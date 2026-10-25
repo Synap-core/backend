@@ -337,6 +337,16 @@ export async function visibleRequiredTools(
 }
 
 /**
+ * A skill's `requires → tool` edges as the writer below sees them (it diffs
+ * against exactly this set). Also read by the definition applier, so a
+ * `requires` that ADDS a tool is told apart from a replay (review of #199, R2).
+ */
+export async function skillRequiresEdges(userId: string, skillId: string) {
+  const edges = await getLinksFor(userId, "skill", skillId);
+  return edges.filter((e) => e.linkType === "requires" && e.toType === "tool");
+}
+
+/**
  * Replace the set of tools a skill `requires` — the body of
  * `skills.setRequiredTools`, shared with the two doors that declare the set at
  * CREATE time: `skills.create`'s direct path and the `skill/create` approval
@@ -351,10 +361,7 @@ export async function replaceSkillRequiredTools(params: {
   toolIds: readonly string[];
 }): Promise<void> {
   const { userId, skill, toolIds } = params;
-  const edges = await getLinksFor(userId, "skill", skill.id);
-  const existing = edges.filter(
-    (e) => e.linkType === "requires" && e.toType === "tool"
-  );
+  const existing = await skillRequiresEdges(userId, skill.id);
   const existingIds = new Set(existing.map((e) => e.toId));
   const wanted = new Set(toolIds);
 
