@@ -1,105 +1,43 @@
 import { describe, expect, it } from "vitest";
-import {
-  approveConsequence,
-  fieldChangeRows,
-  governanceMark,
-} from "./proposal-review-model";
+import { GOVERNANCE_POLICY_SENTENCES } from "@synap-core/types/proposals";
+import { reasonMark, undoMark } from "./proposal-review-model";
 import { initials } from "../../_lib/object/provenance-chips";
 
-describe("fieldChangeRows", () => {
-  it("reads a kind change as Kind: Finding → Issue, never ProfileSlug", () => {
-    expect(
-      fieldChangeRows([
-        {
-          path: "profileSlug",
-          label: "ProfileSlug",
-          operation: "update",
-          before: "finding",
-          after: "issue",
-          drift: "unchanged",
-        },
-      ])
-    ).toEqual([
-      {
-        key: "profileSlug",
-        label: "Kind",
-        op: "change",
-        before: "Finding",
-        after: "Issue",
-        stale: false,
-      },
-    ]);
-  });
-
-  it("an added field draws no before; a removed one draws no after", () => {
-    const [added, removed] = fieldChangeRows([
-      { path: "title", label: "Title", operation: "set", after: "Hello" },
-      { path: "note", label: "Note", operation: "delete", before: "Bye" },
-    ]);
-    expect(added).toMatchObject({
-      op: "add",
-      before: undefined,
-      after: "Hello",
-    });
-    expect(removed).toMatchObject({
-      op: "remove",
-      before: "Bye",
-      after: undefined,
-    });
-  });
-
-  it("a field edited since it was proposed is marked stale", () => {
-    const [row] = fieldChangeRows([
-      {
-        path: "title",
-        label: "Title",
-        operation: "update",
-        before: "A",
-        after: "B",
-        drift: "changed_since",
-      },
-    ]);
-    expect(row!.stale).toBe(true);
-  });
-
-  it("no diff from the pod draws no rows", () => {
-    expect(fieldChangeRows(undefined)).toEqual([]);
-    expect(fieldChangeRows(null)).toEqual([]);
-  });
-});
-
-describe("governanceMark", () => {
-  it("a floor code always asks a person", () => {
-    expect(governanceMark("SCOPE_IDENTITY_CHANGE")).toEqual({
+describe("reasonMark — WHY it waits, as one mark, only when it is particular", () => {
+  it("names the reason, not the ladder's reach; the sentence rides behind it", () => {
+    expect(reasonMark("POSSIBLE_DUPLICATE")).toEqual({
       tone: "warning",
-      label: "Always asks a person",
+      label: "Possible duplicate",
+      sentence: GOVERNANCE_POLICY_SENTENCES.POSSIBLE_DUPLICATE,
     });
   });
 
-  it("an ambiguous code fails closed, like the ladder", () => {
-    expect(governanceMark("CHANNEL_PROPOSE")?.label).toBe(
-      "Always asks a person"
-    );
+  it("a floor or an ambiguous code warns", () => {
+    expect(reasonMark("SCOPE_IDENTITY_CHANGE")?.tone).toBe("warning");
+    expect(reasonMark("CHANNEL_PROPOSE")?.tone).toBe("warning");
   });
 
-  it("a rule code and the default read as such", () => {
-    expect(governanceMark("GOVERNANCE_RULE")?.label).toBe("Your rule");
-    expect(governanceMark("WRITES_REQUIRE_PROPOSAL")?.label).toBe(
-      "Asks by default"
-    );
+  it("a reason that only restates 'this waits for you' draws no mark", () => {
+    expect(reasonMark("WRITES_REQUIRE_PROPOSAL")).toBeNull();
+    expect(reasonMark("GOVERNANCE_RULE")).toBeNull();
+    expect(reasonMark("HUMAN_GATE")).toBeNull();
   });
 
-  it("an unknown or absent code draws no mark", () => {
-    expect(governanceMark("toString")).toBeNull();
-    expect(governanceMark(null)).toBeNull();
+  it("absent, unknown and inherited names draw no mark", () => {
+    expect(reasonMark("toString")).toBeNull();
+    expect(reasonMark(null)).toBeNull();
   });
 });
 
-describe("approveConsequence", () => {
-  it("says undoable only on the pod's own answer", () => {
-    expect(approveConsequence(true).mark?.label).toBe("Can be undone");
-    expect(approveConsequence(false).mark?.label).toBe("Can't be undone");
-    expect(approveConsequence(undefined).mark).toBeNull();
+describe("undoMark — undo is the default, so only its absence is marked", () => {
+  it("draws nothing for an undoable or unknown change", () => {
+    expect(undoMark(true)).toBeNull();
+    expect(undoMark(undefined)).toBeNull();
+    expect(undoMark(null)).toBeNull();
+  });
+
+  it("marks the pod's own `revertable: false`", () => {
+    expect(undoMark(false)?.label).toBe("Can't be undone");
   });
 });
 

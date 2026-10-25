@@ -43830,7 +43830,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				};
 				name: string;
 				schema: {
-					properties: Record<string, import("zod").ZodType<unknown, unknown, import("zod/v4/core/schemas.js").$ZodTypeInternals<unknown, unknown>>>;
+					properties: Record<string, import("zod").ZodTypeAny<unknown, unknown, import("zod/v4/core/schemas.js").$ZodTypeInternals<unknown, unknown>>>;
 					required: string[];
 					type: string;
 				};
@@ -47229,7 +47229,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				invitedBy: string;
 				role: string;
-				token: string;
 				type: "pod" | "workspace";
 				workspaceId: string | null;
 				workspaceName: string | null;
@@ -47248,7 +47247,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				invitedBy: string;
 				role: string;
-				token: string;
 				type: "pod" | "workspace";
 				workspaceId: string | null;
 			}[];
@@ -47486,6 +47484,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: ReconcileReport;
+		}>;
+		regenerateInvite: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+			};
+			meta: object;
+			output: {
+				expiresAt: Date;
+				id: string;
+				token: string;
+			};
 		}>;
 		rejectInvite: import("@trpc/server").TRPCMutationProcedure<{
 			input: {

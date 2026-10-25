@@ -2852,6 +2852,12 @@ export const playbooksRouter = router({
         workspaceId: runWorkspaceId,
         subjectType: "playbook",
         action: "run",
+        // B6: an agent's own run is HELD as the person's draft by `runPlaybook`
+        // below and starts only when they accept it — that accept is the ask,
+        // so the engine's plain default does not file a second one (dogfood
+        // e3c39721 §5: the draft was unreachable). Floors and rules above the
+        // default still propose. Not on a replay: its approval was the accept.
+        ...(input.agentUserId && !approvedReplay ? { heldAsDraft: true } : {}),
         ...(filedProjectId ? { projectId: filedProjectId } : {}),
         source: input.source,
         reasoning: input.reasoning,

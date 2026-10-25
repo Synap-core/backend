@@ -12,6 +12,8 @@
  *   GET  /status       session — codes set?, courier, Cloud trust, session marks
  *   POST /codes        session, privileged — create / regenerate the batch
  *   PUT  /cloud-trust  session, privileged, pod admin — off | sign_in | sign_in_recovery
+ *                      ("Allow sign-in with Synap Cloud": `off` is refused
+ *                      while an owner can sign in ONLY with Synap Cloud)
  *
  * Redeem is the online guessing target, so it is:
  *   - rate limited per email AND globally (per-IP is a shared bucket behind
@@ -122,6 +124,11 @@ export interface AccountRecoveryDeps {
   /** The configured pod-admin resolution (`configuredPodAdminBase`). */
   podAdminConfig(): PodAdminConfigResult;
   isPodAdmin(userId: string): Promise<boolean>;
+  /**
+   * How many owners (pod admins) hold no pod credential (password or
+   * passkey), so Synap Cloud is their ONLY way in. Throws on a failed read.
+   */
+  countCloudOnlyOwners(): Promise<number>;
 
   /** Best-effort audit append. Never receives a code. */
   audit(entry: {
@@ -157,12 +164,14 @@ const MESSAGES: Record<AccountRecoveryErrorCode, string> = {
   cloud_session_not_allowed:
     "Signing in with Synap Cloud can't change how you sign in to this pod. Sign in with your pod password, or use a recovery code.",
   forbidden: "Only the pod owner can change this.",
+  owner_needs_pod_sign_in:
+    "An owner signs in to this pod only with Synap Cloud. Turning Synap Cloud sign-in off would lock them out: each owner needs a password or a passkey on this pod first.",
 };
 
 function fail(
   c: Context,
   code: AccountRecoveryErrorCode,
-  status: 400 | 401 | 403 | 429 | 503
+  status: 400 | 401 | 403 | 409 | 429 | 503
 ) {
   const body: AccountRecoveryError = {
     ok: false,
@@ -518,6 +527,16 @@ export function createAccountRecoveryRouter(
       const refused = await guardCredentialChange(c, caller);
       if (refused) return refused;
       const previous = await deps.readCloudTrust();
+      // ADDENDUM 2026-10-23: switching Synap Cloud sign-in off must not lock
+      // out an owner whose only way in is Synap Cloud (the same rule as
+      // unlink's "never remove the last owner").
+      if (
+        mode === "off" &&
+        previous !== "off" &&
+        (await deps.countCloudOnlyOwners()) > 0
+      ) {
+        return fail(c, "owner_needs_pod_sign_in", 409);
+      }
       await deps.writeCloudTrust(mode);
       await deps.audit({
         userId: caller.account.userId,

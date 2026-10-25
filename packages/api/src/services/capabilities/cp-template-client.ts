@@ -22,8 +22,7 @@
  * (public read; see synap-control-plane-api/src/routes/marketplace-apps.ts).
  */
 
-import { db, drizzleSql, podCpAuthHeaders } from "@synap/database";
-import { workspaces } from "@synap/database/schema";
+import { podCpAuthHeaders, readControlPlaneLink } from "@synap/database";
 import type { CapabilityDefinition } from "@synap/playbooks";
 import { queryCatalogCache } from "./catalog-cache-query.js";
 import {
@@ -84,23 +83,12 @@ export async function fetchCPCapabilityTemplatesFromCP(): Promise<
   }
 }
 
-/** This pod's CP identity (workspace settings `controlPlane.podId`), mirroring
- *  @synap/jobs `cp-project-sync`'s resolveCpPodId. Null when the pod has no CP
- *  identity (self-hosted) — the owner door is then skipped. Never throws. */
+/** This pod's CP identity (its Control Plane link, `readControlPlaneLink`).
+ *  Null when the pod has no CP link (self-hosted) or the link cannot be read —
+ *  the owner door is then skipped and the public door answers. Never throws. */
 async function resolveCpPodId(): Promise<string | null> {
   try {
-    const rows = await db
-      .select({
-        podId: drizzleSql<
-          string | null
-        >`${workspaces.settings} -> 'controlPlane' ->> 'podId'`,
-      })
-      .from(workspaces)
-      .where(
-        drizzleSql`${workspaces.settings} -> 'controlPlane' ->> 'podId' IS NOT NULL`
-      )
-      .limit(1);
-    return rows[0]?.podId ?? null;
+    return (await readControlPlaneLink())?.podId ?? null;
   } catch {
     return null;
   }

@@ -21,6 +21,17 @@ const mocks = vi.hoisted(() => ({
   consumeFederatedAssertionReceipt: vi.fn(),
   verifyIssuerJwt: vi.fn(),
   verifyTrustedIssuerJwt: vi.fn(),
+  // The owner's Synap Cloud switch + the pod's Synap Cloud issuer.
+  readCloudSignInSettings: vi.fn(async () => ({
+    trust: "sign_in" as string,
+    federationIssuer: null as string | null,
+  })),
+}));
+
+vi.mock("../cloud-trust.js", () => ({
+  readCloudSignInSettings: mocks.readCloudSignInSettings,
+  readCloudTrust: async () =>
+    (await mocks.readCloudSignInSettings()).trust as "sign_in",
 }));
 
 vi.mock("@synap/auth", () => ({
@@ -1099,5 +1110,101 @@ describe("application connection start — account hint", () => {
       code: "INVALID_APPLICATION_HANDOFF",
     });
     expect(mocks.createAwaitingLocalAuth).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The owner's "Allow sign-in with Synap Cloud" switch (Cloud trust `off`)
+ * refuses the identity-link ceremony at the POD when the issuer IS this pod's
+ * Synap Cloud: the browser leg (`/identity-links`) and the CP's consume.
+ */
+describe("identity link with Synap Cloud turned off", () => {
+  const CLOUD = "https://issuer.example.test";
+  const nowS = Math.floor(Date.now() / 1_000);
+  const linkClaims = {
+    email: "person@example.test",
+    exp: nowS + 300,
+    iat: nowS,
+    iss: CLOUD,
+    intentId: "intent-1",
+    jti: "identity-link-assertion-off",
+    nonce: "a-long-enough-nonce-for-the-test",
+    purpose: "identity-link" as const,
+    sub: "issuer-user-1",
+    type: "federated_assertion" as const,
+  };
+  const link = () =>
+    federationRouter.request("/identity-links", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        assertion: jwt.sign(linkClaims, "test-secret", { algorithm: "HS256" }),
+      }),
+    });
+  const consume = () =>
+    federationRouter.request("/identity-links/consume", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        receiptId: "11111111-1111-4111-8111-111111111111",
+        assertion: jwt.sign(
+          { ...linkClaims, purpose: "identity-link-receipt" },
+          "test-secret",
+          { algorithm: "HS256" }
+        ),
+      }),
+    });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.PUBLIC_URL = "https://pod.example.test";
+    mocks.getByUrl.mockResolvedValue({
+      allowedScopes: ["identity:link-user"],
+      id: "issuer-1",
+      issuerUrl: CLOUD,
+      status: "approved",
+    });
+  });
+
+  it("refuses the browser leg for the pod's Synap Cloud issuer, binding nothing", async () => {
+    mocks.readCloudSignInSettings.mockResolvedValue({
+      trust: "off",
+      federationIssuer: CLOUD + "/",
+    });
+    const res = await link();
+    expect(res.status).toBe(403);
+    await expect(res.json()).resolves.toMatchObject({
+      code: "CLOUD_SIGN_IN_DISABLED",
+    });
+    expect(mocks.bindExistingFederatedIdentity).not.toHaveBeenCalled();
+    expect(mocks.createIssuerIdentityLinkReceipt).not.toHaveBeenCalled();
+  });
+
+  it("refuses the CP's consume too, consuming nothing", async () => {
+    mocks.readCloudSignInSettings.mockResolvedValue({
+      trust: "off",
+      federationIssuer: CLOUD,
+    });
+    const res = await consume();
+    expect(res.status).toBe(403);
+    expect(mocks.consumeIssuerIdentityLinkReceipt).not.toHaveBeenCalled();
+  });
+
+  it("does not refuse another approved issuer, nor Synap Cloud when the switch is on", async () => {
+    for (const settings of [
+      { trust: "off", federationIssuer: "https://another-cloud.example" },
+      { trust: "sign_in", federationIssuer: CLOUD },
+    ]) {
+      mocks.readCloudSignInSettings.mockResolvedValue(settings);
+      const res = await link();
+      expect(res.status).not.toBe(403);
+    }
+  });
+
+  it("a failed switch read is a 503, never a silent link", async () => {
+    mocks.readCloudSignInSettings.mockRejectedValue(new Error("db down"));
+    const res = await link();
+    expect(res.status).toBe(503);
+    expect(mocks.bindExistingFederatedIdentity).not.toHaveBeenCalled();
   });
 });

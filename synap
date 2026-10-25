@@ -1279,15 +1279,18 @@ $oidc_block
       # Cloud user without pod access (message id 4000901,
       # apps/api/src/webhooks/kratos-registration-gate.ts).
       # EVERY registration-capable method enabled above needs its own gate:
-      # Kratos v1.3.1 looks hooks up per method, with the global list used only
-      # when a method has none (driver/registry_default_registration.go), so an
-      # enabled method without hooks registers with NO gate. Passkey did, until
-      # 2026-10-23 (an open sign-up on every pod). Tripwire:
-      # deploy/__tests__/kratos-registration-gate.test.sh.
-      # Bodies (decoded): function(ctx) { method: "password"|"oidc", identity: ctx.identity }
-      # and for passkey function(ctx) { method: "passkey", identity: ctx.identity,
-      #   transient_payload: if std.objectHas(ctx, "flow") && std.objectHas(ctx.flow,
-      #   "transient_payload") then ctx.flow.transient_payload else null }
+      # Kratos v1.3.1 looks hooks up per method and has no global fallback
+      # once any method defines hooks (driver/registry_default_registration.go),
+      # so an enabled method without one (passkey, until 2026-10-23) registers
+      # with NO gate (tripwire: deploy/__tests__/kratos-registration-gate.test.sh).
+      # Bodies (decoded): function(ctx) { method: "password", identity: ctx.identity }
+      # and, for oidc and passkey, function(ctx) { method: "oidc"|"passkey",
+      #   identity: ctx.identity, transient_payload: if std.objectHas(ctx, "flow")
+      #   && std.objectHas(ctx.flow, "transient_payload") then
+      #   ctx.flow.transient_payload else null }
+      # (the invite page's invite_token, join plan phase 4: an invite-bound
+      # Synap Cloud or passkey sign-up; Kratos keeps transient_payload across
+      # the OIDC trip).
       after:
         password:
           hooks:
@@ -1313,8 +1316,8 @@ $oidc_block
                   Content-Type: application/json
                   X-Webhook-Secret: ${webhook_secret}
                 can_interrupt: true
-            # Post-persist: removes any persisted identity with no pod access
-            # (the gate refuses a passkey sign-up, so none should exist).
+            # Post-persist: accepts the invite for the new identity, or removes
+            # an identity with no pod access (same route as oidc).
             - hook: web_hook
               config:
                 url: http://backend:4000/api/webhooks/kratos/registration/complete
@@ -1330,7 +1333,7 @@ $oidc_block
               config:
                 url: http://backend:4000/api/webhooks/kratos/registration/gate
                 method: POST
-                body: base64://ZnVuY3Rpb24oY3R4KSB7IG1ldGhvZDogIm9pZGMiLCBpZGVudGl0eTogY3R4LmlkZW50aXR5IH0K
+                body: base64://ZnVuY3Rpb24oY3R4KSB7IG1ldGhvZDogIm9pZGMiLCBpZGVudGl0eTogY3R4LmlkZW50aXR5LCB0cmFuc2llbnRfcGF5bG9hZDogaWYgc3RkLm9iamVjdEhhcyhjdHgsICJmbG93IikgJiYgc3RkLm9iamVjdEhhcyhjdHguZmxvdywgInRyYW5zaWVudF9wYXlsb2FkIikgdGhlbiBjdHguZmxvdy50cmFuc2llbnRfcGF5bG9hZCBlbHNlIG51bGwgfQo=
                 headers:
                   Content-Type: application/json
                   X-Webhook-Secret: ${webhook_secret}
@@ -1342,7 +1345,7 @@ $oidc_block
               config:
                 url: http://backend:4000/api/webhooks/kratos/registration/complete
                 method: POST
-                body: base64://ZnVuY3Rpb24oY3R4KSB7IG1ldGhvZDogIm9pZGMiLCBpZGVudGl0eTogY3R4LmlkZW50aXR5IH0K
+                body: base64://ZnVuY3Rpb24oY3R4KSB7IG1ldGhvZDogIm9pZGMiLCBpZGVudGl0eTogY3R4LmlkZW50aXR5LCB0cmFuc2llbnRfcGF5bG9hZDogaWYgc3RkLm9iamVjdEhhcyhjdHgsICJmbG93IikgJiYgc3RkLm9iamVjdEhhcyhjdHguZmxvdywgInRyYW5zaWVudF9wYXlsb2FkIikgdGhlbiBjdHguZmxvdy50cmFuc2llbnRfcGF5bG9hZCBlbHNlIG51bGwgfQo=
                 headers:
                   Content-Type: application/json
                   X-Webhook-Secret: ${webhook_secret}
@@ -1848,6 +1851,8 @@ _swap_backend_canary() {
 #                 (X-Pod-Bootstrap-Token = this pod's PROVISIONING_TOKEN; that
 #                 secret never leaves the host). This also approves the CP issuer
 #                 the next two doors verify against, so it runs first.
+#   1b. admins    adminAssertions[] (a lab's confirming admin, A4) → the same
+#                 door, same secret, BEFORE the secret is retired. Absent = none.
 #   2. sign-in    oidc.assertion → POST /api/hub/federation/oidc-config, then
 #                 kratos.yml is re-rendered from pod_settings and kratos restarted.
 #   3. AI service intelligence {url, apiKey, provisionToken} →
@@ -1918,6 +1923,9 @@ _reg_response_errors() { # <file>
         (if (.issuer|str) then empty else "issuer is missing" end),
         (if (.ownerAssertion|str) then empty else "ownerAssertion is missing" end),
         (if (.catalogUrl|str) then empty else "catalogUrl is missing" end),
+        (if has("adminAssertions") | not then empty
+         elif (.adminAssertions|type) != "array" or any(.adminAssertions[]; (str)|not)
+         then "adminAssertions is present but not a list of assertions" else empty end),
         (if has("oidc") | not then "oidc is missing (object or null)"
          elif .oidc == null then empty
          elif (.oidc|type) != "object" or ((.oidc.assertion|str)|not) then "oidc is present without an assertion"
@@ -1995,6 +2003,23 @@ _reg_apply() {
         _reg_step_mark owner
         _reg_ok "owner bootstrapped (${out%% *})"
     fi
+    # 1b. initial admins (A4) — through the owner's door, while the secret lives.
+    # Not fatal: an admin assertion lives 5 minutes, so a re-run could never
+    # apply it; the owner is bound and the pod is usable. The Control Plane
+    # reports the admin as not projected and the person signs in at the pod.
+    local i n
+    n="$(jq -r '(.adminAssertions // []) | length' "$r")"
+    for ((i = 0; i < n; i++)); do
+        if _reg_step_done "admin-$i"; then continue; fi
+        if out="$(jq -c --argjson i "$i" '{assertion: .adminAssertions[$i]}' "$r" \
+            | SYNAP_REG_AUTH_VALUE="$(_ue_env_get PROVISIONING_TOKEN)" \
+              _reg_pod_post /api/federation/bootstrap X-Pod-Bootstrap-Token)"; then
+            _reg_ok "initial admin $((i + 1))/${n} bound (${out%% *})"
+        else
+            _reg_warn "initial admin $((i + 1))/${n} not bound: ${out} — the owner can invite them from the console"
+        fi
+        _reg_step_mark "admin-$i"
+    done
     # The pod has an owner now: the bootstrap-only token has no job left. Retired
     # BEFORE step 4 so the backend recreate below drops it from its environment.
     _bootstrap_token_retire || _reg_warn "could not retire PROVISIONING_TOKEN from .env — run: synap setup admin --retire-token"

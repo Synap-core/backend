@@ -4366,7 +4366,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "File EXISTING records into a project (entity --belongs_to_project--> project), so the project's members see them. Use this — not link_entities (refused for this edge) and not a projectId property (it files nothing). You must be able to write every record; one refused record refuses the batch. Always a proposal for an agent, one for the whole batch — `proposed` is success, surface reviewUrl. remove:true un-files them instead.",
+          "File EXISTING records into a project (entity --belongs_to_project--> project), so the project's members see them. Use this — not link_entities (refused for this edge) and not a projectId property (it files nothing). You must be able to write every record; one refused record refuses the batch. A proposal for an agent, one for the whole batch — `proposed` is success, surface reviewUrl — EXCEPT your own records from the last 24 hours, untouched by a person, filed into a project the person named (your project focus, or the project of the session you name in `sessionId`): those are filed directly, with a receipt and Undo, unless the person switched that off in Approvals. remove:true un-files them instead.",
         inputSchema: {
           type: "object",
           properties: {
@@ -4388,6 +4388,11 @@ export const tools = {
               type: "string",
               description:
                 "Why they belong to this project, in the person's words — shown to the reviewer. One line.",
+            },
+            sessionId: {
+              type: "string",
+              description:
+                "OPTIONAL: the focus session this filing belongs to. Leave it out and the write is attributed automatically. Name it when you file your own fresh records into THAT session's project: a session you name says which project the person asked for, so the filing applies directly instead of waiting for approval. A session that isn't yours is ignored, not an error.",
             },
           },
           required: ["projectId", "entityIds"],
@@ -5535,7 +5540,7 @@ export const tools = {
           openWorldHint: true,
         },
         description:
-          'LAUNCH a playbook via its executor (discover via synap_list_playbooks) — instantiates a session + run channel + playbook_run and dispatches to the playbook\'s executor (is-agent | external-agent | hybrid). Pass playbookId OR an unambiguous playbookName/name (multi-match returns candidates — never a silent pick). Write home: workspaceId if set, else the playbook\'s workspace, else subject/session; pod-wide playbooks with no home reject (pass workspaceId). This LAUNCHES the executor — it is not the same as opening a working session from the template. Governed, with THREE normal outcomes: status="proposed" (an agent launch awaits approval — SUCCESS, pass on reviewUrl, do not retry), status="blocked" (nothing ran: the playbook uses skills that are not enabled yet; `unenabledSkills` names them and `enableProposals` carries ONE enable request per pack — relay the message and run it again only after that is approved), status="draft" (an agent launch the gate allowed: the run is the person\'s DRAFT and does NOT start until they accept it in their sessions — `session` is returned, `run` is null; tell the person, do not retry), status="running" (it started; `run` + `session` are returned), status="skipped" (nothing ran and nothing is queued — the record\'s last run failed recently and is cooling down, or no pinned record was ready; read `message`, do not retry in a loop and do not report it as started).',
+          'LAUNCH a playbook via its executor (discover via synap_list_playbooks) — instantiates a session + run channel + playbook_run and dispatches to the playbook\'s executor (is-agent | external-agent | hybrid). Pass playbookId OR an unambiguous playbookName/name (multi-match returns candidates — never a silent pick). Write home: workspaceId if set, else the playbook\'s workspace, else subject/session; pod-wide playbooks with no home reject (pass workspaceId). This LAUNCHES the executor — it is not the same as opening a working session from the template. Governed, with THREE normal outcomes: status="draft" (an agent\'s launch, the usual outcome: the run is the person\'s DRAFT and does NOT start until they accept it in their sessions — `session` is returned, `run` is null; tell the person, do not retry), status="proposed" (a rule or a limit asks first — SUCCESS, pass on reviewUrl, do not retry), status="blocked" (nothing ran: the playbook uses skills that are not enabled yet; `unenabledSkills` names them and `enableProposals` carries ONE enable request per pack — relay the message and run it again only after that is approved), status="running" (it started; `run` + `session` are returned), status="skipped" (nothing ran and nothing is queued — the record\'s last run failed recently and is cooling down, or no pinned record was ready; read `message`, do not retry in a loop and do not report it as started).',
         inputSchema: {
           type: "object",
           properties: {
