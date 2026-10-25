@@ -49,24 +49,25 @@ const logger = createLogger({ module: "track-report-escalation" });
  * than the timer, on a goal that is still LIVE — a closed or dropped goal
  * asks nobody for anything (code.md, 2026-10-24). Exported so a test can lock
  * its shape. The cutoff is computed in SQL (no Date bind — postgres.js 3.4.8
- * on the pod image, see the reaper).
+ * on the pod image, see the reaper). Built on each call, never at module load:
+ * suites that stub `@synap/database` import this file through the cron graph,
+ * and a stubbed export is not a list.
  */
-export const TRACK_REPORT_IS_DUE = and(
-  eq(trackParticipants.commitmentState, "reported_impossible"),
-  isNull(trackParticipants.acknowledgedAt),
-  isNull(trackParticipants.escalatedAt),
-  drizzleSql`${trackParticipants.reportedAt} < now() - (${TRACK_REPORT_ESCALATE_AFTER_HOURS}::int * interval '1 hour')`,
-  // No `drizzleSql.join` here: this is built at module load, and suites that
-  // stub `@synap/database` import it through the cron graph.
-  drizzleSql`EXISTS (SELECT 1 FROM ${projectTracks} WHERE ${projectTracks.id} = ${trackParticipants.trackId} AND ${projectTracks.status} IN ${[...LIVE_PROJECT_TRACK_STATUSES]})`
-);
+export const trackReportIsDue = () =>
+  and(
+    eq(trackParticipants.commitmentState, "reported_impossible"),
+    isNull(trackParticipants.acknowledgedAt),
+    isNull(trackParticipants.escalatedAt),
+    drizzleSql`${trackParticipants.reportedAt} < now() - (${TRACK_REPORT_ESCALATE_AFTER_HOURS}::int * interval '1 hour')`,
+    drizzleSql`EXISTS (SELECT 1 FROM ${projectTracks} WHERE ${projectTracks.id} = ${trackParticipants.trackId} AND ${projectTracks.status} IN ${[...LIVE_PROJECT_TRACK_STATUSES]})`
+  );
 
 /** Tell each due report's goal owner, once. Returns how many were told. */
 export async function escalateUnacknowledgedReports(): Promise<number> {
   const claimed = await db
     .update(trackParticipants)
     .set({ escalatedAt: drizzleSql`now()` })
-    .where(TRACK_REPORT_IS_DUE)
+    .where(trackReportIsDue())
     .returning({
       id: trackParticipants.id,
       trackId: trackParticipants.trackId,

@@ -2,7 +2,7 @@
  * R10 on PGlite — an unacknowledged "impossible" report on a goal escalates
  * to the goal's OWNER after 48 h, ONCE.
  *
- * Real: `escalateUnacknowledgedReports` → the `TRACK_REPORT_IS_DUE` claim
+ * Real: `escalateUnacknowledgedReports` → the `trackReportIsDue()` claim
  * (UPDATE … RETURNING), the owner read (the owner row, else the starter), the
  * delegate's name. The notification door is the IoC slot (`NotificationService
  * .create` in api), stubbed to record what it was asked to write.

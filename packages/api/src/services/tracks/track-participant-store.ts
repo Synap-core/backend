@@ -42,7 +42,6 @@ import type {
 } from "@synap/database/schema";
 import { actorDisplayName } from "../../routers/proposals/helper-functions.js";
 import { loadActorRows } from "../activity/activity-actors.js";
-import { loadMachineNames } from "../machine-roster.js";
 import {
   goalJudge,
   goalMayDrop,
@@ -378,6 +377,10 @@ export async function participantDisplayNames(
 ): Promise<Map<string, string>> {
   const rows = await loadActorRows(principalIds);
   if (rows.size === 0) return new Map();
+  // Loaded on use: the computer roster pulls the permission ladder
+  // (machine-connect), which this store — reached from goal-content and the
+  // tracks service at init — must not drag into every importer.
+  const { loadMachineNames } = await import("../machine-roster.js");
   const hostNames = await loadMachineNames(
     [...rows.values()].flatMap((r) => (r.hostUserId ? [r.hostUserId] : []))
   );
