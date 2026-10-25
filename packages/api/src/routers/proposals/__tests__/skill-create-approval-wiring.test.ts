@@ -93,11 +93,15 @@ let insertResult: Record<string, unknown>;
 let insertInputs: Record<string, unknown>[] = [];
 let requiresWrites: { skill: { id: string }; toolIds: readonly string[] }[] =
   [];
+/** Tool ids the APPROVER can see at approval time. */
+let visibleToolIds = new Set<string>(["tool-apify"]);
 vi.mock("../../skills.js", () => ({
   insertSkillGoverned: async (input: Record<string, unknown>) => {
     insertInputs.push(input);
     return insertResult;
   },
+  visibleRequiredTools: async (_userId: string, ids: readonly string[]) =>
+    ids.filter((id) => visibleToolIds.has(id)).map((id) => ({ id, name: id })),
   replaceSkillRequiredTools: async (p: {
     skill: { id: string };
     toolIds: readonly string[];
@@ -181,6 +185,7 @@ const run = async (opts: {
 beforeEach(() => {
   insertInputs = [];
   requiresWrites = [];
+  visibleToolIds = new Set(["tool-apify"]);
   wireCreatedVerb.mockClear();
   proposalRows = [];
   toolRows = [{ id: "tool-1" }];
@@ -291,8 +296,48 @@ describe("skill/create approval writes the DECLARED requires edges (ticket c5058
     expect(requiresWrites).toHaveLength(1);
     expect(requiresWrites[0]!.skill.id).toBe("skill-1");
     expect(requiresWrites[0]!.toolIds).toEqual(["tool-apify"]);
-    // Not a `skills` column: it must not reach the governed insert.
+    // Not `skills` columns: they must not reach the governed insert.
     expect(insertInputs[0]).not.toHaveProperty("requiredToolIds");
+    expect(insertInputs[0]).not.toHaveProperty("requiredToolNames");
+  });
+
+  it("re-resolves every id as the approver: one no longer visible is refused and never linked", async () => {
+    if (!executor) throw new Error("skill/create executor not registered");
+    insertResult = {
+      status: "created",
+      id: "skill-1",
+      skill: declarativeSkill({ kind: "code", providerSpec: null }),
+    };
+    const result = await executor.execute({
+      proposal: {
+        id: "p1",
+        targetType: "skill",
+        targetId: "skill-1",
+        proposalType: "create",
+        workspaceId: "ws-1",
+        sessionId: null,
+        projectId: null,
+        agentUserId: AGENT,
+        sourceMessageId: null,
+        data: {
+          data: {
+            name: "score_handle",
+            kind: "code",
+            requiredToolIds: ["tool-apify", "tool-gone"],
+            requiredToolNames: ["apify_api", "gone_api"],
+          },
+        },
+      },
+      payload: null,
+      userId: APPROVER,
+      input: { proposalId: "p1" },
+      ctx: {} as never,
+      deps: { db: {}, emitProposalReviewed: () => undefined } as never,
+    });
+    expect(requiresWrites[0]!.toolIds).toEqual(["tool-apify"]);
+    expect(result.refusals).toEqual([
+      "Required tool tool-gone was not linked: it is not an installed tool the approver can see.",
+    ]);
   });
 
   it("writes no edges when the author declared none", async () => {

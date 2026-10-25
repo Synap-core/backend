@@ -837,6 +837,25 @@ export const profilesRouter = router({
         }
       }
 
+      // Each field riding the kind's proposal is a property_def write the
+      // key must be allowed to make ITSELF, checked where it would land — a
+      // base def is pod-wide schema (workspace NULL), only an overlay is this
+      // space's — exactly as `createPropertyDef` checks it (S7). Without this a
+      // key scoped to one space could land pod-wide fields through a kind
+      // proposal. Refuses, never proposes (review of #199, M2).
+      for (const field of input.deferredFields ?? []) {
+        await assertKeyMayWrite({
+          subjectType: "property_def",
+          action: "create",
+          workspaceId: field.overlay === true ? ctx.workspaceId : null,
+          data: {
+            slug: field.slug,
+            valueType: field.valueType,
+            overlay: field.overlay === true,
+          },
+        });
+      }
+
       // 2. Permission check (may create proposal)
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,
@@ -870,7 +889,7 @@ export const profilesRouter = router({
           // `entity.query { roleCategory }` can never match.
           roleCategory: input.roleCategory,
           ...(input.deferredFields?.length
-            ? { fields: input.deferredFields }
+            ? { kindFields: input.deferredFields }
             : {}),
         },
         // The duplicate door's answer (B2): the existing kinds ride the card.

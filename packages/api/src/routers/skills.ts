@@ -315,6 +315,28 @@ export {
 } from "../services/capabilities/skill-exec-fields.js";
 
 /**
+ * The tools among `toolIds` that `userId` can see — the ONE visibility check
+ * for a declared `requires` scope: at filing (`skills.create`, as the author)
+ * and again at approval (the `skill/create` replay, as the approver), so an id
+ * that is gone or out of reach by then binds nothing.
+ */
+export async function visibleRequiredTools(
+  userId: string,
+  toolIds: readonly string[]
+): Promise<Array<{ id: string; name: string }>> {
+  if (toolIds.length === 0) return [];
+  return db
+    .select({ id: tools.id, name: tools.name })
+    .from(tools)
+    .where(
+      and(
+        inArray(tools.id, [...toolIds]),
+        userVisibleWhere(tools.workspaceId, userId)
+      )
+    );
+}
+
+/**
  * Replace the set of tools a skill `requires` — the body of
  * `skills.setRequiredTools`, shared with the two doors that declare the set at
  * CREATE time: `skills.create`'s direct path and the `skill/create` approval
@@ -1242,18 +1264,18 @@ export const skillsRouter = router({
       // proposal naming a tool nobody can see would approve a scope that
       // binds nothing.
       const requiredToolIds = [...new Set(input.requiredToolIds ?? [])];
+      // Display-only twin of the ids, in the same order: the summary names
+      // the scope the person approves (it is protected from revise, like the
+      // ids it describes).
+      let requiredToolNames: string[] = [];
       if (requiredToolIds.length > 0) {
-        const visible = await db
-          .select({ id: tools.id })
-          .from(tools)
-          .where(
-            and(
-              inArray(tools.id, requiredToolIds),
-              userVisibleWhere(tools.workspaceId, userId)
-            )
-          );
-        const seen = new Set(visible.map((t) => t.id));
-        const missing = requiredToolIds.filter((id) => !seen.has(id));
+        const visible = await visibleRequiredTools(userId, requiredToolIds);
+        const nameById = new Map(visible.map((t) => [t.id, t.name]));
+        requiredToolNames = requiredToolIds.flatMap((id) => {
+          const name = nameById.get(id);
+          return name ? [name] : [];
+        });
+        const missing = requiredToolIds.filter((id) => !nameById.has(id));
         if (missing.length > 0) {
           throw new TRPCError({
             code: "BAD_REQUEST",
@@ -1300,7 +1322,9 @@ export const skillsRouter = router({
             : {}),
           // Replayed by the `skill/create` executor through the same
           // `replaceSkillRequiredTools` once the skill row exists.
-          ...(requiredToolIds.length ? { requiredToolIds } : {}),
+          ...(requiredToolIds.length
+            ? { requiredToolIds, requiredToolNames }
+            : {}),
         },
         agentUserId: input.agentUserId,
       });

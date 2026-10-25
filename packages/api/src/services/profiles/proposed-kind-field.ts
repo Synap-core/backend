@@ -1,6 +1,6 @@
 /**
  * One field def as it rides a proposed kind (ticket a375443d):
- * `profiles.create` `deferredFields` → the gate's `fields` → the
+ * `profiles.create` `deferredFields` → the gate data `kindFields` → the
  * `profile/create` executor, which re-parses each one at approval.
  *
  * A LEAF module on purpose: the hub door and the executor import it, and

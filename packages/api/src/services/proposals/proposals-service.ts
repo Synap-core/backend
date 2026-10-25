@@ -264,6 +264,17 @@ export const PROTECTED_ENVELOPE_FIELDS = [
   "keyId",
   "agentUserId",
   "appId",
+  // `kindFields` — the field defs a NEW kind's proposal creates on approval
+  // (ticket a375443d). The proposal summary names them at filing; a revise
+  // that could rewrite them would have a person approve one schema and
+  // receive another (pod-wide base fields included).
+  "kindFields",
+  // `requiredToolIds` / `requiredToolNames` — the tools a code skill
+  // `requires` (ticket c5058d24). Those edges ARE the scope its own provider
+  // calls run under without a second review (`verbAct`), so a revise that
+  // could add one would widen a scope the person never saw.
+  "requiredToolIds",
+  "requiredToolNames",
 ] as const;
 
 /**
@@ -313,6 +324,12 @@ const PROTECTED_FIELD_REASON: Record<
     "it names the agent the proposal is about; a revise may not repoint it to another agent",
   appId:
     "it names the app an approval connects; a revise may not repoint it to another app",
+  kindFields:
+    "it is the schema the person approves with the kind; propose the kind again to change its fields",
+  requiredToolIds:
+    "it is the tool scope the person approves with the skill; propose the skill again to change it",
+  requiredToolNames:
+    "it names the tool scope the person approves with the skill; propose the skill again to change it",
 };
 
 export interface ComputeRevisedEnvelopeParams {

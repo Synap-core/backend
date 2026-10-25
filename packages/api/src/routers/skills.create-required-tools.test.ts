@@ -17,7 +17,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const h = vi.hoisted(() => ({
   gated: [] as Array<Record<string, unknown>>,
   verdict: { proposalId: "proposal-1" } as Record<string, unknown>,
-  visibleTools: [] as Array<{ id: string }>,
+  visibleTools: [] as Array<{ id: string; name: string }>,
   links: [] as Array<Record<string, unknown>>,
 }));
 
@@ -82,14 +82,18 @@ const SKILL = {
 beforeEach(() => {
   h.gated.length = 0;
   h.links.length = 0;
-  h.visibleTools = [{ id: TOOL }];
+  h.visibleTools = [{ id: TOOL, name: "apify_api" }];
   h.verdict = { proposalId: "proposal-1" };
 });
 
 describe("skills.create: requiredToolIds", () => {
   it("rides the gate's stored data on the proposed path (the replay's input)", async () => {
     expect(await member().create(SKILL)).toMatchObject({ status: "proposed" });
-    expect(h.gated[0]).toMatchObject({ requiredToolIds: [TOOL] });
+    expect(h.gated[0]).toMatchObject({
+      requiredToolIds: [TOOL],
+      // The display twin the summary names (a scope grant).
+      requiredToolNames: ["apify_api"],
+    });
     // Nothing is linked before a reviewer approves.
     expect(h.links).toEqual([]);
   });

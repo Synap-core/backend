@@ -188,7 +188,7 @@ describe("POST /profiles — define a kind or a role through the shared door", (
         slug: "podcast",
         profileKind: "kind",
         entityScope: "workspace",
-        fields: [{ slug: "host", valueType: "string" }],
+        kindFields: [{ slug: "host", valueType: "string" }],
       },
     });
   });

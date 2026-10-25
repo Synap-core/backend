@@ -24,6 +24,7 @@ const h = vi.hoisted(() => ({
   fields: [] as Array<Record<string, unknown>>,
   failSlug: null as string | null,
   sets: [] as Array<Record<string, unknown>>,
+  existingOnReplay: false,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -43,8 +44,20 @@ vi.mock("@synap/database", async (importOriginal) => {
     }),
   };
   class FakeProfileRepository {
-    async getBySlug() {
-      return null;
+    async getBySlug(slug: string) {
+      // The slug-idempotent hit: by approval time a kind of that slug exists.
+      return h.existingOnReplay
+        ? {
+            id: "existing-kind",
+            slug,
+            displayName: "Social account audit",
+            uiHints: null,
+            defaultValues: null,
+            scope: "workspace",
+            profileKind: "kind",
+            workspaceId: WS,
+          }
+        : null;
     }
     // A KIND (not a role) also probes the pod-wide kind of that slug.
     async findActivePodWideKind() {
@@ -127,6 +140,7 @@ beforeEach(() => {
   h.fields.length = 0;
   h.failSlug = null;
   h.sets.length = 0;
+  h.existingOnReplay = false;
   proposalExecRegistry._reset();
   registerProfileExecutors();
 });
@@ -173,7 +187,7 @@ describe("profile/create — a new kind's fields ride its proposal", () => {
     const proposed = await proposeKind();
     expect(proposed).toMatchObject({ status: "proposed", fieldsIncluded: 2 });
     expect(h.gateData).toHaveLength(1);
-    expect(h.gateData[0]!.fields).toEqual([
+    expect(h.gateData[0]!.kindFields).toEqual([
       { slug: "botscore", valueType: "number" },
       {
         slug: "handle",
@@ -223,8 +237,8 @@ describe("profile/create — a new kind's fields ride its proposal", () => {
     await proposeKind();
     const stored = {
       ...h.gateData[0],
-      fields: [
-        ...(h.gateData[0]!.fields as unknown[]),
+      kindFields: [
+        ...(h.gateData[0]!.kindFields as unknown[]),
         { slug: "Bad Slug", valueType: "string" },
         { slug: "score", valueType: "nope" },
       ],
@@ -249,5 +263,51 @@ describe("profile/create — a new kind's fields ride its proposal", () => {
     });
     expect(proposed).not.toHaveProperty("fieldsIncluded");
     expect(h.gateData[0]).not.toHaveProperty("fields");
+  });
+
+  it("a key scoped to one space cannot carry POD-WIDE base fields through a kind proposal (M2)", async () => {
+    const { runWithGrant } = await import("@synap/database");
+    const spaceKey = {
+      scopes: [
+        {
+          permissions: ["*"],
+          workspaceIds: [WS],
+          projectIds: null,
+          entityIds: null,
+        },
+      ],
+      clientId: null,
+    } as never;
+    // Base fields land pod-wide (workspace NULL): refused before any filing.
+    await expect(runWithGrant(spaceKey, proposeKind)).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    expect(h.gateData).toEqual([]);
+
+    // The same key may carry OVERLAY fields: they land in its own space.
+    const agentCaller = profilesRouter.createCaller({
+      authenticated: true,
+      userId: OWNER,
+      workspaceId: WS,
+    } as never);
+    const proposed = await runWithGrant(spaceKey, () =>
+      agentCaller.create({
+        slug: "social-account-audit",
+        displayName: "Social account audit",
+        agentUserId: AGENT,
+        deferredFields: [
+          { slug: "botscore", valueType: "number", overlay: true },
+        ],
+      })
+    );
+    expect(proposed).toMatchObject({ status: "proposed", fieldsIncluded: 1 });
+  });
+
+  it("an approval that lands on an EXISTING kind attaches no carried field", async () => {
+    await proposeKind();
+    h.existingOnReplay = true;
+    const result = await approve();
+    expect(h.fields).toEqual([]);
+    expect(result.refusals?.join(" ")).toContain("already exists");
   });
 });

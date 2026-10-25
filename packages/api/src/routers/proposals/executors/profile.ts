@@ -160,19 +160,45 @@ export function registerProfileExecutors(): void {
       // `property_def/create` executor uses, as the approver. One field that
       // fails never undoes the kind or its siblings; it is reported (below)
       // for the author to add (define_kind is slug-idempotent).
-      const createdProfileId = (
-        result as { profile?: { id?: string } | null } | null
-      )?.profile?.id;
+      // Only a kind THIS approval created takes the carried fields: on the
+      // slug-idempotent hit (`existing: true`, a kind of that slug appeared
+      // since filing) the reviewer was told a kind was being CREATED, so its
+      // fields are refused and reported, never attached to someone's kind.
+      const replayed = result as {
+        profile?: { id?: string } | null;
+        existing?: boolean;
+      } | null;
+      const landedOnExisting = replayed?.existing === true;
+      const createdProfileId = landedOnExisting
+        ? undefined
+        : replayed?.profile?.id;
       // Each field is CHECKED AGAIN here, not trusted from when it was filed:
       // a proposal can sit for days, and a stored payload is data. A field
       // that no longer passes (bad shape, a slug taken since, a type clash) is
       // REPORTED on the row — `data.fieldOutcomes` — never silently dropped.
-      const rawFields = Array.isArray(innerData.fields) ? innerData.fields : [];
+      const rawFields = Array.isArray(innerData.kindFields)
+        ? innerData.kindFields
+        : [];
       const fieldOutcomes: Array<{
         slug: string | null;
         outcome: "created" | "refused";
         reason?: string;
       }> = [];
+      if (landedOnExisting) {
+        for (const raw of rawFields) {
+          fieldOutcomes.push({
+            slug:
+              raw &&
+              typeof raw === "object" &&
+              typeof (raw as { slug?: unknown }).slug === "string"
+                ? (raw as { slug: string }).slug
+                : null,
+            outcome: "refused",
+            reason:
+              "the kind already exists, so the approval created nothing to attach it to; add it with define_kind",
+          });
+        }
+      }
       if (createdProfileId) {
         for (const raw of rawFields) {
           const parsed = ProposedKindFieldSchema.safeParse(raw);

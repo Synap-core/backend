@@ -57,11 +57,18 @@ export function registerSkillExecutors(): void {
         return { success: true, alreadyApproved: true };
       }
 
-      const { insertSkillGoverned, replaceSkillRequiredTools } =
-        await import("../../skills.js");
+      const {
+        insertSkillGoverned,
+        replaceSkillRequiredTools,
+        visibleRequiredTools,
+      } = await import("../../skills.js");
       // Not a `skills` column: the declared `requires` edges, replayed below
       // once the row exists (ticket c5058d24).
-      const { requiredToolIds, ...skillValues } = innerData;
+      const {
+        requiredToolIds,
+        requiredToolNames: _requiredToolNames,
+        ...skillValues
+      } = innerData;
       const result = await insertSkillGoverned({
         ...(skillValues as Record<string, unknown>),
         // Own the skill as the APPROVER (mirrors project/view) — no agentUserId
@@ -134,17 +141,34 @@ export function registerSkillExecutors(): void {
       }
 
       // The tools the author declared, which the reviewer approved with the
-      // skill — through the same body as `skills.setRequiredTools`. Non-fatal,
-      // like the wiring below: the skill row is committed, and a missing edge
-      // only means the verb's own calls are gated again (the safe direction).
-      if (Array.isArray(requiredToolIds) && requiredToolIds.length > 0) {
+      // skill — RE-RESOLVED under the approver's visibility (a stored id is
+      // data, and these edges are the scope the skill's own provider calls
+      // skip a second review under), then written through the same body as
+      // `skills.setRequiredTools`. An id that no longer resolves is REFUSED
+      // and reported, never written. Non-fatal for the skill: a missing edge
+      // only means its own calls are gated again (the safe direction).
+      const refusals: string[] = [];
+      const declaredToolIds = Array.isArray(requiredToolIds)
+        ? requiredToolIds.filter((id): id is string => typeof id === "string")
+        : [];
+      if (declaredToolIds.length > 0) {
         try {
+          const visible = new Set(
+            (await visibleRequiredTools(userId, declaredToolIds)).map(
+              (t) => t.id
+            )
+          );
+          for (const id of declaredToolIds) {
+            if (!visible.has(id)) {
+              refusals.push(
+                `Required tool ${id} was not linked: it is not an installed tool the approver can see.`
+              );
+            }
+          }
           await replaceSkillRequiredTools({
             userId,
             skill: materializedSkill,
-            toolIds: requiredToolIds.filter(
-              (id): id is string => typeof id === "string"
-            ),
+            toolIds: declaredToolIds.filter((id) => visible.has(id)),
           });
         } catch (err) {
           logger.error(
@@ -231,7 +255,7 @@ export function registerSkillExecutors(): void {
         "approved",
         userId
       );
-      return { success: true };
+      return { success: true, ...(refusals.length > 0 ? { refusals } : {}) };
     },
   });
   // ── skill / delete ───────────────────────────────────────────────────────
