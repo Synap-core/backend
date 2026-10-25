@@ -207,6 +207,7 @@ export const DURABLE_OBJECT_VERBS: ReadonlySet<string> = new Set([
   "automation.update",
   "automation.activate",
   "automation.pause",
+  "automation.delete",
   "view.update",
   "cell.update",
   "skill.update_rule",

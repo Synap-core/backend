@@ -259,6 +259,26 @@ function readParamsArg(raw: unknown): Record<string, unknown> | undefined {
   );
 }
 
+/**
+ * The playbook a session starts from, off the MCP wire: a playbook UUID, or
+ * null to skip matching. Some clients serialise a JSON `null` as the STRING
+ * "null"; it was stored verbatim as `templateId: "null"` (live, session
+ * 9a6a3528, ticket 0d4c2170), so it reads as null here. Any other non-UUID
+ * string is refused in words: it named no playbook, and starting ad-hoc would
+ * read as following one.
+ */
+function readTemplateIdArg(raw: unknown): string | null | undefined {
+  if (raw === null || raw === "null") return null;
+  if (typeof raw !== "string" || raw.trim() === "") return undefined;
+  if (UUID_RE.test(raw)) return raw;
+  throw Object.assign(
+    new Error(
+      `templateId must be a playbook UUID (list_playbooks lists the ones you can start from), or null to start without one — got "${raw.slice(0, 80)}".`
+    ),
+    { code: "BAD_REQUEST" }
+  );
+}
+
 export const sessionHandlers: McpHandlerMap = {
   /**
    * The bounded long-poll for the person's answer (V1 G4) — how an agent the
@@ -450,12 +470,7 @@ export const sessionHandlers: McpHandlerMap = {
       channelId: args.channelId as string | undefined,
       agentIds: args.agentIds as string[] | undefined,
       // `null` is the explicit opt-out of template matching; absent = match.
-      templateId:
-        args.templateId === null
-          ? null
-          : typeof args.templateId === "string"
-            ? args.templateId
-            : undefined,
+      templateId: readTemplateIdArg(args.templateId),
       matchTemplate: true,
       // Answers to the named template's declared params. Free-form on the wire
       // (the playbook owns the shape); validated against the declaration by the
@@ -1251,3 +1266,4 @@ export const sessionHandlers: McpHandlerMap = {
 
 /** Test-only export of the wire coercion above. */
 export { readParamsArg as __readParamsArgForTest };
+export { readTemplateIdArg as __readTemplateIdArgForTest };

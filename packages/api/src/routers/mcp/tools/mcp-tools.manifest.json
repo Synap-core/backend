@@ -6356,7 +6356,7 @@
                 },
                 "content": {
                   "type": "string",
-                  "description": "Long-form markdown body — materialized as a linked document on approval."
+                  "description": "Markdown body. A long-form body (600+ characters, or 2+ headings, a code fence, 3+ list items or 4+ paragraphs) is materialized as a linked document on approval; a shorter one is stored inline as the `content` property."
                 },
                 "properties": {
                   "type": "object",

@@ -54,7 +54,8 @@ export const CLOUD_TRUST_OPTIONS: ReadonlyArray<{
   {
     mode: "off",
     label: "Off",
-    detail: "Synap Cloud can't sign anyone in to this pod.",
+    detail:
+      'Synap Cloud can\'t sign anyone in to this pod, and invitations no longer offer "Continue with Synap Cloud".',
   },
   {
     mode: "sign_in",
@@ -155,7 +156,9 @@ export type AccountRecoveryErrorCode =
   | "unauthorized"
   | "reauth_required"
   | "cloud_session_not_allowed"
-  | "forbidden";
+  | "forbidden"
+  /** Turning Cloud sign-in off would lock out an owner who signs in only with Synap Cloud. */
+  | "owner_needs_pod_sign_in";
 
 export interface AccountRecoveryError {
   ok: false;

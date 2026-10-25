@@ -3401,8 +3401,9 @@ const automationActivateHandler: BuiltinVerbHandler = async (params, ctx) => {
 /**
  * automation.pause — switch an active automation OFF through the governed
  * `automationsRouter.pause` caller. The door gates on the loaded row's
- * workspace (`assertWorkspaceWrite`) and the key's grant; an AGENT pausing
- * proposes `automation.update` (a person pauses directly).
+ * workspace (`assertWorkspaceWrite`) and the key's grant. DE-ESCALATION: an
+ * agent's pause applies directly, at the door and at the capability gate
+ * (`DE_ESCALATION_BUILTIN_VERBS`, founder decision 2026-10-23, ticket 68aeb326).
  */
 const automationPauseParams = z
   .object({
@@ -3422,6 +3423,39 @@ const automationPauseHandler: BuiltinVerbHandler = async (params, ctx) => {
   } as unknown as Context);
 
   return caller.pause({
+    id: input.automationId,
+    workspaceId: ctx.workspaceId,
+  });
+};
+
+/**
+ * automation.delete — remove an automation through the governed
+ * `automationsRouter.delete` caller. The door gates on the loaded row's
+ * workspace and the key's grant, then files an AGENT's delete as an
+ * `automation/delete` proposal (`gateAgentAutomationChange`; "delete" is a
+ * DESTRUCTIVE_ACTIONS floor no rule widens). A person deletes directly. The
+ * agent is threaded on the caller context so the door never depends on the
+ * ambient request to know who acts (ticket 68aeb326).
+ */
+const automationDeleteParams = z
+  .object({
+    automationId: z.string().uuid(),
+  })
+  .strict();
+
+const automationDeleteHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = automationDeleteParams.parse(params);
+
+  const { automationsRouter } = await import("../../routers/automations.js");
+  const caller = automationsRouter.createCaller({
+    db,
+    authenticated: true as const,
+    userId: ctx.userId,
+    workspaceId: ctx.workspaceId,
+    ...(ctx.agentUserId ? { agentUserId: ctx.agentUserId } : {}),
+  } as unknown as Context);
+
+  return caller.delete({
     id: input.automationId,
     workspaceId: ctx.workspaceId,
   });
@@ -3944,6 +3978,7 @@ export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {
   "automation.update": automationUpdateHandler,
   "automation.activate": automationActivateHandler,
   "automation.pause": automationPauseHandler,
+  "automation.delete": automationDeleteHandler,
   // Lifecycle REVISION (Wave B): the remaining doors an agent could CREATE
   // through but never REVISE or RETIRE. See the section note above for the
   // FOUR groups deliberately left out (ungated destructive doors, the
@@ -4015,6 +4050,7 @@ export const BUILTIN_VERB_PARAM_SCHEMAS: Record<
   "automation.update": automationUpdateParams,
   "automation.activate": automationActivateParams,
   "automation.pause": automationPauseParams,
+  "automation.delete": automationDeleteParams,
   "view.update": viewUpdateParams,
   "cell.update": cellUpdateParams,
   "playbook.archive": playbookArchiveParams,
@@ -4023,6 +4059,18 @@ export const BUILTIN_VERB_PARAM_SCHEMAS: Record<
   "property_def.propose_retire": propertyDefProposeRetireParams,
   "web.read": webReadParams,
 };
+
+/**
+ * The DE-ESCALATION builtin verbs — writes that only REDUCE what the pod does
+ * on its own. The capability gate auto-runs them for an agent the way it runs a
+ * read (no grant, no proposal; an untrusted origin still proposes), because
+ * stopping a misbehaving automation must not itself wait for review. The way
+ * back up (`automation.activate`) stays governed. Founder decision 2026-10-23
+ * (ticket 68aeb326). Never a verb that creates, widens or deletes.
+ */
+export const DE_ESCALATION_BUILTIN_VERBS: ReadonlySet<string> = new Set([
+  "automation.pause",
+]);
 
 /**
  * The READ-ONLY builtin verbs — those whose execution only READS (no mutation).

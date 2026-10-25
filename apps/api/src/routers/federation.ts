@@ -55,6 +55,7 @@ import {
   type VerifiedRequesterAccount,
 } from "@synap/api";
 import { configuredPodAdminBase } from "../pod-admin-config.js";
+import { readCloudSignInSettings, readCloudTrust } from "../cloud-trust.js";
 
 const logger = createLogger({ module: "federation" });
 export const federationRouter = new Hono();
@@ -378,9 +379,12 @@ export async function backfillFederationOidcCredentials(): Promise<void> {
  *   503 { error: "discovery_unavailable" }   — the read FAILED (never `available:false`)
  *
  * `available` = the pod has a CP-pushed `federationOidcClient.issuer` AND that
- * issuer is an `approved` row in `trusted_issuers`. `reason` is present only
- * when unavailable: `not_configured` (no usable issuer setting) or
- * `issuer_not_approved` (setting present, issuer not approved). Nothing else is
+ * issuer is an `approved` row in `trusted_issuers` AND the owner has not turned
+ * Synap Cloud sign-in off (Cloud trust `off`, ADDENDUM 2026-10-23: every Cloud
+ * button hides, the invite page's included; the Kratos hooks refuse it anyway).
+ * `reason` is present only when unavailable: `not_configured` (no usable
+ * issuer setting), `issuer_not_approved` (setting present, issuer not
+ * approved) or `turned_off` (the owner's switch). Nothing else is
  * exposed — no client id, no secret, no user data. The issuer URL is the public
  * OIDC issuer the browser is redirected to anyway.
  */
@@ -389,7 +393,7 @@ export type CloudSignInDiscovery = {
     available: boolean;
     provider: typeof CP_OIDC_PROVIDER;
     issuerUrl: string | null;
-    reason?: "not_configured" | "issuer_not_approved";
+    reason?: "not_configured" | "issuer_not_approved" | "turned_off";
   };
 };
 
@@ -418,6 +422,16 @@ federationRouter.get("/discovery", async (c) => {
           provider: CP_OIDC_PROVIDER,
           issuerUrl,
           reason: "issuer_not_approved",
+        },
+      } satisfies CloudSignInDiscovery);
+    }
+    if ((await readCloudTrust()) === "off") {
+      return c.json({
+        cloudSignIn: {
+          available: false,
+          provider: CP_OIDC_PROVIDER,
+          issuerUrl,
+          reason: "turned_off",
         },
       } satisfies CloudSignInDiscovery);
     }
@@ -1511,6 +1525,26 @@ federationRouter.post(
   }
 );
 
+/**
+ * The owner turned Synap Cloud off (Cloud trust `off`, ADDENDUM 2026-10-23)
+ * and `issuerUrl` IS this pod's Synap Cloud: the identity-link ceremony is
+ * refused at the pod, not only hidden in the console. Another approved
+ * issuer is not affected. A failed read throws (the caller answers 503).
+ */
+async function synapCloudLinkRefused(issuerUrl: string): Promise<boolean> {
+  const { trust, federationIssuer } = await readCloudSignInSettings();
+  return (
+    trust === "off" &&
+    federationIssuer !== null &&
+    canonicalIssuerUrl(federationIssuer) === issuerUrl
+  );
+}
+
+const SYNAP_CLOUD_OFF_BODY = {
+  error: "Synap Cloud sign-in is turned off for this pod.",
+  code: "CLOUD_SIGN_IN_DISABLED",
+} as const;
+
 /** Browser → Pod: a direct Pod session links one issuer subject. */
 federationRouter.post("/identity-links", authMiddleware, async (c) => {
   const userId = c.get("userId" as never) as string | undefined;
@@ -1529,6 +1563,15 @@ federationRouter.post("/identity-links", authMiddleware, async (c) => {
       : null;
   if (!issuerUrl) {
     return c.json({ error: "Invalid issuer identity-link assertion" }, 401);
+  }
+
+  try {
+    if (await synapCloudLinkRefused(issuerUrl)) {
+      return c.json(SYNAP_CLOUD_OFF_BODY, 403);
+    }
+  } catch (err) {
+    logger.error({ err }, "identity link: Cloud trust read failed");
+    return c.json({ error: "Identity link unavailable" }, 503);
   }
 
   const db = await getDb();
@@ -1647,6 +1690,15 @@ federationRouter.post("/identity-links/consume", async (c) => {
     : null;
   if (!issuer || issuer.status !== "approved") {
     return c.json({ error: "Issuer is not approved" }, 401);
+  }
+  // Re-checked at consume: the switch may have moved since the browser leg.
+  try {
+    if (await synapCloudLinkRefused(issuer.issuerUrl)) {
+      return c.json(SYNAP_CLOUD_OFF_BODY, 403);
+    }
+  } catch (err) {
+    logger.error({ err }, "identity link consume: Cloud trust read failed");
+    return c.json({ error: "Identity link unavailable" }, 503);
   }
 
   let payload: Assertion | null;

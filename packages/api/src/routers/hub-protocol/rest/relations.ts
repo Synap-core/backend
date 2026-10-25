@@ -13,12 +13,12 @@ import {
   WireRelationSchema,
 } from "./_codecs/relation.js";
 import {
+  actingUserIdFor,
   confineWorkspaceOrForbidden,
   getCaller,
   hasScope,
   httpStatusForTrpcError,
   logger,
-  mayActAsUser,
   resolveActingContext,
   resolveActorId,
   type HubHono,
@@ -252,13 +252,14 @@ export function registerRelationsRoutes(app: HubHono): void {
       const authUserId = c.get("userId") as string | undefined;
       if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
       const claimed = body.userId ?? queryUserId;
-      if (!mayActAsUser(c, claimed)) {
+      const actingUserId = actingUserIdFor(c, claimed);
+      if (!actingUserId) {
         return c.json(
           { error: "userId does not match the authenticated session" },
           403
         );
       }
-      userId = claimed ?? authUserId;
+      userId = actingUserId;
       effectiveWorkspaceId = undefined;
     } else {
       const acting = await resolveActingContext(c, {
