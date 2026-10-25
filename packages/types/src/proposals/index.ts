@@ -36,13 +36,10 @@ export * from "./duplicate-review.js";
 export const PROPOSAL_BATCH_MAX = 50;
 import { resolveProposalAction } from "./action.js";
 
-// Re-export database types for proposals
-export type { Proposal, NewProposal } from "@synap/database";
-
-// NOTE: Zod schemas (insertProposalSchema, selectProposalSchema)
-// intentionally NOT re-exported — they pull in postgres/drizzle which breaks
-// browser/Electron builds. Backend consumers should import directly from
-// @synap/database.
+// The proposal row, declared in this package (`./row.js`); the database
+// re-exports it. Zod schemas (insertProposalSchema, selectProposalSchema) live
+// with the drizzle table in @synap/database and are not part of this package.
+export type { Proposal, NewProposal } from "./row.js";
 
 /**
  * Proposal status as stored in the DB.
@@ -1662,7 +1659,7 @@ export function resolveCompositeRef(
  *
  * Re-exported by frontend as `UniversalProposal` for backwards compat.
  */
-import type { Proposal } from "@synap/database";
+import type { Proposal } from "./row.js";
 
 export interface ProposalWithRequest extends Proposal {
   request: UpdateRequest;

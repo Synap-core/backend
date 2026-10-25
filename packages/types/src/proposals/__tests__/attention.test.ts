@@ -1,5 +1,4 @@
 import { describe, it, expect } from "vitest";
-import { ProposalStatus } from "@synap/database/schema";
 import {
   PROPOSAL_STATUSES,
   STATUS_ATTENTION,
@@ -33,11 +32,11 @@ describe("resolveProposalAttention — every status", () => {
     );
   });
 
-  it("the status list is the RUNTIME DB enum, both directions", () => {
-    // The compile-time floor in attention.ts proves this for the types; this
-    // proves it for the runtime values the DB actually writes.
-    const stored = Object.values(ProposalStatus).sort();
-    expect([...PROPOSAL_STATUSES].sort()).toEqual(stored);
+  it("every stored status is classified, both directions", () => {
+    // That PROPOSAL_STATUSES is exactly the DB enum is proven at compile time on
+    // the database side (`packages/database/src/wire-parity/proposals.ts`:
+    // the runtime const is `as const`, so its value set IS its literal type).
+    const stored = [...PROPOSAL_STATUSES].sort();
     expect(Object.keys(STATUS_ATTENTION).sort()).toEqual(stored);
     // Non-vacuity: the table above covers the whole enum.
     expect(Object.keys(EXPECTED).sort()).toEqual(stored);

@@ -23,16 +23,13 @@ import { ProfileRepository } from "../../repositories/profile-repository.js";
 import { readStoredEnumOptions } from "../../utils/property-enum.js";
 import { parseLifecycleOptions } from "../../utils/lifecycle-model.js";
 import { lifecycleProjectionStatements } from "./project-lifecycle-columns.js";
+import type { LifecycleAuthoring } from "@synap-core/types/workspaces/definition";
 
 type Db = PostgresJsDatabase<typeof schema>;
 
-/** The authoring shape on a template profile. */
-export interface LifecycleAuthoring {
-  /** The lifecycle property's slug (must be one of the profile's properties). */
-  property: string;
-  /** `[{ key, label?, category, tone?, humanOnly? }]` — every option needs a category. */
-  options: unknown[];
-}
+// The authoring shape on a template profile — declared once with the workspace
+// definition that carries it (`@synap-core/types/workspaces/definition`).
+export type { LifecycleAuthoring } from "@synap-core/types/workspaces/definition";
 
 export class LifecycleDeclarationError extends Error {
   readonly code = "LIFECYCLE_DECLARATION_INVALID" as const;

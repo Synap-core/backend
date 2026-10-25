@@ -18,6 +18,11 @@ import {
 } from "drizzle-orm/pg-core";
 import { workspaces } from "./workspaces.js";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
+// `AiPosture` is declared once in `@synap-core/types/profiles/ai-posture` (it is
+// also the shape of `WorkspaceSettings.profileAiPosture`).
+import type { AiPosture } from "@synap-core/types/profiles/ai-posture";
+
+export type { AiPosture } from "@synap-core/types/profiles/ai-posture";
 
 /**
  * Profile Scope
@@ -27,18 +32,6 @@ export enum ProfileScope {
   SHARED = "shared", // Explicitly shared with specific workspaces via profile_workspace_access
   WORKSPACE = "workspace", // Owned by a single workspace
   USER = "user", // Personal to user
-}
-
-/**
- * Per-kind behavioral emphases for AI teaching briefs (base layer). Workspace
- * overlay lives at `workspaces.settings.profileAiPosture[slug]` (jsonb,
- * already exists) — resolved together by `getEffectiveAiPosture()`.
- */
-export interface AiPosture {
-  explainWhy?: boolean;
-  openAfterCreate?: boolean;
-  attachOutputs?: boolean;
-  directives?: string[];
 }
 
 /**

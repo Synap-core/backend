@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { buildRequestFromProposal, resolveProposalAction } from "../index.js";
-import type { Proposal } from "@synap/database";
+import type { Proposal } from "../row.js";
 
 describe("resolveProposalAction — the verb a proposal row performs", () => {
   it("reads a flat receipt's dotted proposalType tail", () => {
