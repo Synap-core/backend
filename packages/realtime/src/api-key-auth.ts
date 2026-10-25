@@ -14,10 +14,9 @@
  *     `realtime:observe`) and for joining only the rooms the key is
  *     authorized for.
  *
- * Phase 3A scope contract: a key with `realtime:observe` is allowed to
- * subscribe to ANY workspace room — the assumption is that this is a local
- * observer running on the operator's own pod. Per-workspace ACL is a Phase 4+
- * concern (see `eve-os-vision.mdx` §9).
+ * Room contract: `realtime:observe` only lets the key CONNECT. Every room it
+ * joins passes `canKeyJoinRoom` (room-authz.ts): the room as its owner may
+ * join it, narrowed by the key's bound workspace and its grant.
  */
 
 import bcrypt from "bcrypt";
@@ -36,6 +35,13 @@ export interface ValidatedRealtimeKey {
   userId: string;
   scopes: string[];
   keyName: string;
+  /**
+   * Whose data the key reads: the human an agent key acts for, else the key's
+   * own user — `effectiveUserId` of `resolveKeyIdentity` (@synap/api).
+   */
+  ownerUserId: string;
+  /** The workspace the key is bound to (`api_keys.workspace_id`); null = pod-wide. */
+  workspaceId: string | null;
   /** Optional — the agent slug if this key belongs to an agent user. */
   agentType?: string;
 }
@@ -102,6 +108,8 @@ export async function validateRealtimeApiKey(
       userId: candidate.userId,
       scopes,
       keyName: candidate.keyName,
+      ownerUserId: candidate.linkedUserId ?? candidate.userId,
+      workspaceId: candidate.workspaceId ?? null,
     };
   }
 

@@ -5,7 +5,7 @@
  *
  *   POST /                       identity.updated sync (settings hook)
  *   POST /registration/gate      blocking registration gate (pre-persist)
- *   POST /registration/complete  Cloud owner claim (post-persist, oidc only)
+ *   POST /registration/complete  Cloud owner claim / invite accept (post-persist, oidc only)
  *   POST /settings/guard         Cloud-trust guard on credential changes (pre-persist)
  *   POST /login/cloud            Cloud sign-in gate (owner set Cloud trust "off")
  *
@@ -15,7 +15,13 @@
 
 import { timingSafeEqual } from "crypto";
 import { Hono } from "hono";
-import { normalizeIssuerUrl, syncUserFromKratos } from "@synap/api";
+import {
+  acceptInviteFor,
+  ensureUserRow,
+  findInviteByToken,
+  normalizeIssuerUrl,
+  syncUserFromKratos,
+} from "@synap/api";
 import { createLogger } from "@synap-core/core";
 import { emitSideEffects } from "@synap/events";
 import { eq, getDb, TrustedIssuerService } from "@synap/database";
@@ -123,6 +129,7 @@ function kratosAdminUrl(): string {
 kratosWebhookRouter.route(
   "/registration",
   createRegistrationGateRouter({
+    readCloudTrust,
     readFederationIssuer: readFederationOidcIssuer,
     normalizeIssuerUrl,
     async hasDifferentHumanOwner(issuerUrl, sub) {
@@ -151,6 +158,21 @@ kratosWebhookRouter.route(
     claimOwner: claimPodOwnerFromCloudSignIn,
     deleteKratosIdentity: (identityId) =>
       deleteKratosIdentity(kratosAdminUrl(), identityId),
+    async findInvite(token) {
+      const invite = await findInviteByToken(token);
+      return invite
+        ? { email: invite.email, expiresAt: invite.expiresAt }
+        : null;
+    },
+    async acceptInvite({ token, kratosIdentityId, email, name }) {
+      const invite = await findInviteByToken(token);
+      if (!invite || invite.expiresAt < new Date()) return "gone";
+      // The same two steps as the console's "Create account and join"
+      // (`/setup/accept-invite`): the pod user row, then the one accept door.
+      await ensureUserRow(kratosIdentityId, email, name);
+      await acceptInviteFor(invite, { id: kratosIdentityId, email });
+      return "accepted";
+    },
   })
 );
 

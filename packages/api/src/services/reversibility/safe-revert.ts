@@ -1032,7 +1032,7 @@ export async function safeRevert(
     pass: opts.touchedByPass ?? null,
   };
 
-  return database.transaction(async (tx) => {
+  const result = await database.transaction(async (tx) => {
     // Checked on the transaction, rows locked: nothing can change a target
     // between the verdict and the write.
     const untouched: RevertTarget[] = [];
@@ -1057,4 +1057,36 @@ export async function safeRevert(
     await opts.alsoInTransaction?.(tx, result);
     return result;
   });
+  await tearDownArchivedPlaybooks(database, result.reverted);
+  return result;
+}
+
+/**
+ * An archived playbook is not live, so neither is what fires it: the SAME
+ * teardown the archive doors run (`playbooksRouter.archive`) — its backing
+ * cron automation and its activator rules. After the commit, because both read
+ * the playbook's committed status. Without it, an undo archived the playbook
+ * and its schedule kept firing (ticket cdf608a8).
+ */
+async function tearDownArchivedPlaybooks(
+  database: Database,
+  reverted: RevertTarget[]
+): Promise<void> {
+  const ids = reverted.flatMap((t) => (t.kind === "playbook" ? [t.id] : []));
+  if (ids.length === 0) return;
+  const { materializePlaybookCronAutomation } =
+    await import("../playbooks/cron-automation.js");
+  const { convergePlaybookActivatorsSafely } =
+    await import("../playbooks/playbook-activators.js");
+  const rows = await database
+    .select()
+    .from(playbooks)
+    .where(inArray(playbooks.id, ids));
+  for (const row of rows) {
+    await materializePlaybookCronAutomation(row, { userId: row.createdBy });
+    await convergePlaybookActivatorsSafely({
+      playbookId: row.id,
+      userId: row.createdBy,
+    });
+  }
 }

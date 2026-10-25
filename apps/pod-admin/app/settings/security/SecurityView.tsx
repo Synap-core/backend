@@ -251,6 +251,8 @@ function refusalSentence(error: string): string {
       return "A Synap Cloud sign-in can't change this. Sign in with your pod password.";
     case "forbidden":
       return "Only the pod owner can change this.";
+    case "owner_needs_pod_sign_in":
+      return "An owner signs in only with Synap Cloud. Each owner needs a password or passkey on this pod before Synap Cloud sign-in can be turned off.";
     default:
       return "Couldn't save that. Try again.";
   }

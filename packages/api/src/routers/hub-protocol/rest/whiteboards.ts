@@ -15,7 +15,7 @@ import {
   hasScope,
   logger,
   resolveActorId,
-  verifyWorkspaceAccess,
+  verifyWorkspaceWriteAccess,
   type HubHono,
   httpStatusForTrpcError,
   requireUuidParam,
@@ -152,7 +152,7 @@ export function registerWhiteboardsRoutes(app: HubHono) {
     // is a required uuid, so the `??` is a type-narrowing guard, never a widen.
     const workspaceId =
       getConfinedWorkspace(c, body.workspaceId) ?? body.workspaceId;
-    if (!(await verifyWorkspaceAccess(userId, workspaceId))) {
+    if (!(await verifyWorkspaceWriteAccess(userId, workspaceId))) {
       return c.json({ error: "Access denied to workspace" }, 403);
     }
 
@@ -250,7 +250,7 @@ export function registerWhiteboardsRoutes(app: HubHono) {
     // is a required uuid, so the `??` is a type-narrowing guard, never a widen.
     const workspaceId =
       getConfinedWorkspace(c, body.workspaceId) ?? body.workspaceId;
-    if (!(await verifyWorkspaceAccess(userId, workspaceId))) {
+    if (!(await verifyWorkspaceWriteAccess(userId, workspaceId))) {
       return c.json({ error: "Access denied to workspace" }, 403);
     }
 

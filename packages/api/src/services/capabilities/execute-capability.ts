@@ -122,7 +122,11 @@ import {
   applyVerbWriteBack,
   type VerbWriteBackReport,
 } from "./verb-write-back.js";
-import { BUILTIN_VERBS, READ_ONLY_BUILTIN_VERBS } from "./builtin-verbs.js";
+import {
+  BUILTIN_VERBS,
+  DE_ESCALATION_BUILTIN_VERBS,
+  READ_ONLY_BUILTIN_VERBS,
+} from "./builtin-verbs.js";
 import { declaredReadOnly } from "./capability-drift.js";
 import {
   checkVerbParameters,
@@ -593,6 +597,13 @@ export async function executeCapability(input: {
     (skillRow.kind === "builtin" &&
       READ_ONLY_BUILTIN_VERBS.has(skillRow.name)) ||
     verbDeclaresReadOnly(skillRow);
+  // A DE-ESCALATION builtin (pausing an automation) takes the same auto-run
+  // path at the gate: it only reduces activity, so it must not wait for review
+  // (ticket 68aeb326). Origin trust still applies there.
+  const autoRuns =
+    readOnly ||
+    (skillRow.kind === "builtin" &&
+      DE_ESCALATION_BUILTIN_VERBS.has(skillRow.name));
 
   // #4 instruction-provenance ACTIVATION (rung 2.55): resolve the acting channel
   // for this turn. An explicit `channelId` wins; otherwise derive it from the
@@ -613,7 +624,7 @@ export async function executeCapability(input: {
     workspaceId,
     channelId: actingChannelId,
     issuer: "hub.capabilities-execute",
-    readOnly,
+    readOnly: autoRuns,
   });
 
   if (decision.decision === "deny") {

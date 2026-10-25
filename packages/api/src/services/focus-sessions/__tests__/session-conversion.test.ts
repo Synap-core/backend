@@ -132,8 +132,20 @@ vi.mock("@synap/database", async (importOriginal) => {
         },
       },
       select: () => ({
-        from: () => ({
-          where: () => Promise.resolve([{ n: 0 }]),
+        from: (table: unknown) => ({
+          // The post-commit teardown reads the archived playbook back.
+          where: () =>
+            Promise.resolve(
+              table === actual.playbooks
+                ? [
+                    {
+                      id: PLAYBOOK_ID,
+                      status: store.playbookStatus,
+                      createdBy: USER_ID,
+                    },
+                  ]
+                : [{ n: 0 }]
+            ),
         }),
       }),
       update: (table: unknown) => {
@@ -159,6 +171,24 @@ vi.mock("@synap/database", async (importOriginal) => {
   };
 });
 
+/** The archive doors' teardown, as `safeRevert` calls it after the commit. */
+const teardown = vi.hoisted(() => [] as string[]);
+vi.mock("../../playbooks/cron-automation.js", () => ({
+  materializePlaybookCronAutomation: vi.fn(
+    async (pb: { id: string; status: string }) => {
+      teardown.push(`cron:${pb.id}:${pb.status}`);
+      return null;
+    }
+  ),
+}));
+vi.mock("../../playbooks/playbook-activators.js", () => ({
+  convergePlaybookActivatorsSafely: vi.fn(
+    async (input: { playbookId: string; userId: string }) => {
+      teardown.push(`activators:${input.playbookId}:${store.playbookStatus}`);
+    }
+  ),
+}));
+
 vi.mock("@synap/events", () => ({
   emitSideEffects: vi.fn(async () => undefined),
 }));
@@ -178,6 +208,7 @@ describe("revertConversion — transaction", () => {
     txCalls.length = 0;
     dbWriteCalls.length = 0;
     failAtCall.index = -1;
+    teardown.length = 0;
   });
 
   it("routes all three writes through the SAME transaction, never the top-level db", async () => {
@@ -226,5 +257,17 @@ describe("revertConversion — transaction", () => {
     expect(txCalls).toEqual(["update:playbooks"]);
     expect(store.playbookStatus).toBe("draft");
     expect(store.linkDeleted).toBe(false);
+    // A rolled-back undo archived nothing, so nothing is torn down.
+    expect(teardown).toEqual([]);
+  });
+
+  // Last: `db.transaction` call counts accumulate across this suite.
+  it("tears down the archived playbook's schedule and activators AFTER the commit (cdf608a8)", async () => {
+    await revertConversion({ sessionId: SESSION_ID, userId: USER_ID });
+    // Both read the committed status: archived, never the draft before.
+    expect(teardown).toEqual([
+      `cron:${PLAYBOOK_ID}:archived`,
+      `activators:${PLAYBOOK_ID}:archived`,
+    ]);
   });
 });
