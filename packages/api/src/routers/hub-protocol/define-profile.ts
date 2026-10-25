@@ -56,6 +56,49 @@ export type DefineProfileOutcome =
 
 type ProfilesCaller = Pick<HubProtocolCaller, "profiles">;
 
+/** One caller slug the door stored under a different spelling. */
+export interface SlugNormalization {
+  from: string;
+  to: string;
+  of: "kind" | "role" | "field";
+}
+
+/**
+ * Every slug this call rewrites, the kind's AND every field's, computed BEFORE
+ * any write so the FIRST result states them — including the call whose fields
+ * are deferred behind the kind's review. Learned the hard way (ticket
+ * a375443d): `social_account_audit` was stored as `social-account-audit` and
+ * `botScore` as `botscore` with no word on the first call, and a code skill
+ * approved against the requested names wrote to fields that do not exist.
+ */
+export function slugNormalizations(
+  profileSlug: { from: string; to: string; of: "kind" | "role" },
+  fields: ReadonlyArray<Record<string, unknown>>
+): SlugNormalization[] {
+  const out: SlugNormalization[] = [];
+  if (profileSlug.from !== profileSlug.to) out.push(profileSlug);
+  for (const spec of fields) {
+    if (typeof spec.slug !== "string") continue;
+    const to = slugifyPropertyKey(spec.slug) || spec.slug;
+    if (to !== spec.slug) out.push({ from: spec.slug, to, of: "field" });
+  }
+  return out;
+}
+
+/** The result keys that announce the rewrites — FIRST in the result, so the
+ *  tool text leads with them. Empty when nothing was rewritten. */
+function normalizationNotice(
+  list: SlugNormalization[]
+): { notice: string; normalized: SlugNormalization[] } | Record<never, never> {
+  if (list.length === 0) return {};
+  return {
+    notice: `Slugs were normalised (lowercase, words joined by "-"). Use the STORED slugs in code, skills and later calls: ${list
+      .map((n) => `${n.from} → ${n.to} (${n.of})`)
+      .join(", ")}.`,
+    normalized: list,
+  };
+}
+
 export async function defineProfile(
   caller: ProfilesCaller,
   input: DefineProfileInput,
@@ -76,6 +119,17 @@ export async function defineProfile(
   // `|| raw` keeps a slug that slugifies to nothing (`"!!!"`) reaching the
   // validator, so it still fails loudly instead of becoming "".
   const profileSlug = slugifyPropertyKey(input.slug) || input.slug;
+  const fieldSpecs = (input.fields ?? []) as Array<Record<string, unknown>>;
+  const announced = normalizationNotice(
+    slugNormalizations(
+      {
+        from: input.slug,
+        to: profileSlug,
+        of: input.profileKind === "role" ? "role" : "kind",
+      },
+      fieldSpecs
+    )
+  );
 
   const uiHints: Record<string, unknown> = { ...(input.uiHints ?? {}) };
   if (input.icon !== undefined) uiHints.icon = input.icon;
@@ -112,8 +166,6 @@ export async function defineProfile(
     ...(input.agentUserId ? { agentUserId: input.agentUserId } : {}),
   })) as unknown as Record<string, unknown>;
 
-  const fieldSpecs = (input.fields ?? []) as Array<Record<string, unknown>>;
-
   // Governance gated the profile itself → there is no profileId to hang fields
   // on. Return the proposal and say the fields are still pending, rather than
   // half-applying a schema.
@@ -124,6 +176,7 @@ export async function defineProfile(
     return {
       ok: true,
       result: withReviewUrl({
+        ...announced,
         ...result,
         ...(fieldSpecs.length > 0
           ? {
@@ -144,7 +197,7 @@ export async function defineProfile(
     | undefined;
   const profileId = createdProfile?.id;
   if (fieldSpecs.length === 0 || !profileId) {
-    return { ok: true, result };
+    return { ok: true, result: { ...announced, ...result } };
   }
   // W2b ROLE PRINCIPLE: re-declaring an EXISTING pod-wide role from a
   // workspace ADDS that workspace's fields as OVERLAYS — the shared role's
@@ -236,5 +289,5 @@ export async function defineProfile(
     }
   }
 
-  return { ok: true, result: { ...result, properties } };
+  return { ok: true, result: { ...announced, ...result, properties } };
 }

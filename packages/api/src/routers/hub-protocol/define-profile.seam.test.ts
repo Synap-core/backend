@@ -254,3 +254,69 @@ describe("define_kind — ONE slug normalisation", () => {
     expect(ledger[0].normalizedFrom).toBeUndefined();
   });
 });
+
+describe("define_kind — the FIRST result states every rewrite (ticket a375443d)", () => {
+  /** The live first call: an agent kind is a proposal, so its fields defer. */
+  const proposedCaller = () =>
+    ({
+      profiles: {
+        createProfile: async (input: Record<string, unknown>) => {
+          h.createProfileCalls.push(input);
+          return {
+            status: "proposed",
+            proposalId: "44444444-4444-4444-8444-444444444444",
+            profile: { slug: input.slug },
+          };
+        },
+        createPropertyDef: async () => {
+          throw new Error("a deferred field must not be written");
+        },
+      },
+    }) as never;
+
+  it("names the kind's AND every deferred field's normalisation on the proposed call", async () => {
+    const outcome = await defineProfile(
+      proposedCaller(),
+      {
+        userId: USER,
+        workspaceId: WS,
+        slug: "social_account_audit",
+        displayName: "Social account audit",
+        fields: [
+          { slug: "botScore", valueType: "number" },
+          { slug: "handle", valueType: "string" },
+        ],
+      },
+      { door: "synap_define_kind", fieldsParam: "properties" }
+    );
+    if (!outcome.ok) throw new Error(outcome.error);
+    expect(outcome.result.normalized).toEqual([
+      { from: "social_account_audit", to: "social-account-audit", of: "kind" },
+      { from: "botScore", to: "botscore", of: "field" },
+    ]);
+    const notice = String(outcome.result.notice);
+    expect(notice).toContain("social_account_audit → social-account-audit");
+    expect(notice).toContain("botScore → botscore");
+    expect(notice).not.toContain("handle");
+    // Prominent in the TOOL TEXT: the MCP door serialises this object, and
+    // the notice is its first key.
+    expect(Object.keys(outcome.result)[0]).toBe("notice");
+  });
+
+  it("states it on the applied call too, and says nothing when nothing changed", async () => {
+    const renamed = await define("knowledge", [
+      { slug: "ek_type", valueType: "string" },
+    ]);
+    if (!renamed.ok) throw new Error(renamed.error);
+    expect(renamed.result.normalized).toEqual([
+      { from: "ek_type", to: "ek-type", of: "field" },
+    ]);
+
+    const clean = await define("knowledge", [
+      { slug: "content", valueType: "string" },
+    ]);
+    if (!clean.ok) throw new Error(clean.error);
+    expect(clean.result).not.toHaveProperty("notice");
+    expect(clean.result).not.toHaveProperty("normalized");
+  });
+});
