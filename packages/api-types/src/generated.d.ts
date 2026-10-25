@@ -46751,7 +46751,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				invitedBy: string;
 				role: string;
-				token: string;
 				type: "pod" | "workspace";
 				workspaceId: string | null;
 				workspaceName: string | null;
@@ -46770,7 +46769,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				invitedBy: string;
 				role: string;
-				token: string;
 				type: "pod" | "workspace";
 				workspaceId: string | null;
 			}[];
@@ -47008,6 +47006,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: ReconcileReport;
+		}>;
+		regenerateInvite: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+			};
+			meta: object;
+			output: {
+				expiresAt: Date;
+				id: string;
+				token: string;
+			};
 		}>;
 		rejectInvite: import("@trpc/server").TRPCMutationProcedure<{
 			input: {

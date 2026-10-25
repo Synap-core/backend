@@ -2048,6 +2048,13 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "sample",
     addedBy: "0347_projects_sample.sql",
   },
+  // Invite links are found by their token's digest (0353, decision B2): a
+  // missing column fails every invite preview, accept and create.
+  {
+    table: "invites",
+    column: "token_digest",
+    addedBy: "0353_invites_token_digest.sql",
+  },
   // Tracks (0272) — a METHOD running inside a project. `project_tracks` is NOT
   // in the baseline (it references `projects`, which 0151 creates), so this is
   // the table's ONLY startup guard. `focus_sessions.track_id` is selected by
