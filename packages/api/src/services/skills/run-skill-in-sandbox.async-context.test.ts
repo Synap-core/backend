@@ -1,40 +1,89 @@
 /**
- * A code skill's host bridges keep the run's async context.
+ * Every isolated-vm host bridge is bound to the run's async context — proven
+ * WITHOUT the native addon, so it runs on every runner.
  *
- * isolated-vm calls an `ivm.Reference` host callback with NO async context, so
- * every AsyncLocalStorage store reads empty inside it. On the IS twin that made
- * every in-skill `callProvider` go out without the run's delegation and come
- * back 401 (ticket f47609a6, pod knowledge 11dc561a). The pod's in-process
- * sandbox builds the same bridges; here the store that would vanish is the
- * acting agent (`runWithActingAgent`), which the write gate reads.
+ * isolated-vm calls an `ivm.Reference` host callback with NO async context
+ * (ticket f47609a6, pod knowledge 11dc561a). Here `isolated-vm` is a recorder:
+ * its `Reference` keeps each bridge function `runIsolate` hands it, and its
+ * script `run` calls the `__getEntities` bridge from a FOREIGN async scope
+ * (an `AsyncResource` made at load time, outside every store) — the shape of
+ * the native callback. The real-isolate twin is
+ * `run-skill-in-sandbox.async-context.real-isolate.test.ts` (devbox only).
  *
- * Runs the REAL isolated-vm isolate and the REAL bridge code (`runIsolate`);
- * only the hub caller is a recorder. Negative control (2026-10-25, branch
- * negctl/tickets-1025-5): `bindHostCallback` returning `fn` unbound turns the
- * behavioural case red (the recorder reads `undefined`).
- *
- * The scan below pins that EVERY bridge is built through `hostRef`; it counts
- * construction sites in this one file, so a bridge built in another file is
- * not seen.
+ * Negative control (2026-10-25, branch negctl/tickets-1025-6):
+ * `bindHostCallback` returning `fn` unbound turns the bridge case red (the
+ * recorder reads `undefined` and no bridge carries `asyncResource`).
  */
-import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { AsyncResource } from "node:async_hooks";
 import { describe, expect, it, vi } from "vitest";
 
-vi.hoisted(() => {
+const h = vi.hoisted(() => {
   process.env.DATABASE_URL ??= "postgresql://test:test@localhost:5432/test";
+  return {
+    refs: new Map<string, (...args: unknown[]) => unknown>(),
+    built: [] as Array<(...args: unknown[]) => unknown>,
+  };
 });
+
+/** A callback scope outside every AsyncLocalStorage store, like the addon's. */
+const foreignScope = new AsyncResource("isolated-vm-native-callback");
+
+vi.mock("isolated-vm", () => {
+  class Reference {
+    constructor(public fn: (...args: unknown[]) => unknown) {
+      h.built.push(fn);
+    }
+  }
+  class ExternalCopy {
+    constructor(private value: unknown) {}
+    copyInto() {
+      return this.value;
+    }
+  }
+  class Isolate {
+    isDisposed = false;
+    async createContext() {
+      return {
+        global: {
+          set: async (name: string, value: unknown) => {
+            if (value instanceof Reference) h.refs.set(name, value.fn);
+          },
+        },
+        eval: async () => undefined,
+      };
+    }
+    async compileScript() {
+      return {
+        // The skill `return await hubProtocol.getEntities({...})`, as the
+        // addon runs it: the host callback fires in a foreign scope.
+        run: async () =>
+          foreignScope.runInAsyncScope(() =>
+            h.refs.get("__getEntities")!({ profileSlug: "task" })
+          ),
+      };
+    }
+    dispose() {
+      this.isDisposed = true;
+    }
+  }
+  const ivm = { Reference, ExternalCopy, Isolate };
+  return { default: ivm, ...ivm };
+});
+
 import { getActingAgentUserId, runWithActingAgent } from "@synap/database";
-import { runIsolate } from "./run-skill-in-sandbox.js";
+import { bindHostCallback, runIsolate } from "./run-skill-in-sandbox.js";
 
-const SOURCE = readFileSync(
-  resolve(dirname(fileURLToPath(import.meta.url)), "run-skill-in-sandbox.ts"),
-  "utf8"
-);
+describe("run-skill-in-sandbox: bridges keep the async context (no addon)", () => {
+  it("the foreign scope really loses the store (non-vacuity of the harness)", async () => {
+    const read = await runWithActingAgent("agent-7", async () =>
+      foreignScope.runInAsyncScope(() => getActingAgentUserId())
+    );
+    expect(read).toBeUndefined();
+  });
 
-describe("run-skill-in-sandbox: bridges keep the async context", () => {
-  it("a hub read made from inside the isolate still sees the acting agent", async () => {
+  it("a bridge called from that scope still sees the acting agent, and EVERY bridge is bound", async () => {
+    h.refs.clear();
+    h.built.length = 0;
     const seen: Array<string | undefined> = [];
     const caller = {
       entities: {
@@ -44,9 +93,9 @@ describe("run-skill-in-sandbox: bridges keep the async context", () => {
         },
       },
     };
-    const result = await runWithActingAgent("agent-7", () =>
+    await runWithActingAgent("agent-7", () =>
       runIsolate({
-        code: "return await hubProtocol.getEntities({ profileSlug: 'task' });",
+        code: "return 1;",
         args: {},
         context: { userId: "u-1", workspaceId: null, agentUserId: "agent-7" },
         timeoutMs: 5000,
@@ -58,21 +107,20 @@ describe("run-skill-in-sandbox: bridges keep the async context", () => {
         failureSink: {},
       })
     );
-    // Non-vacuity: the bridge really ran, once.
-    expect(result).toEqual({ entities: [] });
     expect(seen).toEqual(["agent-7"]);
+    // DERIVED from what the run actually built: every Reference received a
+    // function bound by AsyncResource.bind (it carries `asyncResource`).
+    expect(h.built.length).toBeGreaterThanOrEqual(8);
+    for (const fn of h.built) {
+      expect(
+        (fn as { asyncResource?: unknown }).asyncResource,
+        fn.name || "bridge"
+      ).toBeInstanceOf(AsyncResource);
+    }
   });
 
-  it("every bridge is built through hostRef, never a bare ivm.Reference", () => {
-    const bare = SOURCE.match(/new ivm\.Reference\(/g) ?? [];
-    const bound = SOURCE.match(/\bhostRef\(/g) ?? [];
-    // The ONE bare construction is inside hostRef itself.
-    expect(bare).toHaveLength(1);
-    expect(SOURCE).toMatch(
-      /const hostRef = [^\n]*\n\s*new ivm\.Reference\(bindHostCallback\(fn\)\)/
-    );
-    // Non-vacuity: the eight bridges (log, search, getEntities, getDocument,
-    // redeemSecret, hostFetch, callProvider, proposeEntity).
-    expect(bound.length).toBeGreaterThanOrEqual(8);
+  it("bindHostCallback keeps arguments and the return value", () => {
+    const bound = bindHostCallback((a: number, b: number) => a + b);
+    expect(bound(2, 3)).toBe(5);
   });
 });

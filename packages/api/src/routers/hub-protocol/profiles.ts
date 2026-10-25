@@ -40,10 +40,8 @@ import {
 } from "@synap/database";
 import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
-import {
-  profilesRouter as regularProfilesRouter,
-  ProposedKindFieldSchema,
-} from "../profiles.js";
+import { profilesRouter as regularProfilesRouter } from "../profiles.js";
+import { ProposedKindFieldSchema } from "../../services/profiles/proposed-kind-field.js";
 import { propertyDefsRouter as regularPropertyDefsRouter } from "../property-defs.js";
 import { actingAgentUserId, createHubProtocolCallerContext } from "./utils.js";
 import { assertMayActAs } from "./guard.js";

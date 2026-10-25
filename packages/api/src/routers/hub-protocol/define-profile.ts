@@ -14,7 +14,7 @@
 
 import { PropertyValueType, slugifyPropertyKey } from "@synap/database";
 
-import type { ProposedKindField } from "../profiles.js";
+import type { ProposedKindField } from "../../services/profiles/proposed-kind-field.js";
 
 import type { HubProtocolCaller } from "./rest/_shared.js";
 import { withReviewUrl } from "./proposal-response.js";

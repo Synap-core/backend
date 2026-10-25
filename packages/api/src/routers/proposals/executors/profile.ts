@@ -17,7 +17,7 @@ import {
   createAndLinkPropertyDef,
   type CreateAndLinkPropertyDefInput,
 } from "../../../services/profiles/create-and-link-property-def.js";
-import { ProposedKindFieldSchema } from "../../profiles.js";
+import { ProposedKindFieldSchema } from "../../../services/profiles/proposed-kind-field.js";
 
 const logger = createLogger({ module: "proposal-approve-executors-profile" });
 

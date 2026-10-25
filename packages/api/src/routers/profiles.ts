@@ -35,8 +35,8 @@ import {
   resolveProfileForApply,
   RENDERER_SURFACES,
   withCatalogPresentationStamp,
-  PropertyValueType,
 } from "@synap/database";
+import { ProposedKindFieldSchema } from "../services/profiles/proposed-kind-field.js";
 import type { RendererRef, ProfileRendererSource } from "@synap/database";
 import { TRPCError } from "@trpc/server";
 import { createLogger } from "@synap-core/core";
@@ -84,32 +84,6 @@ const ProfileUiHintsInput = z
   });
 
 const ProfileScopeSchema = z.enum(["system", "shared", "workspace", "user"]);
-
-/**
- * One field def as it rides a proposed kind (`profiles.create`
- * `deferredFields` → gate data `fields` → the `profile/create` executor).
- * The slug is already normalised by the caller (`slugifyPropertyKey`), which
- * is why the pattern is the stored-slug one.
- */
-export const ProposedKindFieldSchema = z.object({
-  slug: z
-    .string()
-    .min(1)
-    .max(100)
-    .regex(/^[a-z0-9-]+$/),
-  valueType: z
-    .string()
-    .refine((t) => (Object.values(PropertyValueType) as string[]).includes(t), {
-      message: `valueType must be one of ${Object.values(PropertyValueType).join(", ")}`,
-    }),
-  constraints: z.record(z.string(), z.unknown()).optional(),
-  uiHints: z.record(z.string(), z.unknown()).optional(),
-  required: z.boolean().optional(),
-  defaultValue: z.unknown().optional(),
-  displayOrder: z.number().optional(),
-  overlay: z.boolean().optional(),
-});
-export type ProposedKindField = z.infer<typeof ProposedKindFieldSchema>;
 
 /**
  * Zod schema for RendererRef.
