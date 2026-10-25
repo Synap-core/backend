@@ -92,7 +92,7 @@ describe("a goal's field labels", () => {
     expect(new Set(words).size).toBe(words.length);
     expect([SERVES_LABEL, THIS_WEEK_LABEL, DECLARE_DONE_LABEL]).toEqual([
       "Serves",
-      "This week",
+      "This week's goals",
       "Declare done",
     ]);
   });

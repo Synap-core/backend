@@ -1765,8 +1765,11 @@ export function resolveGoalFieldLabel(field: string | null | undefined) {
 
 /** A run's crumb to the goal it works for ("Serves · Launch the site"). */
 export const SERVES_LABEL = "Serves";
-/** The person's pinned goals for the week (D4) — the rail group's name. */
-export const THIS_WEEK_LABEL = "This week";
+/**
+ * The person's pinned goals for the week (D4) — the rail group's name. Not
+ * bare "This week": the phone's calendar-week page already has that name.
+ */
+export const THIS_WEEK_LABEL = "This week's goals";
 /** The goal's close-with-a-verdict review (the judge's page and its door). */
 export const DECLARE_DONE_LABEL = "Declare done";
 
