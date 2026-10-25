@@ -34,6 +34,10 @@ import { storage } from "@synap/storage";
 import { ownerPrivateVisibleWhere } from "../../../utils/user-visible-where.js";
 import { accessScopeWhere } from "../../../utils/project-scope.js";
 import { resolveFacetVisibilityScope } from "../../../utils/workspace-membership.js";
+import {
+  MAX_LINKED_FILES_PER_ROW,
+  loadLinkedFileRefs,
+} from "../../../utils/stored-file-access.js";
 
 import {
   uploadBufferAsFileEntity,
@@ -521,6 +525,19 @@ export function registerEntitiesRoutes(app: HubHono): void {
               "one batch per page under the same lens as the rows. Default " +
               "`false`: rows carry no facets. 400 with `q`."
           ),
+        includeMedia: z
+          .enum(["true", "false"])
+          .optional()
+          .describe(
+            "`true` = each row that links a file (`row --references--> " +
+              "file`) also carries `media`: up to " +
+              `${MAX_LINKED_FILES_PER_ROW} ` +
+              "`{ id, title, mimeType }`, oldest link first, only files the " +
+              "caller may read on its own (the `GET /files/{id}/url` floor), " +
+              "loaded in one batch per page. Sign one with " +
+              "`GET /files/{id}/url`. Default `false`: rows carry no media. " +
+              "400 with `q`."
+          ),
         createdAfter: z
           .string()
           .optional()
@@ -553,8 +570,8 @@ export function registerEntitiesRoutes(app: HubHono): void {
       400: {
         description:
           "Malformed or unsupported filter combination — an unparseable " +
-          "createdAfter/createdBefore, or a date window or `includeFacets` " +
-          "combined with `q`.",
+          "createdAfter/createdBefore, or a date window, `includeFacets` or " +
+          "`includeMedia` combined with `q`.",
         content: { "application/json": { schema: ErrorSchema } },
       },
       401: {
@@ -609,6 +626,22 @@ export function registerEntitiesRoutes(app: HubHono): void {
     const toWire: (e: unknown) => WireListedEntity = includeFacets
       ? entityToWireWithFacets
       : entityToWire;
+    const includeMedia = query.includeMedia === "true";
+    // The page's linked files, annotated once the page is final (after any
+    // merge, sort and window), so a row that is not returned costs nothing.
+    const withMedia = async (
+      page: WireListedEntity[]
+    ): Promise<WireListedEntity[]> => {
+      if (!includeMedia) return page;
+      const media = await loadLinkedFileRefs(
+        userId,
+        page.flatMap((r) => (r.id ? [r.id] : []))
+      );
+      return page.map((r) => {
+        const refs = r.id ? media.get(r.id) : undefined;
+        return refs ? { ...r, media: refs } : r;
+      });
+    };
 
     // CREATION-DATE WINDOW. Parsed HERE rather than handed on as a string so an
     // unparseable date is a 400 the caller can see, not a silent `Invalid Date`
@@ -666,6 +699,17 @@ export function registerEntitiesRoutes(app: HubHono): void {
         {
           error:
             "includeFacets cannot be combined with q — full-text search does not apply the facet lens. List without q.",
+        },
+        400
+      );
+    }
+    // The `q` branch returns search documents, not list rows: it has no page
+    // to annotate.
+    if (includeMedia && q.length > 0) {
+      return c.json(
+        {
+          error:
+            "includeMedia cannot be combined with q — full-text search results carry no linked files. List without q.",
         },
         400
       );
@@ -853,7 +897,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
             return tb - ta;
           });
         }
-        return c.json(rows.slice(offset, offset + limit), 200);
+        return c.json(await withMedia(rows.slice(offset, offset + limit)), 200);
       }
 
       const listed = await caller.entities.getEntities({
@@ -885,7 +929,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
         });
       }
 
-      return c.json(rows, 200);
+      return c.json(await withMedia(rows), 200);
     } catch (err) {
       logger.error({ err, userId }, "GET /entities failed");
       return c.json(
