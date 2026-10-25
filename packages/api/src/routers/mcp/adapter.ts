@@ -47,6 +47,10 @@ import { ruleHandlers } from "./handlers/rule.js";
 import { trackHandlers } from "./handlers/track.js";
 import { devApprovalHandlers } from "./handlers/dev-approval.js";
 import { parseJsonObject, withUiStructuredContent } from "./ui-tools.js";
+import {
+  takeProposalUpdates,
+  type ProposalUpdate,
+} from "../../services/proposals/proposal-updates-digest.js";
 
 export { isReadOnlyTool, pickAdvisoryWorkspaceId } from "./handlers/shared.js";
 
@@ -255,10 +259,53 @@ export async function executeMCPToolViaHubProtocol(
         ...(filed ? { filed } : {}),
       })
     : disclosed;
+  // An AGENT is told which of its proposals were decided since its last call
+  // (approved / rejected / approval_failed + reason, ≤10) — otherwise it can
+  // only learn it by polling get_proposal (ticket 437d7370).
+  const digested = agentUserId
+    ? withProposalUpdates(
+        attributed,
+        await takeProposalUpdates(agentUserId, sessionId)
+      )
+    : attributed;
   // MCP Apps: a UI-tagged tool also returns its payload as `structuredContent`
   // for the host's iframe. LAST, so it is read back from the final text block
-  // — `link` and `attribution` included — and the two copies never diverge.
-  return withUiStructuredContent(toolName, attributed);
+  // — `link`, `attribution` and `proposalUpdates` included — and the two
+  // copies never diverge.
+  return withUiStructuredContent(toolName, digested);
+}
+
+/**
+ * Adds `proposalUpdates` to the tool result's JSON payload (the first text
+ * block that parses as a JSON object), or appends it as one JSON text block
+ * to a plain-text result. Nothing to report (or an unread digest) ⇒ the
+ * result is returned unchanged.
+ */
+export function withProposalUpdates(
+  result: CallToolResult,
+  updates: ProposalUpdate[] | null
+): CallToolResult {
+  if (!updates || updates.length === 0) return result;
+  const content = Array.isArray(result.content) ? [...result.content] : [];
+  const index = content.findIndex(
+    (block) => block.type === "text" && parseJsonObject(block.text) !== null
+  );
+  if (index === -1) {
+    content.push({
+      type: "text" as const,
+      text: JSON.stringify({ proposalUpdates: updates }),
+    });
+    return { ...result, content };
+  }
+  const block = content[index] as { type: "text"; text: string };
+  content[index] = {
+    ...block,
+    text: JSON.stringify({
+      ...parseJsonObject(block.text)!,
+      proposalUpdates: updates,
+    }),
+  };
+  return { ...result, content };
 }
 
 /**
