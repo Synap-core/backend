@@ -37,6 +37,7 @@
 // NOT a static import — see `loadIvm()` below. `isolated-vm` is a NATIVE addon,
 // and importing it at module scope crashed the pod on boot.
 import type IvmModule from "isolated-vm";
+import { AsyncResource } from "node:async_hooks";
 import {
   db,
   eq,
@@ -272,7 +273,26 @@ async function loadIvm(): Promise<typeof IvmModule> {
   return ivmModulePromise;
 }
 
-async function runIsolate(params: {
+/**
+ * `fn`, bound to the async context in scope NOW.
+ *
+ * isolated-vm runs an `ivm.Reference` host callback with NO async context, so
+ * every AsyncLocalStorage store is empty inside it: the acting agent
+ * (`runWithActingAgent`), the key grant, the write-session ledger — all the
+ * pod-side context a bridge's hub call reads. Proven on the IS twin (ticket
+ * f47609a6, pod knowledge 11dc561a, IS `bindRequestCustomerContext`), where it
+ * turned every `callProvider` into a 401. `AsyncResource.bind` captures the
+ * WHOLE context (every store at once), so a store added later is covered by
+ * existing — no per-store list to keep in step.
+ */
+export function bindHostCallback<F extends (...args: never[]) => unknown>(
+  fn: F
+): F {
+  return AsyncResource.bind(fn) as F;
+}
+
+/** @internal Exported for `run-skill-in-sandbox.async-context.test.ts`. */
+export async function runIsolate(params: {
   code: string;
   args: Record<string, unknown>;
   context: {
@@ -308,6 +328,10 @@ async function runIsolate(params: {
 
   const ivm = await loadIvm();
   const isolate = new ivm.Isolate({ memoryLimit: ISOLATE_MEMORY_LIMIT_MB });
+  // EVERY host bridge goes through here, bound to this run's async context
+  // (see `bindHostCallback`); the tripwire in the test counts the sites.
+  const hostRef = <F extends (...args: never[]) => unknown>(fn: F) =>
+    new ivm.Reference(bindHostCallback(fn));
 
   try {
     const vmContext = await isolate.createContext();
@@ -317,30 +341,28 @@ async function runIsolate(params: {
     await jail.set("__context", new ivm.ExternalCopy(context).copyInto());
 
     // ── console → backend logger ─────────────────────────────────────────────
-    const logRef = new ivm.Reference((...logArgs: unknown[]) => {
+    const logRef = hostRef((...logArgs: unknown[]) => {
       logger.info({ args: logArgs }, "[Skill]");
     });
     await jail.set("__log", logRef);
 
     // ── hubProtocol.search → hubProtocolRouter.search.search ─────────────────
-    const searchRef = new ivm.Reference(
-      async (query: unknown, opts: unknown) => {
-        const result = await caller.search.search({
-          // Identity LAST — a skill-controlled `opts` spread before it can
-          // never override the operator floor, regardless of what
-          // `search.search` reads in the future (today it ignores
-          // `input.userId` and uses `ctx.userId`, but that's a downstream
-          // invariant this bridge should not depend on).
-          ...((opts as object | null) ?? {}),
-          userId: operatorUserId,
-          query: String(query),
-        });
-        return new ivm.ExternalCopy(result).copyInto();
-      }
-    );
+    const searchRef = hostRef(async (query: unknown, opts: unknown) => {
+      const result = await caller.search.search({
+        // Identity LAST — a skill-controlled `opts` spread before it can
+        // never override the operator floor, regardless of what
+        // `search.search` reads in the future (today it ignores
+        // `input.userId` and uses `ctx.userId`, but that's a downstream
+        // invariant this bridge should not depend on).
+        ...((opts as object | null) ?? {}),
+        userId: operatorUserId,
+        query: String(query),
+      });
+      return new ivm.ExternalCopy(result).copyInto();
+    });
 
     // ── hubProtocol.getEntities → hubProtocolRouter.entities.getEntities ─────
-    const getEntitiesRef = new ivm.Reference(async (opts: unknown) => {
+    const getEntitiesRef = hostRef(async (opts: unknown) => {
       const o = (opts ?? {}) as {
         type?: string;
         profileSlug?: string;
@@ -359,7 +381,7 @@ async function runIsolate(params: {
     });
 
     // ── hubProtocol.getDocument → hubProtocolRouter.documents.getDocument ────
-    const getDocumentRef = new ivm.Reference(async (documentId: unknown) => {
+    const getDocumentRef = hostRef(async (documentId: unknown) => {
       const result = (await caller.documents.getDocument({
         documentId: String(documentId),
         userId: operatorUserId,
@@ -377,7 +399,7 @@ async function runIsolate(params: {
     await jail.set("__getDocument", getDocumentRef);
 
     // ── secrets.get → grant-gated vault resolver (direct) ────────────────────
-    const redeemSecretRef = new ivm.Reference(async (ref: unknown) => {
+    const redeemSecretRef = hostRef(async (ref: unknown) => {
       const value = await redeemVaultSecretDirect(
         String(ref),
         operatorUserId,
@@ -389,68 +411,66 @@ async function runIsolate(params: {
     await jail.set("__redeemSecret", redeemSecretRef);
 
     // ── host.fetch → external egress (SSRF + allowedHosts guarded) ───────────
-    const hostFetchRef = new ivm.Reference(
-      async (urlStr: unknown, optsStr?: unknown) => {
-        const url = String(urlStr);
+    const hostFetchRef = hostRef(async (urlStr: unknown, optsStr?: unknown) => {
+      const url = String(urlStr);
 
-        const check = validateExternalUrl(url);
-        if (!check.valid) {
-          return new ivm.ExternalCopy({
-            error: "url_rejected",
-            message: check.reason,
-          }).copyInto();
-        }
-
-        if (!allowedHosts.includes(check.url.hostname)) {
-          return new ivm.ExternalCopy({
-            error: "domain_not_approved",
-            hostname: check.url.hostname,
-            message: `Domain "${check.url.hostname}" is not approved. The agent should propose access.`,
-          }).copyInto();
-        }
-
-        try {
-          const controller = new AbortController();
-          const timeout = setTimeout(() => controller.abort(), 30_000);
-          try {
-            // `safeExternalFetch` re-validates SSRF ranges on every hop and, with
-            // `maxRedirects` left at its default of 0, REJECTS any redirect
-            // outright — `check.url`/`allowedHosts` above only vetted the
-            // INITIAL URL, so a raw `fetch()` here would follow a same-host-
-            // approved response straight through a `302 Location:
-            // http://169.254.169.254/...` (or any internal service) with no
-            // re-check. Rejecting redirects keeps the initial `allowedHosts`
-            // gate sufficient — there is no second hop to smuggle through it.
-            const response = await safeExternalFetch(url, {
-              ...(typeof optsStr === "string" ? JSON.parse(optsStr) : {}),
-              signal: controller.signal,
-            });
-            const body = await response.text();
-            const headers: Record<string, string> = {};
-            response.headers.forEach((value, key) => {
-              headers[key] = value;
-            });
-            return new ivm.ExternalCopy({
-              ok: response.ok,
-              status: response.status,
-              headers,
-              body: body.slice(0, 100_000), // cap response size
-            }).copyInto();
-          } finally {
-            clearTimeout(timeout);
-          }
-        } catch (err) {
-          return new ivm.ExternalCopy({
-            error: "fetch_failed",
-            message: err instanceof Error ? err.message : "Fetch failed",
-          }).copyInto();
-        }
+      const check = validateExternalUrl(url);
+      if (!check.valid) {
+        return new ivm.ExternalCopy({
+          error: "url_rejected",
+          message: check.reason,
+        }).copyInto();
       }
-    );
+
+      if (!allowedHosts.includes(check.url.hostname)) {
+        return new ivm.ExternalCopy({
+          error: "domain_not_approved",
+          hostname: check.url.hostname,
+          message: `Domain "${check.url.hostname}" is not approved. The agent should propose access.`,
+        }).copyInto();
+      }
+
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 30_000);
+        try {
+          // `safeExternalFetch` re-validates SSRF ranges on every hop and, with
+          // `maxRedirects` left at its default of 0, REJECTS any redirect
+          // outright — `check.url`/`allowedHosts` above only vetted the
+          // INITIAL URL, so a raw `fetch()` here would follow a same-host-
+          // approved response straight through a `302 Location:
+          // http://169.254.169.254/...` (or any internal service) with no
+          // re-check. Rejecting redirects keeps the initial `allowedHosts`
+          // gate sufficient — there is no second hop to smuggle through it.
+          const response = await safeExternalFetch(url, {
+            ...(typeof optsStr === "string" ? JSON.parse(optsStr) : {}),
+            signal: controller.signal,
+          });
+          const body = await response.text();
+          const headers: Record<string, string> = {};
+          response.headers.forEach((value, key) => {
+            headers[key] = value;
+          });
+          return new ivm.ExternalCopy({
+            ok: response.ok,
+            status: response.status,
+            headers,
+            body: body.slice(0, 100_000), // cap response size
+          }).copyInto();
+        } finally {
+          clearTimeout(timeout);
+        }
+      } catch (err) {
+        return new ivm.ExternalCopy({
+          error: "fetch_failed",
+          message: err instanceof Error ? err.message : "Fetch failed",
+        }).copyInto();
+      }
+    });
     await jail.set("__hostFetch", hostFetchRef);
 
     // ── callProvider → triggerProviderAction (governed, agent-gated) ─────────
-    const callProviderRef = new ivm.Reference(
+    const callProviderRef = hostRef(
       async (
         provider: unknown,
         method: unknown,
@@ -562,7 +582,7 @@ async function runIsolate(params: {
     await jail.set("__callProvider", callProviderRef);
 
     // ── propose.entity → hubProtocolRouter.entities.createEntity (governed) ──
-    const proposeEntityRef = new ivm.Reference(async (input: unknown) => {
+    const proposeEntityRef = hostRef(async (input: unknown) => {
       if (typeof input !== "object" || input === null) {
         throw new Error(
           "propose.entity: argument must be an object { profileSlug, title, properties? }"
