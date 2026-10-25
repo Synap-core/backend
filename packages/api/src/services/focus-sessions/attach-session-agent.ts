@@ -39,6 +39,12 @@
  * Enrolled even when the agent was already on the list (`added: false`), so a
  * room minted before its roster existed heals on the next attach.
  *
+ * SETTLES THE HAND-OFF. An agent on the list makes every pending hand-off of
+ * it to this session moot, whichever door put it there (a person adding it
+ * directly never passed through the hand-off proposal): they are EXPIRED in the
+ * same transaction (`expirePendingHandOffsOfAttachedAgent`, ticket 5de7efaa),
+ * except the hand-off being approved right now (`viaProposalId`).
+ *
  * NOT A GOVERNANCE GATE. This door writes; deciding whether an agent MAY write
  * is the caller's job, exactly as it is for `recordSessionSpawn` and the
  * blocked-by producer. The MCP and Hub REST doors run `checkPermissionOrPropose`
@@ -46,8 +52,16 @@
  * session.
  */
 
-import { db, focusSessions, and, eq, ChannelMemberKind } from "@synap/database";
+import {
+  db,
+  focusSessions,
+  and,
+  eq,
+  ChannelMemberKind,
+  expirePendingHandOffsOfAttachedAgent,
+} from "@synap/database";
 import { enrollRoomMember } from "../messaging/enroll-room-member.js";
+import { markProposalNotificationsActioned } from "../../notifications/mark-proposal-notifications-actioned.js";
 
 export interface AttachSessionAgentParams {
   /** The session to staff. */
@@ -56,6 +70,8 @@ export interface AttachSessionAgentParams {
   agentId: string;
   /** Owner floor — the session must belong to this user. */
   userId: string;
+  /** The hand-off proposal being applied, which is never expired. */
+  viaProposalId?: string;
 }
 
 export type AttachSessionAgentResult =
@@ -76,7 +92,8 @@ export async function attachSessionAgent(
   const trimmed = agentId.trim();
   if (trimmed === "") return { status: "not_found" };
 
-  return await db.transaction(async (tx) => {
+  let expiredHandOffs: string[] = [];
+  const result: AttachSessionAgentResult = await db.transaction(async (tx) => {
     const [locked] = await tx
       .select({
         agentIds: focusSessions.agentIds,
@@ -98,6 +115,13 @@ export async function attachSessionAgent(
       });
     }
 
+    // Settled even when the agent was already on the list: that is exactly
+    // the case a hand-off filed after it joined leaves pending.
+    expiredHandOffs = await expirePendingHandOffsOfAttachedAgent(
+      { sessionId, agentId: trimmed, landedByProposalId: params.viaProposalId },
+      tx
+    );
+
     const current = Array.isArray(locked.agentIds) ? locked.agentIds : [];
     if (current.includes(trimmed)) {
       return { status: "attached", agentIds: current, added: false };
@@ -111,4 +135,6 @@ export async function attachSessionAgent(
 
     return { status: "attached", agentIds: next, added: true };
   });
+  markProposalNotificationsActioned(expiredHandOffs);
+  return result;
 }

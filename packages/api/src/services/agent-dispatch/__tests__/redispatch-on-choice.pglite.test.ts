@@ -94,6 +94,7 @@ import {
   workspaces,
   podMembers,
   projectMembers,
+  proposals,
 } from "@synap/database";
 import {
   agentChoiceRedispatchReactor,
@@ -168,6 +169,8 @@ describe("re-dispatch after 'Choose an agent'", () => {
       workspaces,
       podMembers,
       projectMembers,
+      // Attaching an agent settles its pending hand-offs (5de7efaa).
+      proposals,
     ]) {
       await h.client!.exec(ddlFor(t as unknown as PgTable));
     }

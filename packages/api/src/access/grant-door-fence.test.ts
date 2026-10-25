@@ -73,7 +73,7 @@ describe("restDoorAllowed", () => {
     ["GET", "/brand/kit", true],
     ["GET", "/threads/t1/messages", true],
     ["GET", "/focus-sessions", true],
-    ["GET", "/focus-sessions/s1", false], // owner-only read, not the helper
+    ["GET", "/focus-sessions/s1", false], // declared door: DOC_ONLY lacks its subjects
     ["GET", "/projects/p1", true],
     ["GET", "/projects/p1/path", false], // userVisibleWhere sessions — not migrated
     ["GET", "/search", false],
@@ -92,6 +92,70 @@ describe("restDoorAllowed", () => {
     ["DELETE", "/entities/abc", true],
   ] as const)("%s %s → %s", (method, path, ok) => {
     expect(restDoorAllowed(method, path, DOC_ONLY)).toBe(ok);
+  });
+});
+
+describe("declared session read doors (a scoped agent key reads its session)", () => {
+  const S = "11111111-1111-4111-8111-111111111111";
+  const SESSION_DOORS = [
+    `/focus-sessions/${S}`,
+    `/focus-sessions/${S}/`,
+    `/focus-sessions/${S}/evaluations`,
+    `/focus-sessions/${S}/answers`,
+    `/focus-sessions/${S}/answers/wait`,
+    `/focus-sessions/${S}/document`,
+  ];
+  it.each(SESSION_DOORS)("the AI preset may GET %s", (path) => {
+    expect(restDoorAllowed("GET", path, AI)).toBe(true);
+  });
+  it.each(SESSION_DOORS)(
+    "GET %s fails closed for a key missing a subject, pinned, or deny-all",
+    (path) => {
+      expect(restDoorAllowed("GET", path, DOC_ONLY)).toBe(false);
+      expect(restDoorAllowed("GET", path, key({ permissions: [] }))).toBe(
+        false
+      );
+      expect(
+        restDoorAllowed(
+          "GET",
+          path,
+          key({
+            permissions: GRANT_PRESETS.find(
+              (r) => r.id === AI_READ_PROPOSE_ROLE_ID
+            )!.grant.permissions,
+            workspaceIds: ["w1"],
+          })
+        )
+      ).toBe(false);
+    }
+  );
+  it("each route needs the subjects IT reads, not one blanket switch", () => {
+    const sessionAndRoom = key({
+      permissions: ["session.read", "channel.read"],
+    });
+    expect(
+      restDoorAllowed("GET", `/focus-sessions/${S}/answers`, sessionAndRoom)
+    ).toBe(true);
+    expect(
+      restDoorAllowed("GET", `/focus-sessions/${S}/evaluations`, sessionAndRoom)
+    ).toBe(true);
+    // The wait door also reads proposals; the full read the whole packet.
+    expect(
+      restDoorAllowed(
+        "GET",
+        `/focus-sessions/${S}/answers/wait`,
+        sessionAndRoom
+      )
+    ).toBe(false);
+    expect(restDoorAllowed("GET", `/focus-sessions/${S}`, sessionAndRoom)).toBe(
+      false
+    );
+  });
+  it("only uuid-shaped ids: a static sibling is not admitted by the declaration", () => {
+    expect(restDoorAllowed("GET", "/focus-sessions/ambient", AI)).toBe(false);
+    expect(restDoorAllowed("GET", `/focus-sessions/${S}/other`, AI)).toBe(
+      false
+    );
   });
 });
 

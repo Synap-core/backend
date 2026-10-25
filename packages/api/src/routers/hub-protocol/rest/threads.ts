@@ -78,13 +78,13 @@ import {
   UpdateThreadContextRequestSchema,
 } from "./_codecs/thread.js";
 import {
+  actingUserIdFor,
   getCaller,
   getUserAccessibleWorkspaceIds,
   hasScope,
   httpStatusForTrpcError,
   isUuid,
   logger,
-  mayActAsUser,
   resolveActingContext,
   resolveActorId,
   type HubHono,
@@ -240,13 +240,13 @@ export function registerThreadsRoutes(app: HubHono): void {
     const query = c.req.valid("query");
     // A hub-read key may only list threads for an identity it HOLDS — without
     // this, `?userId=<anyone>` fed straight into the visibility predicate.
-    if (!mayActAsUser(c, query.userId)) {
+    const userId = actingUserIdFor(c, query.userId);
+    if (!userId) {
       return c.json(
         { error: "userId does not match the authenticated session" },
         403
       );
     }
-    const userId = query.userId;
     const workspaceId = query.workspaceId;
     const limit = parseInt(query.limit ?? "50", 10);
     try {

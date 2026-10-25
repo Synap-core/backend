@@ -183,12 +183,14 @@ docker() {
     command docker "$@"
 }
 
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
+# Colors — real escape bytes ($'...'), not the 4-char text \033: help screens
+# print through `cat <<EOF`, which never interprets backslash escapes (only
+# `echo -e` / `printf %b` do), so literal strings showed up as "\033[0;32m".
+RED=$'\033[0;31m'
+GREEN=$'\033[0;32m'
+YELLOW=$'\033[1;33m'
+BLUE=$'\033[0;34m'
+NC=$'\033[0m'
 
 # ─── Read-only Compose preflight check ────────────────────────────────────────
 # Verifies the Compose project and Postgres service are resolvable BEFORE any
@@ -312,8 +314,11 @@ get_deploy_dir() {
 # Destructive: `git reset --hard` discards uncommitted local changes. That is
 # the correct behavior for the pod's deploy checkout (it must exactly match
 # what was pushed — that's the whole point of this gate), but would be wrong
-# on a developer's working tree, so it's opt-out via SYNAP_SKIP_GIT_SYNC=1
-# for local/dev iteration where an uncommitted checkout is intentional.
+# on a developer's working tree. So the sync REFUSES when the checkout holds
+# tracked-file edits or commits origin does not have, and says what it found;
+# SYNAP_FORCE_GIT_SYNC=1 resets anyway (the discard is printed first), and
+# SYNAP_SKIP_GIT_SYNC=1 builds the checkout as-is, unsynced, for local/dev
+# iteration where an uncommitted checkout is intentional.
 sync_git_before_build() {
     if ! is_git_repo; then
         return 0
@@ -338,6 +343,20 @@ sync_git_before_build() {
             if ! git fetch origin "$branch" 2>&1; then
                 echo -e "${RED}✗ git fetch origin ${branch} failed — refusing to build against a checkout we couldn't verify is current.${NC}"
                 exit 1
+            fi
+            local dirty ahead
+            dirty=$(git status --porcelain --untracked-files=no 2>/dev/null)
+            ahead=$(git log --oneline "origin/${branch}..HEAD" 2>/dev/null)
+            if [ -n "$dirty" ] || [ -n "$ahead" ]; then
+                [ -n "$dirty" ] && printf '%s\n%s\n' "${YELLOW}Uncommitted changes that the reset would discard:${NC}" "$dirty"
+                [ -n "$ahead" ] && printf '%s\n%s\n' "${YELLOW}Local commits not on origin/${branch} that the reset would drop from this branch:${NC}" "$ahead"
+                if [ "${SYNAP_FORCE_GIT_SYNC:-}" != "1" ]; then
+                    echo -e "${RED}✗ Refusing to git reset --hard: this checkout has work origin does not have.${NC}"
+                    echo "  Commit or push it first, or set SYNAP_SKIP_GIT_SYNC=1 to build this checkout as-is,"
+                    echo "  or SYNAP_FORCE_GIT_SYNC=1 to discard the work above and sync to origin/${branch}."
+                    exit 1
+                fi
+                echo -e "${YELLOW}SYNAP_FORCE_GIT_SYNC=1 — discarding the work listed above.${NC}"
             fi
             if ! git reset --hard "origin/${branch}" 2>&1; then
                 echo -e "${RED}✗ git reset --hard origin/${branch} failed.${NC}"
@@ -1279,15 +1298,18 @@ $oidc_block
       # Cloud user without pod access (message id 4000901,
       # apps/api/src/webhooks/kratos-registration-gate.ts).
       # EVERY registration-capable method enabled above needs its own gate:
-      # Kratos v1.3.1 looks hooks up per method, with the global list used only
-      # when a method has none (driver/registry_default_registration.go), so an
-      # enabled method without hooks registers with NO gate. Passkey did, until
-      # 2026-10-23 (an open sign-up on every pod). Tripwire:
-      # deploy/__tests__/kratos-registration-gate.test.sh.
-      # Bodies (decoded): function(ctx) { method: "password"|"oidc", identity: ctx.identity }
-      # and for passkey function(ctx) { method: "passkey", identity: ctx.identity,
-      #   transient_payload: if std.objectHas(ctx, "flow") && std.objectHas(ctx.flow,
-      #   "transient_payload") then ctx.flow.transient_payload else null }
+      # Kratos v1.3.1 looks hooks up per method and has no global fallback
+      # once any method defines hooks (driver/registry_default_registration.go),
+      # so an enabled method without one (passkey, until 2026-10-23) registers
+      # with NO gate (tripwire: deploy/__tests__/kratos-registration-gate.test.sh).
+      # Bodies (decoded): function(ctx) { method: "password", identity: ctx.identity }
+      # and, for oidc and passkey, function(ctx) { method: "oidc"|"passkey",
+      #   identity: ctx.identity, transient_payload: if std.objectHas(ctx, "flow")
+      #   && std.objectHas(ctx.flow, "transient_payload") then
+      #   ctx.flow.transient_payload else null }
+      # (the invite page's invite_token, join plan phase 4: an invite-bound
+      # Synap Cloud or passkey sign-up; Kratos keeps transient_payload across
+      # the OIDC trip).
       after:
         password:
           hooks:
@@ -1313,8 +1335,8 @@ $oidc_block
                   Content-Type: application/json
                   X-Webhook-Secret: ${webhook_secret}
                 can_interrupt: true
-            # Post-persist: removes any persisted identity with no pod access
-            # (the gate refuses a passkey sign-up, so none should exist).
+            # Post-persist: accepts the invite for the new identity, or removes
+            # an identity with no pod access (same route as oidc).
             - hook: web_hook
               config:
                 url: http://backend:4000/api/webhooks/kratos/registration/complete
@@ -1330,7 +1352,7 @@ $oidc_block
               config:
                 url: http://backend:4000/api/webhooks/kratos/registration/gate
                 method: POST
-                body: base64://ZnVuY3Rpb24oY3R4KSB7IG1ldGhvZDogIm9pZGMiLCBpZGVudGl0eTogY3R4LmlkZW50aXR5IH0K
+                body: base64://ZnVuY3Rpb24oY3R4KSB7IG1ldGhvZDogIm9pZGMiLCBpZGVudGl0eTogY3R4LmlkZW50aXR5LCB0cmFuc2llbnRfcGF5bG9hZDogaWYgc3RkLm9iamVjdEhhcyhjdHgsICJmbG93IikgJiYgc3RkLm9iamVjdEhhcyhjdHguZmxvdywgInRyYW5zaWVudF9wYXlsb2FkIikgdGhlbiBjdHguZmxvdy50cmFuc2llbnRfcGF5bG9hZCBlbHNlIG51bGwgfQo=
                 headers:
                   Content-Type: application/json
                   X-Webhook-Secret: ${webhook_secret}
@@ -1342,7 +1364,7 @@ $oidc_block
               config:
                 url: http://backend:4000/api/webhooks/kratos/registration/complete
                 method: POST
-                body: base64://ZnVuY3Rpb24oY3R4KSB7IG1ldGhvZDogIm9pZGMiLCBpZGVudGl0eTogY3R4LmlkZW50aXR5IH0K
+                body: base64://ZnVuY3Rpb24oY3R4KSB7IG1ldGhvZDogIm9pZGMiLCBpZGVudGl0eTogY3R4LmlkZW50aXR5LCB0cmFuc2llbnRfcGF5bG9hZDogaWYgc3RkLm9iamVjdEhhcyhjdHgsICJmbG93IikgJiYgc3RkLm9iamVjdEhhcyhjdHguZmxvdywgInRyYW5zaWVudF9wYXlsb2FkIikgdGhlbiBjdHguZmxvdy50cmFuc2llbnRfcGF5bG9hZCBlbHNlIG51bGwgfQo=
                 headers:
                   Content-Type: application/json
                   X-Webhook-Secret: ${webhook_secret}
