@@ -35,6 +35,7 @@ import {
   resolveProfileForApply,
   RENDERER_SURFACES,
   withCatalogPresentationStamp,
+  PropertyValueType,
 } from "@synap/database";
 import type { RendererRef, ProfileRendererSource } from "@synap/database";
 import { TRPCError } from "@trpc/server";
@@ -83,6 +84,32 @@ const ProfileUiHintsInput = z
   });
 
 const ProfileScopeSchema = z.enum(["system", "shared", "workspace", "user"]);
+
+/**
+ * One field def as it rides a proposed kind (`profiles.create`
+ * `deferredFields` → gate data `fields` → the `profile/create` executor).
+ * The slug is already normalised by the caller (`slugifyPropertyKey`), which
+ * is why the pattern is the stored-slug one.
+ */
+export const ProposedKindFieldSchema = z.object({
+  slug: z
+    .string()
+    .min(1)
+    .max(100)
+    .regex(/^[a-z0-9-]+$/),
+  valueType: z
+    .string()
+    .refine((t) => (Object.values(PropertyValueType) as string[]).includes(t), {
+      message: `valueType must be one of ${Object.values(PropertyValueType).join(", ")}`,
+    }),
+  constraints: z.record(z.string(), z.unknown()).optional(),
+  uiHints: z.record(z.string(), z.unknown()).optional(),
+  required: z.boolean().optional(),
+  defaultValue: z.unknown().optional(),
+  displayOrder: z.number().optional(),
+  overlay: z.boolean().optional(),
+});
+export type ProposedKindField = z.infer<typeof ProposedKindFieldSchema>;
 
 /**
  * Zod schema for RendererRef.
@@ -374,6 +401,15 @@ export const profilesRouter = router({
         /** Role-category grouping key (0222): clusters role-profiles so
          *  `entity.query { roleCategory }` matches every role in the category. */
         roleCategory: z.string().optional(),
+        /**
+         * Field defs that ride a NEW kind's PROPOSAL (ticket a375443d): the
+         * `profile/create` executor creates them with the kind, so the
+         * reviewer approves one proposal and the author never re-calls. Only
+         * the GATED new-create branch reads it; when the create applies
+         * directly (or the slug already exists) the caller writes its fields
+         * through `createPropertyDef`, as `defineProfile` does.
+         */
+        deferredFields: z.array(ProposedKindFieldSchema).max(100).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -859,6 +895,9 @@ export const profilesRouter = router({
           // role's category — dropping it here approves a role that
           // `entity.query { roleCategory }` can never match.
           roleCategory: input.roleCategory,
+          ...(input.deferredFields?.length
+            ? { fields: input.deferredFields }
+            : {}),
         },
         // The duplicate door's answer (B2): the existing kinds ride the card.
         ...(kindDuplicate
@@ -881,6 +920,9 @@ export const profilesRouter = router({
             "Profile creation proposed for review"
           ),
           proposalId: perm.proposalId,
+          ...(input.deferredFields?.length
+            ? { fieldsIncluded: input.deferredFields.length }
+            : {}),
         };
       }
 

@@ -40,7 +40,10 @@ import {
 } from "@synap/database";
 import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
-import { profilesRouter as regularProfilesRouter } from "../profiles.js";
+import {
+  profilesRouter as regularProfilesRouter,
+  ProposedKindFieldSchema,
+} from "../profiles.js";
 import { propertyDefsRouter as regularPropertyDefsRouter } from "../property-defs.js";
 import { actingAgentUserId, createHubProtocolCallerContext } from "./utils.js";
 import { assertMayActAs } from "./guard.js";
@@ -184,6 +187,9 @@ export const hubProfilesRouter = router({
          * kind. 'pod' on a role is rejected by that resolver.
          */
         entityScope: z.enum(["pod", "workspace"]).optional(),
+        /** Field defs that ride the kind's proposal when the create is gated
+         *  (see `profiles.create` `deferredFields`). */
+        deferredFields: z.array(ProposedKindFieldSchema).max(100).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -220,6 +226,9 @@ export const hubProfilesRouter = router({
         // `resolveEntityScope` as undefined so the kind→pod / role→workspace
         // doctrine default applies instead of a value invented here.
         ...(input.entityScope ? { entityScope: input.entityScope } : {}),
+        ...(input.deferredFields?.length
+          ? { deferredFields: input.deferredFields }
+          : {}),
       });
     }),
 

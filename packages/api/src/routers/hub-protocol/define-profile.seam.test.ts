@@ -320,3 +320,89 @@ describe("define_kind — the FIRST result states every rewrite (ticket a375443d
     expect(clean.result).not.toHaveProperty("normalized");
   });
 });
+
+describe("define_kind — a new kind's fields ride its proposal (ticket a375443d)", () => {
+  it("hands the valid, normalised fields to the kind's create and says they are included", async () => {
+    const outcome = await defineProfile(
+      {
+        profiles: {
+          createProfile: async (input: Record<string, unknown>) => {
+            h.createProfileCalls.push(input);
+            const carried = (input.deferredFields as unknown[]) ?? [];
+            return {
+              status: "proposed",
+              proposalId: "55555555-5555-4555-8555-555555555555",
+              profile: null,
+              ...(carried.length ? { fieldsIncluded: carried.length } : {}),
+            };
+          },
+          createPropertyDef: async () => {
+            throw new Error("a carried field must not be written here");
+          },
+        },
+      } as never,
+      {
+        userId: USER,
+        workspaceId: WS,
+        slug: "social_account_audit",
+        displayName: "Social account audit",
+        fields: [
+          { slug: "botScore", valueType: "number", displayName: "Bot score" },
+          { slug: "handle", valueType: "string", required: true },
+          { slug: "broken", valueType: "nope" },
+        ],
+      },
+      { door: "synap_define_kind", fieldsParam: "properties" }
+    );
+    if (!outcome.ok) throw new Error(outcome.error);
+
+    expect(h.createProfileCalls[0]!.deferredFields).toEqual([
+      {
+        slug: "botscore",
+        valueType: "number",
+        uiHints: { displayName: "Bot score" },
+      },
+      { slug: "handle", valueType: "string", required: true },
+    ]);
+    // The reviewer sees the fields on the kind's own proposal.
+    expect(String(h.createProfileCalls[0]!.reasoning)).toContain(
+      "botscore (number), handle (string)"
+    );
+    const properties = outcome.result.properties as Record<string, unknown>;
+    expect(properties.status).toBe("included");
+    expect(properties.included).toEqual(["botscore", "handle"]);
+    expect(String(properties.message)).toContain("Do not re-call");
+    expect(properties.refused).toEqual([
+      expect.objectContaining({ slug: "broken", status: "error" }),
+    ]);
+  });
+
+  it("keeps the deferred wording when the gated create did not carry them (an existing kind)", async () => {
+    const outcome = await defineProfile(
+      {
+        profiles: {
+          createProfile: async () => ({
+            status: "proposed",
+            proposalId: "66666666-6666-4666-8666-666666666666",
+            existing: true,
+          }),
+          createPropertyDef: async () => {
+            throw new Error("not written");
+          },
+        },
+      } as never,
+      {
+        userId: USER,
+        workspaceId: WS,
+        slug: "knowledge",
+        displayName: "Knowledge",
+        fields: [{ slug: "content", valueType: "string" }],
+      },
+      { door: "synap_define_kind", fieldsParam: "properties" }
+    );
+    if (!outcome.ok) throw new Error(outcome.error);
+    expect((outcome.result.properties as Record<string, unknown>).status).toBe(
+      "deferred"
+    );
+  });
+});

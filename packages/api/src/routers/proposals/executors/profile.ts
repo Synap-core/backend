@@ -12,6 +12,14 @@ import type { Context } from "../../../context.js";
 import { readDuplicateCheck } from "@synap-core/types/proposals";
 import { registerProposalExecutor } from "../execution-registry.js";
 import { reportApproved } from "./shared.js";
+import { createLogger } from "@synap-core/core";
+import {
+  createAndLinkPropertyDef,
+  type CreateAndLinkPropertyDefInput,
+} from "../../../services/profiles/create-and-link-property-def.js";
+import type { ProposedKindField } from "../../profiles.js";
+
+const logger = createLogger({ module: "proposal-approve-executors-profile" });
 
 /** Idempotency: approve is not status-guarded before dispatch. */
 async function alreadyApproved(proposalId: string): Promise<boolean> {
@@ -145,6 +153,43 @@ export function registerProfileExecutors(): void {
           code: "INTERNAL_SERVER_ERROR",
           message: "Profile approval unexpectedly re-proposed",
         });
+      }
+
+      // The fields that rode this proposal (ticket a375443d): one approval
+      // creates the kind AND its fields, through the SAME helper the
+      // `property_def/create` executor uses, as the approver. One field that
+      // fails never undoes the kind or its siblings; it is logged and left
+      // for the author to add (define_kind is slug-idempotent).
+      const createdProfileId = (
+        result as { profile?: { id?: string } | null } | null
+      )?.profile?.id;
+      const fields = Array.isArray(innerData.fields)
+        ? (innerData.fields as ProposedKindField[])
+        : [];
+      if (createdProfileId && fields.length > 0) {
+        for (const field of fields) {
+          try {
+            await createAndLinkPropertyDef({
+              userId,
+              workspaceId,
+              profileId: createdProfileId,
+              slug: field.slug,
+              valueType:
+                field.valueType as CreateAndLinkPropertyDefInput["valueType"],
+              constraints: field.constraints,
+              uiHints: field.uiHints,
+              overlay: field.overlay === true,
+              required: field.required,
+              defaultValue: field.defaultValue,
+              displayOrder: field.displayOrder,
+            });
+          } catch (err) {
+            logger.error(
+              { err, proposalId: input.proposalId, slug: field.slug },
+              "profile/create approval: a carried field was not created (kind kept)"
+            );
+          }
+        }
       }
 
       await db
