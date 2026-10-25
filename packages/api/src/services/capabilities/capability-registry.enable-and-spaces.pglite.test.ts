@@ -304,6 +304,102 @@ describe("enable is approval, never grant — display agrees with the run gate",
   });
 });
 
+describe('per verb: `blocked: "not_enabled"` ⇔ the run door refuses it (ticket 509c9358)', () => {
+  it("an enabled, granted integration with ONE switched-off verb flags that verb, and only it", async () => {
+    // Apify-shaped: tool approved + granted, a declarative verb on, the code
+    // verb's skill OFF. The row reads enabled, launchable, unblocked — which is
+    // what discovery said while the run door refused `apify_run_actor`.
+    const apify = await tool("apify_api", {
+      approved: true,
+      verbs: [
+        "apify_get_dataset",
+        "apify_run_actor",
+        "apify_twin",
+        "apify_ghost",
+      ],
+    });
+    await q(
+      `insert into vault_grants (grantable_type, grantable_id, exec_mode) values ('tool',$1,'propose')`,
+      [apify]
+    );
+    await skill("apify_get_dataset", true);
+    await skill("apify_run_actor", false);
+    // Two copies, one approved: the run door prefers the approved one, so
+    // this verb runs and must NOT be flagged.
+    await skill("apify_twin", false);
+    await skill("apify_twin", true);
+    // `apify_ghost` has no backing skill: the run door answers not_found,
+    // which no enable switch fixes — so no `not_enabled` either.
+
+    const caps = await listCapabilities(
+      { workspaceId: null, userId: U },
+      { limit: null }
+    );
+    const row = sectionCapabilities(caps).integrations.find(
+      (r) => r.name === "apify_api"
+    )!;
+    expect(row.enabled).toBe(true);
+    expect(row.blocked).toBeUndefined();
+    const byVerb = new Map(row.verbs.map((v) => [v.id, v]));
+    expect(byVerb.get("apify_run_actor")!.granted).toBe(true);
+    expect(byVerb.get("apify_run_actor")!.blocked).toBe("not_enabled");
+    expect(byVerb.get("apify_run_actor")!.enable).toMatchObject({
+      kind: "enable",
+      url: expect.stringContaining(`/open/capability/${PACK}`),
+    });
+    expect(byVerb.get("apify_get_dataset")!.blocked).toBeUndefined();
+    expect(byVerb.get("apify_twin")!.blocked).toBeUndefined();
+    expect(byVerb.get("apify_ghost")!.blocked).toBeUndefined();
+  });
+
+  it("every verb of every integration: flagged ⇔ the run door's gate denies the skill it resolves", async () => {
+    const caps = await listCapabilities(
+      { workspaceId: null, userId: U },
+      { limit: null }
+    );
+    let judged = 0;
+    let flagged = 0;
+    for (const row of sectionCapabilities(caps).integrations) {
+      for (const v of row.verbs) {
+        // The run door's own resolution: active rows only, approved first.
+        const [sk] = (
+          await q(
+            `select id, approved, user_id, name from skills
+             where name = $1 and status = 'active'
+             order by approved desc, updated_at desc limit 1`,
+            [v.id]
+          )
+        ).rows;
+        if (!sk) {
+          expect(v.blocked, `${row.name}/${v.id}: no skill`).toBeUndefined();
+          continue;
+        }
+        const verdict = await gateCapabilityExecution({
+          capabilityKind: "skill",
+          capabilityId: sk.id,
+          skill: {
+            id: sk.id,
+            approved: sk.approved,
+            userId: sk.user_id,
+            name: sk.name,
+          },
+          actorUserId: U,
+          workspaceId: null,
+        });
+        judged += 1;
+        if (v.blocked) flagged += 1;
+        expect(v.blocked === "not_enabled", `${row.name}/${v.id}`).toBe(
+          verdict.decision === "deny"
+        );
+      }
+    }
+    // Non-vacuity: both answers are represented across the fixtures.
+    expect(judged).toBeGreaterThanOrEqual(6);
+    expect(flagged).toBeGreaterThanOrEqual(3);
+    expect(judged - flagged).toBeGreaterThanOrEqual(3);
+  });
+});
+
 describe("allSpaces — one read, every visible space, deduped and tagged", () => {
   it("returns pod-wide once + each visible space's row tagged, never an invisible space", async () => {
     // Pod-wide, installed TWICE (the duplicate-install shape): one row.

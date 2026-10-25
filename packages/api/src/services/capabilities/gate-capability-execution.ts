@@ -15,6 +15,7 @@
 
 export {
   gateCapabilityExecution,
+  approvalRefusesRun,
   CAPABILITY_RUN_PROPOSAL,
 } from "@synap/capability-gate";
 export type {

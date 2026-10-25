@@ -113,7 +113,10 @@ import { createLogger } from "@synap-core/core";
 import { resolveWriteIdempotencyKey } from "../../utils/write-door-idempotency.js";
 
 import { emitAiDecision } from "../../utils/ai-feedback-events.js";
-import { gateCapabilityExecution } from "./gate-capability-execution.js";
+import {
+  approvalRefusesRun,
+  gateCapabilityExecution,
+} from "./gate-capability-execution.js";
 import { executeSkillViaIS } from "../skills/execute-skill-via-is.js";
 import { runSkillInSandbox } from "../skills/run-skill-in-sandbox.js";
 import { executeProviderVerb } from "./execute-provider-verb.js";
@@ -652,7 +655,7 @@ export async function executeCapability(input: {
     // An unattended owner run (`requestEnableForOwner`) files the same request,
     // attributed to the owner, one open per pack.
     const fileEnable =
-      skillRow.approved === false &&
+      approvalRefusesRun(skillRow) &&
       (input.agentUserId
         ? !input.suppressProposal
         : input.requestEnableForOwner === true);

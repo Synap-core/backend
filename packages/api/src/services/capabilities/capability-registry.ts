@@ -69,9 +69,23 @@ import { verbType } from "./capability-catalog.js";
 import { toolNotRetiredWhere } from "../tools/visibility.js";
 import { rankByTerms, type TermMatch } from "../../utils/term-match.js";
 import {
+  capabilityNextAction,
   resolveCapabilityBlock,
   type CapabilityNextAction,
 } from "./capability-enable-link.js";
+import { approvalRefusesRun } from "./gate-capability-execution.js";
+
+/**
+ * Whether the execute door can launch a backing skill: the door resolves only
+ * `status = 'active'` rows, then the gate refuses on `approvalRefusesRun` —
+ * the SAME function, never a second spelling of it (ticket 509c9358).
+ */
+function backingSkillPassesRunDoor(s: {
+  status: string;
+  approved: boolean | null;
+}): boolean {
+  return s.status === "active" && !approvalRefusesRun(s);
+}
 
 export interface CapabilityRegistryContext {
   /**
@@ -161,6 +175,47 @@ export interface CapabilityVerbStateWithResponseShape extends CapabilityVerbStat
    * from it (`account` vs `none`) — no cost field is stored.
    */
   credentialed?: true;
+  /**
+   * Present exactly when the run door would REFUSE this verb as "installed but
+   * not yet enabled": an active backing skill exists and `approvalRefusesRun`
+   * holds for every one of them (no approved copy). Per VERB, because the
+   * row's `enabled` judges the TOOL row and its `blocked` judges "any verb
+   * launchable" — Apify read `enabled:true` with `granted:true` verbs while
+   * `apify_run_actor`'s code skill was unapproved, and the first run was
+   * refused (ticket 509c9358). A grant does not clear it: a grant is posture,
+   * approval is the switch. Absent for a verb with no active backing skill at
+   * all — the run door answers `not_found` there, which enabling cannot fix.
+   */
+  blocked?: "not_enabled";
+  /** The enable door for a `blocked` verb — the same `enable` a refused run
+   *  carries (`capabilityNextAction("draft", …)` on the verb's container). */
+  enable?: CapabilityNextAction;
+}
+
+/**
+ * Stamp each verb the run door would refuse as not enabled (see `blocked`),
+ * with the enable door of its container. Others are returned unchanged.
+ */
+export function withEnableBlocks(
+  verbs: CapabilityVerbStateWithResponseShape[],
+  notEnabledNames: ReadonlySet<string>,
+  container: { id: string | null; name: string }
+): CapabilityVerbStateWithResponseShape[] {
+  if (notEnabledNames.size === 0) return verbs;
+  return verbs.map((v) =>
+    notEnabledNames.has(v.id)
+      ? {
+          ...v,
+          blocked: "not_enabled" as const,
+          enable: capabilityNextAction(
+            "draft",
+            container.name,
+            undefined,
+            container.id
+          ),
+        }
+      : v
+  );
 }
 
 /**
@@ -726,7 +781,7 @@ function buildSkillVerb(
       ...(intent ? { intent } : {}),
       // Whether the execute door COULD launch it: the same lifecycle + approval
       // test `buildVerbStates` applies to a tool verb's backing skill.
-      backingSkillExecutable: row.status === "active" && row.approved === true,
+      backingSkillExecutable: backingSkillPassesRunDoor(row),
     },
   ];
 }
@@ -997,6 +1052,9 @@ export async function listCapabilities(
   // in create-from-definition.ts), so this is a direct lookup, no join needed.
   const providerSpecByName = new Map<string, ProviderVerbSpec>();
   const backingSkillExecutableByName = new Map<string, boolean>();
+  // verb id (= skill name) with an ACTIVE backing skill the gate refuses on
+  // approval — narrowed below to the names with no runnable copy.
+  const approvalRefusedByName = new Set<string>();
   // verb id (= skill name) → the skill's authored read-only declaration, read
   // through the same helper the gate uses.
   const declaredReadOnlyByName = new Map<string, boolean>();
@@ -1059,10 +1117,20 @@ export async function listCapabilities(
     // `executeCapability` prefers approved candidates when duplicate verb names
     // exist. Any visible active+approved backing skill therefore makes this verb
     // executable; absent/draft/inactive rows must not be advertised as actions.
-    if (s.status === "active" && s.approved) {
+    if (s.status === "active" && approvalRefusesRun(s)) {
+      approvalRefusedByName.add(s.name);
+    }
+    if (backingSkillPassesRunDoor(s)) {
       backingSkillExecutableByName.set(s.name, true);
     } else if (!backingSkillExecutableByName.has(s.name)) {
       backingSkillExecutableByName.set(s.name, false);
+    }
+  }
+  // The run door prefers an approved copy (`orderBy(desc(skills.approved))`),
+  // so a name is refused only when NO visible active copy passes.
+  for (const name of approvalRefusedByName) {
+    if (backingSkillExecutableByName.get(name) === true) {
+      approvalRefusedByName.delete(name);
     }
   }
 
@@ -1158,21 +1226,31 @@ export async function listCapabilities(
       containerByMember.get(containerMemberKey("tool", row.id))?.id ?? null,
     containerName:
       containerByMember.get(containerMemberKey("tool", row.id))?.name ?? null,
-    verbs: withCredentialed(
-      withUrlPatterns(
-        buildVerbStates(
-          row.capabilities as ToolVerbCatalogEntry[] | null,
-          grantByGrantableId.get(row.id),
-          row.kind,
-          providerSpecByName,
-          backingSkillExecutableByName,
-          declaredReadOnlyByName,
-          skillIntentByName,
-          skillIntentsByTool.get(row.id) ?? new Map()
+    verbs: withEnableBlocks(
+      withCredentialed(
+        withUrlPatterns(
+          buildVerbStates(
+            row.capabilities as ToolVerbCatalogEntry[] | null,
+            grantByGrantableId.get(row.id),
+            row.kind,
+            providerSpecByName,
+            backingSkillExecutableByName,
+            declaredReadOnlyByName,
+            skillIntentByName,
+            skillIntentsByTool.get(row.id) ?? new Map()
+          ),
+          urlPatternsByName
         ),
-        urlPatternsByName
+        credentialedByName
       ),
-      credentialedByName
+      approvalRefusedByName,
+      {
+        id:
+          containerByMember.get(containerMemberKey("tool", row.id))?.id ?? null,
+        name:
+          containerByMember.get(containerMemberKey("tool", row.id))?.name ??
+          row.name,
+      }
     ),
     ...(row.kind === "provider"
       ? {
