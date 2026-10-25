@@ -42,15 +42,11 @@ jobs:
       id-token: write
 
     steps:
-      # Who pushes the bump commit to main. Once the Synap Release App exists
-      # (SECURITY-RELEASE-RUNBOOK.md §5), main's ruleset lets only that App push
-      # directly, so the push must carry the App's token: GITHUB_TOKEN would be
-      # refused AFTER npm had accepted the version (the registry ahead of the
-      # repo again). The token is minted FIRST, before any build or publish, so
-      # a misconfigured App fails the run while nothing is published yet. It
-      # lives one hour, which covers the install, the builds and the publish.
-      # Without SYNAP_RELEASE_APP_ID this step is skipped and the checkout keeps
-      # GITHUB_TOKEN, exactly as before the App.
+      # Push token for the bump commit. Once the Release App exists (RUNBOOK §5.2),
+      # only the App may push to main, so mint its token before any publish: a
+      # bad App then fails the run while nothing is on npm. Skipped when
+      # SYNAP_RELEASE_APP_ID is unset. Its ID and key live in the `production`
+      # environment only.
       - name: Mint the release push token (GitHub App)
         id: app-token
         if: ${{ vars.SYNAP_RELEASE_APP_ID != '' }}
@@ -67,9 +63,9 @@ jobs:
           # Full history: the final step rebases the bump commit onto a main that
           # moved during the run (a shallow clone has no merge base to rebase on).
           fetch-depth: 0
-          # checkout persists this token in the git config, so it is the
-          # credential the final `git push origin HEAD:main` uses.
-          token: ${{ steps.app-token.outputs.token || github.token }}
+          # No token left in .git/config for the install and build steps: only
+          # the final fetch/pull/push is given one (PUSH_TOKEN below).
+          persist-credentials: false
 
       # Version comes from the repo's `packageManager: pnpm@10.28.0`, which pins
       # it MORE precisely than a `version: 10` input would. Passing both makes
@@ -242,7 +238,12 @@ jobs:
       # load-bearing there, so there is nothing to repin yet.
 
       - name: Commit version bumps
+        env:
+          PUSH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
         run: |
+          AUTH=$(printf 'x-access-token:%s' "$PUSH_TOKEN" | base64 -w0)
+          echo "::add-mask::$AUTH"
+          git_auth() { git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $AUTH" "$@"; }
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add packages/types/package.json \
@@ -259,7 +260,7 @@ jobs:
           API_V=$(node -p "require('./packages/api-types/package.json').version")
           reapply_versions() {
             git rebase --abort 2>/dev/null || true
-            git fetch -q origin main && git reset -q --hard origin/main
+            git_auth fetch -q origin main && git reset -q --hard origin/main
             node -e '
               const fs = require("fs");
               const [typesV, apiV] = process.argv.slice(1);
@@ -283,10 +284,10 @@ jobs:
             git commit -m "chore: auto-publish type packages [skip ci]" || true
           }
           for attempt in 1 2 3; do
-            if git pull --rebase origin main; then
-              git push origin HEAD:main && break
+            if git_auth pull --rebase origin main; then
+              git_auth push origin HEAD:main && break
             else
-              reapply_versions && git push origin HEAD:main && break
+              reapply_versions && git_auth push origin HEAD:main && break
             fi
             if [ "$attempt" = 3 ]; then exit 1; fi
             sleep 10

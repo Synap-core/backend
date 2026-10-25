@@ -8,12 +8,12 @@ Vulnerability reports go to [SECURITY.md](SECURITY.md), not here.
 
 ## 1. The publish doors
 
-| What                                               | Workflow                               | Credential                                                      |
-| -------------------------------------------------- | -------------------------------------- | --------------------------------------------------------------- |
-| `@synap-core/types`, `@synap-core/api-types` (npm) | `.github/workflows/publish-types.yml`  | npm Trusted Publishing (OIDC), see §2                           |
-| The version-bump commit back to `main`             | `publish-types.yml`, last step         | `GITHUB_TOKEN` today; the Synap Release App once it exists (§5) |
-| Pod images (GHCR) and the signed pod release       | `.github/workflows/docker-publish.yml` | `GITHUB_TOKEN` plus keyless cosign (OIDC)                       |
-| Reads of the private sibling repos in CI           | `.github/actions/monorepo-setup`       | the Synap Release App, else `CROSS_REPO_TOKEN` (§4)             |
+| What                                               | Workflow                               | Credential                                                  |
+| -------------------------------------------------- | -------------------------------------- | ----------------------------------------------------------- |
+| `@synap-core/types`, `@synap-core/api-types` (npm) | `.github/workflows/publish-types.yml`  | npm Trusted Publishing (OIDC), see §2                       |
+| The version-bump commit back to `main`             | `publish-types.yml`, last step         | `GITHUB_TOKEN` today; the Release App once it exists (§5.2) |
+| Pod images (GHCR) and the signed pod release       | `.github/workflows/docker-publish.yml` | `GITHUB_TOKEN` plus keyless cosign (OIDC)                   |
+| Reads of the private sibling repos in CI           | `.github/actions/monorepo-setup`       | the Reader App (§5.1), else `CROSS_REPO_TOKEN` (§4)         |
 
 The rules every publish workflow must satisfy, in every repo, are checked by
 `ci/scripts/check.mjs` and described in [ci/README.md](ci/README.md).
@@ -44,95 +44,139 @@ commit to a branch, so the `main` ruleset (§6) does not affect it.
 ## 4. Cross-repo read token (transition)
 
 CI lays out private sibling repositories beside this checkout for the
-cross-repo tripwires. Until the App in §5 exists, it reads them with the
-`CROSS_REPO_TOKEN` secret: a fine-grained personal access token with
-**Contents: read** on the sibling repositories only. Once the App is live and a
-CI run shows the "Mint control-plane-api read token (GitHub App)" step
-succeeding, delete `CROSS_REPO_TOKEN` from every repository that holds it.
+cross-repo tripwires. Until the Reader App (§5.1) is live, it reads them with
+the `CROSS_REPO_TOKEN` secret: a fine-grained personal access token with
+**Contents: read** on the sibling repositories only.
 
-## 5. Create the Synap Release GitHub App (organization owner)
+Delete `CROSS_REPO_TOKEN` from a repository only once that repository's
+workflows mint a Reader App token and a run shows the mint step succeeding.
+Today only this repository reads `SYNAP_READER_APP_*`; the others still read
+`SYNAP_RELEASE_APP_*` for their cross-repo reads (§5.4), so they keep
+`CROSS_REPO_TOKEN` until they are switched.
 
-One GitHub App serves every Synap repository's CI: it mints short-lived tokens
-for cross-repo reads and is the only actor allowed to push straight to
-`main` here (the type-package version bump). Workflows read only its ID and
-private key, so its display name is free.
+## 5. The two GitHub Apps (organization owner)
 
-### 5.1 Create it
+Two Apps, so the credential that can push to `main` is never in reach of a
+pull request:
+
+- the **Reader App** (§5.1): Contents: read. CI on every repository uses it for
+  cross-repo checkouts. Its key is a repo secret wherever CI needs it.
+- the **Release App** (§5.2): Contents: write, installed on `backend` only. The
+  type publish uses it to push its version-bump commit, and it is the only
+  App allowed to bypass the `main` ruleset (§6). Its key is a secret of the
+  `production` environment only: that environment needs a reviewer's approval
+  and deploys only from `main` and `v*` tags, so neither a pull request nor
+  `ci.yml` can read it.
+
+Workflows read only each App's ID and private key, so the display names are
+free. Both are created the same way:
 
 1. GitHub → the `Synap-core` organization → **Settings → Developer settings →
    GitHub Apps → New GitHub App**.
-2. **Name**: `Synap Release` (or any free name). **Homepage URL**: this
-   repository's URL.
+2. **Name** (see below). **Homepage URL**: this repository's URL.
 3. **Webhook**: untick **Active**. The App receives no events.
-4. **Repository permissions**:
-   - **Contents: Read and write**
-   - **Metadata: Read-only** (GitHub sets it; it is required)
-   - nothing else. No organization or account permissions.
+4. **Repository permissions**: **Contents** as given below, **Metadata:
+   Read-only** (required), nothing else. No organization or account
+   permissions.
 5. **Where can this GitHub App be installed?** → **Only on this account**.
 6. **Create GitHub App**. Note the **App ID** shown at the top of its page.
 7. On the same page → **Private keys → Generate a private key**. A `.pem` file
-   downloads. It is a credential: do not commit it, paste it into chat or
-   keep it after step 5.3.
+   downloads. It is a credential: do not commit it or paste it into chat, and
+   delete it once the secret is set.
 
-### 5.2 Install it on the repositories that use it
+If a key is lost, generate a new one on the App page, set the secret again and
+revoke the old key there.
 
-App page → **Install App** → `Synap-core` → **Only select repositories**:
+### 5.1 Reader App
 
-| Repository             | Why                                                            | Token requested                                       |
-| ---------------------- | -------------------------------------------------------------- | ----------------------------------------------------- |
-| `backend`              | the type-package bump commit; read by other repos' CI          | Contents: write (`publish-types.yml`), read elsewhere |
-| `control-plane-api`    | cross-repo tripwires                                           | Contents: read                                        |
-| `app-bases`            | cross-repo tripwires                                           | Contents: read                                        |
-| `browser`, `relay-app` | app-bases and relay CI layouts                                 | Contents: read                                        |
-| `browser-exec`         | desktop release uploads (browser repo's `browser-release.yml`) | Contents: write                                       |
+Name `Synap CI Reader`, **Contents: Read-only**. Install it (App page →
+**Install App** → `Synap-core` → **Only select repositories**) on:
 
-Every workflow narrows its token to named repositories and an explicit
-permission (`actions/create-github-app-token` with `repositories:` and
-`permission-contents:`). The App's own ceiling is still Contents: write on
-every repository it is installed on, so its private key is a write credential
-for all of them: store it only in repositories whose workflows mint a token,
-and install the App on no repository that does not appear in this table.
+| Repository          | Read by                               |
+| ------------------- | ------------------------------------- |
+| `backend`           | app-bases, synap-cli and relay-app CI |
+| `control-plane-api` | backend, app-bases and relay-app CI   |
+| `app-bases`         | backend and relay-app CI              |
+| `browser`           | app-bases and relay-app CI            |
+| `relay-app`         | app-bases CI                          |
+| `synap-cli`         | relay-app CI                          |
 
-### 5.3 Give the workflows the ID and the key
-
-For each repository whose workflows read `vars.SYNAP_RELEASE_APP_ID` (today:
-`backend`, `app-bases`, `synap-cli`, `browser`, `relay-app`):
+Then, for this repository:
 
 ```bash
-gh variable set SYNAP_RELEASE_APP_ID -R Synap-core/<repo> --body "<App ID>"
-gh secret set SYNAP_RELEASE_APP_KEY -R Synap-core/<repo> < path/to/key.pem
+gh variable set SYNAP_READER_APP_ID -R Synap-core/backend --body "<Reader App ID>"
+gh secret set SYNAP_READER_APP_KEY -R Synap-core/backend < path/to/reader.pem
 ```
-
-Then delete the downloaded `.pem`. If it is lost, generate a new key on the App
-page and set the secret again; revoke the old key there.
 
 Check: re-run the latest CI run on `main` (Actions → CI → **Re-run all jobs**).
-The "Mint control-plane-api read token (GitHub App)" step must succeed. A
-`continue-on-error` mint that fails would silently fall back to
-`CROSS_REPO_TOKEN`, so read the step, not the job colour.
+The "Mint control-plane-api read token (GitHub App)" step must succeed. That
+step is `continue-on-error`, so a failed mint falls back to `CROSS_REPO_TOKEN`
+quietly: read the step, not the job colour.
 
-### 5.4 Make the App the only bypass on `main`
+### 5.2 Release App
 
-With the App ID in hand, run (from a checkout of this repository, logged in
-with `gh` as an organization owner):
+Name `Synap Release`, **Contents: Read and write**. Install it on **`backend`
+only**. Then set its ID and key **in the `production` environment**, never as
+repository-level values:
 
 ```bash
-scripts/apply-main-protection.sh <App ID>            # prints the new ruleset, changes nothing
-scripts/apply-main-protection.sh <App ID> --apply    # writes it
+gh variable set SYNAP_RELEASE_APP_ID -R Synap-core/backend --env production --body "<Release App ID>"
+gh secret set SYNAP_RELEASE_APP_KEY -R Synap-core/backend --env production < path/to/release.pem
 ```
 
-What the script writes is described in §6. From then on the type publish
-pushes its bump commit with the App's token (`publish-types.yml` mints it as
-its first step whenever `SYNAP_RELEASE_APP_ID` is set) and every other change
-reaches `main` through a pull request.
+`publish-types.yml` mints the token as its first step whenever
+`SYNAP_RELEASE_APP_ID` is set, so a broken App fails the run before anything
+reaches npm. The token is handed only to the final fetch, pull and push of the
+bump commit; checkout keeps no credential in `.git/config`.
+
+### 5.3 Make the Release App the only bypass on `main`
+
+From a checkout of this repository, logged in with `gh` as an organization
+owner:
+
+```bash
+scripts/apply-main-protection.sh <Release App ID>            # prints everything, changes nothing
+scripts/apply-main-protection.sh <Release App ID> --apply    # writes the ruleset
+```
+
+The dry run prints the ruleset before and after, the bypass actors it
+**removes**, and whether the Release App is ready. Read that removal list
+before `--apply`. Today it removes **Integration 1236702, the Claude GitHub
+App**, which can now push straight to `main`. After the change, Claude's
+changes reach `main` only through pull requests. Keeping it is a decision to
+take before running, not after: edit the bypass list in the script if so.
+
+`--apply` refuses unless the `production` environment exists with a required
+reviewer and a branch policy, holds `SYNAP_RELEASE_APP_ID` equal to the ID
+given and holds `SYNAP_RELEASE_APP_KEY`, and the key is **not** also a
+repository secret. A failed read (auth, network) stops the script with its
+error; it is never taken for "not set".
+
+### 5.4 Owed in the other repositories
+
+These workflows still read `vars.SYNAP_RELEASE_APP_ID` /
+`secrets.SYNAP_RELEASE_APP_KEY`:
+
+- cross-repo reads: app-bases (`ci.yml`, `changeset.yml`,
+  `publish-packages.yml`, `publish-official-templates.yml`, the
+  `sibling-repos` action), synap-cli (`publish-cli.yml`), relay-app
+  (`ci.yml`). Each must switch to `SYNAP_READER_APP_*`.
+- a write: browser (`browser-release.yml`) mints Contents: write on
+  `browser-exec` for its desktop release uploads. It needs its own write App
+  installed on `browser-exec` only, with its key in that workflow's protected
+  environment.
+
+**Never set `SYNAP_RELEASE_APP_KEY` in those repositories**: it would put the
+key that can push to backend's `main` in reach of their workflows. Until each
+one is switched, it keeps `CROSS_REPO_TOKEN` (§4).
 
 ## 6. The `main` ruleset
 
-Ruleset **"base branch security"** on the default branch. After §5.4 it holds:
+Ruleset **"base branch security"** on the default branch. After §5.3 it holds:
 
 - **Restrict deletions** and **Block force pushes** (unchanged).
-- **Require a pull request before merging**, with 0 required approvals (a
-  merge needs a PR and green checks, not a second person). Pass
+- **Require a pull request before merging**, with 0 required approvals: a
+  merge needs a PR and green checks, not a second person. Pass
   `--approvals N` to the script to require reviews instead.
 - **Require status checks to pass**, each pinned to the GitHub Actions app so
   another integration cannot post a check with the same name:
@@ -141,20 +185,19 @@ Ruleset **"base branch security"** on the default branch. After §5.4 it holds:
   - `API e2e` (`ci.yml`)
   - `Reference docs are current` (`reference-docs.yml`)
 
-  These names come from the check runs of a recent `main` commit. All four
-  workflows run on every pull request to `main` with no `paths:` filter, so a
-  required check can never be left waiting for a run that does not start. If a
-  job is renamed, update `REQUIRED_CHECKS` in the script and re-run it, or
-  every pull request will wait forever on the old name.
+  These names come from the check runs of a recent `main` commit; the script
+  refuses a name that main's latest CI run did not report. All four workflows
+  run on every pull request to `main` with no `paths:` filter. If a job is
+  renamed, update `REQUIRED_CHECKS` in the script and re-run it, or every pull
+  request waits on the old name.
 
-- **Bypass list**: organization admins (always) and the Synap Release App
-  (always). Nothing else.
+- **Bypass list**: organization admins (always) and the Release App (always).
+  Nothing else.
 
 `Full suite` includes `pnpm audit --prod --audit-level=high`. Once it is
 required, a new high advisory in a production dependency blocks every merge
 until it is fixed or ignored with a written reason (`auditConfig` in
-`pnpm-workspace.yaml`). That is the point: it is how a vulnerable dependency
-stops reaching a release.
+`pnpm-workspace.yaml`).
 
 To undo, edit the ruleset in **Settings → Rules → Rulesets**. The script prints
 the ruleset as it was before writing, so the previous state is in the terminal.
