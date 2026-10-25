@@ -40,7 +40,6 @@ import {
   type McpHandlerMap,
 } from "./shared.js";
 import type { PlaybookStageInput } from "../../../schemas/playbook-stage.js";
-import { compactPlaybookMatches } from "./match-playbooks-compact.js";
 import type { ProposalRevisionPatch } from "../../../services/proposals/proposals-service.js";
 import {
   createPlaybookDoor,
@@ -368,7 +367,7 @@ export const buildHandlers: McpHandlerMap = {
       typeof args.profileSlug === "string" && args.profileSlug.trim()
         ? args.profileSlug.trim()
         : undefined;
-    const matched = await matchCaller.matchForEntity({
+    const result = await matchCaller.matchForEntity({
       ...(profileSlug ? { profileSlug } : {}),
       entityId: args.entityId as string | undefined,
       workspaceId: matchWsId,
@@ -383,9 +382,6 @@ export const buildHandlers: McpHandlerMap = {
         ? { projectId: args.projectId }
         : {}),
     });
-    // The agent door's envelope: default 5 rows, trimmed goals, no row carried
-    // by a shared word alone (the UI keeps the full pool).
-    const result = compactPlaybookMatches(matched, args.limit);
     // Only reshape in the AMBIGUOUS case (auto-picked among several member
     // workspaces) — the explicit-workspaceId and resolved-entity-workspace
     // paths stay byte-identical to the prior array shape.
