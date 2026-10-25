@@ -23,6 +23,7 @@ const h = vi.hoisted(() => ({
   created: [] as Array<Record<string, unknown>>,
   fields: [] as Array<Record<string, unknown>>,
   failSlug: null as string | null,
+  sets: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -34,7 +35,12 @@ vi.mock("@synap/database", async (importOriginal) => {
     },
     // Executor idempotency probe: "already APPROVED?" → no rows.
     select: () => ({ from: () => ({ where: async () => [] }) }),
-    update: () => ({ set: () => ({ where: async () => undefined }) }),
+    update: () => ({
+      set: (v: Record<string, unknown>) => {
+        h.sets.push(v);
+        return { where: async () => undefined };
+      },
+    }),
   };
   class FakeProfileRepository {
     async getBySlug() {
@@ -120,6 +126,7 @@ beforeEach(() => {
   h.created.length = 0;
   h.fields.length = 0;
   h.failSlug = null;
+  h.sets.length = 0;
   proposalExecRegistry._reset();
   registerProfileExecutors();
 });
@@ -146,14 +153,14 @@ const proposeKind = async () => {
   });
 };
 
-const approve = async () => {
+const approve = async (gateData = h.gateData[0]) => {
   const executor = proposalExecRegistry.resolve("profile/create", "create");
   if (!executor) throw new Error("profile/create executor not registered");
-  await executor.execute({
+  return executor.execute({
     proposal: {
       workspaceId: WS,
       agentUserId: AGENT,
-      data: { data: h.gateData[0] },
+      data: { data: gateData },
     },
     userId: OWNER,
     input: { proposalId: "prop-role" },
@@ -194,12 +201,39 @@ describe("profile/create — a new kind's fields ride its proposal", () => {
     });
   });
 
-  it("one field that fails never undoes the kind or its siblings", async () => {
+  it("one field that fails never undoes the kind or its siblings, and is REPORTED", async () => {
     await proposeKind();
     h.failSlug = "botscore";
-    await approve();
+    const result = await approve();
     expect(h.created).toHaveLength(1);
     expect(h.fields.map((f) => f.slug)).toEqual(["handle"]);
+    expect(result.refusals).toEqual([
+      'Field "botscore" was not created: slug conflict',
+    ]);
+    const approvedRow = h.sets.find((v) => v.status === "approved");
+    expect(
+      (approvedRow?.data as { fieldOutcomes?: unknown }).fieldOutcomes
+    ).toEqual([
+      { slug: "botscore", outcome: "refused", reason: "slug conflict" },
+      { slug: "handle", outcome: "created" },
+    ]);
+  });
+
+  it("re-checks every stored field at approval: one that no longer parses is refused, never written", async () => {
+    await proposeKind();
+    const stored = {
+      ...h.gateData[0],
+      fields: [
+        ...(h.gateData[0]!.fields as unknown[]),
+        { slug: "Bad Slug", valueType: "string" },
+        { slug: "score", valueType: "nope" },
+      ],
+    };
+    const result = await approve(stored);
+    expect(h.fields.map((f) => f.slug)).toEqual(["botscore", "handle"]);
+    expect(result.refusals).toHaveLength(2);
+    expect(result.refusals!.join(" ")).toContain('"Bad Slug"');
+    expect(result.refusals!.join(" ")).toContain("valueType must be one of");
   });
 
   it("a kind proposed without fields carries none", async () => {

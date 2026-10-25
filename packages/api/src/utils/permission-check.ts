@@ -3260,10 +3260,31 @@ export function buildProposalSummary(
   // The remainder is DISCLOSED, never hidden: naming one of three operations
   // and staying silent about the other two tells the reviewer something true
   // and something misleading in the same sentence.
-  return withRemainder(
+  const head = withRemainder(
     buildObjectActionTitle({ action, objectKind, objectName }),
     composite?.extraCount ?? 0
   );
+  // A new kind whose fields ride its proposal (ticket a375443d): approving it
+  // creates them too, so the sentence the reviewer reads names them — the
+  // review card lists no `fields` rows for a profile payload.
+  return subjectType === "profile" ? head + carriedFieldsClause(data) : head;
+}
+
+/** ` with 2 fields: botscore, handle` for a profile payload carrying `fields`. */
+function carriedFieldsClause(data: Record<string, unknown>): string {
+  if (!Array.isArray(data.fields) || data.fields.length === 0) return "";
+  const slugs = (data.fields as unknown[]).flatMap((f) =>
+    f &&
+    typeof f === "object" &&
+    typeof (f as { slug?: unknown }).slug === "string"
+      ? [(f as { slug: string }).slug]
+      : []
+  );
+  const SHOWN = 8;
+  const listed = slugs.slice(0, SHOWN).join(", ");
+  const more = slugs.length > SHOWN ? ` and ${slugs.length - SHOWN} more` : "";
+  const n = data.fields.length;
+  return ` with ${n} field${n === 1 ? "" : "s"}: ${listed}${more}`;
 }
 
 /**

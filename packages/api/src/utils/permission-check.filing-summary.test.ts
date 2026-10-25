@@ -176,3 +176,34 @@ describe("buildProposalSummary — a filing names every place it changes", () =>
     );
   });
 });
+
+describe("buildProposalSummary — a new kind's carried fields (ticket a375443d)", () => {
+  it("names the fields the approval will also create", () => {
+    expect(
+      buildProposalSummary("profile", "create", {
+        slug: "social-account-audit",
+        displayName: "Social account audit",
+        fields: [
+          { slug: "botscore", valueType: "number" },
+          { slug: "handle", valueType: "string" },
+        ],
+      })
+    ).toMatch(/ with 2 fields: botscore, handle$/);
+  });
+
+  it("caps the list and says how many more", () => {
+    const fields = Array.from({ length: 11 }, (_, i) => ({
+      slug: `f${i}`,
+      valueType: "string",
+    }));
+    expect(
+      buildProposalSummary("profile", "create", { slug: "k", fields })
+    ).toMatch(/ with 11 fields: f0, f1, f2, f3, f4, f5, f6, f7 and 3 more$/);
+  });
+
+  it("adds nothing to a kind proposed without fields", () => {
+    expect(
+      buildProposalSummary("profile", "create", { slug: "k" })
+    ).not.toContain("field");
+  });
+});

@@ -17,7 +17,7 @@ import {
   createAndLinkPropertyDef,
   type CreateAndLinkPropertyDefInput,
 } from "../../../services/profiles/create-and-link-property-def.js";
-import type { ProposedKindField } from "../../profiles.js";
+import { ProposedKindFieldSchema } from "../../profiles.js";
 
 const logger = createLogger({ module: "proposal-approve-executors-profile" });
 
@@ -158,16 +158,41 @@ export function registerProfileExecutors(): void {
       // The fields that rode this proposal (ticket a375443d): one approval
       // creates the kind AND its fields, through the SAME helper the
       // `property_def/create` executor uses, as the approver. One field that
-      // fails never undoes the kind or its siblings; it is logged and left
+      // fails never undoes the kind or its siblings; it is reported (below)
       // for the author to add (define_kind is slug-idempotent).
       const createdProfileId = (
         result as { profile?: { id?: string } | null } | null
       )?.profile?.id;
-      const fields = Array.isArray(innerData.fields)
-        ? (innerData.fields as ProposedKindField[])
-        : [];
-      if (createdProfileId && fields.length > 0) {
-        for (const field of fields) {
+      // Each field is CHECKED AGAIN here, not trusted from when it was filed:
+      // a proposal can sit for days, and a stored payload is data. A field
+      // that no longer passes (bad shape, a slug taken since, a type clash) is
+      // REPORTED on the row — `data.fieldOutcomes` — never silently dropped.
+      const rawFields = Array.isArray(innerData.fields) ? innerData.fields : [];
+      const fieldOutcomes: Array<{
+        slug: string | null;
+        outcome: "created" | "refused";
+        reason?: string;
+      }> = [];
+      if (createdProfileId) {
+        for (const raw of rawFields) {
+          const parsed = ProposedKindFieldSchema.safeParse(raw);
+          const rawSlug =
+            raw &&
+            typeof raw === "object" &&
+            typeof (raw as { slug?: unknown }).slug === "string"
+              ? (raw as { slug: string }).slug
+              : null;
+          if (!parsed.success) {
+            fieldOutcomes.push({
+              slug: rawSlug,
+              outcome: "refused",
+              reason: parsed.error.issues
+                .map((i) => `${i.path.join(".") || "field"}: ${i.message}`)
+                .join("; "),
+            });
+            continue;
+          }
+          const field = parsed.data;
           try {
             await createAndLinkPropertyDef({
               userId,
@@ -183,12 +208,24 @@ export function registerProfileExecutors(): void {
               defaultValue: field.defaultValue,
               displayOrder: field.displayOrder,
             });
+            fieldOutcomes.push({ slug: field.slug, outcome: "created" });
           } catch (err) {
-            logger.error(
-              { err, proposalId: input.proposalId, slug: field.slug },
-              "profile/create approval: a carried field was not created (kind kept)"
-            );
+            // One field never undoes the kind or its siblings.
+            fieldOutcomes.push({
+              slug: field.slug,
+              outcome: "refused",
+              reason: err instanceof Error ? err.message : String(err),
+            });
           }
+        }
+        const refusedCount = fieldOutcomes.filter(
+          (o) => o.outcome === "refused"
+        ).length;
+        if (refusedCount > 0) {
+          logger.warn(
+            { proposalId: input.proposalId, fieldOutcomes },
+            "profile/create approval: carried field(s) refused (kind kept)"
+          );
         }
       }
 
@@ -196,6 +233,14 @@ export function registerProfileExecutors(): void {
         .update(proposals)
         .set({
           status: ProposalStatus.APPROVED,
+          ...(fieldOutcomes.length > 0
+            ? {
+                data: {
+                  ...((proposal.data as Record<string, unknown> | null) ?? {}),
+                  fieldOutcomes,
+                },
+              }
+            : {}),
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
@@ -211,7 +256,18 @@ export function registerProfileExecutors(): void {
         "approved",
         userId
       );
-      return { success: true };
+      // The honest partial shape: the kind landed, these fields did not.
+      const refusals = fieldOutcomes.flatMap((o) =>
+        o.outcome === "refused"
+          ? [
+              `Field "${o.slug ?? "?"}" was not created: ${o.reason ?? "refused"}`,
+            ]
+          : []
+      );
+      return {
+        success: true,
+        ...(refusals.length > 0 ? { refusals } : {}),
+      };
     },
   });
 
