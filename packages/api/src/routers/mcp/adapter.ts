@@ -265,7 +265,7 @@ export async function executeMCPToolViaHubProtocol(
   const digested = agentUserId
     ? withProposalUpdates(
         attributed,
-        await takeProposalUpdates(agentUserId, sessionId)
+        await takeProposalUpdates(agentUserId, userId, sessionId)
       )
     : attributed;
   // MCP Apps: a UI-tagged tool also returns its payload as `structuredContent`

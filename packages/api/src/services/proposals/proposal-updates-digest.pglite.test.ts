@@ -63,6 +63,9 @@ import {
 
 const AGENT = randomUUID();
 const OTHER = randomUUID();
+/** The person the agent acts for (`subject_user_id`). */
+const OWNER = randomUUID();
+const STRANGER = randomUUID();
 const T0 = new Date("2026-10-25T17:00:00.000Z");
 const at = (min: number) => new Date(T0.getTime() + min * 60_000);
 
@@ -71,14 +74,15 @@ const q = (sql: string, params: unknown[] = []) =>
 
 async function proposal(opts: {
   agent?: string;
+  subject?: string;
   status: string;
   reviewedAt: Date | null;
   reason?: string;
 }): Promise<string> {
   const id = randomUUID();
   await q(
-    `insert into proposals (id, target_type, target_id, proposal_type, status, agent_user_id, reviewed_at, rejection_reason, data)
-     values ($1,'profile',$2,'create',$3,$4,$5,$6,'{}'::jsonb)`,
+    `insert into proposals (id, target_type, target_id, proposal_type, status, agent_user_id, reviewed_at, rejection_reason, subject_user_id, data)
+     values ($1,'profile',$2,'create',$3,$4,$5,$6,$7,'{}'::jsonb)`,
     [
       id,
       randomUUID(),
@@ -86,6 +90,7 @@ async function proposal(opts: {
       opts.agent ?? AGENT,
       opts.reviewedAt?.toISOString() ?? null,
       opts.reason ?? null,
+      opts.subject ?? OWNER,
     ]
   );
   return id;
@@ -105,7 +110,7 @@ beforeEach(async () => {
 describe("takeProposalUpdates", () => {
   it("reports this agent's decisions since its last call, with the reason, once", async () => {
     // First call establishes the cursor at T0 (nothing decided yet).
-    expect(await takeProposalUpdates(AGENT, "s1", T0)).toEqual([]);
+    expect(await takeProposalUpdates(AGENT, OWNER, "s1", T0)).toEqual([]);
 
     const approved = await proposal({ status: "approved", reviewedAt: at(1) });
     const failed = await proposal({
@@ -123,7 +128,7 @@ describe("takeProposalUpdates", () => {
     await proposal({ agent: OTHER, status: "approved", reviewedAt: at(1) });
     await proposal({ status: "approved", reviewedAt: at(-5) });
 
-    const updates = await takeProposalUpdates(AGENT, "s1", at(4));
+    const updates = await takeProposalUpdates(AGENT, OWNER, "s1", at(4));
     expect(updates!.map((u) => [u.id, u.status])).toEqual([
       [approved, "approved"],
       [failed, "approval_failed"],
@@ -136,40 +141,67 @@ describe("takeProposalUpdates", () => {
     expect(updates![0]!.reviewUrl).toContain(approved);
 
     // Told once: the next call has nothing new.
-    expect(await takeProposalUpdates(AGENT, "s1", at(5))).toEqual([]);
+    expect(await takeProposalUpdates(AGENT, OWNER, "s1", at(5))).toEqual([]);
   });
 
   it("is bounded, and the remainder arrives on the next call instead of being dropped", async () => {
-    await takeProposalUpdates(AGENT, "s1", T0);
+    await takeProposalUpdates(AGENT, OWNER, "s1", T0);
     const ids: string[] = [];
     for (let i = 1; i <= PROPOSAL_UPDATES_MAX + 3; i += 1) {
       ids.push(await proposal({ status: "approved", reviewedAt: at(i) }));
     }
-    const first = await takeProposalUpdates(AGENT, "s1", at(30));
+    const first = await takeProposalUpdates(AGENT, OWNER, "s1", at(30));
     expect(first).toHaveLength(PROPOSAL_UPDATES_MAX);
-    const second = await takeProposalUpdates(AGENT, "s1", at(31));
+    const second = await takeProposalUpdates(AGENT, OWNER, "s1", at(31));
     expect([...first!, ...second!].map((u) => u.id)).toEqual(ids);
   });
 
   it("keeps one cursor per session of the same agent", async () => {
-    await takeProposalUpdates(AGENT, "s1", T0);
-    await takeProposalUpdates(AGENT, "s2", T0);
+    await takeProposalUpdates(AGENT, OWNER, "s1", T0);
+    await takeProposalUpdates(AGENT, OWNER, "s2", T0);
     const id = await proposal({ status: "approved", reviewedAt: at(1) });
     expect(
-      (await takeProposalUpdates(AGENT, "s1", at(2)))!.map((u) => u.id)
+      (await takeProposalUpdates(AGENT, OWNER, "s1", at(2)))!.map((u) => u.id)
     ).toEqual([id]);
     expect(
-      (await takeProposalUpdates(AGENT, "s2", at(2)))!.map((u) => u.id)
+      (await takeProposalUpdates(AGENT, OWNER, "s2", at(2)))!.map((u) => u.id)
     ).toEqual([id]);
   });
 
   it("a failed read returns null and moves no cursor", async () => {
-    await takeProposalUpdates(AGENT, "s1", T0);
+    await takeProposalUpdates(AGENT, OWNER, "s1", T0);
     const id = await proposal({ status: "approved", reviewedAt: at(1) });
     h.failNext = true;
-    expect(await takeProposalUpdates(AGENT, "s1", at(2))).toBeNull();
+    expect(await takeProposalUpdates(AGENT, OWNER, "s1", at(2))).toBeNull();
     expect(
-      (await takeProposalUpdates(AGENT, "s1", at(3)))!.map((u) => u.id)
+      (await takeProposalUpdates(AGENT, OWNER, "s1", at(3)))!.map((u) => u.id)
     ).toEqual([id]);
+  });
+
+  it("never tells one person's client another person's decisions on a shared agent identity", async () => {
+    await takeProposalUpdates(AGENT, OWNER, "s1", T0);
+    await proposal({
+      status: "rejected",
+      reviewedAt: at(1),
+      reason: "private reason",
+      subject: STRANGER,
+    });
+    const mine = await proposal({ status: "approved", reviewedAt: at(1) });
+    const updates = await takeProposalUpdates(AGENT, OWNER, "s1", at(2));
+    expect(updates!.map((u) => u.id)).toEqual([mine]);
+  });
+
+  it("a decision stamped before the last read but committed after it is still told, once", async () => {
+    await takeProposalUpdates(AGENT, OWNER, "s1", T0);
+    await proposal({ status: "approved", reviewedAt: at(1) });
+    // Read at minute 2 …
+    expect(await takeProposalUpdates(AGENT, OWNER, "s1", at(2))).toHaveLength(
+      1
+    );
+    // … while another transaction had stamped its row at 1.5 and commits now.
+    const late = await proposal({ status: "approved", reviewedAt: at(1.5) });
+    const next = await takeProposalUpdates(AGENT, OWNER, "s1", at(3));
+    expect(next!.map((u) => u.id)).toEqual([late]);
+    expect(await takeProposalUpdates(AGENT, OWNER, "s1", at(4))).toEqual([]);
   });
 });
