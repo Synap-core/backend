@@ -285,10 +285,10 @@ async function loadIvm(): Promise<typeof IvmModule> {
  * WHOLE context (every store at once), so a store added later is covered by
  * existing — no per-store list to keep in step.
  */
-export function bindHostCallback<F extends (...args: never[]) => unknown>(
-  fn: F
-): F {
-  return AsyncResource.bind(fn) as F;
+export function bindHostCallback<A extends unknown[], R>(
+  fn: (...args: A) => R
+): (...args: A) => R {
+  return AsyncResource.bind(fn);
 }
 
 /** @internal Exported for `run-skill-in-sandbox.async-context.test.ts`. */
@@ -330,7 +330,7 @@ export async function runIsolate(params: {
   const isolate = new ivm.Isolate({ memoryLimit: ISOLATE_MEMORY_LIMIT_MB });
   // EVERY host bridge goes through here, bound to this run's async context
   // (see `bindHostCallback`); the tripwire in the test counts the sites.
-  const hostRef = <F extends (...args: never[]) => unknown>(fn: F) =>
+  const hostRef = <A extends unknown[], R>(fn: (...args: A) => R) =>
     new ivm.Reference(bindHostCallback(fn));
 
   try {
