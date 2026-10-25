@@ -73,7 +73,7 @@ import {
   resolveCapabilityBlock,
   type CapabilityNextAction,
 } from "./capability-enable-link.js";
-import { approvalRefusesRun } from "./gate-capability-execution.js";
+import { approvalRefusesRun } from "@synap/capability-gate";
 
 /**
  * Whether the execute door can launch a backing skill: the door resolves only

@@ -113,10 +113,9 @@ import { createLogger } from "@synap-core/core";
 import { resolveWriteIdempotencyKey } from "../../utils/write-door-idempotency.js";
 
 import { emitAiDecision } from "../../utils/ai-feedback-events.js";
-import {
-  approvalRefusesRun,
-  gateCapabilityExecution,
-} from "./gate-capability-execution.js";
+import { gateCapabilityExecution } from "./gate-capability-execution.js";
+// Straight from the package, not the shim: the shim is what unit tests mock.
+import { approvalRefusesRun } from "@synap/capability-gate";
 import { executeSkillViaIS } from "../skills/execute-skill-via-is.js";
 import { runSkillInSandbox } from "../skills/run-skill-in-sandbox.js";
 import { executeProviderVerb } from "./execute-provider-verb.js";
