@@ -360,6 +360,13 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
     imperative: "Open a new version",
     past: "Opened a new version",
   },
+  // A closed goal whose result must stay alive becomes an OPERATION spawned
+  // from it (`startOperationFrom`) — not a reopen, not a new version: its own
+  // dotted key, read by both apps' "Keep it running" door (2026-10-25).
+  "track.keep_running": {
+    imperative: "Keep it running",
+    past: "Kept it running",
+  },
   // Pod hygiene (`profile/retire`, the cleanup pack). `retire` is a SOFT,
   // reversible hide of a kind — not a delete, so it never reads "Deleted".
   // `close` ends an idle session through the close door; `expire` takes a

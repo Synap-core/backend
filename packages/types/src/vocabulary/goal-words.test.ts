@@ -30,6 +30,15 @@ describe("a goal's verbs", () => {
     expect(resolveActionLabel("reopen", "imperative")).toBe("Reopen");
   });
 
+  it("keeping a closed goal's result alive is its own verb, in both moods", () => {
+    expect(resolveActionLabel("track.keep_running", "imperative")).toBe(
+      "Keep it running"
+    );
+    expect(resolveActionLabel("track.keep_running", "past")).toBe(
+      "Kept it running"
+    );
+  });
+
   it("every commitment move, and the judge's and owner's answers, have a curated row in both moods", () => {
     const acts = [
       ...TRACK_COMMITMENT_MOVE_KEYS,
