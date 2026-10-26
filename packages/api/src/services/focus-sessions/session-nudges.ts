@@ -43,7 +43,10 @@ import {
   type PlaybookCandidate,
 } from "./match-session-template.js";
 import { isOwedSlot } from "./owed-outputs.js";
-import { isOpenAgentSlot } from "./continuation-packet.js";
+import {
+  isOpenAgentSlot,
+  type ContinuationNextMove,
+} from "./continuation-packet.js";
 import { OPEN_SESSION_STATUSES } from "./session-statuses.js";
 import { mergeSessionMetadata } from "./session-metadata.js";
 import { openLink } from "../../utils/deep-links.js";
@@ -91,6 +94,13 @@ export interface SessionNudges {
   answered?: string[];
   /** Ranked playbooks for a session born without one — offered once. */
   playbookCandidates?: PlaybookCandidate[];
+  /**
+   * F4 (plan v5): the session's next move is `ready_to_close` — THE next-move
+   * rule (`deriveNextMove`, read through `attachNextMove`): everything it
+   * declared is produced, nothing is owed or pending, no sub-session is open.
+   * The agent grades and closes; it is never closed for it.
+   */
+  readyToClose?: { reason: string };
   /** One imperative line per nudge above, in the same order. */
   hints: string[];
 }
@@ -130,6 +140,8 @@ export function computeSessionNudges(input: {
   evaluation: Pick<SessionEvaluationSummary, "criteria" | "evaluations">;
   phase: NudgePhase;
   playbookCandidates?: PlaybookCandidate[];
+  /** The session's next move as THE rule derived it — see `readyToClose`. */
+  nextMove?: Pick<ContinuationNextMove, "kind" | "reason">;
 }): SessionNudges | undefined {
   const { session, evaluation, phase } = input;
   const out: SessionNudges = { hints: [] };
@@ -209,7 +221,30 @@ export function computeSessionNudges(input: {
     );
   }
 
+  if (phase === "update" && input.nextMove?.kind === "ready_to_close") {
+    out.readyToClose = { reason: input.nextMove.reason };
+    out.hints.push(
+      out.ungradedCriteria
+        ? "Every outcome is produced and nothing is owed: grade the criteria above with evaluate_session, then close with complete_session (if a person worked in it, ask them in its room first)."
+        : "Every outcome is produced and nothing is owed: close with complete_session (if a person worked in it, ask them in its room first). If more work remains, declare it instead."
+    );
+  }
+
   return out.hints.length > 0 ? out : undefined;
+}
+
+/**
+ * Pure pre-check before the next-move read: only a session with at least one
+ * live declared slot, none of them still open on the agent and none owed by
+ * the person, can read `ready_to_close` — so the batch read runs only then.
+ */
+export function mayBeReadyToClose(session: NudgeSessionLike): boolean {
+  const slots = readSlots(session.expectedOutputs);
+  return (
+    slots.some((s) => s?.retiredAt == null) &&
+    !slots.some((s) => isOpenAgentSlot(s)) &&
+    !slots.some(isOwedSlot)
+  );
 }
 
 /**
@@ -281,11 +316,24 @@ export async function loadSessionNudges(p: {
       // The offer is a courtesy; the owed criteria/stage nudges still stand.
     }
   }
+  // F4: the next move, by THE rule, only when it could be `ready_to_close`.
+  // A failed read omits the nudge (a courtesy), never claims "ready".
+  let nextMove: Pick<ContinuationNextMove, "kind" | "reason"> | undefined;
+  if (p.phase === "update" && mayBeReadyToClose(p.session)) {
+    try {
+      const { attachNextMove } = await import("./session-path-sections.js");
+      const [row] = await attachNextMove([p.session], { userId: p.userId });
+      nextMove = row?.nextMove;
+    } catch {
+      // The owed criteria/stage nudges still stand.
+    }
+  }
   return computeSessionNudges({
     session: p.session,
     evaluation,
     phase: p.phase,
     playbookCandidates,
+    nextMove,
   });
 }
 
