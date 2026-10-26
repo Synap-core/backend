@@ -84,6 +84,28 @@ describe("synap_match_playbooks — no signal, no match", () => {
     );
   });
 
+  it("the agent door caps, trims and drops a one-shared-word tail", async () => {
+    const row = (id: string, score: number) => ({
+      id,
+      score,
+      goalTemplate: "g".repeat(900),
+      signals: [{ type: "intent" }, { type: "anyKind" }],
+    });
+    matchForEntity.mockResolvedValue([
+      row("strong", 20),
+      ...Array.from({ length: 18 }, (_, i) => row(`tail-${i}`, 1.5)),
+    ]);
+    const result = await run({ intentText: "fix wave", workspaceId: "ws-1" });
+    const block = result.content?.[0];
+    if (!block || block.type !== "text") throw new Error("expected text");
+    const rows = JSON.parse(block.text) as Array<{
+      id: string;
+      goalTemplate: string;
+    }>;
+    expect(rows.map((r) => r.id)).toEqual(["strong"]);
+    expect(rows[0]!.goalTemplate.length).toBeLessThan(250);
+  });
+
   it("BOUNDARY: a mistype beside a real signal is still silently dropped", async () => {
     // Not an endorsement — a measurement. The MCP layer has no unknown-key
     // rejection, so `intent` is ignored and the call ranks on profileSlug.

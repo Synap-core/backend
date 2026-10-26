@@ -52,6 +52,7 @@ import {
   ASK_DETAILS,
   synthesizeAnswer,
 } from "../../../services/knowledge/synthesize.js";
+import { capBriefEnvelope } from "../../../services/knowledge/brief-envelope.js";
 import { resolveKnowledgeLens } from "../../../services/knowledge/resolve-lens.js";
 import { describeAiFailure } from "../../../utils/ai-failure.js";
 import {
@@ -755,6 +756,15 @@ export function registerKnowledgeRoutes(app: HubHono): void {
     z.object({ status: z.literal("unavailable") }),
   ]);
 
+  // `ask()`'s queue block — what is waiting on the person, present only for a
+  // queue-type question. Each section reads like orient's `startHere`: its own
+  // shape, or `{ status: "unavailable" }` when that read failed (never zero).
+  const askQueueSchema = z.object({
+    pendingReview: z.record(z.string(), z.unknown()),
+    owedByPerson: z.record(z.string(), z.unknown()),
+    openSessions: z.record(z.string(), z.unknown()),
+  });
+
   const retrievalResponseSchema = z.object({
     query: z.string(),
     routedTo: z.array(z.string()),
@@ -796,6 +806,8 @@ export function registerKnowledgeRoutes(app: HubHono): void {
       .optional(),
     // Where the asked-about kinds live. Absent when no kind was understood.
     spaces: askSpacesHintSchema.optional(),
+    // What is waiting on the person (queue-type questions only).
+    queue: askQueueSchema.optional(),
     // A/B ranker comparison — present ONLY when `compare` was requested.
     comparison: z
       .object({
@@ -1042,6 +1054,7 @@ export function registerKnowledgeRoutes(app: HubHono): void {
               degraded: z.array(z.string()),
               // Where the asked-about kinds live (see retrieval schema).
               spaces: askSpacesHintSchema.optional(),
+              queue: askQueueSchema.optional(),
               error: z.string().optional(),
               // WHY synthesis did not run, classified by the ONE failure door
               // (`utils/ai-failure.ts`) — the same `describeAiFailure` shape
@@ -1109,7 +1122,7 @@ export function registerKnowledgeRoutes(app: HubHono): void {
       // Build context + sources, then synthesize via IS. Pass the pending count
       // so the composed NL answer can acknowledge matching pending proposals
       // instead of a flat "no information found" contradicting them.
-      const synthesis = await synthesizeAnswer(
+      const synthesized = await synthesizeAnswer(
         result.answers,
         question,
         result.routedTo,
@@ -1119,7 +1132,14 @@ export function registerKnowledgeRoutes(app: HubHono): void {
         // a parameter with a single producer is the severance this repo keeps
         // re-finding.
         result.degraded ?? [],
-        body.detail
+        body.detail,
+        result.queue
+      );
+      // `brief` caps the envelope as well as the prose (same helper as MCP).
+      const { synthesis, pending, keepSpaces } = capBriefEnvelope(
+        body.detail,
+        synthesized,
+        result.pending
       );
       if (synthesis.error) {
         logger.error({ userId }, "knowledge/answer IS call failed");
@@ -1133,6 +1153,9 @@ export function registerKnowledgeRoutes(app: HubHono): void {
           answer: synthesis.answer,
           ...(synthesis.detail ? { detail: synthesis.detail } : {}),
           sources: synthesis.sources,
+          ...(synthesis.sourcesOmitted
+            ? { sourcesOmitted: synthesis.sourcesOmitted }
+            : {}),
           routedTo: synthesis.routedTo,
           // Forward the retrieval-health signal `ask()` already computed —
           // withholding it is what let a keyword-only fallback render as a
@@ -1142,10 +1165,11 @@ export function registerKnowledgeRoutes(app: HubHono): void {
           // pending block and this one did not, so a CLI/REST caller saw only
           // `prependPendingNotice`'s one sentence and never the matches
           // themselves. Additive; omitted when nothing pends.
-          ...(result.pending ? { pending: result.pending } : {}),
+          ...(pending ? { pending } : {}),
           // Same parity for the spaces hint (where the asked-about kinds
           // live). Additive; absent when no kind was understood.
-          ...(result.spaces ? { spaces: result.spaces } : {}),
+          ...(keepSpaces && result.spaces ? { spaces: result.spaces } : {}),
+          ...(result.queue ? { queue: result.queue } : {}),
           // Structured truncation, so a caller can DETECT a partial context
           // instead of hoping the model echoes the prose notice — the prose
           // dies with the response whenever synthesis fails.

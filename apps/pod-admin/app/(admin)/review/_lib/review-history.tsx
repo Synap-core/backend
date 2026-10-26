@@ -31,12 +31,15 @@ const STATUS_KIND: Record<string, StatusKind> = {
 };
 
 export function ReviewHistory({
+  sessionId,
   onOpen,
 }: {
+  /** Review narrowed to one session (`?session=`): its decided proposals only. */
+  sessionId?: string | null;
   onOpen: (proposalId: string, title: string) => void;
 }) {
   const list = trpc.proposals.list.useQuery(
-    { status: "all", limit: 100 },
+    { status: "all", limit: 100, ...(sessionId ? { sessionId } : {}) },
     { staleTime: 30_000 }
   );
   useEffect(() => {

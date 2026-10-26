@@ -13796,6 +13796,461 @@ export type AskSpacesHint = {
 } | {
 	status: "unavailable";
 };
+/** One owed deliverable, with just enough of its session to be actionable. */
+export interface OwedSlot {
+	sessionId: string;
+	sessionGoal: string | null;
+	/**
+	 * The session's DISPLAY NAME (`resolveSessionTitle` — its title, else the
+	 * goal's first line, clipped): what a needs-you card names the session by.
+	 * `null` only when the session has neither.
+	 */
+	sessionTitle: string | null;
+	/** The session's lifecycle state — an owed slot outlives its session. */
+	sessionStatus: string;
+	workspaceId: string | null;
+	projectId: string | null;
+	/** The DECLARED label — the key every slot door matches on. */
+	label: string;
+	kind: string;
+	icon?: string;
+	blockedReason?: ExpectedOutput["blockedReason"];
+	/** One line naming WHICH thing is missing. */
+	why?: string;
+	/** When it became the human's. Always present — the invariant guarantees it. */
+	owedSince: string;
+	/** The agent's claim that it produced this after all, if it made one. */
+	claimedDone?: boolean;
+	/**
+	 * For a criterion slot, the `SessionCriterion.key` it stands for — so a tray
+	 * can open the scorecard ON that criterion instead of matching its prose
+	 * label. Absent on every ordinary slot and on criterion slots filed before
+	 * the field existed; absence means "no criterion to highlight".
+	 */
+	criterionKey?: string;
+	/**
+	 * WHERE the agent pointed the person (`ExpectedOutput.ref`) — carried so a
+	 * tray row can open the door without re-reading the whole session. Floored
+	 * at write time (`isOutputRefVisible`) by the declaring door; this read is
+	 * behind the same owner floor.
+	 */
+	ref?: OutputRef;
+	/**
+	 * HOW the person can answer (`ExpectedOutput.ask`) — carried so a tray can
+	 * quick-answer a confirm / choose in place. Its `lookedAt` ("what I looked
+	 * at") arrives with each ref's `title` resolved through the READER's access
+	 * floor; a ref the reader cannot see is dropped (`looked-at.ts`).
+	 */
+	ask?: SlotAsk;
+}
+/** Where the person finds a session's asks in their Inbox. */
+export type OwedInbox = "needs-you" | "proposed";
+export interface OwedByPerson {
+	/** Owed slots across every session (both lenses). */
+	count: number;
+	/** Sessions holding at least one. */
+	sessions: number;
+	/** True when a lens hit its read cap — "at least this many". */
+	countIsLowerBound: boolean;
+	/** The population, stated so it is never read as the agent's own work. */
+	lens: "owed-by-person";
+	items: Array<{
+		/** Of those, how many carry an `ask` (answerable in one tap). */
+		asks: number;
+		inbox: OwedInbox;
+		/** Up to three slot labels, newest first. */
+		labels: string[];
+		link: string;
+		/** The newest `owedSince` on this session — the row's order key. */
+		newestOwedSince: string;
+		/** Owed slots on this session. */
+		owed: number;
+		sessionId: string;
+		title: string | null;
+	}>;
+}
+export type SessionEvaluationRow = typeof sessionEvaluations.$inferSelect;
+export interface SessionEvaluationSummary {
+	criteria: SessionCriterion[];
+	/** The CURRENT row per criterion (human wins), for criteria still declared. */
+	evaluations: SessionEvaluationRow[];
+	verdict: SessionVerdict;
+}
+export type PlaybookScope = "project" | "session";
+declare const TEMPLATE_OPT_OUT: "pass templateId: null";
+export interface PlaybookCandidate {
+	id: string;
+	name: string;
+	/** Lexical score from the shared ranker. */
+	score: number;
+	/** Why it matched, in words ("You mentioned “report”"). */
+	reason: string;
+	/** `project` = a method run as a TRACK; `session` = one sitting of work. */
+	scope: PlaybookScope;
+	/** The user noun for that scope ("Goal template" / "Work template"). */
+	templateKind: string;
+}
+/**
+ * The `playbooks` block every start response carries when matching ran — the
+ * pod handing over its existing processes. An EMPTY `candidates` is a fact
+ * ("nothing of yours matched these words"), not a failure.
+ *
+ * There is deliberately no `applied` and no `notApplied`: nothing is applied,
+ * so both fields could only ever say the same thing, and a field that cannot
+ * vary is noise a reader must learn to ignore.
+ */
+export interface SessionPlaybookCandidates {
+	candidates: PlaybookCandidate[];
+	/** How to skip matching entirely on the next start. */
+	optOut: typeof TEMPLATE_OPT_OUT;
+}
+export interface SessionsOwingGrade {
+	count: number;
+	/** True when the read cap was hit — "at least this many". */
+	countIsLowerBound: boolean;
+	/** Open sessions the caller OWNS (any agent working for them), any kind. */
+	lens: "owned-open";
+	items: Array<{
+		id: string;
+		link: string;
+		title: string;
+		ungraded: number;
+	}>;
+}
+/**
+ * THE SPACE BRIEF — how an agent works inside one space (workspace).
+ *
+ * ONE type, ONE reader. Stored at `workspace.settings.onboarding` (the key is
+ * kept: 28 templates and every installed space already write it there), and
+ * called `SpaceBrief` in code. The interview fields (`goal`, `collect`,
+ * `openingQuestions`, `doneWhen`) are the brief's ONBOARDING MODE — what the
+ * shared `onboard` skill runs while a space is still empty. The steady-state
+ * fields (`purpose`, `anchors`, `rules`, `fetch`) are what any agent entering
+ * the space is told every time.
+ *
+ * WHY ONE TYPE (2026-09-28). The onboarding shape was declared in eight places
+ * (package definition, workspace settings, template authoring, discover,
+ * browser, CLI, CP, hub client) and they had drifted — one required `framing`,
+ * another typed the whole thing `Record<string, unknown>`. This leaf is the
+ * source; the others re-export it or, where a package boundary forbids the
+ * import, mirror it under a compile-time parity floor.
+ *
+ * Pure and dependency-free: the pod, the browser, relay, the CLI and the
+ * template authoring package import the same answer.
+ */
+/** How many of a kind the interview should aim for — guides depth. */
+export type SpaceBriefCardinality = "few" | "one" | "several";
+/** One kind the onboarding interview fills. */
+export interface SpaceBriefCollectTarget {
+	/** Profile slug to populate (e.g. "brand-identity"). */
+	profileSlug: string;
+	/** Human description of what to capture for this target. */
+	what: string;
+	/** Roughly how many to expect — guides interview depth. */
+	cardinality?: SpaceBriefCardinality;
+	/** Key fields the agent should make sure to fill. */
+	keyFields?: string[];
+	/**
+	 * The MINIMUM this space needs before it counts as onboarded: at least `min`
+	 * entities of this kind with every `keyFields` entry filled. Folded in from
+	 * the golden standards' `requires` so a pod can check itself.
+	 */
+	min?: number;
+}
+/** Authored domain expertise the agent LEADS with. */
+export interface SpaceBriefExpertise {
+	/** Concrete starting points the agent proposes instead of asking blank. */
+	starters?: string[];
+	/** Blind spots people in this domain miss — surfaced proactively. */
+	blindSpots?: string[];
+	/** What a great result looks like here — the bar the agent pushes toward. */
+	bar?: string;
+}
+/** `root` = THE entity this space is about; `context` = read it too. */
+export type SpaceBriefAnchorRole = "context" | "root";
+/**
+ * An entity an agent reads FIRST in this space. A template names it by kind
+ * (and optionally by one of its own suggested entities, `seedRef`); the pod
+ * resolves `seedRef` to `entityId` at install. Without an `entityId`, the
+ * anchor means "the `limit` most relevant entities of this kind here".
+ */
+export interface SpaceBriefAnchor {
+	profileSlug: string;
+	role: SpaceBriefAnchorRole;
+	/** A suggested entity of the template (`refKey` | `kind:title` | unique title). */
+	seedRef?: string;
+	/** Resolved at install from `seedRef`, or set by the user. */
+	entityId?: string;
+	/** How many entities of the kind to read when no `entityId` is set. */
+	limit?: number;
+}
+/** Where to look for context before acting — a kind, a query, or both. */
+export interface SpaceBriefFetchHint {
+	profileSlug?: string;
+	query?: string;
+	/** Why this is worth reading, in a few words. */
+	note?: string;
+}
+/**
+ * A reference to a RULE a template installed in this space. The brief lists
+ * refs; the rule itself (intent, sentence, behaviour) lives in its own row,
+ * written through the ONE rule door.
+ */
+export interface SpaceBriefRuleRef {
+	/** The template's stable key for the rule (`SpaceTemplateRule.key`). */
+	key: string;
+	/** The installed rule row, once the pod created it. */
+	ruleId?: string;
+}
+/**
+ * How an AI working in a space loads a skill the space declares.
+ *
+ * `always` — prepended to every session and run started in the space, before the
+ *   model has to ask. For the skill that IS the space's job (a brand space's
+ *   creative director).
+ * `on-demand` — surfaced in the brief and ranked first for a find-skills ask;
+ *   loaded when the work calls for it, not on every turn.
+ */
+export type SpaceSkillMode = "always" | "on-demand";
+/**
+ * A declared skill AS STORED in the brief — the space's own copy.
+ *
+ * Unlike `SpaceBriefRuleRef`, which points at a rule ROW that carries the
+ * intent, a skill's content lives on the pod-wide `system/…` skill. The
+ * space-owned half — `mode` and `when` — therefore has nowhere else to live and
+ * is kept here verbatim.
+ */
+export interface SpaceBriefSkillRef {
+	/** The skill ref: `system/<pkg>/<stem>` or a bare stem. */
+	slug: string;
+	mode: SpaceSkillMode;
+	when?: string;
+}
+/** The brief, as stored at `settings.onboarding`. */
+export interface SpaceBrief {
+	/** What this space is for, day to day (steady state). */
+	purpose?: string;
+	/** Onboarding mode: the outcome the interview achieves, in one sentence. */
+	goal?: string;
+	/** The persona / voice to adopt in this space. */
+	framing?: string;
+	expertise?: SpaceBriefExpertise;
+	/** Onboarding mode: what structured data to collect. */
+	collect?: SpaceBriefCollectTarget[];
+	/** Onboarding mode: a few opening questions — adapt from here. */
+	openingQuestions?: string[];
+	/** Onboarding mode: when the interview is done. */
+	doneWhen?: string;
+	/** Entities to read first. */
+	anchors?: SpaceBriefAnchor[];
+	/** Rules this space's template installed (refs, not bodies). */
+	rules?: SpaceBriefRuleRef[];
+	/**
+	 * Skills this space DECLARES — the space's own refs (slug + mode + when),
+	 * written from the template's `skills[]` by the applier, which owns them.
+	 * An `always` ref is prepended to every session/run started here; every ref
+	 * is surfaced to an agent and ranked first for a find-skills ask.
+	 */
+	skills?: SpaceBriefSkillRef[];
+	/** Where to look before acting. */
+	fetch?: SpaceBriefFetchHint[];
+}
+export interface SpaceBriefFieldChange {
+	field: keyof SpaceBrief;
+	before?: unknown;
+	after?: unknown;
+}
+/** INDEX projection a UI/agent can name, not just id. */
+export type UsedWorkspaceRef = {
+	domain: string | null;
+	id: string;
+	name: string;
+};
+/** Who may rewrite a section. Absent or unknown reads as `human` — see `sectionOwner`. */
+export type SectionOwner = "ai" | "human";
+export interface DependencyNodeRef {
+	kind: string;
+	id: string;
+}
+export interface OpenBlocker extends DependencyNodeRef {
+	/** The blocker as declared, when the open one is its replacement. */
+	replaces?: DependencyNodeRef;
+	hidden: boolean;
+	/**
+	 * It ENDED without delivering (cancelled, failed, archived, lost) and still
+	 * holds the dependent: the work it waited on never happened, so the
+	 * dependent re-plans — remove the edge, or link a replacement.
+	 */
+	dropped: boolean;
+	/** Its own raw status, when the reader may see it. */
+	status?: string | null;
+	/** Its display name, when the reader may see it. */
+	title?: string | null;
+}
+/** A relation row as the relation readers return it — plus the dependency marker. */
+export type RelationReadRow = typeof relations.$inferSelect & {
+	/** 0301: the relation id this dependency was migrated from, if any. */
+	legacyRelationId?: string | null;
+	storedAs?: "link";
+};
+/** The kinds a session can be converted INTO. */
+export type ConversionKind = "playbook" | "project";
+/** The receipt every conversion verb returns. Frontend renders it verbatim. */
+export interface ConversionReceipt {
+	created: {
+		id: string;
+		kind: ConversionKind;
+		name: string;
+	};
+	/** The session's goal BEFORE the rename (null when the rename was skipped). */
+	renamedFrom: string | null;
+	/** The session's goal AFTER the rename. */
+	renamedTo: string;
+	/** ISO deadline after which `revertConversion` refuses. */
+	undoUntil: string;
+}
+/** A briefing section that could not be read — never folded into "none". */
+export interface StartHereUnavailable {
+	status: "unavailable";
+}
+/**
+ * The briefing orient LEADS with (founder decision D4 + research F2,
+ * 2026-09-14): dynamic state only, in the order an agent should act on it —
+ * pending review FIRST.
+ */
+export interface StartHere {
+	pendingReview: {
+		count: number;
+		/**
+		 * What the count covers: `authored` = proposals filed by this user or
+		 * an agent they own. The user's review queue may hold more from others.
+		 */
+		lens: "authored";
+		oldestDays?: number;
+		/** Deep link to the OLDEST pending proposal (the one to review first). */
+		oldestLink?: string;
+	} | StartHereUnavailable;
+	/**
+	 * Open BLOCKER-class `finding` entities — known defects in Synap itself the
+	 * agent is about to walk into. Pod-wide (findings are a pod-scoped kind, and
+	 * a broken door is not a fact about the caller's workspace lens). Each row
+	 * carries its own `surface` so the agent can match it against the door it is
+	 * about to use; orient runs before that door is chosen, so it cannot filter.
+	 */
+	openFindings: {
+		/** Blocker-severity rows returned below — NOT all open findings. */
+		count: number;
+		/** True when `count` hit the read cap — "at least this many". */
+		countIsLowerBound: boolean;
+		items: Array<{
+			id: string;
+			link: string;
+			/** The door it was hit on (mcp, ask, capture…), or null if unset. */
+			surface: string | null;
+			/** `entities.title` is nullable — reported as null, never as "". */
+			title: string | null;
+			/** What to do in the meantime, verbatim from the finding. */
+			workaround: string | null;
+		}>;
+		/** Open findings at ANY severity — the dedup denominator. */
+		openTotal: number;
+		/**
+		 * The severity `count`/`items` are filtered to. Stated so a reader can
+		 * never mistake this page for the whole set (finding 14005d59).
+		 */
+		severity: "blocker";
+	} | StartHereUnavailable;
+	/**
+	 * What the PERSON owes — owed slots (questions, decisions, hand-backs only
+	 * they can do), one row per session, newest first, each naming where the
+	 * person finds it (`needs-you` / `proposed`). Raise these with the person.
+	 * NOT `handedToYou`, which is the other direction (work handed to this
+	 * agent). See `owed-by-person.ts`.
+	 */
+	owedByPerson: OwedByPerson | StartHereUnavailable;
+	openSessions: {
+		count: number;
+		/** True when `count` hit the read cap — "at least this many". */
+		countIsLowerBound: boolean;
+		newest?: {
+			goal: string | null;
+			id: string;
+			startedAt: string | null;
+		};
+	} | StartHereUnavailable;
+	/**
+	 * Open sessions the person HANDED TO THIS AGENT (the agent is on the
+	 * session's roster — e.g. relay Capture "Give to agent"), newest first.
+	 * Present only when an agent calls; a pull-only agent learns about work it
+	 * was given HERE, since nothing can wake it.
+	 */
+	handedToYou?: {
+		count: number;
+		countIsLowerBound: boolean;
+		items: Array<{
+			goal: string | null;
+			id: string;
+			startedAt: string | null;
+		}>;
+	}
+	/**
+	 * The agent is BOUND for dispatch: the pod hands it work through its
+	 * provider (THE route, reach 'dispatch'), never by pull. Nothing is listed
+	 * — a pulling worker for it must stop, or the same work would run twice.
+	 */
+	 | {
+		status: "bound";
+	}
+	/**
+	 * A person PAUSED this agent: it takes no new work until resumed. A worker
+	 * idles (keeps polling) rather than launching anything. Its keys still work.
+	 */
+	 | {
+		status: "paused";
+	} | StartHereUnavailable;
+	/**
+	 * Open sessions the caller OWNS whose criteria are not all graded —
+	 * "grade with evaluate_session before you say done". Bounded read; the lens
+	 * is stated on the value (`owned-open`).
+	 */
+	sessionsOwingGrade: SessionsOwingGrade | StartHereUnavailable;
+	/** Most-used kinds (not roles), blended rank — the SAME rank discover lists by. */
+	topKinds: Array<{
+		entityCount: number;
+		lastActivityAt: string | null;
+		name: string;
+		rank: number;
+		slug: string;
+	}> | StartHereUnavailable;
+	/** Runnable actions from the shared runnable projection. */
+	actions: {
+		count: number;
+		/** First three runnable action labels. */
+		examples: string[];
+		/** The lens the count was read at: a workspace id, or "pod". */
+		lens: string;
+	} | StartHereUnavailable;
+	/**
+	 * The person's Library (what they KEEP, capture-vs-library decision, wave L5): items not
+	 * read yet, groups waiting to be built, the oldest wait. State, not a queue —
+	 * there is no inbox counter to clear. `library.health` is the same read.
+	 */
+	library: LibraryHealth | StartHereUnavailable;
+	/** `skill` = concept depth; `writing` = title rules + knowledge routing. */
+	learnMore: {
+		skill: string;
+		writing: string;
+	};
+	/**
+	 * The standing ask, carried by the pod rather than by a prompt: file what
+	 * broke before you finish. Constant text — it is an INSTRUCTION, not state,
+	 * and it is here because `orient` is the one door every agent already calls.
+	 * See the construction site in `start-here.ts` for why a playbook cannot do
+	 * this job.
+	 */
+	beforeYouFinish: string;
+}
+export type AskQueueBlock = Pick<StartHere, "openSessions" | "owedByPerson" | "pendingReview">;
 /**
  * A degradation tag on the response. Substrate outages use the substrate name;
  * the semantic backbone additionally reports `"semantic:vector-down"` when its
@@ -13869,6 +14324,12 @@ export interface AskResult {
 	 * read failed — never dropped.
 	 */
 	spaces?: AskSpacesHint;
+	/**
+	 * What is waiting on the person — present ONLY for a queue-type question
+	 * ("what is waiting on me", "qu'est-ce qui m'attend"), read from the same
+	 * sections as orient's `startHere`. Retrieval cannot answer such a question.
+	 */
+	queue?: AskQueueBlock;
 }
 export interface SynthesisSource {
 	substrate: string;
@@ -15006,31 +15467,6 @@ export type ExecuteCapabilityResult = {
 	kind: "not_found";
 	message: string;
 };
-export interface DependencyNodeRef {
-	kind: string;
-	id: string;
-}
-export interface OpenBlocker extends DependencyNodeRef {
-	/** The blocker as declared, when the open one is its replacement. */
-	replaces?: DependencyNodeRef;
-	hidden: boolean;
-	/**
-	 * It ENDED without delivering (cancelled, failed, archived, lost) and still
-	 * holds the dependent: the work it waited on never happened, so the
-	 * dependent re-plans — remove the edge, or link a replacement.
-	 */
-	dropped: boolean;
-	/** Its own raw status, when the reader may see it. */
-	status?: string | null;
-	/** Its display name, when the reader may see it. */
-	title?: string | null;
-}
-/** A relation row as the relation readers return it — plus the dependency marker. */
-export type RelationReadRow = typeof relations.$inferSelect & {
-	/** 0301: the relation id this dependency was migrated from, if any. */
-	legacyRelationId?: string | null;
-	storedAs?: "link";
-};
 declare const SHARE_KINDS: readonly [
 	"entity",
 	"document",
@@ -15654,149 +16090,6 @@ export interface SpaceStatsRow {
 	 * predicate). `null` on a live space.
 	 */
 	pausedRuleCount: number | null;
-}
-/**
- * THE SPACE BRIEF — how an agent works inside one space (workspace).
- *
- * ONE type, ONE reader. Stored at `workspace.settings.onboarding` (the key is
- * kept: 28 templates and every installed space already write it there), and
- * called `SpaceBrief` in code. The interview fields (`goal`, `collect`,
- * `openingQuestions`, `doneWhen`) are the brief's ONBOARDING MODE — what the
- * shared `onboard` skill runs while a space is still empty. The steady-state
- * fields (`purpose`, `anchors`, `rules`, `fetch`) are what any agent entering
- * the space is told every time.
- *
- * WHY ONE TYPE (2026-09-28). The onboarding shape was declared in eight places
- * (package definition, workspace settings, template authoring, discover,
- * browser, CLI, CP, hub client) and they had drifted — one required `framing`,
- * another typed the whole thing `Record<string, unknown>`. This leaf is the
- * source; the others re-export it or, where a package boundary forbids the
- * import, mirror it under a compile-time parity floor.
- *
- * Pure and dependency-free: the pod, the browser, relay, the CLI and the
- * template authoring package import the same answer.
- */
-/** How many of a kind the interview should aim for — guides depth. */
-export type SpaceBriefCardinality = "few" | "one" | "several";
-/** One kind the onboarding interview fills. */
-export interface SpaceBriefCollectTarget {
-	/** Profile slug to populate (e.g. "brand-identity"). */
-	profileSlug: string;
-	/** Human description of what to capture for this target. */
-	what: string;
-	/** Roughly how many to expect — guides interview depth. */
-	cardinality?: SpaceBriefCardinality;
-	/** Key fields the agent should make sure to fill. */
-	keyFields?: string[];
-	/**
-	 * The MINIMUM this space needs before it counts as onboarded: at least `min`
-	 * entities of this kind with every `keyFields` entry filled. Folded in from
-	 * the golden standards' `requires` so a pod can check itself.
-	 */
-	min?: number;
-}
-/** Authored domain expertise the agent LEADS with. */
-export interface SpaceBriefExpertise {
-	/** Concrete starting points the agent proposes instead of asking blank. */
-	starters?: string[];
-	/** Blind spots people in this domain miss — surfaced proactively. */
-	blindSpots?: string[];
-	/** What a great result looks like here — the bar the agent pushes toward. */
-	bar?: string;
-}
-/** `root` = THE entity this space is about; `context` = read it too. */
-export type SpaceBriefAnchorRole = "context" | "root";
-/**
- * An entity an agent reads FIRST in this space. A template names it by kind
- * (and optionally by one of its own suggested entities, `seedRef`); the pod
- * resolves `seedRef` to `entityId` at install. Without an `entityId`, the
- * anchor means "the `limit` most relevant entities of this kind here".
- */
-export interface SpaceBriefAnchor {
-	profileSlug: string;
-	role: SpaceBriefAnchorRole;
-	/** A suggested entity of the template (`refKey` | `kind:title` | unique title). */
-	seedRef?: string;
-	/** Resolved at install from `seedRef`, or set by the user. */
-	entityId?: string;
-	/** How many entities of the kind to read when no `entityId` is set. */
-	limit?: number;
-}
-/** Where to look for context before acting — a kind, a query, or both. */
-export interface SpaceBriefFetchHint {
-	profileSlug?: string;
-	query?: string;
-	/** Why this is worth reading, in a few words. */
-	note?: string;
-}
-/**
- * A reference to a RULE a template installed in this space. The brief lists
- * refs; the rule itself (intent, sentence, behaviour) lives in its own row,
- * written through the ONE rule door.
- */
-export interface SpaceBriefRuleRef {
-	/** The template's stable key for the rule (`SpaceTemplateRule.key`). */
-	key: string;
-	/** The installed rule row, once the pod created it. */
-	ruleId?: string;
-}
-/**
- * How an AI working in a space loads a skill the space declares.
- *
- * `always` — prepended to every session and run started in the space, before the
- *   model has to ask. For the skill that IS the space's job (a brand space's
- *   creative director).
- * `on-demand` — surfaced in the brief and ranked first for a find-skills ask;
- *   loaded when the work calls for it, not on every turn.
- */
-export type SpaceSkillMode = "always" | "on-demand";
-/**
- * A declared skill AS STORED in the brief — the space's own copy.
- *
- * Unlike `SpaceBriefRuleRef`, which points at a rule ROW that carries the
- * intent, a skill's content lives on the pod-wide `system/…` skill. The
- * space-owned half — `mode` and `when` — therefore has nowhere else to live and
- * is kept here verbatim.
- */
-export interface SpaceBriefSkillRef {
-	/** The skill ref: `system/<pkg>/<stem>` or a bare stem. */
-	slug: string;
-	mode: SpaceSkillMode;
-	when?: string;
-}
-/** The brief, as stored at `settings.onboarding`. */
-export interface SpaceBrief {
-	/** What this space is for, day to day (steady state). */
-	purpose?: string;
-	/** Onboarding mode: the outcome the interview achieves, in one sentence. */
-	goal?: string;
-	/** The persona / voice to adopt in this space. */
-	framing?: string;
-	expertise?: SpaceBriefExpertise;
-	/** Onboarding mode: what structured data to collect. */
-	collect?: SpaceBriefCollectTarget[];
-	/** Onboarding mode: a few opening questions — adapt from here. */
-	openingQuestions?: string[];
-	/** Onboarding mode: when the interview is done. */
-	doneWhen?: string;
-	/** Entities to read first. */
-	anchors?: SpaceBriefAnchor[];
-	/** Rules this space's template installed (refs, not bodies). */
-	rules?: SpaceBriefRuleRef[];
-	/**
-	 * Skills this space DECLARES — the space's own refs (slug + mode + when),
-	 * written from the template's `skills[]` by the applier, which owns them.
-	 * An `always` ref is prepended to every session/run started here; every ref
-	 * is surfaced to an agent and ranked first for a find-skills ask.
-	 */
-	skills?: SpaceBriefSkillRef[];
-	/** Where to look before acting. */
-	fetch?: SpaceBriefFetchHint[];
-}
-export interface SpaceBriefFieldChange {
-	field: keyof SpaceBrief;
-	before?: unknown;
-	after?: unknown;
 }
 export type UpdateSpaceBriefResult = {
 	changes: SpaceBriefFieldChange[];
@@ -18514,22 +18807,6 @@ export type SessionLiveness = {
 	reason: string;
 	status: "unavailable";
 };
-/** The kinds a session can be converted INTO. */
-export type ConversionKind = "playbook" | "project";
-/** The receipt every conversion verb returns. Frontend renders it verbatim. */
-export interface ConversionReceipt {
-	created: {
-		id: string;
-		kind: ConversionKind;
-		name: string;
-	};
-	/** The session's goal BEFORE the rename (null when the rename was skipped). */
-	renamedFrom: string | null;
-	/** The session's goal AFTER the rename. */
-	renamedTo: string;
-	/** ISO deadline after which `revertConversion` refuses. */
-	undoUntil: string;
-}
 export interface CancelRecordItem {
 	kind: "chat_turn" | "job" | "proposal";
 	id: string;
@@ -18611,13 +18888,6 @@ export type StructureAgainResult = {
 	sourceDocumentId: string;
 	status: "structured";
 } & Omit<RerunItemResult, "door" | "sourceDocumentIds">);
-export type SessionEvaluationRow = typeof sessionEvaluations.$inferSelect;
-export interface SessionEvaluationSummary {
-	criteria: SessionCriterion[];
-	/** The CURRENT row per criterion (human wins), for criteria still declared. */
-	evaluations: SessionEvaluationRow[];
-	verdict: SessionVerdict;
-}
 export interface CriterionRunOutcome {
 	key: string;
 	/** `recorded` wrote a row; `skipped` wrote nothing and says why. */
@@ -18637,34 +18907,6 @@ export interface SessionTwinCandidate {
 	 * or exactly 1 for a same-goal session at ANOTHER track stage (M3).
 	 */
 	score: number;
-}
-export type PlaybookScope = "project" | "session";
-declare const TEMPLATE_OPT_OUT: "pass templateId: null";
-export interface PlaybookCandidate {
-	id: string;
-	name: string;
-	/** Lexical score from the shared ranker. */
-	score: number;
-	/** Why it matched, in words ("You mentioned “report”"). */
-	reason: string;
-	/** `project` = a method run as a TRACK; `session` = one sitting of work. */
-	scope: PlaybookScope;
-	/** The user noun for that scope ("Goal template" / "Work template"). */
-	templateKind: string;
-}
-/**
- * The `playbooks` block every start response carries when matching ran — the
- * pod handing over its existing processes. An EMPTY `candidates` is a fact
- * ("nothing of yours matched these words"), not a failure.
- *
- * There is deliberately no `applied` and no `notApplied`: nothing is applied,
- * so both fields could only ever say the same thing, and a field that cannot
- * vary is noise a reader must learn to ignore.
- */
-export interface SessionPlaybookCandidates {
-	candidates: PlaybookCandidate[];
-	/** How to skip matching entirely on the next start. */
-	optOut: typeof TEMPLATE_OPT_OUT;
 }
 /** What happened to the create-time `spawned_from` edge. */
 export type CreateTimeParentLink = {
@@ -18833,53 +19075,6 @@ export interface SessionAnswersPage {
 	nextSince: string | null;
 	hasMore: boolean;
 }
-/** One owed deliverable, with just enough of its session to be actionable. */
-export interface OwedSlot {
-	sessionId: string;
-	sessionGoal: string | null;
-	/**
-	 * The session's DISPLAY NAME (`resolveSessionTitle` — its title, else the
-	 * goal's first line, clipped): what a needs-you card names the session by.
-	 * `null` only when the session has neither.
-	 */
-	sessionTitle: string | null;
-	/** The session's lifecycle state — an owed slot outlives its session. */
-	sessionStatus: string;
-	workspaceId: string | null;
-	projectId: string | null;
-	/** The DECLARED label — the key every slot door matches on. */
-	label: string;
-	kind: string;
-	icon?: string;
-	blockedReason?: ExpectedOutput["blockedReason"];
-	/** One line naming WHICH thing is missing. */
-	why?: string;
-	/** When it became the human's. Always present — the invariant guarantees it. */
-	owedSince: string;
-	/** The agent's claim that it produced this after all, if it made one. */
-	claimedDone?: boolean;
-	/**
-	 * For a criterion slot, the `SessionCriterion.key` it stands for — so a tray
-	 * can open the scorecard ON that criterion instead of matching its prose
-	 * label. Absent on every ordinary slot and on criterion slots filed before
-	 * the field existed; absence means "no criterion to highlight".
-	 */
-	criterionKey?: string;
-	/**
-	 * WHERE the agent pointed the person (`ExpectedOutput.ref`) — carried so a
-	 * tray row can open the door without re-reading the whole session. Floored
-	 * at write time (`isOutputRefVisible`) by the declaring door; this read is
-	 * behind the same owner floor.
-	 */
-	ref?: OutputRef;
-	/**
-	 * HOW the person can answer (`ExpectedOutput.ask`) — carried so a tray can
-	 * quick-answer a confirm / choose in place. Its `lookedAt` ("what I looked
-	 * at") arrives with each ref's `title` resolved through the READER's access
-	 * floor; a ref the reader cannot see is dropped (`looked-at.ts`).
-	 */
-	ask?: SlotAsk;
-}
 /** One capability (skill) the session ran, with how often and how recently. */
 export interface SessionUsageCapability {
 	skillId: string;
@@ -18946,8 +19141,6 @@ export interface SessionUsage {
 	} | null;
 	agents: SessionParticipant[];
 }
-/** Who may rewrite a section. Absent or unknown reads as `human` — see `sectionOwner`. */
-export type SectionOwner = "ai" | "human";
 export interface CriterionScore {
 	key: string;
 	statement: string;
@@ -19171,12 +19364,6 @@ export interface ProjectAutomation {
 	triggerType: string;
 	status: string | null;
 }
-/** INDEX projection a UI/agent can name, not just id. */
-export type UsedWorkspaceRef = {
-	domain: string | null;
-	id: string;
-	name: string;
-};
 /** One thing the project's work produced. */
 export interface ProjectOutputItem {
 	/** `<sessionId>|<kind>:<refId>` — stable across refetches, unique per row. */
@@ -35078,6 +35265,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				degraded: DegradedTag[];
 				detail: "brief" | "full" | "sources" | undefined;
 				failureClass: AiFailureClass | undefined;
+				queue: AskQueueBlock | undefined;
 				routedTo: string[];
 				sources: SynthesisSource[];
 				spaces: AskSpacesHint | undefined;

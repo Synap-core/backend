@@ -17094,6 +17094,28 @@
                         }
                       ]
                     },
+                    "queue": {
+                      "type": "object",
+                      "properties": {
+                        "pendingReview": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "owedByPerson": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "openSessions": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "pendingReview",
+                        "owedByPerson",
+                        "openSessions"
+                      ]
+                    },
                     "comparison": {
                       "type": "object",
                       "properties": {
@@ -17683,6 +17705,28 @@
                         }
                       ]
                     },
+                    "queue": {
+                      "type": "object",
+                      "properties": {
+                        "pendingReview": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "owedByPerson": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "openSessions": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "pendingReview",
+                        "owedByPerson",
+                        "openSessions"
+                      ]
+                    },
                     "comparison": {
                       "type": "object",
                       "properties": {
@@ -17899,6 +17943,28 @@
                           },
                           "required": ["status"]
                         }
+                      ]
+                    },
+                    "queue": {
+                      "type": "object",
+                      "properties": {
+                        "pendingReview": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "owedByPerson": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "openSessions": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "pendingReview",
+                        "owedByPerson",
+                        "openSessions"
                       ]
                     },
                     "error": { "type": "string" },
