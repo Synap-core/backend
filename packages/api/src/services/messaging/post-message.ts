@@ -31,7 +31,9 @@
 
 import {
   ROUTE_CHOICE_META_KEY,
+  SESSION_POST_META_KEY,
   type RouteChoiceMeta,
+  type SessionPostMeta,
 } from "@synap-core/types/agents";
 import { randomUUID } from "crypto";
 import type { SlotAsk } from "@synap/playbooks";
@@ -144,6 +146,14 @@ export interface PostChannelMessageParams {
    * candidates, never passed from a wire.
    */
   routeChoice?: RouteChoiceMeta;
+  /**
+   * A COORDINATION POST's stamp (`messages.metadata.sessionPost`): an agent's
+   * typed message to another session. SERVER-INTERNAL — built only by
+   * `resolveSessionPost` (`session-post.ts`) from the verified principal and
+   * the sender session it derived, never passed from a wire. Agent posts only.
+   * Such a post notifies no person (`notifyRoomPost`).
+   */
+  sessionPost?: SessionPostMeta;
   /**
    * ⚠️ NOT written to `messages.sessionId`. That column FKs to `sessions` (the
    * channel-scoped conversation-memory session), whereas `X-Session-Id` carries
@@ -449,6 +459,9 @@ export async function postChannelMessage(
               ...(params.routeChoice
                 ? { [ROUTE_CHOICE_META_KEY]: params.routeChoice }
                 : {}),
+              ...(agentUserId && params.sessionPost
+                ? { [SESSION_POST_META_KEY]: params.sessionPost }
+                : {}),
               ...(agentUserId
                 ? {
                     [ROOM_POST_META_KEY]: roomPostMeta(
@@ -509,6 +522,7 @@ export async function postChannelMessage(
     agentUserId,
     kind: params.kind,
     workspaceId: channel.workspaceId,
+    sessionPost: Boolean(agentUserId && params.sessionPost),
   });
 
   const slot = await fileSlotQuestion(params, msgId);
