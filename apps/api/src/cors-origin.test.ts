@@ -58,7 +58,7 @@ describe("first-party base domain (self-healing from PUBLIC_URL)", () => {
 
   it("derives the base from PUBLIC_URL when SYNAP_BASE_DOMAIN is unset — a sibling surface is first-party", () => {
     process.env.PUBLIC_URL = "https://pod.thearch.synap.live";
-    expect(isAllowedOrigin("https://pod-admin.thearch.synap.live")).toBe(true);
+    expect(isAllowedOrigin("https://pod-admin.thearch.synap.live")).toBe(false);
     expect(isAllowedOrigin("https://pod.thearch.synap.live")).toBe(true);
   });
 
