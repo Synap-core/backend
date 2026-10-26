@@ -65,6 +65,10 @@ import {
   LIBRARIAN_ARCHIVER_CRON,
 } from "./workers/librarian-archiver.js";
 import {
+  POD_HYGIENE_CLEANUP_PACK_QUEUE,
+  POD_HYGIENE_CLEANUP_PACK_CRON,
+} from "./workers/pod-hygiene-cleanup-pack-cron.js";
+import {
   AUTOMATION_RUN_REAPER_QUEUE,
   AUTOMATION_RUN_REAPER_CRON,
 } from "./workers/automation-run-reaper.js";
@@ -435,10 +439,20 @@ export async function registerCronSchedules(): Promise<void> {
     "Registered cron: librarian.project-archiver (daily at 3:45 AM UTC)"
   );
 
-  // Pod hygiene cleanup pack: deliberately NOT scheduled. One Approve applies
-  // every item in a pack, so re-register only once relay renders the pack's
-  // items with a per-item "Leave out" (`proposals.rejectItem`). Pinned by
-  // `__tripwires__/cleanup-pack-cron-unscheduled.tripwire.test.ts`.
+  // Pod hygiene cleanup pack — the pod's janitor (W-B4, founder Q-B4: weekly,
+  // Mondays 04:20 UTC, so its one "tidy your pod" row is in the person's
+  // Monday brief before the 06:00 night shift). Relay renders a pack's items
+  // with a per-item "Leave out" (`ItemPackReview`, `proposals.rejectItem`).
+  // Pinned by `__tripwires__/cleanup-pack-cron-weekly.tripwire.test.ts`.
+  await scheduleSafe(
+    boss,
+    POD_HYGIENE_CLEANUP_PACK_QUEUE,
+    POD_HYGIENE_CLEANUP_PACK_CRON,
+    {}
+  );
+  logger.info(
+    "Registered cron: pod-hygiene.cleanup-pack (weekly, Mondays at 4:20 AM UTC)"
+  );
 
   // Notification cleanup (daily at 2:00 AM UTC — expires/deletes old notifications)
   await scheduleSafe(boss, "notification-cleanup", "0 2 * * *", {});
