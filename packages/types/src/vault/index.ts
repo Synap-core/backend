@@ -9,18 +9,19 @@
 // Secret Types
 // ============================================================================
 
+/** Stored as the pod's `secret_type` enum (built from this list). */
 export const SECRET_TYPES = [
-  "password",
-  "api_key",
-  "credential",
-  "note",
-  "card",
-  "identity",
-  "ssh_key",
-  "certificate",
-  "env_variable",
-  "database",
-  "oauth",
+  "password", // Website/app passwords
+  "api_key", // API keys & tokens
+  "credential", // Username/password pairs
+  "note", // Secure notes
+  "card", // Payment cards
+  "identity", // Personal identity info
+  "ssh_key", // SSH keys
+  "certificate", // SSL/TLS certificates
+  "env_variable", // Environment variables
+  "database", // Database connection strings
+  "oauth", // OAuth tokens
 ] as const;
 
 export type SecretType = (typeof SECRET_TYPES)[number];

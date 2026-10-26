@@ -27,6 +27,7 @@ import {
   index,
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
+import { SECRET_TYPES as SECRET_TYPE_VALUES } from "@synap-core/types/vault";
 import { users } from "./users.js";
 import { workspaces } from "./workspaces.js";
 
@@ -34,21 +35,11 @@ import { workspaces } from "./workspaces.js";
 // Enums
 // ============================================================================
 
-export const secretTypeEnum = pgEnum("secret_type", [
-  "password", // Website/app passwords
-  "api_key", // API keys & tokens
-  "credential", // Username/password pairs
-  "note", // Secure notes
-  "card", // Payment cards
-  "identity", // Personal identity info
-  "ssh_key", // SSH keys
-  "certificate", // SSL/TLS certificates
-  "env_variable", // Environment variables
-  "database", // Database connection strings
-  "oauth", // OAuth tokens
-]);
+// The secret types are declared ONCE, as `SECRET_TYPES` in
+// `@synap-core/types/vault` (with their labels and fields); the stored enum
+// is built from that list.
+export const secretTypeEnum = pgEnum("secret_type", SECRET_TYPE_VALUES);
 
-// Local type derived from the pgEnum above (mirrors @synap-core/types SecretType)
 export const SECRET_TYPES = secretTypeEnum.enumValues;
 export type SecretType = (typeof SECRET_TYPES)[number];
 

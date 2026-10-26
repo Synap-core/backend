@@ -14,10 +14,9 @@
  * the SQL is what actually populates the table — a TypeScript-only check would
  * stay green while the shipped seed and this mirror disagreed.
  *
- * Scoped like the sibling `guideline-vocabulary-parity.test.ts` in
- * `@synap/database`: `package.json` declares no dependency on
- * `synap-backend`, and `tsconfig.json` excludes test files, so this file never
- * enters the types build. It skips cleanly in an isolated checkout where
+ * It reads the migrations by path, not by import: `package.json` declares no
+ * dependency on the database package, and `tsconfig.json` excludes test files,
+ * so this file never enters the types build. It skips cleanly in an isolated checkout where
  * synap-backend is absent.
  */
 import { describe, it, expect } from "vitest";

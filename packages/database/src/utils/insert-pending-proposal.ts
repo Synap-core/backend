@@ -8,6 +8,10 @@ import { proposals, ProposalStatus } from "../schema/proposals.js";
 // here moved WITH it, so no caller loses the 22P02 protection.
 import { resolveProjectPlacement } from "../services/project-resolution-service.js";
 import { stableStringify } from "./stable-stringify.js";
+import {
+  isRequestShapedProposalData,
+  type StoredProposalData,
+} from "@synap-core/types/proposals";
 import { isUniqueViolation } from "./pg-errors.js";
 import {
   callingKeyAttribution,
@@ -197,21 +201,6 @@ const VOLATILE_DEDUP_KEYS = new Set([
 ]);
 
 /**
- * True when a stored payload is the REQUEST ENVELOPE `checkPermissionOrPropose`
- * writes — `{ requestId, targetType, changeType, data: <the record>, … }` —
- * rather than a flat record. The same three-field signature as
- * `isRequestShapedProposalData` (`@synap-core/types/proposals`); mirrored, not
- * imported, because `@synap-core/types` builds against this package.
- */
-function isRequestEnvelope(data: Record<string, unknown>): boolean {
-  return (
-    typeof data.targetType === "string" &&
-    typeof data.changeType === "string" &&
-    typeof data.requestId === "string"
-  );
-}
-
-/**
  * What makes two proposed creates the SAME record: the record the create door
  * handed the gate, minus its per-attempt minted `id`. The ONE rule both the
  * dedup hash (two pending copies) and `expirePendingCreatesOfLandedRecord`
@@ -270,7 +259,11 @@ export function computeProposalDedupHash(p: {
   const record = payload.data;
   if (
     isCreate &&
-    isRequestEnvelope(p.data) &&
+    // The REQUEST ENVELOPE `checkPermissionOrPropose` writes —
+    // `{ requestId, targetType, changeType, data: <the record>, … }` — rather
+    // than a flat record. The guard reads any object; the cast only meets its
+    // parameter type.
+    isRequestShapedProposalData(p.data as StoredProposalData) &&
     record !== null &&
     typeof record === "object" &&
     !Array.isArray(record)
