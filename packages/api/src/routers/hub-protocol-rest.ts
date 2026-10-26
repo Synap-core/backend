@@ -52,6 +52,7 @@ import {
   registerProfilesRoutes,
   registerProjectsRoutes,
   registerTracksRoutes,
+  registerTrackParticipantsRoutes,
   registerSharesRoutes,
   registerFormsRoutes,
   registerAppsRoutes,
@@ -314,6 +315,7 @@ registerViewsRoutes(app); // /views*
 registerProfilesRoutes(app); // /profiles*, /property-defs*
 registerProjectsRoutes(app); // /projects*
 registerTracksRoutes(app); // /tracks*
+registerTrackParticipantsRoutes(app); // /tracks/:id/participants* (W3)
 registerSharesRoutes(app); // /shares* (Sites W2 S3 owner share doors)
 registerFormsRoutes(app); // /forms* (Sites W4 owner public-form doors)
 registerAppsRoutes(app); // /apps* (App Connect v1 — register/connect/key/revoke)

@@ -31,7 +31,7 @@ describe("concept vocabulary — Step", () => {
     expect(normalizeObjectKind("steps")).toBe("stage");
   });
 
-  it("a step reads as a segment of its track (same hue + icon family)", () => {
+  it("a step reads as a segment of its goal (same hue + icon family)", () => {
     expect(OBJECT_KINDS.stage?.color).toBe(OBJECT_KINDS.track?.color);
     expect(resolveObjectIcon("stage")).toBe(OBJECT_KINDS.track?.icon);
   });
@@ -50,10 +50,10 @@ describe("concept vocabulary — Pack", () => {
 });
 
 describe("resolveTemplateNoun — derived from scope, never declared", () => {
-  it("a project-scoped playbook is a Track template", () => {
-    expect(resolveTemplateNoun("project")).toBe("Track template");
+  it("a project-scoped playbook is a Goal template", () => {
+    expect(resolveTemplateNoun("project")).toBe("Goal template");
     expect(resolveTemplateNoun("project", { plural: true })).toBe(
-      "Track templates"
+      "Goal templates"
     );
   });
 

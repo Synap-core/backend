@@ -238,6 +238,7 @@ export async function recordSessionEvaluation(
         userId: session.userId,
         workspaceId: session.workspaceId,
         title: resolveSessionTitle(session),
+        trackId: session.trackId ?? null,
       },
       attempts: nonHuman + 1,
     };
@@ -289,6 +290,18 @@ export async function recordSessionEvaluation(
       // The verdict IS the answer the slot's pass/fail ask wanted.
       criterionGraded: true,
     });
+  }
+
+  // A grade on a run filed into a goal may CLAIM one of its criteria, put
+  // the goal in review, or take a claim back (a later fail): its judge's
+  // items are refreshed — judgements, first in their Needs you (W5, F1).
+  // After the commit; never throws. Loaded on use: the goal reader pulls the
+  // tracks service graph, which this module must not drag into every
+  // importer at init.
+  if (outcome.session.trackId) {
+    const { refreshGoalJudgements } =
+      await import("../../tracks/goal-review-notice.js");
+    await refreshGoalJudgements(outcome.session.trackId);
   }
 
   return { status: "recorded", evaluation: outcome.evaluation, escalated };

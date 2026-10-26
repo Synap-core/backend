@@ -72,11 +72,11 @@ describe("draftProcessForKind", () => {
       workspaceId: "ws-1",
       entities: [],
       rawSource: { idempotencyKey: "draft-process:ws-1:track" },
-      summary: "Draft a template for tracks",
+      summary: "Draft a template for goals",
     });
     expect(arg.plan.playbooks).toEqual([
       expect.objectContaining({
-        name: "Track template",
+        name: "Goal template",
         status: "draft",
         subjectProfile: {
           profileSlug: "track",

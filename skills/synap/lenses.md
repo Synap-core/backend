@@ -4,7 +4,7 @@ You don't work "inside a workspace" the way you'd work inside a folder. You oper
 
 Tool names below are stems; your door may prefix them.
 
-What each word means (workspace, project, track, step, work): `concepts` — the one glossary. This file is only about scoping.
+What each word means (workspace, project, goal, step, work): `concepts` — the one glossary. This file is only about scoping.
 
 | Lens          | Scopes                                                     | Set it (MCP / CLI)                                                 |
 | ------------- | ---------------------------------------------------------- | ------------------------------------------------------------------ |
@@ -30,7 +30,7 @@ What each word means (workspace, project, track, step, work): `concepts` — the
 
 - A **project spans workspaces** and a **workspace spans projects**.
 - **Membership is per-entity, filed on write.** An entity belongs to a project because it was written **under that project lens** (`belongs_to_project`) — that is the data ACL/filing edge. Separately, provisioning with a `projectId` also stamps **`project --uses--> workspace`**: an INDEX of domains the engagement runs through. That index is **not** an ACL and does **not** replace entity filing — set the project lens before writing work so entities compose into the project from any workspace.
-- A lasting goal inside a project is a **track**, never a child project or a workspace; a bounded piece of work is a **session** (`trackId` when it belongs to a track). There are no nested projects.
+- A lasting goal inside a project is a **goal** (a _track_ in every tool and field name — say "goal" to the person), never a child project or a workspace; a bounded piece of work is a **session** (`trackId` when it belongs to a goal). There are no nested projects.
 
 - **The connection is pod-wide by design.** Your MCP/CLI link is _not_ welded to a workspace — reads default pod-wide, writes default to a sensible workspace. Pass a lens to narrow a single call; the lens is a focus, not a fence.
 - **These are per-Claude-session.** Two concurrent Claude sessions can sit on different projects/workspaces/sessions without colliding. `synap use` here rebinds **this** session only.
@@ -50,7 +50,7 @@ What each word means (workspace, project, track, step, work): `concepts` — the
 
 A project sometimes clearly needs something it lacks. Tell the two apart first:
 
-- **A lasting goal is missing** (the talk keeps returning to a goal — growing the newsletter, landing clients… — and `list_tracks` shows no track for it) → offer a **track**: _"This project has no track for the newsletter yet — want me to start one?"_ Then `start_track` with a `name` and `direction`; no method needed.
+- **A lasting goal is missing** (the talk keeps returning to a goal — growing the newsletter, landing clients… — and `list_tracks` shows none for it) → offer a **goal**: _"This project has no goal for the newsletter yet — want me to start one?"_ Then `start_track` with a `name` and `direction`; no method needed.
 - **A domain is missing** (new kinds of things must be recorded that no workspace owns — e.g. you are logging deals and there is no CRM) → offer a **workspace**, provisioned with the project lens active (see the `agent-os` skill). Never a workspace to stand for a method.
 
 Say it **once, at the end, in one line**. **Offer, don't auto-build.** One nudge per response, only when the gap is real — never a checklist of everything the project "could" have. **If the user has already declined it (this session or before), drop it — don't re-offer.**

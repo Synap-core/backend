@@ -57,7 +57,10 @@ import {
   type TrackPausedBy,
   type TrackStage,
 } from "@synap-core/types/units";
-import { resolveStatusLabel } from "@synap-core/types/vocabulary";
+import {
+  resolveStatusLabel,
+  resolveTrackStatusLabel,
+} from "@synap-core/types/vocabulary";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import type {
   ContinuationNextMove,
@@ -449,7 +452,9 @@ export async function getProjectPath(
               methodVersion: t.methodVersion,
               currentStage: t.currentStage,
               status: t.status,
-              statusLabel: resolveStatusLabel(t.status),
+              // The track lifecycle's own words ("Closed", "Dropped",
+              // "Proposed"…) — a client that predates a status still reads it.
+              statusLabel: resolveTrackStatusLabel(t.status),
               pausedBy: trackPausedBy(t),
               stages: deriveTrackStages(
                 (t.definitionSnapshot as { stages?: unknown } | null)?.stages,

@@ -81,7 +81,7 @@ export const workersRouter = router({
           trackId: z.string().uuid().optional(),
         })
         .refine((i) => !!i.projectId || !!i.trackId, {
-          message: "Enable a worker for a project or a track.",
+          message: "Enable a worker for a project or a goal.",
         })
     )
     .output(

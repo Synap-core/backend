@@ -231,23 +231,23 @@ export async function runSkillInSandbox(args: {
 /**
  * Load `isolated-vm` LAZILY — the fix for a production boot crash.
  *
- * `isolated-vm` is a native addon with no musl prebuild. A static
- * `import ivm from "isolated-vm"` at module scope executed on every boot,
- * because `execute-capability.ts` imports THIS module statically. The
- * `SANDBOX_LOCAL === "1"` check there gates the CALL, never the module graph —
- * so on Alpine the pod crash-looped with:
+ * `isolated-vm` is a native addon. A static `import ivm from "isolated-vm"` at
+ * module scope executed on every boot, because `execute-capability.ts` imports
+ * THIS module statically. The `SANDBOX_LOCAL === "1"` check there gates the
+ * CALL, never the module graph — so on the old Node 20 image the pod
+ * crash-looped with:
  *
- *   No native build was found for … libc=musl … loaded from: …/isolated-vm
+ *   No native build was found for … abi=115 … libc=musl … loaded from: …/isolated-vm
  *
- * `deploy/Dockerfile.api` states the dep is "inert … nothing loads it while the
- * flag is OFF". That was FALSE: inert for BUILDING (pnpm skips its build script
- * since it is not in `onlyBuiltDependencies`) but very much LOADED at import.
- * A flag that gates a call cannot gate a static import — only a dynamic one can.
+ * isolated-vm 6.1.2 ships prebuilds for Node 22 and 24 only (ABI 127 / 137,
+ * glibc and musl), loaded by `node-gyp-build` at require time: nothing is
+ * compiled (pnpm skips its build script since it is not in
+ * `onlyBuiltDependencies`). `deploy/Dockerfile` now runs Node 22, and ci.yml's
+ * image smoke proves the addon loads in the built image.
  *
- * Deferring to first CALL makes the flag mean what it says: with SANDBOX_LOCAL
- * off the addon is never touched, so it never has to exist. With the flag ON,
- * the addon must genuinely be compiled for the target platform — follow the
- * FLAG-FLIP PREREQUISITE steps in `deploy/Dockerfile.api`.
+ * Deferring to first CALL still makes the flag mean what it says: with
+ * SANDBOX_LOCAL off the addon is never touched, and a host where it cannot load
+ * fails the one call that needs it, never the boot.
  *
  * The failure is deliberately NOT swallowed: a skill asked to run in the local
  * sandbox must fail loudly if the sandbox is unavailable. Silently falling back
@@ -264,9 +264,9 @@ async function loadIvm(): Promise<typeof IvmModule> {
         throw new Error(
           `SANDBOX_LOCAL is enabled but the isolated-vm native addon could not be loaded ` +
             `(${err instanceof Error ? err.message : String(err)}). ` +
-            `See the FLAG-FLIP PREREQUISITE block in deploy/Dockerfile.api — on Alpine/musl ` +
-            `it must be compiled from source. Unset SANDBOX_LOCAL to route code skills to the ` +
-            `Intelligence Service sandbox instead.`
+            `The pod image (deploy/Dockerfile) must run Node 22 or 24 with --no-node-snapshot: ` +
+            `isolated-vm 6.x ships prebuilds for those only. Unset SANDBOX_LOCAL to route code ` +
+            `skills to the Intelligence Service sandbox instead.`
         );
       });
   }

@@ -29,16 +29,18 @@ import {
   CREATABLE_VIEW_DEFINITIONS,
 } from "@synap-core/types/renderables";
 const CREATABLE_VIEW_TYPE_KEYS = CREATABLE_VIEW_DEFINITIONS.map((d) => d.key);
-import { PROJECT_TRACK_STATUSES } from "@synap/database/schema";
-
-/**
- * The track statuses `synap_set_track_status` OFFERS (work model W1): a track
- * is lasting — paused or archived, never completed. `completed` stays in the
- * column enum (0317's live-name index, CLOSED_TRACK_STATUSES) for legacy rows.
- */
-const OFFERED_TRACK_STATUSES = PROJECT_TRACK_STATUSES.filter(
-  (s) => s !== "completed"
-);
+import {
+  PROJECT_TRACK_STATUSES,
+  PROJECT_TRACK_UNCERTAINTY_LEVELS,
+  PROJECT_TRACK_VERDICTS,
+  PROJECT_TRACK_WORK_KINDS,
+} from "@synap/database/schema";
+import {
+  GOAL_CRITERIA_MAX,
+  GOAL_CRITERIA_MIN,
+  GOAL_LOOP_DEFAULT_PER_WEEK,
+  GOAL_LOOP_MAX_PER_WEEK,
+} from "@synap-core/types/units";
 // The renderer `slot`/`scope` wire vocabularies — DERIVED, never hand-listed
 // (see renderer-slot-enum-parity.tripwire.test.ts).
 import {
@@ -55,7 +57,12 @@ import { FIND_CATALOGS } from "../../../services/capabilities/find-intent.js";
 // reason for a copy. Widening the union now widens what MCP advertises, in the
 // same commit, and `output-ref-kinds-parity` audits the mirrors this file
 // cannot import (the Hub REST client's duplicated literal).
-import { BLOCKED_REASONS, OUTPUT_REF_KINDS } from "@synap/playbooks";
+import {
+  BLOCKED_REASONS,
+  CRITERION_ABOUT,
+  CRITERION_CHECK_MEANINGS,
+  OUTPUT_REF_KINDS,
+} from "@synap/playbooks";
 // The ONE ask schema (`@synap-core/types/ask`) — the MCP `ask` property is
 // DERIVED from it (below), never hand-copied.
 import { AskSchema } from "@synap-core/types/ask";
@@ -86,6 +93,7 @@ import {
   WAIT_MAX_SECONDS,
 } from "../../../services/focus-sessions/wait-for-answers.js";
 import { SESSION_CHANGE_KINDS } from "../../../services/focus-sessions/session-changes.js";
+import { TRACK_PARTICIPANT_ACTIONS } from "../handlers/track-participants.js";
 
 /**
  * The ONE advertised shape of a session criterion (start + update doors).
@@ -121,8 +129,69 @@ const SESSION_CRITERIA_PROPERTY = {
         },
         required: ["kind"],
       },
+      checkKind: {
+        type: "string",
+        enum: [...CRITERION_CHECK_MEANINGS],
+        description:
+          "Optional — what kind of check this is, in people's words: measured (evidence or capability), judged (a person; an AI judge only advises), handed_over (a deliverable: evidence or a person), learning (about the method), decided_outside / certified (a person's grade with the source attached).",
+      },
+      about: {
+        type: "string",
+        enum: [...CRITERION_ABOUT],
+        description:
+          "Optional — 'method' when the criterion is about HOW the work is done (an investigation's criteria are), not the hoped-for answer. Default 'result'.",
+      },
     },
     required: ["key", "statement", "check"],
+  },
+};
+
+/**
+ * What a GOAL holds (work model W2, 0345) — the ONE advertised shape on both
+ * track doors (`synap_start_track`, `synap_update_track`). Validated
+ * server-side (`trackGoalInputSchema` + the 2–5 rule); this only teaches it.
+ */
+const TRACK_GOAL_PROPERTIES = {
+  endState: {
+    type: ["string", "null"],
+    description:
+      "Optional: what 'done' looks like, in the person's words (a short paragraph). null clears it.",
+  },
+  criteria: {
+    ...SESSION_CRITERIA_PROPERTY,
+    type: ["array", "null"],
+    minItems: GOAL_CRITERIA_MIN,
+    maxItems: GOAL_CRITERIA_MAX,
+    description: `Optional: how the goal is judged done — none (a lasting goal) or ${GOAL_CRITERIA_MIN} to ${GOAL_CRITERIA_MAX} binary criteria, the same shape as a session's. A goal criterion is met when a session filed into the goal passes the criterion of the SAME key and the goal's judge accepts it (a measured one checked by someone other than its author is accepted automatically). Only with the person: your criteria are proposed for review. Written whole; null or [] clears them.`,
+  },
+  dropConditions: {
+    type: ["array", "null"],
+    maxItems: 5,
+    items: { type: "string" },
+    description:
+      "Optional: when to stop pursuing the goal, one line each (at most 5). null clears them.",
+  },
+  workKind: {
+    type: ["string", "null"],
+    enum: [...PROJECT_TRACK_WORK_KINDS, null],
+    description:
+      "Optional: the kind of work — project (a one-off result), flow (a steady stream), operation (keep something running; closes as 'retired'), investigation (find something out; criteria about the method), incident (restore after a break), commission (made for someone else), pathway (a person's growth). Your choice is a PROPOSAL until the person confirms it.",
+  },
+  uncertainty: {
+    type: ["string", "null"],
+    enum: [...PROJECT_TRACK_UNCERTAINTY_LEVELS, null],
+    description:
+      "Optional: how well the way is known — clear, complicated, complex, chaotic or unknown. A proposal until the person confirms it.",
+  },
+  loop: {
+    type: ["object", "null"],
+    additionalProperties: false,
+    required: ["on"],
+    properties: {
+      on: { type: "boolean" },
+      perWeek: { type: "integer", minimum: 1, maximum: GOAL_LOOP_MAX_PER_WEEK },
+    },
+    description: `Optional: the goal's loop — { on: true } makes the goal PROPOSE its next session (filed into it, carrying its unmet criteria) whenever a required criterion is unmet and no session of it is open, at most perWeek times a week (default ${GOAL_LOOP_DEFAULT_PER_WEEK}). It stops and asks the owner when the same criterion fails in two sessions; { on: true } again is "try again". Every next session is a proposal a person approves. Your switch-on is always proposed for review. null turns it off.`,
   },
 };
 
@@ -2006,7 +2075,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Create a focus session — a goal-bound work session — to declare 'I'm starting work on X'. Scope it to a project (projectId) OR a workspace (workspaceId), at least one; project-scoped needs no workspace membership. Work toward one of a project's TRACKS (its lasting goals) is born inside it: pass trackId (synap_list_tracks) — it implies the project. Give it a short `title` (the name) and a `goal` (the outcome). To decompose work, start a root session, then start each sub-session with parentSessionId = the root; declare ordering with blockedBySessionIds instead of writing the dependency chain into the goal. When the goal cannot proceed until a prerequisite is built, start THAT prerequisite with parentSessionId of the goal session AND suspendedIntent — that blocks the parent; work the child to completion, then resume the parent. Do not fold the prerequisite into the parent session. The result reports `parentLink` and `blockerLinks` — a failed edge is reported there, never silently dropped. If an open session with the same goal already exists in this scope, the existing one is returned with status 'deduped' — continue it instead of starting another. DEFAULTS: your writes are grouped into THIS conversation's session automatically even if you never call this — one per project (another conversation's session is joined only by passing its id as `sessionId`); every write reply names it in `attribution.filed`. Calling this when you begin a unit of work names your session (if one was auto-opened for you in this session's project it is ADOPTED — `adopted: true`, same id; other projects' writes stay where they are). A session you start takes all your later writes; when one is about another project the reply carries `attribution.filed.topicHint` — start a new session if it is new work. FETCH THE POD'S PROCESSES FIRST: with no templateId, the result's `playbooks` block hands you the pod's existing playbooks ranked against your title+goal, each with the `reason` it matched — suggestions only, NOTHING is applied. If one fits, start again with that `templateId` (the only way a playbook binds); if none does, carry on ad-hoc deliberately. Pass templateId: null to skip matching entirely. SIZE it from the work: one session per thing when each needs its own thinking (a post, a feature), one per batch when items are interchangeable. With a subject, the session's step IS the subject's status: move the thing (synap_update_entity + expectedStatus), the step follows. PROPOSE `criteria` — two to five binary, observable statements — and let the person validate or rewrite them; declaring none leaves you nothing to report progress against but your own opinion. Declare `expectedOutputs` for what the session will produce, so 'done' is derivable from unfilled slots rather than announced as a percentage. A detour that has to happen first is a CHILD session: `parentSessionId` plus `suspendedIntent`, one line naming what you were about to do, so popping back restates the goal.",
+          "Create a focus session — a goal-bound work session — to declare 'I'm starting work on X'. Scope it to a project (projectId) OR a workspace (workspaceId), at least one; project-scoped needs no workspace membership. Work toward one of a project's GOALS (tracks in tool and field names) is born inside it: pass trackId (synap_list_tracks) — it implies the project. Give it a short `title` (the name) and a `goal` (the outcome). To decompose work, start a root session, then start each sub-session with parentSessionId = the root; declare ordering with blockedBySessionIds instead of writing the dependency chain into the goal. When the goal cannot proceed until a prerequisite is built, start THAT prerequisite with parentSessionId of the goal session AND suspendedIntent — that blocks the parent; work the child to completion, then resume the parent. Do not fold the prerequisite into the parent session. The result reports `parentLink` and `blockerLinks` — a failed edge is reported there, never silently dropped. If an open session with the same goal already exists in this scope, the existing one is returned with status 'deduped' — continue it instead of starting another. DEFAULTS: your writes are grouped into THIS conversation's session automatically even if you never call this — one per project (another conversation's session is joined only by passing its id as `sessionId`); every write reply names it in `attribution.filed`. Calling this when you begin a unit of work names your session (if one was auto-opened for you in this session's project it is ADOPTED — `adopted: true`, same id; other projects' writes stay where they are). A session you start takes all your later writes; when one is about another project the reply carries `attribution.filed.topicHint` — start a new session if it is new work. FETCH THE POD'S PROCESSES FIRST: with no templateId, the result's `playbooks` block hands you the pod's existing playbooks ranked against your title+goal, each with the `reason` it matched — suggestions only, NOTHING is applied. If one fits, start again with that `templateId` (the only way a playbook binds); if none does, carry on ad-hoc deliberately. Pass templateId: null to skip matching entirely. SIZE it from the work: one session per thing when each needs its own thinking (a post, a feature), one per batch when items are interchangeable. With a subject, the session's step IS the subject's status: move the thing (synap_update_entity + expectedStatus), the step follows. PROPOSE `criteria` — two to five binary, observable statements — and let the person validate or rewrite them; declaring none leaves you nothing to report progress against but your own opinion. Declare `expectedOutputs` for what the session will produce, so 'done' is derivable from unfilled slots rather than announced as a percentage. A detour that has to happen first is a CHILD session: `parentSessionId` plus `suspendedIntent`, one line naming what you were about to do, so popping back restates the goal.",
         inputSchema: {
           type: "object",
           properties: {
@@ -2914,7 +2983,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Suggest playbooks for what the user wants — text-first, suggest-and-confirm, NEVER auto-run the top hit. Pass intentText (what they said — that exact spelling) and/or profileSlug (the kind of thing, e.g. 'post') and/or entityId. At least ONE is required: a call with no signal is REFUSED (without one, every active playbook ties at the same score; to just see what exists, call synap_list_playbooks). Read-only. Returns ranked candidates best first ({ id, name, scope, templateKind, goalTemplate, subjectProfileSlug, params, executor, score, reason, signals }); [] when none. `scope: 'project'` (templateKind 'Track template') is a method a project runs as a TRACK — start it with synap_start_track; `'session'` ('Work template') is one working session. Pass projectId (or name the project/track in intentText) and a track template ranks above its same-name session twin. Show the reason when you suggest; wait for confirmation before launching via synap_run_playbook (or, on doors that expose sessions, by opening the template as a working session with the chosen entity as its subject). Each of your words is weighted by how rare it is among the candidates, so a specific word outranks one most playbooks share. A playbook is returned only with a reason about THIS request (one of your words, the entity's kind, or one of its roles): a playbook with no subject (e.g. Plan Next Content) comes back only when your words match it. When profileSlug is omitted, every active visible playbook is a candidate.",
+          "Suggest playbooks for what the user wants — text-first, suggest-and-confirm, NEVER auto-run the top hit. Pass intentText (what they said — that exact spelling) and/or profileSlug (the kind of thing, e.g. 'post') and/or entityId. At least ONE is required: a call with no signal is REFUSED (without one, every active playbook ties at the same score; to just see what exists, call synap_list_playbooks). Read-only. Returns ranked candidates best first ({ id, name, scope, templateKind, goalTemplate, subjectProfileSlug, params, executor, score, reason, signals }); [] when none. `scope: 'project'` (templateKind 'Goal template') is a method a project runs as a GOAL (a track) — start it with synap_start_track; `'session'` ('Work template') is one working session. Pass projectId (or name the project/track in intentText) and a track template ranks above its same-name session twin. Show the reason when you suggest; wait for confirmation before launching via synap_run_playbook (or, on doors that expose sessions, by opening the template as a working session with the chosen entity as its subject). Each of your words is weighted by how rare it is among the candidates, so a specific word outranks one most playbooks share. A playbook is returned only with a reason about THIS request (one of your words, the entity's kind, or one of its roles): a playbook with no subject (e.g. Plan Next Content) comes back only when your words match it. When profileSlug is omitted, every active visible playbook is a candidate.",
         inputSchema: {
           type: "object",
           properties: {
@@ -3796,12 +3865,12 @@ export const tools = {
       {
         name: "synap_list_tracks",
         annotations: {
-          title: "List tracks",
+          title: "List goals",
           readOnlyHint: true,
           openWorldHint: false,
         },
         description:
-          "List a project's TRACKS — the lasting goals it is pursuing (e.g. 'Grow the newsletter', 'Win the first ten clients' inside one project). Work in a track = synap_start_session with its trackId. A track holds a direction, instructions and a goal, and turns workers on; it has no stages and never completes. LEGACY: an old track also follows a project-scoped playbook (its method, with stages), pinned at the version it started with; a new track has none (playbookId null, no stages). Each row: id, name, playbookId, methodVersion, status (active|paused|completed|archived), pausedBy (check|human|null — why a paused track is held), currentStage and stages [{ key, name, position: done|active|not_started, addedAt? }] (addedAt marks a stage added after the start), direction (where it is heading, or null) and kpi ({ label, unit?, target, current?, updatedAt? } or null — current is STATED, updatedAt says when). Archived tracks are omitted unless includeArchived. Find the project id with synap_list_projects.",
+          "List a project's GOALS — what people call a goal is a TRACK in tool and field names (say 'goal' to the person; the tools keep 'track'): the goals it is pursuing (e.g. 'Grow the newsletter', 'Win the first ten clients' inside one project). Work in a track = synap_start_session with its trackId. A track holds a direction, instructions and a goal, and turns workers on; it has no stages. A goal can stay open as long as it matters, or finish: a person closes it with a verdict once its criteria are met. LEGACY: an old track also follows a project-scoped playbook (its method, with stages), pinned at the version it started with; a new track has none (playbookId null, no stages). Each row: id, name, playbookId, methodVersion, status (proposed|agreed|ready|active|paused|completed|archived — completed reads Closed, archived Dropped), verdict (how a closed or dropped goal ended, else null) and verdictReason, pausedBy (check|human|null — why a paused track is held), currentStage and stages [{ key, name, position: done|active|not_started, addedAt? }] (addedAt marks a stage added after the start), direction (where it is heading, or null) and kpi ({ label, unit?, target, current?, updatedAt? } or null — current is STATED, updatedAt says when). Archived tracks are omitted unless includeArchived. Find the project id with synap_list_projects.",
         inputSchema: {
           type: "object",
           properties: {
@@ -3817,13 +3886,13 @@ export const tools = {
       {
         name: "synap_start_track",
         annotations: {
-          title: "Start track",
+          title: "Start goal",
           readOnlyHint: false,
           destructiveHint: false,
           openWorldHint: false,
         },
         description:
-          "Start a TRACK on a project — a LASTING goal (e.g. 'Grow the newsletter'): pass a `name`, a one-line `direction` in the person's words and, only if the person names a number, a `kpi`. List the project's tracks first (synap_list_tracks) and resume a running one rather than starting a twin. Work in it = synap_start_session with its trackId, one session per sitting, for as long as the goal lasts; it is paused or archived, never completed for hitting a number. No method needed and never stages: playbookId (a project-scoped playbook with stages) is OPTIONAL and legacy — omit it. Repeatable work under it = sessions that follow a playbook, or workers a status starts. While the track is active, its agent may work in the spaces the project links. Idempotent per track NAME: a live track of that name comes back with status='exists'; a live track of another method holding the name is refused. Governed: status='proposed' is SUCCESS — say it awaits review, pass on reviewUrl, do not retry. Otherwise status='started' with the track.",
+          "Start a GOAL on a project (a TRACK in tool and field names — say 'goal' to the person), e.g. 'Launch the new site': pass a `name` in the person's words, an `endState` (what done looks like, a short paragraph) and 2 to 5 `criteria` (binary checks, each with how it is checked) — or no criteria for a goal kept open as long as it matters ('keep the newsletter growing'): it then steers by its `direction` (one line) and, only if the person names a number, a `kpi`. Propose the `workKind` and `uncertainty` too: the person confirms them. List the project's tracks first (synap_list_tracks) and resume a running one rather than starting a twin. Work in it = synap_start_session with its trackId, one session per sitting, for as long as the goal matters. A goal can stay open as long as it matters, or finish: a person closes it with a verdict once its criteria are met — hitting a number never closes it. No method needed and never stages: playbookId (a project-scoped playbook with stages) is OPTIONAL and legacy — omit it. Repeatable work under it = sessions that follow a playbook, or workers a status starts. While the track is active, its agent may work in the spaces the project links. Idempotent per track NAME: a live track of that name comes back with status='exists'; a live track of another method holding the name is refused. Governed: status='proposed' is SUCCESS — say it awaits review, pass on reviewUrl, do not retry. Otherwise status='started' with the track.",
         inputSchema: {
           type: "object",
           properties: {
@@ -3860,6 +3929,7 @@ export const tools = {
               },
               required: ["label", "target"],
             },
+            ...TRACK_GOAL_PROPERTIES,
             reasoning: {
               type: "string",
               description:
@@ -3877,7 +3947,7 @@ export const tools = {
       {
         name: "synap_start_stage_session",
         annotations: {
-          title: "Start stage session",
+          title: "Start step session",
           readOnlyHint: false,
           destructiveHint: false,
           openWorldHint: false,
@@ -3910,13 +3980,13 @@ export const tools = {
       {
         name: "synap_advance_track",
         annotations: {
-          title: "Advance track",
+          title: "Advance goal step",
           readOnlyHint: false,
           destructiveHint: false,
           openWorldHint: false,
         },
         description:
-          "LEGACY — only a track started with a method has stages; a track with none is never advanced (work in it = synap_start_session with trackId). Only with the user. Move a track to one of its method's stages — forward OR back (stages are re-enterable; any stage key synap_list_tracks shows). Refused for a stage the method does not declare, or a completed/archived track. A stage may carry a GATE: a human gate pauses the track and files an approval (`proposalId` on the reply); a check gate measures the sessions filed at the stage being left (at least one closed, every closed one passing its criteria) and otherwise holds the track paused (pausedBy='check', `check.reason` says why) until resumed with synap_set_track_status status='active'. Entering a stage does NOT start work: the reply's `offer` is the session that stage suggests — offer it to the person, and start it with synap_start_stage_session only if they want it. Governed: status='proposed' is SUCCESS — pass on reviewUrl, do not retry.",
+          "LEGACY — only a track started with a method has stages; a track with none is never advanced (work in it = synap_start_session with trackId). Only with the user. Move a track to one of its method's stages — forward OR back (stages are re-enterable; any stage key synap_list_tracks shows). Refused for a stage the method does not declare, or a closed or dropped track. A stage may carry a GATE: a human gate pauses the track and files an approval (`proposalId` on the reply); a check gate measures the sessions filed at the stage being left (at least one closed, every closed one passing its criteria) and otherwise holds the track paused (pausedBy='check', `check.reason` says why) until resumed with synap_set_track_status status='active'. Entering a stage does NOT start work: the reply's `offer` is the session that stage suggests — offer it to the person, and start it with synap_start_stage_session only if they want it. Governed: status='proposed' is SUCCESS — pass on reviewUrl, do not retry.",
         inputSchema: {
           type: "object",
           properties: {
@@ -3937,24 +4007,34 @@ export const tools = {
       {
         name: "synap_set_track_status",
         annotations: {
-          title: "Set track status",
+          title: "Set goal status",
           readOnlyHint: false,
           destructiveHint: false,
           openWorldHint: false,
         },
         description:
-          "Pause, resume or archive a track. A track is LASTING: pause it while nobody should work on it (its agent loses access to the project's spaces until it resumes); archive it when the goal is dropped — archived is FINAL (start a new track with synap_start_track). Resuming (status='active') also releases a track a check gate held (pausedBy='check'). A move the table does not allow is refused with the reason. Governed: status='proposed' is SUCCESS — pass on reviewUrl, do not retry.",
+          "Move a goal (a track) through its lifecycle: proposed, agreed, ready (a goal still being shaped), active, paused, completed (Closed) or archived (Dropped). A goal can stay open as long as it matters, or finish: a person closes it with a verdict once its criteria are met. Closing (status='completed') needs verdict met | partly_met | not_met — an operation (workKind 'operation') is never met: it closes retired, and only an operation does; dropping it when it stopped mattering (status='archived') should carry verdict no_longer_needed | impossible | replaced | mistake, and impossible and replaced need verdictReason. Both are FINAL: a closed goal comes back only as a new version. Your close is ALWAYS a proposal the person approves — never close a goal the person has not judged. Pause it while nobody should work on it (its agent loses access to the project's spaces until it resumes). Resuming (status='active') also releases a track a check gate held (pausedBy='check'). A move the lifecycle does not allow, or a close without its verdict, is refused with the reason. Governed: status='proposed' is SUCCESS — pass on reviewUrl, do not retry.",
         inputSchema: {
           type: "object",
           properties: {
             trackId: { type: "string", description: "Track UUID" },
             status: {
               type: "string",
-              // OFFERED statuses only (W1): `completed` stays in the column's
-              // enum (0317, CLOSED_TRACK_STATUSES) but a lasting track is
-              // never completed. The handler still reads the full enum.
-              enum: [...OFFERED_TRACK_STATUSES],
+              // EVERY option of the track lifecycle — a goal can finish.
+              // Closing is governed by the lifecycle (human-only), not hidden.
+              enum: [...PROJECT_TRACK_STATUSES],
               description: "The status to move the track to.",
+            },
+            verdict: {
+              type: "string",
+              enum: [...PROJECT_TRACK_VERDICTS],
+              description:
+                "How the goal ended — required with status 'completed' (met | partly_met | not_met; retired for an operation, and only for one); should be given with 'archived' (no_longer_needed | impossible | replaced | mistake); refused with any other status.",
+            },
+            verdictReason: {
+              type: "string",
+              description:
+                "Why, in one line — required for verdict 'impossible' (what made it impossible) and 'replaced' (what replaced it).",
             },
             reasoning: {
               type: "string",
@@ -3966,9 +4046,140 @@ export const tools = {
         },
       },
       {
+        name: "synap_reopen_track",
+        annotations: {
+          title: "Reopen goal",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+        description:
+          "Reopen a CLOSED or DROPPED track as a NEW version — a closed goal is final and never moves back. The new track carries the same name (or `name`), method, answers, direction and KPI definition (not its last stated value), starts active, and is linked to the old one (`replaces`); the old track keeps its status, its verdict and its sessions. Only the NEWEST version reopens: an old version a newer one already replaced is refused — reopen that one. A live track is refused (work in it instead). Idempotent: reopening again while the new version is live returns it with status='exists'. Governed like synap_start_track: status='proposed' is SUCCESS — say it awaits review, pass on reviewUrl, do not retry. Otherwise status='started' with the new track.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            trackId: {
+              type: "string",
+              description:
+                "UUID of the closed or dropped track to reopen (synap_list_tracks with includeArchived lists dropped ones).",
+            },
+            name: {
+              type: "string",
+              description:
+                "Optional new name for the new version — omit it to keep the old one's (free once that track is not live).",
+            },
+            reasoning: {
+              type: "string",
+              description:
+                "Why the goal is reopened, in the person's words — shown to the reviewer. One line.",
+            },
+            sessionId: {
+              type: "string",
+              description:
+                "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess, and this is the only way to say which session the write belongs to. Also the way to JOIN a session another conversation started — automatic attribution never shares one across conversations. A session that isn't yours is ignored, not an error.",
+            },
+          },
+          required: ["trackId"],
+        },
+      },
+      {
+        name: "synap_convert_to_goal",
+        annotations: {
+          title: "Make it a goal",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+        description:
+          "Make a goal, objective or OKR ENTITY a goal (a track) — once. Its title becomes the goal's name; its description / outcome / notes the end state (a target date is appended: '— by <date>'); an OKR's key results become measured criteria ('Qualified leads: target 40 per month', the current value in the hint) — one key result rides the end state instead (a goal has no criteria or 2–5). The entity's owner owns the goal. An entity already achieved arrives CLOSED as met (its key results in the end state); an abandoned or cancelled one arrives DROPPED (no longer needed). The entity is kept unchanged and linked to the goal (promoted_to). The goal lives in the project the entity is filed in; pass projectId when it is filed in none or several. Refused: another kind, an entity already made a goal (open that goal), a name a live goal on the project holds (pass name). Governed like synap_start_track: status='proposed' is SUCCESS — say it awaits review, pass on reviewUrl, do not retry. Otherwise status='started' with the goal, and notCarried = the entity's fields the goal does not hold (progress, area…), to tell the person.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            entityId: {
+              type: "string",
+              description:
+                "UUID of the goal, objective or OKR entity to make a goal.",
+            },
+            projectId: {
+              type: "string",
+              description:
+                "UUID of the project the goal lives in — required only when the entity is filed in no project or in several (the refusal lists them). Never guess one: ask the person.",
+            },
+            name: {
+              type: "string",
+              description:
+                "Optional name for the goal — omit it to keep the entity's title.",
+            },
+            reasoning: {
+              type: "string",
+              description:
+                "Why it becomes a goal, in the person's words — shown to the reviewer. One line.",
+            },
+            sessionId: {
+              type: "string",
+              description:
+                "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess, and this is the only way to say which session the write belongs to. Also the way to JOIN a session another conversation started — automatic attribution never shares one across conversations. A session that isn't yours is ignored, not an error.",
+            },
+          },
+          required: ["entityId"],
+        },
+      },
+      {
+        name: "synap_set_track_participant",
+        annotations: {
+          title: "Set goal participant",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+        description:
+          "Who is on a goal: one owner (a person), a judge (a person; when none is named the owner judges, and only the judge closes the goal), delegates (people or agents) each with a commitment, and an optional integrator. synap_list_tracks returns each goal's `participants` (id, role, commitment, commitmentState, silentSince). action='add' (owner or judge only) names principalId (a person's user id, or an agent's from synap_list_agents) and role judge | delegate | integrator; a delegate needs `commitment` (what they commit to) — re-adding a delegate asks again with the new commitment. Handing a goal to ANOTHER agent is a hand-off the person approves; adding yourself as a delegate commits you. action='remove' (owner or judge) takes participantId; the owner stays. A delegate answers ONLY their own commitment: 'accept', 'counter' (text = what you would commit to instead), 'decline' (text = why, optional), 'report_impossible' (text = why — only after accepting; this is NOT the goal's verdict, the judge still decides). Never answer for a person. action='acknowledge' is the owner's or judge's act — never yours. Governed: status='proposed' is SUCCESS — pass on reviewUrl, do not retry.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            trackId: { type: "string", description: "Track (goal) UUID" },
+            action: {
+              type: "string",
+              enum: [...TRACK_PARTICIPANT_ACTIONS],
+              description: "What to change.",
+            },
+            principalId: {
+              type: "string",
+              description:
+                "add: the user id of the person or agent to put on the goal.",
+            },
+            role: {
+              type: "string",
+              enum: ["judge", "delegate", "integrator"],
+              description: "add: their role (default delegate).",
+            },
+            commitment: {
+              type: "string",
+              description:
+                "add, for a delegate: what they commit to, in one line.",
+            },
+            participantId: {
+              type: "string",
+              description:
+                "remove / accept / counter / decline / report_impossible / acknowledge: the participant row's id (synap_list_tracks `participants[].id`).",
+            },
+            text: {
+              type: "string",
+              description:
+                "counter: what you would commit to instead. report_impossible: why it cannot be done. decline: why (optional).",
+            },
+            reasoning: {
+              type: "string",
+              description: "Why — shown to the reviewer. One line.",
+            },
+          },
+          required: ["trackId", "action"],
+        },
+      },
+      {
         name: "synap_set_track_params",
         annotations: {
-          title: "Set track params",
+          title: "Set goal params",
           readOnlyHint: false,
           destructiveHint: false,
           openWorldHint: false,
@@ -3997,13 +4208,13 @@ export const tools = {
       {
         name: "synap_update_track",
         annotations: {
-          title: "Update track",
+          title: "Update goal",
           readOnlyHint: false,
           destructiveHint: false,
           openWorldHint: false,
         },
         description:
-          "Set a track's DIRECTION (where it is heading, one line) and/or its KPI (the number it steers by). kpi is MERGED onto the stored one: pass { current } to state the latest value (stamped with when and by whom — it is STATED, never measured), { target } to move the goal, a whole { label, unit?, target, current? } to define one, or null to clear it. direction null clears it. A KPI needs a label and a target. Reaching the target NUDGES the person to re-aim it (a new target) — the track keeps going; never move the target yourself. Governed: status='proposed' is SUCCESS — pass on reviewUrl, do not retry.",
+          "Set what a goal holds: its DIRECTION (where it is heading, one line), its KPI (the number it steers by), its endState, criteria (none, or 2 to 5), dropConditions, and the kind of work and uncertainty you propose (the person confirms them). Every field but kpi is written WHOLE; null clears it. kpi is MERGED onto the stored one: pass { current } to state the latest value (stamped with when and by whom — it is STATED, never measured), { target } to move the goal, a whole { label, unit?, target, current? } to define one, or null to clear it. direction null clears it. A KPI needs a label and a target. Reaching the target NUDGES the person to re-aim it or close the goal — a number reached never closes it; never move the target or close the goal yourself. Governed: status='proposed' is SUCCESS — pass on reviewUrl, do not retry.",
         inputSchema: {
           type: "object",
           properties: {
@@ -4023,6 +4234,7 @@ export const tools = {
                 current: { type: "number" },
               },
             },
+            ...TRACK_GOAL_PROPERTIES,
             reasoning: {
               type: "string",
               description: "Why — shown to the reviewer. One line.",
@@ -4034,7 +4246,7 @@ export const tools = {
       {
         name: "synap_add_track_stage",
         annotations: {
-          title: "Add track stage",
+          title: "Add goal step",
           readOnlyHint: false,
           destructiveHint: false,
           openWorldHint: false,

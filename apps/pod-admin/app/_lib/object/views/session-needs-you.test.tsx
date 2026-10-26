@@ -217,6 +217,8 @@ vi.mock("../../../../lib/trpc", () => {
 });
 
 import { NeedsYouSection, ProposedChangesSection } from "./session-needs-you";
+import { AskAnswer } from "../../../(admin)/review/_lib/ask-answer";
+import { reviewRows } from "../../../(admin)/review/_lib/review-rows";
 
 /** Visible text only — attributes and tags stripped. */
 const text = (html: string) =>
@@ -257,6 +259,28 @@ describe("Needs you — the session's own asks, answered in place", () => {
     expect(seenText).not.toContain("Create task");
     // On its own page the ask does not offer a door back to the session.
     expect(seenText).not.toContain("Open session");
+    // Nor does "Who is asking" repeat the session the reader is already on.
+    expect(seenText).toContain("Claude-code");
+    expect(seenText).not.toContain("while working in the session");
+    expect(seenText).not.toContain("Launch plan");
+  });
+
+  it("everywhere else (Review) the same ask still says which session it came from", () => {
+    const row = reviewRows([owedHere] as never, new Map())[0];
+    if (row?.detail?.kind !== "ask") throw new Error("expected an ask row");
+    const seenText = text(
+      render(
+        <AskAnswer
+          slot={row.detail.slot}
+          live={row.detail.slot}
+          occurredAt={row.occurredAt}
+          onSettled={() => {}}
+          onClose={() => {}}
+        />
+      )
+    );
+    expect(seenText).toContain("while working in the session Launch plan");
+    expect(seenText).toContain("Open session");
   });
 
   it("answering sends the answer door Review uses, with the slot and the ask the reader saw", () => {
@@ -329,6 +353,24 @@ describe("Proposed changes — this session's pending proposals", () => {
     expect(html).not.toContain(proposalElsewhere.id);
     // Decided on its review page, never from the row.
     expect(seenText).not.toMatch(/\bApprove\b/);
+  });
+
+  it('names an entity proposal by its kind, not the generic "Entity"', () => {
+    seen.proposals = [
+      {
+        ...proposalHere,
+        targetType: "entity",
+        data: {},
+        request: {
+          data: { profileSlug: "task", title: "Draft the launch post" },
+        },
+      },
+    ];
+    const seenText = text(
+      render(<ProposedChangesSection sessionId={SESSION_ID} />)
+    );
+    expect(seenText).toContain("Task · Claude-code");
+    expect(seenText).not.toContain("Entity");
   });
 
   it("draws nothing when the session proposed nothing", () => {

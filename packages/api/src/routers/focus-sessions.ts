@@ -52,6 +52,7 @@ import {
   projectSessionRecall,
 } from "@synap-core/types/focus-sessions";
 import {
+  closedRunRefusal,
   isTerminalSessionStatus,
   OPEN_SESSION_STATUSES,
   SESSION_STATUSES,
@@ -2120,6 +2121,12 @@ export const focusSessionsRouter = router({
       }
 
       const { id: _id, ...patch } = input;
+
+      // R8 — a closed run stays closed: never moved back to an open status.
+      const reopening = closedRunRefusal(existing.status, patch.status);
+      if (reopening) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: reopening });
+      }
 
       // TRACK FILING — the ONE resolution (throws the refusal as a TRPCError).
       const trackFilingModule =
