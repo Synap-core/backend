@@ -90,12 +90,47 @@ describe("request write context — the client's own conversation", () => {
       undefined
     );
   });
+
+  it("the cwd rides with the client key and stamps only that key", async () => {
+    const key = clientKeyForApiKey({ id: "k1" }, CC)!;
+    const seen = await runWithClientKey(
+      key,
+      async () => {
+        await tick();
+        return {
+          key: getRequestClientKey(),
+          cwd: getRequestConversationCwd(),
+          own: conversationCwdPatch(key),
+          other: conversationCwdPatch("key:k2|conv:x"),
+        };
+      },
+      "/Users/a/code/synap"
+    );
+    expect(seen).toEqual({
+      key,
+      cwd: "/Users/a/code/synap",
+      own: { conversationCwd: "/Users/a/code/synap" },
+      other: {},
+    });
+  });
+
+  it("an unusable cwd is dropped, never stored", () => {
+    const key = "key:k1|conv:x";
+    expect(
+      runWithClientKey(key, () => getRequestConversationCwd(), "/a\nb")
+    ).toBeUndefined();
+    expect(
+      runWithClientKey(undefined, () => getRequestConversationCwd(), "/a")
+    ).toBeUndefined();
+  });
 });
 
 // D1 (founder 2026-10-23): a request that names no conversation is its OWN
 // run — `key:<id>|call:<uuid>`, fresh per request. It used to be `key:<id>`,
 // one client for every routine on the key (two ran in the same minute live).
 describe("request write context — the per-call run", () => {
+  const CC = "claude-code:8c34a72b-b1c1-4c37-9c1f-02920b69ccb2";
+
   it("no conversation ⇒ a fresh per-call run, distinct per request", () => {
     const a = clientKeyForApiKey({ id: "k1" })!;
     const b = clientKeyForApiKey({ id: "k1" }, "bad id")!;
@@ -134,38 +169,5 @@ describe("request write context — the per-call run", () => {
     }
     expect(clientKeyScope("agent:a1")).toBe("key");
     expect(clientKeyScope("key:k1")).toBe("key");
-  });
-
-  it("the cwd rides with the client key and stamps only that key", async () => {
-    const key = clientKeyForApiKey({ id: "k1" }, CC)!;
-    const seen = await runWithClientKey(
-      key,
-      async () => {
-        await tick();
-        return {
-          key: getRequestClientKey(),
-          cwd: getRequestConversationCwd(),
-          own: conversationCwdPatch(key),
-          other: conversationCwdPatch("key:k2|conv:x"),
-        };
-      },
-      "/Users/a/code/synap"
-    );
-    expect(seen).toEqual({
-      key,
-      cwd: "/Users/a/code/synap",
-      own: { conversationCwd: "/Users/a/code/synap" },
-      other: {},
-    });
-  });
-
-  it("an unusable cwd is dropped, never stored", () => {
-    const key = "key:k1|conv:x";
-    expect(
-      runWithClientKey(key, () => getRequestConversationCwd(), "/a\nb")
-    ).toBeUndefined();
-    expect(
-      runWithClientKey(undefined, () => getRequestConversationCwd(), "/a")
-    ).toBeUndefined();
   });
 });

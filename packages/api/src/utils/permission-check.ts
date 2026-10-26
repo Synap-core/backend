@@ -3291,10 +3291,46 @@ export function buildProposalSummary(
   // The remainder is DISCLOSED, never hidden: naming one of three operations
   // and staying silent about the other two tells the reviewer something true
   // and something misleading in the same sentence.
-  return withRemainder(
+  const head = withRemainder(
     buildObjectActionTitle({ action, objectKind, objectName }),
     composite?.extraCount ?? 0
   );
+  // A new kind whose fields ride its proposal (ticket a375443d): approving it
+  // creates them too, so the sentence the reviewer reads names them — the
+  // review card lists no `kindFields` rows for a profile payload yet.
+  if (subjectType === "profile") return head + carriedFieldsClause(data);
+  // A code skill's declared tools are a SCOPE grant (its own provider calls to
+  // them skip a second review), so the sentence the person approves names them.
+  if (subjectType === "skill") return head + requiredToolsClause(data);
+  return head;
+}
+
+/** ` using tools: apify_api` for a skill payload carrying `requiredToolNames`. */
+function requiredToolsClause(data: Record<string, unknown>): string {
+  if (!Array.isArray(data.requiredToolNames)) return "";
+  const names = (data.requiredToolNames as unknown[]).filter(
+    (n): n is string => typeof n === "string" && n.length > 0
+  );
+  if (names.length === 0) return "";
+  return ` using ${names.length === 1 ? "tool" : "tools"}: ${names.join(", ")}`;
+}
+
+/** ` with 2 fields: botscore, handle` for a profile payload carrying `kindFields`. */
+function carriedFieldsClause(data: Record<string, unknown>): string {
+  if (!Array.isArray(data.kindFields) || data.kindFields.length === 0)
+    return "";
+  const slugs = (data.kindFields as unknown[]).flatMap((f) =>
+    f &&
+    typeof f === "object" &&
+    typeof (f as { slug?: unknown }).slug === "string"
+      ? [(f as { slug: string }).slug]
+      : []
+  );
+  const SHOWN = 8;
+  const listed = slugs.slice(0, SHOWN).join(", ");
+  const more = slugs.length > SHOWN ? ` and ${slugs.length - SHOWN} more` : "";
+  const n = data.kindFields.length;
+  return ` with ${n} field${n === 1 ? "" : "s"}: ${listed}${more}`;
 }
 
 /**

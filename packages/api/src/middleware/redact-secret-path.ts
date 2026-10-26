@@ -7,6 +7,7 @@
  *
  *   GET /api/hub/calendar/feed/{token}.ics   — a subscribed calendar client
  *   GET /api/hub/setup/agent/pending/{keyId} — a browser opening a setup link
+ *   POST /api/webhooks/{provider}/{token}    — a SaaS that can only be given a URL
  *
  * A calendar client polls every 5–15 minutes forever, so without this the
  * pod's stdout accumulates thousands of copies of a permanent, unauthenticated
@@ -43,6 +44,16 @@ const SECRET_PATH_PATTERNS: ReadonlyArray<RegExp> = [
   // Invite link on the pod host (`invite-bounce.ts`) — the token IS the
   // invitation.
   /(\/invite\/)([^/?#]+)/gi,
+  // Token-in-path inbound webhooks (`POST /api/webhooks/<provider>/:token`,
+  // `routers/webhooks-inbound.ts`, one row per provider in
+  // `INBOUND_WEBHOOK_PROVIDERS`) — for fireflies and postiz the token is the
+  // ONLY credential. Deny by default: any `/webhooks/<x>/<y>` is masked except
+  // the static routes, so a new provider is covered the day it exists. The
+  // static ones carry no secret in the path: n8n / kratos / intelligence are
+  // their own routers (`apps/api/src/index.ts`), `messaging` has no second
+  // segment, and `inbound/:subscriptionId` is an id, its credential is the
+  // HMAC header. `redact-secret-path.webhooks.test.ts` derives both sets.
+  /(\/webhooks\/(?!(?:n8n|kratos|intelligence|messaging|inbound)\/)[^/?#]+\/)([^/?#]+)/gi,
 ];
 
 /** `[redacted]` keeps the segment countable in a log without being replayable. */
