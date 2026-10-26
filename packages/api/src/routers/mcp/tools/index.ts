@@ -4054,7 +4054,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Move a goal (a track) through its lifecycle: proposed, agreed, ready (a goal still being shaped), active, paused, completed (Closed) or archived (Dropped). A goal can stay open as long as it matters, or finish: a person closes it with a verdict once its criteria are met. Closing (status='completed') needs verdict met | partly_met | not_met — an operation (workKind 'operation') is never met: it closes retired, and only an operation does; dropping it when it stopped mattering (status='archived') should carry verdict no_longer_needed | impossible | replaced | mistake, and impossible and replaced need verdictReason. Both are FINAL: a closed goal comes back only as a new version. Your close is ALWAYS a proposal the person approves — never close a goal the person has not judged. Pause it while nobody should work on it (its agent loses access to the project's spaces until it resumes). Resuming (status='active') also releases a track a check gate held (pausedBy='check'). A move the lifecycle does not allow, or a close without its verdict, is refused with the reason. Governed: status='proposed' is SUCCESS — pass on reviewUrl, do not retry.",
+          "Move a goal (a track) through its lifecycle: proposed, agreed, ready (a goal still being shaped), active, paused, completed (Closed) or archived (Dropped). A goal can stay open as long as it matters, or finish: a person closes it with a verdict once its criteria are met. Closing (status='completed') needs verdict met | partly_met | not_met — an operation (workKind 'operation') is never met: it closes retired, and only an operation does; dropping it when it stopped mattering (status='archived') should carry verdict no_longer_needed | impossible | replaced | mistake, and impossible and replaced need verdictReason. Both are FINAL: a closed goal comes back only as a new version. Your close is ALWAYS a proposal the person approves — never close a goal the person has not judged. Pause it while nobody should work on it (its agent loses access to the project's spaces until it resumes). Resuming (status='active') also releases a track a check gate held (pausedBy='check'). Pass `expectedStatus` = the status you read the goal in: `conflict` means someone moved it meanwhile (nothing changed — re-read it and decide again). A move the lifecycle does not allow, or a close without its verdict, is refused with the reason. Governed: status='proposed' is SUCCESS — pass on reviewUrl, do not retry.",
         inputSchema: {
           type: "object",
           properties: {
@@ -4077,13 +4077,19 @@ export const tools = {
               description:
                 "Why, in one line — required for verdict 'impossible' (what made it impossible) and 'replaced' (what replaced it).",
             },
+            expectedStatus: {
+              type: "string",
+              enum: [...PROJECT_TRACK_STATUSES],
+              description:
+                "The status you read the goal in (synap_list_tracks). Compare-and-set: if it moved meanwhile the call answers status='conflict' with the current status and writes nothing.",
+            },
             reasoning: {
               type: "string",
               description:
                 "Why the track changes status — shown to the reviewer. One line.",
             },
           },
-          required: ["trackId", "status"],
+          required: ["trackId", "status", "expectedStatus"],
         },
       },
       {

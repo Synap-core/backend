@@ -196,6 +196,7 @@ import { getProjectPath } from "../../projects/project-path.js";
 import { proposalExecRegistry } from "../../../routers/proposals/execution-registry.js";
 import { registerTrackExecutors } from "../../../routers/proposals/executors/track.js";
 import type { ProposalExecutorArgs } from "../../../routers/proposals/execution-registry.js";
+import { lifecycleConflictOf } from "../../lifecycle/conflict.js";
 
 const USER = "user-1";
 const STRANGER = "user-2";
@@ -963,11 +964,19 @@ describe("stale writes — the approval replay and a concurrent advance", () => 
     const filed = await setTrackStatus({
       trackId,
       status: "paused",
+      expectedStatus: "active",
       actor: agent,
     });
     expect(filed.status).toBe("proposed");
-    const data = h.permCalls.at(-1)!.data as Record<string, unknown>;
+    const { expectedStatus, ...data } = h.permCalls.at(-1)!.data as Record<
+      string,
+      unknown
+    >;
     expect(data).toMatchObject({ id: trackId, status: "paused" });
+    expect(expectedStatus).toBe("active");
+    // Replayed WITHOUT the belief (a proposal filed before it rode one): the
+    // lifecycle re-check alone still refuses it. With the belief, the replay
+    // is refused as stale first ("expectedStatus" describe below).
 
     // …then a person drops the track before anyone reviews it.
     await setTrackStatus({
@@ -1285,7 +1294,12 @@ describe("closing a goal — the verdict rule and the person's act", () => {
     h.permCalls.length = 0;
     for (const actor of [human, agent]) {
       await expect(
-        setTrackStatus({ trackId: id, status: "completed", actor })
+        setTrackStatus({
+          trackId: id,
+          status: "completed",
+          expectedStatus: "active",
+          actor,
+        })
       ).rejects.toMatchObject({
         code: "BAD_REQUEST",
         message: expect.stringMatching(/needs a verdict/),
@@ -1340,6 +1354,7 @@ describe("closing a goal — the verdict rule and the person's act", () => {
     const filed = await setTrackStatus({
       trackId: viaAgent,
       status: "archived",
+      expectedStatus: "active",
       actor: agent,
     });
     expect(filed.status).toBe("proposed");
@@ -1381,6 +1396,7 @@ describe("closing a goal — the verdict rule and the person's act", () => {
       trackId: id,
       status: "completed",
       verdict: "met",
+      expectedStatus: "active",
       actor: agent,
     });
     expect(filed.status).toBe("proposed");
@@ -1431,6 +1447,7 @@ describe("closing a goal — the verdict rule and the person's act", () => {
       trackId: id,
       status: "archived",
       verdict: "mistake",
+      expectedStatus: "active",
       actor: agent,
     });
     expect(h.permCalls.at(-1)!.lifecycleMove).toEqual({
@@ -1439,14 +1456,24 @@ describe("closing a goal — the verdict rule and the person's act", () => {
     });
     // An agent's drop is ALWAYS a proposal (F7): only the owner or judge may.
     expect(h.permCalls.at(-1)!.forcePropose).toBe(true);
-    await setTrackStatus({ trackId: id, status: "paused", actor: agent });
+    await setTrackStatus({
+      trackId: id,
+      status: "paused",
+      expectedStatus: "active",
+      actor: agent,
+    });
     expect(h.permCalls.at(-1)!.lifecycleMove).toBeUndefined();
     expect(h.permCalls.at(-1)!.forcePropose).toBeUndefined();
   });
 
   it("F11 — agreeing is a person's act: an agent's move into agreed is human-only, a person's applies", async () => {
     const id = await goal("Agree first");
-    await setTrackStatus({ trackId: id, status: "agreed", actor: agent });
+    await setTrackStatus({
+      trackId: id,
+      status: "agreed",
+      expectedStatus: "active",
+      actor: agent,
+    });
     expect(h.permCalls.at(-1)!.lifecycleMove).toEqual({
       intoTerminal: false,
       humanOnly: true,
@@ -2178,5 +2205,167 @@ describe("what a goal holds (W2) — content, derived marks, acceptance, the clo
     ).rejects.toMatchObject({
       message: expect.stringMatching(/Only an operation closes as retired/),
     });
+  });
+});
+
+describe("expectedStatus — a status move decided on a stale read (D1)", () => {
+  // The scenario: an agent reads a goal as active; the person pauses it; the
+  // agent then sends a move decided on its stale read. Nothing may land.
+  const STALE_READS = randomUUID();
+  let trackHandlers: (typeof import("../../../routers/mcp/handlers/track.js"))["trackHandlers"];
+  beforeAll(async () => {
+    await q(
+      `insert into projects (id, user_id, workspace_id, name, status) values ($1, $2, null, 'Stale reads', 'active')`,
+      [STALE_READS, USER]
+    );
+    ({ trackHandlers } =
+      await import("../../../routers/mcp/handlers/track.js"));
+  }, 180_000);
+  async function goal(name: string): Promise<string> {
+    const res = await startTrack({
+      projectId: STALE_READS,
+      name,
+      actor: human,
+    });
+    if (res.status === "proposed") throw new Error("unreachable");
+    return res.track.id;
+  }
+  async function status(id: string): Promise<string> {
+    return (
+      await q<{ status: string }>(
+        `select status from project_tracks where id = $1`,
+        [id]
+      )
+    ).rows[0]!.status;
+  }
+
+  it("an agent's move WITHOUT expectedStatus is refused before governance, nothing filed", async () => {
+    const id = await goal("Agent forgets its read");
+    h.permCalls.length = 0;
+    await expect(
+      setTrackStatus({ trackId: id, status: "paused", actor: agent })
+    ).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: expect.stringMatching(/expectedStatus is required/),
+    });
+    expect(h.permCalls).toHaveLength(0);
+    expect(await status(id)).toBe("active");
+  });
+
+  it("an agent's move on a STALE read is a typed conflict naming the current status; nothing filed or written", async () => {
+    const id = await goal("Person paused it");
+    await setTrackStatus({ trackId: id, status: "paused", actor: human });
+    h.permCalls.length = 0;
+    const err = await setTrackStatus({
+      trackId: id,
+      status: "archived",
+      verdict: "mistake",
+      expectedStatus: "active",
+      actor: agent,
+    }).catch((e: unknown) => e);
+    expect(err).toMatchObject({ code: "CONFLICT" });
+    expect(lifecycleConflictOf(err)).toMatchObject({
+      status: "conflict",
+      conflict: { expectedStatus: "active", currentStatus: "paused" },
+    });
+    expect(h.permCalls).toHaveLength(0);
+    expect(await status(id)).toBe("paused");
+
+    // The MCP door answers it as data the agent re-plans on, not an error.
+    const res = await trackHandlers.synap_set_track_status!({
+      toolName: "synap_set_track_status",
+      args: {
+        trackId: id,
+        status: "archived",
+        verdict: "mistake",
+        expectedStatus: "active",
+      },
+      userId: USER,
+      apiKeyScopes: ["mcp.write"],
+      agentUserId: AGENT,
+      caller: undefined as never,
+      lensCaller: undefined as never,
+      workspaceAccessible: false,
+    });
+    const body = JSON.parse(
+      (res as { content: Array<{ text: string }> }).content[0]!.text
+    );
+    expect(body).toMatchObject({
+      status: "conflict",
+      conflict: { expectedStatus: "active", currentStatus: "paused" },
+    });
+    expect(h.permCalls).toHaveLength(0);
+    expect(await status(id)).toBe("paused");
+  });
+
+  it("a FRESH read files the move with its belief, which the proposal carries", async () => {
+    const id = await goal("Agent read it right");
+    h.permCalls.length = 0;
+    const filed = await setTrackStatus({
+      trackId: id,
+      status: "paused",
+      expectedStatus: "active",
+      actor: agent,
+    });
+    expect(filed.status).toBe("proposed");
+    expect(h.permCalls.at(-1)!.data).toMatchObject({
+      id,
+      status: "paused",
+      expectedStatus: "active",
+    });
+  });
+
+  it("REPLAY: a proposal approved after the person moved the goal is refused as stale, nothing written", async () => {
+    const id = await goal("Moved before review");
+    const filed = await setTrackStatus({
+      trackId: id,
+      status: "archived",
+      verdict: "mistake",
+      expectedStatus: "active",
+      actor: agent,
+    });
+    expect(filed.status).toBe("proposed");
+    const data = h.permCalls.at(-1)!.data as Record<string, unknown>;
+    // The person pauses it before anyone reviews the drop. Paused → archived
+    // is still a legal move: only the stale belief refuses the replay.
+    await setTrackStatus({ trackId: id, status: "paused", actor: human });
+
+    const proposalId = randomUUID();
+    await q(
+      `insert into proposals (id, status, target_type, target_id, proposal_type, data) values ($1, 'pending', 'track', $2, 'update', $3::jsonb)`,
+      [proposalId, id, JSON.stringify({ data })]
+    );
+    const err = await proposalExecRegistry
+      .resolveExact("track/update")!
+      .execute({
+        proposal: {
+          id: proposalId,
+          targetType: "track",
+          targetId: id,
+          proposalType: "update",
+          workspaceId: null,
+          agentUserId: AGENT,
+          data: { data },
+        },
+        userId: USER,
+        input: { proposalId },
+        deps: {
+          reportProposalOutcome: () => {},
+          emitProposalReviewed: () => {},
+        },
+      } as unknown as ProposalExecutorArgs)
+      .catch((e: unknown) => e);
+    expect(err).toMatchObject({ code: "CONFLICT" });
+    expect(lifecycleConflictOf(err)).toMatchObject({
+      conflict: { expectedStatus: "active", currentStatus: "paused" },
+    });
+    expect(await status(id)).toBe("paused");
+    const [p] = (
+      await q<{ status: string }>(
+        `select status from proposals where id = $1`,
+        [proposalId]
+      )
+    ).rows;
+    expect(p!.status).toBe("pending");
   });
 });

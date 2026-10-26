@@ -27,9 +27,11 @@ import {
   addTrackStage,
   startStageSession,
   startTrack,
+  type SetTrackStatusResult,
   type TrackActor,
 } from "../../../services/tracks/tracks-service.js";
 import { pickTrackGoalInput } from "../../../services/tracks/goal-content.js";
+import { lifecycleConflictOf } from "../../../services/lifecycle/conflict.js";
 import { convertEntityToGoal } from "../../../services/tracks/convert-to-goal.js";
 import {
   missingStageDomainsNote,
@@ -185,16 +187,35 @@ export const trackHandlers: McpHandlerMap = {
         error: `verdict must be one of ${PROJECT_TRACK_VERDICTS.join(" | ")}.`,
       });
     }
+    const expectedArg = str(ctx.args.expectedStatus);
+    const expectedStatus = PROJECT_TRACK_STATUSES.find(
+      (s) => s === expectedArg
+    );
+    if (expectedArg && !expectedStatus) {
+      return ok({
+        error: `expectedStatus must be one of ${PROJECT_TRACK_STATUSES.join(" | ")}.`,
+      });
+    }
     return run(async () => {
       // The verdict rule (closing needs one, impossible/replaced a reason)
-      // is the service's, refused with words before anything is filed.
-      const result = await setTrackStatus({
-        trackId,
-        status,
-        verdict,
-        verdictReason: str(ctx.args.verdictReason),
-        actor: actorOf(ctx),
-      });
+      // and the expectedStatus rule are the service's, refused with words
+      // before anything is filed.
+      let result: SetTrackStatusResult;
+      try {
+        result = await setTrackStatus({
+          trackId,
+          status,
+          verdict,
+          verdictReason: str(ctx.args.verdictReason),
+          ...(expectedStatus ? { expectedStatus } : {}),
+          actor: actorOf(ctx),
+        });
+      } catch (err) {
+        // A stale status move is an answer the agent re-plans on, not a fault.
+        const conflict = lifecycleConflictOf(err);
+        if (conflict) return conflict;
+        throw err;
+      }
       if (result.status === "proposed") return result;
       return {
         status: result.status,

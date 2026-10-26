@@ -56,6 +56,7 @@ import {
 } from "@synap/database/schema";
 import { GOAL_ACCEPTANCE_DECISIONS } from "@synap-core/types/units";
 import { trackGoalInputSchema } from "../../../services/tracks/goal-content.js";
+import { lifecycleConflictOf } from "../../../services/lifecycle/conflict.js";
 import {
   advanceTrackStage,
   decodeTrackListCursor,
@@ -135,6 +136,8 @@ const StatusSchema = z.object({
   status: z.enum(PROJECT_TRACK_STATUSES),
   verdict: z.enum(PROJECT_TRACK_VERDICTS).optional(),
   verdictReason: z.string().trim().max(2000).optional(),
+  /** The status the caller read — required for an agent (409 when stale). */
+  expectedStatus: z.enum(PROJECT_TRACK_STATUSES).optional(),
   reasoning: z.string().max(2000).optional(),
 });
 const ReopenSchema = z.object({
@@ -588,6 +591,7 @@ export function registerTracksRoutes(app: HubHono): void {
         status: body.data.status,
         verdict: body.data.verdict,
         verdictReason: body.data.verdictReason,
+        expectedStatus: body.data.expectedStatus,
         actor: actorOf(c, body.data.reasoning),
       });
       if (result.status === "proposed") return jsonGoverned(c, result);
@@ -596,6 +600,9 @@ export function registerTracksRoutes(app: HubHono): void {
         track: await loadWrittenTrackView(result.track, actorOf(c)),
       });
     } catch (err) {
+      // A stale status move: the current status, 409, nothing written.
+      const conflict = lifecycleConflictOf(err);
+      if (conflict) return c.json(conflict, 409);
       return fail(c, err, "PATCH /tracks/:id");
     }
   });

@@ -249,6 +249,8 @@ export const tracksRouter = router({
         status: z.enum(PROJECT_TRACK_STATUSES),
         verdict: z.enum(PROJECT_TRACK_VERDICTS).optional(),
         verdictReason: z.string().trim().max(2000).optional(),
+        /** The status the caller read — required for an agent (CONFLICT when stale). */
+        expectedStatus: z.enum(PROJECT_TRACK_STATUSES).optional(),
         reasoning,
       })
     )
@@ -258,6 +260,7 @@ export const tracksRouter = router({
         status: input.status,
         verdict: input.verdict,
         verdictReason: input.verdictReason,
+        expectedStatus: input.expectedStatus,
         actor: actorOf(ctx, input.reasoning),
       });
       if (result.status === "proposed") return result;
