@@ -13,7 +13,7 @@
  *       the proposal (receipt) it went through records this key
  *       (`proposals.api_key_id`);
  *     - a session: it is bound to this key (`metadata.clientKey`
- *       `key:<id>[|conv:…]`, stamped when the client opened it).
+ *       `key:<id>[|conv:…|call:…]`, stamped when the client opened it).
  *  2. FRESH — created in the last {@link OWN_WORK_FRESH_HOURS} hours.
  *  3. UNTOUCHED BY A PERSON — no completed write on it since that a person
  *     made (an event with no agent, from a person's door — not the system,

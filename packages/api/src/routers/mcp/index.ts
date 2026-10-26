@@ -25,6 +25,7 @@ import { prompts } from "./prompts/index.js";
 import { filterToolsForAccess } from "./tool-profiles.js";
 import { loadKeyToolAccess } from "./tool-access.js";
 import { ENTRY_REFLEX_PROSE } from "./entry-instructions.js";
+import { shadowUndeclaredArgs } from "./undeclared-args.js";
 import {
   NO_UI_RENDERER,
   listUiResources,
@@ -300,12 +301,16 @@ export function createMCPServer(
       ...args,
     };
 
+    // W-C1 SHADOW: undeclared argument keys are logged, never refused yet
+    // (W-C3 refuses after seven days of these numbers). The caller's own
+    // arguments — the door-injected lens is never "unknown".
+    await shadowUndeclaredArgs(request.params.name, args);
+
     // Session attribution is resolved SERVER-SIDE in the adapter (derived from
     // the caller's open sessions), so nothing session-shaped is spread into
-    // `scopedArgs` — declaring a bookkeeping handle on every schema would make
-    // the advertised schemas dishonest. The three write doors that can lose
-    // provenance declare an OPTIONAL `sessionId` purely as a disambiguator, and
-    // an explicit one always wins.
+    // `scopedArgs`. Every write tool declares an OPTIONAL `sessionId` (derived
+    // in `tools.list()`, W-C1) — the handle a run that named no conversation
+    // keeps itself together with — and an explicit one always wins.
     return await tools.execute(
       request.params.name,
       scopedArgs,

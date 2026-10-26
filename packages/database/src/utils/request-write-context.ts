@@ -19,6 +19,7 @@
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";
+import { randomUUID } from "node:crypto";
 import { sql, type SQL } from "drizzle-orm";
 import { PROBE_KEY_SCOPE } from "../schema/api-keys.js";
 import { entities } from "../schema/entities.js";
@@ -338,6 +339,32 @@ export function isDerivedSession(
 const CONVERSATION_SEP = "|conv:";
 
 /**
+ * Separator between a client and the per-call RUN a door minted for a request
+ * that named no conversation (D1, founder 2026-10-23: one receipt session per
+ * run; a routine never borrows another run's session). Deliberately NOT
+ * `|conv:call:`: a call is one run, but nothing a later request can name, so
+ * it is never a runner (`parseRunnerClientKey`) and never reopenable
+ * (`conversationOfClientKey`). Its continuity is the `sessionId` handle the
+ * write reply hands back (`attribution.filed.handle`).
+ */
+const CALL_SEP = "|call:";
+
+/** A fresh per-call run of `client` (`key:<id>`, `agent:<id>`). */
+export function perCallClientKey(client: string): string {
+  return `${client}${CALL_SEP}${randomUUID()}`;
+}
+
+/**
+ * Whether a client key is a per-call run (`…|call:<uuid>`): ONE run, so it
+ * scopes like a conversation, but it carries no conversation a later request
+ * shares — so nothing per-conversation (focus, the unclaimed-session guess)
+ * may key on it.
+ */
+export function isPerCallClientKey(clientKey: string): boolean {
+  return clientKey.includes(CALL_SEP);
+}
+
+/**
  * A client-supplied conversation id, or undefined when unusable. The MCP
  * transport id is visible ASCII (0x21–0x7E) by spec; the cap keeps a hostile
  * value out of JSONB keys and lock names.
@@ -356,11 +383,13 @@ export function normalizeConversationId(
  *   2. a conversation id ⇒ `key:<id>|conv:<conversationId>` — CONVERSATION
  *      scope. The client's OWN id when it names one (`X-Synap-Conversation`,
  *      e.g. `claude-code:<uuid>` from the CLI and its stdio MCP bridge — see
- *      `CONVERSATION_HEADER`), else on MCP the Streamable-HTTP `Mcp-Session-Id`
- *      the pod mints at `initialize` and the client echoes on every request.
- *   3. otherwise ⇒ `key:<id>` — KEY scope (option A): a write joins a session
- *      only when it names one, else the key's own AUTO-OPENED session, never a
- *      session some conversation on the key STARTED; focus stays per-agent.
+ *      `CONVERSATION_HEADER`; or `_meta["live.synap/conversation"]`), else on
+ *      MCP the Streamable-HTTP `Mcp-Session-Id` the pod mints at `initialize`
+ *      and the client echoes on every request (`requestConversationId`).
+ *   3. otherwise ⇒ `key:<id>|call:<uuid>` — a per-call RUN minted here (D1):
+ *      this request is its own run, with its own receipt. Two routines on one
+ *      key in the same minute (live 2026-10-23) never share a session. It used
+ *      to be `key:<id>` (option A), which pooled every such run on the key.
  * MCP and Hub REST share the value, so one conversation is one client on both.
  */
 export function clientKeyForApiKey(
@@ -369,16 +398,20 @@ export function clientKeyForApiKey(
 ): string | undefined {
   if (key.keyType === "is_internal") return undefined;
   const conv = normalizeConversationId(conversationId);
-  return conv ? `key:${key.id}${CONVERSATION_SEP}${conv}` : `key:${key.id}`;
+  return conv
+    ? `key:${key.id}${CONVERSATION_SEP}${conv}`
+    : perCallClientKey(`key:${key.id}`);
 }
 
 /**
- * Whether a client key identifies ONE conversation (`…|conv:…`, or an IS
- * `channel:` — a channel is a conversation) or only a KEY/agent shared by
- * every conversation on it (`key:<id>`, `agent:<id>`). Key scope is option A.
+ * Whether a client key identifies ONE conversation or run (`…|conv:…`, a
+ * per-call run `…|call:…`, or an IS `channel:` — a channel is a conversation)
+ * or only a KEY/agent shared by every run on it (`agent:<id>`, the jobs'
+ * fallback, and legacy `key:<id>` rows). Key scope is option A.
  */
 export function clientKeyScope(clientKey: string): "conversation" | "key" {
   return clientKey.includes(CONVERSATION_SEP) ||
+    isPerCallClientKey(clientKey) ||
     clientKey.startsWith("channel:")
     ? "conversation"
     : "key";
@@ -398,15 +431,30 @@ export const CONVERSATION_HEADER = "x-synap-conversation";
 export const CONVERSATION_CWD_HEADER = "x-synap-conversation-cwd";
 
 /**
- * The conversation id for a request: the client's OWN id when it named one
- * (`X-Synap-Conversation`), else the transport id (MCP `Mcp-Session-Id`).
+ * The same two facts as MCP request metadata (`params._meta`), reverse-DNS
+ * vendor keys (`io.modelcontextprotocol/` is reserved). Set by our own stdio
+ * bridge on every forwarded request, and by any client that cannot set
+ * headers. MCP 2026-07-28 removes `Mcp-Session-Id`; these survive it.
+ */
+export const CONVERSATION_META_KEY = "live.synap/conversation";
+export const CONVERSATION_CWD_META_KEY = "live.synap/conversationCwd";
+
+/**
+ * The conversation id for a request, first usable of:
+ *   1. the client's OWN id in the `X-Synap-Conversation` header — set by our
+ *      own transport code, so it wins when both are sent and differ;
+ *   2. `_meta["live.synap/conversation"]` on the MCP request;
+ *   3. the transport id (MCP `Mcp-Session-Id`, until 2026-07-28).
+ * None ⇒ undefined, and `clientKeyForApiKey` mints a per-call run.
  */
 export function requestConversationId(
   namedByClient: string | null | undefined,
+  namedInMeta?: string | null,
   transportId?: string | null
 ): string | undefined {
   return (
     normalizeConversationId(namedByClient) ??
+    normalizeConversationId(namedInMeta) ??
     normalizeConversationId(transportId)
   );
 }

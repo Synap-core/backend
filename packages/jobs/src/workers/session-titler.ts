@@ -18,7 +18,10 @@
  *    writes (live: 142 writes across six spaces under "Ecosystem market
  *    intelligence foundation").
  * 4. CLOSE. A closed session whose name is still automation's gets ONE
- *    outcome-aware rename from its closing summary.
+ *    outcome-aware rename from its closing summary. A RECEIPT is closed by the
+ *    reaper and never has a summary, so it is renamed from what it holds (the
+ *    rolling context: latest proposals, counts by kind) — it used to keep its
+ *    first-write name for ever (live: `titleEarlyLastReason: "empty"`).
  *
  * Playbook and automation runs are never generated for: their derived name is
  * already the right one. A title a person or the working agent chose
@@ -229,8 +232,13 @@ export const CLOSE_TITLE_CANDIDATE = and(
   drizzleSql`${TEMPLATE_RUN} IS NOT TRUE`,
   WORK_OR_RECEIPT,
   drizzleSql`${focusSessions.closedAt} > now() - (${CLOSE_LOOKBACK_DAYS}::int * interval '1 day')`,
-  // Outcome-aware needs an outcome.
-  drizzleSql`COALESCE(${focusSessions.verificationReport}->>'summary', '') <> ''`
+  // Outcome-aware needs an outcome: the closing summary, or — for a receipt,
+  // which the reaper closes without one — the proposals it holds.
+  drizzleSql`(
+    COALESCE(${focusSessions.verificationReport}->>'summary', '') <> ''
+    OR (${focusSessions.metadata}->>'source' = ${RECEIPT_SOURCE}
+        AND EXISTS (SELECT 1 FROM ${proposals} WHERE ${proposals.sessionId} = ${focusSessions.id}))
+  )`
 );
 
 /**
@@ -379,14 +387,17 @@ async function rollingContext(row: CandidateRow): Promise<string> {
   return parts.join("\n").slice(0, CONTEXT_MAX);
 }
 
+/** The closing summary, or "" when the session closed without one. */
+function closingSummary(row: CandidateRow): string {
+  const summary = (row.verificationReport as { summary?: unknown } | null)
+    ?.summary;
+  return typeof summary === "string" ? summary.trim() : "";
+}
+
 function closeContext(row: CandidateRow): string {
-  const summary =
-    (row.verificationReport as { summary?: unknown } | null)?.summary ?? "";
+  const summary = closingSummary(row);
   const labels = outputLabels(row.expectedOutputs);
-  return [
-    typeof summary === "string" ? summary : "",
-    labels.length ? `Outputs: ${labels.join(", ")}` : "",
-  ]
+  return [summary, labels.length ? `Outputs: ${labels.join(", ")}` : ""]
     .filter(Boolean)
     .join("\n")
     .slice(0, CONTEXT_MAX);
@@ -455,8 +466,10 @@ async function generatePhase(
     const context =
       phase === "early"
         ? await earlyContext(row)
-        : isRoll
-          ? await rollingContext(row)
+        : isRoll || !closingSummary(row)
+          ? // A receipt closed with no summary (CLOSE_TITLE_CANDIDATE admits
+            // it only when it holds proposals) is named from what it holds.
+            await rollingContext(row)
           : closeContext(row);
     let answer: SessionTitleResult;
     try {

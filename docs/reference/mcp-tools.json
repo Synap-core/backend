@@ -1231,6 +1231,12 @@
           "type": "string",
           "required": false,
           "description": "WHY these changes — shown to the person who reviews them. One line."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
         }
       ],
       "inputSchema": {
@@ -1288,6 +1294,10 @@
           "reasoning": {
             "type": "string",
             "description": "WHY these changes — shown to the person who reviews them. One line."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
         "required": ["items"]
@@ -1316,6 +1326,12 @@
           "type": "string",
           "required": false,
           "description": "Why it should go, in the person's words — shown to the human who reviews it. One line."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
         }
       ],
       "inputSchema": {
@@ -1328,6 +1344,10 @@
           "reasoning": {
             "type": "string",
             "description": "Why it should go, in the person's words — shown to the human who reviews it. One line."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
         "required": ["entityId"]
@@ -1478,6 +1498,12 @@
           "type": "string",
           "required": false,
           "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
         }
       ],
       "inputSchema": {
@@ -1544,6 +1570,10 @@
           "reasoning": {
             "type": "string",
             "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
         "required": ["documentId", "ops"]
@@ -1777,6 +1807,12 @@
           "type": "boolean",
           "required": false,
           "description": "true ONLY if the user directly stated this; do not infer. This is the single signal that makes the write auto-approve instead of proposing."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
         }
       ],
       "inputSchema": {
@@ -1810,6 +1846,10 @@
           "userStated": {
             "type": "boolean",
             "description": "true ONLY if the user directly stated this; do not infer. This is the single signal that makes the write auto-approve instead of proposing."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
         "required": ["fact"]
@@ -1856,6 +1896,12 @@
           "type": "string",
           "required": false,
           "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
         }
       ],
       "inputSchema": {
@@ -1881,6 +1927,10 @@
           "reasoning": {
             "type": "string",
             "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
         "required": ["sourceEntityId", "targetEntityId"]
@@ -1933,6 +1983,12 @@
           "type": "string",
           "required": false,
           "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
         }
       ],
       "inputSchema": {
@@ -1961,6 +2017,10 @@
           "reasoning": {
             "type": "string",
             "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
         "required": ["entityId", "facetSlug"]
@@ -2007,6 +2067,12 @@
           "type": "string",
           "required": false,
           "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
         }
       ],
       "inputSchema": {
@@ -2031,6 +2097,10 @@
           "reasoning": {
             "type": "string",
             "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
         "required": []
@@ -2101,6 +2171,12 @@
           "type": "string",
           "required": false,
           "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
         }
       ],
       "inputSchema": {
@@ -2142,6 +2218,10 @@
           "reasoning": {
             "type": "string",
             "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
         "required": ["slug", "displayName", "workspaceId"]
@@ -2219,6 +2299,12 @@
           "type": "string",
           "required": false,
           "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
         }
       ],
       "inputSchema": {
@@ -2315,6 +2401,10 @@
           "reasoning": {
             "type": "string",
             "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
         "required": ["slug", "displayName", "workspaceId"]
@@ -2520,6 +2610,12 @@
           "type": "array<object>",
           "required": false,
           "description": "DEPRECATED alias — prefer `outcomes`. The concrete deliverables the session should produce, so the goal can stay one line."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
         }
       ],
       "inputSchema": {
@@ -3352,6 +3448,10 @@
               "required": ["kind", "label"]
             },
             "description": "DEPRECATED alias — prefer `outcomes`. The concrete deliverables the session should produce, so the goal can stay one line."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
         "required": ["goal"]
@@ -5302,6 +5402,12 @@
           "type": "string",
           "required": false,
           "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
         }
       ],
       "inputSchema": {
@@ -5342,6 +5448,10 @@
           "reasoning": {
             "type": "string",
             "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
         "required": ["name", "rendererSource"]
@@ -5402,6 +5512,12 @@
           "type": "string",
           "required": false,
           "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
         }
       ],
       "inputSchema": {
@@ -5436,6 +5552,10 @@
           "reasoning": {
             "type": "string",
             "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
         "required": ["profileSlug", "slot", "cellKey"]
@@ -7581,6 +7701,12 @@
           "type": "string",
           "required": false,
           "description": "Workspace name or id to focus on. Omit, or pass 'none'/'clear', to clear the current focus."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
         }
       ],
       "inputSchema": {
@@ -7589,6 +7715,10 @@
           "workspace": {
             "type": "string",
             "description": "Workspace name or id to focus on. Omit, or pass 'none'/'clear', to clear the current focus."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
         "required": []
@@ -7611,6 +7741,12 @@
           "type": "string",
           "required": false,
           "description": "Project name or id to declare. Omit, or pass 'none'/'clear', to clear the current focus."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
         }
       ],
       "inputSchema": {
@@ -7619,6 +7755,10 @@
           "project": {
             "type": "string",
             "description": "Project name or id to declare. Omit, or pass 'none'/'clear', to clear the current focus."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
         "required": []
@@ -7647,6 +7787,12 @@
           "type": "string",
           "required": false,
           "description": "Why this organisation helps, in the person's words — shown to the reviewer. One line."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
         }
       ],
       "inputSchema": {
@@ -7681,6 +7827,10 @@
           "reasoning": {
             "type": "string",
             "description": "Why this organisation helps, in the person's words — shown to the reviewer. One line."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
         "required": []
@@ -8177,6 +8327,12 @@
           "type": "string",
           "required": false,
           "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
         }
       ],
       "inputSchema": {
@@ -8194,6 +8350,10 @@
           "reasoning": {
             "type": "string",
             "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
         "required": ["name"]
@@ -8234,6 +8394,12 @@
           "type": "string",
           "required": false,
           "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
         }
       ],
       "inputSchema": {
@@ -8268,6 +8434,10 @@
           "reasoning": {
             "type": "string",
             "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
         "required": ["workspaceId"]
@@ -8361,6 +8531,12 @@
           "type": "string",
           "required": false,
           "description": "Optional: the project's mark — ONE emoji (e.g. 🚀) or glyph:<lucide-name> (e.g. glyph:rocket)."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
         }
       ],
       "inputSchema": {
@@ -8391,6 +8567,10 @@
           "icon": {
             "type": "string",
             "description": "Optional: the project's mark — ONE emoji (e.g. 🚀) or glyph:<lucide-name> (e.g. glyph:rocket)."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
         "required": ["name"]
@@ -8804,6 +8984,12 @@
           "type": "string",
           "required": false,
           "description": "Optional outcome in the person's words; defaults to the stage's own goal."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
         }
       ],
       "inputSchema": {
@@ -8821,6 +9007,10 @@
           "goal": {
             "type": "string",
             "description": "Optional outcome in the person's words; defaults to the stage's own goal."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
         "required": ["trackId"]
@@ -8855,6 +9045,12 @@
           "type": "string",
           "required": false,
           "description": "Why the work moves to this stage — shown to the reviewer. One line."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
         }
       ],
       "inputSchema": {
@@ -8868,6 +9064,10 @@
           "reasoning": {
             "type": "string",
             "description": "Why the work moves to this stage — shown to the reviewer. One line."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
         "required": ["trackId", "toStage"]
@@ -8933,6 +9133,12 @@
           "type": "string",
           "required": false,
           "description": "Why the track changes status — shown to the reviewer. One line."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
         }
       ],
       "inputSchema": {
@@ -8973,6 +9179,10 @@
           "reasoning": {
             "type": "string",
             "description": "Why the track changes status — shown to the reviewer. One line."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
         "required": ["trackId", "status"]
@@ -9177,6 +9387,12 @@
           "type": "string",
           "required": false,
           "description": "Why — shown to the reviewer. One line."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
         }
       ],
       "inputSchema": {
@@ -9220,6 +9436,10 @@
           "reasoning": {
             "type": "string",
             "description": "Why — shown to the reviewer. One line."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
         "required": ["trackId", "action"]
@@ -9254,6 +9474,12 @@
           "type": "string",
           "required": false,
           "description": "Why these answers — shown to the reviewer. One line."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
         }
       ],
       "inputSchema": {
@@ -9268,6 +9494,10 @@
           "reasoning": {
             "type": "string",
             "description": "Why these answers — shown to the reviewer. One line."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
         "required": ["trackId", "params"]
@@ -9362,6 +9592,12 @@
           "type": "string",
           "required": false,
           "description": "Why — shown to the reviewer. One line."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
         }
       ],
       "inputSchema": {
@@ -9482,6 +9718,10 @@
           "reasoning": {
             "type": "string",
             "description": "Why — shown to the reviewer. One line."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
         "required": ["trackId"]
@@ -9528,6 +9768,12 @@
           "type": "string",
           "required": false,
           "description": "Why this step is needed — shown to the reviewer."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
         }
       ],
       "inputSchema": {
@@ -9546,6 +9792,10 @@
           "reasoning": {
             "type": "string",
             "description": "Why this step is needed — shown to the reviewer."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
         "required": ["trackId", "name"]
@@ -9606,6 +9856,12 @@
           "type": "string",
           "required": false,
           "description": "Why you are making this write, in the person's words — shown to the reviewer. One line."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
         }
       ],
       "inputSchema": {
@@ -9637,6 +9893,10 @@
           "reasoning": {
             "type": "string",
             "description": "Why you are making this write, in the person's words — shown to the reviewer. One line."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
         "required": ["projectId"]
@@ -9667,6 +9927,12 @@
           "type": "string",
           "required": false,
           "description": "Why this project uses this domain, in the person's words. One line."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
         }
       ],
       "inputSchema": {
@@ -9681,6 +9947,10 @@
           "reasoning": {
             "type": "string",
             "description": "Why this project uses this domain, in the person's words. One line."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
         "required": ["projectId", "workspaceId"]
@@ -9786,6 +10056,12 @@
           "type": "string",
           "required": false,
           "description": "Why, in the person's words — shown to the reviewer. One line."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
         }
       ],
       "inputSchema": {
@@ -9802,6 +10078,10 @@
           "reasoning": {
             "type": "string",
             "description": "Why, in the person's words — shown to the reviewer. One line."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
         "required": ["workspaceId"]
@@ -9836,6 +10116,12 @@
           "type": "string",
           "required": false,
           "description": "Why, in the person's words — shown to the reviewer. One line."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
         }
       ],
       "inputSchema": {
@@ -9852,6 +10138,10 @@
           "reasoning": {
             "type": "string",
             "description": "Why, in the person's words — shown to the reviewer. One line."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
         "required": ["workspaceId"]
@@ -9881,7 +10171,13 @@
           "required": false,
           "description": "New name (1-100 chars)."
         },
-        { "name": "description", "type": "string", "required": false }
+        { "name": "description", "type": "string", "required": false },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
+        }
       ],
       "inputSchema": {
         "type": "object",
@@ -9891,7 +10187,11 @@
             "type": "string",
             "description": "New name (1-100 chars)."
           },
-          "description": { "type": "string" }
+          "description": { "type": "string" },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
+          }
         },
         "required": ["workspaceId"]
       }
@@ -9925,6 +10225,12 @@
           "type": "string",
           "required": false,
           "description": "Why, in the person's words — shown to the reviewer. One line."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
         }
       ],
       "inputSchema": {
@@ -9938,6 +10244,10 @@
           "reasoning": {
             "type": "string",
             "description": "Why, in the person's words — shown to the reviewer. One line."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
         "required": ["workspaceId", "brief"]
@@ -9972,6 +10282,12 @@
           "type": "string",
           "required": false,
           "description": "Why they belong there — shown to the reviewer."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
         }
       ],
       "inputSchema": {
@@ -9989,6 +10305,10 @@
           "reasoning": {
             "type": "string",
             "description": "Why they belong there — shown to the reviewer."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
         "required": ["entityIds", "workspaceId"]
@@ -10017,6 +10337,12 @@
           "type": "string",
           "required": false,
           "description": "Why this field should go — shown to the reviewer. One line."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
         }
       ],
       "inputSchema": {
@@ -10029,6 +10355,10 @@
           "reasoning": {
             "type": "string",
             "description": "Why this field should go — shown to the reviewer. One line."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
         "required": ["propertyDefId"]
@@ -10069,6 +10399,12 @@
           "type": "string",
           "required": false,
           "description": "Why — shown to the reviewer. One line."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
         }
       ],
       "inputSchema": {
@@ -10086,6 +10422,10 @@
           "reasoning": {
             "type": "string",
             "description": "Why — shown to the reviewer. One line."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
         "required": ["profileId", "targetWorkspaceId"]
@@ -10140,6 +10480,12 @@
           "type": "string",
           "required": false,
           "description": "Why — shown to the reviewer. One line."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
         }
       ],
       "inputSchema": {
@@ -10168,6 +10514,10 @@
           "reasoning": {
             "type": "string",
             "description": "Why — shown to the reviewer. One line."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
         "required": ["profileId"]
@@ -10268,6 +10618,12 @@
           "type": "string",
           "required": false,
           "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
         }
       ],
       "inputSchema": {
@@ -10321,6 +10677,10 @@
           "reasoning": {
             "type": "string",
             "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
         "required": ["name", "type"]
@@ -10373,6 +10733,12 @@
           "type": "string",
           "required": false,
           "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
         }
       ],
       "inputSchema": {
@@ -10399,6 +10765,10 @@
           "reasoning": {
             "type": "string",
             "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
         "required": ["viewId", "store", "version"]
@@ -10535,6 +10905,12 @@
           "type": "string",
           "required": false,
           "description": "Required for mode 'by-context'"
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
         }
       ],
       "inputSchema": {
@@ -10550,6 +10926,10 @@
           "contextObjectId": {
             "type": "string",
             "description": "Required for mode 'by-context'"
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
         "required": ["mode", "workspaceId"]
@@ -10647,6 +11027,12 @@
           "type": "object",
           "required": false,
           "description": "Instead of channelId: a comment on an object. EITHER `anchor` (open a thread) OR `replyTo` (reply in one)."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
         }
       ],
       "inputSchema": {
@@ -11015,6 +11401,10 @@
                 "description": "A comment's message id (any message of its thread)."
               }
             }
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
         "required": ["content"]
@@ -11055,6 +11445,12 @@
           "type": "object",
           "required": false,
           "description": "Amend WHAT WILL BE APPLIED, not just the narrative. Use this whenever you change the summary to describe different content — a summary that no longer matches the payload is worse than no revision, because the human reads the summary."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
         }
       ],
       "inputSchema": {
@@ -11087,6 +11483,10 @@
               }
             },
             "required": ["kind", "fields"]
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
         "required": ["proposalId"]
@@ -11131,6 +11531,12 @@
             "not_relevant",
             "other"
           ]
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
         }
       ],
       "inputSchema": {
@@ -11157,6 +11563,10 @@
               "other"
             ],
             "description": "Optional structured cause, one of the fixed set — recorded alongside `reason` and fed to the calibration/scorecard loop. Use `other` (or omit) when none fits and rely on the free-text `reason`."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
         "required": ["proposalId"]
@@ -11459,6 +11869,12 @@
           "type": "string",
           "required": false,
           "description": "Optional: a stable key that correlates retries of THIS run. Note: a direct capability run has NO automatic content dedup — a retried call CAN produce a second external effect (e.g. a second send). Pass a key when the effect must be at-most-once; the key is recorded on the run."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
         }
       ],
       "inputSchema": {
@@ -11498,6 +11914,10 @@
             "description": "Optional: a stable key that correlates retries of THIS run. Note: a direct capability run has NO automatic content dedup — a retried call CAN produce a second external effect (e.g. a second send). Pass a key when the effect must be at-most-once; the key is recorded on the run.",
             "type": "string",
             "minLength": 1
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
         "required": ["workspaceId"]
@@ -11575,6 +11995,12 @@
           "type": "string",
           "required": false,
           "description": "Optional workspace UUID to scope the new verb to (default: pod-wide)."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
         }
       ],
       "inputSchema": {
@@ -11620,6 +12046,10 @@
           "workspaceId": {
             "type": "string",
             "description": "Optional workspace UUID to scope the new verb to (default: pod-wide)."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
         "required": ["toolName", "verbName", "method", "pathTemplate"]
@@ -11722,6 +12152,12 @@
           "type": "string",
           "required": false,
           "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
         }
       ],
       "inputSchema": {
@@ -11742,6 +12178,10 @@
           "reasoning": {
             "type": "string",
             "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
         "required": ["id"]
@@ -11815,6 +12255,12 @@
           "type": "string",
           "required": false,
           "description": "Optional workspace to scope to (default pod-wide)."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
         }
       ],
       "inputSchema": {
@@ -11984,6 +12430,10 @@
           "workspaceId": {
             "type": "string",
             "description": "Optional workspace to scope to (default pod-wide)."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
         "required": ["name", "triggerType", "flowDefinition", "metadata"]
@@ -12037,6 +12487,12 @@
           "type": "string",
           "required": false,
           "description": "ISO-8601 instant with offset (e.g. '2026-12-31T00:00:00Z') after which the rule stops applying. A non-instant is refused rather than stored."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
         }
       ],
       "inputSchema": {
@@ -12238,6 +12694,10 @@
           "expiresAt": {
             "type": "string",
             "description": "ISO-8601 instant with offset (e.g. '2026-12-31T00:00:00Z') after which the rule stops applying. A non-instant is refused rather than stored."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
         "required": ["intent"]
@@ -12303,6 +12763,12 @@
           "type": "boolean",
           "required": false,
           "description": "true keeps (or returns) the rule to DRAFT — nothing compiled, nothing can fire. Omitted/false = live: a draft is ACTIVATED (recompiled, refused by clause if it has a hole)."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
         }
       ],
       "inputSchema": {
@@ -12512,6 +12978,10 @@
           "draft": {
             "type": "boolean",
             "description": "true keeps (or returns) the rule to DRAFT — nothing compiled, nothing can fire. Omitted/false = live: a draft is ACTIVATED (recompiled, refused by clause if it has a hole)."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
         "required": ["ruleId", "intent", "scope"]
@@ -12588,6 +13058,12 @@
           "type": "string",
           "required": false,
           "description": "Optional track UUID (synap_list_tracks) — the method, inside a project, this run advances. Implies its project; a different projectId is refused."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
         }
       ],
       "inputSchema": {
@@ -12633,6 +13109,10 @@
           "trackId": {
             "type": "string",
             "description": "Optional track UUID (synap_list_tracks) — the method, inside a project, this run advances. Implies its project; a different projectId is refused."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
         "required": []
@@ -12703,6 +13183,12 @@
           "type": "integer",
           "required": false,
           "description": "Code skills: how long one run may take, in seconds (default 30, max 300)."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
         }
       ],
       "inputSchema": {
@@ -12746,6 +13232,10 @@
             "minimum": 1,
             "maximum": 300,
             "description": "Code skills: how long one run may take, in seconds (default 30, max 300)."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
         "required": ["name"]
@@ -12792,6 +13282,12 @@
           "type": "string",
           "required": false,
           "description": "New display name."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
         }
       ],
       "inputSchema": {
@@ -12813,7 +13309,11 @@
             "type": "string",
             "description": "One line: what it does + when to use it."
           },
-          "name": { "type": "string", "description": "New display name." }
+          "name": { "type": "string", "description": "New display name." },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
+          }
         },
         "required": []
       }
