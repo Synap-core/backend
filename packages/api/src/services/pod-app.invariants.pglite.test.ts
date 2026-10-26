@@ -130,19 +130,6 @@ const TEMPLATED_CB = "https://templated.example.com/cb";
 const SYNAP_APP =
   "https://content-studio.synap.live/.well-known/synap-client.json";
 const SYNAP_APP_CB = "https://content-studio.synap.live/cb";
-/** A third-party app that asks for what an agent key may hold. */
-const CRM = "https://crm.example.com/.well-known/synap-client.json";
-const CRM_CB = "https://crm.example.com/cb";
-const CRM_ASK = [
-  READ,
-  "playbook.read",
-  "playbook.run",
-  "entity.post.transition",
-  "tool.create",
-  "proposal.approve",
-  "proposal.reject",
-  "*",
-];
 
 const OWNER = "human-owner";
 const OTHER = "human-other";
@@ -157,6 +144,19 @@ const VERIFIER = "v".repeat(64);
 const CHALLENGE = computeS256Challenge(VERIFIER);
 const READ = "entity.post.read";
 const CREATE = "entity.post.create";
+/** A third-party app that asks for what an agent key may hold. */
+const CRM = "https://crm.example.com/.well-known/synap-client.json";
+const CRM_CB = "https://crm.example.com/cb";
+const CRM_ASK = [
+  READ,
+  "playbook.read",
+  "playbook.run",
+  "entity.post.transition",
+  "tool.create",
+  "proposal.approve",
+  "proposal.reject",
+  "*",
+];
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
