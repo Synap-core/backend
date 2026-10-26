@@ -99,6 +99,18 @@ const SAMPLE: Required<
     answeredAt: "2026-09-08T14:00:00.000Z",
     question: "Which Stripe account?",
     value: { type: "chip", chip: { label: "EU account", value: "eu" } },
+    via: "relayed",
+    relayedBy: "44444444-4444-4444-4444-444444444444",
+    relaySurface: "claude-code",
+    quote: "use the EU one",
+  },
+  pendingRelay: {
+    text: "Yes",
+    value: { type: "confirm", confirmed: true },
+    relayedBy: "44444444-4444-4444-4444-444444444444",
+    relaySurface: "claude-code",
+    quote: "yes ship it",
+    relayedAt: "2026-09-08T14:30:00.000Z",
   },
 };
 

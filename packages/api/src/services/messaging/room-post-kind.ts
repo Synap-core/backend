@@ -1,3 +1,9 @@
+import type {
+  AnswerProvenance,
+  PendingRelayedAnswer,
+  QuestionClosed,
+} from "@synap-core/types/ask";
+
 /**
  * What an agent's room post IS — the `kind` param on MCP `synap_post_message`
  * and Hub REST `POST /threads/:id/messages`. Pure (no I/O) so the tool schema
@@ -52,7 +58,18 @@ export interface RoomPostMeta {
     answeredBy: string;
     answeredAt: string;
     text: string;
-  };
+  } & AnswerProvenance;
+  /**
+   * A relayed answer to a `commitment` question, waiting for the owner's tap
+   * (`PendingRelayedAnswer`, `@synap-core/types/ask`, says why it is not
+   * `answer`). Its presence leaves the question OPEN.
+   */
+  pendingRelay?: PendingRelayedAnswer;
+  /**
+   * Stamped once when the question stopped being open WITHOUT an answer: its
+   * session ended (W2) or its agent withdrew it (W1). Never deleted.
+   */
+  closed?: QuestionClosed;
 }
 
 /** The persisted marker for an agent post. Pure. */
@@ -88,6 +105,8 @@ export function readRoomPostMeta(metadata: unknown): RoomPostMeta | null {
 /**
  * Client-supplied metadata with the server-owned marker removed — a Hub
  * caller's `metadata.roomPost` must never land as a forged question/answer.
+ * The WHOLE key goes, so every stamp under it (`answer` and its provenance,
+ * `pendingRelay`, `closed`) is server-owned by construction.
  */
 export function withoutRoomPostMeta(
   metadata: Record<string, unknown> | undefined

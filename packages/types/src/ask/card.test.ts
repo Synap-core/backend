@@ -6,6 +6,7 @@ import {
   AskSchema,
   SLOT_MOVED_ON_PHRASES,
   actView,
+  answerProvenanceMark,
   askOptionChips,
   askOptionForChip,
   askRowRegion,
@@ -237,5 +238,58 @@ describe("ASK_COPY", () => {
     expect(ASK_COPY.provideUploadKept("Finance")).toBe(
       "The file was saved in Finance, but it wasn't handed over."
     );
+  });
+});
+
+describe("answerProvenanceMark", () => {
+  it.each([
+    ["open draws nothing", {}, null],
+    ["a tap", { answer: {} }, { tone: "success", label: "You answered" }],
+    [
+      "a routine relay names the agent",
+      { answer: { via: "relayed", relayedBy: "a" } },
+      { tone: "ai", label: "Answered in chat · relayed by Claude Code" },
+    ],
+    [
+      // the relay stays visible after the person's own tap
+      "a confirmed relay still says it was relayed",
+      { answer: { via: "tap", relayedBy: "a", confirmedAt: "t" } },
+      { tone: "success", label: "You confirmed what Claude Code relayed" },
+    ],
+    [
+      "awaiting the tap",
+      { pendingRelay: { relayedBy: "a" } },
+      { tone: "warning", label: "Claude Code relayed your answer. Confirm it." },
+    ],
+    [
+      "withdrawn with its reason",
+      { closed: { reason: "withdrawn", note: "you answered it in the brief" } },
+      { tone: "textMuted", label: "Withdrawn · you answered it in the brief" },
+    ],
+    [
+      "withdrawn, no reason",
+      { closed: { reason: "withdrawn" } },
+      { tone: "textMuted", label: "Withdrawn" },
+    ],
+    [
+      "closed by the session's end",
+      { closed: { reason: "session_ended" } },
+      { tone: "textMuted", label: "Closed · the session ended" },
+    ],
+  ] as const)("%s", (_n, input, want) => {
+    expect(answerProvenanceMark(input, { agent: "Claude Code" })).toEqual(want);
+  });
+
+  it("never prints a blank agent name, and no visible em dash", () => {
+    const mark = answerProvenanceMark({ answer: { via: "relayed" } });
+    expect(mark?.label).toBe("Answered in chat · relayed by an agent");
+    expect(
+      answerProvenanceMark({ pendingRelay: { relayedBy: "a" } }, { agent: " " })
+        ?.label
+    ).toBe("An agent relayed your answer. Confirm it.");
+    for (const v of Object.values(ASK_COPY)) {
+      const text = typeof v === "function" ? (v as (a: string) => string)("x") : v;
+      expect(text).not.toContain("—");
+    }
   });
 });

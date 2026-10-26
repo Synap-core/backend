@@ -13,6 +13,7 @@ describe("resolveRetiredReasonLabel", () => {
       "Decided elsewhere"
     );
     expect(resolveRetiredReasonLabel("withdrawn")).toBe("Withdrawn");
+    expect(resolveRetiredReasonLabel("session_ended")).toBe("Session ended");
   });
 
   it("humanizes an unknown value instead of leaking it, and blanks absence", () => {

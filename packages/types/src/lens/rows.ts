@@ -37,6 +37,7 @@ import {
 import type { NeedsYouFacts } from "../units/needs-you.js";
 import type { SessionLiveFacts } from "../run-activity/live.js";
 import { isTerminalSessionStatus } from "../focus-sessions/statuses.js";
+import type { ProposalFate } from "../proposals/fate.js";
 import {
   humanizeToken,
   normalizeObjectKind,
@@ -311,6 +312,38 @@ export function lensRowExpiry(
     urgent: left <= LENS_EXPIRY_URGENT_MS,
     expired: false,
   };
+}
+
+/**
+ * A pending proposal's fate on silence as ONE sentence (`proposalFate`,
+ * `../proposals/fate.ts`) — the "If you ignore it" line every surface draws.
+ * An expiry reads exactly as the row's age slot does ({@link lensRowExpiry}),
+ * so the two can never show different countdowns. Copy, not vocabulary: no
+ * fate kind is a stored value.
+ */
+export function proposalFateLine(
+  fate: ProposalFate,
+  now: number = Date.now()
+): string {
+  switch (fate.kind) {
+    case "expires": {
+      const expiry = lensRowExpiry({ expiresAt: fate.expiresAt }, now);
+      if (!expiry) return "Stays until you decide";
+      return fate.orSessionEnd && !expiry.expired
+        ? `${expiry.label}, or when the session ends`
+        : expiry.label;
+    }
+    case "dies_with_session":
+      return "Dropped when the session ends";
+    case "until_decided":
+      return "Stays until you decide";
+    case "review_later": {
+      const d = new Date(fate.since);
+      return Number.isNaN(d.getTime())
+        ? "In Review later"
+        : `In Review later since ${d.toLocaleDateString(undefined, { day: "numeric", month: "short" })}`;
+    }
+  }
 }
 
 /**

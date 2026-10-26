@@ -1031,7 +1031,11 @@ export interface FocusSessionExpectedOutput {
    */
   retiredAt?: string;
   /** Mirrored from `OUTPUT_RETIRED_REASONS` (@synap/playbooks). */
-  retiredReason?: "session_cancelled" | "decision_resolved" | "withdrawn";
+  retiredReason?:
+    | "session_cancelled"
+    | "decision_resolved"
+    | "withdrawn"
+    | "session_ended";
   /**
    * WHERE to go for this deliverable — an in-pod object or an external link.
    * ONE union, two arms; nothing else (free text is `why`).
@@ -1082,6 +1086,18 @@ export interface FocusSessionExpectedOutput {
    * `answer` without it = answered, still waiting for the agent.
    */
   answerPickedUpAt?: string;
+  /**
+   * A relayed answer to a `commitment` ask, waiting for the person's tap
+   * (pod-stamped; the slot stays owed while it is here).
+   */
+  pendingRelay?: {
+    text: string;
+    value?: HubSlotAnswerValue;
+    relayedBy: string;
+    relaySurface?: string;
+    quote?: string;
+    relayedAt: string;
+  };
   /** Prior answers, oldest first (pod-stamped; a re-ask archives, never drops). */
   answerHistory?: HubSlotAnswer[];
   /**
@@ -1144,6 +1160,12 @@ export type HubSlotAsk = (
    * through the access floor, on the owed-slot read).
    */
   lookedAt?: HubSlotAskLookedAt[];
+  /**
+   * What answering commits the person to. `commitment` (deploy, spend,
+   * publish, delete) makes a relayed answer wait for their tap. Absent =
+   * `routine`; the pod can only raise it.
+   */
+  stakes?: "routine" | "commitment";
 };
 
 /** One object an ask cites as read. Mirrors `AskLookedAtRef` (@synap-core/types/ask). */
@@ -1208,6 +1230,16 @@ export interface HubSlotAnswer {
     followedRecommendation: boolean | null;
     lookedAt?: Array<{ kind: string; id: string }>;
   };
+  /** `tap` (absent on older answers) or `relayed` by an agent from a chat. */
+  via?: "tap" | "relayed";
+  /** The relaying agent's user id. */
+  relayedBy?: string;
+  /** Where the words were said (`claude-code`). */
+  relaySurface?: string;
+  /** The person's own words, verbatim. */
+  quote?: string;
+  /** The person confirmed a relayed answer. */
+  confirmedAt?: string;
 }
 
 /**

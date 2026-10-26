@@ -30,19 +30,25 @@ import { sessionCriteriaSchema } from "../../schemas/session-criteria.js";
 import { isHttpUrl } from "@synap/shared-utils";
 import {
   ASK_LOOKED_AT_KINDS,
+  AnswerProvenanceSchema,
   AskAnswerValueSchema,
   AskSchema,
   AskSnapshotSchema,
+  PendingRelayedAnswerSchema,
+  type AnswerProvenance,
   type Ask,
   type AskAnswerValue,
   type AskSnapshot,
+  type PendingRelayedAnswer,
 } from "@synap-core/types/ask";
 import type {
   OutputRefKind,
+  SlotAnswerProvenance,
   SlotAnswerValue,
   SlotAsk,
   SlotAskLookedAtKind,
   SlotAskSnapshot,
+  SlotPendingRelay,
 } from "@synap/playbooks";
 import { normalizeExpectedLabel } from "./satisfy-expected-output.js";
 import { carrySlotKeys, declaredSlotKey, deriveSlotKeys } from "./slot-keys.js";
@@ -376,6 +382,10 @@ const slotAnswerWireSchema = z.object({
   value: AskAnswerValueSchema.optional(),
   // The ask as posed, frozen at answer time. Round-trip only.
   askSnapshot: AskSnapshotSchema.optional(),
+  // Where the answer came from (tap / relayed). Round-trip only, and DECLARED
+  // here so an echo keeps it: an undeclared nested key is stripped at the
+  // parse, and the stripped echo then reads as a forged answer.
+  ...AnswerProvenanceSchema.shape,
 });
 
 export const expectedOutputWireSchema = z.object({
@@ -453,6 +463,9 @@ export const expectedOutputWireSchema = z.object({
   // The agent's pick-up receipt — stamped by `answer-pickup.ts` only. On the
   // wire for the same round-trip reason as `answer`.
   answerPickedUpAt: z.string().optional(),
+  // A commitment's relayed answer awaiting the person's tap — stamped by the
+  // relay door only. On the wire for the same round-trip reason as `answer`.
+  pendingRelay: PendingRelayedAnswerSchema.optional(),
   // HOW the person can answer — AGENT-declared, never stamped. Parsed with the
   // ONE ask schema (`@synap-core/types/ask`): closed modes, ≤8 options with ≤1
   // recommended, flat forms with AI-authored credential fields dropped, http(s)
@@ -488,6 +501,11 @@ type _Mutual<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
 const _askParity: _Mutual<SlotAsk, Ask> = true;
 const _answerValueParity: _Mutual<SlotAnswerValue, AskAnswerValue> = true;
 const _askSnapshotParity: _Mutual<SlotAskSnapshot, AskSnapshot> = true;
+const _provenanceParity: _Mutual<SlotAnswerProvenance, AnswerProvenance> = true;
+const _pendingRelayParity: _Mutual<SlotPendingRelay, PendingRelayedAnswer> =
+  true;
+void _provenanceParity;
+void _pendingRelayParity;
 void _askParity;
 void _answerValueParity;
 void _askSnapshotParity;
@@ -628,6 +646,10 @@ export const SERVER_STAMPED_OUTPUT_FIELDS = [
   // The decision entity the answer files into. An agent that could author it
   // would make the person's next answer overwrite a decision it names.
   "decisionId",
+  // A commitment's relayed answer awaiting the person's tap (the relay door).
+  // An agent that could author it would put words in the person's mouth and
+  // pre-fill the one-tap confirm of a deploy with them.
+  "pendingRelay",
   // The output → subject edge receipt (`satisfy-expected-output.ts`). An agent
   // that could author it would claim a link nobody wrote.
   "subjectEdge",

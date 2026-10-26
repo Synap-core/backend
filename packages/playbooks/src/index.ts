@@ -283,6 +283,11 @@ export const OUTPUT_RETIRED_REASONS = [
   // `synap_update_session`) — the one removal verb, since an agent's
   // `expectedOutputs` list only adds and updates (api `update-session.ts`).
   "withdrawn",
+  // The session ENDED with an agent-need ask (`confirm` / `choose`) still
+  // owed: the agent's question is moot once its session is gone. A person's
+  // deliverable (`act` / `provide` / `form`) stays owed instead — Resolve-XP
+  // founder default 3 (2026-10-26), stamped by the close door (W2).
+  "session_ended",
 ] as const;
 
 export type OutputRetiredReason = (typeof OUTPUT_RETIRED_REASONS)[number];
@@ -598,6 +603,13 @@ export interface ExpectedOutput {
    */
   answerPickedUpAt?: string;
   /**
+   * A relayed answer to a `commitment` ask, waiting for the person's tap — see
+   * {@link SlotPendingRelay}. SERVER-STAMPED by the relay door only (W1); the
+   * slot stays owed (`owner: 'human'`) while it is here, and the person's
+   * Confirm / "Not what I said" clears it.
+   */
+  pendingRelay?: SlotPendingRelay;
+  /**
    * HOW the person can answer this slot — see {@link SlotAsk}. DECLARED by the
    * agent (with `owner: 'human'` + `blockedReason` + `why`), never stamped:
    * `blockedReason` says WHY it is blocked, `why`/`ref` WHAT and WHERE, and
@@ -711,6 +723,13 @@ export type SlotAsk = (
   | { mode: "provide"; provide: SlotAskProvide }
 ) & {
   /**
+   * What answering COMMITS the person to — mirrors `AskStakes`
+   * (`@synap-core/types/ask`). Absent reads `routine`. The pod only ever
+   * RAISES it (`effectiveAskStakes`): a relayed answer to a `commitment`
+   * waits for the person's tap.
+   */
+  stakes?: SlotAskStakes;
+  /**
    * "What I looked at" (trust ladder rung 1, a PREPARED question): at most 8
    * objects the agent read before asking. Stored as `{kind, id}` — the agent's
    * own `title` is stripped at the parse — and floored at the declaring door
@@ -719,6 +738,9 @@ export type SlotAsk = (
    */
   lookedAt?: SlotAskLookedAt[];
 };
+
+/** Mirrors `ASK_STAKES` (@synap-core/types/ask). */
+export type SlotAskStakes = "routine" | "commitment";
 
 /** One object an ask cites as read. Mirrors `AskLookedAtRef` (@synap-core/types/ask). */
 export interface SlotAskLookedAt {
@@ -789,10 +811,44 @@ export type SlotAnswerValue =
   | { type: "provide"; ref: SlotProvideRef };
 
 /**
- * A person's answer to an agent's question about one slot. Server-stamped as a
- * unit; never authored by a client (it sits in `SERVER_STAMPED_OUTPUT_FIELDS`).
+ * WHERE an answer came from — STRUCTURAL MIRROR of `AnswerProvenance`
+ * (`@synap-core/types/ask`), pinned mutually assignable in api
+ * `update-session.ts`. All absent = a tap recorded before relays existed;
+ * `answerVia` there reads it.
  */
-export interface SlotAnswer {
+export interface SlotAnswerProvenance {
+  /** `tap` = the person answered in the pod; `relayed` = an agent carried their chat words. */
+  via?: "tap" | "relayed";
+  /** The relaying agent's user id. */
+  relayedBy?: string;
+  /** Where the words were said (`claude-code`). */
+  relaySurface?: string;
+  /** The person's own words, verbatim. */
+  quote?: string;
+  /** The person confirmed a relayed answer (set with `via: 'tap'` only). */
+  confirmedAt?: string;
+}
+
+/**
+ * A relayed answer to a `commitment` ask, held until the person taps — mirror
+ * of `PendingRelayedAnswer` (`@synap-core/types/ask`), which says why it sits
+ * beside `answer` rather than on it.
+ */
+export interface SlotPendingRelay {
+  text: string;
+  value?: SlotAnswerValue;
+  relayedBy: string;
+  relaySurface?: string;
+  quote?: string;
+  relayedAt: string;
+}
+
+/**
+ * A person's answer to an agent's question about one slot. Server-stamped as a
+ * unit; never authored by a client (it sits in `SERVER_STAMPED_OUTPUT_FIELDS`)
+ * — its provenance fields included.
+ */
+export interface SlotAnswer extends SlotAnswerProvenance {
   /** What the person said. */
   text: string;
   /**

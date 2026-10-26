@@ -14,13 +14,16 @@
  */
 
 import { isHttpUrl } from "../navigation/index.js";
+import type { UnitTone } from "../units/state.js";
 import {
   ASK_CHANGED_PREFIX,
   askAnswersInline,
   askOptionKey,
   askRefusalIsStale,
+  questionDisposition,
   resolveAskResolution,
   type Ask,
+  type QuestionDispositionInput,
   type AskOption,
   type AskProvideKind,
   type AskSnapshot,
@@ -130,6 +133,25 @@ export const ASK_COPY = {
    */
   draftStarted: (agent: string | null, work: string): string =>
     `${agent?.trim() || "An agent"} started ${work}`,
+  /**
+   * The answer marks ({@link answerProvenanceMark}). `agent` is the relaying
+   * agent's display name; null when the pod cannot name it.
+   */
+  answeredByYou: "You answered",
+  relayedBy: (agent: string | null): string =>
+    `Answered in chat · relayed by ${agent?.trim() || "an agent"}`,
+  /** A relay the person then confirmed with their own tap. */
+  relayConfirmed: (agent: string | null): string =>
+    `You confirmed what ${agent?.trim() || "an agent"} relayed`,
+  /** A commitment's relay, waiting for the person's tap. */
+  awaitingYourTap: (agent: string | null): string =>
+    `${agent?.trim() || "An agent"} relayed your answer. Confirm it.`,
+  confirmRelayed: "Confirm",
+  notWhatISaid: "Not what I said",
+  /** `note` is the agent's one-line reason, when it gave one. */
+  withdrawn: (note: string | null | undefined): string =>
+    note?.trim() ? `Withdrawn · ${note.trim()}` : "Withdrawn",
+  closedSessionEnded: "Closed · the session ended",
 } as const;
 
 // ─── Where the slot stands ──────────────────────────────────────────────────
@@ -359,4 +381,46 @@ export function askRecommendationOutcome(
     (o) => askOptionKey(o) === snap.recommendedKey
   );
   return { outcome: "overrode", recommendedLabel: rec?.label ?? null };
+}
+
+// ─── Where an answer came from ──────────────────────────────────────────────
+
+/** The mark a question row or receipt draws: ONE tone + ONE label. */
+export interface AnswerProvenanceMark {
+  tone: UnitTone;
+  label: string;
+}
+
+/**
+ * The mark for a question's state ({@link questionDisposition}), for every
+ * surface (relay, browser, pod-admin). `null` while the question is open:
+ * an open question draws its ask, not a mark.
+ *
+ * A relayed answer always SAYS it was relayed, even once confirmed: the
+ * founder's trust rule for relays is that the mark is always visible.
+ */
+export function answerProvenanceMark(
+  input: QuestionDispositionInput,
+  opts: { agent?: string | null } = {}
+): AnswerProvenanceMark | null {
+  const agent = opts.agent ?? null;
+  switch (questionDisposition(input)) {
+    case "open":
+      return null;
+    case "answered":
+      return input.answer?.confirmedAt && input.answer.relayedBy
+        ? { tone: "success", label: ASK_COPY.relayConfirmed(agent) }
+        : { tone: "success", label: ASK_COPY.answeredByYou };
+    case "relayed":
+      return { tone: "ai", label: ASK_COPY.relayedBy(agent) };
+    case "awaiting_your_tap":
+      return { tone: "warning", label: ASK_COPY.awaitingYourTap(agent) };
+    case "withdrawn":
+      return {
+        tone: "textMuted",
+        label: ASK_COPY.withdrawn(input.closed?.note),
+      };
+    case "closed_session_ended":
+      return { tone: "textMuted", label: ASK_COPY.closedSessionEnded };
+  }
 }
