@@ -55,6 +55,6 @@ The governed write-back. Returns `{ status, proposalId, proposedEntityId, messag
 
 ## Before the first run
 
-1. The skill is born unapproved: the user approves the `skill/create` proposal.
-2. `synap_list_capabilities` shows a verb whose skill is still off as `blocked: "not_enabled"` with an `enable.url`: hand that link to the user instead of running it.
+1. The skill is born unapproved: the user approves the `skill/create` proposal. That one approval also turns it on: there is no separate enable step.
+2. It can still be off: when the person who approved may not turn verbs on (the approval result says so in `refusals`), or after its code changed (an edit turns it off until approved again). `synap_list_capabilities` then shows it as `blocked: "not_enabled"` with an `enable.url`: hand that link to the user instead of running it.
 3. `console.log` goes to the pod log, not to your result: return what you need to see.

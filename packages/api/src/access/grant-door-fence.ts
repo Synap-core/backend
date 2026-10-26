@@ -39,12 +39,26 @@ import {
 export type FencedReadDoor =
   | { readonly bound: "seamed" }
   | { readonly bound: "reads"; readonly subjects: readonly string[] }
+  | { readonly bound: "person"; readonly subject: string }
   | { readonly bound: "refused"; readonly reason: string };
 
 const SEAMED: FencedReadDoor = { bound: "seamed" };
 const READS = (...subjects: string[]): FencedReadDoor => ({
   bound: "reads",
   subjects,
+});
+/**
+ * A door that reads the PERSON's own account-level rows, which no space,
+ * project or object holds (which accounts are connected) — so no pin can
+ * narrow it, and `READS` (which a pinned key never passes) would refuse every
+ * app, whose grant is always pinned to spaces. Bounded when one live scope's
+ * permissions grant `<subject>.read`, whatever that scope is pinned to: an app
+ * asks for it and the person ticks it like any permission (founder decision
+ * 3, 2026-10-26). A deny-all scope grants nothing.
+ */
+const PERSON = (subject: string): FencedReadDoor => ({
+  bound: "person",
+  subject,
 });
 const REFUSED = (reason: string): FencedReadDoor => ({
   bound: "refused",
@@ -68,6 +82,12 @@ export function grantBoundsDoor(
 ): boolean {
   if (!door || door.bound === "refused") return false;
   if (door.bound === "seamed") return true;
+  if (door.bound === "person")
+    return grant.scopes.some((scope) =>
+      scope.permissions.some((p) =>
+        patternMatches(p, { subject: door.subject, action: "read" })
+      )
+    );
   // A deny-all scope (`permissions: []`) reads nothing — `every` over a door
   // that declares no subject would otherwise let it through.
   return grant.scopes.some(
@@ -166,6 +186,11 @@ const SESSION_ID = "[0-9a-fA-F-]{36}";
 export const GRANT_REST_GET_READS: ReadonlyArray<
   readonly [RegExp, FencedReadDoor]
 > = [
+  // Which messaging accounts the person connected (provider, name, status;
+  // never a credential — messaging.accounts-read.pglite.test.ts pins the key
+  // set). `messaging` is the subject `messaging_accounts` already reads under
+  // (grant-read.ts); the send through one is `messaging.send`.
+  [/^\/messaging\/accounts\/?$/, PERSON("messaging")],
   // The session row + the continuation packet (continuation-packet.ts:
   // proposals, links, sessions, projects, room messages, playbook runs) + the
   // outcomes (session-outputs.ts: artifacts, links, proposals, entities,
@@ -412,6 +437,17 @@ export const GRANT_OWNER_WIDE_REST_DOORS: readonly RegExp[] = [
  *  - `DELETE /connectors/connections/:id`, `POST /connectors/disconnect`:
  *    revokes the account at the provider and detaches it from every
  *    capability (`detachNangoConnectionRegistry`).
+ *  - `POST /connectors/connect`, `POST /connectors/session` (2026-10-26, task
+ *    d890410b): start an OAuth session that connects an account to the
+ *    PERSON, usable in every space; `onBehalfOfUserId` binds it to another
+ *    member.
+ *  - `DELETE /messaging/accounts/:id` (disconnects the person's messaging
+ *    account at the provider), `POST /messaging/accounts/sync` (rewrites the
+ *    person's account mirror, registers provider webhooks), `POST
+ *    /messaging/service-config[/migrate]` (replaces the pod's messaging
+ *    connector credentials). The send through an account is NOT here: it
+ *    checks `messaging.send` in the conversation's space
+ *    (`sendExternalMessage`).
  *  - `/memory` writes (`POST /memory`, `/memory/turns|sessions|writes`,
  *    `DELETE /memory/:id`; S5 2026-10-20): `knowledge_facts` about the
  *    person, recalled in EVERY workspace, written directly — no grant narrows
@@ -431,6 +467,9 @@ export const GRANT_OWNER_WIDE_REST_WRITES: readonly RegExp[] = [
   /^\/vault\/secrets\/[^/]+\/?$/,
   /^\/connectors\/connections\/[^/]+\/?$/,
   /^\/connectors\/disconnect\/?$/,
+  /^\/connectors\/(?:connect|session)\/?$/,
+  /^\/messaging\/accounts\/[^/]+\/?$/,
+  /^\/messaging\/service-config(?:\/migrate)?\/?$/,
   /^\/memory(?:\/(?!search\/?$)[^/]+)?\/?$/,
   /^\/knowledge\/(?!(?:search|ask|answer)\/?$)[^/]+\/?$/,
 ];

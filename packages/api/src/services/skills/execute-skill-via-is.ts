@@ -22,12 +22,43 @@ import { getDefaultActiveService } from "../../utils/intelligence-routing.js";
 import { isCallBudgetMs } from "@synap/intelligence-client";
 import { isDelegationHeaders } from "@synap/database";
 
+/**
+ * A side effect a skill WOULD have performed live. A dry-run records it
+ * host-side instead of performing it, so a caller can preview the skill's
+ * writes and sends before approving it. Mirrors the Intelligence Hub type.
+ */
+export type RecordedEffect =
+  | {
+      kind: "propose.entity";
+      profileSlug: string;
+      title: string;
+      properties?: Record<string, unknown>;
+      content?: string;
+    }
+  | {
+      kind: "callProvider";
+      provider: string;
+      method: string;
+      path: string;
+      body?: unknown;
+      baseUrlOverride?: string;
+    }
+  | {
+      kind: "fetch";
+      url: string;
+      method: string;
+    };
+
 /** Mirrors the Intelligence Hub `SkillExecutionResult`. */
 export interface SkillExecutionResult {
   success: boolean;
   result?: unknown;
   error?: string;
   executionTimeMs?: number;
+  /** The skill-runtime stdlib version the isolate booted with (`skill-stdlib.ts`). Set on success. */
+  runtimeVersion?: number;
+  /** Dry-run only: the side effects the skill intended, none of them performed. */
+  dryRunEffects?: RecordedEffect[];
   /**
    * P1: when the skill failed BECAUSE an in-skill `callProvider` hit a classified
    * provider failure (e.g. a 401 → `auth`), these ride the envelope so the
