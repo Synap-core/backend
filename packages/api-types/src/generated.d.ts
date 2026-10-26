@@ -40327,7 +40327,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					identity?: ProposalExecutorResult["identity"];
 					opRef?: string;
 					proposalId: string;
-					reasonCode?: "ENTITY_WEAK_DEDUP";
+					reasonCode?: "ENTITY_WEAK_DEDUP" | "REVIEW_ON_ITS_PAGE";
 					refusals?: ProposalExecutorResult["refusals"];
 					relationsFailed?: ProposalExecutorResult["relationsFailed"];
 					success: boolean;
