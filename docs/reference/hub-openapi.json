@@ -26708,7 +26708,8 @@
                             "session_cancelled",
                             "decision_resolved",
                             "withdrawn",
-                            "session_ended"
+                            "session_ended",
+                            "not_asked"
                           ]
                         },
                         "ref": {
@@ -28603,7 +28604,8 @@
                             "session_cancelled",
                             "decision_resolved",
                             "withdrawn",
-                            "session_ended"
+                            "session_ended",
+                            "not_asked"
                           ]
                         },
                         "ref": {
@@ -30204,7 +30206,7 @@
       "post": {
         "tags": ["FocusSessions"],
         "summary": "Hand a declared deliverable to the human",
-        "description": "Stamps `owner: 'human'` + `blockedReason` + `why` + `owedSince` on the named slot. The slot stays `pending` — declaring that you cannot do the work is the opposite of having done it. When a standing guideline covers this kind of block, `blockGuidelines` carries its text.",
+        "description": "Stamps `owner: 'human'` + `blockedReason` + `why` + `owedSince` on the named slot. The slot stays `pending` — declaring that you cannot do the work is the opposite of having done it. When a standing guideline covers this kind of block, `blockGuidelines` carries its text. A confirm prompt that only repeats the label comes back as a `hint`.",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -30637,7 +30639,8 @@
                     "ok": { "type": "boolean" },
                     "expectedLabel": { "type": "string" },
                     "kind": { "type": "string" },
-                    "blockGuidelines": {}
+                    "blockGuidelines": {},
+                    "hint": { "type": "string" }
                   },
                   "required": ["ok", "expectedLabel", "kind"]
                 }

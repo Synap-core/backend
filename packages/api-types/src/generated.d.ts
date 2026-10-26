@@ -10243,7 +10243,8 @@ declare const OUTPUT_RETIRED_REASONS: readonly [
 	"session_cancelled",
 	"decision_resolved",
 	"withdrawn",
-	"session_ended"
+	"session_ended",
+	"not_asked"
 ];
 export type OutputRetiredReason = (typeof OUTPUT_RETIRED_REASONS)[number];
 declare const OUTPUT_REF_KINDS: readonly [
@@ -11062,9 +11063,11 @@ export interface PostChannelMessageResult {
 	 * `failed`). A slot the session does not declare, or a room with no
 	 * session, is REFUSED before posting (`checkRoomQuestionSlot`), so
 	 * `unknown_label` / `no_session` only reach here on a race. Absent for
-	 * every other post.
+	 * every other post. `hint` when the ask's prompt only repeats the slot's
+	 * label (`ask-text.ts`): filed anyway, said back.
 	 */
 	slot?: {
+		hint?: string;
 		status: string;
 	};
 }
@@ -31105,7 +31108,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					} | null | undefined;
 					relationToSubject?: string | undefined;
 					retiredAt?: string | undefined;
-					retiredReason?: "decision_resolved" | "session_cancelled" | "session_ended" | "withdrawn" | undefined;
+					retiredReason?: "decision_resolved" | "not_asked" | "session_cancelled" | "session_ended" | "withdrawn" | undefined;
 					returnedAt?: string | undefined;
 					returnedReason?: string | undefined;
 					satisfiedByEvidence?: {
@@ -32103,7 +32106,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					} | null | undefined;
 					relationToSubject?: string | undefined;
 					retiredAt?: string | undefined;
-					retiredReason?: "decision_resolved" | "session_cancelled" | "session_ended" | "withdrawn" | undefined;
+					retiredReason?: "decision_resolved" | "not_asked" | "session_cancelled" | "session_ended" | "withdrawn" | undefined;
 					returnedAt?: string | undefined;
 					returnedReason?: string | undefined;
 					satisfiedByEvidence?: {
