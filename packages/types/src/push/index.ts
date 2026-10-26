@@ -191,12 +191,26 @@ export const PUSH_TYPE_RULES: Readonly<Record<string, PushTypeRule>> = {
   // that ask's only push (design-relay §5.2 wants it folded into the ask; until
   // the producer does that, dropping it would leave the escalation silent).
   "session.criterion_escalated": "blocking-ask",
+  // A goal's loop stopped on a criterion that failed twice (W4): it proposes
+  // nothing more until its owner answers.
+  "track.loop_stopped": "blocking-ask",
   "proposal.created": "blocking-proposal",
   "ai_request.vault_access": "decision-blocking",
   "ai_request.terminal_exec": "decision-blocking",
+  // A goal is in review: every required criterion is claimed and the work
+  // waits on its judge's verdict (W5, 2026-10-23).
+  "track.review_ready": "decision-blocking",
+  // One claimed criterion waits on the goal's judge (in-app only).
+  "track.criterion_claimed": "decision-blocking",
+  // An agent proposed to end a goal; only its judge's (or owner's) approval
+  // applies (code-core F12).
+  "track.close_proposed": "decision-blocking",
   // Something you own broke; the fix needs you.
   "agent.task_failed": "work-broke",
   "session.closed.criteria_unmet": "work-broke",
+  // A delegate said part of your goal cannot be done and nobody acknowledged
+  // it for 48 h (R10, W3): the goal's plan broke and waits on the owner.
+  "track.report_unacknowledged": "work-broke",
   "connector.auth.expired": "work-broke",
   // A person addressed you by name.
   "chat.mention": "mention",

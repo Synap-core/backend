@@ -339,7 +339,6 @@ async function runMigrations() {
     // node_modules package, ../../migrations resolves into the package bundle
     // inside node_modules, not the Dockerfile-copied directory we want.
     const candidates = [
-      "/app/migrations", // Dockerfile.api (WORKDIR /app)
       "/app/api/migrations", // deploy/Dockerfile (api sub-dir layout)
       path.join(process.cwd(), "migrations"), // CWD fallback (dev)
       path.join(__dirname, "../../migrations"), // Last resort: src/scripts/ or dist/scripts/

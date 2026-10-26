@@ -45,6 +45,28 @@ export function isTerminalSessionStatus(
 }
 
 /**
+ * A CLOSED RUN STAYS CLOSED (work model R8). A session that ended — closed,
+ * cancelled or failed — never moves back to an open status through an update
+ * door: more work is a NEW run (rerun, or start a session). Every door that
+ * writes `status` asks this one function: tRPC `focusSessions.update`, the
+ * MCP/Hub service `updateFocusSession`, Hub REST `PATCH /focus-sessions/:id`
+ * and the `focus_session/update` approval replay. `null` = allowed.
+ *
+ * Narrow on purpose: a terminal → terminal relabel (closed → cancelled) is not
+ * a reopening and is not refused here.
+ */
+export function closedRunRefusal(
+  from: string | null | undefined,
+  to: string | null | undefined
+): string | null {
+  if (to == null || from === to) return null;
+  if (!isTerminalSessionStatus(from) || isTerminalSessionStatus(to)) {
+    return null;
+  }
+  return `This run is ${from} — a closed run stays closed. Start a new run to keep working.`;
+}
+
+/**
  * Suspended statuses — resumable, and not moving: `paused` by a person, or
  * `stale` (the reaper found the session quiet). NOT terminal: either can pick
  * up again. THE ONE READING of `stale` for a person-facing state filter —
