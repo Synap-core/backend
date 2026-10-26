@@ -576,7 +576,7 @@ export function segmentPassages(markdown: string): Passage[] {
     const prev = merged[merged.length - 1];
     if (
       prev &&
-      (length(piece) < PASSAGE_MIN_CHARS || length(prev) < PASSAGE_MIN_CHARS) &&
+      (length(piece) < 0 || length(prev) < 0) &&
       length(prev) + 2 + length(piece) <= PASSAGE_MAX_CHARS
     ) {
       prev.end = piece.end;

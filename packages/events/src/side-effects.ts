@@ -332,7 +332,7 @@ const documentPassagesReactor: Reactor = {
   match: (payload) =>
     config.server.vectorSearchEnabled &&
     payload.subjectType === "document" &&
-    (payload.action === "create" || payload.action === "update"),
+    payload.action === "create",
   async handler(payload, { boss }) {
     await enqueueDocumentPassages({ documentId: payload.subjectId }, boss);
   },
