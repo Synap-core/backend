@@ -53,6 +53,7 @@ const compile = (sql: SQL) => dialect.sqlToQuery(sql);
 const here = dirname(fileURLToPath(import.meta.url));
 const servicePath = join(here, "proposals-service.ts");
 const discoverPath = join(here, "../discover/discover.ts");
+const pendingReviewPath = join(here, "../discover/pending-review.ts");
 
 // Two distinct humans on the same pod.
 const ME = "user-me";
@@ -149,7 +150,12 @@ describe("listCreatedProposals wiring", () => {
 
 describe("orient pendingReview aggregate matches the list population", () => {
   it("counts over the same author floor (count and oldestDays agree)", () => {
-    const src = readFileSync(discoverPath, "utf8");
+    // The aggregate lives in pending-review.ts (shared with ask's queue answer);
+    // orient reaches it through readPendingReviewState.
+    expect(readFileSync(discoverPath, "utf8")).toMatch(
+      /readPendingReviewState[\s\S]*from "\.\/pending-review\.js"/
+    );
+    const src = readFileSync(pendingReviewPath, "utf8");
     expect(src).toMatch(/ownAgentUserFilter\(proposals\.agentUserId, userId\)/);
     expect(src).toMatch(/ownAgentUserFilter\(proposals\.createdBy, userId\)/);
     // Both aggregates come from the SAME `.where(...)`, so widening one without

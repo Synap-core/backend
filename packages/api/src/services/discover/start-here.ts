@@ -17,6 +17,10 @@ import {
 } from "./profile-ranking.js";
 import type { StartHere } from "./discover.js";
 import { readLooseEnds } from "./loose-ends.js";
+import {
+  readPendingReviewState,
+  type PendingReviewState,
+} from "./pending-review.js";
 
 /**
  * The skill orient points at BEFORE a write: title rules and what counts as
@@ -31,15 +35,13 @@ export const OPEN_SESSIONS_READ_CAP = 10;
 /** Sessions handed to the calling agent, listed. */
 export const HANDED_TO_YOU_READ_CAP = 5;
 
-export type PendingReviewState =
-  | { status: "ok"; count: number; oldestDays: number; oldestId?: string }
-  | { status: "unavailable" };
+export type { PendingReviewState } from "./pending-review.js";
 
 const logger = createLogger({ module: "discover/start-here" });
 
 const UNAVAILABLE = { status: "unavailable" } as const;
 
-async function readOpenSessions(
+export async function readOpenSessions(
   userId: string
 ): Promise<StartHere["openSessions"]> {
   try {
@@ -134,7 +136,7 @@ async function readHandedToYou(
 }
 
 /** What the person owes; a failed read is `unavailable`, never "nothing". */
-async function readOwedByPerson(
+export async function readOwedByPerson(
   userId: string
 ): Promise<StartHere["owedByPerson"]> {
   try {
@@ -323,6 +325,42 @@ async function readLibrary(userId: string): Promise<StartHere["library"]> {
   }
 }
 
+/** The pending-review state as `startHere.pendingReview` words it. */
+export function foldPendingReview(
+  pending: PendingReviewState
+): StartHere["pendingReview"] {
+  if (pending.status === "unavailable") return UNAVAILABLE;
+  return pending.count > 0
+    ? {
+        count: pending.count,
+        oldestDays: pending.oldestDays,
+        ...(pending.oldestId ? { oldestLink: openLink(pending.oldestId) } : {}),
+        lens: "authored",
+      }
+    : { count: 0, lens: "authored" };
+}
+
+/**
+ * What is waiting on the person — the three `startHere` sections that answer
+ * "what is waiting on me", read through the SAME readers orient uses.
+ * `ask` calls this for a queue-type question; orient builds the same sections
+ * inside `buildStartHere`.
+ */
+export async function readWaitingOnPerson(
+  userId: string
+): Promise<Pick<StartHere, "pendingReview" | "owedByPerson" | "openSessions">> {
+  const [pending, owedByPerson, openSessions] = await Promise.all([
+    readPendingReviewState(userId),
+    readOwedByPerson(userId),
+    readOpenSessions(userId),
+  ]);
+  return {
+    pendingReview: foldPendingReview(pending),
+    owedByPerson,
+    openSessions,
+  };
+}
+
 export async function buildStartHere(p: {
   caller: HubProtocolCaller;
   userId: string;
@@ -359,19 +397,7 @@ export async function buildStartHere(p: {
       : Promise.resolve(undefined),
     readLibrary(p.userId),
   ]);
-  const pendingReview: StartHere["pendingReview"] =
-    p.pending.status === "unavailable"
-      ? UNAVAILABLE
-      : p.pending.count > 0
-        ? {
-            count: p.pending.count,
-            oldestDays: p.pending.oldestDays,
-            ...(p.pending.oldestId
-              ? { oldestLink: openLink(p.pending.oldestId) }
-              : {}),
-            lens: "authored",
-          }
-        : { count: 0, lens: "authored" };
+  const pendingReview = foldPendingReview(p.pending);
   // Key order is the briefing order — pending review first, then the blockers
   // the agent is about to walk into, then its own open work.
   return {
