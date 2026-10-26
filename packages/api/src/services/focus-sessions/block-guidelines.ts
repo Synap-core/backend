@@ -174,7 +174,7 @@ export async function guidanceForBlockedSlots(params: {
           .map((g) => g.text)
           .join(
             " / "
-          )}. If it tells you how to proceed, do so and reclaim the slot.`,
+          )}. If it tells you how to proceed, do so, then take the slot back with synap_relay_answer (disposition 'withdrawn', this slotLabel, a note naming the guideline).`,
       },
     ];
   });
