@@ -33,6 +33,50 @@ const M0317 = readFileSync(
   ),
   "utf8"
 );
+// The track lifecycle (open statuses, verdict columns + CHECK, the live-name
+// index for the new live set) — the REAL migration, on top of 0317.
+const M0344 = readFileSync(
+  fileURLToPath(
+    new URL(
+      "../../../../../database/migrations/0344_track_lifecycle_and_verdict.sql",
+      import.meta.url
+    )
+  ),
+  "utf8"
+);
+
+// What a goal holds (end state, criteria, drop conditions, kind, uncertainty)
+// — the REAL migration, on top of 0344.
+const M0345 = readFileSync(
+  fileURLToPath(
+    new URL(
+      "../../../../../database/migrations/0345_track_goal_content.sql",
+      import.meta.url
+    )
+  ),
+  "utf8"
+);
+// An operation ends retired (R6) — the verdict CHECK admits `retired`.
+const M0349 = readFileSync(
+  fileURLToPath(
+    new URL(
+      "../../../../../database/migrations/0349_track_verdict_retired.sql",
+      import.meta.url
+    )
+  ),
+  "utf8"
+);
+
+// The goal's loop (W4) — the REAL migration, on top of 0349.
+const M0350 = readFileSync(
+  fileURLToPath(
+    new URL(
+      "../../../../../database/migrations/0350_track_goal_loop.sql",
+      import.meta.url
+    )
+  ),
+  "utf8"
+);
 
 const h = vi.hoisted(() => ({
   client: null as null | {
@@ -129,6 +173,8 @@ import {
   automations,
   podMembers,
   projectMembers,
+  sessionEvaluations,
+  trackParticipants,
 } from "@synap/database";
 import {
   advanceTrackStage,
@@ -136,9 +182,15 @@ import {
   listTracks,
   setTrackStatus,
   startTrack,
+  reopenTrack,
+  resolveTrackFiling,
   countProjectsUsingMethods,
   applyTrackStageAdvance,
   toTrackView,
+  setTrackDirection,
+  acceptGoalCriterion,
+  applyTrackDirection,
+  loadTrackViews,
 } from "../tracks-service.js";
 import { getProjectPath } from "../../projects/project-path.js";
 import { proposalExecRegistry } from "../../../routers/proposals/execution-registry.js";
@@ -224,6 +276,9 @@ beforeAll(async () => {
     projects,
     podMembers,
     projectMembers,
+    sessionEvaluations,
+    // Who is on a goal (0348): `startTrack` seeds the owner row.
+    trackParticipants,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }
@@ -258,8 +313,17 @@ beforeAll(async () => {
     create schema pgboss;
     create table pgboss.job (id uuid primary key default gen_random_uuid(), name text, state text, data jsonb);
   `);
-  // The live-name unique index idempotency rides on — the REAL migration.
+  // The live-name unique index idempotency rides on — the REAL migrations.
   await h.client!.exec(M0317);
+  await h.client!.exec(M0344);
+  await h.client!.exec(M0345);
+  await h.client!.exec(M0349);
+  await h.client!.exec(M0350);
+  // The edge-uniqueness index the dependency door's insert conflicts on
+  // (`idx_links_unique_edge`) — a reopen writes `new --replaces--> old`.
+  await h.client!.exec(
+    `create unique index if not exists idx_links_unique_edge on links (from_type, from_id, to_type, to_id, link_type)`
+  );
 
   await q(
     `insert into projects (id, user_id, workspace_id, name, status) values
@@ -452,6 +516,63 @@ describe("synap_start_track — the caller's session reaches the gate", () => {
       sessionId: SESSION,
     });
   });
+
+  it("synap_reopen_track: the agent's reopen goes through the start door as a proposal naming the version it replaces", async () => {
+    // Its own project: the suites below count PROJECT's tracks.
+    const REOPEN_MCP = randomUUID();
+    await q(
+      `insert into projects (id, user_id, workspace_id, name, status) values ($1, $2, null, 'Reopen MCP', 'active')`,
+      [REOPEN_MCP, USER]
+    );
+    const started = await startTrack({
+      projectId: REOPEN_MCP,
+      name: "Reopened over MCP",
+      actor: human,
+    });
+    if (started.status === "proposed") throw new Error("unreachable");
+    await setTrackStatus({
+      trackId: started.track.id,
+      status: "completed",
+      verdict: "met",
+      actor: human,
+    });
+    h.permCalls.length = 0;
+    const ctx = {
+      toolName: "synap_reopen_track",
+      userId: USER,
+      apiKeyScopes: ["mcp.write"],
+      agentUserId: AGENT,
+      caller: undefined as never,
+      lensCaller: undefined as never,
+      workspaceAccessible: false,
+    };
+    const bad = await trackHandlers.synap_reopen_track!({
+      ...ctx,
+      args: { trackId: "not-a-uuid" },
+    });
+    expect(JSON.stringify(bad)).toContain("trackId (uuid) is required");
+    expect(h.permCalls).toHaveLength(0);
+
+    const res = await trackHandlers.synap_reopen_track!({
+      ...ctx,
+      args: { trackId: started.track.id, reasoning: "The launch slipped" },
+    });
+    expect(JSON.stringify(res)).toContain("proposed");
+    expect(h.permCalls).toHaveLength(1);
+    expect(h.permCalls[0]).toMatchObject({
+      subjectType: "track",
+      action: "create",
+      agentUserId: AGENT,
+      source: "mcp",
+      reasoning: "The launch slipped",
+      data: expect.objectContaining({
+        name: "Reopened over MCP",
+        replacesTrackId: started.track.id,
+      }),
+    });
+    // Nothing written: the closed track stays closed, no new version yet.
+    expect((await getTrack(started.track.id, human))!.status).toBe("completed");
+  });
 });
 
 describe("visibility — a track is exactly as visible as its project", () => {
@@ -498,7 +619,7 @@ describe("visibility — a track is exactly as visible as its project", () => {
   });
 });
 
-describe("startTrack with NO method — a lasting, stage-less track (W1)", () => {
+describe("startTrack with NO method — a stage-less track (W1)", () => {
   const LASTING = randomUUID();
   beforeAll(async () => {
     await q(
@@ -816,7 +937,12 @@ describe("advanceTrackStage — through the SHARED gate core", () => {
         [OTHER_PROJECT]
       )
     ).rows;
-    await setTrackStatus({ trackId: bm!.id, status: "archived", actor: human });
+    await setTrackStatus({
+      trackId: bm!.id,
+      status: "archived",
+      verdict: "no_longer_needed",
+      actor: human,
+    });
     await expect(
       setTrackStatus({ trackId: bm!.id, status: "active", actor: human })
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
@@ -843,8 +969,13 @@ describe("stale writes — the approval replay and a concurrent advance", () => 
     const data = h.permCalls.at(-1)!.data as Record<string, unknown>;
     expect(data).toMatchObject({ id: trackId, status: "paused" });
 
-    // …then a person archives the track before anyone reviews it.
-    await setTrackStatus({ trackId, status: "archived", actor: human });
+    // …then a person drops the track before anyone reviews it.
+    await setTrackStatus({
+      trackId,
+      status: "archived",
+      verdict: "no_longer_needed",
+      actor: human,
+    });
 
     const proposalId = randomUUID();
     await q(
@@ -1021,11 +1152,12 @@ describe("a live track's identity is its NAME (0317) — a method can run twice"
     expect(await liveCount()).toBe(2);
   });
 
-  it("a COMPLETED track holds no name: the same name starts anew", async () => {
+  it("a CLOSED track holds no name: the same name starts anew", async () => {
     const [first] = await trackRows(NAMED);
     const done = await setTrackStatus({
       trackId: first!.id,
       status: "completed",
+      verdict: "met",
       actor: human,
     });
     expect(done.status).toBe("updated");
@@ -1042,13 +1174,19 @@ describe("a live track's identity is its NAME (0317) — a method can run twice"
     expect(await liveCount()).toBe(2);
   });
 
-  it("reopening the completed track while its name is held is a CONFLICT, and moves nothing", async () => {
+  it("a closed track never reopens IN PLACE; reopening while an unrelated live track holds its name is a CONFLICT", async () => {
     const [first] = await trackRows(NAMED);
     expect(first!.status).toBe("completed");
+    // Inverted from the reopen-in-place rule: done is final for the status door.
     await expect(
       setTrackStatus({ trackId: first!.id, status: "active", actor: human })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    // The new-version door refuses to hand back a live goal it did not make.
+    await expect(
+      reopenTrack({ trackId: first!.id, actor: human })
     ).rejects.toMatchObject({ code: "CONFLICT" });
     expect((await trackRows(NAMED))[0]!.status).toBe("completed");
+    expect(await trackRows(NAMED)).toHaveLength(3);
   });
 
   it("ANOTHER method under a name a live track holds is refused, never handed back as `exists`", async () => {
@@ -1080,6 +1218,12 @@ describe("a live track's identity is its NAME (0317) — a method can run twice"
     );
     await h.client!.exec(M0317);
     await h.client!.exec(M0317);
+    // …and the lifecycle migration on top, as a pod runs them, re-runnable.
+    await h.client!.exec(M0344);
+    await h.client!.exec(M0344);
+    // 0344 re-adds ITS verdict CHECK; 0349 (run after it on every pod) is
+    // what admits `retired` — re-run it so later tests see the pod's CHECK.
+    await h.client!.exec(M0349);
     const names = (
       await q<{ name: string; status: string }>(
         `select name, status from project_tracks where project_id = $1 order by created_at`,
@@ -1097,5 +1241,942 @@ describe("a live track's identity is its NAME (0317) — a method can run twice"
         [DUP, USER]
       )
     ).rejects.toThrow(/uniq_project_tracks_live_name/);
+    // A goal still being shaped holds its name too (0344's live set).
+    await expect(
+      q(
+        `insert into project_tracks (project_id, user_id, name, status) values ($1, $2, 'plan', 'proposed')`,
+        [DUP, USER]
+      )
+    ).rejects.toThrow(/uniq_project_tracks_live_name/);
+  });
+});
+
+// ── D1 / R1 / R8 (work model, 2026-10-23): one lifecycle for goals ──────────
+
+describe("closing a goal — the verdict rule and the person's act", () => {
+  const GOALS = randomUUID();
+  beforeAll(async () => {
+    await q(
+      `insert into projects (id, user_id, workspace_id, name, status) values ($1, $2, null, 'Goals', 'active')`,
+      [GOALS, USER]
+    );
+  });
+  async function goal(name: string): Promise<string> {
+    const res = await startTrack({ projectId: GOALS, name, actor: human });
+    if (res.status === "proposed") throw new Error("unreachable");
+    return res.track.id;
+  }
+  async function row(id: string) {
+    return (
+      await q<{
+        status: string;
+        verdict: string | null;
+        verdict_reason: string | null;
+        verdict_by: string | null;
+      }>(
+        `select status, verdict, verdict_reason, verdict_by from project_tracks where id = $1`,
+        [id]
+      )
+    ).rows[0]!;
+  }
+
+  it("a close WITHOUT a verdict is refused before governance, and nothing moves", async () => {
+    const id = await goal("No verdict");
+    h.permCalls.length = 0;
+    for (const actor of [human, agent]) {
+      await expect(
+        setTrackStatus({ trackId: id, status: "completed", actor })
+      ).rejects.toMatchObject({
+        code: "BAD_REQUEST",
+        message: expect.stringMatching(/needs a verdict/),
+      });
+    }
+    // Refused before anything was filed for a person to approve.
+    expect(h.permCalls).toHaveLength(0);
+    expect((await row(id)).status).toBe("active");
+  });
+
+  it("a DONE close with a LOST verdict is refused; impossible needs its reason", async () => {
+    const id = await goal("Wrong ending");
+    await expect(
+      setTrackStatus({
+        trackId: id,
+        status: "completed",
+        verdict: "no_longer_needed",
+        actor: human,
+      })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    await expect(
+      setTrackStatus({
+        trackId: id,
+        status: "archived",
+        verdict: "impossible",
+        actor: human,
+      })
+    ).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: expect.stringMatching(/verdictReason/),
+    });
+    expect(await row(id)).toMatchObject({ status: "active", verdict: null });
+  });
+
+  it("BACK-COMPAT: a DROP without a verdict lands (shipped clients), stamping nothing; an agent's is still proposed", async () => {
+    const id = await goal("Old client drops");
+    // The browser Archive menu, the released CLI and the IS send no verdict.
+    const res = await setTrackStatus({
+      trackId: id,
+      status: "archived",
+      actor: human,
+    });
+    expect(res.status).toBe("updated");
+    // Reads exactly like a track dropped before 0344.
+    expect(await row(id)).toMatchObject({
+      status: "archived",
+      verdict: null,
+      verdict_reason: null,
+      verdict_by: null,
+    });
+    const viaAgent = await goal("Agent drops, no verdict");
+    const filed = await setTrackStatus({
+      trackId: viaAgent,
+      status: "archived",
+      actor: agent,
+    });
+    expect(filed.status).toBe("proposed");
+    expect(h.permCalls.at(-1)!.lifecycleMove).toEqual({
+      intoTerminal: true,
+      humanOnly: false,
+    });
+    expect(h.permCalls.at(-1)!.data).not.toHaveProperty("verdict");
+  });
+
+  it("a person's close lands with its verdict, reason and closer; the view projects them", async () => {
+    const id = await goal("Closed well");
+    const res = await setTrackStatus({
+      trackId: id,
+      status: "archived",
+      verdict: "replaced",
+      verdictReason: "  Folded into the Q4 launch goal ",
+      actor: human,
+    });
+    expect(res.status).toBe("updated");
+    expect(await row(id)).toMatchObject({
+      status: "archived",
+      verdict: "replaced",
+      verdict_reason: "Folded into the Q4 launch goal",
+      verdict_by: USER,
+    });
+    const view = toTrackView((await getTrack(id, human))!);
+    expect(view).toMatchObject({
+      verdict: "replaced",
+      verdictReason: "Folded into the Q4 launch goal",
+      verdictBy: USER,
+      verdictAt: expect.any(String),
+    });
+  });
+
+  it("an AGENT close reaches governance as a HUMAN-ONLY terminal move with its verdict; approval closes it as the approver", async () => {
+    const id = await goal("Agent says done");
+    const filed = await setTrackStatus({
+      trackId: id,
+      status: "completed",
+      verdict: "met",
+      actor: agent,
+    });
+    expect(filed.status).toBe("proposed");
+    const call = h.permCalls.at(-1)!;
+    // The SAME classification a kind's done move gets (`classifyLifecycleMove`):
+    // the floors above every rule read exactly this.
+    expect(call.lifecycleMove).toEqual({ intoTerminal: true, humanOnly: true });
+    expect(call.data).toMatchObject({
+      id,
+      status: "completed",
+      verdict: "met",
+    });
+    expect((await row(id)).status).toBe("active");
+
+    const data = call.data as Record<string, unknown>;
+    const proposalId = randomUUID();
+    await q(
+      `insert into proposals (id, status, target_type, target_id, proposal_type, data) values ($1, 'pending', 'track', $2, 'update', $3::jsonb)`,
+      [proposalId, id, JSON.stringify({ data })]
+    );
+    await proposalExecRegistry.resolveExact("track/update")!.execute({
+      proposal: {
+        id: proposalId,
+        targetType: "track",
+        targetId: id,
+        proposalType: "update",
+        workspaceId: null,
+        agentUserId: AGENT,
+        data: { data },
+      },
+      userId: USER,
+      input: { proposalId },
+      deps: {
+        reportProposalOutcome: () => {},
+        emitProposalReviewed: () => {},
+      },
+    } as unknown as ProposalExecutorArgs);
+    expect(await row(id)).toMatchObject({
+      status: "completed",
+      verdict: "met",
+      verdict_by: USER,
+    });
+  });
+
+  it("a drop is a terminal (lost) move, not human-only; a pause keeps today's classification", async () => {
+    const id = await goal("Agent drops");
+    await setTrackStatus({
+      trackId: id,
+      status: "archived",
+      verdict: "mistake",
+      actor: agent,
+    });
+    expect(h.permCalls.at(-1)!.lifecycleMove).toEqual({
+      intoTerminal: true,
+      humanOnly: false,
+    });
+    // An agent's drop is ALWAYS a proposal (F7): only the owner or judge may.
+    expect(h.permCalls.at(-1)!.forcePropose).toBe(true);
+    await setTrackStatus({ trackId: id, status: "paused", actor: agent });
+    expect(h.permCalls.at(-1)!.lifecycleMove).toBeUndefined();
+    expect(h.permCalls.at(-1)!.forcePropose).toBeUndefined();
+  });
+
+  it("F11 — agreeing is a person's act: an agent's move into agreed is human-only, a person's applies", async () => {
+    const id = await goal("Agree first");
+    await setTrackStatus({ trackId: id, status: "agreed", actor: agent });
+    expect(h.permCalls.at(-1)!.lifecycleMove).toEqual({
+      intoTerminal: false,
+      humanOnly: true,
+    });
+    expect(
+      (await setTrackStatus({ trackId: id, status: "agreed", actor: human }))
+        .status
+    ).toBe("updated");
+  });
+
+  it("the open statuses are reachable by explicit moves, and a shaped goal takes work; a closed one does not", async () => {
+    const id = await goal("Shaped first");
+    for (const status of ["proposed", "agreed", "ready", "active"] as const) {
+      expect(
+        (await setTrackStatus({ trackId: id, status, actor: human })).status
+      ).toBe("updated");
+    }
+    await setTrackStatus({ trackId: id, status: "agreed", actor: human });
+    await expect(
+      resolveTrackFiling({ trackId: id, actor: human })
+    ).resolves.toMatchObject({ trackId: id, projectId: GOALS });
+    await setTrackStatus({
+      trackId: id,
+      status: "completed",
+      verdict: "met",
+      actor: human,
+    });
+    await expect(
+      resolveTrackFiling({ trackId: id, actor: human })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+});
+
+describe("reopenTrack — a closed goal comes back as a NEW version (R8)", () => {
+  const REOPEN = randomUUID();
+  beforeAll(async () => {
+    await q(
+      `insert into projects (id, user_id, workspace_id, name, status) values ($1, $2, null, 'Reopen', 'active')`,
+      [REOPEN, USER]
+    );
+  });
+  async function replacesEdges(fromId: string) {
+    return (
+      await q<{ to_id: string }>(
+        `select to_id from links where from_type = 'track' and from_id = $1 and to_type = 'track' and link_type = 'replaces'`,
+        [fromId]
+      )
+    ).rows.map((r) => r.to_id);
+  }
+
+  it("creates a new active track, linked new --replaces--> old; the old one stays closed with its verdict", async () => {
+    const started = await startTrack({
+      projectId: REOPEN,
+      name: "Grow the newsletter",
+      direction: "Reach the people who already read us",
+      kpi: { label: "Subscribers", target: 500, current: 510 },
+      actor: human,
+    });
+    if (started.status === "proposed") throw new Error("unreachable");
+    const oldId = started.track.id;
+    await setTrackStatus({
+      trackId: oldId,
+      status: "completed",
+      verdict: "met",
+      actor: human,
+    });
+
+    const reopened = await reopenTrack({ trackId: oldId, actor: human });
+    expect(reopened.status).toBe("started");
+    if (reopened.status === "proposed") throw new Error("unreachable");
+    expect(reopened.track.id).not.toBe(oldId);
+    expect(reopened.track).toMatchObject({
+      name: "Grow the newsletter",
+      status: "active",
+      direction: "Reach the people who already read us",
+      verdict: null,
+    });
+    // The KPI's definition carries over; its last STATED value does not.
+    expect(reopened.track.kpi).toMatchObject({
+      label: "Subscribers",
+      target: 500,
+    });
+    expect(reopened.track.kpi?.current).toBeUndefined();
+    expect(await replacesEdges(reopened.track.id)).toEqual([oldId]);
+    expect((await getTrack(oldId, human))!).toMatchObject({
+      status: "completed",
+      verdict: "met",
+    });
+
+    // Repeating the reopen hands back the same new version, idempotently…
+    const again = await reopenTrack({ trackId: oldId, actor: human });
+    expect(again.status).toBe("exists");
+    if (again.status === "proposed") throw new Error("unreachable");
+    expect(again.track.id).toBe(reopened.track.id);
+  });
+
+  it("refuses a live goal (nothing to reopen) and an old version already replaced", async () => {
+    const live = await startTrack({
+      projectId: REOPEN,
+      name: "Still going",
+      actor: human,
+    });
+    if (live.status === "proposed") throw new Error("unreachable");
+    await expect(
+      reopenTrack({ trackId: live.track.id, actor: human })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+
+    // v1 closed → v2 (replaces v1) closed → reopening v1 again is refused:
+    // the line continues from the newest version.
+    await setTrackStatus({
+      trackId: live.track.id,
+      status: "archived",
+      verdict: "no_longer_needed",
+      actor: human,
+    });
+    const v2 = await reopenTrack({ trackId: live.track.id, actor: human });
+    if (v2.status === "proposed") throw new Error("unreachable");
+    await setTrackStatus({
+      trackId: v2.track.id,
+      status: "completed",
+      verdict: "not_met",
+      actor: human,
+    });
+    await expect(
+      reopenTrack({ trackId: live.track.id, actor: human })
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    const v3 = await reopenTrack({ trackId: v2.track.id, actor: human });
+    expect(v3.status).toBe("started");
+  });
+
+  it("an AGENT reopen is proposed with the version it replaces; approval starts it AND links it", async () => {
+    const started = await startTrack({
+      projectId: REOPEN,
+      name: "Win ten clients",
+      actor: human,
+    });
+    if (started.status === "proposed") throw new Error("unreachable");
+    await setTrackStatus({
+      trackId: started.track.id,
+      status: "completed",
+      verdict: "partly_met",
+      actor: human,
+    });
+    const filed = await reopenTrack({
+      trackId: started.track.id,
+      actor: agent,
+    });
+    expect(filed.status).toBe("proposed");
+    const call = h.permCalls.at(-1)!;
+    expect(call).toMatchObject({ subjectType: "track", action: "create" });
+    const data = call.data as Record<string, unknown>;
+    expect(data.replacesTrackId).toBe(started.track.id);
+
+    const proposalId = randomUUID();
+    await q(
+      `insert into proposals (id, status, target_type, proposal_type, data) values ($1, 'pending', 'track', 'create', $2::jsonb)`,
+      [proposalId, JSON.stringify({ data })]
+    );
+    await proposalExecRegistry.resolveExact("track/create")!.execute({
+      proposal: {
+        id: proposalId,
+        targetType: "track",
+        proposalType: "create",
+        workspaceId: null,
+        agentUserId: AGENT,
+        data: { data },
+      },
+      userId: USER,
+      input: { proposalId },
+      deps: {
+        reportProposalOutcome: () => {},
+        emitProposalReviewed: () => {},
+      },
+    } as unknown as ProposalExecutorArgs);
+    expect(await replacesEdges(data.id as string)).toEqual([started.track.id]);
+    expect((await getTrack(data.id as string, human))!.status).toBe("active");
+  });
+});
+
+describe("what a goal holds (W2) — content, derived marks, acceptance, the close rule", () => {
+  const GOALS2 = randomUUID();
+  beforeAll(async () => {
+    await q(
+      `insert into projects (id, user_id, workspace_id, name, status) values ($1, $2, null, 'Goals W2', 'active')`,
+      [GOALS2, USER]
+    );
+  });
+  const crit = (key: string, kind = "judge", extra: object = {}) => ({
+    key,
+    statement: `Criterion ${key}`,
+    check: { kind },
+    ...extra,
+  });
+  async function goal(name: string, extra: object = {}): Promise<string> {
+    const res = await startTrack({
+      projectId: GOALS2,
+      name,
+      actor: human,
+      ...extra,
+    });
+    if (res.status === "proposed") throw new Error("unreachable");
+    return res.track.id;
+  }
+  async function view(id: string) {
+    const [v] = await loadTrackViews([(await getTrack(id, human))!], human);
+    return v!;
+  }
+  async function fileSession(
+    trackId: string,
+    opts: {
+      status?: string;
+      keys?: string[];
+      outputs?: unknown[];
+      agentIds?: string[];
+    } = {}
+  ): Promise<string> {
+    const id = randomUUID();
+    await q(
+      `insert into focus_sessions (id, user_id, workspace_id, track_id, project_id, status, goal, criteria, expected_outputs, agent_ids, metadata, created_at, updated_at)
+       values ($1, $2, null, $3, $4, $5, 'work', $6::jsonb, $7::jsonb, $8, '{}'::jsonb, now(), now())`,
+      [
+        id,
+        USER,
+        trackId,
+        GOALS2,
+        opts.status ?? "active",
+        JSON.stringify((opts.keys ?? []).map((k) => crit(k))),
+        JSON.stringify(opts.outputs ?? []),
+        opts.agentIds ?? [],
+      ]
+    );
+    return id;
+  }
+  async function grade(
+    sessionId: string,
+    key: string,
+    verdict: string,
+    evaluatorKind: string,
+    evaluatorId: string | null,
+    at: string
+  ) {
+    await q(
+      `insert into session_evaluations (id, session_id, user_id, criterion_key, attempt, verdict, evaluator_kind, evaluator_id, evidence, created_at)
+       values (gen_random_uuid(), $1, $2, $3, 1, $4, $5, $6, '{}'::jsonb, $7)`,
+      [sessionId, USER, key, verdict, evaluatorKind, evaluatorId, at]
+    );
+  }
+
+  it("starts with what it holds, and the read returns it with derived marks", async () => {
+    const id = await goal("Migrate the docs", {
+      endState: " Every page lives on the new site ",
+      criteria: [
+        crit("pages", "evidence", {
+          check: { kind: "evidence", evidenceKey: "pages" },
+          checkKind: "measured",
+        }),
+        crit("tone"),
+      ],
+      dropConditions: ["The old site is retired first"],
+      workKind: "project",
+      uncertainty: "complicated",
+    });
+    const v = await view(id);
+    expect(v).toMatchObject({
+      endState: "Every page lives on the new site",
+      dropConditions: ["The old site is retired first"],
+      workKind: "project",
+      uncertainty: "complicated",
+      // A person wrote the kind: confirmed by them.
+      kindConfirmedBy: USER,
+      kindConfirmedAt: expect.any(String),
+      inReview: false,
+      waitingOn: [],
+    });
+    expect(v.criteria.map((c) => [c.key, c.mark, c.meaning])).toEqual([
+      ["pages", "not_started", "measured"],
+      ["tone", "not_started", "judged"],
+    ]);
+  });
+
+  it("a goal has no criteria or 2 to 5 — one is refused at both doors, before governance", async () => {
+    await expect(
+      startTrack({
+        projectId: GOALS2,
+        name: "One criterion",
+        criteria: [crit("only")],
+        actor: human,
+      })
+    ).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: expect.stringMatching(/2 to 5/),
+    });
+    const id = await goal("Lasting goal");
+    h.permCalls.length = 0;
+    await expect(
+      setTrackDirection({
+        trackId: id,
+        criteria: Array.from({ length: 6 }, (_, i) => crit(`c${i}`)),
+        actor: agent,
+      })
+    ).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: expect.stringMatching(/not 6/),
+    });
+    expect(h.permCalls).toHaveLength(0);
+    // A criterion cannot carry a decision the caller made up.
+    await expect(
+      setTrackDirection({
+        trackId: id,
+        criteria: [
+          {
+            ...crit("a"),
+            acceptance: {
+              decision: "accepted",
+              by: USER,
+              at: new Date().toISOString(),
+            },
+          },
+          crit("b"),
+        ],
+        actor: human,
+      })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("an agent's kind is the AI's proposal: the approver confirms it; an agent may never confirm", async () => {
+    const id = await goal("Keep the newsletter going");
+    const filed = await setTrackDirection({
+      trackId: id,
+      workKind: "operation",
+      uncertainty: "clear",
+      actor: agent,
+    });
+    expect(filed.status).toBe("proposed");
+    const data = h.permCalls.at(-1)!.data as Record<string, unknown>;
+    expect(data).toMatchObject({ workKind: "operation", uncertainty: "clear" });
+    await expect(
+      setTrackDirection({ trackId: id, confirmKind: true, actor: agent })
+    ).rejects.toMatchObject({
+      message: expect.stringMatching(/Only a person confirms/),
+    });
+
+    const proposalId = randomUUID();
+    await proposalExecRegistry.resolveExact("track/update")!.execute({
+      proposal: {
+        id: proposalId,
+        targetType: "track",
+        targetId: id,
+        proposalType: "update",
+        workspaceId: null,
+        agentUserId: AGENT,
+        data: { data },
+      },
+      userId: USER,
+      input: { proposalId },
+      deps: { reportProposalOutcome: () => {}, emitProposalReviewed: () => {} },
+    } as unknown as ProposalExecutorArgs);
+    expect(await view(id)).toMatchObject({
+      workKind: "operation",
+      uncertainty: "clear",
+      kindConfirmedBy: USER,
+    });
+  });
+
+  it("an edit of the criteria never drops a decision recorded after it read them (compare-and-set)", async () => {
+    const id = await goal("Raced", { criteria: [crit("a"), crit("b")] });
+    const stale = (await getTrack(id, human))!;
+    // The judge's decision lands between the editor's read and its write.
+    await q(
+      `update project_tracks
+          set criteria = jsonb_set(criteria, '{0,acceptance}',
+                '{"decision":"accepted","by":"user-1","at":"2026-10-24T10:00:00.000Z"}'::jsonb)
+        where id = $1`,
+      [id]
+    );
+    const project = { id: GOALS2, workspaceId: null, userId: USER };
+    const edit = { criteria: [crit("a"), crit("b"), crit("c")] };
+    const who = { userId: USER, statedBy: USER, confirmedBy: USER };
+    await expect(
+      applyTrackDirection(stale, project, edit, who)
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    const decided = () =>
+      q<{ acceptance: unknown }>(
+        `select criteria->0->'acceptance' as acceptance from project_tracks where id = $1`,
+        [id]
+      );
+    expect((await decided()).rows[0]!.acceptance).toMatchObject({
+      decision: "accepted",
+    });
+    // Read again: the edit lands and the decision rides along (same contract).
+    await applyTrackDirection((await getTrack(id, human))!, project, edit, who);
+    expect((await decided()).rows[0]!.acceptance).toMatchObject({
+      decision: "accepted",
+    });
+    expect((await view(id)).criteria.map((c) => c.key)).toEqual([
+      "a",
+      "b",
+      "c",
+    ]);
+  });
+
+  it("a person confirms the AI's kind as it stands — the header's 'to confirm' door (confirmKind)", async () => {
+    const id = await goal("Keep the site up");
+    // The AI's proposal as stored: a kind nobody confirmed yet.
+    await q(
+      `update project_tracks set work_kind = 'operation', uncertainty = 'clear', kind_confirmed_by = null, kind_confirmed_at = null where id = $1`,
+      [id]
+    );
+    expect(await view(id)).toMatchObject({ kindConfirmedBy: null });
+    const r = await setTrackDirection({
+      trackId: id,
+      confirmKind: true,
+      actor: human,
+    });
+    expect(r.status).toBe("updated");
+    expect(await view(id)).toMatchObject({
+      workKind: "operation",
+      uncertainty: "clear",
+      kindConfirmedBy: USER,
+    });
+  });
+
+  it("marks come from the sessions filed into the goal: claimed → in review; waiting on what its runs owe", async () => {
+    const id = await goal("Ship the pricing page", {
+      criteria: [crit("copy"), crit("legal", "human")],
+    });
+    const s1 = await fileSession(id, {
+      status: "active",
+      keys: ["copy", "legal"],
+      outputs: [
+        {
+          kind: "document",
+          label: "Key",
+          owner: "human",
+          blockedReason: "credential",
+        },
+        {
+          kind: "document",
+          label: "Pick",
+          owner: "human",
+          blockedReason: "decision",
+        },
+      ],
+    });
+    let v = await view(id);
+    expect(v.criteria.map((c) => c.mark)).toEqual(["under_way", "under_way"]);
+    expect(v.waitingOn).toEqual([
+      { reason: "input", count: 1 },
+      { reason: "access", count: 1 },
+    ]);
+    // An AI judge passes both: two CLAIMS, waiting on the judge — in review.
+    await grade(s1, "copy", "pass", "judge", "model-x", "2026-10-21T10:00:00Z");
+    await grade(
+      s1,
+      "legal",
+      "pass",
+      "judge",
+      "model-x",
+      "2026-10-21T10:00:00Z"
+    );
+    v = await view(id);
+    expect(v.criteria.map((c) => [c.mark, c.acceptanceState])).toEqual([
+      ["claimed", "waiting"],
+      ["claimed", "waiting"],
+    ]);
+    expect(v.inReview).toBe(true);
+
+    // Closing as met while the claims wait is refused, before governance.
+    h.permCalls.length = 0;
+    await expect(
+      setTrackStatus({
+        trackId: id,
+        status: "completed",
+        verdict: "met",
+        actor: human,
+      })
+    ).rejects.toMatchObject({
+      message: expect.stringMatching(/not yet: copy, legal/),
+    });
+    expect(h.permCalls).toHaveLength(0);
+
+    // The judge accepts both → met; no longer in review; the close lands.
+    for (const key of ["copy", "legal"]) {
+      const r = await acceptGoalCriterion({
+        trackId: id,
+        criterionKey: key,
+        decision: "accepted",
+        actor: human,
+      });
+      expect(r.status).toBe("updated");
+    }
+    v = await view(id);
+    expect(v.criteria.map((c) => [c.mark, c.acceptance?.by])).toEqual([
+      ["met", USER],
+      ["met", USER],
+    ]);
+    expect(v.inReview).toBe(false);
+    await expect(
+      setTrackStatus({
+        trackId: id,
+        status: "completed",
+        verdict: "partly_met",
+        actor: human,
+      })
+    ).rejects.toMatchObject({
+      message: expect.stringMatching(/close it as met/),
+    });
+    const closed = await setTrackStatus({
+      trackId: id,
+      status: "completed",
+      verdict: "met",
+      actor: human,
+    });
+    expect(closed.status).toBe("updated");
+  });
+
+  it("acceptance: an agent never, a person only as the goal's judge; sending back needs words", async () => {
+    const id = await goal("Judge only", { criteria: [crit("a"), crit("b")] });
+    await expect(
+      acceptGoalCriterion({
+        trackId: id,
+        criterionKey: "a",
+        decision: "accepted",
+        actor: agent,
+      })
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: expect.stringMatching(/agent/),
+    });
+    await expect(
+      acceptGoalCriterion({
+        trackId: id,
+        criterionKey: "a",
+        decision: "changes_asked",
+        actor: human,
+      })
+    ).rejects.toMatchObject({ message: expect.stringMatching(/needs a note/) });
+    await expect(
+      acceptGoalCriterion({
+        trackId: id,
+        criterionKey: "zzz",
+        decision: "accepted",
+        actor: human,
+      })
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    // Someone else holds the goal's JUDGE seat (W3): USER still owns the goal
+    // and can see and write the project, but is not the judge.
+    await q(
+      `insert into track_participants (track_id, principal_kind, principal_id, role, decided_by) values ($1, 'person', $2, 'judge', $3)`,
+      [id, STRANGER, USER]
+    );
+    await expect(
+      acceptGoalCriterion({
+        trackId: id,
+        criterionKey: "a",
+        decision: "accepted",
+        actor: human,
+      })
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: expect.stringMatching(/judge/),
+    });
+    await q(
+      `delete from track_participants where track_id = $1 and role = 'judge'`,
+      [id]
+    );
+  });
+
+  it("F14 — the judge accepts a CLAIM; an outside party's decision only with its source", async () => {
+    const id = await goal("Outside decides", {
+      criteria: [
+        crit("ours"),
+        crit("legal", "human", { checkKind: "decided_outside" }),
+      ],
+    });
+    // Nothing claims "ours": accepting it would be a grade with no run.
+    await expect(
+      acceptGoalCriterion({
+        trackId: id,
+        criterionKey: "ours",
+        decision: "accepted",
+        actor: human,
+      })
+    ).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: expect.stringMatching(/Nothing claims/),
+    });
+    // Sending back and rejecting stay open on an unclaimed criterion.
+    await expect(
+      acceptGoalCriterion({
+        trackId: id,
+        criterionKey: "ours",
+        decision: "rejected",
+        actor: human,
+      })
+    ).resolves.toMatchObject({ status: "updated" });
+    // An outside party's decision: refused with no source…
+    await expect(
+      acceptGoalCriterion({
+        trackId: id,
+        criterionKey: "legal",
+        decision: "accepted",
+        actor: human,
+      })
+    ).rejects.toMatchObject({ message: expect.stringMatching(/source/) });
+    // …recorded with one, and the note stays on the acceptance.
+    await acceptGoalCriterion({
+      trackId: id,
+      criterionKey: "legal",
+      decision: "accepted",
+      note: "Signed by ACME counsel, contract v3 (Drive)",
+      actor: human,
+    });
+    const legal = (await view(id)).criteria.find((c) => c.key === "legal")!;
+    expect(legal).toMatchObject({
+      mark: "met",
+      acceptance: {
+        decision: "accepted",
+        note: "Signed by ACME counsel, contract v3 (Drive)",
+      },
+    });
+  });
+
+  it("F2 — a person's pass accepts only when it is the judge's; anyone else's is a claim", async () => {
+    const id = await goal("Delegate grades", {
+      criteria: [crit("copy", "human"), crit("legal", "human")],
+    });
+    const run = await fileSession(id, {
+      status: "closed",
+      keys: ["copy", "legal"],
+    });
+    // A delegate (not the judge) grades their own run: a CLAIM.
+    await grade(run, "copy", "pass", "human", STRANGER, "2026-10-21T10:00:00Z");
+    // The judge (the owner, no judge row) grades: that IS their acceptance.
+    await grade(run, "legal", "pass", "human", USER, "2026-10-21T10:00:00Z");
+    const v = await view(id);
+    expect(v.criteria.map((c) => [c.key, c.mark, c.acceptanceState])).toEqual([
+      ["copy", "claimed", "waiting"],
+      ["legal", "met", "accepted"],
+    ]);
+  });
+
+  it("a rewrite keeps the judge's decision on an unchanged criterion, and drops it on a changed one", async () => {
+    const id = await goal("Rewritten criteria", {
+      criteria: [crit("a"), crit("b")],
+    });
+    // Both CLAIMED first: the judge decides about claims (F14).
+    const run = await fileSession(id, { status: "closed", keys: ["a", "b"] });
+    await grade(run, "a", "pass", "judge", "model-x", "2026-10-21T10:00:00Z");
+    await grade(run, "b", "pass", "judge", "model-x", "2026-10-21T10:00:00Z");
+    await acceptGoalCriterion({
+      trackId: id,
+      criterionKey: "a",
+      decision: "accepted",
+      actor: human,
+    });
+    await acceptGoalCriterion({
+      trackId: id,
+      criterionKey: "b",
+      decision: "rejected",
+      actor: human,
+    });
+    await setTrackDirection({
+      trackId: id,
+      criteria: [crit("a"), { ...crit("b"), statement: "Reworded" }],
+      actor: human,
+    });
+    const v = await view(id);
+    expect(
+      v.criteria.map((c) => [c.key, c.acceptance?.decision ?? null])
+    ).toEqual([
+      ["a", "accepted"],
+      ["b", null],
+    ]);
+  });
+
+  it("R6 — an operation closes retired, never met; retired closes nothing else", async () => {
+    const op = await goal("Keep the lights on", { workKind: "operation" });
+    h.permCalls.length = 0;
+    await expect(
+      setTrackStatus({
+        trackId: op,
+        status: "completed",
+        verdict: "met",
+        actor: human,
+      })
+    ).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: expect.stringMatching(/operation is never "met"/),
+    });
+    // Refused before governance: nothing was filed for a person to approve.
+    expect(h.permCalls).toHaveLength(0);
+    const closed = await setTrackStatus({
+      trackId: op,
+      status: "completed",
+      verdict: "retired",
+      actor: human,
+    });
+    expect(closed.status).toBe("updated");
+    expect(
+      (
+        await q<{ status: string; verdict: string; verdict_by: string }>(
+          `select status, verdict, verdict_by from project_tracks where id = $1`,
+          [op]
+        )
+      ).rows[0]
+    ).toEqual({ status: "completed", verdict: "retired", verdict_by: USER });
+    expect((await view(op)).verdict).toBe("retired");
+
+    const project = await goal("Ship the launch", { workKind: "project" });
+    await expect(
+      setTrackStatus({
+        trackId: project,
+        status: "completed",
+        verdict: "retired",
+        actor: human,
+      })
+    ).rejects.toMatchObject({
+      message: expect.stringMatching(/Only an operation closes as retired/),
+    });
+    const unkinded = await goal("No kind said");
+    await expect(
+      setTrackStatus({
+        trackId: unkinded,
+        status: "completed",
+        verdict: "retired",
+        actor: human,
+      })
+    ).rejects.toMatchObject({
+      message: expect.stringMatching(/Only an operation closes as retired/),
+    });
   });
 });

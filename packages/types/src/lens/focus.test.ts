@@ -318,6 +318,29 @@ describe("the sections and the order", () => {
     ]);
   });
 
+  it("a goal keeps Done when FIRST; the lead goes first below it (UX-1)", () => {
+    // needs_you leads Needs you — which already sits second: rules out
+    // nothing. "happening" (working) sits fourth: the discriminating case.
+    expect(lensFocusOrder(lensFocusSections("track"), "happening")).toEqual([
+      "doneWhen",
+      "happening",
+      "blocking",
+      "participants",
+      "produced",
+      "structure",
+      "proposed",
+      "happened",
+    ]);
+    expect(
+      lensFocusOrder(lensFocusSections("track"), "blocking").slice(0, 2)
+    ).toEqual(["doneWhen", "blocking"]);
+    // A goal page whose host does not draw Done when: the lead goes first.
+    expect(lensFocusOrder(["blocking", "produced"], "produced")).toEqual([
+      "produced",
+      "blocking",
+    ]);
+  });
+
   it("a lead the host omitted changes nothing — reordering never resurrects", () => {
     const drawn = ["happening", "produced", "happened"] as const;
     expect(lensFocusOrder(drawn, "blocking")).toEqual([...drawn]);

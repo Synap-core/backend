@@ -981,7 +981,7 @@ async function readRecentTrackSessions(
     unavailable(
       row.id,
       "priorStages.outputs",
-      "What earlier sessions in this track produced could not be read."
+      "What earlier sessions in this goal produced could not be read."
     )
   );
   return {
@@ -1914,7 +1914,7 @@ export async function projectContinuationPacket(
       unavailable(
         row.id,
         "priorStages",
-        "What the earlier stages of this track produced could not be read."
+        "What the earlier steps of this goal produced could not be read."
       )
     ),
     // THE dependency rule for the next move — open AND dropped blockers,

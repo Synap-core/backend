@@ -231,14 +231,21 @@ export function lensFocus(input: LensFocusInput): LensFocus {
 /**
  * The host's DRAWN sections with the lead first; the rest keep their order.
  * A lead the host did not pass (an omitted section) changes nothing.
+ *
+ * A goal's "Done when" never moves (review-ux-2 UX-1, 2026-10-24): how close
+ * the goal is IS the question its page answers, so it stays first and the
+ * lead goes first among the sections below it — on both surfaces, because
+ * both call this.
  */
 export function lensFocusOrder<K extends string>(
   sections: readonly K[],
   lead: LensSectionKey | null | undefined
 ): K[] {
-  const first = sections.find((s) => s === lead);
+  const pinned = sections.filter((s) => s === "doneWhen");
+  const rest = sections.filter((s) => s !== "doneWhen");
+  const first = rest.find((s) => s === lead);
   if (first === undefined) return [...sections];
-  return [first, ...sections.filter((s) => s !== first)];
+  return [...pinned, first, ...rest.filter((s) => s !== first)];
 }
 
 /**

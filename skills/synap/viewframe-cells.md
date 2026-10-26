@@ -165,7 +165,7 @@ All `query()` calls return a Promise. Entity shape: `{ id, title, profileSlug, p
 
 #### Intent reads (a kind's pipeline, goal, needs-you, sessions)
 
-The same reads a kind's own page makes, so a frame can be that kind's dashboard. The host stamps the lens (the active space and project); a `workspaceId` / `projectId` you pass is ignored. `trackId` narrows to one track.
+The same reads a kind's own page makes, so a frame can be that kind's dashboard. The host stamps the lens (the active space and project); a `workspaceId` / `projectId` you pass is ignored. `trackId` narrows to one goal.
 
 | Operation              | Params                                                                                                | Returns                                                                                                                                                                                                                              |
 | ---------------------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |

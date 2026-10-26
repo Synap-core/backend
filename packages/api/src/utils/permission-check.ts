@@ -82,6 +82,7 @@ import {
 } from "@synap-core/types/vocabulary";
 import { buildProjectFilingSummary } from "../services/projects/project-filing-summary.js";
 import { buildTrackStartSummary } from "../services/tracks/track-start-summary.js";
+import { buildTrackParticipantSummary } from "../services/tracks/track-participant-summary.js";
 import { buildDescriptiveProfileUpdateSummary } from "../services/profiles/profile-descriptive-update.js";
 import {
   defaultApprovalSentence,
@@ -229,10 +230,17 @@ function isFocusSessionCriteriaUpdate(
   action: string,
   data: Record<string, unknown> | undefined
 ): boolean {
+  const carriesCriteria =
+    data !== undefined && "criteria" in data && data.criteria !== undefined;
+  // A GOAL's criteria (work model W2, 0345) are the same contract one level
+  // up: the standard the goal is judged done against. An agent writing them
+  // — when it starts the goal or later — proposes, and the person validates.
+  // The track doors carry `criteria` only when the caller sent them.
+  if (subjectType === "track") {
+    return (action === "create" || action === "update") && carriesCriteria;
+  }
   if (subjectType !== "focus_session" || action !== "update") return false;
-  return (
-    data !== undefined && "criteria" in data && data.criteria !== undefined
-  );
+  return carriesCriteria;
 }
 
 /**
@@ -1037,6 +1045,15 @@ export interface PermissionCheckBaseOpts {
    */
   forcePropose?: boolean;
   /**
+   * The POD files this proposal on its own, not the person it is filed for
+   * (code-core F3, 2026-10-24): a `system:<producer>` author stamped as the
+   * row's `createdBy` — the machine marker the codebase already reads
+   * (`MACHINE_CREATED_BY_PREFIX`, @synap/database). `userId` stays the person
+   * it is for (the owner floor), so they still see and decide it; it is no
+   * longer counted as their own act. Today: the goal loop's next run.
+   */
+  machineAuthor?: `system:${string}`;
+  /**
    * FB1020 B3 — the door PROVED this write organises the acting agent's own
    * fresh work (`isOwnFreshWork`, @synap/database): same key, last 24 h,
    * untouched by a person, into a project the person named. Set ONLY by the
@@ -1578,6 +1595,7 @@ async function evaluatePermission(
           if (actorRow?.userType === "agent") {
             if (dryRun) return DRY_RUN_PROPOSE;
             return createProposal({
+              createdBy: opts.machineAuthor,
               envelope: writeEnvelope,
               workspaceId,
               subjectType,
@@ -1652,6 +1670,7 @@ async function evaluatePermission(
           if (reviewerExists) {
             if (dryRun) return DRY_RUN_PROPOSE;
             return createProposal({
+              createdBy: opts.machineAuthor,
               envelope: writeEnvelope,
               proposedByUserId: userId,
               workspaceId,
@@ -1694,6 +1713,7 @@ async function evaluatePermission(
     if (opts.issuer && opts.issuer.trusted === false) {
       if (dryRun) return DRY_RUN_PROPOSE;
       return createProposal({
+        createdBy: opts.machineAuthor,
         envelope: writeEnvelope,
         workspaceId,
         subjectType,
@@ -2103,6 +2123,7 @@ async function evaluatePermission(
       if (gov.decision === "propose" && !lifecycleCloseEscape) {
         if (dryRun) return DRY_RUN_PROPOSE;
         return createProposal({
+          createdBy: opts.machineAuthor,
           envelope: governedEnvelope,
           workspaceId,
           subjectType,
@@ -2592,6 +2613,7 @@ async function evaluatePermission(
       }
       if (dryRun) return DRY_RUN_PROPOSE;
       return createProposal({
+        createdBy: opts.machineAuthor,
         envelope: writeEnvelope,
         workspaceId,
         subjectType,
@@ -3079,6 +3101,15 @@ export function buildProposalSummary(
       ? `Hand session "${name}" to ${agent}`
       : `Hand a session to ${agent}`;
   }
+  // WHO IS ON A GOAL (W3) — the goal hand-off (`track/assign_agent`) and an
+  // agent's participant change under `track/update`: names the goal, who, and
+  // what changes for them.
+  const participantSentence = buildTrackParticipantSummary(
+    subjectType,
+    action,
+    data
+  );
+  if (participantSentence) return participantSentence;
   // focus_session FILING — where a session belongs (its track step, its
   // project, its space) is the person's call, so the title says it is a move
   // and names EVERY place it changes, never the generic "Update session"
@@ -3877,6 +3908,8 @@ async function createProposal(args: {
    * (they carry `agentUserId` on the envelope's access instead).
    */
   proposedByUserId?: string;
+  /** A machine author (`PermissionCheckOpts.machineAuthor`) — else `userId`. */
+  createdBy?: string;
   workspaceId: string | null | undefined;
   subjectType: string;
   action: string;
@@ -3921,6 +3954,7 @@ async function createProposal(args: {
   const {
     envelope,
     proposedByUserId,
+    createdBy: machineAuthor,
     workspaceId,
     subjectType,
     action,
@@ -4302,7 +4336,7 @@ async function createProposal(args: {
           ...(reqEventId ? { requestedEventId: reqEventId } : {}),
         },
         agentUserId: attributionAgentUserId ?? undefined,
-        createdBy: userId,
+        createdBy: machineAuthor ?? userId,
         proposedByUserId: proposedByUserId ?? null,
         threadId: threadId ?? null,
         commandRunId: commandRunId ?? null,

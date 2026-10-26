@@ -347,15 +347,17 @@ export const OBJECT_KINDS: Record<string, ObjectKindDef> = {
     labelPlural: "Projects",
     glyph: "◈",
   },
-  // A METHOD running inside one project (`project_tracks`, 0272). Same hue as
-  // its project: a track is read as a lane OF the project, never beside it.
+  // A GOAL pursued inside one project (`project_tracks`, 0272). The USER word
+  // is "Goal" (founder decision 89d53f13, 2026-10-23); the kind token, the
+  // table and every tool stem stay `track`. Same hue as its project: a goal is
+  // read as a lane OF the project, never beside it.
   track: {
     kind: "track",
     category: "project",
     icon: "Route",
     color: ID(5),
-    label: "Track",
-    labelPlural: "Tracks",
+    label: "Goal",
+    labelPlural: "Goals",
   },
   // One stretch of a track (`project_tracks.stages[]`, the `stage` key on a
   // track-filed session). The USER word is "Step" — `skills/synap/concepts.md`
@@ -412,7 +414,7 @@ export const OBJECT_KINDS: Record<string, ObjectKindDef> = {
     glyph: "⚡",
   },
   // The user word is "Template" (concepts.md). Scoped surfaces say WHICH
-  // template through `resolveTemplateNoun(scope)` ("Work"/"Track template").
+  // template through `resolveTemplateNoun(scope)` ("Work"/"Goal template").
   playbook: {
     kind: "playbook",
     category: "playbook",
@@ -889,7 +891,10 @@ export const resolveObjectLabel = (
  * author declares (`skills/synap/concepts.md` → Template).
  *
  * A playbook's `scope` decides it: `"project"` is a method a project runs over
- * weeks as a track → "Track template"; `"session"` (the playbook default) is
+ * weeks as a goal → "Goal template" (starting a goal from it COPIES its steps
+ * and params into the goal, `buildTrackSnapshot` — the same relation a work
+ * template has to a session, so it is a template, not a new word);
+ * `"session"` (the playbook default) is
  * one sitting of work → "Work template". A missing scope reads as a work
  * template because the schema says so (`playbooks.scope`: "NULL reads as
  * session"), not as a guess about the row.
@@ -900,6 +905,6 @@ export function resolveTemplateNoun(
   scope: TemplateScope | string | null | undefined,
   opts: { plural?: boolean } = {}
 ): string {
-  const noun = scope === "project" ? "Track template" : "Work template";
+  const noun = scope === "project" ? "Goal template" : "Work template";
   return opts.plural ? `${noun}s` : noun;
 }
