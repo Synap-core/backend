@@ -822,6 +822,11 @@ export const sessionHandlers: McpHandlerMap = {
     if (typeof args.subjectEntityId === "string" && args.subjectEntityId) {
       conditions.push(eq(focusSessions.subjectEntityId, args.subjectEntityId));
     }
+    // A track's sessions — the filter the schema never offered, so a caller
+    // that passed `trackId` got every session back, unfiltered.
+    if (typeof args.trackId === "string" && args.trackId) {
+      conditions.push(eq(focusSessions.trackId, args.trackId));
+    }
     // Flow DEFINITION filters — the same two the tRPC and Hub REST doors take.
     // Each names a definition, never one execution. Pair with kind 'run' or
     // 'all': every flow-linked row classifies as a run, so under 'work' either
@@ -851,6 +856,12 @@ export const sessionHandlers: McpHandlerMap = {
     // PAGING (plan 9992207a, c-paging): `offset` walks past the 50-row page;
     // one row past it tells whether another page exists. `id` breaks ties so
     // two sessions started in the same instant never swap between pages.
+    const detailArg = (args.detail as string | undefined) ?? "lean";
+    if (detailArg !== "lean" && detailArg !== "full") {
+      return ok({
+        error: `Unknown detail '${detailArg}'. Valid values: lean (default), full.`,
+      });
+    }
     const limit = pageLimit(args.limit, 20, SESSIONS_PAGE_MAX);
     const offset = pageOffset(args.offset);
     const page = await db
@@ -877,10 +888,26 @@ export const sessionHandlers: McpHandlerMap = {
     // The flag makes the distinction visible either way.
     // `kind` rides along on every row for the same reason `triage` does: pure,
     // no query, and the ONE place the predicate is decided.
+    const rows = attachSessionKind(
+      attachTriage(await attachParentSessionIds(sessions))
+    );
     return ok({
-      sessions: attachSessionKind(
-        attachTriage(await attachParentSessionIds(sessions))
-      ),
+      // `lean` (default): the row an agent scans to pick a session — a full
+      // row carries goal, criteria, stages and metadata, 62 KB for one page.
+      // `full` is the whole row; `synap_get_session` reads one in depth.
+      sessions:
+        detailArg === "full"
+          ? rows
+          : rows.map((r) => ({
+              id: r.id,
+              title: r.title,
+              status: r.status,
+              kind: r.kind,
+              trackId: r.trackId,
+              projectId: r.projectId,
+              workspaceId: r.workspaceId,
+              updatedAt: r.updatedAt,
+            })),
       count: sessions.length,
       offset,
       ...(hasMore ? { nextOffset: offset + limit } : {}),
