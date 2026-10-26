@@ -4,7 +4,7 @@
  * names the rule it rules out.
  */
 import { describe, expect, it } from "vitest";
-import { agentHasCapability } from "./index.js";
+import { agentHasCapability, grantRequestKeys } from "./index.js";
 
 describe("agentHasCapability — gate verbs must be named", () => {
   // Rules out: the legacy `subject.*` short-circuit widening to every verb.
@@ -84,5 +84,45 @@ describe("agentHasCapability — gate verbs must be named", () => {
     expect(agentHasCapability("view.updateContent", "view", ["view"])).toBe(
       false
     );
+  });
+  // Founder decision 1, 2026-10-26: a status move is an ordinary update.
+  // Rules out: the rung still requiring `transition` named (an update-only
+  // agent refused), the fold dropping capabilities minted naming the door,
+  // and the fold reaching past update (read-only or another kind moving it).
+  it("a status move is an update; a capability naming transition still moves", () => {
+    for (const caps of [
+      ["entity.task.update"],
+      ["entity.task"],
+      ["entity.*"],
+      ["entity.task.transition"],
+      ["entity.*.transition"],
+      ["entity.transition"],
+    ])
+      expect(
+        agentHasCapability("entity.transition", "entity", caps, "task"),
+        caps.join()
+      ).toBe(true);
+    for (const caps of [["entity.task.read"], ["entity.note.update"]])
+      expect(
+        agentHasCapability("entity.transition", "entity", caps, "task"),
+        caps.join()
+      ).toBe(false);
+  });
+});
+
+describe("grantRequestKeys", () => {
+  it("a folded door: the folded key first, then the door's own spelling", () => {
+    expect(grantRequestKeys("entity", "transition")).toEqual([
+      { subject: "entity", action: "update" },
+      { subject: "entity", action: "transition" },
+    ]);
+  });
+  it("an unfolded door: its one key", () => {
+    expect(grantRequestKeys("entity", "merge")).toEqual([
+      { subject: "entity", action: "merge" },
+    ]);
+    expect(grantRequestKeys("view", "updateContent")).toEqual([
+      { subject: "view", action: "update_content" },
+    ]);
   });
 });

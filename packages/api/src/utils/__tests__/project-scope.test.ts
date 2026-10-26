@@ -330,17 +330,23 @@ describe("accessScopeWhere", () => {
     expect(wsLens).toBeUndefined();
 
     // The workspace narrow is the podPersonal AND(AND(isNull, eq), NOT guest)
-    // — Sites W2 S2 appended the guest gate as a second conjunct.
+    // — Sites W2 S2 appended the guest gate as a second conjunct. Since the
+    // home-space share (0355) the POD view is `or(podPersonal, …shared)`; with
+    // no shared branch (no facetLens) that is `or(podPersonal)`, which real
+    // drizzle reduces to podPersonal itself (this mock keeps the wrapper).
+    const isPodPersonal = (a: any) =>
+      a?._tag === "and" &&
+      Array.isArray(a.args) &&
+      a.args.some(
+        (x: any) =>
+          x?._tag === "and" &&
+          Array.isArray(x.args) &&
+          x.args.some((y: any) => y?._tag === "isNull")
+      );
     const podPersonalArm = result.args.find(
       (a: any) =>
-        a?._tag === "and" &&
-        Array.isArray(a.args) &&
-        a.args.some(
-          (x: any) =>
-            x?._tag === "and" &&
-            Array.isArray(x.args) &&
-            x.args.some((y: any) => y?._tag === "isNull")
-        )
+        isPodPersonal(a) ||
+        (a?._tag === "or" && a.args?.length === 1 && isPodPersonal(a.args[0]))
     );
     expect(podPersonalArm).toBeDefined();
   });
@@ -415,7 +421,8 @@ describe("accessScopeWhere", () => {
       // pod-shared twin (`podSharedFacetWhere`), so the opt-in now widens the
       // floor by TWO branches. The count was stale, not wrong to have — it is
       // what says "nothing ELSE crept into the floor", so it is updated rather
-      // than dropped.
+      // than dropped. The home-space share (0355) adds a third opt-in branch
+      // (`homeSpaceMemberWhere`, floor.args[5]), so the count is now 6.
       const floor = (
         accessScopeWhere({
           workspaceIdColumn: wsIdCol,
@@ -425,7 +432,8 @@ describe("accessScopeWhere", () => {
           facetLens: true,
         }) as any
       ).args[0];
-      expect(floor.args).toHaveLength(5);
+      expect(floor.args).toHaveLength(6);
+      expect(floor.args[5]).toBeDefined();
 
       // 1. workspace-scoped: facetLensMemberWhere = inArray(entityIdColumn, sub)
       const facetBranch = floor.args[3];

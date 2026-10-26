@@ -5,7 +5,9 @@
  *  - a proposed move writes nothing and emits nothing;
  *  - an agent acting on a false belief gets a conflict BEFORE any proposal;
  *  - a moved write emits exactly one transition;
- *  - an approved replay skips governance.
+ *  - an approved replay skips governance;
+ *  - a mover who may not WRITE the target is refused before governance (the
+ *    floor itself is proven on PGlite in status-write-floor.pglite.test.ts).
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -16,6 +18,7 @@ const h = vi.hoisted(() => ({
   expire: vi.fn(async () => [] as string[]),
   actioned: vi.fn(),
   current: "negotiating" as string | null,
+  mayWrite: vi.fn(async () => true),
 }));
 
 vi.mock("@synap/database", async (importOriginal) => ({
@@ -77,6 +80,9 @@ const own = vi.hoisted(() => ({ close: vi.fn(async () => false) }));
 vi.mock("../../governance/own-organise.js", () => ({
   ownWorkOrganiseForTaskClose: own.close,
 }));
+vi.mock("../status-write-floor.js", () => ({
+  mayWriteStatusTarget: h.mayWrite,
+}));
 
 import { moveStatus, statusMoveActorFor } from "../move-status.js";
 
@@ -91,9 +97,41 @@ beforeEach(() => {
   h.current = "negotiating";
   own.close.mockReset();
   own.close.mockResolvedValue(false);
+  h.mayWrite.mockReset();
+  h.mayWrite.mockResolvedValue(true);
 });
 
 describe("moveStatus door", () => {
+  it("a mover who may not write the target is refused before governance", async () => {
+    h.mayWrite.mockResolvedValue(false);
+    const r = await moveStatus({ entityId: "e1", to: "lost", actor: AGENT });
+    expect(r).toMatchObject({ status: "refused", code: "NOT_FOUND" });
+    expect(h.mayWrite).toHaveBeenCalledWith(
+      expect.objectContaining({ entityId: "e1" }),
+      "u1"
+    );
+    expect(h.perm).not.toHaveBeenCalled();
+    expect(h.apply).not.toHaveBeenCalled();
+  });
+
+  it("server code and an approved replay are not re-floored", async () => {
+    h.mayWrite.mockResolvedValue(false);
+    h.apply.mockResolvedValue({ status: "moved", transition: { to: "lost" } });
+    await moveStatus({
+      entityId: "e1",
+      to: "lost",
+      actor: { kind: "system", userId: "u1" },
+    });
+    await moveStatus({
+      entityId: "e1",
+      to: "lost",
+      actor: AGENT,
+      approvedProposalId: "p1",
+    });
+    expect(h.mayWrite).not.toHaveBeenCalled();
+    expect(h.apply).toHaveBeenCalledTimes(2);
+  });
+
   it("governs with the target option's classification, then writes and emits once", async () => {
     h.perm.mockResolvedValue({ granted: true, autoApprovedProposalId: "r1" });
     h.apply.mockResolvedValue({ status: "moved", transition: { to: "lost" } });

@@ -1032,6 +1032,12 @@ export class ImportOrchestrator {
           userId,
           workspaceId: workspaceId ?? null,
           auditSource: "rule_loop_import_apply",
+          // A proposal-less apply writes now: no person reviewed it, so an
+          // agent caller's skills are born unapproved.
+          skillAuthor: {
+            agentUserId: agentUserIdOf(trpcCtx),
+            personApproved: false,
+          },
         }),
         // Per-op targetWorkspaceId only (parity with capture auto-apply +
         // composite approve). Do NOT blanket workspaceScoped.
@@ -1808,6 +1814,11 @@ export class ImportOrchestrator {
             userId,
             workspaceId: workspaceId ?? null,
             auditSource: "rule_loop_import_apply",
+            // Same rule as apply() above.
+            skillAuthor: {
+              agentUserId: agentUserIdOf(trpcCtx),
+              personApproved: false,
+            },
           }),
           // Per-op pins only — never blanket workspaceScoped (folder prison).
           seedRefToRealId: refToRealId,
