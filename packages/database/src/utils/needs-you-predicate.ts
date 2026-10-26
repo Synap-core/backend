@@ -111,25 +111,30 @@ function causeKindSql(): SQL {
     END)`);
 }
 
-/** SQL boolean: `needsYouHasRealAsker`. */
+/**
+ * SQL boolean: `needsYouHasRealAsker`. Never NULL: a JSON field that is
+ * absent makes its comparison NULL, and `NOT NULL` is NULL, which a CASE
+ * reads as "no" — the three-valued trap the parity test caught (a decision
+ * ask with no asker read as asked).
+ */
 function realAskerSql(): SQL {
   const cause = causeKindSql();
-  return drizzleSql`(${cause} IS NULL
+  return drizzleSql`coalesce(${cause} IS NULL
       OR ${cause} IN (${ASKER_CAUSES})
       OR (${cause} = 'decision'
           AND jsonb_typeof(slot->'askedBy') = 'string'
-          AND slot->>'askedBy' <> ''))`;
+          AND slot->>'askedBy' <> ''), false)`;
 }
 
-/** SQL boolean: `needsYouIsCommitment`. */
+/** SQL boolean: `needsYouIsCommitment`. Never NULL (see {@link realAskerSql}). */
 function commitmentSql(): SQL {
-  return drizzleSql`(${causeKindSql()} IS NOT DISTINCT FROM 'gate'
+  return drizzleSql`coalesce(${causeKindSql()} IS NOT DISTINCT FROM 'gate'
       OR jsonb_typeof(slot->'pendingRelay') = 'object'
       OR (jsonb_typeof(slot->'ask') = 'object' AND (
             slot->'ask'->'stakes' = '"commitment"'::jsonb
             OR (slot->'ask'->'mode' = '"provide"'::jsonb
                 AND jsonb_typeof(slot->'ask'->'provide') = 'object'
-                AND slot->'ask'->'provide'->'kind' = '"secret"'::jsonb))))`;
+                AND slot->'ask'->'provide'->'kind' = '"secret"'::jsonb))), false)`;
 }
 
 /**
