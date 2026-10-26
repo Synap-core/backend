@@ -18,13 +18,18 @@
  * non-HTTP governed entry point. Never analyzes the bytes — deterministic store.
  */
 
-import { db, ProfileResolutionService } from "@synap/database";
+import {
+  db,
+  getWorkspaceMembership,
+  ProfileResolutionService,
+} from "@synap/database";
 import {
   storeDocumentFromBuffer,
   uploadEntityProperties,
   type StoredDocument,
 } from "./file-upload.js";
 import { entitiesRouter as regularEntitiesRouter } from "./entities.js";
+import { isSpaceWriteRole } from "@synap-core/types/workspaces";
 import { createHubProtocolCallerContext } from "./hub-protocol/utils.js";
 
 export interface CreateGovernedFileEntityParams {
@@ -136,6 +141,20 @@ export async function createGovernedFileEntityForStoredDocument(
   );
   const callerWorkspaceId =
     entityScope === "pod" && !params.pinWorkspace ? null : workspaceId;
+  // The null caller lens above drops the space the upload came from, so name
+  // it as the file's HOME (0355): that space's members may read it, and
+  // `entities.create` governs the write THERE. Only a member who may write in
+  // the space may file for it (`entities.create` refuses anyone else), and this
+  // door's callers check workspace access more loosely than that — so anyone
+  // else's upload lands un-homed (owner-only), as it did before 0355.
+  const uploaderMembership =
+    callerWorkspaceId === null
+      ? await getWorkspaceMembership(db, workspaceId, userId)
+      : null;
+  const homeWorkspaceId =
+    uploaderMembership && isSpaceWriteRole(uploaderMembership.role)
+      ? workspaceId
+      : undefined;
 
   // 3. Build the governed caller ctx (threads agent identity, session, and
   //    service-key confinement) and mint the `file` entity through the SAME
@@ -171,6 +190,7 @@ export async function createGovernedFileEntityForStoredDocument(
       storageKey: stored.storageKey,
     }),
     ...(params.pinWorkspace ? { targetWorkspaceId: workspaceId } : {}),
+    ...(homeWorkspaceId ? { homeWorkspaceId } : {}),
     ...(agentUserId ? { agentUserId } : {}),
     ...(params.expectedLabel ? { expectedLabel: params.expectedLabel } : {}),
     source: "agent",
