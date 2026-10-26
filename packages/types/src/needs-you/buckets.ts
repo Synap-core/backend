@@ -74,7 +74,9 @@ export interface BucketableSignal {
  * Out of the headline: the pod's Review later stamp — the predicate its badge
  * count (`countNeedsYou`) reads. Counted in no bucket, batched never.
  */
-function inReviewLater(s: { reviewLater?: boolean } | undefined): boolean {
+export function inReviewLater(
+  s: { reviewLater?: boolean } | null | undefined
+): boolean {
   return s?.reviewLater === true;
 }
 
