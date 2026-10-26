@@ -2157,6 +2157,23 @@ void startupHooksSettled
     )
   );
 
+// Decision asks NOBODY ASKED (founder decision 1, 2026-10-26): open asks the
+// old reactor raised on a person's own proposed decision retire `not_asked`,
+// and the Decide sessions it opened for them close through the one close
+// door. Idempotent (a retired ask is no longer open), so it simply runs at
+// every boot. Off the boot path.
+void startupHooksSettled
+  .then(async () => {
+    const { retireUnaskedDecisionAsks } = await import("@synap/api");
+    await retireUnaskedDecisionAsks();
+  })
+  .catch((err) =>
+    apiLogger.warn(
+      { err },
+      "Retiring unasked decision asks failed (non-fatal; resumes next boot)"
+    )
+  );
+
 // Live session updates: the ONE producer of `focus_session:updated` — LISTENs
 // on the migration-0277 row trigger, so every session writer pushes. Never
 // throws; polling is the floor if the LISTEN is down.

@@ -9,7 +9,11 @@
  * `session-unblock-reactor.ts` IoC precedent: `@synap/events` cannot import
  * `@synap/api`, so the api process registers its own reactors at boot).
  *
- * ON `decisionStatus: 'proposed'` — ensure ONE owed human slot asks it:
+ * ON ENTERING `decisionStatus: 'proposed'` (created so, or moved into it —
+ * {@link entersProposed}; any other edit of a proposed decision asks nothing)
+ * AND ONLY WHEN AN AGENT WROTE IT ({@link decisionHasAgentAuthor}: a person's
+ * own proposed decision is their note, not a question) — ensure ONE owed
+ * human slot asks it:
  *   `{kind:'decision', owner:'human', blockedReason:'decision', ask, decisionId,
  *   ref → the decision}`. The ask is a `choose` over the decision's
  *   `decisionOptions` (recommended marked, or via `recommendedOption`), else a
@@ -82,13 +86,14 @@ function clip(s: string, max: number): string {
   return s.length > max ? `${s.slice(0, max - 1)}…` : s;
 }
 
-type DecisionRow = {
+export type DecisionRow = {
   id: string;
   userId: string;
   workspaceId: string | null;
   title: string | null;
   properties: Record<string, unknown>;
   createdByKind: string | null;
+  agentUserId: string | null;
 };
 
 // ─── Pure ───────────────────────────────────────────────────────────────────
@@ -177,6 +182,36 @@ export function isOpenDecisionAsk(
   return slot?.decisionId === decisionId && isOwedSlot(slot) && !slot.answer;
 }
 
+/**
+ * Did an AGENT write this decision? Only then is `proposed` a question for the
+ * person (founder decision 1, 2026-10-26): a person's own proposed decision is
+ * their note, and nobody is asking them anything. Pure.
+ */
+export function decisionHasAgentAuthor(
+  decision: Pick<DecisionRow, "createdByKind" | "agentUserId">
+): boolean {
+  return !!decision.agentUserId || decision.createdByKind === "ai_agent";
+}
+
+/**
+ * Did THIS write put the decision into `proposed`? A create, or an update whose
+ * status changed from something else — the update fan-out carries
+ * `changed.<slug>` / `previous.<slug>` (`entities.update`, and the lifecycle
+ * emitter's update for every status move). Any other edit of a proposed
+ * decision (a renamed title, a backfill) is not a new question. Pure.
+ */
+export function entersProposed(payload: {
+  action: string;
+  data?: Record<string, unknown> | null;
+}): boolean {
+  if (payload.action === "create") return true;
+  return (
+    payload.action === "update" &&
+    payload.data?.["changed.decisionStatus"] === true &&
+    payload.data?.["previous.decisionStatus"] !== "proposed"
+  );
+}
+
 /** Retire the slots still asking about a resolved decision. Pure; null = no change. */
 export function retireResolvedDecisionAsks(
   outputs: ExpectedOutput[],
@@ -224,6 +259,7 @@ async function loadDecision(id: string): Promise<DecisionRow | null> {
       properties: entities.properties,
       type: entities.type,
       createdByKind: entities.createdByKind,
+      agentUserId: entities.agentUserId,
       deletedAt: entities.deletedAt,
     })
     .from(entities)
@@ -240,6 +276,7 @@ async function loadDecision(id: string): Promise<DecisionRow | null> {
         ? (row.properties as Record<string, unknown>)
         : {},
     createdByKind: row.createdByKind ?? null,
+    agentUserId: row.agentUserId ?? null,
   };
 }
 
@@ -401,7 +438,7 @@ export async function ensureDecisionAsk(
       sessionId: homeId,
       before,
       after,
-      agentUserId: null,
+      agentUserId: decision.agentUserId,
     });
     const { notifySessionNeedsYou } =
       await import("../focus-sessions/notify-needs-you.js");
@@ -436,7 +473,8 @@ export async function resolveDecisionAsks(
  * the person (no agent principal ⇒ never a proposal). Returns how many closed.
  */
 export async function closeSettledDecisionSessions(
-  decision: DecisionRow
+  decision: DecisionRow,
+  opts: { summary?: string } = {}
 ): Promise<number> {
   const rows = await db
     .select({
@@ -464,9 +502,11 @@ export async function closeSettledDecisionSessions(
     const res = await completeFocusSession({
       sessionId: row.id,
       userId: decision.userId,
-      ...(typeof status === "string" && status
-        ? { summary: resolveStatusLabel(status) }
-        : {}),
+      ...(opts.summary
+        ? { summary: opts.summary }
+        : typeof status === "string" && status
+          ? { summary: resolveStatusLabel(status) }
+          : {}),
     });
     if (res) closed += 1;
   }
@@ -487,7 +527,9 @@ export const decisionAskReactor: Reactor = {
       const decision = await loadDecision(payload.subjectId);
       if (!decision) return;
       if (decision.properties.decisionStatus === "proposed") {
-        await ensureDecisionAsk(decision, payload.sessionId ?? null);
+        if (entersProposed(payload) && decisionHasAgentAuthor(decision)) {
+          await ensureDecisionAsk(decision, payload.sessionId ?? null);
+        }
       } else {
         await resolveDecisionAsks(decision);
         await closeSettledDecisionSessions(decision);

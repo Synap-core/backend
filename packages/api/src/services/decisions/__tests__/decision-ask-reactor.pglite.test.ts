@@ -27,6 +27,7 @@ const h = vi.hoisted(() => ({
   updates: [] as Array<{ id: string; properties: Record<string, unknown> }>,
   notified: [] as Array<Record<string, unknown>>,
   closed: [] as Array<Record<string, unknown>>,
+  asked: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -51,7 +52,10 @@ vi.mock("@synap/events", async (importOriginal) => {
   return { ...actual, emitSideEffects: async () => undefined };
 });
 vi.mock("../../../lib/event-helpers.js", () => ({
-  logEvent: async () => "evt",
+  logEvent: async (_u: string, type: string, data: Record<string, unknown>) => {
+    if (type.includes("slot_asked")) h.asked.push(data);
+    return "evt";
+  },
 }));
 vi.mock("../../focus-sessions/notify-needs-you.js", () => ({
   notifySessionNeedsYou: async (p: Record<string, unknown>) => {
@@ -102,6 +106,7 @@ vi.mock("../decision-entity-door.js", () => ({
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import { focusSessions, entities } from "@synap/database";
 import { decisionAskReactor } from "../decision-ask-reactor.js";
+import { retireUnaskedDecisionAsks } from "../retire-unasked-decision-asks.js";
 import { answerExpectedOutput } from "../../focus-sessions/answer-slot.js";
 
 const OWNER = "11111111-1111-4111-8111-111111111111";
@@ -119,15 +124,22 @@ function ddlFor(table: PgTable): string {
 const q = <T>(sql: string, params?: unknown[]) =>
   h.client!.query<T>(sql, params);
 
+const AGENT = "22222222-2222-4222-8222-222222222222";
 async function decision(
   props: Record<string, unknown>,
-  createdByKind = "ai_agent"
+  createdByKind: string | null = "ai_agent"
 ) {
   const id = randomUUID();
   await q(
-    `insert into entities (id, user_id, workspace_id, type, title, properties, system_data, created_by_kind, created_at, updated_at)
-     values ($1, $2, null, 'decision', 'Pricing model', $3::jsonb, '{}'::jsonb, $4, now(), now())`,
-    [id, OWNER, JSON.stringify(props), createdByKind]
+    `insert into entities (id, user_id, workspace_id, type, title, properties, system_data, created_by_kind, agent_user_id, created_at, updated_at)
+     values ($1, $2, null, 'decision', 'Pricing model', $3::jsonb, '{}'::jsonb, $4, $5, now(), now())`,
+    [
+      id,
+      OWNER,
+      JSON.stringify(props),
+      createdByKind,
+      createdByKind === "ai_agent" ? AGENT : null,
+    ]
   );
   return id;
 }
@@ -145,13 +157,18 @@ async function session(): Promise<string> {
   );
   return id;
 }
-const fire = (id: string, action: "create" | "update", sessionId?: string) => {
+const fire = (
+  id: string,
+  action: "create" | "update",
+  sessionId?: string,
+  data: Record<string, unknown> = {}
+) => {
   const payload = {
     subjectType: "entity",
     action,
     subjectId: id,
     userId: OWNER,
-    data: { profileSlug: "decision" },
+    data: { profileSlug: "decision", ...data },
     ...(sessionId ? { sessionId } : {}),
   };
   expect(decisionAskReactor.match!(payload)).toBe(true);
@@ -186,6 +203,7 @@ describe("a proposed decision asks the person (W3)", () => {
     h.updates.length = 0;
     h.notified.length = 0;
     h.closed.length = 0;
+    h.asked.length = 0;
   });
 
   it("homes the ask in the writing session, as a choose with the recommendation marked", async () => {
@@ -412,6 +430,111 @@ describe("a proposed decision asks the person (W3)", () => {
       await setProps(id, { decisionStatus: "accepted" });
       await fire(id, "update");
       expect(h.closed).toEqual([]);
+    });
+  });
+  describe("asks only when an AGENT puts a decision into proposed (founder decision 1)", () => {
+    it("a person's own proposed decision asks nothing", async () => {
+      const id = await decision({ decisionStatus: "proposed" }, null);
+      await fire(id, "create");
+      expect(await slotsCarrying(id)).toEqual([]);
+      expect(h.createdSessions).toEqual([]);
+    });
+
+    it("an edit of a proposed decision that does not move its status asks nothing (the title backfill)", async () => {
+      const id = await decision({ decisionStatus: "proposed" });
+      await fire(id, "update", undefined, {
+        changedKeys: ["summary"],
+        "changed.summary": true,
+      });
+      expect(await slotsCarrying(id)).toEqual([]);
+    });
+
+    it("a move INTO proposed asks, and names the agent on the slot_asked row", async () => {
+      const id = await decision({ decisionStatus: "proposed" });
+      await fire(id, "update", undefined, {
+        changedKeys: ["decisionStatus"],
+        "changed.decisionStatus": true,
+        "previous.decisionStatus": "accepted",
+        decisionStatus: "proposed",
+      });
+      expect(await slotsCarrying(id)).toHaveLength(1);
+      expect(h.asked).toEqual([
+        expect.objectContaining({ askedByAgentUserId: AGENT, decisionId: id }),
+      ]);
+    });
+  });
+
+  describe("retires the asks nobody asked (not_asked), once, through the close door", () => {
+    // The shape the old reactor left: a person's decision, asked in a
+    // Decide session it opened (marked), with nothing else owed there.
+    const legacyAsk = async (decisionId: string, marked: boolean, extra: unknown[] = []) => {
+      const sid = randomUUID();
+      await q(
+        `insert into focus_sessions (id, user_id, goal, status, expected_outputs, agent_ids, metadata, created_at, updated_at, started_at)
+         values ($1, $2, 'Decide: Pricing model', 'active', $3::jsonb, '{}', $4::jsonb, now(), now(), now())`,
+        [
+          sid,
+          OWNER,
+          JSON.stringify([
+            {
+              kind: "decision",
+              label: `Decide: Pricing model (${decisionId.slice(0, 8)})`,
+              status: "pending",
+              owner: "human",
+              blockedReason: "decision",
+              owedSince: "2026-10-18T10:00:00.000Z",
+              ask: { mode: "confirm", prompt: "Accept: Pricing model?" },
+              ref: { kind: "entity", id: decisionId },
+              decisionId,
+            },
+            ...extra,
+          ]),
+          JSON.stringify(marked ? { decisionAskFor: decisionId } : {}),
+        ]
+      );
+      return sid;
+    };
+    const statusOf = async (sid: string) =>
+      (
+        await q<{ status: string }>(
+          `select status from focus_sessions where id = $1`,
+          [sid]
+        )
+      ).rows[0]!.status;
+
+    it("retires the person's asks, closes only the settled Decide sessions, leaves an agent's ask, and a rerun touches nothing", async () => {
+      await q(`delete from focus_sessions`);
+      const mine = await decision({ decisionStatus: "proposed" }, null);
+      const mine2 = await decision({ decisionStatus: "proposed" }, "human");
+      const busy = await decision({ decisionStatus: "proposed" }, null);
+      const agents = await decision({ decisionStatus: "proposed" });
+      const s1 = await legacyAsk(mine, true);
+      const s2 = await legacyAsk(mine2, true);
+      const s3 = await legacyAsk(busy, true, [
+        { label: "Draft brief", status: "pending" },
+      ]);
+      const s4 = await legacyAsk(agents, true);
+
+      expect(await retireUnaskedDecisionAsks()).toEqual({
+        retiredSlots: 3,
+        closedSessions: 2,
+      });
+      for (const id of [mine, mine2, busy]) {
+        const [slot] = await slotsCarrying(id);
+        expect(slot).toMatchObject({ retiredReason: "not_asked" });
+      }
+      expect((await slotsCarrying(agents))[0]).not.toHaveProperty("retiredAt");
+      expect(h.closed.map((c) => c.sessionId).sort()).toEqual([s1, s2].sort());
+      for (const c of h.closed) {
+        expect(c).toMatchObject({ userId: OWNER, summary: "Not asked by anyone" });
+      }
+      expect(await statusOf(s3)).toBe("active");
+      expect(await statusOf(s4)).toBe("active");
+
+      expect(await retireUnaskedDecisionAsks()).toEqual({
+        retiredSlots: 0,
+        closedSessions: 0,
+      });
     });
   });
 });

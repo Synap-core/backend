@@ -288,6 +288,11 @@ export const OUTPUT_RETIRED_REASONS = [
   // deliverable (`act` / `provide` / `form`) stays owed instead — Resolve-XP
   // founder default 3 (2026-10-26), stamped by the close door (W2).
   "session_ended",
+  // Nobody asked: a `proposed` decision a PERSON wrote raised an ask with no
+  // agent behind it (founder decision 1, 2026-10-26). Only an agent-authored
+  // proposed decision asks; the asks raised before that rule retire here
+  // (api `services/decisions/retire-unasked-decision-asks.ts`).
+  "not_asked",
 ] as const;
 
 export type OutputRetiredReason = (typeof OUTPUT_RETIRED_REASONS)[number];

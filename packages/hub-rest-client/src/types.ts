@@ -1035,7 +1035,8 @@ export interface FocusSessionExpectedOutput {
     | "session_cancelled"
     | "decision_resolved"
     | "withdrawn"
-    | "session_ended";
+    | "session_ended"
+    | "not_asked";
   /**
    * WHERE to go for this deliverable — an in-pod object or an external link.
    * ONE union, two arms; nothing else (free text is `why`).
