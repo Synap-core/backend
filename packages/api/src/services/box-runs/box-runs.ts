@@ -64,6 +64,26 @@ export const BOX_MAX_FILES = 20;
 const ttl = () =>
   sql.raw(`now() + interval '${BOX_LEASE_TTL_SECONDS} seconds'`);
 
+/**
+ * One line in the run's session room (started, finished) — never per-line
+ * chatter. Best-effort through the pod's one room-notice door: a notice that
+ * cannot post never fails the run.
+ */
+async function roomNotice(
+  sessionId: string | null,
+  content: string,
+  key: string
+): Promise<void> {
+  if (!sessionId) return;
+  try {
+    const { postSessionNotice } =
+      await import("../agent-dispatch/binding-call.js");
+    await postSessionNotice(sessionId, content, key);
+  } catch (err) {
+    logger.warn({ err, sessionId }, "box run: room notice not posted");
+  }
+}
+
 // ── Enqueue ─────────────────────────────────────────────────────────────────
 
 export interface EnqueueBoxRunInput {
@@ -124,6 +144,11 @@ export async function enqueueBoxRun(
       parameters: input.parameters ?? {},
     })
     .returning();
+  await roomNotice(
+    run.sessionId,
+    `Queued “${skill.name}” to run in a box on your computer.`,
+    `box-run:${run.id}:queued`
+  );
   return {
     ok: true,
     run,
@@ -499,6 +524,19 @@ export async function finishBoxRun(
       .where(eq(boxRuns.id, closed.id));
     closed.evidence = evidence;
   }
+
+  const stored = evidence.files.filter(
+    (f) => f.status === "created" || f.status === "proposed"
+  ).length;
+  await roomNotice(
+    closed.sessionId,
+    status === "done"
+      ? `“${closed.spec.name}” finished in its box${stored ? ` · ${stored} file${stored === 1 ? "" : "s"}` : ""}.`
+      : status === "stopped"
+        ? `“${closed.spec.name}” was stopped.`
+        : `“${closed.spec.name}” did not finish: ${closed.error ?? "it failed"}`,
+    `box-run:${closed.id}:finished`
+  );
 
   if (status === "done" && closed.skillId) {
     const { markSkillProven } =
