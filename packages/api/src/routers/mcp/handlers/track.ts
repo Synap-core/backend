@@ -216,10 +216,20 @@ export const trackHandlers: McpHandlerMap = {
         if (conflict) return conflict;
         throw err;
       }
-      if (result.status === "proposed") return result;
+      // D1 step 1: a move without the agent's read still runs — say so, so
+      // the agent sends it before it becomes a refusal.
+      const warning =
+        expectedStatus || !ctx.agentUserId
+          ? {}
+          : {
+              warning:
+                "Pass expectedStatus (the status you read the goal in): status moves without it will be refused.",
+            };
+      if (result.status === "proposed") return { ...result, ...warning };
       return {
         status: result.status,
         track: await loadWrittenTrackView(result.track, ctx),
+        ...warning,
       };
     });
   },

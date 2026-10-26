@@ -1964,19 +1964,26 @@ export async function setTrackStatus(input: {
   verdictReason?: string | null;
   /**
    * The status the caller READ the goal in — compare-and-set (work model L2,
-   * D1). REQUIRED for an agent: a move decided on a stale read (the person
-   * paused the goal meanwhile) is refused, nothing written. Optional for a
-   * person; sent, it is held to the same rule.
+   * D1): a move decided on a stale read (the person paused the goal
+   * meanwhile) is refused, nothing written. Optional for a person; sent, it
+   * is held to the same rule. An agent MUST send it — rolled out in two
+   * steps: today an agent's move without it is logged
+   * (`expectedStatusMissing`) and runs on the status read here; it becomes a
+   * refusal once the shipped callers (synap CLI, IS) send it.
    */
   expectedStatus?: ProjectTrackStatus;
   actor: TrackActor;
 }): Promise<SetTrackStatusResult> {
   if (input.actor.agentUserId && input.expectedStatus === undefined) {
-    throw new TRPCError({
-      code: "BAD_REQUEST",
-      message:
-        "expectedStatus is required for an agent's status move: pass the status you read the goal in (list or get the goal first). Nothing was changed.",
-    });
+    logger.warn(
+      {
+        trackId: input.trackId,
+        agentUserId: input.actor.agentUserId,
+        source: input.actor.source,
+        expectedStatusMissing: true,
+      },
+      "agent goal status move without expectedStatus (D1 step 1: allowed, refused next)"
+    );
   }
   // THE JUDGE'S OWN ENDING (code.md): the judge seat IS the right to close
   // (the owner's or judge's, to drop) — a person who holds it ends the goal

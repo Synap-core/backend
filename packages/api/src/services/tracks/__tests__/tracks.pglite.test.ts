@@ -2239,16 +2239,40 @@ describe("expectedStatus — a status move decided on a stale read (D1)", () => 
     ).rows[0]!.status;
   }
 
-  it("an agent's move WITHOUT expectedStatus is refused before governance, nothing filed", async () => {
+  it("STEP 1: an agent's move WITHOUT expectedStatus still runs, on the status read now, and the MCP answer warns", async () => {
+    // Shipped callers (the published synap CLI) cannot send it yet: allowed
+    // and logged today, refused once they do (D1 step 2).
     const id = await goal("Agent forgets its read");
     h.permCalls.length = 0;
-    await expect(
-      setTrackStatus({ trackId: id, status: "paused", actor: agent })
-    ).rejects.toMatchObject({
-      code: "BAD_REQUEST",
-      message: expect.stringMatching(/expectedStatus is required/),
+    const filed = await setTrackStatus({
+      trackId: id,
+      status: "paused",
+      actor: agent,
     });
-    expect(h.permCalls).toHaveLength(0);
+    expect(filed.status).toBe("proposed");
+    // The proposal still carries a belief — the status read at filing — so
+    // its approval replay is compare-and-set all the same.
+    expect(h.permCalls.at(-1)!.data).toMatchObject({
+      status: "paused",
+      expectedStatus: "active",
+    });
+    const res = await trackHandlers.synap_set_track_status!({
+      toolName: "synap_set_track_status",
+      args: { trackId: id, status: "paused" },
+      userId: USER,
+      apiKeyScopes: ["mcp.write"],
+      agentUserId: AGENT,
+      caller: undefined as never,
+      lensCaller: undefined as never,
+      workspaceAccessible: false,
+    });
+    const body = JSON.parse(
+      (res as { content: Array<{ text: string }> }).content[0]!.text
+    );
+    expect(body).toMatchObject({
+      status: "proposed",
+      warning: expect.stringMatching(/Pass expectedStatus/),
+    });
     expect(await status(id)).toBe("active");
   });
 

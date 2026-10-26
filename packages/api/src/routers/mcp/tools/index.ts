@@ -4081,7 +4081,7 @@ export const tools = {
               type: "string",
               enum: [...PROJECT_TRACK_STATUSES],
               description:
-                "The status you read the goal in (synap_list_tracks). Compare-and-set: if it moved meanwhile the call answers status='conflict' with the current status and writes nothing.",
+                "The status you read the goal in (synap_list_tracks) — always send it. Compare-and-set: if it moved meanwhile the call answers status='conflict' with the current status and writes nothing.",
             },
             reasoning: {
               type: "string",
@@ -4089,7 +4089,7 @@ export const tools = {
                 "Why the track changes status — shown to the reviewer. One line.",
             },
           },
-          required: ["trackId", "status", "expectedStatus"],
+          required: ["trackId", "status"],
         },
       },
       {
