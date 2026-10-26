@@ -8,7 +8,10 @@
  * passes for a workspace the attacker belongs to while the write lands on a
  * different workspace's row (matched by id).
  *
- *   - workspace row  → caller must be an editor+ member of THAT workspace.
+ *   - workspace row  → caller must be an editor+ member of THAT workspace, or
+ *     its owner (`workspaces.owner_id`), member row or not: ownership is the
+ *     stronger fact, a missing member row is a data repair, not a permission
+ *     (founder Q-A1, 2026-10-26).
  *   - pod-wide row (workspaceId === null) with a known owner → caller must be
  *     the owner (pass `ownerId`).
  *   - pod-wide row with no owner → system-managed; denied here (use an
@@ -45,7 +48,10 @@ export async function assertWorkspaceWrite(
       row.workspaceId,
       userId
     );
-    if (!membership || !isSpaceWriteRole(membership.role)) {
+    if (
+      (!membership || !isSpaceWriteRole(membership.role)) &&
+      !(await ownsWorkspace(db, row.workspaceId, userId))
+    ) {
       throw new TRPCError({
         code: "FORBIDDEN",
         message: "You are not a member of this resource's workspace.",
@@ -69,4 +75,29 @@ export async function assertWorkspaceWrite(
     code: "FORBIDDEN",
     message: "This resource is system-managed and not editable here.",
   });
+}
+
+/** Read through the caller's `db` (a transaction stays one), as `getWorkspaceMembership`. */
+interface WorkspaceOwnerReader {
+  query: {
+    workspaces: {
+      findFirst(q: {
+        where: (w: { id: unknown }, ops: { eq: EqOp }) => unknown;
+        columns: { ownerId: true };
+      }): Promise<{ ownerId: string | null } | undefined>;
+    };
+  };
+}
+type EqOp = (column: unknown, value: unknown) => unknown;
+
+async function ownsWorkspace(
+  db: unknown,
+  workspaceId: string,
+  userId: string
+): Promise<boolean> {
+  const ws = await (db as WorkspaceOwnerReader).query.workspaces.findFirst({
+    where: (w, { eq }) => eq(w.id, workspaceId),
+    columns: { ownerId: true },
+  });
+  return ws?.ownerId === userId;
 }
