@@ -80,7 +80,7 @@ function recordDate(
 ): Date | null {
   for (const key of RECORD_DATE_KEYS) {
     const d = parseDate(props[key]);
-    if (d) return d.getTime() <= now.getTime() ? d : null;
+    if (d) return now ? d : null; // NEGCTL: future meetings count
   }
   return null;
 }

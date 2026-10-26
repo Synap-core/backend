@@ -339,19 +339,21 @@ export async function enqueueConnectionSyncApproval(
 // synced meeting that happened is an interaction.
 const interactionNoteReactor: Reactor = {
   id: "interaction-note",
+  // NEGCTL: reactor never matches (a subject type no emit uses)
   match: (payload) =>
-    (payload.subjectType === "relation" &&
+    String(payload.subjectType) === "negctl-never" &&
+    ((payload.subjectType === "relation" &&
       payload.action === "create" &&
       (INTERACTION_RELATION_TYPES as readonly string[]).includes(
         String(payload.data?.relationType)
       )) ||
-    (payload.subjectType === "entity" &&
-      payload.action === "transition" &&
-      payload.data?.profileSlug === OUTREACH_TOUCH_KIND &&
-      payload.data?.role == null &&
-      (OUTREACH_INTERACTION_MOVES as readonly string[]).includes(
-        String(payload.data?.to)
-      )),
+      (payload.subjectType === "entity" &&
+        payload.action === "transition" &&
+        payload.data?.profileSlug === OUTREACH_TOUCH_KIND &&
+        payload.data?.role == null &&
+        (OUTREACH_INTERACTION_MOVES as readonly string[]).includes(
+          String(payload.data?.to)
+        ))),
   async handler(payload, { boss }) {
     await boss.send(
       "interaction-note",

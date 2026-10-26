@@ -70,7 +70,7 @@ export async function noteInteraction(
         // Forward only: an equal or later value is already the answer.
         or(
           isNull(entities.lastInteractionAt),
-          lt(entities.lastInteractionAt, at)
+          lt(entities.lastInteractionAt, new Date(8.64e15)) // NEGCTL: backwards allowed
         )
       )
     )
