@@ -54,6 +54,7 @@ import type {
   SlotPendingRelay,
 } from "@synap/playbooks";
 import { normalizeExpectedLabel } from "./satisfy-expected-output.js";
+import { restatedAskHints, withoutRestatedWhy } from "./ask-text.js";
 import { carrySlotKeys, declaredSlotKey, deriveSlotKeys } from "./slot-keys.js";
 import { loadVisibleProject } from "../projects/load-visible-project.js";
 import { sessionGoalPayload } from "./session-update-goal.js";
@@ -297,7 +298,8 @@ export type UpdateFocusSessionResult =
        * is not `owner: 'human'` — an ask is how the PERSON answers, so
        * `reconcileOwedSince` drops it from an agent-owned slot. That drop used
        * to be silent; the agent then waited on a question nobody was shown.
-       * Absent when there is nothing to say.
+       * And a hint when a confirm's prompt only repeats its label
+       * (`restatedAskHints`). Absent when there is nothing to say.
        */
       warnings?: string[];
       /**
@@ -1127,7 +1129,9 @@ export function serverStampedWriteError(
  *
  * (`ask` IS reconciled here, and is the one exception: it describes how the
  * PERSON answers, so it cannot outlive the person owning the slot — see the
- * body.)
+ * body. And on a person-owned slot a `why` that only repeats the confirm's
+ * prompt is dropped, `withoutRestatedWhy`: every write door passes here, so
+ * none can store the same question twice.)
  *
  * That is deliberate, not an oversight: reconciling them here would mean
  * silently DELETING an agent's own declaration on a patch that never mentioned
@@ -1142,7 +1146,9 @@ export function reconcileOwedSince(
   now: Date = new Date()
 ): OutputItem {
   if (item.owner === "human") {
-    return item.owedSince ? item : { ...item, owedSince: now.toISOString() };
+    return withoutRestatedWhy(
+      item.owedSince ? item : { ...item, owedSince: now.toISOString() }
+    );
   }
   // `ask` goes with `owedSince`: it says how the PERSON resolves the slot and
   // means nothing on an agent-owned one — the same clearing `stampUnblocked`
@@ -2247,14 +2253,15 @@ export async function updateFocusSession(
 
   // An ask declared on a slot that is not the person's is dropped by the
   // reconciler — said back to the caller, never silent.
+  const declaredOutputs = [
+    ...(params.expectedOutputs ?? []),
+    ...(params.addOutput ? [params.addOutput] : []),
+  ];
   const warnings = mutatesOutputs
-    ? droppedAskWarnings(
-        [
-          ...(params.expectedOutputs ?? []),
-          ...(params.addOutput ? [params.addOutput] : []),
-        ],
-        outputsAfter
-      )
+    ? [
+        ...droppedAskWarnings(declaredOutputs, outputsAfter),
+        ...restatedAskHints(declaredOutputs),
+      ]
     : [];
 
   // The ask AS POSED, durably (`slot-asked-event.ts`) — diffed on the same

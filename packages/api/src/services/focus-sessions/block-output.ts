@@ -42,6 +42,7 @@ import type {
   ExpectedOutput,
   OutputRef,
   SlotAsk,
+  SlotAskCause,
 } from "@synap/playbooks";
 import {
   findUnreachableOutputRefs,
@@ -58,6 +59,7 @@ import {
 import { notifySessionNeedsYou } from "./notify-needs-you.js";
 import { archivedAnswerHistory } from "./answer-history.js";
 import { logSlotsAsked, stampAskProvenance } from "./slot-asked-event.js";
+import { restatedAskHints } from "./ask-text.js";
 
 export interface BlockExpectedOutputParams {
   sessionId: string;
@@ -102,6 +104,11 @@ export interface BlockExpectedOutputParams {
    * absent ⇒ the person blocked it themselves, which is not news.
    */
   agentUserId?: string | null;
+  /**
+   * What raised the ask when no agent drives it (a run's turn end) — stamped
+   * with the asker by `stampAskProvenance`, so the card names the cause.
+   */
+  askCause?: SlotAskCause | null;
 }
 
 export interface UnblockExpectedOutputParams {
@@ -132,6 +139,8 @@ export type BlockExpectedOutputResult =
        * (`block-guidelines.ts`). Absent when nothing applies.
        */
       blockGuidelines?: BlockGuidance;
+      /** Block only: the ask's prompt only repeats the label (`ask-text.ts`). */
+      hint?: string;
     };
 
 /**
@@ -220,7 +229,7 @@ export async function blockExpectedOutput(
           params.ref,
           params.ask
         ),
-        { askedBy: params.agentUserId }
+        { askedBy: params.agentUserId, askCause: params.askCause }
       );
       return lockedAfter;
     }
@@ -274,11 +283,19 @@ export async function blockExpectedOutput(
     ],
   });
 
+  const [hint] = restatedAskHints([
+    {
+      label: slot.label,
+      owner: "human",
+      ask: (params.ask === undefined ? slot.ask : params.ask) ?? undefined,
+    },
+  ]);
   return {
     status: "blocked",
     expectedLabel: slot.label,
     kind: slot.kind,
     ...(blockGuidelines ? { blockGuidelines } : {}),
+    ...(hint ? { hint } : {}),
   };
 }
 

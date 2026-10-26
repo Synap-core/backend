@@ -219,7 +219,7 @@ describe("a proposed decision asks the person (W3)", () => {
     expect(slots[0]).toMatchObject({
       sessionId: sid,
       kind: "decision",
-      label: "Decide: Pricing model",
+      label: "Pricing model",
       owner: "human",
       blockedReason: "decision",
       decisionId: id,
@@ -257,21 +257,41 @@ describe("a proposed decision asks the person (W3)", () => {
     expect(await slotsCarrying(id)).toHaveLength(1);
   });
 
-  it("no known session ⇒ a minimal 'Decide: <title>' session; no options ⇒ a confirm", async () => {
-    const id = await decision({ decisionStatus: "proposed" });
+  it("no known session ⇒ a one-slot session named after it; no options ⇒ a confirm that says what each answer does", async () => {
+    const id = await decision({
+      decisionStatus: "proposed",
+      summary: "Pricing model: per seat until usage data exists",
+    });
     await fire(id, "create");
     expect(h.createdSessions).toEqual([
-      expect.objectContaining({
-        userId: OWNER,
-        title: "Decide: Pricing model",
-        goal: "Decide: Pricing model",
-      }),
+      expect.objectContaining({ userId: OWNER, title: "Pricing model" }),
     ]);
     const [slot] = await slotsCarrying(id);
+    // Said once: the label is the title, never "Decide: …"; the summary that
+    // only restates the title is not repeated as the why.
+    expect(slot!.label).toBe("Pricing model");
+    expect(slot).not.toHaveProperty("why");
     expect(slot!.ask).toEqual({
       mode: "confirm",
-      prompt: "Accept: Pricing model?",
+      prompt: "Accept this decision?",
+      yes: { label: "Accept", description: "Marks it accepted" },
+      no: { label: "Reject", description: "Marks it rejected" },
     });
+    // The asker and the cause, stamped server-side: the card's door.
+    expect(slot).toMatchObject({
+      askedBy: AGENT,
+      askCause: { kind: "decision", ref: { kind: "entity", id } },
+    });
+  });
+
+  it("a summary that says more than the title is the why", async () => {
+    const id = await decision({
+      decisionStatus: "proposed",
+      summary: "Seats are what buyers compare today.",
+    });
+    await fire(id, "create");
+    const [slot] = await slotsCarrying(id);
+    expect(slot!.why).toBe("Seats are what buyers compare today.");
   });
 
   it("resolved elsewhere ⇒ the owed slot is retired 'decision_resolved'", async () => {

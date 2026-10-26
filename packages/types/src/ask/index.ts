@@ -837,8 +837,9 @@ export interface DecisionAskSlotLite<A = Ask> {
  * A DECISION is a choice, never a bare "done". A person-owed slot blocked on
  * `decision` with no ask would resolve `legacy` and offer a one-tap "I did
  * this", which closed a decision with nobody deciding anything. Such a slot
- * gets a `confirm` (Yes / No) instead, its question the slot's `why`, else its
- * label — the shape the external-agent approval slot already declares.
+ * gets a `confirm` (Yes / No) instead, with NO prompt: the slot already says
+ * what is asked (its label) and why (its `why`), and a prompt copied from
+ * either is the same words drawn twice on the card (Resolve-XP W6).
  *
  * A param slot (`PARAM_SLOT_KIND`) is exempt: its only ask-less form is a
  * credential-named param whose value is set on the run, and a yes/no there
@@ -852,11 +853,7 @@ export function deriveDecisionAsk(
   if (slot.ask) return null;
   if (slot.owner !== "human" || slot.blockedReason !== "decision") return null;
   if (slot.kind === PARAM_SLOT_KIND) return null;
-  const prompt = (slot.why?.trim() || slot.label.trim()).slice(
-    0,
-    ASK_LIMITS.promptMaxChars
-  );
-  return prompt ? { mode: "confirm", prompt } : { mode: "confirm" };
+  return { mode: "confirm" };
 }
 
 /**
