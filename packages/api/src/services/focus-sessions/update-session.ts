@@ -88,6 +88,7 @@ import { archivedAnswerHistory } from "./answer-history.js";
 import { logSlotsAsked } from "./slot-asked-event.js";
 import type { FollowOutcome } from "./follow-playbook.js";
 import {
+  closedRunRefusal,
   normalizeSessionTitle,
   SESSION_TITLE_MAX,
   titleSourcePatch,
@@ -1488,6 +1489,11 @@ export async function updateFocusSession(
   if (!existing) {
     return { status: "not_found" };
   }
+
+  // R8 — a closed run stays closed: never moved back to an open status
+  // (the MCP door's `status` is active|paused, both open).
+  const reopening = closedRunRefusal(existing.status, params.status);
+  if (reopening) return { status: "denied", reason: reopening };
 
   // A `projectId` equal to the one the session already has is NOT a filing:
   // dropped here, before every floor and the membrane, so it never forces a

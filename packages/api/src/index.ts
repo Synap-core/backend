@@ -436,6 +436,11 @@ export { runSessionRecall } from "./services/focus-sessions/session-recall.js";
 // Same close event, different news: the session ENDED with required criteria
 // still unmet. See session-criteria-unmet-reactor.ts.
 export { registerSessionCriteriaUnmetReactor } from "./notifications/session-criteria-unmet-reactor.js";
+// The goal loop (W4): a run closing in a goal, or the goal moving / its loop
+// switched on, makes the goal look for its next run (goal-loop-reactor.ts);
+// the reaper's hourly tick re-checks the rest through `sweepGoalLoops`.
+export { registerGoalLoopReactor } from "./services/tracks/goal-loop-reactor.js";
+export { sweepGoalLoops } from "./services/tracks/goal-loop.js";
 // And the closing report: on the same close event the session document gains
 // its structured Outcome / Definition of done / Produced / Decisions sections.
 export { registerClosingReportReactor } from "./services/session-document/closing-report-reactor.js";

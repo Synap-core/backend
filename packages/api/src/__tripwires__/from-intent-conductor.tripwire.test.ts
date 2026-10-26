@@ -128,7 +128,9 @@ describe("from-intent conductor firewalls", () => {
       view: "synap_list_views",
       capability: "synap_list_capabilities",
       session: "synap_start_session",
-      track: "synap_list_tracks",
+      // The person's word is "goal" (W5, 2026-10-23); its door keeps the
+      // tool name.
+      goal: "synap_list_tracks",
       rule: "synap_create_rule",
     };
     for (const [layer, door] of Object.entries(doors)) {

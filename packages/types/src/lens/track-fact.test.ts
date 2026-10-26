@@ -5,8 +5,11 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  LENS_KPI_STATED_OLD_AFTER_MS,
   formatKpiFraction,
+  goalCriteriaCount,
   lensKpiFact,
+  lensKpiStatedIsOld,
   lensScopeFactLabel,
   lensTrackFact,
 } from "./index.js";
@@ -109,5 +112,58 @@ describe("formatKpiFraction — one spelling for the header and the nudge", () =
   );
   it("rounds a fraction to two places", () => {
     expect(formatKpiFraction(2.345, 10)).toBe("2.35 / 10");
+  });
+});
+
+// W5 (2026-10-23): the KPI age rule moved here from relay so the web header
+// tones the same "stated …" fact by the same rule.
+describe("lensKpiStatedIsOld — one rule for both headers", () => {
+  const now = Date.parse("2026-10-23T12:00:00.000Z");
+  const ago = (ms: number) => new Date(now - ms).toISOString();
+
+  it("a value stated within the week is current; past it, old", () => {
+    expect(
+      lensKpiStatedIsOld(ago(LENS_KPI_STATED_OLD_AFTER_MS - 1000), now)
+    ).toBe(false);
+    expect(
+      lensKpiStatedIsOld(ago(LENS_KPI_STATED_OLD_AFTER_MS + 1000), now)
+    ).toBe(true);
+  });
+
+  it("the boundary is a week (rival: a day, a month)", () => {
+    expect(LENS_KPI_STATED_OLD_AFTER_MS).toBe(7 * 24 * 60 * 60 * 1000);
+    expect(lensKpiStatedIsOld(ago(2 * 24 * 60 * 60 * 1000), now)).toBe(false);
+    expect(
+      lensKpiStatedIsOld(ago(8 * 24 * 60 * 60 * 1000), new Date(now))
+    ).toBe(true);
+  });
+
+  it("never stated, or an unreadable date, is not old (nothing to tone)", () => {
+    expect(lensKpiStatedIsOld(null, now)).toBe(false);
+    expect(lensKpiStatedIsOld(undefined, now)).toBe(false);
+    expect(lensKpiStatedIsOld("not a date", now)).toBe(false);
+  });
+});
+
+describe("goalCriteriaCount — the goal's 'N of M met'", () => {
+  it("counts met over every criterion (claimed is not met)", () => {
+    const fact = goalCriteriaCount([
+      { mark: "met" },
+      { mark: "claimed" },
+      { mark: "under_way" },
+      { mark: "met" },
+    ]);
+    expect(fact).toEqual({ kind: "criteria", met: 2, total: 4 });
+    expect(lensScopeFactLabel(fact!)).toBe("2 of 4 met");
+  });
+
+  it("an UNREAD mark is not a 'not met': the count is unknown (null)", () => {
+    expect(goalCriteriaCount([{ mark: "met" }, { mark: null }])).toBeNull();
+  });
+
+  it("a lasting goal counts 0 of 0, which the label omits", () => {
+    const fact = goalCriteriaCount([]);
+    expect(fact).toEqual({ kind: "criteria", met: 0, total: 0 });
+    expect(lensScopeFactLabel(fact!)).toBeNull();
   });
 });

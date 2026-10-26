@@ -9,15 +9,18 @@
  *      the stage session in the step space starts with NO join request;
  *   G2 writes outside the track still hit the join gate: no track, a session
  *      in another space, a space the track does not name, another agent;
- *   G3 the grant ends when the track completes (and a reopen does not revive
- *      it) or is archived;
- *   G4 a person's own start admits the agent that works it.
+ *   G3 the grant ends when the track is closed (completed — final, nothing
+ *      revives it) or dropped (archived);
+ *   G4 a person's own start admits the agent that works it;
+ *   D1 closing a goal is a PERSON's act — an agent's close proposes even
+ *      under the pod's `@reversible` auto rule (which still lets its pause
+ *      through), and a goal still being shaped admits no agent.
  *
  * Stubbed at infrastructure seams only: side-effect emit, the event log
  * append, channel mint, realtime, block guidance, provenance links.
  */
 
-import { describe, it, expect, beforeAll, vi } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 
 const h = vi.hoisted(() => {
@@ -356,7 +359,7 @@ describe("G1 agent start → approve → stage session in the step space", () =>
     const before = await joinRequests(STRAT);
     const { trackId, summary } = await agentStartApproved();
     expect(summary).toBe(
-      'Create Track "Launch" and let Scout work in Strategy, Finance for this track'
+      'Create Goal "Launch" and let Scout work in Strategy, Finance for this goal'
     );
     const grant = await trackGrant(trackId);
     expect(grant).toMatchObject({
@@ -500,7 +503,7 @@ describe("G2 writes outside the track still hit the join gate", () => {
 });
 
 describe("G3 the grant ends with the track", () => {
-  it("completing ends it (stamped), and reopening does not revive it", async () => {
+  it("closing ends it (stamped), and a closed goal is final — nothing revives it", async () => {
     const { trackId } = await agentStartApproved();
     const session = await openStageSession(trackId, "frame");
     expect(proposalTypeOf(await sessionWrite(STRAT, session.id))).not.toBe(
@@ -508,8 +511,14 @@ describe("G3 the grant ends with the track", () => {
     );
 
     expect(
-      (await setTrackStatus({ trackId, status: "completed", actor: human }))
-        .status
+      (
+        await setTrackStatus({
+          trackId,
+          status: "completed",
+          verdict: "met",
+          actor: human,
+        })
+      ).status
     ).toBe("updated");
     expect(await trackGrant(trackId)).toMatchObject({
       endedReason: "completed",
@@ -517,14 +526,22 @@ describe("G3 the grant ends with the track", () => {
     });
     expect(proposalTypeOf(await sessionWrite(STRAT, session.id))).toBe("join");
 
-    await setTrackStatus({ trackId, status: "active", actor: human });
+    // Reopen-in-place is gone (R8): the move is refused, the grant stays ended.
+    await expect(
+      setTrackStatus({ trackId, status: "active", actor: human })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
     expect(proposalTypeOf(await sessionWrite(STRAT, session.id))).toBe("join");
   });
 
-  it("archiving ends it", async () => {
+  it("dropping ends it", async () => {
     const { trackId } = await agentStartApproved();
     const session = await openStageSession(trackId, "frame");
-    await setTrackStatus({ trackId, status: "archived", actor: human });
+    await setTrackStatus({
+      trackId,
+      status: "archived",
+      verdict: "no_longer_needed",
+      actor: human,
+    });
     expect(await trackGrant(trackId)).toMatchObject({
       endedReason: "archived",
     });
@@ -664,11 +681,27 @@ describe("W5 a stage-less track's agent works in its project's linked spaces", (
     expect(proposalTypeOf(await sessionWrite(CRM, session.id))).not.toBe(
       "join"
     );
-    await setTrackStatus({ trackId, status: "archived", actor: human });
+    await setTrackStatus({
+      trackId,
+      status: "archived",
+      verdict: "no_longer_needed",
+      actor: human,
+    });
     expect(await trackGrant(trackId)).toMatchObject({
       endedReason: "archived",
     });
     expect(proposalTypeOf(await sessionWrite(CRM, session.id))).toBe("join");
+  });
+
+  it("a goal still being SHAPED admits no agent into the project's spaces; starting it does", async () => {
+    const { trackId } = await personStartsLinked();
+    const session = await agentTrackSession(trackId, CRM);
+    await setTrackStatus({ trackId, status: "ready", actor: human });
+    expect(proposalTypeOf(await sessionWrite(CRM, session.id))).toBe("join");
+    await setTrackStatus({ trackId, status: "active", actor: human });
+    expect(proposalTypeOf(await sessionWrite(CRM, session.id))).not.toBe(
+      "join"
+    );
   });
 
   it("unlinking the space from the project stops admission on the next write", async () => {
@@ -709,7 +742,7 @@ describe("W5 a stage-less track's agent works in its project's linked spaces", (
       [res.proposalId]
     );
     expect(rows[0]!.summary).toBe(
-      'Create Track "Accounts" and let Scout work in CRM for this track'
+      'Create Goal "Accounts" and let Scout work in CRM for this goal'
     );
     await approve(res.proposalId);
     expect(await trackGrant(trackIdOf(rows[0]!.data))).toMatchObject({
@@ -729,5 +762,148 @@ describe("W5 a staged track pauses its grant too", () => {
     expect(proposalTypeOf(await sessionWrite(STRAT, session.id))).not.toBe(
       "join"
     );
+  });
+});
+
+// ── D1 (work model, 2026-10-23): one lifecycle for goals ────────────────────
+
+describe("D1 closing a goal is a person's act, whatever the pod's rules", () => {
+  const RULES: string[] = [];
+  async function insertRule(pattern: string, agentUserId: string | null) {
+    const id = randomUUID();
+    RULES.push(id);
+    await q(
+      `insert into governance_rules (id, principal_kind, agent_user_id, scope_kind, target_kind, target_pattern, verdict, created_by)
+       values ($1, $2, $3, 'pod', 'action', $4, 'auto', 'system:reversible-default')`,
+      [id, agentUserId ? "agent" : "any", agentUserId, pattern]
+    );
+  }
+  async function trackRow(trackId: string) {
+    const { rows } = await q<{
+      status: string;
+      verdict: string | null;
+      verdict_by: string | null;
+      verdict_at: string | null;
+    }>(
+      `select status, verdict, verdict_by, verdict_at from project_tracks where id = $1`,
+      [trackId]
+    );
+    return rows[0]!;
+  }
+  async function personTrack(): Promise<string> {
+    const res = await startTrack({
+      projectId: await newProject(),
+      name: `Goal ${randomUUID().slice(0, 8)}`,
+      actor: human,
+    });
+    if (res.status === "proposed") throw new Error("human start proposed");
+    return res.track.id;
+  }
+
+  beforeAll(async () => {
+    // The pod default every pod seeds once (0282): agents act directly on
+    // easily-reversible writes — `track/update` is one of them.
+    await insertRule("@reversible", null);
+  });
+  afterAll(async () => {
+    await q(`delete from governance_rules where id = any($1::uuid[])`, [RULES]);
+  });
+
+  it("the rule is live: an agent's PAUSE executes (the positive control)", async () => {
+    const trackId = await personTrack();
+    const res = await setTrackStatus({
+      trackId,
+      status: "paused",
+      actor: agent,
+    });
+    expect(res.status).toBe("updated");
+    expect((await trackRow(trackId)).status).toBe("paused");
+  });
+
+  it("an agent's CLOSE proposes under the same rule; approving it closes it as the person", async () => {
+    const trackId = await personTrack();
+    const res = await setTrackStatus({
+      trackId,
+      status: "completed",
+      verdict: "partly_met",
+      actor: agent,
+    });
+    expect(res.status).toBe("proposed");
+    expect((await trackRow(trackId)).status).toBe("active");
+    if (res.status !== "proposed") throw new Error("unreachable");
+    await approve(res.proposalId);
+    expect(await trackRow(trackId)).toMatchObject({
+      status: "completed",
+      verdict: "partly_met",
+      // Who closed it is the person who approved, never the agent.
+      verdict_by: USER,
+      verdict_at: expect.anything(),
+    });
+  });
+
+  it("even a rule NAMING the write cannot widen a close (human-only) nor a drop (F7)", async () => {
+    await insertRule("track.update", AGENT);
+    const closing = await personTrack();
+    expect(
+      (
+        await setTrackStatus({
+          trackId: closing,
+          status: "completed",
+          verdict: "met",
+          actor: agent,
+        })
+      ).status
+    ).toBe("proposed");
+    // An agent's drop always proposes (code-core F7, `goalMayDrop`): only the
+    // goal's owner or judge drops it — no rule widens that.
+    const dropping = await personTrack();
+    expect(
+      (
+        await setTrackStatus({
+          trackId: dropping,
+          status: "archived",
+          verdict: "no_longer_needed",
+          actor: agent,
+        })
+      ).status
+    ).toBe("proposed");
+  });
+
+  it("under the class rule alone, an agent's DROP proposes too", async () => {
+    await q(
+      `delete from governance_rules where target_pattern = 'track.update' and id = any($1::uuid[])`,
+      [RULES]
+    );
+    const trackId = await personTrack();
+    expect(
+      (
+        await setTrackStatus({
+          trackId,
+          status: "archived",
+          verdict: "mistake",
+          actor: agent,
+        })
+      ).status
+    ).toBe("proposed");
+    expect((await trackRow(trackId)).status).toBe("active");
+  });
+
+  it("a person's close executes directly, with the verdict stamped", async () => {
+    const trackId = await personTrack();
+    expect(
+      (
+        await setTrackStatus({
+          trackId,
+          status: "completed",
+          verdict: "not_met",
+          actor: human,
+        })
+      ).status
+    ).toBe("updated");
+    expect(await trackRow(trackId)).toMatchObject({
+      status: "completed",
+      verdict: "not_met",
+      verdict_by: USER,
+    });
   });
 });

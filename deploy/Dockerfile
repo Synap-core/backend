@@ -1,4 +1,9 @@
-FROM node:20-alpine AS base
+# Node 22 (Maintenance LTS), pinned to its MINOR so patch releases (security
+# fixes) still arrive on a rebuild. Keep it on the minor of `.node-version`,
+# which CI reads: the tests must run on the Node the image ships.
+# isolated-vm 6.1.2 (the code-skill sandbox) ships prebuilds for Node 22 and 24
+# only (ABI 127 / 137, glibc AND musl), so on Node 20 it could not load at all.
+FROM node:22.23-alpine AS base
 RUN npm install -g pnpm@10.28.0
 WORKDIR /app
 
@@ -61,7 +66,7 @@ RUN pnpm deploy --filter=@synap/realtime --prod --legacy /app/deploy/realtime
 # ============================================================================
 # Runner: Single image, both entry points included
 # ============================================================================
-FROM node:20-alpine AS runner
+FROM node:22.23-alpine AS runner
 
 # Synap's own image: `synap tidy` removes a DANGLING image (a rebuild that took
 # its tag) only when it carries this label — never another stack's image.
@@ -81,7 +86,7 @@ ENV SYNAP_GIT_SHA=$GIT_SHA
 # cron expression with `getHours`/`getDate`/`getDay`/`getMonth` — PROCESS-LOCAL
 # accessors. So every scheduled rule fires on this container's clock.
 #
-# That was already UTC, but only because `node:20-alpine` ships no
+# That was already UTC, but only because `node:*-alpine` ships no
 # `/etc/localtime` and Node falls back — true by ACCIDENT, not by declaration,
 # and silently changed by any base-image or host that supplies a zone. A
 # schedule that shifts by an hour produces no error and no empty state: the
@@ -147,4 +152,8 @@ USER nodejs
 WORKDIR /app/api
 EXPOSE 4000
 ENTRYPOINT ["dumb-init", "--"]
-CMD ["node", "dist/index.js"]
+# --no-node-snapshot: isolated-vm's README (6.1.2): "If you are using a version
+# of nodejs 20.x or later, you must pass `--no-node-snapshot` to `node`." The
+# API process is where code skills create isolates. ci.yml's image smoke checks
+# this flag is here.
+CMD ["node", "--no-node-snapshot", "dist/index.js"]
