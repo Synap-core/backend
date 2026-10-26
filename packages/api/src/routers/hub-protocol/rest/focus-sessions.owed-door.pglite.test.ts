@@ -348,7 +348,12 @@ type Slot = {
   why?: string;
   owedSince: string;
 };
-type Body = { slots?: Slot[]; truncated?: boolean; error?: string; code?: string };
+type Body = {
+  slots?: Slot[];
+  truncated?: boolean;
+  error?: string;
+  code?: string;
+};
 
 async function owed(key: KeyName, query = "") {
   const res = await app().request(`/api/hub/focus-sessions/owed${query}`, {

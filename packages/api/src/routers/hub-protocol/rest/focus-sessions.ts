@@ -600,8 +600,7 @@ function patchAsksForMore(
 async function subjectFromQuery(c: {
   req: { query: (key: string) => string | undefined };
 }): Promise<
-  | { subject: SessionSubject | undefined }
-  | { error: string; status: 400 | 404 }
+  { subject: SessionSubject | undefined } | { error: string; status: 400 | 404 }
 > {
   const subjectEntityId = c.req.query("subjectEntityId") || undefined;
   const subjectProfileSlug = c.req.query("subjectProfileSlug") || undefined;
