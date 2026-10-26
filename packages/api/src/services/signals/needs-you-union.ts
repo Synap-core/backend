@@ -292,6 +292,13 @@ export interface Signal {
    */
   lifetimeHours?: number | null;
   /**
+   * A `proposal-cluster` whose members all sat untouched for 7 days
+   * (`ProposalCluster.reviewLater`, the ONE count predicate): drawn in the
+   * Review later fold, OUT of the headline — `countNeedsYou` counts it as
+   * `reviewLater`, never in `needsYou`. Absent on every other row.
+   */
+  reviewLater?: true;
+  /**
    * WHERE the row came from — the small provenance door (lens grammar §5: a
    * source is shown only when it differs from the page's scope; the client
    * decides that with `visibleSource`, `@synap-core/types/lens`). The most
@@ -431,6 +438,7 @@ const _KIND_SPECIFIC_SIGNAL_FIELDS = [
   "ask",
   "class",
   "lifetimeHours",
+  "reviewLater",
   "source",
   "by",
   "live",
@@ -656,7 +664,13 @@ export function signalFromCluster(
   now: Date = new Date(),
   session?: ClusterSessionName
 ): Signal {
-  const inSession = cluster.sessionId && session ? cluster.sessionId : null;
+  const readableSession =
+    cluster.sessionId && session ? cluster.sessionId : null;
+  // A Review later cluster never joins its session's block: the block is
+  // lifted into Recent with its newest row (`liftSessionAgeBuckets`) and
+  // counted as the session's, while this row is out of the headline. It is
+  // its own row in the fold; the session stays its provenance door.
+  const inSession = cluster.reviewLater ? null : readableSession;
   const sampleId = cluster.sampleProposalIds[0] ?? null;
   return {
     // A session PART of a split cluster (`splitBySession`) shares its
@@ -704,11 +718,15 @@ export function signalFromCluster(
     ...(inSession && session?.projectId
       ? { sessionProjectId: session.projectId }
       : {}),
-    ...(inSession ? sessionSource(inSession, session?.title) : {}),
+    ...(readableSession ? sessionSource(readableSession, session?.title) : {}),
     groupKey: inSession
       ? sessionGroupKey(inSession)
       : `proposal-cluster:${cluster.fingerprint}`,
-    ageBucket: ageBucketOf(cluster.latestAt, now),
+    // Review later is 7+ days old by its own rule, so `older` — stamped, not
+    // measured: the pod's SQL clock and this one may straddle the line, and a
+    // client that predates `reviewLater` must fold it under Older, never Recent.
+    ageBucket: cluster.reviewLater ? "older" : ageBucketOf(cluster.latestAt, now),
+    ...(cluster.reviewLater ? { reviewLater: true as const } : {}),
     repeatCount: 1,
   };
 }
@@ -1844,6 +1862,11 @@ export function orderNeedsYou(input: readonly Signal[]): Signal[] {
 export function countNeedsYou(args: {
   /** `proposals.groups`.distinct — distinct pending fingerprints. */
   distinctClusters: number;
+  /**
+   * `proposals.groups`.reviewLater — of `distinctClusters`, the ones in Review
+   * later. Out of `decisions` and `needsYou`; reported as `reviewLater`.
+   */
+  reviewLaterClusters?: number;
   /** `proposals.groups`.scanTruncated. */
   clustersTruncated: boolean;
   /** Unread notifications, already page-limited by the caller. */
@@ -1892,8 +1915,14 @@ export function countNeedsYou(args: {
   distinct: number;
   truncated: boolean;
   blocked: number;
-  /** Distinct pending proposal clusters (after the dedupe). */
+  /** Distinct pending proposal clusters (after the dedupe), Review later excluded. */
   decisions: number;
+  /**
+   * Clusters in Review later — untouched durable work, 7+ days (founder
+   * default 2026-10-26). NOT a part of `needsYou`: the rows a needs-you list
+   * marks `reviewLater`, counted by the same cluster flag.
+   */
+  reviewLater: number;
   /** Unread notifications that survive the dedupe. */
   notifications: number;
   /** Sessions awaiting your review / close (every scope). */
@@ -1926,7 +1955,11 @@ export function countNeedsYou(args: {
    */
   suggestions: number;
 } {
-  const decisions = args.distinctClusters;
+  // Review later leaves the headline (Resolve-XP): the SAME cluster flag the
+  // list stamps on its rows (`signalFromCluster`), counted by the groups door
+  // before its page slice.
+  const reviewLater = args.reviewLaterClusters ?? 0;
+  const decisions = args.distinctClusters - reviewLater;
   const buckets = partitionNotifications(
     args.notifications,
     args.clusters,
@@ -1960,6 +1993,7 @@ export function countNeedsYou(args: {
       invites,
     distinct: decisions,
     decisions,
+    reviewLater,
     notifications,
     truncated:
       args.clustersTruncated ||

@@ -437,7 +437,13 @@ async function readAttention(
   ] = await Promise.all([
     settle(
       "proposals",
-      { groups: [], distinct: 0, scanTruncated: false, scanned: 0 },
+      {
+        groups: [],
+        distinct: 0,
+        reviewLater: 0,
+        scanTruncated: false,
+        scanned: 0,
+      },
       () =>
         proposalsRouter.createCaller(ctx).groups({
           workspaceId: input.workspaceId,
@@ -662,6 +668,7 @@ function proposedSignals(a: Attention): Signal[] {
 function countOf(a: Attention) {
   return countNeedsYou({
     distinctClusters: a.groups.distinct,
+    reviewLaterClusters: a.groups.reviewLater,
     clustersTruncated: a.groups.scanTruncated,
     clusters: a.groups.groups,
     notifications: a.notifications,
@@ -1374,6 +1381,7 @@ function narrowAttention(
       ...a.groups,
       groups: clusters,
       distinct: clusters.length,
+      reviewLater: clusters.filter((c) => c.reviewLater).length,
       scanTruncated: false,
     },
     notifications: scope.kindClusters
