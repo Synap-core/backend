@@ -3562,6 +3562,30 @@ function receiptSessionInput(input: {
 }
 
 /**
+ * The calling client's RECEIPT for an agent's work that named no session —
+ * through the ONE mint point the gate itself uses (R2, memoised per request),
+ * with the gate's project key (the caller's project, else the conversation's
+ * declared focus). For a door that must hold the run's session BEFORE its
+ * writes reach the gate: the MCP capture graph records its raw source on it,
+ * so a run gets one room, not an intake room plus a receipt (W-A3).
+ */
+export async function resolveAgentRunReceipt(input: {
+  userId: string;
+  agentUserId: string;
+  workspaceId?: string | null;
+  projectId?: string | null;
+  goal: string;
+}): Promise<string | null> {
+  return resolveAgentProposalSessionOnce(
+    receiptSessionInput({
+      ...input,
+      projectId:
+        input.projectId ?? (await getAgentFocusProjectId(input.agentUserId)),
+    })
+  );
+}
+
+/**
  * Same as createPendingProposal but also reports whether the SSOT deduped the
  * write (an identical PENDING agent proposal already existed). Threaded up by
  * createProposal so it can skip the "created" notification for a dedup hit and
