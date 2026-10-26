@@ -958,25 +958,6 @@ export async function getUserMemberWorkspaceIds(
 }
 
 /**
- * Verify a user has access to a specific workspace: ANY membership, a viewer
- * included. A READ check — a mutating route gates on the access door's
- * `canWrite` (tripwire `hub-mutations-gate-on-write-role`).
- */
-export async function verifyWorkspaceAccess(
-  userId: string,
-  workspaceId: string
-): Promise<boolean> {
-  const row = await db.query.workspaceMembers.findFirst({
-    where: and(
-      eq(workspaceMembers.workspaceId, workspaceId),
-      eq(workspaceMembers.userId, userId)
-    ),
-    columns: { id: true },
-  });
-  return !!row;
-}
-
-/**
  * Verify read access for a workspace: the access door's space read
  * (`canRead(p, {workspace})`, `access/door.ts`) for the person alone.
  *
