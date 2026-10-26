@@ -76,6 +76,7 @@ import {
   type SessionTwinCandidate,
 } from "./find-open-session-twin.js";
 import { paramOwedSlots } from "./param-slots.js";
+import { readStartOffers, type StartOffers } from "./start-offers.js";
 import { notifySessionNeedsYou } from "./notify-needs-you.js";
 import { enqueueSessionRecall } from "./session-recall.js";
 import {
@@ -267,6 +268,13 @@ export interface CreateFocusSessionParams {
    */
   matchTemplate?: boolean;
   /**
+   * Hand back the START OFFERS (`start-offers.ts`, plan v5 F5/F6): the
+   * project's open goals when no `trackId` was named, and the open sessions on
+   * close work in the same goal or project. Set by the AI start doors only.
+   * NOTHING is applied: no goal is joined, no session adopted.
+   */
+  offerStartContext?: boolean;
+  /**
    * The GOAL whose loop proposes this run (work model W4, `runGoalLoop`):
    * the start is ALWAYS a proposal a person approves (the gate's
    * `forcePropose`, whoever switched the loop on), and the proposal carries
@@ -339,6 +347,12 @@ export type CreateFocusSessionResult =
        * roster until a person approves; `granted` ⇒ it is.
        */
       handOffs?: AgentHandOffDecision[];
+      /**
+       * Present iff `offerStartContext` was set and the session has a project
+       * or a goal: open goals it may serve, open sessions on close work.
+       * Suggestions only — see `start-offers.ts`.
+       */
+      offers?: StartOffers;
     }
   | {
       /**
@@ -1214,9 +1228,26 @@ export async function createFocusSession(
     }
   }
 
+  // START OFFERS (F5/F6) — a courtesy, never a gate: each part reports its
+  // own failure, and a throw past them only omits the block.
+  const offers = params.offerStartContext
+    ? await readStartOffers({
+        userId,
+        sessionId: sessionOut.id,
+        projectId: sessionOut.projectId ?? null,
+        trackId: sessionOut.trackId ?? null,
+        title: sessionOut.title ?? null,
+        goal: sessionOut.goal,
+      }).catch((err) => {
+        logger.warn({ err }, "start offers failed — omitted");
+        return undefined;
+      })
+    : undefined;
+
   return {
     status: "created",
     session: sessionOut,
+    ...(offers ? { offers } : {}),
     ...(handOffs.length > 0 ? { handOffs } : {}),
     ...(warnings.length > 0 ? { warnings } : {}),
     ...(blockGuidelines ? { blockGuidelines } : {}),

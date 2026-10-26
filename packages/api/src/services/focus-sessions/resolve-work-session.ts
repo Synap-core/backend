@@ -47,6 +47,7 @@ import {
   sessionLastActivitySql,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
+import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import { OPEN_SESSION_STATUSES } from "./session-statuses.js";
 import { ambientWorkWhere } from "./session-kind.js";
 
@@ -259,4 +260,89 @@ export async function resolveWorkSession(
     );
   }
   return { source: "none", unclaimedOpenCount: unclaimedCount };
+}
+
+/** Sessions listed when a client holds several (the refusal names them). */
+export const CLIENT_OPEN_SESSIONS_LISTED = 5;
+
+/**
+ * F2 (plan v5) — "which session is THIS conversation working in", asked by a
+ * write that must land on exactly one (an outcome write with no `sessionId`):
+ * the open sessions THIS client STARTED (`metadata.clientKey`, never an
+ * auto-opened receipt — a PR is not recorded on a receipt).
+ *
+ * Unlike `resolveWorkSession` (a DEFAULT for attribution, newest wins), this
+ * never picks among several: `several` lists them and the caller refuses. A
+ * key shared by several conversations (`key` scope) or a per-call run cannot
+ * tell conversations apart, so it answers `no_client` — the same Option A
+ * policy as rung 3 above. A failed read is `unavailable`, never `none`.
+ */
+export type ClientOpenSession =
+  | { status: "one"; sessionId: string }
+  | { status: "none" }
+  | {
+      status: "several";
+      count: number;
+      sessions: Array<{ id: string; title: string; startedAt: string | null }>;
+    }
+  | { status: "no_client" }
+  | { status: "unavailable" };
+
+/** Open sessions this client STARTED (never its auto-opened receipt). */
+function startedByClientWhere(userId: string, clientKey: string) {
+  return and(
+    eq(focusSessions.userId, userId),
+    inArray(
+      focusSessions.status,
+      OPEN_SESSION_STATUSES.filter((s) => s !== "scheduled")
+    ),
+    drizzleSql`${focusSessions.metadata} ->> 'clientKey' = ${clientKey}`,
+    drizzleSql`coalesce((${focusSessions.metadata} ->> 'autoOpened')::boolean, false) = false`
+  );
+}
+
+export async function resolveClientOpenSession(input: {
+  userId: string;
+  clientKey: string | null | undefined;
+}): Promise<ClientOpenSession> {
+  const clientKey = input.clientKey;
+  if (
+    !clientKey ||
+    clientKeyScope(clientKey) === "key" ||
+    isPerCallClientKey(clientKey)
+  ) {
+    return { status: "no_client" };
+  }
+  try {
+    const rows = await db
+      .select({
+        id: focusSessions.id,
+        title: focusSessions.title,
+        goal: focusSessions.goal,
+        startedAt: focusSessions.startedAt,
+      })
+      .from(focusSessions)
+      .where(startedByClientWhere(input.userId, clientKey))
+      // SESSION-KIND-LENS-EXEMPT: an attribution resolver over one client's own started sessions; returns ids + titles for a refusal, never a page.
+      .orderBy(desc(focusSessions.startedAt))
+      .limit(CLIENT_OPEN_SESSIONS_LISTED + 1);
+    if (rows.length === 1) return { status: "one", sessionId: rows[0]!.id };
+    if (rows.length === 0) return { status: "none" };
+    const [countRow] = await db
+      .select({ n: drizzleSql<number>`count(*)::int` })
+      .from(focusSessions)
+      .where(startedByClientWhere(input.userId, clientKey));
+    return {
+      status: "several",
+      count: Number(countRow?.n),
+      sessions: rows.slice(0, CLIENT_OPEN_SESSIONS_LISTED).map((r) => ({
+        id: r.id,
+        title: resolveSessionTitle(r),
+        startedAt: r.startedAt ? new Date(r.startedAt).toISOString() : null,
+      })),
+    };
+  } catch (err) {
+    logger.warn({ err, clientKey }, "client open-session read failed");
+    return { status: "unavailable" };
+  }
 }

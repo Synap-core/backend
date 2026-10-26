@@ -472,6 +472,9 @@ export const sessionHandlers: McpHandlerMap = {
       // `null` is the explicit opt-out of template matching; absent = match.
       templateId: readTemplateIdArg(args.templateId),
       matchTemplate: true,
+      // F5/F6: the project's open goals (no trackId named) and the open
+      // sessions on close work — suggestions on the reply, never applied.
+      offerStartContext: true,
       // Answers to the named template's declared params. Free-form on the wire
       // (the playbook owns the shape); validated against the declaration by the
       // service, with the same pure function the run funnel uses.
@@ -922,7 +925,8 @@ export const sessionHandlers: McpHandlerMap = {
   synap_update_session: async (
     ctx: McpToolContext
   ): Promise<CallToolResult> => {
-    const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
+    const { toolName, userId, apiKeyScopes, agentUserId } = ctx;
+    let args = ctx.args;
     requireScope(apiKeyScopes, "mcp.write", toolName);
     /**
      * REFUSE LOUDLY rather than accept and drop.
@@ -959,6 +963,53 @@ export const sessionHandlers: McpHandlerMap = {
     // nothing. The valid set is the tool's own declared schema (undeclared-args.ts).
     const undeclared = await refuseUndeclaredArgs("synap_update_session", args);
     if (undeclared) return undeclared;
+
+    /**
+     * NO `sessionId` (F2, plan v5) — the session THIS conversation started,
+     * when it started exactly one that is still open (`resolveClientOpenSession`
+     * — never an auto-opened receipt, never a guess among several). So the PR
+     * hook can say "record it" in one call with no id. Several, none, a shared
+     * key or a failed read: refused in words, with the list when there is one.
+     */
+    let inferredSession = false;
+    if (typeof args.sessionId !== "string" || args.sessionId.trim() === "") {
+      const { resolveClientOpenSession, requestClientKey } =
+        await import("../../../services/focus-sessions/resolve-work-session.js");
+      const found = await resolveClientOpenSession({
+        userId,
+        clientKey: requestClientKey(agentUserId),
+      });
+      switch (found.status) {
+        case "one":
+          args = { ...args, sessionId: found.sessionId };
+          inferredSession = true;
+          break;
+        case "several":
+          return ok({
+            error: `sessionId is required: this conversation has ${found.count} open sessions, so none is guessed — NOTHING WAS CHANGED. Send the call again with the sessionId of the one this belongs to.`,
+            sessions: found.sessions,
+          });
+        case "none":
+          return ok({
+            error:
+              "sessionId is required: this conversation started no session that is still open — NOTHING WAS CHANGED. Start one with synap_start_session, or pass the sessionId of the session this belongs to.",
+          });
+        case "no_client":
+          return ok({
+            error:
+              "sessionId is required: this connection cannot tell your conversation apart from others on the same key — NOTHING WAS CHANGED. Pass the sessionId.",
+          });
+        case "unavailable":
+          return ok({
+            error:
+              "sessionId is required: your open sessions could not be read just now — NOTHING WAS CHANGED. Pass the sessionId.",
+          });
+      }
+    }
+    /** Said on every success when the session was resolved for the caller. */
+    const inferred = inferredSession
+      ? { inferred: true as const, via: "client" as const }
+      : {};
 
     const blockerEdits = parseBlockerEdits(args);
     if ("error" in blockerEdits) return ok(blockerEdits);
@@ -1035,6 +1086,7 @@ export const sessionHandlers: McpHandlerMap = {
       if (asked.length === 0) {
         return ok({
           sessionId: args.sessionId,
+          ...inferred,
           ...(await applyBlockerEdits()),
           message:
             "Only this session's blockers were changed — read each id's outcome: linked / removed / absent applied now; proposed was filed for review (success — do not retry); failed says why.",
@@ -1198,6 +1250,7 @@ export const sessionHandlers: McpHandlerMap = {
         return ok({
           ...(await applyBlockerEdits()),
           status: "proposed",
+          ...inferred,
           message: proposedMessageFor(
             (result as { proposalType?: string }).proposalType,
             "Focus session update proposed for review"
@@ -1229,6 +1282,7 @@ export const sessionHandlers: McpHandlerMap = {
         return ok({
           ...(await applyBlockerEdits()),
           status: "updated",
+          ...inferred,
           session: result.session,
           ...(result.retireOutput ? { retireOutput: result.retireOutput } : {}),
           ...(result.completeOutput
