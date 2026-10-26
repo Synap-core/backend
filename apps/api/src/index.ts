@@ -2167,7 +2167,7 @@ void startupHooksSettled
     )
   );
 
-// Decision asks NOBODY ASKED (founder decision 1, 2026-10-26): open asks the
+// Decision asks NOBODY ASKED (founder, 2026-10-26): open asks the
 // old reactor raised on a person's own proposed decision retire `not_asked`,
 // and the Decide sessions it opened for them close through the one close
 // door. Idempotent (a retired ask is no longer open), so it simply runs at

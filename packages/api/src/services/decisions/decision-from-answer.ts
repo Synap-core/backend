@@ -241,7 +241,7 @@ export function decisionUpdateFromAnswer(p: {
 }
 
 /**
- * Where the answer came from, on the decision it filed (Resolve-XP W1). Only
+ * Where the answer came from, on the decision it filed (the relay door). Only
  * an answer an agent RELAYED carries any: `answeredVia` says whether the
  * person then tapped Confirm (`tap`) or the relay alone decided (`relayed`),
  * and `relayedBy` / `relayQuote` keep who carried which words, both ways — a

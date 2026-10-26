@@ -311,7 +311,7 @@ export interface Signal {
    * A `proposal-cluster` whose members all sat untouched for 7 days
    * (`ProposalCluster.reviewLater`, the ONE count predicate), or an
    * `owed-slot` owed for more than 7 days (`isAskReviewLater`, the same
-   * clock — Resolve-XP decision 3): drawn in the Review later fold, OUT of
+   * clock — founder, 2026-10-26): drawn in the Review later fold, OUT of
    * the headline — `countNeedsYou` counts it as `reviewLater`, never in
    * `needsYou`. Absent on every other row.
    */
@@ -469,7 +469,7 @@ const _KIND_SPECIFIC_SIGNAL_FIELDS = [
   "source",
   "by",
   "askCause",
-  // `owed-slot` only (W1, the relay door) — classified here so the floor
+  // `owed-slot` only (the relay door) — classified here so the floor
   // below compiles; it was on `Signal` unclassified.
   "pendingRelay",
   "live",
@@ -2027,7 +2027,7 @@ export function countNeedsYou(args: {
    */
   suggestions: number;
 } {
-  // Review later leaves the headline (Resolve-XP): the SAME cluster flag the
+  // Review later leaves the headline: the SAME cluster flag the
   // list stamps on its rows (`signalFromCluster`), counted by the groups door
   // before its page slice.
   const reviewLaterClusters = args.reviewLaterClusters ?? 0;

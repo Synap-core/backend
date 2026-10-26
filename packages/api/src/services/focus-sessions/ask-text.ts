@@ -1,5 +1,5 @@
 /**
- * An owed ask says each thing ONCE (Resolve-XP W6; the founder, 2026-10-26:
+ * An owed ask says each thing ONCE (the founder, 2026-10-26:
  * "there is repeated multiple times the same question"). The card dedupes what
  * it draws (`askCardView`, @synap-core/types/ask); this keeps the STORED slot
  * from repeating itself at the doors that write it, with the same fold
