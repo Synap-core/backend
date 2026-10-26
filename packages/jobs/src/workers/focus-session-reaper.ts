@@ -24,11 +24,13 @@
 import {
   db,
   and,
+  inArray,
   drizzleSql,
   focusSessions,
   AGENT_PROPOSAL_PACKAGE_MARKER,
   RECEIPT_IDLE_WINDOW_HOURS,
   focusSessionWaitsOnPersonWhere,
+  personTouchedSubjectIds,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { closeSessionViaDoor } from "../utils/session-close.js";
@@ -83,6 +85,62 @@ export const SESSION_IS_STALE = and(
   drizzleSql`(coalesce(${focusSessions.metadata} -> 'importCuration' ->> 'phase', 'done') = 'done'
     OR ((${focusSessions.metadata} -> 'libraryRun' ->> 'day') < to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD')))`
 );
+
+/**
+ * W-B4 (supervision plan B3, founder Q-B1/Q-B2): an AGENT-opened session that
+ * waits on the person but has had no activity for this many days was walked
+ * away from. The W2-calm exemption above (a session that owes the person is
+ * quiet, not dead) holds for a week of silence, not forever: its agent never
+ * came back to withdraw or hand over its asks.
+ */
+export const AGENT_SESSION_ABANDONED_DAYS = 14;
+
+/**
+ * SQL half of the abandoned rule: open, opened by an agent, silent for
+ * {@link AGENT_SESSION_ABANDONED_DAYS}, and waiting on the person (the
+ * sessions `SESSION_IS_STALE` exempts). The other half — no PERSON ever wrote
+ * on it — is `personTouchedSubjectIds`, applied in
+ * {@link staleAbandonedAgentSessions}: a session a person worked in is theirs
+ * too, and stays exactly as it is.
+ */
+export const AGENT_SESSION_MAY_BE_ABANDONED = and(
+  drizzleSql`${focusSessions.status} IN ('active', 'paused')`,
+  drizzleSql`${focusSessions.origin} = 'agent'`,
+  drizzleSql`${focusSessions.updatedAt} < now() - (${AGENT_SESSION_ABANDONED_DAYS}::int * interval '1 day')`,
+  focusSessionWaitsOnPersonWhere()
+);
+
+/** Most abandoned sessions staled per tick. */
+const ABANDONED_BATCH = 200;
+
+/**
+ * Mark abandoned agent sessions `stale` — only the agent's own: a session a
+ * person ever wrote on is never touched. Its asks stay owed, never retired:
+ * the agent sees the session in orient's `looseEnds`, and once it has been
+ * stale for 30 days the weekly cleanup pack proposes closing it, then
+ * withdrawing what it still owes. `updatedAt` is left alone, as in the main
+ * sweep. A failed person-touch read stales nothing (it throws).
+ */
+export async function staleAbandonedAgentSessions(): Promise<number> {
+  const candidates = await db
+    .select({ id: focusSessions.id })
+    .from(focusSessions)
+    .where(AGENT_SESSION_MAY_BE_ABANDONED)
+    .limit(ABANDONED_BATCH);
+  if (candidates.length === 0) return 0;
+  const ids = candidates.map((c) => c.id);
+  const touched = await personTouchedSubjectIds(db, "focus_session", ids);
+  const abandoned = ids.filter((id) => !touched.has(id));
+  if (abandoned.length === 0) return 0;
+  const staled = await db
+    .update(focusSessions)
+    .set({ status: "stale" })
+    .where(
+      and(inArray(focusSessions.id, abandoned), AGENT_SESSION_MAY_BE_ABANDONED)
+    )
+    .returning({ id: focusSessions.id });
+  return staled.length;
+}
 
 /**
  * A write RECEIPT (the session the gate auto-opened to group an agent's writes)
@@ -165,6 +223,18 @@ export async function handleFocusSessionReaper(): Promise<void> {
     }
   } else {
     logger.debug("Goal loop sweeper not registered — skipped");
+  }
+  // Abandoned agent sessions (W-B4). Its own failure never stops the sweep.
+  try {
+    const abandoned = await staleAbandonedAgentSessions();
+    if (abandoned > 0) {
+      logger.info(
+        { abandoned },
+        "Focus session reaper marked abandoned agent sessions stale"
+      );
+    }
+  } catch (err) {
+    logger.error({ err }, "Abandoned agent session sweep failed");
   }
   try {
     // Receipts first, so a finished one is CLOSED rather than swept to stale.
