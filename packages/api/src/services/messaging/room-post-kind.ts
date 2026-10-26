@@ -7,6 +7,11 @@
  * session window (`session.needs_you`). `update` (default) — progress and
  * results; NO notification at all (founder decision F, 2026-09-25) — it
  * lives only in the room and the session's state mark.
+ *
+ * Its sibling, for a message to ANOTHER SESSION's agent rather than the
+ * person, is the coordination post's `intent` (`metadata.sessionPost`,
+ * `@synap-core/types/agents` session-post, built by `session-post.ts`). Such
+ * a post is always an `update` here and never notifies anyone.
  */
 export const ROOM_POST_KINDS = ["question", "update"] as const;
 export type RoomPostKind = (typeof ROOM_POST_KINDS)[number];
