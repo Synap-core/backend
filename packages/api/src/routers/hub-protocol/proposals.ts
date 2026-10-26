@@ -27,6 +27,10 @@ import {
   resolveProposalSetups,
   withProposalSetup,
 } from "../../services/proposals/proposal-setup.js";
+import {
+  proposalWaitsFields,
+  resolveProposalWaits,
+} from "../../services/proposals/proposal-waits.js";
 
 /** Filter string → the stored `proposals.status` value ("all" = no filter). */
 export const PROPOSAL_STATUS_BY_FILTER = {
@@ -155,17 +159,23 @@ export const proposalsRouter = router({
         items as unknown as Record<string, unknown>[],
         input.userId
       );
+      // WAITING ON IT (Resolve-XP W3) — forwarded by both REST views; the
+      // agent door reads sessions owner-only (decision D1).
+      const waits = await resolveProposalWaits(items, {
+        userId: ctx.userId as string,
+      });
 
       return {
         // Class + lifetime stamped through the SAME door the REST/MCP codecs
         // use, so a `view=full` row and a `view=basic` row can never disagree
         // about what class a proposal is.
-        proposals: items.map((row) =>
-          withProposalSetup(
+        proposals: items.map((row) => ({
+          ...withProposalSetup(
             withProposalClass(row) as unknown as Record<string, unknown>,
             setups
-          )
-        ),
+          ),
+          ...proposalWaitsFields(row.id, waits),
+        })),
         total,
         limit: input.limit,
         offset: input.offset,

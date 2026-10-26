@@ -1,8 +1,17 @@
-import { db, proposals, eq, and, or, drizzleSql } from "@synap/database";
+import { db, proposals, eq, and, or, not, drizzleSql } from "@synap/database";
 import { ownAgentUserFilter } from "../agent-identity-service.js";
+import { reviewLaterProposalWhere } from "../proposals/proposal-fate.js";
 
 export type PendingReviewState =
-  | { status: "ok"; count: number; oldestDays: number; oldestId?: string }
+  | {
+      status: "ok";
+      /** The headline: pending proposals NOT in Review later. */
+      count: number;
+      oldestDays: number;
+      oldestId?: string;
+      /** Untouched durable proposals out of the headline (Review later). */
+      reviewLater: number;
+    }
   | { status: "unavailable" };
 
 /**
@@ -22,6 +31,13 @@ export type PendingReviewState =
  * `count` and `oldest` are aggregated over the SAME floored population as the
  * list: widening the list without widening this would make `oldestDays` a
  * number computed over a different set than the count printed beside it.
+ *
+ * REVIEW LATER (Resolve-XP, founder default 2026-10-26): untouched durable
+ * proposals leave the headline after 7 days. `count`, `oldestDays` and
+ * `oldestId` are the headline; `reviewLater` counts the rest — through the
+ * SAME predicate the needs-you `decisions` count reads
+ * (`reviewLaterProposalWhere`), so orient and the badge cannot disagree on
+ * which proposals moved.
  */
 export async function readPendingReviewState(
   userId: string
@@ -38,10 +54,12 @@ export async function readPendingReviewState(
     // COUNT + MIN in one aggregate row — never load the rows themselves. On a
     // busy pod the pending queue can be large, and orient runs on every session
     // start; a full-row fetch just to count would tax the mandated first call.
+    const reviewLater = reviewLaterProposalWhere(new Date());
     const [agg] = await db
       .select({
-        count: drizzleSql<number>`count(*)::int`,
-        oldest: drizzleSql<Date | null>`min(${proposals.createdAt})`,
+        count: drizzleSql<number>`(count(*) filter (where not ${reviewLater}))::int`,
+        reviewLater: drizzleSql<number>`(count(*) filter (where ${reviewLater}))::int`,
+        oldest: drizzleSql<Date | null>`min(${proposals.createdAt}) filter (where not ${reviewLater})`,
       })
       .from(proposals)
       .where(pendingFloor);
@@ -55,7 +73,7 @@ export async function readPendingReviewState(
         const [oldestRow] = await db
           .select({ id: proposals.id })
           .from(proposals)
-          .where(pendingFloor)
+          .where(and(pendingFloor, not(reviewLater)))
           .orderBy(drizzleSql`${proposals.createdAt} asc`)
           .limit(1);
         oldestId = oldestRow?.id;
@@ -73,6 +91,7 @@ export async function readPendingReviewState(
             )
           : 0,
       ...(oldestId ? { oldestId } : {}),
+      reviewLater: agg?.reviewLater ?? 0,
     };
   } catch {
     // Unreadable is its own state in startHere; the legacy top-level

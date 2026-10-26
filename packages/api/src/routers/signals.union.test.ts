@@ -38,6 +38,7 @@ function cluster(over: Partial<ProposalCluster> = {}): ProposalCluster {
     // Derived through the ONE door, never hand-written: a fixture that pins
     // its own class values would keep passing after the real classifier moved.
     ...proposalClassFields(proposalType, targetType, null),
+    reviewLater: false,
     count: 3,
     sampleProposalIds: ["prop-1", "prop-2", "prop-3"],
     sources: [],

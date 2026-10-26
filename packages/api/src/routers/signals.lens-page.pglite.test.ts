@@ -626,3 +626,77 @@ describe('Needs you: "from X" — the ONE agent behind a decision (wave PO)', ()
     expect(row.repeat).toBe("and 1 more like it");
   });
 });
+
+describe("Review later (Resolve-XP W3): out of the headline, into its own fold", () => {
+  // Two 8-day-old pending proposals. Each rules out a wrong rule:
+  //  - an objectWork `create` in s4 — s4 owes a RECENT slot, so a rule that
+  //    let the row join its session's block would lift it into Recent and
+  //    count it as the session's;
+  //  - a curatorial `merge` of the same age — a rule keyed on age alone
+  //    would move it too. Only objectWork goes to Review later.
+  let before: { needsYou: number; s4: number };
+  const old = (proposalType: string, sessionId: string | null, name: string) =>
+    q(
+      `insert into proposals (id, proposal_type, target_type, target_id, data, status, session_id, created_by, created_at, updated_at)
+       values ($1, $2, 'entity', $3, $4::jsonb, 'pending', $5, $6, now() - interval '8 days', now() - interval '8 days')`,
+      [
+        randomUUID(),
+        proposalType,
+        randomUUID(),
+        JSON.stringify({ name }),
+        sessionId,
+        USER,
+      ]
+    );
+  beforeAll(async () => {
+    before = {
+      needsYou: (await caller().count({})).needsYou,
+      s4: (await caller().count({ sessionId: S4 })).needsYou,
+    };
+    await old("create", S4, "Old Lantern");
+    await old("merge", null, "Old Twin");
+  });
+
+  it("the count leaves Review later out and reports it beside the headline", async () => {
+    const c = await caller().count({});
+    // The merge counts (not objectWork); the old create does not.
+    expect(c.needsYou).toBe(before.needsYou + 1);
+    expect(c.reviewLater).toBe(1);
+    expect((await caller().count({ sessionId: S4 })).needsYou).toBe(before.s4);
+  });
+
+  it("the row is drawn in the Review later fold — the fold and the count read the same flag", async () => {
+    const rows = (await page({})).blocking.rows;
+    const later = rows.find((s) => s.title.includes("Old Lantern"));
+    expect(later).toBeDefined();
+    expect(later!.reviewLater).toBe(true);
+    expect(later!.ageBucket).toBe("older");
+    // Never in s4's block, though s4 is its session — its door stays.
+    expect(later!.groupKey).not.toBe(`session:${S4}`);
+    expect(later!.source).toMatchObject({ kind: "session", id: S4 });
+    const merge = rows.find((s) => s.title.includes("Old Twin"));
+    expect(merge?.reviewLater).toBeUndefined();
+    const shaped = needsYouRows(rows);
+    expect(shaped.reviewLaterCount).toBe(
+      (await caller().count({})).reviewLater
+    );
+    expect(
+      shaped.reviewLater.flatMap((r) =>
+        r.kind === "item" ? [r.signal.id] : []
+      )
+    ).toEqual([later!.id]);
+  });
+
+  it("orient's pendingReview reads the SAME predicate: headline + reviewLater", async () => {
+    const { readPendingReviewState } =
+      await import("../services/discover/pending-review.js");
+    const state = await readPendingReviewState(USER);
+    const [{ n }] = (
+      await q<{ n: number }>(
+        `select count(*)::int as n from proposals where status = 'pending' and created_by = $1`,
+        [USER]
+      )
+    ).rows;
+    expect(state).toMatchObject({ status: "ok", reviewLater: 1, count: n - 1 });
+  });
+});
