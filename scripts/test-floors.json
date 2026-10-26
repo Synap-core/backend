@@ -70,6 +70,12 @@
       "floor": 4
     },
     {
+      "id": "api (apps/api)",
+      "dir": "apps/api",
+      "floor": 623,
+      "note": "Had NO `test` script until 2026-10-26, so its 58 test files ran nowhere (only its tripwires, through scripts/test-ratchet.mjs). Floor = CI Full suite run 40372636106 (PR #241, 58 files, 623/623 passed, 0 skipped). Its first run found 4 stale tests and 1 real bug (synapCloudLinkRefused)."
+    },
+    {
       "id": "@synap/api",
       "dir": "packages/api",
       "floor": null,
@@ -92,16 +98,10 @@
   ],
   "notWired": [
     {
-      "id": "apps/api",
-      "dir": "apps/api",
-      "measured": "156 total, 124 passed, 16 failed, 16 skipped (2026-08-03, no local Postgres)",
-      "why": "Has 8 test files and NO `test` script, so none of it runs anywhere. Deliberately left unwired: (a) it needs Postgres, so its CI result is unverifiable from here, and (b) it has no vitest config, so a run collects `dist/**` as well as `src/**` \u2014 every test is counted TWICE and one dist file errors on a source file that no longer exists (`ENOENT \u2026 apps/api/dist/routers/federation.ts`). Wiring it needs a vitest config excluding dist, then a CI run to measure. Reported, not guessed."
-    },
-    {
       "id": "@synap/feed-service",
       "dir": "packages/feed-service",
       "measured": "0 total \u2014 both its src and stale-dist copies fail to collect: 'Invalid configuration: database.url' (2026-08-03, no local Postgres)",
-      "why": "Same two blockers as apps/api: needs Postgres, and collects dist/** alongside src/**."
+      "why": "Same two blockers apps/api had until 2026-10-26: needs Postgres, and collects dist/** alongside src/**."
     },
     {
       "id": "@synap-core/core",
