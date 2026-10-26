@@ -1717,6 +1717,7 @@ async function runResolvedSkillInner(
           parameters,
           workspaceId: ctx.workspaceId,
           agentUserId: ctx.agentUserId ?? null,
+          sessionId: ctx.sessionId ?? null,
           verbAct: {
             skillId: skill.id,
             toolIds: await requiredToolIdsOf(skill.id),

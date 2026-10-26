@@ -4181,6 +4181,12 @@ const captureBaseRouter = router({
               userId,
               workspaceId: workspaceId ?? null,
               auditSource: "rule_loop_capture",
+              // This door writes now (no proposal), so no person reviewed it:
+              // an agent caller's skills are born unapproved.
+              skillAuthor: {
+                agentUserId: ctx.agentUserId ?? null,
+                personApproved: false,
+              },
             }),
             resolveRelationType,
             // U1: always key materialize. Prefer client key; else stable hash of

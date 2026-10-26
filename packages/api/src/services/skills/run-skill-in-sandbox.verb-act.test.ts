@@ -128,6 +128,9 @@ vi.mock("@synap/database", async (importOriginal) => {
     getDb: async () => ({}),
     findCapabilityGrant: (...a: unknown[]) => h.findGrant(...a),
     resolveCapabilityGrant: async () => ({ ok: true }),
+    // A session reaches the worker send ceiling (worker-send-ceiling.ts), which
+    // asks which worker started it; these sessions are no worker's.
+    workerAutomationOfSession: async () => null,
     db: {
       select,
       update,
@@ -305,5 +308,41 @@ describe("a DIRECT provider call (no verb decision) is still gated", () => {
     expect(out.proposed).toBe(true);
     expect(h.proposals).toHaveLength(1);
     expect(fetchCalls).toEqual([]);
+  });
+});
+
+describe("the run's focus session reaches the proposal an in-skill write files (R1)", () => {
+  // The seam: a door's ctx.sessionId → runResolvedSkill → runSkillInSandbox →
+  // the callProvider bridge → triggerProviderAction → the proposal row. The IS
+  // path dropped it (its 45 live `capability/run` proposals had session_id NULL).
+  const SESSION_ID = "5e551011-0000-4000-8000-000000000001";
+  const runIn = (sessionId?: string) => {
+    h.skillRow = {
+      id: h.SKILL_ID,
+      name: "vendor_start",
+      kind: "code",
+      status: "active",
+      approved: true,
+      code: codeCalling("other_api"),
+      timeoutSeconds: 10,
+      metadata: {},
+    };
+    return runResolvedSkill(SKILL as never, {}, { ...asAgent, sessionId });
+  };
+
+  it("a gated write in a session → the proposal carries that session", async () => {
+    const out = await runIn(SESSION_ID);
+    expect(out.kind, JSON.stringify(out)).toBe("run");
+    expect(h.proposals).toHaveLength(1);
+    expect(h.proposals[0]).toMatchObject({
+      agentUserId: "agent-1",
+      sessionId: SESSION_ID,
+    });
+  });
+
+  it("no session → NULL, never synthesised", async () => {
+    await runIn(undefined);
+    expect(h.proposals).toHaveLength(1);
+    expect(h.proposals[0]!.sessionId).toBeNull();
   });
 });

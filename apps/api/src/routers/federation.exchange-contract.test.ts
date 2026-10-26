@@ -39,6 +39,9 @@ const EXPECTED = [
   "ASSERTION_EXPIRED",
   "ASSERTION_REPLAYED",
   "REPLAY_PROTECTION_UNAVAILABLE",
+  // The identity-link ceremony when the owner turned Synap Cloud off
+  // (ADDENDUM 2026-10-23, e5ab40c1d).
+  "CLOUD_SIGN_IN_DISABLED",
 ].sort();
 
 function emittedCodes(src: string): string[] {
