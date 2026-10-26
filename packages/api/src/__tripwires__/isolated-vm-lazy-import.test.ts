@@ -3,8 +3,9 @@
  *
  * WHY THIS EXISTS (a production outage, 2026-08-01):
  *
- * `isolated-vm` is a NATIVE addon that ships no musl prebuild. The pod runs on
- * `node:20-alpine`. A single static `import ivm from "isolated-vm"` in
+ * `isolated-vm` is a NATIVE addon. 6.1.2 ships prebuilds for Node 22 and 24
+ * only (ABI 127 / 137), and the pod then ran on `node:20-alpine` (ABI 115). A
+ * single static `import ivm from "isolated-vm"` in
  * `services/skills/run-skill-in-sandbox.ts` therefore executed on every boot —
  * because `services/capabilities/execute-capability.ts` imports that module
  * statically — and the container crash-looped:
@@ -17,13 +18,13 @@
  * and a call-site flag can never gate a STATIC import — the module graph is
  * resolved before any flag is read. Only a dynamic `import()` defers the load.
  *
- * `deploy/Dockerfile.api` asserts the dep is inert while the flag is off. That
- * claim is only TRUE while the import stays lazy — which is what this test
- * enforces. A comment cannot enforce an invariant; this can.
+ * The pod image now runs Node 22 (deploy/Dockerfile), where the prebuild loads
+ * (ci.yml's image smoke proves it). The import stays lazy all the same: a
+ * native addon that cannot load on some host (another arch, a future Node
+ * major) must fail the one call that needs it, never the boot of every pod.
+ * A comment cannot enforce an invariant; this can.
  *
- * If this test fails: do not "fix" it by compiling the addon into the image
- * unless you actually intend to turn `SANDBOX_LOCAL` on. Restore the lazy
- * `loadIvm()` helper instead.
+ * If this test fails: restore the lazy `loadIvm()` helper.
  */
 
 import { describe, it, expect } from "vitest";
@@ -71,7 +72,7 @@ describe("isolated-vm is never imported at module scope", () => {
     );
     expect(
       offenders.map((f) => f.slice(SRC_ROOT.length + 1)),
-      "isolated-vm has no musl prebuild — a static import crash-loops the pod on boot. " +
+      "isolated-vm is a native addon — a static import crash-loops the pod on boot wherever it cannot load. " +
         "Use the lazy loadIvm() helper in services/skills/run-skill-in-sandbox.ts."
     ).toEqual([]);
   });

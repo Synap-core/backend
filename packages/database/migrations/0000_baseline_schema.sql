@@ -155,6 +155,11 @@ ALTER TABLE "invites" ADD COLUMN IF NOT EXISTS "token" text;
 ALTER TABLE "invites" ADD COLUMN IF NOT EXISTS "invited_by" text;
 ALTER TABLE "invites" ADD COLUMN IF NOT EXISTS "expires_at" timestamp with time zone;
 ALTER TABLE "invites" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
+-- token_digest (migration 0353): the token's SHA-256 (hex), the one lookup
+-- key (decision B2). Not written "-- 0353:": that prefix opens a NEW block at
+-- the end of this file (the migrations-0339/0340 tests slice on it).
+ALTER TABLE "invites" ADD COLUMN IF NOT EXISTS "token_digest" text;
+CREATE UNIQUE INDEX IF NOT EXISTS "invites_token_digest_key" ON "invites" ("token_digest");
 
 -- pod_members — durable pod-membership identity, the singleton-pod peer of
 -- workspace_members (mirrors 0205_pod_members.sql). No pod_id: the pod is a
@@ -296,6 +301,8 @@ ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "metadata_expires_at" times
 ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "metadata_sha256" text;
 -- 0338b: the workspace templates a pod app declares (`synap_templates`).
 ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "requested_templates" text[] NOT NULL DEFAULT '{}';
+-- 0339b: why the document asks for each permission (`synap_requests[].reason`).
+ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "requested_reasons" jsonb NOT NULL DEFAULT '{}'::jsonb;
 
 CREATE TABLE IF NOT EXISTS "oauth_authorization_codes" (
   "code_hash"      text PRIMARY KEY,
@@ -5231,3 +5238,39 @@ CREATE TABLE IF NOT EXISTS "session_runners" (
 
 CREATE INDEX IF NOT EXISTS "idx_session_runners_session_seen"
   ON "session_runners" ("session_id", "last_seen_at");
+
+-- 0352: proposal apply runs — one row per background attempt at applying a
+-- LARGE approved proposal (progress, counts, outcome). Read through its
+-- proposal only. Mirrors 0352_proposal_apply_runs.sql.
+CREATE TABLE IF NOT EXISTS "proposal_apply_runs" (
+  "id"                   uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  "proposal_id"          uuid        NOT NULL REFERENCES "proposals"("id") ON DELETE CASCADE,
+  "user_id"              text        NOT NULL,
+  "status"               text        NOT NULL DEFAULT 'queued',
+  "phase"                text,
+  "total"                integer     NOT NULL DEFAULT 0,
+  "done"                 integer     NOT NULL DEFAULT 0,
+  "created"              integer     NOT NULL DEFAULT 0,
+  "linked"               integer     NOT NULL DEFAULT 0,
+  "failed"               integer     NOT NULL DEFAULT 0,
+  "input"                jsonb       NOT NULL DEFAULT '{}'::jsonb,
+  "via_app"              jsonb,
+  "request_workspace_id" text,
+  "revision"             integer     NOT NULL DEFAULT 0,
+  "job_id"               text,
+  "error"                text,
+  "error_class"          text,
+  "result"               jsonb,
+  "heartbeat_at"         timestamptz NOT NULL DEFAULT now(),
+  "started_at"           timestamptz,
+  "finished_at"          timestamptz,
+  "created_at"           timestamptz NOT NULL DEFAULT now(),
+  "updated_at"           timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS "uq_proposal_apply_runs_active"
+  ON "proposal_apply_runs" ("proposal_id")
+  WHERE "status" IN ('queued', 'running');
+
+CREATE INDEX IF NOT EXISTS "idx_proposal_apply_runs_proposal_created"
+  ON "proposal_apply_runs" ("proposal_id", "created_at");

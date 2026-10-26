@@ -181,10 +181,11 @@ describe("projects.update homeWorkspaceId (D6)", () => {
     expect(res).toMatchObject({ status: "updated" });
     expect(await homeOf(p)).toBe(WB);
     expect(await usesEdges(p)).toEqual([WB]);
-    // Governed on the project's CURRENT workspace, with the move in the patch.
+    // Governed on the DESTINATION, with the move in the patch: a move is a
+    // write into the space it lands in (86b6faae).
     expect(h.permCalls).toHaveLength(1);
     expect(h.permCalls[0]).toMatchObject({
-      workspaceId: WA,
+      workspaceId: WB,
       subjectType: "project",
       action: "update",
       data: { id: p, homeWorkspaceId: WB },

@@ -1,12 +1,15 @@
 /**
  * Tier Check Utility
  *
- * Reads the subscription tier from the pod's local workspace settings
- * (workspace.settings.controlPlane.tier). The Control Plane pushes the tier
- * in every provision JWT and re-pushes it on subscription changes — no
- * runtime round-trip to the CP is ever needed.
+ * Reads the pod's subscription tier from its PLAN — what its Control Plane
+ * answered on `GET /internal/plan`, pulled by `@synap/jobs`
+ * `cp-entitlement-sync` into `pod_settings.settings.controlPlaneEntitlement`
+ * and read through `readControlPlaneEntitlement` (`@synap/database`
+ * utils/control-plane-link.ts). No runtime round-trip to the CP.
  *
- * For self-hosted pods (no CP configured), returns 'solo' as the safe default.
+ * A pod with no plan record (its CP never answered) or no live plan enforces
+ * 'solo'. A FAILED read throws: it is never folded into 'solo'.
+ * For self-hosted pods (no CP configured), nothing is enforced.
  *
  * Exports:
  *   requireTier       — tRPC middleware factory for per-procedure tier gates
@@ -16,7 +19,7 @@
 import { config, createLogger } from "@synap-core/core";
 import { TRPCError } from "@trpc/server";
 import { t } from "../init-trpc.js";
-import { getDb } from "@synap/database";
+import { readControlPlaneEntitlement } from "@synap/database";
 import { signedRequiredTier } from "../services/capabilities/official-catalog-trust.js";
 
 const logger = createLogger({ module: "tier-check" });
@@ -56,16 +59,17 @@ export const TIER_RANK: Record<string, number> = {
 };
 
 // ---------------------------------------------------------------------------
-// Core: read tier from workspace.settings.controlPlane.tier
+// Core: read tier from the pod's plan
 // ---------------------------------------------------------------------------
 
 /**
- * Get the pod's subscription tier from the local workspace settings.
+ * Get the pod's subscription tier from its plan.
  *
  * Returns 'solo' when:
  *   - No CP is configured (self-hosted pod)
- *   - No tier has been pushed yet (pod provisioned before this feature)
- *   - DB read fails
+ *   - The CP never answered (no plan record) or the pod has no live plan
+ *
+ * Throws when the plan cannot be read: a failed read is not 'solo'.
  */
 async function getLocalTier(): Promise<string> {
   const cpUrl = config.server.controlPlaneUrl;
@@ -77,22 +81,9 @@ async function getLocalTier(): Promise<string> {
   const cached = getCachedTier();
   if (cached) return cached;
 
-  try {
-    const db = await getDb();
-    const ws = await db.query.workspaces.findFirst({
-      columns: { settings: true },
-    });
-
-    const settings = (ws?.settings as Record<string, unknown>) ?? {};
-    const cp = settings.controlPlane as { tier?: string } | undefined;
-    const tier = cp?.tier ?? "solo";
-
-    setCachedTier(tier);
-    return tier;
-  } catch (err) {
-    logger.warn({ err }, "getLocalTier: DB read failed — defaulting to 'solo'");
-    return "solo";
-  }
+  const tier = (await readControlPlaneEntitlement())?.tier ?? "solo";
+  setCachedTier(tier);
+  return tier;
 }
 
 /**
@@ -143,7 +134,7 @@ async function fetchPackageRequiredTier(slug: string): Promise<string | null> {
 /**
  * tRPC middleware that gates a procedure behind a minimum subscription tier.
  *
- * Reads the tier from local workspace settings — no CP round-trip.
+ * Reads the tier from the pod's plan — no CP round-trip.
  * For self-hosted pods (no CP configured), all tiers are allowed.
  *
  * Usage:

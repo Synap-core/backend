@@ -22,6 +22,7 @@
  * Words come from the vocabulary door; nothing here names a kind by hand.
  */
 
+import { proposalSubjectKind } from "../../../proposal/[id]/proposal-subject-kind";
 import { DESTRUCTIVE_ACTIONS } from "@synap/governance-policy";
 import {
   lensRowOfNeedsYou,
@@ -29,6 +30,10 @@ import {
   type LensNeedsYouSignal,
 } from "@synap-core/types/lens";
 import { isObjectNavView } from "@synap-core/types/navigation";
+import {
+  deriveDuplicateReview,
+  needsIdentityChoice,
+} from "@synap-core/types/proposals";
 import type { Ask } from "@synap-core/types/ask";
 import { openIn, type Exit } from "../../../../lib/open-in";
 import { askSlotOf, type AskSlot } from "./ask-detail";
@@ -87,6 +92,8 @@ export interface ProposalFacts {
   actorKind?: string | null;
   workspaceName?: string | null;
   data?: unknown;
+  /** The request payload (`request.data`), where an entity proposal names its kind. */
+  requestData?: unknown;
 }
 
 /** What the row's one verb opens. */
@@ -187,6 +194,18 @@ function iso(at: string | Date | null | undefined): string | null {
   return Number.isFinite(d.getTime()) ? d.toISOString() : null;
 }
 
+/**
+ * A create whose twin is a record waits for the person's choice on its page
+ * (`needsIdentityChoice`): an inline or batch approve would keep both without
+ * showing the twin.
+ */
+function needsTwinChoice(f: ProposalFacts | undefined): boolean {
+  if (!f) return false;
+  return needsIdentityChoice({
+    duplicate: deriveDuplicateReview(f.data, { singleEntityCreate: true }),
+  });
+}
+
 /** The members a cluster row decides, when the sample IS the whole cluster. */
 function wholeCluster(s: ReviewSignal): string[] | null {
   const ids = s.proposalIds?.length
@@ -210,16 +229,26 @@ function proposalRow(
     members !== null &&
     members.every((id) => facts.get(id)?.viewerCanReview === true);
   const changes = group === "changes";
+  const twin = (members ?? (sampleId ? [sampleId] : [])).some((id) =>
+    needsTwinChoice(facts.get(id))
+  );
   return {
-    nounKind: sample?.targetType || "proposal",
+    nounKind: sample
+      ? proposalSubjectKind(sample, sample.requestData ?? sample.data) ||
+        "proposal"
+      : "proposal",
     who: (sample && proposalRequester(sample)) || sample?.agentName || null,
     where: sample?.workspaceName || s.source?.label || null,
     reason: null,
     expiresAt: null,
     detail: sampleId ? { kind: "proposal", proposalId: sampleId } : null,
     inlineApprove:
-      changes && approvable && sample !== undefined && !isRemoval(sample),
-    batchIds: changes && approvable ? members : null,
+      changes &&
+      approvable &&
+      !twin &&
+      sample !== undefined &&
+      !isRemoval(sample),
+    batchIds: changes && approvable && !twin ? members : null,
     ids: [s.id, ...(s.proposalIds ?? (sampleId ? [sampleId] : []))],
   };
 }

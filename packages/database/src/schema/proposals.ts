@@ -13,6 +13,11 @@ import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 import { channels } from "./channels.js";
 import { commandRuns } from "./command-runs.js";
 import { messages } from "./messages.js";
+// The row's revision entry is declared once in `@synap-core/types` (the wire
+// shape); imported to type the JSONB column below.
+import type { ProposalRevision } from "@synap-core/types/proposals/row";
+
+export type { ProposalRevision } from "@synap-core/types/proposals/row";
 
 /**
  * Proposal Status
@@ -56,18 +61,6 @@ export const ProposalStatus = {
 } as const;
 export type ProposalStatus =
   (typeof ProposalStatus)[keyof typeof ProposalStatus];
-
-/**
- * One entry in a proposal's `revision_history` — a before/after snapshot of a
- * `reviseProposal` edit. `before` holds only the fields the patch changed, with
- * their prior values; `patch` is the applied change. `by` is the actor id.
- */
-export interface ProposalRevision {
-  at: string;
-  by: string | null;
-  before: Record<string, unknown>;
-  patch: Record<string, unknown>;
-}
 
 /**
  * Universal Proposals Table
@@ -329,49 +322,11 @@ export const proposals = pgTable(
   })
 );
 
-/** Proposal row — explicit interface so consumers don't need drizzle-orm to resolve it. */
-export interface Proposal {
-  id: string;
-  workspaceId: string | null;
-  targetType: string;
-  targetId: string;
-  proposalType: string;
-  data: unknown;
-  status: ProposalStatus;
-  createdBy: string | null;
-  proposedByUserId: string | null;
-  threadId: string | null;
-  commandRunId: string | null;
-  sourceMessageId: string | null;
-  agentUserId: string | null;
-  correlationId: string | null;
-  requestedEventId: string | null;
-  sessionId: string | null;
-  stepRunId: string | null;
-  nodeId: string | null;
-  expiresAt: Date | null;
-  reviewedBy: string | null;
-  reviewedAt: Date | null;
-  externalDispatchedAt: Date | null;
-  dedupHash: string | null;
-  rejectionReason: string | null;
-  reasonCode: string | null;
-  /** The app's `public_id` whose key filed this proposal, or null. */
-  appId: string | null;
-  comments: unknown;
-  revisionHistory: ProposalRevision[];
-  createdAt: Date;
-  updatedAt: Date;
-}
-export type NewProposal = Partial<
-  Omit<Proposal, "id" | "createdAt" | "updatedAt">
-> & {
-  workspaceId?: string | null;
-  targetType: string;
-  targetId: string;
-  proposalType: string;
-  data: unknown;
-};
+// The proposal row (`Proposal`, `NewProposal`) is an explicit interface declared
+// in `@synap-core/types/proposals/row`, so clients resolve it without
+// drizzle-orm. Its `status` is that package's `ProposalStatus`, proven equal to
+// the const above in `../wire-parity/proposals.ts`.
+export type { Proposal, NewProposal } from "@synap-core/types/proposals/row";
 
 // Zod Schemas
 export const insertProposalSchema = createInsertSchema(proposals);

@@ -11,8 +11,8 @@
  * governance engine — so Relay (React Native / Hermes), Electron, Next.js, the
  * CLI and the pod all import the same answer. It is published as its own LEAF
  * subpath (`@synap-core/types/proposals/intent`) rather than through the
- * `./proposals` barrel, because the barrel re-exports `@synap/database` types
- * and a VALUE import from a barrel is what crashes Hermes.
+ * large `./proposals` barrel, because a VALUE import from a barrel is what
+ * crashes Hermes.
  *
  * ── It derives from fields ALREADY ON THE WIRE ──────────────────────────────
  * `kind` (the frontend `ProposalKind` union), `class` (`proposalClassFields`,

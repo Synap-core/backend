@@ -136,6 +136,74 @@ export const GRANT_SAFE_REST_READS: readonly RegExp[] = [
   /^\/proposals\/?$/, // hub proposals.listProposals: proposalUserFloor (+ grant)
 ];
 
+/** A session id in a REST path: uuid-shaped, so a future static sibling
+ * (`/focus-sessions/<word>`) is NOT admitted by the declarations below. */
+const SESSION_ID = "[0-9a-fA-F-]{36}";
+
+/**
+ * Hub REST GET routes that are AGGREGATE reads (P2b): each DECLARES the grant
+ * subjects it reads, like `GRANT_REST_POST_READS` and `MCP_READ_TOOL_DOORS`. A
+ * fenced key passes when one of its scopes reads EVERY declared subject with
+ * no narrowing — then the grant would remove no row the route returns. A key
+ * pinned to a space / project / object, or missing one subject, is refused.
+ *
+ * These are the routes a scoped AGENT key needs to read the session it works
+ * on over REST (the CLI's `session get` / `session wait`), as it already can
+ * over MCP (`synap_get_session`). Each route stays owner-floored on the key's
+ * LINKED HUMAN (`effectiveUserId`): a declaration bounds WHICH subjects a key
+ * reads, never WHOSE rows — no agent reads another person's session here.
+ *
+ * Subjects were read from the code (2026-10-23); completeness is a review
+ * question the classification tripwire cannot see.
+ */
+export const GRANT_REST_GET_READS: ReadonlyArray<
+  readonly [RegExp, FencedReadDoor]
+> = [
+  // The session row + the continuation packet (continuation-packet.ts:
+  // proposals, links, sessions, projects, room messages, playbook runs) + the
+  // outcomes (session-outputs.ts: artifacts, links, proposals, entities,
+  // documents, views, automations, playbooks, tracks, projects). The same
+  // projection as MCP `synap_get_session`.
+  [
+    new RegExp(`^/focus-sessions/${SESSION_ID}/?$`),
+    READS(
+      "session",
+      "channel",
+      "proposal",
+      "document",
+      "entity",
+      "artifact",
+      "link",
+      "view",
+      "automation",
+      "playbook",
+      "track",
+      "project"
+    ),
+  ],
+  // The row + its `session_evaluations` (subject `session`, grant-read.ts).
+  [
+    new RegExp(`^/focus-sessions/${SESSION_ID}/evaluations/?$`),
+    READS("session"),
+  ],
+  // `listSessionAnswers`: the row (sessionReadableWhere) + the room's messages.
+  [
+    new RegExp(`^/focus-sessions/${SESSION_ID}/answers/?$`),
+    READS("session", "channel"),
+  ],
+  // `waitForSessionAnswers` / `listSessionChanges`: answers + room messages +
+  // proposals filed under the session (`proposal_decided`).
+  [
+    new RegExp(`^/focus-sessions/${SESSION_ID}/answers/wait/?$`),
+    READS("session", "channel", "proposal"),
+  ],
+  // `readSessionDocument`: the row, the designating artifact, the document.
+  [
+    new RegExp(`^/focus-sessions/${SESSION_ID}/document/?$`),
+    READS("session", "artifact", "document"),
+  ],
+];
+
 /**
  * Hub REST POST routes that READ (every other POST is a write, bounded by the
  * gate). Matched in order; the first match classifies the route.
@@ -371,8 +439,11 @@ export function restDoorAllowed(
   grant: KeyGrant
 ): boolean {
   const m = method.toUpperCase();
-  if (m === "GET" || m === "HEAD")
-    return GRANT_SAFE_REST_READS.some((r) => r.test(path));
+  if (m === "GET" || m === "HEAD") {
+    if (GRANT_SAFE_REST_READS.some((r) => r.test(path))) return true;
+    const read = GRANT_REST_GET_READS.find(([r]) => r.test(path));
+    return Boolean(read) && grantBoundsDoor(read![1], grant);
+  }
   if (m === "POST") {
     const read = GRANT_REST_POST_READS.find(([r]) => r.test(path));
     return !read || grantBoundsDoor(read[1], grant);

@@ -75,11 +75,21 @@ const PLUMBING_KEYS = new Set([
   "governanceReason",
   // The proposal's own target — the card's header already names it.
   "entityId",
+  // The space an entity create was placed in, resolved at filing time for the
+  // materializer (`entities/create.ts`); the card names the space itself.
+  "resolvedWorkspaceId",
+  // The duplicate door's answer (`duplicateCheck`, beside a capture graph's
+  // operations): the card draws it as the twin, never as a changed field.
+  "duplicateCheck",
   // A session update's display-only name, and the goal it had when a goal
   // change was filed — the latter is drawn as the `goal` row's before
   // (`services/focus-sessions/session-update-goal.ts`).
   "sessionName",
   "previousGoal",
+  // The acting owner a create door stamps on its payload, and the retry key
+  // (ticket 1e193849 listed both to the founder): raw ids, never a change.
+  "userId",
+  "idempotencyKey",
 ]);
 
 /** Keys the entity-shape walk above the fallback already turned into rows. */
@@ -236,6 +246,26 @@ export function buildProposalChanges(
         ...(measureDrift ? { drift: topLevelDrift(key) } : {}),
       });
     }
+  }
+
+  // The BODY a create brings is what the reviewer approves first. `content`
+  // stays in NON_ENTITY_INFRA_KEYS (a byte-identical cross-repo twin), so the
+  // fallback never emits it: it is emitted HERE, once, for a create only. Live
+  // (proposal 1e193849): a document create listed its url and type but not
+  // its body, and read as an empty document. The full text rides the row, as
+  // every other value does; each surface folds a long value when it draws it.
+  if (
+    operation === "create" &&
+    typeof data.content === "string" &&
+    data.content.trim() !== ""
+  ) {
+    changes.push({
+      path: "content",
+      label: labelFromPath("content"),
+      operation,
+      after: data.content,
+      valueType: "string",
+    });
   }
 
   // A proposal WITH a property snapshot never reads the live row for a before:

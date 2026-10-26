@@ -15,6 +15,7 @@ import {
 import { eq, and, gte, isNull } from "drizzle-orm";
 import crypto from "crypto";
 import { safeTokenEqual } from "@synap/auth";
+import { inviteTokenColumns } from "@synap/api";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "admin-router" });
@@ -108,7 +109,7 @@ adminRouter.post("/bootstrap/claim", async (c) => {
       type: "pod",
       email,
       role,
-      token: inviteToken,
+      ...inviteTokenColumns(inviteToken),
       invitedBy: "admin-bootstrap",
       expiresAt: new Date(Date.now() + 30 * 60 * 1000), // 30 minutes
     });

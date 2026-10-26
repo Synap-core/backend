@@ -122,6 +122,19 @@ describe("reviewRows", () => {
     });
   });
 
+  it("an entity proposal's row names the thing's kind, not the generic \"entity\"", () => {
+    const [row] = reviewRows(
+      [cluster("c")],
+      new Map([
+        facts("c-p1", {
+          targetType: "entity",
+          requestData: { profileSlug: "task" },
+        }),
+      ])
+    );
+    expect(row!.nounKind).toBe("task");
+  });
+
   it("an app request opens the request, and expires at its lease", () => {
     const [row] = reviewRows([appRequest], new Map());
     expect(row!.detail).toEqual({ kind: "app-request", requestId: "r1" });
@@ -177,6 +190,33 @@ describe("reviewRows", () => {
     );
     expect(row!.inlineApprove).toBe(false);
     expect(row!.batchIds).toEqual(["c1-p1"]);
+  });
+
+  it("a create whose twin is a record is decided on its page, never inline or batched", () => {
+    const twinData = {
+      duplicateCheck: {
+        status: "possible",
+        subject: "entity",
+        candidates: [
+          {
+            ref: "record",
+            id: "e-1",
+            kind: "person",
+            title: "Léa",
+            why: "same_name",
+          },
+        ],
+      },
+    };
+    const [twin, plain] = reviewRows(
+      [cluster("c1"), cluster("c2")],
+      new Map([
+        facts("c1-p1", { targetType: "entity", data: twinData }),
+        facts("c2-p1", { targetType: "entity", data: {} }),
+      ])
+    );
+    expect(twin).toMatchObject({ inlineApprove: false, batchIds: null });
+    expect(plain).toMatchObject({ inlineApprove: true, batchIds: ["c2-p1"] });
   });
 
   it("a member the viewer may not approve keeps the whole row out of inline and batch", () => {

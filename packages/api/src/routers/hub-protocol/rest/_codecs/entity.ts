@@ -39,6 +39,63 @@ export const WireEntitySchema = z
   .openapi("Entity");
 export type WireEntity = z.infer<typeof WireEntitySchema>;
 
+/** One live role facet on a listed row — the tRPC `FacetRowAnnotation` shape. */
+export const WireFacetRowSchema = z
+  .object({
+    facetId: z.string(),
+    slug: z.string().describe("The role-profile slug, e.g. `lead`."),
+    properties: z
+      .record(z.string(), z.unknown())
+      .describe("The facet's overlay values, e.g. the `leadStage` of a lead."),
+    status: z.string().nullable(),
+  })
+  .openapi("EntityFacetRow");
+export type WireFacetRow = z.infer<typeof WireFacetRowSchema>;
+
+/** One `file` a listed row links (`row --references--> file`) — enough to draw it. */
+export const WireMediaRefSchema = z
+  .object({
+    id: z
+      .string()
+      .describe("The file entity id: sign it with `GET /files/{id}/url`."),
+    title: z.string().nullable(),
+    mimeType: z
+      .string()
+      .nullable()
+      .describe(
+        "The type the blob is served with (what `GET /files/{id}/url` reports); null when unknown."
+      ),
+  })
+  .openapi("EntityMediaRef");
+export type WireMediaRef = z.infer<typeof WireMediaRefSchema>;
+
+/**
+ * A `GET /entities` row: the entity wire shape, plus its role facets when the
+ * caller asked `includeFacets=true` and the row wears at least one, and its
+ * linked files when it asked `includeMedia=true` and the row links one.
+ */
+export const WireListedEntitySchema = WireEntitySchema.extend({
+  facetSlugs: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "With `includeFacets=true`: the slugs of the role facets the row wears. Absent when it wears none."
+    ),
+  facets: z
+    .array(WireFacetRowSchema)
+    .optional()
+    .describe(
+      "With `includeFacets=true`: each role facet the row wears, with its overlay. Absent when it wears none."
+    ),
+  media: z
+    .array(WireMediaRefSchema)
+    .optional()
+    .describe(
+      "With `includeMedia=true`: the `file` entities the row links by `references` edges (capped, see `includeMedia`), each one the caller may read, oldest link first. Absent when it links none."
+    ),
+}).openapi("ListedEntity");
+export type WireListedEntity = z.infer<typeof WireListedEntitySchema>;
+
 /**
  * Loose record schema for routes that return raw entity rows from the DB
  * (e.g. GET /entities/:id, GET /users/:userId/entities). DB rows have `type`
@@ -464,5 +521,24 @@ export function entityToWire(entity: unknown): WireEntity {
     version: typeof row.version === "number" ? row.version : undefined,
     createdAt: row.createdAt as string | Date | undefined,
     updatedAt: row.updatedAt as string | Date | undefined,
+  };
+}
+
+/**
+ * {@link entityToWire} keeping the role facets a list row was annotated with
+ * (`entities.list` with `includeFacets: true` sets `facetSlugs` + `facets`
+ * only on a row wearing ≥1). Only for a caller that asked for them: the
+ * default list already carries `facetSlugs` and must keep dropping them.
+ */
+export function entityToWireWithFacets(entity: unknown): WireListedEntity {
+  const wire = entityToWire(entity);
+  const { facetSlugs, facets } = entity as {
+    facetSlugs?: string[];
+    facets?: WireFacetRow[];
+  };
+  return {
+    ...wire,
+    ...(facetSlugs ? { facetSlugs } : {}),
+    ...(facets ? { facets } : {}),
   };
 }

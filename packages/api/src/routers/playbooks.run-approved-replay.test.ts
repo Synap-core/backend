@@ -179,6 +179,27 @@ describe("playbooks.run — an approved replay is the approver's decision", () =
     });
   });
 
+  // B6 (dogfood e3c39721 §5): an agent's own run tells the gate it lands as
+  // the person's held draft, so the default ask does not file a proposal in
+  // front of the draft. A replay (already accepted) and a person's run do not.
+  it("a direct agent run asks the gate as a held draft; a replay or a person's run does not", async () => {
+    const asked = async (c: never, agentUserId?: string) => {
+      mockCheckPermission.mockClear();
+      await playbooksRouter
+        .createCaller(c)
+        .run({ playbookId: PB_ID, ...(agentUserId ? { agentUserId } : {}) });
+      return (mockCheckPermission.mock.calls[0] as unknown[])[0] as Record<
+        string,
+        unknown
+      >;
+    };
+    expect(await asked(ctx(), AGENT)).toMatchObject({ heldAsDraft: true });
+    expect(await asked(ctx("proposal-1"), AGENT)).not.toHaveProperty(
+      "heldAsDraft"
+    );
+    expect(await asked(ctx())).not.toHaveProperty("heldAsDraft");
+  });
+
   it("skills not enabled: says so as `blocked`, files no request in the agent's name, never throws", async () => {
     mockFindUnenabled.mockResolvedValue([{ name: "Web reader" }] as never);
     const res = await playbooksRouter

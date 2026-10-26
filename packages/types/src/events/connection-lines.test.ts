@@ -168,7 +168,7 @@ const ROWS: Row[] = [
   [
     "track.stage_changed.completed",
     { toStage: "Launch prep" },
-    'Moved track to "Launch prep"',
+    'Moved goal to "Launch prep"',
   ],
 ];
 

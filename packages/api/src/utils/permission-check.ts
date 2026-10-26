@@ -82,6 +82,7 @@ import {
 } from "@synap-core/types/vocabulary";
 import { buildProjectFilingSummary } from "../services/projects/project-filing-summary.js";
 import { buildTrackStartSummary } from "../services/tracks/track-start-summary.js";
+import { buildTrackParticipantSummary } from "../services/tracks/track-participant-summary.js";
 import { buildDescriptiveProfileUpdateSummary } from "../services/profiles/profile-descriptive-update.js";
 import {
   defaultApprovalSentence,
@@ -229,10 +230,17 @@ function isFocusSessionCriteriaUpdate(
   action: string,
   data: Record<string, unknown> | undefined
 ): boolean {
+  const carriesCriteria =
+    data !== undefined && "criteria" in data && data.criteria !== undefined;
+  // A GOAL's criteria (work model W2, 0345) are the same contract one level
+  // up: the standard the goal is judged done against. An agent writing them
+  // — when it starts the goal or later — proposes, and the person validates.
+  // The track doors carry `criteria` only when the caller sent them.
+  if (subjectType === "track") {
+    return (action === "create" || action === "update") && carriesCriteria;
+  }
   if (subjectType !== "focus_session" || action !== "update") return false;
-  return (
-    data !== undefined && "criteria" in data && data.criteria !== undefined
-  );
+  return carriesCriteria;
 }
 
 /**
@@ -1037,6 +1045,15 @@ export interface PermissionCheckBaseOpts {
    */
   forcePropose?: boolean;
   /**
+   * The POD files this proposal on its own, not the person it is filed for
+   * (code-core F3, 2026-10-24): a `system:<producer>` author stamped as the
+   * row's `createdBy` — the machine marker the codebase already reads
+   * (`MACHINE_CREATED_BY_PREFIX`, @synap/database). `userId` stays the person
+   * it is for (the owner floor), so they still see and decide it; it is no
+   * longer counted as their own act. Today: the goal loop's next run.
+   */
+  machineAuthor?: `system:${string}`;
+  /**
    * FB1020 B3 — the door PROVED this write organises the acting agent's own
    * fresh work (`isOwnFreshWork`, @synap/database): same key, last 24 h,
    * untouched by a person, into a project the person named. Set ONLY by the
@@ -1045,6 +1062,14 @@ export interface PermissionCheckBaseOpts {
    * class row (rung 2.8) apply it; without that row it proposes as before.
    */
   ownWorkOrganise?: boolean;
+  /**
+   * FB1020 B6 — the write lands as the PERSON's held draft and does nothing
+   * until they accept it (an agent's direct playbook run, held by
+   * `runPlaybook`). The engine's plain default then executes instead of
+   * filing a second ask; every floor and rule above it still decides. Set
+   * ONLY by `playbooks.run` for an agent's own (non-replay) run.
+   */
+  heldAsDraft?: boolean;
   /**
    * The duplicate door (`findDuplicateCandidates`) found a possible twin of
    * this create (same kind, same name or strong identity, as a record or a
@@ -1336,6 +1361,9 @@ function anonymousPolicyInput(facts: AnonymousPolicyFacts): AgentPolicyInput {
     // records — an unattributed write is never "its own".
     ownWorkOrganise: undefined,
     governanceRuleIsOwnOrganise: undefined,
+    // B6: only an attributed agent's run is held as the person's draft
+    // (`runPlaybook` holds on `agentUserId`); an unattributed write never is.
+    heldAsDraft: undefined,
   };
   return input;
 }
@@ -1567,6 +1595,7 @@ async function evaluatePermission(
           if (actorRow?.userType === "agent") {
             if (dryRun) return DRY_RUN_PROPOSE;
             return createProposal({
+              createdBy: opts.machineAuthor,
               envelope: writeEnvelope,
               workspaceId,
               subjectType,
@@ -1641,6 +1670,7 @@ async function evaluatePermission(
           if (reviewerExists) {
             if (dryRun) return DRY_RUN_PROPOSE;
             return createProposal({
+              createdBy: opts.machineAuthor,
               envelope: writeEnvelope,
               proposedByUserId: userId,
               workspaceId,
@@ -1683,6 +1713,7 @@ async function evaluatePermission(
     if (opts.issuer && opts.issuer.trusted === false) {
       if (dryRun) return DRY_RUN_PROPOSE;
       return createProposal({
+        createdBy: opts.machineAuthor,
         envelope: writeEnvelope,
         workspaceId,
         subjectType,
@@ -1941,6 +1972,7 @@ async function evaluatePermission(
         // B3: a session that forces every write keeps forcing (effective
         // forcePropose above wins at 2.1); the proof only reaches the store.
         ownWorkOrganise: opts.ownWorkOrganise,
+        heldAsDraft: opts.heldAsDraft,
         podAdminSchemaChange,
         // #4 instruction-provenance (rung 2.55): the acting channel + the human
         // owner let the ladder classify origin trust server-side and force-propose
@@ -2091,6 +2123,7 @@ async function evaluatePermission(
       if (gov.decision === "propose" && !lifecycleCloseEscape) {
         if (dryRun) return DRY_RUN_PROPOSE;
         return createProposal({
+          createdBy: opts.machineAuthor,
           envelope: governedEnvelope,
           workspaceId,
           subjectType,
@@ -2580,6 +2613,7 @@ async function evaluatePermission(
       }
       if (dryRun) return DRY_RUN_PROPOSE;
       return createProposal({
+        createdBy: opts.machineAuthor,
         envelope: writeEnvelope,
         workspaceId,
         subjectType,
@@ -3067,6 +3101,15 @@ export function buildProposalSummary(
       ? `Hand session "${name}" to ${agent}`
       : `Hand a session to ${agent}`;
   }
+  // WHO IS ON A GOAL (W3) — the goal hand-off (`track/assign_agent`) and an
+  // agent's participant change under `track/update`: names the goal, who, and
+  // what changes for them.
+  const participantSentence = buildTrackParticipantSummary(
+    subjectType,
+    action,
+    data
+  );
+  if (participantSentence) return participantSentence;
   // focus_session FILING — where a session belongs (its track step, its
   // project, its space) is the person's call, so the title says it is a move
   // and names EVERY place it changes, never the generic "Update session"
@@ -3342,8 +3385,7 @@ export function buildProposalResponseFields(opts: {
   );
   return {
     summary,
-    reasoning:
-      opts.reasoning ?? defaultApprovalSentence(opts.action, opts.subjectType),
+    reasoning: opts.reasoning ?? defaultApprovalSentence(),
     reviewPath: openPath(opts.proposalId),
     reviewUrl: openLink(opts.proposalId),
   };
@@ -3830,6 +3872,8 @@ async function createProposal(args: {
    * (they carry `agentUserId` on the envelope's access instead).
    */
   proposedByUserId?: string;
+  /** A machine author (`PermissionCheckOpts.machineAuthor`) — else `userId`. */
+  createdBy?: string;
   workspaceId: string | null | undefined;
   subjectType: string;
   action: string;
@@ -3874,6 +3918,7 @@ async function createProposal(args: {
   const {
     envelope,
     proposedByUserId,
+    createdBy: machineAuthor,
     workspaceId,
     subjectType,
     action,
@@ -4212,10 +4257,7 @@ async function createProposal(args: {
         proposalId: existing.id,
         proposalType: `${subjectType}.${action}`,
         summary,
-        reasoning:
-          reasoning ||
-          policyReason ||
-          defaultApprovalSentence(action, singularType),
+        reasoning: reasoning || policyReason || defaultApprovalSentence(),
         reviewPath: openPath(existing.id),
         reviewUrl: openLink(existing.id),
         deduped: true,
@@ -4258,7 +4300,7 @@ async function createProposal(args: {
           ...(reqEventId ? { requestedEventId: reqEventId } : {}),
         },
         agentUserId: attributionAgentUserId ?? undefined,
-        createdBy: userId,
+        createdBy: machineAuthor ?? userId,
         proposedByUserId: proposedByUserId ?? null,
         threadId: threadId ?? null,
         commandRunId: commandRunId ?? null,
@@ -4300,10 +4342,7 @@ async function createProposal(args: {
     proposalId: proposal.id,
     proposalType: `${subjectType}.${action}`,
     summary,
-    reasoning:
-      reasoning ??
-      policyReason ??
-      defaultApprovalSentence(action, singularType),
+    reasoning: reasoning ?? policyReason ?? defaultApprovalSentence(),
     reviewPath: openPath(proposal.id),
     reviewUrl: openLink(proposal.id),
     ...(deduped ? { deduped: true } : {}),
@@ -4381,16 +4420,26 @@ async function maybeCreateWorkspaceJoinProposal(opts: {
     .limit(1);
   if (agentUser?.userType !== "agent") return null;
 
+  const [ws] = await db
+    .select({ name: workspaces.name, archivedAt: workspaces.archivedAt })
+    .from(workspaces)
+    .where(eq(workspaces.id, workspaceId))
+    .limit(1);
+  // An archived space takes no new member: a join filed there could only be
+  // approved into a retired space (ticket 86b6faae). Refused in words, in
+  // dry-run too, since it is the verdict.
+  if (ws?.archivedAt) {
+    return {
+      denied: true,
+      reason: `The space "${ws.name}" is archived, so an agent cannot join it or write there. A person must do this, or restore the space first.`,
+    };
+  }
+
   // Verdict resolved (agent → join proposal). In dry-run stop here: everything
   // below either reads to build the card or WRITES the proposal.
   if (dryRun) return DRY_RUN_PROPOSE;
 
   const role = "editor";
-  const [ws] = await db
-    .select({ name: workspaces.name })
-    .from(workspaces)
-    .where(eq(workspaces.id, workspaceId))
-    .limit(1);
   const agentName = agentUser.name ?? "Agent";
   const workspaceName = ws?.name ?? workspaceId;
   // Enrich the summary when we know WHAT the agent wanted to do — a join

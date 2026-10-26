@@ -46,8 +46,9 @@
  *
  * ── END ─────────────────────────────────────────────────────────────────────
  * PAUSING suspends it: the gate admits only an ACTIVE track, so resuming
- * restores it with nothing to rewrite. Completing or archiving the track
- * stamps `endedAt` (`applyTrackStatus`), so a later reopen does NOT revive it.
+ * restores it with nothing to rewrite. Closing or dropping the track stamps
+ * `endedAt` (`applyTrackStatus`); both are final, and a reopened goal is a NEW
+ * track (`reopenTrack`) whose grant is consented to again at its start.
  */
 
 import {
@@ -62,7 +63,11 @@ import {
   type getDb,
   type PermissionType,
 } from "@synap/database";
-import { readTrackStage, deriveTrackStages } from "@synap-core/types/units";
+import {
+  readTrackStage,
+  deriveTrackStages,
+  type TrackStatusIn,
+} from "@synap-core/types/units";
 import { OPEN_SESSION_STATUSES } from "@synap-core/types/focus-sessions";
 import {
   resolveStageDomainWorkspace,
@@ -82,10 +87,22 @@ export { TRACK_SPACE_GRANT_KEY };
 const GRANT_ROLE = "editor" as const;
 
 /**
- * The track statuses under which the grant can admit anything (W5): ACTIVE
- * only. A paused track's agents stop at the join gate until it resumes.
+ * The track statuses under which the grant can admit anything (W5): the
+ * ACTIVE category only (`TRACK_STATUS_DECLARATION`). A paused track's agents
+ * stop at the join gate until it resumes; a goal still being shaped
+ * (proposed · agreed · ready) admits nobody until it starts.
  */
-const GRANT_LIVE_STATUSES = ["active"] as const;
+const GRANT_LIVE_STATUSES = [
+  "active",
+] as const satisfies readonly TrackStatusIn<"active">[];
+// Exactly the active category: a second active option added to the track
+// lifecycle and not listed here stops the build.
+const _grantIsActiveCategory: [
+  Exclude<TrackStatusIn<"active">, (typeof GRANT_LIVE_STATUSES)[number]>,
+] extends [never]
+  ? true
+  : never = true;
+void _grantIsActiveCategory;
 
 export interface TrackSpaceGrant {
   /** The person the admitted agents act for (the gate's `userId`). */
@@ -100,9 +117,9 @@ export interface TrackSpaceGrant {
   grantedAt: string;
   /** The approved `track/create` proposal, when the start was proposed. */
   proposalId?: string;
-  /** ISO-8601 — set when the track completed or was archived. */
+  /** ISO-8601 — set when the track was closed (completed) or dropped (archived). */
   endedAt?: string;
-  endedReason?: "completed" | "archived";
+  endedReason?: TrackStatusIn<"done" | "lost">;
 }
 
 /** A granted space, as a proposal lists it for the person to read. */
@@ -221,10 +238,10 @@ export function readListedStepSpaces(data: unknown): string[] {
     .filter((w): w is string => typeof w === "string");
 }
 
-/** The grant as it stands once the track completes or is archived. */
+/** The grant as it stands once the track is closed or dropped. */
 export function endTrackSpaceGrant(
   metadata: unknown,
-  reason: "completed" | "archived",
+  reason: TrackStatusIn<"done" | "lost">,
   at: Date = new Date()
 ): Record<string, unknown> | undefined {
   const grant = readTrackSpaceGrant(metadata);

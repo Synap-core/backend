@@ -47,11 +47,23 @@ claims the registration gate needs into `metadata_public.synap_cp`.
 
 - `POST /gate` (pre-persist, can interrupt): a federated user gets a pod account
   on first sign-in only if the signed claims say they own this pod, their email
-  is verified, and the pod has no different human owner yet. Everyone else is
-  refused with `POD_ACCESS_REQUIRED`; a password sign-up is refused with
-  `SELF_REGISTRATION_DISABLED`.
+  is verified, and the pod has no different human owner yet; or if the
+  registration carries an open invitation (`transient_payload.invite_token`,
+  from the invite page) sent to that verified email. A passkey account is made
+  the same way, for the invited email only. Everyone else is refused with
+  `POD_ACCESS_REQUIRED` (`INVITE_EMAIL_MISMATCH` for an invitation sent to
+  another email); a password sign-up, and a passkey one without an invitation,
+  is refused with `SELF_REGISTRATION_DISABLED`. Every registration-capable
+  method has this gate first: Kratos runs no hook for a method that has none.
 - `POST /complete` (post-persist): seeds the owner through the same door as
-  `/api/federation/bootstrap`.
+  `/api/federation/bootstrap`, or accepts the invitation through
+  `acceptInviteFor`.
+
+The owner's "Synap Cloud" setting (Settings › Security, `off` | `sign_in` |
+`sign_in_recovery`) governs how anyone signs in: `off` refuses every Synap
+Cloud registration at `/gate` and every Cloud sign-in at the login hook
+(`kratos-cloud-trust.ts`). It cannot be turned off while an owner has no
+password or passkey on the pod.
 
 `GET /api/federation/discovery` tells a client whether federated sign-in is
 available: the pod must have a configured OIDC issuer and that issuer must be

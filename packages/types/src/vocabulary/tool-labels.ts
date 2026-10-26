@@ -227,9 +227,9 @@ export const TOOL_LABEL_OVERRIDES: Readonly<Record<string, ToolLabelMoods>> = {
     "Read feed preferences"
   ),
   set_track_params: moods(
-    "Setting track parameters",
-    "Set track parameters",
-    "Set track parameters"
+    "Setting goal parameters",
+    "Set goal parameters",
+    "Set goal parameters"
   ),
   focus_surface: moods(
     "Opening a surface",

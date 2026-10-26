@@ -11,10 +11,13 @@ import {
   CardHeader,
   Checkbox,
   Chip,
+  Radio,
+  RadioGroup,
   Spinner,
 } from "@heroui/react";
 import {
   Check,
+  ChevronRight,
   Monitor,
   Plug,
   ShieldAlert,
@@ -31,21 +34,40 @@ import { trpc } from "../../../lib/trpc";
 import {
   actsAsHeadline,
   allowBlockedReason,
+  alsoSeeLine,
   consentWidth,
+  decideLine,
+  groupByObject,
+  holdsSpace,
   initialSelection,
   invalidRequestHint,
   isTicked,
+  LEVEL_WORDS,
+  levelControlLabel,
+  objectLevel,
+  objectSpaceLabel,
+  objectSpaces,
+  otherSpaces,
   permissionLabel,
+  podWideNote,
+  readsSpaceRecords,
   reasonOf,
+  scopeLabel,
+  SPACE_REACH_NOTE,
   sectionCheckboxLabel,
   sectionState,
+  setObjectLevel,
+  shownSpaces,
   spaceCheckboxLabel,
   spaceHintFirst,
   splitOffer,
   toApproved,
   toggle,
+  toggleObjectSpace,
   toggleSection,
   withoutSpace,
+  type AccessLevel,
+  type ConsentObject,
   type OfferedPermission,
   type Selection,
 } from "./consent-model";
@@ -181,11 +203,14 @@ export function ConsentForm({
     [offered, spaceHint]
   );
   const [selection, setSelection] = useState<Selection>(new Set());
+  const [customize, setCustomize] = useState(false);
   useEffect(() => {
     if (app) {
-      setSelection(initialSelection(app.permissions, app.approved, spaceHint));
+      setSelection(
+        initialSelection(app.permissions, app.approved, app.templates)
+      );
     }
-  }, [app, spaceHint]);
+  }, [app]);
   const approved = app ? toApproved(selection, app.permissions) : [];
 
   const act = useCallback(
@@ -381,6 +406,24 @@ export function ConsentForm({
                       toggleSection(s, app.permissions, section)
                     )
                   }
+                  onSetLevel={(row, level) =>
+                    setSelection((s) =>
+                      setObjectLevel(
+                        s,
+                        app.permissions,
+                        row,
+                        level,
+                        app.templates
+                      )
+                    )
+                  }
+                  onToggleObjectSpace={(row, workspaceId) =>
+                    setSelection((s) =>
+                      toggleObjectSpace(s, app.permissions, row, workspaceId)
+                    )
+                  }
+                  customize={customize}
+                  onCustomize={setCustomize}
                   onSpaceCreated={() => void context.refetch()}
                   busy={busy}
                   step={step}
@@ -804,7 +847,7 @@ function PermissionList({
   onToggle,
   busy,
 }: {
-  permissions: ConsentApp["permissions"];
+  permissions: readonly OfferedPermission[];
   selection: Selection;
   onToggle: (permission: string, workspaceId: string) => void;
   busy: boolean;
@@ -870,10 +913,277 @@ function PermissionList({
 }
 
 /**
+ * A row's level control: a segmented radio group (arrow keys move, one tab
+ * stop), named for its object. The ring is `default-500` (5.0:1 dark, 4.6:1
+ * light against the card, as `CONSENT_CHECKBOX`); the segments are 36px
+ * inside a 2px inset, so each target is 40px tall. A level that gives
+ * something fills with the primary colour; Off fills neutral.
+ */
+export const LEVEL_GROUP = {
+  base: "shrink-0 gap-0",
+  wrapper:
+    "flex-nowrap gap-0.5 rounded-lg p-0.5 ring-1 ring-inset ring-default-500",
+} as const;
+const SEGMENT_BASE =
+  "m-0 min-h-9 min-w-12 max-w-none justify-center rounded-md px-3 py-0 hover:bg-default-100 data-[focus-visible=true]:z-10 data-[focus-visible=true]:ring-2 data-[focus-visible=true]:ring-focus";
+export const LEVEL_SEGMENT = {
+  base: `${SEGMENT_BASE} data-[selected=true]:bg-primary data-[selected=true]:hover:bg-primary`,
+  wrapper: "hidden",
+  labelWrapper: "m-0 ml-0",
+  label:
+    "text-sm text-foreground/80 group-data-[selected=true]:font-medium group-data-[selected=true]:text-primary-foreground",
+} as const;
+export const LEVEL_SEGMENT_OFF = {
+  ...LEVEL_SEGMENT,
+  base: `${SEGMENT_BASE} data-[selected=true]:bg-default-200 data-[selected=true]:hover:bg-default-200`,
+  label:
+    "text-sm text-foreground/80 group-data-[selected=true]:font-medium group-data-[selected=true]:text-foreground",
+} as const;
+
+function LevelControl({
+  row,
+  level,
+  isDisabled,
+  onChange,
+}: {
+  row: ConsentObject;
+  level: AccessLevel;
+  isDisabled: boolean;
+  onChange: (level: AccessLevel) => void;
+}) {
+  return (
+    <RadioGroup
+      orientation="horizontal"
+      aria-label={levelControlLabel(row)}
+      value={level}
+      isDisabled={isDisabled}
+      onValueChange={(v) => onChange(v as AccessLevel)}
+      classNames={LEVEL_GROUP}
+    >
+      {row.levels.map((l) => (
+        <Radio
+          key={l}
+          value={l}
+          classNames={l === "off" ? LEVEL_SEGMENT_OFF : LEVEL_SEGMENT}
+        >
+          {LEVEL_WORDS[l]}
+        </Radio>
+      ))}
+    </RadioGroup>
+  );
+}
+
+/**
+ * One object the app asks about: its name and where it is given (the
+ * button opens its detail), and its level. The detail lists each permission
+ * in words with its raw token, the developer's reason, and a tick per space:
+ * the row's own and default spaces, then the rest behind "Also allow in
+ * another space…". "It can also see" names its objects instead, and its
+ * detail lists each as its own row (View or Off, its own spaces).
+ */
+function ObjectRow({
+  row,
+  selection,
+  templates,
+  podWide,
+  busy,
+  onSetLevel,
+  onToggleSpace,
+}: {
+  row: ConsentObject;
+  selection: Selection;
+  templates: readonly string[];
+  /** The row's kind is kept pod-wide (the server's `podWideKinds`). */
+  podWide: (row: ConsentObject) => boolean;
+  busy: boolean;
+  onSetLevel: (row: ConsentObject, level: AccessLevel) => void;
+  onToggleSpace: (row: ConsentObject, workspaceId: string) => void;
+}) {
+  const id = useId();
+  const [open, setOpen] = useState(false);
+  const folded = row.members.length > 0;
+  const scope = folded
+    ? alsoSeeLine(selection, row)
+    : scopeLabel(objectSpaces(selection, row));
+  const noSpace = row.permissions.every((p) => p.workspaces.length === 0);
+  return (
+    <li className="flex flex-col py-1" data-object={row.key}>
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-controls={`${id}-detail`}
+          onClick={() => setOpen((o) => !o)}
+          className="-mx-1 flex min-h-10 min-w-0 flex-1 basis-40 items-center gap-1.5 rounded-md px-1 text-left hover:bg-foreground/[0.04] focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+        >
+          <ChevronRight
+            aria-hidden
+            className={`h-4 w-4 shrink-0 text-foreground/65 transition-transform ${open ? "rotate-90" : ""}`}
+          />
+          <span className="flex min-w-0 flex-col">
+            <span className="text-sm font-medium text-foreground/90">
+              {row.label}
+            </span>
+            {scope ? (
+              <span className="text-xs text-foreground/65">{scope}</span>
+            ) : row.decisions ? (
+              <span className="text-xs text-foreground/65">
+                {decideLine(row)}
+              </span>
+            ) : null}
+          </span>
+        </button>
+        {noSpace ? (
+          <span className="text-xs text-foreground/65">No space to give</span>
+        ) : (
+          <LevelControl
+            row={row}
+            level={objectLevel(selection, row)}
+            isDisabled={busy}
+            onChange={(level) => onSetLevel(row, level)}
+          />
+        )}
+      </div>
+      <div
+        id={`${id}-detail`}
+        hidden={!open}
+        // A class's `display` beats the `hidden` attribute: keep both.
+        className={`${open ? "flex" : "hidden"} flex-col gap-2 pb-2 pl-6 pt-1`}
+      >
+        {folded ? (
+          <ul className="flex flex-col divide-y divide-foreground/10">
+            {row.members.map((m) => (
+              <ObjectRow
+                key={m.key}
+                row={m}
+                selection={selection}
+                templates={templates}
+                podWide={podWide}
+                busy={busy}
+                onSetLevel={onSetLevel}
+                onToggleSpace={onToggleSpace}
+              />
+            ))}
+          </ul>
+        ) : (
+          <ObjectDetail
+            row={row}
+            selection={selection}
+            templates={templates}
+            podWide={podWide(row)}
+            busy={busy}
+            onToggleSpace={onToggleSpace}
+          />
+        )}
+      </div>
+    </li>
+  );
+}
+
+/** A row's detail: its permissions in words, its reasons, a tick per space. */
+function ObjectDetail({
+  row,
+  selection,
+  templates,
+  podWide,
+  busy,
+  onToggleSpace,
+}: {
+  row: ConsentObject;
+  selection: Selection;
+  templates: readonly string[];
+  podWide: boolean;
+  busy: boolean;
+  onToggleSpace: (row: ConsentObject, workspaceId: string) => void;
+}) {
+  const id = useId();
+  const [more, setMore] = useState(false);
+  const shown = shownSpaces(selection, row, templates);
+  const others = otherSpaces(selection, row, templates);
+  const tick = (w: { workspaceId: string; workspaceName: string }) => (
+    <Checkbox
+      key={w.workspaceId}
+      size="sm"
+      classNames={CONSENT_CHECKBOX}
+      aria-label={objectSpaceLabel(row, w.workspaceName)}
+      isSelected={holdsSpace(selection, row, w.workspaceId)}
+      isDisabled={busy}
+      onValueChange={() => onToggleSpace(row, w.workspaceId)}
+    >
+      {w.workspaceName}
+    </Checkbox>
+  );
+  return (
+    <>
+      <ul className="flex flex-col gap-1.5">
+        {row.permissions.map((p) => {
+          const reason = reasonOf(p);
+          return (
+            <li key={p.permission} className="flex flex-col gap-0.5">
+              <span className="text-xs text-foreground/85">
+                {permissionLabel(p.permission)}{" "}
+                <span className="font-mono text-[11px] text-foreground/65">
+                  {p.permission}
+                </span>
+              </span>
+              {reason ? (
+                <span className="text-pretty text-xs leading-relaxed text-foreground/75">
+                  {/* The developer's words, as text: why it asks. */}
+                  <span className="text-foreground/65">Its reason: </span>
+                  {reason}
+                </span>
+              ) : null}
+            </li>
+          );
+        })}
+      </ul>
+      {podWide ? (
+        <p className="text-xs leading-relaxed text-foreground/75">
+          {podWideNote(row)}
+        </p>
+      ) : null}
+      {shown.length > 0 ? (
+        <div
+          role="group"
+          aria-label={`${row.label}: where`}
+          className="flex flex-wrap gap-x-4"
+        >
+          {shown.map(tick)}
+        </div>
+      ) : null}
+      {others.length > 0 ? (
+        <>
+          <button
+            type="button"
+            aria-expanded={more}
+            aria-controls={`${id}-more`}
+            onClick={() => setMore((m) => !m)}
+            className="flex min-h-10 items-center self-start rounded-sm text-xs text-foreground/75 underline underline-offset-2 hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+          >
+            Also allow in another space…
+          </button>
+          <div
+            id={`${id}-more`}
+            hidden={!more}
+            role="group"
+            aria-label={`${row.label}: other spaces`}
+            className={`${more ? "flex" : "hidden"} flex-wrap gap-x-4`}
+          >
+            {others.map(tick)}
+          </div>
+        </>
+      ) : null}
+    </>
+  );
+}
+
+/**
  * A pod app's consent (spec 17 §9.1): its domain is the headline (above), and
- * the person picks, per permission, the spaces it may act in — only from what
- * the pod offers, so the screen can narrow and never widen. Each section
- * (reads and writes, decisions) also selects or clears as a whole.
+ * the person gives it, OBJECT by object, a level (Edit, View or Off) in the
+ * spaces made from its declared templates (`groupByObject`, `setObjectLevel`)
+ * — only from what the pod offers, so the screen can narrow and never widen.
+ * "Customize…" shows the permission × space matrix, each section selecting
+ * or clearing as a whole; both views edit the same selection.
  */
 export function AppConsent({
   app,
@@ -882,6 +1192,10 @@ export function AppConsent({
   selection,
   onToggle,
   onToggleSection,
+  onSetLevel,
+  onToggleObjectSpace,
+  customize,
+  onCustomize,
   onSpaceCreated,
   busy,
   step,
@@ -895,6 +1209,16 @@ export function AppConsent({
   onToggle: (permission: string, workspaceId: string) => void;
   /** The section checkbox pressed (`toggleSection` on that section). */
   onToggleSection: (section: readonly OfferedPermission[]) => void;
+  /** A row's level pressed (`setObjectLevel`). */
+  onSetLevel: (row: ConsentObject, level: AccessLevel) => void;
+  /** A row's space tick pressed (`toggleObjectSpace`). */
+  onToggleObjectSpace: (row: ConsentObject, workspaceId: string) => void;
+  /**
+   * The full permission × space matrix is shown instead of the rows. Both
+   * edit the same `selection`.
+   */
+  customize: boolean;
+  onCustomize: (customize: boolean) => void;
   onSpaceCreated: () => void;
   busy: boolean;
   step: Step;
@@ -905,11 +1229,60 @@ export function AppConsent({
   const missing = withoutSpace(app.permissions);
   // Decisions (approve / reject) are their own line, never part of a write.
   const { grants, decisions } = splitOffer(app.permissions);
+  const rows = useMemo(() => groupByObject(app.permissions), [app.permissions]);
+  const objects = rows.filter((r) => !r.decisions);
+  const decide = rows.filter((r) => r.decisions);
   const groupId = useId();
+  // The server's list of pod-wide kinds, never a hand list.
+  const podWide = (row: ConsentObject) =>
+    !!row.kind && app.podWideKinds.includes(row.kind);
+  const objectRow = (row: ConsentObject) => (
+    <ObjectRow
+      key={row.key}
+      row={row}
+      selection={selection}
+      templates={app.templates}
+      podWide={podWide}
+      busy={busy}
+      onSetLevel={onSetLevel}
+      onToggleSpace={onToggleObjectSpace}
+    />
+  );
   return (
     <>
       <div className="flex flex-col gap-3 rounded-lg bg-foreground/[0.03] px-4 py-3 ring-1 ring-inset ring-foreground/10">
-        {grants.length > 0 && (
+        {!customize && objects.length > 0 && (
+          <section
+            aria-labelledby={`${groupId}-objects`}
+            className="flex flex-col"
+          >
+            <p
+              id={`${groupId}-objects`}
+              className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-[0.04em] text-foreground/65"
+            >
+              <ShieldCheck className="h-3 w-3" aria-hidden /> It asks to
+            </p>
+            <ul className="flex flex-col divide-y divide-foreground/10">
+              {objects.map(objectRow)}
+            </ul>
+          </section>
+        )}
+        {!customize && decide.length > 0 && (
+          <section
+            aria-labelledby={`${groupId}-decide`}
+            className="flex flex-col"
+          >
+            <p
+              id={`${groupId}-decide`}
+              className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-[0.04em] text-foreground/65"
+            >
+              <ShieldCheck className="h-3 w-3" aria-hidden /> It asks to decide
+              for you
+            </p>
+            <ul className="flex flex-col">{decide.map(objectRow)}</ul>
+          </section>
+        )}
+        {customize && grants.length > 0 && (
           <section
             aria-labelledby={`${groupId}-grants`}
             className="flex flex-col gap-1"
@@ -931,7 +1304,7 @@ export function AppConsent({
             />
           </section>
         )}
-        {decisions.length > 0 && (
+        {customize && decisions.length > 0 && (
           <section
             aria-labelledby={`${groupId}-decisions`}
             className="flex flex-col gap-1"
@@ -956,6 +1329,24 @@ export function AppConsent({
               includes it: tick the spaces where you allow it.
             </p>
           </section>
+        )}
+        {/* Once, under the rows or the matrix, for any record read (rv-ui U1/U3). */}
+        {readsSpaceRecords(app.permissions) && (
+          <p className="text-pretty text-xs leading-relaxed text-foreground/75">
+            {SPACE_REACH_NOTE}
+          </p>
+        )}
+        {rows.length > 0 && (
+          <Button
+            size="sm"
+            variant="light"
+            radius="md"
+            className="min-h-10 self-start px-2 text-foreground/80"
+            isDisabled={busy}
+            onPress={() => onCustomize(!customize)}
+          >
+            {customize ? "Simple view" : "Customize…"}
+          </Button>
         )}
         {app.ignoredScopes.length > 0 && (
           <p className="text-xs text-foreground/65">
@@ -1076,12 +1467,23 @@ function CreateSpace({
     );
   };
   if (templates.length === 0) {
+    // A state, not an error (rv-ui U9): the screen's neutral hint tone.
     return (
-      <Problem
-        title="No space to give it"
-        message="You have no space where you can give this app what it asks for."
-        hint="Create a space in Synap (or ask for edit rights in one), then reload this page."
-      />
+      <div
+        role="status"
+        className="flex flex-col gap-1 rounded-lg bg-foreground/[0.03] px-4 py-3 ring-1 ring-inset ring-foreground/10"
+      >
+        <span className="text-sm font-medium text-foreground">
+          No space to give it
+        </span>
+        <span className="text-xs leading-relaxed text-foreground/65">
+          You have no space where you can give this app what it asks for.
+        </span>
+        <span className="text-xs leading-relaxed text-foreground/65">
+          Create a space in Synap (or ask for edit rights in one), then reload
+          this page.
+        </span>
+      </div>
     );
   }
   return (

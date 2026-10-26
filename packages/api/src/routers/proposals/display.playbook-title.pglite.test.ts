@@ -126,3 +126,45 @@ describe('read time — a stored "Update Template" names its playbook', () => {
     expect(JSON.stringify(out)).not.toContain(HIDDEN_NAME);
   });
 });
+
+/**
+ * A playbook RUN proposal filed on the engine's plain default carries no
+ * reason code (dogfood e3c39721 §1: d95014db had no `governanceReason`), so
+ * the card said only "Run Playbook". It now reads the default ask's sentence
+ * from the one sentences home. A row WITH a reason code keeps the engine's.
+ */
+describe("a run proposal says why it waits", () => {
+  function runRow(governanceReason: string | null) {
+    const row = updateRow(PB_SEEN, "Run Playbook") as unknown as Record<
+      string,
+      unknown
+    >;
+    return {
+      ...row,
+      proposalType: "run",
+      governanceReason,
+      data: {
+        ...(row.data as Record<string, unknown>),
+        changeType: "run",
+        data: { playbookId: PB_SEEN, name: "Business Model (GRP)" },
+      },
+    } as never;
+  }
+
+  it("on the plain default: the default ask's sentence", async () => {
+    const [out] = await enrichProposalsForDisplay([runRow(null)], VIEWER);
+    expect((out as { policyReason?: string }).policyReason).toBe(
+      "Running a playbook starts work that carries on by itself, so it waits for you."
+    );
+  });
+
+  it("with an engine reason: the engine's sentence, not the default's", async () => {
+    const [out] = await enrichProposalsForDisplay(
+      [runRow("WRITES_REQUIRE_PROPOSAL")],
+      VIEWER
+    );
+    expect((out as { policyReason?: string }).policyReason).toBe(
+      "This agent asks before every change."
+    );
+  });
+});

@@ -1,7 +1,7 @@
 # Debian (glibc), NOT alpine (musl): Next.js' SWC native binary segfaults
 # (SIGSEGV in the build worker) under musl libc. glibc is Next.js' most-tested
 # native target. The backend image stays on alpine because it ships no Next app.
-FROM node:20-slim AS base
+FROM node:22.23-slim AS base
 RUN npm install -g pnpm@10.28.0
 WORKDIR /app
 
@@ -53,7 +53,7 @@ RUN NODE_OPTIONS=--max-old-space-size=4096 NEXT_TELEMETRY_DISABLED=1 \
 # ============================================================================
 # Runner — Next.js standalone output
 # ============================================================================
-FROM node:20-slim AS runner
+FROM node:22.23-slim AS runner
 
 # Synap's own image: `synap tidy` removes a DANGLING image (a rebuild that took
 # its tag) only when it carries this label — never another stack's image.

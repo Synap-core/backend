@@ -34,6 +34,12 @@ describe("buildProposalChanges — uncovered keys always render, plumbing never"
         policyReason: "Auto-approved by rule",
         governanceReason: "rule",
         entityId: "e1",
+        resolvedWorkspaceId: null,
+        duplicateCheck: {
+          status: "possible",
+          subject: "entity",
+          candidates: [],
+        },
       },
       "update"
     ).map((c) => c.path);
@@ -46,5 +52,45 @@ describe("buildProposalChanges — uncovered keys always render, plumbing never"
       "create"
     ).map((c) => c.path);
     expect(paths).toEqual(["slug", "valueType"]);
+  });
+
+  it("THE LIVE CASE (1e193849): a document create shows its body, not its plumbing", () => {
+    const changes = buildProposalChanges(
+      {
+        id: "e6234b15-9985-450d-b80c-a19bc092cd5d",
+        url: null,
+        type: "markdown",
+        title: "Launch readiness",
+        userId: "e418d146-e495-4b8a-8e8b-985f9f885431",
+        content: "# Launch readiness\n\nEvery known issue, ranked.",
+        idempotencyKey: "k-1",
+      },
+      "create"
+    );
+    expect(changes.map((c) => c.path)).toEqual([
+      "title",
+      "content",
+      "url",
+      "type",
+    ]);
+    expect(changes.find((c) => c.path === "content")).toMatchObject({
+      label: "Content",
+      operation: "create",
+      after: "# Launch readiness\n\nEvery known issue, ranked.",
+      valueType: "string",
+    });
+  });
+
+  it("a body is shown on a create only, and never when blank", () => {
+    expect(
+      buildProposalChanges({ title: "T", content: "new body" }, "update").map(
+        (c) => c.path
+      )
+    ).toEqual(["title"]);
+    expect(
+      buildProposalChanges({ title: "T", content: "  " }, "create").map(
+        (c) => c.path
+      )
+    ).toEqual(["title"]);
   });
 });
