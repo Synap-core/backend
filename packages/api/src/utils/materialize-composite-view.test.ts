@@ -198,6 +198,7 @@ describe("create_view — executor caller (views.create door)", () => {
     userId: "user-1",
     workspaceId: "ws-1",
     auditSource: "test",
+    skillAuthor: { agentUserId: null, personApproved: false },
   };
 
   it("creates a fixed-set list scoped to its members' kinds, container on the config", async () => {
