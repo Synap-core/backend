@@ -729,8 +729,11 @@ describe("the CONVERSATION is the client, not the key (founder rule, 2026-09-28)
       "key:K|conv:mcp-session-a",
       "key:K|conv:mcp-session-b",
     ]);
-    // A value outside visible ASCII is no conversation id (option A), never a key part.
-    expect(clientKeyForApiKey({ id: "K" }, "bad id")).toBe(KEY_ONLY);
+    // A value outside visible ASCII is no conversation id, never a key part:
+    // the request is its own per-call run (D1).
+    expect(clientKeyForApiKey({ id: "K" }, "bad id")).toMatch(
+      /^key:K\|call:[0-9a-f-]{36}$/
+    );
     expect(clientKeyForApiKey({ id: "K", keyType: "is_internal" }, "c")).toBe(
       undefined
     );
