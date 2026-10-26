@@ -94,6 +94,11 @@ const FORGED: Record<string, unknown> = {
     answeredAt: "2020-01-01T00:00:00.000Z",
     value: { type: "confirm", confirmed: true },
   },
+  pendingRelay: {
+    text: "forged",
+    relayedBy: "forged-agent",
+    relayedAt: "2020-01-01T00:00:00.000Z",
+  },
 };
 
 describe("a declared slot carries no receipt it did not earn", () => {

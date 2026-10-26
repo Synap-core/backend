@@ -6505,6 +6505,50 @@ export interface SecretDetailBundle {
 	grants: SecretGrantView[];
 	recentActivity: SecretActivityEvent[];
 }
+declare const UNIT_STATES: readonly [
+	"not_started",
+	"working",
+	"needs_you",
+	"needs_review",
+	"blocked",
+	"scheduled",
+	"paused",
+	"done",
+	"unmeasured",
+	"failed"
+];
+export type UnitState = (typeof UNIT_STATES)[number];
+/**
+ * A palette token NAME. Every one of these already exists in Relay's theme
+ * (`relay-theme.ts`) and in the browser's `--synap-*` set; this list may not
+ * grow without a token existing on BOTH surfaces first.
+ *
+ * `warning` is a heads-up — "you need to act, nothing broke yet" (a sign-in
+ * that expired, a connection asking for access). It joined once both palettes
+ * carried it (`--synap-tone-warning-fill|ink`, relay `warning` / `warningInk`);
+ * no unit-of-work state wears it, `resolveUnitState` never returns it.
+ */
+export type UnitTone = "ai" | "error" | "info" | "primary" | "success" | "textMuted" | "textSecondary" | "warning";
+/** Which mark the state wears. Surfaces map these to their own icon set. */
+export type UnitGlyph = "alert" | "check" | "clock" | "dashed-circle" | "globe" | "link" | "lock" | "pause" | "person" | "question" | "scales" | "spark" | "users";
+/**
+ * The progress rail. `none` is not "0%" — a rail implies motion, so a unit
+ * that has never started shows none at all. `dashed` means the progress is
+ * not real yet (scheduled) or not knowable (unmeasured); rendering either as
+ * a determinate 0% would assert a measurement nobody made.
+ */
+export type UnitRailKind = "dashed" | "determinate" | "none" | "striped";
+export interface UnitRail {
+	kind: UnitRailKind;
+	/** 0–100, and ONLY when `kind === "determinate"`. Null otherwise. */
+	pct: number | null;
+}
+export interface UnitStateView {
+	state: UnitState;
+	tone: UnitTone;
+	glyph: UnitGlyph;
+	rail: UnitRail;
+}
 /**
  * Capture routing — the ONE mapping from a `capture.structure` result to the
  * routing hints `capture.execute` takes.
@@ -9485,50 +9529,6 @@ export type UndoPromotePropertyToBodyResult = {
 	reason: UndoPromoteToBodyRefusal;
 	status: "refused";
 };
-declare const UNIT_STATES: readonly [
-	"not_started",
-	"working",
-	"needs_you",
-	"needs_review",
-	"blocked",
-	"scheduled",
-	"paused",
-	"done",
-	"unmeasured",
-	"failed"
-];
-export type UnitState = (typeof UNIT_STATES)[number];
-/**
- * A palette token NAME. Every one of these already exists in Relay's theme
- * (`relay-theme.ts`) and in the browser's `--synap-*` set; this list may not
- * grow without a token existing on BOTH surfaces first.
- *
- * `warning` is a heads-up — "you need to act, nothing broke yet" (a sign-in
- * that expired, a connection asking for access). It joined once both palettes
- * carried it (`--synap-tone-warning-fill|ink`, relay `warning` / `warningInk`);
- * no unit-of-work state wears it, `resolveUnitState` never returns it.
- */
-export type UnitTone = "ai" | "error" | "info" | "primary" | "success" | "textMuted" | "textSecondary" | "warning";
-/** Which mark the state wears. Surfaces map these to their own icon set. */
-export type UnitGlyph = "alert" | "check" | "clock" | "dashed-circle" | "globe" | "link" | "lock" | "pause" | "person" | "question" | "scales" | "spark" | "users";
-/**
- * The progress rail. `none` is not "0%" — a rail implies motion, so a unit
- * that has never started shows none at all. `dashed` means the progress is
- * not real yet (scheduled) or not knowable (unmeasured); rendering either as
- * a determinate 0% would assert a measurement nobody made.
- */
-export type UnitRailKind = "dashed" | "determinate" | "none" | "striped";
-export interface UnitRail {
-	kind: UnitRailKind;
-	/** 0–100, and ONLY when `kind === "determinate"`. Null otherwise. */
-	pct: number | null;
-}
-export interface UnitStateView {
-	state: UnitState;
-	tone: UnitTone;
-	glyph: UnitGlyph;
-	rail: UnitRail;
-}
 declare const LIFECYCLE_CATEGORIES$1: readonly [
 	"open",
 	"active",
@@ -10193,7 +10193,8 @@ export type BlockedReason = (typeof BLOCKED_REASONS)[number];
 declare const OUTPUT_RETIRED_REASONS: readonly [
 	"session_cancelled",
 	"decision_resolved",
-	"withdrawn"
+	"withdrawn",
+	"session_ended"
 ];
 export type OutputRetiredReason = (typeof OUTPUT_RETIRED_REASONS)[number];
 declare const OUTPUT_REF_KINDS: readonly [
@@ -10489,6 +10490,13 @@ export interface ExpectedOutput {
 	 */
 	answerPickedUpAt?: string;
 	/**
+	 * A relayed answer to a `commitment` ask, waiting for the person's tap — see
+	 * {@link SlotPendingRelay}. SERVER-STAMPED by the relay door only (W1); the
+	 * slot stays owed (`owner: 'human'`) while it is here, and the person's
+	 * Confirm / "Not what I said" clears it.
+	 */
+	pendingRelay?: SlotPendingRelay;
+	/**
 	 * HOW the person can answer this slot — see {@link SlotAsk}. DECLARED by the
 	 * agent (with `owner: 'human'` + `blockedReason` + `why`), never stamped:
 	 * `blockedReason` says WHY it is blocked, `why`/`ref` WHAT and WHERE, and
@@ -10580,7 +10588,16 @@ export type SlotAsk = ({
 	 * the viewer's access floor; a ref the viewer cannot see is dropped there.
 	 */
 	lookedAt?: SlotAskLookedAt[];
+	/**
+	 * What answering COMMITS the person to — mirrors `AskStakes`
+	 * (`@synap-core/types/ask`). Absent reads `routine`. The pod only ever
+	 * RAISES it (`effectiveAskStakes`): a relayed answer to a `commitment`
+	 * waits for the person's tap.
+	 */
+	stakes?: SlotAskStakes;
 };
+/** Mirrors `ASK_STAKES` (@synap-core/types/ask). */
+export type SlotAskStakes = "commitment" | "routine";
 /** One object an ask cites as read. Mirrors `AskLookedAtRef` (@synap-core/types/ask). */
 export interface SlotAskLookedAt {
 	kind: SlotAskLookedAtKind;
@@ -10661,10 +10678,42 @@ export type SlotAnswerValue = {
 	type: "provide";
 };
 /**
- * A person's answer to an agent's question about one slot. Server-stamped as a
- * unit; never authored by a client (it sits in `SERVER_STAMPED_OUTPUT_FIELDS`).
+ * WHERE an answer came from — STRUCTURAL MIRROR of `AnswerProvenance`
+ * (`@synap-core/types/ask`), pinned mutually assignable in api
+ * `update-session.ts`. All absent = a tap recorded before relays existed;
+ * `answerVia` there reads it.
  */
-export interface SlotAnswer {
+export interface SlotAnswerProvenance {
+	/** `tap` = the person answered in the pod; `relayed` = an agent carried their chat words. */
+	via?: "relayed" | "tap";
+	/** The relaying agent's user id. */
+	relayedBy?: string;
+	/** Where the words were said (`claude-code`). */
+	relaySurface?: string;
+	/** The person's own words, verbatim. */
+	quote?: string;
+	/** The person confirmed a relayed answer (set with `via: 'tap'` only). */
+	confirmedAt?: string;
+}
+/**
+ * A relayed answer to a `commitment` ask, held until the person taps — mirror
+ * of `PendingRelayedAnswer` (`@synap-core/types/ask`), which says why it sits
+ * beside `answer` rather than on it.
+ */
+export interface SlotPendingRelay {
+	text: string;
+	value?: SlotAnswerValue;
+	relayedBy: string;
+	relaySurface?: string;
+	quote?: string;
+	relayedAt: string;
+}
+/**
+ * A person's answer to an agent's question about one slot. Server-stamped as a
+ * unit; never authored by a client (it sits in `SERVER_STAMPED_OUTPUT_FIELDS`)
+ * — its provenance fields included.
+ */
+export interface SlotAnswer extends SlotAnswerProvenance {
 	/** What the person said. */
 	text: string;
 	/**
@@ -30258,6 +30307,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					}[] | undefined;
 					mode: "confirm";
 					prompt?: string | undefined;
+					stakes?: "commitment" | "routine" | undefined;
 				} | {
 					allowOther?: boolean | undefined;
 					lookedAt?: {
@@ -30272,6 +30322,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						recommended?: boolean | undefined;
 						value?: string | undefined;
 					}[];
+					stakes?: "commitment" | "routine" | undefined;
 				} | {
 					form: {
 						fields: {
@@ -30295,12 +30346,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						kind: "automation" | "document" | "entity" | "playbook" | "view";
 					}[] | undefined;
 					mode: "form";
+					stakes?: "commitment" | "routine" | undefined;
 				} | {
 					lookedAt?: {
 						id: string;
 						kind: "automation" | "document" | "entity" | "playbook" | "view";
 					}[] | undefined;
 					mode: "act";
+					stakes?: "commitment" | "routine" | undefined;
 					steps?: string[] | undefined;
 					url?: string | undefined;
 				} | {
@@ -30319,6 +30372,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						kind: "secret";
 						name: string;
 					};
+					stakes?: "commitment" | "routine" | undefined;
 				} | null | undefined;
 				blockedReason: "capability" | "credential" | "decision" | "permission" | "physical" | "policy";
 				expectedLabel: string;
@@ -30528,8 +30582,202 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							recommendedKey: string | null;
 							why?: string | undefined;
 						} | undefined;
+						confirmedAt?: string | undefined;
 						messageId: string | null;
 						question?: string | undefined;
+						quote?: string | undefined;
+						relaySurface?: string | undefined;
+						relayedBy?: string | undefined;
+						text: string;
+						value?: {
+							type: "text";
+						} | {
+							confirmed: boolean;
+							type: "confirm";
+						} | {
+							chip: {
+								description?: string | undefined;
+								icon?: string | undefined;
+								label: string;
+								recommended?: boolean | undefined;
+								value?: string | undefined;
+							};
+							type: "chip";
+						} | {
+							type: "form";
+							values: Record<string, unknown>;
+						} | {
+							ref: {
+								kind: "secret";
+								vaultRef: string;
+							} | {
+								connectionId: string;
+								kind: "connection";
+							} | {
+								fileId: string;
+								kind: "file";
+							};
+							type: "provide";
+						} | undefined;
+						via?: "relayed" | "tap" | undefined;
+					} | undefined;
+					answerHistory?: {
+						answeredAt: string;
+						answeredBy: string;
+						askSnapshot?: {
+							chosenKey: string | null;
+							followedRecommendation: boolean | null;
+							lookedAt?: {
+								id: string;
+								kind: "automation" | "document" | "entity" | "playbook" | "view";
+							}[] | undefined;
+							mode: "act" | "choose" | "confirm" | "form" | "provide";
+							options?: {
+								description?: string | undefined;
+								icon?: string | undefined;
+								label: string;
+								recommended?: boolean | undefined;
+								value?: string | undefined;
+							}[] | undefined;
+							prompt?: string | undefined;
+							recommendedKey: string | null;
+							why?: string | undefined;
+						} | undefined;
+						confirmedAt?: string | undefined;
+						messageId: string | null;
+						question?: string | undefined;
+						quote?: string | undefined;
+						relaySurface?: string | undefined;
+						relayedBy?: string | undefined;
+						text: string;
+						value?: {
+							type: "text";
+						} | {
+							confirmed: boolean;
+							type: "confirm";
+						} | {
+							chip: {
+								description?: string | undefined;
+								icon?: string | undefined;
+								label: string;
+								recommended?: boolean | undefined;
+								value?: string | undefined;
+							};
+							type: "chip";
+						} | {
+							type: "form";
+							values: Record<string, unknown>;
+						} | {
+							ref: {
+								kind: "secret";
+								vaultRef: string;
+							} | {
+								connectionId: string;
+								kind: "connection";
+							} | {
+								fileId: string;
+								kind: "file";
+							};
+							type: "provide";
+						} | undefined;
+						via?: "relayed" | "tap" | undefined;
+					}[] | undefined;
+					answerPickedUpAt?: string | undefined;
+					ask?: {
+						lookedAt?: {
+							id: string;
+							kind: "automation" | "document" | "entity" | "playbook" | "view";
+						}[] | undefined;
+						mode: "confirm";
+						prompt?: string | undefined;
+						stakes?: "commitment" | "routine" | undefined;
+					} | {
+						allowOther?: boolean | undefined;
+						lookedAt?: {
+							id: string;
+							kind: "automation" | "document" | "entity" | "playbook" | "view";
+						}[] | undefined;
+						mode: "choose";
+						options: {
+							description?: string | undefined;
+							icon?: string | undefined;
+							label: string;
+							recommended?: boolean | undefined;
+							value?: string | undefined;
+						}[];
+						stakes?: "commitment" | "routine" | undefined;
+					} | {
+						form: {
+							fields: {
+								constraints?: {
+									enum?: string[] | undefined;
+									max?: number | undefined;
+									min?: number | undefined;
+									pattern?: string | undefined;
+								} | undefined;
+								help?: string | undefined;
+								key: string;
+								label: string;
+								required?: boolean | undefined;
+								type: string;
+							}[];
+							note?: string | undefined;
+							title?: string | undefined;
+						};
+						lookedAt?: {
+							id: string;
+							kind: "automation" | "document" | "entity" | "playbook" | "view";
+						}[] | undefined;
+						mode: "form";
+						stakes?: "commitment" | "routine" | undefined;
+					} | {
+						lookedAt?: {
+							id: string;
+							kind: "automation" | "document" | "entity" | "playbook" | "view";
+						}[] | undefined;
+						mode: "act";
+						stakes?: "commitment" | "routine" | undefined;
+						steps?: string[] | undefined;
+						url?: string | undefined;
+					} | {
+						lookedAt?: {
+							id: string;
+							kind: "automation" | "document" | "entity" | "playbook" | "view";
+						}[] | undefined;
+						mode: "provide";
+						provide: {
+							kind: "connection";
+							service: string;
+						} | {
+							accept?: string[] | undefined;
+							kind: "file";
+						} | {
+							kind: "secret";
+							name: string;
+						};
+						stakes?: "commitment" | "routine" | undefined;
+					} | null | undefined;
+					attestedAt?: string | undefined;
+					attestedBy?: string | undefined;
+					blockedReason?: "capability" | "credential" | "decision" | "permission" | "physical" | "policy" | undefined;
+					claimedDone?: boolean | undefined;
+					criterionKey?: string | undefined;
+					decisionId?: string | undefined;
+					delegatedAt?: string | undefined;
+					delegatedTo?: string | undefined;
+					icon?: string | undefined;
+					key?: string | undefined;
+					kind: string;
+					label: string;
+					optional?: boolean | undefined;
+					owedSince?: string | undefined;
+					owner?: "agent" | "human" | undefined;
+					paramName?: string | undefined;
+					pendingRelay?: {
+						quote?: string | undefined;
+						relaySurface?: string | undefined;
+						relayedAt: string;
+						relayedBy: string;
 						text: string;
 						value?: {
 							type: "text";
@@ -30562,148 +30810,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							type: "provide";
 						} | undefined;
 					} | undefined;
-					answerHistory?: {
-						answeredAt: string;
-						answeredBy: string;
-						askSnapshot?: {
-							chosenKey: string | null;
-							followedRecommendation: boolean | null;
-							lookedAt?: {
-								id: string;
-								kind: "automation" | "document" | "entity" | "playbook" | "view";
-							}[] | undefined;
-							mode: "act" | "choose" | "confirm" | "form" | "provide";
-							options?: {
-								description?: string | undefined;
-								icon?: string | undefined;
-								label: string;
-								recommended?: boolean | undefined;
-								value?: string | undefined;
-							}[] | undefined;
-							prompt?: string | undefined;
-							recommendedKey: string | null;
-							why?: string | undefined;
-						} | undefined;
-						messageId: string | null;
-						question?: string | undefined;
-						text: string;
-						value?: {
-							type: "text";
-						} | {
-							confirmed: boolean;
-							type: "confirm";
-						} | {
-							chip: {
-								description?: string | undefined;
-								icon?: string | undefined;
-								label: string;
-								recommended?: boolean | undefined;
-								value?: string | undefined;
-							};
-							type: "chip";
-						} | {
-							type: "form";
-							values: Record<string, unknown>;
-						} | {
-							ref: {
-								kind: "secret";
-								vaultRef: string;
-							} | {
-								connectionId: string;
-								kind: "connection";
-							} | {
-								fileId: string;
-								kind: "file";
-							};
-							type: "provide";
-						} | undefined;
-					}[] | undefined;
-					answerPickedUpAt?: string | undefined;
-					ask?: {
-						lookedAt?: {
-							id: string;
-							kind: "automation" | "document" | "entity" | "playbook" | "view";
-						}[] | undefined;
-						mode: "confirm";
-						prompt?: string | undefined;
-					} | {
-						allowOther?: boolean | undefined;
-						lookedAt?: {
-							id: string;
-							kind: "automation" | "document" | "entity" | "playbook" | "view";
-						}[] | undefined;
-						mode: "choose";
-						options: {
-							description?: string | undefined;
-							icon?: string | undefined;
-							label: string;
-							recommended?: boolean | undefined;
-							value?: string | undefined;
-						}[];
-					} | {
-						form: {
-							fields: {
-								constraints?: {
-									enum?: string[] | undefined;
-									max?: number | undefined;
-									min?: number | undefined;
-									pattern?: string | undefined;
-								} | undefined;
-								help?: string | undefined;
-								key: string;
-								label: string;
-								required?: boolean | undefined;
-								type: string;
-							}[];
-							note?: string | undefined;
-							title?: string | undefined;
-						};
-						lookedAt?: {
-							id: string;
-							kind: "automation" | "document" | "entity" | "playbook" | "view";
-						}[] | undefined;
-						mode: "form";
-					} | {
-						lookedAt?: {
-							id: string;
-							kind: "automation" | "document" | "entity" | "playbook" | "view";
-						}[] | undefined;
-						mode: "act";
-						steps?: string[] | undefined;
-						url?: string | undefined;
-					} | {
-						lookedAt?: {
-							id: string;
-							kind: "automation" | "document" | "entity" | "playbook" | "view";
-						}[] | undefined;
-						mode: "provide";
-						provide: {
-							kind: "connection";
-							service: string;
-						} | {
-							accept?: string[] | undefined;
-							kind: "file";
-						} | {
-							kind: "secret";
-							name: string;
-						};
-					} | null | undefined;
-					attestedAt?: string | undefined;
-					attestedBy?: string | undefined;
-					blockedReason?: "capability" | "credential" | "decision" | "permission" | "physical" | "policy" | undefined;
-					claimedDone?: boolean | undefined;
-					criterionKey?: string | undefined;
-					decisionId?: string | undefined;
-					delegatedAt?: string | undefined;
-					delegatedTo?: string | undefined;
-					icon?: string | undefined;
-					key?: string | undefined;
-					kind: string;
-					label: string;
-					optional?: boolean | undefined;
-					owedSince?: string | undefined;
-					owner?: "agent" | "human" | undefined;
-					paramName?: string | undefined;
 					ref?: {
 						id: string;
 						kind: "automation" | "cell" | "document" | "entity" | "playbook" | "view";
@@ -30712,7 +30818,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					} | null | undefined;
 					relationToSubject?: string | undefined;
 					retiredAt?: string | undefined;
-					retiredReason?: "decision_resolved" | "session_cancelled" | "withdrawn" | undefined;
+					retiredReason?: "decision_resolved" | "session_cancelled" | "session_ended" | "withdrawn" | undefined;
 					returnedAt?: string | undefined;
 					returnedReason?: string | undefined;
 					satisfiedByEvidence?: {
@@ -31455,8 +31561,202 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							recommendedKey: string | null;
 							why?: string | undefined;
 						} | undefined;
+						confirmedAt?: string | undefined;
 						messageId: string | null;
 						question?: string | undefined;
+						quote?: string | undefined;
+						relaySurface?: string | undefined;
+						relayedBy?: string | undefined;
+						text: string;
+						value?: {
+							type: "text";
+						} | {
+							confirmed: boolean;
+							type: "confirm";
+						} | {
+							chip: {
+								description?: string | undefined;
+								icon?: string | undefined;
+								label: string;
+								recommended?: boolean | undefined;
+								value?: string | undefined;
+							};
+							type: "chip";
+						} | {
+							type: "form";
+							values: Record<string, unknown>;
+						} | {
+							ref: {
+								kind: "secret";
+								vaultRef: string;
+							} | {
+								connectionId: string;
+								kind: "connection";
+							} | {
+								fileId: string;
+								kind: "file";
+							};
+							type: "provide";
+						} | undefined;
+						via?: "relayed" | "tap" | undefined;
+					} | undefined;
+					answerHistory?: {
+						answeredAt: string;
+						answeredBy: string;
+						askSnapshot?: {
+							chosenKey: string | null;
+							followedRecommendation: boolean | null;
+							lookedAt?: {
+								id: string;
+								kind: "automation" | "document" | "entity" | "playbook" | "view";
+							}[] | undefined;
+							mode: "act" | "choose" | "confirm" | "form" | "provide";
+							options?: {
+								description?: string | undefined;
+								icon?: string | undefined;
+								label: string;
+								recommended?: boolean | undefined;
+								value?: string | undefined;
+							}[] | undefined;
+							prompt?: string | undefined;
+							recommendedKey: string | null;
+							why?: string | undefined;
+						} | undefined;
+						confirmedAt?: string | undefined;
+						messageId: string | null;
+						question?: string | undefined;
+						quote?: string | undefined;
+						relaySurface?: string | undefined;
+						relayedBy?: string | undefined;
+						text: string;
+						value?: {
+							type: "text";
+						} | {
+							confirmed: boolean;
+							type: "confirm";
+						} | {
+							chip: {
+								description?: string | undefined;
+								icon?: string | undefined;
+								label: string;
+								recommended?: boolean | undefined;
+								value?: string | undefined;
+							};
+							type: "chip";
+						} | {
+							type: "form";
+							values: Record<string, unknown>;
+						} | {
+							ref: {
+								kind: "secret";
+								vaultRef: string;
+							} | {
+								connectionId: string;
+								kind: "connection";
+							} | {
+								fileId: string;
+								kind: "file";
+							};
+							type: "provide";
+						} | undefined;
+						via?: "relayed" | "tap" | undefined;
+					}[] | undefined;
+					answerPickedUpAt?: string | undefined;
+					ask?: {
+						lookedAt?: {
+							id: string;
+							kind: "automation" | "document" | "entity" | "playbook" | "view";
+						}[] | undefined;
+						mode: "confirm";
+						prompt?: string | undefined;
+						stakes?: "commitment" | "routine" | undefined;
+					} | {
+						allowOther?: boolean | undefined;
+						lookedAt?: {
+							id: string;
+							kind: "automation" | "document" | "entity" | "playbook" | "view";
+						}[] | undefined;
+						mode: "choose";
+						options: {
+							description?: string | undefined;
+							icon?: string | undefined;
+							label: string;
+							recommended?: boolean | undefined;
+							value?: string | undefined;
+						}[];
+						stakes?: "commitment" | "routine" | undefined;
+					} | {
+						form: {
+							fields: {
+								constraints?: {
+									enum?: string[] | undefined;
+									max?: number | undefined;
+									min?: number | undefined;
+									pattern?: string | undefined;
+								} | undefined;
+								help?: string | undefined;
+								key: string;
+								label: string;
+								required?: boolean | undefined;
+								type: string;
+							}[];
+							note?: string | undefined;
+							title?: string | undefined;
+						};
+						lookedAt?: {
+							id: string;
+							kind: "automation" | "document" | "entity" | "playbook" | "view";
+						}[] | undefined;
+						mode: "form";
+						stakes?: "commitment" | "routine" | undefined;
+					} | {
+						lookedAt?: {
+							id: string;
+							kind: "automation" | "document" | "entity" | "playbook" | "view";
+						}[] | undefined;
+						mode: "act";
+						stakes?: "commitment" | "routine" | undefined;
+						steps?: string[] | undefined;
+						url?: string | undefined;
+					} | {
+						lookedAt?: {
+							id: string;
+							kind: "automation" | "document" | "entity" | "playbook" | "view";
+						}[] | undefined;
+						mode: "provide";
+						provide: {
+							kind: "connection";
+							service: string;
+						} | {
+							accept?: string[] | undefined;
+							kind: "file";
+						} | {
+							kind: "secret";
+							name: string;
+						};
+						stakes?: "commitment" | "routine" | undefined;
+					} | null | undefined;
+					attestedAt?: string | undefined;
+					attestedBy?: string | undefined;
+					blockedReason?: "capability" | "credential" | "decision" | "permission" | "physical" | "policy" | undefined;
+					claimedDone?: boolean | undefined;
+					criterionKey?: string | undefined;
+					decisionId?: string | undefined;
+					delegatedAt?: string | undefined;
+					delegatedTo?: string | undefined;
+					icon?: string | undefined;
+					key?: string | undefined;
+					kind: string;
+					label: string;
+					optional?: boolean | undefined;
+					owedSince?: string | undefined;
+					owner?: "agent" | "human" | undefined;
+					paramName?: string | undefined;
+					pendingRelay?: {
+						quote?: string | undefined;
+						relaySurface?: string | undefined;
+						relayedAt: string;
+						relayedBy: string;
 						text: string;
 						value?: {
 							type: "text";
@@ -31489,148 +31789,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							type: "provide";
 						} | undefined;
 					} | undefined;
-					answerHistory?: {
-						answeredAt: string;
-						answeredBy: string;
-						askSnapshot?: {
-							chosenKey: string | null;
-							followedRecommendation: boolean | null;
-							lookedAt?: {
-								id: string;
-								kind: "automation" | "document" | "entity" | "playbook" | "view";
-							}[] | undefined;
-							mode: "act" | "choose" | "confirm" | "form" | "provide";
-							options?: {
-								description?: string | undefined;
-								icon?: string | undefined;
-								label: string;
-								recommended?: boolean | undefined;
-								value?: string | undefined;
-							}[] | undefined;
-							prompt?: string | undefined;
-							recommendedKey: string | null;
-							why?: string | undefined;
-						} | undefined;
-						messageId: string | null;
-						question?: string | undefined;
-						text: string;
-						value?: {
-							type: "text";
-						} | {
-							confirmed: boolean;
-							type: "confirm";
-						} | {
-							chip: {
-								description?: string | undefined;
-								icon?: string | undefined;
-								label: string;
-								recommended?: boolean | undefined;
-								value?: string | undefined;
-							};
-							type: "chip";
-						} | {
-							type: "form";
-							values: Record<string, unknown>;
-						} | {
-							ref: {
-								kind: "secret";
-								vaultRef: string;
-							} | {
-								connectionId: string;
-								kind: "connection";
-							} | {
-								fileId: string;
-								kind: "file";
-							};
-							type: "provide";
-						} | undefined;
-					}[] | undefined;
-					answerPickedUpAt?: string | undefined;
-					ask?: {
-						lookedAt?: {
-							id: string;
-							kind: "automation" | "document" | "entity" | "playbook" | "view";
-						}[] | undefined;
-						mode: "confirm";
-						prompt?: string | undefined;
-					} | {
-						allowOther?: boolean | undefined;
-						lookedAt?: {
-							id: string;
-							kind: "automation" | "document" | "entity" | "playbook" | "view";
-						}[] | undefined;
-						mode: "choose";
-						options: {
-							description?: string | undefined;
-							icon?: string | undefined;
-							label: string;
-							recommended?: boolean | undefined;
-							value?: string | undefined;
-						}[];
-					} | {
-						form: {
-							fields: {
-								constraints?: {
-									enum?: string[] | undefined;
-									max?: number | undefined;
-									min?: number | undefined;
-									pattern?: string | undefined;
-								} | undefined;
-								help?: string | undefined;
-								key: string;
-								label: string;
-								required?: boolean | undefined;
-								type: string;
-							}[];
-							note?: string | undefined;
-							title?: string | undefined;
-						};
-						lookedAt?: {
-							id: string;
-							kind: "automation" | "document" | "entity" | "playbook" | "view";
-						}[] | undefined;
-						mode: "form";
-					} | {
-						lookedAt?: {
-							id: string;
-							kind: "automation" | "document" | "entity" | "playbook" | "view";
-						}[] | undefined;
-						mode: "act";
-						steps?: string[] | undefined;
-						url?: string | undefined;
-					} | {
-						lookedAt?: {
-							id: string;
-							kind: "automation" | "document" | "entity" | "playbook" | "view";
-						}[] | undefined;
-						mode: "provide";
-						provide: {
-							kind: "connection";
-							service: string;
-						} | {
-							accept?: string[] | undefined;
-							kind: "file";
-						} | {
-							kind: "secret";
-							name: string;
-						};
-					} | null | undefined;
-					attestedAt?: string | undefined;
-					attestedBy?: string | undefined;
-					blockedReason?: "capability" | "credential" | "decision" | "permission" | "physical" | "policy" | undefined;
-					claimedDone?: boolean | undefined;
-					criterionKey?: string | undefined;
-					decisionId?: string | undefined;
-					delegatedAt?: string | undefined;
-					delegatedTo?: string | undefined;
-					icon?: string | undefined;
-					key?: string | undefined;
-					kind: string;
-					label: string;
-					optional?: boolean | undefined;
-					owedSince?: string | undefined;
-					owner?: "agent" | "human" | undefined;
-					paramName?: string | undefined;
 					ref?: {
 						id: string;
 						kind: "automation" | "cell" | "document" | "entity" | "playbook" | "view";
@@ -31639,7 +31797,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					} | null | undefined;
 					relationToSubject?: string | undefined;
 					retiredAt?: string | undefined;
-					retiredReason?: "decision_resolved" | "session_cancelled" | "withdrawn" | undefined;
+					retiredReason?: "decision_resolved" | "session_cancelled" | "session_ended" | "withdrawn" | undefined;
 					returnedAt?: string | undefined;
 					returnedReason?: string | undefined;
 					satisfiedByEvidence?: {
@@ -31691,6 +31849,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[] | undefined;
 							mode: "confirm";
 							prompt?: string | undefined;
+							stakes?: "commitment" | "routine" | undefined;
 						} | {
 							allowOther?: boolean | undefined;
 							lookedAt?: {
@@ -31705,6 +31864,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							}[];
+							stakes?: "commitment" | "routine" | undefined;
 						} | {
 							form: {
 								fields: {
@@ -31728,12 +31888,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								kind: "automation" | "document" | "entity" | "playbook" | "view";
 							}[] | undefined;
 							mode: "form";
+							stakes?: "commitment" | "routine" | undefined;
 						} | {
 							lookedAt?: {
 								id: string;
 								kind: "automation" | "document" | "entity" | "playbook" | "view";
 							}[] | undefined;
 							mode: "act";
+							stakes?: "commitment" | "routine" | undefined;
 							steps?: string[] | undefined;
 							url?: string | undefined;
 						} | {
@@ -31752,6 +31914,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								kind: "secret";
 								name: string;
 							};
+							stakes?: "commitment" | "routine" | undefined;
 						} | null | undefined;
 						relationToSubject?: string | undefined;
 						optional?: boolean | undefined;
@@ -37212,6 +37375,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						}[] | undefined;
 						mode: "confirm";
 						prompt?: string | undefined;
+						stakes?: "commitment" | "routine" | undefined;
 					} | {
 						allowOther?: boolean | undefined;
 						lookedAt?: {
@@ -37226,6 +37390,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							recommended?: boolean | undefined;
 							value?: string | undefined;
 						}[];
+						stakes?: "commitment" | "routine" | undefined;
 					} | {
 						form: {
 							fields: {
@@ -37249,12 +37414,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
 						}[] | undefined;
 						mode: "form";
+						stakes?: "commitment" | "routine" | undefined;
 					} | {
 						lookedAt?: {
 							id: string;
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
 						}[] | undefined;
 						mode: "act";
+						stakes?: "commitment" | "routine" | undefined;
 						steps?: string[] | undefined;
 						url?: string | undefined;
 					} | {
@@ -37273,6 +37440,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							kind: "secret";
 							name: string;
 						};
+						stakes?: "commitment" | "routine" | undefined;
 					} | null | undefined;
 					relationToSubject?: string | undefined;
 					optional?: boolean | undefined;
@@ -37321,6 +37489,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[] | undefined;
 							mode: "confirm";
 							prompt?: string | undefined;
+							stakes?: "commitment" | "routine" | undefined;
 						} | {
 							allowOther?: boolean | undefined;
 							lookedAt?: {
@@ -37335,6 +37504,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							}[];
+							stakes?: "commitment" | "routine" | undefined;
 						} | {
 							form: {
 								fields: {
@@ -37358,12 +37528,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								kind: "automation" | "document" | "entity" | "playbook" | "view";
 							}[] | undefined;
 							mode: "form";
+							stakes?: "commitment" | "routine" | undefined;
 						} | {
 							lookedAt?: {
 								id: string;
 								kind: "automation" | "document" | "entity" | "playbook" | "view";
 							}[] | undefined;
 							mode: "act";
+							stakes?: "commitment" | "routine" | undefined;
 							steps?: string[] | undefined;
 							url?: string | undefined;
 						} | {
@@ -37382,6 +37554,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								kind: "secret";
 								name: string;
 							};
+							stakes?: "commitment" | "routine" | undefined;
 						} | null | undefined;
 						relationToSubject?: string | undefined;
 						optional?: boolean | undefined;
@@ -38021,6 +38194,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						}[] | undefined;
 						mode: "confirm";
 						prompt?: string | undefined;
+						stakes?: "commitment" | "routine" | undefined;
 					} | {
 						allowOther?: boolean | undefined;
 						lookedAt?: {
@@ -38035,6 +38209,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							recommended?: boolean | undefined;
 							value?: string | undefined;
 						}[];
+						stakes?: "commitment" | "routine" | undefined;
 					} | {
 						form: {
 							fields: {
@@ -38058,12 +38233,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
 						}[] | undefined;
 						mode: "form";
+						stakes?: "commitment" | "routine" | undefined;
 					} | {
 						lookedAt?: {
 							id: string;
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
 						}[] | undefined;
 						mode: "act";
+						stakes?: "commitment" | "routine" | undefined;
 						steps?: string[] | undefined;
 						url?: string | undefined;
 					} | {
@@ -38082,6 +38259,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							kind: "secret";
 							name: string;
 						};
+						stakes?: "commitment" | "routine" | undefined;
 					} | null | undefined;
 					relationToSubject?: string | undefined;
 					optional?: boolean | undefined;
@@ -38122,6 +38300,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[] | undefined;
 							mode: "confirm";
 							prompt?: string | undefined;
+							stakes?: "commitment" | "routine" | undefined;
 						} | {
 							allowOther?: boolean | undefined;
 							lookedAt?: {
@@ -38136,6 +38315,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							}[];
+							stakes?: "commitment" | "routine" | undefined;
 						} | {
 							form: {
 								fields: {
@@ -38159,12 +38339,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								kind: "automation" | "document" | "entity" | "playbook" | "view";
 							}[] | undefined;
 							mode: "form";
+							stakes?: "commitment" | "routine" | undefined;
 						} | {
 							lookedAt?: {
 								id: string;
 								kind: "automation" | "document" | "entity" | "playbook" | "view";
 							}[] | undefined;
 							mode: "act";
+							stakes?: "commitment" | "routine" | undefined;
 							steps?: string[] | undefined;
 							url?: string | undefined;
 						} | {
@@ -38183,6 +38365,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								kind: "secret";
 								name: string;
 							};
+							stakes?: "commitment" | "routine" | undefined;
 						} | null | undefined;
 						relationToSubject?: string | undefined;
 						optional?: boolean | undefined;
@@ -47078,6 +47261,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								}[] | undefined;
 								mode: "confirm";
 								prompt?: string | undefined;
+								stakes?: "commitment" | "routine" | undefined;
 							} | {
 								allowOther?: boolean | undefined;
 								lookedAt?: {
@@ -47092,6 +47276,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 									recommended?: boolean | undefined;
 									value?: string | undefined;
 								}[];
+								stakes?: "commitment" | "routine" | undefined;
 							} | {
 								form: {
 									fields: {
@@ -47115,12 +47300,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 									kind: "automation" | "document" | "entity" | "playbook" | "view";
 								}[] | undefined;
 								mode: "form";
+								stakes?: "commitment" | "routine" | undefined;
 							} | {
 								lookedAt?: {
 									id: string;
 									kind: "automation" | "document" | "entity" | "playbook" | "view";
 								}[] | undefined;
 								mode: "act";
+								stakes?: "commitment" | "routine" | undefined;
 								steps?: string[] | undefined;
 								url?: string | undefined;
 							} | {
@@ -47139,6 +47326,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 									kind: "secret";
 									name: string;
 								};
+								stakes?: "commitment" | "routine" | undefined;
 							} | null | undefined;
 							relationToSubject?: string | undefined;
 							optional?: boolean | undefined;
@@ -47188,6 +47376,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 									}[] | undefined;
 									mode: "confirm";
 									prompt?: string | undefined;
+									stakes?: "commitment" | "routine" | undefined;
 								} | {
 									allowOther?: boolean | undefined;
 									lookedAt?: {
@@ -47202,6 +47391,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 										recommended?: boolean | undefined;
 										value?: string | undefined;
 									}[];
+									stakes?: "commitment" | "routine" | undefined;
 								} | {
 									form: {
 										fields: {
@@ -47225,12 +47415,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 										kind: "automation" | "document" | "entity" | "playbook" | "view";
 									}[] | undefined;
 									mode: "form";
+									stakes?: "commitment" | "routine" | undefined;
 								} | {
 									lookedAt?: {
 										id: string;
 										kind: "automation" | "document" | "entity" | "playbook" | "view";
 									}[] | undefined;
 									mode: "act";
+									stakes?: "commitment" | "routine" | undefined;
 									steps?: string[] | undefined;
 									url?: string | undefined;
 								} | {
@@ -47249,6 +47441,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 										kind: "secret";
 										name: string;
 									};
+									stakes?: "commitment" | "routine" | undefined;
 								} | null | undefined;
 								relationToSubject?: string | undefined;
 								optional?: boolean | undefined;
