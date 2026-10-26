@@ -223,7 +223,15 @@ async function authenticateIsDelegation(
   c.set("keyWorkspaceId", null);
   const refused = await refuseGuestPrincipal(c);
   if (refused) return refused;
-  return runWithGrant(IS_DELEGATION_GRANT, () => next());
+  // W-A4: a non-channel IS run names itself (`is:<runId>`); the same resolver
+  // as the stored key's, the AI service (the token's audience) as the client.
+  return runWithClientKey(
+    clientKeyForApiKey(
+      { id: delegation.audience, keyType: "is_internal" },
+      requestConversationId(c.req.header(CONVERSATION_HEADER))
+    ),
+    () => runWithGrant(IS_DELEGATION_GRANT, () => next())
+  );
 }
 
 /** The explicit full access the `is_internal` key is minted with (provision.ts). */
