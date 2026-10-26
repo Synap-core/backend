@@ -25,6 +25,7 @@ import {
   owedSlotExistsIn,
   OPEN_SESSION_STATUSES,
 } from "./owed-slot-predicate.js";
+import { awaitedGatePendingIn } from "./awaited-gate-wait.js";
 
 /** The `messages.metadata` key a room post's kind / slot / answer live under. */
 export const ROOM_POST_META_KEY = "roomPost" as const;
@@ -59,8 +60,9 @@ const OPEN_SESSION_SQL_LIST = drizzleSql.raw(
 
 /**
  * SQL: the session whose id is `sessionId` is OPEN and waits on the person —
- * it owes them a slot (`sessionOwesHumanWhere`'s rule) OR its room holds an
- * open agent question. The run reaper parks / keeps parked on THIS.
+ * it owes them a slot (`sessionOwesHumanWhere`'s rule), its room holds an
+ * open agent question, OR it waits on its pending plan/deploy gate
+ * (`awaitedGatePendingIn`). The run reaper parks / keeps parked on THIS.
  */
 export function sessionWaitsOnPersonWhere(sessionId: AnyPgColumn | SQL): SQL {
   return drizzleSql`EXISTS (
@@ -70,11 +72,12 @@ export function sessionWaitsOnPersonWhere(sessionId: AnyPgColumn | SQL): SQL {
       AND (
         ${owedSlotExistsIn(drizzleSql.raw("waiting.expected_outputs"))}
         OR ${openRoomQuestionIn(drizzleSql.raw("waiting.channel_id"))}
+        OR ${awaitedGatePendingIn(drizzleSql.raw("waiting.id"))}
       )
   )`;
 }
 
-/** SQL over a `focus_sessions` row: it owes a slot OR its room holds an open agent question. */
+/** SQL over a `focus_sessions` row: the same three arms as {@link sessionWaitsOnPersonWhere}. */
 export function focusSessionWaitsOnPersonWhere(): SQL {
-  return drizzleSql`(${owedSlotExistsIn(focusSessions.expectedOutputs)} OR ${openRoomQuestionIn(focusSessions.channelId)})`;
+  return drizzleSql`(${owedSlotExistsIn(focusSessions.expectedOutputs)} OR ${openRoomQuestionIn(focusSessions.channelId)} OR ${awaitedGatePendingIn(focusSessions.id)})`;
 }
