@@ -85,6 +85,7 @@ vi.mock("./_shared.js", () => ({
 // Total, for the same reason as `_shared.js` above: the door's module graph
 // reads `@synap/database` exports this file's total mock lacks.
 vi.mock("../../../access/door.js", () => ({
+  canRead: async () => h.workspaceAccess,
   canWrite: async () => h.workspaceAccess,
   userPrincipal: (userId: string) => ({ userId, grant: null }),
 }));

@@ -65,6 +65,13 @@ vi.mock("@synap/database", async (importOriginal) => {
   };
 });
 vi.mock("@synap/database/schema", () => ({ channelContextItems: {} }));
+// The access door pulls in the whole access layer, which this total schema
+// mock cannot serve. The write gate is not under test here (its own suite is
+// file-upload-membership): the caller may write.
+vi.mock("../../access/door.js", () => ({
+  canWrite: async () => true,
+  userPrincipal: (userId: string) => ({ userId, grant: null }),
+}));
 // The read floor of the URL doors pulls in the access layer; these tests
 // drive the upload doors only.
 vi.mock("../../utils/stored-file-access.js", () => ({
