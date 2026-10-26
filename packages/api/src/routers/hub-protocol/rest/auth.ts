@@ -34,6 +34,7 @@ import {
   GUEST_REFUSED_BODY,
   isGuestPrincipal,
 } from "../../../access/guest-containment.js";
+import { reportNoPodAccess } from "../../../access/pod-access.js";
 import { AuthStatusSchema, KeyHolderStateSchema } from "./_codecs/auth.js";
 import { ErrorSchema, trpcErrorResponses } from "./_codecs/_openapi.js";
 import { logger, type HubHono, httpStatusForTrpcError } from "./_shared.js";
@@ -211,6 +212,13 @@ export function registerAuthRoutes(app: HubHono): void {
         (await isGuestPrincipal(status.record.userId, c.req.raw))
       )
         return c.json(GUEST_REFUSED_BODY, 403);
+      // Pod-access floor, report mode (B1, access/pod-access.ts).
+      if ("record" in status && status.record)
+        await reportNoPodAccess(
+          status.record.userId,
+          c.req.raw,
+          "hub:/auth/key-state"
+        );
       // The status just read is handed on: a second lookup would repeat the
       // (legacy bcrypt) work for every unknown key.
       return c.json(await describeKeyForHolder(token, c.req.url, status), 200);

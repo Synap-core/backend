@@ -271,13 +271,18 @@ export function createScopedProcedure(requiredScopes: string[]) {
  * Helper: Create procedure with API key auth + scope check
  */
 import { publicProcedure } from "../trpc.js";
-import { guestContainmentMiddleware } from "../access/guest-containment.js";
+import {
+  guestContainmentMiddleware,
+  podAccessReportMiddleware,
+} from "../access/guest-containment.js";
 
 // Guest containment again AFTER the key resolves the principal: on a Bearer
-// request the base procedure's check ran before any userId existed.
+// request the base procedure's check ran before any userId existed. The
+// pod-access floor (report mode, B1) judges the same final principal.
 export const apiKeyProcedure = publicProcedure
   .use(apiKeyMiddleware)
-  .use(guestContainmentMiddleware);
+  .use(guestContainmentMiddleware)
+  .use(podAccessReportMiddleware);
 
 export function scopedProcedure(scopes: string[]) {
   return apiKeyProcedure.use(createScopedProcedure(scopes));

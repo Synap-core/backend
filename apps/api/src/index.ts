@@ -55,6 +55,7 @@ import {
   normalizeIssuerUrl,
   sanitizeErrorEgress,
   refuseGuestSession,
+  podAccessOf,
   appSessionMiddleware,
   registerPodWideProposalReactor,
   registerSessionUnblockReactor,
@@ -911,7 +912,10 @@ app.use("/api/federation/application-connections/requests/*", (c, next) => {
 // exchange, so it does not need to create another session on every page load.
 //
 // Auth: ory_kratos_session cookie (set by the native or federated login flow).
-// Returns 200 + session data if valid, 401 if missing or expired.
+// Returns 200 + session data if valid, 401 if missing or expired. `podAccess`
+// ("member" | "guest" | "none", `access/pod-access.ts`) says whether the
+// signed-in person is inside this pod at all: a client shows "No access to
+// this pod" for "none". A failed access read is a 5xx, never a guessed answer.
 app.get("/api/session", async (c) => {
   // LOCAL MODE: validate the bearer/x-local-token and return the fixed identity.
   // Only bearer + x-local-token are accepted — ory_kratos_session cookie is
@@ -932,7 +936,11 @@ app.get("/api/session", async (c) => {
     }
 
     const { buildLocalApiSession } = await import("@synap/auth");
-    return c.json(buildLocalApiSession());
+    const local = buildLocalApiSession();
+    return c.json({
+      ...local,
+      podAccess: await podAccessOf(local.session.identity.id, c.req.raw),
+    });
   }
 
   const sessionToken = getCookie(c, "ory_kratos_session");
@@ -940,6 +948,7 @@ app.get("/api/session", async (c) => {
     return c.json({ authenticated: false }, 401);
   }
 
+  let session: { identity?: { id?: string } };
   try {
     const resp = await fetch(`${kratosPublicUrl}/sessions/whoami`, {
       headers: {
@@ -952,12 +961,18 @@ app.get("/api/session", async (c) => {
       return c.json({ authenticated: false }, 401);
     }
 
-    const session = await resp.json();
-    return c.json({ authenticated: true, session });
+    session = await resp.json();
   } catch (err) {
     apiLogger.error({ err }, "Session check failed");
     return c.json({ authenticated: false }, 401);
   }
+  const identityId = session.identity?.id;
+  if (!identityId) return c.json({ authenticated: false }, 401);
+  return c.json({
+    authenticated: true,
+    session,
+    podAccess: await podAccessOf(identityId, c.req.raw),
+  });
 });
 
 if (config.server.localMode) {

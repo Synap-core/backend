@@ -44,6 +44,7 @@ import {
   GUEST_REFUSED_MESSAGE,
   isGuestPrincipal,
 } from "../../access/guest-containment.js";
+import { reportNoPodAccess } from "../../access/pod-access.js";
 import { checkHubRateLimit } from "../../utils/hub-protocol-rate-limit.js";
 import { tools } from "./tools/index.js";
 import { createMCPServer, groundingBudgetBytes } from "./index.js";
@@ -533,6 +534,8 @@ mcpHttpApp.post("/", async (c) => {
       GUEST_REFUSED_MESSAGE
     );
   }
+  // Pod-access floor, report mode (B1, access/pod-access.ts).
+  await reportNoPodAccess(effectiveUserId, c.req.raw, "mcp");
 
   // ── 2b. Attribution hard-reject (Phase 0, docs/decisions/agent-governance.md D1) ──
   if (

@@ -29,7 +29,10 @@ import {
 import { isSetupRequiredLike } from "./services/proposals/setup-required-error.js";
 import { auditLogMiddleware } from "./middleware/audit-log.js";
 import { readOnlyGuardMiddleware } from "./middleware/read-only-guard.js";
-import { guestContainmentMiddleware } from "./access/guest-containment.js";
+import {
+  guestContainmentMiddleware,
+  podAccessReportMiddleware,
+} from "./access/guest-containment.js";
 
 const logger = createLogger({ module: "trpc" });
 
@@ -146,7 +149,8 @@ export const publicProcedure = t.procedure
 /**
  * Protected procedure (auth required)
  *
- * Validates Ory Kratos session. Authorization handled by permissionValidator worker.
+ * Validates Ory Kratos session, then the pod-access floor (report mode, B1:
+ * `access/pod-access.ts`). Authorization handled by permissionValidator worker.
  */
 export const protectedProcedure = publicProcedure
   .use(async (opts) => {
@@ -170,6 +174,7 @@ export const protectedProcedure = publicProcedure
       },
     });
   })
+  .use(podAccessReportMiddleware)
   .use(readOnlyGuardMiddleware)
   .use(auditLogMiddleware);
 
