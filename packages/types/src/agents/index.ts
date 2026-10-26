@@ -14,6 +14,7 @@
 import {
   type AGENT_BINDING_ERROR_LABELS,
   type AGENT_REACH_LABELS,
+  type SESSION_POST_INTENT_LABELS,
   resolveAgentBindingErrorLabel,
   resolveAgentReachLabel,
 } from "../vocabulary/index.js";
@@ -23,6 +24,7 @@ import {
   resolveStatusLabel,
 } from "../vocabulary/index.js";
 import { resolveServiceName } from "../service-marks/index.js";
+import type { SessionPostIntent } from "./session-post.js";
 import { resolveUnitState, type UnitStateView } from "../units/state.js";
 
 /**
@@ -489,8 +491,23 @@ type _BindingWords =
       : never
     : never;
 const _bindingWords: _BindingWords = true;
+// A coordination-post intent without its words fails the build too.
+type _IntentWords =
+  Exclude<
+    SessionPostIntent,
+    keyof typeof SESSION_POST_INTENT_LABELS
+  > extends never
+    ? Exclude<
+        keyof typeof SESSION_POST_INTENT_LABELS,
+        SessionPostIntent
+      > extends never
+      ? true
+      : never
+    : never;
+const _intentWords: _IntentWords = true;
 void _reachWords;
 void _bindingWords;
+void _intentWords;
 
 /** The slice of an `agentUsers.list` row the reach mark reads. */
 export interface AgentReachRowLike {
@@ -942,3 +959,5 @@ export function agentDisplayName(input: {
 // The reopenable agent conversation behind a piece of work.
 export * from "./conversation.js";
 export * from "./route-choice.js";
+// One agent's typed message to another session (the coordination post).
+export * from "./session-post.js";
