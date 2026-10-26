@@ -57,10 +57,16 @@ describe("MCP read-tool classification (derived from the live tool list)", () =>
     // Non-vacuity: the REST declarations are in the scanned set.
     expect(GRANT_REST_GET_READS.length).toBeGreaterThanOrEqual(5);
     expect(known.has("session")).toBe(true);
-    const unknown = doors.flatMap(([n, d]) =>
+    const declared = (d: (typeof doors)[number][1]): readonly string[] =>
       d.bound === "reads"
-        ? d.subjects.filter((s) => !known.has(s)).map((s) => `${n}:${s}`)
-        : []
+        ? d.subjects
+        : d.bound === "person"
+          ? [d.subject]
+          : [];
+    const unknown = doors.flatMap(([n, d]) =>
+      declared(d)
+        .filter((s) => !known.has(s))
+        .map((s) => `${n}:${s}`)
     );
     expect(unknown).toEqual([]);
   });

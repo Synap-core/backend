@@ -133,6 +133,19 @@ function looksLikeJsonSchema(declared: Record<string, unknown>): boolean {
   );
 }
 
+/**
+ * A number or boolean sent as a string. CLI and HTTP callers send every value
+ * as a string ("5"), agents send real ones; the code-skill runtime has always
+ * accepted both (the IS `buildZodSchema`: `z.coerce.number()`, and a boolean
+ * preprocess that maps ANY string). Refusing "5" here would refuse a call the
+ * runtime runs. Strings only: a non-string of the wrong type stays wrong.
+ */
+function isStringEncoded(type: string, value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  if (type === "number") return Number.isFinite(Number(value));
+  return type === "boolean";
+}
+
 function checkTypeMap(
   declared: Record<string, unknown>,
   params: Record<string, unknown>
@@ -188,7 +201,7 @@ function checkTypeMap(
         ? received === "object"
         : type === "array"
           ? received === "array"
-          : received === type;
+          : received === type || isStringEncoded(type, value);
     if (!matches) repair.wrongType[field] = { expected: type, received };
   }
 

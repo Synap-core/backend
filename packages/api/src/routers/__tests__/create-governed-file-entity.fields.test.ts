@@ -17,6 +17,7 @@ const h = vi.hoisted(() => ({
   create: vi.fn(),
   scope: "pod" as "pod" | "workspace",
   ctxWorkspace: undefined as unknown,
+  membership: null as null | { role: string },
 }));
 
 vi.mock("@synap/database", async (importOriginal) => ({
@@ -25,6 +26,7 @@ vi.mock("@synap/database", async (importOriginal) => ({
   ProfileResolutionService: class {
     getEntityScope = async () => h.scope;
   },
+  getWorkspaceMembership: async () => h.membership,
 }));
 vi.mock("../file-upload.js", async () => {
   // Keep the REAL property shaping; only the storing half is irrelevant here.
@@ -69,6 +71,7 @@ const base = {
 beforeEach(() => {
   vi.clearAllMocks();
   h.scope = "pod";
+  h.membership = null;
   h.create.mockResolvedValue({ id: "ent-1" });
 });
 
@@ -80,6 +83,16 @@ describe("governed file entity — fields + pin", () => {
     expect(input.targetWorkspaceId).toBeUndefined();
     expect(input.properties).toEqual({ mimeType: "video/mp4", fileSize: 42 });
     expect(h.ctxWorkspace).toBeNull();
+  });
+
+  it("a pod-wide file is homed in the upload's space only for a member who can write there", async () => {
+    h.membership = { role: "editor" };
+    await createGovernedFileEntityForStoredDocument(stored, base);
+    // `entities.create` then governs the write in that space (permWorkspaceId).
+    expect(h.create.mock.calls[0]![0].homeWorkspaceId).toBe(WS);
+    h.membership = { role: "viewer" };
+    await createGovernedFileEntityForStoredDocument(stored, base);
+    expect(h.create.mock.calls[1]![0].homeWorkspaceId).toBeUndefined();
   });
 
   it("an explicit pin lands the entity in that workspace (rung 1)", async () => {

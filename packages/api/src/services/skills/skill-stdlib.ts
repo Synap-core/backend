@@ -197,7 +197,7 @@ export const SKILL_STDLIB_BOOTSTRAP = String.raw`
 
   const callProvider = (...args) => __callProvider.applySyncPromise(undefined, args, __COPY);
 
-  // Governed write-back. propose.entity({ profileSlug, title, properties })
+  // Governed write-back. propose.entity({ profileSlug, title, properties, content? })
   // creates a PROPOSAL (never a direct write) via the propose-gated backend
   // endpoint and returns { status, proposalId, proposedEntityId }.
   const propose = {
