@@ -356,6 +356,8 @@ describe("count counts exactly the folded list", () => {
       now: NOW,
     });
     const counted = countNeedsYou({
+      // The list's clock: an owed ask 7+ days old is in Review later.
+      now: NOW,
       distinctClusters: clusters.length,
       clustersTruncated: false,
       clusters,
@@ -369,7 +371,12 @@ describe("count counts exactly the folded list", () => {
     // Non-vacuity: the fold really happened (3 rows became 1).
     expect(listed.find((s) => s.id === "notification:r1")?.repeatCount).toBe(3);
     expect(counted.notifications).toBe(2);
-    expect(counted.needsYou).toBe(listed.length);
+    // The 9-day owed ask is in Review later (Resolve-XP decision 3): listed
+    // in its fold, out of the headline — the count says so, row for row.
+    const later = listed.filter((s) => s.reviewLater);
+    expect(later.map((s) => s.title)).toEqual(["B"]);
+    expect(counted.reviewLater).toBe(later.length);
+    expect(counted.needsYou).toBe(listed.length - later.length);
   });
 });
 
@@ -432,6 +439,8 @@ describe("project REVIEW sessions — listed and counted as ONE population (W2 r
     ]);
     expect(review[1]!.ageBucket).toBe("older");
     const counted = countNeedsYou({
+      // The list's clock: an owed ask 7+ days old is in Review later.
+      now: NOW,
       distinctClusters: 0,
       clustersTruncated: false,
       clusters: [],

@@ -148,6 +148,7 @@ import {
   droppedAskWarnings,
   criteriaDiffer,
 } from "../../../services/focus-sessions/update-session.js";
+import { restatedAskHints } from "../../../services/focus-sessions/ask-text.js";
 import { ErrorSchema, uuidParam, uuidQueryParam } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import {
@@ -851,7 +852,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       "Stamps `owner: 'human'` + `blockedReason` + `why` + `owedSince` on the " +
       "named slot. The slot stays `pending` — declaring that you cannot do the " +
       "work is the opposite of having done it. When a standing guideline " +
-      "covers this kind of block, `blockGuidelines` carries its text.",
+      "covers this kind of block, `blockGuidelines` carries its text. A " +
+      "confirm prompt that only repeats the label comes back as a `hint`.",
     request: {
       params: z.object({ id: z.string().uuid() }),
       body: BlockOutputBodySchema,
@@ -864,6 +866,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           expectedLabel: z.string(),
           kind: z.string(),
           blockGuidelines: z.unknown().optional(),
+          hint: z.string().optional(),
         }),
       },
       400: { description: "Bad request", schema: ErrorSchema },
@@ -2159,12 +2162,21 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       // as the MCP door (`updateSession` → `warnings`).
       const warnings =
         patch.expectedOutputs !== undefined
-          ? droppedAskWarnings(
-              patch.expectedOutputs as Parameters<typeof droppedAskWarnings>[0],
-              (updated.expectedOutputs ?? []) as Parameters<
-                typeof droppedAskWarnings
-              >[1]
-            )
+          ? [
+              ...droppedAskWarnings(
+                patch.expectedOutputs as Parameters<
+                  typeof droppedAskWarnings
+                >[0],
+                (updated.expectedOutputs ?? []) as Parameters<
+                  typeof droppedAskWarnings
+                >[1]
+              ),
+              ...restatedAskHints(
+                patch.expectedOutputs as Parameters<
+                  typeof restatedAskHints
+                >[0]
+              ),
+            ]
           : [];
 
       return c.json({
@@ -3166,6 +3178,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
               ...(result.blockGuidelines
                 ? { blockGuidelines: result.blockGuidelines }
                 : {}),
+              ...("hint" in result && result.hint ? { hint: result.hint } : {}),
             });
         }
       } catch (err) {

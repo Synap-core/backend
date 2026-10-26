@@ -937,7 +937,10 @@ export function registerFocusSessionExecutors(): void {
           // An AGENT's list adds and updates, never deletes (C6): live,
           // approving an agent's `expectedOutputs: []` beside a rename deleted
           // every declared deliverable of session 9dc5da0c.
-          { keepUnlisted: !!proposal.agentUserId }
+          {
+            keepUnlisted: !!proposal.agentUserId,
+            askedBy: proposal.agentUserId ?? null,
+          }
         );
         if (goalChange.refusal) outputRefusals.push(goalChange.refusal);
 
@@ -1314,7 +1317,7 @@ async function applyProposedOutputMutations(
   sessionId: string,
   innerData: Record<string, unknown>,
   ownerUserId: string,
-  opts: { keepUnlisted: boolean }
+  opts: { keepUnlisted: boolean; askedBy: string | null }
 ): Promise<string[]> {
   const expectedOutputs = z
     .array(expectedOutputWireSchema)

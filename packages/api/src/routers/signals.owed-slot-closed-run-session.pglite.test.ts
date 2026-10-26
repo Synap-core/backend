@@ -141,7 +141,9 @@ const FOUNDER_SLOT = {
   label: LABEL,
   owner: "human",
   status: "pending",
-  owedSince: "2026-09-25T12:58:38.299Z",
+  // Fresh: an owed ask 7+ days old leaves the headline for Review later
+  // (Resolve-XP decision 3), which this test is not about.
+  owedSince: new Date(Date.now() - 3_600_000).toISOString(),
   blockedReason: "decision",
 };
 

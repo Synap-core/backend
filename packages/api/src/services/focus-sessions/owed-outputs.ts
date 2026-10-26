@@ -66,7 +66,14 @@ import {
 import type { SQL } from "@synap/database";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import { deliverableOwedBy } from "@synap-core/types/units";
-import { effectiveSlotAsk } from "@synap-core/types/ask";
+import {
+  ASK_MODES_ENDING_WITH_SESSION,
+  askEndsWithSession,
+  effectiveSlotAsk,
+  effectiveAskCause,
+  type AskCause,
+  type AskCardSlot,
+} from "@synap-core/types/ask";
 import type {
   ExpectedOutput,
   OutputRef,
@@ -221,6 +228,19 @@ export interface OwedSlot {
    * the row is a one-tap Confirm / "Not what I said" in place.
    */
   pendingRelay?: SlotPendingRelay;
+  /**
+   * WHO asked (`ExpectedOutput.askedBy`, the agent user) and its display
+   * NAME, resolved by {@link listOwedSlots} in one batched read — the same
+   * `actorDisplayName` the session roster shows. The name is absent when the
+   * pod cannot name the asker; a card then names the cause, or nobody.
+   */
+  askedBy?: string;
+  askedByName?: string;
+  /**
+   * WHAT raised it when no agent did (`effectiveAskCause`: the stamped cause,
+   * else a criterion / param slot's own) — the card's door.
+   */
+  askCause?: AskCause;
 }
 
 export interface ListOwedSlotsParams {
@@ -359,9 +379,34 @@ export function projectOwedSlots(row: OwedRow): OwedSlot[] {
       ...(slot.ref ? { ref: slot.ref } : {}),
       ...(ask ? { ask } : {}),
       ...(slot.pendingRelay ? { pendingRelay: slot.pendingRelay } : {}),
+      ...(slot.askedBy ? { askedBy: slot.askedBy } : {}),
+      ...askCauseOf(slot),
     });
   }
   return owed;
+}
+
+function askCauseOf(slot: ExpectedOutput): { askCause?: AskCause } {
+  const cause = effectiveAskCause(slot as AskCardSlot);
+  return cause ? { askCause: cause } : {};
+}
+
+/**
+ * The askers' display names, in ONE users read for the whole page
+ * (`participantDisplayNames`, the roster's own naming). Loaded lazily, like
+ * "What I looked at", so a page with no asker pays nothing. An asker the pod
+ * cannot name keeps its id and gets no name, never its id as a name.
+ */
+async function withAskerNames(slots: OwedSlot[]): Promise<OwedSlot[]> {
+  const ids = [...new Set(slots.flatMap((s) => (s.askedBy ? [s.askedBy] : [])))];
+  if (ids.length === 0) return slots;
+  const { participantDisplayNames } =
+    await import("../tracks/track-participant-store.js");
+  const names = await participantDisplayNames(ids);
+  return slots.map((s) => {
+    const name = s.askedBy ? names.get(s.askedBy) : undefined;
+    return name ? { ...s, askedByName: name } : s;
+  });
 }
 
 /**
@@ -442,9 +487,10 @@ export async function listOwedSlots(
   // Loaded lazily, and only when some slot carries provenance, so the access
   // registry stays out of this read's import graph on the common path (and out
   // of every suite that mocks `@synap/database` around it).
-  if (!slots.some((s) => s.ask?.lookedAt?.length)) return slots;
+  const named = await withAskerNames(slots);
+  if (!named.some((s) => s.ask?.lookedAt?.length)) return named;
   const { resolveLookedAtForReader } = await import("./looked-at.js");
-  return resolveLookedAtForReader(userId, slots);
+  return resolveLookedAtForReader(userId, named);
 }
 
 /**
@@ -477,15 +523,15 @@ export function stampRetired(
  * `provide` or a `form` is something the person still has to do or hand over
  * whatever happened to the session, and a slot with no ask is owed work.
  */
-export const SESSION_BOUND_ASK_MODES = ["confirm", "choose"] as const;
+export const SESSION_BOUND_ASK_MODES = ASK_MODES_ENDING_WITH_SESSION;
 
 /**
- * Does this owed slot end with its session? Read through `effectiveSlotAsk`,
- * the one ask reading: a `decision` slot stored with no ask IS a confirm.
+ * Does this owed slot end with its session? `askEndsWithSession`
+ * (`@synap-core/types/ask`), the rule the card's fate mark reads too, through
+ * `effectiveSlotAsk`: a `decision` slot stored with no ask IS a confirm.
  */
 export function slotEndsWithSession(slot: ExpectedOutput): boolean {
-  const mode = effectiveSlotAsk(slot)?.mode;
-  return (SESSION_BOUND_ASK_MODES as readonly string[]).includes(mode ?? "");
+  return askEndsWithSession(slot as AskCardSlot);
 }
 
 /**

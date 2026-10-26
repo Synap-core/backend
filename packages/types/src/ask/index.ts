@@ -493,10 +493,63 @@ export function effectiveAskStakes(input: {
   return "routine";
 }
 
-export const AskSchema = z.discriminatedUnion("mode", [
+// ─── Who asked ──────────────────────────────────────────────────────────────
+
+/**
+ * What raised an ask when no agent did (founder decision 4, 2026-10-26: the
+ * card NAMES THE CAUSE as a door, never "An agent"). Server-stamped on the
+ * slot (`ExpectedOutput.askCause`) by the producer that wrote it:
+ *   `decision`          — a `proposed` decision note (the decision-ask reactor)
+ *   `gate`              — the session's plan/deploy gate
+ *   `run`               — a run's turn end ("Keep the run going")
+ *   `external_approval` — an external agent's approval request
+ *   `param`             — a playbook input the run needs (`paramName`)
+ *   `criterion`         — a failed check of the session (`criterionKey`)
+ */
+export const ASK_CAUSE_KINDS = [
+  "decision",
+  "gate",
+  "run",
+  "external_approval",
+  "param",
+  "criterion",
+] as const;
+export type AskCauseKind = (typeof ASK_CAUSE_KINDS)[number];
+
+export const AskCauseSchema = z.object({
+  kind: z.enum(ASK_CAUSE_KINDS),
+  /** The object the cause is — the card's door (the decision, the run). */
+  ref: z
+    .object({ kind: z.string().min(1).max(64), id: z.string().min(1).max(200) })
+    .optional(),
+  /** ISO — when the cause happened (the decision note's date). */
+  at: z.string().optional(),
+});
+export type AskCause = z.infer<typeof AskCauseSchema>;
+
+/**
+ * One side of a confirm: the button's own words, what pressing it does, and
+ * whether the agent recommends it. Founder decision 2 (2026-10-26) overturns
+ * D-4 ("Yes and No at equal weight"): a confirm MAY recommend one answer and
+ * state each answer's consequence, exactly like a choose option does
+ * ({@link AskOptionSchema}'s `recommended` / `description`).
+ */
+export const AskConfirmAnswerSchema = z.object({
+  /** The button's words; absent ⇒ "Yes" / "No". */
+  label: z.string().min(1).max(ASK_LIMITS.optionLabelMaxChars).optional(),
+  /** One-line consequence of this answer ("Marks the decision accepted"). */
+  description: z.string().max(ASK_LIMITS.optionDescriptionMaxChars).optional(),
+  /** The agent's recommended answer — at most ONE of `yes` / `no`. */
+  recommended: z.boolean().optional(),
+});
+export type AskConfirmAnswer = z.infer<typeof AskConfirmAnswerSchema>;
+
+const AskModesSchema = z.discriminatedUnion("mode", [
   z.object({
     mode: z.literal("confirm"),
     prompt: z.string().max(ASK_LIMITS.promptMaxChars).optional(),
+    yes: AskConfirmAnswerSchema.optional(),
+    no: AskConfirmAnswerSchema.optional(),
     ...lookedAtField,
     ...stakesField,
   }),
@@ -544,6 +597,19 @@ export const AskSchema = z.discriminatedUnion("mode", [
     ...stakesField,
   }),
 ]);
+
+// The choose rule, for a confirm's two answers: a contract rule, at the
+// parse. On the UNION, not the confirm member — under zod 3 a refined member
+// is an effect `discriminatedUnion` cannot read.
+export const AskSchema = AskModesSchema.superRefine((ask, ctx) => {
+  if (ask.mode === "confirm" && ask.yes?.recommended && ask.no?.recommended) {
+    ctx.addIssue({
+      code: "custom",
+      message: "at most one answer may be recommended",
+      path: ["no", "recommended"],
+    });
+  }
+});
 export type Ask = z.infer<typeof AskSchema>;
 
 // ─── The answer's typed value ───────────────────────────────────────────────
@@ -771,8 +837,9 @@ export interface DecisionAskSlotLite<A = Ask> {
  * A DECISION is a choice, never a bare "done". A person-owed slot blocked on
  * `decision` with no ask would resolve `legacy` and offer a one-tap "I did
  * this", which closed a decision with nobody deciding anything. Such a slot
- * gets a `confirm` (Yes / No) instead, its question the slot's `why`, else its
- * label — the shape the external-agent approval slot already declares.
+ * gets a `confirm` (Yes / No) instead, with NO prompt: the slot already says
+ * what is asked (its label) and why (its `why`), and a prompt copied from
+ * either is the same words drawn twice on the card (Resolve-XP W6).
  *
  * A param slot (`PARAM_SLOT_KIND`) is exempt: its only ask-less form is a
  * credential-named param whose value is set on the run, and a yes/no there
@@ -786,11 +853,7 @@ export function deriveDecisionAsk(
   if (slot.ask) return null;
   if (slot.owner !== "human" || slot.blockedReason !== "decision") return null;
   if (slot.kind === PARAM_SLOT_KIND) return null;
-  const prompt = (slot.why?.trim() || slot.label.trim()).slice(
-    0,
-    ASK_LIMITS.promptMaxChars
-  );
-  return prompt ? { mode: "confirm", prompt } : { mode: "confirm" };
+  return { mode: "confirm" };
 }
 
 /**
@@ -981,8 +1044,10 @@ export function validateAnswerAgainstAsk(
  *
  * `chosenKey` is the picked option's identity (`askOptionKey`) for a choose,
  * `"yes"` / `"no"` for a confirm, and `null` for anything else (a free-text
- * "Other…", a room reply in words, a form, a provide). `followedRecommendation`
- * is `null` when there was no recommendation to follow — NEVER `false`, which
+ * "Other…", a room reply in words, a form, a provide). `recommendedKey` uses the
+ * same keys (a confirm's recommended `yes` / `no`, decision 2026-10-26).
+ * `followedRecommendation` is `null` when there was no recommendation to
+ * follow — NEVER `false`, which
  * would read as the person overruling advice nobody gave.
  *
  * `lookedAt` is stored as `{kind, id}` only: the server-resolved `title` the
@@ -1009,6 +1074,14 @@ export type AskSnapshot = z.infer<typeof AskSnapshotSchema>;
 /** The confirm arm's two keys — what `chosenKey` holds for a yes / a no. */
 export const ASK_CONFIRM_KEYS = { yes: "yes", no: "no" } as const;
 
+/** The confirm answer the agent recommends (`yes` / `no`), else `null`. */
+export function confirmRecommendedKey(ask: Ask | null | undefined): string | null {
+  if (ask?.mode !== "confirm") return null;
+  if (ask.yes?.recommended) return ASK_CONFIRM_KEYS.yes;
+  if (ask.no?.recommended) return ASK_CONFIRM_KEYS.no;
+  return null;
+}
+
 /**
  * Freeze an ask + the answer given to it. Pure. `value` absent ⇒ an answer in
  * words (the room-reply entrance), whose pick is unknown.
@@ -1020,7 +1093,9 @@ export function buildAskSnapshot(
 ): AskSnapshot {
   const options = ask.mode === "choose" ? ask.options : undefined;
   const recommended = options?.find((o) => o.recommended === true);
-  const recommendedKey = recommended ? askOptionKey(recommended) : null;
+  const recommendedKey = recommended
+    ? askOptionKey(recommended)
+    : confirmRecommendedKey(ask);
   const chosenKey =
     value?.type === "chip"
       ? askOptionKey(value.chip)
@@ -1033,7 +1108,7 @@ export function buildAskSnapshot(
   const followedRecommendation =
     recommendedKey === null
       ? null
-      : value?.type === "chip"
+      : value?.type === "chip" || value?.type === "confirm"
         ? chosenKey === recommendedKey
         : value?.type === "text"
           ? false
@@ -1274,6 +1349,20 @@ export {
   actView,
   askRecommendationOutcome,
   answerProvenanceMark,
+  ASK_MODES_ENDING_WITH_SESSION,
+  askCardView,
+  askEndsWithSession,
+  askFate,
+  isAskReviewLater,
+  effectiveAskCause,
+  stripAskVerbPrefix,
+  askTextRestates,
+  type AskCardAnswer,
+  type AskCardAsker,
+  type AskCardSlot,
+  type AskCardView,
+  type AskCardViewOptions,
+  type AskFate,
   type AnswerProvenanceMark,
   type AskRecommendationOutcome,
   type AskRecommendationOutcomeKind,

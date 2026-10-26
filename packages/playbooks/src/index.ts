@@ -288,6 +288,11 @@ export const OUTPUT_RETIRED_REASONS = [
   // deliverable (`act` / `provide` / `form`) stays owed instead — Resolve-XP
   // founder default 3 (2026-10-26), stamped by the close door (W2).
   "session_ended",
+  // Nobody asked: a `proposed` decision a PERSON wrote raised an ask with no
+  // agent behind it (founder decision 1, 2026-10-26). Only an agent-authored
+  // proposed decision asks; the asks raised before that rule retire here
+  // (api `services/decisions/retire-unasked-decision-asks.ts`).
+  "not_asked",
 ] as const;
 
 export type OutputRetiredReason = (typeof OUTPUT_RETIRED_REASONS)[number];
@@ -626,6 +631,23 @@ export interface ExpectedOutput {
    */
   ask?: SlotAsk | null;
   /**
+   * WHO asked — the agent user that handed this slot to the person (or posed
+   * its current ask). SERVER-STAMPED from the acting door's verified auth
+   * context, the same agent the `slot_asked` event records; never authored by
+   * a client. Present only while the slot is owed (cleared with `owedSince`),
+   * and ABSENT when the person handed it to themselves or no agent can be
+   * named — a card then names the {@link askCause}, or nobody.
+   */
+  askedBy?: string;
+  /**
+   * WHAT raised the ask when no agent did — see {@link SlotAskCause}.
+   * SERVER-STAMPED by the system producer that wrote the owed slot (the
+   * decision-ask reactor, a run's turn end, an external agent's approval),
+   * cleared with `owedSince`. A card names it as a door ("From your decision
+   * note · 29 Sep") instead of inventing an agent.
+   */
+  askCause?: SlotAskCause;
+  /**
    * The relation type written OUTPUT → SUBJECT when this slot is satisfied
    * (e.g. `made_for`, `derived_from`). DECLARED by the playbook author (or the
    * declaring agent) — saying how a deliverable relates to the run's subject
@@ -716,7 +738,12 @@ export interface PlaybookStageOnFail {
  * MUTUALLY assignable at compile time — a drift on either side stops the build.
  */
 export type SlotAsk = (
-  | { mode: "confirm"; prompt?: string }
+  | {
+      mode: "confirm";
+      prompt?: string;
+      yes?: SlotAskConfirmAnswer;
+      no?: SlotAskConfirmAnswer;
+    }
   | { mode: "choose"; options: SlotAskOption[]; allowOther?: boolean }
   | { mode: "form"; form: SlotAskFormSpec }
   | { mode: "act"; url?: string; steps?: string[] }
@@ -757,6 +784,32 @@ export type SlotAskLookedAtKind = Extract<
 >;
 
 /** One offered answer (capture's chip minus its apply fields). */
+/**
+ * What raised a system ask (no agent asked). STRUCTURAL MIRROR of `AskCause`
+ * (`@synap-core/types/ask`), pinned mutual by `update-session.ts`.
+ */
+export interface SlotAskCause {
+  kind: SlotAskCauseKind;
+  /** The object the cause is (the decision, the run, the session). */
+  ref?: { kind: string; id: string };
+  /** ISO — when the cause happened (the decision note's date). */
+  at?: string;
+}
+export type SlotAskCauseKind =
+  | "decision"
+  | "gate"
+  | "run"
+  | "external_approval"
+  | "param"
+  | "criterion";
+
+/** One side of a confirm — mirror of `AskConfirmAnswer`. At most ONE recommended. */
+export interface SlotAskConfirmAnswer {
+  label?: string;
+  description?: string;
+  recommended?: boolean;
+}
+
 export interface SlotAskOption {
   label: string;
   /** Absent ⇒ the label IS the value. */

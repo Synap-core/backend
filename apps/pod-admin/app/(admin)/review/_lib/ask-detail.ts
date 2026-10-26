@@ -3,11 +3,13 @@
  * the answer controls draw, and the exact calls they send.
  *
  * PURE. Every RULE comes from `@synap-core/types/ask`, the one the pod's
- * answer door and the desktop and phone apps apply: whether an answer fits
+ * answer door and the desktop and phone apps apply: what the card SAYS
+ * (`askCardView`: heading, context, asker, age + fate, the answers with
+ * their recommendation and consequence, the note; no renderer here reads
+ * the label, `why` or prompt for display), whether an answer fits
  * (`validateAnswerAgainstAsk`, which also sends an act to "I did this"),
- * what an act shows (`actView`), the options as
- * chips (`askOptionChips`) and the fingerprint the pod checks the answer
- * against (`askFingerprint`). What is left here is the
+ * what an act shows (`actView`) and the fingerprint the pod checks the
+ * answer against (`askFingerprint`). What is left here is the
  * console's own arrangement: which controls a form field becomes, the
  * field-level hints a web form shows before a round trip, and the call shapes.
  *
@@ -19,12 +21,16 @@
 
 import {
   actView,
+  askCardView,
   askFingerprint,
-  askOptionChips,
   askOptionForChip,
   isRefusedAskField,
   validateAnswerAgainstAsk,
   type Ask,
+  type AskCardAnswer,
+  type AskCardAsker,
+  type AskCardView,
+  type AskCause,
   type AskAnswerValue,
   type AskLookedAtKind,
   type AskProvideKind,
@@ -47,6 +53,13 @@ export interface AskSlotSignal {
   why?: string | null;
   claimedDone?: boolean | null;
   ask?: Ask | null;
+  blockedReason?: string | null;
+  /** When it became the person's (`owedSince`, the row's clock). */
+  occurredAt?: string | Date | null;
+  /** The agent that asked it, named by the pod (`Signal.by`). */
+  by?: { label: string } | null;
+  /** What raised it when no agent did (`Signal.askCause`). */
+  askCause?: AskCause | null;
 }
 
 /** One owed slot, as the detail reads it. */
@@ -60,6 +73,12 @@ export interface AskSlot {
   why: string | null;
   /** The agent says it produced this after all (unverified). */
   claimedDone: boolean;
+  blockedReason: string | null;
+  /** ISO; null when the pod could not date it. */
+  owedSince: string | null;
+  /** The asking agent's name, as the pod resolved it; null = unknown. */
+  askerName: string | null;
+  askCause: AskCause | null;
 }
 
 /**
@@ -77,7 +96,17 @@ export function askSlotOf(s: AskSlotSignal): AskSlot | null {
     ask: s.ask ?? null,
     why: s.why?.trim() || null,
     claimedDone: s.claimedDone === true,
+    blockedReason: s.blockedReason ?? null,
+    owedSince: isoOf(s.occurredAt),
+    askerName: s.by?.label?.trim() || null,
+    askCause: s.askCause ?? null,
   };
+}
+
+function isoOf(at: string | Date | null | undefined): string | null {
+  if (!at) return null;
+  const t = (at instanceof Date ? at : new Date(at)).getTime();
+  return Number.isFinite(t) ? new Date(t).toISOString() : null;
 }
 
 /**
@@ -97,23 +126,6 @@ export function askStaleness(
     : "changed";
 }
 
-// ─── Who is asking ───────────────────────────────────────────────────────────
-
-/**
- * The agents on the session, by the names the pod resolved
- * (`focusSessions.get` → `participants`). A slot does not record WHICH agent
- * asked, so several are named together rather than one guessed. Null = none
- * known.
- */
-export function askerOf(
-  participants: ReadonlyArray<{ name: string }> | null | undefined
-): string | null {
-  const names = (participants ?? []).map((p) => p.name.trim()).filter(Boolean);
-  if (names.length === 0) return null;
-  if (names.length === 1) return names[0];
-  return `${names.slice(0, -1).join(", ")} or ${names[names.length - 1]}`;
-}
-
 // ─── The view ────────────────────────────────────────────────────────────────
 
 /** One thing the agent read before asking, named by the pod for the reader. */
@@ -123,13 +135,11 @@ export interface LookedAtItem {
   label: string;
 }
 
-export interface ChooseOptionView {
-  /** `askOptionKey` — what the pod matches the answer on. */
-  key: string;
-  label: string;
-  description: string | null;
-  recommended: boolean;
-}
+/** A choose option, as the card derives it (`AskCardAnswer`). */
+export type ChooseOptionView = Pick<
+  AskCardAnswer,
+  "key" | "label" | "description" | "recommended"
+>;
 
 /** The control a form field becomes. */
 export type FormControl = "text" | "textarea" | "number" | "select" | "switch";
@@ -150,7 +160,8 @@ export interface FormFieldView {
 }
 
 export type AskControlView =
-  | { mode: "confirm"; prompt: string | null }
+  /** Yes / No as the card draws them: icon, tone, recommended, consequence. */
+  | { mode: "confirm"; answers: AskCardAnswer[] }
   | {
       mode: "choose";
       options: ChooseOptionView[];
@@ -175,8 +186,16 @@ export type AskControlView =
   | { mode: "legacy" };
 
 export interface AskView {
+  /** The question, once (`askCardView`). */
   heading: string;
-  why: string | null;
+  /** The `why`, only when it adds to the heading. */
+  context: string | null;
+  /** The asking agent (its session is the door), or the cause; null = unknown. */
+  asker: AskCardAsker | null;
+  /** Age + fate as one mark ("8d · Stays until you decide"). */
+  ageFate: AskCardView["ageFate"];
+  /** The collapsed note affordance's one label. */
+  note: AskCardView["note"];
   claimedDone: boolean;
   lookedAt: LookedAtItem[];
   control: AskControlView;
@@ -234,18 +253,20 @@ function provideWants(ask: Extract<Ask, { mode: "provide" }>): string {
   }
 }
 
-function controlOf(ask: Ask | null): AskControlView {
+function controlOf(ask: Ask | null, card: AskCardView): AskControlView {
   if (!ask) return { mode: "legacy" };
   switch (ask.mode) {
     case "confirm":
-      return { mode: "confirm", prompt: ask.prompt?.trim() || null };
+      return { mode: "confirm", answers: card.answers };
     case "choose": {
-      const options = askOptionChips(ask).map((c) => ({
-        key: c.value,
-        label: c.label,
-        description: c.description ?? null,
-        recommended: c.recommended === true,
-      }));
+      const options = card.answers.map(
+        ({ key, label, description, recommended }) => ({
+          key,
+          label,
+          description,
+          recommended,
+        })
+      );
       return {
         mode: "choose",
         options,
@@ -277,15 +298,29 @@ function controlOf(ask: Ask | null): AskControlView {
   }
 }
 
-export function askView(slot: AskSlot): AskView {
+export function askView(slot: AskSlot, now: number = Date.now()): AskView {
   const refs = (slot.ask?.lookedAt ?? []) as ReadonlyArray<{
     kind: AskLookedAtKind;
     id: string;
     title?: string;
   }>;
+  const card = askCardView(
+    {
+      label: slot.label,
+      why: slot.why,
+      ask: slot.ask,
+      blockedReason: slot.blockedReason,
+      owedSince: slot.owedSince,
+      askCause: slot.askCause,
+    },
+    { askerName: slot.askerName, sessionId: slot.sessionId, now }
+  );
   return {
-    heading: slot.label,
-    why: slot.why,
+    heading: card.heading,
+    context: card.context,
+    asker: card.asker,
+    ageFate: card.ageFate,
+    note: card.note,
     claimedDone: slot.claimedDone,
     lookedAt: refs.map((r) => ({
       kind: r.kind,
@@ -294,7 +329,7 @@ export function askView(slot: AskSlot): AskView {
       // agent's title never reaches here.
       label: r.title?.trim() || resolveObjectNoun(r.kind),
     })),
-    control: controlOf(slot.ask),
+    control: controlOf(slot.ask, card),
   };
 }
 

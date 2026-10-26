@@ -505,9 +505,9 @@ function openOf(row: ReviewRow): OpenReview | null {
   if (!detail || detail.kind === "open") return null;
   return {
     detail,
-    // The question itself is the detail's heading; the frame names the job.
-    title: detail.kind === "ask" ? "Answer the agent" : row.title,
-    occurredAt: row.occurredAt,
+    // An ask's row title is its question (`askCardView`), so the frame
+    // names the question once and the detail does not repeat it.
+    title: row.title,
   };
 }
 

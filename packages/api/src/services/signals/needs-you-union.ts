@@ -38,7 +38,11 @@ import {
   resolveObjectNoun,
 } from "@synap-core/types/vocabulary";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
-import { ASK_COPY } from "@synap-core/types/ask";
+import {
+  ASK_COPY,
+  isAskReviewLater,
+  type AskCause,
+} from "@synap-core/types/ask";
 import { needsYouTotal } from "@synap-core/types/units";
 import {
   SUGGESTIONS_CAP,
@@ -305,9 +309,11 @@ export interface Signal {
   lifetimeHours?: number | null;
   /**
    * A `proposal-cluster` whose members all sat untouched for 7 days
-   * (`ProposalCluster.reviewLater`, the ONE count predicate): drawn in the
-   * Review later fold, OUT of the headline — `countNeedsYou` counts it as
-   * `reviewLater`, never in `needsYou`. Absent on every other row.
+   * (`ProposalCluster.reviewLater`, the ONE count predicate), or an
+   * `owed-slot` owed for more than 7 days (`isAskReviewLater`, the same
+   * clock — Resolve-XP decision 3): drawn in the Review later fold, OUT of
+   * the headline — `countNeedsYou` counts it as `reviewLater`, never in
+   * `needsYou`. Absent on every other row.
    */
   reviewLater?: true;
   /**
@@ -321,11 +327,19 @@ export interface Signal {
   source?: SignalSource;
   /**
    * WHO asked — the ONE agent that filed it, as a door to the agent's page
-   * ("from Claude Code"). `proposal-cluster` only, and only when EVERY member
+   * ("from Claude Code"). On a `proposal-cluster` only when EVERY member
    * came from that agent (`ProposalCluster.agent`); several agents, or a
-   * member a person filed, sends none rather than a guessed one.
+   * member a person filed, sends none rather than a guessed one. On an
+   * `owed-slot`, the agent that asked it (`ExpectedOutput.askedBy`), only
+   * when the pod can name it.
    */
   by?: { kind: "agent"; id: string; label: string };
+  /**
+   * `owed-slot` only: WHAT raised the ask when no agent did (the decision
+   * note, the run, the gate…) — the card names it as a door instead of
+   * inventing "an agent" (`askCardView`, `@synap-core/types/ask`).
+   */
+  askCause?: AskCause;
   /** `live-session` only: the liveness facts the "working now" rule read. */
   live?: SessionActivityLive;
   /**
@@ -454,6 +468,7 @@ const _KIND_SPECIFIC_SIGNAL_FIELDS = [
   "reviewLater",
   "source",
   "by",
+  "askCause",
   "live",
   "progress",
   "ruleRun",
@@ -864,6 +879,11 @@ export interface OwedSlotSignalInput {
   ask?: SlotAsk;
   /** A relay awaiting the tap, straight from `listOwedSlots`. */
   pendingRelay?: SlotPendingRelay;
+  /** Who asked and their name, straight from `listOwedSlots`. */
+  askedBy?: string;
+  askedByName?: string;
+  /** What raised it when no agent did, straight from `listOwedSlots`. */
+  askCause?: AskCause;
 }
 
 /**
@@ -906,6 +926,10 @@ export interface OwedSlotSignalInput {
  *                                      quick-answer a confirm / choose in place.
  *   pendingRelay                    → `pendingRelay` — a relayed answer
  *                                      awaiting the tap: the row's Confirm.
+ *   askedBy, askedByName            → `by` — the asker as a named mark, only
+ *                                      when the pod can name it
+ *   askCause                        → `askCause` — what raised it when no
+ *                                      agent did, the card's door
  *
  * DELIBERATELY WITHHELD — a real field, not surfaced today, and here is why:
  *   sessionStatus  → no `owed-slot` surface renders a session-lifecycle chip;
@@ -937,6 +961,9 @@ const _PROJECTED_OWED_SLOT_FIELDS = [
   "ref",
   "ask",
   "pendingRelay",
+  "askedBy",
+  "askedByName",
+  "askCause",
 ] as const satisfies ReadonlyArray<keyof OwedSlot>;
 
 const _WITHHELD_OWED_SLOT_FIELDS = [
@@ -991,7 +1018,7 @@ function owedInstant(owedSince: string): Date {
  * WITHHELD — the per-ask disclosure belongs to the ask's OWN row, which the
  * person sees the moment the draft is accepted (answering one accepts it):
  *   kind, icon, blockedReason, why, claimedDone, criterionKey, ref, ask,
- *   pendingRelay →
+ *   pendingRelay, askedBy, askedByName, askCause →
  *     one row stands for N asks, and any single ask's reason/pointer/answer
  *     region on it would misdescribe the other N-1. The row is a door to the
  *     session, where every ask renders in full.
@@ -1017,6 +1044,9 @@ const _WITHHELD_DRAFT_ASK_FIELDS = [
   "ref",
   "ask",
   "pendingRelay",
+  "askedBy",
+  "askedByName",
+  "askCause",
   "sessionStatus",
   "workspaceId",
 ] as const satisfies ReadonlyArray<keyof OwedSlot>;
@@ -1141,9 +1171,16 @@ export function signalFromOwedSlot(
     ...(row.ref ? { slotRef: row.ref } : {}),
     ...(row.ask ? { ask: row.ask } : {}),
     ...(row.pendingRelay ? { pendingRelay: row.pendingRelay } : {}),
+    ...(row.askedBy && row.askedByName
+      ? { by: { kind: "agent" as const, id: row.askedBy, label: row.askedByName } }
+      : {}),
+    ...(row.askCause ? { askCause: row.askCause } : {}),
     ...sessionSource(row.sessionId, row.sessionTitle),
     groupKey: sessionGroupKey(row.sessionId),
+    // Review later wins over Older, like a cluster's: a client that predates
+    // the flag still folds it under Older (owed > 7 days is older too).
     ageBucket: ageBucketOf(occurredAt, now),
+    ...(isAskReviewLater(row, now) ? { reviewLater: true as const } : {}),
     repeatCount: 1,
   };
 }
@@ -1941,9 +1978,10 @@ export function countNeedsYou(args: {
   /** Distinct pending proposal clusters (after the dedupe), Review later excluded. */
   decisions: number;
   /**
-   * Clusters in Review later — untouched durable work, 7+ days (founder
-   * default 2026-10-26). NOT a part of `needsYou`: the rows a needs-you list
-   * marks `reviewLater`, counted by the same cluster flag.
+   * Rows in Review later — untouched durable proposal clusters and owed asks
+   * nobody answered, 7+ days (founder defaults 2 and 3, 2026-10-26). NOT a
+   * part of `needsYou`: exactly the rows a needs-you list marks
+   * `reviewLater` (the cluster flag, `isAskReviewLater` for an owed slot).
    */
   reviewLater: number;
   /** Unread notifications that survive the dedupe. */
@@ -1981,8 +2019,8 @@ export function countNeedsYou(args: {
   // Review later leaves the headline (Resolve-XP): the SAME cluster flag the
   // list stamps on its rows (`signalFromCluster`), counted by the groups door
   // before its page slice.
-  const reviewLater = args.reviewLaterClusters ?? 0;
-  const decisions = args.distinctClusters - reviewLater;
+  const reviewLaterClusters = args.reviewLaterClusters ?? 0;
+  const decisions = args.distinctClusters - reviewLaterClusters;
   const buckets = partitionNotifications(
     args.notifications,
     args.clusters,
@@ -1991,7 +2029,14 @@ export function countNeedsYou(args: {
   // Folded, like the list: the same news raised N times is ONE row there, so
   // it is one here — the badge must equal the number of rows it stands for.
   const notifications = foldNotifications(buckets.needsYou).length;
-  const blocked = args.owedSlots.length;
+  // An owed ask nobody answered for 7 days leaves the headline the SAME way
+  // (`isAskReviewLater`, the predicate `signalFromOwedSlot` stamps the row by).
+  const now = args.now ?? new Date();
+  const owedReviewLater = args.owedSlots.filter((s) =>
+    isAskReviewLater(s, now)
+  ).length;
+  const blocked = args.owedSlots.length - owedReviewLater;
+  const reviewLater = reviewLaterClusters + owedReviewLater;
   const review = args.reviewSessions ?? 0;
   const captures = liveCaptureRows({
     unfinishedCaptures: args.unfinishedCaptures,

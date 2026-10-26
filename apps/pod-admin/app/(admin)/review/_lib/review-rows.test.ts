@@ -272,6 +272,36 @@ describe("reviewRows", () => {
     });
   });
 
+  it("an ask row says its question once and names who asked (askCardView)", () => {
+    const [row] = reviewRows(
+      [
+        {
+          ...ask,
+          title: "Decide: Ship the launch post",
+          ask: { mode: "confirm", prompt: "Accept: Ship the launch post?" },
+          source: {
+            kind: "session",
+            id: "s1",
+            label: "Decide: Ship the launch post",
+          },
+          by: { kind: "agent", id: "a1", label: "Claude Code" },
+        },
+      ],
+      new Map()
+    );
+    expect(row).toMatchObject({
+      title: "Ship the launch post?",
+      who: "Claude Code",
+      // The session is named after the question: saying it again adds nothing.
+      where: null,
+    });
+    const [caused] = reviewRows(
+      [{ ...ask, askCause: { kind: "run" } }],
+      new Map()
+    );
+    expect(caused!.who).toBe("From the run");
+  });
+
   it("a criterion slot is graded on the scorecard, so it opens where it lives", () => {
     const [row] = reviewRows([{ ...ask, slotKind: "criterion" }], new Map());
     expect(row!.detail).toEqual({

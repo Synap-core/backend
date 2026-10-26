@@ -38,6 +38,7 @@ import type { NeedsYouFacts } from "../units/needs-you.js";
 import type { SessionLiveFacts } from "../run-activity/live.js";
 import { isTerminalSessionStatus } from "../focus-sessions/statuses.js";
 import type { ProposalFate } from "../proposals/fate.js";
+import { askCardView, type Ask, type AskCause } from "../ask/index.js";
 import {
   humanizeToken,
   normalizeObjectKind,
@@ -239,8 +240,15 @@ export interface LensNeedsYouSignal extends GroupableSignal {
   access?: NeedsYouAccessRequest | null;
   /** `space-invite`: the invite the row's Accept and Decline act on. */
   invite?: NeedsYouInvite | null;
-  /** `proposal-cluster`: the ONE agent that filed every member (the pod's `Signal.by`). */
+  /**
+   * `proposal-cluster`: the ONE agent that filed every member; `owed-slot`:
+   * the agent that asked it, when the pod can name it (the pod's `Signal.by`).
+   */
   by?: LensRowBy | null;
+  /** `owed-slot`: HOW the person answers — read for the card's heading. */
+  ask?: Ask | null;
+  /** `owed-slot`: what raised it when no agent did. */
+  askCause?: AskCause | null;
 }
 
 /** A work-broke notification: ONE rule, owned by the Inbox buckets (`needs-you/buckets.ts`). */
@@ -492,6 +500,17 @@ export function lensRowOfNeedsYou<T extends LensNeedsYouSignal>(
   if (row.kind === "item") {
     const s = row.signal;
     const shape = itemShape(s);
+    const card =
+      s.kind === "owed-slot"
+        ? askCardView({
+            label: s.title,
+            kind: s.slotKind,
+            why: s.why,
+            ask: s.ask,
+            blockedReason: s.blockedReason,
+            askCause: s.askCause,
+          })
+        : null;
     return {
       key: row.key,
       cls,
@@ -503,10 +522,12 @@ export function lensRowOfNeedsYou<T extends LensNeedsYouSignal>(
       title:
         s.kind === "draft-asks"
           ? s.sessionTitle?.trim() || s.sessionGoal?.trim() || s.title
-          : s.title,
-      ...(s.kind === "owed-slot" && s.why?.trim()
-        ? { detail: s.why.trim() }
-        : {}),
+          : card
+            ? card.heading
+            : s.title,
+      // An owed slot's title and detail are the ask card's (`askCardView`):
+      // the question once, and its `why` only when it adds.
+      ...(card?.context ? { detail: card.context } : {}),
       reasonKind: needsYouReasonOf(s),
       repeat: repeatLabel(s),
       source: row.session

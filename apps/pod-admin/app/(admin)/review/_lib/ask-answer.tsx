@@ -51,10 +51,12 @@ import {
 } from "@heroui/react";
 import {
   ArrowUpRight,
+  Bot,
   Check,
   FileUp,
   MessageSquare,
   Plug,
+  StickyNote,
   X,
 } from "lucide-react";
 import {
@@ -62,6 +64,8 @@ import {
   askFingerprint,
   classifyAskRefusal,
   provideAcceptAttribute,
+  type AskCardAnswer,
+  type AskCardAsker,
   type AskProvideRef,
 } from "@synap-core/types/ask";
 import { POD_URL, trpc } from "../../../../lib/trpc";
@@ -69,12 +73,8 @@ import {
   redirectToLogin,
   redirectToLoginIfUnauthorized,
 } from "../../../../lib/auth-redirect";
-import {
-  formatRelative,
-  humanizeBytes,
-  readableError,
-} from "../../../../lib/format";
-import { openIn } from "../../../../lib/open-in";
+import { humanizeBytes, readableError } from "../../../../lib/format";
+import { openIn, type Exit } from "../../../../lib/open-in";
 import {
   ExitFallback,
   ExitLink,
@@ -90,7 +90,6 @@ import {
   answerCall,
   askStaleness,
   askView,
-  askerOf,
   formFieldErrors,
   initialFormDraft,
   slotCall,
@@ -132,24 +131,28 @@ export interface AskAnswerProps {
   slot: AskSlot;
   /** The question as the pod holds it now (null = no longer owed). */
   live: AskSlot | null;
-  occurredAt: string | null;
   /** Answered, done or handed back: the page closes this and moves on. */
   onSettled: () => void;
   onClose: () => void;
   /**
-   * The "Open session" door. Off on the session's own page, where it would
-   * lead back to where the reader already is.
+   * The asker's door to its session. Off on the session's own page, where it
+   * would lead back to where the reader already is.
    */
   sessionDoor?: boolean;
+  /**
+   * Draw the question here. Off where the frame around it already names the
+   * question (Review's detail), so it is read once.
+   */
+  showHeading?: boolean;
 }
 
 export function AskAnswer({
   slot,
   live,
-  occurredAt,
   onSettled,
   onClose,
   sessionDoor = true,
+  showHeading = true,
 }: AskAnswerProps) {
   // What the reader sees stays put until they choose to see the new question:
   // a poll must never swap the options under a half-made answer.
@@ -160,11 +163,6 @@ export function AskAnswer({
   const [asked, setAsked] = useState(false);
 
   const utils = trpc.useUtils();
-  const session = trpc.focusSessions.get.useQuery(
-    { id: seen.sessionId },
-    { staleTime: 60_000, retry: false }
-  );
-  const who = askerOf(session.data?.participants);
 
   /** Every read an answer changes: the rows, the badges, Sessions, Home. */
   function refresh() {
@@ -245,11 +243,6 @@ export function AskAnswer({
     answer.mutate(call);
   }
 
-  const sessionExit = openIn({
-    kind: "object",
-    objectKind: "session",
-    id: seen.sessionId,
-  });
   const roomExit = openIn({
     kind: "object",
     objectKind: "session",
@@ -267,52 +260,35 @@ export function AskAnswer({
   return (
     <div className="flex flex-col gap-5 pb-4">
       <div className="flex flex-col gap-2">
-        <p className="flex items-center gap-2 text-[12px] text-foreground/65">
-          <Chip
-            size="sm"
-            variant="flat"
-            radius="sm"
-            startContent={<MessageSquare className="h-3 w-3" aria-hidden />}
-          >
-            Ask
-          </Chip>
-          <span>
-            Question
-            {occurredAt ? ` · asked ${formatRelative(occurredAt)}` : ""}
-          </span>
-        </p>
-        <h3 className="font-heading text-[17px] font-medium leading-snug text-foreground">
-          {view.heading}
-        </h3>
-        {view.why && (
-          <p className="text-[13px] leading-relaxed text-foreground/75">
-            {view.why}
+        {showHeading && (
+          <h3 className="line-clamp-2 text-balance font-heading text-[17px] font-medium leading-snug text-foreground">
+            {view.heading}
+          </h3>
+        )}
+        {view.context && (
+          <p className="text-pretty text-[13px] leading-relaxed text-foreground/75">
+            {view.context}
           </p>
         )}
+        <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-foreground/65">
+          {view.asker && (
+            <>
+              <AskerMark asker={view.asker} sessionDoor={sessionDoor} />
+              <span aria-hidden>·</span>
+            </>
+          )}
+          <span
+            className={`tabular-nums ${TONE_TEXT[view.ageFate.tone] ?? "text-foreground/65"}`}
+          >
+            {view.ageFate.label}
+          </span>
+        </p>
         {view.claimedDone && (
           <p className="text-[12.5px] text-foreground/65">
             The agent says it did this after all. Check before you answer.
           </p>
         )}
       </div>
-
-      <Section label="Who is asking">
-        <p className="text-[13px] leading-relaxed text-foreground/85">
-          <strong className="font-medium text-foreground">
-            {who ?? "An agent"}
-          </strong>
-          {sessionDoor && (
-            <>
-              , while working in the session{" "}
-              <span className="text-foreground">
-                {seen.sessionTitle ?? "this session"}
-              </span>
-            </>
-          )}
-          . It is waiting on your answer.
-        </p>
-        {sessionDoor && <ExitLink exit={sessionExit} label="Open session" />}
-      </Section>
 
       {view.lookedAt.length > 0 && (
         <Section label={ASK_COPY.lookedAt}>
@@ -446,6 +422,71 @@ export function AskAnswer({
   );
 }
 
+/** Each age + fate tone, as the console's text colour. */
+const TONE_TEXT: Readonly<Record<string, string>> = {
+  warning: "text-warning-600",
+  textMuted: "text-foreground/55",
+  textSecondary: "text-foreground/65",
+};
+
+/**
+ * Who asked, as a mark: the agent by name (its session is the door), or what
+ * raised the ask when no agent did (the cause's own door). Never a sentence.
+ */
+function AskerMark({
+  asker,
+  sessionDoor,
+}: {
+  asker: AskCardAsker;
+  sessionDoor: boolean;
+}) {
+  const exit =
+    asker.kind === "agent"
+      ? sessionDoor && asker.sessionId
+        ? openIn({ kind: "object", objectKind: "session", id: asker.sessionId })
+        : null
+      : asker.cause.ref
+        ? openIn({
+            kind: "object",
+            objectKind: asker.cause.ref.kind,
+            id: asker.cause.ref.id,
+          })
+        : null;
+  const label = asker.kind === "agent" ? asker.name : asker.label;
+  const body = (
+    <>
+      {asker.kind === "agent" && (
+        <Bot className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} aria-hidden />
+      )}
+      <span className="truncate">{label}</span>
+    </>
+  );
+  return exit ? (
+    <ExitMark exit={exit}>{body}</ExitMark>
+  ) : (
+    <span className="inline-flex min-w-0 items-center gap-1 text-foreground/80">
+      {body}
+    </span>
+  );
+}
+
+/** A mark that opens its door, plain text where nothing opens it here. */
+function ExitMark({ exit, children }: { exit: Exit; children: ReactNode }) {
+  const href = rowHref(usePlacedExit(exit));
+  const cls = "inline-flex min-w-0 items-center gap-1 text-foreground/80";
+  return href ? (
+    <a
+      href={href}
+      {...externalProps(href)}
+      className={`${cls} rounded-sm underline-offset-2 transition-colors hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40`}
+    >
+      {children}
+    </a>
+  ) : (
+    <span className={cls}>{children}</span>
+  );
+}
+
 function Section({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="flex flex-col gap-1">
@@ -517,7 +558,7 @@ function Controls(props: ControlsProps) {
   const { control } = props;
   switch (control.mode) {
     case "confirm":
-      return <ConfirmControl prompt={control.prompt} {...props} />;
+      return <ConfirmControl {...props} answers={control.answers} />;
     case "choose":
       return <ChooseControl {...props} control={control} />;
     case "form":
@@ -593,12 +634,11 @@ function DidThisPair({
 }
 
 function ConfirmControl({
-  prompt,
+  answers,
   busy,
   pending,
   onAnswer,
-  slot,
-}: ControlsProps & { prompt: string | null }) {
+}: ControlsProps & { answers: AskCardAnswer[] }) {
   const [note, setNote] = useState("");
   const [picked, setPicked] = useState<boolean | null>(null);
   const press = (confirmed: boolean) => {
@@ -608,38 +648,91 @@ function ConfirmControl({
   return (
     <fieldset className="flex flex-col gap-3">
       <legend className={`mb-2 ${SECTION_LABEL}`}>Your answer</legend>
-      {prompt && prompt !== slot.label && (
-        <p className="text-[13px] text-foreground/85">{prompt}</p>
-      )}
       <div className="grid grid-cols-2 gap-2">
+        {answers.map((a) => {
+          const yes = a.key === "yes";
+          return (
+            <div key={a.key} className="flex min-w-0 flex-col gap-1.5">
+              <Button
+                // The affirmative answer wears the positive tone; the agent's
+                // pick is the solid one (decision 2, 2026-10-26).
+                color={a.tone === "positive" ? "success" : "default"}
+                variant={a.recommended ? "solid" : "flat"}
+                className="min-h-10 transition-transform active:scale-[0.96]"
+                startContent={
+                  !(pending && picked === yes) &&
+                  (a.icon === "check" ? (
+                    <Check className="h-4 w-4" aria-hidden />
+                  ) : (
+                    <X className="h-4 w-4" aria-hidden />
+                  ))
+                }
+                isLoading={pending && picked === yes}
+                isDisabled={busy}
+                onPress={() => press(yes)}
+              >
+                {a.label}
+              </Button>
+              {(a.recommended || a.description) && (
+                <p className="flex flex-wrap items-center gap-1.5 px-0.5 text-[12px] leading-snug text-foreground/65">
+                  {a.recommended && (
+                    <Chip size="sm" variant="flat" color="primary" radius="sm">
+                      {ASK_COPY.recommended}
+                    </Chip>
+                  )}
+                  {a.description && (
+                    <span className="text-pretty">{a.description}</span>
+                  )}
+                </p>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      <NoteField value={note} onChange={setNote} busy={busy} />
+    </fieldset>
+  );
+}
+
+/**
+ * The optional note to the agent, collapsed behind ONE label until asked for.
+ * The open field carries the same label and no placeholder repeating it.
+ */
+function NoteField({
+  value,
+  onChange,
+  busy,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  busy: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  if (!open) {
+    return (
+      <div>
         <Button
-          variant="bordered"
-          className="min-h-10"
-          isLoading={pending && picked === true}
+          size="sm"
+          variant="light"
+          startContent={<StickyNote className="h-3.5 w-3.5" aria-hidden />}
+          className="-ml-2 text-foreground/70"
           isDisabled={busy}
-          onPress={() => press(true)}
+          onPress={() => setOpen(true)}
         >
-          {ASK_COPY.yes}
-        </Button>
-        <Button
-          variant="bordered"
-          className="min-h-10"
-          isLoading={pending && picked === false}
-          isDisabled={busy}
-          onPress={() => press(false)}
-        >
-          {ASK_COPY.no}
+          {ASK_COPY.addNote}
         </Button>
       </div>
-      <Input
-        size="sm"
-        label="Note for the agent (optional)"
-        placeholder={ASK_COPY.notePlaceholder}
-        value={note}
-        onValueChange={setNote}
-        isDisabled={busy}
-      />
-    </fieldset>
+    );
+  }
+  return (
+    <Input
+      size="sm"
+      label={ASK_COPY.addNote}
+      value={value}
+      onValueChange={onChange}
+      isDisabled={busy}
+      autoFocus
+    />
   );
 }
 
@@ -678,7 +771,7 @@ function ChooseControl({
               <span className="text-[13px] text-foreground">{o.label}</span>
               {o.recommended && (
                 <Chip size="sm" variant="flat" color="primary" radius="sm">
-                  Recommended
+                  {ASK_COPY.recommended}
                 </Chip>
               )}
             </span>
