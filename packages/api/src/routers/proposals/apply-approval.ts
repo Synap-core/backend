@@ -1078,13 +1078,14 @@ async function applyProposalApprovalInner(
             userId,
             workspaceId: compositeCtx.workspaceId,
             auditSource: "rule_loop_approval",
-            // The proposal's author, and whether a PERSON is approving: the
-            // same three facts the `skill/create` executor reads
-            // (`executors/skill.ts`), so an agent's skill is born approved
-            // only by a person's approval of the batch that carries it. Read
-            // only when the batch creates a skill.
+            // The proposal's author (the actor `compositeCtx` already
+            // carries), and whether a PERSON is approving: the same three
+            // facts the `skill/create` executor reads (`executors/skill.ts`),
+            // so an agent's skill is born approved only by a person's
+            // approval of the batch that carries it. Read only when the
+            // batch creates a skill.
             skillAuthor: {
-              agentUserId: proposal.agentUserId ?? null,
+              agentUserId: compositeCtx.agentUserId,
               personApproved:
                 reconciledOperations.some((op) => op.op === "create_skill") &&
                 !ctx?.agentUserId &&
