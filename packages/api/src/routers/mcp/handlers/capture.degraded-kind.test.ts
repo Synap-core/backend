@@ -182,3 +182,34 @@ describe("synap_capture degraded fallback — the caller's kind", () => {
     expect(out.degradedNotice).toMatch(/RAW NOTE/);
   });
 });
+
+describe("synap_capture degraded notice — the failure class the pod read (1c252b3b)", () => {
+  const withDetail = (failureClass: string) => ({
+    ...degraded("note"),
+    degradedDetail: { cause: "http", status: 402, attempts: 1, failureClass },
+  });
+
+  it("a billing refusal names it and says not to retry", async () => {
+    h.structureResult = withDetail("quota");
+    const out = await call({ text: "Call the accountant" });
+
+    expect(out.degradedNotice).toMatch(/out of credit/);
+    expect(out.degradedNotice).toMatch(/do not tell them to try again/);
+    expect(out.degradedNotice).not.toMatch(/could not be read/);
+  });
+
+  it("a server error the retries did not outlast says re-capturing may work", async () => {
+    h.structureResult = withDetail("upstream");
+    const out = await call({ text: "Call the accountant" });
+
+    expect(out.degradedNotice).toMatch(/server error/);
+    expect(out.degradedNotice).toMatch(/re-capturing shortly may structure it/);
+  });
+
+  it("no detail (a plan the IS marked degraded) keeps the reason mapping", async () => {
+    h.structureResult = degraded("note");
+    const out = await call({ text: "Call the accountant" });
+
+    expect(out.degradedNotice).toMatch(/could not be read/);
+  });
+});
