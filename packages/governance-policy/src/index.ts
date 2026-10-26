@@ -1100,6 +1100,11 @@ const GRANT_ACTION_FOLDS: Readonly<Record<string, string>> = {
   // An update pack is N entity updates filed as one review: a key that may
   // update entities may ask for it.
   "entity/update_pack": "update",
+  // A status move is an ordinary update (founder decision 1, 2026-10-26, pod
+  // decision 452726d6): a key or agent that may update a record may ASK to
+  // move its status. The status door still governs each move — expectedStatus,
+  // humanOnly options, the ladder (`services/lifecycle/move-status.ts`).
+  "entity/transition": "update",
 };
 
 /** `relationDef` → `relation_def`, `renderer.set` → `renderer_set`. */
@@ -1127,6 +1132,24 @@ export function grantRequestKey(
       GRANT_ACTION_FOLDS[`${subjectType}/${action}`] ?? action
     ),
   };
+}
+
+/**
+ * Every grant request key that permits a gate door: {@link grantRequestKey},
+ * then — for a door that folds onto another action — the door's own spelling,
+ * so a grant minted naming the door before its fold (`entity.task.transition`,
+ * the AI preset's `entity.*.transition`) keeps permitting it. ANY one key
+ * suffices. Used by the same refusing layers as `grantRequestKey`.
+ */
+export function grantRequestKeys(
+  subjectType: string,
+  action: string
+): { subject: string; action: string }[] {
+  const folded = grantRequestKey(subjectType, action);
+  const named = toGrammarToken(action);
+  return named === folded.action
+    ? [folded]
+    : [folded, { subject: folded.subject, action: named }];
 }
 
 /**
@@ -1158,16 +1181,18 @@ export function agentHasCapability(
   )
     return true;
   if (!eventKey.startsWith(`${subjectType}.`)) return false;
-  const req = {
-    ...grantRequestKey(subjectType, eventKey.slice(subjectType.length + 1)),
-    qualifier: kind ?? null,
-  };
-  return capabilities.some((pattern) => {
-    try {
-      return patternMatches(pattern, req);
-    } catch {
-      return false; // not a grant pattern — the legacy check above had its say
-    }
+  return grantRequestKeys(
+    subjectType,
+    eventKey.slice(subjectType.length + 1)
+  ).some((key) => {
+    const req = { ...key, qualifier: kind ?? null };
+    return capabilities.some((pattern) => {
+      try {
+        return patternMatches(pattern, req);
+      } catch {
+        return false; // not a grant pattern — the legacy check above had its say
+      }
+    });
   });
 }
 
