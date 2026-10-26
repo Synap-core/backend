@@ -63,10 +63,11 @@ const VIEWER = randomUUID();
 const AGENT = randomUUID(); // a key's own (agent) user, acting for OWNER
 
 async function user(id: string, type = "human") {
-  await q(
-    `insert into users (id, email, user_type) values ($1, $1 || '@t', $2)`,
-    [id, type]
-  );
+  await q(`insert into users (id, email, user_type) values ($1, $2, $3)`, [
+    id,
+    `${id}@t`,
+    type,
+  ]);
 }
 
 async function space(
@@ -76,7 +77,7 @@ async function space(
 ) {
   const ws = randomUUID();
   await q(
-    `insert into workspaces (id, owner_id, name, settings) values ($1, $2, $1, $3::jsonb)`,
+    `insert into workspaces (id, owner_id, name, settings) values ($1, $2, 'space', $3::jsonb)`,
     [ws, ownerId, JSON.stringify(settings)]
   );
   for (const [u, role] of members) {
