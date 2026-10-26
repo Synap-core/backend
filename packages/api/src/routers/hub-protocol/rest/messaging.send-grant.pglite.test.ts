@@ -116,9 +116,14 @@ function ddlFor(table: PgTable): string {
 }
 const q = (sql: string, params?: unknown[]) => h.client!.query(sql, params);
 
-/** A key's grant: one scope, pinned to `workspaceIds` (an app's always is). */
+/**
+ * A key's grant: one scope, pinned to `workspaceIds` (an app's always is). It
+ * always reads conversations (`channel.read`): the channel floor hides a
+ * conversation from a key that cannot, so the send check below it is reached
+ * only by a key that sees the conversation (the last row pins that floor).
+ */
 const grant = (permissions: string[], workspaceIds = [ALICE_WS]): KeyGrant => ({
-  scopes: [{ permissions, workspaceIds }],
+  scopes: [{ permissions: ["channel.read", ...permissions], workspaceIds }],
   clientId: "crm-site",
 });
 
@@ -237,6 +242,19 @@ describe("a key's grant bounds a send through the person's account", () => {
     const res = await send({ grant: grant(["messaging.send"]) });
     expect(res.status).toBe(200);
     expect(h.sent).toEqual([[ACCOUNT, THREAD, "hello"]]);
+  });
+
+  it("a key that cannot read the conversation does not find it: 404, nothing sent", async () => {
+    const res = await send({
+      grant: {
+        scopes: [{ permissions: ["messaging.send"], workspaceIds: [ALICE_WS] }],
+        clientId: "crm-site",
+      },
+      agentUserId: APP_AGENT,
+    });
+    expect(res.status).toBe(404);
+    expect(h.sent).toEqual([]);
+    expect(h.proposals).toEqual([]);
   });
 
   it("CONTROL — the person signed in (no grant) sends, as before", async () => {
