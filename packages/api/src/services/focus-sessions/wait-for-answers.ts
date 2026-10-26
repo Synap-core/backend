@@ -59,6 +59,7 @@ import {
   type SessionChangesPage,
 } from "./session-changes.js";
 import { stampSessionRunner } from "./session-runners.js";
+import { stampSessionMessagesRead } from "./session-inbox.js";
 
 const logger = createLogger({ module: "wait-for-answers" });
 
@@ -100,6 +101,8 @@ export type WaitForChangesResult =
 
 export interface WaitForChangesDeps extends Omit<WaitForAnswersDeps, "list"> {
   list?: typeof listSessionChanges;
+  /** The coordination posts' read receipt (`session-inbox.ts`). */
+  stampRead?: typeof stampSessionMessagesRead;
 }
 
 export function clampWaitSeconds(timeoutSeconds: number | undefined): number {
@@ -273,8 +276,9 @@ export async function waitForSessionAnswers(
  * Same floor, same exclusive cursor, same clamp, same wake and fallback poll.
  *
  * `stampReceipt` keeps its meaning for the `answer` kind (an agent's read is
- * the "Picked up" moment); a WATCHER passes `false` — a PEEK that never writes
- * a receipt, so the agent's own later wait still gets the answer as unread.
+ * the "Picked up" moment) and extends it to `session_message` (the read
+ * receipt, `sessionPost.readAt`); a WATCHER passes `false` — a PEEK that never
+ * writes a receipt, so the agent's own later wait still gets both as unread.
  *
  * `knownStage` omitted = the stage at the wait's first read is the baseline,
  * so only a move DURING this wait is reported; pass `state.currentStage` back
@@ -291,6 +295,7 @@ export async function waitForSessionChanges(
 ): Promise<WaitForChangesResult | null> {
   const list = deps.list ?? listSessionChanges;
   const stamp = deps.stamp ?? stampAnswersPickedUp;
+  const stampRead = deps.stampRead ?? stampSessionMessagesRead;
   let knownStage = p.knownStage;
 
   const out = await waitLoop<SessionChangesPage>(
@@ -331,6 +336,33 @@ export async function waitForSessionChanges(
           logger.warn(
             { err, sessionId: p.sessionId },
             "wait_for_answer: picked-up receipt failed"
+          );
+        }
+      }
+      // The coordination posts' READ RECEIPT — same moment, same rule: an
+      // agent's read that is not a peek. A failed receipt never fails the read.
+      const mail = page.events.flatMap((e) =>
+        e.kind === "session_message" && !e.message.readAt
+          ? [{ id: e.id, fromSessionId: e.from.sessionId }]
+          : []
+      );
+      if (
+        p.stampReceipt &&
+        p.agentUserId &&
+        !p.signal?.aborted &&
+        mail.length > 0
+      ) {
+        try {
+          await stampRead({
+            sessionId: p.sessionId,
+            userId: p.userId,
+            agentUserId: p.agentUserId,
+            messages: mail,
+          });
+        } catch (err) {
+          logger.warn(
+            { err, sessionId: p.sessionId },
+            "wait_for_answer: session message read receipt failed"
           );
         }
       }
