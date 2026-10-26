@@ -28,8 +28,7 @@ import { channelContextItems } from "@synap/database/schema";
 import { appSessionMiddleware } from "../middleware/app-session.js";
 import { refuseGuestSession } from "../access/guest-containment.js";
 import { MEDIA_COPY_UPLOAD_KIND } from "../services/media-copy/media-copy-documents.js";
-import { TRPCError } from "@trpc/server";
-import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
+import { canWrite, userPrincipal } from "../access/door.js";
 import {
   loadSignableDocument,
   loadSignableFileEntity,
@@ -567,7 +566,7 @@ fileUploadApp.post("/upload", async (c) => {
 
     // Same write gate as the presigned lane (`/uploads`): a session must
     // never write into a workspace it cannot edit.
-    if (!(await canWriteWorkspace(userId, workspaceId))) {
+    if (!(await canWrite(userPrincipal(userId), { workspace: workspaceId }))) {
       return c.json({ error: "Forbidden" }, 403);
     }
 
@@ -709,24 +708,6 @@ async function finishUpload(p: {
   };
 }
 
-/**
- * Kratos-door write gate: the canonical `assertWorkspaceWrite` floor (an
- * editor+ member row — a viewer cannot upload — or the workspace OWNER, who
- * may hold no member row at all), as a boolean.
- */
-export async function canWriteWorkspace(
-  userId: string,
-  workspaceId: string
-): Promise<boolean> {
-  try {
-    await assertWorkspaceWrite(db, userId, { workspaceId });
-    return true;
-  } catch (err) {
-    if (!(err instanceof TRPCError && err.code === "FORBIDDEN")) throw err;
-    return false;
-  }
-}
-
 // ---------------------------------------------------------------------------
 // POST /uploads — presigned (large-file) upload, step 1: get a PUT URL.
 // Body (JSON): { workspaceId, filename, mimeType, size }
@@ -744,7 +725,7 @@ fileUploadApp.post("/uploads", async (c) => {
   if (typeof workspaceId !== "string" || !workspaceId) {
     return c.json({ error: "workspaceId is required" }, 400);
   }
-  if (!(await canWriteWorkspace(userId, workspaceId))) {
+  if (!(await canWrite(userPrincipal(userId), { workspace: workspaceId }))) {
     return c.json({ error: "Forbidden" }, 403);
   }
   const ticket = await requestPresignedUpload({
@@ -780,7 +761,10 @@ fileUploadApp.post("/uploads/finalize", async (c) => {
   const uploadToken =
     typeof body.uploadToken === "string" ? body.uploadToken : "";
   const bound = parsePresignedUploadKey(uploadToken);
-  if (bound && !(await canWriteWorkspace(userId, bound.workspaceId))) {
+  if (
+    bound &&
+    !(await canWrite(userPrincipal(userId), { workspace: bound.workspaceId }))
+  ) {
     return c.json({ error: "Forbidden" }, 403);
   }
   try {

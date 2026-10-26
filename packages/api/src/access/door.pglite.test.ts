@@ -35,6 +35,7 @@ import { resolveKeyIdentity } from "./key-identity.js";
 import {
   assertCanWrite,
   canJoinRoom,
+  canWrite,
   canRead,
   principalFromKey,
   userPrincipal,
@@ -356,5 +357,31 @@ describe("assertCanWrite — the write floor on the stored workspace, then the g
     await expect(assertCanWrite(boundToA, create(b))).rejects.toMatchObject({
       code: "FORBIDDEN",
     });
+  });
+});
+
+describe("canWrite({workspace}) — the write floor as a boolean, for a door's 403", () => {
+  it("an editor and a row-less owner write; a viewer, an outsider and another space's bound key do not", async () => {
+    const { a, b } = await world();
+    const noRow = await space(VIEWER, []);
+    expect(await canWrite(userPrincipal(WS_MEMBER), { workspace: a })).toBe(
+      true
+    );
+    expect(await canWrite(userPrincipal(VIEWER), { workspace: noRow })).toBe(
+      true
+    );
+    expect(await canWrite(userPrincipal(VIEWER), { workspace: a })).toBe(false);
+    expect(
+      await canWrite(userPrincipal(ROSTER_OUTSIDER), { workspace: a })
+    ).toBe(false);
+    const boundToA = await key({ grants: [{ permissions: ["*"] }], bound: a });
+    expect(await canWrite(boundToA, { workspace: a })).toBe(true);
+    expect(await canWrite(boundToA, { workspace: b })).toBe(false);
+  });
+
+  it('a failed read throws: it is never "no"', async () => {
+    await expect(
+      canWrite(userPrincipal(OWNER), { workspace: "not-a-uuid" })
+    ).rejects.toThrow();
   });
 });

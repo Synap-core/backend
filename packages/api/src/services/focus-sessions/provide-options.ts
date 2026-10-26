@@ -35,7 +35,7 @@ import {
   type ProvideSecretGrantOffer,
 } from "@synap-core/types/ask";
 import { resolveServiceName } from "@synap-core/types/service-marks";
-import { canWriteWorkspace } from "../../routers/file-upload.js";
+import { canWrite, userPrincipal } from "../../access/door.js";
 import { selectSlotToAnswer } from "./answer-slot.js";
 import { describeAnswerRefusal } from "./session-answer.js";
 import { resolveAskingAgent } from "./provide-secret-grant.js";
@@ -156,7 +156,7 @@ export type ProvideFileLanding =
  * The space a file handed over for this session lands in: the session's own
  * space, else its project's home space, else nowhere (refused in words). The
  * person must be able to write there — the upload door checks the same
- * (`canWriteWorkspace`), so a `ready` answer is one the upload will accept.
+ * (the access door's `canWrite`), so a `ready` answer is one the upload will accept.
  */
 export async function resolveProvideFileLanding(p: {
   userId: string;
@@ -192,7 +192,7 @@ export async function resolveProvideFileLanding(p: {
         "The space this file would be saved in is archived or gone. Give the session another space first.",
     };
   }
-  if (!(await canWriteWorkspace(p.userId, workspaceId))) {
+  if (!(await canWrite(userPrincipal(p.userId), { workspace: workspaceId }))) {
     return {
       status: "refused",
       message: `You can't add files to ${space.name}. Ask its owner, or give the session a space you can write to.`,

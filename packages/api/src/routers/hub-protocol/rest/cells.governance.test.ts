@@ -79,8 +79,14 @@ vi.mock("./_shared.js", () => ({
   httpStatusForTrpcError: () => 500,
   logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
   hasScope: (scopes: string[], scope: string) => scopes.includes(scope),
-  verifyWorkspaceWriteAccess: async () => h.workspaceAccess,
   verifyWorkspaceReadAccess: async () => h.workspaceAccess,
+}));
+
+// Total, for the same reason as `_shared.js` above: the door's module graph
+// reads `@synap/database` exports this file's total mock lacks.
+vi.mock("../../../access/door.js", () => ({
+  canWrite: async () => h.workspaceAccess,
+  userPrincipal: (userId: string) => ({ userId, grant: null }),
 }));
 
 // The route destructures BOTH `checkPermissionOrPropose` AND

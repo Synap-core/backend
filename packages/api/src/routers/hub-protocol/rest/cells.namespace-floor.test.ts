@@ -65,8 +65,12 @@ vi.mock("./_shared.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./_shared.js")>()),
   logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
   hasScope: (scopes: string[], scope: string) => scopes.includes(scope),
-  verifyWorkspaceWriteAccess: async () => true,
   verifyWorkspaceReadAccess: async () => true,
+}));
+
+vi.mock("../../../access/door.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../access/door.js")>()),
+  canWrite: async () => true,
 }));
 
 vi.mock("../../../utils/permission-check.js", () => ({
