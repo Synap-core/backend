@@ -102,6 +102,7 @@ import { proposalProfileSlug } from "./proposal-subject-kind";
 import { proposalRequesterParts } from "./proposal-requester";
 import {
   graphRecords,
+  proposedEntityMedia,
   proposedRecord,
   type ProposedRecord,
   type ResolvedRef,
@@ -782,6 +783,11 @@ export function ProposalReviewBody({
             });
             return record ? [record] : [];
           })();
+  // An entity create carrying an upload: the reviewer sees the image itself.
+  const recordMedia =
+    !graph && action === "create" && p.targetType === "entity"
+      ? proposedEntityMedia(payload)
+      : null;
 
   /* The twin(s) the pod's duplicate door found, read with the ONE derivation.
      `duplicateCheck` rides the TOP of the stored payload (`p.data`), beside
@@ -877,7 +883,11 @@ export function ProposalReviewBody({
           {records.map((record) => {
             const item = itemByRef.get(record.ref);
             return (
-              <ProposedRecordCard key={record.ref} record={record}>
+              <ProposedRecordCard
+                key={record.ref}
+                record={record}
+                media={recordMedia}
+              >
                 {twinsUnderCard && (
                   <div className="border-t border-foreground/[0.06] pt-3">
                     <TwinDoors
