@@ -948,7 +948,8 @@ app.get("/api/session", async (c) => {
     return c.json({ authenticated: false }, 401);
   }
 
-  let session: { identity?: { id?: string } };
+  type WhoAmI = { identity?: { id?: string } };
+  let session: WhoAmI;
   try {
     const resp = await fetch(`${kratosPublicUrl}/sessions/whoami`, {
       headers: {
@@ -961,7 +962,7 @@ app.get("/api/session", async (c) => {
       return c.json({ authenticated: false }, 401);
     }
 
-    session = await resp.json();
+    session = (await resp.json()) as WhoAmI;
   } catch (err) {
     apiLogger.error({ err }, "Session check failed");
     return c.json({ authenticated: false }, 401);
