@@ -247,7 +247,8 @@ describe("nameCapturedSubject (W2 door 4)", () => {
 describe("capture.execute names the subject of the work session it filed into", () => {
   const HERE = dirname(fileURLToPath(import.meta.url));
   const src = stripComments(
-    readFileSync(join(HERE, "../../../routers/capture.ts"), "utf8")
+    readFileSync(join(HERE, "../../../routers/capture.ts"), "utf8"),
+    "ts"
   ) as string;
 
   it("calls nameCapturedSubject for a PROVIDED session, with what it filed, after the produced links", () => {
