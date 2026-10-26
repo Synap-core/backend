@@ -69,9 +69,11 @@ export function canonicalJson(value: unknown): string {
  * every pod re-diffs exactly once. Absent (legacy) = pre-versioned = re-diff.
  *
  * v12 = v11 + `metadata.metering` (the verb's DECLARED meter — see
- *      `declaredMetering`). A v11 stamp certified a container whose verbs could
- *      not yet carry the declaration, so a priced verb would never reach a pod
- *      already stamped; retiring v11 stamps makes each container re-diff once.
+ *      `declaredMetering`) + a DECLARED-none `intent: null`, which the applier
+ *      now writes (clearing a stored intent). A v11 stamp certified a container
+ *      under a comparator that read neither, so a meter or a dropped intent
+ *      would never reach a pod already stamped; retiring v11 stamps makes each
+ *      container re-diff once.
  * v11 = v10 + `metadata.writeBack` (the verb's DECLARED write-back — see
  *      `declaredWriteBack`). Before it the applier dropped the key on install
  *      AND on update (`projectSkillMetadata` wrote only `allowedHosts` /
@@ -593,10 +595,14 @@ export const PROJECTED_SKILL_FIELDS: Record<
    * converges, and a row missing it reads `null`, which is the drift signal.
    */
   intent: {
+    // `null` = the definition DECLARES none (the applier writes NULL), so a
+    // live intent is drift and one apply clears it. Absent = skipped.
     expected: (d) =>
       typeof d.intent === "string" && d.intent.length > 0
         ? d.intent
-        : undefined,
+        : d.intent === null
+          ? null
+          : undefined,
     // Declared-ness is decided on the DEFINITION side, exactly as `metadata`
     // does for its independently-declarable keys: a template that declares no
     // `intent` must not diff against (or blank) one set by another definition.
@@ -604,7 +610,7 @@ export const PROJECTED_SKILL_FIELDS: Record<
     // dropping this read would make the column invisible here and the stamp
     // would overclaim.
     actual: (i, d) =>
-      typeof d.intent === "string" && d.intent.length > 0
+      (typeof d.intent === "string" && d.intent.length > 0) || d.intent === null
         ? (i.intent ?? null)
         : undefined,
   },

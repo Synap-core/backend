@@ -1059,9 +1059,10 @@ export async function createCapabilityFromDefinition(
           // `resolveVerbIntent` the derived catalog mirror uses, so a template
           // cannot be accepted by one door and rejected by the other.
           //
-          // `undefined` when the definition declares none, which Drizzle SKIPS —
+          // `undefined` when the definition omits the field, which Drizzle SKIPS —
           // an existing intent is then left alone rather than revoked, the same
           // undefined-is-load-bearing contract `allowedHosts`/`readOnly` follow.
+          // `null` when it DECLARES none: written, so a dropped intent clears.
           // A definition that DOES declare one overwrites unconditionally: it is
           // the authority, and it is how a tool-less builtin like
           // `messaging.send` becomes reachable by intent at all.
@@ -1115,8 +1116,9 @@ export async function createCapabilityFromDefinition(
       // as the update branch above. This is the branch that finally lets a skill
       // which `requires` NO tool (every Synap Core builtin, e.g.
       // `messaging.send`) carry an intent, because it lands on the skill row
-      // itself instead of on a tool that does not exist.
-      intent: resolveVerbIntent(s, knownIntents),
+      // itself instead of on a tool that does not exist. A declared-none
+      // `null` is simply absent here: a new row has no intent to clear.
+      intent: resolveVerbIntent(s, knownIntents) ?? undefined,
       // The URLs a READER verb reads (0330), same projection as the update.
       urlPatterns: projectUrlPatterns(s, readerTrust) ?? undefined,
       // Persist the definition-owned keys of the `metadata` bag — the declared
@@ -1645,9 +1647,11 @@ export function deriveVerbKind(s: CapabilitySkillDef): ToolVerbKind {
 export function resolveVerbIntent(
   s: CapabilitySkillDef,
   known?: ReadonlySet<string>
-): ToolVerbCatalogEntry["intent"] {
+): ToolVerbCatalogEntry["intent"] | null {
   const raw = (s as { intent?: unknown }).intent;
-  if (raw === undefined || raw === null) return undefined;
+  if (raw === undefined) return undefined;
+  // DECLARED none: the applier writes NULL, clearing a stored intent.
+  if (raw === null) return null;
   if (typeof raw === "string" && (isAbstractVerb(raw) || known?.has(raw))) {
     return raw;
   }
