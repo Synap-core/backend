@@ -1686,7 +1686,8 @@ export const capabilitiesRouter = router({
       return {
         kind: "dry-run" as const,
         skillId: skillRow.id,
-        result: result as unknown,
+        // `?? null` keeps the wire type the IS-proxy version had (`{} | null`).
+        result: (result as unknown) ?? null,
         dryRunEffects: (dryRunEffects ?? []) as unknown[],
       };
     }),

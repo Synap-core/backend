@@ -73,7 +73,12 @@ vi.mock("../skills/run-skill.js", () => ({
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import { SQL } from "drizzle-orm";
-import { skills, events, capabilityRunReceipts } from "@synap/database/schema";
+import {
+  skills,
+  events,
+  capabilityRunReceipts,
+  links,
+} from "@synap/database/schema";
 import { executeCapability } from "./execute-capability.js";
 
 const USER = "user-metering";
@@ -137,7 +142,9 @@ const EXA_METER = {
 };
 
 beforeAll(async () => {
-  for (const t of [skills, events, capabilityRunReceipts]) {
+  // `links`: the run reads the verb's declared tools (`requires` edges) for
+  // its verb act on every run since R2 (one skill door).
+  for (const t of [skills, events, capabilityRunReceipts, links]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }
 });
