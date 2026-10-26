@@ -95,7 +95,9 @@ describe("waits on the person: a pending awaited gate", () => {
 
   it("a gate filed in another session does not", async () => {
     const id = await session({
-      gates: [{ type: "dev.plan_approval", status: "pending", elsewhere: true }],
+      gates: [
+        { type: "dev.plan_approval", status: "pending", elsewhere: true },
+      ],
     });
     expect(await waits(id)).toEqual({ byId: false, byRow: false });
   });

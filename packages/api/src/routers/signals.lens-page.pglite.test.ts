@@ -639,7 +639,14 @@ describe("Review later (Resolve-XP W3): out of the headline, into its own fold",
     q(
       `insert into proposals (id, proposal_type, target_type, target_id, data, status, session_id, created_by, created_at, updated_at)
        values ($1, $2, 'entity', $3, $4::jsonb, 'pending', $5, $6, now() - interval '8 days', now() - interval '8 days')`,
-      [randomUUID(), proposalType, randomUUID(), JSON.stringify({ name }), sessionId, USER]
+      [
+        randomUUID(),
+        proposalType,
+        randomUUID(),
+        JSON.stringify({ name }),
+        sessionId,
+        USER,
+      ]
     );
   beforeAll(async () => {
     before = {
@@ -670,16 +677,19 @@ describe("Review later (Resolve-XP W3): out of the headline, into its own fold",
     const merge = rows.find((s) => s.title.includes("Old Twin"));
     expect(merge?.reviewLater).toBeUndefined();
     const shaped = needsYouRows(rows);
-    expect(shaped.reviewLaterCount).toBe((await caller().count({})).reviewLater);
+    expect(shaped.reviewLaterCount).toBe(
+      (await caller().count({})).reviewLater
+    );
     expect(
-      shaped.reviewLater.flatMap((r) => (r.kind === "item" ? [r.signal.id] : []))
+      shaped.reviewLater.flatMap((r) =>
+        r.kind === "item" ? [r.signal.id] : []
+      )
     ).toEqual([later!.id]);
   });
 
   it("orient's pendingReview reads the SAME predicate: headline + reviewLater", async () => {
-    const { readPendingReviewState } = await import(
-      "../services/discover/pending-review.js"
-    );
+    const { readPendingReviewState } =
+      await import("../services/discover/pending-review.js");
     const state = await readPendingReviewState(USER);
     const [{ n }] = (
       await q<{ n: number }>(

@@ -400,9 +400,18 @@ export const readHandlers: McpHandlerMap = {
       rawRows as Record<string, unknown>[],
       userId
     );
-    const rows = (rawRows as Record<string, unknown>[]).map((row) =>
-      withProposalSetup(row, setups)
+    // WAITING ON IT (Resolve-XP W3): the same resolver the Hub list door
+    // stamps, owner-only on this agent door (decision D1).
+    const { resolveProposalWaits, proposalWaitsFields } =
+      await import("../../../services/proposals/proposal-waits.js");
+    const waits = await resolveProposalWaits(
+      rawRows as unknown as Parameters<typeof resolveProposalWaits>[0],
+      { userId }
     );
+    const rows = (rawRows as Record<string, unknown>[]).map((row) => ({
+      ...withProposalSetup(row, setups),
+      ...proposalWaitsFields(row.id, waits),
+    }));
     if ((args.detail as string) === "full") {
       // `detail:"full"` answers with the whole `data` JSONB. Strip the
       // AGENT-ONLY failure fields — `data.failure.detail` is the redacted raw

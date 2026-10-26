@@ -1,7 +1,18 @@
 import { createHash, randomUUID } from "crypto";
-import { and, eq } from "drizzle-orm";
+import {
+  and,
+  desc,
+  eq,
+  inArray,
+  isNull,
+  ne,
+  sql as drizzleSql,
+} from "drizzle-orm";
 import { db } from "../client-pg.js";
 import { proposals, ProposalStatus } from "../schema/proposals.js";
+import { notifications } from "../schema/notifications.js";
+import { messages, MessageAuthorType } from "../schema/messages.js";
+import { focusSessions } from "../schema/focus-sessions.js";
 // The ONE project ladder. The hand-rolled duplicate that used to live in this
 // file (explicit → session → channel, no rung 3.5) is gone; `deriveProposalProjectId`
 // below is now a thin adapter over this. The `UUID_SHAPE` guard that used to live
@@ -158,6 +169,47 @@ export interface InsertPendingProposalResult {
    * and tell the agent it already proposed this.
    */
   deduped: boolean;
+  /**
+   * Older PENDING versions this proposal REPLACED (see
+   * {@link supersedesEarlierVersions}) — now `withdrawn`, their notifications
+   * actioned. Empty for a dedup hit and for every proposal the rule skips.
+   * Optional on the TYPE only so hand-built results (test doubles of this
+   * door) need not spell it; this function always sets it.
+   */
+  superseded?: string[];
+}
+
+/** `proposals.data` key on a superseded row: the id of the version that replaced it. */
+export const SUPERSEDED_BY_KEY = "supersededBy" as const;
+/**
+ * The withdrawn row's reason line, on the key a person's own withdraw uses
+ * (`data.withdrawReason`, `proposals.withdraw`) — never `rejectionReason`,
+ * which the agent scorecard reads as a rejection.
+ */
+export const SUPERSEDED_REASON = "Replaced by a newer version";
+
+/**
+ * Does a new pending proposal REPLACE the agent's earlier pending versions of
+ * itself? (Resolve-XP, founder default 2026-10-26: "supersede = same agent +
+ * same session + same target, updates/patches only".)
+ *
+ * Only an AGENT's write in a SESSION (a person's proposal is never withdrawn
+ * under them), and only a whole-target `update` (`update`, or a dotted
+ * `<kind>.update`): a create is a new thing, not a version; a section or
+ * narrative patch writes PART of a document, so two of them are two changes,
+ * not a revision. The match itself — same agent, same session, same target,
+ * same proposal type — is the WHERE in {@link insertPendingProposal}.
+ */
+export function supersedesEarlierVersions(input: {
+  agentUserId?: string | null;
+  sessionId?: string | null;
+  proposalType: string;
+}): boolean {
+  if (!input.agentUserId || !input.sessionId) return false;
+  const action = input.proposalType.slice(
+    input.proposalType.lastIndexOf(".") + 1
+  );
+  return action === "update";
 }
 
 /**
@@ -476,7 +528,7 @@ export async function insertPendingProposal(
   // partial unique index rejects the loser).
   if (input.agentUserId) {
     const existing = await findExistingPendingDuplicate(input, executor);
-    if (existing) return { proposal: existing, deduped: true };
+    if (existing) return { proposal: existing, deduped: true, superseded: [] };
   }
 
   // G3: persist the dedup hash for agent rows so the partial unique index can
@@ -522,8 +574,19 @@ export async function insertPendingProposal(
     ? { ...input.data, [SESSION_SOURCE_MARKER_KEY]: "derived" as const }
     : input.data;
 
-  try {
-    const [proposal] = await executor
+  // THE MOMENT IT WAS FILED (Resolve-XP): an external agent (Claude Code over
+  // MCP) files with no `sourceMessageId` — no MCP door passes one — so the
+  // apps had no point in the room to reopen. Its latest post in the session's
+  // room is that moment. Only when the caller named none (the chat path names
+  // the triggering message), one indexed read.
+  const sourceMessageId =
+    input.sourceMessageId ||
+    (input.agentUserId && input.sessionId && UUID_RE.test(input.sessionId)
+      ? await latestAgentRoomPost(input.agentUserId, input.sessionId, executor)
+      : null);
+
+  const insertRow = async (ex: typeof db | DbTx) => {
+    const [proposal] = await ex
       .insert(proposals)
       .values({
         workspaceId: input.workspaceId,
@@ -550,9 +613,7 @@ export async function insertPendingProposal(
         ...(input.agentUserId ? { agentUserId: input.agentUserId } : {}),
         ...(input.threadId ? { threadId: input.threadId } : {}),
         ...(input.commandRunId ? { commandRunId: input.commandRunId } : {}),
-        ...(input.sourceMessageId
-          ? { sourceMessageId: input.sourceMessageId }
-          : {}),
+        ...(sourceMessageId ? { sourceMessageId } : {}),
         correlationId,
         ...(input.requestedEventId
           ? { requestedEventId: input.requestedEventId }
@@ -570,8 +631,25 @@ export async function insertPendingProposal(
         ...callingKeyAttribution(),
       })
       .returning();
+    return proposal!;
+  };
 
-    return { proposal, deduped: false };
+  try {
+    if (supersedesEarlierVersions(input)) {
+      // One savepoint for the row and the versions it replaces: both land or
+      // neither does, and a unique-violation rolls back only this, so the
+      // recovery peek below still runs inside a caller's transaction.
+      return await executor.transaction(async (tx) => {
+        const proposal = await insertRow(tx);
+        const superseded = await supersedeEarlierVersions(tx, proposal);
+        return { proposal, deduped: false, superseded };
+      });
+    }
+    return {
+      proposal: await insertRow(executor),
+      deduped: false,
+      superseded: [],
+    };
   } catch (err) {
     // Race enforcement: a concurrent identical write won the partial unique
     // index first (Postgres unique-violation, SQLSTATE 23505). Re-run the peek
@@ -581,8 +659,99 @@ export async function insertPendingProposal(
     // returned as the dedup hit, never leaked as a 500 / false denial.
     if (input.agentUserId && isUniqueViolation(err)) {
       const existing = await findExistingPendingDuplicate(input, executor);
-      if (existing) return { proposal: existing, deduped: true };
+      if (existing)
+        return { proposal: existing, deduped: true, superseded: [] };
     }
     throw err;
   }
+}
+
+/**
+ * Withdraw the agent's older PENDING versions of `latest` — same agent, same
+ * session, same target, same proposal type — stamping what replaced them, and
+ * action their notifications so the bell drops them with the queue. Runs in
+ * the insert's transaction, after the new row exists. The new row's own hash
+ * differs from theirs by construction: an identical one was returned as a
+ * dedup hit before any insert.
+ */
+async function supersedeEarlierVersions(
+  tx: DbTx,
+  latest: typeof proposals.$inferSelect
+): Promise<string[]> {
+  if (!latest.agentUserId || !latest.sessionId) return [];
+  const stamp = JSON.stringify({
+    [SUPERSEDED_BY_KEY]: latest.id,
+    withdrawReason: SUPERSEDED_REASON,
+  });
+  const replaced = await tx
+    .update(proposals)
+    .set({
+      status: ProposalStatus.WITHDRAWN,
+      updatedAt: new Date(),
+      data: drizzleSql`COALESCE(${proposals.data}, '{}'::jsonb) || ${stamp}::jsonb`,
+    })
+    .where(
+      and(
+        eq(proposals.status, ProposalStatus.PENDING),
+        eq(proposals.agentUserId, latest.agentUserId),
+        eq(proposals.sessionId, latest.sessionId),
+        eq(proposals.targetType, latest.targetType),
+        eq(proposals.targetId, latest.targetId),
+        eq(proposals.proposalType, latest.proposalType),
+        ne(proposals.id, latest.id)
+      )
+    )
+    .returning({ id: proposals.id });
+  const ids = replaced.map((r) => r.id);
+  if (ids.length > 0) await actionProposalNotifications(ids, tx);
+  return ids;
+}
+
+/**
+ * A proposal's notification rows leave the bell — the statement the api's
+ * `markProposalNotificationsActioned` runs (fire-and-forget, on its own
+ * connection), here on the supersede's transaction so the withdrawn rows and
+ * their bell entries go together. This package cannot import the api helper.
+ */
+export async function actionProposalNotifications(
+  proposalIds: readonly string[],
+  executor: typeof db | DbTx = db
+): Promise<void> {
+  if (proposalIds.length === 0) return;
+  await executor
+    .update(notifications)
+    .set({ status: "actioned", readAt: new Date() })
+    .where(
+      and(
+        eq(notifications.sourceType, "proposal"),
+        inArray(notifications.sourceId, [...proposalIds])
+      )
+    );
+}
+
+/** Shape check BEFORE the uuid-typed read: a 22P02 would abort a caller's transaction. */
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** The agent's newest live post in the room of `sessionId`, or null. */
+async function latestAgentRoomPost(
+  agentUserId: string,
+  sessionId: string,
+  executor: typeof db | DbTx
+): Promise<string | null> {
+  const [row] = await executor
+    .select({ id: messages.id })
+    .from(messages)
+    .innerJoin(focusSessions, eq(focusSessions.channelId, messages.channelId))
+    .where(
+      and(
+        eq(focusSessions.id, sessionId),
+        eq(messages.authorType, MessageAuthorType.AI_AGENT),
+        eq(messages.routedTeammateId, agentUserId),
+        isNull(messages.deletedAt)
+      )
+    )
+    .orderBy(desc(messages.timestamp))
+    .limit(1);
+  return row?.id ?? null;
 }

@@ -147,8 +147,7 @@ function runsOf<T extends GroupableSignal>(
   const recentBySession = new Map<string, Run<T>>();
   const olderBySession = new Map<string, Run<T>>();
   for (const s of signals) {
-    if (s.reviewLater === true)
-      pushInto(reviewLater, s, reviewLaterBySession);
+    if (s.reviewLater === true) pushInto(reviewLater, s, reviewLaterBySession);
     else if (s.ageBucket === "older") pushInto(older, s, olderBySession);
     else pushInto(recent, s, recentBySession);
   }

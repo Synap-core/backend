@@ -56,11 +56,19 @@ const NOW = new Date("2026-10-26T12:00:00.000Z");
 const DAY = 24 * 3_600_000;
 
 /** One per class, plus the pairs a wrong SQL arm would misread. */
-const PAIRS: Array<{ proposalType: string; targetType: string; data: unknown }> = [
+const PAIRS: Array<{
+  proposalType: string;
+  targetType: string;
+  data: unknown;
+}> = [
   { proposalType: "create", targetType: "entity", data: { name: "A" } },
   { proposalType: "update", targetType: "entity", data: {} },
   { proposalType: "merge", targetType: "entity", data: {} },
-  { proposalType: "governance.widen_lane", targetType: "governance_rule", data: {} },
+  {
+    proposalType: "governance.widen_lane",
+    targetType: "governance_rule",
+    data: {},
+  },
   // `governance` with no dot is NOT the governance lane.
   { proposalType: "governanceish", targetType: "entity", data: {} },
   { proposalType: "join", targetType: "workspace", data: {} },
@@ -78,7 +86,11 @@ const PAIRS: Array<{ proposalType: string; targetType: string; data: unknown }> 
   },
   { proposalType: "capability.run", targetType: "capability", data: {} },
   // A durable verb on a NON-capability target is not a capability run.
-  { proposalType: "capability.run", targetType: "entity", data: { verbId: "x" } },
+  {
+    proposalType: "capability.run",
+    targetType: "entity",
+    data: { verbId: "x" },
+  },
   { proposalType: "update", targetType: "document", data: {} },
   { proposalType: "ai_edit", targetType: "document", data: {} },
   { proposalType: "section_update", targetType: "document", data: {} },
@@ -144,25 +156,41 @@ describe("reviewLaterProposalWhere === isProposalReviewLater", () => {
   it("the matrix discriminates every clause (non-vacuity)", () => {
     const rl = (f: Fixture) => isProposalReviewLater(f, NOW);
     const cls = (f: Fixture) =>
-      classifyProposal(f.proposalType, f.targetType, capabilityRunVerbId(f.data));
+      classifyProposal(
+        f.proposalType,
+        f.targetType,
+        capabilityRunVerbId(f.data)
+      );
     const old = (f: Fixture) => NOW.getTime() - f.createdAt.getTime() > 7 * DAY;
     // Some rows ARE review later, some are not.
     expect(FIXTURES.some(rl)).toBe(true);
     // Age: an old objectWork row is in, the same row a minute younger is out.
-    expect(FIXTURES.some((f) => cls(f) === "objectWork" && !old(f) && !rl(f))).toBe(true);
+    expect(
+      FIXTURES.some((f) => cls(f) === "objectWork" && !old(f) && !rl(f))
+    ).toBe(true);
     // Class: an old row of every other class stays out.
     for (const other of ["ephemeral", "curatorial", "governance", "access"]) {
-      expect(FIXTURES.some((f) => cls(f) === other && old(f) && !rl(f)), other).toBe(true);
+      expect(
+        FIXTURES.some((f) => cls(f) === other && old(f) && !rl(f)),
+        other
+      ).toBe(true);
     }
     // Session-bound draft: an old document edit is out WITH a session, in without.
     const docEdit = (f: Fixture) =>
       f.targetType === "document" && f.proposalType === "update" && old(f);
-    expect(FIXTURES.some((f) => docEdit(f) && f.sessionId && !rl(f))).toBe(true);
-    expect(FIXTURES.some((f) => docEdit(f) && !f.sessionId && rl(f))).toBe(true);
+    expect(FIXTURES.some((f) => docEdit(f) && f.sessionId && !rl(f))).toBe(
+      true
+    );
+    expect(FIXTURES.some((f) => docEdit(f) && !f.sessionId && rl(f))).toBe(
+      true
+    );
     // A durable-object capability run is objectWork, and old ⇒ in.
     expect(
       FIXTURES.some(
-        (f) => f.proposalType === "capability.run" && cls(f) === "objectWork" && rl(f)
+        (f) =>
+          f.proposalType === "capability.run" &&
+          cls(f) === "objectWork" &&
+          rl(f)
       )
     ).toBe(true);
   });

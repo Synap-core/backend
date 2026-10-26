@@ -725,7 +725,9 @@ export function signalFromCluster(
     // Review later is 7+ days old by its own rule, so `older` — stamped, not
     // measured: the pod's SQL clock and this one may straddle the line, and a
     // client that predates `reviewLater` must fold it under Older, never Recent.
-    ageBucket: cluster.reviewLater ? "older" : ageBucketOf(cluster.latestAt, now),
+    ageBucket: cluster.reviewLater
+      ? "older"
+      : ageBucketOf(cluster.latestAt, now),
     ...(cluster.reviewLater ? { reviewLater: true as const } : {}),
     repeatCount: 1,
   };

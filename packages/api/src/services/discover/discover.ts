@@ -550,7 +550,8 @@ function lensConceptNote(projectCount: number): string {
 function buildNote(
   projectCount: number,
   workspaceCount: number,
-  pending: { count: number; oldestDays: number; reviewLater: number } | undefined,
+  pending:
+    { count: number; oldestDays: number; reviewLater: number } | undefined,
   opts: { light: boolean; hiddenEmpty: number; explain: boolean }
 ): string {
   // ── THE REVIEW QUEUE, SURFACED AT THE ONE CALL EVERY SESSION MAKES ─────────
