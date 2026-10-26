@@ -1649,9 +1649,7 @@ export function resolveVerbIntent(
   known?: ReadonlySet<string>
 ): ToolVerbCatalogEntry["intent"] | null {
   const raw = (s as { intent?: unknown }).intent;
-  if (raw === undefined) return undefined;
-  // DECLARED none: the applier writes NULL, clearing a stored intent.
-  if (raw === null) return null;
+  if (raw === undefined || raw === null) return undefined;
   if (typeof raw === "string" && (isAbstractVerb(raw) || known?.has(raw))) {
     return raw;
   }
