@@ -93,7 +93,7 @@ async function ownSkill(name: string, intent: string | null, pack: string) {
 }
 
 const run = () => {
-  const execute = vi.fn(async () => ({
+  const execute = vi.fn(async (_input: { verbId: string }) => ({
     kind: "run" as const,
     skillId: "s",
     result: { results: [] },
