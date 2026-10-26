@@ -302,7 +302,6 @@ describe("a proposed decision asks the person (W3)", () => {
         properties: expect.objectContaining({
           decisionStatus: "accepted",
           chosenOption: "usage",
-          summary: "Usage based",
         }),
       },
     ]);
@@ -310,6 +309,34 @@ describe("a proposed decision asks the person (W3)", () => {
       status: "updated",
       decisionId: id,
     });
+  });
+
+  it("answering NEVER rewrites the person's summary, options or rationale; the note is appended", async () => {
+    const sid = await session();
+    const id = await decision({
+      decisionStatus: "proposed",
+      summary: "Four observations will confirm or kill H1 and H2",
+      rationale: "Dated, falsifiable.",
+    });
+    await fire(id, "create", sid);
+    const [slot] = await slotsCarrying(id);
+    await answerExpectedOutput({
+      sessionId: sid,
+      userId: OWNER,
+      expectedLabel: slot!.label as string,
+      text: "No — not before the October data",
+      messageId: null,
+      value: { type: "confirm", confirmed: false },
+    });
+    const [update] = h.updates;
+    expect(update!.properties).toMatchObject({
+      decisionStatus: "rejected",
+      chosenOption: "no",
+      rationale: "Dated, falsifiable.\n\nWhen deciding: not before the October data",
+    });
+    for (const key of ["summary", "decisionOptions", "alternatives"]) {
+      expect(update!.properties).not.toHaveProperty(key);
+    }
   });
 
   describe("closes the 'Decide:' session it opened, once decided", () => {

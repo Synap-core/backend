@@ -5,7 +5,9 @@
  *
  *   - slot carries `decisionId` ⇒ UPDATE that decision (the slot was opened
  *     for a `proposed` decision by the decision-ask reactor, or a previous
- *     answer to this slot already filed one — re-answering revises it);
+ *     answer to this slot already filed one — re-answering revises it). Only
+ *     what the answer decided is written (`decisionUpdateFromAnswer`): the
+ *     summary, options and rationale stay whoever wrote them;
  *   - otherwise ⇒ CREATE a `decision`, link it to what the agent looked at,
  *     and stamp `decisionId` on the slot.
  *
@@ -17,10 +19,14 @@
  */
 
 import { createLogger } from "@synap-core/core";
+import { db, eq, entities } from "@synap/database";
 import type { ExpectedOutput, SlotAnswer, LinkInput } from "@synap/playbooks";
 import { normalizeExpectedLabel } from "../focus-sessions/expected-label.js";
 import { updateExpectedOutputsLocked } from "../focus-sessions/delegate-output.js";
-import { decisionFromAnswer } from "./decision-from-answer.js";
+import {
+  decisionFromAnswer,
+  decisionUpdateFromAnswer,
+} from "./decision-from-answer.js";
 import {
   createDecisionEntity,
   updateDecisionEntity,
@@ -89,7 +95,31 @@ export async function fileAnswerDecision(p: {
 
   if (p.slot.decisionId) {
     try {
-      await updateDecisionEntity(scope, p.slot.decisionId, draft.properties);
+      // The decision is somebody's record: the answer writes what it decided
+      // and never the summary, options or rationale it was asked from.
+      const [row] = await db
+        .select({ properties: entities.properties })
+        .from(entities)
+        .where(eq(entities.id, p.slot.decisionId))
+        .limit(1);
+      if (!row) throw new Error("the decision it asks about was not found");
+      const previous = p.slot.answer
+        ? decisionFromAnswer({
+            slot: p.slot,
+            answer: p.slot.answer,
+            sessionId: p.session.id,
+          })
+        : null;
+      await updateDecisionEntity(
+        scope,
+        p.slot.decisionId,
+        decisionUpdateFromAnswer({
+          draft,
+          previous,
+          existing: (row.properties ?? {}) as Record<string, unknown>,
+          answer: p.answer,
+        })
+      );
       return { status: "updated", decisionId: p.slot.decisionId };
     } catch (err) {
       return failed(err, p, "update");
