@@ -1391,6 +1391,16 @@ export {
   type ActView,
 } from "./card.js";
 
+/** A room post's marker and its one reader — see `./room-post.ts`. */
+export {
+  ROOM_POST_KINDS,
+  ROOM_POST_META_KEY,
+  ROOM_POST_SLOT_LABEL_MAX,
+  readRoomPostMeta,
+  type RoomPostKind,
+  type RoomPostMeta,
+} from "./room-post.js";
+
 /** A decision entity's ask record → the shared outcome rule — see `./decision-record.ts`. */
 export {
   decisionAskSnapshot,

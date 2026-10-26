@@ -184,6 +184,8 @@ export const ASK_COPY = {
   // ── The card's anatomy ({@link askCardView}) ──
   /** The collapsed note affordance: one label, no placeholder repeating it. */
   addNote: "Add a note",
+  /** The note field once opened: a noun, not the verb that opened it. */
+  note: "Note",
   /** The mark on the answer the agent recommends. */
   recommended: "Recommended",
   /**

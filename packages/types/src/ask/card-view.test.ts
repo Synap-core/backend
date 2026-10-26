@@ -13,8 +13,11 @@ import {
   ASK_COPY,
   askCardView,
   askFate,
+  answerProvenanceMark,
   answerWasRelayed,
   askRecommendationOutcome,
+  readRoomPostMeta,
+  ROOM_POST_META_KEY,
   buildAskSnapshot,
   stripLeadingRestatement,
   isAskReviewLater,
@@ -364,5 +367,25 @@ describe("relayed answers — one reader, one receipt", () => {
     );
     expect(ASK_COPY.relayedWords({ text: "Yes" })).toBe("“Yes”");
     expect(ASK_COPY.relayedWords({ quote: " ", text: null })).toBeNull();
+  });
+});
+
+describe("readRoomPostMeta — the one reader of a room question's marker", () => {
+  it("reads the stamp the pod writes, and drives the question's mark", () => {
+    const meta = readRoomPostMeta({
+      [ROOM_POST_META_KEY]: {
+        kind: "question",
+        closed: { reason: "session_ended", at: "2026-10-26T12:00:00.000Z" },
+      },
+    });
+    expect(meta?.kind).toBe("question");
+    expect(answerProvenanceMark(meta!)).toEqual({
+      tone: "textMuted",
+      label: ASK_COPY.closedSessionEnded,
+    });
+  });
+  it("anything else is not a room post", () => {
+    expect(readRoomPostMeta(null)).toBeNull();
+    expect(readRoomPostMeta({ [ROOM_POST_META_KEY]: { kind: "chat" } })).toBeNull();
   });
 });
