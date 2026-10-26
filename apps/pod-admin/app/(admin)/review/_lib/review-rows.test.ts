@@ -275,9 +275,9 @@ describe("reviewRows", () => {
       batchIds: ["c3-p1"],
     });
     // The batch door takes nothing from the page-only rows.
-    expect(
-      batchOf(rows, new Set(rows.map((r) => r.key))).proposalIds
-    ).toEqual(["c3-p1"]);
+    expect(batchOf(rows, new Set(rows.map((r) => r.key))).proposalIds).toEqual([
+      "c3-p1",
+    ]);
   });
 
   it("a member the viewer may not approve keeps the whole row out of inline and batch", () => {
