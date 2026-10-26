@@ -71,6 +71,7 @@ import {
   type IntakeSourceMetadata,
 } from "../intake/stage-intake-source.js";
 import { ownCapturesWhere } from "./capture-scope.js";
+import { intakeRunSubjectOf } from "./captured-subject.js";
 
 export interface RosterAgent {
   id: string;
@@ -265,12 +266,19 @@ export async function giveCaptureToAgent(p: {
   const goal = goalFrom(text, row, source);
   if (!goal) return { status: "empty_capture" };
 
+  // The work is ABOUT what the capture filed, when that is ONE thing of a kind
+  // with a lifecycle (`captured-subject.ts`); otherwise it has no subject.
+  const subjectEntityId = source?.sessionId
+    ? await intakeRunSubjectOf(source.sessionId)
+    : null;
+
   if (agent && bound) {
     return handToBoundAgent({
       userId: p.userId,
       captureId: row.id,
       captureWorkspaceId: row.workspaceId ?? null,
       parentSessionId: source?.sessionId ?? null,
+      subjectEntityId,
       agent,
       goal,
     });
@@ -282,7 +290,7 @@ export async function giveCaptureToAgent(p: {
     projectId: null,
     trackId: null,
     trackStage: null,
-    subjectEntityId: null,
+    subjectEntityId,
     title: null,
     goal,
     templateId: null,
@@ -353,6 +361,7 @@ async function handToBoundAgent(p: {
   captureId: string;
   captureWorkspaceId: string | null;
   parentSessionId: string | null;
+  subjectEntityId: string | null;
   agent: { id: string; name: string | null };
   goal: string;
 }): Promise<GiveToAgentResult> {
@@ -442,6 +451,7 @@ async function handToBoundAgent(p: {
       onMissingRequired: "owe",
       agentIds: [p.agent.id],
       ...(p.parentSessionId ? { parentSessionId: p.parentSessionId } : {}),
+      ...(p.subjectEntityId ? { subjectId: p.subjectEntityId } : {}),
     });
   } catch (err) {
     return {
