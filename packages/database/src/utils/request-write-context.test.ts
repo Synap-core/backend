@@ -171,3 +171,45 @@ describe("request write context — the per-call run", () => {
     expect(clientKeyScope("key:k1")).toBe("key");
   });
 });
+
+// W-A4: the IS is one client for every channel, so its key alone is never a
+// client (a channel turn groups by `channel:<id>`). A NON-channel IS run names
+// itself (`X-Synap-Conversation: is:<runId>`) and is then its own client — not
+// the `agent:<id>` fallback that pooled every keyless IS write of an agent.
+describe("request write context — an IS run names itself", () => {
+  const RUN = "is:5b0f1e2a-9c4d-4e8f-8a1b-2c3d4e5f6a7b";
+
+  it("a named IS run ⇒ `is:<id>|conv:<run>`, ONE run (conversation scope)", () => {
+    const key = clientKeyForApiKey(
+      { id: "is-key", keyType: "is_internal" },
+      RUN
+    );
+    expect(key).toBe(`is:is-key|conv:${RUN}`);
+    expect(clientKeyScope(key!)).toBe("conversation");
+    // Never a per-call run, never an external `key:` client.
+    expect(isPerCallClientKey(key!)).toBe(false);
+    expect(key!.startsWith("key:")).toBe(false);
+  });
+
+  it("two IS runs are two clients; the header wins as for any client", () => {
+    const other = "is:0d9e8f7a-6b5c-4d3e-8f2a-1b0c9d8e7f6a";
+    expect(
+      clientKeyForApiKey(
+        { id: "is-key", keyType: "is_internal" },
+        requestConversationId(RUN, "meta-run", "transport")
+      )
+    ).toBe(`is:is-key|conv:${RUN}`);
+    expect(
+      clientKeyForApiKey({ id: "is-key", keyType: "is_internal" }, other)
+    ).not.toBe(
+      clientKeyForApiKey({ id: "is-key", keyType: "is_internal" }, RUN)
+    );
+  });
+
+  it("an unnamed IS request stays unscoped (it groups by its channel)", () => {
+    for (const conv of [undefined, null, "", "bad id"])
+      expect(
+        clientKeyForApiKey({ id: "is-key", keyType: "is_internal" }, conv)
+      ).toBeUndefined();
+  });
+});

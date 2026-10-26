@@ -74,8 +74,12 @@ vi.mock("../../../services/external-user-mapping.js", () => ({
 }));
 
 const { hubAuthMiddleware } = await import("./auth.js");
-const { _resetPodIdentityForTest, mintIsDelegationToken, getRequestGrant } =
-  await import("@synap/database");
+const {
+  _resetPodIdentityForTest,
+  mintIsDelegationToken,
+  getRequestGrant,
+  getRequestClientKey,
+} = await import("@synap/database");
 
 const IS = "https://intelligence.synap.test";
 const OPERATOR = "operator-human";
@@ -150,6 +154,7 @@ async function callDoor(headers: Record<string, string>) {
       fullGrant:
         getRequestGrant()?.scopes.every((s) => s.permissions.includes("*")) ??
         null,
+      clientKey: getRequestClientKey() ?? null,
     })
   );
   const res = await app.request("/api/hub/probe", { headers });
@@ -173,8 +178,20 @@ describe("hub auth: IS delegation token", () => {
       keyType: "is_internal",
       scopes: ["hub-protocol.read", "hub-protocol.write"],
       fullGrant: true,
+      // No named run: no client — a channel turn groups by its channel.
+      clientKey: null,
     });
     expect(getApiKeyStatus).not.toHaveBeenCalled();
+  });
+
+  it("W-A4: a non-channel run that names itself is its own client", async () => {
+    const run = "is:5b0f1e2a-9c4d-4e8f-8a1b-2c3d4e5f6a7b";
+    const { status, body } = await callDoor({
+      authorization: `Bearer ${delegation({ channelId: null })}`,
+      "x-synap-conversation": run,
+    });
+    expect(status).toBe(200);
+    expect(body.clientKey).toBe(`is:${IS}|conv:${run}`);
   });
 
   it("accepts a matching X-Delegated-Operator-Id (an IS mid-rollout may send both)", async () => {
