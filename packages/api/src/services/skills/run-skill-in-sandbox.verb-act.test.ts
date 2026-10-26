@@ -128,6 +128,9 @@ vi.mock("@synap/database", async (importOriginal) => {
     getDb: async () => ({}),
     findCapabilityGrant: (...a: unknown[]) => h.findGrant(...a),
     resolveCapabilityGrant: async () => ({ ok: true }),
+    // A session reaches the worker send ceiling (worker-send-ceiling.ts), which
+    // asks which worker started it; these sessions are no worker's.
+    workerAutomationOfSession: async () => null,
     db: {
       select,
       update,
