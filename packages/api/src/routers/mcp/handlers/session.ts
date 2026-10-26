@@ -18,6 +18,7 @@ import {
 } from "../../../services/focus-sessions/parent-lineage.js";
 import { attachTriage } from "../../../services/focus-sessions/triage.js";
 import type { TerminalSessionStatus } from "../../../services/focus-sessions/session-statuses.js";
+import type { CloseQuestionDisposition } from "../../../services/messaging/room-post-kind.js";
 import type { ExpectedOutput, SessionCriterion } from "@synap/playbooks";
 import { requestClientKey } from "../../../services/focus-sessions/resolve-work-session.js";
 import { refuseUndeclaredArgs } from "../undeclared-args.js";
@@ -539,22 +540,42 @@ export const sessionHandlers: McpHandlerMap = {
   ): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
-    const { completeFocusSession } =
+    const { completeFocusSession, isOpenQuestionsAtCloseError } =
       await import("../../../services/focus-sessions/complete-session.js");
-    const result = await completeFocusSession({
-      sessionId: args.sessionId as string,
-      userId,
-      agentUserId,
-      summary: args.summary as string | undefined,
-      verificationReport: args.verificationReport as
-        Record<string, unknown> | undefined,
-      // Every lifecycle exit, not just `closed`. The service has accepted this
-      // since it was written; this door never forwarded it, so an agent could
-      // record "I finished" but never "I abandoned" or "I could not" — and the
-      // tRPC / Hub PATCH doors could. Validated by the tool schema's enum,
-      // which derives from TERMINAL_SESSION_STATUSES.
-      terminalStatus: args.terminalStatus as TerminalSessionStatus | undefined,
-    });
+    let result: Awaited<ReturnType<typeof completeFocusSession>>;
+    try {
+      result = await completeFocusSession({
+        sessionId: args.sessionId as string,
+        userId,
+        agentUserId,
+        summary: args.summary as string | undefined,
+        verificationReport: args.verificationReport as
+          Record<string, unknown> | undefined,
+        // Every lifecycle exit, not just `closed`. The service has accepted this
+        // since it was written; this door never forwarded it, so an agent could
+        // record "I finished" but never "I abandoned" or "I could not" — and the
+        // tRPC / Hub PATCH doors could. Validated by the tool schema's enum,
+        // which derives from TERMINAL_SESSION_STATUSES.
+        terminalStatus: args.terminalStatus as TerminalSessionStatus | undefined,
+        // Shape-checked by the tool schema; the service matches each id
+        // against this agent's own open questions and ignores the rest.
+        questionDispositions: Array.isArray(args.questionDispositions)
+          ? (args.questionDispositions as CloseQuestionDisposition[])
+          : undefined,
+      });
+    } catch (err) {
+      // Its own questions are still open: nothing closed, and the agent is
+      // handed the list and the two ways out.
+      if (isOpenQuestionsAtCloseError(err)) {
+        return ok({
+          status: "refused",
+          reasonCode: err.code,
+          message: err.message,
+          openQuestions: err.openQuestions,
+        });
+      }
+      throw err;
+    }
     if (!result) {
       return ok({ error: `Focus session ${args.sessionId} not found` });
     }

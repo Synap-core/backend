@@ -234,6 +234,52 @@ describe("retirementForClose — which exit ends the obligation", () => {
     expect(retirementForClose(outputs, "failed")).toBeNull();
   });
 
+  // Resolve-XP founder default 3: the agent's own asks end with the session,
+  // the person's deliverables do not. The rows are the inputs where "retire on
+  // cancel only" and "retire every owed slot" disagree with the rule.
+  const ASKS: ExpectedOutput[] = [
+    { ...OWED, label: "confirm", ask: { mode: "confirm" } },
+    { ...OWED, label: "choose", ask: { mode: "choose", options: [] } as never },
+    // No ask on a decision slot IS a confirm (`effectiveSlotAsk`).
+    { ...OWED, label: "bare decision", blockedReason: "decision" },
+    { ...OWED, label: "act", ask: { mode: "act" } },
+    { ...OWED, label: "form", ask: { mode: "form" } as never },
+    { ...OWED, label: "provide", ask: { mode: "provide" } as never },
+    OWED,
+  ];
+
+  it.each(["closed", "failed"] as const)(
+    "%s retires the confirm/choose asks as session_ended and keeps the rest owed",
+    (status) => {
+      const result = retirementForClose(ASKS, status)!;
+      expect(result.retiredSlots).toBe(3);
+      const reasons = result.outputs.map((o) => [o.label, o.retiredReason]);
+      expect(reasons).toEqual([
+        ["confirm", "session_ended"],
+        ["choose", "session_ended"],
+        ["bare decision", "session_ended"],
+        ["act", undefined],
+        ["form", undefined],
+        ["provide", undefined],
+        [OWED.label, undefined],
+      ]);
+    }
+  );
+
+  it("a slot the closing agent kept owed is never retired, on any exit", () => {
+    const keep = new Set(["confirm"]);
+    expect(
+      retirementForClose(ASKS, "closed", new Date(), keep)!.outputs.find(
+        (o) => o.label === "confirm"
+      )!.retiredAt
+    ).toBeUndefined();
+    expect(
+      retirementForClose(ASKS, "cancelled", new Date(), keep)!.outputs.find(
+        (o) => o.label === "confirm"
+      )!.retiredAt
+    ).toBeUndefined();
+  });
+
   it("is a no-op when nothing was owed", () => {
     expect(
       retirementForClose([{ kind: "doc", label: "Runbook" }], "cancelled")

@@ -5,8 +5,11 @@
  * REAL `signals.list` / `signals.count` procedures on PGlite.
  *
  * Why this shape, field by field (each is a lens something could drop it on):
- *  - status `closed`   — the reaper closed the run; the slot is still owed
- *                        (`retirementForClose` retires on `cancelled` only).
+ *  - status `closed`   — the reaper closed the run; the slot is still owed.
+ *                        Seeded closed directly: since Resolve-XP W2 a close
+ *                        through the door retires a decision ask with no ask
+ *                        (`retirementForClose`, `session_ended`), so this pins
+ *                        the read, not what the close leaves.
  *  - origin `playbook` — derives `kind: run`, which every `kind: 'work'`
  *                        session list excludes.
  *  - workspace NULL    — a pod-personal session; a workspace-string lens
