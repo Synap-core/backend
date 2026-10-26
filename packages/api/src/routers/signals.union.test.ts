@@ -178,6 +178,7 @@ describe("needs-you union", () => {
       truncated: false,
       blocked: 0,
       decisions: 0,
+      reviewLater: 0,
       notifications: 0,
       review: 0,
       captures: 0,

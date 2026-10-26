@@ -112,9 +112,15 @@ describe("insertPendingProposal — persisted sessionSource marker", () => {
 
   it("the marker never splits the dedup hash — an agent row stores the hash of the CALLER's data", async () => {
     const { executor, inserted } = capturingExecutor();
-    // The agent-row dedup peek: no existing pending duplicate.
+    // The agent-row dedup peek: no existing pending duplicate. And the
+    // filing-moment read (the agent's latest room post): none.
     (executor as Record<string, unknown>).select = () => ({
-      from: () => ({ where: () => ({ limit: async () => [] }) }),
+      from: () => ({
+        where: () => ({ limit: async () => [] }),
+        innerJoin: () => ({
+          where: () => ({ orderBy: () => ({ limit: async () => [] }) }),
+        }),
+      }),
     });
     await insertPendingProposal(
       { ...BASE, agentUserId: "agent-1", sessionSource: "derived" },

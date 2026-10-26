@@ -98,6 +98,14 @@ afterAll(async () => {
   await client.close();
 });
 
+// The gate arm (Resolve-XP W3) reads `proposals`; its own cases live in
+// `awaited-gate-wait.pglite.test.ts`. Here it only has to exist.
+beforeAll(async () => {
+  await client.exec(
+    `create table proposals (id uuid primary key, session_id uuid, status text, proposal_type text);`
+  );
+});
+
 describe("session waits on the person", () => {
   it("an open agent question in the room ⇒ waits", async () => {
     expect(await waits(await session({ msgs: [{}] }))).toEqual({

@@ -199,7 +199,7 @@ describe("sourceMessageId — the room moment an agent's proposal was filed at",
       const id = randomUUID();
       await q(
         `insert into messages (id, channel_id, author_type, routed_teammate_id, deleted_at, timestamp, content, user_id, hash)
-         values ($1, $2, $3, $4, $5, now() - ($6 || ' minutes')::interval, 'x', 'u', $1)`,
+         values ($1, $2, $3, $4, $5, now() - ($6 || ' minutes')::interval, 'x', 'u', $7)`,
         [
           id,
           o.room ?? ROOM1,
@@ -207,6 +207,7 @@ describe("sourceMessageId — the room moment an agent's proposal was filed at",
           o.teammate,
           o.deleted ? new Date().toISOString() : null,
           String(o.minutesAgo),
+          `hash-${id}`,
         ]
       );
       return id;
