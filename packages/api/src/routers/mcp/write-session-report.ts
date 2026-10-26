@@ -76,6 +76,7 @@ function runHandle(filedIn: readonly FiledInSession[]): RunHandle | undefined {
   const receipt = filedIn.find((f) => f.kind === "receipt");
   if (!clientKey || !isPerCallClientKey(clientKey) || !receipt)
     return undefined;
+  if (clientKey) return undefined;
   return {
     sessionId: receipt.sessionId,
     note:
