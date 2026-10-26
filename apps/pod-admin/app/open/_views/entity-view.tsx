@@ -11,6 +11,11 @@
  * plan's body prose) read in full as content instead of a folded row, and the
  * entity's body document follows them.
  *
+ * The entity's media (`resolveEntityMedia`: the file it is, the cover or
+ * picture its kind declares, a copy the pod holds) leads the page, drawn by
+ * the one image door; when the body document IS that media it is not read
+ * again as text.
+ *
  * `entities.get` re-checks access server-side; no admin role is involved.
  * The body document is read through `documents.get` on the viewer's own
  * floor: a body they cannot read says so, and shows nothing.
@@ -21,6 +26,7 @@ import { planEntityFields } from "@synap-core/types/property-render";
 import { trpc } from "../../../lib/trpc";
 import { formatRelative } from "../../../lib/format";
 import { FieldList } from "../../_lib/object/field-list";
+import { MediaView } from "../../_lib/media/media-view";
 import { proseFields } from "../../_lib/object/field-rows";
 import {
   definitionsOf,
@@ -32,7 +38,11 @@ import {
 } from "../../_lib/object/content/content-block";
 import { prepareContent } from "../../_lib/object/content/markdown-model";
 import { useDocumentContent } from "../../_lib/object/content/use-document-content";
-import { entitySummary, redactSecretProperties } from "../open-model";
+import {
+  entityPageMedia,
+  entitySummary,
+  redactSecretProperties,
+} from "../open-model";
 import { OpenFailure, OpenLoading, OpenObject } from "../open-shell";
 import { couldNotLoad, loadFailure } from "../../_lib/object/load-failure";
 import { OpenInAppLink } from "../../_lib/object/open-in-app-link";
@@ -51,13 +61,19 @@ type EntityPayload = {
     /** The entity's body document, when it has one. */
     documentId?: string | null;
     properties?: Record<string, unknown> | null;
+    /** Pod-held media copies live here (`systemData.media`). */
+    systemData?: unknown;
     updatedAt?: Date | string | null;
     facetSlugs?: string[];
   };
   profile?: {
     slug?: string;
     displayName?: string;
-    uiHints?: { icon?: string | null; color?: string | null } | null;
+    uiHints?: {
+      icon?: string | null;
+      color?: string | null;
+      presentation?: unknown;
+    } | null;
   };
   effectiveProperties?: WirePropertyDef[];
   facets?: Array<{ profile?: Record<string, unknown> }>;
@@ -76,9 +92,12 @@ function roleSlugs(data: EntityPayload): string[] {
 export function EntityView({ id }: { id: string }) {
   const query = trpc.entities.get.useQuery({ id, includeProfile: true });
   useReauthOnUnauthorized(query.error);
-  const body = useDocumentContent(
-    (query.data as EntityPayload | undefined)?.entity?.documentId
-  );
+  const payload = query.data as EntityPayload | undefined;
+  const loaded = payload?.entity;
+  const { media, bodyIsMedia } = loaded
+    ? entityPageMedia({ ...loaded, id }, payload?.profile?.uiHints)
+    : { media: null, bodyIsMedia: false };
+  const body = useDocumentContent(bodyIsMedia ? null : loaded?.documentId);
 
   if (query.isLoading) return <OpenLoading label="Loading entity…" />;
   const data = query.data as EntityPayload | undefined;
@@ -150,6 +169,9 @@ export function EntityView({ id }: { id: string }) {
         },
       }}
     >
+      {media && (
+        <MediaView media={media} alt={title} size="full" viaEntityId={id} />
+      )}
       {roles.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
           {roles.map((slug) => (
@@ -179,7 +201,7 @@ export function EntityView({ id }: { id: string }) {
           openInApp={openInApp}
         />
       ))}
-      {entity.documentId && (
+      {entity.documentId && !bodyIsMedia && (
         <DocumentContentSection
           title="Content"
           content={body}
