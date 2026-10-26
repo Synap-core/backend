@@ -312,7 +312,7 @@ export function bindHostCallback<A extends unknown[], R>(
 }
 
 /** The broker-side context every bridge of one run closes over. */
-interface SkillBridgeParams {
+export interface SkillBridgeParams {
   allowedHosts: string[];
   operatorUserId: string;
   workspaceId: string | null;
