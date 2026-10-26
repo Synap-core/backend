@@ -176,3 +176,55 @@ describe("buildProposalSummary — a filing names every place it changes", () =>
     );
   });
 });
+
+describe("buildProposalSummary — a new kind's carried fields (ticket a375443d)", () => {
+  it("names the fields the approval will also create", () => {
+    expect(
+      buildProposalSummary("profile", "create", {
+        slug: "social-account-audit",
+        displayName: "Social account audit",
+        kindFields: [
+          { slug: "botscore", valueType: "number" },
+          { slug: "handle", valueType: "string" },
+        ],
+      })
+    ).toMatch(/ with 2 fields: botscore, handle$/);
+  });
+
+  it("caps the list and says how many more", () => {
+    const fields = Array.from({ length: 11 }, (_, i) => ({
+      slug: `f${i}`,
+      valueType: "string",
+    }));
+    expect(
+      buildProposalSummary("profile", "create", {
+        slug: "k",
+        kindFields: fields,
+      })
+    ).toMatch(/ with 11 fields: f0, f1, f2, f3, f4, f5, f6, f7 and 3 more$/);
+  });
+
+  it("adds nothing to a kind proposed without fields", () => {
+    expect(
+      buildProposalSummary("profile", "create", { slug: "k" })
+    ).not.toContain("field");
+  });
+});
+
+describe("buildProposalSummary — a code skill's declared tools (review of #199, M3)", () => {
+  it("names the tools the skill will run under", () => {
+    expect(
+      buildProposalSummary("skill", "create", {
+        name: "score_handle",
+        requiredToolIds: ["7b0d9c4e-1f2a-4c3b-9d8e-5a6b7c8d9e0f"],
+        requiredToolNames: ["apify_api"],
+      })
+    ).toMatch(/ using tool: apify_api$/);
+  });
+
+  it("adds nothing to a skill that declares none", () => {
+    expect(
+      buildProposalSummary("skill", "create", { name: "score_handle" })
+    ).not.toContain("using");
+  });
+});

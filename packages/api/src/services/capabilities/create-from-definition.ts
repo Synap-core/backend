@@ -84,6 +84,7 @@ import {
   skillsRouter,
   SKILL_DEFINITION_APPLIER,
   assertSkillCodeAllowed,
+  skillRequiresEdges,
 } from "../../routers/skills.js";
 import {
   skillExecFieldsChanged,
@@ -1017,6 +1018,27 @@ export async function createCapabilityFromDefinition(
           existingSkill.metadata as Record<string, unknown> | null
         );
 
+      // The tools this definition `requires`, resolved like the create branch.
+      // A set that ADDS a tool the skill does not already require widens the
+      // scope its own provider calls run under without a second review
+      // (`verbAct`, execute-capability.ts): an execution change, demoted
+      // exactly like `execContentChanged`. A replay or a narrowing keeps the
+      // approval. Without it, a key posting an inline definition to
+      // `POST /api/hub/capabilities/apply` grew an approved skill's scope with
+      // no proposal (review of #199, R2).
+      const requiredToolIds = (s.requires ?? [])
+        .map((name) => toolIdByName.get(name))
+        .filter((id): id is string => !!id);
+      let requiresWidened = false;
+      if (existingSkill.approved && requiredToolIds.length > 0) {
+        const held = new Set(
+          (await skillRequiresEdges(userId, existingSkill.id)).map(
+            (e) => e.toId
+          )
+        );
+        requiresWidened = requiredToolIds.some((id) => !held.has(id));
+      }
+
       // NARROWER than `execContentChanged` on purpose: the globals scan must
       // fire only when the CODE ITSELF is being rewritten. Gating it on the
       // wider approval rule would hard-fail a skill grandfathered with a
@@ -1075,21 +1097,16 @@ export async function createCapabilityFromDefinition(
           // live bag (marketSource, rule, counters) is then untouched.
           metadata: projectSkillMetadata(existingSkill.metadata, s.metadata),
           updatedAt: new Date(),
-          ...(execContentChanged && existingSkill.approved
+          ...((execContentChanged || requiresWidened) && existingSkill.approved
             ? { approved: false }
             : {}),
         })
         .where(eq(skillsTable.id, existingSkill.id));
-      if (s.requires && s.requires.length > 0) {
-        const toolIds = s.requires
-          .map((name) => toolIdByName.get(name))
-          .filter((id): id is string => !!id);
-        if (toolIds.length > 0) {
-          await skillsCaller.setRequiredTools({
-            skillId: existingSkill.id,
-            toolIds,
-          });
-        }
+      if (requiredToolIds.length > 0) {
+        await skillsCaller.setRequiredTools({
+          skillId: existingSkill.id,
+          toolIds: requiredToolIds,
+        });
       }
       createdSkills.push({
         name: s.name,

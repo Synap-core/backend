@@ -114,6 +114,8 @@ import { resolveWriteIdempotencyKey } from "../../utils/write-door-idempotency.j
 
 import { emitAiDecision } from "../../utils/ai-feedback-events.js";
 import { gateCapabilityExecution } from "./gate-capability-execution.js";
+// Straight from the package, not the shim: the shim is what unit tests mock.
+import { approvalRefusesRun } from "@synap/capability-gate";
 import { executeSkillViaIS } from "../skills/execute-skill-via-is.js";
 import { runSkillInSandbox } from "../skills/run-skill-in-sandbox.js";
 import { executeProviderVerb } from "./execute-provider-verb.js";
@@ -653,7 +655,7 @@ export async function executeCapability(input: {
     // An unattended owner run (`requestEnableForOwner`) files the same request,
     // attributed to the owner, one open per pack.
     const fileEnable =
-      skillRow.approved === false &&
+      approvalRefusesRun(skillRow) &&
       (input.agentUserId
         ? !input.suppressProposal
         : input.requestEnableForOwner === true);

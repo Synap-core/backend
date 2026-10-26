@@ -254,3 +254,155 @@ describe("define_kind — ONE slug normalisation", () => {
     expect(ledger[0].normalizedFrom).toBeUndefined();
   });
 });
+
+describe("define_kind — the FIRST result states every rewrite (ticket a375443d)", () => {
+  /** The live first call: an agent kind is a proposal, so its fields defer. */
+  const proposedCaller = () =>
+    ({
+      profiles: {
+        createProfile: async (input: Record<string, unknown>) => {
+          h.createProfileCalls.push(input);
+          return {
+            status: "proposed",
+            proposalId: "44444444-4444-4444-8444-444444444444",
+            profile: { slug: input.slug },
+          };
+        },
+        createPropertyDef: async () => {
+          throw new Error("a deferred field must not be written");
+        },
+      },
+    }) as never;
+
+  it("names the kind's AND every deferred field's normalisation on the proposed call", async () => {
+    const outcome = await defineProfile(
+      proposedCaller(),
+      {
+        userId: USER,
+        workspaceId: WS,
+        slug: "social_account_audit",
+        displayName: "Social account audit",
+        fields: [
+          { slug: "botScore", valueType: "number" },
+          { slug: "handle", valueType: "string" },
+        ],
+      },
+      { door: "synap_define_kind", fieldsParam: "properties" }
+    );
+    if (!outcome.ok) throw new Error(outcome.error);
+    expect(outcome.result.normalized).toEqual([
+      { from: "social_account_audit", to: "social-account-audit", of: "kind" },
+      { from: "botScore", to: "botscore", of: "field" },
+    ]);
+    const notice = String(outcome.result.notice);
+    expect(notice).toContain("social_account_audit → social-account-audit");
+    expect(notice).toContain("botScore → botscore");
+    expect(notice).not.toContain("handle");
+    // Prominent in the TOOL TEXT: the MCP door serialises this object, and
+    // the notice is its first key.
+    expect(Object.keys(outcome.result)[0]).toBe("notice");
+  });
+
+  it("states it on the applied call too, and says nothing when nothing changed", async () => {
+    const renamed = await define("knowledge", [
+      { slug: "ek_type", valueType: "string" },
+    ]);
+    if (!renamed.ok) throw new Error(renamed.error);
+    expect(renamed.result.normalized).toEqual([
+      { from: "ek_type", to: "ek-type", of: "field" },
+    ]);
+
+    const clean = await define("knowledge", [
+      { slug: "content", valueType: "string" },
+    ]);
+    if (!clean.ok) throw new Error(clean.error);
+    expect(clean.result).not.toHaveProperty("notice");
+    expect(clean.result).not.toHaveProperty("normalized");
+  });
+});
+
+describe("define_kind — a new kind's fields ride its proposal (ticket a375443d)", () => {
+  it("hands the valid, normalised fields to the kind's create and says they are included", async () => {
+    const outcome = await defineProfile(
+      {
+        profiles: {
+          createProfile: async (input: Record<string, unknown>) => {
+            h.createProfileCalls.push(input);
+            const carried = (input.deferredFields as unknown[]) ?? [];
+            return {
+              status: "proposed",
+              proposalId: "55555555-5555-4555-8555-555555555555",
+              profile: null,
+              ...(carried.length ? { fieldsIncluded: carried.length } : {}),
+            };
+          },
+          createPropertyDef: async () => {
+            throw new Error("a carried field must not be written here");
+          },
+        },
+      } as never,
+      {
+        userId: USER,
+        workspaceId: WS,
+        slug: "social_account_audit",
+        displayName: "Social account audit",
+        fields: [
+          { slug: "botScore", valueType: "number", displayName: "Bot score" },
+          { slug: "handle", valueType: "string", required: true },
+          { slug: "broken", valueType: "nope" },
+        ],
+      },
+      { door: "synap_define_kind", fieldsParam: "properties" }
+    );
+    if (!outcome.ok) throw new Error(outcome.error);
+
+    expect(h.createProfileCalls[0]!.deferredFields).toEqual([
+      {
+        slug: "botscore",
+        valueType: "number",
+        uiHints: { displayName: "Bot score" },
+      },
+      { slug: "handle", valueType: "string", required: true },
+    ]);
+    // The reviewer sees the fields on the kind's own proposal.
+    expect(String(h.createProfileCalls[0]!.reasoning)).toContain(
+      "botscore (number), handle (string)"
+    );
+    const properties = outcome.result.properties as Record<string, unknown>;
+    expect(properties.status).toBe("included");
+    expect(properties.included).toEqual(["botscore", "handle"]);
+    expect(String(properties.message)).toContain("Do not re-call");
+    expect(properties.refused).toEqual([
+      expect.objectContaining({ slug: "broken", status: "error" }),
+    ]);
+  });
+
+  it("keeps the deferred wording when the gated create did not carry them (an existing kind)", async () => {
+    const outcome = await defineProfile(
+      {
+        profiles: {
+          createProfile: async () => ({
+            status: "proposed",
+            proposalId: "66666666-6666-4666-8666-666666666666",
+            existing: true,
+          }),
+          createPropertyDef: async () => {
+            throw new Error("not written");
+          },
+        },
+      } as never,
+      {
+        userId: USER,
+        workspaceId: WS,
+        slug: "knowledge",
+        displayName: "Knowledge",
+        fields: [{ slug: "content", valueType: "string" }],
+      },
+      { door: "synap_define_kind", fieldsParam: "properties" }
+    );
+    if (!outcome.ok) throw new Error(outcome.error);
+    expect((outcome.result.properties as Record<string, unknown>).status).toBe(
+      "deferred"
+    );
+  });
+});

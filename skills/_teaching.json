@@ -81,6 +81,17 @@
       "capability": null
     }
   },
+  "synap/code-skills": {
+    "teachesTools": ["create_skill", "synap_create_skill"],
+    "skillGroup": "build",
+    "alwaysOn": false,
+    "summary": "Code-skill runtime: the async (args, context) wrapper, callProvider(tool, method, path, body?, opts?) and its { status, headers, body } | { proposed, proposalId } return, hubProtocol reads, propose.entity, the 64 MB / timeoutSeconds limits, and requiredTools so a verb's own provider calls are not gated twice.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
+  },
   "synap/capabilities": {
     "teachesTools": [
       "list_capabilities",
