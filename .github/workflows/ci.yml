@@ -63,8 +63,8 @@ jobs:
       - name: Monorepo layout + dependencies
         uses: ./.github/actions/monorepo-setup
         with:
-          app-id: ${{ vars.SYNAP_RELEASE_APP_ID }}
-          app-key: ${{ secrets.SYNAP_RELEASE_APP_KEY }}
+          app-id: ${{ vars.SYNAP_READER_APP_ID }}
+          app-key: ${{ secrets.SYNAP_READER_APP_KEY }}
           cross-repo-token: ${{ secrets.CROSS_REPO_TOKEN }}
           node-version: ${{ env.NODE_VERSION }}
 
@@ -213,8 +213,8 @@ jobs:
         id: setup
         uses: ./.github/actions/monorepo-setup
         with:
-          app-id: ${{ vars.SYNAP_RELEASE_APP_ID }}
-          app-key: ${{ secrets.SYNAP_RELEASE_APP_KEY }}
+          app-id: ${{ vars.SYNAP_READER_APP_ID }}
+          app-key: ${{ secrets.SYNAP_READER_APP_KEY }}
           cross-repo-token: ${{ secrets.CROSS_REPO_TOKEN }}
           node-version: ${{ env.NODE_VERSION }}
 
@@ -317,8 +317,8 @@ jobs:
       - name: Monorepo layout + dependencies
         uses: ./.github/actions/monorepo-setup
         with:
-          app-id: ${{ vars.SYNAP_RELEASE_APP_ID }}
-          app-key: ${{ secrets.SYNAP_RELEASE_APP_KEY }}
+          app-id: ${{ vars.SYNAP_READER_APP_ID }}
+          app-key: ${{ secrets.SYNAP_READER_APP_KEY }}
           cross-repo-token: ${{ secrets.CROSS_REPO_TOKEN }}
           node-version: ${{ env.NODE_VERSION }}
 
