@@ -229,6 +229,9 @@ function stringPropOf(
   }
   const init = unwrap(prop.initializer);
   if (ts.isStringLiteral(init)) return init.text;
+  // `intent: null` DECLARES none (the applier clears a stored one): for
+  // routing it is the same as absent, an unroutable verb that must be pinned.
+  if (init.kind === ts.SyntaxKind.NullKeyword) return undefined;
   // A non-literal (a variable, a template expression) must NOT be read as
   // "absent": that would turn a present-but-computed intent into a silent skip.
   throw new Error(

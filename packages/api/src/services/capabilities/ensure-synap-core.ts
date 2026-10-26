@@ -835,6 +835,10 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
       name: "market.search",
       kind: "builtin",
       scope: "pod",
+      // DECLARED none (not omitted): it searches Synap's catalog, not an outside
+      // corpus, and `null` makes the applier clear the `search_external` it
+      // carried on pods seeded before (an omitted intent is left alone).
+      intent: null,
       description:
         "Search the Control-Plane marketplace catalog (capabilities, automations, workspace templates, cells, skills, views) — the pod-local cache, never a live CP fetch. Use this AFTER list_capabilities finds nothing installed. Agents must send kind:template not kind:workspace. Returns { entries[] } with an honest `installed` flag per entry (undefined when not cheaply checkable) or, on zero hits, a message pointing to tool.request for a missing tool. Read-only.",
       parameters: {
