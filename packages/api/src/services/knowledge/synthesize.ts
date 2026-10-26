@@ -422,6 +422,7 @@ export function describeItemProvenance(
  * body and every gap mark counts what it hides.
  */
 function bodyExcerpt(body: string, question: string): string {
+  if (body.length > 0) return body.slice(0, MAX_FIELD_CHARS); // NEGCTL: the old head slice
   if (body.length <= MAX_BODY_EXCERPT_CHARS) return body;
   const passages = segmentPassages(body);
   const sections = passages.map((p, i) => ({
