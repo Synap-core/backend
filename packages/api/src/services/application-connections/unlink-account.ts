@@ -43,6 +43,7 @@ import {
   users,
 } from "@synap/database";
 import { normalizeIssuerUrl } from "../../utils/issuer-url-safety.js";
+import { endIdentitySessions } from "../kratos-sessions.js";
 import {
   getPodAdminRole,
   podAdminRoleOutranks,
@@ -136,17 +137,7 @@ const defaultDeps: UnlinkAccountDeps = {
       return status === 404;
     }
   },
-  endSessions: async (kratosIdentityId) => {
-    try {
-      await kratosAdmin.deleteIdentitySessions({ id: kratosIdentityId });
-      return true;
-    } catch (error) {
-      // No sessions left is the outcome we wanted.
-      const status = (error as { response?: { status?: number } }).response
-        ?.status;
-      return status === 404;
-    }
-  },
+  endSessions: endIdentitySessions,
   email: async (userId) =>
     (
       await db.query.users.findFirst({

@@ -33,7 +33,13 @@ import {
   backfillTeamPersonBridge as runBackfillTeamPersonBridge,
   notAnAppAgent,
   readIdentityKeepers,
+  podMembers,
+  livePodMemberWhere,
+  readPodUserAccess,
+  hasActivePodAccess,
+  apiKeys,
 } from "@synap/database";
+import { revokeApiKeys } from "@synap/database/api-key-revocation";
 import { TRPCError } from "@trpc/server";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import {
@@ -48,6 +54,7 @@ import {
   newInviteToken,
 } from "./invite-token.js";
 import { disconnectAllUserConnections } from "../../services/capabilities/capability-nango-sync.js";
+import { endIdentitySessions } from "../../services/kratos-sessions.js";
 import { kratosAdmin } from "@synap/auth";
 import { config } from "@synap-core/core";
 import {
@@ -1140,12 +1147,48 @@ export const inviteProcedures = {
       // membership, not the account's existence.
       let identity: "deleted" | "kept" = "kept";
       let identityKeptBy: string[] = [];
+      let keysRevoked = 0;
+      let sessionsEnded: boolean | null = null;
       if (removed.length > 0) {
         const remainingMembership = await db.query.workspaceMembers.findFirst({
           where: eq(workspaceMembers.userId, input.userId),
           columns: { workspaceId: true },
         });
         if (!remainingMembership) {
+          // Out of every space = out of the pod: the pod_members row stops
+          // counting as access (0357, founder Q-B1). Stamped BEFORE the
+          // keepers are read, whose `active_access` counts a live row.
+          await db
+            .update(podMembers)
+            .set({ removedAt: new Date() })
+            .where(livePodMemberWhere(input.userId));
+          // Nothing else lets them in (a project membership would): their
+          // keys and Kratos sessions end too (founder Q-B3). The request-time
+          // pod-access floor is the guarantee (`access/pod-access.ts`); this
+          // keeps the key list and "signed in on N devices" equal to it. A key
+          // acting FOR them (`linked_user_id`) is theirs as much as one they
+          // own.
+          if (!hasActivePodAccess(await readPodUserAccess(input.userId, db))) {
+            const revokedKeys = await revokeApiKeys(db, {
+              where: and(
+                or(
+                  eq(apiKeys.userId, input.userId),
+                  eq(apiKeys.linkedUserId, input.userId)
+                ),
+                eq(apiKeys.isActive, true)
+              ),
+              revokedBy: ctx.userId,
+              reason: "Removed from the pod",
+            });
+            keysRevoked = revokedKeys.length;
+            sessionsEnded = await endIdentitySessions(input.userId);
+            if (!sessionsEnded) {
+              logger.warn(
+                { userId: input.userId },
+                "Removed from the pod, but Kratos did not end the person's sessions"
+              );
+            }
+          }
           identityKeptBy = (await isPodAdmin(ctx.userId))
             ? await readIdentityKeepers(input.userId, db)
             : ["caller_is_not_a_pod_admin"];
@@ -1187,6 +1230,8 @@ export const inviteProcedures = {
           removedFromWorkspaces: removed,
           identity,
           identityKeptBy,
+          keysRevoked,
+          sessionsEnded,
           errors,
         },
       });

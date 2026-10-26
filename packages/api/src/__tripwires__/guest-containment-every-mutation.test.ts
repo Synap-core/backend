@@ -23,6 +23,16 @@
  * `apiKeyProcedure`) — this caller hands the principal in the context, so the
  * base guard already sees it. `apiKeyProcedure` re-applies the guard after
  * `apiKeyMiddleware` for that case.
+ *
+ * POD-ACCESS FLOOR (B1, report mode): every served procedure that needs a
+ * signed-in caller (derived: an ANONYMOUS call is refused with
+ * `protectedProcedure`'s "Authentication required"), query or mutation, must
+ * REPORT a signed-in principal that is not a guest and holds no pod access
+ * (`reportNoPodAccess`, access/pod-access.ts), except the admission mutations
+ * of `GUEST_MUTATION_ALLOWLIST`. The report is recorded and then stops the call
+ * (a thrown sentinel), so no body runs. NOT COVERED the same way as above:
+ * `apiKeyProcedure` (Bearer only; its Hub REST twin is covered by the hub-routes
+ * tripwire).
  */
 
 import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
@@ -36,6 +46,20 @@ import {
 } from "../access/guest-containment.js";
 
 const GUEST = "0b9d6f3e-1c2a-4e5f-8a7b-9c0d1e2f3a4b";
+
+const floor = vi.hoisted(() => ({
+  reports: [] as Array<{ userId: string; door: string }>,
+  stop: false,
+}));
+vi.mock("../access/pod-access.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  reportNoPodAccess: vi.fn(
+    async (userId: string, _requestKey: unknown, door: string) => {
+      floor.reports.push({ userId, door });
+      if (floor.stop) throw new Error("tripwire: pod-access floor reached");
+    }
+  ),
+}));
 
 type AnyProcedure = { _def: { type?: string } };
 const procedures = coreRouter._def.procedures as unknown as Record<
@@ -51,25 +75,31 @@ const mutations = Object.entries(procedures)
 // seam under test is the served one: `createContext` marks the request, the
 // guard judges marked requests.
 let guestCaller: Record<string, unknown>;
-async function servedContextFor(userId: string) {
+async function servedContextFor(userId: string | null) {
   return createContext(new Request("http://pod.test/trpc/batch"), {
     get: (key: string) =>
-      key === "session"
+      key === "session" && userId
         ? { identity: { id: userId, traits: { email: `${userId}@x.test` } } }
         : undefined,
   });
 }
 
-function callerFor(path: string): (input: unknown) => Promise<unknown> {
+function callerFor(
+  path: string,
+  caller: Record<string, unknown> = guestCaller
+): (input: unknown) => Promise<unknown> {
   const fn = path
     .split(".")
-    .reduce<unknown>((o, k) => (o as Record<string, unknown>)[k], guestCaller);
+    .reduce<unknown>((o, k) => (o as Record<string, unknown>)[k], caller);
   return fn as (input: unknown) => Promise<unknown>;
 }
 
-async function outcome(path: string): Promise<string> {
+async function outcome(
+  path: string,
+  caller: Record<string, unknown> = guestCaller
+): Promise<string> {
   try {
-    await callerFor(path)(undefined);
+    await callerFor(path, caller)(undefined);
     return "RESOLVED";
   } catch (err) {
     if (err instanceof TRPCError) {
@@ -128,6 +158,42 @@ describe("tripwire: guest containment covers every tRPC mutation", () => {
   it("a query is never refused by the guard (reads go through the floors)", async () => {
     const got = await outcome("relations.get");
     expect(got).not.toBe("GUEST_REFUSED");
+  });
+
+  it("every procedure that needs a signed-in caller REPORTS one with no pod access (B1)", async () => {
+    const anonymous = coreRouter.createCaller(
+      (await servedContextFor(null)) as never
+    ) as unknown as Record<string, unknown>;
+    const signedIn = Object.keys(procedures).sort();
+    const missed: string[] = [];
+    let judged = 0;
+    audienceSpy.mockResolvedValue("unknown");
+    // A fresh served request: the audience is memoized per request, and the
+    // guest caller's request already holds "guest".
+    const outsider = coreRouter.createCaller(
+      (await servedContextFor(GUEST)) as never
+    ) as unknown as Record<string, unknown>;
+    floor.stop = true;
+    try {
+      for (const path of signedIn) {
+        if (GUEST_MUTATION_ALLOWLIST.includes(path)) continue;
+        const anon = await outcome(path, anonymous);
+        if (anon !== "UNAUTHORIZED: Authentication required") continue;
+        judged++;
+        floor.reports.length = 0;
+        await outcome(path, outsider);
+        if (!floor.reports.some((r) => r.door === `trpc:${path}`)) {
+          missed.push(path);
+        }
+      }
+    } finally {
+      floor.stop = false;
+      audienceSpy.mockResolvedValue("guest");
+    }
+    expect(missed).toEqual([]);
+    // Most of the router needs a signed-in caller; a count near zero means the
+    // derivation went blind, not that the router became public.
+    expect(judged).toBeGreaterThan(500);
   });
 
   it("the verdict comes from the audience probe: a member is let through", async () => {

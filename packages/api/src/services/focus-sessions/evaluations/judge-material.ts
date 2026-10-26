@@ -65,6 +65,12 @@ import type { focusSessions } from "@synap/database";
 import { listSessionOutputs } from "../session-outputs.js";
 import { hydrationScopeWhere } from "../../object-graph/graph-service.js";
 import { rankByTerms } from "../../../utils/term-match.js";
+import {
+  clip,
+  clipMark,
+  excerptByQuery,
+  type ExcerptSection,
+} from "../../../utils/section-excerpt.js";
 import type { SessionEvaluationRow } from "./record.js";
 import type { PostedEvidence } from "./evaluate.js";
 
@@ -92,8 +98,6 @@ export const ROOM_MESSAGES_N = 20;
  * fragments.
  */
 const ROOM_MESSAGE_MIN = 400;
-/** The marker a cut leaves behind, naming how much it dropped. */
-const clipMark = (omitted: number) => `…[clipped: ${omitted} chars omitted]…`;
 const CLIP_NOTE_HEAD = "NOTE: CLIPPED MATERIAL";
 /** The header note of a material with any cut in it. */
 const clipNote = (sections: number) =>
@@ -121,8 +125,6 @@ export interface JudgeFocus {
  * before the named ones are served; it gets more only from what they leave.
  */
 const OFF_FOCUS_GLIMPSE = 1_500;
-/** Below this share an outline + sections is not worth it: head + tail. */
-const EXCERPT_MIN = 1_000;
 /** A heading-less document is cut into paragraph chunks of about this size. */
 const PARAGRAPH_CHUNK = 1_500;
 
@@ -320,21 +322,6 @@ export async function loadRoomMaterial(params: {
   }
 }
 
-/**
- * ≤ `max` chars. `ends` keeps the head and the tail (a document's verdict and
- * logs are often at its end); `head` keeps only the start.
- */
-function clip(s: string, max: number, keep: "ends" | "head" = "ends"): string {
-  if (s.length <= max) return s;
-  // Sized for the widest count (the whole string), so the real mark fits.
-  const room = max - clipMark(s.length).length;
-  if (room <= 0) return max > 0 ? clipMark(s.length).slice(0, max) : "";
-  const mark = clipMark(s.length - room);
-  if (keep === "head") return `${s.slice(0, room)}${mark}`;
-  const head = Math.ceil(room / 2);
-  return `${s.slice(0, head)}${mark}${s.slice(s.length - (room - head))}`;
-}
-
 /** The words a criterion is found by — hint first (the query keeps 8 terms). */
 function focusQuery(focus: JudgeFocus): string {
   return [focus.hint ?? "", focus.statement, focus.key.replace(/[-_]+/g, " ")]
@@ -342,18 +329,12 @@ function focusQuery(focus: JudgeFocus): string {
     .trim();
 }
 
-interface DocSection {
-  /** The heading text, or the first words of a heading-less chunk. */
-  label: string;
-  text: string;
-}
-
 /**
  * Pure: `text` as contiguous sections (concatenated, they ARE `text`). Split
  * at markdown headings outside code fences; a document with none is cut into
  * paragraph chunks of about {@link PARAGRAPH_CHUNK} chars.
  */
-function splitSections(text: string): DocSection[] {
+function splitSections(text: string): ExcerptSection[] {
   const starts: Array<{ at: number; label: string }> = [];
   let at = 0;
   let fence = false;
@@ -372,7 +353,7 @@ function splitSections(text: string): DocSection[] {
       text: text.slice(s.at, starts[k + 1]?.at ?? text.length),
     }));
   }
-  const chunks: DocSection[] = [];
+  const chunks: ExcerptSection[] = [];
   let from = 0;
   const close = (to: number) => {
     const chunk = text.slice(from, to);
@@ -392,66 +373,17 @@ function splitSections(text: string): DocSection[] {
 }
 
 /**
- * Pure: a long document in ≤ `budget` chars, chosen for `focus`: one OUTLINE
- * line naming every section as shown or omitted, then the sections the
- * criterion's words rank highest (then the rest, in document order, while
- * they fit), laid out in DOCUMENT order with every gap marked
- * `[clipped: N chars omitted]`. The best section alone over budget is
- * clipped head + tail. Nothing to rank by — one section, a tiny budget, no
- * term hit — is the plain head + tail {@link clip}, as before.
+ * Pure: a long document in ≤ `budget` chars, chosen for `focus`
+ * (`utils/section-excerpt.ts`, the excerpt the knowledge answer cuts with too).
  */
 function excerpt(text: string, budget: number, focus: JudgeFocus): string {
-  const sections = splitSections(text);
-  if (sections.length < 2 || budget < EXCERPT_MIN) return clip(text, budget);
-  const ranked = rankByTerms(
+  return excerptByQuery(
+    text,
+    splitSections(text),
+    budget,
     focusQuery(focus),
-    sections.map((s, i) => ({ ...s, i })),
-    (s) => ({ primary: s.label, tertiary: s.text })
-  ).map((r) => r.item.i);
-  if (ranked.length === 0) return clip(text, budget);
-
-  const outline = (shown: ReadonlySet<number>) =>
-    `EXCERPT — chosen for the criteria graded here; every gap is marked "[clipped: N chars omitted]". OUTLINE (${sections.length} sections, ${text.length} chars): ${sections
-      .map(
-        (s, i) => `${i + 1}. ${s.label} [${shown.has(i) ? "shown" : "omitted"}]`
-      )
-      .join(" · ")}`;
-  // "omitted" is the longer word, so the all-omitted outline bounds the real one.
-  const outlineMax = Math.max(200, Math.floor(budget / 4));
-  const gapCost = clipMark(text.length).length + 2;
-  let room =
-    budget - Math.min(outline(new Set()).length, outlineMax) - 1 - gapCost;
-  const shown = new Set<number>();
-  const partial = new Map<number, string>();
-  const rest = sections.map((_, i) => i).filter((i) => !ranked.includes(i));
-  for (const i of [...ranked, ...rest]) {
-    const cost = sections[i]!.text.length + gapCost;
-    if (cost <= room) {
-      shown.add(i);
-      room -= cost;
-    } else if (shown.size === 0) {
-      // The best section alone does not fit: its head and tail, marked.
-      partial.set(i, clip(sections[i]!.text, room - gapCost));
-      shown.add(i);
-      break;
-    }
-  }
-  let body = "";
-  let gap = 0;
-  const flush = () => {
-    if (gap > 0) body += `\n${clipMark(gap)}\n`;
-    gap = 0;
-  };
-  sections.forEach((s, i) => {
-    if (!shown.has(i)) {
-      gap += s.text.length;
-      return;
-    }
-    flush();
-    body += partial.get(i) ?? s.text;
-  });
-  flush();
-  return clip(`${clip(outline(shown), outlineMax, "head")}\n${body}`, budget);
+    "the criteria graded here"
+  );
 }
 
 /**
