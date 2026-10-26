@@ -120,12 +120,31 @@ export function resolveQueryProfileSlug(
 }
 
 /**
+ * A query node's string filter that does not parse, after templating, to a
+ * JSON object.
+ *
+ * Thrown, never swallowed: the old parser read an unparseable filter as "no
+ * filter" and returned EVERY row of the kind, so a typo in a flow feeding an
+ * `entity_update` would have touched the whole kind. A filter the author wrote
+ * and the engine cannot read is a failed step, not an empty filter. The step
+ * runner records it as `failed` with this message (`automation-executor.ts`).
+ */
+export class QueryFilterParseError extends Error {
+  constructor(detail: string) {
+    super(`query node: ${detail}; refusing to run the query unfiltered`);
+    this.name = "QueryFilterParseError";
+  }
+}
+
+/**
  * Parse a query node's `filter` into property conditions. Supports both the
  * legacy shape — a JSON-stringified flat `{ propertyKey: value }` equality
  * map, resolved via template first — and the object shape AI-authored flows
  * emit directly (`{ profileSlug, "properties.<key>": value | { $gt, … } }`).
  * `profileSlug` is resolved separately (`resolveQueryProfileSlug`) and
- * skipped here. Never throws: an unparseable/empty filter yields `[]`.
+ * skipped here. An absent or empty filter yields `[]` (no filter). A string
+ * filter that does not parse to a JSON object throws `QueryFilterParseError`:
+ * a failed read is never an empty filter.
  *
  * KEY RESOLUTION — identical precedence to `parseQueryOrderBy`, on purpose, so
  * the two halves of a query node mean the same thing by the same name:
@@ -146,11 +165,20 @@ export function parseQueryFilterConditions(
   let filterObj = asQueryFilterObject(filter);
   if (!filterObj && typeof filter === "string") {
     const resolved = resolveTemplate(filter, context);
-    if (resolved) {
+    if (resolved.trim()) {
+      let parsed: unknown;
       try {
-        filterObj = JSON.parse(resolved) as Record<string, unknown>;
-      } catch {
-        filterObj = undefined; // unparseable filter — ignore, return unfiltered (defensive)
+        parsed = JSON.parse(resolved);
+      } catch (err) {
+        throw new QueryFilterParseError(
+          `filter is not valid JSON after templating (${(err as Error).message})`
+        );
+      }
+      filterObj = asQueryFilterObject(parsed);
+      if (!filterObj) {
+        throw new QueryFilterParseError(
+          `filter must be a JSON object, got ${parsed === null ? "null" : Array.isArray(parsed) ? "an array" : typeof parsed}`
+        );
       }
     }
   }
