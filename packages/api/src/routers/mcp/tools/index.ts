@@ -315,7 +315,7 @@ function buildAskJsonSchema(): Record<string, unknown> {
   >;
   delete derived.$schema;
   derived.description =
-    'Only with owner=\'human\': HOW the person can answer, so they resolve it in one tap instead of writing back. mode \'confirm\' (yes/no; optional prompt), \'choose\' (1-8 options, at most ONE recommended, each with a one-line `description` of its consequence; allowOther for free text), \'form\' (a small FLAT form; credential field types are dropped — never ask for a secret in a form), \'act\' (something to DO: optional http(s) url + up to 7 steps; the person answers \'I did this\'), \'provide\' (connection {service} | file {accept} | secret {name} — handed over through the vault, never typed into a message). PREFER confirm/choose for any decision (mark exactly ONE option `recommended` when you have a view: their pick vs your recommendation is recorded, and every answered confirm/choose files a `decision` entity); use act ONLY for a physical/world task with steps. Example: {"mode":"choose","options":[{"label":"Ship now","recommended":true,"description":"Publishes today"},{"label":"Wait a week"}]}. Omit for a plain free-text answer. null clears a stored ask. Any mode may carry `lookedAt`: up to 8 {kind, id} (entity | document | view | automation | playbook) you actually read before asking, so the person sees what you based the question on — refs they cannot see are refused, and any title you send is ignored (the pod names them).';
+    'Only with owner=\'human\': HOW the person can answer, so they resolve it in one tap instead of writing back. mode \'confirm\' (yes/no: `prompt` IS the question; `yes` / `no` may each carry a one-line `description` of what that answer does, and ONE may be `recommended`), \'choose\' (1-8 options, at most ONE recommended, each with a one-line `description` of its consequence; allowOther for free text), \'form\' (a small FLAT form; credential field types are dropped — never ask for a secret in a form), \'act\' (something to DO: optional http(s) url + up to 7 steps; the person answers \'I did this\'), \'provide\' (connection {service} | file {accept} | secret {name} — handed over through the vault, never typed into a message). PREFER confirm/choose for any decision (mark exactly ONE answer `recommended` when you have a view: their pick vs your recommendation is recorded, and every answered confirm/choose files a `decision` entity); use act ONLY for a physical/world task with steps. Example: {"mode":"choose","options":[{"label":"Ship now","recommended":true,"description":"Publishes today"},{"label":"Wait a week"}]}. Omit for a plain free-text answer. null clears a stored ask. Any mode may carry `lookedAt`: up to 8 {kind, id} (entity | document | view | automation | playbook) you actually read before asking, so the person sees what you based the question on — refs they cannot see are refused, and any title you send is ignored (the pod names them).';
   return derived;
 }
 
@@ -512,7 +512,11 @@ const SESSION_OUTCOMES_PROPERTY = {
         description:
           "Optional stable id (lowercase slug a-z 0-9 -). Default: a slug of the label. Name the outcome by this key in completeOutput and later updates; a renamed label keeps its key.",
       },
-      label: { type: "string", description: "What it is, in words." },
+      label: {
+        type: "string",
+        description:
+          "A short name for it, a few words: a key, not the question ('Stripe account', not 'Decide: which Stripe account?'). The question goes in the ask.",
+      },
       kind: {
         type: "string",
         description:
@@ -2251,7 +2255,7 @@ export const tools = {
                     type: "string",
                     maxLength: 500,
                     description:
-                      "Only with owner='human'. ONE line naming WHICH thing is missing, not its class — 'the Stripe restricted key for the live account', not 'a credential'. This is what the person reads to know what to do.",
+                      "Only with owner='human'. ONE line naming WHICH thing is missing, not its class — 'the Stripe restricted key for the live account', not 'a credential'. Context the question does not already say: never a repeat of the label or the prompt.",
                   },
                   ref: {
                     description:
@@ -2394,7 +2398,7 @@ export const tools = {
                     type: "string",
                     maxLength: 500,
                     description:
-                      "Only with owner='human'. ONE line naming WHICH thing is missing, not its class — 'the Stripe restricted key for the live account', not 'a credential'. This is what the person reads to know what to do.",
+                      "Only with owner='human'. ONE line naming WHICH thing is missing, not its class — 'the Stripe restricted key for the live account', not 'a credential'. Context the question does not already say: never a repeat of the label or the prompt.",
                   },
                   ref: {
                     description:
@@ -2451,7 +2455,7 @@ export const tools = {
                   type: "string",
                   maxLength: 500,
                   description:
-                    "Only with owner='human'. ONE line naming WHICH thing is missing, not its class.",
+                    "Only with owner='human'. ONE line naming WHICH thing is missing, not its class; never a repeat of the label or the prompt.",
                 },
                 ref: {
                   description:
