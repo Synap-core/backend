@@ -103,10 +103,13 @@ export async function fileAnswerDecision(p: {
         .where(eq(entities.id, p.slot.decisionId))
         .limit(1);
       if (!row) throw new Error("the decision it asks about was not found");
-      const previous = p.slot.answer
+      // The answer before this one: still on the slot, or archived when the
+      // slot was re-asked (`stampBlocked` → `answerHistory`).
+      const prior = p.slot.answer ?? p.slot.answerHistory?.at(-1);
+      const previous = prior
         ? decisionFromAnswer({
             slot: p.slot,
-            answer: p.slot.answer,
+            answer: prior,
             sessionId: p.session.id,
           })
         : null;
