@@ -38,6 +38,7 @@ import type {
 import type { SQL } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import { randomUUID } from "crypto";
+import { MACHINE_AGENT_TYPE } from "@synap-core/types/agents";
 import {
   createAndVerifyHubInboundKey,
   type RegistrationResult,
@@ -46,7 +47,7 @@ import {
   agentKeyGrantPermissions,
   aiDefaultCapabilities,
 } from "@synap-core/types/grants";
-import { attachGrantOrRevoke } from "./key-grant.js";
+import { attachGrantOrRevoke, clipHostedAgentGrants } from "./key-grant.js";
 import { narrowKeyGrants } from "./agent-connect.js";
 import {
   AGENT_KEY_TTL_DAYS,
@@ -631,6 +632,21 @@ export async function findOrCreateServiceAgentUser(opts: {
     return { agentUserId: existing.id, email: existing.email };
   }
 
+  if (hostUserId) {
+    const adopted = await adoptComputerlessAgent({
+      creatorId,
+      agentType,
+      hostUserId,
+    });
+    if (adopted) {
+      logger?.info(
+        { agentUserId: adopted.agentUserId, agentType, hostUserId },
+        "findOrCreateServiceAgentUser: adopted the creator's computer-less agent onto its only computer"
+      );
+      return adopted;
+    }
+  }
+
   try {
     const { agentUserId, email } = await insertServiceAgentUser({
       creatorId,
@@ -664,6 +680,55 @@ export async function findOrCreateServiceAgentUser(opts: {
     );
     return { agentUserId: raced.id, email: raced.email };
   }
+}
+
+/**
+ * Q-D2 (founder 2026-10-26): the creator's agent of this type that runs on NO
+ * computer (every agent `/setup/agent` minted before D1) is moved onto
+ * `hostUserId` ONCE, when that is unambiguous: the creator has exactly one
+ * computer, and it is this one. The agent keeps its history, rules and
+ * posture; from now its keys are clipped to the computer's grant and revoking
+ * the computer revokes them. With two computers nothing is guessed: the
+ * caller creates a fresh "<type> on <computer>", and the old agent stays
+ * listed under "No computer" for its person to retire. Null = not adopted.
+ */
+async function adoptComputerlessAgent(opts: {
+  creatorId: string;
+  agentType: string;
+  hostUserId: string;
+}): Promise<{ agentUserId: string; email: string } | null> {
+  const computers = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(
+      and(
+        eq(users.agentType, MACHINE_AGENT_TYPE),
+        eq(users.createdByUserId, opts.creatorId)
+      )
+    )
+    .limit(2);
+  if (computers.length !== 1 || computers[0]!.id !== opts.hostUserId)
+    return null;
+  const [adopted] = await db
+    .update(users)
+    .set({ hostUserId: opts.hostUserId, updatedAt: new Date() })
+    .where(
+      eq(
+        users.id,
+        drizzleSql`(SELECT ${users.id} FROM ${users} WHERE ${and(
+          eq(users.userType, "agent"),
+          eq(users.agentType, opts.agentType),
+          eq(users.createdByUserId, opts.creatorId),
+          eq(users.isPersonalAgent, false),
+          isNull(users.hostUserId)
+        )} ORDER BY ${users.createdAt} ASC LIMIT 1)`
+      )
+    )
+    .returning({ id: users.id, email: users.email });
+  if (!adopted) return null;
+  // Its keys minted before now are cut to the computer's reach at once.
+  await clipHostedAgentGrants(adopted.id, opts.creatorId);
+  return { agentUserId: adopted.id, email: adopted.email };
 }
 
 /**
@@ -957,6 +1022,9 @@ export interface ProvisionSurfaceAgentKeyOpts {
   /**
    * The COMPUTER the agent runs on (0320): the agent is then the distinct
    * "<type> on <computer>" principal, not the creator's computer-less one.
+   * Every door names it, null included (D1): a door that forgot to say which
+   * computer minted agents their computer could not revoke (12b90604).
+   * Tripwire: `agent-creator-type-singleton` reads every call site.
    */
   hostUserId?: string | null;
   /** Provenance of a NEW agent user (`users.created_via`). Default "cli". */

@@ -482,6 +482,8 @@ export const hubAuthMiddleware = async (
     // external user's data under the pod owner as well. Non-sub-token traffic is
     // unchanged: a linked key's writes still own as the human.
     const keyIdentity = await resolveKeyIdentity(keyRecord);
+    // Who HOLDS the key, whatever human it acts for (`/users/me.principal`).
+    c.set("keyPrincipal", keyIdentity.principal);
     if (keyRecord.linkedUserId && !subTokenResolved) {
       c.set("linkedUserId", keyRecord.linkedUserId);
       c.set("userId", keyIdentity.effectiveUserId); // human owns the entities

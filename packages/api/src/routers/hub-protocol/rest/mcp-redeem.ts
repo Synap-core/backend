@@ -174,6 +174,8 @@ export function registerMcpRedeemRoutes(app: HubHono): void {
         agentType: row.agentType, // "claude-web"
         createdByUserId: row.podUserId,
         linkedUserId: row.podUserId, // the key acts for THIS human
+        // claude.ai runs on no computer of this person's.
+        hostUserId: null,
         instanceId,
         scopes,
         ensureRegistryRow: true,

@@ -701,6 +701,10 @@ export function registerSetupRoutes(app: HubHono): void {
     let surfaceAgentLinkedUserId: string | undefined;
     let surfaceKeyIsHumanOwned = false;
     let surfaceCallerKeyId: string | undefined;
+    // D1: the computer the new agent runs on, from the CALLING key, never the
+    // body: a computer's key registers its agents on itself; a person's own
+    // key registers an agent with no computer (Q-D3).
+    const surfaceHostUserId: string | null = null;
     if (!authenticated) {
       const keyRecord = await apiKeyService.validateApiKey(token);
       if (
@@ -721,6 +725,19 @@ export function registerSetupRoutes(app: HubHono): void {
         authMethod = "api_key_surface";
         surfaceCallerKeyId = keyRecord.id;
         const identity = await resolveKeyIdentity(keyRecord);
+        // Q-D1: an AI's own key never registers another AI: it could widen
+        // its reach within its computer's grant with no person seeing it.
+        // Only a computer's key, or a person's, connects an AI.
+        if (identity.isAgent && identity.principal.kind !== "machine") {
+          return c.json(
+            {
+              error:
+                "An AI's key cannot connect another AI. Connect it with this computer's key (`synap init`) or from your own session.",
+              code: "AGENT_KEY_CANNOT_REGISTER_AGENTS",
+            },
+            403
+          );
+        }
         surfaceKeyIsHumanOwned = !identity.isAgent;
         surfaceAgentLinkedUserId =
           keyRecord.linkedUserId ?? keyRecord.userId ?? undefined;
@@ -1140,6 +1157,13 @@ export function registerSetupRoutes(app: HubHono): void {
           : {}),
         createdByUserId: agentCreatorId,
         linkedUserId: resolvedLinkedUserId ?? agentCreatorId,
+        // A computer's key: "<type> on <computer>", so its grant is clipped
+        // to the computer's and revoking the computer revokes it. Every other
+        // door (issuer JWT, PROVISIONING_TOKEN, a person's key): no computer.
+        hostUserId:
+          typeof body.hostUserId === "string"
+            ? body.hostUserId
+            : surfaceHostUserId,
         // OPT-IN pod-wide: forces the minted key's linkedUserId to null (governed
         // as the agent-user's own principal). Ignored when false.
         podWide,

@@ -38,6 +38,7 @@ import { getConfinedWorkspace } from "../confine-workspace.js";
 import { isAgentCaller } from "../../../services/library/agent-door.js";
 import { assertWorkspaceWrite } from "../../../utils/workspace-write-access.js";
 import { canRead, userPrincipal } from "../../../access/door.js";
+import type { KeyPrincipal } from "../../../access/key-identity.js";
 
 /**
  * Module-scoped pino logger.
@@ -81,6 +82,12 @@ export type HubVariables = {
    * explicitly in the request body.
    */
   agentUserId?: string;
+  /**
+   * Who HOLDS the bearer key (`resolveKeyIdentity().principal`): its own id,
+   * kind and computer. Set only for an API-key caller; `userId` is the human
+   * it acts for.
+   */
+  keyPrincipal?: KeyPrincipal;
   /**
    * The authenticating key's `keyType` (e.g. "service", "hub_inbound"). Set by
    * the auth middleware for Bearer callers. Used for SERVICE-KEY WORKSPACE

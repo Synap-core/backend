@@ -18,6 +18,9 @@
  *                         (derived from is-agent, NEVER from linkedUserId).
  *   - `effectiveUserId` = `keyRecord.linkedUserId ?? keyRecord.userId`
  *                         (the human the agent acts for, else the key owner).
+ *   - `principal`       = who HOLDS the key (`keyRecord.userId`), its kind,
+ *                         and the computer it runs on (D1: an agent's host is
+ *                         read from its own row, never from a caller's body).
  *
  * Costs ONE indexed PK lookup on `users` — `keyRecord` (a plain `api_keys` row)
  * does not carry the owner's `userType`.
@@ -42,9 +45,30 @@
  */
 
 import { UnauthorizedError } from "@synap-core/types";
+import { MACHINE_AGENT_TYPE } from "@synap-core/types/agents";
 import { isAppPublicId } from "@synap-core/types/membrane";
 import { db, users, eq, GrantRepository } from "@synap/database";
 import type { ApiKeyRecord, KeyGrant } from "@synap/database";
+
+/**
+ * What holds a key: a person, an AI agent, a computer (`agent_type =
+ * 'machine'`), an app's agent, or a holder with no person or agent row (the
+ * IS `system` sentinel).
+ */
+export type KeyPrincipalKind =
+  "human" | "agent" | "machine" | "app" | "service";
+
+export interface KeyPrincipal {
+  /** `api_keys.user_id`: who holds the key, never the human it acts for. */
+  id: string;
+  kind: KeyPrincipalKind;
+  /**
+   * The computer the principal runs on: itself for a computer, its
+   * `users.host_user_id` for an agent hosted on one, else null (no computer).
+   * The same derivation as `session-runners.ts`' computer of a runner.
+   */
+  hostUserId: string | null;
+}
 
 export interface ResolvedKeyIdentity {
   /** The identity that OWNS/SEES the data: the linked human, else the key owner. */
@@ -71,6 +95,8 @@ export interface ResolvedKeyIdentity {
    * it never widens what the grant permits.
    */
   grant: KeyGrant | null;
+  /** Who holds the key, and on which computer (`/users/me`, `/setup/agent`). */
+  principal: KeyPrincipal;
 }
 
 /**
@@ -87,7 +113,7 @@ export async function resolveKeyIdentity(
 ): Promise<ResolvedKeyIdentity> {
   const owner = await db.query.users.findFirst({
     where: eq(users.id, keyRecord.userId),
-    columns: { userType: true },
+    columns: { userType: true, agentType: true, hostUserId: true },
   });
   const isAgent = owner?.userType === "agent";
   const grant = keyRecord.id
@@ -113,6 +139,7 @@ export async function resolveKeyIdentity(
         isAgent: false,
         // Cut down to what the app may give this person NOW (PR #29 L1).
         grant: personKey.grant,
+        principal: { id: keyRecord.userId, kind: "human", hostUserId: null },
       };
     }
     if (personKey.kind === "dead") {
@@ -136,12 +163,28 @@ export async function resolveKeyIdentity(
       agentUserId: appAgentUserId,
       isAgent: true,
       grant: await new GrantRepository(db).resolveForKey(keyRecord.id),
+      principal: { id: appAgentUserId, kind: "app", hostUserId: null },
     };
   }
+  const kind: KeyPrincipalKind = isAgent
+    ? owner?.agentType === MACHINE_AGENT_TYPE
+      ? "machine"
+      : isAppPublicId(owner?.agentType)
+        ? "app"
+        : "agent"
+    : owner?.userType === "human"
+      ? "human"
+      : "service";
   return {
     effectiveUserId: keyRecord.linkedUserId ?? keyRecord.userId,
     agentUserId: isAgent ? keyRecord.userId : undefined,
     isAgent,
     grant,
+    principal: {
+      id: keyRecord.userId,
+      kind,
+      hostUserId:
+        kind === "machine" ? keyRecord.userId : (owner?.hostUserId ?? null),
+    },
   };
 }

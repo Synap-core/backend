@@ -12,9 +12,9 @@
  * and error codes (NO_HUMAN_OWNER / NO_LINKED_HUMAN).
  */
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const servicePath = join(here, "../services/agent-identity-service.ts");
@@ -89,5 +89,80 @@ describe("agent creator×type singleton (tripwire)", () => {
     const src = readFileSync(captureAgentPath, "utf8");
     expect(src).toMatch(/resolvePodOwnerUserId/);
     expect(src).toMatch(/findCaptureAgent\(ownerUserId\)/);
+  });
+});
+
+// ── D1: every agent mint names its computer ───────────────────────────────
+// 12b90604: `/setup/agent` was called WITH a computer's key and never said
+// so, minting agents their computer could not clip or revoke. The scanned
+// set is DERIVED: every non-test source file under api/src, database/src and
+// jobs/src that calls `provisionSurfaceAgentKey(` — a new door joins by
+// existing. Each call's argument object must name `hostUserId` (null
+// included: "no computer" is a decision, not an omission).
+const PACKAGES = join(here, "../../..");
+function sourceFiles(dir: string, out: string[] = []): string[] {
+  for (const name of readdirSync(dir)) {
+    if (name === "node_modules" || name === "dist") continue;
+    const p = join(dir, name);
+    if (statSync(p).isDirectory()) sourceFiles(p, out);
+    else if (
+      p.endsWith(".ts") &&
+      !p.endsWith(".test.ts") &&
+      !p.includes("__tests__") &&
+      !p.includes("__tripwires__")
+    )
+      out.push(p);
+  }
+  return out;
+}
+/** The text of the call's argument list, balanced on parentheses. */
+function callArgs(src: string, open: number): string {
+  let depth = 0;
+  for (let i = open; i < src.length; i++) {
+    if (src[i] === "(") depth++;
+    else if (src[i] === ")" && --depth === 0) return src.slice(open, i + 1);
+  }
+  return src.slice(open);
+}
+
+describe("every provisionSurfaceAgentKey call names its computer (D1 tripwire)", () => {
+  const sites = ["api/src", "database/src", "jobs/src"]
+    .flatMap((r) => sourceFiles(join(PACKAGES, r)))
+    .flatMap((file) => {
+      const src = readFileSync(file, "utf8");
+      return [...src.matchAll(/(?<!function )\bprovisionSurfaceAgentKey\(/g)]
+        .filter((m) => {
+          // A mention inside a comment is not a call.
+          const line = src.slice(src.lastIndexOf("\n", m.index!) + 1, m.index);
+          return !/^\s*(\*|\/\/)/.test(line);
+        })
+        .map((m) => ({
+          file: relative(PACKAGES, file),
+          args: callArgs(src, m.index! + m[0].length - 1),
+        }));
+    });
+
+  it("finds the doors (the scan is live)", () => {
+    const files = sites.map((s) => s.file);
+    expect(files.length).toBeGreaterThanOrEqual(4);
+    // Reachability: the door this wave fixed, and the device door.
+    expect(files).toContain("api/src/routers/hub-protocol/rest/setup.ts");
+    expect(files).toContain("api/src/services/machine-connect.ts");
+  });
+
+  it.each(sites.map((s) => [s.file, s.args] as const))(
+    "%s passes hostUserId",
+    (_file, args) => {
+      expect(args).toMatch(/\bhostUserId\s*:/);
+    }
+  );
+
+  it("/setup/agent takes the computer from the CALLING key, never the body", () => {
+    const src = readFileSync(
+      join(here, "../routers/hub-protocol/rest/setup.ts"),
+      "utf8"
+    );
+    expect(src).toMatch(/surfaceHostUserId = identity\.principal\.hostUserId;/);
+    expect(src).not.toMatch(/body\.hostUserId/);
   });
 });
