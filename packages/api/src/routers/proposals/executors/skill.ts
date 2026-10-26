@@ -57,9 +57,16 @@ export function registerSkillExecutors(): void {
         return { success: true, alreadyApproved: true };
       }
 
-      const { insertSkillGoverned } = await import("../../skills.js");
+      const {
+        insertSkillGoverned,
+        replaceSkillRequiredTools,
+        visibleRequiredTools,
+      } = await import("../../skills.js");
+      // Not a `skills` column: the declared `requires` edges, replayed below
+      // once the row exists (ticket c5058d24).
+      const { requiredToolIds, requiredToolNames, ...skillValues } = innerData;
       const result = await insertSkillGoverned({
-        ...(innerData as Record<string, unknown>),
+        ...(skillValues as Record<string, unknown>),
         // Own the skill as the APPROVER (mirrors project/view) — no agentUserId
         // so the re-entrant gate auto-grants for the operator authority. `id` in
         // innerData is stripped by insertSkillGoverned (it mints its own).
@@ -127,6 +134,59 @@ export function registerSkillExecutors(): void {
           .set({ approved: false, updatedAt: new Date() })
           .where(eq(skills.id, materializedSkill.id));
         materializedSkill.approved = false;
+      }
+
+      // The tools the author declared, which the reviewer approved with the
+      // skill — RE-RESOLVED under the approver's visibility (a stored id is
+      // data, and these edges are the scope the skill's own provider calls
+      // skip a second review under), then written through the same body as
+      // `skills.setRequiredTools`. An id that no longer resolves is REFUSED
+      // and reported, never written. A FAILED read or write is reported too:
+      // the approver learns the approved scope did not land, never a quiet
+      // success. Non-fatal for the skill: a missing edge only means its own
+      // calls are gated again (the safe direction). Refusals name the tool
+      // (`requiredToolNames`, same order as the ids), never an id.
+      const refusals: string[] = [];
+      const declaredToolIds = Array.isArray(requiredToolIds)
+        ? requiredToolIds.filter((id): id is string => typeof id === "string")
+        : [];
+      const declaredNames = Array.isArray(requiredToolNames)
+        ? requiredToolNames
+        : [];
+      const toolLabel = (id: string) => {
+        const name = declaredNames[declaredToolIds.indexOf(id)];
+        return typeof name === "string" && name.trim() !== ""
+          ? `\`${name}\``
+          : "(unnamed)";
+      };
+      if (declaredToolIds.length > 0) {
+        try {
+          const visible = new Set(
+            (await visibleRequiredTools(userId, declaredToolIds)).map(
+              (t) => t.id
+            )
+          );
+          for (const id of declaredToolIds) {
+            if (!visible.has(id)) {
+              refusals.push(
+                `Required tool ${toolLabel(id)} was not linked: it is not an installed tool the approver can see.`
+              );
+            }
+          }
+          await replaceSkillRequiredTools({
+            userId,
+            skill: materializedSkill,
+            toolIds: declaredToolIds.filter((id) => visible.has(id)),
+          });
+        } catch (err) {
+          logger.error(
+            { skillId: materializedSkill.id, err },
+            "skill/create approval: requires edges not written (non-fatal — approval proceeds)"
+          );
+          refusals.push(
+            `Required tools ${declaredToolIds.map(toolLabel).join(", ")} may not be linked: the approval could not check or write them, so the skill's own calls to them may still ask for review.`
+          );
+        }
       }
 
       const providerSpec = materializedSkill.providerSpec;
@@ -206,7 +266,7 @@ export function registerSkillExecutors(): void {
         "approved",
         userId
       );
-      return { success: true };
+      return { success: true, ...(refusals.length > 0 ? { refusals } : {}) };
     },
   });
   // ── skill / delete ───────────────────────────────────────────────────────
