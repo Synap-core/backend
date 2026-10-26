@@ -45,6 +45,7 @@ import {
   fetchCPCapabilityTemplateByKey,
 } from "./cp-template-client.js";
 import { READ_ONLY_BUILTIN_VERBS } from "./builtin-verbs.js";
+import { approvalRefusesRun } from "@synap/capability-gate";
 
 // ── Contract (matched verbatim by the CLI being built in parallel) ────────────
 
@@ -108,7 +109,7 @@ export interface CapabilityCardVerb {
    * than a create/update. TODO: promote fully to explicit skill metadata.
    */
   type: "read" | "write" | "action";
-  /** Backing skill `approved === true`. */
+  /** The backing skill passes the run gate's `approvalRefusesRun`. */
   enabled: boolean;
   /**
    * Run posture for an agent (`catalogVerbPosture`): `auto` runs now, `propose`
@@ -943,7 +944,8 @@ export async function buildCapabilityCatalog(
 
     const verbs: CapabilityCardVerb[] = mySkills.map((s) => {
       const type = verbType(s.name, s.metadata, s.kind);
-      const enabled = s.approved === true;
+      // The gate's own predicate, never a second spelling of it (509c9358).
+      const enabled = !approvalRefusesRun(s);
       // `skills.category` is the first-class column the capability applier
       // persists from the definition; `metadata.category` is a tolerated
       // fallback for rows tagged out-of-band.
