@@ -592,6 +592,88 @@ describe("the person the loop asks is the goal's OWNER seat", () => {
   });
 });
 
+describe("the run names WHO works it and HOW (plan v5 T2)", () => {
+  async function delegate(
+    goalId: string,
+    principalId: string,
+    opts: { kind?: "agent" | "person"; state?: string; at?: string } = {}
+  ) {
+    await q(
+      `insert into track_participants (id, track_id, principal_kind, principal_id, role, commitment, commitment_state, decided_by, created_at)
+       values (gen_random_uuid(), $1, $2, $3, 'delegate', 'Work the goal', $4, $5, $6)`,
+      [
+        goalId,
+        opts.kind ?? "agent",
+        principalId,
+        opts.state ?? "accepted",
+        OWNER,
+        opts.at ?? new Date().toISOString(),
+      ]
+    );
+  }
+  const lastData = () =>
+    loopCalls().at(-1)!.data as Record<string, unknown> & {
+      agentIds?: string[];
+      templateId?: string | null;
+    };
+
+  it("hands the run to the goal's AGENT delegate — one that accepted beats one only asked", async () => {
+    // Rules out: the run proposed with no agent (an approved run nobody works),
+    // and the first row winning over the one that said yes.
+    const id = await goal({ name: "Handed" });
+    await delegate(id, "agent-asked", {
+      state: "proposed",
+      at: "2026-10-01T00:00:00Z",
+    });
+    await delegate(id, "agent-yes", {
+      state: "accepted",
+      at: "2026-10-02T00:00:00Z",
+    });
+    await delegate(id, "agent-no", {
+      state: "declined",
+      at: "2026-09-01T00:00:00Z",
+    });
+    await delegate(id, "person-yes", {
+      kind: "person",
+      state: "accepted",
+      at: "2026-09-01T00:00:00Z",
+    });
+    expect((await runGoalLoop(id)).status).toBe("proposed");
+    expect(lastData().agentIds).toEqual(["agent-yes"]);
+  });
+
+  it("never hands it to an agent who declined or reported it impossible", async () => {
+    const id = await goal({ name: "Declined" });
+    await delegate(id, "agent-no", { state: "declined" });
+    await delegate(id, "agent-cannot", { state: "reported_impossible" });
+    expect((await runGoalLoop(id)).status).toBe("proposed");
+    expect(lastData().agentIds).toBeUndefined();
+  });
+
+  it("runs the goal's method playbook", async () => {
+    // Rules out: the run proposed with no playbook while the goal names one.
+    const playbookId = randomUUID();
+    await q(
+      `insert into playbooks (id, workspace_id, name, goal_template, status, executor, stages, params, expected_outputs, criteria, created_by)
+       values ($1, null, 'Ship a change', 'Ship', 'active', 'is-agent', '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, $2)`,
+      [playbookId, OWNER]
+    );
+    const id = await goal({ name: "With a method" });
+    await q(`update project_tracks set playbook_id = $1 where id = $2`, [
+      playbookId,
+      id,
+    ]);
+    expect((await runGoalLoop(id)).status).toBe("proposed");
+    expect(lastData().templateId).toBe(playbookId);
+  });
+
+  it("a goal with no method proposes a run with no playbook", async () => {
+    const id = await goal({ name: "No method" });
+    expect((await runGoalLoop(id)).status).toBe("proposed");
+    expect(lastData().templateId ?? null).toBeNull();
+  });
+});
+
 describe("the seams that run it", () => {
   it("a run of the goal closing makes it propose its next run", async () => {
     const id = await goal({});
