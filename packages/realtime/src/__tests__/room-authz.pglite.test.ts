@@ -1,7 +1,8 @@
 /**
- * `join-room` gate for `channel:<id>` — on a real Postgres (PGlite), through the
- * real gate (`canUserJoinRoom`) and the real read predicate it delegates to
- * (`channelVisibilityWhere` in `@synap/database`).
+ * `join-room` gate — on a real Postgres (PGlite), through the real gate
+ * (`canPrincipalJoinRoom`), the access door it asks (`canJoinRoom`, vendored
+ * from `@synap/api/access-door`) and the read floors that door applies
+ * (`channelVisibilityWhere` for a channel, the space read for a workspace).
  *
  * The defect this pins: the gate admitted any member of the channel's
  * WORKSPACE, so a workspace member off a roster-only session room's roster (or
@@ -42,7 +43,9 @@ vi.mock("@synap/database", async (importOriginal) => {
 
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
-import { canPrincipalJoinRoom, canUserJoinRoom } from "../room-authz.js";
+import { canPrincipalJoinRoom } from "../room-authz.js";
+
+const asUser = (userId: string) => ({ kind: "user" as const, userId });
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -156,7 +159,7 @@ async function channel(args: {
   return id;
 }
 
-describe("canUserJoinRoom('channel:…') = the channel read predicate", () => {
+describe("a person joining 'channel:…' = the channel read predicate", () => {
   it("session room: roster outsider may join; workspace member off the roster may NOT", async () => {
     const ws = await world();
     const room = await channel({
@@ -165,31 +168,43 @@ describe("canUserJoinRoom('channel:…') = the channel read predicate", () => {
       session: true,
       roster: [OWNER, ROSTER_OUTSIDER],
     });
-    expect(await canUserJoinRoom(`channel:${room}`, OWNER)).toBe(true);
-    expect(await canUserJoinRoom(`channel:${room}`, ROSTER_OUTSIDER)).toBe(
+    expect(await canPrincipalJoinRoom(`channel:${room}`, asUser(OWNER))).toBe(
       true
     );
-    expect(await canUserJoinRoom(`channel:${room}`, WS_MEMBER)).toBe(false);
+    expect(
+      await canPrincipalJoinRoom(`channel:${room}`, asUser(ROSTER_OUTSIDER))
+    ).toBe(true);
+    expect(
+      await canPrincipalJoinRoom(`channel:${room}`, asUser(WS_MEMBER))
+    ).toBe(false);
   });
 
   it("private thread: only its owner", async () => {
     const ws = await world();
     const thread = await channel({ ws, type: "thread" });
-    expect(await canUserJoinRoom(`channel:${thread}`, OWNER)).toBe(true);
-    expect(await canUserJoinRoom(`channel:${thread}`, WS_MEMBER)).toBe(false);
+    expect(await canPrincipalJoinRoom(`channel:${thread}`, asUser(OWNER))).toBe(
+      true
+    );
+    expect(
+      await canPrincipalJoinRoom(`channel:${thread}`, asUser(WS_MEMBER))
+    ).toBe(false);
   });
 
   it("control — a plain shared GROUP channel admits workspace members, not outsiders", async () => {
     const ws = await world();
     const group = await channel({ ws, type: "group" });
-    expect(await canUserJoinRoom(`channel:${group}`, WS_MEMBER)).toBe(true);
-    expect(await canUserJoinRoom(`channel:${group}`, ROSTER_OUTSIDER)).toBe(
-      false
-    );
+    expect(
+      await canPrincipalJoinRoom(`channel:${group}`, asUser(WS_MEMBER))
+    ).toBe(true);
+    expect(
+      await canPrincipalJoinRoom(`channel:${group}`, asUser(ROSTER_OUTSIDER))
+    ).toBe(false);
   });
 
   it("a non-uuid channel id is denied, not thrown", async () => {
-    expect(await canUserJoinRoom("channel:not-a-uuid", OWNER)).toBe(false);
+    expect(
+      await canPrincipalJoinRoom("channel:not-a-uuid", asUser(OWNER))
+    ).toBe(false);
   });
 });
 
@@ -263,9 +278,15 @@ describe("canPrincipalJoinRoom(service) — the key's owner, narrowed to its wor
     const chanB = await channel({ ws: b, type: "group" });
     const docB = await objectRoom(b);
     // Control: the owner alone may join every one of B's rooms.
-    expect(await canUserJoinRoom(`workspace:${b}`, OWNER)).toBe(true);
-    expect(await canUserJoinRoom(`channel:${chanB}`, OWNER)).toBe(true);
-    expect(await canUserJoinRoom(`channel:${docB}`, OWNER)).toBe(true);
+    expect(await canPrincipalJoinRoom(`workspace:${b}`, asUser(OWNER))).toBe(
+      true
+    );
+    expect(await canPrincipalJoinRoom(`channel:${chanB}`, asUser(OWNER))).toBe(
+      true
+    );
+    expect(await canPrincipalJoinRoom(`channel:${docB}`, asUser(OWNER))).toBe(
+      true
+    );
 
     expect(await canPrincipalJoinRoom(`workspace:${a}`, k)).toBe(true);
     expect(await canPrincipalJoinRoom(`channel:${chanA}`, k)).toBe(true);
@@ -309,5 +330,27 @@ describe("canPrincipalJoinRoom(service) — the key's owner, narrowed to its wor
     const chanA = await channel({ ws: a, type: "group" });
     expect(await canPrincipalJoinRoom(`channel:${chanA}`, k)).toBe(true);
     expect(await canPrincipalJoinRoom(`workspace:${a}`, k)).toBe(false);
+  });
+});
+
+/**
+ * Q-A2 (founder 10-26): a `workspace:` room admits exactly the space's READERS
+ * — the door's space read — not "any member row". Its owner joins with no
+ * member row; a stranger to a private space does not.
+ */
+describe("a person joining 'workspace:…' = the space read floor", () => {
+  it("its owner joins with no member row; an outsider does not", async () => {
+    await world();
+    const owned = randomUUID();
+    await q(
+      `insert into workspaces (id, owner_id, name) values ($1, $2, 'Mine')`,
+      [owned, ROSTER_OUTSIDER]
+    );
+    expect(
+      await canPrincipalJoinRoom(`workspace:${owned}`, asUser(ROSTER_OUTSIDER))
+    ).toBe(true);
+    expect(
+      await canPrincipalJoinRoom(`workspace:${owned}`, asUser(WS_MEMBER))
+    ).toBe(false);
   });
 });
