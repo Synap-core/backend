@@ -480,6 +480,11 @@ export const SYSTEM_PROFILE_PROPERTY_LINKS: ReadonlyArray<{
       { slug: "followedRecommendation", required: false, displayOrder: 13 },
       { slug: "sourceSessionId", required: false, displayOrder: 14 },
       { slug: "askedByAgent", required: false, displayOrder: 15 },
+      // Where the answer came from when an agent RELAYED it from a chat
+      // (Resolve-XP W1, api `decision-from-answer.ts`): absent on a tap.
+      { slug: "answeredVia", required: false, displayOrder: 16 },
+      { slug: "relayedBy", required: false, displayOrder: 17 },
+      { slug: "relayQuote", required: false, displayOrder: 18 },
     ],
   },
   // Question — what the user is investigating.
@@ -1417,6 +1422,30 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
         valueType: PropertyValueType.STRING,
         constraints: {},
         uiHints: { label: "Asked by agent", inputType: "text" },
+      },
+      // Relay provenance of a decision (see the decision link list above).
+      {
+        slug: "answeredVia",
+        valueType: PropertyValueType.STRING,
+        constraints: { enum: ["tap", "relayed"] },
+        uiHints: {
+          label: "Answered",
+          inputType: "select",
+          helpText:
+            "relayed = an agent carried the person's words from a chat; tap = the person confirmed it in Synap.",
+        },
+      },
+      {
+        slug: "relayedBy",
+        valueType: PropertyValueType.STRING,
+        constraints: {},
+        uiHints: { label: "Relayed by agent", inputType: "text" },
+      },
+      {
+        slug: "relayQuote",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 5000 },
+        uiHints: { label: "Their words", inputType: "text" },
       },
       {
         slug: "viewCount",

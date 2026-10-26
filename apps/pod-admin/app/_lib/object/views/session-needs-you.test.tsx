@@ -57,6 +57,12 @@ const {
     ask: ASK,
     sessionTitle: "Launch plan",
     target: { kind: "session", id: SESSION_ID },
+    // The asker, named by the pod on the signal (`askedBy` → `by`).
+    by: {
+      kind: "agent",
+      id: "a0000000-0000-4000-8000-000000000001",
+      label: "Claude-code",
+    },
   });
   const owedElsewhere = signal({
     id: "owed:elsewhere",
@@ -243,7 +249,8 @@ function render(node: ReactElement): string {
 describe("Needs you — the session's own asks, answered in place", () => {
   it("draws this session's ask: the question, its options, the recommendation marked", () => {
     seen.signals = [owedHere, owedElsewhere, cluster];
-    const seenText = text(render(<NeedsYouSection sessionId={SESSION_ID} />));
+    const html = render(<NeedsYouSection sessionId={SESSION_ID} />);
+    const seenText = text(html);
 
     expect(calls).toContainEqual([
       "signals.list",
@@ -257,30 +264,74 @@ describe("Needs you — the session's own asks, answered in place", () => {
     // Another session's ask, and a proposal (its own section), are not here.
     expect(seenText).not.toContain("Pick the other session's logo");
     expect(seenText).not.toContain("Create task");
-    // On its own page the ask does not offer a door back to the session.
-    expect(seenText).not.toContain("Open session");
-    // Nor does "Who is asking" repeat the session the reader is already on.
+    // The asker is a NAMED mark (decision 4, 2026-10-26): never a sentence,
+    // never "An agent", never "It is waiting on your answer".
     expect(seenText).toContain("Claude-code");
-    expect(seenText).not.toContain("while working in the session");
+    expect(seenText).not.toMatch(
+      /An agent|waiting on your answer|Who is asking/
+    );
+    // On its own page the mark is no door back to the session.
+    expect(html).not.toMatch(/<a [^>]*>(?:(?!<\/a>)[\s\S])*Claude-code/);
     expect(seenText).not.toContain("Launch plan");
   });
 
-  it("everywhere else (Review) the same ask still says which session it came from", () => {
+  it("everywhere else (Review) the asker's mark is the door to its session", () => {
     const row = reviewRows([owedHere] as never, new Map())[0];
     if (row?.detail?.kind !== "ask") throw new Error("expected an ask row");
-    const seenText = text(
-      render(
-        <AskAnswer
-          slot={row.detail.slot}
-          live={row.detail.slot}
-          occurredAt={row.occurredAt}
-          onSettled={() => {}}
-          onClose={() => {}}
-        />
-      )
+    const html = render(
+      <AskAnswer
+        slot={row.detail.slot}
+        live={row.detail.slot}
+        onSettled={() => {}}
+        onClose={() => {}}
+      />
     );
-    expect(seenText).toContain("while working in the session Launch plan");
-    expect(seenText).toContain("Open session");
+    expect(html).toMatch(
+      /<a [^>]*href="[^"]+"[^>]*>(?:(?!<\/a>)[\s\S])*Claude-code/
+    );
+    expect(text(html)).not.toMatch(/An agent|waiting on your answer/);
+  });
+
+  it("the founder's card (2026-10-26): the question ONCE, the cause named, Yes / No with icon, tone and the pick", () => {
+    const title = "Four observations will confirm or kill H1 and H2";
+    const founder = {
+      sessionId: SESSION_ID,
+      label: `Decide: ${title}`,
+      sessionTitle: `Decide: ${title}`,
+      ask: {
+        mode: "confirm",
+        prompt: `Accept: ${title}?`,
+        yes: { recommended: true, description: "Marks it accepted" },
+        no: { description: "Marks it rejected" },
+      },
+      why: `${title}. Each one is dated.`,
+      claimedDone: false,
+      blockedReason: "decision",
+      owedSince: "2026-10-18T09:00:00.000Z",
+      askerName: null,
+      askCause: { kind: "decision" as const },
+    };
+    const html = render(
+      <AskAnswer
+        slot={founder as never}
+        live={founder as never}
+        onSettled={() => {}}
+        onClose={() => {}}
+      />
+    );
+    const seenText = text(html);
+    expect(seenText.split(title)).toHaveLength(2);
+    expect(seenText).not.toMatch(
+      /Decide:|Accept:|An agent|waiting on your answer|Question|Answer the agent/
+    );
+    expect(seenText).toContain("From your decision note");
+    expect(seenText).toMatch(/Yes Recommended Marks it accepted/);
+    expect(seenText).toContain("Marks it rejected");
+    expect(seenText.match(/Add a note/g)).toHaveLength(1);
+    const yes = buttons.find((b) => b.children === "Yes") as
+      { color?: string; variant?: string; startContent?: unknown } | undefined;
+    expect(yes).toMatchObject({ color: "success", variant: "solid" });
+    expect(yes?.startContent).toBeTruthy();
   });
 
   it("answering sends the answer door Review uses, with the slot and the ask the reader saw", () => {

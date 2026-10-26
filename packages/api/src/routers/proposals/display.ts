@@ -44,6 +44,14 @@ import {
   type ProposalClassFields,
 } from "../../services/proposals/proposal-class.js";
 import {
+  proposalFateFields,
+  supersededByFields,
+} from "../../services/proposals/proposal-fate.js";
+import {
+  proposalWaitsFields,
+  resolveProposalWaits,
+} from "../../services/proposals/proposal-waits.js";
+import {
   proposalSetupFields,
   redactSecretParams,
   resolveProposalSetups,
@@ -72,6 +80,10 @@ import type {
   StoredProposalData,
 } from "@synap-core/types";
 import { resolveProposalAttention } from "@synap-core/types/proposals/attention";
+import type {
+  ProposalFate,
+  ProposalWaits,
+} from "@synap-core/types/proposals/fate";
 import { isSessionStartChange } from "@synap-core/types/proposals/intent";
 import { revertableForRow } from "./revert.js";
 import {
@@ -457,6 +469,12 @@ type DisplayEnrichedProposal = ProposalRow &
      * never rendered.
      */
     governanceRuleId?: string;
+    /** What happens on silence — PENDING rows only (`proposalFateFields`). */
+    fate?: ProposalFate;
+    /** Does an agent wait on it — and why (`resolveProposalWaits`). */
+    waits: ProposalWaits;
+    /** A withdrawn row replaced by a newer version: that proposal's id. */
+    supersededBy?: string;
     review: ProposalReviewModel;
   };
 
@@ -754,6 +772,7 @@ export async function enrichProposalsForDisplay(
     removalRelationCounts,
     setups,
     receiptRuleRows,
+    waitsByProposal,
   ] = await Promise.all([
     entityIds.length > 0
       ? db
@@ -1160,6 +1179,9 @@ export async function enrichProposalsForDisplay(
     // The rules behind this page's auto-approved receipts (names resolved
     // below, from the loaded users first).
     readReceiptRules(rows, userId),
+    // WAITING ON IT (Resolve-XP): gate / owed slot / parked run — two batched
+    // reads for the page, through the same session read rule as the titles.
+    resolveProposalWaits(rows, { userId, roster: opts.roster ?? false }),
   ]);
   const relationCountByEntityId = countRelationsByEntity(
     removalRelationCounts,
@@ -1867,6 +1889,13 @@ export async function enrichProposalsForDisplay(
         row.targetType,
         capabilityRunVerbId(row.data)
       ),
+      // FATE on silence (pending only) and who WAITS on it (Resolve-XP W3):
+      // the context card's "If you ignore it" and "Waiting on it" lines.
+      ...proposalFateFields(row),
+      ...proposalWaitsFields(row.id, waitsByProposal),
+      // REPLACED (supersede, `insertPendingProposal`): the newer proposal's id,
+      // the door "Replaced by a newer version" opens. Withdrawn rows only.
+      ...supersededByFields(row),
       // SETUP — the manifest-derived gap, plus the SAME row payload with every
       // secret param value stripped. ONE door: `proposalSetupFields`. Spread
       // AFTER `projectProposalRowForViewer(row)` so its `data` override wins.

@@ -53,6 +53,7 @@ import {
   droppedAskWarnings,
   sanitizeDeclaredOutputs,
 } from "./update-session.js";
+import { stampAskProvenance } from "./slot-asked-event.js";
 import { stampSlotKeys } from "./slot-keys.js";
 import {
   guidanceForBlockedSlots,
@@ -893,7 +894,10 @@ export async function createFocusSession(
       // the authority on.
       // Keyed at birth (`slot-keys.ts`): every slot's stable identity.
       expectedOutputs: stampSlotKeys([
-        ...sanitizeDeclaredOutputs(expectedOutputs),
+        // An agent declaring a slot the person owes from birth asked it.
+        ...stampAskProvenance([], sanitizeDeclaredOutputs(expectedOutputs), {
+          askedBy: agentUserId,
+        }),
         ...paramSlots,
       ]),
       criteria: sessionCriteria,

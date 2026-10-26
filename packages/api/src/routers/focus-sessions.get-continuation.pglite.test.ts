@@ -789,6 +789,85 @@ describe("focusSessions.get returns the continuation packet", () => {
     });
   });
 
+  it("openRoomQuestions lists the agent questions still open in the room — open or awaiting the tap — with the relay address", async () => {
+    const session = randomUUID();
+    const room = randomUUID();
+    const agent = randomUUID();
+    await insertSession(session, USER, "Ship billing", "active", {
+      channelId: room,
+    });
+    const roomQuestion = async (
+      roomPost: Record<string, unknown>,
+      content: string,
+      at: string
+    ) => {
+      const id = randomUUID();
+      await q(
+        `insert into messages (id, channel_id, role, author_type, content, metadata, user_id, routed_teammate_id, "timestamp", hash)
+         values ($1, $2, 'assistant', 'ai_agent', $3, $4::jsonb, $5, $6, $7::timestamptz, 'h')`,
+        [id, room, content, JSON.stringify({ roomPost }), USER, agent, at]
+      );
+      return id;
+    };
+    const open = await roomQuestion(
+      { kind: "question" },
+      "Tuesday or Wednesday?",
+      "2026-10-26T09:00:00Z"
+    );
+    const pending = await roomQuestion(
+      {
+        kind: "question",
+        slotLabel: "Deploy",
+        pendingRelay: {
+          text: "Yes",
+          relayedBy: agent,
+          relayedAt: "2026-10-26T10:30:00Z",
+        },
+      },
+      "Deploy to prod?",
+      "2026-10-26T10:00:00Z"
+    );
+    await roomQuestion(
+      {
+        kind: "question",
+        answer: {
+          messageId: "m",
+          answeredBy: USER,
+          answeredAt: "2026-10-26T11:30:00Z",
+          text: "EU",
+        },
+      },
+      "Answered",
+      "2026-10-26T11:00:00Z"
+    );
+    await roomQuestion({ kind: "update" }, "Progress", "2026-10-26T12:00:00Z");
+
+    const c = (await get(session)).continuation;
+    expect(c.openRoomQuestions).toEqual({
+      status: "ok",
+      total: 2,
+      items: [
+        {
+          messageId: open,
+          shortId: `Q-${open.slice(0, 8)}`,
+          text: "Tuesday or Wednesday?",
+          askedAt: expect.any(String),
+          askedBy: agent,
+          disposition: "open",
+        },
+        {
+          messageId: pending,
+          shortId: `Q-${pending.slice(0, 8)}`,
+          text: "Deploy to prod?",
+          askedAt: expect.any(String),
+          askedBy: agent,
+          slotLabel: "Deploy",
+          disposition: "awaiting_your_tap",
+        },
+      ],
+    });
+  });
+
   it("a failed questions read is unavailable, not 'no questions'", async () => {
     const session = randomUUID();
     await insertSession(session, USER, "Capture", "active", {

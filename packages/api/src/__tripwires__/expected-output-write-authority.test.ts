@@ -72,6 +72,8 @@ const STORED: Required<
   returnedReason: "Missing the numbers",
   returnedAt: "2026-09-01T11:00:00.000Z",
   owedSince: "2026-09-01T09:00:00.000Z",
+  askedBy: "44444444-4444-4444-4444-444444444444",
+  askCause: { kind: "run", ref: { kind: "session", id: "run-1" } },
   attestedBy: "22222222-2222-2222-2222-222222222222",
   attestedAt: "2026-09-01T12:00:00.000Z",
   retiredAt: "2026-09-01T13:00:00.000Z",
@@ -98,6 +100,17 @@ const STORED: Required<
     answeredBy: "22222222-2222-2222-2222-222222222222",
     answeredAt: "2026-09-01T14:00:00.000Z",
     value: { type: "chip", chip: { label: "EU account", value: "eu" } },
+    via: "relayed",
+    relayedBy: "44444444-4444-4444-4444-444444444444",
+    relaySurface: "claude-code",
+    quote: "use the EU one",
+  },
+  pendingRelay: {
+    text: "Yes",
+    value: { type: "confirm", confirmed: true },
+    relayedBy: "44444444-4444-4444-4444-444444444444",
+    quote: "yes ship it",
+    relayedAt: "2026-09-01T14:30:00.000Z",
   },
 };
 
@@ -122,6 +135,10 @@ const FORGED: typeof STORED = {
   returnedReason: "actually fine",
   returnedAt: "2026-09-08T11:00:00.000Z",
   owedSince: "2026-09-08T09:00:00.000Z",
+  // An agent putting its question in another agent's mouth…
+  askedBy: "99999999-9999-9999-9999-999999999999",
+  // …or dressing its own as the person's decision note.
+  askCause: { kind: "decision", ref: { kind: "entity", id: "forged" } },
   attestedBy: "antoine",
   attestedAt: "2026-09-08T12:00:00.000Z",
   retiredAt: "2026-09-08T13:00:00.000Z",
@@ -147,6 +164,13 @@ const FORGED: typeof STORED = {
     answeredAt: "2026-09-08T14:00:00.000Z",
     // …and forging WHICH option the person picked, typed.
     value: { type: "confirm", confirmed: true },
+  },
+  // An agent pre-filling the person's one-tap confirm with words they never said.
+  pendingRelay: {
+    text: "Yes, deploy",
+    value: { type: "confirm", confirmed: true },
+    relayedBy: "44444444-4444-4444-4444-444444444444",
+    relayedAt: "2026-09-08T14:30:00.000Z",
   },
 };
 
@@ -235,6 +259,38 @@ describe("tripwire: expected-output write authority", () => {
         `${field} was overwritable by a client patch`
       ).toThrow(/server-stamped/i);
     }
+  });
+
+  it("an agent cannot relabel WHERE a stored answer came from", () => {
+    // Provenance rides inside `answer`, so the deep compare is its floor: a
+    // relayed answer re-sent as a tap is a forged receipt like any other.
+    const stored = storedSlot();
+    const patch = {
+      kind: "doc",
+      label: LABEL,
+      answer: {
+        ...STORED.answer,
+        via: "tap",
+        confirmedAt: "2026-09-08T00:00:00.000Z",
+      },
+    } as ExpectedOutput;
+    expect(() => mergeExpectedOutputs([stored], [patch])).toThrow(
+      /"Launch brief"\.answer/
+    );
+  });
+
+  it("an honest echo of every stamped field survives the WIRE parse unchanged", () => {
+    // A nested key the wire schema does not declare is STRIPPED at the parse;
+    // the stripped echo then differs from the stored stamp and a client that
+    // merely round-tripped what it read is refused as a forger. Every sample
+    // above (answer provenance, pendingRelay included) must parse to itself.
+    const echoed = expectedOutputWireSchema.parse(
+      JSON.parse(JSON.stringify(storedSlot()))
+    );
+    expect(echoed).toEqual(storedSlot());
+    expect(() =>
+      mergeExpectedOutputs([storedSlot()], [echoed as ExpectedOutput])
+    ).not.toThrow();
   });
 
   it("the refusal NAMES the slot and the field — a silent no-op is the defect", () => {

@@ -30,26 +30,51 @@
  * INTENDED outcome and it is now stated rather than left to accident: a session
  * the reaper gave up on is the strongest case there is for the human still
  * owing what they said they would do.
+ *
+ * One kind of owed slot does end on `closed` / `failed` too (Resolve-XP founder
+ * default 3, 2026-10-26): a `confirm` / `choose` ask is the AGENT's need, and it
+ * is stamped `session_ended` (`retirementForClose`). An `act`, `provide` or
+ * `form` ask, or a slot with no ask, is the person's deliverable and stays owed.
+ *
+ * ── WHAT HAPPENS TO ROOM QUESTIONS ──────────────────────────────────────────
+ * Every exit stamps the room's still-open agent questions `closed:
+ * session_ended` (never deleted): they leave needs-you and no later reply in
+ * the room reads as their answer. Before that, an AGENT closing as `closed` /
+ * `failed` must say what becomes of each question IT asked
+ * (`questionDispositions`), or the close is refused with the list: an agent
+ * that walks away from its own questions leaves the person answering into a
+ * void. A person's close, a cancel and the reapers are never refused.
  */
 import {
   db,
   focusSessions,
+  messages,
   playbookRuns,
   proposals,
   ProposalStatus,
   eq,
   and,
+  asc,
   desc,
   drizzleSql,
   liveRunStatusWhere,
   playbooks,
   stampOpenWorkerTargets,
+  closeOpenRoomQuestions,
+  openRoomQuestionConditions,
 } from "@synap/database";
 import { WORKER_TARGET_REASONS } from "@synap-core/types/workers";
 import { isDeliverableOutstanding } from "@synap-core/types/units";
+import { ASK_LIMITS } from "@synap-core/types/ask";
 import type { FocusSession } from "@synap/database";
 import type { ExpectedOutput } from "@synap/playbooks";
 import { retirementForClose } from "./owed-outputs.js";
+import {
+  readRoomPostMeta,
+  questionShortId,
+  type CloseQuestionDisposition,
+} from "../messaging/room-post-kind.js";
+import { settleSessionNeedsYou } from "./notify-needs-you.js";
 import {
   checkPermissionOrPropose,
   proposedMessageFor,
@@ -102,6 +127,204 @@ export interface CompleteFocusSessionParams {
   terminalStatus?: "closed" | "cancelled" | "failed";
   /** Why it was cancelled — kept on `metadata.run.cancel`. Ignored unless `cancelled`. */
   cancelReason?: string;
+  /**
+   * The closing AGENT's word on each question it asked in the room that is
+   * still open. Required for every one of them on an agent's `closed` /
+   * `failed` close (else {@link openQuestionsAtCloseError}); read only with
+   * `agentUserId`.
+   */
+  questionDispositions?: CloseQuestionDisposition[];
+}
+
+/** One of the closing agent's still-open questions, as the refusal lists it. */
+export interface OpenQuestionAtClose {
+  messageId: string;
+  /** `Q-` + the first 8 characters of the message id — how agents show it in chat. */
+  shortId: string;
+  text: string;
+  slotLabel: string | null;
+}
+
+export const OPEN_QUESTIONS_AT_CLOSE = "OPEN_QUESTIONS" as const;
+
+/** Longest question text quoted back in the refusal sentence. */
+const QUESTION_QUOTE_MAX = 120;
+
+function clipText(s: string, max: number): string {
+  const t = s.trim().replace(/\s+/g, " ");
+  return t.length > max ? `${t.slice(0, max - 1)}…` : t;
+}
+
+/**
+ * The refusal an agent's close gets while it leaves its own questions open.
+ * The sentence carries the list, so a door that only forwards `message` still
+ * tells the agent what to settle and how.
+ */
+export function openQuestionsAtCloseError(
+  questions: OpenQuestionAtClose[]
+): Error & {
+  code: typeof OPEN_QUESTIONS_AT_CLOSE;
+  openQuestions: OpenQuestionAtClose[];
+} {
+  const list = questions
+    .map(
+      (q) =>
+        `${q.shortId} (messageId ${q.messageId}): "${clipText(q.text, QUESTION_QUOTE_MAX)}"`
+    )
+    .join("; ");
+  return Object.assign(
+    new Error(
+      `Not closed: ${questions.length} question(s) you asked the person in this session's room are still open — ${list}. ` +
+        "Settle each one before closing: if they answered you in chat, relay their exact words with synap_relay_answer; " +
+        "otherwise close again with questionDispositions — 'withdrawn' (with a note) when your work overtook it, " +
+        "'keep_as_owed' when they still owe you the answer after this session."
+    ),
+    { code: OPEN_QUESTIONS_AT_CLOSE, openQuestions: questions }
+  );
+}
+
+export function isOpenQuestionsAtCloseError(err: unknown): err is Error & {
+  code: typeof OPEN_QUESTIONS_AT_CLOSE;
+  openQuestions: OpenQuestionAtClose[];
+} {
+  return (
+    err instanceof Error &&
+    (err as { code?: unknown }).code === OPEN_QUESTIONS_AT_CLOSE
+  );
+}
+
+/**
+ * Match the agent's dispositions to its open questions. Pure. `uncovered` is
+ * what the refusal lists; a disposition naming no open question of this agent
+ * (answered meanwhile, someone else's, a typo) is counted, never applied.
+ */
+export function planQuestionDispositions(
+  open: readonly OpenQuestionAtClose[],
+  dispositions: readonly CloseQuestionDisposition[] = []
+): {
+  uncovered: OpenQuestionAtClose[];
+  withdrawn: Array<{ question: OpenQuestionAtClose; note?: string }>;
+  keep: OpenQuestionAtClose[];
+  unmatched: number;
+} {
+  const byId = new Map(open.map((q) => [q.messageId, q]));
+  const decided = new Map<string, CloseQuestionDisposition>();
+  let unmatched = 0;
+  for (const d of dispositions) {
+    if (byId.has(d.messageId)) decided.set(d.messageId, d);
+    else unmatched += 1;
+  }
+  const withdrawn: Array<{ question: OpenQuestionAtClose; note?: string }> =
+    [];
+  const keep: OpenQuestionAtClose[] = [];
+  const uncovered: OpenQuestionAtClose[] = [];
+  for (const q of open) {
+    const d = decided.get(q.messageId);
+    if (!d) uncovered.push(q);
+    else if (d.disposition === "withdrawn") {
+      // The stamp's bound (`QuestionClosedSchema.note`).
+      const note = d.note?.trim().slice(0, ASK_LIMITS.promptMaxChars);
+      withdrawn.push({ question: q, ...(note ? { note } : {}) });
+    } else keep.push(q);
+  }
+  return { uncovered, withdrawn, keep, unmatched };
+}
+
+/** The agent's own still-open questions in a room, oldest first. */
+async function loadAgentOpenQuestions(
+  channelId: string,
+  agentUserId: string
+): Promise<OpenQuestionAtClose[]> {
+  const rows = await db
+    .select({
+      id: messages.id,
+      content: messages.content,
+      metadata: messages.metadata,
+    })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.channelId, channelId),
+        eq(messages.routedTeammateId, agentUserId),
+        ...openRoomQuestionConditions(messages)
+      )
+    )
+    .orderBy(asc(messages.timestamp))
+    .limit(100);
+  return rows.map((r) => ({
+    messageId: r.id,
+    shortId: questionShortId(r.id),
+    text: r.content,
+    slotLabel: readRoomPostMeta(r.metadata)?.slotLabel ?? null,
+  }));
+}
+
+/** The slot `why` ceiling (`room-question-slot.ts`). */
+const KEPT_WHY_MAX = 500;
+/** A new slot's label: the question's first words. */
+const KEPT_LABEL_MAX = 120;
+
+/**
+ * Hand a question the agent keeps owed to the person, through the slot doors
+ * that already do it: a question about a slot re-files on THAT slot
+ * (`fileRoomQuestionOnSlot`, the block door); a slotless one becomes a new
+ * human slot (`updateFocusSession` `addOutput`, governed like any agent
+ * declaration). Returns the slot's stored label, or why it could not.
+ */
+async function keepQuestionOwed(p: {
+  sessionId: string;
+  channelId: string;
+  userId: string;
+  agentUserId: string;
+  question: OpenQuestionAtClose;
+}): Promise<{ label: string } | { warning: string }> {
+  const { question } = p;
+  const why = clipText(question.text, KEPT_WHY_MAX);
+  if (question.slotLabel) {
+    const { fileRoomQuestionOnSlot } = await import("./room-question-slot.js");
+    const filed = await fileRoomQuestionOnSlot({
+      channelId: p.channelId,
+      slotLabel: question.slotLabel,
+      question: question.text,
+      agentUserId: p.agentUserId,
+      userId: p.userId,
+    });
+    if (filed.status === "blocked") return { label: filed.expectedLabel };
+    if (filed.status === "already_done") {
+      return {
+        warning: `${question.shortId}: its slot "${question.slotLabel}" is already delivered, so nothing is left owed.`,
+      };
+    }
+    if (filed.status !== "unknown_label") {
+      return {
+        warning: `${question.shortId} could not be kept owed (${filed.status}); it was closed with the session.`,
+      };
+    }
+    // The slot it named is gone: keep it as a new slot, like a slotless one.
+  }
+  const label = clipText(question.text.split("\n")[0] ?? "", KEPT_LABEL_MAX);
+  const { updateFocusSession } = await import("./update-session.js");
+  const added = await updateFocusSession({
+    sessionId: p.sessionId,
+    userId: p.userId,
+    agentUserId: p.agentUserId,
+    addOutput: {
+      kind: "decision",
+      label: label || question.shortId,
+      owner: "human",
+      blockedReason: "decision",
+      why,
+    },
+  });
+  if (added.status === "updated") return { label: label || question.shortId };
+  if (added.status === "proposed") {
+    return {
+      warning: `${question.shortId}: keeping it owed was proposed for review (proposal ${added.proposalId}); the question closed with the session and the slot lands when that is approved.`,
+    };
+  }
+  return {
+    warning: `${question.shortId} could not be kept owed (${added.status === "denied" ? added.reason : added.status}); it was closed with the session.`,
+  };
 }
 
 export type ProposalPackItem = {
@@ -127,10 +350,13 @@ export type CompleteFocusSessionResult = {
      */
     expiredEphemerals: number;
     /**
-     * Owed (human-owned, not-done) outputs RETIRED because this session was
-     * cancelled. Always 0 for `closed`/`failed` — those keep their slots.
+     * Owed (human-owned, not-done) outputs RETIRED by this close: every one on
+     * `cancelled`; only the `confirm` / `choose` asks on `closed` / `failed`
+     * (`retirementForClose`).
      */
     retiredSlots: number;
+    /** Room questions still open at the end, stamped `closed: session_ended`. */
+    closedQuestions: number;
   };
   warnings: string[];
   /** `cancelled` only: what was stopped, what will finish, what already applied. */
@@ -214,9 +440,24 @@ export async function completeFocusSession(
         unfinishedOutputs: 0,
         expiredEphemerals: 0,
         retiredSlots: 0,
+        closedQuestions: 0,
       },
       warnings: [],
     };
+  }
+
+  // THE AGENT'S OWN QUESTIONS, before governance: a refused close files no
+  // proposal and changes nothing. A cancel is exempt — abandoning the work is
+  // the disposition — and so is every close no agent made.
+  const agentQuestions =
+    params.agentUserId && session.channelId && terminalStatus !== "cancelled"
+      ? planQuestionDispositions(
+          await loadAgentOpenQuestions(session.channelId, params.agentUserId),
+          params.questionDispositions
+        )
+      : null;
+  if (agentQuestions && agentQuestions.uncovered.length > 0) {
+    throw openQuestionsAtCloseError(agentQuestions.uncovered);
   }
 
   // Lifecycle close must not be blocked by session forceProposeWrites (pack mode).
@@ -283,6 +524,30 @@ export async function completeFocusSession(
     )
     .limit(1);
 
+  // `keep_as_owed`, through the slot doors, before the close takes the row
+  // lock: the slots it hands over are then in the array the retirement reads,
+  // and `keep` exempts them by label.
+  const warnings: string[] = [];
+  const keep = new Set<string>();
+  if (agentQuestions && params.agentUserId && session.channelId) {
+    for (const question of agentQuestions.keep) {
+      const kept = await keepQuestionOwed({
+        sessionId,
+        channelId: session.channelId,
+        userId: params.userId,
+        agentUserId: params.agentUserId,
+        question,
+      });
+      if ("label" in kept) keep.add(kept.label);
+      else warnings.push(kept.warning);
+    }
+    if (agentQuestions.unmatched > 0) {
+      warnings.push(
+        `${agentQuestions.unmatched} question disposition(s) named no open question of yours in this room — ignored.`
+      );
+    }
+  }
+
   if (run) {
     // The run's terminal status FOLLOWS how the session closed. Stamping
     // `completed` on a failed/cancelled close hid the failure from the parent
@@ -311,9 +576,9 @@ export async function completeFocusSession(
     (session.expectedOutputs as ExpectedOutput[] | null) ?? []
   ).filter((o) => isDeliverableOutstanding(o)).length;
 
-  // CANCELLED retires the slots the human still owed — the obligation ends with
-  // the work. Stamped, never deleted (see the header). Computed inside the
-  // update's own transaction, from a ROW-LOCKED read, and only there.
+  // The close retires slots (see the header: all of them on cancel, the
+  // agent's confirm/choose asks otherwise). Stamped, never deleted. Computed
+  // inside the update's own transaction, from a ROW-LOCKED read, and only there.
   //
   // WHY NOT FROM `session` ABOVE. That row was loaded BEFORE the governance
   // membrane, which is an await of unbounded duration (it can hit the policy
@@ -324,8 +589,8 @@ export async function completeFocusSession(
   // it writes the WHOLE array back, so an attestation landing during the
   // membrane was silently reverted, receipt and all.
   let retiredSlots = 0;
+  let closedQuestions = 0;
 
-  const warnings: string[] = [];
   if (unfinishedOutputs > 0) {
     warnings.push(
       `${unfinishedOutputs} expected output(s) still not marked done — session closed anyway (warn-only).`
@@ -357,23 +622,52 @@ export async function completeFocusSession(
   });
 
   const [updated] = await db.transaction(async (tx) => {
-    // Only the cancel path touches the array, so only it needs the lock — a
-    // `closed`/`failed` exit leaves `expectedOutputs` alone and cannot lose a
-    // concurrent write because it never writes the column.
-    let retirement: ReturnType<typeof retirementForClose> = null;
-    if (terminalStatus === "cancelled") {
-      const [locked] = await tx
-        .select({ expectedOutputs: focusSessions.expectedOutputs })
-        .from(focusSessions)
-        .where(eq(focusSessions.id, sessionId))
-        .for("update");
-      const lockedOutputs: ExpectedOutput[] = Array.isArray(
-        locked?.expectedOutputs
-      )
-        ? (locked.expectedOutputs as ExpectedOutput[])
-        : [];
-      retirement = retirementForClose(lockedOutputs, terminalStatus);
-      retiredSlots = retirement?.retiredSlots ?? 0;
+    // Every exit may retire a slot now, so every exit reads the array under
+    // the lock it writes it with.
+    const [locked] = await tx
+      .select({ expectedOutputs: focusSessions.expectedOutputs })
+      .from(focusSessions)
+      .where(eq(focusSessions.id, sessionId))
+      .for("update");
+    const lockedOutputs: ExpectedOutput[] = Array.isArray(
+      locked?.expectedOutputs
+    )
+      ? (locked.expectedOutputs as ExpectedOutput[])
+      : [];
+    const retirement = retirementForClose(
+      lockedOutputs,
+      terminalStatus,
+      new Date(),
+      keep
+    );
+    retiredSlots = retirement?.retiredSlots ?? 0;
+
+    // The room's questions end with the session, in the same transaction as
+    // the status: a session is never terminal over an open question. The
+    // agent's withdrawals first (its note is the record), then whatever is
+    // still open — the questions it kept owed included: their slot carries
+    // them on now.
+    if (session.channelId) {
+      const at = new Date().toISOString();
+      for (const { question, note } of agentQuestions?.withdrawn ?? []) {
+        await closeOpenRoomQuestions(tx, {
+          channelId: session.channelId,
+          messageIds: [question.messageId],
+          askedBy: params.agentUserId,
+          closed: {
+            reason: "withdrawn",
+            at,
+            ...(params.agentUserId ? { by: params.agentUserId } : {}),
+            ...(note ? { note } : {}),
+          },
+        });
+      }
+      closedQuestions = (
+        await closeOpenRoomQuestions(tx, {
+          channelId: session.channelId,
+          closed: { reason: "session_ended", at },
+        })
+      ).length;
     }
 
     return await tx
@@ -524,10 +818,24 @@ export async function completeFocusSession(
   // a silent one. Say which slots stopped being owed and why.
   if (retiredSlots > 0) {
     warnings.push(
-      `${retiredSlots} output(s) you owed were retired because this session was ` +
-        `cancelled — they are stamped, not deleted, and stay readable on the session.`
+      terminalStatus === "cancelled"
+        ? `${retiredSlots} output(s) you owed were retired because this session was ` +
+            `cancelled — they are stamped, not deleted, and stay readable on the session.`
+        : `${retiredSlots} question(s) waiting for your yes/no or choice were retired because ` +
+            `the session ended — they are stamped, not deleted, and stay readable on the session.`
     );
   }
+
+  if (closedQuestions > 0) {
+    warnings.push(
+      `${closedQuestions} question(s) still open in the room were closed because the session ` +
+        `ended — they are stamped, not deleted, and stay readable in the room.`
+    );
+  }
+
+  // Nothing left for the person here: the "this session needs you" rows leave
+  // the bell too. Never throws.
+  await settleSessionNeedsYou(sessionId);
 
   if (expiredEphemerals > 0) {
     warnings.push(
@@ -601,6 +909,7 @@ export async function completeFocusSession(
       unfinishedOutputs,
       expiredEphemerals,
       retiredSlots,
+      closedQuestions,
     },
     warnings,
     ...(cancel ? { cancel } : {}),

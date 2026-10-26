@@ -18,6 +18,7 @@ import {
 } from "../../../services/focus-sessions/parent-lineage.js";
 import { attachTriage } from "../../../services/focus-sessions/triage.js";
 import type { TerminalSessionStatus } from "../../../services/focus-sessions/session-statuses.js";
+import type { CloseQuestionDisposition } from "../../../services/messaging/room-post-kind.js";
 import type { ExpectedOutput, SessionCriterion } from "@synap/playbooks";
 import { requestClientKey } from "../../../services/focus-sessions/resolve-work-session.js";
 import { refuseUndeclaredArgs } from "../undeclared-args.js";
@@ -26,6 +27,16 @@ import {
   waitForSessionChanges,
 } from "../../../services/focus-sessions/wait-for-answers.js";
 import { parseSessionChangeKinds } from "../../../services/focus-sessions/session-changes.js";
+import {
+  describeRelayRefusal,
+  relaySessionAnswer,
+  RELAY_DISPOSITIONS,
+  type RelayDisposition,
+} from "../../../services/focus-sessions/session-answer.js";
+import {
+  AskAnswerValueSchema,
+  type AskAnswerValue,
+} from "@synap-core/types/ask";
 import { readAgentsForHandoff } from "../../../services/agent-dispatch/agents-for-handoff.js";
 import type { UpdateFocusSessionParams } from "../../../services/focus-sessions/update-session.js";
 import { SESSION_TITLE_MAX } from "@synap-core/types/focus-sessions";
@@ -369,6 +380,85 @@ export const sessionHandlers: McpHandlerMap = {
     return ok(result);
   },
 
+  /**
+   * The person answered in THIS chat: relay their words to the question the
+   * agent asked in the pod (`relaySessionAnswer`, which owns who may relay
+   * what and the stakes rule). Agent keys only — the relay is labelled with
+   * the agent that carried it.
+   */
+  synap_relay_answer: async (ctx: McpToolContext): Promise<CallToolResult> => {
+    const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
+    requireScope(apiKeyScopes, "mcp.write", toolName);
+    if (!agentUserId) {
+      return ok({
+        error:
+          "Only an agent relays an answer — this key acts as the person, who answers in Synap.",
+      });
+    }
+    const sessionId =
+      typeof args.sessionId === "string" ? args.sessionId.trim() : "";
+    if (!UUID_RE.test(sessionId)) {
+      return ok({ error: `Focus session ${sessionId || "(none)"} not found` });
+    }
+    const disposition = args.disposition;
+    if (
+      typeof disposition !== "string" ||
+      !(RELAY_DISPOSITIONS as readonly string[]).includes(disposition)
+    ) {
+      return ok({
+        error: `disposition must be one of: ${RELAY_DISPOSITIONS.join(", ")}.`,
+      });
+    }
+    const str = (v: unknown) => (typeof v === "string" ? v : undefined);
+    const messageId = str(args.messageId)?.trim();
+    if (messageId && !UUID_RE.test(messageId)) {
+      return ok({ error: "messageId must be the question's message id (a UUID)." });
+    }
+    let value: AskAnswerValue | undefined;
+    if (args.value !== undefined) {
+      // The ONE answer schema, as on every answer door — never a cast.
+      const parsed = AskAnswerValueSchema.safeParse(args.value);
+      if (!parsed.success) {
+        return ok({
+          error: `value: ${parsed.error.issues[0]?.message ?? "invalid answer value"}`,
+        });
+      }
+      value = parsed.data;
+    }
+    const slotLabel = str(args.slotLabel);
+    const result = await relaySessionAnswer({
+      sessionId,
+      userId,
+      agentUserId,
+      disposition: disposition as RelayDisposition,
+      ...(messageId ? { messageId } : {}),
+      ...(slotLabel ? { slotLabel } : {}),
+      quote: str(args.quote),
+      text: str(args.text),
+      ...(value ? { value } : {}),
+      relaySurface: str(args.relaySurface),
+      note: str(args.note),
+    });
+    if (
+      result.status === "relayed" ||
+      result.status === "awaiting_tap" ||
+      result.status === "withdrawn"
+    ) {
+      return ok({
+        ...result,
+        next:
+          result.status === "awaiting_tap"
+            ? "Recorded as waiting for the person's tap: it is a commitment. Do not act on it yet — synap_wait_for_answer until they confirm."
+            : result.status === "relayed"
+              ? "Recorded as the person's answer, marked relayed by you. Go on with it."
+              : "Withdrawn. The slot, if any, is yours again.",
+      });
+    }
+    return ok({
+      error: describeRelayRefusal(result, { sessionId, slotLabel }).message,
+    });
+  },
+
   synap_start_session: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
@@ -539,22 +629,42 @@ export const sessionHandlers: McpHandlerMap = {
   ): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
-    const { completeFocusSession } =
+    const { completeFocusSession, isOpenQuestionsAtCloseError } =
       await import("../../../services/focus-sessions/complete-session.js");
-    const result = await completeFocusSession({
-      sessionId: args.sessionId as string,
-      userId,
-      agentUserId,
-      summary: args.summary as string | undefined,
-      verificationReport: args.verificationReport as
-        Record<string, unknown> | undefined,
-      // Every lifecycle exit, not just `closed`. The service has accepted this
-      // since it was written; this door never forwarded it, so an agent could
-      // record "I finished" but never "I abandoned" or "I could not" — and the
-      // tRPC / Hub PATCH doors could. Validated by the tool schema's enum,
-      // which derives from TERMINAL_SESSION_STATUSES.
-      terminalStatus: args.terminalStatus as TerminalSessionStatus | undefined,
-    });
+    let result: Awaited<ReturnType<typeof completeFocusSession>>;
+    try {
+      result = await completeFocusSession({
+        sessionId: args.sessionId as string,
+        userId,
+        agentUserId,
+        summary: args.summary as string | undefined,
+        verificationReport: args.verificationReport as
+          Record<string, unknown> | undefined,
+        // Every lifecycle exit, not just `closed`. The service has accepted this
+        // since it was written; this door never forwarded it, so an agent could
+        // record "I finished" but never "I abandoned" or "I could not" — and the
+        // tRPC / Hub PATCH doors could. Validated by the tool schema's enum,
+        // which derives from TERMINAL_SESSION_STATUSES.
+        terminalStatus: args.terminalStatus as TerminalSessionStatus | undefined,
+        // Shape-checked by the tool schema; the service matches each id
+        // against this agent's own open questions and ignores the rest.
+        questionDispositions: Array.isArray(args.questionDispositions)
+          ? (args.questionDispositions as CloseQuestionDisposition[])
+          : undefined,
+      });
+    } catch (err) {
+      // Its own questions are still open: nothing closed, and the agent is
+      // handed the list and the two ways out.
+      if (isOpenQuestionsAtCloseError(err)) {
+        return ok({
+          status: "refused",
+          reasonCode: err.code,
+          message: err.message,
+          openQuestions: err.openQuestions,
+        });
+      }
+      throw err;
+    }
     if (!result) {
       return ok({ error: `Focus session ${args.sessionId} not found` });
     }

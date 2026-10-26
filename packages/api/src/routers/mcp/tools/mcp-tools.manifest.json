@@ -1410,7 +1410,7 @@
                 },
                 "label": {
                   "type": "string",
-                  "description": "What it is, in words."
+                  "description": "A short name for it, a few words: a key, not the question ('Stripe account', not 'Decide: which Stripe account?'). The question goes in the ask."
                 },
                 "kind": {
                   "type": "string",
@@ -1477,6 +1477,40 @@
                           "type": "string",
                           "maxLength": 500
                         },
+                        "yes": {
+                          "type": "object",
+                          "properties": {
+                            "label": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 80
+                            },
+                            "description": {
+                              "type": "string",
+                              "maxLength": 140
+                            },
+                            "recommended": {
+                              "type": "boolean"
+                            }
+                          }
+                        },
+                        "no": {
+                          "type": "object",
+                          "properties": {
+                            "label": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 80
+                            },
+                            "description": {
+                              "type": "string",
+                              "maxLength": 140
+                            },
+                            "recommended": {
+                              "type": "boolean"
+                            }
+                          }
+                        },
                         "lookedAt": {
                           "maxItems": 8,
                           "type": "array",
@@ -1501,6 +1535,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode"]
@@ -1570,6 +1609,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode", "options"]
@@ -1666,6 +1710,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode", "form"]
@@ -1714,6 +1763,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode"]
@@ -1802,12 +1856,17 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode", "provide"]
                     }
                   ],
-                  "description": "Only with owner='human': HOW the person can answer, so they resolve it in one tap instead of writing back. mode 'confirm' (yes/no; optional prompt), 'choose' (1-8 options, at most ONE recommended, each with a one-line `description` of its consequence; allowOther for free text), 'form' (a small FLAT form; credential field types are dropped — never ask for a secret in a form), 'act' (something to DO: optional http(s) url + up to 7 steps; the person answers 'I did this'), 'provide' (connection {service} | file {accept} | secret {name} — handed over through the vault, never typed into a message). PREFER confirm/choose for any decision (mark exactly ONE option `recommended` when you have a view: their pick vs your recommendation is recorded, and every answered confirm/choose files a `decision` entity); use act ONLY for a physical/world task with steps. Example: {\"mode\":\"choose\",\"options\":[{\"label\":\"Ship now\",\"recommended\":true,\"description\":\"Publishes today\"},{\"label\":\"Wait a week\"}]}. Omit for a plain free-text answer. null clears a stored ask. Any mode may carry `lookedAt`: up to 8 {kind, id} (entity | document | view | automation | playbook) you actually read before asking, so the person sees what you based the question on — refs they cannot see are refused, and any title you send is ignored (the pod names them)."
+                  "description": "Only with owner='human': HOW the person can answer, so they resolve it in one tap instead of writing back. mode 'confirm' (yes/no: `prompt` IS the question; `yes` / `no` may each carry a one-line `description` of what that answer does, and ONE may be `recommended`), 'choose' (1-8 options, at most ONE recommended, each with a one-line `description` of its consequence; allowOther for free text), 'form' (a small FLAT form; credential field types are dropped — never ask for a secret in a form), 'act' (something to DO: optional http(s) url + up to 7 steps; the person answers 'I did this'), 'provide' (connection {service} | file {accept} | secret {name} — handed over through the vault, never typed into a message). PREFER confirm/choose for any decision (mark exactly ONE answer `recommended` when you have a view: their pick vs your recommendation is recorded, and every answered confirm/choose files a `decision` entity); use act ONLY for a physical/world task with steps. Example: {\"mode\":\"choose\",\"options\":[{\"label\":\"Ship now\",\"recommended\":true,\"description\":\"Publishes today\"},{\"label\":\"Wait a week\"}]}. Omit for a plain free-text answer. null clears a stored ask. Any mode may carry `lookedAt`: up to 8 {kind, id} (entity | document | view | automation | playbook) you actually read before asking, so the person sees what you based the question on — refs they cannot see are refused, and any title you send is ignored (the pod names them)."
                 }
               },
               "required": ["label"]
@@ -1924,7 +1983,7 @@
                 "why": {
                   "type": "string",
                   "maxLength": 500,
-                  "description": "Only with owner='human'. ONE line naming WHICH thing is missing, not its class — 'the Stripe restricted key for the live account', not 'a credential'. This is what the person reads to know what to do."
+                  "description": "Only with owner='human'. ONE line naming WHICH thing is missing, not its class — 'the Stripe restricted key for the live account', not 'a credential'. Context the question does not already say: never a repeat of the label or the prompt."
                 },
                 "ref": {
                   "description": "WHERE to go for this deliverable — turns the card's title into a door instead of leaving the person to search. ONE of two shapes: {\"kind\":\"entity|document|view|cell|automation|playbook\",\"id\":\"<uuid>\"} for something in the pod, or {\"url\":\"https://...\"} for an external page. REFUSED if the object is not one you can already see. Use it above all with owner='human': name the blocker in `why`, then point at it here.",
@@ -1976,6 +2035,40 @@
                           "type": "string",
                           "maxLength": 500
                         },
+                        "yes": {
+                          "type": "object",
+                          "properties": {
+                            "label": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 80
+                            },
+                            "description": {
+                              "type": "string",
+                              "maxLength": 140
+                            },
+                            "recommended": {
+                              "type": "boolean"
+                            }
+                          }
+                        },
+                        "no": {
+                          "type": "object",
+                          "properties": {
+                            "label": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 80
+                            },
+                            "description": {
+                              "type": "string",
+                              "maxLength": 140
+                            },
+                            "recommended": {
+                              "type": "boolean"
+                            }
+                          }
+                        },
                         "lookedAt": {
                           "maxItems": 8,
                           "type": "array",
@@ -2000,6 +2093,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode"]
@@ -2069,6 +2167,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode", "options"]
@@ -2165,6 +2268,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode", "form"]
@@ -2213,6 +2321,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode"]
@@ -2301,12 +2414,17 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode", "provide"]
                     }
                   ],
-                  "description": "Only with owner='human': HOW the person can answer, so they resolve it in one tap instead of writing back. mode 'confirm' (yes/no; optional prompt), 'choose' (1-8 options, at most ONE recommended, each with a one-line `description` of its consequence; allowOther for free text), 'form' (a small FLAT form; credential field types are dropped — never ask for a secret in a form), 'act' (something to DO: optional http(s) url + up to 7 steps; the person answers 'I did this'), 'provide' (connection {service} | file {accept} | secret {name} — handed over through the vault, never typed into a message). PREFER confirm/choose for any decision (mark exactly ONE option `recommended` when you have a view: their pick vs your recommendation is recorded, and every answered confirm/choose files a `decision` entity); use act ONLY for a physical/world task with steps. Example: {\"mode\":\"choose\",\"options\":[{\"label\":\"Ship now\",\"recommended\":true,\"description\":\"Publishes today\"},{\"label\":\"Wait a week\"}]}. Omit for a plain free-text answer. null clears a stored ask. Any mode may carry `lookedAt`: up to 8 {kind, id} (entity | document | view | automation | playbook) you actually read before asking, so the person sees what you based the question on — refs they cannot see are refused, and any title you send is ignored (the pod names them)."
+                  "description": "Only with owner='human': HOW the person can answer, so they resolve it in one tap instead of writing back. mode 'confirm' (yes/no: `prompt` IS the question; `yes` / `no` may each carry a one-line `description` of what that answer does, and ONE may be `recommended`), 'choose' (1-8 options, at most ONE recommended, each with a one-line `description` of its consequence; allowOther for free text), 'form' (a small FLAT form; credential field types are dropped — never ask for a secret in a form), 'act' (something to DO: optional http(s) url + up to 7 steps; the person answers 'I did this'), 'provide' (connection {service} | file {accept} | secret {name} — handed over through the vault, never typed into a message). PREFER confirm/choose for any decision (mark exactly ONE answer `recommended` when you have a view: their pick vs your recommendation is recorded, and every answered confirm/choose files a `decision` entity); use act ONLY for a physical/world task with steps. Example: {\"mode\":\"choose\",\"options\":[{\"label\":\"Ship now\",\"recommended\":true,\"description\":\"Publishes today\"},{\"label\":\"Wait a week\"}]}. Omit for a plain free-text answer. null clears a stored ask. Any mode may carry `lookedAt`: up to 8 {kind, id} (entity | document | view | automation | playbook) you actually read before asking, so the person sees what you based the question on — refs they cannot see are refused, and any title you send is ignored (the pod names them)."
                 }
               },
               "required": ["kind", "label"]
@@ -2368,7 +2486,7 @@
                 },
                 "label": {
                   "type": "string",
-                  "description": "What it is, in words."
+                  "description": "A short name for it, a few words: a key, not the question ('Stripe account', not 'Decide: which Stripe account?'). The question goes in the ask."
                 },
                 "kind": {
                   "type": "string",
@@ -2435,6 +2553,40 @@
                           "type": "string",
                           "maxLength": 500
                         },
+                        "yes": {
+                          "type": "object",
+                          "properties": {
+                            "label": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 80
+                            },
+                            "description": {
+                              "type": "string",
+                              "maxLength": 140
+                            },
+                            "recommended": {
+                              "type": "boolean"
+                            }
+                          }
+                        },
+                        "no": {
+                          "type": "object",
+                          "properties": {
+                            "label": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 80
+                            },
+                            "description": {
+                              "type": "string",
+                              "maxLength": 140
+                            },
+                            "recommended": {
+                              "type": "boolean"
+                            }
+                          }
+                        },
                         "lookedAt": {
                           "maxItems": 8,
                           "type": "array",
@@ -2459,6 +2611,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode"]
@@ -2528,6 +2685,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode", "options"]
@@ -2624,6 +2786,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode", "form"]
@@ -2672,6 +2839,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode"]
@@ -2760,12 +2932,17 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode", "provide"]
                     }
                   ],
-                  "description": "Only with owner='human': HOW the person can answer, so they resolve it in one tap instead of writing back. mode 'confirm' (yes/no; optional prompt), 'choose' (1-8 options, at most ONE recommended, each with a one-line `description` of its consequence; allowOther for free text), 'form' (a small FLAT form; credential field types are dropped — never ask for a secret in a form), 'act' (something to DO: optional http(s) url + up to 7 steps; the person answers 'I did this'), 'provide' (connection {service} | file {accept} | secret {name} — handed over through the vault, never typed into a message). PREFER confirm/choose for any decision (mark exactly ONE option `recommended` when you have a view: their pick vs your recommendation is recorded, and every answered confirm/choose files a `decision` entity); use act ONLY for a physical/world task with steps. Example: {\"mode\":\"choose\",\"options\":[{\"label\":\"Ship now\",\"recommended\":true,\"description\":\"Publishes today\"},{\"label\":\"Wait a week\"}]}. Omit for a plain free-text answer. null clears a stored ask. Any mode may carry `lookedAt`: up to 8 {kind, id} (entity | document | view | automation | playbook) you actually read before asking, so the person sees what you based the question on — refs they cannot see are refused, and any title you send is ignored (the pod names them)."
+                  "description": "Only with owner='human': HOW the person can answer, so they resolve it in one tap instead of writing back. mode 'confirm' (yes/no: `prompt` IS the question; `yes` / `no` may each carry a one-line `description` of what that answer does, and ONE may be `recommended`), 'choose' (1-8 options, at most ONE recommended, each with a one-line `description` of its consequence; allowOther for free text), 'form' (a small FLAT form; credential field types are dropped — never ask for a secret in a form), 'act' (something to DO: optional http(s) url + up to 7 steps; the person answers 'I did this'), 'provide' (connection {service} | file {accept} | secret {name} — handed over through the vault, never typed into a message). PREFER confirm/choose for any decision (mark exactly ONE answer `recommended` when you have a view: their pick vs your recommendation is recorded, and every answered confirm/choose files a `decision` entity); use act ONLY for a physical/world task with steps. Example: {\"mode\":\"choose\",\"options\":[{\"label\":\"Ship now\",\"recommended\":true,\"description\":\"Publishes today\"},{\"label\":\"Wait a week\"}]}. Omit for a plain free-text answer. null clears a stored ask. Any mode may carry `lookedAt`: up to 8 {kind, id} (entity | document | view | automation | playbook) you actually read before asking, so the person sees what you based the question on — refs they cannot see are refused, and any title you send is ignored (the pod names them)."
                 }
               },
               "required": ["label"]
@@ -2887,7 +3064,7 @@
                 "why": {
                   "type": "string",
                   "maxLength": 500,
-                  "description": "Only with owner='human'. ONE line naming WHICH thing is missing, not its class — 'the Stripe restricted key for the live account', not 'a credential'. This is what the person reads to know what to do."
+                  "description": "Only with owner='human'. ONE line naming WHICH thing is missing, not its class — 'the Stripe restricted key for the live account', not 'a credential'. Context the question does not already say: never a repeat of the label or the prompt."
                 },
                 "ref": {
                   "description": "WHERE to go for this deliverable — turns the card's title into a door instead of leaving the person to search. ONE of two shapes: {\"kind\":\"entity|document|view|cell|automation|playbook\",\"id\":\"<uuid>\"} for something in the pod, or {\"url\":\"https://...\"} for an external page. REFUSED if the object is not one you can already see. Use it above all with owner='human': name the blocker in `why`, then point at it here.",
@@ -2939,6 +3116,40 @@
                           "type": "string",
                           "maxLength": 500
                         },
+                        "yes": {
+                          "type": "object",
+                          "properties": {
+                            "label": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 80
+                            },
+                            "description": {
+                              "type": "string",
+                              "maxLength": 140
+                            },
+                            "recommended": {
+                              "type": "boolean"
+                            }
+                          }
+                        },
+                        "no": {
+                          "type": "object",
+                          "properties": {
+                            "label": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 80
+                            },
+                            "description": {
+                              "type": "string",
+                              "maxLength": 140
+                            },
+                            "recommended": {
+                              "type": "boolean"
+                            }
+                          }
+                        },
                         "lookedAt": {
                           "maxItems": 8,
                           "type": "array",
@@ -2963,6 +3174,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode"]
@@ -3032,6 +3248,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode", "options"]
@@ -3128,6 +3349,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode", "form"]
@@ -3176,6 +3402,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode"]
@@ -3264,12 +3495,17 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode", "provide"]
                     }
                   ],
-                  "description": "Only with owner='human': HOW the person can answer, so they resolve it in one tap instead of writing back. mode 'confirm' (yes/no; optional prompt), 'choose' (1-8 options, at most ONE recommended, each with a one-line `description` of its consequence; allowOther for free text), 'form' (a small FLAT form; credential field types are dropped — never ask for a secret in a form), 'act' (something to DO: optional http(s) url + up to 7 steps; the person answers 'I did this'), 'provide' (connection {service} | file {accept} | secret {name} — handed over through the vault, never typed into a message). PREFER confirm/choose for any decision (mark exactly ONE option `recommended` when you have a view: their pick vs your recommendation is recorded, and every answered confirm/choose files a `decision` entity); use act ONLY for a physical/world task with steps. Example: {\"mode\":\"choose\",\"options\":[{\"label\":\"Ship now\",\"recommended\":true,\"description\":\"Publishes today\"},{\"label\":\"Wait a week\"}]}. Omit for a plain free-text answer. null clears a stored ask. Any mode may carry `lookedAt`: up to 8 {kind, id} (entity | document | view | automation | playbook) you actually read before asking, so the person sees what you based the question on — refs they cannot see are refused, and any title you send is ignored (the pod names them)."
+                  "description": "Only with owner='human': HOW the person can answer, so they resolve it in one tap instead of writing back. mode 'confirm' (yes/no: `prompt` IS the question; `yes` / `no` may each carry a one-line `description` of what that answer does, and ONE may be `recommended`), 'choose' (1-8 options, at most ONE recommended, each with a one-line `description` of its consequence; allowOther for free text), 'form' (a small FLAT form; credential field types are dropped — never ask for a secret in a form), 'act' (something to DO: optional http(s) url + up to 7 steps; the person answers 'I did this'), 'provide' (connection {service} | file {accept} | secret {name} — handed over through the vault, never typed into a message). PREFER confirm/choose for any decision (mark exactly ONE answer `recommended` when you have a view: their pick vs your recommendation is recorded, and every answered confirm/choose files a `decision` entity); use act ONLY for a physical/world task with steps. Example: {\"mode\":\"choose\",\"options\":[{\"label\":\"Ship now\",\"recommended\":true,\"description\":\"Publishes today\"},{\"label\":\"Wait a week\"}]}. Omit for a plain free-text answer. null clears a stored ask. Any mode may carry `lookedAt`: up to 8 {kind, id} (entity | document | view | automation | playbook) you actually read before asking, so the person sees what you based the question on — refs they cannot see are refused, and any title you send is ignored (the pod names them)."
                 }
               },
               "required": ["kind", "label"]
@@ -3308,7 +3544,7 @@
               "why": {
                 "type": "string",
                 "maxLength": 500,
-                "description": "Only with owner='human'. ONE line naming WHICH thing is missing, not its class."
+                "description": "Only with owner='human'. ONE line naming WHICH thing is missing, not its class; never a repeat of the label or the prompt."
               },
               "ref": {
                 "description": "WHERE to go for this deliverable — turns the card's title into a door instead of leaving the person to search. ONE of two shapes: {\"kind\":\"entity|document|view|cell|automation|playbook\",\"id\":\"<uuid>\"} for something in the pod, or {\"url\":\"https://...\"} for an external page. REFUSED if the object is not one you can already see. Use it above all with owner='human': name the blocker in `why`, then point at it here.",
@@ -3360,6 +3596,40 @@
                         "type": "string",
                         "maxLength": 500
                       },
+                      "yes": {
+                        "type": "object",
+                        "properties": {
+                          "label": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 80
+                          },
+                          "description": {
+                            "type": "string",
+                            "maxLength": 140
+                          },
+                          "recommended": {
+                            "type": "boolean"
+                          }
+                        }
+                      },
+                      "no": {
+                        "type": "object",
+                        "properties": {
+                          "label": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 80
+                          },
+                          "description": {
+                            "type": "string",
+                            "maxLength": 140
+                          },
+                          "recommended": {
+                            "type": "boolean"
+                          }
+                        }
+                      },
                       "lookedAt": {
                         "maxItems": 8,
                         "type": "array",
@@ -3384,6 +3654,11 @@
                           },
                           "required": ["kind", "id"]
                         }
+                      },
+                      "stakes": {
+                        "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                        "type": "string",
+                        "enum": ["routine", "commitment"]
                       }
                     },
                     "required": ["mode"]
@@ -3453,6 +3728,11 @@
                           },
                           "required": ["kind", "id"]
                         }
+                      },
+                      "stakes": {
+                        "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                        "type": "string",
+                        "enum": ["routine", "commitment"]
                       }
                     },
                     "required": ["mode", "options"]
@@ -3549,6 +3829,11 @@
                           },
                           "required": ["kind", "id"]
                         }
+                      },
+                      "stakes": {
+                        "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                        "type": "string",
+                        "enum": ["routine", "commitment"]
                       }
                     },
                     "required": ["mode", "form"]
@@ -3597,6 +3882,11 @@
                           },
                           "required": ["kind", "id"]
                         }
+                      },
+                      "stakes": {
+                        "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                        "type": "string",
+                        "enum": ["routine", "commitment"]
                       }
                     },
                     "required": ["mode"]
@@ -3685,12 +3975,17 @@
                           },
                           "required": ["kind", "id"]
                         }
+                      },
+                      "stakes": {
+                        "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                        "type": "string",
+                        "enum": ["routine", "commitment"]
                       }
                     },
                     "required": ["mode", "provide"]
                   }
                 ],
-                "description": "Only with owner='human': HOW the person can answer, so they resolve it in one tap instead of writing back. mode 'confirm' (yes/no; optional prompt), 'choose' (1-8 options, at most ONE recommended, each with a one-line `description` of its consequence; allowOther for free text), 'form' (a small FLAT form; credential field types are dropped — never ask for a secret in a form), 'act' (something to DO: optional http(s) url + up to 7 steps; the person answers 'I did this'), 'provide' (connection {service} | file {accept} | secret {name} — handed over through the vault, never typed into a message). PREFER confirm/choose for any decision (mark exactly ONE option `recommended` when you have a view: their pick vs your recommendation is recorded, and every answered confirm/choose files a `decision` entity); use act ONLY for a physical/world task with steps. Example: {\"mode\":\"choose\",\"options\":[{\"label\":\"Ship now\",\"recommended\":true,\"description\":\"Publishes today\"},{\"label\":\"Wait a week\"}]}. Omit for a plain free-text answer. null clears a stored ask. Any mode may carry `lookedAt`: up to 8 {kind, id} (entity | document | view | automation | playbook) you actually read before asking, so the person sees what you based the question on — refs they cannot see are refused, and any title you send is ignored (the pod names them)."
+                "description": "Only with owner='human': HOW the person can answer, so they resolve it in one tap instead of writing back. mode 'confirm' (yes/no: `prompt` IS the question; `yes` / `no` may each carry a one-line `description` of what that answer does, and ONE may be `recommended`), 'choose' (1-8 options, at most ONE recommended, each with a one-line `description` of its consequence; allowOther for free text), 'form' (a small FLAT form; credential field types are dropped — never ask for a secret in a form), 'act' (something to DO: optional http(s) url + up to 7 steps; the person answers 'I did this'), 'provide' (connection {service} | file {accept} | secret {name} — handed over through the vault, never typed into a message). PREFER confirm/choose for any decision (mark exactly ONE answer `recommended` when you have a view: their pick vs your recommendation is recorded, and every answered confirm/choose files a `decision` entity); use act ONLY for a physical/world task with steps. Example: {\"mode\":\"choose\",\"options\":[{\"label\":\"Ship now\",\"recommended\":true,\"description\":\"Publishes today\"},{\"label\":\"Wait a week\"}]}. Omit for a plain free-text answer. null clears a stored ask. Any mode may carry `lookedAt`: up to 8 {kind, id} (entity | document | view | automation | playbook) you actually read before asking, so the person sees what you based the question on — refs they cannot see are refused, and any title you send is ignored (the pod names them)."
               }
             },
             "required": ["kind", "label"],
@@ -3789,7 +4084,7 @@
         "destructiveHint": true,
         "openWorldHint": false
       },
-      "description": "End a focus session — the ONE door for every lifecycle exit. `terminalStatus` says HOW it ended: 'closed' (the work finished, default), 'cancelled' (abandoned — you stopped on purpose), 'failed' (you could not complete it). Say which honestly: a cancelled or failed session recorded as 'closed' tells the user work succeeded when it did not. 'cancelled' also STOPS the session's in-flight work where a real stop exists (queued jobs, a running agent reply) and returns `cancel`: { stopped[], notStoppable[] (already running — it will finish), finished[] (proposals that already applied) }. A cancel may come back status 'proposed' — that is NOT an error: it is queued for the user's review and nothing is stopped until they approve. Also closes any running playbook_run. Returns a **review pack**: pendingProposals[], counts, and warnings (e.g. unfinished expectedOutputs — warn only), plus `nudges` for what closed still owed (ungraded criteria: grade them with synap_evaluate_session — best BEFORE closing). Use synap_list_proposals({sessionId}) to re-fetch the pack.",
+      "description": "End a focus session — the ONE door for every lifecycle exit. `terminalStatus` says HOW it ended: 'closed' (the work finished, default), 'cancelled' (abandoned — you stopped on purpose), 'failed' (you could not complete it). Say which honestly: a cancelled or failed session recorded as 'closed' tells the user work succeeded when it did not. 'cancelled' also STOPS the session's in-flight work where a real stop exists (queued jobs, a running agent reply) and returns `cancel`: { stopped[], notStoppable[] (already running — it will finish), finished[] (proposals that already applied) }. A cancel may come back status 'proposed' — that is NOT an error: it is queued for the user's review and nothing is stopped until they approve. Also closes any running playbook_run. Returns a **review pack**: pendingProposals[], counts, and warnings (e.g. unfinished expectedOutputs — warn only), plus `nudges` for what closed still owed (ungraded criteria: grade them with synap_evaluate_session — best BEFORE closing). Use synap_list_proposals({sessionId}) to re-fetch the pack. QUESTIONS: every question still open in the room is stamped 'closed — session ended' (never deleted), and an open confirm/choose ask the person owed retires with the session (act/provide/form stay owed). Before you close as 'closed' or 'failed', settle each question YOU asked that is still open: if the person answered you in chat, relay their exact words with synap_relay_answer; otherwise pass `questionDispositions`. A close that leaves one of your questions unsettled is refused with status 'refused' and `openQuestions` (messageId, shortId Q-xxxxxxxx, text) — nothing is closed. A 'cancelled' close is never refused.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -3809,6 +4104,30 @@
             "type": "string",
             "enum": ["closed", "cancelled", "failed"],
             "description": "How the session ended. 'closed' (default) = the work finished. 'cancelled' = abandoned on purpose. 'failed' = attempted and could not be completed. All three run the SAME close (review pack, playbook_run close, ephemeral expiry, close event) — only the recorded outcome differs."
+          },
+          "questionDispositions": {
+            "type": "array",
+            "maxItems": 100,
+            "description": "Your word on each question you asked in the room that is still open (the refusal lists them). 'withdrawn' = your work overtook it (say why in `note`). 'keep_as_owed' = the person still owes you the answer after this session: it becomes an owed slot of theirs.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "messageId": {
+                  "type": "string",
+                  "description": "The question's full message id (from the refusal's openQuestions), not the Q- short id."
+                },
+                "disposition": {
+                  "type": "string",
+                  "enum": ["withdrawn", "keep_as_owed"]
+                },
+                "note": {
+                  "type": "string",
+                  "maxLength": 500,
+                  "description": "One line: why it was withdrawn ('you answered it in the brief')."
+                }
+              },
+              "required": ["messageId", "disposition"]
+            }
           }
         },
         "required": ["sessionId"]
@@ -3955,6 +4274,59 @@
           }
         },
         "required": ["sessionId"]
+      }
+    },
+    {
+      "name": "synap_relay_answer",
+      "annotations": {
+        "title": "Relay the person's answer",
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "description": "The person answered your question HERE, in this chat, instead of in Synap: relay their answer to the question you asked (a room question you posted, or a slot you handed them). Name the EXACT question — `messageId` (the id synap_post_message returned) and/or `slotLabel`; never guess the newest. `quote` = their words VERBATIM, never your paraphrase or summary; `value` = the pick you read in them, for a confirm/choose ask. A routine question is answered and marked relayed by you. A commitment (deploy, spend, publish, delete, an approval, a grade, handing over a secret/connection/file — or any ask you marked stakes 'commitment') is NOT answered: it returns status 'awaiting_tap' and waits for the person's own tap — do not act on it yet. When your question is overtaken (you no longer need it), disposition 'withdrawn' + `note` closes it and hands its slot back to you.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "description": "The focus session you asked in."
+          },
+          "disposition": {
+            "type": "string",
+            "enum": ["answered", "withdrawn"],
+            "description": "'answered' = the person answered in this chat (needs quote). 'withdrawn' = you no longer need the answer (needs note)."
+          },
+          "messageId": {
+            "type": "string",
+            "description": "Your room question's message id (from synap_post_message)."
+          },
+          "slotLabel": {
+            "type": "string",
+            "maxLength": 500,
+            "description": "The output the question is about — alone when you asked through the output itself (owner 'human' + ask)."
+          },
+          "quote": {
+            "type": "string",
+            "maxLength": 2000,
+            "description": "The person's own words, verbatim, as they typed them. Required with 'answered'."
+          },
+          "value": {
+            "type": "object",
+            "description": "The typed answer you read in their words, for an output with an ask: {type:'confirm', confirmed:true|false} | {type:'chip', chip:{label, value}} (one of the options offered) | {type:'form', values:{...}} | {type:'text'}. Omit for a free-text question."
+          },
+          "relaySurface": {
+            "type": "string",
+            "maxLength": 64,
+            "description": "Where they said it, e.g. 'claude-code' or 'claude-ai'."
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 500,
+            "description": "With 'withdrawn': one line on why you no longer need it."
+          }
+        },
+        "required": ["sessionId", "disposition"]
       }
     },
     {
@@ -4398,6 +4770,40 @@
                                 "type": "string",
                                 "maxLength": 500
                               },
+                              "yes": {
+                                "type": "object",
+                                "properties": {
+                                  "label": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 80
+                                  },
+                                  "description": {
+                                    "type": "string",
+                                    "maxLength": 140
+                                  },
+                                  "recommended": {
+                                    "type": "boolean"
+                                  }
+                                }
+                              },
+                              "no": {
+                                "type": "object",
+                                "properties": {
+                                  "label": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 80
+                                  },
+                                  "description": {
+                                    "type": "string",
+                                    "maxLength": 140
+                                  },
+                                  "recommended": {
+                                    "type": "boolean"
+                                  }
+                                }
+                              },
                               "lookedAt": {
                                 "maxItems": 8,
                                 "type": "array",
@@ -4422,6 +4828,11 @@
                                   },
                                   "required": ["kind", "id"]
                                 }
+                              },
+                              "stakes": {
+                                "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                                "type": "string",
+                                "enum": ["routine", "commitment"]
                               }
                             },
                             "required": ["mode"]
@@ -4491,6 +4902,11 @@
                                   },
                                   "required": ["kind", "id"]
                                 }
+                              },
+                              "stakes": {
+                                "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                                "type": "string",
+                                "enum": ["routine", "commitment"]
                               }
                             },
                             "required": ["mode", "options"]
@@ -4587,6 +5003,11 @@
                                   },
                                   "required": ["kind", "id"]
                                 }
+                              },
+                              "stakes": {
+                                "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                                "type": "string",
+                                "enum": ["routine", "commitment"]
                               }
                             },
                             "required": ["mode", "form"]
@@ -4635,6 +5056,11 @@
                                   },
                                   "required": ["kind", "id"]
                                 }
+                              },
+                              "stakes": {
+                                "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                                "type": "string",
+                                "enum": ["routine", "commitment"]
                               }
                             },
                             "required": ["mode"]
@@ -4723,12 +5149,17 @@
                                   },
                                   "required": ["kind", "id"]
                                 }
+                              },
+                              "stakes": {
+                                "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                                "type": "string",
+                                "enum": ["routine", "commitment"]
                               }
                             },
                             "required": ["mode", "provide"]
                           }
                         ],
-                        "description": "Only with owner='human': HOW the person can answer, so they resolve it in one tap instead of writing back. mode 'confirm' (yes/no; optional prompt), 'choose' (1-8 options, at most ONE recommended, each with a one-line `description` of its consequence; allowOther for free text), 'form' (a small FLAT form; credential field types are dropped — never ask for a secret in a form), 'act' (something to DO: optional http(s) url + up to 7 steps; the person answers 'I did this'), 'provide' (connection {service} | file {accept} | secret {name} — handed over through the vault, never typed into a message). PREFER confirm/choose for any decision (mark exactly ONE option `recommended` when you have a view: their pick vs your recommendation is recorded, and every answered confirm/choose files a `decision` entity); use act ONLY for a physical/world task with steps. Example: {\"mode\":\"choose\",\"options\":[{\"label\":\"Ship now\",\"recommended\":true,\"description\":\"Publishes today\"},{\"label\":\"Wait a week\"}]}. Omit for a plain free-text answer. null clears a stored ask. Any mode may carry `lookedAt`: up to 8 {kind, id} (entity | document | view | automation | playbook) you actually read before asking, so the person sees what you based the question on — refs they cannot see are refused, and any title you send is ignored (the pod names them)."
+                        "description": "Only with owner='human': HOW the person can answer, so they resolve it in one tap instead of writing back. mode 'confirm' (yes/no: `prompt` IS the question; `yes` / `no` may each carry a one-line `description` of what that answer does, and ONE may be `recommended`), 'choose' (1-8 options, at most ONE recommended, each with a one-line `description` of its consequence; allowOther for free text), 'form' (a small FLAT form; credential field types are dropped — never ask for a secret in a form), 'act' (something to DO: optional http(s) url + up to 7 steps; the person answers 'I did this'), 'provide' (connection {service} | file {accept} | secret {name} — handed over through the vault, never typed into a message). PREFER confirm/choose for any decision (mark exactly ONE answer `recommended` when you have a view: their pick vs your recommendation is recorded, and every answered confirm/choose files a `decision` entity); use act ONLY for a physical/world task with steps. Example: {\"mode\":\"choose\",\"options\":[{\"label\":\"Ship now\",\"recommended\":true,\"description\":\"Publishes today\"},{\"label\":\"Wait a week\"}]}. Omit for a plain free-text answer. null clears a stored ask. Any mode may carry `lookedAt`: up to 8 {kind, id} (entity | document | view | automation | playbook) you actually read before asking, so the person sees what you based the question on — refs they cannot see are refused, and any title you send is ignored (the pod names them)."
                       },
                       "relationToSubject": {
                         "type": "string",
@@ -4859,6 +5290,40 @@
                           "type": "string",
                           "maxLength": 500
                         },
+                        "yes": {
+                          "type": "object",
+                          "properties": {
+                            "label": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 80
+                            },
+                            "description": {
+                              "type": "string",
+                              "maxLength": 140
+                            },
+                            "recommended": {
+                              "type": "boolean"
+                            }
+                          }
+                        },
+                        "no": {
+                          "type": "object",
+                          "properties": {
+                            "label": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 80
+                            },
+                            "description": {
+                              "type": "string",
+                              "maxLength": 140
+                            },
+                            "recommended": {
+                              "type": "boolean"
+                            }
+                          }
+                        },
                         "lookedAt": {
                           "maxItems": 8,
                           "type": "array",
@@ -4883,6 +5348,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode"]
@@ -4952,6 +5422,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode", "options"]
@@ -5048,6 +5523,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode", "form"]
@@ -5096,6 +5576,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode"]
@@ -5184,12 +5669,17 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode", "provide"]
                     }
                   ],
-                  "description": "Only with owner='human': HOW the person can answer, so they resolve it in one tap instead of writing back. mode 'confirm' (yes/no; optional prompt), 'choose' (1-8 options, at most ONE recommended, each with a one-line `description` of its consequence; allowOther for free text), 'form' (a small FLAT form; credential field types are dropped — never ask for a secret in a form), 'act' (something to DO: optional http(s) url + up to 7 steps; the person answers 'I did this'), 'provide' (connection {service} | file {accept} | secret {name} — handed over through the vault, never typed into a message). PREFER confirm/choose for any decision (mark exactly ONE option `recommended` when you have a view: their pick vs your recommendation is recorded, and every answered confirm/choose files a `decision` entity); use act ONLY for a physical/world task with steps. Example: {\"mode\":\"choose\",\"options\":[{\"label\":\"Ship now\",\"recommended\":true,\"description\":\"Publishes today\"},{\"label\":\"Wait a week\"}]}. Omit for a plain free-text answer. null clears a stored ask. Any mode may carry `lookedAt`: up to 8 {kind, id} (entity | document | view | automation | playbook) you actually read before asking, so the person sees what you based the question on — refs they cannot see are refused, and any title you send is ignored (the pod names them)."
+                  "description": "Only with owner='human': HOW the person can answer, so they resolve it in one tap instead of writing back. mode 'confirm' (yes/no: `prompt` IS the question; `yes` / `no` may each carry a one-line `description` of what that answer does, and ONE may be `recommended`), 'choose' (1-8 options, at most ONE recommended, each with a one-line `description` of its consequence; allowOther for free text), 'form' (a small FLAT form; credential field types are dropped — never ask for a secret in a form), 'act' (something to DO: optional http(s) url + up to 7 steps; the person answers 'I did this'), 'provide' (connection {service} | file {accept} | secret {name} — handed over through the vault, never typed into a message). PREFER confirm/choose for any decision (mark exactly ONE answer `recommended` when you have a view: their pick vs your recommendation is recorded, and every answered confirm/choose files a `decision` entity); use act ONLY for a physical/world task with steps. Example: {\"mode\":\"choose\",\"options\":[{\"label\":\"Ship now\",\"recommended\":true,\"description\":\"Publishes today\"},{\"label\":\"Wait a week\"}]}. Omit for a plain free-text answer. null clears a stored ask. Any mode may carry `lookedAt`: up to 8 {kind, id} (entity | document | view | automation | playbook) you actually read before asking, so the person sees what you based the question on — refs they cannot see are refused, and any title you send is ignored (the pod names them)."
                 },
                 "relationToSubject": {
                   "type": "string",
@@ -5417,6 +5907,40 @@
                                 "type": "string",
                                 "maxLength": 500
                               },
+                              "yes": {
+                                "type": "object",
+                                "properties": {
+                                  "label": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 80
+                                  },
+                                  "description": {
+                                    "type": "string",
+                                    "maxLength": 140
+                                  },
+                                  "recommended": {
+                                    "type": "boolean"
+                                  }
+                                }
+                              },
+                              "no": {
+                                "type": "object",
+                                "properties": {
+                                  "label": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 80
+                                  },
+                                  "description": {
+                                    "type": "string",
+                                    "maxLength": 140
+                                  },
+                                  "recommended": {
+                                    "type": "boolean"
+                                  }
+                                }
+                              },
                               "lookedAt": {
                                 "maxItems": 8,
                                 "type": "array",
@@ -5441,6 +5965,11 @@
                                   },
                                   "required": ["kind", "id"]
                                 }
+                              },
+                              "stakes": {
+                                "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                                "type": "string",
+                                "enum": ["routine", "commitment"]
                               }
                             },
                             "required": ["mode"]
@@ -5510,6 +6039,11 @@
                                   },
                                   "required": ["kind", "id"]
                                 }
+                              },
+                              "stakes": {
+                                "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                                "type": "string",
+                                "enum": ["routine", "commitment"]
                               }
                             },
                             "required": ["mode", "options"]
@@ -5606,6 +6140,11 @@
                                   },
                                   "required": ["kind", "id"]
                                 }
+                              },
+                              "stakes": {
+                                "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                                "type": "string",
+                                "enum": ["routine", "commitment"]
                               }
                             },
                             "required": ["mode", "form"]
@@ -5654,6 +6193,11 @@
                                   },
                                   "required": ["kind", "id"]
                                 }
+                              },
+                              "stakes": {
+                                "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                                "type": "string",
+                                "enum": ["routine", "commitment"]
                               }
                             },
                             "required": ["mode"]
@@ -5742,12 +6286,17 @@
                                   },
                                   "required": ["kind", "id"]
                                 }
+                              },
+                              "stakes": {
+                                "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                                "type": "string",
+                                "enum": ["routine", "commitment"]
                               }
                             },
                             "required": ["mode", "provide"]
                           }
                         ],
-                        "description": "Only with owner='human': HOW the person can answer, so they resolve it in one tap instead of writing back. mode 'confirm' (yes/no; optional prompt), 'choose' (1-8 options, at most ONE recommended, each with a one-line `description` of its consequence; allowOther for free text), 'form' (a small FLAT form; credential field types are dropped — never ask for a secret in a form), 'act' (something to DO: optional http(s) url + up to 7 steps; the person answers 'I did this'), 'provide' (connection {service} | file {accept} | secret {name} — handed over through the vault, never typed into a message). PREFER confirm/choose for any decision (mark exactly ONE option `recommended` when you have a view: their pick vs your recommendation is recorded, and every answered confirm/choose files a `decision` entity); use act ONLY for a physical/world task with steps. Example: {\"mode\":\"choose\",\"options\":[{\"label\":\"Ship now\",\"recommended\":true,\"description\":\"Publishes today\"},{\"label\":\"Wait a week\"}]}. Omit for a plain free-text answer. null clears a stored ask. Any mode may carry `lookedAt`: up to 8 {kind, id} (entity | document | view | automation | playbook) you actually read before asking, so the person sees what you based the question on — refs they cannot see are refused, and any title you send is ignored (the pod names them)."
+                        "description": "Only with owner='human': HOW the person can answer, so they resolve it in one tap instead of writing back. mode 'confirm' (yes/no: `prompt` IS the question; `yes` / `no` may each carry a one-line `description` of what that answer does, and ONE may be `recommended`), 'choose' (1-8 options, at most ONE recommended, each with a one-line `description` of its consequence; allowOther for free text), 'form' (a small FLAT form; credential field types are dropped — never ask for a secret in a form), 'act' (something to DO: optional http(s) url + up to 7 steps; the person answers 'I did this'), 'provide' (connection {service} | file {accept} | secret {name} — handed over through the vault, never typed into a message). PREFER confirm/choose for any decision (mark exactly ONE answer `recommended` when you have a view: their pick vs your recommendation is recorded, and every answered confirm/choose files a `decision` entity); use act ONLY for a physical/world task with steps. Example: {\"mode\":\"choose\",\"options\":[{\"label\":\"Ship now\",\"recommended\":true,\"description\":\"Publishes today\"},{\"label\":\"Wait a week\"}]}. Omit for a plain free-text answer. null clears a stored ask. Any mode may carry `lookedAt`: up to 8 {kind, id} (entity | document | view | automation | playbook) you actually read before asking, so the person sees what you based the question on — refs they cannot see are refused, and any title you send is ignored (the pod names them)."
                       },
                       "relationToSubject": {
                         "type": "string",
@@ -5911,6 +6460,40 @@
                           "type": "string",
                           "maxLength": 500
                         },
+                        "yes": {
+                          "type": "object",
+                          "properties": {
+                            "label": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 80
+                            },
+                            "description": {
+                              "type": "string",
+                              "maxLength": 140
+                            },
+                            "recommended": {
+                              "type": "boolean"
+                            }
+                          }
+                        },
+                        "no": {
+                          "type": "object",
+                          "properties": {
+                            "label": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 80
+                            },
+                            "description": {
+                              "type": "string",
+                              "maxLength": 140
+                            },
+                            "recommended": {
+                              "type": "boolean"
+                            }
+                          }
+                        },
                         "lookedAt": {
                           "maxItems": 8,
                           "type": "array",
@@ -5935,6 +6518,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode"]
@@ -6004,6 +6592,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode", "options"]
@@ -6100,6 +6693,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode", "form"]
@@ -6148,6 +6746,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode"]
@@ -6236,12 +6839,17 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode", "provide"]
                     }
                   ],
-                  "description": "Only with owner='human': HOW the person can answer, so they resolve it in one tap instead of writing back. mode 'confirm' (yes/no; optional prompt), 'choose' (1-8 options, at most ONE recommended, each with a one-line `description` of its consequence; allowOther for free text), 'form' (a small FLAT form; credential field types are dropped — never ask for a secret in a form), 'act' (something to DO: optional http(s) url + up to 7 steps; the person answers 'I did this'), 'provide' (connection {service} | file {accept} | secret {name} — handed over through the vault, never typed into a message). PREFER confirm/choose for any decision (mark exactly ONE option `recommended` when you have a view: their pick vs your recommendation is recorded, and every answered confirm/choose files a `decision` entity); use act ONLY for a physical/world task with steps. Example: {\"mode\":\"choose\",\"options\":[{\"label\":\"Ship now\",\"recommended\":true,\"description\":\"Publishes today\"},{\"label\":\"Wait a week\"}]}. Omit for a plain free-text answer. null clears a stored ask. Any mode may carry `lookedAt`: up to 8 {kind, id} (entity | document | view | automation | playbook) you actually read before asking, so the person sees what you based the question on — refs they cannot see are refused, and any title you send is ignored (the pod names them)."
+                  "description": "Only with owner='human': HOW the person can answer, so they resolve it in one tap instead of writing back. mode 'confirm' (yes/no: `prompt` IS the question; `yes` / `no` may each carry a one-line `description` of what that answer does, and ONE may be `recommended`), 'choose' (1-8 options, at most ONE recommended, each with a one-line `description` of its consequence; allowOther for free text), 'form' (a small FLAT form; credential field types are dropped — never ask for a secret in a form), 'act' (something to DO: optional http(s) url + up to 7 steps; the person answers 'I did this'), 'provide' (connection {service} | file {accept} | secret {name} — handed over through the vault, never typed into a message). PREFER confirm/choose for any decision (mark exactly ONE answer `recommended` when you have a view: their pick vs your recommendation is recorded, and every answered confirm/choose files a `decision` entity); use act ONLY for a physical/world task with steps. Example: {\"mode\":\"choose\",\"options\":[{\"label\":\"Ship now\",\"recommended\":true,\"description\":\"Publishes today\"},{\"label\":\"Wait a week\"}]}. Omit for a plain free-text answer. null clears a stored ask. Any mode may carry `lookedAt`: up to 8 {kind, id} (entity | document | view | automation | playbook) you actually read before asking, so the person sees what you based the question on — refs they cannot see are refused, and any title you send is ignored (the pod names them)."
                 },
                 "relationToSubject": {
                   "type": "string",
@@ -8431,6 +9039,40 @@
                     "type": "string",
                     "maxLength": 500
                   },
+                  "yes": {
+                    "type": "object",
+                    "properties": {
+                      "label": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 80
+                      },
+                      "description": {
+                        "type": "string",
+                        "maxLength": 140
+                      },
+                      "recommended": {
+                        "type": "boolean"
+                      }
+                    }
+                  },
+                  "no": {
+                    "type": "object",
+                    "properties": {
+                      "label": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 80
+                      },
+                      "description": {
+                        "type": "string",
+                        "maxLength": 140
+                      },
+                      "recommended": {
+                        "type": "boolean"
+                      }
+                    }
+                  },
                   "lookedAt": {
                     "maxItems": 8,
                     "type": "array",
@@ -8455,6 +9097,11 @@
                       },
                       "required": ["kind", "id"]
                     }
+                  },
+                  "stakes": {
+                    "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                    "type": "string",
+                    "enum": ["routine", "commitment"]
                   }
                 },
                 "required": ["mode"]
@@ -8524,6 +9171,11 @@
                       },
                       "required": ["kind", "id"]
                     }
+                  },
+                  "stakes": {
+                    "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                    "type": "string",
+                    "enum": ["routine", "commitment"]
                   }
                 },
                 "required": ["mode", "options"]
@@ -8620,6 +9272,11 @@
                       },
                       "required": ["kind", "id"]
                     }
+                  },
+                  "stakes": {
+                    "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                    "type": "string",
+                    "enum": ["routine", "commitment"]
                   }
                 },
                 "required": ["mode", "form"]
@@ -8668,6 +9325,11 @@
                       },
                       "required": ["kind", "id"]
                     }
+                  },
+                  "stakes": {
+                    "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                    "type": "string",
+                    "enum": ["routine", "commitment"]
                   }
                 },
                 "required": ["mode"]
@@ -8756,6 +9418,11 @@
                       },
                       "required": ["kind", "id"]
                     }
+                  },
+                  "stakes": {
+                    "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                    "type": "string",
+                    "enum": ["routine", "commitment"]
                   }
                 },
                 "required": ["mode", "provide"]
@@ -10147,5 +10814,5 @@
       }
     }
   ],
-  "instructions": "The user's Synap pod: their source of truth. Tool names below are stems; your door may prefix them (`pod__ask`).\n\n1. **Recall first.** Before answering or creating, `ask`.\n2. **Capture after.** A durable fact, decision, person, task: `capture`; about the user: `remember_fact`. No private scratchpad.\n3. **Orient once.** `orient`: pending review (raise first), open sessions, kinds.\n4. **Work in a session.** `start_session` or resume (playbook `templateId`); a goal (tools: TRACK): `list_tracks`, else `start_track`; work in it = `start_session` + `trackId`; 2-5 `criteria`; status moves carry `expectedStatus`; person-only: `owner:'human'` slot + `blockedReason` + `ask` (confirm/choose with 1 `recommended`/form/act/provide), then `wait_for_answer` if listed; post progress, questions and results in its room (`post_message` to `session.channelId`); your own chat may repeat them; `evaluate_session` before `complete_session`.\n5. **Never guess a project.** Pin only what the user names (`set_workspace_focus`, `set_project_focus`).\n6. **`proposed` is success**: keep going, never retry.\n7. **Discover before inventing.** `list_profiles` / `list_capabilities` before defining a kind, role, space. **Extend first** (facet, overlay, parent); never a twin.\n8. **One space per domain**; projects filter it (`file_into_project`, `project_use_workspace`).\n\nDepth: `load_skill` `system/synap/concepts`, `work-model`, `focus-sessions`, `from-intent`, `escalation-ladder`, `writes`, `catalog`."
+  "instructions": "The user's Synap pod: source of truth. Tool names below are stems; your door may prefix them (`pod__ask`).\n\n1. **Recall first.** Before answering or creating, `ask`.\n2. **Capture after.** A durable fact, decision, person, task: `capture`; about the user: `remember_fact`. No private scratchpad.\n3. **Orient once.** `orient`: pending review, open sessions.\n4. **Work in a session.** `start_session` or resume (playbook `templateId`); a goal (tools: TRACK): `list_tracks`, else `start_track`; work in it = `start_session` + `trackId`; 2-5 `criteria`; status moves carry `expectedStatus`; person-only: `owner:'human'` slot + `blockedReason` + `ask` (confirm/choose with 1 `recommended`/form/act/provide), then `wait_for_answer` if listed; post progress, questions and results in its room (`post_message` to `session.channelId`); your own chat may repeat them, questions as `Q-<id8>`; chat answer → `relay_answer`, words verbatim; `evaluate_session`, close open asks, `complete_session`.\n5. **Never guess a project**: pin only what the user names (`set_*_focus`).\n6. **`proposed` is success**: keep going, never retry.\n7. **Discover before inventing**: `list_profiles` / `list_capabilities` before defining a kind, role, space. **Extend first**, never a twin.\n8. **One space per domain**; projects filter it (`file_into_project`, `project_use_workspace`).\n\nDepth: `load_skill` `system/synap/concepts`, `work-model`, `focus-sessions`, `from-intent`, `escalation-ladder`, `writes`, `catalog`."
 }

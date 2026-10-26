@@ -38,6 +38,7 @@ function cluster(over: Partial<ProposalCluster> = {}): ProposalCluster {
     // Derived through the ONE door, never hand-written: a fixture that pins
     // its own class values would keep passing after the real classifier moved.
     ...proposalClassFields(proposalType, targetType, null),
+    reviewLater: false,
     count: 3,
     sampleProposalIds: ["prop-1", "prop-2", "prop-3"],
     sources: [],
@@ -177,6 +178,7 @@ describe("needs-you union", () => {
       truncated: false,
       blocked: 0,
       decisions: 0,
+      reviewLater: 0,
       notifications: 0,
       review: 0,
       captures: 0,
@@ -206,7 +208,9 @@ function owed(over: Partial<OwedSlotSignalInput> = {}): OwedSlotSignalInput {
   return {
     sessionId: "sess-1",
     label: "Stripe restricted key",
-    owedSince: "2026-09-02T08:00:00Z",
+    // Fresh by default: an owed ask 7+ days old leaves the headline for
+    // Review later (Resolve-XP decision 3), which these counts are not about.
+    owedSince: new Date(Date.now() - 3_600_000).toISOString(),
     ...over,
   };
 }

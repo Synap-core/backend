@@ -69,6 +69,12 @@ const SAMPLE: Required<
     options: [{ label: "EU account", value: "eu", recommended: true }],
   },
   owedSince: "2026-09-08T09:00:00.000Z",
+  askedBy: "77777777-7777-7777-7777-777777777777",
+  askCause: {
+    kind: "decision",
+    ref: { kind: "entity", id: "66666666-6666-6666-6666-666666666666" },
+    at: "2026-09-08T08:00:00.000Z",
+  },
   attestedBy: "22222222-2222-2222-2222-222222222222",
   attestedAt: "2026-09-08T12:00:00.000Z",
   retiredAt: "2026-09-08T13:00:00.000Z",
@@ -99,6 +105,18 @@ const SAMPLE: Required<
     answeredAt: "2026-09-08T14:00:00.000Z",
     question: "Which Stripe account?",
     value: { type: "chip", chip: { label: "EU account", value: "eu" } },
+    via: "relayed",
+    relayedBy: "44444444-4444-4444-4444-444444444444",
+    relaySurface: "claude-code",
+    quote: "use the EU one",
+  },
+  pendingRelay: {
+    text: "Yes",
+    value: { type: "confirm", confirmed: true },
+    relayedBy: "44444444-4444-4444-4444-444444444444",
+    relaySurface: "claude-code",
+    quote: "yes ship it",
+    relayedAt: "2026-09-08T14:30:00.000Z",
   },
 };
 

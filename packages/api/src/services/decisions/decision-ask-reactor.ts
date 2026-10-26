@@ -9,21 +9,27 @@
  * `session-unblock-reactor.ts` IoC precedent: `@synap/events` cannot import
  * `@synap/api`, so the api process registers its own reactors at boot).
  *
- * ON `decisionStatus: 'proposed'` — ensure ONE owed human slot asks it:
+ * ON ENTERING `decisionStatus: 'proposed'` (created so, or moved into it —
+ * {@link entersProposed}; any other edit of a proposed decision asks nothing)
+ * AND ONLY WHEN AN AGENT WROTE IT ({@link decisionHasAgentAuthor}: a person's
+ * own proposed decision is their note, not a question) — ensure ONE owed
+ * human slot asks it:
  *   `{kind:'decision', owner:'human', blockedReason:'decision', ask, decisionId,
  *   ref → the decision}`. The ask is a `choose` over the decision's
  *   `decisionOptions` (recommended marked, or via `recommendedOption`), else a
- *   `confirm` on its title. HOME: the session it was created in (its
- *   `sourceSessionId`, else the writing request's session) when that session is
- *   the owner's and open; otherwise a minimal one-slot session
- *   "Decide: <title>". Answering the slot UPDATES the decision (W2,
- *   `slot.decisionId`).
+ *   `confirm` (Accept / Reject, each saying what it does; no prompt — the
+ *   title heads the card). Stamped with the
+ *   agent that wrote it and the decision as its cause (`stampAskProvenance`).
+ *   HOME: the session it was created in (its `sourceSessionId`, else the
+ *   writing request's session) when that session is the owner's and open;
+ *   otherwise a minimal one-slot session named after the decision. Answering
+ *   the slot UPDATES the decision (W2, `slot.decisionId`).
  *
  * ON ANY OTHER STATUS — an owed slot still asking about it is moot (decided on
  * the entity itself): retired `decision_resolved`. An ANSWERED slot is left
  * alone — the agent still has to pick its answer up.
  *
- * CLOSE: a "Decide: <title>" session THIS reactor opened (marked
+ * CLOSE: a one-slot session THIS reactor opened (marked
  * `metadata.decisionAskFor = <decisionId>`, {@link DECISION_ASK_SESSION_KEY})
  * exists only to ask; once the decision is no longer proposed (answered — the
  * answer updates it — or resolved elsewhere) and nothing else is owed there,
@@ -47,11 +53,16 @@ import {
   focusSessions,
 } from "@synap/database";
 import { registerReactor, type Reactor } from "@synap/events";
-import type { ExpectedOutput, SlotAsk } from "@synap/playbooks";
+import type {
+  ExpectedOutput,
+  SlotAsk,
+  SlotAskCause,
+} from "@synap/playbooks";
 import {
   AskOptionSchema,
   AskSchema,
   askOptionKey,
+  askTextRestates,
   ASK_LIMITS,
   type AskOption,
 } from "@synap-core/types/ask";
@@ -62,7 +73,10 @@ import {
 import { isOwedSlot } from "../focus-sessions/owed-outputs.js";
 import { reconcileOwedSince } from "../focus-sessions/update-session.js";
 import { updateExpectedOutputsLocked } from "../focus-sessions/delegate-output.js";
-import { logSlotsAsked } from "../focus-sessions/slot-asked-event.js";
+import {
+  logSlotsAsked,
+  stampAskProvenance,
+} from "../focus-sessions/slot-asked-event.js";
 import { normalizeExpectedLabel } from "../focus-sessions/expected-label.js";
 import { mergeSessionMetadata } from "../focus-sessions/session-metadata.js";
 import { isDeliverableOutstanding } from "@synap-core/types/units";
@@ -82,13 +96,16 @@ function clip(s: string, max: number): string {
   return s.length > max ? `${s.slice(0, max - 1)}…` : s;
 }
 
-type DecisionRow = {
+export type DecisionRow = {
   id: string;
   userId: string;
   workspaceId: string | null;
   title: string | null;
   properties: Record<string, unknown>;
   createdByKind: string | null;
+  agentUserId: string | null;
+  /** ISO — when the decision was written (the ask cause's date). */
+  createdAt?: string | null;
 };
 
 // ─── Pure ───────────────────────────────────────────────────────────────────
@@ -96,14 +113,11 @@ type DecisionRow = {
 /**
  * The ask for a proposed decision. `decisionOptions` (≥ 2 valid options) ⇒ a
  * `choose`, with the recommendation taken from an option's own flag or from
- * `recommendedOption` (at most one kept); anything less ⇒ a `confirm` on the
- * title. Parsed with the ONE ask schema — an option that does not parse is
- * dropped, never stored.
+ * `recommendedOption` (at most one kept); anything less ⇒ a `confirm`:
+ * accept or reject it. Parsed with the ONE ask schema — an option that does
+ * not parse is dropped, never stored.
  */
-export function askForDecision(
-  title: string,
-  properties: Record<string, unknown>
-): SlotAsk {
+export function askForDecision(properties: Record<string, unknown>): SlotAsk {
   const raw = Array.isArray(properties.decisionOptions)
     ? properties.decisionOptions
     : [];
@@ -132,26 +146,48 @@ export function askForDecision(
     const ask = AskSchema.safeParse({ mode: "choose", options: marked });
     if (ask.success) return ask.data as SlotAsk;
   }
+  // Each answer says what it does (founder decision 2, 2026-10-26). No
+  // prompt: a confirm's prompt becomes the card's heading (`askCardView`), and
+  // the decision's own title — the slot's label — is what the person must see
+  // there; "Accept: <title>?" was the same words twice.
   return {
     mode: "confirm",
-    prompt: clip(`Accept: ${title}?`, ASK_LIMITS.promptMaxChars),
+    yes: { label: "Accept", description: "Marks it accepted" },
+    no: { label: "Reject", description: "Marks it rejected" },
   };
 }
 
-/** The owed slot that asks a proposed decision. Pure. */
+/** The decision's name as the person reads it. Pure. */
+function decisionTitle(decision: Pick<DecisionRow, "title">): string {
+  return (decision.title ?? "").trim() || "Untitled decision";
+}
+
+/**
+ * The owed slot that asks a proposed decision. Pure. Said once: the label is
+ * the decision's title (a key, never "Decide: <title>", and the card's
+ * heading), the confirm's answers say what they do, and `why` is what the
+ * summary says beyond the title.
+ */
 export function decisionSlot(
   decision: Pick<DecisionRow, "id" | "title" | "properties">,
   takenLabels: ReadonlySet<string>,
   now: Date = new Date()
 ): ExpectedOutput {
-  const title = (decision.title ?? "").trim() || "Untitled decision";
-  let label = clip(`Decide: ${title}`, LABEL_MAX);
+  const title = decisionTitle(decision);
+  let label = clip(title, LABEL_MAX);
   if (takenLabels.has(normalizeExpectedLabel(label) ?? "")) {
-    label = `${clip(`Decide: ${title}`, LABEL_MAX - 11)} (${decision.id.slice(0, 8)})`;
+    label = `${clip(title, LABEL_MAX - 11)} (${decision.id.slice(0, 8)})`;
   }
   const summary =
     typeof decision.properties.summary === "string"
       ? decision.properties.summary.trim()
+      : "";
+  // The summary minus the title it opens with (a title cut from the summary's
+  // first sentence, the 10-18 backfill), or nothing when that is all it says.
+  const why = !askTextRestates(summary, title)
+    ? summary
+    : summary.startsWith(title)
+      ? summary.slice(title.length).replace(/^[\s.:;,—–-]+/, "")
       : "";
   return reconcileOwedSince(
     {
@@ -160,13 +196,24 @@ export function decisionSlot(
       status: "pending",
       owner: "human",
       blockedReason: "decision",
-      why: clip(summary || title, 500),
+      ...(why ? { why: clip(why, 500) } : {}),
       ref: { kind: "entity", id: decision.id },
-      ask: askForDecision(title, decision.properties),
+      ask: askForDecision(decision.properties),
       decisionId: decision.id,
     },
     now
   );
+}
+
+/** What raised the ask: the agent's decision, as the card's door. Pure. */
+export function decisionAskCause(
+  decision: Pick<DecisionRow, "id" | "createdAt">
+): SlotAskCause {
+  return {
+    kind: "decision",
+    ref: { kind: "entity", id: decision.id },
+    ...(decision.createdAt ? { at: decision.createdAt } : {}),
+  };
 }
 
 /** Is this slot STILL ASKING about the decision (owed, unanswered)? Pure. */
@@ -175,6 +222,36 @@ export function isOpenDecisionAsk(
   decisionId: string
 ): boolean {
   return slot?.decisionId === decisionId && isOwedSlot(slot) && !slot.answer;
+}
+
+/**
+ * Did an AGENT write this decision? Only then is `proposed` a question for the
+ * person (founder decision 1, 2026-10-26): a person's own proposed decision is
+ * their note, and nobody is asking them anything. Pure.
+ */
+export function decisionHasAgentAuthor(
+  decision: Pick<DecisionRow, "createdByKind" | "agentUserId">
+): boolean {
+  return !!decision.agentUserId || decision.createdByKind === "ai_agent";
+}
+
+/**
+ * Did THIS write put the decision into `proposed`? A create, or an update whose
+ * status changed from something else — the update fan-out carries
+ * `changed.<slug>` / `previous.<slug>` (`entities.update`, and the lifecycle
+ * emitter's update for every status move). Any other edit of a proposed
+ * decision (a renamed title, a backfill) is not a new question. Pure.
+ */
+export function entersProposed(payload: {
+  action: string;
+  data?: Record<string, unknown> | null;
+}): boolean {
+  if (payload.action === "create") return true;
+  return (
+    payload.action === "update" &&
+    payload.data?.["changed.decisionStatus"] === true &&
+    payload.data?.["previous.decisionStatus"] !== "proposed"
+  );
 }
 
 /** Retire the slots still asking about a resolved decision. Pure; null = no change. */
@@ -197,7 +274,7 @@ export function retireResolvedDecisionAsks(
 }
 
 /**
- * Is a reactor-made "Decide:" session done? Its decision's slot no longer asks
+ * Is a reactor-made session done? Its decision's slot no longer asks
  * (answered, or retired) AND no OTHER slot is still outstanding — anything
  * else added there keeps it open. Pure.
  */
@@ -224,6 +301,8 @@ async function loadDecision(id: string): Promise<DecisionRow | null> {
       properties: entities.properties,
       type: entities.type,
       createdByKind: entities.createdByKind,
+      agentUserId: entities.agentUserId,
+      createdAt: entities.createdAt,
       deletedAt: entities.deletedAt,
     })
     .from(entities)
@@ -240,6 +319,8 @@ async function loadDecision(id: string): Promise<DecisionRow | null> {
         ? (row.properties as Record<string, unknown>)
         : {},
     createdByKind: row.createdByKind ?? null,
+    agentUserId: row.agentUserId ?? null,
+    createdAt: row.createdAt ? new Date(row.createdAt).toISOString() : null,
   };
 }
 
@@ -308,10 +389,7 @@ export async function ensureDecisionAsk(
   if (!homeId) {
     const { createFocusSession } =
       await import("../focus-sessions/create-session.js");
-    const title = clip(
-      `Decide: ${(decision.title ?? "").trim() || "Untitled decision"}`,
-      SESSION_TITLE_MAX
-    );
+    const title = clip(decisionTitle(decision), SESSION_TITLE_MAX);
     const projectId =
       typeof decision.properties.projectId === "string"
         ? decision.properties.projectId
@@ -321,7 +399,7 @@ export async function ensureDecisionAsk(
       workspaceId: decision.workspaceId,
       ...(projectId ? { projectId } : {}),
       title,
-      goal: title,
+      goal: "Accept or reject this proposed decision.",
     });
     if (res.status !== "created" && res.status !== "deduped") {
       logger.error(
@@ -366,7 +444,7 @@ export async function ensureDecisionAsk(
     // re-asked IN PLACE rather than duplicated.
     const prior = current.findIndex((o) => o?.decisionId === decision.id);
     const fresh = decisionSlot(decision, taken);
-    after =
+    const asked =
       prior >= 0
         ? current.map((o, i) => {
             if (i !== prior) return o;
@@ -392,6 +470,10 @@ export async function ensureDecisionAsk(
             };
           })
         : [...current, fresh];
+    after = stampAskProvenance(current, asked, {
+      askedBy: decision.agentUserId,
+      askCause: decisionAskCause(decision),
+    });
     wrote = true;
     return after;
   });
@@ -401,7 +483,7 @@ export async function ensureDecisionAsk(
       sessionId: homeId,
       before,
       after,
-      agentUserId: null,
+      agentUserId: decision.agentUserId,
     });
     const { notifySessionNeedsYou } =
       await import("../focus-sessions/notify-needs-you.js");
@@ -436,7 +518,8 @@ export async function resolveDecisionAsks(
  * the person (no agent principal ⇒ never a proposal). Returns how many closed.
  */
 export async function closeSettledDecisionSessions(
-  decision: DecisionRow
+  decision: DecisionRow,
+  opts: { summary?: string } = {}
 ): Promise<number> {
   const rows = await db
     .select({
@@ -464,9 +547,11 @@ export async function closeSettledDecisionSessions(
     const res = await completeFocusSession({
       sessionId: row.id,
       userId: decision.userId,
-      ...(typeof status === "string" && status
-        ? { summary: resolveStatusLabel(status) }
-        : {}),
+      ...(opts.summary
+        ? { summary: opts.summary }
+        : typeof status === "string" && status
+          ? { summary: resolveStatusLabel(status) }
+          : {}),
     });
     if (res) closed += 1;
   }
@@ -487,7 +572,9 @@ export const decisionAskReactor: Reactor = {
       const decision = await loadDecision(payload.subjectId);
       if (!decision) return;
       if (decision.properties.decisionStatus === "proposed") {
-        await ensureDecisionAsk(decision, payload.sessionId ?? null);
+        if (entersProposed(payload) && decisionHasAgentAuthor(decision)) {
+          await ensureDecisionAsk(decision, payload.sessionId ?? null);
+        }
       } else {
         await resolveDecisionAsks(decision);
         await closeSettledDecisionSessions(decision);

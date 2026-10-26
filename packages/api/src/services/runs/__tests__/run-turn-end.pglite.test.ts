@@ -358,8 +358,10 @@ describe("complete-run settles the run from how the IS turn ended (B8)", () => {
       kind: "decision",
       owner: "human",
       blockedReason: "decision",
-      ask: { mode: "confirm" },
+      ask: { mode: "confirm", prompt: "Keep it going?" },
     });
+    // Said once: the facts are the why, the question only the prompt.
+    expect(String(slot.why)).not.toContain("Keep it going?");
     expect(String(slot.why)).toContain(
       `stopped before it was finished ${MAX_AUTO_CONTINUATIONS + 1} times`
     );

@@ -432,6 +432,7 @@ export { registerSessionUnblockReactor } from "./notifications/session-unblock-r
 // reactor opens ONE owed ask slot for it, and retires it once the decision is
 // resolved elsewhere. See services/decisions/decision-ask-reactor.ts.
 export { registerDecisionAskReactor } from "./services/decisions/decision-ask-reactor.js";
+export { retireUnaskedDecisionAsks } from "./services/decisions/retire-unasked-decision-asks.js";
 export { registerAgentChoiceRedispatchReactor } from "./services/agent-dispatch/redispatch-on-choice.js";
 // Session recall runner — apps/api fills the @synap/jobs `registerSessionRecallRunner`
 // slot with it at boot.

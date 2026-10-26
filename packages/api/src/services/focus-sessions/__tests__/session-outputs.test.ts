@@ -545,6 +545,13 @@ describe("joinSessionOutputs — a matched slot is projected WHOLE", () => {
       question: "Which Stripe account?",
       value: { type: "confirm", confirmed: true },
     },
+    pendingRelay: {
+      text: "Yes",
+      relayedBy: "77777777-7777-7777-7777-777777777777",
+      relayedAt: "2026-09-08T14:30:00.000Z",
+    },
+    askedBy: "77777777-7777-7777-7777-777777777777",
+    askCause: { kind: "run" },
   };
 
   it("carries EVERY declared field onto the matched output", () => {

@@ -427,6 +427,17 @@ describe("external agent status poll", () => {
         ask: expect.objectContaining({ mode: "confirm" }),
       }),
     ]);
+    // Said once: the agent's account is the why, the prompt a short question
+    // (never the same words, never a fixed "is waiting" sentence); the cause
+    // names the run.
+    expect(slots[0]!.why).toBe("Approve running github.push_files?");
+    expect(String((slots[0]!.ask as { prompt?: string }).prompt)).toMatch(
+      /agent go ahead\?$/
+    );
+    expect(slots[0]!.askCause).toEqual({
+      kind: "external_approval",
+      ref: { kind: "run", id: runId },
+    });
     expect((await runRow(runId)).external_agent.lastState).toMatchObject({
       confirmationId: "sevt_push",
     });

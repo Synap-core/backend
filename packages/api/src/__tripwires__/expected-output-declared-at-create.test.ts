@@ -61,6 +61,9 @@ const FORGED: Record<string, unknown> = {
   returnedReason: "forged",
   returnedAt: "2020-01-01T00:00:00.000Z",
   owedSince: "1999-01-01T00:00:00.000Z",
+  // An agent naming another as the asker, or forging a system cause.
+  askedBy: "forged-agent",
+  askCause: { kind: "decision", ref: { kind: "entity", id: "forged" } },
   attestedBy: "Antoine",
   attestedAt: "2020-01-01T00:00:00.000Z",
   retiredAt: "2020-01-01T00:00:00.000Z",
@@ -93,6 +96,11 @@ const FORGED: Record<string, unknown> = {
     answeredBy: "Antoine",
     answeredAt: "2020-01-01T00:00:00.000Z",
     value: { type: "confirm", confirmed: true },
+  },
+  pendingRelay: {
+    text: "forged",
+    relayedBy: "forged-agent",
+    relayedAt: "2020-01-01T00:00:00.000Z",
   },
 };
 

@@ -58,8 +58,17 @@ import {
   SESSION_TITLE_MAX,
   titleSourcePatch,
 } from "@synap-core/types/focus-sessions";
-import { AskAnswerValueSchema, AskSchema } from "@synap-core/types/ask";
-import { completeFocusSession } from "../../../services/focus-sessions/complete-session.js";
+import {
+  ASK_LIMITS,
+  AskAnswerValueSchema,
+  AskSchema,
+  RELAY_SURFACE_MAX_CHARS,
+} from "@synap-core/types/ask";
+import {
+  completeFocusSession,
+  isOpenQuestionsAtCloseError,
+} from "../../../services/focus-sessions/complete-session.js";
+import { CLOSE_QUESTION_DISPOSITIONS } from "../../../services/messaging/room-post-kind.js";
 import { sessionGoalPayload } from "../../../services/focus-sessions/session-update-goal.js";
 import {
   gateSessionFiling,
@@ -94,10 +103,15 @@ import type { FollowOutcome } from "../../../services/focus-sessions/follow-play
 import { refuseAgentGateBypass } from "../../../services/focus-sessions/gate-bypass-floor.js";
 import { delegateExpectedOutput } from "../../../services/focus-sessions/delegate-output.js";
 import {
+  answerDoorInputIssue,
   answerGrantWrite,
   answerSessionSlot,
+  correctRelayedAnswer,
   describeAnswerRefusal,
-  type AnswerSessionSlotResult,
+  describeRelayRefusal,
+  relaySessionAnswer,
+  RELAY_DISPOSITIONS,
+  type SlotDoorRefusal,
 } from "../../../services/focus-sessions/session-answer.js";
 import { SLOT_ANSWER_TEXT_MAX } from "../../../services/focus-sessions/answer-slot.js";
 import {
@@ -134,6 +148,7 @@ import {
   droppedAskWarnings,
   criteriaDiffer,
 } from "../../../services/focus-sessions/update-session.js";
+import { restatedAskHints } from "../../../services/focus-sessions/ask-text.js";
 import { ErrorSchema, uuidParam, uuidQueryParam } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import {
@@ -471,7 +486,8 @@ const UnblockOutputBodySchema = z.object({
 /** The person's answer to what an agent asked about a slot. */
 const AnswerOutputBodySchema = z
   .object({
-    expectedLabel: z.string().min(1).max(500),
+    // Required, except on a "Not what I said" that names `questionId`.
+    expectedLabel: z.string().min(1).max(500).optional(),
     text: z.string().max(SLOT_ANSWER_TEXT_MAX).optional(),
     // The tRPC twin's schema (`focusSessions.answerOutput`): parsed and
     // redacted at the door, never `z.custom` (see `ask` above).
@@ -479,10 +495,35 @@ const AnswerOutputBodySchema = z
     askFingerprint: z.string().min(1).max(64).optional(),
     // A secret answer: the agent `provideOptions` named as the reader.
     expectedGranteeId: z.string().min(1).max(200).optional(),
+    // The one-tap Confirm of a relay waiting on the slot (`pendingRelay`).
+    confirmRelayed: z.literal(true).optional(),
+    // "Not what I said" (`correctRelayedAnswer`).
+    rejectRelayed: z.literal(true).optional(),
+    // With `rejectRelayed`: a slotless room question (its message id).
+    questionId: z.string().uuid().optional(),
   })
-  .refine((v) => v.value !== undefined || !!v.text?.trim(), {
-    message: "An answer needs `text` or `value`.",
+  .superRefine((v, ctx) => {
+    const issue = answerDoorInputIssue(v);
+    if (issue) ctx.addIssue({ code: z.ZodIssueCode.custom, message: issue });
   });
+
+/**
+ * An agent RELAYS the person's chat words to the question it asked — the
+ * Hub twin of MCP `synap_relay_answer` (`relaySessionAnswer`).
+ */
+const RelayAnswerBodySchema = z.object({
+  disposition: z.enum(RELAY_DISPOSITIONS),
+  // The EXACT question: a room question's message id, and/or a slot label.
+  messageId: z.string().uuid().optional(),
+  slotLabel: z.string().min(1).max(500).optional(),
+  // The person's words, verbatim — required for `answered`.
+  quote: z.string().max(ASK_LIMITS.answerTextMaxChars).optional(),
+  text: z.string().max(ASK_LIMITS.answerTextMaxChars).optional(),
+  value: AskAnswerValueSchema.optional(),
+  relaySurface: z.string().min(1).max(RELAY_SURFACE_MAX_CHARS).optional(),
+  // Why the question is withdrawn — required for `withdrawn`.
+  note: z.string().max(ASK_LIMITS.promptMaxChars).optional(),
+});
 
 /** The long-poll's query: the poll cursor, plus a bounded wait (V1 G4). */
 const SessionAnswersWaitQuerySchema = z.object({
@@ -533,7 +574,7 @@ const SessionAnswersQuerySchema = z.object({
 
 /** The answer door's refusals, named — the `answered` arm is the only success. */
 function answerRefusal(
-  result: Exclude<AnswerSessionSlotResult, { status: "answered" }>,
+  result: SlotDoorRefusal,
   expectedLabel: string,
   sessionId: string
 ): { status: 400 | 404 | 409; error: string } {
@@ -564,6 +605,18 @@ const CompleteBodySchema = z.object({
   // the MCP door — which both close through here — could record only success.
   // Derived from the SSOT so a fourth terminal status is accepted by default.
   terminalStatus: z.enum(TERMINAL_SESSION_STATUSES).optional(),
+  // The calling agent's word on each of its still-open room questions; the
+  // MCP door's twin (`synap_complete_session`).
+  questionDispositions: z
+    .array(
+      z.object({
+        messageId: z.string().uuid(),
+        disposition: z.enum(CLOSE_QUESTION_DISPOSITIONS),
+        note: z.string().max(500).optional(),
+      })
+    )
+    .max(100)
+    .optional(),
 });
 
 // ── Registration ───────────────────────────────────────────────────────────
@@ -667,6 +720,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     description:
       "Lifecycle close via completeFocusSession — stamps closed, finishes any " +
       "running playbook_run, returns pendingProposals + counts + warnings. " +
+      "Every still-open room question is stamped closed (session ended). An " +
+      "agent's closed/failed close is refused (409 OPEN_QUESTIONS) while a " +
+      "question it asked is open, unless questionDispositions settles each. " +
       "Distinct from POST .../complete-run (playbook run only).",
     request: {
       params: z.object({ id: z.string().uuid() }),
@@ -680,6 +736,11 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       400: { description: "Bad request", schema: ErrorSchema },
       403: { description: "Forbidden or proposed", schema: ErrorSchema },
       404: { description: "Not found", schema: ErrorSchema },
+      409: {
+        description:
+          "Refused: the calling agent's own room questions are still open (openQuestions[])",
+        schema: z.object({}).passthrough(),
+      },
       500: { description: "Internal error", schema: ErrorSchema },
     },
   });
@@ -791,7 +852,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       "Stamps `owner: 'human'` + `blockedReason` + `why` + `owedSince` on the " +
       "named slot. The slot stays `pending` — declaring that you cannot do the " +
       "work is the opposite of having done it. When a standing guideline " +
-      "covers this kind of block, `blockGuidelines` carries its text.",
+      "covers this kind of block, `blockGuidelines` carries its text. A " +
+      "confirm prompt that only repeats the label comes back as a `hint`.",
     request: {
       params: z.object({ id: z.string().uuid() }),
       body: BlockOutputBodySchema,
@@ -804,6 +866,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           expectedLabel: z.string(),
           kind: z.string(),
           blockGuidelines: z.unknown().optional(),
+          hint: z.string().optional(),
         }),
       },
       400: { description: "Bad request", schema: ErrorSchema },
@@ -817,10 +880,12 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     method: "post",
     path: "/focus-sessions/:id/outputs/unblock",
     tags: ["FocusSessions"],
-    summary: "Reclaim a deliverable handed to the human",
+    summary: "Hand a deliverable back from the human (people only)",
     description:
       "Clears `owner`, `blockedReason`, `why` and `owedSince` together. The " +
-      "deliverable itself is unchanged and still owed.",
+      "deliverable itself is unchanged and still owed. Refused (403) for an " +
+      "agent key: an agent whose need is gone withdraws its question " +
+      "(`POST /focus-sessions/:id/answers/relay`, `disposition: 'withdrawn'`).",
     request: {
       params: z.object({ id: z.string().uuid() }),
       body: UnblockOutputBodySchema,
@@ -854,26 +919,91 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       "`focus_session.slot_answered.completed`. Refused (403) for an agent key. " +
       "A slot with a typed `ask` takes `value` (validated against it; 400 " +
       "`ask_invalid:` when it does not fit, 409 `ask_changed:` when " +
-      "`askFingerprint` no longer matches the slot's ask).",
+      "`askFingerprint` no longer matches the slot's ask). `confirmRelayed` " +
+      "confirms the relay waiting on the slot (`pendingRelay`) as the " +
+      "person's answer; `rejectRelayed` (\"Not what I said\") drops what an " +
+      "agent relayed and gives the question back — on a slot, or on a " +
+      "slotless room question named by `questionId` — and emits " +
+      "`focus_session.relay_corrected.completed`.",
     request: {
       params: z.object({ id: z.string().uuid() }),
       body: AnswerOutputBodySchema,
     },
     responses: {
       200: {
-        description: "Answered",
+        description: "Answered, or (`rejectRelayed`) corrected",
+        schema: z.union([
+          z.object({
+            ok: z.boolean(),
+            expectedLabel: z.string(),
+            kind: z.string(),
+            answer: z.unknown(),
+            handedBack: z.boolean(),
+            messageId: z.string().nullable(),
+            questionId: z.string().nullable(),
+            wokeAgentType: z.string().nullable(),
+            triggered: z.boolean(),
+            // The decision an answered confirm/choose filed or updated;
+            // `{status:'failed'}` = the answer stands, the decision did not land.
+            decision: z.unknown().optional(),
+          }),
+          z.object({
+            ok: z.boolean(),
+            status: z.literal("corrected"),
+            dropped: z.enum(["pending", "answer"]),
+            expectedLabel: z.string().nullable(),
+            questionId: z.string().nullable(),
+            relayedBy: z.string(),
+            reopened: z.boolean(),
+          }),
+        ]),
+      },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      404: { description: "Not found", schema: ErrorSchema },
+      409: {
+        description: "The slot's ask changed (`ask_changed:`)",
+        schema: ErrorSchema,
+      },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  registerOpenApi(app, {
+    method: "post",
+    path: "/focus-sessions/:id/answers/relay",
+    tags: ["FocusSessions"],
+    summary: "Relay the person's answer from a chat (agents only)",
+    description:
+      "The person answered your question in a chat (Claude Code, claude.ai): " +
+      "relay their words here. Name the EXACT question — `messageId` (your " +
+      "room question) and/or `slotLabel` — never the newest open one; only " +
+      "the agent that asked a room question may relay it (a slot with no room " +
+      "question: an agent on the session). `disposition: 'answered'` needs " +
+      "`quote`, the person's words verbatim (never a paraphrase); `value` is " +
+      "the typed pick you read in them. A routine ask is answered " +
+      "(`status: 'relayed'`, marked relayed by you). A commitment — `stakes: " +
+      "'commitment'`, an approval card, a grade, a hand-over (`provide`) — " +
+      "is NOT answered: it waits for the person's own tap (`status: " +
+      "'awaiting_tap'`). `disposition: 'withdrawn'` + `note` closes your own " +
+      "question as overtaken and hands its slot back to you. Refused (403) " +
+      "for a person's key.",
+    request: {
+      params: z.object({ id: z.string().uuid() }),
+      body: RelayAnswerBodySchema,
+    },
+    responses: {
+      200: {
+        description: "Relayed, awaiting the person's tap, or withdrawn",
         schema: z.object({
           ok: z.boolean(),
-          expectedLabel: z.string(),
-          kind: z.string(),
-          answer: z.unknown(),
-          handedBack: z.boolean(),
-          messageId: z.string().nullable(),
+          status: z.enum(["relayed", "awaiting_tap", "withdrawn"]),
+          stakes: z.enum(["routine", "commitment"]).optional(),
           questionId: z.string().nullable(),
-          wokeAgentType: z.string().nullable(),
-          triggered: z.boolean(),
-          // The decision an answered confirm/choose filed or updated;
-          // `{status:'failed'}` = the answer stands, the decision did not land.
+          expectedLabel: z.string().nullable(),
+          answer: z.unknown().optional(),
+          pendingRelay: z.unknown().optional(),
+          handedBack: z.boolean().optional(),
           decision: z.unknown().optional(),
         }),
       },
@@ -881,7 +1011,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       403: { description: "Forbidden", schema: ErrorSchema },
       404: { description: "Not found", schema: ErrorSchema },
       409: {
-        description: "The slot's ask changed (`ask_changed:`)",
+        description: "The question moved on (answered, closed, re-asked)",
         schema: ErrorSchema,
       },
       500: { description: "Internal error", schema: ErrorSchema },
@@ -2032,12 +2162,21 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       // as the MCP door (`updateSession` → `warnings`).
       const warnings =
         patch.expectedOutputs !== undefined
-          ? droppedAskWarnings(
-              patch.expectedOutputs as Parameters<typeof droppedAskWarnings>[0],
-              (updated.expectedOutputs ?? []) as Parameters<
-                typeof droppedAskWarnings
-              >[1]
-            )
+          ? [
+              ...droppedAskWarnings(
+                patch.expectedOutputs as Parameters<
+                  typeof droppedAskWarnings
+                >[0],
+                (updated.expectedOutputs ?? []) as Parameters<
+                  typeof droppedAskWarnings
+                >[1]
+              ),
+              ...restatedAskHints(
+                patch.expectedOutputs as Parameters<
+                  typeof restatedAskHints
+                >[0]
+              ),
+            ]
           : [];
 
       return c.json({
@@ -2261,6 +2400,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         summary: parsed.data.summary,
         verificationReport: parsed.data.verificationReport,
         terminalStatus: parsed.data.terminalStatus,
+        questionDispositions: parsed.data.questionDispositions,
       });
 
       if (!result) {
@@ -2289,6 +2429,18 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         ...(nudges ? { nudges } : {}),
       });
     } catch (err) {
+      // The calling agent left its own questions open: nothing closed.
+      if (isOpenQuestionsAtCloseError(err)) {
+        return c.json(
+          {
+            status: "refused" as const,
+            reasonCode: err.code,
+            error: err.message,
+            openQuestions: err.openQuestions,
+          },
+          409
+        );
+      }
       const code = (err as { code?: unknown })?.code;
       if (code === "FORBIDDEN") {
         const e = err as {
@@ -2950,7 +3102,24 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
         return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
       }
+      // The tRPC twin's floor (`focusSessions.unblockOutput`): handing a slot
+      // back is the person's "Not mine"; an agent withdraws its question
+      // through the relay door instead.
+      if (path === "unblock" && c.get("agentUserId")) {
+        return c.json(
+          {
+            error:
+              "Only the person can hand a slot back — an agent key cannot.",
+          },
+          403
+        );
+      }
       const id = c.req.param("id");
+      if (path === "unblock") {
+        // The tRPC twin's grant rung: the session's own space + project.
+        const denial = await grantWriteDenial(await answerGrantWrite(id));
+        if (denial) return c.json({ error: denial }, 403);
+      }
       if (!isUuid(id)) {
         return c.json({ error: `Focus session ${id} not found` }, 404);
       }
@@ -3009,6 +3178,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
               ...(result.blockGuidelines
                 ? { blockGuidelines: result.blockGuidelines }
                 : {}),
+              ...("hint" in result && result.hint ? { hint: result.hint } : {}),
             });
         }
       } catch (err) {
@@ -3089,17 +3259,32 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     try {
       const acting = await resolveActingContext(c, {});
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+      const label = parsed.data.expectedLabel ?? "";
+      if (parsed.data.rejectRelayed) {
+        const corrected = await correctRelayedAnswer({
+          sessionId: id,
+          userId: acting.userId,
+          expectedLabel: parsed.data.expectedLabel,
+          questionId: parsed.data.questionId,
+        });
+        if (corrected.status !== "corrected") {
+          const refusal = answerRefusal(corrected, label, id);
+          return c.json({ error: refusal.error }, refusal.status);
+        }
+        return c.json({ ok: true as const, ...corrected });
+      }
       const result = await answerSessionSlot({
         sessionId: id,
         userId: acting.userId,
-        expectedLabel: parsed.data.expectedLabel,
+        expectedLabel: label,
         text: parsed.data.text,
         value: parsed.data.value,
         askFingerprint: parsed.data.askFingerprint,
         expectedGranteeId: parsed.data.expectedGranteeId,
+        confirmRelayed: parsed.data.confirmRelayed,
       });
       if (result.status !== "answered") {
-        const refusal = answerRefusal(result, parsed.data.expectedLabel, id);
+        const refusal = answerRefusal(result, label, id);
         return c.json({ error: refusal.error }, refusal.status);
       }
       return c.json({
@@ -3117,6 +3302,83 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       });
     } catch (err) {
       logger.error({ err, id }, "focus-sessions.answerOutput failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        httpStatusForTrpcError(err) as never
+      );
+    }
+  });
+
+  /**
+   * POST /focus-sessions/:id/answers/relay
+   *
+   * An AGENT relays what the person said in a chat to the question it asked —
+   * the Hub twin of MCP `synap_relay_answer`, the same service
+   * (`relaySessionAnswer`, which documents who may relay what, and the stakes
+   * rule). A PERSON's key is refused (403): a person answers through
+   * `/outputs/answer`, and a relay with no agent to name would be a tap with
+   * a forged label. Owner-floored by the service (the acting person).
+   */
+  app.post("/focus-sessions/:id/answers/relay", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const agentUserId = c.get("agentUserId") as string | undefined;
+    if (!agentUserId) {
+      return c.json(
+        {
+          error:
+            "Only an agent relays an answer — a person answers through /outputs/answer.",
+        },
+        403
+      );
+    }
+    const id = c.req.param("id");
+    // The answer door's grant rung: the session's own space + project.
+    const denial = await grantWriteDenial(await answerGrantWrite(id));
+    if (denial) return c.json({ error: denial }, 403);
+    if (!isUuid(id)) {
+      return c.json({ error: `Focus session ${id} not found` }, 404);
+    }
+    const raw = await c.req.json().catch(() => null);
+    const parsed = RelayAnswerBodySchema.safeParse(raw);
+    if (!parsed.success) {
+      return c.json(
+        { error: "Invalid request body", details: parsed.error.flatten() },
+        400
+      );
+    }
+    try {
+      const acting = await resolveActingContext(c, {});
+      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+      const result = await relaySessionAnswer({
+        sessionId: id,
+        userId: acting.userId,
+        agentUserId,
+        ...parsed.data,
+      });
+      if (
+        result.status !== "relayed" &&
+        result.status !== "awaiting_tap" &&
+        result.status !== "withdrawn"
+      ) {
+        const refusal = describeRelayRefusal(result, {
+          sessionId: id,
+          slotLabel: parsed.data.slotLabel,
+        });
+        const status =
+          refusal.code === "NOT_FOUND"
+            ? 404
+            : refusal.code === "CONFLICT"
+              ? 409
+              : refusal.code === "FORBIDDEN"
+                ? 403
+                : 400;
+        return c.json({ error: refusal.message }, status);
+      }
+      return c.json({ ok: true as const, ...result });
+    } catch (err) {
+      logger.error({ err, id }, "focus-sessions.relayAnswer failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
         httpStatusForTrpcError(err) as never

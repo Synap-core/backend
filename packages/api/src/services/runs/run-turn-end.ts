@@ -398,11 +398,22 @@ async function askToKeepGoing(p: {
   turnRef: string;
   reason: RunStopReason | undefined;
 }): Promise<boolean> {
-  const question =
+  // Said once: the facts are the slot's `why`, the question is the prompt.
+  // The room post carries both, as a message reads.
+  const facts =
     `This run stopped before it was finished ${p.stops} times ` +
     `(the last turn hit its ${stopLimitWords(p.reason)}; ` +
-    `it continued on its own ${MAX_AUTO_CONTINUATIONS} times). Keep it going?`;
-  const ask: SlotAsk = { mode: "confirm", prompt: question };
+    `it continued on its own ${MAX_AUTO_CONTINUATIONS} times).`;
+  const prompt = "Keep it going?";
+  const question = `${facts} ${prompt}`;
+  const ask: SlotAsk = {
+    mode: "confirm",
+    prompt,
+    // The answer wakes the asking agent (`session-answer.ts`): it is the one
+    // that goes on or stops.
+    yes: { description: "The agent picks up where it stopped" },
+    no: { description: "The agent is told to stop" },
+  };
   const wanted = normalizeExpectedLabel(RUN_CONTINUE_SLOT_LABEL);
   try {
     const declared = await updateExpectedOutputsLocked(
@@ -441,9 +452,10 @@ async function askToKeepGoing(p: {
       userId: p.session.userId,
       expectedLabel: RUN_CONTINUE_SLOT_LABEL,
       blockedReason: "decision",
-      why: question,
+      why: facts,
       ask,
       agentUserId: p.askingAgentUserId,
+      askCause: { kind: "run", ref: { kind: "run", id: p.run.id } },
     });
     return blocked.status === "blocked";
   } catch (err) {

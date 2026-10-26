@@ -66,8 +66,20 @@ import {
 import type { SQL } from "@synap/database";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import { deliverableOwedBy } from "@synap-core/types/units";
-import { effectiveSlotAsk } from "@synap-core/types/ask";
-import type { ExpectedOutput, OutputRef, SlotAsk } from "@synap/playbooks";
+import {
+  ASK_MODES_ENDING_WITH_SESSION,
+  askEndsWithSession,
+  effectiveSlotAsk,
+  effectiveAskCause,
+  type AskCause,
+  type AskCardSlot,
+} from "@synap-core/types/ask";
+import type {
+  ExpectedOutput,
+  OutputRef,
+  SlotAsk,
+  SlotPendingRelay,
+} from "@synap/playbooks";
 import type { ResolvedScope } from "../../utils/scope-filter.js";
 import { sessionScopeConditions } from "./session-scope.js";
 import {
@@ -210,6 +222,25 @@ export interface OwedSlot {
    * floor; a ref the reader cannot see is dropped (`looked-at.ts`).
    */
   ask?: SlotAsk;
+  /**
+   * A relayed answer waiting for the person's tap (`ExpectedOutput.
+   * pendingRelay`, a `commitment` an agent relayed from a chat) — carried so
+   * the row is a one-tap Confirm / "Not what I said" in place.
+   */
+  pendingRelay?: SlotPendingRelay;
+  /**
+   * WHO asked (`ExpectedOutput.askedBy`, the agent user) and its display
+   * NAME, resolved by {@link listOwedSlots} in one batched read — the same
+   * `actorDisplayName` the session roster shows. The name is absent when the
+   * pod cannot name the asker; a card then names the cause, or nobody.
+   */
+  askedBy?: string;
+  askedByName?: string;
+  /**
+   * WHAT raised it when no agent did (`effectiveAskCause`: the stamped cause,
+   * else a criterion / param slot's own) — the card's door.
+   */
+  askCause?: AskCause;
 }
 
 export interface ListOwedSlotsParams {
@@ -347,9 +378,37 @@ export function projectOwedSlots(row: OwedRow): OwedSlot[] {
       // as "no pointer", not leak the wire's CLEAR into a read model.
       ...(slot.ref ? { ref: slot.ref } : {}),
       ...(ask ? { ask } : {}),
+      ...(slot.pendingRelay ? { pendingRelay: slot.pendingRelay } : {}),
+      ...(slot.askedBy ? { askedBy: slot.askedBy } : {}),
+      ...askCauseOf(slot),
     });
   }
   return owed;
+}
+
+function askCauseOf(slot: ExpectedOutput): { askCause?: AskCause } {
+  const cause = effectiveAskCause(slot as AskCardSlot);
+  return cause ? { askCause: cause } : {};
+}
+
+/**
+ * The askers' display names, in ONE users read for the whole page
+ * (`participantDisplayNames`, the roster's own naming). Loaded lazily, like
+ * "What I looked at", so a page with no asker pays nothing. An asker the pod
+ * cannot name keeps its id and gets no name, never its id as a name.
+ */
+async function withAskerNames(slots: OwedSlot[]): Promise<OwedSlot[]> {
+  const ids = [
+    ...new Set(slots.flatMap((s) => (s.askedBy ? [s.askedBy] : []))),
+  ];
+  if (ids.length === 0) return slots;
+  const { participantDisplayNames } =
+    await import("../tracks/track-participant-store.js");
+  const names = await participantDisplayNames(ids);
+  return slots.map((s) => {
+    const name = s.askedBy ? names.get(s.askedBy) : undefined;
+    return name ? { ...s, askedByName: name } : s;
+  });
 }
 
 /**
@@ -430,56 +489,91 @@ export async function listOwedSlots(
   // Loaded lazily, and only when some slot carries provenance, so the access
   // registry stays out of this read's import graph on the common path (and out
   // of every suite that mocks `@synap/database` around it).
-  if (!slots.some((s) => s.ask?.lookedAt?.length)) return slots;
+  const named = await withAskerNames(slots);
+  if (!named.some((s) => s.ask?.lookedAt?.length)) return named;
   const { resolveLookedAtForReader } = await import("./looked-at.js");
-  return resolveLookedAtForReader(userId, slots);
+  return resolveLookedAtForReader(userId, named);
 }
 
 /**
- * Stamp the retirement receipt on every still-owed slot. Pure.
+ * Stamp the retirement receipt on every still-owed slot (`which` narrows it).
+ * Pure.
  *
  * Slots that are done, already retired, or agent-owned are untouched: this
- * records that the CANCELLATION is why the human no longer owes them, and that
- * is only true of the ones they still owed.
+ * records that the CLOSE is why the human no longer owes them, and that is
+ * only true of the ones they still owed.
  */
 export function stampRetired(
   outputs: ExpectedOutput[],
   reason: ExpectedOutput["retiredReason"],
-  now: Date = new Date()
+  now: Date = new Date(),
+  which: (slot: ExpectedOutput) => boolean = () => true
 ): ExpectedOutput[] {
   const at = now.toISOString();
   return outputs.map((o) =>
-    o && typeof o === "object" && isOwedSlot(o)
+    o && typeof o === "object" && isOwedSlot(o) && which(o)
       ? { ...o, retiredAt: at, retiredReason: reason }
       : o
   );
 }
 
 /**
+ * The ask modes that are the AGENT's need, not the person's deliverable: a
+ * `confirm` or a `choose` exists because the agent wanted an answer to go on.
+ * Once its session has ended nobody will go on with it, so the ask dies with
+ * the session (Resolve-XP founder default 3, 2026-10-26). An `act`, a
+ * `provide` or a `form` is something the person still has to do or hand over
+ * whatever happened to the session, and a slot with no ask is owed work.
+ */
+export const SESSION_BOUND_ASK_MODES = ASK_MODES_ENDING_WITH_SESSION;
+
+/**
+ * Does this owed slot end with its session? `askEndsWithSession`
+ * (`@synap-core/types/ask`), the rule the card's fate mark reads too, through
+ * `effectiveSlotAsk`: a `decision` slot stored with no ask IS a confirm.
+ */
+export function slotEndsWithSession(slot: ExpectedOutput): boolean {
+  return askEndsWithSession(slot as AskCardSlot);
+}
+
+/**
  * WHAT A CLOSE DOES TO THE OWED SLOTS — the rule, pure, so "which terminal
- * status retires" is testable without a database and cannot be re-decided
- * inline at the close door.
+ * status retires what" is testable without a database and cannot be
+ * re-decided inline at the close door.
  *
- * Returns `null` when nothing changes, which is the answer for every exit but
- * one: `closed` and `failed` LEAVE the slots owed (the work was declared, the
- * session ended, somebody still has to do it), and `stale` never reaches the
- * close door at all — the reaper stamps it directly — so its slots survive for
- * the same reason, by design rather than by accident.
+ *  - `cancelled` ends the obligation: every owed slot is stamped
+ *    `session_cancelled`.
+ *  - `closed` / `failed` keep the person's deliverables owed (the work was
+ *    declared, the session ended, somebody still has to do it) and retire the
+ *    agent's own asks (`slotEndsWithSession`) as `session_ended`.
+ *  - `stale` never reaches the close door at all — the reaper stamps it
+ *    directly — so its slots survive, by design rather than by accident.
  *
- * `cancelled` is the only exit that ends the obligation, and it stamps.
+ * `keep` names slots (by their stored label) the closing agent explicitly
+ * left owed (`questionDispositions` `keep_as_owed`): its word beats both rules.
+ *
+ * Returns `null` when nothing changes.
  */
 export function retirementForClose(
   outputs: ExpectedOutput[],
   terminalStatus: "closed" | "cancelled" | "failed",
-  now: Date = new Date()
+  now: Date = new Date(),
+  keep: ReadonlySet<string> = new Set()
 ): { outputs: ExpectedOutput[]; retiredSlots: number } | null {
-  if (terminalStatus !== "cancelled") return null;
+  const which = (o: ExpectedOutput): boolean =>
+    !keep.has(o.label) &&
+    (terminalStatus === "cancelled" || slotEndsWithSession(o));
   const retiredSlots = outputs.filter(
-    (o) => o && typeof o === "object" && isOwedSlot(o)
+    (o) => o && typeof o === "object" && isOwedSlot(o) && which(o)
   ).length;
   if (retiredSlots === 0) return null;
   return {
-    outputs: stampRetired(outputs, "session_cancelled", now),
+    outputs: stampRetired(
+      outputs,
+      terminalStatus === "cancelled" ? "session_cancelled" : "session_ended",
+      now,
+      which
+    ),
     retiredSlots,
   };
 }

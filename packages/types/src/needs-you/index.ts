@@ -16,6 +16,16 @@
  *   fold. A fold, never a filter: they still count and still render when
  *   opened. The split is a STABLE partition, so it cannot reorder anything the
  *   server already put in place.
+ * - `reviewLater` — EXCEPT untouched durable proposals (Resolve-XP, founder
+ *   default 2026-10-26): a `proposal-cluster` row the pod marks `reviewLater`
+ *   has waited 7 days and LEFT the headline count (`signals.count` counts it
+ *   as `reviewLater`, never in `needsYou`). It renders in its own
+ *   "Review later · N" fold, never in Recent or Older — the count and the fold
+ *   read the ONE pod predicate (`isReviewLater`). An `owed-slot` row nobody
+ *   answered for 7 days joins the same fold (decision 3, `isAskReviewLater`,
+ *   `../ask`). Still a fold: opened, it
+ *   shows every row. The pod stamps such a row `ageBucket: 'older'` too, so a
+ *   client older than this field folds it under Older, never in Recent.
  * - `repeatCount` / `count` — how many identical things one row stands for,
  *   drawn as "and N more like it" ({@link repeatLabel}). KIND-AWARE ({@link repeatOf}): a notification's repeats
  *   are `repeatCount`, a cluster's N proposals are `count`, and nothing else
@@ -65,6 +75,11 @@ export interface GroupableSignal {
   blockedReason?: string | null;
   /** When it happened — a session card's `newestAt`. */
   occurredAt?: string | Date;
+  /**
+   * `proposal-cluster`: untouched for 7 days, out of the headline count —
+   * drawn in the Review later fold. Stamped by the pod, never measured here.
+   */
+  reviewLater?: boolean;
 }
 
 /** One session's rows (or a lone row) — internal. */
@@ -118,22 +133,27 @@ function pushInto<T extends GroupableSignal>(
   groups.push({ key: signal.id, sessionId: null, items: [signal] });
 }
 
-/** Split a server-ordered page into one run per session + the Older partition. */
+/** Split a server-ordered page into one run per session + the Older and Review later partitions. */
 function runsOf<T extends GroupableSignal>(
   signals: readonly T[]
-): { recent: Run<T>[]; older: Run<T>[] } {
+): { recent: Run<T>[]; older: Run<T>[]; reviewLater: Run<T>[] } {
   const recent: Run<T>[] = [];
   const older: Run<T>[] = [];
+  const reviewLater: Run<T>[] = [];
+  // A review-later row never carries a session key (the pod keeps it out of
+  // the session's block), so it never joins a session card.
+  const reviewLaterBySession = new Map<string, Run<T>>();
   // Per fold: a session is one row in Recent and, separately, in Older (the
   // pod lifts a session's rows into one bucket, so on its pages that never
   // splits).
   const recentBySession = new Map<string, Run<T>>();
   const olderBySession = new Map<string, Run<T>>();
   for (const s of signals) {
-    if (s.ageBucket === "older") pushInto(older, s, olderBySession);
+    if (s.reviewLater === true) pushInto(reviewLater, s, reviewLaterBySession);
+    else if (s.ageBucket === "older") pushInto(older, s, olderBySession);
     else pushInto(recent, s, recentBySession);
   }
-  return { recent, older };
+  return { recent, older, reviewLater };
 }
 
 /** The fields `repeatLabel` reads. Optional: a row from a pre-W2 pod may lack them. */
@@ -233,6 +253,10 @@ export interface NeedsYouRows<T extends GroupableSignal> {
   older: NeedsYouRow<T>[];
   /** ROWS under the Older fold — a session card is one (what "Older · N" states). */
   olderCount: number;
+  /** Untouched durable proposals and owed asks — the "Review later · N" fold, out of the headline count. */
+  reviewLater: NeedsYouRow<T>[];
+  /** ROWS under the Review later fold (what "Review later · N" states). */
+  reviewLaterCount: number;
 }
 
 /**
@@ -337,7 +361,7 @@ function toRows<T extends GroupableSignal>(
 
 /**
  * Shape a server-ordered needs-you page into ONE list of rows + the Older
- * fold. Never sorts: a card sits exactly where its session's first item
+ * and Review later folds. Never sorts: a card sits exactly where its session's first item
  * sat, i.e. at its newest item's position.
  */
 export function needsYouRows<T extends GroupableSignal>(
@@ -345,7 +369,14 @@ export function needsYouRows<T extends GroupableSignal>(
 ): NeedsYouRows<T> {
   const shape = runsOf(signals);
   const older = toRows(shape.older);
-  return { recent: toRows(shape.recent), older, olderCount: older.length };
+  const reviewLater = toRows(shape.reviewLater);
+  return {
+    recent: toRows(shape.recent),
+    older,
+    olderCount: older.length,
+    reviewLater,
+    reviewLaterCount: reviewLater.length,
+  };
 }
 
 /**
