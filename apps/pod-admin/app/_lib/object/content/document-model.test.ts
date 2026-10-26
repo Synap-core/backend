@@ -91,4 +91,31 @@ describe("documentFormat", () => {
     expect(documentFormat("docx")).toBeNull();
     expect(documentFormat(undefined)).toBe("markdown");
   });
+
+  it("an uploaded file is drawn as text only when its stored type is text", () => {
+    expect(documentFormat("file", "image/png")).toBeNull();
+    expect(documentFormat("file", "application/zip")).toBeNull();
+    expect(documentFormat("file", "text/markdown")).toBe("markdown");
+    expect(documentFormat("file", "text/csv; charset=utf-8")).toBe("markdown");
+    expect(documentFormat("file", "application/json")).toBe("markdown");
+    expect(documentFormat("file", null)).toBe("markdown");
+  });
+});
+
+describe("documentContent — an uploaded image", () => {
+  it("is a file carrying its type, never its bytes drawn as markdown", () => {
+    const answer = {
+      document: {
+        type: "file",
+        storageKey: "files/ws/a.png",
+        storageUrl: null,
+        mimeType: "image/png",
+      },
+      content: "\uFFFDPNG\r\n\u001a\n",
+    };
+    expect(documentContent(null, answer)).toEqual({
+      kind: "file",
+      mimeType: "image/png",
+    });
+  });
 });
