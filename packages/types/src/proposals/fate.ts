@@ -1,8 +1,8 @@
 /**
  * A pending proposal's FATE ON SILENCE — what happens if nobody decides it
- * (Resolve-XP, pod doc 86890dee, W0). Declared the moment it is born so nothing
- * piles up silently: every surface reads it from the wire (W3 stamps it on the
- * display row) and draws one sentence (`proposalFateLine`, `../lens/rows.ts`).
+ * (pod doc 86890dee). Declared the moment it is born so nothing piles up
+ * silently: every surface reads it from the wire (the read doors stamp it on
+ * the display row) and draws one sentence (`proposalFateLine`, `../lens/rows.ts`).
  * Pure; it encodes the pod's existing sweeps, it does not add one.
  */
 
@@ -98,7 +98,7 @@ export function proposalFate(input: ProposalFateInput): ProposalFate {
 
 /**
  * Is this proposal in the Review later pile? The ONE predicate for every
- * count (needs-you, orient's pendingReview) — W3 pins its SQL twin to it.
+ * count (needs-you, orient's pendingReview) — a pglite test pins its SQL twin to it.
  */
 export function isReviewLater(input: ProposalFateInput): boolean {
   return proposalFate(input).kind === "review_later";
@@ -117,6 +117,8 @@ export const FATE_COPY = {
   reviewLater: "In Review later",
   /** `date` is already formatted ("29 Sep"). */
   reviewLaterSince: (date: string): string => `In Review later since ${date}`,
+  /** The fold's own label, with how many rows it holds. */
+  reviewLaterFold: (count: number): string => `Review later · ${count}`,
   /** An expiry its session's end may come before. */
   orSessionEnd: (expiry: string): string =>
     `${expiry}, or when the session ends`,
@@ -135,7 +137,7 @@ export const FATE_TONE: Record<ProposalFateKind, UnitTone> = {
 };
 
 /**
- * Does an agent WAIT on this proposal (W3 `waitsOnIt`)?
+ * Does an agent WAIT on this proposal (`waitsOnIt`)?
  *   `gate`       — it is an awaited plan/deploy gate (`AWAITED_GATE_PROPOSAL_TYPES`).
  *   `owed_slot`  — it fills a slot the session owes.
  *   `parked_run` — its session's run is parked `waiting_on_you`.
