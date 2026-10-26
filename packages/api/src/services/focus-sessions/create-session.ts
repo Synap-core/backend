@@ -76,7 +76,6 @@ import {
   type SessionTwinCandidate,
 } from "./find-open-session-twin.js";
 import { paramOwedSlots } from "./param-slots.js";
-import { readStartOffers, type StartOffers } from "./start-offers.js";
 import { notifySessionNeedsYou } from "./notify-needs-you.js";
 import { enqueueSessionRecall } from "./session-recall.js";
 import {
@@ -85,6 +84,7 @@ import {
   type AgentHandOffDecision,
 } from "./agent-hand-off.js";
 import { attachSessionAgent } from "./attach-session-agent.js";
+import { readStartOffers, type StartOffers } from "./start-offers.js";
 import {
   normalizeSessionTitle,
   SESSION_TITLE_MAX,
