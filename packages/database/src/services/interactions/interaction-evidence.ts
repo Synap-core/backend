@@ -28,31 +28,18 @@ import {
   LAST_INTERACTION_PROPERTY,
   noteInteraction,
 } from "./note-interaction.js";
+import {
+  ATTENDED_BY,
+  DISCUSSED_WITH,
+  INTERACTION_RELATION_TYPES,
+  MET_AT,
+  OUTREACH_INTERACTION_MOVES,
+  OUTREACH_TOUCH_KIND,
+  OUTREACH_WENT_OUT_STATUSES,
+  SENT_TO,
+} from "./interaction-kinds.js";
 
 type Db = PostgresJsDatabase<typeof schema>;
-
-export const ATTENDED_BY = "attended_by";
-export const MET_AT = "met_at";
-export const DISCUSSED_WITH = "discussed_with";
-export const SENT_TO = "sent_to";
-/** The edges an interaction is read from. */
-export const INTERACTION_RELATION_TYPES = [
-  ATTENDED_BY,
-  MET_AT,
-  DISCUSSED_WITH,
-  SENT_TO,
-] as const;
-
-/** The CRM outreach kind (`crm.yaml`) and the statuses meaning "it went out". */
-export const OUTREACH_TOUCH_KIND = "outreach-touch";
-export const OUTREACH_WENT_OUT_STATUSES = [
-  "sent",
-  "opened",
-  "replied",
-  "no_response",
-] as const;
-/** The touch moves that are interactions (`moveStatus` → `to`). */
-export const OUTREACH_INTERACTION_MOVES = ["sent", "replied"] as const;
 
 /**
  * When a record happened: `startDate` (an event; a meeting is the hat an event

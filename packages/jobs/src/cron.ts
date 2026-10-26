@@ -90,6 +90,10 @@ import {
 } from "./workers/lifecycle-transition-sweeper.js";
 import { EVENT_END_CRON_QUEUE } from "./workers/event-end-cron.js";
 import {
+  INTERACTION_SWEEP_QUEUE,
+  INTERACTION_SWEEP_CRON,
+} from "./workers/interaction-note.js";
+import {
   EXTERNAL_AGENT_POLL_QUEUE,
   EXTERNAL_AGENT_POLL_CRON,
 } from "./workers/external-agent-poll.js";
@@ -287,6 +291,11 @@ export async function registerCronSchedules(): Promise<void> {
   // And once at boot: an owed event left by a process that died mid-dispatch
   // is delivered without waiting for the first tick.
   await sendSafe(boss, LIFECYCLE_TRANSITION_SWEEPER_QUEUE, {});
+
+  // Interaction sweep (daily — a meeting linked before it happened becomes
+  // an interaction once its date has passed; CRM recall C-W2)
+  await scheduleSafe(boss, INTERACTION_SWEEP_QUEUE, INTERACTION_SWEEP_CRON, {});
+  logger.info("Registered cron: interaction-sweep (daily at 03:40 UTC)");
 
   // Vault grant expiry (every hour — expires TTL-bounded approved vault.request proposals)
   await scheduleSafe(boss, "vault-grant-expiry", "0 * * * *", {});

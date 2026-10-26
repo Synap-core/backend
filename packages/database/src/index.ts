@@ -456,6 +456,8 @@ export {
   INTERACTION_RELATION_TYPES,
   OUTREACH_INTERACTION_MOVES,
   OUTREACH_TOUCH_KIND,
+} from "./services/interactions/interaction-kinds.js";
+export {
   collectInteractionEvidence,
   noteInteractionsFrom,
   rebuildLastInteraction,
