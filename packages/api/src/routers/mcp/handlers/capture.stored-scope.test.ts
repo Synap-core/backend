@@ -77,6 +77,11 @@ vi.mock("../../../services/intake/ensure-intake-session.js", () => ({
     requestedSessionIgnored: false,
   })),
 }));
+// The run's receipt (W-A3): the ONE mint point, stubbed at its seam — the
+// capture handler only needs its answer.
+vi.mock("../../../utils/permission-check.js", () => ({
+  resolveAgentRunReceipt: vi.fn(async () => "S-RUN-RECEIPT"),
+}));
 vi.mock("../../../services/intake/record-structure-intake.js", () => ({
   recordStructureIntake: vi.fn(async () => null),
 }));
@@ -222,6 +227,42 @@ describe("graph lane — the raw record (raw-capture wave 1)", () => {
   beforeEach(async () => {
     h.submitResult = PENDING;
     (await mocks()).submit.mockClear();
+  });
+
+  // W-A3: one room per run. An agent's capture that named no session (and has
+  // no bound one) is filed under its run's RECEIPT, the session every other
+  // write of the run lands in — it used to mint an intake room beside it.
+  it("no session in hand: the run's receipt is the room — never a second, intake room", async () => {
+    const { resolveAgentRunReceipt } = vi.mocked(
+      await import("../../../utils/permission-check.js")
+    );
+    const ensure = vi.mocked(
+      (await import("../../../services/intake/ensure-intake-session.js"))
+        .ensureIntakeSession
+    );
+    resolveAgentRunReceipt.mockClear();
+    ensure.mockClear();
+    await captureHandlers.synap_capture!({
+      ...(ctx(ARGS) as object),
+      sessionId: undefined,
+    } as never);
+    expect(resolveAgentRunReceipt).toHaveBeenCalledTimes(1);
+    expect(resolveAgentRunReceipt.mock.calls[0]![0]).toMatchObject({
+      userId: "user-1",
+      agentUserId: "agent-1",
+    });
+    expect(ensure.mock.calls[0]![0]).toMatchObject({
+      verifiedHandle: "S-RUN-RECEIPT",
+    });
+  });
+
+  it("a session in hand is kept: no receipt is resolved for the capture", async () => {
+    const { resolveAgentRunReceipt } = vi.mocked(
+      await import("../../../utils/permission-check.js")
+    );
+    resolveAgentRunReceipt.mockClear();
+    await call(ARGS);
+    expect(resolveAgentRunReceipt).not.toHaveBeenCalled();
   });
 
   it("the run manifest names the AGENT as the engine — never `unknown`, which reads as an older IS having answered", async () => {

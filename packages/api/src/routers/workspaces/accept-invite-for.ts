@@ -19,6 +19,7 @@ import {
   db,
   eq,
   and,
+  isNotNull,
   invites,
   podMembers,
   workspaceMembers,
@@ -114,7 +115,9 @@ export async function acceptInviteFor(
   } else {
     // Pod invite: durable pod membership (always a plain member), then the
     // ordinary spaces only — a system space (pod-admin) is never fanned into,
-    // so an invite's role can never become pod admin.
+    // so an invite's role can never become pod admin. A person removed before
+    // (`removed_at`, 0357) is let back in by this invite: the row is revived,
+    // its role and history kept.
     await db
       .insert(podMembers)
       .values({
@@ -123,6 +126,12 @@ export async function acceptInviteFor(
         invitedBy: invite.invitedBy ?? null,
       })
       .onConflictDoNothing();
+    await db
+      .update(podMembers)
+      .set({ removedAt: null })
+      .where(
+        and(eq(podMembers.userId, user.id), isNotNull(podMembers.removedAt))
+      );
     // `db` named on purpose: the helpers default to the database package's
     // own client, and the accept reads and writes through ONE connection.
     const fanOutIds = await listPodInviteFanOutWorkspaceIds(db);

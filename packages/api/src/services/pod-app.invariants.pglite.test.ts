@@ -100,7 +100,11 @@ vi.mock("../utils/permission-check.js", async (importOriginal) => {
 import { is } from "drizzle-orm";
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
-import { runWithActingAgent, runWithGrant } from "@synap/database";
+import {
+  isFullAccessGrant,
+  runWithActingAgent,
+  runWithGrant,
+} from "@synap/database";
 import { REVERSIBLE_CLASS_PATTERN } from "@synap/governance-policy";
 import { computeS256Challenge } from "../routers/oauth/protocol.js";
 import { oauthApp } from "../routers/oauth/routes.js";
@@ -109,6 +113,8 @@ import {
   getOAuthConsentContext,
 } from "../routers/oauth/consent.js";
 import { previewPermissionDecision } from "../utils/permission-check.js";
+import { applyProposalApproval } from "../routers/proposals/apply-approval.js";
+import { assertAgentKeyMayReject } from "../routers/proposals/review-authority.js";
 import { resolveKeyIdentity } from "../access/key-identity.js";
 import { apiKeyService } from "./api-keys.js";
 import { reapplyAgentKeyGrants } from "./agent-identity-service.js";
@@ -138,6 +144,19 @@ const VERIFIER = "v".repeat(64);
 const CHALLENGE = computeS256Challenge(VERIFIER);
 const READ = "entity.post.read";
 const CREATE = "entity.post.create";
+/** A third-party app that asks for what an agent key may hold. */
+const CRM = "https://crm.example.com/.well-known/synap-client.json";
+const CRM_CB = "https://crm.example.com/cb";
+const CRM_ASK = [
+  READ,
+  "playbook.read",
+  "playbook.run",
+  "entity.post.transition",
+  "tool.create",
+  "proposal.approve",
+  "proposal.reject",
+  "*",
+];
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -173,14 +192,15 @@ async function cacheApp(
   clientId: string,
   callback: string,
   name: string,
-  templates: string[] = []
+  templates: string[] = [],
+  permissions: string[] = [READ, CREATE]
 ) {
   await q(
     `insert into oauth_clients (client_id, client_kind, client_name, redirect_uris, scopes,
        requested_permissions, requested_templates, metadata_fetched_at, metadata_expires_at, created_at)
      values ($1, 'cimd', $2, $3, '{}', $4, $5, now(), now() + interval '1 hour', now())
      on conflict (client_id) do nothing`,
-    [clientId, name, [callback], [READ, CREATE], templates]
+    [clientId, name, [callback], permissions, templates]
   );
 }
 
@@ -256,6 +276,7 @@ beforeAll(async () => {
   await cacheApp(NOTES, NOTES_CB, "Content Studio");
   await cacheApp(SYNAP_APP, SYNAP_APP_CB, "Content Studio");
   await cacheApp(TEMPLATED, TEMPLATED_CB, "Templated", ["content-os"]);
+  await cacheApp(CRM, CRM_CB, "Deals", [], CRM_ASK);
 }, 120_000);
 
 const HUMAN_CTX = (userId: string, extra: Record<string, unknown> = {}) =>
@@ -914,5 +935,145 @@ describe("the token's plaintext lives only in the /token response", () => {
       for (const { r } of rows) expect(r).not.toContain(material);
     }
     expect(scanned).toBeGreaterThan(10);
+  });
+});
+
+describe("apps = agents (founder decision 4): it may ASK for what an agent key holds; every act still runs the ladder", () => {
+  const crm = { clientId: CRM, callback: CRM_CB, scope: CRM_ASK.join(" ") };
+
+  it("the consent offers every permission it declared: reads where the person reads, the rest where they may write", async () => {
+    const ctx = await getOAuthConsentContext(
+      params(CRM, CRM_CB, crm.scope),
+      OWNER
+    );
+    expect(ctx.app!.actsAs.kind).toBe("agent");
+    const offer = Object.fromEntries(
+      ctx.app!.permissions.map((p) => [
+        p.permission,
+        p.workspaces.map((w) => w.workspaceName),
+      ])
+    );
+    expect(Object.keys(offer)).toEqual(CRM_ASK);
+    expect(offer[READ]).toEqual(["Brand", "Shared", "Viewing"]);
+    for (const p of CRM_ASK.filter((p) => !p.endsWith(".read"))) {
+      expect(offer[p], p).toEqual(["Brand", "Shared"]);
+    }
+  });
+
+  /** Connected with full access, run and approve in Shared only. */
+  async function connectBroad() {
+    const { record } = await connect(
+      [
+        { permission: "*", workspaceId: SHARED },
+        { permission: "playbook.run", workspaceId: SHARED },
+        { permission: "proposal.approve", workspaceId: SHARED },
+      ],
+      crm
+    );
+    expect(await liveGrantsOf(record.id)).toEqual([
+      {
+        permissions: ["*", "playbook.run", "proposal.approve"],
+        workspaceIds: [SHARED],
+      },
+    ]);
+    const id = await resolveKeyIdentity(record);
+    expect(id.isAgent).toBe(true);
+    // A `*` pinned to the spaces it was given is not full access (S1).
+    expect(isFullAccessGrant(id.grant!)).toBe(false);
+    return id;
+  }
+
+  it("holding `*`, its writes and its runs are PROPOSED (ask-first), and refused outside its space", async () => {
+    const id = await connectBroad();
+    const decide = (
+      workspaceId: string,
+      subjectType: string,
+      action: string,
+      extra: Record<string, unknown> = {}
+    ) =>
+      runWithActingAgent(id.agentUserId!, () =>
+        runWithGrant(id.grant!, () =>
+          previewPermissionDecision({
+            userId: id.effectiveUserId,
+            agentUserId: id.agentUserId,
+            workspaceId,
+            subjectType,
+            action,
+            ...extra,
+          } as Parameters<typeof previewPermissionDecision>[0])
+        )
+      );
+    const post = { data: { profileSlug: "post", title: "Launch" } };
+    expect(await decide(SHARED, "entity", "create", post)).toEqual({
+      decision: "propose",
+    });
+    // `POST /playbooks/:id/run` → `playbooks.run` gates exactly this
+    // (subject `playbook`, action `run`, `heldAsDraft` for an agent's own run).
+    expect(
+      await decide(SHARED, "playbook", "run", { heldAsDraft: true })
+    ).toEqual({ decision: "propose" });
+    expect(await decide(BRAND, "entity", "create", post)).toMatchObject({
+      decision: "deny",
+    });
+    expect(
+      await decide(BRAND, "playbook", "run", { heldAsDraft: true })
+    ).toMatchObject({ decision: "deny" });
+  });
+
+  it("holding `proposal.approve` (and `*`), it still cannot approve; it may decline only its own work", async () => {
+    const id = await connectBroad();
+    const proposalId = randomUUID();
+    await q(
+      `insert into proposals (id, target_type, target_id, proposal_type, workspace_id, status, data, agent_user_id, created_by, revision_history, comments)
+       values ($1, 'entity', $2, 'create', $3, 'pending', '{}', $4, $5, '[]', '[]')`,
+      [proposalId, randomUUID(), SHARED, AGENT, OWNER]
+    );
+    const [proposal] = (
+      await q<Record<string, unknown>>(
+        `select id, workspace_id as "workspaceId", agent_user_id as "agentUserId", status from proposals where id = $1`,
+        [proposalId]
+      )
+    ).rows;
+    const asApp = <T>(fn: () => T) =>
+      runWithActingAgent(id.agentUserId!, () => runWithGrant(id.grant!, fn));
+    await expect(
+      asApp(() =>
+        applyProposalApproval({
+          proposal: proposal as never,
+          userId: OWNER,
+          input: { proposalId },
+          ctx: HUMAN_CTX(OWNER, { agentUserId: id.agentUserId }),
+        })
+      )
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: expect.stringMatching(/agent credential cannot approve/),
+    });
+    expect(
+      (
+        await q<{ status: string }>(
+          `select status from proposals where id = $1`,
+          [proposalId]
+        )
+      ).rows[0]!.status
+    ).toBe("pending");
+    // Another's proposal: refused, even holding `*` in that space.
+    expect(() =>
+      asApp(() => assertAgentKeyMayReject({ agentUserId: AGENT }, "reject"))
+    ).toThrow(/may only reject its own/);
+    // Its own: it may withdraw it.
+    expect(() =>
+      asApp(() =>
+        assertAgentKeyMayReject({ agentUserId: id.agentUserId }, "reject")
+      )
+    ).not.toThrow();
+    // CONTROL: an UNBOUNDED `*` key is unchanged.
+    expect(() =>
+      runWithActingAgent(AGENT, () =>
+        runWithGrant({ scopes: [{ permissions: ["*"] }], clientId: null }, () =>
+          assertAgentKeyMayReject({ agentUserId: OTHER }, "reject")
+        )
+      )
+    ).not.toThrow();
   });
 });

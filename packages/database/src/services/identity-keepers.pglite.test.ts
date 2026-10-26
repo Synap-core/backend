@@ -78,7 +78,10 @@ beforeAll(async () => {
     insert into workspaces (id, name) values ('${LIVE}', 'Content');
     insert into workspace_members (workspace_id, user_id, role) values
       ('${LIVE}', 'in-a-space', 'editor');
-    insert into pod_members (user_id, pod_role) values ('joined', 'member');
+    -- Stamped removed, as removeFromPod leaves it before it reads the
+    -- keepers (0357): a LIVE row would also be active_access.
+    insert into pod_members (user_id, pod_role, removed_at)
+      values ('joined', 'member', now());
     insert into federated_identity_links (issuer_id, issuer_subject, user_id)
       values ('22222222-2222-4222-8222-222222222222', 'sub-1', 'linked');
     insert into entities (id, user_id) values (gen_random_uuid(), 'author-entity');
@@ -106,7 +109,7 @@ describe("readIdentityKeepers", () => {
     ]);
   });
 
-  it("a pod_members row alone keeps them", async () => {
+  it("a pod_members row alone keeps them, removed or not", async () => {
     await expect(readIdentityKeepers("joined", conn)).resolves.toEqual([
       "pod_member",
     ]);

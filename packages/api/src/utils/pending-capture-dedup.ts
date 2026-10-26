@@ -146,14 +146,11 @@ export function extractQueryTerms(query: string): string[] {
  * (`understand-query.ts`): `term.includes(" ") ? haystack.includes(term) :
  * tokenSet.has(term)`.
  *
- * Fixed at admit `score > 0` (unchanged) rather than a raised numeric
- * threshold: the reported false-positive mode (a 2-char term like "12"/"ai"
- * matching almost any summary) is a SUBSTRING defect, and word-boundary
- * matching alone closes it — "12" now only scores when the haystack contains
- * the literal token "12", not when it's a substring of "1234" or "day12". No
- * measured score distribution across real pending queues was available to
- * justify a specific higher cutoff, and an unjustified magic number would
- * only trade one unexplained behavior for another.
+ * The substring defect (a 2-char term like "12"/"ai" matching almost any
+ * summary) is closed by word-boundary matching alone: "12" now only scores when
+ * the haystack contains the literal token "12", not when it's a substring of
+ * "1234" or "day12". This scorer stays a plain count; the one-shared-word floor
+ * lives in `findPendingTextMatches` (admits a multi-term query at score >= 2).
  */
 export function scorePendingText(
   terms: string[],
@@ -210,6 +207,12 @@ export async function findPendingTextMatches(
         : [];
   const terms = [...new Set(raw)];
   if (terms.length === 0) return [];
+  // TERM FLOOR: one shared word is not a match. A multi-term query needs two
+  // distinct terms in the op's text, or a CRM question printed the "pending
+  // your review" block for any unrelated capture sharing a word. A one-term
+  // query can only ever score 1, so it keeps admitting that. Same rule as the
+  // procedural lane (`ask.ts`, `minMatchedTerms: 2`).
+  const minScore = terms.length >= 2 ? 2 : 1;
 
   const rows = await database
     .select({
@@ -260,7 +263,7 @@ export async function findPendingTextMatches(
         // Safe by construction: the scorer below already handles a row with no
         // `operations[]` — "a relation-only proposal still scores on its
         // summary" — and every proposal carries a summary. Widening admits
-        // more CANDIDATES, never more matches: a row still needs score > 0
+        // more CANDIDATES, never more matches: a row still needs the term floor
         // against the query's terms, and the block is capped.
       )
     )
@@ -303,7 +306,7 @@ export async function findPendingTextMatches(
     }
     // A relation-only proposal (no create_entity op) still scores on its summary.
     const score = best ? best.score : scorePendingText(terms, { summary });
-    if (score > 0) {
+    if (score >= minScore) {
       matches.push({
         proposalId: row.id,
         proposalType: row.proposalType,

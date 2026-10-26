@@ -66,6 +66,11 @@ export interface DeferredWrite {
   at: string;
   /** Identity of the change: a resend of the same write is not queued twice. */
   fingerprint: string;
+  /**
+   * The space the write was made in. A join replays in its own space; a
+   * held-writes pack (W-B1) spans spaces, so each write replays in its own.
+   */
+  workspaceId?: string | null;
   projectId?: string | null;
   reasoning?: string;
   expectedLabel?: string;

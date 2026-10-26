@@ -43,6 +43,8 @@ export async function readIdentityKeepers(
 ): Promise<IdentityKeeper[]> {
   const [access, member, linked, authored] = await Promise.all([
     readPodUserAccess(userId, conn).then(hasActivePodAccess),
+    // ANY row, removed or not: joining through a pod invite keeps the
+    // identity even after `removeFromPod` stamped the row removed (0357).
     exists(
       conn
         .select({ id: podMembers.id })

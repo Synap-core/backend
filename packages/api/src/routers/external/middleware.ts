@@ -31,6 +31,7 @@ import {
   GUEST_REFUSED_BODY,
   isGuestPrincipal,
 } from "../../access/guest-containment.js";
+import { reportNoPodAccess } from "../../access/pod-access.js";
 
 /** Hono context variables populated by externalApiKeyAuth */
 export type ExternalApiVariables = {
@@ -105,6 +106,8 @@ export function externalApiKeyAuth(requiredScope: string) {
     if (await isGuestPrincipal(effectiveUserId, c.req.raw)) {
       return c.json(GUEST_REFUSED_BODY, 403);
     }
+    // Pod-access floor, report mode (B1, access/pod-access.ts).
+    await reportNoPodAccess(effectiveUserId, c.req.raw, "external");
 
     // W1 fence: fail closed for a scoped key (see step 5 above).
     if (isFencedGrant(grant)) {
