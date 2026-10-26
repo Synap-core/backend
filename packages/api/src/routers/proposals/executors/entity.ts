@@ -19,10 +19,12 @@ import {
   type LinkEndpointType,
   type LinkType,
   resolveMaterializedEntityWorkspaceId,
+  resolveMaterializedEntityHomeWorkspaceId,
   isDomainHomeWorkspace,
   DOMAIN_INTO_NON_DOMAIN_HOME_MESSAGE,
   expirePendingCreatesOfLandedRecord,
 } from "@synap/database";
+import { isSpaceWriteRole } from "@synap-core/types/workspaces";
 import { ProposalStatus } from "@synap/database/schema";
 import {
   isEntityMergeProposalData,
@@ -258,6 +260,27 @@ export function registerEntityExecutors(): void {
         innerData,
         proposalWorkspaceId
       );
+      // The space a pod-wide row was filed for (0355). Replayed through
+      // create's `homeWorkspaceId` — which only a member who may WRITE in that
+      // space may name, the approver included: any other approver lands the
+      // row un-homed (owner-only, exactly as before 0355) and we say so.
+      const persistedHome = resolveMaterializedEntityHomeWorkspaceId(
+        innerData,
+        entityHome
+      );
+      const approverHomeMembership = persistedHome
+        ? await getWorkspaceMembership(db, persistedHome, userId)
+        : null;
+      const replayHome =
+        approverHomeMembership && isSpaceWriteRole(approverHomeMembership.role)
+          ? persistedHome
+          : null;
+      if (persistedHome && !replayHome) {
+        logger.warn(
+          { proposalId: input.proposalId, homeWorkspaceId: persistedHome },
+          "entity/create approve: approver cannot write in the space this entity was filed for — landing it without a home space (owner-only)"
+        );
+      }
 
       if (entityHome) {
         const filingTarget = await db.query.workspaces.findFirst({
@@ -414,6 +437,7 @@ export function registerEntityExecutors(): void {
           // long-content entity that proposed) lost its document link. Forward it.
           documentId: innerData.documentId as string | undefined,
           ...(entityHome ? { targetWorkspaceId: entityHome } : {}),
+          ...(replayHome ? { homeWorkspaceId: replayHome } : {}),
           source: "system",
           approvalDuplicate: decision?.keepBoth ? "keep_both" : "ask_reviewer",
           // No verb: keep both for the twins the card showed; an unseen twin
