@@ -639,7 +639,10 @@ export async function insertPendingProposal(
       // One savepoint for the row and the versions it replaces: both land or
       // neither does, and a unique-violation rolls back only this, so the
       // recovery peek below still runs inside a caller's transaction.
-      return await executor.transaction(async (tx) => {
+      // `db.transaction` opens one; a caller's `tx.transaction` a savepoint —
+      // the same call at runtime. Narrowed to one member because TS cannot
+      // call a union of two generic signatures.
+      return await (executor as typeof db).transaction(async (tx) => {
         const proposal = await insertRow(tx);
         const superseded = await supersedeEarlierVersions(tx, proposal);
         return { proposal, deduped: false, superseded };
