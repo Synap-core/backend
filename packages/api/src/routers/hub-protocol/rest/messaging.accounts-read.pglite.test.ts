@@ -17,7 +17,6 @@
  */
 
 import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
-import { randomUUID } from "node:crypto";
 
 const h = vi.hoisted(() => ({
   client: null as null | {
