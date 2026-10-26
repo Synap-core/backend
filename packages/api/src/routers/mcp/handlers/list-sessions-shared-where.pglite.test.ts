@@ -19,21 +19,47 @@
 import { describe, it, expect, beforeAll, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 
-const h = vi.hoisted(() => ({
-  client: null as null | {
-    exec: (sql: string) => Promise<unknown>;
-    query: <T>(sql: string, params?: unknown[]) => Promise<{ rows: T[] }>;
-  },
-}));
+const h = vi.hoisted(() => {
+  const state = {
+    client: null as null | {
+      exec: (sql: string) => Promise<unknown>;
+      query: <T>(sql: string, params?: unknown[]) => Promise<{ rows: T[] }>;
+    },
+    db: null as unknown,
+    async init(): Promise<unknown> {
+      if (!state.db) {
+        const { PGlite } = await import("@electric-sql/pglite");
+        const { drizzle } = await import("drizzle-orm/pglite");
+        const schema = await import("@synap/database/schema");
+        const client = new PGlite();
+        state.client = client as unknown as typeof state.client;
+        state.db = drizzle(client, { schema });
+      }
+      return state.db;
+    },
+    // The lineage read (`getParentSessionIds`) lives inside @synap/database
+    // and imports `db` from its client module, not from the package entry:
+    // route that onto the same PGlite.
+    async clientPgModule() {
+      const db = await state.init();
+      return {
+        db,
+        sql: undefined,
+        getDb: async () => db,
+        setCurrentUser: async () => undefined,
+        clearCurrentUser: async () => undefined,
+        closeDatabase: async () => undefined,
+      };
+    },
+  };
+  return state;
+});
 
+vi.mock("../../../../../database/dist/client-pg.js", () => h.clientPgModule());
+vi.mock("../../../../../database/src/client-pg.js", () => h.clientPgModule());
 vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
-  const { PGlite } = await import("@electric-sql/pglite");
-  const { drizzle } = await import("drizzle-orm/pglite");
-  const schema = await import("@synap/database/schema");
-  const client = new PGlite();
-  h.client = client as unknown as typeof h.client;
-  const pg = drizzle(client, { schema });
+  const pg = await h.init();
   return { ...actual, db: pg, getDb: async () => pg };
 });
 
