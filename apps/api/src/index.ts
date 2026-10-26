@@ -96,7 +96,9 @@ import {
 } from "./open-dispatch.js";
 import {
   setupEventBroadcasting,
+  skillRuntimeHealth,
   startSessionChangedListener,
+  warmSkillRuntime,
 } from "@synap/api";
 import { configureLocalMode, safeTokenEqual } from "@synap/auth";
 import { buildKratosProxyTargetUrl } from "./kratos-proxy-url.js";
@@ -370,6 +372,10 @@ app.get("/health", async (c) => {
     // Kratos /health/ready: "not_ready" also reads "degraded" (the CP health
     // check counts it as a failed check). `auth` above stays the stack name.
     authHealth,
+    // Where code skills run (intelligence-service, or the pod's runner pool)
+    // and, for the pool, whether it can: `unavailable` + `reason` when a
+    // runner cannot start. Body-only, like `data`.
+    skillRuntime: skillRuntimeHealth(),
   });
 });
 
@@ -2112,6 +2118,10 @@ import {
 runStartupHooks().catch((err) => {
   apiLogger.error({ err }, "Startup hooks failed (non-fatal)");
 });
+
+// Code skills on this pod (SANDBOX_LOCAL=1): start one runner process now, so
+// /health's `skillRuntime` answers at boot whether it can. Never throws.
+void warmSkillRuntime();
 
 // One-title BACKFILL (founder 2026-10-19): documents written before the create
 // door applied the one-title rule lose a leading heading equal to their name,

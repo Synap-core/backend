@@ -16,6 +16,10 @@ export default defineConfig({
     // services/capabilities/web-read/extract-pool.ts as `./extract-worker.js`
     // NEXT TO the bundle (dist root), so it must be its own entry here.
     "extract-worker": "src/services/capabilities/web-read/extract-worker.ts",
+    // The code-skill runner process — forked by
+    // services/skills/runner/process-pool.ts as `./skill-runner-child.js` NEXT
+    // TO the bundle (dist root), so it must be its own entry here.
+    "skill-runner-child": "src/services/skills/runner/skill-runner-child.ts",
   },
   format: ["esm"],
   sourcemap: true,
