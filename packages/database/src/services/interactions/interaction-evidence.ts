@@ -17,7 +17,16 @@
  * meeting that has not happened yet (the sweep counts it once it has).
  * Gmail threads and the company rollup are C-W3.
  */
-import { and, eq, inArray, isNotNull, or, sql, type SQL } from "drizzle-orm";
+import {
+  and,
+  eq,
+  inArray,
+  isNotNull,
+  or,
+  sql,
+  type SQL,
+  type SQLWrapper,
+} from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type * as schema from "../../schema/index.js";
@@ -105,8 +114,9 @@ export async function collectInteractionEvidence(
 ): Promise<InteractionEvidence[]> {
   const s = alias(entities, "s");
   const t = alias(entities, "t");
-  const prop = (e: typeof s, key: string) =>
-    sql<string | null>`${e.properties}->>${key}`;
+  // `properties->>key` of either endpoint (the two aliases differ in type).
+  const prop = (properties: SQLWrapper, key: string) =>
+    sql<string | null>`${properties}->>${key}`;
 
   const where: SQL[] = [
     inArray(relations.type, [...INTERACTION_RELATION_TYPES]),
@@ -126,11 +136,11 @@ export async function collectInteractionEvidence(
     // A text prefilter on the ISO day (an exact parse follows in TS): a
     // malformed date string never reaches a `::timestamptz` cast.
     const day = isoDay(scope.recordDatesFrom);
-    const dated = (e: typeof s) =>
+    const dated = (properties: SQLWrapper) =>
       [...RECORD_DATE_KEYS, "sentDate"].map(
-        (k) => sql`left(${prop(e, k)}, 10) >= ${day}`
+        (k) => sql`left(${prop(properties, k)}, 10) >= ${day}`
       );
-    where.push(or(...dated(s), ...dated(t))!);
+    where.push(or(...dated(s.properties), ...dated(t.properties))!);
   }
 
   const rows = await db
@@ -139,12 +149,12 @@ export async function collectInteractionEvidence(
       sourceId: s.id,
       sourceKind: s.type,
       sourceStatus: s.status,
-      sourceStartDate: prop(s, "startDate"),
-      sourceDate: prop(s, "date"),
-      sourceSentDate: prop(s, "sentDate"),
+      sourceStartDate: prop(s.properties, "startDate"),
+      sourceDate: prop(s.properties, "date"),
+      sourceSentDate: prop(s.properties, "sentDate"),
       targetId: t.id,
-      targetStartDate: prop(t, "startDate"),
-      targetDate: prop(t, "date"),
+      targetStartDate: prop(t.properties, "startDate"),
+      targetDate: prop(t.properties, "date"),
     })
     .from(relations)
     .innerJoin(s, eq(s.id, relations.sourceEntityId))
