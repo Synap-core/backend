@@ -1,5 +1,6 @@
 /**
- * DEFERRED WRITES — replay after a workspace join is approved (#6).
+ * DEFERRED WRITES — replay after a workspace join (#6) or a held-writes pack
+ * (W-B1) is approved.
  *
  * The gate keeps an agent's writes into a space it has not joined on the join
  * proposal (`data.deferredWrites`, `utils/permission-check.ts`
@@ -13,6 +14,12 @@
  *
  * Never `ctx.governanceProposalId` here: that channel says "a person already
  * decided this write", which is exactly what a join approval does NOT say.
+ *
+ * A held-writes pack (`agent/held_writes`, filed by the gate when an agent is
+ * past its daily write ceiling) replays the same way, with ONE difference: the
+ * person approved those writes past the ceiling, so the replay runs inside
+ * `runWithHeldWritesApproved` and rung 2.56 does not hold them again. Every
+ * other rung still decides each write.
  */
 
 import { TRPCError } from "@trpc/server";
@@ -24,6 +31,7 @@ import {
   drizzleSql,
   runWithActingAgent,
   runWithGrant,
+  runWithHeldWritesApproved,
   type KeyGrant,
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
@@ -59,7 +67,10 @@ type DoorAnswer =
   | { outcome: "proposed"; proposalId: string }
   | { outcome: "refused"; reason: string };
 
-type ReplayDoor = (w: DeferredWrite, workspaceId: string) => Promise<unknown>;
+type ReplayDoor = (
+  w: DeferredWrite,
+  workspaceId: string | null
+) => Promise<unknown>;
 
 /** Drop null/undefined so optional zod fields accept the replayed input. */
 function defined<T extends Record<string, unknown>>(o: T): Partial<T> {
@@ -72,7 +83,7 @@ const str = (v: unknown): string | undefined =>
   typeof v === "string" ? v : undefined;
 
 /** The hub caller context the agent's own doors run under. */
-function agentCallerContext(w: DeferredWrite, workspaceId: string) {
+function agentCallerContext(w: DeferredWrite, workspaceId: string | null) {
   return createHubProtocolCallerContext(
     w.userId,
     ["hub-protocol.read", "hub-protocol.write"],
@@ -97,6 +108,9 @@ const REPLAY_DOORS: Record<ReplayableDeferredPair, ReplayDoor> = {
     );
     return caller.create(
       defined({
+        // The id the gate minted and handed the agent: the replay lands under
+        // it, so a held write's `proposedEntityId` resolves once approved.
+        proposedEntityId: str(d.id),
         profileSlug: str(d.profileSlug),
         title: str(d.title),
         description: str(d.description),
@@ -214,7 +228,7 @@ function readDoorAnswer(result: unknown): DoorAnswer {
 /** Run one kept write through its door as the agent. Never throws. */
 async function replayOne(
   w: DeferredWrite,
-  workspaceId: string
+  workspaceId: string | null
 ): Promise<DoorAnswer> {
   const pair = replayableDeferredPair(w.subjectType, w.action);
   if (!pair) {
@@ -264,14 +278,18 @@ async function recordOutcome(
 }
 
 /**
- * Replay every write kept on the APPROVED join `proposalId`, in the order the
- * agent made them. Call only once the membership row exists. Idempotent: a
- * write that already has an outcome is not run again. A write the reviewer
- * dropped (`rejectItem` → `data.dispositions[ref]`) is recorded as skipped.
+ * Replay every write kept on the APPROVED join or held-writes pack
+ * `proposalId`, in the order the agent made them. A join passes its space
+ * (call only once the membership row exists); a held-writes pack passes none,
+ * so each write replays in its own space, past the ceiling the person lifted.
+ * Idempotent: a write that already has an outcome is not run again. A write
+ * the reviewer dropped (`rejectItem` → `data.dispositions[ref]`) is recorded
+ * as skipped.
  */
 export async function replayDeferredWrites(args: {
   proposalId: string;
-  workspaceId: string;
+  workspaceId?: string;
+  heldWritesApproved?: boolean;
 }): Promise<{
   outcomes: Record<string, StoredDeferredOutcome>;
   unreadable: number;
@@ -285,7 +303,7 @@ export async function replayDeferredWrites(args: {
   if (unreadable > 0) {
     logger.warn(
       { proposalId: args.proposalId, unreadable },
-      "join proposal holds deferred writes that do not parse — not replayed"
+      "proposal holds deferred writes that do not parse — not replayed"
     );
   }
   const outcomes = readDeferredOutcomes(row?.data);
@@ -296,7 +314,12 @@ export async function replayDeferredWrites(args: {
     if (isItemRejected(row?.data, w.ref)) {
       stored = { outcome: "skipped_by_reviewer", at };
     } else {
-      const answer = await replayOne(w, args.workspaceId);
+      const workspaceId = args.workspaceId ?? w.workspaceId ?? null;
+      const answer = args.heldWritesApproved
+        ? await runWithHeldWritesApproved(args.proposalId, () =>
+            replayOne(w, workspaceId)
+          )
+        : await replayOne(w, workspaceId);
       stored =
         answer.outcome === "proposed"
           ? { outcome: "proposed", proposalId: answer.proposalId, at }
@@ -315,8 +338,8 @@ export async function replayDeferredWrites(args: {
 }
 
 /**
- * A REJECTED join: every kept write without an outcome is recorded as
- * `rejected` — it never ran. Only touches a row that IS rejected.
+ * A REJECTED join or held-writes pack: every kept write without an outcome is
+ * recorded as `rejected` — it never ran. Only touches a row that IS rejected.
  */
 export async function recordRejectedDeferredWrites(
   proposalId: string

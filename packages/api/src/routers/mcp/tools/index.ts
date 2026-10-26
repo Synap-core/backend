@@ -577,6 +577,22 @@ const ROOM_QUESTION_ASK_JSON_SCHEMA = {
  */
 const RUN_CAPABILITY_JSON_SCHEMA = buildCapabilityExecuteAgentJsonSchema();
 
+/**
+ * The `sessionId` every ATTRIBUTED (non-read) tool declares — DERIVED in
+ * `tools.list()` from `readOnlyHint`, never hand-added to each schema (W-C1).
+ * The adapter already reads `sessionId` on every write
+ * (`resolveSessionHandle`); undeclared, a client that validates its arguments
+ * could not send it, and an agent was never told it may. The handle is
+ * server-minted (MCP SEP-2567): a session it started, or the one the reply
+ * names in `attribution.filed`. The idle window is
+ * `RECEIPT_IDLE_WINDOW_HOURS` (pinned by `attributed-tools-declare-session`).
+ */
+const ATTRIBUTED_SESSION_ID_PARAM = {
+  type: "string",
+  description:
+    "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error.",
+} as const;
+
 /** Context available when `list()` is called from a live MCP session (createMCPServer) — absent for the legacy static capabilities manifest (http-handler.ts GET /). */
 export interface ToolsListContext {
   workspaceId?: string;
@@ -746,6 +762,18 @@ export const tools = {
               type: "string",
               description:
                 "Kind + Facets filter — only return entities carrying a live facet of this role-profile slug (e.g. 'client', 'investor'). Use synap_list_profiles to find role slugs (profileKind='role').",
+            },
+            sortBy: {
+              type: "string",
+              enum: ["createdAt", "updatedAt", "title"],
+              description:
+                "Sort field, applied to the WHOLE set before paging (page 2 continues page 1). Default createdAt, newest first.",
+            },
+            sortDir: {
+              type: "string",
+              enum: ["asc", "desc"],
+              description:
+                "Sort direction (default desc). e.g. 'least recently updated first' = sortBy updatedAt, sortDir asc.",
             },
             limit: {
               type: "number",
@@ -5889,6 +5917,19 @@ export const tools = {
         },
       },
     ];
+
+    // W-C1: every attributed tool declares `sessionId`, derived here so a new
+    // write tool declares it the moment it is listed. A tool that declares its
+    // own (`synap_update_session`'s target, …) keeps it.
+    for (const tool of toolDefs) {
+      if (tool.annotations?.readOnlyHint === true) continue;
+      const properties = tool.inputSchema.properties ?? {};
+      if ("sessionId" in properties) continue;
+      tool.inputSchema = {
+        ...tool.inputSchema,
+        properties: { ...properties, sessionId: ATTRIBUTED_SESSION_ID_PARAM },
+      };
+    }
 
     if (!ctx) return toolDefs;
 

@@ -114,6 +114,13 @@ export const GRANT_SAFE_REST_READS: readonly RegExp[] = [
   /^\/artifacts\/?$/,
   /^\/commands\/?$/,
   /^\/commands\/[^/]+\/?$/,
+  // `listPlaybooksDoor` / `getPlaybookDoor` → `playbooks.listAllPage` /
+  // `playbooks.get`: `scopedDb(...).predicate(playbooks)` / `findFirst`
+  // (subject `playbook`), and the method's project count reads tracks and
+  // projects with their grant clauses (`countProjectsUsingMethods`). A uuid
+  // id only, so a static sibling is never admitted by this line.
+  /^\/playbooks\/?$/,
+  /^\/playbooks\/[0-9a-fA-F-]{36}\/?$/,
   /^\/brand\/kit\/?$/,
   // Read only through the grant-aware channel / session helpers
   // (utils/channel-visibility.ts, access/session-visibility.ts):

@@ -835,7 +835,10 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
       name: "market.search",
       kind: "builtin",
       scope: "pod",
-      intent: "search_external",
+      // DECLARED none (not omitted): it searches Synap's catalog, not an outside
+      // corpus, and `null` makes the applier clear the `search_external` it
+      // carried on pods seeded before (an omitted intent is left alone).
+      intent: null,
       description:
         "Search the Control-Plane marketplace catalog (capabilities, automations, workspace templates, cells, skills, views) — the pod-local cache, never a live CP fetch. Use this AFTER list_capabilities finds nothing installed. Agents must send kind:template not kind:workspace. Returns { entries[] } with an honest `installed` flag per entry (undefined when not cheaply checkable) or, on zero hits, a message pointing to tool.request for a missing tool. Read-only.",
       parameters: {
@@ -879,6 +882,29 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
         properties: {
           url: { type: "string" },
           reader: { type: "string" },
+        },
+      },
+    },
+    // ── Search the web — the agent's door onto `searchWeb` ───────────────────
+    {
+      name: "web.search",
+      kind: "builtin",
+      scope: "pod",
+      intent: "search_external",
+      description:
+        "Search the web through a search provider installed on this pod (e.g. Exa), run through that provider's own approval and recorded with its cost. " +
+        "Use when: you need pages you do not have a link for yet; then read one in full with web.read. " +
+        "Don't use when: you have the link (web.read), or you are searching the user's own notes, files or mail (their own verbs). " +
+        "Name the provider in `provider` (a verbId from providers[]): there is no default provider yet. " +
+        "Returns { search: { status: ok|blocked|failed, provider?, result?, reason?, nextStep?, detail?, error? }, providers[]: { verbId, capabilityName, ready } }. " +
+        "`blocked` means nothing ran: no_provider (name one of providers[], or install one found with market.search), not_enabled (offer to enable it), awaiting_review. Never retry blindly. " +
+        "Args: query (required); provider (a providers[].verbId).",
+      parameters: {
+        type: "object",
+        required: ["query"],
+        properties: {
+          query: { type: "string" },
+          provider: { type: "string" },
         },
       },
     },

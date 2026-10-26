@@ -25,6 +25,11 @@
       "import": "./dist/document-access.js",
       "default": "./dist/document-access.js"
     },
+    "./access-door": {
+      "types": "./dist/access/door.d.ts",
+      "import": "./dist/access-door.js",
+      "default": "./dist/access-door.js"
+    },
     "./public-doors": {
       "types": "./dist/public-doors.d.ts",
       "import": "./dist/public-doors.js",

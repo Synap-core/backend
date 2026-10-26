@@ -59,7 +59,7 @@ import { buildVerbStates } from "./capability-registry.js";
 function applierWritesIntent(
   s: CapabilitySkillDef,
   known?: ReadonlySet<string>
-): string | undefined {
+): string | null | undefined {
   return resolveVerbIntent(s, known);
 }
 
@@ -145,6 +145,39 @@ describe("the intent COLUMN reaches a skill that requires no tool", () => {
     expect(
       capabilityDefinitionDrift([live], { skills: [def] }).drifted
     ).toEqual([]);
+  });
+
+  it("a DECLARED-none intent (null) clears a stored one: drift, written NULL, converged", () => {
+    // Omitting the field leaves a stored intent alone (the test above), so a
+    // verb could never DROP a wrong intent on a pod already seeded — that is
+    // how `market.search` kept `search_external`. `null` declares none.
+    const def: DefinitionSkillRow = { name: "market.search", intent: null };
+    const live: InstalledSkillRow = {
+      name: "market.search",
+      intent: "search_external",
+      metadata: { runCount: 4 },
+    };
+    expect(
+      capabilityDefinitionDrift([live], { skills: [def] }).drifted,
+      "a stored intent the definition declares none of must read as drift"
+    ).toEqual(["market.search"]);
+    // The applier writes NULL (Drizzle writes a null, it SKIPS undefined).
+    const written = applierWritesIntent({
+      name: "market.search",
+      kind: "builtin",
+      intent: null,
+    } as CapabilitySkillDef);
+    expect(written).toBeNull();
+    expect(
+      capabilityDefinitionDrift([{ ...live, intent: written ?? null }], {
+        skills: [def],
+      }).drifted,
+      "one apply converges it — no re-apply loop"
+    ).toEqual([]);
+    // And an omitted field still writes nothing.
+    expect(
+      applierWritesIntent({ name: "x", kind: "builtin" } as CapabilitySkillDef)
+    ).toBeUndefined();
   });
 
   it("is not drift when both sides agree", () => {

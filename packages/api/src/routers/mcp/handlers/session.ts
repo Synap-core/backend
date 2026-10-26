@@ -678,6 +678,11 @@ export const sessionHandlers: McpHandlerMap = {
       userId,
       agentUserId,
     });
+    // W-B2 / Q-B2: asks the close left owed by the person. Nothing retires
+    // them but a cancel, so the closer withdraws or hands each one over.
+    const { leftOwedAfterClose } =
+      await import("../../../services/discover/loose-ends.js");
+    const leftOwed = leftOwedAfterClose(result.session);
     // Gate 2: proposal pack on complete — one review unit for the session.
     return ok({
       // The status the ROW now holds — not a hardcoded "closed". With
@@ -695,6 +700,7 @@ export const sessionHandlers: McpHandlerMap = {
       // revert). Also kept on the session's `metadata.run.cancel`.
       ...(result.cancel ? { cancel: result.cancel } : {}),
       ...(nudges ? { nudges } : {}),
+      ...(leftOwed ? { leftOwed } : {}),
       note:
         result.counts.pending > 0
           ? `Review pack: ${result.counts.pending} pending proposal(s) for this session — use synap_list_proposals with sessionId, or open the session room.`

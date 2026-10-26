@@ -793,3 +793,62 @@ describe("resolveProfileForApply — scope/entityScope divergence (advisory)", (
     expect(r.scopeConflict).toBeNull();
   });
 });
+
+describe("resolveProfileForApply — a declared SYSTEM role is granted to the space", () => {
+  // Founder decision 2 (2026-10-26): a role a template declares, including a
+  // system role such as `contact`, is visible in that template's space. The
+  // reach rule reads grants only, so the apply writes one.
+  const contact = (over: Record<string, unknown> = {}) =>
+    mkProfile({
+      id: "sysRole",
+      slug: "contact",
+      scope: ProfileScope.SYSTEM,
+      profileKind: "role",
+      ...over,
+    });
+  const declareContact = { ...baseOpts, slug: "contact" };
+
+  it("grants an accessible system role to the applying workspace", async () => {
+    const repo = fakeRepo({ accessible: contact() });
+    const r = await resolveProfileForApply(repo, declareContact);
+    expect(r.reused).toBe(true);
+    expect(r.profile?.id).toBe("sysRole");
+    expect(repo.calls.grant).toEqual([["sysRole", "wsB"]]);
+    expect(repo.calls.update).toHaveLength(0);
+  });
+
+  it("does NOT swallow a failed grant: it is the role's whole visibility here", async () => {
+    const repo = fakeRepo({ accessible: contact(), grantThrows: true });
+    await expect(resolveProfileForApply(repo, declareContact)).rejects.toThrow(
+      "grant failed"
+    );
+  });
+
+  it("dryRun decides the reuse but writes no grant", async () => {
+    const repo = fakeRepo({ accessible: contact() });
+    const r = await resolveProfileForApply(repo, {
+      ...declareContact,
+      dryRun: true,
+    });
+    expect(r.reused).toBe(true);
+    expect(repo.calls.grant).toHaveLength(0);
+  });
+
+  it("a declared system KIND gets no grant (kinds are out of this rule)", async () => {
+    const repo = fakeRepo({
+      accessible: mkProfile({
+        id: "sysKind",
+        slug: "person",
+        scope: ProfileScope.SYSTEM,
+        profileKind: "kind",
+      }),
+    });
+    const r = await resolveProfileForApply(repo, {
+      ...baseOpts,
+      slug: "person",
+      declaredKind: "kind",
+    });
+    expect(r.reused).toBe(true);
+    expect(repo.calls.grant).toHaveLength(0);
+  });
+});

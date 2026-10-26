@@ -165,6 +165,7 @@ import {
   entityFacets,
   views,
   automations,
+  automationRuns,
   profileRelations,
   focusSessions,
   users,
@@ -263,13 +264,21 @@ async function staleSession(owner: string, updatedAt = OLD): Promise<string> {
 
 async function neverRunAutomation(
   owner: string,
-  workspaceId: string | null
+  workspaceId: string | null,
+  opts: { triggerType?: string; status?: string; createdAt?: string } = {}
 ): Promise<string> {
   const id = randomUUID();
   await q(
-    `insert into automations (id, name, created_by, workspace_id, status, run_count, trigger_config, created_at, updated_at)
-     values ($1, 'Generate report', $2, $3, 'active', 0, '{}'::jsonb, $4, now())`,
-    [id, owner, workspaceId, OLD]
+    `insert into automations (id, name, created_by, workspace_id, status, trigger_type, run_count, trigger_config, created_at, updated_at)
+     values ($1, 'Generate report', $2, $3, $4, $5, 0, '{}'::jsonb, $6, now())`,
+    [
+      id,
+      owner,
+      workspaceId,
+      opts.status ?? "active",
+      opts.triggerType ?? "event",
+      opts.createdAt ?? OLD,
+    ]
   );
   return id;
 }
@@ -355,6 +364,7 @@ beforeAll(async () => {
     entityFacets,
     views,
     automations,
+    automationRuns,
     profileRelations,
     focusSessions,
     users,
@@ -378,6 +388,7 @@ beforeEach(async () => {
     "entity_facets",
     "views",
     "automations",
+    "automation_runs",
     "profile_relations",
     "focus_sessions",
     "users",
@@ -936,6 +947,28 @@ describe("diagnose schema hygiene — every number is the caller's", () => {
     expect(signal.duplicateRelationDefs).toEqual([
       { slug: "depends_on", rows: 2 },
     ]);
+  });
+
+  it("counts never-run automations by the warden's rule: manual, draft, young and ledger-run ones are not counted", async () => {
+    const dead = await neverRunAutomation(A, WS_A, { triggerType: "cron" });
+    // The per-space manual "Generate report" seed: nobody clicked, not broken.
+    await neverRunAutomation(A, WS_A, { triggerType: "manual" });
+    await neverRunAutomation(A, WS_A, { status: "draft" });
+    await neverRunAutomation(A, WS_A, { createdAt: "2026-09-10T00:00:00Z" });
+    // `run_count` stays 0 but the LEDGER has a run: it fired.
+    const ran = await neverRunAutomation(A, WS_A);
+    await q(
+      `insert into automation_runs (id, automation_id, status, started_at) values ($1, $2, 'failed', now())`,
+      [randomUUID(), ran]
+    );
+
+    const signal = await gatherSchemaHygieneSignal({
+      userId: A,
+      workspaceId: null,
+      now: NOW,
+    });
+
+    expect(signal.neverRunAutomations.map((a) => a.id)).toEqual([dead]);
   });
 });
 

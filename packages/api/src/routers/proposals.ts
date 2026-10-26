@@ -1785,11 +1785,14 @@ export const proposalsRouter = router({
       // A rejected PUBLIC-FORM submission keeps no answers: the owner said no,
       // so the stranger's personal data has nothing left to be reviewed for.
       await scrubRejectedGuestPayloads([input.proposalId]);
-      // A rejected JOIN drops the writes it was keeping: each one is recorded
-      // as `rejected` so the agent reading the join sees why it never ran.
+      // A rejected JOIN (or held-writes pack) drops the writes it was
+      // keeping: each one is recorded as `rejected` so the agent reading it
+      // sees why it never ran.
       if (
-        proposal?.targetType === "workspace" &&
-        proposal.proposalType === "join"
+        (proposal?.targetType === "workspace" &&
+          proposal.proposalType === "join") ||
+        (proposal?.targetType === "agent" &&
+          proposal.proposalType === "held_writes")
       ) {
         const { recordRejectedDeferredWrites } =
           await import("../services/governance/deferred-writes.js");
@@ -3525,11 +3528,13 @@ export const proposalsRouter = router({
             userId,
             proposalData: target.data,
           });
-          // Parity with the single `reject` door: a rejected JOIN records its
-          // kept writes as `rejected`.
+          // Parity with the single `reject` door: a rejected JOIN (or
+          // held-writes pack) records its kept writes as `rejected`.
           if (
-            target.targetType === "workspace" &&
-            target.proposalType === "join"
+            (target.targetType === "workspace" &&
+              target.proposalType === "join") ||
+            (target.targetType === "agent" &&
+              target.proposalType === "held_writes")
           ) {
             const { recordRejectedDeferredWrites } =
               await import("../services/governance/deferred-writes.js");

@@ -27,6 +27,7 @@
  */
 
 import type { OwedByPerson } from "./owed-by-person.js";
+import type { LooseEnds } from "./loose-ends.js";
 import type { LibraryHealth } from "@synap-core/types/imports";
 import type { SessionsOwingGrade } from "../focus-sessions/session-nudges.js";
 import {
@@ -200,6 +201,13 @@ export interface StartHere {
      */
     | { status: "paused" }
     | StartHereUnavailable;
+  /**
+   * The CALLING AGENT's own leftovers (W-B2): sessions it opened idle over a
+   * week, asks it left owed on its ended sessions, its proposals pending over
+   * a week, automations it made that never fired — each row with the call
+   * that ends it. Present only when an agent calls. See `loose-ends.ts`.
+   */
+  looseEnds?: LooseEnds;
   /**
    * Open sessions the caller OWNS whose criteria are not all graded —
    * "grade with evaluate_session before you say done". Bounded read; the lens

@@ -27,6 +27,7 @@ import {
   drizzleSql,
   getRequestClientKey,
   clientKeyScope,
+  isPerCallClientKey,
 } from "@synap/database";
 import { agents, apps, users } from "@synap/database/schema";
 import type {
@@ -236,10 +237,18 @@ export function focusScopeReply(scope: FocusScope): {
 /** Idle conversation-focus entries older than this are pruned on write. */
 const CONVERSATION_FOCUS_TTL_DAYS = 30;
 
-/** The request's conversation client key, or undefined (key scope). */
+/**
+ * The request's conversation client key, or undefined (key scope). A per-call
+ * run (`…|call:`) names no conversation: a focus keyed on it would be lost on
+ * the next call, so it reads and sets the agent's focus, as option A did.
+ */
 function focusConversationKey(): string | undefined {
   const key = getRequestClientKey();
-  return key && clientKeyScope(key) === "conversation" ? key : undefined;
+  return key &&
+    clientKeyScope(key) === "conversation" &&
+    !isPerCallClientKey(key)
+    ? key
+    : undefined;
 }
 
 /**

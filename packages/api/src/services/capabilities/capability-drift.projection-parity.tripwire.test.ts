@@ -138,7 +138,7 @@ describe("drift comparator ↔ applier projection parity (skills row)", () => {
       "DRIFT_COMPARATOR_VERSION must be bumped (and this pin updated) whenever " +
         "the comparator's coverage changes — otherwise every container already " +
         "stamped by the OLD comparator keeps its stamp and is never re-diffed."
-    ).toBe(11);
+    ).toBe(12);
   });
 
   /** A value pair per field: what the template declares vs what the live row has. */
@@ -359,6 +359,47 @@ describe("drift comparator ↔ applier projection parity (skills row)", () => {
       // A malformed declaration is never persisted as if it worked.
       expect(
         projectSkillMetadata(null, { writeBack: { kind: "post" } })
+      ).toBeUndefined();
+    });
+
+    it("a metering-only difference is drift, and the projection installs it", () => {
+      // The fourth definition-owned key (v12). Without it in the projection a
+      // priced verb would install with no meter and every run would read as
+      // unmetered; without it in the comparator no installed pod would ever
+      // receive a meter added to its template.
+      const metering = {
+        provider: "exa",
+        unit: "search",
+        costPath: "costDollars.total",
+      };
+      const def = {
+        name: "exa_search",
+        metadata: { readOnly: true, metering },
+      };
+      const live = { name: "exa_search", metadata: { readOnly: true } };
+      expect(
+        capabilityDefinitionDrift([live], { skills: [def] }).drifted,
+        "a metering-only difference must be drift — if it is not, no installed pod ever receives the declaration"
+      ).toEqual(["exa_search"]);
+      expect(projectSkillMetadata(null, def.metadata)).toEqual({
+        readOnly: true,
+        metering,
+      });
+      const converged = projectSkillMetadata(
+        { ...live.metadata, runCount: 3 },
+        def.metadata
+      );
+      expect(
+        capabilityDefinitionDrift([{ ...live, metadata: converged }], {
+          skills: [def],
+        }).drifted,
+        "one apply converges it — no re-apply loop"
+      ).toEqual([]);
+      // A malformed declaration (a negative price) is never persisted.
+      expect(
+        projectSkillMetadata(null, {
+          metering: { provider: "exa", unit: "search", costUsd: -1 },
+        })
       ).toBeUndefined();
     });
 
