@@ -9,8 +9,9 @@
  * Both previously hand-copied these constants and the agent-policy precedence
  * ladder. Because `@synap/api` depends on `@synap/jobs`, the jobs side could not
  * import the canonical gate without a cycle, so it kept a forked MIRROR with an
- * explicit "DRIFT RISK" TODO. This package is that lower, dependency-free home —
- * it removes the fork.
+ * explicit "DRIFT RISK" TODO. This package is that lower home — it removes the
+ * fork. Its one dependency is the pure, published `@synap-core/types` (the
+ * grant grammar and the reason sentences are declared there).
  *
  * It contains NO database / event / proposal side effects — ONLY the decision.
  * Each caller still: runs RBAC, fetches the agent + workspace rows, then calls
@@ -84,6 +85,7 @@
 // Constants — the policy values (formerly duplicated in both gates)
 // ---------------------------------------------------------------------------
 
+import { GOVERNANCE_POLICY_SENTENCES } from "@synap-core/types/proposals";
 import { GRANT_ACTIONS, patternMatches } from "./grants.js";
 
 /**
@@ -1520,47 +1522,11 @@ export type AgentPolicyVerdict =
 
 /**
  * The sentence a person reads for each reason code, written for them: what
- * will happen and why, in one sentence. Mirrored in `@synap-core/types`
- * (`GOVERNANCE_POLICY_SENTENCES`); a tripwire keeps the two equal.
+ * will happen and why, in one sentence. Declared ONCE, as
+ * `GOVERNANCE_POLICY_SENTENCES` in `@synap-core/types/proposals` (where the
+ * review surfaces read it and its short labels), under the engine's name here.
  */
-export const PROPOSE_REASON = {
-  ADMIN: "This changes how your pod is run, so it waits for you.",
-  WRITES_REQUIRE_PROPOSAL: "This agent asks before every change.",
-  AGENT_OWNED_DESTRUCTIVE:
-    "This removes something from an agent's workspace, so it waits for you.",
-  CHANNEL_PROPOSE:
-    "In this channel a teammate can suggest changes, but only you can apply them.",
-  USER_OBSERVATION_INFERENCE:
-    "The AI guessed this about you, so it is only saved if you confirm it.",
-  CAPABILITY_PROPOSE: "Running this tool needs your OK first.",
-  SCOPE_IDENTITY_CHANGE:
-    "This changes what the record is or where it shows, so it waits for you.",
-  PROJECT_FILING:
-    "Filing these into a project shows them to its members, so you approve it.",
-  CRITERIA_CHANGE:
-    "An agent wants to change the criteria its own work is checked against, so you decide.",
-  POSSIBLE_DUPLICATE:
-    "This looks like something you already have or that is already waiting for review, so you decide whether to keep both.",
-  DESTRUCTIVE_HARD_FLOOR:
-    "This deletes, archives, purges or merges something, so it always waits for you.",
-  GOVERNANCE_RULE: "One of your rules says to ask you first.",
-  UNTRUSTED_ORIGIN:
-    "This came from outside, such as an external app or a bridge, so nothing is applied until you approve it.",
-  DAILY_WRITE_CEILING:
-    "This agent used up today's automatic writes, so the rest wait for you.",
-  HUMAN_GATE: "This is a decision only you can make, and no rule can skip it.",
-  ARBITRARY_EXECUTION:
-    "This runs a shell command on your pod, so it always waits for you.",
-  POD_ADMIN_SCHEMA_CHANGE:
-    "This adds a required field or a default to a built-in kind and changes every workspace, so a pod admin must approve it.",
-  AGENT_SCHEMA_DEFINITION:
-    "An agent wants to define a new kind of thing for your pod, so you approve it, and no rule can skip that.",
-  HUMAN_ONLY_STATUS: "Only you can move this into that status.",
-  LIFECYCLE_TERMINAL:
-    "An agent wants to close this (done or lost), so it waits for you unless you have said otherwise.",
-  AGENT_STRUCTURE_WRITE:
-    "An agent wants to create or switch on a workspace, cell, playbook or automation, which changes what your pod does, so you approve it, and no rule can skip that.",
-} as const;
+export const PROPOSE_REASON = GOVERNANCE_POLICY_SENTENCES;
 
 /**
  * Rung 2.1's reason for a FORCED write whose door forces it for a reason other
