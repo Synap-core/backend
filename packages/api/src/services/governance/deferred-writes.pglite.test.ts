@@ -207,7 +207,12 @@ beforeAll(async () => {
     `insert into users (id, email, name, user_type) values ($1, 'h@x', 'Human', 'human'), ($2, 'a@x', 'Scout', 'agent')`,
     [HUMAN, AGENT]
   );
-  await q(`insert into workspaces (id, name) values ($1, 'Sales')`, [WS]);
+  // `ddlFor` defaults every `*_at` column to now(): a live space states its
+  // `archived_at` explicitly, or the gate reads it as archived (86b6faae).
+  await q(
+    `insert into workspaces (id, name, archived_at) values ($1, 'Sales', null)`,
+    [WS]
+  );
   registerWorkspaceExecutors();
 });
 
@@ -216,6 +221,30 @@ beforeEach(async () => {
   await q(`delete from workspace_members`);
   h.doorCalls.length = 0;
   h.answers = {};
+});
+
+describe("an archived space takes no join (86b6faae)", () => {
+  it("an agent write into an archived space is refused in words, and no join is filed", async () => {
+    const archived = randomUUID();
+    await q(
+      `insert into workspaces (id, name, archived_at) values ($1, 'Old Clients', now())`,
+      [archived]
+    );
+    const result = await checkPermissionOrPropose({
+      userId: HUMAN,
+      agentUserId: AGENT,
+      workspaceId: archived,
+      subjectType: "entity",
+      action: "create",
+      data: { profileSlug: "note", title: "x" },
+    } as Parameters<typeof checkPermissionOrPropose>[0]);
+    expect(result).toEqual({
+      denied: true,
+      reason:
+        'The space "Old Clients" is archived, so an agent cannot join it or write there. A person must do this, or restore the space first.',
+    });
+    expect(await joinRows()).toEqual([]);
+  });
 });
 
 /** One agent write into WS through the real gate. */

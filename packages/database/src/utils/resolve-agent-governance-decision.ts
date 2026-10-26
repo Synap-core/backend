@@ -4,6 +4,7 @@ import {
   eq,
   gt,
   gte,
+  inArray,
   isNull,
   like,
   ne,
@@ -122,6 +123,12 @@ export interface ResolveAgentGovernanceInput {
    * (and nothing else widen it). Automation omits.
    */
   ownWorkOrganise?: boolean;
+  /**
+   * FB1020 B6 — the write lands as the person's held DRAFT (an agent's direct
+   * playbook run): the engine's plain default yields to their accept
+   * (`heldAsDraft` on `decideAgentPolicy`). Automation omits.
+   */
+  heldAsDraft?: boolean;
   /**
    * Rungs 2.075 / 2.85 / 2.86 — the write MOVES a lifecycle status (work model
    * W14), classified by the `moveStatus` door from the option it enters.
@@ -1014,6 +1021,38 @@ export interface AgentGovernanceState {
   configured: boolean;
 }
 
+/** The posture fields an agent's metadata carries (the one derivation). */
+function writePostureOf(
+  agentMetadata: unknown
+): Pick<AgentGovernanceState, "posture" | "writesRequireProposal"> {
+  const meta = (agentMetadata ?? {}) as Partial<AgentMetadata>;
+  return {
+    posture: meta.governancePosture ?? null,
+    writesRequireProposal: meta.writesRequireProposal === true,
+  };
+}
+
+/**
+ * The write posture of many agents in ONE read: the two fields of
+ * {@link readAgentGovernance} a write-mode line needs (an app list shows it
+ * per row, review S7). An id that is not an agent is absent from the map, as
+ * `readAgentGovernance` answers null for it.
+ */
+export async function readAgentWritePostures(input: {
+  db: DbHandle;
+  agentUserIds: readonly string[];
+}): Promise<
+  Map<string, Pick<AgentGovernanceState, "posture" | "writesRequireProposal">>
+> {
+  const ids = [...new Set(input.agentUserIds)];
+  if (ids.length === 0) return new Map();
+  const rows = await input.db
+    .select({ id: users.id, agentMetadata: users.agentMetadata })
+    .from(users)
+    .where(and(inArray(users.id, ids), eq(users.userType, "agent")));
+  return new Map(rows.map((r) => [r.id, writePostureOf(r.agentMetadata)]));
+}
+
 /** The read half of {@link applyAgentPosture}. */
 export async function readAgentGovernance(input: {
   db: DbHandle;
@@ -1027,6 +1066,7 @@ export async function readAgentGovernance(input: {
     .limit(1);
   if (!agent) return null;
   const meta = (agent.agentMetadata ?? {}) as Partial<AgentMetadata>;
+  const { posture, writesRequireProposal } = writePostureOf(meta);
   const rows = await db
     .select({
       pattern: governanceRules.targetPattern,
@@ -1043,7 +1083,6 @@ export async function readAgentGovernance(input: {
       )
     );
   const rules = rows.map((r) => ({ pattern: r.pattern, verdict: r.verdict }));
-  const posture = meta.governancePosture ?? null;
   const spaceRows = await db
     .select({
       workspaceId: governanceRules.workspaceId,
@@ -1070,7 +1109,7 @@ export async function readAgentGovernance(input: {
     .sort((a, b) => a.workspaceId.localeCompare(b.workspaceId));
   return {
     posture,
-    writesRequireProposal: meta.writesRequireProposal === true,
+    writesRequireProposal,
     rules,
     spaces,
     configured:
@@ -1616,6 +1655,7 @@ async function resolveForPrincipal(
     ownWorkOrganise: input.ownWorkOrganise,
     governanceRuleIsOwnOrganise:
       ruleMatch?.matchedPattern === OWN_ORGANISE_CLASS_PATTERN,
+    heldAsDraft: input.heldAsDraft,
     originTrust,
     bodyOfHumanOwnedEntity: lane.bodyOfHumanOwnedEntity,
   };

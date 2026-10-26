@@ -19,14 +19,20 @@ import {
   getDb,
   sql,
 } from "@synap/database";
-import { podSettings, users } from "@synap/database/schema";
+import {
+  podSettings,
+  users,
+  workspaceMembers,
+  workspaces,
+} from "@synap/database/schema";
 import { createUnifiedEvent } from "@synap/jobs";
 import { createLogger } from "@synap-core/core";
+import type { CloudTrustMode } from "@synap-core/types/account-recovery";
+import { readCloudTrust } from "../cloud-trust.js";
 import {
-  DEFAULT_CLOUD_TRUST,
-  isCloudTrustMode,
-  type CloudTrustMode,
-} from "@synap-core/types/account-recovery";
+  POD_ADMIN_ROLES,
+  POD_ADMIN_SYSTEM_SLUG,
+} from "@synap-core/types/console";
 import { courierStatus } from "../courier-status.js";
 import { configuredPodAdminBase } from "../pod-admin-config.js";
 import { identityHasPodHeldCredential } from "../account-recovery/policy.js";
@@ -63,18 +69,7 @@ async function accountWhere(
 }
 
 /** `pod_settings.settings.accountRecovery` — the owner's Cloud trust choice. */
-export async function readCloudTrust(): Promise<CloudTrustMode> {
-  const db = await getDb();
-  const [row] = await db
-    .select({ settings: podSettings.settings })
-    .from(podSettings)
-    .orderBy(podSettings.createdAt)
-    .limit(1);
-  const value = (
-    row?.settings as { accountRecovery?: { cloudTrust?: unknown } } | undefined
-  )?.accountRecovery?.cloudTrust;
-  return isCloudTrustMode(value) ? value : DEFAULT_CLOUD_TRUST;
-}
+export { readCloudTrust };
 
 async function writeCloudTrust(mode: CloudTrustMode): Promise<void> {
   const db = await getDb();
@@ -175,6 +170,38 @@ export async function isPodAdmin(userId: string): Promise<boolean> {
   }
 }
 
+/**
+ * Owners (human pod admins: `owner` or `admin` of the live pod-admin space,
+ * the `isPodAdmin` rule) with no password or passkey in Kratos. Throws on a
+ * failed read: an unknown answer must never let Cloud sign-in be turned off.
+ */
+async function countCloudOnlyOwners(): Promise<number> {
+  const db = await getDb();
+  const owners = await db
+    .selectDistinct({
+      identityId: drizzleSql<string>`coalesce(${users.kratosIdentityId}, ${users.id})`,
+    })
+    .from(workspaceMembers)
+    .innerJoin(workspaces, eq(workspaces.id, workspaceMembers.workspaceId))
+    .innerJoin(users, eq(users.id, workspaceMembers.userId))
+    .where(
+      drizzleSql`${workspaces.systemSlug} = ${POD_ADMIN_SYSTEM_SLUG}
+        and ${workspaces.archivedAt} is null
+        and ${users.userType} = 'human'
+        and ${workspaceMembers.role} in (${drizzleSql.join(
+          POD_ADMIN_ROLES.map((role) => drizzleSql`${role}`),
+          drizzleSql`, `
+        )})`
+    );
+  let cloudOnly = 0;
+  for (const owner of owners) {
+    if (!(await kratosIdentityHasPodHeldCredential(owner.identityId))) {
+      cloudOnly += 1;
+    }
+  }
+  return cloudOnly;
+}
+
 /** `users.update.completed` with `data.change` — visible in pod-admin Audit. */
 export async function audit(entry: {
   userId: string;
@@ -248,6 +275,7 @@ export const accountRecoveryDeps: AccountRecoveryDeps = {
   courierStatus: () => courierStatus().status,
   podAdminConfig: () => configuredPodAdminBase(),
   isPodAdmin,
+  countCloudOnlyOwners,
   audit,
 };
 

@@ -132,6 +132,7 @@ function makeWorld(opts: { trust?: CloudTrustMode } = {}) {
     courierStatus: () => "catchall",
     podAdminConfig: () => ({ ok: false, code: "POD_ADMIN_URL_REQUIRED" }),
     isPodAdmin: async (userId) => userId === OWNER.userId,
+    countCloudOnlyOwners: async () => 0,
     audit: async (entry) => {
       audits.push(entry);
     },
@@ -668,6 +669,53 @@ describe("GET /status and PUT /cloud-trust", () => {
         data: { from: "sign_in", to: "off" },
       })
     );
+  });
+});
+
+describe('PUT /cloud-trust off: "Allow sign-in with Synap Cloud" (ADDENDUM 2026-10-23)', () => {
+  const put = (world: ReturnType<typeof makeWorld>, mode: string) =>
+    app(world).request("/cloud-trust", {
+      method: "PUT",
+      headers: {
+        "x-test-session": session({}),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ mode }),
+    });
+
+  it("refuses to turn it off while an owner signs in only with Synap Cloud, and says why", async () => {
+    const world = makeWorld();
+    world.deps.countCloudOnlyOwners = async () => 1;
+    const res = await put(world, "off");
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.error).toBe("owner_needs_pod_sign_in");
+    expect(body.message).toMatch(/password or a passkey/);
+    expect(world.getTrust()).toBe("sign_in");
+    expect(world.audits).toEqual([]);
+  });
+
+  it("turns it off once every owner has a pod password or passkey", async () => {
+    const world = makeWorld();
+    world.deps.countCloudOnlyOwners = async () => 0;
+    expect((await put(world, "off")).status).toBe(200);
+    expect(world.getTrust()).toBe("off");
+  });
+
+  it("never blocks turning it back ON", async () => {
+    const world = makeWorld({ trust: "off" });
+    world.deps.countCloudOnlyOwners = async () => 2;
+    expect((await put(world, "sign_in")).status).toBe(200);
+    expect(world.getTrust()).toBe("sign_in");
+  });
+
+  it("a failed owner read refuses with 503, never a silent off", async () => {
+    const world = makeWorld();
+    world.deps.countCloudOnlyOwners = async () => {
+      throw new Error("kratos down");
+    };
+    expect((await put(world, "off")).status).toBe(503);
+    expect(world.getTrust()).toBe("sign_in");
   });
 });
 

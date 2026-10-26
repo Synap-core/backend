@@ -31,6 +31,7 @@ const h = vi.hoisted(() => ({
   automationUpdateCalls: [] as Array<Record<string, unknown>>,
   automationActivateCalls: [] as Array<Record<string, unknown>>,
   automationPauseCalls: [] as Array<Record<string, unknown>>,
+  automationDeleteCalls: [] as Array<Record<string, unknown>>,
   playbookUpdateResult: {} as unknown,
 }));
 
@@ -47,7 +48,14 @@ vi.mock("../../routers/playbooks.js", () => ({
 
 vi.mock("../../routers/automations.js", () => ({
   automationsRouter: {
-    createCaller: () => ({
+    createCaller: (callerCtx: { agentUserId?: string }) => ({
+      delete: async (input: Record<string, unknown>) => {
+        h.automationDeleteCalls.push({
+          ...input,
+          callerAgentUserId: callerCtx.agentUserId,
+        });
+        return { status: "proposed", proposalId: "prop-delete-1" };
+      },
       update: async (input: Record<string, unknown>) => {
         h.automationUpdateCalls.push(input);
         return { status: "updated", message: "Automation updated" };
@@ -64,7 +72,11 @@ vi.mock("../../routers/automations.js", () => ({
   },
 }));
 
-import { BUILTIN_VERBS, READ_ONLY_BUILTIN_VERBS } from "./builtin-verbs.js";
+import {
+  BUILTIN_VERBS,
+  DE_ESCALATION_BUILTIN_VERBS,
+  READ_ONLY_BUILTIN_VERBS,
+} from "./builtin-verbs.js";
 
 const USER = "11111111-1111-4111-8111-111111111111";
 const AGENT = "22222222-2222-4222-8222-222222222222";
@@ -83,6 +95,7 @@ beforeEach(() => {
   h.automationUpdateCalls = [];
   h.automationActivateCalls = [];
   h.automationPauseCalls = [];
+  h.automationDeleteCalls = [];
   h.playbookUpdateResult = {
     playbook: null,
     status: "proposed",
@@ -98,6 +111,7 @@ describe("the four config-revision verbs are registered as WRITES", () => {
       "automation.update",
       "automation.activate",
       "automation.pause",
+      "automation.delete",
     ]) {
       expect(typeof BUILTIN_VERBS[verb], `${verb} is not dispatchable`).toBe(
         "function"
@@ -111,6 +125,7 @@ describe("the four config-revision verbs are registered as WRITES", () => {
       "automation.update",
       "automation.activate",
       "automation.pause",
+      "automation.delete",
     ]) {
       expect(
         READ_ONLY_BUILTIN_VERBS.has(verb),
@@ -259,6 +274,21 @@ describe("automation.activate / automation.pause", () => {
       { id: AUTOMATION, workspaceId: WS },
     ]);
     expect(result).toEqual({ status: "paused" });
+  });
+
+  it("pause is the ONLY de-escalation verb — delete and activate stay governed (68aeb326)", () => {
+    expect([...DE_ESCALATION_BUILTIN_VERBS]).toEqual(["automation.pause"]);
+  });
+
+  it("delete re-enters automations.delete with the agent on the caller and surfaces `proposed` verbatim (68aeb326)", async () => {
+    const result = await BUILTIN_VERBS["automation.delete"]!(
+      { automationId: AUTOMATION },
+      ctx({ agentUserId: AGENT })
+    );
+    expect(h.automationDeleteCalls).toEqual([
+      { id: AUTOMATION, workspaceId: WS, callerAgentUserId: AGENT },
+    ]);
+    expect(result).toEqual({ status: "proposed", proposalId: "prop-delete-1" });
   });
 
   it("both refuse a non-uuid automationId before reaching the router", async () => {

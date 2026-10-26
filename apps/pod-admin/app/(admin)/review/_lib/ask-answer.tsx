@@ -136,6 +136,11 @@ export interface AskAnswerProps {
   /** Answered, done or handed back: the page closes this and moves on. */
   onSettled: () => void;
   onClose: () => void;
+  /**
+   * The "Open session" door. Off on the session's own page, where it would
+   * lead back to where the reader already is.
+   */
+  sessionDoor?: boolean;
 }
 
 export function AskAnswer({
@@ -144,6 +149,7 @@ export function AskAnswer({
   occurredAt,
   onSettled,
   onClose,
+  sessionDoor = true,
 }: AskAnswerProps) {
   // What the reader sees stays put until they choose to see the new question:
   // a poll must never swap the options under a half-made answer.
@@ -295,13 +301,17 @@ export function AskAnswer({
           <strong className="font-medium text-foreground">
             {who ?? "An agent"}
           </strong>
-          , while working in the session{" "}
-          <span className="text-foreground">
-            {seen.sessionTitle ?? "this session"}
-          </span>
+          {sessionDoor && (
+            <>
+              , while working in the session{" "}
+              <span className="text-foreground">
+                {seen.sessionTitle ?? "this session"}
+              </span>
+            </>
+          )}
           . It is waiting on your answer.
         </p>
-        <ExitLink exit={sessionExit} label="Open session" />
+        {sessionDoor && <ExitLink exit={sessionExit} label="Open session" />}
       </Section>
 
       {view.lookedAt.length > 0 && (

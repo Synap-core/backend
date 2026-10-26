@@ -6,7 +6,12 @@
  *    view, so an unpinned suggestion never comes back — while a space that
  *    appears later still suggests its own;
  *  - a pin must name a real, readable surface of that kind; pinning twice
- *    keeps one pin; another person's pins are untouched.
+ *    keeps one pin; another person's pins are untouched;
+ *  - GOAL pins ("This week", D4): `track:<id>`, `profileSlug` null, at most
+ *    `RAIL_GOAL_PINS_MAX` (a 4th is PRECONDITION_FAILED while the rail has
+ *    room), unpin / reorder by the `track:` key, a goal the person cannot read
+ *    is refused, and a pinned goal that stops being readable leaves the read
+ *    and frees its place.
  */
 
 import { describe, it, expect, beforeAll, vi } from "vitest";
@@ -96,7 +101,7 @@ const as = (userId: string) =>
     workspaceId: null,
   } as never);
 const keys = async (userId = U) =>
-  (await as(userId).railPins()).pins.map((p) => p.key);
+  (await as(userId).railPins({ includeGoals: true })).pins.map((p) => p.key);
 
 let LEADS = "";
 let POSTS = "";
@@ -164,6 +169,7 @@ describe("preferences rail pins", () => {
           key: `view:${LEADS}`,
           profileSlug: "lead",
           viewId: LEADS,
+          trackId: null,
           label: "Leads",
           source: "template",
         },
@@ -171,6 +177,7 @@ describe("preferences rail pins", () => {
           key: `view:${POSTS}`,
           profileSlug: "post",
           viewId: POSTS,
+          trackId: null,
           label: "Posts",
           source: "template",
         },
@@ -223,5 +230,130 @@ describe("preferences rail pins", () => {
     await expect(
       as(OTHER).pinSurface({ profileSlug: "lead", viewId: LEADS })
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+});
+
+describe("goal pins — This week (D4)", () => {
+  const MINE = randomUUID();
+  const THEIRS = randomUUID();
+  const goals: string[] = [];
+  let theirGoal = "";
+
+  async function goal(project: string, owner: string, name: string) {
+    const id = randomUUID();
+    await q(
+      `insert into project_tracks (id, project_id, user_id, name, status, definition_snapshot, params, stage_history, metadata)
+       values ($1, $2, $3, $4, 'active', '{}'::jsonb, '{}'::jsonb, '[]'::jsonb, '{}'::jsonb)`,
+      [id, project, owner, name]
+    );
+    return id;
+  }
+
+  beforeAll(async () => {
+    await q(
+      `insert into projects (id, user_id, workspace_id, name, status) values
+        ($1, $2, null, 'Mine', 'active'), ($3, $4, null, 'Theirs', 'active')`,
+      [MINE, U, THEIRS, OTHER]
+    );
+    for (const n of ["One", "Two", "Three", "Four"]) {
+      goals.push(await goal(MINE, U, n));
+    }
+    theirGoal = await goal(THEIRS, OTHER, "Not yours");
+  });
+
+  it("pins a goal under its track: key, with no kind", async () => {
+    const { pins } = await as(U).pinSurface({
+      trackId: goals[0]!,
+      includeGoals: true,
+    });
+    expect(pins).toContainEqual({
+      key: `track:${goals[0]}`,
+      profileSlug: null,
+      viewId: null,
+      trackId: goals[0],
+      label: null,
+      source: "user",
+    });
+    // The stored pin reads back (a pin with no profileSlug is kept).
+    expect(await keys()).toContain(`track:${goals[0]}`);
+  });
+
+  it("holds three goals: a fourth is a precondition, not a 500", async () => {
+    await as(U).pinSurface({ trackId: goals[1]! });
+    await as(U).pinSurface({ trackId: goals[2]! });
+    // Pinning a pinned goal again is idempotent, never "full".
+    await as(U).pinSurface({ trackId: goals[2]! });
+    await expect(
+      as(U).pinSurface({ trackId: goals[3]! })
+    ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    expect((await keys()).filter((k) => k.startsWith("track:"))).toHaveLength(
+      3
+    );
+    // The rail itself still has room: a kind pin still lands.
+    await as(U).pinSurface({ profileSlug: "post" });
+    expect(await keys()).toContain("kind:post");
+  });
+
+  it("unpin and reorder work by the track: key", async () => {
+    await as(U).reorderRailPins({ keys: [`track:${goals[2]}`] });
+    expect((await keys())[0]).toBe(`track:${goals[2]}`);
+    await as(U).unpinSurface({ key: `track:${goals[1]}` });
+    expect(await keys()).not.toContain(`track:${goals[1]}`);
+    // The freed place takes the fourth goal.
+    await as(U).pinSurface({ trackId: goals[3]! });
+    expect(await keys()).toContain(`track:${goals[3]}`);
+  });
+
+  it("refuses a goal the person cannot read, and a pin that names both a kind and a goal", async () => {
+    await expect(
+      as(U).pinSurface({ trackId: theirGoal })
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(
+      as(U).pinSurface({ trackId: goals[0]!, profileSlug: "post" })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    await expect(as(U).pinSurface({})).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+    });
+  });
+
+  it("goal pins come back only when asked: an old client reads surface pins alone", async () => {
+    const withGoals = (await as(U).railPins({ includeGoals: true })).pins;
+    expect(withGoals.some((p) => p.trackId)).toBe(true); // non-vacuity
+    for (const read of [await as(U).railPins(), await as(U).railPins({})]) {
+      // Every pin an old build reads names a kind — never a null profileSlug.
+      expect(read.pins.every((p) => p.trackId === null && p.profileSlug)).toBe(
+        true
+      );
+      expect(read.pins.map((p) => p.key)).toEqual(
+        withGoals.filter((p) => !p.trackId).map((p) => p.key)
+      );
+    }
+    // The WRITE doors answer the same way: no goal pin unless asked.
+    const surfaceOnly = (pins: Array<{ trackId: string | null }>) =>
+      pins.every((p) => p.trackId === null);
+    const goalKey = withGoals.find((p) => p.trackId)!.key;
+    const written = [
+      await as(U).pinSurface({ profileSlug: "post" }),
+      await as(U).reorderRailPins({ keys: [goalKey] }),
+      await as(U).unpinSurface({ key: "kind:post" }),
+    ];
+    for (const w of written) expect(surfaceOnly(w.pins)).toBe(true);
+    const asked = await as(U).reorderRailPins({
+      keys: [goalKey],
+      includeGoals: true,
+    });
+    expect(asked.pins.some((p) => p.key === goalKey)).toBe(true);
+  });
+
+  it("a pinned goal that is no longer readable leaves the read and frees its place", async () => {
+    const pinned = (await keys()).filter((k) => k.startsWith("track:"));
+    expect(pinned).toHaveLength(3);
+    await q(`delete from project_tracks where id = $1`, [goals[0]]);
+    expect(await keys()).not.toContain(`track:${goals[0]}`);
+    // Its place is free: a new goal pins without "unpin one first".
+    await as(U).pinSurface({ trackId: goals[1]! });
+    expect((await keys()).filter((k) => k.startsWith("track:"))).toHaveLength(
+      3
+    );
   });
 });

@@ -889,6 +889,63 @@
         "additionalProperties": {}
       },
       "RawEntityRecord": { "type": "object", "additionalProperties": {} },
+      "ListedEntity": {
+        "allOf": [
+          { "$ref": "#/components/schemas/Entity" },
+          {
+            "type": "object",
+            "properties": {
+              "facetSlugs": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "With `includeFacets=true`: the slugs of the role facets the row wears. Absent when it wears none."
+              },
+              "facets": {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/EntityFacetRow" },
+                "description": "With `includeFacets=true`: each role facet the row wears, with its overlay. Absent when it wears none."
+              },
+              "media": {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/EntityMediaRef" },
+                "description": "With `includeMedia=true`: the `file` entities the row links by `references` edges (capped, see `includeMedia`), each one the caller may read, oldest link first. Absent when it links none."
+              }
+            }
+          }
+        ]
+      },
+      "EntityFacetRow": {
+        "type": "object",
+        "properties": {
+          "facetId": { "type": "string" },
+          "slug": {
+            "type": "string",
+            "description": "The role-profile slug, e.g. `lead`."
+          },
+          "properties": {
+            "type": "object",
+            "additionalProperties": {},
+            "description": "The facet's overlay values, e.g. the `leadStage` of a lead."
+          },
+          "status": { "type": ["string", "null"] }
+        },
+        "required": ["facetId", "slug", "properties", "status"]
+      },
+      "EntityMediaRef": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The file entity id: sign it with `GET /files/{id}/url`."
+          },
+          "title": { "type": ["string", "null"] },
+          "mimeType": {
+            "type": ["string", "null"],
+            "description": "The type the blob is served with (what `GET /files/{id}/url` reports); null when unknown."
+          }
+        },
+        "required": ["id", "title", "mimeType"]
+      },
       "Entity": {
         "type": "object",
         "properties": {
@@ -1307,7 +1364,8 @@
                 "description": "Provider-qualified id, e.g. `github:12345`."
               }
             },
-            "description": "Explicit strong identity atoms."
+            "additionalProperties": { "type": "string" },
+            "description": "Explicit strong identity atoms. Also accepted: an atom name (linkedin_url, website, …) or the property slug that carries it (linkedinUrl, …); any other key is refused."
           },
           "properties": {
             "type": "object",
@@ -6896,6 +6954,28 @@
           {
             "schema": {
               "type": "string",
+              "enum": ["true", "false"],
+              "description": "`true` = each row also carries `facetSlugs` and `facets` (each role facet with its overlay `properties` and `status`, e.g. a lead's `leadStage`), only on a row wearing ≥1 role, loaded in one batch per page under the same lens as the rows. Default `false`: rows carry no facets. 400 with `q`."
+            },
+            "required": false,
+            "description": "`true` = each row also carries `facetSlugs` and `facets` (each role facet with its overlay `properties` and `status`, e.g. a lead's `leadStage`), only on a row wearing ≥1 role, loaded in one batch per page under the same lens as the rows. Default `false`: rows carry no facets. 400 with `q`.",
+            "name": "includeFacets",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": ["true", "false"],
+              "description": "`true` = each row that links a file (`row --references--> file`) also carries `media`: up to 12 `{ id, title, mimeType }`, oldest link first, only files the caller may read on its own (the `GET /files/{id}/url` floor), loaded in one batch per page. Sign one with `GET /files/{id}/url`. Default `false`: rows carry no media. 400 with `q`."
+            },
+            "required": false,
+            "description": "`true` = each row that links a file (`row --references--> file`) also carries `media`: up to 12 `{ id, title, mimeType }`, oldest link first, only files the caller may read on its own (the `GET /files/{id}/url` floor), loaded in one batch per page. Sign one with `GET /files/{id}/url`. Default `false`: rows carry no media. 400 with `q`.",
+            "name": "includeMedia",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
               "description": "Creation-date window, INCLUSIVE lower bound (ISO-8601). Together with createdBefore forms the half-open interval [createdAfter, createdBefore), so consecutive windows tile. Rejected with 400 when combined with `q` — see createdBefore."
             },
             "required": false,
@@ -6921,13 +7001,13 @@
               "application/json": {
                 "schema": {
                   "type": "array",
-                  "items": { "$ref": "#/components/schemas/Entity" }
+                  "items": { "$ref": "#/components/schemas/ListedEntity" }
                 }
               }
             }
           },
           "400": {
-            "description": "Malformed or unsupported filter combination — an unparseable createdAfter/createdBefore, or a date window combined with `q`.",
+            "description": "Malformed or unsupported filter combination — an unparseable createdAfter/createdBefore, or a date window, `includeFacets` or `includeMedia` combined with `q`.",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
@@ -12800,6 +12880,21 @@
                                           "type": "string",
                                           "minLength": 1,
                                           "maxLength": 120
+                                        },
+                                        "checkKind": {
+                                          "type": "string",
+                                          "enum": [
+                                            "measured",
+                                            "judged",
+                                            "handed_over",
+                                            "learning",
+                                            "decided_outside",
+                                            "certified"
+                                          ]
+                                        },
+                                        "about": {
+                                          "type": "string",
+                                          "enum": ["result", "method"]
                                         }
                                       },
                                       "required": ["key", "statement", "check"],
@@ -12895,6 +12990,21 @@
                                     "type": "string",
                                     "minLength": 1,
                                     "maxLength": 120
+                                  },
+                                  "checkKind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "measured",
+                                      "judged",
+                                      "handed_over",
+                                      "learning",
+                                      "decided_outside",
+                                      "certified"
+                                    ]
+                                  },
+                                  "about": {
+                                    "type": "string",
+                                    "enum": ["result", "method"]
                                   }
                                 },
                                 "required": ["key", "statement", "check"],
@@ -15508,6 +15618,21 @@
                                           "type": "string",
                                           "minLength": 1,
                                           "maxLength": 120
+                                        },
+                                        "checkKind": {
+                                          "type": "string",
+                                          "enum": [
+                                            "measured",
+                                            "judged",
+                                            "handed_over",
+                                            "learning",
+                                            "decided_outside",
+                                            "certified"
+                                          ]
+                                        },
+                                        "about": {
+                                          "type": "string",
+                                          "enum": ["result", "method"]
                                         }
                                       },
                                       "required": ["key", "statement", "check"],
@@ -15603,6 +15728,21 @@
                                     "type": "string",
                                     "minLength": 1,
                                     "maxLength": 120
+                                  },
+                                  "checkKind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "measured",
+                                      "judged",
+                                      "handed_over",
+                                      "learning",
+                                      "decided_outside",
+                                      "certified"
+                                    ]
+                                  },
+                                  "about": {
+                                    "type": "string",
+                                    "enum": ["result", "method"]
                                   }
                                 },
                                 "required": ["key", "statement", "check"],
@@ -20274,6 +20414,21 @@
                                 "type": "string",
                                 "minLength": 1,
                                 "maxLength": 120
+                              },
+                              "checkKind": {
+                                "type": "string",
+                                "enum": [
+                                  "measured",
+                                  "judged",
+                                  "handed_over",
+                                  "learning",
+                                  "decided_outside",
+                                  "certified"
+                                ]
+                              },
+                              "about": {
+                                "type": "string",
+                                "enum": ["result", "method"]
                               }
                             },
                             "required": ["key", "statement", "check"],
@@ -20453,6 +20608,21 @@
                           "type": "string",
                           "minLength": 1,
                           "maxLength": 120
+                        },
+                        "checkKind": {
+                          "type": "string",
+                          "enum": [
+                            "measured",
+                            "judged",
+                            "handed_over",
+                            "learning",
+                            "decided_outside",
+                            "certified"
+                          ]
+                        },
+                        "about": {
+                          "type": "string",
+                          "enum": ["result", "method"]
                         }
                       },
                       "required": ["key", "statement", "check"],
@@ -28534,6 +28704,21 @@
                           "type": "string",
                           "minLength": 1,
                           "maxLength": 120
+                        },
+                        "checkKind": {
+                          "type": "string",
+                          "enum": [
+                            "measured",
+                            "judged",
+                            "handed_over",
+                            "learning",
+                            "decided_outside",
+                            "certified"
+                          ]
+                        },
+                        "about": {
+                          "type": "string",
+                          "enum": ["result", "method"]
                         }
                       },
                       "required": ["key", "statement", "check"],

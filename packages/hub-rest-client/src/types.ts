@@ -1375,6 +1375,19 @@ export interface HubSessionCriterion {
     hint?: string;
   };
   stageKey?: string;
+  /**
+   * R5 — what kind of check this is, in people's words: measured · judged ·
+   * handed_over · learning · decided_outside · certified.
+   */
+  checkKind?:
+    | "measured"
+    | "judged"
+    | "handed_over"
+    | "learning"
+    | "decided_outside"
+    | "certified";
+  /** R7 — about the result (default) or the method. */
+  about?: "result" | "method";
 }
 
 /**
@@ -1642,6 +1655,35 @@ export interface HubRelation {
   type: string;
   label?: string;
   createdAt: string;
+}
+
+/**
+ * A config/runtime edge from the `links` table (`about`, `member_of`, …) where
+ * the entity is an endpoint. Endpoint ids are polymorphic (`fromType`/`toType`
+ * say which kind), so they are strings, not entity ids.
+ */
+export interface HubConfigLink {
+  id: string;
+  workspaceId: string | null;
+  fromType: string;
+  fromId: string;
+  toType: string;
+  toId: string;
+  linkType: string;
+  metadata: Record<string, unknown>;
+  createdBy: string | null;
+  createdAt: string;
+}
+
+/**
+ * What `GET /api/hub/relations?entityId=…` answers: the entity's NEIGHBOURS
+ * (the "other" end of each relation, both directions) plus its config links —
+ * the pod's `relations.getRelated`, not relation rows. Without an `entityId`
+ * the same route answers `{ relations }` instead.
+ */
+export interface HubEntityNeighbours {
+  entities: HubEntity[];
+  configLinks: HubConfigLink[];
 }
 
 export interface HubGraphNode extends HubEntity {

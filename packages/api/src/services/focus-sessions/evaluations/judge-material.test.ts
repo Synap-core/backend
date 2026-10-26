@@ -11,7 +11,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const h = vi.hoisted(() => ({
-  judgeCalls: [] as Array<{ material: string; excludeModel?: string }>,
+  judgeCalls: [] as Array<{
+    material: string;
+    excludeModel?: string;
+    criteria: Array<{ key: string; hint?: string }>;
+  }>,
   isCap: 16_000,
   outputs: [] as Array<Record<string, unknown>>,
   rowsByTable: new Map<unknown, Record<string, unknown>[]>(),
@@ -23,6 +27,7 @@ const h = vi.hoisted(() => ({
   roomCalls: [] as Array<Record<string, unknown>>,
   channelId: null as string | null,
   evalRows: [] as Array<Record<string, unknown>>,
+  criteria: null as Array<Record<string, unknown>> | null,
 }));
 
 const SESSION_BASE = {
@@ -57,6 +62,7 @@ vi.mock("@synap/database", async (importOriginal) => {
         focusSessions: {
           findFirst: vi.fn(async () => ({
             ...SESSION_BASE,
+            ...(h.criteria ? { criteria: h.criteria } : {}),
             channelId: h.channelId,
           })),
         },
@@ -148,7 +154,7 @@ beforeEach(() => {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (_url: string, init: { body: string }) => {
-      const payload = JSON.parse(init.body) as { material: string };
+      const payload = JSON.parse(init.body) as (typeof h.judgeCalls)[number];
       h.judgeCalls.push(payload);
       if (payload.material.length > h.isCap)
         return new Response(JSON.stringify({ error: "Validation error" }), {
@@ -158,7 +164,11 @@ beforeEach(() => {
       return Response.json({
         decider: "llm",
         model: "judge/model-b",
-        verdicts: [{ key: "mapped", verdict: "pass", rationale: "cites it" }],
+        verdicts: payload.criteria.map((c) => ({
+          key: c.key,
+          verdict: "pass",
+          rationale: "cites it",
+        })),
       });
     })
   );
@@ -169,6 +179,7 @@ beforeEach(() => {
   h.roomCalls = [];
   h.channelId = null;
   h.evalRows = [];
+  h.criteria = null;
   h.bodies = new Map([["k/audit.md", AUDIT_BODY]]);
   h.rowsByTable = new Map<unknown, Record<string, unknown>[]>([
     [
@@ -591,5 +602,335 @@ describe("buildJudgeMaterial — fair budget", () => {
   it("fairShares: short items keep everything, never over budget", () => {
     expect(fairShares([10, 1000, 1000], 1010)).toEqual([10, 500, 500]);
     expect(fairShares([5, 5], 100)).toEqual([5, 5]);
+  });
+});
+
+/**
+ * Criterion-scoped excerpt (option B1). The live case: criterion
+ * "every-claim-sourced" on session a89be2e5 judged a ~3,800-word synthesis and
+ * came back unmeasured — the material kept the head and tail of the document
+ * (22,018 chars omitted) and the part the criterion was about sat in the cut
+ * middle. When something must be cut, the material built FOR a criterion keeps
+ * the document's outline and the sections its hint / statement point at, and
+ * names every section it left out.
+ */
+describe("buildJudgeMaterial — criterion-scoped excerpt", () => {
+  const S = { goal: "g", expectedOutputs: [], verificationReport: null };
+  const part = (i: number) =>
+    `## Part ${i}\nS${i}-BODY ${`Claim ${i}: demand rose in market ${i}. `.repeat(95)}\n\n`;
+  /** ~38k chars; "## Sources" and "## Methods" sit in the middle, past the old head cut. */
+  const LONG_DOC = [
+    "# Synthesis\nOPENING-LINE a synthesis of the market.\n\n",
+    ...[1, 2, 3, 4, 5].map(part),
+    "## Sources\nSOURCES-MARKER [1] Smith 2024, [2] Lee 2025, [3] Okafor 2023.\n\n",
+    "## Methods\nMETHODS-MARKER interviews, n=12, coded twice.\n\n",
+    ...[6, 7, 8, 9, 10].map(part),
+  ].join("");
+  const SOURCED = {
+    key: "every-claim-sourced",
+    statement: "Every claim cites a source",
+    hint: "the Sources section",
+  };
+  const doc = (text: string, extra: Record<string, string> = {}) => ({
+    kind: "document",
+    title: "Market synthesis",
+    text,
+    ...extra,
+  });
+
+  it("fixture: the section is past the old cut (without a focus the judge never sees it)", () => {
+    expect(LONG_DOC.length).toBeGreaterThan(MATERIAL_MAX * 2);
+    const material = buildJudgeMaterial(S, [], undefined, [doc(LONG_DOC)]);
+    expect(material).not.toContain("SOURCES-MARKER");
+  });
+
+  it("the material for a criterion with a matching hint carries that section, the outline, and an omitted note", () => {
+    const material = buildJudgeMaterial(
+      S,
+      [],
+      undefined,
+      [doc(LONG_DOC)],
+      undefined,
+      MATERIAL_MAX,
+      new Set([SOURCED.key]),
+      SOURCED
+    );
+    expect(material.length).toBeLessThanOrEqual(MATERIAL_MAX);
+    expect(material).toContain("SOURCES-MARKER [1] Smith 2024");
+    expect(
+      material.startsWith("NOTE: CLIPPED MATERIAL — 1 section below was cut")
+    ).toBe(true);
+    expect(material).toMatch(/…\[clipped: \d+ chars omitted\]…/);
+    expect(material).toMatch(/OUTLINE \(13 sections, \d+ chars\)/);
+    expect(material).toMatch(/\d+\. Sources \[shown\]/);
+    expect(material).toMatch(/\d+\. Part \d+ \[omitted\]/);
+  });
+
+  it("the outline tells the truth: a section is marked shown exactly when its text is in the material", () => {
+    const material = buildJudgeMaterial(
+      S,
+      [],
+      undefined,
+      [doc(LONG_DOC)],
+      undefined,
+      MATERIAL_MAX,
+      new Set([SOURCED.key]),
+      SOURCED
+    );
+    const marks = [
+      ...material.matchAll(/\d+\. Part (\d+) \[(shown|omitted)\]/g),
+    ];
+    expect(marks).toHaveLength(10);
+    for (const [, i, status] of marks)
+      expect(material.includes(`S${i}-BODY`)).toBe(status === "shown");
+    expect(marks.some(([, , s]) => s === "omitted")).toBe(true);
+    // Every omitted char is counted: kept text + named omissions = the whole.
+    // The excerpt is the last section of this material: its outline line,
+    // then the document body with each gap as "\n<mark>\n".
+    const body = material.slice(
+      material.indexOf("\n", material.indexOf("EXCERPT")) + 1
+    );
+    const gap = /\n…\[clipped: (\d+) chars omitted\]…\n/g;
+    const omitted = [...body.matchAll(gap)]
+      .map((m) => Number(m[1]))
+      .reduce((a, b) => a + b, 0);
+    expect(omitted).toBeGreaterThan(0);
+    expect(body.replace(gap, "").length + omitted).toBe(LONG_DOC.length);
+  });
+
+  it("two criteria get two excerpts, each with its own section", () => {
+    const methods = {
+      key: "method-stated",
+      statement: "The method is stated",
+      hint: "the Methods section",
+    };
+    const forMethods = buildJudgeMaterial(
+      S,
+      [],
+      undefined,
+      [doc(LONG_DOC)],
+      undefined,
+      MATERIAL_MAX,
+      new Set(),
+      methods
+    );
+    expect(forMethods).toContain("METHODS-MARKER");
+    expect(forMethods.length).toBeLessThanOrEqual(MATERIAL_MAX);
+  });
+
+  it("the slot label steers the budget to the document the criterion is about", () => {
+    const off = `${"z".repeat(15_000)}OFF-MIDDLE${"z".repeat(15_000)}`;
+    const bib = `${"b".repeat(6_000)}BIB-MIDDLE${"b".repeat(6_000)}`;
+    const produced = [
+      { kind: "document", title: "Draft notes", text: off },
+      {
+        kind: "document",
+        title: "Appendix",
+        slotLabel: "Sources list",
+        text: bib,
+      },
+    ];
+    const focus = {
+      key: "sources-listed",
+      statement: "Sources are listed",
+      hint: "the sources list",
+    };
+    // Control: a fair split cuts both — the middle of the bibliography is lost.
+    expect(buildJudgeMaterial(S, [], undefined, produced)).not.toContain(
+      "BIB-MIDDLE"
+    );
+    const material = buildJudgeMaterial(
+      S,
+      [],
+      undefined,
+      produced,
+      undefined,
+      MATERIAL_MAX,
+      new Set(),
+      focus
+    );
+    expect(material.length).toBeLessThanOrEqual(MATERIAL_MAX);
+    expect(material).toContain(bib);
+    // The off-topic document is still shown in part, and its cut is marked.
+    expect(material).toContain("### document: Draft notes");
+    expect(material).toMatch(/…\[clipped: \d+ chars omitted\]…/);
+    expect(
+      material.startsWith("NOTE: CLIPPED MATERIAL — 1 section below was cut")
+    ).toBe(true);
+  });
+
+  it("a material that fits whole is unchanged by a focus (no excerpt, no note)", () => {
+    const produced = [doc("## Sources\n[1] Smith 2024\n\n## Body\nshort")];
+    const room = {
+      status: "ok" as const,
+      messages: [{ author: "agent", text: "done" }],
+    };
+    const plain = buildJudgeMaterial(S, [], undefined, produced, room);
+    const focused = buildJudgeMaterial(
+      S,
+      [],
+      undefined,
+      produced,
+      room,
+      MATERIAL_MAX,
+      new Set(),
+      SOURCED
+    );
+    expect(focused).toBe(plain);
+    expect(focused).not.toContain("EXCERPT");
+    expect(focused).not.toContain("CLIPPED");
+  });
+
+  it("whenever anything is cut, the material opens with the CLIPPED note and marks the cut — every focus path", () => {
+    const cases: Array<
+      [string, Array<ReturnType<typeof doc>>, typeof SOURCED]
+    > = [
+      ["matching hint", [doc(LONG_DOC)], SOURCED],
+      [
+        "no term matches (head + tail fallback)",
+        [doc(LONG_DOC)],
+        { key: "zebra", statement: "Zebra quokka wombat", hint: "" },
+      ],
+      [
+        "no headings (paragraph chunks)",
+        [doc(LONG_DOC.replace(/^#+ /gm, ""))],
+        SOURCED,
+      ],
+      ["one huge section", [doc(`## Sources\n${"s".repeat(40_000)}`)], SOURCED],
+      [
+        "an off-topic document capped",
+        [
+          doc("q".repeat(30_000), { title: "Notes" }),
+          doc(LONG_DOC, { slotLabel: "Sources" }),
+        ],
+        SOURCED,
+      ],
+    ];
+    for (const [name, produced, focus] of cases) {
+      const material = buildJudgeMaterial(
+        S,
+        [],
+        undefined,
+        produced,
+        undefined,
+        MATERIAL_MAX,
+        new Set(),
+        focus
+      );
+      expect(material.length, name).toBeLessThanOrEqual(MATERIAL_MAX);
+      expect(material.startsWith("NOTE: CLIPPED MATERIAL — "), name).toBe(true);
+      expect(material, name).toMatch(/…\[clipped: \d+ chars omitted\]…/);
+    }
+  });
+
+  it("a focus with no matching term changes nothing (the head + tail cut as before)", () => {
+    const none = { key: "zebra", statement: "Zebra quokka wombat" };
+    expect(
+      buildJudgeMaterial(
+        S,
+        [],
+        undefined,
+        [doc(LONG_DOC)],
+        undefined,
+        MATERIAL_MAX,
+        new Set(),
+        none
+      )
+    ).toBe(buildJudgeMaterial(S, [], undefined, [doc(LONG_DOC)]));
+  });
+
+  const TWO_CRITERIA = [
+    {
+      key: SOURCED.key,
+      statement: SOURCED.statement,
+      check: { kind: "judge", hint: SOURCED.hint },
+    },
+    {
+      key: "method-stated",
+      statement: "The method is stated",
+      check: { kind: "judge", hint: "the Methods section" },
+    },
+  ];
+
+  it("through evaluateSession: a cut material becomes one judge call per criterion, each with its section", async () => {
+    // Sources and Methods are each ~8k here: no 16k material holds both.
+    h.bodies.set(
+      "k/audit.md",
+      LONG_DOC.replace(
+        "SOURCES-MARKER",
+        `SOURCES-MARKER ${"Smith 2024; ".repeat(650)}`
+      ).replace(
+        "METHODS-MARKER",
+        `METHODS-MARKER ${"coded twice; ".repeat(600)}`
+      )
+    );
+    h.criteria = TWO_CRITERIA;
+    const out = await evaluateSession({ sessionId: "s-1", userId: "u-1" });
+    expect(h.judgeCalls).toHaveLength(2);
+    const byKey = new Map(
+      h.judgeCalls.map((c) => [c.criteria.map((k) => k.key).join(","), c])
+    );
+    const sourced = byKey.get(SOURCED.key)!;
+    const methods = byKey.get("method-stated")!;
+    expect(sourced.material).toContain("SOURCES-MARKER");
+    expect(sourced.material).not.toContain("METHODS-MARKER");
+    expect(methods.material).toContain("METHODS-MARKER");
+    expect(methods.material).not.toContain("SOURCES-MARKER");
+    for (const c of h.judgeCalls) {
+      expect(c.material.length).toBeLessThanOrEqual(MATERIAL_MAX);
+      expect(c.material.startsWith("NOTE: CLIPPED MATERIAL")).toBe(true);
+      // The rule the excerpt must never weaken: the worker never grades.
+      expect(c.excludeModel).toBe("worker/model-a");
+    }
+    expect(out.status === "evaluated" && out.results).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: SOURCED.key,
+          status: "recorded",
+          verdict: "pass",
+        }),
+        expect.objectContaining({
+          key: "method-stated",
+          status: "recorded",
+          verdict: "pass",
+        }),
+      ])
+    );
+  });
+
+  it("through evaluateSession: criteria whose excerpts come out identical share ONE call", async () => {
+    // Both short sections fit in either criterion's excerpt.
+    h.bodies.set("k/audit.md", LONG_DOC);
+    h.criteria = TWO_CRITERIA;
+    await evaluateSession({ sessionId: "s-1", userId: "u-1" });
+    expect(h.judgeCalls).toHaveLength(1);
+    const { material, criteria } = h.judgeCalls[0]!;
+    expect(criteria.map((c) => c.key)).toEqual([SOURCED.key, "method-stated"]);
+    expect(material).toContain("SOURCES-MARKER");
+    expect(material).toContain("METHODS-MARKER");
+    expect(material).toContain("EXCERPT");
+  });
+
+  it("through evaluateSession: a material that fits stays ONE call for every criterion", async () => {
+    h.criteria = [
+      {
+        key: SOURCED.key,
+        statement: SOURCED.statement,
+        check: { kind: "judge", hint: SOURCED.hint },
+      },
+      {
+        key: "method-stated",
+        statement: "The method is stated",
+        check: { kind: "judge" },
+      },
+    ];
+    await evaluateSession({ sessionId: "s-1", userId: "u-1" });
+    expect(h.judgeCalls).toHaveLength(1);
+    expect(h.judgeCalls[0]!.criteria.map((c) => c.key)).toEqual([
+      SOURCED.key,
+      "method-stated",
+    ]);
+    expect(h.judgeCalls[0]!.material).toContain("graph-service.ts:1601");
+    expect(h.judgeCalls[0]!.material).not.toContain("EXCERPT");
   });
 });

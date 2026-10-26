@@ -79,7 +79,7 @@ vi.mock("./_shared.js", () => ({
   httpStatusForTrpcError: () => 500,
   logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
   hasScope: (scopes: string[], scope: string) => scopes.includes(scope),
-  verifyWorkspaceAccess: async () => h.workspaceAccess,
+  verifyWorkspaceWriteAccess: async () => h.workspaceAccess,
   verifyWorkspaceReadAccess: async () => h.workspaceAccess,
 }));
 

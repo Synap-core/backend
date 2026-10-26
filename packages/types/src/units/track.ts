@@ -24,8 +24,20 @@
  */
 
 import { CHECK_GATE_METADATA_KEY } from "../focus-sessions/check-gate.js";
-import { resolveObjectNoun, resolveStatusLabel } from "../vocabulary/index.js";
+import {
+  resolveObjectNoun,
+  resolveStatusLabel,
+  resolveTrackStatusLabel,
+  type TRACK_STATUS_LABELS,
+  type TRACK_VERDICT_LABELS,
+} from "../vocabulary/index.js";
+import {
+  TERMINAL_LIFECYCLE_CATEGORIES,
+  type LifecycleCategory,
+  type LifecycleOption,
+} from "../lifecycle/index.js";
 import type { UnitStateInput, UnitTone } from "./state.js";
+import type { TrackWorkKind } from "./goal.js";
 import {
   projectAggregateInput,
   type ProjectAggregateSessionFact,
@@ -238,11 +250,19 @@ export function readTrackStageHistory(raw: unknown): TrackStageHistoryEntry[] {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * A track's lifecycle status. The DB column (`project_tracks.status`,
+ * A track's status — the stored option keys of its SYSTEM LIFECYCLE (work
+ * model D1, 2026-10-23). The DB column (`project_tracks.status`,
  * `PROJECT_TRACK_STATUSES` in `@synap/database`) holds exactly these — the
  * pod's tracks service pins the two lists equal at COMPILE time.
+ *
+ * Machine values are contracts (the CLI, IS, Control Plane, Relay and the
+ * browser send them): `completed` and `archived` keep their keys; people read
+ * them as "Closed" and "Dropped" (`resolveTrackStatusLabel`).
  */
 export const TRACK_STATUSES = [
+  "proposed",
+  "agreed",
+  "ready",
   "active",
   "paused",
   "completed",
@@ -251,21 +271,100 @@ export const TRACK_STATUSES = [
 export type TrackStatus = (typeof TRACK_STATUSES)[number];
 
 /**
- * THE status transition table. The pod refuses anything not listed here
- * (`assertTrackTransition`, services/tracks); surfaces offer only these moves
- * (`trackStatusMoves`). Order is the order a surface lists the moves in.
+ * THE track lifecycle, declared ONCE like a kind's lifecycle: each status's
+ * fixed CATEGORY, and which one only a person may enter. Keyed by every
+ * status, so a status added to {@link TRACK_STATUSES} and not classified here
+ * stops the build.
+ *
+ *   open    proposed → agreed (criteria and bounds agreed with the doers) →
+ *           ready (prerequisites clear) — R3, before work starts. `agreed`
+ *           is HUMAN-ONLY: agreeing is a person's act; an agent's move into
+ *           it is always a proposal (code-core F11);
+ *   active  active (a new track's default);
+ *   paused  paused (chosen; a check gate may also hold it);
+ *   done    completed — "Closed": HUMAN-ONLY, an agent's close always
+ *           becomes a proposal, whatever rule the pod has;
+ *   lost    archived — "Dropped": an agent's drop proposes by default, as
+ *           a move into lost does for any kind.
+ * How it ended is a separate VERDICT ({@link TRACK_VERDICTS}), never more
+ * statuses.
+ */
+export const TRACK_STATUS_DECLARATION = {
+  proposed: { category: "open" },
+  agreed: { category: "open", humanOnly: true },
+  ready: { category: "open" },
+  active: { category: "active" },
+  paused: { category: "paused" },
+  completed: { category: "done", humanOnly: true },
+  archived: { category: "lost" },
+} as const satisfies Record<
+  TrackStatus,
+  { category: LifecycleCategory; humanOnly?: true }
+>;
+
+/** The statuses whose category is `C` — derived from the declaration. */
+export type TrackStatusIn<C extends LifecycleCategory> = {
+  [K in TrackStatus]: (typeof TRACK_STATUS_DECLARATION)[K]["category"] extends C
+    ? K
+    : never;
+}[TrackStatus];
+
+/**
+ * The track lifecycle in the lifecycle model's own shape — what the pod's
+ * classifier (`classifyLifecycleMove`, the SAME one every kind's status move
+ * goes through) and every surface read. Labels come from the vocabulary.
+ */
+export const TRACK_LIFECYCLE: {
+  propertySlug: "status";
+  options: LifecycleOption[];
+} = {
+  propertySlug: "status",
+  options: TRACK_STATUSES.map((key) => {
+    const d: { category: LifecycleCategory; humanOnly?: true } =
+      TRACK_STATUS_DECLARATION[key];
+    return {
+      key,
+      label: resolveTrackStatusLabel(key),
+      category: d.category,
+      ...(d.humanOnly ? { humanOnly: true } : {}),
+    };
+  }),
+};
+
+/** The category of a track status; `null` for a value no option declares. */
+export function trackStatusCategory(
+  status: string | null | undefined
+): LifecycleCategory | null {
+  if (status == null) return null;
+  return Object.hasOwn(TRACK_STATUS_DECLARATION, status)
+    ? TRACK_STATUS_DECLARATION[status as TrackStatus].category
+    : null;
+}
+
+/**
+ * THE status transition table, DERIVED from the categories (never hand-listed):
+ * from any open, active or paused status a track may move to any other status;
+ * a done or lost track is FINAL for the status door. Reopening a closed goal is
+ * a NEW version (`reopenTrack`, linked by `replaces`), never a move back — so a
+ * closed track keeps its verdict, and a dropped one frees its live NAME
+ * (0317) without ever colliding with a newer live track of that name.
+ * Order is the order a surface lists the moves in (the status order).
  */
 export const TRACK_STATUS_TRANSITIONS: Readonly<
   Record<TrackStatus, readonly TrackStatus[]>
-> = {
-  active: ["paused", "completed", "archived"],
-  paused: ["active", "completed", "archived"],
-  completed: ["active", "archived"],
-  // Archived is FINAL: it frees the track's live NAME (migration 0317), so
-  // reviving it could collide with a newer live track of that name. Start the
-  // method again instead.
-  archived: [],
-};
+> = deriveTrackTransitions();
+
+function deriveTrackTransitions(): Record<TrackStatus, readonly TrackStatus[]> {
+  const table = {} as Record<TrackStatus, readonly TrackStatus[]>;
+  for (const from of TRACK_STATUSES) {
+    table[from] = TERMINAL_LIFECYCLE_CATEGORIES.includes(
+      TRACK_STATUS_DECLARATION[from].category
+    )
+      ? []
+      : TRACK_STATUSES.filter((to) => to !== from);
+  }
+  return table;
+}
 
 /** True when `from → to` is a move the table allows (a no-op is not a move). */
 export function canTransitionTrack(from: string, to: string): boolean {
@@ -275,7 +374,7 @@ export function canTransitionTrack(from: string, to: string): boolean {
 
 /** An ACTION token for `resolveActionLabel(verb, mood)` — never a hand label. */
 export type TrackStatusVerb =
-  "pause" | "resume" | "reopen" | "complete" | "archive";
+  "pause" | "resume" | "start" | "move" | "close" | "drop" | "reopen";
 
 export interface TrackStatusMove {
   to: TrackStatus;
@@ -284,48 +383,226 @@ export interface TrackStatusMove {
 
 /**
  * The verb of a move that HAPPENED (history, receipts) — named for every move
- * the table allows, including a completion a surface no longer offers.
+ * between two known statuses, including one the table no longer allows: a
+ * track completed and reopened in place before goals could close (2026-10-23)
+ * still reads "Reopened" in its history.
  */
 export function trackStatusVerb(
   from: string,
   to: string
 ): TrackStatusVerb | null {
-  return canTransitionTrack(from, to)
-    ? verbFor(from as TrackStatus, to as TrackStatus)
-    : null;
+  if (from === to) return null;
+  const fromCat = trackStatusCategory(from);
+  const toCat = trackStatusCategory(to);
+  if (!fromCat || !toCat) return null;
+  return verbFor(fromCat, toCat);
 }
 
-function verbFor(from: TrackStatus, to: TrackStatus): TrackStatusVerb {
+function verbFor(
+  from: LifecycleCategory,
+  to: LifecycleCategory
+): TrackStatusVerb {
+  if (to === "done") return "close";
+  if (to === "lost") return "drop";
+  if (TERMINAL_LIFECYCLE_CATEGORIES.includes(from)) return "reopen";
   if (to === "paused") return "pause";
-  if (to === "completed") return "complete";
-  if (to === "archived") return "archive";
-  // → active: a paused track RESUMES; a completed one is REOPENED.
-  return from === "completed" ? "reopen" : "resume";
+  if (to === "active") return from === "paused" ? "resume" : "start";
+  return "move";
 }
 
 /**
- * The status moves a surface offers from `status`, in table order. Archiving
- * is final and frees the method slot — a workbench act, not a supervising one —
- * so it is offered only with `includeArchive: true` (Relay omits it). An
- * unknown status offers nothing.
- *
- * A track is LASTING (work model W1/L7): it is never offered `completed`. Its
- * goal is met or not; the track goes on, pauses, or is archived. The table
- * still holds the completed status so a track completed before W1 can be
- * reopened or archived, and its history still names the move
- * (`trackStatusVerb`).
+ * The status moves a surface offers from `status`, in table order. Dropping
+ * is final and frees the live name, so it is offered only with
+ * `includeArchive: true` — both surfaces ask for it: Relay KEEPS Drop (a
+ * decision, 2026-10-24), and who may drop is `goalMayDrop`. Closing
+ * IS offered: a goal can stay open as long as it matters, or finish — a
+ * person closes it with a verdict ({@link checkTrackClose}). A done or lost
+ * track offers nothing; an unknown status offers nothing.
  */
 export function trackStatusMoves(
   status: string,
   opts: { includeArchive?: boolean } = {}
 ): TrackStatusMove[] {
-  const from = status as TrackStatus;
-  const moves = TRACK_STATUS_TRANSITIONS[from];
+  const moves = TRACK_STATUS_TRANSITIONS[status as TrackStatus];
   if (!moves) return [];
+  const from = trackStatusCategory(status)!;
   return moves
-    .filter((to) => to !== "completed")
     .filter((to) => opts.includeArchive === true || to !== "archived")
-    .map((to) => ({ to, verb: verbFor(from, to) }));
+    .map((to) => ({ to, verb: verbFor(from, trackStatusCategory(to)!) }));
+}
+
+// ── how a goal ended (R1) ──────────────────────────────────────────────────
+
+/**
+ * How a closed or dropped track ENDED — its verdict (R1), stored beside the
+ * status (`project_tracks.verdict`), never as more statuses. The DB mirror
+ * (`PROJECT_TRACK_VERDICTS`, `@synap/database`) and the `project_tracks`
+ * CHECK spell the same set; the tracks service pins the mirror equal at
+ * compile time. Words: `resolveTrackVerdictLabel`.
+ */
+export const TRACK_VERDICTS = [
+  "met",
+  "partly_met",
+  "not_met",
+  "retired",
+  "no_longer_needed",
+  "impossible",
+  "replaced",
+  "mistake",
+] as const;
+export type TrackVerdict = (typeof TRACK_VERDICTS)[number];
+
+/**
+ * Which ending each verdict belongs to: a CLOSED goal (done) was worked to
+ * its end and judged — or, for an operation, retired; a DROPPED one (lost)
+ * stopped mattering. Keyed by every verdict, so an unclassified one stops the
+ * build.
+ */
+export const TRACK_VERDICT_CATEGORY = {
+  met: "done",
+  partly_met: "done",
+  not_met: "done",
+  retired: "done",
+  no_longer_needed: "lost",
+  impossible: "lost",
+  replaced: "lost",
+  mistake: "lost",
+} as const satisfies Record<TrackVerdict, "done" | "lost">;
+
+// Every status and every verdict has its words in the vocabulary, and the
+// vocabulary names nothing else: a value added on one side only stops the build.
+type _SameKeys<A extends string, B extends string> = [A] extends [B]
+  ? [B] extends [A]
+    ? true
+    : never
+  : never;
+const _statusWords: _SameKeys<TrackStatus, keyof typeof TRACK_STATUS_LABELS> =
+  true;
+const _verdictWords: _SameKeys<
+  TrackVerdict,
+  keyof typeof TRACK_VERDICT_LABELS
+> = true;
+void _statusWords;
+void _verdictWords;
+
+/** Verdicts that need a reason in words (what made it impossible, what replaced it). */
+export const TRACK_VERDICTS_NEEDING_REASON = [
+  "impossible",
+  "replaced",
+] as const satisfies readonly TrackVerdict[];
+
+/**
+ * The kind of work that never ends `met` (R6): an OPERATION is kept running
+ * and assessed per period; when it stops it is RETIRED. `retired` closes an
+ * operation only, and an operation closes only `retired`.
+ */
+const OPERATION_WORK_KIND = "operation" satisfies TrackWorkKind;
+
+/**
+ * The verdicts a move INTO `status` accepts, for a goal of `workKind` — none
+ * for a status that does not end the goal. Done: `retired` for an operation,
+ * met · partly_met · not_met for every other kind (or none set). Lost: the
+ * same four for every kind.
+ */
+export function trackVerdictsFor(
+  status: string,
+  workKind?: string | null
+): readonly TrackVerdict[] {
+  const category = trackStatusCategory(status);
+  if (category !== "done" && category !== "lost") return [];
+  const operation = workKind === OPERATION_WORK_KIND;
+  return TRACK_VERDICTS.filter(
+    (v) =>
+      TRACK_VERDICT_CATEGORY[v] === category &&
+      (category === "lost" || (v === "retired") === operation)
+  );
+}
+
+export function isTrackVerdict(v: unknown): v is TrackVerdict {
+  return (
+    typeof v === "string" && (TRACK_VERDICTS as readonly string[]).includes(v)
+  );
+}
+
+/**
+ * THE close rule, one answer for the pod's status door and any surface that
+ * asks before sending:
+ *   - a move into DONE (close) REQUIRES a verdict from met · partly_met ·
+ *     not_met — a person judges how it went; an OPERATION (R6, `workKind`)
+ *     is never met: it closes `retired`, and only an operation may;
+ *   - a move into LOST (drop) SHOULD carry one from no_longer_needed ·
+ *     impossible · replaced · mistake, but may come without: the clients
+ *     shipped before verdicts (browser Archive, the released CLI, the IS)
+ *     drop with no verdict, and such a track reads like one dropped before
+ *     0344 (verdict NULL). A verdict that IS sent is validated;
+ *   - impossible / replaced need a reason, and a reason needs its verdict;
+ *   - any other move carries no verdict;
+ *   - with CRITERIA (W2, the derived marks — `deriveGoalCriteria`): `met`
+ *     only when every REQUIRED criterion is met (accepted); `partly_met` /
+ *     `not_met` only when at least one criterion is not met. A goal with no
+ *     criteria closes on its judge's word. Omit `criteria` only where they
+ *     cannot be known (a surface asking before it read them). `workKind`
+ *     omitted reads as "not an operation".
+ * `null` = allowed; otherwise the refusal, in words an agent can act on
+ * (machine tokens, so it can resend them).
+ */
+export function checkTrackClose(
+  to: string,
+  close: { verdict?: string | null; verdictReason?: string | null },
+  criteria?: ReadonlyArray<{
+    key: string;
+    required?: boolean;
+    mark: string;
+  }>,
+  workKind?: string | null
+): string | null {
+  const allowed = trackVerdictsFor(to, workKind);
+  const verdict = close.verdict ?? null;
+  const reason = close.verdictReason?.trim() ?? "";
+  if (allowed.length === 0) {
+    return verdict !== null || reason
+      ? `A verdict is given only when a goal is closed (completed) or dropped (archived) — not when it moves to ${to}.`
+      : null;
+  }
+  const closing = trackStatusCategory(to) === "done";
+  const into = closing ? "Closing" : "Dropping";
+  if (verdict === null) {
+    if (closing)
+      return `${into} a goal needs a verdict: ${allowed.join(", ")}.`;
+    return reason
+      ? `A verdictReason needs its verdict: ${allowed.join(", ")}.`
+      : null;
+  }
+  if (!(allowed as readonly string[]).includes(verdict)) {
+    if (closing && workKind === OPERATION_WORK_KIND) {
+      return `An operation is never "${verdict}" — it is assessed per period and closes as retired.`;
+    }
+    if (closing && verdict === "retired") {
+      return `Only an operation closes as retired — close this goal as ${allowed.join(", ")}.`;
+    }
+    return `"${verdict}" is not a verdict for ${into.toLowerCase()} a goal — use ${allowed.join(", ")}.`;
+  }
+  if (
+    (TRACK_VERDICTS_NEEDING_REASON as readonly string[]).includes(verdict) &&
+    !reason
+  ) {
+    return `The verdict "${verdict}" needs a verdictReason — say what ${verdict === "replaced" ? "replaced it" : "made it impossible"}.`;
+  }
+  if (criteria && criteria.length > 0) {
+    if (verdict === "met") {
+      const open = criteria.filter(
+        (c) => c.required !== false && c.mark !== "met"
+      );
+      if (open.length > 0) {
+        return `Closing a goal as met needs every required criterion met and accepted — not yet: ${open.map((c) => c.key).join(", ")}.`;
+      }
+    } else if (verdict === "partly_met" || verdict === "not_met") {
+      if (criteria.every((c) => c.mark === "met")) {
+        return `Every criterion of this goal is met — close it as met, not ${verdict}.`;
+      }
+    }
+  }
+  return null;
 }
 
 /**
@@ -401,24 +678,57 @@ export function trackPausedByLabel(pausedBy: TrackPausedBy): string | null {
 
 /** A track that takes no new work on a page: its sessions fall to the remainder. */
 export function isTrackRetired(track: { status: string }): boolean {
-  return track.status === "archived";
+  return trackStatusCategory(track.status) === "lost";
 }
 
 /**
- * The CLOSED statuses — the complement of the LIVE ones that hold a track's
- * name on its project (`LIVE_PROJECT_TRACK_STATUSES`, @synap/database). The
- * pod's tracks service pins live ∪ closed = every status, live ∩ closed = ∅,
- * at compile time.
+ * The CLOSED statuses — the done and lost categories of
+ * {@link TRACK_STATUS_DECLARATION}; the complement of the LIVE ones that hold
+ * a track's name on its project ({@link LIVE_TRACK_STATUSES}). Pinned to the
+ * declaration below; the pod's tracks service pins its own live list
+ * (`LIVE_PROJECT_TRACK_STATUSES`, @synap/database) to the same partition.
  */
 export const CLOSED_TRACK_STATUSES = [
   "completed",
   "archived",
-] as const satisfies readonly TrackStatus[];
+] as const satisfies readonly TrackStatusIn<"done" | "lost">[];
 
 /**
- * A CLOSED track — `completed` or `archived`: it stands on no live stage, so
- * no stage session starts on it and its stages offer no move. (Narrower than
- * "not active": a PAUSED track is still open — it resumes where it stands.)
+ * The LIVE statuses: open, active and paused. A live track holds its NAME on
+ * its project (`uniq_project_tracks_live_name`, whose predicate spells this
+ * set) and takes work.
+ */
+export const LIVE_TRACK_STATUSES = [
+  "proposed",
+  "agreed",
+  "ready",
+  "active",
+  "paused",
+] as const satisfies readonly TrackStatusIn<"open" | "active" | "paused">[];
+
+// Both lists are EXACTLY their categories: a status added to the declaration
+// and listed in neither (or listed in the wrong one) stops the build.
+type _ExactlyIn<L extends readonly string[], S extends string> = [
+  Exclude<S, L[number]>,
+] extends [never]
+  ? true
+  : never;
+const _closedExact: _ExactlyIn<
+  typeof CLOSED_TRACK_STATUSES,
+  TrackStatusIn<"done" | "lost">
+> = true;
+const _liveExact: _ExactlyIn<
+  typeof LIVE_TRACK_STATUSES,
+  TrackStatusIn<"open" | "active" | "paused">
+> = true;
+void _closedExact;
+void _liveExact;
+
+/**
+ * A CLOSED track — closed (done) or dropped (lost): it stands on no live
+ * stage, so no stage session starts on it, no session is filed into it, and
+ * its stages offer no move. (Narrower than "not active": a PAUSED track is
+ * still open — it resumes where it stands; a PROPOSED one is being shaped.)
  */
 export function isTrackClosed(track: { status: string }): boolean {
   return (CLOSED_TRACK_STATUSES as readonly string[]).includes(track.status);

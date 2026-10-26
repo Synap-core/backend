@@ -182,6 +182,8 @@ export * from "./focus-sessions.js";
 // Session evaluations — the graded verdicts against focus_sessions.criteria (0267)
 export * from "./session-evaluations.js";
 export * from "./session-runners.js";
+// Proposal apply runs — a large approval applied by a background job (0352)
+export * from "./proposal-apply-runs.js";
 // The one registry of live agent terminals (0354), linked to sessions by session_runners
 export * from "./agent-conversations.js";
 
@@ -216,6 +218,8 @@ export * from "./playbook-enrollments.js";
 // Project tracks (RUNTIME) — a METHOD (project-scoped playbook) running inside
 // one project; sessions are born inside a track (focus_sessions.track_id, 0272).
 export * from "./project-tracks.js";
+// Who is on a goal (0348) — owner, judge, delegates with commitments, integrator.
+export * from "./track-participants.js";
 
 // Entity centrality (Horizon Phase 3) — batch-computed global PageRank score per
 // entity. Side table, recomputed by the pagerank-centrality job; read by Horizon.

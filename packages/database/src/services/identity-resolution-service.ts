@@ -345,41 +345,106 @@ export function isLinkedinUrl(value: string): boolean {
   return /^https?:\/\/([a-z0-9-]+\.)*linkedin\.com(\/|$)/i.test(value);
 }
 
+/** The pre-check's shorthand keys (the documented request shape). */
+const EXPLICIT_SHORTHAND_KEYS = [
+  "email",
+  "phone",
+  "url",
+  "twitter",
+  "github",
+  "externalId",
+] as const;
+
+/**
+ * Every key an explicit signals object may use → the atom it names, DERIVED
+ * from `IDENTITY_SIGNAL_PROPERTY_KEYS` (one table): each atom's own name
+ * (`linkedin_url`) and each property slug that carries it (`linkedinUrl`,
+ * `linkedin-url`). The shorthand keys above keep their meaning (`url` is
+ * classified LinkedIn-vs-website; the bookmark `url` atom is reached through
+ * `properties`).
+ */
+export const EXPLICIT_SIGNAL_ALIASES: ReadonlyMap<string, StrongSignalType> =
+  (() => {
+    const map = new Map<string, StrongSignalType>();
+    for (const [atom, keys] of Object.entries(
+      IDENTITY_SIGNAL_PROPERTY_KEYS
+    ) as Array<[StrongSignalType, string[]]>) {
+      if (atom === "url") continue;
+      map.set(atom, atom);
+      for (const k of keys) map.set(k, atom);
+    }
+    for (const k of EXPLICIT_SHORTHAND_KEYS) map.delete(k);
+    return map;
+  })();
+
+/** Explicit signal keys this door does not know — refused, never dropped. */
+export class UnknownIdentitySignalKeyError extends Error {
+  readonly unknownKeys: string[];
+  readonly acceptedKeys: string[];
+  constructor(unknownKeys: string[]) {
+    const accepted = [
+      ...EXPLICIT_SHORTHAND_KEYS,
+      ...EXPLICIT_SIGNAL_ALIASES.keys(),
+    ];
+    super(
+      `Unknown identity signal key${unknownKeys.length === 1 ? "" : "s"}: ${unknownKeys.join(", ")}. ` +
+        `Accepted: ${accepted.join(", ")}.`
+    );
+    this.name = "UnknownIdentitySignalKeyError";
+    this.unknownKeys = unknownKeys;
+    this.acceptedKeys = accepted;
+  }
+}
+
 /**
  * Map an EXPLICIT signals object (the identity pre-check request shape shared
  * by the Hub REST /identity/resolve route and the MCP synap_resolve_identity
  * tool) to typed identity atoms — the ONE mapper, so a bare `url` is
  * classified linkedin-vs-website by the same domain-anchored check everywhere
  * and the pre-check always agrees with a real write.
+ *
+ * Beyond the shorthand keys it accepts an atom's name (`linkedin_url`) or a
+ * property slug that carries it (`linkedinUrl`) — `EXPLICIT_SIGNAL_ALIASES`.
+ * Any other key THROWS `UnknownIdentitySignalKeyError`: a dropped key answered
+ * "none"/"weak" for a person whose LinkedIn URL was registered (live
+ * 2026-10-23, `{linkedin_url: …}` read as no signal at all).
  */
 export function signalsFromExplicit(
-  signals:
-    | {
-        email?: string;
-        phone?: string;
-        url?: string;
-        twitter?: string;
-        github?: string;
-        externalId?: string;
-      }
-    | undefined
+  signals: Record<string, unknown> | undefined
 ): IdentitySignal[] {
   if (!signals) return [];
+  const unknown = Object.keys(signals).filter(
+    (k) =>
+      !(EXPLICIT_SHORTHAND_KEYS as readonly string[]).includes(k) &&
+      !EXPLICIT_SIGNAL_ALIASES.has(k)
+  );
+  if (unknown.length > 0) throw new UnknownIdentitySignalKeyError(unknown);
+  const text = (k: string): string | undefined => {
+    const v = signals[k];
+    return typeof v === "string" && v.trim() ? v : undefined;
+  };
   const out: IdentitySignal[] = [];
-  if (signals.email) out.push({ type: "email", value: signals.email });
-  if (signals.phone) out.push({ type: "phone", value: signals.phone });
-  if (signals.url) {
+  const email = text("email");
+  if (email) out.push({ type: "email", value: email });
+  const phone = text("phone");
+  if (phone) out.push({ type: "phone", value: phone });
+  const url = text("url");
+  if (url) {
     out.push({
-      type: isLinkedinUrl(signals.url) ? "linkedin_url" : "website",
-      value: signals.url,
+      type: isLinkedinUrl(url) ? "linkedin_url" : "website",
+      value: url,
     });
   }
-  if (signals.twitter)
-    out.push({ type: "twitter_handle", value: signals.twitter });
-  if (signals.github)
-    out.push({ type: "github_username", value: signals.github });
-  if (signals.externalId)
-    out.push({ type: "external_id", value: signals.externalId });
+  const twitter = text("twitter");
+  if (twitter) out.push({ type: "twitter_handle", value: twitter });
+  const github = text("github");
+  if (github) out.push({ type: "github_username", value: github });
+  const externalId = text("externalId");
+  if (externalId) out.push({ type: "external_id", value: externalId });
+  for (const [key, atom] of EXPLICIT_SIGNAL_ALIASES) {
+    const value = text(key);
+    if (value) out.push({ type: atom, value });
+  }
   return out;
 }
 

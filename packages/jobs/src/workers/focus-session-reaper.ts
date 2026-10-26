@@ -33,8 +33,25 @@ import {
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { closeSessionViaDoor } from "../utils/session-close.js";
+import { escalateUnacknowledgedReports } from "./track-report-escalation.js";
 
 const logger = createLogger({ module: "focus-session-reaper" });
+
+/**
+ * The goal loop's hourly re-check (work model W4) — `sweepGoalLoops` in
+ * @synap/api, which this package cannot import: apps/api fills the slot at
+ * boot. It rides THIS tick so the loop has no scheduler of its own. Unfilled
+ * (a jobs-only process), the tick skips it and says so.
+ */
+export type GoalLoopSweeper = () => Promise<{
+  checked: number;
+  proposed: number;
+  failed: number;
+}>;
+let goalLoopSweeper: GoalLoopSweeper | null = null;
+export function registerGoalLoopSweeper(fn: GoalLoopSweeper): void {
+  goalLoopSweeper = fn;
+}
 
 export const FOCUS_SESSION_REAPER_QUEUE = "focus-session-reaper";
 export const FOCUS_SESSION_REAPER_CRON = "0 * * * *"; // every hour
@@ -147,6 +164,31 @@ export async function pruneAgentConversations(
 
 /** Called by the cron scheduler every hour. */
 export async function handleFocusSessionReaper(): Promise<void> {
+  // R10 (W3) rides this hourly tick: an "impossible" report on a goal that
+  // nobody acknowledged for 48 h is escalated to the goal's owner, once. Its
+  // own failure never stops the session sweep below.
+  try {
+    const told = await escalateUnacknowledgedReports();
+    if (told > 0) {
+      logger.info({ told }, "Escalated unacknowledged goal reports");
+    }
+  } catch (err) {
+    logger.error({ err }, "Goal report escalation failed");
+  }
+  // The goal loop's re-check (W4). Its own failure never stops the session
+  // sweep below.
+  if (goalLoopSweeper) {
+    try {
+      const swept = await goalLoopSweeper();
+      if (swept.proposed > 0 || swept.failed > 0) {
+        logger.info(swept, "Goal loop re-check");
+      }
+    } catch (err) {
+      logger.error({ err }, "Goal loop re-check failed");
+    }
+  } else {
+    logger.debug("Goal loop sweeper not registered — skipped");
+  }
   try {
     // Presence hygiene first, on its own: a failed prune never blocks the
     // session sweep (it retries next hour).

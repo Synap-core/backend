@@ -30,7 +30,9 @@
 import { TRPCError } from "@trpc/server";
 import {
   and,
+  asc,
   eq,
+  inArray,
   isNull,
   or,
   drizzleSql,
@@ -38,6 +40,8 @@ import {
   documents,
   entities,
   profiles,
+  profileSlugScopeCondition,
+  relations,
 } from "@synap/database";
 import {
   declaredMediaSources,
@@ -46,6 +50,7 @@ import {
 } from "@synap-core/types/presentation";
 import { AccessContext, scopedDb } from "../access/index.js";
 import { loadReadableDocument } from "./document-edit-access.js";
+import { resolveFacetVisibilityScope } from "./workspace-membership.js";
 
 export interface SignableDocument {
   id: string;
@@ -210,4 +215,105 @@ export async function loadSignableFileEntity(
     storageKey: doc?.storageKey ?? undefined,
     mimeType: doc?.mimeType ?? null,
   };
+}
+
+/** Most linked files one listed row carries (`GET /entities?includeMedia=true`). */
+export const MAX_LINKED_FILES_PER_ROW = 12;
+
+/** A `file` an entity links, as a list row carries it: enough to draw it. */
+export interface LinkedFileRef {
+  id: string;
+  title: string | null;
+  /** The served type — the `documents` row's under the owner lock, as the URL door reports it. */
+  mimeType: string | null;
+}
+
+/**
+ * The `file` entities each of `entityIds` links (`entity --references--> file`,
+ * the attachments door's edge), for a list page in ONE batch: up to
+ * {@link MAX_LINKED_FILES_PER_ROW} per entity, oldest edge first (edge id breaks
+ * ties). Entities with none are absent from the map.
+ *
+ * Never more than the caller could read on its own: the edge through the
+ * `relations` rule and the file through the `entities` rule — the read
+ * `loadSignableFileEntity` does for `GET /files/:id/url` — both via `scopedDb`,
+ * so a key's grant narrows them. A file the caller cannot read is dropped
+ * before the cap, so it never takes a slot; `mimeType` follows the same owner
+ * lock as the signer.
+ */
+export async function loadLinkedFileRefs(
+  userId: string,
+  entityIds: readonly string[]
+): Promise<Map<string, LinkedFileRef[]>> {
+  const byEntity = new Map<string, LinkedFileRef[]>();
+  if (entityIds.length === 0) return byEntity;
+  const scoped = scopedDb(AccessContext.operator({ userId }));
+
+  const edges = await scoped.findMany<{
+    sourceEntityId: string;
+    targetEntityId: string;
+  }>(relations, {
+    columns: { sourceEntityId: true, targetEntityId: true },
+    where: and(
+      inArray(relations.sourceEntityId, [...entityIds]),
+      eq(relations.type, "references")
+    ),
+    orderBy: [asc(relations.createdAt), asc(relations.id)],
+  });
+  const targetIds = [
+    ...new Set(edges.map((e) => e.targetEntityId).filter(Boolean)),
+  ];
+  if (targetIds.length === 0) return byEntity;
+
+  // The kind-aware scope door (no-kind-blind-reads tripwire), identity-wide:
+  // the edge already named the rows, the `entities` rule below narrows them.
+  const isFile = await profileSlugScopeCondition(
+    db,
+    "file",
+    await resolveFacetVisibilityScope(userId, undefined)
+  );
+  const files = await scoped.findMany<{
+    id: string;
+    userId: string;
+    title: string | null;
+    documentId: string | null;
+  }>(entities, {
+    columns: { id: true, userId: true, title: true, documentId: true },
+    where: and(
+      inArray(entities.id, targetIds),
+      isFile,
+      isNull(entities.deletedAt)
+    ),
+  });
+  const docIds = files.flatMap((f) => (f.documentId ? [f.documentId] : []));
+  const docs = docIds.length
+    ? await db.query.documents.findMany({
+        where: inArray(documents.id, docIds),
+        columns: { id: true, userId: true, mimeType: true },
+      })
+    : [];
+  const docById = new Map(docs.map((d) => [d.id, d]));
+  const fileById = new Map<string, LinkedFileRef>();
+  for (const f of files) {
+    const doc = f.documentId ? docById.get(f.documentId) : undefined;
+    fileById.set(f.id, {
+      id: f.id,
+      title: f.title,
+      mimeType: doc && doc.userId === f.userId ? (doc.mimeType ?? null) : null,
+    });
+  }
+
+  for (const edge of edges) {
+    const file = fileById.get(edge.targetEntityId);
+    if (!file) continue;
+    const list = byEntity.get(edge.sourceEntityId) ?? [];
+    if (
+      list.length < MAX_LINKED_FILES_PER_ROW &&
+      !list.some((f) => f.id === file.id)
+    ) {
+      list.push(file);
+      byEntity.set(edge.sourceEntityId, list);
+    }
+  }
+  return byEntity;
 }

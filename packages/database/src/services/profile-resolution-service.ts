@@ -94,11 +94,10 @@ function effectiveLifecycleOf(
  * RendererRef / DeclarativeBlock — MIRROR of `@synap-core/types/renderer-ref`.
  *
  * The canonical declaration (and its docs) lives in that module, which every
- * surface that draws a renderer reads. This package cannot import it —
- * `@synap-core/types` already builds against `@synap/database`, so the
- * reverse edge is a build cycle — so the pod keeps this structural copy, and
- * `packages/types/src/renderer-ref/pod-parity.contract.ts` holds the two
- * EXACTLY equal at compile time. Change both, in the same commit.
+ * surface that draws a renderer reads. The pod keeps this structural copy, and
+ * `packages/database/src/wire-parity/renderer-ref.ts` holds the two EXACTLY
+ * equal at compile time. Change both, in the same commit. (This package may
+ * now import `@synap-core/types`; collapsing the copy is a follow-up.)
  *
  * Stored as JSONB on `profiles.default_renderers`, `renderer_bindings.ref` and
  * inside `workspaces.settings.profileRenderers[slug]`.

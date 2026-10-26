@@ -190,6 +190,46 @@ describe("GET /discovery", () => {
     });
   });
 
+  it("turned_off when the owner switched Synap Cloud sign-in off (ADDENDUM 2026-10-23)", async () => {
+    podSettingsRows([
+      {
+        settings: {
+          federationOidcClient: { issuer: ISSUER },
+          accountRecovery: { cloudTrust: "off" },
+        },
+      },
+    ]);
+    mocks.getByUrl.mockResolvedValue({ id: "i1", status: "approved" });
+
+    const { status, body } = await discover();
+
+    expect(status).toBe(200);
+    expect(body).toEqual({
+      cloudSignIn: {
+        available: false,
+        provider: "cp",
+        issuerUrl: ISSUER,
+        reason: "turned_off",
+      },
+    });
+  });
+
+  it("stays available when Cloud trust is sign_in or sign_in_recovery", async () => {
+    for (const cloudTrust of ["sign_in", "sign_in_recovery"]) {
+      podSettingsRows([
+        {
+          settings: {
+            federationOidcClient: { issuer: ISSUER },
+            accountRecovery: { cloudTrust },
+          },
+        },
+      ]);
+      mocks.getByUrl.mockResolvedValue({ id: "i1", status: "approved" });
+      const { body } = await discover();
+      expect(body.cloudSignIn.available).toBe(true);
+    }
+  });
+
   it("a FAILED settings read is a 503, never available:false", async () => {
     podSettingsRows(new Error("connection refused"));
 

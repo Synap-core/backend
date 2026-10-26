@@ -446,40 +446,27 @@ declare const relations: import("drizzle-orm/pg-core").PgTableWithColumns<{
 	name: "relations";
 	schema: undefined;
 }>;
-declare const ChannelType: {
-	readonly AGENT_COLLAB: "agent_collab";
-	readonly EXTERNAL: "external";
-	readonly FEED: "feed";
-	readonly GROUP: "group";
-	readonly PERSONAL: "personal";
-	readonly RUN: "run";
-	readonly SUB_THREAD: "sub_thread";
-	readonly THREAD: "thread";
-};
-export type ChannelType = (typeof ChannelType)[keyof typeof ChannelType];
-declare const ChannelScope: {
-	readonly POD: "pod";
-	readonly USER: "user";
-	readonly WORKSPACE: "workspace";
-};
-export type ChannelScope = (typeof ChannelScope)[keyof typeof ChannelScope];
-declare const FeedScope: {
-	readonly USER: "user";
-	readonly WORKSPACE: "workspace";
-};
-export type FeedScope = (typeof FeedScope)[keyof typeof FeedScope];
-declare const ChannelStatus: {
-	readonly ACTIVE: "active";
-	readonly ARCHIVED: "archived";
-	readonly MERGED: "merged";
-};
-export type ChannelStatus = (typeof ChannelStatus)[keyof typeof ChannelStatus];
-declare const AiReactionMode: {
-	readonly OFF: "off";
-	readonly ONLY_MENTIONED: "only_mentioned";
-	readonly WHEN_CONFIDENT: "when_confident";
-};
-export type AiReactionMode = (typeof AiReactionMode)[keyof typeof AiReactionMode];
+/**
+ * Chat rows on the wire — channels, messages, channel context items.
+ *
+ * The row interfaces are declared HERE, once: `@synap/database` imports and
+ * re-exports them. The string unions below mirror the database's runtime
+ * `as const` objects (`ChannelType.THREAD`, …), which stay with the tables;
+ * the database proves each union equal to its const
+ * (`packages/database/src/wire-parity/chat.ts`). Plain string literal unions,
+ * so "user" is directly assignable to `MessageRole`, "active" to
+ * `ChannelStatus`, etc. Pure types: nothing from the database package.
+ */
+/** `channels.channel_type`. */
+export type ChannelType = "agent_collab" | "external" | "feed" | "group" | "personal" | "run" | "sub_thread" | "thread";
+/** `channels.scope` — visibility, orthogonal to type. */
+export type ChannelScope = "pod" | "user" | "workspace";
+/** `channels.feed_scope` (FEED channels only). */
+export type FeedScope = "user" | "workspace";
+/** `channels.status`. */
+export type ChannelStatus = "active" | "archived" | "merged";
+/** Per-channel "how do AI teammates react" control (multiplayer channels). */
+export type AiReactionMode = "off" | "only_mentioned" | "when_confident";
 /** Channel row — explicit interface so consumers don't need drizzle-orm to resolve it. */
 export interface Channel {
 	id: string;
@@ -545,6 +532,17 @@ export interface InputOverride {
 	default?: string;
 	options?: string[];
 }
+/**
+ * Per-kind behavioral emphases for AI teaching briefs (base layer). Workspace
+ * overlay lives at `workspaces.settings.profileAiPosture[slug]` (jsonb,
+ * already exists) — resolved together by `getEffectiveAiPosture()`.
+ */
+export interface AiPosture {
+	explainWhy?: boolean;
+	openAfterCreate?: boolean;
+	attachOutputs?: boolean;
+	directives?: string[];
+}
 /** Where the last template apply on a space stands. */
 export type TemplateApplyStateName = 
 /** Layer 1 is being built (legacy `provisioningStatus: "pending"`). */
@@ -602,23 +600,6 @@ export interface TemplateState {
 	heldForDataChangesUnreadable?: true;
 	/** When this state was last written ("" = unknown, a legacy record). */
 	at: string;
-}
-declare enum ProfileScope {
-	SYSTEM = "system",// Available to all users (pod-wide)
-	SHARED = "shared",// Explicitly shared with specific workspaces via profile_workspace_access
-	WORKSPACE = "workspace",// Owned by a single workspace
-	USER = "user"
-}
-/**
- * Per-kind behavioral emphases for AI teaching briefs (base layer). Workspace
- * overlay lives at `workspaces.settings.profileAiPosture[slug]` (jsonb,
- * already exists) — resolved together by `getEffectiveAiPosture()`.
- */
-export interface AiPosture {
-	explainWhy?: boolean;
-	openAfterCreate?: boolean;
-	attachOutputs?: boolean;
-	directives?: string[];
 }
 export type WorkspaceSidebarSurfacePlacement = "embed" | "floating" | "main" | "modal" | "popover" | "side";
 export type WorkspaceSidebarSurfaceDisplayMode = "compact" | "full" | "medium";
@@ -1522,9 +1503,14 @@ export interface WorkspaceSettings {
 	};
 }
 /**
- * User Preferences Schema - UI and application settings
+ * User preferences on the wire — the `user_preferences` row and the shapes of
+ * its JSONB columns.
  *
- * Stores user-specific preferences that persist across sessions
+ * The JSONB shapes are declared HERE, once: `@synap/database` imports them to
+ * type its columns and re-exports them. The row itself is inferred from the
+ * drizzle table on the pod side; it is declared here and the database proves
+ * it equal (`packages/database/src/wire-parity/preferences.ts`). Pure types:
+ * nothing from the database package.
  */
 export interface CustomTheme {
 	colors?: {
@@ -1715,18 +1701,13 @@ export type ProviderVerbSpec = {
  */
 export type SkillScope = "pod" | "user" | "workspace";
 /**
- * Automations Schema
+ * Automation flow definition — the shape of `automations.flow_definition`,
+ * `automations.trigger_config` and `automation_runs.path_taken`.
  *
- * Workflow automations: trigger → step chain with conditions, commands, and outputs.
- * The flow_definition JSONB is both the visual layout (ReactFlow) and the execution graph.
- *
- * Trigger types:
- *   - event: fires on a Synap event (entities.create.validated, etc.)
- *   - cron: fires on schedule ("0 9 * * MON")
- *   - webhook: fires on inbound webhook
- *   - manual: user-triggered
- *
- * Steps reference intelligence_commands by ID, with input mapping from prior step outputs.
+ * Declared HERE, once. `@synap/database` (`schema/automations.ts`) imports and
+ * re-exports these declarations to type its JSONB columns, so the pod, the
+ * executor and every client read the same declaration. Pure types: no runtime
+ * code, nothing from the database package.
  */
 /**
  * AutomationTriggerConfig
@@ -2723,9 +2704,9 @@ export interface McpToolPolicy {
  * the type instead of hiding in the data.
  *
  * The canonical list is `@synap-core/types/property-hints` (what the renderer
- * types against). This package cannot import it (types builds against the
- * database), so this is a second copy, held EQUAL to it at compile time by
- * `types/src/property-hints/pod-parity.contract.ts`.
+ * types against). This is a second copy, held EQUAL to it at compile time by
+ * `database/src/wire-parity/property-hints.ts` (this package may now import
+ * `@synap-core/types`; collapsing the copy is a follow-up).
  */
 export type PropertyInputType = "checkbox" | "color" | "date" | "datetime" | "datetime-local" | "email" | "entity" | "entity-select" | "json" | "markdown" | "number" | "person" | "phone" | "richtext" | "select" | "tags" | "tel" | "text" | "textarea" | "url";
 export interface PropertyUIHints {
@@ -3013,6 +2994,12 @@ declare const propertyDefs: import("drizzle-orm/pg-core").PgTableWithColumns<{
 	schema: undefined;
 }>;
 export type PropertyDef = typeof propertyDefs.$inferSelect;
+declare enum ProfileScope {
+	SYSTEM = "system",// Available to all users (pod-wide)
+	SHARED = "shared",// Explicitly shared with specific workspaces via profile_workspace_access
+	WORKSPACE = "workspace",// Owned by a single workspace
+	USER = "user"
+}
 /**
  * Widget Definitions Schema
  *
@@ -5191,6 +5178,9 @@ export interface PlaybookRunExternalAgent {
 	startedAt: string;
 }
 declare const PROJECT_TRACK_STATUSES: readonly [
+	"proposed",
+	"agreed",
+	"ready",
 	"active",
 	"paused",
 	"completed",
@@ -5220,11 +5210,10 @@ export interface EffectiveProperty extends PropertyDef {
  * RendererRef / DeclarativeBlock — MIRROR of `@synap-core/types/renderer-ref`.
  *
  * The canonical declaration (and its docs) lives in that module, which every
- * surface that draws a renderer reads. This package cannot import it —
- * `@synap-core/types` already builds against `@synap/database`, so the
- * reverse edge is a build cycle — so the pod keeps this structural copy, and
- * `packages/types/src/renderer-ref/pod-parity.contract.ts` holds the two
- * EXACTLY equal at compile time. Change both, in the same commit.
+ * surface that draws a renderer reads. The pod keeps this structural copy, and
+ * `packages/database/src/wire-parity/renderer-ref.ts` holds the two EXACTLY
+ * equal at compile time. Change both, in the same commit. (This package may
+ * now import `@synap-core/types`; collapsing the copy is a follow-up.)
  *
  * Stored as JSONB on `profiles.default_renderers`, `renderer_bindings.ref` and
  * inside `workspaces.settings.profileRenderers[slug]`.
@@ -9540,6 +9529,14 @@ export interface UnitStateView {
 	glyph: UnitGlyph;
 	rail: UnitRail;
 }
+declare const LIFECYCLE_CATEGORIES$1: readonly [
+	"open",
+	"active",
+	"paused",
+	"done",
+	"lost"
+];
+type LifecycleCategory$1 = (typeof LIFECYCLE_CATEGORIES$1)[number];
 declare const TRACK_STAGE_POSITIONS: readonly [
 	"done",
 	"active",
@@ -9606,6 +9603,17 @@ export interface TrackStageCheckVerdict {
 	failing: string[];
 	reason?: string;
 }
+declare const TRACK_VERDICTS: readonly [
+	"met",
+	"partly_met",
+	"not_met",
+	"retired",
+	"no_longer_needed",
+	"impossible",
+	"replaced",
+	"mistake"
+];
+export type TrackVerdict = (typeof TRACK_VERDICTS)[number];
 /**
  * WHY a paused track is paused — projected by the pod on every track read.
  *   - `check` — a check stage gate held it (the gate's `metadata.checkGate`
@@ -9651,6 +9659,152 @@ export interface TrackKpi {
 	updatedAt?: string;
 	/** The user (or agent) id that stated `current`. */
 	updatedBy?: string;
+}
+/** A session's deliverables, counted — the progress rail and the owed badge. */
+export interface DeliverableCounts {
+	/** Stamped done. */
+	done: number;
+	/** Done + still owed. A RETIRED slot is in neither: it was let go, not delivered. */
+	total: number;
+	/** Still owed, and the person's (`deliverableOwedBy === "you"`). */
+	owedByYou: number;
+}
+declare const TRACK_WORK_KINDS: readonly [
+	"project",
+	"flow",
+	"operation",
+	"investigation",
+	"incident",
+	"commission",
+	"pathway"
+];
+export type TrackWorkKind = (typeof TRACK_WORK_KINDS)[number];
+declare const TRACK_UNCERTAINTY_LEVELS: readonly [
+	"clear",
+	"complicated",
+	"complex",
+	"chaotic",
+	"unknown"
+];
+export type TrackUncertainty = (typeof TRACK_UNCERTAINTY_LEVELS)[number];
+declare const CRITERION_CHECK_MEANINGS: readonly [
+	"measured",
+	"judged",
+	"handed_over",
+	"learning",
+	"decided_outside",
+	"certified"
+];
+export type CriterionCheckMeaning = (typeof CRITERION_CHECK_MEANINGS)[number];
+declare const CRITERION_ABOUT: readonly [
+	"result",
+	"method"
+];
+export type CriterionAbout = (typeof CRITERION_ABOUT)[number];
+declare const GOAL_ACCEPTANCE_DECISIONS: readonly [
+	"accepted",
+	"changes_asked",
+	"rejected"
+];
+export type GoalAcceptanceDecision = (typeof GOAL_ACCEPTANCE_DECISIONS)[number];
+declare const GOAL_ACCEPTANCE_STATES: readonly [
+	"waiting",
+	"accepted",
+	"changes_asked",
+	"rejected"
+];
+export type GoalAcceptanceState = (typeof GOAL_ACCEPTANCE_STATES)[number];
+/** The stored record of a judge's decision on one goal criterion. */
+export interface GoalCriterionAcceptance {
+	decision: GoalAcceptanceDecision;
+	/** The person who decided. */
+	by: string;
+	/** ISO-8601. */
+	at: string;
+	/** Why, in words — what to change, or why it was rejected. */
+	note?: string;
+}
+declare const GOAL_CRITERION_MARKS: readonly [
+	"met",
+	"claimed",
+	"under_way",
+	"not_met",
+	"not_started"
+];
+export type GoalCriterionMark = (typeof GOAL_CRITERION_MARKS)[number];
+/**
+ * A claim as every goal read returns it (`GoalCriterionView.claim`): who
+ * claimed, in which run, and what backs it — names resolved by the pod,
+ * never looked up by a page (`null` = not known, never an id).
+ */
+export interface GoalCriterionClaim {
+	by: string | null;
+	byName: string | null;
+	sessionId: string;
+	sessionTitle: string | null;
+	/** The evaluation's evidence (links, files, numbers) — `null` when none. */
+	evidence: Record<string, unknown> | null;
+	note: string | null;
+	/** ISO-8601. */
+	at: string;
+}
+/**
+ * One goal criterion as every track read returns it (`TrackView.criteria`):
+ * the stored criterion (the session criterion shape), the judge's stored
+ * decision, and the derived state. `mark` is `null` only on a view that could
+ * not read the goal's runs (a write's fallback) — never a guessed
+ * `not_started`.
+ */
+export interface GoalCriterionView {
+	key: string;
+	statement: string;
+	required?: boolean;
+	check: {
+		capability?: string;
+		evidenceKey?: string;
+		hint?: string;
+		kind: EvaluatorKind;
+	};
+	stageKey?: string;
+	checkKind?: CriterionCheckMeaning;
+	about?: CriterionAbout;
+	/** The judge's stored decision — `null` until one is made. */
+	acceptance: GoalCriterionAcceptance | null;
+	mark: GoalCriterionMark | null;
+	acceptanceState: GoalAcceptanceState | null;
+	meaning: CriterionCheckMeaning;
+	currentValue: string | null;
+	/**
+	 * Who claimed it, in which run, what backs it — the current passing
+	 * evaluation (`null` when none: never claimed, or accepted from an outside
+	 * decision with no run). `undefined` never: a write's fallback reads `null`.
+	 */
+	claim: GoalCriterionClaim | null;
+}
+declare const OPERATION_PERIOD_MARKS: readonly [
+	"met",
+	"not_met",
+	"unmeasured"
+];
+export type OperationPeriodMark = (typeof OPERATION_PERIOD_MARKS)[number];
+export interface OperationPeriodReading {
+	/** ISO-8601, inclusive. */
+	from: string;
+	/** ISO-8601, exclusive. */
+	to: string;
+	mark: OperationPeriodMark;
+}
+declare const WAITING_ON_REASONS: readonly [
+	"input",
+	"approval",
+	"access",
+	"another_work",
+	"outside_world"
+];
+export type WaitingOnReason = (typeof WAITING_ON_REASONS)[number];
+export interface WaitingOnMark {
+	reason: WaitingOnReason;
+	count: number;
 }
 /**
  * WHO is asking for access, on an `access-request` row — a pod-level request
@@ -10563,6 +10717,20 @@ declare const CRITERION_CHECK_KINDS: readonly [
 	"human"
 ];
 export type CriterionCheckKind = (typeof CRITERION_CHECK_KINDS)[number];
+declare const CRITERION_CHECK_MEANINGS$1: readonly [
+	"measured",
+	"judged",
+	"handed_over",
+	"learning",
+	"decided_outside",
+	"certified"
+];
+type CriterionCheckMeaning$1 = (typeof CRITERION_CHECK_MEANINGS$1)[number];
+declare const CRITERION_ABOUT$1: readonly [
+	"result",
+	"method"
+];
+type CriterionAbout$1 = (typeof CRITERION_ABOUT$1)[number];
 /**
  * One BINARY, observable acceptance criterion ("Typecheck passes with 0
  * errors"). Stored on `playbooks.criteria`, `PlaybookStage.criteria` and
@@ -10585,6 +10753,13 @@ export interface SessionCriterion {
 	};
 	/** Set when copied from a stage. */
 	stageKey?: string;
+	/**
+	 * R5 — what kind of check this is, in people's words. Absent ⇒ derived
+	 * from `check.kind` (`criterionMeaning`, `@synap-core/types/units`).
+	 */
+	checkKind?: CriterionCheckMeaning$1;
+	/** R7 — about the result (absent = result) or the method. */
+	about?: CriterionAbout$1;
 }
 /**
  * The normalized shape the Phase-1 adapters produce from builtin IS tools,
@@ -11878,6 +12053,40 @@ export interface ProposalExecutorResult {
 	identities?: Array<IdentityReceipt & {
 		ref: string;
 	}>;
+	/**
+	 * A LARGE approval handed to the background job (approve door only): the
+	 * gates passed and the apply is RUNNING, not done. `approvalRun` is its
+	 * progress as of now; poll `proposals.approvalProgress`. `joined` = an
+	 * apply of this proposal was already running and this approve joined it.
+	 */
+	queued?: true;
+	joined?: boolean;
+	approvalRun?: ApprovalRunView;
+}
+/** One attempt, as every reader sees it. */
+export interface ApprovalRunView {
+	runId: string;
+	proposalId: string;
+	/** `stalled` = stored `running`, but its heartbeat stopped. */
+	state: "failed" | "queued" | "running" | "stalled" | "succeeded";
+	phase: "entities" | "finishing" | "relations" | null;
+	total: number;
+	done: number;
+	created: number;
+	linked: number;
+	failed: number;
+	/** A safe sentence (failed / stalled), never raw thrown text. */
+	error: string | null;
+	/** Who approved — the only person who may resume a partial attempt. */
+	approverId: string;
+	/** Doors to what was created, once it succeeded. */
+	primaryId: string | null;
+	sessionId: string | null;
+	/** Connections that did not land, from the finished approval. */
+	relationsFailed: number;
+	startedAt: string | null;
+	finishedAt: string | null;
+	updatedAt: string;
 }
 /**
  * The complete created-rows record. Extends the shared
@@ -12401,6 +12610,12 @@ export interface DeviceRequestView {
 export interface OAuthAppOfferItem {
 	permission: string;
 	workspaces: Array<{
+		/**
+		 * The template the space was made from (`workspaces.package_slug`), or
+		 * null. The consent screen starts with the spaces whose template the app
+		 * declared (`synap_templates`); it never changes what is offered.
+		 */
+		templateSlug: string | null;
 		workspaceId: string;
 		workspaceName: string;
 	}>;
@@ -12482,7 +12697,7 @@ export interface AppSignInDescription {
 	/** "<App> will act as you in: Sales, Content." */
 	headline: string;
 	spaces: AppSignInSpace[];
-	/** "It cannot delete, manage keys, approve outside these spaces, or see other spaces." */
+	/** "It cannot delete, manage keys, approve outside these spaces, or see anything outside what a member of these spaces sees." */
 	cannot: string;
 	/** How a write through it lands, and how long the sign-in lasts. */
 	note: string;
@@ -12525,9 +12740,13 @@ export interface OAuthAppConsent {
 	/**
 	 * Each permission the app asked for AND declared, with the spaces this
 	 * person may give it in (`oauthAppOffer`). An empty list means the person
-	 * has no space to give that permission in.
+	 * has no space to give that permission in. `reason`: the document's own
+	 * `synap_requests[].reason` (display text, `displayReason`), or null —
+	 * the developer's words, shown as text, never a reason to trust the app.
 	 */
-	permissions: OAuthAppOfferItem[];
+	permissions: Array<OAuthAppOfferItem & {
+		reason: string | null;
+	}>;
 	/** What this person approved for this app before (re-consent pre-ticks it). */
 	approved: AppApprovedRequest[];
 	/**
@@ -12535,6 +12754,12 @@ export interface OAuthAppConsent {
 	 * offers to create a space from one when a permission has no space.
 	 */
 	templates: string[];
+	/**
+	 * The kinds it asks for that are pod-wide (`oauthAppPodWideKinds`): such an
+	 * entity reaches it only through a role in a space it is given, and the
+	 * screen says so on that kind's row.
+	 */
+	podWideKinds: string[];
 	/** Scopes it asked for that a pod app is never given (`mcp.*`), shown as dropped. */
 	ignoredScopes: string[];
 }
@@ -14210,14 +14435,6 @@ export type ExecuteCapabilityResult = {
 	kind: "not_found";
 	message: string;
 };
-declare const LIFECYCLE_CATEGORIES$1: readonly [
-	"open",
-	"active",
-	"paused",
-	"done",
-	"lost"
-];
-type LifecycleCategory$1 = (typeof LIFECYCLE_CATEGORIES$1)[number];
 export interface DependencyNodeRef {
 	kind: string;
 	id: string;
@@ -15048,12 +15265,15 @@ export type PaginatedResponse<T> = {
 	};
 };
 export interface RailPin {
-	/** `view:<viewId>` or `kind:<profileSlug>` — one pin per surface. */
+	/** `view:<viewId>`, `kind:<profileSlug>` or `track:<trackId>` — one pin per surface. */
 	key: string;
-	profileSlug: string;
+	/** The kind the surface lists — `null` on a goal pin. */
+	profileSlug: string | null;
 	/** The saved pipeline view, when the pin is one. */
 	viewId: string | null;
-	/** The name the person (or the template) gave it; null = the kind's name. */
+	/** The goal, when the pin is one ("This week", D4) — then `profileSlug` is null. */
+	trackId: string | null;
+	/** The name the person (or the template) gave it; null = the kind's (or the goal's) name. */
 	label: string | null;
 	/** `template` = suggested by a space's sidebar; `user` = pinned by hand. */
 	source: "template" | "user";
@@ -16568,6 +16788,19 @@ export interface SessionOutputDependencies {
 	/** Sessions waiting on THIS session's outputs (only while it is open). */
 	outputsWaitedOnBy: OutputWaitedOnBy[];
 }
+/** The loop as stored on the goal (`project_tracks.loop`, 0350). */
+export interface GoalLoopSettings {
+	on: boolean;
+	/** Proposals per rolling week, 1 to {@link GOAL_LOOP_MAX_PER_WEEK}. */
+	perWeek: number;
+	/**
+	 * When a person last switched it on (ISO-8601) — failures before it no
+	 * longer count: switching the loop on again is "try again".
+	 */
+	onAt: string | null;
+	/** Who set it last: the person (the approver, for an agent's proposal). */
+	by: string | null;
+}
 /** Doors the event names — each opens that object's own page. */
 export interface TrackHistoryRefs {
 	sessionId?: string;
@@ -16644,14 +16877,65 @@ export interface TrackHistoryWire {
 	/** A source hit its scan cap — older events exist and are not listed. */
 	truncated: boolean;
 }
-/** A session's deliverables, counted — the progress rail and the owed badge. */
-export interface DeliverableCounts {
-	/** Stamped done. */
-	done: number;
-	/** Done + still owed. A RETIRED slot is in neither: it was let go, not delivered. */
-	total: number;
-	/** Still owed, and the person's (`deliverableOwedBy === "you"`). */
-	owedByYou: number;
+declare const TRACK_PARTICIPANT_ROLES: readonly [
+	"owner",
+	"judge",
+	"delegate",
+	"integrator"
+];
+export type TrackParticipantRole = (typeof TRACK_PARTICIPANT_ROLES)[number];
+declare const TRACK_PRINCIPAL_KINDS: readonly [
+	"person",
+	"agent"
+];
+export type TrackPrincipalKind = (typeof TRACK_PRINCIPAL_KINDS)[number];
+declare const TRACK_COMMITMENT_STATES: readonly [
+	"proposed",
+	"accepted",
+	"countered",
+	"declined",
+	"reported_impossible",
+	"done"
+];
+export type TrackCommitmentState = (typeof TRACK_COMMITMENT_STATES)[number];
+/** One participant as every read returns it (`TrackView.participants`). */
+export interface TrackParticipant {
+	id: string;
+	principalKind: TrackPrincipalKind;
+	/** A user id: the person's, or the agent's own user row. */
+	principalId: string;
+	/**
+	 * The name a person reads — resolved by the pod (the session roster's and
+	 * the proposals' `actorDisplayName`: "Claude Code on devbox" for an agent on
+	 * a computer), never looked up by a page. `null` = unknown, never invented.
+	 */
+	displayName: string | null;
+	role: TrackParticipantRole;
+	/** What the delegate commits to — `null` for owner and judge. */
+	commitment: string | null;
+	/** `null` for every role but delegate. */
+	commitmentState: TrackCommitmentState | null;
+	/** The delegate's counter-offer, in words (state `countered`). */
+	counterText: string | null;
+	/** Why it cannot be done (state `reported_impossible`). */
+	reportedReason: string | null;
+	/** ISO-8601 — when it was reported impossible. */
+	reportedAt: string | null;
+	/** ISO-8601 — when the owner or judge acknowledged the report. */
+	acknowledgedAt: string | null;
+	/** Who made the last decision on this row (added it, or answered it). */
+	decidedBy: string;
+	/** ISO-8601. */
+	decidedAt: string;
+	/** ISO-8601 — when the participant was added. */
+	createdAt: string;
+	/**
+	 * ISO-8601 — a delegate with an OPEN commitment: the last time they did
+	 * anything on this goal (answered the commitment, or a session of the goal
+	 * they work in moved), else when they were added. `null` for every other
+	 * row. Words: `trackSilenceLabel` ("Silent 6 h").
+	 */
+	silentSince: string | null;
 }
 /**
  * One produced item (`SessionOutput` from the pod's three-ledger join).
@@ -17741,7 +18025,7 @@ export interface PlaybookCandidate {
 	reason: string;
 	/** `project` = a method run as a TRACK; `session` = one sitting of work. */
 	scope: PlaybookScope;
-	/** The user noun for that scope ("Track template" / "Work template"). */
+	/** The user noun for that scope ("Goal template" / "Work template"). */
 	templateKind: string;
 }
 /**
@@ -18539,6 +18823,72 @@ export interface TrackView {
 	 * (with `updatedAt` / `updatedBy`), never measured.
 	 */
 	kpi: TrackKpi | null;
+	/**
+	 * How the track ENDED (0344, R1) — `null` while it is live, and on a track
+	 * dropped before verdicts existed. Read with its category: done verdicts
+	 * (met · partly_met · not_met, or retired for an operation) on a closed
+	 * track, lost ones on a dropped one.
+	 */
+	verdict: TrackVerdict | null;
+	/** Why, in words — always present for `impossible` and `replaced`. */
+	verdictReason: string | null;
+	/** The person who closed it (the approver when an agent proposed it). */
+	verdictBy: string | null;
+	/** ISO-8601 — when it was closed; `null` when not recorded (before 0344). */
+	verdictAt: string | null;
+	/** What "done" looks like, in words (0345) — `null` when unsaid. */
+	endState: string | null;
+	/**
+	 * The goal's criteria (0345): none (a lasting goal) or 2–5, each with the
+	 * judge's stored decision and its DERIVED state — `mark` (met · claimed ·
+	 * under_way · not_met · not_started), `acceptanceState`, `meaning` (R5) and
+	 * a measured criterion's `currentValue`. `mark` is `null` only on a write's
+	 * fallback view (the goal's runs could not be read) — never a guess.
+	 */
+	criteria: GoalCriterionView[];
+	/** When to stop (0345) — `[]` when none said. */
+	dropConditions: string[];
+	/**
+	 * The goal's loop (0350, W4): whether it proposes its next run while a
+	 * required criterion is unmet, its weekly budget, when a person last
+	 * switched it on and who. Never set reads as OFF.
+	 */
+	loop: GoalLoopSettings;
+	/** The kind of work (decision 4) — `null` when not set. */
+	workKind: TrackWorkKind | null;
+	/** How well the way is known (decision 4) — `null` when not set. */
+	uncertainty: TrackUncertainty | null;
+	/**
+	 * The person who confirmed kind + uncertainty, and when (ISO-8601). Both
+	 * `null` while they are the AI's proposal, not yet confirmed.
+	 */
+	kindConfirmedBy: string | null;
+	kindConfirmedAt: string | null;
+	/**
+	 * DERIVED — every required criterion met or claimed and one at least
+	 * claimed (a mark inside the active category, never a status). `null` on a
+	 * write's fallback view.
+	 */
+	inReview: boolean | null;
+	/**
+	 * DERIVED (R6) — an OPERATION's reading for THIS week (Monday 00:00 UTC):
+	 * met / not met / unmeasured from its required criteria's grades in the
+	 * week. `null` for any other kind of work, and on a write's fallback view.
+	 */
+	periodReading: OperationPeriodReading | null;
+	/**
+	 * DERIVED (R4) — what the goal waits on, one mark per reason present
+	 * (input · approval · access · another_work · outside_world) with how many.
+	 * `[]` = waiting on nothing; `null` on a write's fallback view.
+	 */
+	waitingOn: WaitingOnMark[] | null;
+	/**
+	 * WHO IS ON IT (0348, W3): owner, judge, delegates with their commitment
+	 * and its state ("silent since" for a delegate who still owes something),
+	 * integrator. Absent when not read (a write's fallback view) — never a
+	 * fabricated empty list. Owner first, then judge, delegates, integrator.
+	 */
+	participants?: TrackParticipant[];
 	createdAt: string;
 	updatedAt: string;
 }
@@ -18601,6 +18951,11 @@ export type StartStageSessionResult = ({
 	reviewUrl?: string;
 	stageKey: string | null;
 })) & StageSessionDomainOutcome;
+export type ChangeTrackParticipantsResult = {
+	participants: TrackParticipant[];
+	status: "updated";
+	trackId: string;
+} | ProposedOutcome;
 export interface ActionDescriptor {
 	id: string;
 	kind: "browse_marketplace" | "capture" | "connect_source" | "import_data" | "link_website" | "open_primary_surface" | "resume_guided_setup" | "start_empty" | "start_guided_setup";
@@ -30789,12 +31144,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				channelId?: string | undefined;
 				correlationId?: string | undefined;
 				criteria?: {
+					about?: "method" | "result" | undefined;
 					check: {
 						capability?: string | undefined;
 						evidenceKey?: string | undefined;
 						hint?: string | undefined;
 						kind: "capability" | "evidence" | "human" | "judge";
 					};
+					checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 					key: string;
 					required?: boolean | undefined;
 					stageKey?: string | undefined;
@@ -31136,12 +31493,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						proposalType: "dev.deploy_approval" | "dev.plan_approval";
 					} | undefined;
 					criteria?: {
+						about?: "method" | "result" | undefined;
 						check: {
 							capability?: string | undefined;
 							evidenceKey?: string | undefined;
 							hint?: string | undefined;
 							kind: "capability" | "evidence" | "human" | "judge";
 						};
+						checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 						key: string;
 						required?: boolean | undefined;
 						stageKey?: string | undefined;
@@ -36554,12 +36913,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					name?: string | undefined;
 				} | undefined;
 				criteria?: {
+					about?: "method" | "result" | undefined;
 					check: {
 						capability?: string | undefined;
 						evidenceKey?: string | undefined;
 						hint?: string | undefined;
 						kind: "capability" | "evidence" | "human" | "judge";
 					};
+					checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 					key: string;
 					required?: boolean | undefined;
 					stageKey?: string | undefined;
@@ -36761,12 +37122,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						proposalType: "dev.deploy_approval" | "dev.plan_approval";
 					} | undefined;
 					criteria?: {
+						about?: "method" | "result" | undefined;
 						check: {
 							capability?: string | undefined;
 							evidenceKey?: string | undefined;
 							hint?: string | undefined;
 							kind: "capability" | "evidence" | "human" | "judge";
 						};
+						checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 						key: string;
 						required?: boolean | undefined;
 						stageKey?: string | undefined;
@@ -37359,12 +37722,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				agentUserId?: string | undefined;
 				channelSpec?: Record<string, unknown> | undefined;
 				criteria?: {
+					about?: "method" | "result" | undefined;
 					check: {
 						capability?: string | undefined;
 						evidenceKey?: string | undefined;
 						hint?: string | undefined;
 						kind: "capability" | "evidence" | "human" | "judge";
 					};
+					checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 					key: string;
 					required?: boolean | undefined;
 					stageKey?: string | undefined;
@@ -37558,12 +37923,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						proposalType: "dev.deploy_approval" | "dev.plan_approval";
 					} | undefined;
 					criteria?: {
+						about?: "method" | "result" | undefined;
 						check: {
 							capability?: string | undefined;
 							evidenceKey?: string | undefined;
 							hint?: string | undefined;
 							kind: "capability" | "evidence" | "human" | "judge";
 						};
+						checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 						key: string;
 						required?: boolean | undefined;
 						stageKey?: string | undefined;
@@ -37709,8 +38076,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		pinSurface: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
+				includeGoals?: boolean | undefined;
 				label?: string | undefined;
-				profileSlug: string;
+				profileSlug?: string | undefined;
+				trackId?: string | undefined;
 				viewId?: string | undefined;
 			};
 			meta: object;
@@ -37719,7 +38088,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 		}>;
 		railPins: import("@trpc/server").TRPCQueryProcedure<{
-			input: void;
+			input: {
+				includeGoals?: boolean | undefined;
+			} | undefined;
 			meta: object;
 			output: {
 				pins: RailPin[];
@@ -37727,6 +38098,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		reorderRailPins: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
+				includeGoals?: boolean | undefined;
 				keys: string[];
 			};
 			meta: object;
@@ -37773,6 +38145,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		unpinSurface: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
+				includeGoals?: boolean | undefined;
 				key: string;
 			};
 			meta: object;
@@ -39509,6 +39882,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			} | undefined;
 			meta: object;
 			output: ApprovalPatternScan;
+		}>;
+		approvalProgress: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				proposalId: string;
+			};
+			meta: object;
+			output: ApprovalRunView | null;
 		}>;
 		approve: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
@@ -43436,7 +43816,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				};
 				name: string;
 				schema: {
-					properties: Record<string, import("zod").ZodType<unknown, unknown, import("zod/v4/core/schemas.js").$ZodTypeInternals<unknown, unknown>>>;
+					properties: Record<string, import("zod").ZodTypeAny<unknown, unknown, import("zod/v4/core/schemas.js").$ZodTypeInternals<unknown, unknown>>>;
 					required: string[];
 					type: string;
 				};
@@ -44229,6 +44609,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		meta: object;
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		acceptCriterion: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				criterionKey: string;
+				decision: "accepted" | "changes_asked" | "rejected";
+				id: string;
+				note?: string | undefined;
+			};
+			meta: object;
+			output: {
+				status: "unchanged" | "updated";
+				track: TrackView;
+			};
+		}>;
 		addStage: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				id: string;
@@ -44268,6 +44661,51 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				track: TrackView;
 			};
 		}>;
+		changeParticipants: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				change: {
+					commitment?: string | undefined;
+					op: "add";
+					principalId: string;
+					role: "delegate" | "integrator" | "judge";
+				} | {
+					op: "remove";
+					participantId: string;
+				} | {
+					move: "accept" | "counter" | "decline" | "report_impossible";
+					op: "move";
+					participantId: string;
+					text?: string | undefined;
+				} | {
+					op: "acknowledge";
+					participantId: string;
+				};
+				id: string;
+				reasoning?: string | undefined;
+			};
+			meta: object;
+			output: ChangeTrackParticipantsResult;
+		}>;
+		convertFromEntity: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				entityId: string;
+				name?: string | undefined;
+				projectId?: string | undefined;
+				reasoning?: string | undefined;
+			};
+			meta: object;
+			output: (ProposedOutcome & {
+				missingDomains: string[];
+			} & {
+				entityId: string;
+				notCarried: string[];
+			}) | {
+				entityId: string;
+				notCarried: string[];
+				status: "exists" | "started";
+				track: TrackView;
+			};
+		}>;
 		get: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				id: string;
@@ -44284,17 +44722,51 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
+				cursor?: string | undefined;
 				includeArchived?: boolean | undefined;
-				projectId: string;
+				limit?: number | undefined;
+				projectId?: string | undefined;
 			};
 			meta: object;
 			output: {
 				items: TrackView[];
+				nextCursor: string | null;
+			};
+		}>;
+		reopen: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				name?: string | undefined;
+				reasoning?: string | undefined;
+			};
+			meta: object;
+			output: (ProposedOutcome & {
+				missingDomains: string[];
+			}) | {
+				status: "exists" | "started";
+				track: TrackView;
 			};
 		}>;
 		setDirection: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
+				confirmKind?: boolean | undefined;
+				criteria?: {
+					about?: "method" | "result" | undefined;
+					check: {
+						capability?: string | undefined;
+						evidenceKey?: string | undefined;
+						hint?: string | undefined;
+						kind: "capability" | "evidence" | "human" | "judge";
+					};
+					checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
+					key: string;
+					required?: boolean | undefined;
+					stageKey?: string | undefined;
+					statement: string;
+				}[] | null | undefined;
 				direction?: string | null | undefined;
+				dropConditions?: string[] | null | undefined;
+				endState?: string | null | undefined;
 				id: string;
 				kpi?: {
 					current?: number | undefined;
@@ -44302,7 +44774,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					target?: number | undefined;
 					unit?: string | undefined;
 				} | null | undefined;
+				loop?: {
+					on: boolean;
+					perWeek?: number | undefined;
+				} | null | undefined;
 				reasoning?: string | undefined;
+				uncertainty?: "chaotic" | "clear" | "complex" | "complicated" | "unknown" | null | undefined;
+				workKind?: "commission" | "flow" | "incident" | "investigation" | "operation" | "pathway" | "project" | null | undefined;
 			};
 			meta: object;
 			output: ProposedOutcome | {
@@ -44326,7 +44804,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				id: string;
 				reasoning?: string | undefined;
-				status: "active" | "archived" | "completed" | "paused";
+				status: "active" | "agreed" | "archived" | "completed" | "paused" | "proposed" | "ready";
+				verdict?: "impossible" | "met" | "mistake" | "no_longer_needed" | "not_met" | "partly_met" | "replaced" | "retired" | undefined;
+				verdictReason?: string | undefined;
 			};
 			meta: object;
 			output: ProposedOutcome | {
@@ -44336,17 +44816,54 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		start: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
+				confirmKind?: boolean | undefined;
+				criteria?: {
+					about?: "method" | "result" | undefined;
+					check: {
+						capability?: string | undefined;
+						evidenceKey?: string | undefined;
+						hint?: string | undefined;
+						kind: "capability" | "evidence" | "human" | "judge";
+					};
+					checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
+					key: string;
+					required?: boolean | undefined;
+					stageKey?: string | undefined;
+					statement: string;
+				}[] | null | undefined;
 				direction?: string | undefined;
+				dropConditions?: string[] | null | undefined;
+				endState?: string | null | undefined;
 				kpi?: {
 					current?: number | undefined;
 					label?: string | undefined;
 					target?: number | undefined;
 					unit?: string | undefined;
 				} | undefined;
+				loop?: {
+					on: boolean;
+					perWeek?: number | undefined;
+				} | null | undefined;
 				name?: string | undefined;
 				params?: Record<string, unknown> | undefined;
 				playbookId?: string | undefined;
 				projectId: string;
+				reasoning?: string | undefined;
+				uncertainty?: "chaotic" | "clear" | "complex" | "complicated" | "unknown" | null | undefined;
+				workKind?: "commission" | "flow" | "incident" | "investigation" | "operation" | "pathway" | "project" | null | undefined;
+			};
+			meta: object;
+			output: (ProposedOutcome & {
+				missingDomains: string[];
+			}) | {
+				status: "exists" | "started";
+				track: TrackView;
+			};
+		}>;
+		startOperationFrom: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				name?: string | undefined;
 				reasoning?: string | undefined;
 			};
 			meta: object;
@@ -46250,12 +46767,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						}[] | undefined;
 						channelSpec?: Record<string, unknown> | undefined;
 						criteria?: {
+							about?: "method" | "result" | undefined;
 							check: {
 								capability?: string | undefined;
 								evidenceKey?: string | undefined;
 								hint?: string | undefined;
 								kind: "capability" | "evidence" | "human" | "judge";
 							};
+							checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 							key: string;
 							required?: boolean | undefined;
 							stageKey?: string | undefined;
@@ -46458,12 +46977,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								proposalType: "dev.deploy_approval" | "dev.plan_approval";
 							} | undefined;
 							criteria?: {
+								about?: "method" | "result" | undefined;
 								check: {
 									capability?: string | undefined;
 									evidenceKey?: string | undefined;
 									hint?: string | undefined;
 									kind: "capability" | "evidence" | "human" | "judge";
 								};
+								checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 								key: string;
 								required?: boolean | undefined;
 								stageKey?: string | undefined;
@@ -46694,7 +47215,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				invitedBy: string;
 				role: string;
-				token: string;
 				type: "pod" | "workspace";
 				workspaceId: string | null;
 				workspaceName: string | null;
@@ -46713,7 +47233,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				invitedBy: string;
 				role: string;
-				token: string;
 				type: "pod" | "workspace";
 				workspaceId: string | null;
 			}[];
@@ -46951,6 +47470,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: ReconcileReport;
+		}>;
+		regenerateInvite: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+			};
+			meta: object;
+			output: {
+				expiresAt: Date;
+				id: string;
+				token: string;
+			};
 		}>;
 		rejectInvite: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
