@@ -27,6 +27,12 @@ import {
   handleWhiteboardAutoSave,
 } from "./snapshot-worker.js";
 import { handleEntityEmbedding } from "./entity-embedding.js";
+import {
+  DOCUMENT_PASSAGES_QUEUE,
+  DOCUMENT_PASSAGES_SWEEP_QUEUE,
+  handleDocumentPassages,
+  handleDocumentPassagesSweep,
+} from "./document-passages.js";
 import { handleWebhookDelivery } from "./webhook-worker.js";
 import { handleAiAnalysis } from "./ai-workers.js";
 import { handleMaterialize } from "./materializer.js";
@@ -285,6 +291,10 @@ const ALL_QUEUES = [
   "whiteboard-restore",
   "whiteboard-autosave",
   "entity-embedding",
+  // Recall passages of a document body (on-demand per document + the 15-min
+  // revision sweep floor; document-passages.ts).
+  DOCUMENT_PASSAGES_QUEUE,
+  DOCUMENT_PASSAGES_SWEEP_QUEUE,
   "webhook-delivery",
   "ai-analysis",
   "materialize",
@@ -639,6 +649,16 @@ export async function registerAllWorkers(): Promise<void> {
     handleEntityEmbedding(job)
   );
   logger.info("Registered worker: entity-embedding");
+
+  // Document passages (a document body as recall passages, A-W2): on each
+  // document create/update (reactor) and the revision sweep floor.
+  await boss.work(DOCUMENT_PASSAGES_QUEUE, async ([job]: any[]) => {
+    await handleDocumentPassages(job);
+  });
+  await boss.work(DOCUMENT_PASSAGES_SWEEP_QUEUE, async () => {
+    await handleDocumentPassagesSweep();
+  });
+  logger.info("Registered workers: document-passages, document-passages-sweep");
 
   // Webhook delivery
   await boss.work("webhook-delivery", async ([job]: any[]) =>

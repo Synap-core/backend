@@ -6,25 +6,48 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 // NOTE ON THE TEXT BUILDER MOCK: it returns a fixed string but the assertions
 // below inspect the ARGUMENTS it received (title, documentText), so the tests
 // pin what the worker actually assembled — not merely that it called something.
-const { selectRows, sqlMock, fetchMock, buildTextMock, resolveEndpointMock } =
-  vi.hoisted(() => ({
-    // The worker issues up to TWO selects per job (the entity row, then the
-    // latest document_version when the entity has a documentId). `value` is a
-    // QUEUE consumed in call order — one entry per expected select — so a test
-    // can drive both without the second silently re-reading the first's rows.
-    selectRows: { value: [] as Array<Array<Record<string, unknown>>> },
-    sqlMock: vi.fn(async () => undefined),
-    fetchMock: vi.fn(),
-    buildTextMock: vi.fn(() => "text-to-embed"),
-    resolveEndpointMock: vi.fn(async () => ({
-      endpoint: "http://is.local",
-      apiKey: "test-key",
-    })),
-  }));
+const {
+  selectRows,
+  sqlMock,
+  fetchMock,
+  buildTextMock,
+  resolveEndpointMock,
+  bodies,
+} = vi.hoisted(() => ({
+  // The worker issues up to TWO selects per job (the entity row, then the
+  // latest document_version when the entity has a documentId). `value` is a
+  // QUEUE consumed in call order — one entry per expected select — so a test
+  // can drive both without the second silently re-reading the first's rows.
+  selectRows: { value: [] as Array<Array<Record<string, unknown>>> },
+  sqlMock: vi.fn(async () => undefined),
+  fetchMock: vi.fn(),
+  buildTextMock: vi.fn(() => "text-to-embed"),
+  resolveEndpointMock: vi.fn(async () => ({
+    endpoint: "http://is.local",
+    apiKey: "test-key",
+  })),
+  // The STORED body (`loadDocumentBodyTexts`), per document id.
+  bodies: {
+    texts: new Map<string, string>(),
+    failed: new Map<string, string>(),
+  },
+}));
 
 vi.mock("@synap/database", () => ({
   sql: sqlMock,
   resolveDefaultIntelligenceEndpoint: resolveEndpointMock,
+  loadDocumentBodyTexts: vi.fn(async (_db: unknown, ids: string[]) => ({
+    texts: new Map(
+      ids
+        .filter((id) => bodies.texts.has(id))
+        .map((id) => [id, bodies.texts.get(id)!])
+    ),
+    failed: new Map(
+      ids
+        .filter((id) => bodies.failed.has(id))
+        .map((id) => [id, bodies.failed.get(id)!])
+    ),
+  })),
   entities: {
     id: "entities.id",
     title: "entities.title",
@@ -76,6 +99,8 @@ const asJob = (data: Record<string, unknown>) =>
 
 beforeEach(() => {
   selectRows.value = [];
+  bodies.texts.clear();
+  bodies.failed.clear();
   sqlMock.mockClear();
   buildTextMock.mockClear();
   fetchMock.mockReset();
@@ -118,7 +143,7 @@ describe("handleEntityEmbedding", () => {
     expect(sqlMock).toHaveBeenCalledTimes(1);
   });
 
-  it("folds the linked document's latest version text into the embedding", async () => {
+  it("folds the linked document's latest version text into the embedding when the stored body has no text (an uploaded binary's extracted text)", async () => {
     // Entity row carries a documentId → the worker runs a SECOND select for the
     // latest document_version and must pass its content through as documentText.
     selectRows.value = [
@@ -146,5 +171,57 @@ describe("handleEntityEmbedding", () => {
         documentText: "the document body",
       })
     );
+  });
+
+  it("folds the STORED body, not the stale checkpoint, when the document has text (A-W2)", async () => {
+    selectRows.value = [
+      [
+        {
+          title: "Spec",
+          type: "note",
+          preview: null,
+          properties: null,
+          documentId: "d1",
+        },
+      ],
+      // The checkpoint row: never read when the stored body has text.
+      [{ content: "the old checkpoint text" }],
+    ];
+    bodies.texts.set("d1", "# Pricing\n\nThe seat price is **49 EUR**.");
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ embedding: new Array(1536).fill(0.1) }),
+    });
+
+    await handleEntityEmbedding(asJob({ entityId: "e4", userId: "u4" }));
+
+    const { documentText } = buildTextMock.mock.calls[0]![0] as unknown as {
+      documentText: string;
+    };
+    // Prose (markdown-core plain text), from the stored body.
+    expect(documentText).toContain("The seat price is 49 EUR.");
+    expect(documentText).not.toContain("**");
+    expect(documentText).not.toContain("old checkpoint");
+  });
+
+  it("a body that cannot be read throws (retried), never embeds without it", async () => {
+    selectRows.value = [
+      [
+        {
+          title: "Spec",
+          type: "note",
+          preview: null,
+          properties: null,
+          documentId: "d1",
+        },
+      ],
+    ];
+    bodies.failed.set("d1", "storage unreachable");
+
+    await expect(
+      handleEntityEmbedding(asJob({ entityId: "e5", userId: "u5" }))
+    ).rejects.toThrow(/storage unreachable/);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(sqlMock).not.toHaveBeenCalled();
   });
 });

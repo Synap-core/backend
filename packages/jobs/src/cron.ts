@@ -85,6 +85,10 @@ import {
   CHAT_TURN_REAPER_CRON,
 } from "./workers/chat-turn-reaper.js";
 import {
+  DOCUMENT_PASSAGES_SWEEP_QUEUE,
+  DOCUMENT_PASSAGES_SWEEP_CRON,
+} from "./workers/document-passages.js";
+import {
   LIFECYCLE_TRANSITION_SWEEPER_QUEUE,
   LIFECYCLE_TRANSITION_SWEEPER_CRON,
 } from "./workers/lifecycle-transition-sweeper.js";
@@ -258,6 +262,18 @@ export async function registerCronSchedules(): Promise<void> {
     {}
   );
   logger.info("Registered cron: session-recall-sweep (every 2min)");
+
+  // Document passages sweep (every 15min — re-queues the passage build of any
+  // document whose passages were cut from an older content revision, so an
+  // edit whose event was missed self-heals; never-built documents are the
+  // backfill script's)
+  await scheduleSafe(
+    boss,
+    DOCUMENT_PASSAGES_SWEEP_QUEUE,
+    DOCUMENT_PASSAGES_SWEEP_CRON,
+    {}
+  );
+  logger.info("Registered cron: document-passages-sweep (every 15min)");
 
   // Playbook run reaper (every ~30min — force-fails playbook_runs stuck
   // 'running' past PLAYBOOK_RUN_REAPER_STALE_HOURS whose session went quiet;
