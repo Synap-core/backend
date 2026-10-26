@@ -158,12 +158,19 @@ describe("Hub REST route classes (derived from the served routes)", () => {
     expect(count("read")).toBeGreaterThan(100);
     expect(count("write")).toBeGreaterThan(150);
     expect(count("owner-wide")).toBeGreaterThanOrEqual(5);
-    // The read check sees the handlers' own code: these name the door's
-    // write floor today (the attachments / uploads routes, rest/entities.ts).
-    const gated = routes.filter(
-      (r) => classOf(r) === "write" && WRITE_GATE.test(r.source)
+    // The read check sees the handlers' own code: the uploads routes name the
+    // door's write floor (rest/entities.ts). Measured 2026-10-26: 7 write
+    // routes name a gate in their own handler source.
+    const gated = routes
+      .filter((r) => classOf(r) === "write" && WRITE_GATE.test(r.source))
+      .map((r) => `${r.method} ${r.path}`);
+    expect(gated).toEqual(
+      expect.arrayContaining([
+        "POST /files/uploads",
+        "POST /files/uploads/finalize",
+      ])
     );
-    expect(gated.length).toBeGreaterThanOrEqual(10);
+    expect(gated.length).toBeGreaterThanOrEqual(5);
   });
 
   it("a route declared `read` (a POST read) reaches no write gate", () => {
