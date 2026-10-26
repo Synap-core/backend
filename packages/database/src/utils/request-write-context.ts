@@ -396,9 +396,7 @@ export function clientKeyForApiKey(
 ): string | undefined {
   if (key.keyType === "is_internal") return undefined;
   const conv = normalizeConversationId(conversationId);
-  return conv
-    ? `key:${key.id}${CONVERSATION_SEP}${conv}`
-    : perCallClientKey(`key:${key.id}`);
+  return conv ? `key:${key.id}${CONVERSATION_SEP}${conv}` : `key:${key.id}`;
 }
 
 /**
