@@ -57,6 +57,7 @@ import {
 import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
 import { gateCapabilityExecution } from "../services/capabilities/gate-capability-execution.js";
 import { createPendingProposal } from "../utils/permission-check.js";
+import { grantWriteDenial } from "../utils/grant-write-check.js";
 import {
   resolveNotEnabledRefusal,
   type CapabilityEnableOffer,
@@ -782,8 +783,26 @@ export async function sendExternalMessage(
       eq(channels.channelType, ChannelType.EXTERNAL),
       eq(channels.externalId as any, threadId)
     ),
-    columns: { id: true, externalSource: true },
+    columns: { id: true, externalSource: true, workspaceId: true },
   });
+
+  // The calling key's grant (task d890410b). A send through the person's
+  // connected account is `messaging.send` — a verb only `*` or a pattern that
+  // names it grants — in the space of the conversation's channel, never the
+  // caller's (a pod-wide or unmirrored thread is pod scope: a key pinned to a
+  // space fails closed). Refused, never proposed, and before the agent gate
+  // below: a reviewer approving a send the key was never allowed to make
+  // would widen it. A person's own key is bounded too (that branch has no
+  // gate). No grant (a signed-in session, a job) → no-op. An approved replay
+  // was bounded when it was filed.
+  if (!input.alreadyApproved) {
+    const denial = await grantWriteDenial({
+      subjectType: "messaging",
+      action: "send",
+      workspaceId: linkedChannel?.workspaceId ?? null,
+    });
+    if (denial) return { success: false, error: denial };
+  }
 
   const provider = linkedChannel?.externalSource ?? undefined;
   const connector = await getMessagingConnector(provider);

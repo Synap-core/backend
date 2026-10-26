@@ -39,7 +39,9 @@ import {
 import { dispatchLifecycleTransition } from "@synap/events";
 import { createLogger } from "@synap-core/core";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
+import { reachedFacetGrantSpace } from "../../utils/grant-write-check.js";
 import { ownWorkOrganiseForTaskClose } from "../governance/own-organise.js";
+import { mayWriteStatusTarget } from "./status-write-floor.js";
 import { markProposalNotificationsActioned } from "../../notifications/mark-proposal-notifications-actioned.js";
 
 const logger = createLogger({ module: "move-status" });
@@ -160,6 +162,26 @@ export async function moveStatus(
     return { status: "refused", code: resolved.code, reason: resolved.reason };
   }
   const { target } = resolved;
+  // WRITE FLOOR before anything else is said about the thing. A mover must be
+  // able to TARGET it for a write — the floor the update doors apply
+  // (`entities.update`: `entityWriteVisibleWhere`; `entities.updateFacet`:
+  // `canWriteFacet`) — not merely READ it. Doors that accept a subject on read
+  // visibility (a session's subject: `isOutputRefVisible`) reach this door
+  // too, and governance below runs on the CALLER's lens for a pod-wide row,
+  // so a reader of a shared pod-wide row (home space, facet, pod share) could
+  // otherwise move its owner's status. Server code (`system`) and an approved
+  // replay already hold a decision. Same answer as those doors: NOT_FOUND.
+  if (
+    input.actor.kind !== "system" &&
+    !input.approvedProposalId &&
+    !(await mayWriteStatusTarget(target, input.actor.userId))
+  ) {
+    return {
+      status: "refused",
+      code: "NOT_FOUND",
+      reason: "Entity not found",
+    };
+  }
   if (input.property && input.property !== target.lifecycle.propertySlug) {
     return {
       status: "refused",
@@ -216,13 +238,34 @@ export async function moveStatus(
         target,
         to,
       }));
+    const data = {
+      id: input.entityId,
+      entityId: input.entityId,
+      role: target.role,
+      facetId: target.facetId,
+      property: target.lifecycle.propertySlug,
+      // The belief the approval replays against (strict CAS).
+      expectedFrom: target.current,
+      to,
+      reason: input.reason ?? null,
+    };
     const perm = await checkPermissionOrPropose({
       userId: input.actor.userId,
       agentUserId: input.actor.agentUserId ?? undefined,
       workspaceId: governanceWorkspaceId,
       // The key's grant is checked on the row's own workspace — a pod-wide
-      // entity or role facet is pod-scope, never the caller's lens (S7).
-      grantWorkspaceId: target.workspaceId ?? null,
+      // entity or role facet is pod-scope, never the caller's lens (S7) —
+      // except a pod-wide ROLE facet the key reaches through a space its
+      // role is granted to: checked in that space (`reachedFacetGrantSpace`).
+      grantWorkspaceId:
+        target.workspaceId ??
+        (target.facetId
+          ? await reachedFacetGrantSpace(target.facetId, {
+              subjectType: "entity",
+              action: "transition",
+              data,
+            })
+          : null),
       subjectType: "entity",
       action: "transition",
       // An unattributed agent reaches the anonymous AI ladder; never "user".
@@ -238,17 +281,7 @@ export async function moveStatus(
         input.reason ??
         `Move ${target.lifecycle.propertySlug} from "${target.current ?? "none"}" to "${to}".`,
       sessionId: input.sessionId ?? undefined,
-      data: {
-        id: input.entityId,
-        entityId: input.entityId,
-        role: target.role,
-        facetId: target.facetId,
-        property: target.lifecycle.propertySlug,
-        // The belief the approval replays against (strict CAS).
-        expectedFrom: target.current,
-        to,
-        reason: input.reason ?? null,
-      },
+      data,
     });
     if ("denied" in perm && perm.denied) {
       return { status: "denied", reason: perm.reason };
