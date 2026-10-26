@@ -757,15 +757,30 @@ export const tools = {
             },
             sortBy: {
               type: "string",
-              enum: ["createdAt", "updatedAt", "title"],
+              enum: ["createdAt", "updatedAt", "title", "lastInteractionAt"],
               description:
-                "Sort field, applied to the WHOLE set before paging (page 2 continues page 1). Default createdAt, newest first.",
+                "Sort field, applied to the WHOLE set before paging (page 2 continues page 1). Default createdAt, newest first. lastInteractionAt = when we last spoke to them; never-contacted rows come last.",
             },
             sortDir: {
               type: "string",
               enum: ["asc", "desc"],
               description:
                 "Sort direction (default desc). e.g. 'least recently updated first' = sortBy updatedAt, sortDir asc.",
+            },
+            lastInteractionBefore: {
+              type: "string",
+              description:
+                "ISO-8601. Only entities we last spoke to BEFORE this (exclusive). 'Who haven't I spoken to in a month' = facetSlug 'lead' or 'client', lastInteractionBefore <now - 30 days>, includeNever true, sortBy lastInteractionAt, sortDir asc. Spoke to = a meeting that happened, sent outreach, a dated conversation.",
+            },
+            lastInteractionAfter: {
+              type: "string",
+              description:
+                "ISO-8601. Only entities we last spoke to on or after this (inclusive).",
+            },
+            includeNever: {
+              type: "boolean",
+              description:
+                "With a lastInteraction window: also return the people never contacted (no interaction recorded). Default false.",
             },
             limit: {
               type: "number",

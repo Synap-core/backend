@@ -35,6 +35,13 @@ export const WireEntitySchema = z
     version: z.number().optional(),
     createdAt: z.union([z.string(), z.date()]).optional(),
     updatedAt: z.union([z.string(), z.date()]).optional(),
+    lastInteractionAt: z
+      .union([z.string(), z.date()])
+      .nullable()
+      .optional()
+      .describe(
+        "When we last spoke to them (a meeting that happened, sent outreach, a dated conversation); null = never. Present on rows read from the pod's entity table."
+      ),
   })
   .openapi("Entity");
 export type WireEntity = z.infer<typeof WireEntitySchema>;
@@ -521,6 +528,14 @@ export function entityToWire(entity: unknown): WireEntity {
     version: typeof row.version === "number" ? row.version : undefined,
     createdAt: row.createdAt as string | Date | undefined,
     updatedAt: row.updatedAt as string | Date | undefined,
+    // A DB row carries it (null = never); a search document does not, and
+    // must not read as "never".
+    ...("lastInteractionAt" in row
+      ? {
+          lastInteractionAt:
+            (row.lastInteractionAt as string | Date | null | undefined) ?? null,
+        }
+      : {}),
   };
 }
 

@@ -34,6 +34,7 @@ import { storage } from "@synap/storage";
 import { ownerPrivateVisibleWhere } from "../../../utils/user-visible-where.js";
 import {
   compareListedEntities,
+  lastInteractionWindowWhere,
   parseEntityListSort,
 } from "../../../utils/entity-list-sort.js";
 import { accessScopeWhere } from "../../../utils/project-scope.js";
@@ -492,7 +493,8 @@ export function registerEntitiesRoutes(app: HubHono): void {
           .optional()
           .describe(
             "`<field>[:asc|:desc]` (default `desc`), field one of " +
-              "`createdAt`, `updatedAt`, `title`. Applied in SQL before " +
+              "`createdAt`, `updatedAt`, `title`, `lastInteractionAt` " +
+              "(never-contacted last). Applied in SQL before " +
               "paging. Any other value is a 400; not combinable with `q`."
           ),
         scope: z
@@ -568,6 +570,28 @@ export function registerEntitiesRoutes(app: HubHono): void {
               "question, so silently truncating one to the other would " +
               "under-report. Ask for the window without `q`."
           ),
+        lastInteractionAfter: z
+          .string()
+          .optional()
+          .describe(
+            "Last-interaction window, INCLUSIVE lower bound (ISO-8601): " +
+              "people we last spoke to on or after this. 400 with `q`."
+          ),
+        lastInteractionBefore: z
+          .string()
+          .optional()
+          .describe(
+            "Last-interaction window, EXCLUSIVE upper bound (ISO-8601). " +
+              "'Who haven't I spoken to in a month' = this at now-30d with " +
+              "`includeNever=true` and `sort=lastInteractionAt:asc`. 400 with `q`."
+          ),
+        includeNever: z
+          .enum(["true", "false"])
+          .optional()
+          .describe(
+            "`true` = a last-interaction window also returns the people " +
+              "never contacted (no value). Default `false`."
+          ),
       }),
     },
     responses: {
@@ -581,7 +605,8 @@ export function registerEntitiesRoutes(app: HubHono): void {
       400: {
         description:
           "Malformed or unsupported filter combination — an unparseable " +
-          "createdAfter/createdBefore, an unsupported `sort`, or a date " +
+          "createdAfter/createdBefore/lastInteraction bound, an inverted " +
+          "last-interaction window, an unsupported `sort`, or a date " +
           "window, `sort`, `includeFacets` or `includeMedia` combined with `q`.",
         content: { "application/json": { schema: ErrorSchema } },
       },
@@ -678,7 +703,37 @@ export function registerEntitiesRoutes(app: HubHono): void {
         400
       );
     }
-    const hasDateWindow = Boolean(createdAfter || createdBefore);
+    const lastInteractionAfter = parseWindowBound(query.lastInteractionAfter);
+    const lastInteractionBefore = parseWindowBound(query.lastInteractionBefore);
+    if (lastInteractionAfter === null || lastInteractionBefore === null) {
+      return c.json(
+        {
+          error:
+            "lastInteractionAfter/lastInteractionBefore must be ISO-8601 timestamps (e.g. 2026-09-01T00:00:00Z)",
+        },
+        400
+      );
+    }
+    const includeNever = query.includeNever === "true";
+    const interactionWindow = lastInteractionWindowWhere({
+      lastInteractionAfter,
+      lastInteractionBefore,
+    });
+    if ("error" in interactionWindow) {
+      return c.json({ error: interactionWindow.error }, 400);
+    }
+    // The window rides to the list verbatim; the list owns the predicate.
+    const interactionFilter = {
+      ...(lastInteractionAfter ? { lastInteractionAfter } : {}),
+      ...(lastInteractionBefore ? { lastInteractionBefore } : {}),
+      ...(includeNever ? { includeNever } : {}),
+    };
+    const hasDateWindow = Boolean(
+      createdAfter ||
+      createdBefore ||
+      lastInteractionAfter ||
+      lastInteractionBefore
+    );
     // W1 fence: this door is listed as grant-safe (GRANT_SAFE_REST_READS)
     // because every branch below reads through `entities.getEntities` → the
     // `entities.list` floor (`accessScopeWhere`, which ANDs the key's grant).
@@ -792,7 +847,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
           return c.json(
             {
               error:
-                "createdAfter/createdBefore cannot be combined with q — full-text search returns a relevance-ranked top-N, not an exhaustive date window. Ask for the window without q.",
+                "createdAfter/createdBefore/lastInteractionAfter/lastInteractionBefore cannot be combined with q — full-text search returns a relevance-ranked top-N, not an exhaustive date window. Ask for the window without q.",
             },
             400
           );
@@ -856,6 +911,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
               ...(createdAfter ? { createdAfter } : {}),
               ...(createdBefore ? { createdBefore } : {}),
               ...(orderBy ? { orderBy } : {}),
+              ...interactionFilter,
             })
           )
         );
@@ -937,6 +993,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
         ...(createdAfter ? { createdAfter } : {}),
         ...(createdBefore ? { createdBefore } : {}),
         ...(orderBy ? { orderBy } : {}),
+        ...interactionFilter,
       });
 
       const rows = (listed as unknown[]).map((e) => toWire(e));
