@@ -63,6 +63,8 @@ export interface SkillJob {
   /** The `context` parameter the skill reads (ids only, never a credential). */
   context: {
     userId: string;
+    /** "manual" | "dry-run" (the author contract types it a string). */
+    threadId?: string;
     workspaceId: string | null;
     agentUserId: string | null;
   };
