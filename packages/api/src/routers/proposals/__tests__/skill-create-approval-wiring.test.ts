@@ -18,14 +18,15 @@
  * inserting `false &&` into the wiring condition kept all 25 of them passing).
  * The tests below DRIVE the executor, so they measure that wiring actually RUNS.
  *
- * They also pin the BORN-APPROVED DOWNGRADE (security): re-running the governed
- * door as the APPROVER launders agent authorship into operator authorship, which
- * would make `insertSkillGoverned`'s `approved = kind === "instruction" &&
- * !agentUserId` rule read TRUE — landing an AGENT-authored instruction skill in
- * the agent's own system prompt with no owner approval (prompt-injection
- * vector). The executor restores `approved: false` — unless a PERSON approved
- * the proposal (their click on the reviewed body is the owner approval); every
- * agent path (agent behind a human, agent key, agent principal) keeps it.
+ * They also pin the APPROVAL VERDICT (`skillBornApproved`):
+ *   - ONE APPROVAL (founder decision 2): a PERSON approving the proposal turns
+ *     the skill on through `setSkillApproved`, the one enable door — a code
+ *     skill no longer needs a second "enable" after its create was approved.
+ *   - the DOWNGRADE (security): re-running the governed door as the APPROVER
+ *     launders agent authorship into operator authorship, which would land an
+ *     AGENT-authored instruction skill in the agent's own system prompt with
+ *     no owner approval. Every agent path (agent behind a human, agent key,
+ *     agent principal) restores `approved: false` and never enables.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -122,6 +123,20 @@ vi.mock("../../skills.js", () => ({
   },
 }));
 
+/** Every call to the one enable door; `enableRefusal` makes it refuse. */
+let enables: Record<string, unknown>[] = [];
+let enableRefusal: Error | null = null;
+/** How many times the verb had been wired when the enable door was called. */
+let wiresAtEnable: number | null = null;
+vi.mock("../../../services/capabilities/set-skill-approved.js", () => ({
+  setSkillApproved: async (input: Record<string, unknown>) => {
+    if (enableRefusal) throw enableRefusal;
+    wiresAtEnable = wireCreatedVerb.mock.calls.length;
+    enables.push(input);
+    return { id: input.skillId, approved: input.approved };
+  },
+}));
+
 /** Args typed so `.mock.calls[0][1]` is a real tuple index, not `never`. */
 const wireCreatedVerb = vi.fn(
   async (
@@ -171,7 +186,7 @@ const run = async (opts: {
     id: "skill-1",
     skill: opts.skill ?? declarativeSkill(),
   };
-  await executor.execute({
+  return executor.execute({
     proposal: {
       id: "p1",
       targetType: "skill",
@@ -195,6 +210,9 @@ const run = async (opts: {
 };
 
 beforeEach(() => {
+  enables = [];
+  enableRefusal = null;
+  wiresAtEnable = null;
   visibilityReadAs = [];
   visibilityReadFails = false;
   insertInputs = [];
@@ -293,6 +311,108 @@ describe("BORN-APPROVED DOWNGRADE stays intact (security)", () => {
       skill: declarativeSkill({ kind: "instruction", approved: true }),
     });
     expect(updates.find((u) => u.table === SKILLS)).toBeUndefined();
+  });
+});
+
+describe("ONE APPROVAL: a person approving the create turns the skill on (decision 2)", () => {
+  const codeSkill = () =>
+    declarativeSkill({ kind: "code", providerSpec: null, approved: false });
+  const codeData = { name: "score_handle", kind: "code", code: "return 1;" };
+
+  it("an AGENT's code skill a PERSON approved is enabled through the one enable door", async () => {
+    const result = await run({
+      agentUserId: AGENT,
+      skill: codeSkill(),
+      data: codeData,
+    });
+    expect(enables).toEqual([
+      {
+        userId: APPROVER,
+        skillId: "skill-1",
+        approved: true,
+        agentUserId: null,
+      },
+    ]);
+    // Through the door, never a raw `approved` write of its own.
+    expect(updates.find((u) => u.table === SKILLS)).toBeUndefined();
+    expect(result).not.toHaveProperty("refusals");
+  });
+
+  it("a member's code skill a PERSON approved is enabled too: the review showed the code", async () => {
+    await run({ agentUserId: null, skill: codeSkill(), data: codeData });
+    expect(enables).toHaveLength(1);
+  });
+
+  it("an agent travelling behind the approver (ctx.agentUserId) never enables it", async () => {
+    await run({
+      agentUserId: AGENT,
+      skill: codeSkill(),
+      data: codeData,
+      ctx: { agentUserId: "agent-2" },
+    });
+    expect(enables).toEqual([]);
+  });
+
+  it("the request's acting agent (agent key) never enables it", async () => {
+    actingAgent = "agent-2";
+    await run({ agentUserId: AGENT, skill: codeSkill(), data: codeData });
+    expect(enables).toEqual([]);
+  });
+
+  it("an agent-principal approver never enables it", async () => {
+    agentPrincipals = new Set(["agent-approver"]);
+    await run({
+      agentUserId: AGENT,
+      skill: codeSkill(),
+      data: codeData,
+      approver: "agent-approver",
+    });
+    expect(enables).toEqual([]);
+  });
+
+  it("an instruction skill already on is not enabled a second time", async () => {
+    await run({
+      agentUserId: AGENT,
+      skill: declarativeSkill({ kind: "instruction", approved: true }),
+    });
+    expect(enables).toEqual([]);
+  });
+
+  it("enables AFTER the verb is wired, so the pack it joined re-syncs", async () => {
+    await run({ agentUserId: AGENT }); // declarative, wired to tool-1
+    expect(enables).toHaveLength(1);
+    expect(wiresAtEnable).toBe(1);
+  });
+
+  it("a reviewer who may approve but not turn verbs on: created, left OFF, and the approval says so", async () => {
+    const { TRPCError } = await import("@trpc/server");
+    enableRefusal = new TRPCError({
+      code: "FORBIDDEN",
+      message: "Only workspace owners can turn this verb on or off.",
+    });
+    const result = await run({
+      agentUserId: AGENT,
+      skill: codeSkill(),
+      data: codeData,
+    });
+    expect(result).toMatchObject({
+      success: true,
+      refusals: [
+        "The skill was created but not turned on: Only workspace owners can turn this verb on or off.",
+      ],
+    });
+    expect(
+      updates.some(
+        (u) => u.table === PROPOSALS && u.values.status === "approved"
+      )
+    ).toBe(true);
+  });
+
+  it("any other enable failure is not folded into a refusal", async () => {
+    enableRefusal = new Error("db down");
+    await expect(
+      run({ agentUserId: AGENT, skill: codeSkill(), data: codeData })
+    ).rejects.toThrow("db down");
   });
 });
 
