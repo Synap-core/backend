@@ -16,7 +16,15 @@
  *     question, and emits ONE `focus_session.relay_corrected.completed`;
  *   - withdraw closes the agent's own question and hands its slot back;
  *   - who may relay: only the asker, only an agent key, only an exact
- *     address; and `/outputs/unblock` refuses an agent key.
+ *     address, only inside the key's grant (MCP too); and `/outputs/unblock`
+ *     refuses an agent key;
+ *   - only an OPEN question: never over the person's tap, never a slot
+ *     nobody asked them; a withdraw never takes back a step only the person
+ *     may take, and always leaves its note on the record;
+ *   - the pod forces the tap for a session stopped at its gate and for a
+ *     slot about a pending human-only status move, and pushes for it;
+ *   - "Not what I said" re-opens the decision the relay decided, and never
+ *     re-asks an ended session.
  *
  * Stubbed, and why — the same seams as `answer-loop.pglite.test.ts`: transport
  * (Expo, sockets), channel visibility (its own suite), the event history row +
@@ -46,6 +54,11 @@ const h = vi.hoisted(() => ({
   effects: [] as Array<Record<string, unknown>>,
   triggers: [] as Array<Record<string, unknown>>,
   decisions: [] as Array<Record<string, unknown>>,
+  decisionUpdates: [] as Array<{
+    id: string;
+    properties: Record<string, unknown>;
+    deleteProperties?: string[];
+  }>,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -126,25 +139,22 @@ vi.mock("../../decisions/decision-entity-door.js", () => ({
     h.decisions.push(input);
     return "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
   },
-  updateDecisionEntity: async () => undefined,
+  updateDecisionEntity: async (
+    _scope: unknown,
+    id: string,
+    properties: Record<string, unknown>,
+    deleteProperties?: string[]
+  ) => {
+    h.decisionUpdates.push({ id, properties, deleteProperties });
+  },
 }));
 
 import { OpenAPIHono } from "@hono/zod-openapi";
+import { allSchemaTables } from "../../../__tests__/pglite-ddl.js";
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
+import { grantOfScope, runWithGrant } from "@synap/database";
 import {
-  focusSessions,
-  notifications,
-  notificationPreferences,
-  users,
-  channels,
-  channelMembers,
-  messages,
-  apiKeys,
-  links,
-  tools,
-  playbookRuns,
-} from "@synap/database";
-import {
+  FOCUS_SESSION_QUESTION_WITHDRAWN_EVENT_TYPE,
   FOCUS_SESSION_RELAY_CORRECTED_EVENT_TYPE,
   FOCUS_SESSION_SLOT_ANSWERED_EVENT_TYPE,
 } from "../lifecycle-events.js";
@@ -182,7 +192,9 @@ const CHOOSE = {
 const DEPLOY = { mode: "confirm", prompt: "Deploy to prod?", stakes: "commitment" };
 const EU = { type: "chip", chip: { label: "EU account", value: "eu" } };
 
-async function seed(): Promise<{ sessionId: string; channelId: string }> {
+async function seed(
+  opts: { workspaceId?: string; outputs?: unknown[] } = {}
+): Promise<{ sessionId: string; channelId: string }> {
   const channelId = randomUUID();
   await q(
     `insert into channels (id, user_id, channel_type, title, created_at, updated_at) values ($1, $2, 'group', 'Billing', now(), now())`,
@@ -194,14 +206,15 @@ async function seed(): Promise<{ sessionId: string; channelId: string }> {
   );
   const sessionId = randomUUID();
   await q(
-    `insert into focus_sessions (id, user_id, goal, title, status, expected_outputs, agent_ids, metadata, criteria, channel_id, created_at, updated_at, started_at)
-     values ($1, $2, 'Billing', 'Billing', 'active', $3::jsonb, $4, '{}'::jsonb, '[]'::jsonb, $5, now(), now(), now())`,
+    `insert into focus_sessions (id, user_id, goal, title, status, expected_outputs, agent_ids, metadata, criteria, channel_id, workspace_id, created_at, updated_at, started_at)
+     values ($1, $2, 'Billing', 'Billing', 'active', $3::jsonb, $4, '{}'::jsonb, '[]'::jsonb, $5, $6, now(), now(), now())`,
     [
       sessionId,
       OWNER,
-      JSON.stringify([{ kind: "document", label: LABEL }]),
+      JSON.stringify(opts.outputs ?? [{ kind: "document", label: LABEL }]),
       [AGENT],
       channelId,
+      opts.workspaceId ?? null,
     ]
   );
   return { sessionId, channelId };
@@ -289,21 +302,16 @@ const corrected = () =>
 
 describe("the relay door", () => {
   beforeAll(async () => {
-    for (const t of [
-      focusSessions,
-      notifications,
-      notificationPreferences,
-      users,
-      channels,
-      channelMembers,
-      messages,
-      apiKeys,
-      links,
-      tools,
-      playbookRuns,
-    ]) {
+    // Every schema table: the relay door now reads proposals and raises a
+    // notification, and a hand-picked list rots the day it reads one more.
+    for (const t of allSchemaTables()) {
       await h.client!.exec(ddlFor(t as unknown as PgTable));
     }
+    // The derived DDL carries no column defaults; the real table defaults
+    // `status` to 'unread' (0000 baseline) — the dedupe reads OPEN rows only.
+    await h.client!.exec(
+      `alter table notifications alter column status set default 'unread'`
+    );
     await q(
       `insert into users (id, email, name, timezone, user_type, agent_type) values
         ($1, 'a@example.test', 'Antoine', 'UTC', 'human', null),
@@ -323,6 +331,7 @@ describe("the relay door", () => {
     h.effects.length = 0;
     h.triggers.length = 0;
     h.decisions.length = 0;
+    h.decisionUpdates.length = 0;
   });
 
   it("ROUTINE: answers the slot and its question, marked relayed; files the decision with the relay; wakes nobody", async () => {
@@ -647,5 +656,259 @@ describe("the relay door", () => {
     );
     expect(asPerson.status).toBe(200);
     expect((await slot(sessionId)).owner).toBeUndefined();
+  });
+
+  // ── Only an OPEN question, only inside the grant (R1 M1, M2) ───────────────
+
+  it("a relay never overwrites the person's tap, and never answers a slot nobody asked them", async () => {
+    const { sessionId, channelId } = await seed();
+    await ask(channelId, { slotLabel: LABEL, ask: CHOOSE });
+    // The person taps "EU" in Synap…
+    expect(
+      (await personAnswer(sessionId, { expectedLabel: LABEL, value: EU })).status
+    ).toBe(200);
+    const decided = h.decisions.length;
+    // …and the agent then relays the chat's "US" onto the same slot.
+    const over = await relay(sessionId, {
+      disposition: "answered",
+      slotLabel: LABEL,
+      quote: "the US one",
+      value: { type: "chip", chip: { label: "US account", value: "us" } },
+    });
+    expect(over.status).toBe(409);
+    const s = await slot(sessionId);
+    expect(s.answer).toMatchObject({ value: EU });
+    expect(s.answer!.via).toBeUndefined();
+    expect(h.decisions).toHaveLength(decided);
+
+    // A slot that was never the person's: nothing to relay onto.
+    const fresh = await seed();
+    const homework = await relay(fresh.sessionId, {
+      disposition: "answered",
+      slotLabel: LABEL,
+      quote: "looks done to me",
+    });
+    expect(homework.status).toBe(409);
+    expect((await slot(fresh.sessionId)).answer).toBeUndefined();
+  });
+
+  it("the MCP door is bounded by the key's grant, like the Hub door", async () => {
+    const SPACE_A = randomUUID();
+    const SPACE_B = randomUUID();
+    const { sessionHandlers } = await import(
+      "../../../routers/mcp/handlers/session.js"
+    );
+    const mcpRelay = async (sessionId: string, qid: string) => {
+      const res = await runWithGrant(
+        grantOfScope({ permissions: ["*"], workspaceIds: [SPACE_A] }),
+        () =>
+          sessionHandlers.synap_relay_answer!({
+            toolName: "synap_relay_answer",
+            args: {
+              sessionId,
+              disposition: "answered",
+              messageId: qid,
+              quote: "the EU one",
+              value: EU,
+            },
+            userId: OWNER,
+            agentUserId: AGENT,
+            apiKeyScopes: ["mcp.read", "mcp.write"],
+          } as never)
+      );
+      return JSON.parse(
+        (res.content as Array<{ text: string }>)[0]!.text
+      ) as Record<string, unknown>;
+    };
+    // A session in a space the key does not reach: refused, nothing moved.
+    const outside = await seed({ workspaceId: SPACE_B });
+    const qOut = await ask(outside.channelId, { slotLabel: LABEL, ask: CHOOSE });
+    const refused = await mcpRelay(outside.sessionId, qOut);
+    expect(refused.error).toBeTruthy();
+    expect(refused.status).toBeUndefined();
+    expect((await slot(outside.sessionId)).answer).toBeUndefined();
+    // Inside its space the same call relays (the refusal is the grant's).
+    const inside = await seed({ workspaceId: SPACE_A });
+    const qIn = await ask(inside.channelId, { slotLabel: LABEL, ask: CHOOSE });
+    expect(await mcpRelay(inside.sessionId, qIn)).toMatchObject({
+      status: "relayed",
+    });
+  });
+
+  // ── Withdraw (R1 M3) ───────────────────────────────────────────────────────
+
+  it("WITHDRAW never takes back a step only the person may take", async () => {
+    const { sessionId, channelId } = await seed();
+    const qid = await ask(channelId, { slotLabel: LABEL, ask: DEPLOY });
+    const res = await relay(sessionId, {
+      disposition: "withdrawn",
+      messageId: qid,
+      note: "no longer needed",
+    });
+    expect(res.status).toBe(409);
+    expect((await slot(sessionId)).owner).toBe("human");
+    expect((await roomPost(qid)).closed).toBeUndefined();
+    expect(
+      h.events.filter((e) => e.type === FOCUS_SESSION_QUESTION_WITHDRAWN_EVENT_TYPE)
+    ).toHaveLength(0);
+  });
+
+  it("WITHDRAW by slot, with no room question, keeps its note on the record", async () => {
+    const { sessionId } = await seed({
+      outputs: [
+        {
+          kind: "document",
+          label: LABEL,
+          owner: "human",
+          blockedReason: "decision",
+          owedSince: "2026-10-26T09:00:00.000Z",
+          ask: CHOOSE,
+          askedBy: AGENT,
+        },
+      ],
+    });
+    const res = await relay(sessionId, {
+      disposition: "withdrawn",
+      slotLabel: LABEL,
+      note: "the invoice settled it",
+    });
+    expect(await res.json()).toMatchObject({
+      status: "withdrawn",
+      questionId: null,
+      handedBack: true,
+    });
+    const withdrawn = h.events.filter(
+      (e) => e.type === FOCUS_SESSION_QUESTION_WITHDRAWN_EVENT_TYPE
+    );
+    expect(withdrawn).toHaveLength(1);
+    expect(withdrawn[0]!.data).toMatchObject({
+      sessionId,
+      expectedLabel: LABEL,
+      withdrawnBy: AGENT,
+      note: "the invoice settled it",
+      handedBack: true,
+    });
+  });
+
+  // ── Pod-forced commitments + the push (R4 F8, F15) ─────────────────────────
+
+  const pendingProposal = (p: {
+    sessionId?: string | null;
+    targetId: string;
+    proposalType: string;
+    governanceReason?: string;
+  }) =>
+    q(
+      `insert into proposals (id, target_type, target_id, proposal_type, status, session_id, governance_reason, data, created_at, updated_at)
+       values ($1, 'entity', $2, $3, 'pending', $4, $5, '{}'::jsonb, now(), now())`,
+      [
+        randomUUID(),
+        p.targetId,
+        p.proposalType,
+        p.sessionId ?? null,
+        p.governanceReason ?? null,
+      ]
+    );
+
+  it("a session stopped at its plan/deploy gate forces the tap, and the person is pushed for it", async () => {
+    const { sessionId, channelId } = await seed();
+    await pendingProposal({
+      sessionId,
+      targetId: sessionId,
+      proposalType: "dev.plan_approval",
+    });
+    await ask(channelId, { slotLabel: LABEL, ask: CHOOSE });
+    const res = await relay(sessionId, {
+      disposition: "answered",
+      slotLabel: LABEL,
+      quote: "the EU one",
+      value: EU,
+    });
+    expect(await res.json()).toMatchObject({
+      status: "awaiting_tap",
+      stakes: "commitment",
+    });
+    expect((await slot(sessionId)).answer).toBeUndefined();
+    const pushed = (
+      await q<{ group_key: string | null; body: string }>(
+        `select group_key, body from notifications where type = 'session.needs_you' and source_id = $1`,
+        [sessionId]
+      )
+    ).rows.filter((r) => r.group_key?.includes(":relay:"));
+    expect(pushed).toHaveLength(1);
+    expect(pushed[0]!.body).toContain("the EU one");
+  });
+
+  it("a slot about an object with a pending human-only status move forces the tap", async () => {
+    const DEAL = randomUUID();
+    const { sessionId, channelId } = await seed();
+    await pendingProposal({
+      targetId: DEAL,
+      proposalType: "entity.update",
+      governanceReason: "HUMAN_ONLY_STATUS",
+    });
+    await ask(channelId, {
+      slotLabel: LABEL,
+      ask: { ...CHOOSE, lookedAt: [{ kind: "entity", id: DEAL }] },
+    });
+    const res = await relay(sessionId, {
+      disposition: "answered",
+      slotLabel: LABEL,
+      quote: "mark it won",
+      value: EU,
+    });
+    expect(await res.json()).toMatchObject({ status: "awaiting_tap" });
+  });
+
+  // ── "Not what I said" (R1 S1, S6) ──────────────────────────────────────────
+
+  it("NOT WHAT I SAID re-opens the decision the relay decided, without its pick or its words", async () => {
+    const { sessionId, channelId } = await seed();
+    await ask(channelId, { slotLabel: LABEL, ask: CHOOSE });
+    await relay(sessionId, {
+      disposition: "answered",
+      slotLabel: LABEL,
+      quote: "the EU one",
+      value: EU,
+    });
+    expect((await slot(sessionId)).decisionId).toBeTruthy();
+    const res = await personAnswer(sessionId, {
+      expectedLabel: LABEL,
+      rejectRelayed: true,
+    });
+    expect(await res.json()).toMatchObject({
+      status: "corrected",
+      decision: { status: "reopened" },
+    });
+    expect(h.decisionUpdates).toHaveLength(1);
+    expect(h.decisionUpdates[0]!.properties).toEqual({
+      decisionStatus: "proposed",
+    });
+    expect(h.decisionUpdates[0]!.deleteProperties).toEqual(
+      expect.arrayContaining(["chosenOption", "relayedBy", "relayQuote"])
+    );
+  });
+
+  it("NOT WHAT I SAID never re-asks an ended session", async () => {
+    const { sessionId, channelId } = await seed();
+    await ask(channelId, { slotLabel: LABEL, ask: CHOOSE });
+    await relay(sessionId, {
+      disposition: "answered",
+      slotLabel: LABEL,
+      quote: "the EU one",
+      value: EU,
+    });
+    await q(`update focus_sessions set status = 'closed' where id = $1`, [
+      sessionId,
+    ]);
+    const res = await personAnswer(sessionId, {
+      expectedLabel: LABEL,
+      rejectRelayed: true,
+    });
+    expect(res.status).toBe(400);
+    const s = await slot(sessionId);
+    expect(s.owner).toBeUndefined();
+    expect(s.answer).toMatchObject({ via: "relayed" });
+    expect(corrected()).toHaveLength(0);
   });
 });

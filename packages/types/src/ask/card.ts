@@ -34,6 +34,7 @@ import {
   type AskCauseKind,
 } from "./index.js";
 import { REVIEW_LATER_AFTER_MS } from "../proposals/fate.js";
+import { CRITERION_SLOT_KIND } from "../focus-sessions/criterion-slot.js";
 
 // ─── Copy ───────────────────────────────────────────────────────────────────
 
@@ -512,21 +513,47 @@ export interface AskCardSlot {
   askCause?: AskCause | null;
   criterionKey?: string | null;
   paramName?: string | null;
+  /** A relayed answer waiting for the person's tap — its own clock. */
+  pendingRelay?: { relayedAt?: string | null } | null;
 }
 
-/** Does this slot's ask end with its session? Read through `effectiveSlotAsk`. */
+/**
+ * Does this slot's ask end with its session? Read through `effectiveSlotAsk`.
+ * A CRITERION grade never does, though its ask is a `choose`: it is the
+ * person's verdict on the agent's work, graded on the session's scorecard
+ * after the session as before it — not the agent's need to go on.
+ */
 export function askEndsWithSession(slot: AskCardSlot): boolean {
+  if (slot.kind === CRITERION_SLOT_KIND || slot.criterionKey) return false;
   const mode = (effectiveSlotAsk(slot) as Ask | null)?.mode;
   return (ASK_MODES_ENDING_WITH_SESSION as readonly string[]).includes(
     mode ?? ""
   );
 }
 
+/**
+ * Since when the ask has waited on the person: the later of when it was owed
+ * and when a relay last asked for their tap — a commitment relayed today is
+ * fresh news, whatever the slot's age. Pure; `NaN` when neither is stamped.
+ */
+function askWaitingSince(
+  slot: Pick<AskCardSlot, "owedSince" | "pendingRelay">
+): number {
+  const owed = slot.owedSince ? Date.parse(slot.owedSince) : NaN;
+  const relayed = slot.pendingRelay?.relayedAt
+    ? Date.parse(slot.pendingRelay.relayedAt)
+    : NaN;
+  if (Number.isFinite(owed) && Number.isFinite(relayed)) {
+    return Math.max(owed, relayed);
+  }
+  return Number.isFinite(relayed) ? relayed : owed;
+}
+
 export function askFate(
   slot: AskCardSlot,
   now: Date | number = Date.now()
 ): AskFate {
-  const owed = slot.owedSince ? Date.parse(slot.owedSince) : NaN;
+  const owed = askWaitingSince(slot);
   const at = now instanceof Date ? now.getTime() : now;
   if (Number.isFinite(owed) && at > owed + REVIEW_LATER_AFTER_MS) {
     return {
@@ -544,7 +571,7 @@ export function askFate(
  * and its list fold read (api `needs-you-union.ts`), so they cannot disagree.
  */
 export function isAskReviewLater(
-  slot: Pick<AskCardSlot, "owedSince">,
+  slot: Pick<AskCardSlot, "owedSince" | "pendingRelay">,
   now: Date | number = Date.now()
 ): boolean {
   return askFate({ label: "", ...slot }, now).kind === "review_later";

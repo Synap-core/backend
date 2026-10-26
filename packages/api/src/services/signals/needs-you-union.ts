@@ -469,9 +469,6 @@ const _KIND_SPECIFIC_SIGNAL_FIELDS = [
   "source",
   "by",
   "askCause",
-  // `owed-slot` only (W1, the relay door) — classified here so the floor
-  // below compiles; it was on `Signal` unclassified.
-  "pendingRelay",
   "live",
   "progress",
   "ruleRun",
@@ -683,6 +680,11 @@ export interface ClusterSessionName {
   projectId: string | null;
 }
 
+/** The id / group-key suffix of a cluster's Review later part. Pure. */
+function reviewLaterSuffix(cluster: Pick<ProposalCluster, "reviewLater">): string {
+  return cluster.reviewLater ? "@review-later" : "";
+}
+
 /** One cluster → one signal. Title via the vocabulary SSOT, imperative mood
  *  (the card describes what approving it WILL do, not what happened).
  *
@@ -707,11 +709,13 @@ export function signalFromCluster(
     // A session PART of a split cluster (`splitBySession`) shares its
     // fingerprint with the other parts, so its newest member makes the id
     // unique. Never the session id: a session the viewer cannot read must not
-    // leak through a row id (cluster-sessions.pglite.test.ts pins it).
+    // leak through a row id (cluster-sessions.pglite.test.ts pins it). The
+    // Review later part of a sessionless cluster shares it with the fresh part
+    // the same way, and is told apart by its fold.
     id:
       cluster.sessionId && sampleId
         ? `cluster:${cluster.fingerprint}@${sampleId}`
-        : `cluster:${cluster.fingerprint}`,
+        : `cluster:${cluster.fingerprint}${reviewLaterSuffix(cluster)}`,
     kind: "proposal-cluster",
     title: buildObjectActionTitle({
       action: cluster.proposalType,
@@ -752,7 +756,7 @@ export function signalFromCluster(
     ...(readableSession ? sessionSource(readableSession, session?.title) : {}),
     groupKey: inSession
       ? sessionGroupKey(inSession)
-      : `proposal-cluster:${cluster.fingerprint}`,
+      : `proposal-cluster:${cluster.fingerprint}${reviewLaterSuffix(cluster)}`,
     // Review later is 7+ days old by its own rule, so `older` — stamped, not
     // measured: the pod's SQL clock and this one may straddle the line, and a
     // client that predates `reviewLater` must fold it under Older, never Recent.

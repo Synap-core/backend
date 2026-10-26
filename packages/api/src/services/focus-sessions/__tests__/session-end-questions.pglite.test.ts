@@ -10,7 +10,8 @@
  *   - an agent closing over its own open question without a word on it, or
  *     being refused over ANOTHER agent's question, or on a cancel;
  *   - a disposition that does not land: a withdrawal without its note, a
- *     kept question whose slot retires anyway;
+ *     kept question whose slot retires anyway, or the agent's word dropped
+ *     when its close is PROPOSED and a person approves it;
  *   - the bell keeping a "needs you" row for a session with nothing left.
  *
  * Stubbed, and why: governance (`checkPermissionOrPropose`: granted — the
@@ -30,6 +31,8 @@ const h = vi.hoisted(() => ({
     close: () => Promise<void>;
   },
   addOutputs: [] as Array<Record<string, unknown>>,
+  permCalls: [] as Array<Record<string, unknown>>,
+  perm: null as null | Record<string, unknown>,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -60,7 +63,13 @@ vi.mock("@synap/events", async (importOriginal) => {
 });
 vi.mock("../../../utils/permission-check.js", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
-  return { ...actual, checkPermissionOrPropose: async () => ({ granted: true }) };
+  return {
+    ...actual,
+    checkPermissionOrPropose: async (opts: Record<string, unknown>) => {
+      h.permCalls.push(opts);
+      return h.perm ?? { granted: true };
+    },
+  };
 });
 vi.mock("../../../lib/event-helpers.js", () => ({
   logEvent: async () => undefined,
@@ -396,5 +405,47 @@ describe("an agent's close and its own open questions", () => {
     const added = byLabel.get("Which region should the bucket live in?");
     expect(added).toBeDefined();
     expect(added!.retiredAt).toBeUndefined();
+  });
+
+  it("a PROPOSED close carries the agent's word, and the approval applies it", async () => {
+    const s = await session();
+    const withdrawn = await question(s.channel);
+    const uncovered = await question(s.channel, { text: "Any blockers?" });
+    const word = [
+      { messageId: withdrawn, disposition: "withdrawn" as const, note: "the tests answered it" },
+      { messageId: uncovered, disposition: "withdrawn" as const, note: "moot" },
+    ];
+
+    h.perm = { proposalId: "prop-close", proposalType: "focus_session.update" };
+    const err = await completeFocusSession({
+      sessionId: s.id,
+      userId: USER,
+      agentUserId: AGENT,
+      questionDispositions: word,
+    }).catch((e: unknown) => e);
+    h.perm = null;
+    expect((err as { proposalId?: string }).proposalId).toBe("prop-close");
+    expect(await statusOf(s.id)).toBe("active");
+    const gate = h.permCalls.at(-1)!.data as Record<string, unknown>;
+    expect(gate.questionDispositions).toEqual(word);
+
+    // The approval (the executor: no agent principal, the proposal's agent
+    // named), with the word as stored — and one question it no longer covers.
+    await completeFocusSession({
+      sessionId: s.id,
+      userId: USER,
+      approvedCloseOf: AGENT,
+      questionDispositions: [word[0]!],
+    });
+    expect(await statusOf(s.id)).toBe("closed");
+    expect((await roomPost(withdrawn)).closed).toMatchObject({
+      reason: "withdrawn",
+      by: AGENT,
+      note: "the tests answered it",
+    });
+    // Never refused at approval: what it did not cover ends with the session.
+    expect((await roomPost(uncovered)).closed).toMatchObject({
+      reason: "session_ended",
+    });
   });
 });

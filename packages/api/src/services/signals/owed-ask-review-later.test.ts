@@ -103,6 +103,38 @@ describe("owed asks in Review later: the count and the fold agree", () => {
   });
 });
 
+describe("a relay waiting for the tap is never folded away as old", () => {
+  const relayed = owed("relayed", REVIEW_LATER_AFTER_DAYS + 5, {
+    pendingRelay: {
+      text: "Yes",
+      relayedBy: "agent-1",
+      quote: "yes ship it",
+      relayedAt: daysAgo(0.1),
+    },
+  });
+  it("the row and the count keep it in the headline", () => {
+    const [row] = unionNeedsYou({
+      clusters: [],
+      notifications: [],
+      owedSlots: [relayed],
+      now: NOW,
+    }).filter((s) => s.kind === "owed-slot");
+    expect(row!.reviewLater).toBeUndefined();
+    const count = countNeedsYou({
+      distinctClusters: 0,
+      clustersTruncated: false,
+      notifications: [],
+      clusters: [],
+      notificationsTruncated: false,
+      owedSlots: [relayed],
+      owedTruncated: false,
+      now: NOW,
+    });
+    expect(count.reviewLater).toBe(0);
+    expect(count.needsYou).toBe(1);
+  });
+});
+
 describe("the owed-slot signal carries who asked and why", () => {
   it("a named asker → `by`, the agent's door", () => {
     const s = signalFromOwedSlot(

@@ -148,3 +148,32 @@ export interface CloseQuestionDisposition {
   note?: string;
 }
 
+/**
+ * The dispositions a stored close proposal carries (`data.questionDispositions`,
+ * written by the close door), read back for its approval. Anything that is not
+ * one is dropped: the close door matches each id against the agent's own open
+ * questions anyway. Pure.
+ */
+export function readCloseQuestionDispositions(
+  raw: unknown
+): CloseQuestionDisposition[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((d): CloseQuestionDisposition[] => {
+    const r = d as Record<string, unknown> | null;
+    if (
+      !r ||
+      typeof r.messageId !== "string" ||
+      !(CLOSE_QUESTION_DISPOSITIONS as readonly unknown[]).includes(r.disposition)
+    ) {
+      return [];
+    }
+    return [
+      {
+        messageId: r.messageId,
+        disposition: r.disposition as CloseQuestionDispositionKind,
+        ...(typeof r.note === "string" ? { note: r.note } : {}),
+      },
+    ];
+  });
+}
+

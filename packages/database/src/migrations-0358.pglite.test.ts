@@ -1,6 +1,6 @@
 /**
  * REAL-POSTGRES (PGlite) test for migration 0358 — a session that ended stops
- * asking (Resolve-XP W2). Minimal tables carry the columns the migration
+ * asking (founder default 3). Minimal tables carry the columns the migration
  * reads; it runs TWICE.
  *
  * Each row names what it rules out:
@@ -8,6 +8,8 @@
  *   - an OPEN session's question, an answered one, a human's, an update or a
  *     deleted question stamped;
  *   - an act / form / no-ask slot retired (a person's deliverable stays owed);
+ *   - a criterion grade retired (its `choose` is the person's verdict on the
+ *     scorecard, not the agent's need to go on);
  *   - a confirm, a choose, or an ask-less `decision` slot left owed;
  *   - a done, already retired, optional or agent-owned slot re-stamped;
  *   - a slot moved (order kept) or a second run re-stamping (`at` stable).
@@ -53,6 +55,7 @@ const SLOTS = [
   { kind: "decision", label: "retired", owner: "human", retiredAt: "x", retiredReason: "withdrawn", ask: { mode: "confirm" } },
   { kind: "decision", label: "optional", owner: "human", optional: true, ask: { mode: "confirm" } },
   { kind: "decision", label: "agent", ask: { mode: "confirm" } },
+  { kind: "criterion", label: "criterion", owner: "human", criterionKey: "tests-pass", ask: { mode: "choose", options: [] } },
 ];
 
 async function msg(id: string, channel: string, roomPost: Record<string, unknown>, extra: { author?: string; deleted?: boolean } = {}) {

@@ -42,6 +42,7 @@ vi.mock("@synap/database", async (importOriginal) => {
       schema: {
         focusSessions: actual.focusSessions as never,
         entities: actual.entities as never,
+        podSettings: actual.podSettings as never,
       },
     }),
     eventRepository: { append: async () => undefined },
@@ -104,7 +105,7 @@ vi.mock("../decision-entity-door.js", () => ({
 }));
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
-import { focusSessions, entities } from "@synap/database";
+import { focusSessions, entities, podSettings } from "@synap/database";
 import { decisionAskReactor } from "../decision-ask-reactor.js";
 import { retireUnaskedDecisionAsks } from "../retire-unasked-decision-asks.js";
 import { answerExpectedOutput } from "../../focus-sessions/answer-slot.js";
@@ -193,7 +194,7 @@ const OPTIONS = [
 
 describe("a proposed decision asks the person (W3)", () => {
   beforeAll(async () => {
-    for (const t of [focusSessions, entities]) {
+    for (const t of [focusSessions, entities, podSettings]) {
       await h.client!.exec(ddlFor(t as unknown as PgTable));
     }
   }, 120_000);
@@ -494,9 +495,15 @@ describe("a proposed decision asks the person (W3)", () => {
   });
 
   describe("retires the asks nobody asked (not_asked), once, through the close door", () => {
+    beforeEach(() => q(`delete from pod_settings`));
     // The shape the old reactor left: a person's decision, asked in a
     // Decide session it opened (marked), with nothing else owed there.
-    const legacyAsk = async (decisionId: string, marked: boolean, extra: unknown[] = []) => {
+    const legacyAsk = async (
+      decisionId: string,
+      marked: boolean,
+      extra: unknown[] = [],
+      over: Record<string, unknown> = {}
+    ) => {
       const sid = randomUUID();
       await q(
         `insert into focus_sessions (id, user_id, goal, status, expected_outputs, agent_ids, metadata, created_at, updated_at, started_at)
@@ -515,6 +522,7 @@ describe("a proposed decision asks the person (W3)", () => {
               ask: { mode: "confirm", prompt: "Accept: Pricing model?" },
               ref: { kind: "entity", id: decisionId },
               decisionId,
+              ...over,
             },
             ...extra,
           ]),
@@ -545,6 +553,7 @@ describe("a proposed decision asks the person (W3)", () => {
       const s4 = await legacyAsk(agents, true);
 
       expect(await retireUnaskedDecisionAsks()).toEqual({
+        status: "completed",
         retiredSlots: 3,
         closedSessions: 2,
       });
@@ -560,10 +569,36 @@ describe("a proposed decision asks the person (W3)", () => {
       expect(await statusOf(s3)).toBe("active");
       expect(await statusOf(s4)).toBe("active");
 
+      // Run once: the marker answers every later boot.
       expect(await retireUnaskedDecisionAsks()).toEqual({
+        status: "already-complete",
         retiredSlots: 0,
         closedSessions: 0,
       });
+    });
+
+    it("never retires a question somebody asked: re-asked after an answer, asked by a named agent, or filed from an answer", async () => {
+      await q(`delete from focus_sessions`);
+      // Answered, then re-asked ("Not what I said", an agent's block).
+      const reasked = await decision({ decisionStatus: "proposed" }, null);
+      await legacyAsk(reasked, false, [], {
+        answerHistory: [{ text: "Yes", answeredBy: OWNER, answeredAt: "2026-10-20T10:00:00.000Z" }],
+      });
+      // Asked by a named agent.
+      const named = await decision({ decisionStatus: "proposed" }, null);
+      await legacyAsk(named, false, [], { askedBy: AGENT });
+      // A decision an answer FILED: the slot's ref is not the decision.
+      const filed = await decision({ decisionStatus: "proposed" }, "human");
+      await legacyAsk(filed, false, [], { ref: { kind: "entity", id: randomUUID() } });
+
+      expect(await retireUnaskedDecisionAsks()).toEqual({
+        status: "completed",
+        retiredSlots: 0,
+        closedSessions: 0,
+      });
+      for (const id of [reasked, named, filed]) {
+        expect((await slotsCarrying(id))[0]).not.toHaveProperty("retiredAt");
+      }
     });
   });
 });

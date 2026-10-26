@@ -58,7 +58,10 @@ import {
   openRoomQuestionConditions,
 } from "@synap/database";
 import { questionDisposition } from "@synap-core/types/ask";
-import { readRoomPostMeta } from "../messaging/room-post-kind.js";
+import {
+  questionShortId,
+  readRoomPostMeta,
+} from "../messaging/room-post-kind.js";
 import {
   buildObjectActionTitle,
   resolveObjectGlyph,
@@ -1293,10 +1296,6 @@ async function readOpenQuestions(
   return { status: "ok", total: Number(totalRow?.n ?? 0), items };
 }
 
-/** How an agent names a room question in a chat: `Q-` + its id's first 8. */
-export function roomQuestionShortId(messageId: string): string {
-  return `Q-${messageId.slice(0, 8)}`;
-}
 
 /**
  * Agent questions still open in the session's ROOM (`PacketRoomQuestionItem`).
@@ -1336,7 +1335,7 @@ async function readOpenRoomQuestions(
     if (disposition !== "open" && disposition !== "awaiting_your_tap") continue;
     items.push({
       messageId: r.id,
-      shortId: roomQuestionShortId(r.id),
+      shortId: questionShortId(r.id),
       text: r.content,
       askedAt: r.timestamp ? new Date(r.timestamp).toISOString() : null,
       askedBy: r.routedTeammateId ?? null,

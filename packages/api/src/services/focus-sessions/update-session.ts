@@ -36,6 +36,8 @@ import {
   AskSchema,
   AskSnapshotSchema,
   PendingRelayedAnswerSchema,
+  askFingerprint,
+  effectiveSlotAsk,
   type AnswerProvenance,
   type Ask,
   type AskAnswerValue,
@@ -769,7 +771,8 @@ void _serverStampedCoverage;
  * agent filed `expectedOutputs: []` beside a rename and, on approval, every
  * declared deliverable of the session was gone (live, session 9dc5da0c). The
  * same upsert-by-key the `outcomes` declaration does ({@link keepUnlistedSlots});
- * withdrawing a slot is its own verb, `retireOutput`.
+ * withdrawing a slot is its own verb, `retireOutput`. Nor may an agent's list
+ * take back the person's turn on a slot ({@link personsSlotsHandedAway}).
  */
 export function mergeExpectedOutputs(
   current: OutputItem[],
@@ -782,6 +785,10 @@ export function mergeExpectedOutputs(
   const violations = detectServerStampedWrites(current, incoming);
   if (violations.length > 0) {
     throw serverStampedWriteError(violations);
+  }
+  if (opts.keepUnlisted) {
+    const handedAway = personsSlotsHandedAway(current, rawIncoming);
+    if (handedAway.length > 0) throw personsSlotHandBackError(handedAway);
   }
 
   const { twinOf, keyOf } = storedTwins(current);
@@ -848,11 +855,99 @@ export function mergeExpectedOutputs(
       // Stripped first so a server-stamped field the STORED slot does not carry
       // cannot survive as the incoming value — `carried` can only overwrite keys
       // it has, and an absent stored receipt has none.
-      return dropClearedRef(
-        reconcileOwedSince({ ...stripServerStamped(item), ...carried })
+      return withoutStaleRelay(
+        prior,
+        dropClearedRef(
+          reconcileOwedSince({ ...stripServerStamped(item), ...carried })
+        )
       );
     })
   );
+}
+
+/**
+ * The stored slots an AGENT's list hands away from the person — a stored
+ * `owner: 'human'` slot the incoming twin gives another owner. Pure.
+ *
+ * That is the hand-back `unblockOutput` refuses an agent key: the person's
+ * turn dropped with no answer and no record, and with it any commitment
+ * waiting for their tap. The agent's door for "I no longer need this" is
+ * `synap_relay_answer` `disposition: 'withdrawn'`, which records why and
+ * refuses a step only the person may take.
+ */
+export function personsSlotsHandedAway(
+  current: OutputItem[],
+  incoming: OutputItem[]
+): string[] {
+  const { twinOf } = storedTwins(current);
+  return incoming
+    .filter((item) => {
+      const prior = twinOf(item);
+      return (
+        prior?.owner === "human" &&
+        item?.owner !== undefined &&
+        item.owner !== "human"
+      );
+    })
+    .map((item) => item.label);
+}
+
+/** The refusal of {@link personsSlotsHandedAway}, as a `BAD_REQUEST`. */
+export function personsSlotHandBackError(labels: string[]): TRPCError {
+  const named = labels
+    .slice(0, 5)
+    .map((l) => `"${l}"`)
+    .join(", ");
+  return new TRPCError({
+    code: "BAD_REQUEST",
+    message:
+      `Refused: ${named} — the person owes the answer on this slot, and your ` +
+      `list cannot take it back. Nothing was changed. If your work no longer ` +
+      `needs it, withdraw the question with synap_relay_answer ` +
+      `(disposition 'withdrawn', with a note); if they answered you in chat, ` +
+      `relay their words with disposition 'answered'.`,
+  });
+}
+
+/**
+ * A relay waiting for the tap was read against the ask AS IT WAS, for the
+ * person: it goes when the ask changes (its Confirm would answer a question
+ * the person never answered) or the slot stops being theirs. Pure.
+ */
+export function withoutStaleRelay(
+  prior: OutputItem,
+  next: OutputItem
+): OutputItem {
+  if (!next.pendingRelay) return next;
+  if (
+    next.owner === "human" &&
+    askFingerprint(effectiveSlotAsk(prior)) ===
+      askFingerprint(effectiveSlotAsk(next))
+  ) {
+    return next;
+  }
+  const { pendingRelay: _stale, ...rest } = next;
+  return rest;
+}
+
+/**
+ * The labels whose waiting relay a write dropped — its room question still
+ * carries the stamp (`dropPendingRelayStamps`). Pure.
+ */
+export function droppedRelayLabels(
+  before: readonly OutputItem[],
+  after: readonly OutputItem[]
+): string[] {
+  const kept = new Set(
+    after
+      .filter((o) => o?.pendingRelay)
+      .map((o) => normalizeExpectedLabel(o.label))
+  );
+  return before
+    .filter(
+      (o) => o?.pendingRelay && !kept.has(normalizeExpectedLabel(o.label))
+    )
+    .map((o) => o.label);
 }
 
 /**
@@ -1155,11 +1250,13 @@ export function reconcileOwedSince(
   // does. Kept, it would resurrect as a stale card the moment the slot is
   // handed to the person again for a different reason.
   // Who asked it goes too: it names the asker of an ask that no longer exists.
+  // And a relay waiting for the person's tap: nobody is left to tap it.
   if (
     item.owedSince === undefined &&
     item.ask === undefined &&
     item.askedBy === undefined &&
-    item.askCause === undefined
+    item.askCause === undefined &&
+    item.pendingRelay === undefined
   )
     return item;
   const {
@@ -1167,6 +1264,7 @@ export function reconcileOwedSince(
     ask: _staleAsk,
     askedBy: _staleAsker,
     askCause: _staleCause,
+    pendingRelay: _staleRelay,
     ...rest
   } = item;
   return rest;
@@ -1610,6 +1708,20 @@ export async function updateFocusSession(
         status: "denied",
         reason: serverStampedWriteError(violations).message,
       };
+    }
+    // Same floor, same reason: an agent taking back the person's turn is
+    // refused to the agent, never proposed to the person it was taken from.
+    if (agentUserId) {
+      const handedAway = personsSlotsHandedAway(
+        storedOutputs,
+        params.expectedOutputs
+      );
+      if (handedAway.length > 0) {
+        return {
+          status: "denied",
+          reason: personsSlotHandBackError(handedAway).message,
+        };
+      }
     }
     // An AGENT's list is add-or-update (C6). It travels AS SENT: the locked
     // write and the executor on approval apply that upsert against the row as
@@ -2116,6 +2228,18 @@ export async function updateFocusSession(
     before: undoBefore,
     after: updated,
   });
+
+  // A relay this write made stale (the ask changed, or the slot left the
+  // person) leaves its room question too, so nobody confirms it there.
+  if (mutatesOutputs && existing.channelId) {
+    const stale = droppedRelayLabels(outputsBefore, outputsAfter);
+    if (stale.length > 0) {
+      const { dropPendingRelayStamps } = await import("./session-answer.js");
+      for (const label of stale) {
+        await dropPendingRelayStamps(existing.channelId, label);
+      }
+    }
+  }
 
   // ── EVIDENCE VERDICT ────────────────────────────────────────────────────────
   // A claim (`completeOutput`) is never a verdict: the ONE evidence door

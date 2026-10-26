@@ -259,6 +259,49 @@ describe("askFate — the owed ask's fate on silence", () => {
     });
   });
 
+  it("a criterion grade never retires with its session, though its ask is a choose", () => {
+    const grade = ask({
+      mode: "choose",
+      options: [
+        { label: "Pass", value: "pass" },
+        { label: "Fail", value: "fail" },
+      ],
+    });
+    expect(
+      askFate(
+        { label: "a", kind: "criterion", ask: grade, owedSince: daysAgo(1) },
+        NOW
+      )
+    ).toEqual({ kind: "until_decided" });
+    expect(
+      askFate(
+        { label: "a", criterionKey: "tests", ask: grade, owedSince: daysAgo(1) },
+        NOW
+      )
+    ).toEqual({ kind: "until_decided" });
+  });
+
+  it("a relay waiting for the tap is fresh news, whatever the slot's age", () => {
+    const old = daysAgo(REVIEW_LATER_AFTER_DAYS + 3);
+    expect(isAskReviewLater({ owedSince: old }, NOW)).toBe(true);
+    expect(
+      isAskReviewLater(
+        { owedSince: old, pendingRelay: { relayedAt: daysAgo(0.1) } },
+        NOW
+      )
+    ).toBe(false);
+    // A relay left waiting past the window ages out like anything else.
+    expect(
+      isAskReviewLater(
+        {
+          owedSince: old,
+          pendingRelay: { relayedAt: daysAgo(REVIEW_LATER_AFTER_DAYS + 1) },
+        },
+        NOW
+      )
+    ).toBe(true);
+  });
+
   it("an unreadable owedSince fails toward KEEPING it in the headline", () => {
     expect(isAskReviewLater({ owedSince: "0000-00-00" }, NOW)).toBe(false);
     expect(isAskReviewLater({ owedSince: null }, NOW)).toBe(false);
