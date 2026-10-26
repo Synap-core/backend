@@ -82,6 +82,7 @@ export const TOOL_GROUPS = {
   /** The rest of the session lifecycle. */
   sessions: [
     "synap_get_session",
+    "synap_relay_answer",
     "synap_list_sessions",
     "synap_list_agents",
     "synap_evaluate_session",

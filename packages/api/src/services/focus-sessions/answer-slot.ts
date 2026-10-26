@@ -46,6 +46,7 @@ import { createLogger } from "@synap-core/core";
 import type {
   ExpectedOutput,
   SlotAnswer,
+  SlotAnswerProvenance,
   SlotAnswerValue,
 } from "@synap/playbooks";
 import {
@@ -107,6 +108,13 @@ export interface AnswerExpectedOutputParams {
    * would make that discharge impossible. Default `true`.
    */
   handBack?: boolean;
+  /**
+   * WHERE the answer came from (`@synap-core/types/ask` `AnswerProvenance`),
+   * stamped on `answer` as given. Set by the relay door (`via: 'relayed'`) and
+   * by the person's Confirm of a relay (`via: 'tap'` + `confirmedAt`); absent
+   * on every plain tap, which reads `tap`.
+   */
+  provenance?: SlotAnswerProvenance;
   now?: Date;
 }
 
@@ -189,10 +197,13 @@ export function stampAnswered(
   // prior answer (`answer-pickup.ts`).
   const { answerPickedUpAt: _stale, ...fresh } = handedBack;
   // A SECOND answer archives the first instead of overwriting it.
+  // …and a recorded answer settles any relay that waited for the person's
+  // tap: confirmed, or overtaken by their own words.
+  const { pendingRelay: _settled, ...unpended } = fresh;
   const answerHistory = archivedAnswerHistory(slot);
   return outputs.map((o, i) =>
     i === index
-      ? { ...fresh, ...(answerHistory ? { answerHistory } : {}), answer }
+      ? { ...unpended, ...(answerHistory ? { answerHistory } : {}), answer }
       : o
   );
 }
@@ -261,6 +272,7 @@ export async function answerExpectedOutput(
           ? { question: question.slice(0, SLOT_ANSWER_TEXT_MAX) }
           : {}),
         ...(params.value ? { value: params.value } : {}),
+        ...params.provenance,
         // The ask AS POSED — the hand-back below clears `ask`/`why`, and with
         // them the options, the recommendation and what the agent looked at.
         ...(before.ask
@@ -419,6 +431,10 @@ function slotAnsweredEventData(
     // durable record of "the AI said X, the person chose Y". `null` when the
     // slot carried no ask.
     askSnapshot: answer.askSnapshot ?? null,
+    // A relayed answer says so in its history row (`via` absent = a tap).
+    ...(answer.via ? { via: answer.via } : {}),
+    ...(answer.relayedBy ? { relayedBy: answer.relayedBy } : {}),
+    ...(answer.confirmedAt ? { confirmedAt: answer.confirmedAt } : {}),
     ...(slot.decisionId ? { decisionId: slot.decisionId } : {}),
   };
 }

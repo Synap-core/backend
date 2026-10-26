@@ -67,7 +67,12 @@ import type { SQL } from "@synap/database";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import { deliverableOwedBy } from "@synap-core/types/units";
 import { effectiveSlotAsk } from "@synap-core/types/ask";
-import type { ExpectedOutput, OutputRef, SlotAsk } from "@synap/playbooks";
+import type {
+  ExpectedOutput,
+  OutputRef,
+  SlotAsk,
+  SlotPendingRelay,
+} from "@synap/playbooks";
 import type { ResolvedScope } from "../../utils/scope-filter.js";
 import { sessionScopeConditions } from "./session-scope.js";
 import {
@@ -210,6 +215,12 @@ export interface OwedSlot {
    * floor; a ref the reader cannot see is dropped (`looked-at.ts`).
    */
   ask?: SlotAsk;
+  /**
+   * A relayed answer waiting for the person's tap (`ExpectedOutput.
+   * pendingRelay`, a `commitment` an agent relayed from a chat) — carried so
+   * the row is a one-tap Confirm / "Not what I said" in place.
+   */
+  pendingRelay?: SlotPendingRelay;
 }
 
 export interface ListOwedSlotsParams {
@@ -347,6 +358,7 @@ export function projectOwedSlots(row: OwedRow): OwedSlot[] {
       // as "no pointer", not leak the wire's CLEAR into a read model.
       ...(slot.ref ? { ref: slot.ref } : {}),
       ...(ask ? { ask } : {}),
+      ...(slot.pendingRelay ? { pendingRelay: slot.pendingRelay } : {}),
     });
   }
   return owed;

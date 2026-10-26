@@ -70,7 +70,12 @@ import {
 } from "@synap/playbooks";
 // The ONE ask schema (`@synap-core/types/ask`) — the MCP `ask` property is
 // DERIVED from it (below), never hand-copied.
-import { AskSchema } from "@synap-core/types/ask";
+import {
+  ASK_LIMITS,
+  AskSchema,
+  RELAY_SURFACE_MAX_CHARS,
+} from "@synap-core/types/ask";
+import { RELAY_DISPOSITIONS } from "../../../services/focus-sessions/session-answer.js";
 
 import { automationDataContractSchema } from "../../automations.js";
 import { playbookStageSchema } from "../../../schemas/playbook-stage.js";
@@ -2718,6 +2723,67 @@ export const tools = {
             },
           },
           required: ["sessionId"],
+        },
+      },
+      {
+        name: "synap_relay_answer",
+        annotations: {
+          title: "Relay the person's answer",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+        description:
+          "The person answered your question HERE, in this chat, instead of in Synap: relay their answer to the question you asked (a room question you posted, or a slot you handed them). Name the EXACT question — `messageId` (the id synap_post_message returned) and/or `slotLabel`; never guess the newest. `quote` = their words VERBATIM, never your paraphrase or summary; `value` = the pick you read in them, for a confirm/choose ask. A routine question is answered and marked relayed by you. A commitment (deploy, spend, publish, delete, an approval, a grade, handing over a secret/connection/file — or any ask you marked stakes 'commitment') is NOT answered: it returns status 'awaiting_tap' and waits for the person's own tap — do not act on it yet. When your question is overtaken (you no longer need it), disposition 'withdrawn' + `note` closes it and hands its slot back to you.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            sessionId: {
+              type: "string",
+              description: "The focus session you asked in.",
+            },
+            disposition: {
+              type: "string",
+              enum: [...RELAY_DISPOSITIONS],
+              description:
+                "'answered' = the person answered in this chat (needs quote). 'withdrawn' = you no longer need the answer (needs note).",
+            },
+            messageId: {
+              type: "string",
+              description:
+                "Your room question's message id (from synap_post_message).",
+            },
+            slotLabel: {
+              type: "string",
+              maxLength: 500,
+              description:
+                "The output the question is about — alone when you asked through the output itself (owner 'human' + ask).",
+            },
+            quote: {
+              type: "string",
+              maxLength: ASK_LIMITS.answerTextMaxChars,
+              description:
+                "The person's own words, verbatim, as they typed them. Required with 'answered'.",
+            },
+            value: {
+              type: "object",
+              description:
+                "The typed answer you read in their words, for an output with an ask: {type:'confirm', confirmed:true|false} | {type:'chip', chip:{label, value}} (one of the options offered) | {type:'form', values:{...}} | {type:'text'}. Omit for a free-text question.",
+            },
+            relaySurface: {
+              type: "string",
+              maxLength: RELAY_SURFACE_MAX_CHARS,
+              description:
+                "Where they said it, e.g. 'claude-code' or 'claude-ai'.",
+            },
+            note: {
+              type: "string",
+              maxLength: ASK_LIMITS.promptMaxChars,
+              description:
+                "With 'withdrawn': one line on why you no longer need it.",
+            },
+          },
+          required: ["sessionId", "disposition"],
         },
       },
       {

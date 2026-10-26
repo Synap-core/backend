@@ -336,6 +336,8 @@ export function stampBlocked(
     if (answerHistory) withRef.answerHistory = answerHistory;
     delete withRef.answer;
     delete withRef.answerPickedUpAt;
+    // A relay pre-filled the OLD ask; it must not confirm the new one.
+    delete withRef.pendingRelay;
     return reconcileOwedSince(
       {
         ...withRef,
@@ -352,7 +354,8 @@ export function stampBlocked(
  * The agent reclaiming a slot it can now do: all four ownership fields go
  * together — and the `ask`, which describes how the PERSON resolves the
  * blocker and means nothing on an agent-owned slot (see
- * `BlockExpectedOutputParams.ask`). `ref` stays: it describes the deliverable.
+ * `BlockExpectedOutputParams.ask`), with any relay waiting on the person's tap
+ * of that ask (`pendingRelay`). `ref` stays: it describes the deliverable.
  * Pure.
  */
 export function stampUnblocked(
@@ -368,6 +371,7 @@ export function stampUnblocked(
       why: _why,
       owedSince: _owedSince,
       ask: _ask,
+      pendingRelay: _pendingRelay,
       ...rest
     } = o;
     return rest;
