@@ -140,13 +140,13 @@ vi.mock("../../../utils/split-brain-service.js", async (importOriginal) => ({
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
 import {
-  applyAgentPosture,
   grantOfScope,
   runWithActingAgent,
   runWithCallingKey,
   runWithDerivedSession,
   runWithGrant,
 } from "@synap/database";
+import { applyAgentPosture } from "@synap/database/agent-governance";
 import type { GrantScope } from "@synap/governance-policy/grants";
 import { entitiesRouter } from "../../../routers/entities.js";
 import { moveStatus } from "../move-status.js";
