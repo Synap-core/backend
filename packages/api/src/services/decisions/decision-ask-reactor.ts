@@ -320,6 +320,9 @@ export async function ensureDecisionAsk(
       userId: decision.userId,
       workspaceId: decision.workspaceId,
       ...(projectId ? { projectId } : {}),
+      // The session is ABOUT this decision: its subject, so its work type is
+      // the decision's kind (not only a `decisionAskFor` metadata marker).
+      subjectEntityId: decision.id,
       title,
       goal: title,
     });

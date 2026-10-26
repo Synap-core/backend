@@ -279,6 +279,13 @@ describe("a proposed decision asks the person (W3)", () => {
     ).toBe(false);
   });
 
+  it("the session it opens has the decision as its SUBJECT (its work type)", async () => {
+    const id = await decision({ decisionStatus: "proposed" });
+    await fire(id, "create");
+    expect(h.createdSessions).toHaveLength(1);
+    expect(h.createdSessions[0]).toMatchObject({ subjectEntityId: id });
+  });
+
   it("answering the slot UPDATES that decision — never files a new one", async () => {
     const sid = await session();
     const id = await decision({
