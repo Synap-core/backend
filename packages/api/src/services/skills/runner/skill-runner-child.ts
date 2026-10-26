@@ -24,9 +24,15 @@ function send(msg: RunnerMessage): void {
 
 const pending = new Map<
   number,
-  { resolve: (value: unknown) => void; reject: (err: Error) => void }
+  {
+    runId: string;
+    resolve: (value: unknown) => void;
+    reject: (err: Error) => void;
+  }
 >();
 let nextCallId = 1;
+/** The runs in flight, to stop one the broker cancels. */
+const running = new Map<string, AbortController>();
 
 /** Bridges that forward to the broker for ONE run. */
 function forwardingBridges(runId: string): SkillBridges {
@@ -39,7 +45,7 @@ function forwardingBridges(runId: string): SkillBridges {
       : (...args: unknown[]) =>
           new Promise((resolve, reject) => {
             const callId = nextCallId++;
-            pending.set(callId, { resolve, reject });
+            pending.set(callId, { runId, resolve, reject });
             send({ type: "bridge", runId, callId, name, args });
           });
   }
@@ -47,6 +53,8 @@ function forwardingBridges(runId: string): SkillBridges {
 }
 
 async function run(msg: Extract<BrokerMessage, { type: "run" }>) {
+  const stop = new AbortController();
+  running.set(msg.runId, stop);
   try {
     const value = await evaluateSkill(
       {
@@ -55,7 +63,8 @@ async function run(msg: Extract<BrokerMessage, { type: "run" }>) {
         context: msg.context,
         timeoutMs: msg.timeoutMs,
       },
-      forwardingBridges(msg.runId)
+      forwardingBridges(msg.runId),
+      stop.signal
     );
     send({ type: "done", runId: msg.runId, ok: true, value });
   } catch (err) {
@@ -65,13 +74,29 @@ async function run(msg: Extract<BrokerMessage, { type: "run" }>) {
       ok: false,
       error: err instanceof Error ? err.message : String(err),
     });
+  } finally {
+    running.delete(msg.runId);
   }
+}
+
+/** Stop a run past its limit: its bridge waits end, its isolate is disposed. */
+function cancel(runId: string) {
+  for (const [callId, call] of pending) {
+    if (call.runId !== runId) continue;
+    pending.delete(callId);
+    call.reject(new Error("The skill ran past its time limit."));
+  }
+  running.get(runId)?.abort();
 }
 
 process.on("message", (raw: unknown) => {
   const msg = raw as BrokerMessage;
   if (msg.type === "run") {
     void run(msg);
+    return;
+  }
+  if (msg.type === "cancel") {
+    cancel(msg.runId);
     return;
   }
   const call = pending.get(msg.callId);

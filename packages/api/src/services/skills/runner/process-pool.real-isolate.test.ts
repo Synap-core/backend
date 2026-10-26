@@ -175,21 +175,38 @@ describe.skipIf(!ivmLoads)("skill runner pool: containment", () => {
     expect(pool.pids()[0]).not.toBe(pid);
   });
 
-  it("a run stuck past its limit is failed by the watchdog and its runner replaced", async () => {
-    const pool = newPool({ processes: 1, watchdogGraceMs: 300 });
+  it("a run stuck on a bridge past its limit is stopped alone: the caller gets a timeout, a co-tenant finishes, the runner lives", async () => {
+    // isolated-vm's own `timeout` does not stop a skill waiting on a bridge
+    // (seen on the devbox, 2026-10-26): the broker's watchdog answers the
+    // caller and cancels the run in its runner, without killing the runner.
+    const pool = newPool({
+      processes: 1,
+      isolatesPerProcess: 2,
+      watchdogGraceMs: 300,
+    });
     const hang = gate<unknown>();
     const started = Date.now();
-    const err = await pool
+    const stuck = pool
       .run(
         job("return await hubProtocol.getEntities({});", 300),
         bridges({ getEntities: hang.bridge })
       )
       .then(
         () => null,
-        (e: unknown) => e as Error
+        (e: unknown) => e
       );
-    expect(err?.message).toMatch(/timed out|did not stop within/i);
-    expect(Date.now() - started).toBeLessThan(5_000);
+    await hang.reached;
+    const [pid] = pool.pids();
+    const neighbour = pool.run(
+      job(SLOW_NORMAL),
+      bridges({ getEntities: slowEntities })
+    );
+    const err = await stuck;
+    expect(err).toBeInstanceOf(SkillRuntimeError);
+    expect((err as SkillRuntimeError).code).toBe("SKILL_RUNTIME_TIMEOUT");
+    expect(Date.now() - started).toBeLessThan(3_000);
+    await expect(neighbour).resolves.toBe(42);
+    expect(pool.pids()).toEqual([pid]); // cancelled, not killed
     await expect(pool.run(job("return 8;"), bridges())).resolves.toBe(8);
   });
 });

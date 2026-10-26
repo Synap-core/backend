@@ -13,9 +13,11 @@
  * async context by the caller) are executed HERE when the child asks, so the
  * child never holds an identity, a session, a verbAct or a credential.
  *
- * Supervision: a run that does not answer within its timeout plus a grace gets
- * its child killed; a child that dies (OOM, abort, kill) fails every run it
- * held with the reason, and is replaced on demand. The API keeps serving.
+ * Supervision: a run that does not answer within its timeout plus a grace is
+ * failed (`timeout`) and cancelled in its child (its bridge waits end, its
+ * isolate is disposed); a child that does not stop it within a grace is
+ * killed. A child that dies (OOM, abort, kill) fails every run it held with
+ * the reason, and is replaced on demand. The API keeps serving.
  * Children are spawned lazily, kept warm, and `unref`'d while idle (an idle
  * pool never keeps the process alive).
  *
@@ -49,6 +51,9 @@ export const RUNNER_ENV_ALLOWLIST = ["TZ"] as const;
 
 /** Heap of a runner's own (main) isolate; each skill isolate has its own cap. */
 const RUNNER_HEAP_MB = 128;
+
+/** A cancelled run that has not stopped after this long gets its runner killed. */
+const CANCEL_GRACE_MS = 2_000;
 
 /** After a runner fails to start, no new one is forked for this long. */
 const START_RETRY_MS = 5_000;
@@ -113,6 +118,11 @@ interface Slot {
   runs: Map<string, Run>;
   /** Why the broker stopped this child, when it did (else it died on its own). */
   killReason: string | null;
+  /**
+   * Runs failed past their limit and cancelled, until the runner answers
+   * `done` for them (they still hold an isolate): runId → the kill timer.
+   */
+  draining: Map<string, ReturnType<typeof setTimeout>>;
   /** The child's own last words (`fatal`), when it could not start. */
   fatal: string | null;
   readyWaiters: Array<() => void>;
@@ -284,6 +294,14 @@ export function createProcessSkillPool(
         onBridge(slot, msg);
         return;
       case "done": {
+        const drained = slot.draining.get(msg.runId);
+        if (drained) {
+          // A cancelled run stopped: its isolate is free again.
+          clearTimeout(drained);
+          slot.draining.delete(msg.runId);
+          pump();
+          return;
+        }
         const run = slot.runs.get(msg.runId);
         if (!run) return;
         finish(
@@ -303,6 +321,8 @@ export function createProcessSkillPool(
   ) {
     if (slot.exited) return;
     slot.exited = true;
+    for (const t of slot.draining.values()) clearTimeout(t);
+    slot.draining.clear();
     const i = slots.indexOf(slot);
     if (i >= 0) slots.splice(i, 1);
     for (const w of slot.readyWaiters.splice(0)) w();
@@ -356,6 +376,7 @@ export function createProcessSkillPool(
       exited: false,
       runs: new Map(),
       killReason: null,
+      draining: new Map(),
       fatal: null,
       readyWaiters: [],
     };
@@ -383,19 +404,32 @@ export function createProcessSkillPool(
     holdOpen(slot, true);
     const limitMs = run.job.timeoutMs + config.watchdogGraceMs;
     run.timer = setTimeout(() => {
+      // Past its limit (a skill waiting on a bridge is beyond the isolate's
+      // own timeout): the caller is answered now, the runner is asked to stop
+      // the run, and only a runner that does not is killed.
       logger.warn(
         { pid: slot.child.pid, runId: run.runId, limitMs },
-        "skill runner: a run did not answer within its limit — runner killed"
+        "skill runner: a run passed its limit — cancelled"
       );
       finish(run, {
         error: new SkillRuntimeError(
           "SKILL_RUNTIME_TIMEOUT",
-          `The skill did not stop within its ${Math.round(run.job.timeoutMs / 1000)} s limit; its runtime process was stopped.`
+          `The skill did not finish within its ${Math.round(run.job.timeoutMs / 1000)} s limit and was stopped.`
         ),
       });
-      slot.killReason =
-        "another skill on the same runtime process overran its limit";
-      slot.child.kill("SIGKILL");
+      slot.draining.set(
+        run.runId,
+        setTimeout(() => {
+          logger.warn(
+            { pid: slot.child.pid, runId: run.runId },
+            "skill runner: a cancelled run did not stop — runner killed"
+          );
+          slot.killReason =
+            "another skill on the same runtime process could not be stopped";
+          slot.child.kill("SIGKILL");
+        }, CANCEL_GRACE_MS)
+      );
+      reply(slot, { type: "cancel", runId: run.runId });
     }, limitMs);
     reply(slot, { type: "run", runId: run.runId, ...run.job });
   }
@@ -420,10 +454,12 @@ export function createProcessSkillPool(
 
   function pump() {
     if (closed) return;
-    const live = () => slots.filter((s) => !s.exited);
+    // A runner being killed takes nothing new.
+    const live = () => slots.filter((s) => !s.exited && !s.killReason);
+    const load = (s: Slot) => s.runs.size + s.draining.size;
     // Spread before sharing: one fresh runner per waiting run, up to N, so a
     // run shares a runner (and its fate) only when N are already up.
-    let empty = live().filter((s) => s.runs.size === 0).length;
+    let empty = live().filter((s) => load(s) === 0).length;
     while (
       queue.length > empty &&
       slots.length < config.processes &&
@@ -437,18 +473,18 @@ export function createProcessSkillPool(
         return;
       }
     }
-    if (queue.length > 0 && live().length === 0) {
-      // Nothing is up and nothing may start yet: say so now, never hang.
+    if (queue.length > 0 && slots.length === 0) {
+      // Nothing is up, stopping or allowed to start yet: say so now, never hang.
       for (const run of queue.splice(0)) finish(run, { error: unavailable() });
       return;
     }
     const starting = live().some((s) => !s.ready);
     while (queue.length > 0) {
       const slot = live()
-        .filter((s) => s.ready && s.runs.size < config.isolatesPerProcess)
-        .sort((a, b) => a.runs.size - b.runs.size)[0];
-      if (!slot) return; // the next `ready` or `done` pumps again
-      if (slot.runs.size > 0 && starting) return; // a fresh runner is on its way
+        .filter((s) => s.ready && load(s) < config.isolatesPerProcess)
+        .sort((a, b) => load(a) - load(b))[0];
+      if (!slot) return; // the next `ready`, `done` or `close` pumps again
+      if (load(slot) > 0 && starting) return; // a fresh runner is on its way
       dispatch(slot, queue.shift()!);
     }
   }
@@ -490,7 +526,7 @@ export function createProcessSkillPool(
     },
 
     health() {
-      const live = slots.filter((s) => !s.exited);
+      const live = slots.filter((s) => !s.exited && !s.killReason);
       const status = live.some((s) => s.ready)
         ? "ready"
         : lastStartError

@@ -13,6 +13,7 @@
  *   runner → broker   bridge         { runId, callId, name, args }   (callId null: no reply, `log`)
  *   broker → runner   bridge-result  { runId, callId, ok, value | error }
  *   runner → broker   done           { runId, ok, value | error }
+ *   broker → runner   cancel         { runId }   (past its limit: stop it, answer `done`)
  *   runner → broker   ready | fatal  once, at start (the addon loaded, or why not)
  *
  * Nothing about WHO runs the skill crosses: no user, agent, session, verbAct or
@@ -73,6 +74,7 @@ export interface SkillJob {
 
 export type BrokerMessage =
   | ({ type: "run"; runId: string } & SkillJob)
+  | { type: "cancel"; runId: string }
   | {
       type: "bridge-result";
       runId: string;

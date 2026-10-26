@@ -54,12 +54,22 @@ export async function loadIvm(): Promise<typeof IvmModule> {
   return ivmModulePromise;
 }
 
+/**
+ * `signal` aborts the run from outside: the isolate is disposed, which stops
+ * it even where its own `timeout` cannot (a skill waiting on a bridge).
+ */
 export async function evaluateSkill(
   job: SkillJob,
-  bridges: SkillBridges
+  bridges: SkillBridges,
+  signal?: AbortSignal
 ): Promise<unknown> {
   const ivm = await loadIvm();
   const isolate = new ivm.Isolate({ memoryLimit: ISOLATE_MEMORY_LIMIT_MB });
+  const stop = () => {
+    if (!isolate.isDisposed) isolate.dispose();
+  };
+  signal?.addEventListener("abort", stop, { once: true });
+  if (signal?.aborted) stop();
   // An object crosses into the isolate as a copy; a primitive as itself.
   const intoIsolate = (value: unknown) =>
     value !== null && typeof value === "object"
@@ -112,8 +122,7 @@ export async function evaluateSkill(
 
     return result;
   } finally {
-    if (!isolate.isDisposed) {
-      isolate.dispose();
-    }
+    signal?.removeEventListener("abort", stop);
+    stop();
   }
 }
