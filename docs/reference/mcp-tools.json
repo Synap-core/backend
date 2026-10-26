@@ -8,7 +8,7 @@
     "group": "Which listing group the tool belongs to: 'entry' tools are listed to every key; other groups are listed to an entry-profile key once unlocked with synap_load_skill('tools:<group>'). A group narrows listing only and is not a permission.",
     "scopes": "Tool definitions declare no required API key scopes. Scope checks (mcp.read / mcp.write) run inside the handlers when a tool is called."
   },
-  "toolCount": 101,
+  "toolCount": 102,
   "entryTools": [
     "synap_orient",
     "synap_ask",
@@ -17,6 +17,7 @@
     "synap_update_session",
     "synap_wait_for_answer",
     "synap_post_message",
+    "synap_relay_answer",
     "synap_complete_session",
     "synap_load_skill"
   ],
@@ -5292,6 +5293,112 @@
           }
         },
         "required": ["sessionId"]
+      }
+    },
+    {
+      "name": "synap_relay_answer",
+      "title": "Relay the person's answer",
+      "group": "entry",
+      "annotations": {
+        "title": "Relay the person's answer",
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "description": "The person answered your question HERE, in this chat, instead of in Synap: relay their answer to the question you asked (a room question you posted, or a slot you handed them). Name the EXACT question — `messageId` (the id synap_post_message returned) and/or `slotLabel`; never guess the newest. `quote` = their words VERBATIM, never your paraphrase or summary; `value` = the pick you read in them, for a confirm/choose ask. A routine question is answered and marked relayed by you. A commitment (deploy, spend, publish, delete, an approval, a grade, handing over a secret/connection/file — or any ask you marked stakes 'commitment') is NOT answered: it returns status 'awaiting_tap' and waits for the person's own tap — do not act on it yet. When your question is overtaken (you no longer need it), disposition 'withdrawn' + `note` closes it and hands its slot back to you.",
+      "parameters": [
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": true,
+          "description": "The focus session you asked in."
+        },
+        {
+          "name": "disposition",
+          "type": "enum",
+          "required": true,
+          "description": "'answered' = the person answered in this chat (needs quote). 'withdrawn' = you no longer need the answer (needs note).",
+          "enum": ["answered", "withdrawn"]
+        },
+        {
+          "name": "messageId",
+          "type": "string",
+          "required": false,
+          "description": "Your room question's message id (from synap_post_message)."
+        },
+        {
+          "name": "slotLabel",
+          "type": "string",
+          "required": false,
+          "description": "The output the question is about — alone when you asked through the output itself (owner 'human' + ask)."
+        },
+        {
+          "name": "quote",
+          "type": "string",
+          "required": false,
+          "description": "The person's own words, verbatim, as they typed them. Required with 'answered'."
+        },
+        {
+          "name": "value",
+          "type": "object",
+          "required": false,
+          "description": "The typed answer you read in their words, for an output with an ask: {type:'confirm', confirmed:true|false} | {type:'chip', chip:{label, value}} (one of the options offered) | {type:'form', values:{...}} | {type:'text'}. Omit for a free-text question."
+        },
+        {
+          "name": "relaySurface",
+          "type": "string",
+          "required": false,
+          "description": "Where they said it, e.g. 'claude-code' or 'claude-ai'."
+        },
+        {
+          "name": "note",
+          "type": "string",
+          "required": false,
+          "description": "With 'withdrawn': one line on why you no longer need it."
+        }
+      ],
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "description": "The focus session you asked in."
+          },
+          "disposition": {
+            "type": "string",
+            "enum": ["answered", "withdrawn"],
+            "description": "'answered' = the person answered in this chat (needs quote). 'withdrawn' = you no longer need the answer (needs note)."
+          },
+          "messageId": {
+            "type": "string",
+            "description": "Your room question's message id (from synap_post_message)."
+          },
+          "slotLabel": {
+            "type": "string",
+            "maxLength": 500,
+            "description": "The output the question is about — alone when you asked through the output itself (owner 'human' + ask)."
+          },
+          "quote": {
+            "type": "string",
+            "maxLength": 2000,
+            "description": "The person's own words, verbatim, as they typed them. Required with 'answered'."
+          },
+          "value": {
+            "type": "object",
+            "description": "The typed answer you read in their words, for an output with an ask: {type:'confirm', confirmed:true|false} | {type:'chip', chip:{label, value}} (one of the options offered) | {type:'form', values:{...}} | {type:'text'}. Omit for a free-text question."
+          },
+          "relaySurface": {
+            "type": "string",
+            "maxLength": 64,
+            "description": "Where they said it, e.g. 'claude-code' or 'claude-ai'."
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 500,
+            "description": "With 'withdrawn': one line on why you no longer need it."
+          }
+        },
+        "required": ["sessionId", "disposition"]
       }
     },
     {

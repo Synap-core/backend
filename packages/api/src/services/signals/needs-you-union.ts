@@ -448,6 +448,7 @@ const _KIND_SPECIFIC_SIGNAL_FIELDS = [
   "criterionKey",
   "slotRef",
   "ask",
+  "pendingRelay",
   "class",
   "lifetimeHours",
   "reviewLater",

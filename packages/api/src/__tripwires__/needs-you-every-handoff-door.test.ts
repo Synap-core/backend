@@ -64,6 +64,10 @@ const EXEMPT: Record<string, string> = {
   "services/playbooks/playbook-lifecycle.ts":
     "DEFINES `instantiateSession(Row)`; the notification belongs to the DOOR " +
     "that knows who is in front of the run (`run-playbook.ts` notifies).",
+  "services/focus-sessions/session-answer.ts":
+    "\"Not what I said\" (`correctRelayedAnswer`) gives a slot back to the " +
+    "PERSON who just rejected its relayed answer — they are looking at it; a " +
+    "push about their own click is noise.",
   "services/focus-sessions/schedule-session.ts":
     "An APPOINTMENT the person booked themselves (origin 'human').",
   "services/import/session.ts":
