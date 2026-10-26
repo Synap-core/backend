@@ -1,18 +1,29 @@
 name: Publish Docker Images
 
 on:
-  # ON DEMAND ONLY (founder, 2026-10-18): images and releases are built when a
-  # release is wanted, never on every green push. Two doors, both gated on a
-  # green CI run for the exact commit (job ci-gate below):
-  #   - a v* tag  → STABLE release vX.Y.Z (what managed and lab pods install)
+  # Releases are never built on every green push (founder, 2026-10-18). Three
+  # doors, all gated on a green "Release gate" for the exact commit (job
+  # ci-gate below) and on the `production` environment's required reviewer:
+  #   - a v* tag  → STABLE release vX.Y.Z (what managed pods install)
   #   - "Run workflow" on main (gh workflow run docker-publish.yml --ref main)
-  #               → FAST release main-<sha7>
+  #               → FAST release main-<sha7> of main's head
+  #   - NIGHTLY (founder, 2026-10-26, "1B now, C later") → FAST release
+  #               main-<sha7> of the newest main commit whose Release gate
+  #               passed, so the lab pod (channel fast) stays within ~24 h of
+  #               main without a hand-made tag. This consciously amends the
+  #               2026-10-18 "on demand only" decision, for the fast channel
+  #               only: one run a day, one approval tap a day. It skips (no
+  #               build, no approval request) when that commit is already
+  #               released, and cancels an older nightly still waiting for
+  #               approval so only the newest commit is ever offered.
   # The old `workflow_run: CI completed` trigger built a fast release (and asked
   # for a production approval) after every merge.
   push:
     tags:
       - "v*"
   workflow_dispatch:
+  schedule:
+    - cron: "30 2 * * *" # 02:30 UTC
 
 # Branch → image tag mapping (update-door plan P1 — pods never consume :latest):
 #   develop  → :dev + :develop-<sha7> + :sha-<full>  (staging ring — no release, no CP notification)
@@ -34,13 +45,23 @@ jobs:
   # "Release gate" job of ci.yml — founder decision 2026-10-19, option A). A tag
   # or a manual run is not itself covered by CI, so this reads that job's check
   # run for the SHA. The "Full suite" job is deliberately NOT read here: its red
-  # is a backlog, not a release blocker.
+  # is a backlog, not a release blocker. The nightly does not read github.sha
+  # (main's head, whose gate is often cancelled by the next push): it PICKS the
+  # newest first-parent main commit with a green gate, and the build jobs
+  # check out that commit (outputs sha / build).
   ci-gate:
     runs-on: ubuntu-latest
     permissions:
       checks: read
+      contents: read
+      # Nightly only: cancel an older nightly still waiting for approval.
+      actions: write
+    outputs:
+      sha: ${{ steps.pick.outputs.sha }}
+      build: ${{ steps.pick.outputs.build }}
     steps:
       - name: Release gate passed on this commit
+        if: github.event_name != 'schedule'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -54,6 +75,37 @@ jobs:
           fi
           echo "Release gate passed on $SHA ($n green check run(s))."
 
+      - name: Checkout main (nightly)
+        if: github.event_name == 'schedule'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 50
+
+      - name: Pick the newest main commit with a green Release gate (nightly)
+        id: pick
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: bash deploy/release/nightly-fast-pick.sh "$REPO" 30 >> "$GITHUB_OUTPUT"
+
+      # Approving an older nightly after a newer release would move channel-fast
+      # BACKWARDS, and two open prompts for one day's work is noise. A run that
+      # is "waiting" has built nothing yet (its build jobs wait for the
+      # reviewer), so cancelling it cannot leave a release half-published.
+      - name: Supersede an older nightly still waiting for approval
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          for id in $(gh api "repos/$REPO/actions/workflows/docker-publish.yml/runs?event=schedule&status=waiting&per_page=20" \
+                        --jq ".workflow_runs[] | select(.id != $RUN_ID) | .id"); do
+            echo "Cancelling nightly run $id: it was waiting for approval and is superseded by run $RUN_ID."
+            gh api -X POST "repos/$REPO/actions/runs/$id/cancel"
+          done
+
   build-and-push-backend-api:
     needs: ci-gate
     runs-on: ubuntu-latest
@@ -61,6 +113,7 @@ jobs:
     if: >
       github.event_name == 'workflow_dispatch' ||
       github.event_name == 'push' ||
+      (github.event_name == 'schedule' && needs.ci-gate.outputs.build == 'true') ||
       (github.event_name == 'workflow_run' &&
         github.event.workflow_run.conclusion == 'success' &&
         github.event.workflow_run.event == 'push' &&
@@ -106,10 +159,14 @@ jobs:
           RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           GH_REF: ${{ github.ref }}
           GH_SHA: ${{ github.sha }}
+          NIGHTLY_SHA: ${{ needs.ci-gate.outputs.sha }}
         run: |
           if [[ "$EVENT_NAME" == "workflow_run" ]]; then
             REF="refs/heads/${RUN_HEAD_BRANCH}"
             SHA="${RUN_HEAD_SHA}"
+          elif [[ "$EVENT_NAME" == "schedule" ]]; then
+            REF="refs/heads/main"
+            SHA="${NIGHTLY_SHA}"
           else
             REF="${GH_REF}"
             SHA="${GH_SHA}"
@@ -233,6 +290,7 @@ jobs:
     if: >
       github.event_name == 'workflow_dispatch' ||
       github.event_name == 'push' ||
+      (github.event_name == 'schedule' && needs.ci-gate.outputs.build == 'true') ||
       (github.event_name == 'workflow_run' &&
         github.event.workflow_run.conclusion == 'success' &&
         github.event.workflow_run.event == 'push' &&
@@ -259,10 +317,14 @@ jobs:
           RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           GH_REF: ${{ github.ref }}
           GH_SHA: ${{ github.sha }}
+          NIGHTLY_SHA: ${{ needs.ci-gate.outputs.sha }}
         run: |
           if [[ "$EVENT_NAME" == "workflow_run" ]]; then
             REF="refs/heads/${RUN_HEAD_BRANCH}"
             SHA="${RUN_HEAD_SHA}"
+          elif [[ "$EVENT_NAME" == "schedule" ]]; then
+            REF="refs/heads/main"
+            SHA="${NIGHTLY_SHA}"
           else
             REF="${GH_REF}"
             SHA="${GH_SHA}"
@@ -333,6 +395,7 @@ jobs:
     if: >
       github.event_name == 'workflow_dispatch' ||
       github.event_name == 'push' ||
+      (github.event_name == 'schedule' && needs.ci-gate.outputs.build == 'true') ||
       (github.event_name == 'workflow_run' &&
         github.event.workflow_run.conclusion == 'success' &&
         github.event.workflow_run.event == 'push' &&
@@ -359,10 +422,14 @@ jobs:
           RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           GH_REF: ${{ github.ref }}
           GH_SHA: ${{ github.sha }}
+          NIGHTLY_SHA: ${{ needs.ci-gate.outputs.sha }}
         run: |
           if [[ "$EVENT_NAME" == "workflow_run" ]]; then
             REF="refs/heads/${RUN_HEAD_BRANCH}"
             SHA="${RUN_HEAD_SHA}"
+          elif [[ "$EVENT_NAME" == "schedule" ]]; then
+            REF="refs/heads/main"
+            SHA="${NIGHTLY_SHA}"
           else
             REF="${GH_REF}"
             SHA="${GH_SHA}"
@@ -502,7 +569,8 @@ jobs:
       # D12: sign the manifest — it is the root of trust (images by digest and
       # the bundle sha256 live inside it). Keyless: Fulcio certifies this
       # workflow's identity (…/docker-publish.yml@refs/heads/main for a fast
-      # release — workflow_run always runs the default-branch file — or
+      # release — a dispatch on main and the nightly schedule both run main's
+      # file — or
       # @refs/tags/vX.Y.Z for a stable one) and Rekor logs it. `synap update`
       # verifies with the same identity + issuer (_ue_verify_manifest_sig).
       - name: Install cosign
