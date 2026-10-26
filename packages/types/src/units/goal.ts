@@ -417,6 +417,11 @@ export interface GoalCriterionState {
    * gave (`"9 of 12 pages migrated"`); `null` when none was recorded.
    */
   currentValue: string | null;
+  /**
+   * The run `currentValue` was read from — `null` with it. A read shows the
+   * value only to a reader who may see that run (D-6, 2026-10-26).
+   */
+  currentValueSessionId: string | null;
   /** The pass that claims it — `null` when no pass is current. */
   claim: GoalCriterionClaimFacts | null;
 }
@@ -453,6 +458,17 @@ export interface GoalCriterionView {
    * decision with no run). `undefined` never: a write's fallback reads `null`.
    */
   claim: GoalCriterionClaim | null;
+  /**
+   * D-6 (founder, 2026-10-26): what backs a criterion — its claim's run title,
+   * evidence and note, and its `currentValue` — is shown only to the goal's
+   * OWNER, its JUDGE and whoever may read that run. `true` = there is such
+   * content and this reader is none of them: those fields read `null`
+   * ("Evidence visible to the owner and judge"), never an empty claim.
+   * `false` = nothing withheld. The pod sets it on every derived read; it is
+   * absent only on a write's fallback view, which read no goal facts
+   * (`mark: null`).
+   */
+  evidenceWithheld?: boolean;
 }
 
 function ms(at: Date | string): number {
@@ -521,7 +537,15 @@ export function deriveGoalCriteria(
             at: new Date(ms(current.createdAt)).toISOString(),
           }
         : null;
-    const base = { key: c.key, meaning, currentValue, claim };
+    const currentValueSessionId =
+      currentValue !== null && measured ? measured.run.sessionId : null;
+    const base = {
+      key: c.key,
+      meaning,
+      currentValue,
+      currentValueSessionId,
+      claim,
+    };
 
     const notPassing = (): GoalCriterionMark =>
       carrying.some((r) => r.open)

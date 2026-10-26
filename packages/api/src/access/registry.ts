@@ -676,6 +676,12 @@ registerVisibility({
 // WHO IS ON A GOAL (0348) — exactly as visible as the goal (the track), so
 // as its project. Being a participant grants NO read (D5-A): an agent reads a
 // goal only as the person it acts for, a person through the project's floor.
+// The goal's OWNER and JUDGE seats do grant one read (D-6, founder,
+// 2026-10-26): what backs each criterion — the claim's run title, evidence,
+// note and measured value — which is otherwise as private as the run
+// (`sessionReadableWhere`). Everyone else who sees the goal reads the mark
+// alone, with `evidenceWithheld: true`. A key reads it as its person, within
+// its grant (`session`). Applied in `loadTrackGoalFacts` (goal-content.ts).
 registerVisibility({
   table: trackParticipants,
   query: () => db.query.trackParticipants,

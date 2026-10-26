@@ -173,6 +173,7 @@ import {
 import { AccessContext, scopedDb } from "../../access/index.js";
 import { grantReadPredicate } from "../../access/grant-read.js";
 import { projectVisibleWhere } from "../../access/project-visibility.js";
+import { rosterReadFor } from "../../access/session-visibility.js";
 import { loadVisibleProject } from "../projects/load-visible-project.js";
 import { projectPathConditions } from "../projects/project-path.js";
 import type { CreateFocusSessionParams } from "../focus-sessions/create-session.js";
@@ -578,7 +579,7 @@ export async function countTrackSessionsByStage(
 /** Track views with per-stage session counts — what every track READ returns. */
 export async function loadTrackViews(
   tracks: ProjectTrack[],
-  actor: Pick<TrackActor, "userId">
+  actor: Pick<TrackActor, "userId" | "agentUserId" | "isHubProtocol">
 ): Promise<TrackView[]> {
   const [counts, movers, goals, participants] = await Promise.all([
     countTrackSessionsByStage(tracks, actor.userId),
@@ -587,7 +588,7 @@ export async function loadTrackViews(
         readTrackStageHistory(t.stageHistory).map((e) => e.actor)
       )
     ),
-    loadTrackGoalFacts(tracks, actor.userId),
+    loadTrackGoalFacts(tracks, actor.userId, { roster: rosterReadFor(actor) }),
     loadTrackParticipantViews(tracks),
   ]);
   const actorOf = (id: string) =>
@@ -606,7 +607,7 @@ export async function loadTrackViews(
  */
 export async function loadWrittenTrackView(
   track: ProjectTrack,
-  actor: Pick<TrackActor, "userId">
+  actor: Pick<TrackActor, "userId" | "agentUserId" | "isHubProtocol">
 ): Promise<TrackView> {
   try {
     return await loadTrackView(track, actor);
@@ -621,7 +622,7 @@ export async function loadWrittenTrackView(
 
 export async function loadTrackView(
   track: ProjectTrack,
-  actor: Pick<TrackActor, "userId">
+  actor: Pick<TrackActor, "userId" | "agentUserId" | "isHubProtocol">
 ): Promise<TrackView> {
   const [view] = await loadTrackViews([track], actor);
   return view!;

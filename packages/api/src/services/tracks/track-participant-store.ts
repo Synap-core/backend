@@ -92,7 +92,18 @@ export async function loadGoalJudge(
 export async function loadGoalJudges(
   tracks: ReadonlyArray<Pick<ProjectTrack, "id" | "userId">>
 ): Promise<Map<string, string>> {
-  const out = new Map<string, string>();
+  const seats = await loadGoalSeats(tracks);
+  return new Map([...seats].map(([id, s]) => [id, s.judge]));
+}
+
+/**
+ * THE owner and judge of many goals in ONE read — `goalOwner` and `goalJudge`
+ * per goal, keyed by its id (every goal has an entry).
+ */
+export async function loadGoalSeats(
+  tracks: ReadonlyArray<Pick<ProjectTrack, "id" | "userId">>
+): Promise<Map<string, { owner: string; judge: string }>> {
+  const out = new Map<string, { owner: string; judge: string }>();
   if (tracks.length === 0) return out;
   const db = await getDb();
   const rows = await db
@@ -112,13 +123,8 @@ export async function loadGoalJudges(
       )
     );
   for (const t of tracks) {
-    out.set(
-      t.id,
-      goalJudge(
-        rows.filter((r) => r.trackId === t.id),
-        t
-      )
-    );
+    const own = rows.filter((r) => r.trackId === t.id);
+    out.set(t.id, { owner: goalOwner(own, t), judge: goalJudge(own, t) });
   }
   return out;
 }
