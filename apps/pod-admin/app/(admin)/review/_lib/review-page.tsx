@@ -121,6 +121,7 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
         actorKind: p.actorKind,
         workspaceName: p.workspaceName,
         data: p.data,
+        requestData: p.request?.data,
       });
     }
     return map;

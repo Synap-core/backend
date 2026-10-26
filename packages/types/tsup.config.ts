@@ -2,7 +2,7 @@ import { defineConfig } from "tsup";
 
 export default defineConfig({
   // Node platform so require() of built-ins (e.g. "os" in pino) works when any dep is bundled.
-  // peerDependencies (@synap/database, @synap-core/core) are excluded by tsup so pino is not bundled.
+  // @synap-core/core is excluded so pino is not bundled.
   platform: "node",
   entry: [
     "src/index.ts",
@@ -26,13 +26,5 @@ export default defineConfig({
   dts: false,
   clean: true,
   splitting: false,
-  external: [
-    "yjs",
-    "@synap/database",
-    "@synap-core/core",
-    "pino",
-    "pino-pretty",
-    "os",
-    /^node:/,
-  ],
+  external: ["yjs", "@synap-core/core", "pino", "pino-pretty", "os", /^node:/],
 });

@@ -1,12 +1,11 @@
 /**
  * Workspace Types
  *
- * Re-exports workspace types from database schema (single source of truth).
- *
- * @see {@link @synap/database/schema}
+ * Declared in this package: the rows in ./rows.js (the database proves its
+ * inferred rows equal), the settings/layout shapes in ./settings.js and the
+ * definition input in ./definition.js (the database imports both).
  */
 
-// Direct re-exports from database
 export type {
   Workspace,
   NewWorkspace,
@@ -14,17 +13,19 @@ export type {
   NewWorkspaceMember,
   WorkspaceInvite,
   NewWorkspaceInvite,
+} from "./rows.js";
+export type {
   // Workspace settings/layout types (canonical source of truth)
   WorkspaceSidebarItem,
   WorkspaceSidebarSection,
   WorkspaceLayoutConfig,
   McpServerConfig,
-  // Workspace definition (used by createFromDefinition — apps, presets, packages)
-  WorkspaceDefinitionInput,
-} from "@synap/database";
+} from "./settings.js";
+// Workspace definition (used by createFromDefinition — apps, presets, packages)
+export type { WorkspaceDefinitionInput } from "./definition.js";
 
 // Derived types for API convenience
-import type { Workspace, WorkspaceMember } from "@synap/database";
+import type { Workspace, WorkspaceMember } from "./rows.js";
 
 export type WorkspaceType = Workspace["workspaceType"];
 export type WorkspaceRole = WorkspaceMember["role"];

@@ -6,11 +6,10 @@
  * same members: the renderer (`@synap-core/property-renderer`) imports these
  * unions instead of keeping a hand-mirrored copy, which had drifted both ways.
  *
- * The pod's own declaration (`@synap/database` `schema/property-defs.ts`) has
- * to stay a second copy (the database cannot depend on this package: this
- * package already builds against it). `pod-parity.contract.ts` compiles both
- * against each other, so a member added on one side only fails this package's
- * typecheck.
+ * The pod's own declaration (`@synap/database` `schema/property-defs.ts`) is a
+ * second copy; `packages/database/src/wire-parity/property-hints.ts` compiles
+ * both against each other, so a member added on one side only fails the
+ * database's typecheck.
  */
 
 /**

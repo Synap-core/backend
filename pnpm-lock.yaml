@@ -651,6 +651,9 @@ importers:
       '@synap-core/markdown-core':
         specifier: workspace:*
         version: link:../markdown-core
+      '@synap-core/types':
+        specifier: workspace:*
+        version: link:../types
       '@synap/governance-policy':
         specifier: workspace:*
         version: link:../governance-policy
@@ -1214,9 +1217,6 @@ importers:
       '@synap-core/core':
         specifier: workspace:*
         version: link:../core
-      '@synap/database':
-        specifier: workspace:*
-        version: link:../database
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.28

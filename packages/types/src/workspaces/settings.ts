@@ -1,0 +1,1126 @@
+/**
+ * Workspace settings on the wire — `workspaces.settings` (JSONB) and the
+ * layout, sidebar, routing, delivery, brief and template-state shapes it
+ * carries.
+ *
+ * Declared HERE, once: `@synap/database` (`schema/workspaces.ts`,
+ * `utils/template-state.ts`) imports these to type the column and re-exports
+ * them, so the pod and every client read one declaration. Pure types: no
+ * runtime code, nothing from the database package.
+ */
+
+import type { AiPosture } from "../profiles/ai-posture.js";
+
+/** Where the last template apply on a space stands. */
+export type TemplateApplyStateName =
+  /** Layer 1 is being built (legacy `provisioningStatus: "pending"`). */
+  | "building"
+  /** Built, nothing unfinished. The STAMP (`version`) says "converged". */
+  | "active"
+  /** Layer 2 only filed proposals (nothing failed). */
+  | "awaiting-approval"
+  /** A layer-2 item errored. */
+  | "partial"
+  /** This door ran layer 1 only; the living layers were never applied. */
+  | "layer-2-not-run"
+  /** An apply threw (`failedLayer` says which layer). */
+  | "failed";
+
+/** One overlay pack recorded on a space (legacy `installedPacks[]`). */
+export interface TemplatePackEntry {
+  slug: string;
+  /** The pack version that CONVERGED; `null` = recorded, not yet earned. */
+  version: string | null;
+  installedAt: string;
+}
+
+export interface TemplateState {
+  /**
+   * The template identity (also the `package_slug` column). `null` for a space
+   * built from a definition with no catalog identity, or one that only carries
+   * packs — such a space still has a build state (and a resume ledger).
+   */
+  slug: string | null;
+  /** The version stamp — written only on convergence. */
+  version: string | null;
+  state: TemplateApplyStateName;
+  /**
+   * The version an UNFINISHED apply (awaiting-approval · partial ·
+   * layer-2-not-run) was converging to — never the stamp (legacy
+   * `templateApply.version`).
+   */
+  pendingVersion?: string | null;
+  failedLayer?: 1 | 2;
+  failedStep?: string;
+  error?: string;
+  /** Layer-1 resume ledger. */
+  completedSteps?: string[];
+  proposals?: string[];
+  failures?: string[];
+  packs?: TemplatePackEntry[];
+  /**
+   * The template data changes (conversion opKeys) the last stamp is HELD for
+   * (TEMPLATE-LIFECYCLE Contract C): layer 1 and layer 2 converged, but a
+   * consentable change still touches the template's profiles, so the version
+   * (or a pack's) was not stamped. `[]` only with `heldForDataChangesUnreadable`
+   * (the pending list could not be read — held, never guessed "none"). Absent =
+   * nothing held; cleared by the next stamp. Written only by the finisher.
+   */
+  heldForDataChanges?: string[];
+  heldForDataChangesUnreadable?: true;
+  /** When this state was last written ("" = unknown, a legacy record). */
+  at: string;
+}
+
+export type WorkspaceSidebarSurfacePlacement =
+  "main" | "side" | "floating" | "modal" | "popover" | "embed";
+
+export type WorkspaceSidebarSurfaceDisplayMode = "compact" | "medium" | "full";
+export type WorkspaceSidebarAppRendererType =
+  "native" | "external" | "iframe-srcdoc";
+
+export interface WorkspaceSidebarSurface {
+  kind: "cell" | "view" | "entity" | "document" | "channel" | "app" | "url";
+  cellKey?: string;
+  viewId?: string;
+  /** Authoring-time fallback resolved by workspace importers once views exist. */
+  viewName?: string;
+  entityId?: string;
+  documentId?: string;
+  channelId?: string;
+  appId?: string;
+  url?: string;
+  srcdoc?: string;
+  rendererType?: WorkspaceSidebarAppRendererType;
+  external?: boolean;
+  placement?: WorkspaceSidebarSurfacePlacement;
+  displayMode?: WorkspaceSidebarSurfaceDisplayMode;
+  props?: Record<string, unknown>;
+  title?: string;
+  workspaceId?: string | null;
+  meta?: Record<string, unknown>;
+}
+
+export interface WorkspaceSidebarItem {
+  kind: "app" | "view" | "profile" | "external" | "cell";
+  /** App ID for kind='app' (e.g. 'dashboard', 'intelligence', 'data') */
+  appId?: string;
+  /** View name for kind='view' — resolved lazily at click time */
+  viewName?: string;
+  /** View ID for kind='view' — preferred over viewName when available */
+  viewId?: string;
+  /**
+   * Profile slug for kind='profile'.
+   * ActivityBar resolves this to the profile bento view via workspace.settings.profileBentoViewIds,
+   * or lazily creates one via ensureProfileBento if not yet set.
+   */
+  profileSlug?: string;
+  /** URL template for kind='external'. Use __POD_URL__ as a placeholder. */
+  url?: string;
+  /** Widget/cell type key for kind='cell' (e.g. 'ai-chat', 'proposals-list') */
+  cellKey?: string;
+  /** Config props passed to the cell when opened as a panel */
+  cellProps?: Record<string, unknown>;
+  /**
+   * Canonical rich target. When present, Browser opens this descriptor directly.
+   * Legacy kind='cell' remains a side-panel shorthand.
+   */
+  surface?: WorkspaceSidebarSurface;
+  /** Display label shown in the sidebar */
+  label?: string;
+  /** Lucide icon name override */
+  icon?: string;
+  /**
+   * URL patterns that auto-activate this item's highlight when the active browser
+   * tab URL matches. Checked as prefix (startsWith). Supports the __POD_URL__
+   * placeholder. When omitted, kind='external' items auto-match their own url.
+   */
+  matchUrls?: string[];
+  /**
+   * Which sidebar section this item belongs to.
+   * 'workspace' = pod data items (views, profiles, pod links).
+   * 'space'     = browser/app items (app shortcuts, pinned URLs).
+   * Omitted items default to 'workspace' for backward compatibility.
+   */
+  section?: string;
+}
+
+/**
+ * A named collapsible section in the sidebar.
+ * Items are assigned to sections via WorkspaceSidebarItem.section.
+ */
+export interface WorkspaceSidebarSection {
+  /** Stable id — used as the key in WorkspaceSidebarItem.section */
+  id: string;
+  /** Display label */
+  label: string;
+  /** When true the section body is hidden; chevron still shown */
+  collapsed?: boolean;
+}
+
+export type WorkspaceJsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | WorkspaceJsonValue[]
+  | { [key: string]: WorkspaceJsonValue };
+
+/**
+ * Persisted, JSON-safe subset of the cross-host SurfaceDescriptor vocabulary.
+ * Active workspace/project/session/lens context is injected by the host and
+ * must never be stored in this descriptor.
+ */
+export type WorkspacePrimarySurface =
+  | {
+      kind: "app";
+      appId: string;
+      rendererType: "native";
+      title?: string;
+      props?: Record<string, WorkspaceJsonValue>;
+    }
+  | {
+      kind: "app";
+      appId: string;
+      rendererType: "external";
+      url: string;
+      title?: string;
+      props?: Record<string, WorkspaceJsonValue>;
+    }
+  | {
+      kind: "cell";
+      cellKey: string;
+      title?: string;
+      props?: Record<string, WorkspaceJsonValue>;
+    }
+  | {
+      /**
+       * Ordinary website. It has no trusted application identity and must be
+       * rendered by hosts as an unprivileged URL surface.
+       */
+      kind: "url";
+      url: string;
+      title?: string;
+      /**
+       * The pod app this website is (spec 17 §7.1): its Client ID Metadata
+       * Document URL. A launch hint only: the browser opens the site with this
+       * pod's `iss` so the app starts the pod's own OAuth flow. It grants no
+       * identity, bridge or credential; the site stays an unprivileged URL.
+       */
+      podApp?: { clientId: string };
+    }
+  | {
+      kind: "view";
+      viewId: string;
+      title?: string;
+    };
+
+export type WorkspacePrimarySurfaceViewReference =
+  | {
+      kind: "view";
+      viewName: string;
+      viewSlug?: string;
+      title?: string;
+    }
+  | {
+      kind: "view";
+      viewName?: string;
+      viewSlug: string;
+      title?: string;
+    };
+
+/** Package/template input. Resolved to `WorkspacePrimarySurface` before write. */
+export type WorkspacePrimarySurfaceDefinition =
+  WorkspacePrimarySurface | WorkspacePrimarySurfaceViewReference;
+
+export interface WorkspaceLayoutConfig {
+  pinnedApps?: string[]; // App IDs pinned to the top of the activity bar
+  defaultView?: string; // Default view when entering workspace (web)
+  /**
+   * Canonical first screen. Missing = preserve during reconcile, null = clear
+   * to workspace home, descriptor = replace.
+   */
+  primarySurface?: WorkspacePrimarySurface | null;
+  /**
+   * Legacy compatibility value. Importers normalize it to a native
+   * `primarySurface`; new definitions should not author this field.
+   */
+  defaultApp?: string | null;
+  theme?: string; // Per-workspace theme override: 'dark' | 'light'
+  /** Ordered list of sidebar items. When set, replaces the generic app list. */
+  sidebarItems?: WorkspaceSidebarItem[];
+  /**
+   * Named sections for the sidebar. Default when absent: two sections —
+   * 'workspace' (pod data) and 'space' (browser/app shortcuts).
+   * Section collapsed state is stored here and persisted to the pod.
+   */
+  sidebarSections?: WorkspaceSidebarSection[];
+}
+
+export type WorkspaceLayoutDefinition = Omit<
+  WorkspaceLayoutConfig,
+  "primarySurface"
+> & {
+  primarySurface?: WorkspacePrimarySurfaceDefinition | null;
+};
+
+/**
+ * MCP server configuration — stored per workspace.
+ * Agents in this workspace will have access to tools from these servers.
+ */
+export interface McpServerConfig {
+  /** Unique slug within the workspace, e.g. "playwright", "whatsapp" */
+  id: string;
+  /** Human-readable name shown in UI */
+  name: string;
+  /** Transport mechanism */
+  transport: "stdio" | "http";
+  command?: string;
+  args?: string[];
+  url?: string;
+  env?: Record<string, string>;
+  /** Set to false to disable without removing config. Default: true. */
+  enabled?: boolean;
+}
+
+/**
+ * Proactive AI Preferences
+ *
+ * Controls the AI's proactive intelligence features: morning briefings,
+ * weekly digests, health checks, and nudge density. Stored per workspace
+ * so users can have different schedules per workspace.
+ */
+export type ProactiveNudgeDensity = "minimal" | "balanced" | "proactive";
+
+export type EveAiProviderId = "ollama" | "openrouter" | "anthropic" | "openai";
+
+/**
+ * Eve-side provider routing policy synced to a workspace (non-secret).
+ * This is distinct from Synap's internal intelligence service routing.
+ */
+export interface EveProviderRoutingPolicy {
+  mode?: "local" | "provider" | "hybrid";
+  defaultProvider?: EveAiProviderId;
+  fallbackProvider?: EveAiProviderId;
+  providers?: Array<{
+    id: EveAiProviderId;
+    enabled?: boolean;
+    /** Optional custom base URL for provider gateways (non-secret). */
+    baseUrl?: string;
+    /** Optional default model hint for clients (non-secret). */
+    defaultModel?: string;
+  }>;
+  /** Whether Eve intends this workspace to follow synced provider policy. */
+  syncToSynap?: boolean;
+}
+
+export interface ProactiveAiPreferences {
+  /** Global kill switch for all proactive AI features. Default: true */
+  enabled: boolean;
+  morningBriefing: {
+    enabled: boolean;
+    /** Hour in 24h format (0-23). Default: 8 */
+    cronHour: number;
+    /** Minute (0-59). Default: 0 */
+    cronMinute: number;
+    /** IANA timezone. Default: "UTC" */
+    timezone: string;
+  };
+  weeklyDigest: {
+    enabled: boolean;
+    /** Day of week: 0=Sun..6=Sat. Default: 1 (Monday) */
+    dayOfWeek: number;
+    /** Hour in 24h format. Default: 9 */
+    cronHour: number;
+    /** IANA timezone. Default: "UTC" */
+    timezone: string;
+  };
+  healthCheck: {
+    enabled: boolean;
+    /** How often to run health checks in days. Default: 7 */
+    frequencyDays: number;
+  };
+  /** Controls how many proactive nudges the AI sends. Default: "balanced" */
+  nudgeDensity: ProactiveNudgeDensity;
+  /**
+   * Event-driven proactive triggers (Feature C). Each toggle opts the workspace
+   * into reacting to a class of user action. Time-based features above
+   * (morningBriefing/weeklyDigest/healthCheck) are independent of these.
+   * All default OFF — proactive event reactions are opt-in.
+   */
+  triggers?: ProactiveAiTriggers;
+  /** ISO 8601 timestamp — snooze all proactive AI until this time */
+  mutedUntil?: string;
+}
+
+/**
+ * Per-event opt-in toggles for event-driven proactive AI (Feature C).
+ * Keyed by the validated event that fires the proactive scan.
+ */
+export interface ProactiveAiTriggers {
+  /** N captures sharing a topic → propose a Question to track them. */
+  captureCluster?: boolean;
+  /** Task moved to done → connect it back to its decision/research. */
+  taskCompleted?: boolean;
+  /** New Question created → suggest research from existing captures. */
+  questionCreated?: boolean;
+  /** New Decision created → auto-link the research that informed it. */
+  decisionCreated?: boolean;
+}
+
+// ── Delivery Preferences ────────────────────────────────────────────────────
+
+/**
+ * Which surface(s) receive a signal.
+ * - feed         → proactive feed channel (AI-initiated messages)
+ * - chat         → personal chat channel (conversational)
+ * - notification → notification bell (ephemeral, shown in notification center)
+ * - suppress     → don't deliver (silences this signal domain)
+ */
+export type SignalSurface =
+  "feed" | "chat" | "notification" | "suppress" | "external";
+
+/**
+ * A delivery target. A surface can be a bare kind (back-compat string form) or a
+ * structured target that carries provider/channel routing for the `external`
+ * surface (deliver to a bound Discord/Telegram/etc channel via the messaging
+ * connector seam). Stored in JSONB — adding the structured form needs no migration.
+ */
+export interface SurfaceTarget {
+  kind: "feed" | "chat" | "notification" | "suppress" | "external";
+  /** External provider for kind="external" (e.g. "discord", "telegram"). */
+  provider?: string;
+  /** Bound external channel ref (channels.externalId) for kind="external". */
+  channelRef?: string;
+}
+
+/** Routing rule for a single signal domain. */
+export interface SignalDeliveryRule {
+  /**
+   * A bare `SignalSurface` string normalizes to `{ kind: string }`; a
+   * `SurfaceTarget` carries provider/channel for `external` routing.
+   */
+  surfaces: (SignalSurface | SurfaceTarget)[];
+}
+
+/**
+ * Per-workspace delivery preferences.
+ * Maps signal domain → which surfaces receive it.
+ * Domains without an explicit rule fall back to DEFAULT_DELIVERY_RULES.
+ */
+export interface DeliveryPreferences {
+  /** AI-initiated briefings, digests, insights, nudges */
+  proactive?: SignalDeliveryRule;
+  /** Automation output channel_message nodes */
+  automation?: SignalDeliveryRule;
+  /** Connector sync completion signals */
+  connector?: SignalDeliveryRule;
+  /** IS agent-generated insights (via /proactive/post) */
+  ai_insight?: SignalDeliveryRule;
+}
+
+/**
+ * Match criteria for an agent-routing rule. Every DEFINED field must equal the
+ * dispatch context (undefined = wildcard). A trailing "*" on a value is a prefix
+ * match (e.g. eventPattern "entity.update.*"). First matching rule wins.
+ */
+export interface AgentRoutingMatch {
+  /** Entity/task type (e.g. "task", "devplane_feature") */
+  taskType?: string;
+  /** Profile slug of the subject entity */
+  profileSlug?: string;
+  /** Typed event name/pattern (e.g. "entity.update.completed") */
+  eventPattern?: string;
+  /** Channel type, when dispatch originates from a channel */
+  channelType?: string;
+  /** State transition guards (e.g. agent_status from/to) */
+  fromState?: string;
+  toState?: string;
+}
+
+export interface AgentRoutingRule {
+  match: AgentRoutingMatch;
+  /** Stable agent slug (portable across pods) the matched work dispatches to */
+  agentSlug: string;
+}
+
+/**
+ * Workspace-level agent routing: "this kind of task/event → this registered agent".
+ * The canonical replacement for runtime-specific hardwiring (e.g. single-agent
+ * dispatch).
+ *
+ * @deprecated NO RESOLVER READS THIS. Its only resolver (`resolveAgentForTask`,
+ * which also routed per-agent to an intelligence service via the legacy
+ * `agents` table) had zero call sites and was removed (W7, 2026-10-08) — it broke
+ * "agentType ⟂ intelligenceServiceId". The DevPlane providers page still writes
+ * it. Which agent a run uses is now decided by the dispatch contract
+ * (`resolveAgentBinding` / run param `agentUserId`), not by this setting.
+ */
+export interface AgentRoutingPolicy {
+  /** Agent slug used when no rule matches */
+  defaultAgentSlug?: string;
+  /** Ordered rules; first match wins */
+  rules?: AgentRoutingRule[];
+}
+
+/**
+ * Discoverability/access mode for a workspace.
+ *
+ * Write access is still controlled by workspace_members + role permissions.
+ * `pod_visible` and `pod_joinable` only make the workspace discoverable/readable
+ * to authenticated users on the same data pod.
+ */
+export type WorkspaceVisibility =
+  "private" | "members" | "pod_visible" | "pod_joinable" | "public_link";
+
+export type WorkspaceSourceRole = "provider" | "consumer" | "provider-consumer";
+
+export interface WorkspaceDefaultSource {
+  workspaceId: string;
+  capability?: string;
+  profileSlug?: string;
+  label?: string;
+}
+
+/**
+ * Deliberate product-surface policy for the existing CRM workspace.
+ *
+ * This is presentation/product policy, not an authorization boundary: actual
+ * access remains workspace-membership based. Keeping it on the workspace lets
+ * Browser and the standalone CRM render the same focused experience without
+ * inventing a second CRM workspace or data model.
+ */
+export interface CrmWorkspacePolicy {
+  surface: "pipeline" | "full";
+  postWin: "handoff" | "client";
+}
+
+/**
+ * Provenance record for a workspace composed via `definition.extends`
+ * (Wave 7 / north star §10 — workspace composition). One entry per resolved
+ * source. COPY semantics: the imported profiles/views are independent copies
+ * on this workspace; this is a snapshot of where they came from, not a live
+ * link. Surfaced in the frontend so an imported brick reads "from <source>".
+ */
+export interface WorkspaceComposedFromEntry {
+  /** Resolved source workspace id. */
+  sourceWorkspaceId: string;
+  /** The original `source` ref as declared (workspaceId or systemSlug). */
+  source: string;
+  /** Profile slugs imported from this source. */
+  profiles: string[];
+  /** View names imported from this source. */
+  views: string[];
+  /** ISO timestamp of when the import was resolved. */
+  importedAt: string;
+}
+
+/**
+ * Opt-in configuration for an UNAUTHENTICATED public projection of a workspace's
+ * data (Hub Protocol REST `GET /public/projection`). Default-deny: a workspace
+ * serves a public projection ONLY when `enabled === true`.
+ *
+ * Deliberately product-agnostic — it names no product, role, or field literally.
+ * The workspace owner declares WHICH facet role-profiles are public (`roles`,
+ * matched against `entity_facets` → `profiles.slug`) and WHICH property keys may
+ * be projected (`fields`, an allowlist applied server-side to every row).
+ *
+ * SECURITY: the projection query filters by the FACET's `workspace_id`, never the
+ * entity's — pod-wide atoms (company/person) live in every lens, so only entities
+ * carrying an allowlisted facet IN this workspace are exposed. See the route.
+ */
+export interface PublicProjectionSettings {
+  /** Master switch. Anything other than the boolean `true` = not opted in = 404. */
+  enabled: boolean;
+  /**
+   * Allowlist of facet role-profile slugs (`profiles.slug`) whose holders are
+   * public. An entity qualifies only if it has a live facet in THIS workspace
+   * whose profile slug is in this list. Empty ⇒ nothing is public (default-deny).
+   */
+  roles: string[];
+  /**
+   * Allowlist of property keys that may appear in a projected row. Any key not
+   * listed is stripped server-side, even if present on the entity/facet.
+   */
+  fields: string[];
+}
+
+// ─── Space brief (settings.onboarding) — MIRROR of @synap-core/types ──────────
+//
+// The canonical `SpaceBrief` lives in `@synap-core/types/space-brief`, which
+// this package cannot import (`@synap-core/types` already depends on
+// `@synap/database` — a build cycle; see entity-body-service.ts). This is the
+// ONE database-side declaration: `package-definition.ts` and the definition
+// input alias it. `@synap/api` compiles a MUTUAL-ASSIGNABILITY floor between
+// the two (services/space-brief-door.ts), so a field added on one side and
+// not the other stops the api build.
+
+export interface WorkspaceSpaceBriefCollectTarget {
+  profileSlug: string;
+  what: string;
+  cardinality?: "one" | "few" | "several";
+  keyFields?: string[];
+  min?: number;
+}
+
+export interface WorkspaceSpaceBriefExpertise {
+  starters?: string[];
+  blindSpots?: string[];
+  bar?: string;
+}
+
+export interface WorkspaceSpaceBriefAnchor {
+  profileSlug: string;
+  role: "root" | "context";
+  seedRef?: string;
+  entityId?: string;
+  limit?: number;
+}
+
+export interface WorkspaceSpaceBriefFetchHint {
+  profileSlug?: string;
+  query?: string;
+  note?: string;
+}
+
+export interface WorkspaceSpaceBriefRuleRef {
+  key: string;
+  ruleId?: string;
+}
+
+/** A skill mode — mirror of `SpaceSkillMode`. */
+export type WorkspaceSpaceSkillMode = "always" | "on-demand";
+
+/** A declared skill as stored in the brief — mirror of `SpaceBriefSkillRef`. */
+export interface WorkspaceSpaceBriefSkillRef {
+  slug: string;
+  mode: WorkspaceSpaceSkillMode;
+  when?: string;
+}
+
+export interface WorkspaceSpaceBrief {
+  purpose?: string;
+  goal?: string;
+  framing?: string;
+  expertise?: WorkspaceSpaceBriefExpertise;
+  collect?: WorkspaceSpaceBriefCollectTarget[];
+  openingQuestions?: string[];
+  doneWhen?: string;
+  anchors?: WorkspaceSpaceBriefAnchor[];
+  rules?: WorkspaceSpaceBriefRuleRef[];
+  skills?: WorkspaceSpaceBriefSkillRef[];
+  fetch?: WorkspaceSpaceBriefFetchHint[];
+}
+
+/** A template-declared rule (package `rules[]`) — mirror of `SpaceTemplateRule`. */
+export interface WorkspaceSpaceTemplateRule {
+  key: string;
+  intent: string;
+  sentence?: unknown;
+}
+
+/** `settings.onboardingSeed` — per-field hashes of what the reconcile wrote. */
+export interface SpaceBriefSeed {
+  v: 1;
+  fields: Partial<Record<string, string>>;
+}
+
+/** `settings.intent` — what a space produces, as its template declared it. */
+export interface WorkspaceIntentSettings {
+  /** The purpose word shown first ("Product · Dev"). */
+  label: string;
+  /** Produced profile slugs (kinds or roles), in order; [] = a library. */
+  produces: string[];
+  source: "template";
+}
+
+export interface WorkspaceSettings {
+  // ─── Entity & UI Settings ───────────────────────────────────────────────────
+  defaultEntityTypes?: string[];
+  theme?: string;
+  aiEnabled?: boolean;
+  allowExternalSharing?: boolean;
+
+  /**
+   * Product surface class for placement hygiene. Admin/settings surfaces must
+   * never be auto-homes or ambient defaults for domain entity dumps.
+   * Templates that mint operator consoles MUST set this (or
+   * `workspaceType: "operational"`) — product code never gates on display name.
+   */
+  surfaceClass?: "admin" | "settings" | "domain";
+
+  /** Product-surface policy for a CRM workspace. */
+  crm?: CrmWorkspacePolicy;
+
+  /**
+   * Opt-in configuration for an UNAUTHENTICATED public projection of this
+   * workspace's facet-scoped data. Absent / `enabled !== true` ⇒ no public
+   * surface (the route 404s). See {@link PublicProjectionSettings}.
+   */
+  publicProjection?: PublicProjectionSettings;
+
+  // ─── Workspace Directory / Capability Source Contract ───────────────────────
+  /**
+   * Free-form subtype, e.g. "brand-library", "research-library", "agent-lab".
+   * No fixed enum — extensible by templates and agents.
+   */
+  workspaceSubtype?: string;
+  /**
+   * THE SPACE BRIEF — how an agent works in this space (key kept as
+   * `onboarding`; the interview fields are its onboarding mode). Canonical
+   * type: `@synap-core/types/space-brief` `SpaceBrief`; this is its mirror —
+   * see {@link WorkspaceSpaceBrief}.
+   */
+  onboarding?: WorkspaceSpaceBrief;
+  /**
+   * Three-way convergence marker for `onboarding`: per template-seeded brief
+   * field, the hash of the value the template reconcile last WROTE. Equal to
+   * the stored value's hash ⇒ untouched by the user ⇒ the template may update
+   * it; different ⇒ the user edited it ⇒ left alone and reported. Written only
+   * by `convergeSpaceBrief` (utils/space-brief-seed.ts).
+   */
+  onboardingSeed?: SpaceBriefSeed;
+  /**
+   * Discovery/read visibility. Defaults to "members" when absent.
+   */
+  workspaceVisibility?: WorkspaceVisibility;
+  /**
+   * Capability ids this workspace provides or consumes, e.g.
+   * "brand.library", "brand.assets", "research.sources", "agent.staging".
+   */
+  workspaceCapabilities?: string[];
+  /**
+   * Domain → role map. Example: { brand: "provider", research: "consumer" }.
+   */
+  sourceRoles?: Record<string, WorkspaceSourceRole>;
+  /**
+   * Domain/capability → default source workspace. Stored on consumer
+   * workspaces so features can resolve defaults without copying data.
+   */
+  defaultSources?: Record<string, WorkspaceDefaultSource>;
+
+  // ─── Workspace composition (north star §10) ─────────────────────────────────
+  /**
+   * Provenance of bricks (profiles/views) imported from other workspaces via
+   * `definition.extends`. COPY semantics — a snapshot of origin, not a live
+   * dependency. Used by the UI to tag imported bricks with their source.
+   */
+  composedFrom?: WorkspaceComposedFromEntry[];
+
+  // ─── MCP Server integrations ─────────────────────────────────────────────────
+  /** External MCP servers whose tools will be available to AI agents in this workspace */
+  mcpServers?: McpServerConfig[];
+
+  // ─── Per-workspace layout configuration ──────────────────────────────────────
+  layout?: WorkspaceLayoutConfig;
+
+  // ─── Per-workspace view ID cache ─────────────────────────────────────────────
+  /**
+   * Maps profile slug → bento dashboard view ID for this workspace.
+   * Each entry is the "home page" view for all entities of that profile type.
+   * Stored here (not on the profile row) so system/shared profiles can have
+   * different bento views per workspace.
+   * Populated on workspace creation and lazily via ensureProfileBento.
+   * Example: { "deal": "uuid-deal-bento", "contact": "uuid-contact-bento" }
+   */
+  profileBentoViewIds?: Record<string, string>;
+
+  /**
+   * Per-profile default bento layout for entity instance dashboards.
+   * When a user opens a single entity in bento mode for the first time,
+   * this template is used to seed the bento view (instead of the generic default).
+   * Populated from the workspace template at creation time.
+   * Example: { "deal": { blocks: [...] }, "contact": { blocks: [...] } }
+   */
+  profileEntityBentoTemplates?: Record<
+    string,
+    { blocks: Array<Record<string, unknown>> }
+  >;
+
+  /**
+   * Per-profile renderer override for THIS workspace (Profile Renderer North Star).
+   * Each value is a RendererTarget (from @synap-core/renderer-runtime). Stored as
+   * Record<string, unknown> here to avoid pulling a frontend type into the schema
+   * package — runtime validation lives in the routers and the canonical type is
+   * re-exported by @synap-core/profile-renderer.
+   *
+   * Resolution chain in ProfileResolutionService.getEffectiveRenderer():
+   *   1. this workspace overlay (profileRenderers[slug][slot])
+   *   2. profile system default (profiles.default_list_renderer / .default_detail_renderer)
+   *   3. hardcoded system fallback
+   *
+   * Example:
+   *   {
+   *     "contact": { detail: { kind: "cell", cellKey: "form-detail", props: {} } },
+   *     "task":    { list:   { kind: "view", viewId: "uuid-task-kanban" } }
+   *   }
+   *
+   * Spec: Synap-core/app-bases docs/architecture/profile-renderer.md
+   */
+  profileRenderers?: Record<
+    string,
+    {
+      list?: Record<string, unknown>;
+      detail?: Record<string, unknown>;
+    }
+  >;
+
+  /**
+   * Per-capability renderer override for THIS workspace — the capability-subject
+   * analogue of `profileRenderers`, keyed by capabilityId. Each value is a
+   * `CapabilityRenderersConfig` (`{ pages: Array<{ slot, title, ref }> }`), stored
+   * as an opaque object here to keep the schema package UI-free. Resolved by
+   * `getEffectiveCapabilityRenderer(db, capabilityId, workspaceId)`:
+   *   1. this workspace overlay (capabilityRenderers[capabilityId])
+   *   2. capability default (capabilities.metadata.renderers)
+   *   3. empty page-set (browser keeps its hardcoded capability surface)
+   */
+  capabilityRenderers?: Record<string, { pages: unknown[] }>;
+
+  /**
+   * Per-profile AI-teaching-posture overlay for THIS workspace (AI Teaching
+   * Substrate D4). Shallow-merged over the profile's base `profiles.aiPosture`
+   * column, which is itself layered over the code-defaults constant
+   * (`DEFAULT_AI_POSTURES`). Resolved by
+   * `ProfileResolutionService.getEffectiveAiPosture(profileSlug, workspaceId)`.
+   *
+   * Example: { "session": { attachOutputs: false } }
+   */
+  profileAiPosture?: Record<string, AiPosture>;
+
+  /** UUID of the main whiteboard view for this workspace */
+  mainWhiteboardId?: string;
+
+  /**
+   * Home dashboard view ID (type='bento', metadata.homeScope='workspace').
+   * Stored here for O(1) lookup on workspace open.
+   */
+  homeDashboardViewId?: string;
+
+  /**
+   * Template-declared entity-detail action placements. Authored on a template
+   * (see `TemplateActionPlacement` in `@synap-core/workspace-templates`), merged
+   * here by `applyPackagePostWorkspace`, and read by the browser entity-detail
+   * cell to render dynamic actions. `ref` is a capability verb key, or a
+   * playbook / automation row id (names are resolved to ids at merge time).
+   */
+  actionPlacements?: Array<{
+    profileSlug: string;
+    surface: string;
+    kind: "capability" | "playbook" | "automation";
+    ref: string;
+    label: string;
+    when?: {
+      requiredFacetSlugs?: string[];
+      propertyEquals?: Record<string, unknown>;
+    };
+    confirmation?: {
+      title: string;
+      description?: string;
+      confirmLabel?: string;
+    };
+  }>;
+
+  // ─── Intelligence service configuration ──────────────────────────────────────
+  intelligenceServiceId?: string; // Default for workspace
+  intelligenceServiceOverrides?: {
+    chat?: string;
+    analysis?: string;
+  };
+  /**
+   * Eve provider routing policy (Brain-side model/provider selection).
+   * Kept separate from Synap internal intelligence service routing.
+   */
+  eveProviderRouting?: EveProviderRoutingPolicy;
+
+  /**
+   * Workspace-level agent routing: "this kind of task/event → this agent".
+   * @deprecated Written by the DevPlane providers page, read by nothing — see
+   * {@link AgentRoutingPolicy}.
+   */
+  agentRouting?: AgentRoutingPolicy;
+
+  // Validation Policy Overrides
+  // Allows workspace owners to customize which operations require validation
+  // Overrides GLOBAL_VALIDATION_DEFAULTS from ValidationPolicyService
+  validationRules?: {
+    [tableName: string]: {
+      create?: boolean; // true = require validation, false = fast-path
+      update?: boolean;
+      delete?: boolean;
+    };
+  };
+
+  // Role-Based Permissions (Fine-grained RBAC)
+  // Allows workspace owners to customize permissions per role per table
+  rolePermissions?: {
+    [role: string]: {
+      // 'owner' | 'admin' | 'editor' | 'viewer'
+      [tableName: string]: {
+        create?: boolean;
+        read?: boolean;
+        update?: boolean;
+        delete?: boolean;
+      };
+    };
+  };
+
+  // ─── Developer / SDK access ──────────────────────────────────────────────────
+  /**
+   * Origins that are allowed to make cross-origin requests to this pod via the SDK.
+   * Merged with ALLOWED_ORIGINS env var at runtime.
+   * Example: ["https://myapp.example.com", "http://localhost:3000"]
+   */
+  corsAllowedOrigins?: string[];
+
+  // ─── Template / Package provenance ──────────────────────────────────────────
+  /** Name of the template used to seed this workspace. When set, workspace-init skips default views. */
+  templateName?: string;
+  /**
+   * ID of the template used to create this workspace (from control plane registry).
+   * Distinct from packageSlug — a package can have multiple template versions.
+   */
+  templateId?: string;
+  /** Slug of the control plane package used to create this workspace. */
+  packageSlug?: string;
+  /**
+   * WHAT THIS WORKSPACE NEEDS TO FUNCTION — the abstract intents (the pod's
+   * `capability_intents` closed vocabulary) the template declared as this
+   * space's task requirements.
+   *
+   * Distinct from `capabilities`/`workspaceCapabilities`, which name what this
+   * space PROVIDES to others; this is what it CONSUMES, and it is what the
+   * intent resolver joins against what is installed to report a GAP.
+   *
+   * A DECLARATION, not a snapshot. A gap is a real, reportable fact (the
+   * template may legitimately declare ahead of its installs), so this is stored
+   * as-authored and never reconciled away. Omitted = the workspace declares no
+   * external capability requirements, which is a real answer, not a missing one.
+   */
+  taskIntents?: string[];
+  /**
+   * WHAT THIS SPACE PRODUCES (object-first homes) — the template's
+   * `meta.intent`, projected on install/reconcile by the settings-merge writer
+   * (`projectTemplateIntent`). `produces` = profile slugs (kinds or roles), in
+   * the template's order; empty = a LIBRARY. Absent (or null, once a template
+   * stopped declaring it) → `lifecycle.home` INFERS one at read time; an
+   * inferred intent is never stored.
+   */
+  intent?: WorkspaceIntentSettings | null;
+  /**
+   * System-reserved slug identifying built-in workspaces created by the backend.
+   * Used for idempotent re-creation (e.g. 'pod-admin').
+   * Never set by users.
+   */
+  systemSlug?: string;
+  /** Version of the package at time of creation. */
+  packageVersion?: string;
+  /**
+   * Caller-supplied proposal id used for idempotency on workspace-from-definition
+   * creation paths (Hub Protocol REST `/workspaces/from-definition`). When set,
+   * subsequent calls with the same `proposalId` for the same user return the
+   * existing workspace instead of creating a new one.
+   *
+   * Distinct from `packageSlug` (which keys idempotency in the tRPC path) —
+   * external callers (Eve, Coder) generate `proposalId` themselves from a
+   * stable template id (e.g. "builder-workspace-v1") so retries are safe even
+   * when no CP package is involved.
+   */
+  proposalId?: string;
+  /**
+   * App that owns this workspace (e.g. "crm", "studio", "canvas", "devplane").
+   * Stamped at creation time via `createFromDefinition`. Used by `workspaces.list`
+   * to filter workspaces to the calling app's own set.
+   */
+  appId?: string;
+
+  // ─── Installed Packs ─────────────────────────────────────────────────────────
+  /**
+   * Profile packs, view packs, and bento templates installed into this workspace.
+   * Populated by the browser when installing from the CP package registry.
+   * Used to show "Installed" badges and prevent re-installation.
+   */
+  installedPacks?: Array<{
+    slug: string;
+    version: string;
+    installedAt: string;
+  }>;
+
+  /**
+   * THE template install state (APPLY-ONE-DOOR-PLAN §2): identity, stamp,
+   * apply state, resume ledger, packs. Read ONLY through `readTemplateState`
+   * and written ONLY through `writeTemplateState` (utils/template-state.ts),
+   * which also mirrors the legacy keys below (`packageVersion`,
+   * `provisioningStatus`, `failedStep*`, `completedSteps`, `templateApply`,
+   * `installedPacks`) until W6 folds them in. Server-owned.
+   */
+  template?: TemplateState;
+
+  // ─── Provenance & provisioning status ────────────────────────────────────────
+  /** Who/what created this workspace: user, control-plane provisioning, or plugin seed */
+  createdBy?: "user" | "provisioning" | "plugin";
+  /** ISO timestamp when provisioning started (set immediately on workspace creation) */
+  provisionedAt?: string;
+  /** ISO timestamp when provisioning started */
+  provisioningStartedAt?: string;
+  /**
+   * Current provisioning status.
+   * - "pending" — workspace row exists but provisioning is in progress (or failed)
+   * - "active"  — fully provisioned and ready to use
+   * - "failed"  — provisioning stopped at a step (see failedStep + completedSteps)
+   */
+  provisioningStatus?: "pending" | "active" | "failed";
+  /**
+   * Why the last template apply did NOT earn its version stamp, written by the
+   * ONE finisher (`finishTemplateApply`, api `services/template-apply-finisher.ts`).
+   * `null` = the last apply converged (the stamp, if any, was earned).
+   * - "awaiting-approval" — layer 2 only filed proposals (nothing failed)
+   * - "partial"           — a layer-2 item errored
+   * - "layer-2-not-run"   — this door ran layer 1 only; the template's living
+   *                         layers were never applied
+   * Template health reads any of these as drifted, so `synap templates update`
+   * offers the space and the next apply finishes it.
+   */
+  templateApply?: {
+    state: "awaiting-approval" | "partial" | "layer-2-not-run";
+    /** The version this apply was converging to (not stamped). */
+    version: string | null;
+    at: string;
+    proposals?: string[];
+    failures?: string[];
+  } | null;
+  /**
+   * The step at which provisioning failed.
+   * Only set when provisioningStatus === "failed"; explicitly `null` clears it
+   * on a successful (re)provision — the JSONB `||` merge overwrites the stale
+   * value with JSON null rather than leaving it dangling (it cannot delete keys).
+   * Format: step-key (e.g. "profiles[company].create", "views[Home]", "entities")
+   */
+  failedStep?: string | null;
+  /**
+   * Human-readable error message from the failed step (truncated to 500 chars).
+   * Only set when provisioningStatus === "failed"; `null` clears it on success
+   * (same JSONB-merge reason as failedStep above).
+   */
+  failedStepError?: string | null;
+  /**
+   * Step keys that completed successfully before the failure.
+   * Populated in order: ["workspace", "member", "profiles", "relations", "templates",
+   *   "views", "bento", "home", "entities", "flows", "relations-seed", "done"]
+   * Lets callers know how far provisioning progressed for debugging / partial retry.
+   */
+  completedSteps?: string[];
+
+  // ─── Agent Workspace Pair ────────────────────────────────────────────────────
+  /**
+   * Semantic type of this workspace within the pod.
+   * - "personal"     — the user's curated space (default)
+   * - "agent"        — the AI's staging area (drafts, research, branch outputs)
+   * - "project"      — scoped context for a specific project
+   * - "operational"  — system/admin workspace (e.g. pod-admin)
+   */
+  workspaceType?: "personal" | "agent" | "project" | "operational";
+
+  /**
+   * For agent workspaces: the userId (userType="agent") that owns this workspace.
+   * Enables the intelligence service to know which staging area belongs to which agent.
+   */
+  linkedAgentId?: string;
+
+  /**
+   * Workspace governance mode.
+   * - "standard"    — default: workspace owner has full control.
+   * - "agent-owned" — the AI agent is workspace owner (creative authority);
+   *                   the human is admin (irreversibility guard).
+   *                   All destructive actions by the agent require a proposal
+   *                   even if the agent holds the owner role.
+   */
+  governanceMode?: "standard" | "agent-owned";
+
+  // ─── Per-workspace package enabled/disabled state ────────────────────────────
+  /**
+   * Package enabled overrides for this workspace.
+   * Maps SynapPackage id → enabled boolean.
+   * Only entries that differ from the package's `defaultEnabled` flag are stored.
+   * When absent for a package, the package's own default applies.
+   *
+   * Example: { "synap.proposals": false, "synap.ai-chat": true }
+   */
+  enabledPackages?: Record<string, boolean>;
+
+  // ─── Proactive AI Preferences ─────────────────────────────────────────────
+  /**
+   * Proactive AI intelligence preferences (morning briefings, weekly digests, nudges).
+   * Controls when and how the AI proactively posts messages to the user's personal channel.
+   */
+  proactiveAi?: ProactiveAiPreferences;
+
+  // ─── Signal Delivery Preferences ─────────────────────────────────────────
+  /**
+   * Controls where AI signals are delivered for each domain.
+   * When absent, system defaults apply (see DEFAULT_DELIVERY_RULES in delivery-router.ts).
+   *
+   * Example: route proactive messages to both feed AND notification bell:
+   *   { proactive: { surfaces: ['feed', 'notification'] } }
+   */
+  deliveryPreferences?: DeliveryPreferences;
+
+  // AI Governance Settings
+  aiGovernance?: {
+    /**
+     * Whitelist of event keys that AI agents may execute WITHOUT a proposal.
+     * Everything else defaults to proposal-required.
+     *
+     * Format: "<subjectType>.<action>" or "<subjectType>.*" glob.
+     * Default (when field absent): ["search.*", "memory.recall", "entity.read", "document.read"]
+     *
+     * Examples:
+     *   "entity.read"    — agents can read entities without proposal
+     *   "search.*"       — all search operations bypass proposal
+     *   "entity.create"  — agents can create entities without proposal (high trust)
+     *
+     * @deprecated RETIRED as a write target (Governance Convergence, contract
+     * phase). NO write surface persists this anymore — the workspace grant lives
+     * in `governance_rules` (resolver rung 2.8). Kept optional ONLY so
+     * `backfillGovernanceRules` can project pre-migration legacy JSONB into rows
+     * at boot. Never read it to make a decision; never write it.
+     */
+    autoApproveFor?: string[];
+    /** @deprecated Use autoApproveFor instead. Kept for migration reference only. */
+    requireReviewFor?: string[];
+    /** @deprecated Use autoApproveFor instead. */
+    autoApprove?: boolean;
+    maxAgentsPerUser?: number; // Limit AI agents per user
+    allowAgentCreation?: boolean; // Allow users to create custom agents
+    /** When true, any workspace member can create their own twin agent without admin approval. Default: false */
+    allowSelfServiceTwin?: boolean;
+    /** Who can approve AI proposals. Default: "owner_and_admins" */
+    proposalApprovalPolicy?: "owner_and_admins" | "any_editor" | "admins_only";
+    /**
+     * Controls whether AI navigation commands (e.g. [[open:side|view:UUID]])
+     * execute automatically or require user confirmation.
+     */
+    navigationPermissions?: {
+      /** When true, AI-suggested panel/surface opens happen immediately without confirmation. */
+      autoApprove: boolean;
+      /**
+       * Resource types the AI is allowed to suggest opening.
+       * All types are allowed by default when this field is absent.
+       */
+      allowedResourceTypes?: Array<
+        "entity" | "view" | "doc" | "cell" | "channel" | "automation"
+      >;
+    };
+  };
+
+  // ─── DevPlane settings ───────────────────────────────────────────────────────
+  /** Settings for the DevPlane app embedded in this workspace */
+  devplane?: {
+    /**
+     * Allow DevPlane to open a local PTY terminal in the browser.
+     * Only safe when the pod is running on a trusted local machine.
+     * Disabled by default.
+     */
+    localTerminalEnabled?: boolean;
+  };
+}
