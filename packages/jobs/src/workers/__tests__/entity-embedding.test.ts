@@ -195,9 +195,10 @@ describe("handleEntityEmbedding", () => {
 
     await handleEntityEmbedding(asJob({ entityId: "e4", userId: "u4" }));
 
-    const { documentText } = buildTextMock.mock.calls[0]![0] as unknown as {
-      documentText: string;
-    };
+    const [input] = buildTextMock.mock.calls[0] as unknown as [
+      { documentText: string },
+    ];
+    const { documentText } = input;
     // Prose (markdown-core plain text), from the stored body.
     expect(documentText).toContain("The seat price is 49 EUR.");
     expect(documentText).not.toContain("**");
