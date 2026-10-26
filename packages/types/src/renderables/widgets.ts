@@ -3087,9 +3087,9 @@ const activeSessions: WidgetCapabilityDef = {
 const sessionGoalBar: WidgetCapabilityDef = {
   key: "session-goal-bar",
   package: "synap.bento-widgets",
-  name: "Session Goal Bar",
+  name: "Session Aim Bar",
   description:
-    "Persistent banner showing the current session goal, progress, and participants",
+    "Persistent banner showing the current session aim, progress, and participants",
   icon: "Target",
   category: "productivity",
   semanticSection: "collaborate",

@@ -23,6 +23,9 @@ import type {
   ProjectTrackKpi,
   ProjectTrackStageHistoryEntry,
   ProjectTrackStatus,
+  ProjectTrackUncertainty,
+  ProjectTrackVerdict,
+  ProjectTrackWorkKind,
 } from "../schema/project-tracks.js";
 import { BaseRepository } from "./base-repository.js";
 import type { EventRepository } from "./event-repository.js";
@@ -42,7 +45,29 @@ export interface CreateTrackInput {
   direction?: string | null;
   /** The number it steers by (0302), already validated by the caller. */
   kpi?: ProjectTrackKpi | null;
+  /** What a goal holds (0345), already validated by the caller. */
+  goal?: TrackGoalPatch;
   metadata?: Record<string, unknown>;
+}
+
+/**
+ * WHAT A GOAL HOLDS (0345) — each field WHOLE: `undefined` leaves it alone,
+ * `null` clears it. Validation (the 2–5 criteria rule, the meanings, who
+ * confirmed the kind) and governance are the caller's (`services/tracks`).
+ * `criteria` never carries a judge's decision the caller made up: the
+ * service carries each stored `acceptance` over, and the ONE writer of a new
+ * one is {@link TrackRepository.setCriterionAcceptance}.
+ */
+export interface TrackGoalPatch {
+  endState?: string | null;
+  criteria?: unknown[] | null;
+  dropConditions?: string[] | null;
+  workKind?: ProjectTrackWorkKind | null;
+  uncertainty?: ProjectTrackUncertainty | null;
+  kindConfirmedBy?: string | null;
+  kindConfirmedAt?: Date | null;
+  /** The goal's loop (0350) — written WHOLE; `null` clears it (off). */
+  loop?: Record<string, unknown> | null;
 }
 
 /**
@@ -54,6 +79,17 @@ export interface CreateTrackInput {
 export interface TrackDirectionPatch {
   direction?: string | null;
   kpi?: Partial<ProjectTrackKpi> | null;
+  /** What a goal holds (0345) — each field written whole. */
+  goal?: TrackGoalPatch;
+  /**
+   * COMPARE-AND-SET on the criteria (code.md): the stored criteria as the
+   * caller READ them. Set whenever the patch writes criteria whole, so a
+   * judge's decision stamped in between (`setCriterionAcceptance`) is never
+   * silently dropped — the write lands only while the criteria still are what
+   * the caller merged onto (`null` back: gone, or changed). `undefined` = no
+   * check.
+   */
+  expectedCriteria?: unknown;
 }
 
 /** One stage appended to a running track (`appendStage`). */
@@ -118,6 +154,7 @@ export class TrackRepository extends BaseRepository<
         params: data.params ?? {},
         direction: data.direction ?? null,
         kpi: data.kpi ?? null,
+        ...goalSet(data.goal),
         // The birth seed of the stage history (0274): the first stage is
         // ENTERED at birth, the same moment `current_stage` is seeded.
         stageHistory: data.currentStage
@@ -154,7 +191,7 @@ export class TrackRepository extends BaseRepository<
   /**
    * The LIVE track holding `name` on the project, or `null`. The ONE spelling
    * in TS of `uniq_project_tracks_live_name`'s predicate (0317): same project,
-   * `lower(btrim(name))`, status active/paused.
+   * `lower(btrim(name))`, a live status (open, active or paused — 0344).
    */
   async findLiveByName(
     projectId: string,
@@ -206,7 +243,10 @@ export class TrackRepository extends BaseRepository<
    * Guarded status flip: `from → to`, ONLY while the row still stands at
    * `from` (the WHERE is the arbiter, so a decision and its write cannot
    * disagree). `metadataPatch` is merged into metadata; `dropMetadataKey` is
-   * removed after the merge. Returns the updated row, or `null` when no row
+   * removed after the merge. `close` stamps how the track ended (0344) in the
+   * SAME statement as the status — the caller (the status door) has checked
+   * the verdict fits the ending; the `project_tracks_verdict_check` constraint
+   * refuses one that does not. Returns the updated row, or `null` when no row
    * flipped — and emits `track.update.completed` only when one did.
    */
   async transitionStatus(
@@ -216,10 +256,16 @@ export class TrackRepository extends BaseRepository<
       to: ProjectTrackStatus;
       metadataPatch?: Record<string, unknown>;
       dropMetadataKey?: string;
+      close?: {
+        verdict: ProjectTrackVerdict;
+        reason: string | null;
+        by: string;
+        at?: Date;
+      };
     },
     userId: string
   ): Promise<ProjectTrack | null> {
-    const { metadataPatch, dropMetadataKey } = params;
+    const { metadataPatch, dropMetadataKey, close } = params;
     let metadata = sql`COALESCE(${projectTracks.metadata}, '{}'::jsonb)`;
     if (metadataPatch) {
       metadata = sql`(${metadata} || ${JSON.stringify(metadataPatch)}::jsonb)`;
@@ -232,6 +278,14 @@ export class TrackRepository extends BaseRepository<
       .set({
         status: params.to,
         ...(metadataPatch || dropMetadataKey ? { metadata } : {}),
+        ...(close
+          ? {
+              verdict: close.verdict,
+              verdictReason: close.reason,
+              verdictBy: close.by,
+              verdictAt: close.at ?? new Date(),
+            }
+          : {}),
         updatedAt: new Date(),
       })
       .where(
@@ -375,9 +429,53 @@ export class TrackRepository extends BaseRepository<
         // `undefined` keys are dropped by Drizzle's SET (field untouched).
         direction: patch.direction,
         kpi,
+        ...goalSet(patch.goal),
         updatedAt: new Date(),
       })
-      .where(eq(projectTracks.id, id))
+      .where(
+        and(
+          eq(projectTracks.id, id),
+          patch.expectedCriteria === undefined
+            ? undefined
+            : sql`${projectTracks.criteria} IS NOT DISTINCT FROM ${
+                patch.expectedCriteria === null
+                  ? null
+                  : JSON.stringify(patch.expectedCriteria)
+              }::jsonb`
+        )
+      )
+      .returning();
+    if (!track) return null;
+    await this.emitCompleted("update", track, userId);
+    return track as ProjectTrack;
+  }
+
+  /**
+   * Stamp the judge's decision on ONE goal criterion (R2) — the one writer of
+   * a criterion's `acceptance`. Rewritten IN SQL, entry by entry, so a
+   * decision on one criterion cannot revert another's, and only while the
+   * criterion still exists (`null` = gone or no such key). Who may decide is
+   * the caller's (`acceptGoalCriterion`). Emits `track.update.completed`.
+   */
+  async setCriterionAcceptance(
+    id: string,
+    criterionKey: string,
+    acceptance: Record<string, unknown>,
+    userId: string
+  ): Promise<ProjectTrack | null> {
+    const entries = sql`(CASE WHEN jsonb_typeof(${projectTracks.criteria}) = 'array' THEN ${projectTracks.criteria} ELSE '[]'::jsonb END)`;
+    const [track] = await this.db
+      .update(projectTracks)
+      .set({
+        criteria: sql`(SELECT jsonb_agg(CASE WHEN t.e ->> 'key' = ${criterionKey} THEN t.e || jsonb_build_object('acceptance', ${JSON.stringify(acceptance)}::jsonb) ELSE t.e END ORDER BY t.ord) FROM jsonb_array_elements(${entries}) WITH ORDINALITY AS t(e, ord))`,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(projectTracks.id, id),
+          sql`EXISTS (SELECT 1 FROM jsonb_array_elements(${entries}) AS s(e) WHERE s.e ->> 'key' = ${criterionKey})`
+        )
+      )
       .returning();
     if (!track) return null;
     await this.emitCompleted("update", track, userId);
@@ -432,4 +530,14 @@ export class TrackRepository extends BaseRepository<
       userId
     );
   }
+}
+
+/** The SET of a goal patch — only the keys it names (`undefined` = untouched). */
+function goalSet(goal: TrackGoalPatch | undefined): Record<string, unknown> {
+  if (!goal) return {};
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(goal)) {
+    if (v !== undefined) out[k] = v;
+  }
+  return out;
 }

@@ -46,6 +46,9 @@ export * from "./destinations.js";
 /** A document embed's noun and label (`resolveEmbedWords`, over `describeEmbed`). */
 export * from "./embed-words.js";
 
+/** Who is on a goal: participant roles, commitment states, "Silent 6 h". */
+export * from "./track-participant-words.js";
+
 /**
  * Words a sentence-cased token must still spell the way people write them —
  * the casing of a NAME (a product, a format), not of a sentence. Deliberately
@@ -350,12 +353,36 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   // a row `resolveActionLabel("reopen", …)` fell through to `humanizeToken`,
   // which has no tense and only spelled "Reopen" by luck.
   reopen: { imperative: "Reopen", past: "Reopened" },
+  // Reopening a closed GOAL is a new version (`reopenTrack`, linked by
+  // `replaces`), never the governance reopen above, nor a move back: its own
+  // dotted key, so bare `reopen` keeps both its readers (2026-10-24).
+  "track.reopen": {
+    imperative: "Open a new version",
+    past: "Opened a new version",
+  },
+  // A closed goal whose result must stay alive becomes an OPERATION spawned
+  // from it (`startOperationFrom`) — not a reopen, not a new version: its own
+  // dotted key, read by both apps' "Keep it running" door (2026-10-25).
+  "track.keep_running": {
+    imperative: "Keep it running",
+    past: "Kept it running",
+  },
+  // The owner's two answers to a delegate's counter-offer — both re-ask the
+  // delegate through the participants door (`op: "add"`): with the
+  // counter-offer as the commitment, or with the original one.
+  "track.take_offer": {
+    imperative: "Take their offer",
+    past: "Took their offer",
+  },
+  "track.keep_ask": { imperative: "Keep my ask", past: "Kept my ask" },
   // Pod hygiene (`profile/retire`, the cleanup pack). `retire` is a SOFT,
   // reversible hide of a kind — not a delete, so it never reads "Deleted".
   // `close` ends an idle session through the close door; `expire` takes a
   // long-waiting proposal out of the queue without applying it.
   retire: { imperative: "Retire", past: "Retired" },
   close: { imperative: "Close", past: "Closed" },
+  // A goal (track) that stopped mattering — its lost ending ("Dropped").
+  drop: { imperative: "Drop", past: "Dropped" },
   expire: { imperative: "Expire", past: "Expired", progressive: "Expiring" },
   // Sharing (Sites W2–W5, `services/sharing/share-service.ts`). `publish`
   // above is reused for putting a record on the public web — one word for one
@@ -458,6 +485,16 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   // `accept`); a working agent is MESSAGED from its room; a finished track step
   // MOVES ON. Humanized, the receipts would read "Send back" / "Move on".
   send_back: { imperative: "Send back", past: "Sent back" },
+  // A DELEGATE's answer to a goal commitment (`TRACK_COMMITMENT_MOVES`,
+  // `@synap-core/types/units`: accept · counter · decline · report_impossible
+  // — accept and decline are rows above), and the owner's ACKNOWLEDGE of a
+  // report. `track-participant-words` tests hold every move to a row here.
+  counter: { imperative: "Counter", past: "Countered" },
+  report_impossible: {
+    imperative: "Report impossible",
+    past: "Reported impossible",
+  },
+  acknowledge: { imperative: "Acknowledge", past: "Acknowledged" },
   message: { imperative: "Message", past: "Messaged" },
   move_on: { imperative: "Move on", past: "Moved on" },
   // CONNECTION lifecycle (`@synap-core/types/membrane`, the Connected page).
@@ -740,6 +777,9 @@ export const OBJECT_NOUNS: Readonly<Record<string, string>> = {
   // A pod `ui-design` (the design canvas kind): the acronym is the one thing
   // the sentence-caser cannot know, so it humanized to "Ui design".
   "ui-design": "UI design",
+  // The Project Management `okr` kind ("Make it a goal" names it in the
+  // proposal it files): an acronym again — it humanized to "Okr".
+  okr: "OKR",
 };
 
 /**
@@ -1529,6 +1569,226 @@ export function resolveLibraryStatusLabel(
 }
 
 /**
+ * TRACK STATUS words — a goal's system lifecycle (`TRACK_STATUSES`,
+ * `@synap-core/types/units`). Its OWN table, because two stored keys are
+ * contracts that mean something narrower for a goal than the shared words
+ * (`completed` reads "Completed" for a run, `archived` "Archived" for a
+ * record): a goal that finished is "Closed" — how it went is its verdict —
+ * and one that stopped mattering is "Dropped". `proposed` is a goal being
+ * shaped, not a governance proposal ("Suggested"). `units/track.ts` holds the
+ * compile-time floor that every status has a row here.
+ */
+export const TRACK_STATUS_LABELS = {
+  proposed: "Proposed",
+  agreed: "Agreed",
+  ready: "Ready",
+  active: "Active",
+  paused: "Paused",
+  completed: "Closed",
+  archived: "Dropped",
+} as const satisfies Readonly<Record<string, string>>;
+
+/** The words for a track status; unknown values humanize, never leak. */
+export function resolveTrackStatusLabel(
+  status: string | null | undefined
+): string {
+  if (!status) return "";
+  const key = status.trim().toLowerCase();
+  return Object.hasOwn(TRACK_STATUS_LABELS, key)
+    ? TRACK_STATUS_LABELS[key as keyof typeof TRACK_STATUS_LABELS]
+    : humanizeToken(status);
+}
+
+/**
+ * TRACK VERDICT words — how a goal ended (R1, `TRACK_VERDICTS`,
+ * `@synap-core/types/units`). A classification of the ending, not a status:
+ * the chip reads "Closed" or "Dropped", the verdict says why. `units/track.ts`
+ * holds the compile-time floor that every verdict has a row here.
+ */
+export const TRACK_VERDICT_LABELS = {
+  met: "Met",
+  partly_met: "Partly met",
+  not_met: "Not met",
+  retired: "Retired",
+  no_longer_needed: "No longer needed",
+  impossible: "Impossible",
+  replaced: "Replaced",
+  mistake: "Created by mistake",
+} as const satisfies Readonly<Record<string, string>>;
+
+/** The words for a track verdict; unknown values humanize, never leak. */
+export function resolveTrackVerdictLabel(
+  verdict: string | null | undefined
+): string {
+  if (!verdict) return "";
+  const key = verdict.trim().toLowerCase();
+  return Object.hasOwn(TRACK_VERDICT_LABELS, key)
+    ? TRACK_VERDICT_LABELS[key as keyof typeof TRACK_VERDICT_LABELS]
+    : humanizeToken(verdict);
+}
+
+// ── What a goal holds (work model W2) ──────────────────────────────────────
+// Each closed set lives in `@synap-core/types/units` (`units/goal.ts`), which
+// holds the compile-time floor that every value has a row here and that these
+// tables name nothing else. Labels, not sentences: they sit on a chip or after
+// "Kind:", "Waiting on:".
+
+/** Kind of work a goal is (decision 4, `TRACK_WORK_KINDS`). */
+export const TRACK_WORK_KIND_LABELS = {
+  project: "Project",
+  flow: "Flow",
+  operation: "Operation",
+  investigation: "Investigation",
+  incident: "Incident",
+  commission: "Commission",
+  pathway: "Pathway",
+} as const satisfies Readonly<Record<string, string>>;
+
+/** How well the way to the end is known (decision 4, `TRACK_UNCERTAINTY_LEVELS`). */
+export const TRACK_UNCERTAINTY_LABELS = {
+  clear: "Clear",
+  complicated: "Complicated",
+  complex: "Complex",
+  chaotic: "Chaotic",
+  unknown: "Unknown",
+} as const satisfies Readonly<Record<string, string>>;
+
+/** What kind of check a criterion is (R5, `CRITERION_CHECK_MEANINGS`). */
+export const CRITERION_CHECK_MEANING_LABELS = {
+  measured: "Measured",
+  judged: "Judged by a person",
+  handed_over: "Handed over",
+  learning: "Learning",
+  decided_outside: "Decided by an outside party",
+  certified: "Certified by a third party",
+} as const satisfies Readonly<Record<string, string>>;
+
+/** Where one goal criterion stands — derived (`GOAL_CRITERION_MARKS`). */
+export const GOAL_CRITERION_MARK_LABELS = {
+  met: "Met",
+  claimed: "Claimed",
+  under_way: "Under way",
+  not_met: "Not met",
+  not_started: "Not started",
+} as const satisfies Readonly<Record<string, string>>;
+
+/** How an operation's period reads (R6, `OPERATION_PERIOD_MARKS`). */
+export const OPERATION_PERIOD_MARK_LABELS = {
+  met: "Met",
+  not_met: "Not met",
+  unmeasured: "Not checked",
+} as const satisfies Readonly<Record<string, string>>;
+
+/** The judge's acceptance of a claimed criterion (R2, `GOAL_ACCEPTANCE_STATES`). */
+export const GOAL_ACCEPTANCE_LABELS = {
+  waiting: "Waiting",
+  accepted: "Accepted",
+  changes_asked: "Changes asked",
+  rejected: "Rejected",
+} as const satisfies Readonly<Record<string, string>>;
+
+/** What a goal waits on (R4, `WAITING_ON_REASONS`) — read after "Waiting on". */
+export const WAITING_ON_REASON_LABELS = {
+  input: "Input",
+  approval: "Approval",
+  access: "Access",
+  another_work: "Other work",
+  outside_world: "Outside world",
+} as const satisfies Readonly<Record<string, string>>;
+
+function resolveFrom<T extends Readonly<Record<string, string>>>(
+  table: T,
+  value: string | null | undefined
+): string {
+  if (!value) return "";
+  const key = value.trim().toLowerCase();
+  return Object.hasOwn(table, key)
+    ? table[key as keyof T]!
+    : humanizeToken(value);
+}
+
+/** The words for a goal's kind of work; unknown values humanize, never leak. */
+export function resolveTrackWorkKindLabel(v: string | null | undefined) {
+  return resolveFrom(TRACK_WORK_KIND_LABELS, v);
+}
+/** The words for a goal's uncertainty; unknown values humanize, never leak. */
+export function resolveTrackUncertaintyLabel(v: string | null | undefined) {
+  return resolveFrom(TRACK_UNCERTAINTY_LABELS, v);
+}
+/** The words for a criterion's kind of check; unknown values humanize. */
+export function resolveCriterionCheckMeaningLabel(
+  v: string | null | undefined
+) {
+  return resolveFrom(CRITERION_CHECK_MEANING_LABELS, v);
+}
+/** The words for a goal criterion's mark; unknown values humanize. */
+export function resolveGoalCriterionMarkLabel(v: string | null | undefined) {
+  return resolveFrom(GOAL_CRITERION_MARK_LABELS, v);
+}
+/** The words for an operation's period mark; unknown values humanize. */
+export function resolveOperationPeriodMarkLabel(v: string | null | undefined) {
+  return resolveFrom(OPERATION_PERIOD_MARK_LABELS, v);
+}
+/** The words for a criterion's acceptance; unknown values humanize. */
+export function resolveGoalAcceptanceLabel(v: string | null | undefined) {
+  return resolveFrom(GOAL_ACCEPTANCE_LABELS, v);
+}
+/** The words for what a goal waits on; unknown values humanize. */
+export function resolveWaitingOnReasonLabel(v: string | null | undefined) {
+  return resolveFrom(WAITING_ON_REASON_LABELS, v);
+}
+
+/**
+ * A plain move of a goal between two statuses names where it goes — "Move to
+ * agreed" — because three bare "Move" items say nothing (code-core F8). The
+ * one door for that label; a close, a drop or a pause keep their own verb
+ * (`resolveActionLabel(move.verb)`).
+ */
+export function resolveTrackMoveLabel(
+  status: string | null | undefined
+): string {
+  const word = resolveTrackStatusLabel(status);
+  return word
+    ? `${ACTION_VERBS.move!.imperative} to ${word.toLowerCase()}`
+    : "";
+}
+
+/**
+ * A GOAL'S FIELDS as a person reads them — on the New goal forms, the goal
+ * page, the CLI (slop.md must-fix, 2026-10-24). Keyed by the stored field
+ * (`project_tracks`, 0345). The end state is "What done looks like": "Success
+ * looks like" stays the space brief's interview field
+ * ({@link SPACE_BRIEF_FIELD_LABELS}), so no two fields share a name.
+ * "Done when" is the goal page's criteria section, spelled once
+ * (`LENS_SECTION_LABELS.doneWhen` reads it from here).
+ */
+export const GOAL_FIELD_LABELS = {
+  endState: "What done looks like",
+  criteria: "Done when",
+  workKind: "Kind of work",
+  uncertainty: "How well the way is known",
+  dropConditions: "Drop it if",
+} as const satisfies Readonly<Record<string, string>>;
+
+/** The label for a goal field; an unknown key humanizes rather than leaks. */
+export function resolveGoalFieldLabel(field: string | null | undefined) {
+  if (!field) return "";
+  return Object.hasOwn(GOAL_FIELD_LABELS, field)
+    ? GOAL_FIELD_LABELS[field as keyof typeof GOAL_FIELD_LABELS]
+    : humanizeToken(field);
+}
+
+/** A run's crumb to the goal it works for ("Serves · Launch the site"). */
+export const SERVES_LABEL = "Serves";
+/**
+ * The person's pinned goals for the week (D4) — the rail group's name. Not
+ * bare "This week": the phone's calendar-week page already has that name.
+ */
+export const THIS_WEEK_LABEL = "This week's goals";
+/** The goal's close-with-a-verdict review (the judge's page and its door). */
+export const DECLARE_DONE_LABEL = "Declare done";
+
+/**
  * Where an import was STARTED (`ImportSessionCuration.origin`), as the end of
  * "Import from …" and "Started on …". Keyed by the client token each door
  * sends. An unknown origin humanizes, never leaks.
@@ -1966,6 +2226,8 @@ export const NEEDS_YOU_REASON_ICONS: Readonly<Record<string, string>> = {
   failure: "TriangleAlert",
   /** An owed slot that recorded no reason. */
   owed: "CircleDot",
+  /** A goal's verdict owed by its judge or owner (in review, an impossible report). */
+  judgement: "Scale",
 };
 
 /** The glyph NAME for a needs-you reason; unknown/absent ⇒ the fallback mark. */
@@ -1992,6 +2254,7 @@ export const NEEDS_YOU_REASON_LABELS: Readonly<Record<string, string>> = {
   review: "Review",
   failure: "Failed",
   owed: "Owed",
+  judgement: "Judgement",
 };
 
 export function resolveNeedsYouReasonLabel(
@@ -2175,6 +2438,19 @@ export function resolveHandedToLabel(
   return `Handed to ${name}`;
 }
 
+// ─── The one-line aim of a sitting (decision D3, 2026-10-23) ────────────────
+
+/**
+ * What a session's one-line `goal` is CALLED wherever a person reads it
+ * ("Aim · split the light and heavy lanes") — and a stage's and a playbook's
+ * one-line `goal`, which say the same thing one level up. Never "Goal": a goal
+ * is a track since 2026-10-23 (`OBJECT_KINDS.track`). Never "Outcome": the
+ * session's Outcomes list (deliverables + checks) sits on the same page. The
+ * storage fields keep their name (`focus_sessions.goal`, `stages[].goal`,
+ * `playbooks.goal_template`); only the word moved.
+ */
+export const AIM_LABEL = "Aim";
+
 // ─── Space brief fields (`SpaceBrief`, stored at settings.onboarding) ────────
 
 /**
@@ -2188,12 +2464,16 @@ export const SPACE_BRIEF_FIELD_LABELS: Readonly<
   Record<keyof SpaceBrief, string>
 > = {
   purpose: "Purpose",
-  goal: "Goal",
+  // The onboarding interview's one-line outcome. NOT "Goal" (the user word for
+  // a track since 2026-10-23) and not "Purpose" (the field above): it is the
+  // interview's aim, as a session's one line is its "Aim".
+  goal: "Interview aim",
   framing: "Persona",
   expertise: "Expertise",
   collect: "Kinds to collect",
   openingQuestions: "Opening questions",
-  doneWhen: "Done when",
+  // When the INTERVIEW is over — not a goal's "Done when" criteria section.
+  doneWhen: "Success looks like",
   anchors: "Read first",
   rules: "Rules",
   skills: "Skills",

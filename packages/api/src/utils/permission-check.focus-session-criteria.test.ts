@@ -220,3 +220,67 @@ describe("an AI update that writes CRITERIA is floored to a proposal", () => {
     expect(mockInsertPendingProposal).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * A GOAL's criteria (work model W2) — the same contract one level up. The
+ * track doors (`startTrack`, `setTrackDirection`) carry `criteria` in the
+ * gate data only when the caller sent them. Fixtures rule out: "only
+ * focus_session is floored" (the track update + create fixtures), and "every
+ * track write proposes" (the direction-only fixture stays false).
+ */
+describe("an AI write that sets a GOAL's criteria is floored to a proposal", () => {
+  const TRACK = "00000000-0000-4000-8000-0000000000bb";
+  const aiTrack = (
+    action: "create" | "update",
+    data: Record<string, unknown>
+  ) => ({
+    userId: "user-abc",
+    agentUserId: "agent-7",
+    workspaceId: "ws-123",
+    subjectType: "track" as const,
+    action,
+    source: "mcp" as const,
+    data: { id: TRACK, name: "Grow the newsletter", ...data },
+  });
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockValues.mockReturnValue({
+      returning: vi.fn().mockResolvedValue([{ id: "receipt-1" }]),
+    });
+    mockInsertPendingProposal.mockResolvedValue({
+      proposal: { id: "proposal-1" },
+      deduped: false,
+    });
+    mockVerifyPermission.mockResolvedValue({ allowed: true });
+    mockGov.mockImplementation(
+      async (input: { forcePropose?: boolean; criteriaChange?: boolean }) =>
+        input.forcePropose || input.criteriaChange
+          ? { decision: "propose", reason: "floored" }
+          : { decision: "execute", explicitAutoApproveFor: ["*"] }
+    );
+  });
+
+  it("track/update carrying criteria → the criteria floor", async () => {
+    const perm = await checkPermissionOrPropose(
+      aiTrack("update", { criteria: [CRITERION, { ...CRITERION, key: "b" }] })
+    );
+    expect(criteriaChangeArg()).toBe(true);
+    expect(forceProposeArg()).toBe(false);
+    expect(perm).toMatchObject({ granted: false, proposalId: "proposal-1" });
+  });
+
+  it("track/create carrying criteria → the criteria floor (an agent's new goal)", async () => {
+    await checkPermissionOrPropose(
+      aiTrack("create", { criteria: [CRITERION, { ...CRITERION, key: "b" }] })
+    );
+    expect(criteriaChangeArg()).toBe(true);
+  });
+
+  it("a track direction / kind write without criteria is not floored by it", async () => {
+    const perm = await checkPermissionOrPropose(
+      aiTrack("update", { direction: "Weekly", workKind: "operation" })
+    );
+    expect(criteriaChangeArg()).toBe(false);
+    expect(perm).toMatchObject({ granted: true });
+  });
+});

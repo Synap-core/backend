@@ -181,13 +181,13 @@ describe("LENS_INTENT_SECTION_LABELS", () => {
 });
 
 describe("lensIntentGoalFact — the goal line (WP.5)", () => {
-  it("a stated target over the measured throughput: 'Goal 6 / 8 published this month'", () => {
+  it("a stated target over the measured throughput: 'Target 6 / 8 published this month'", () => {
     const fact = lensIntentGoalFact({
       goal: { count: 8, per: "month" },
       done: 6,
       doneWord: "Published",
     })!;
-    expect(lensScopeFactLabel(fact)).toBe("Goal 6 / 8 published this month");
+    expect(lensScopeFactLabel(fact)).toBe("Target 6 / 8 published this month");
     expect(fact.progress).toBe(0.75);
     expect(fact.statedAt).toBeNull(); // measured, never "stated"
     expect(lensIntentHeaderModel({ counts, goal: fact }).fact).toEqual(fact);
@@ -199,7 +199,7 @@ describe("lensIntentGoalFact — the goal line (WP.5)", () => {
       done: 1,
       doneWord: "QA passed",
     })!;
-    expect(lensScopeFactLabel(fact)).toBe("Goal 1 / 4 QA passed this week");
+    expect(lensScopeFactLabel(fact)).toBe("Target 1 / 4 QA passed this week");
   });
 
   it("an unknown measure still says the target, with no bar", () => {
@@ -208,7 +208,7 @@ describe("lensIntentGoalFact — the goal line (WP.5)", () => {
       done: null,
       doneWord: "done",
     })!;
-    expect(lensScopeFactLabel(fact)).toBe("Goal: target 3 done this week");
+    expect(lensScopeFactLabel(fact)).toBe("Target 3 done this week");
     expect(fact.progress).toBeNull();
   });
 

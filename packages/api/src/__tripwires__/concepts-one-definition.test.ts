@@ -58,7 +58,7 @@ const ALIGNED: Record<string, string> = {
   // kind token, the table and every tool stem.
   Space: "workspace",
   Project: "project",
-  Track: "track",
+  Goal: "track",
   Step: "stage",
   Pack: "pack",
   Rule: "automation",

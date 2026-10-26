@@ -5,6 +5,7 @@ import {
   SUSPENDED_SESSION_STATUSES,
   TERMINAL_SESSION_STATUSES,
   isSuspendedSessionStatus,
+  closedRunRefusal,
 } from "./statuses.js";
 
 describe("SUSPENDED_SESSION_STATUSES — the one reading of `stale`", () => {
@@ -28,5 +29,22 @@ describe("SUSPENDED_SESSION_STATUSES — the one reading of `stale`", () => {
     // `paused` is ALSO in the pod's OPEN set — that set answers a different
     // question ("not finished") and is deliberately left alone.
     expect(OPEN_SESSION_STATUSES as readonly string[]).toContain("paused");
+  });
+});
+
+describe("closedRunRefusal — a closed run stays closed (R8)", () => {
+  it("refuses every terminal → open move", () => {
+    for (const from of ["closed", "cancelled", "failed"]) {
+      for (const to of ["active", "paused", "forming", "scheduled", "stale"]) {
+        expect(closedRunRefusal(from, to)).toMatch(/stays closed/);
+      }
+    }
+  });
+  it("allows an open run to move anywhere, a no-op, an absent status, and terminal → terminal", () => {
+    expect(closedRunRefusal("active", "paused")).toBeNull();
+    expect(closedRunRefusal("paused", "closed")).toBeNull();
+    expect(closedRunRefusal("closed", "closed")).toBeNull();
+    expect(closedRunRefusal("closed", undefined)).toBeNull();
+    expect(closedRunRefusal("closed", "cancelled")).toBeNull();
   });
 });

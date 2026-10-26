@@ -22,6 +22,11 @@
  * names exactly one hand-off and approving it attaches exactly that agent
  * (`focus_session/assign_agent` executor → `attachSessionAgent`).
  *
+ * A GOAL is handed on through the same gate (work model W3): an agent naming
+ * ANOTHER agent as a goal's delegate passes `track` instead of a session, and
+ * files `track/assign_agent` (`services/tracks/track-participants.ts`; the
+ * executor re-asks the route, then writes the delegate row).
+ *
  * WHICH agent may take it is THE route's answer, asked first
  * (`handOffRefusal` → `route()` with the agent as selector): a paused agent,
  * or one that does not act for the session's owner, is refused by name —
@@ -101,11 +106,26 @@ export async function gateAgentHandOff(p: {
   userId: string;
   agentUserId: string;
   workspaceId: string | null | undefined;
-  sessionId: string;
+  /**
+   * The session handed on — or, with `track`, the session the hand-off is
+   * filed under (the caller's own, when it has one).
+   */
+  sessionId: string | null;
   /** The session's goal and title — named in the proposal's summary by
    *  `resolveSessionTitle`, as the display-only `sessionName`. */
   goal: string | null | undefined;
   title?: string | null;
+  /**
+   * A GOAL handed on instead of a session (W3): the agent joins it in this
+   * role (a delegate, with its commitment) — `track/assign_agent`.
+   */
+  track?: {
+    id: string;
+    name: string;
+    projectId: string;
+    role: "delegate" | "integrator";
+    commitment: string | null;
+  };
   agentId: string;
   reasoning?: string;
 }): Promise<AgentHandOffDecision> {
@@ -121,25 +141,45 @@ export async function gateAgentHandOff(p: {
     agentName: agent?.name,
   });
   if (refused) return { status: "denied", agentId: p.agentId, reason: refused };
-  const perm = await checkPermissionOrPropose({
-    userId: p.userId,
-    agentUserId: p.agentUserId,
-    workspaceId: p.workspaceId ?? undefined,
-    subjectType: "focus_session",
-    action: "assign_agent",
-    source: "intelligence",
-    ...(p.reasoning ? { reasoning: p.reasoning } : {}),
-    // Filed on the session it hands over, so it shows there as waiting on you.
-    sessionId: p.sessionId,
-    sessionSource: "explicit",
-    data: {
-      id: p.sessionId,
-      goal: p.goal ?? null,
-      ...sessionNameField({ title: p.title, goal: p.goal }),
-      addAgentId: p.agentId,
-      agentName: agent?.name ?? null,
-    },
-  });
+  const perm = p.track
+    ? await checkPermissionOrPropose({
+        userId: p.userId,
+        agentUserId: p.agentUserId,
+        workspaceId: p.workspaceId ?? undefined,
+        projectId: p.track.projectId,
+        subjectType: "track",
+        action: "assign_agent",
+        source: "intelligence",
+        ...(p.reasoning ? { reasoning: p.reasoning } : {}),
+        ...(p.sessionId ? { sessionId: p.sessionId } : {}),
+        data: {
+          id: p.track.id,
+          name: p.track.name,
+          addAgentId: p.agentId,
+          agentName: agent?.name ?? null,
+          role: p.track.role,
+          commitment: p.track.commitment,
+        },
+      })
+    : await checkPermissionOrPropose({
+        userId: p.userId,
+        agentUserId: p.agentUserId,
+        workspaceId: p.workspaceId ?? undefined,
+        subjectType: "focus_session",
+        action: "assign_agent",
+        source: "intelligence",
+        ...(p.reasoning ? { reasoning: p.reasoning } : {}),
+        // Filed on the session it hands over, so it shows there as waiting on you.
+        sessionId: p.sessionId ?? undefined,
+        sessionSource: "explicit",
+        data: {
+          id: p.sessionId,
+          goal: p.goal ?? null,
+          ...sessionNameField({ title: p.title, goal: p.goal }),
+          addAgentId: p.agentId,
+          agentName: agent?.name ?? null,
+        },
+      });
   if ("denied" in perm && perm.denied) {
     return { status: "denied", agentId: p.agentId, reason: perm.reason };
   }

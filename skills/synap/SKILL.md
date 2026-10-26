@@ -46,7 +46,7 @@ The user's Synap pod: their source of truth. Tool names below are stems; your do
 1. **Recall first.** Before answering or creating, `ask`.
 2. **Capture after.** A durable fact, decision, person, task: `capture`; about the user: `remember_fact`. No private scratchpad.
 3. **Orient once.** `orient`: pending review (raise first), open sessions, kinds.
-4. **Work in a session.** `start_session` or resume (playbook `templateId`); a lasting goal = TRACK: `list_tracks`, else `start_track`; work in it = `start_session` + `trackId`; 2-5 `criteria`; status moves carry `expectedStatus`; person-only: `owner:'human'` slot + `blockedReason` + `ask` (confirm/choose with 1 `recommended`/form/act/provide), then `wait_for_answer` if listed; post progress, questions and results in its room (`post_message` to `session.channelId`); your own chat may repeat them; `evaluate_session` before `complete_session`.
+4. **Work in a session.** `start_session` or resume (playbook `templateId`); a goal (tools: TRACK): `list_tracks`, else `start_track`; work in it = `start_session` + `trackId`; 2-5 `criteria`; status moves carry `expectedStatus`; person-only: `owner:'human'` slot + `blockedReason` + `ask` (confirm/choose with 1 `recommended`/form/act/provide), then `wait_for_answer` if listed; post progress, questions and results in its room (`post_message` to `session.channelId`); your own chat may repeat them; `evaluate_session` before `complete_session`.
 5. **Never guess a project.** Pin only what the user names (`set_workspace_focus`, `set_project_focus`).
 6. **`proposed` is success**: keep going, never retry.
 7. **Discover before inventing.** `list_profiles` / `list_capabilities` before defining a kind, role, space. **Extend first** (facet, overlay, parent); never a twin.
@@ -60,38 +60,38 @@ Depth: `load_skill` `system/synap/concepts`, `work-model`, `focus-sessions`, `fr
 
 The ONE glossary; other skills point here. Word = what the user sees; internal = tools and tables.
 
-| Word                | Internal                | Answers                            | Test · e.g. · not                                                                                                                                                    |
-| ------------------- | ----------------------- | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Space**           | workspace               | which domain: kinds + tools?       | owns kinds, never done · CRM · not a project or method; findable, not emphasised                                                                                     |
-| **Project**         | project                 | what am I committed to, with whom? | ends with the commitment; spans spaces · a launch · not a task, method, or the owner's company                                                                       |
-| **Track**           | project_tracks          | what lasting intent am I pursuing? | inside ONE project, lasts, never completes; direction, instructions, goal; turns workers on; work in it = sessions · grow the newsletter · no stages                 |
-| **Step**            | stage                   | where does this work stand?        | = the subject's status: move the thing, the step follows · legacy: steps of a track started from a method                                                            |
-| **Work**            | focus_session           | what am I doing this sitting?      | one goal · no noun: "Start work"                                                                                                                                     |
-| **Template**        | playbook                | how do I reuse it?                 | kind DERIVED, never declared: scope session = work template (a method a session or worker follows), project = track template (legacy); also space and rule templates |
-| **Pack**            | suite                   | which templates come together?     | a bundle; depends on space templates, never creates a space                                                                                                          |
-| **Rule**            | automation              | what runs by itself, when?         | standing · "every Monday…" · not Approvals                                                                                                                           |
-| **Approvals**       | governance rules        | which AI writes wait for me?       | decides review vs auto, does no work                                                                                                                                 |
-| **Tools**           | capability, skill, tool | what can it act with?              | one word; the detail shows the kind                                                                                                                                  |
-| **To review**       | proposal                | what awaits my approval?           | `proposed` is success                                                                                                                                                |
-| **Role**            | role profile + facet    | which hat does it wear?            | one role per name, pod-wide; spaces add properties by overlay; its entities show in all · client · never a twin                                                      |
-| **Thing**           | entity                  | what is being worked on?           | one kind, maybe roles · a post, a lead · never a twin for a hat                                                                                                      |
-| **Status**          | lifecycle               | where does it stand?               | ONE list per kind or role, declared on its profile; category open·active·paused·done·lost · moved only through the door (`expectedStatus`)                           |
-| **Pipeline**        | pipeline view           | what is in each status?            | computed from a lifecycle, never created · not an object                                                                                                             |
-| **Worker**          | playbook activator      | what starts work by itself?        | a method + trigger (enters status · schedule · count · manual) + size (per thing · per batch); a track or project turns it on                                        |
-| **Inbox**           | needs-you signals       | what needs me?                     | one list: decisions, questions, routine changes, broken · not Work                                                                                                   |
-| **Questions**       | owed slot ask           | what did an agent ask me?          | an Inbox filter · answer it, the work resumes                                                                                                                        |
-| **Routine changes** | reversible proposal     | what can I approve in a batch?     | an Inbox filter · only reversible changes batch; undo says what it cannot restore                                                                                    |
-| **Broken**          | failed or stuck work    | what needs a fix?                  | an Inbox filter · a failed run, a stuck session                                                                                                                      |
-| **Library**         | data (things, files)    | what did we bring in?              | what you and your agents kept or made: things, files, imports · not a space                                                                                          |
-| **Unfiled**         | entity in no project    | what is not filed yet?             | things outside every project · file them into one                                                                                                                    |
-| **Agents**          | agent users + keys      | who acts for me?                   | Claude Code, Codex, any MCP client; each has its own page · not a Tool                                                                                               |
-| **Getting started** | first-run Home card     | what do I try first?               | goes away once done                                                                                                                                                  |
+| Word                | Internal                | Answers                            | Test · e.g. · not                                                                                                                                                     |
+| ------------------- | ----------------------- | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Space**           | workspace               | which domain: kinds + tools?       | owns kinds, never done · CRM · not a project or method; findable, not emphasised                                                                                      |
+| **Project**         | project                 | what am I committed to, with whom? | ends with the commitment; spans spaces · a launch · not a task, method, or the owner's company                                                                        |
+| **Goal**            | project_tracks          | what goal am I pursuing?           | in ONE project; open while it matters, or its judge closes it with a verdict; criteria say when it is done; work = sessions · grow the newsletter · tools say "track" |
+| **Step**            | stage                   | where does this work stand?        | = the subject's status: move the thing, the step follows · legacy: steps of a goal started from a method                                                              |
+| **Work**            | focus_session           | what am I doing this sitting?      | one aim · no noun: "Start work"                                                                                                                                       |
+| **Template**        | playbook                | how do I reuse it?                 | kind DERIVED, never declared: scope session = work template (a method a session or worker follows), project = goal template (legacy); also space and rule templates   |
+| **Pack**            | suite                   | which templates come together?     | a bundle; depends on space templates, never creates a space                                                                                                           |
+| **Rule**            | automation              | what runs by itself, when?         | standing · "every Monday…" · not Approvals                                                                                                                            |
+| **Approvals**       | governance rules        | which AI writes wait for me?       | decides review vs auto, does no work                                                                                                                                  |
+| **Tools**           | capability, skill, tool | what can it act with?              | one word; the detail shows the kind                                                                                                                                   |
+| **To review**       | proposal                | what awaits my approval?           | `proposed` is success                                                                                                                                                 |
+| **Role**            | role profile + facet    | which hat does it wear?            | one role per name, pod-wide; spaces add properties by overlay; its entities show in all · client · never a twin                                                       |
+| **Thing**           | entity                  | what is being worked on?           | one kind, maybe roles · a post, a lead · never a twin for a hat                                                                                                       |
+| **Status**          | lifecycle               | where does it stand?               | ONE list per kind or role, declared on its profile; category open·active·paused·done·lost · moved only through the door (`expectedStatus`)                            |
+| **Pipeline**        | pipeline view           | what is in each status?            | computed from a lifecycle, never created · not an object                                                                                                              |
+| **Worker**          | playbook activator      | what starts work by itself?        | a method + trigger (enters status · schedule · count · manual) + size (per thing · per batch); a goal or project turns it on                                          |
+| **Inbox**           | needs-you signals       | what needs me?                     | one list: decisions, questions, routine changes, broken · not Work                                                                                                    |
+| **Questions**       | owed slot ask           | what did an agent ask me?          | an Inbox filter · answer it, the work resumes                                                                                                                         |
+| **Routine changes** | reversible proposal     | what can I approve in a batch?     | an Inbox filter · only reversible changes batch; undo says what it cannot restore                                                                                     |
+| **Broken**          | failed or stuck work    | what needs a fix?                  | an Inbox filter · a failed run, a stuck session                                                                                                                       |
+| **Library**         | data (things, files)    | what did we bring in?              | what you and your agents kept or made: things, files, imports · not a space                                                                                           |
+| **Unfiled**         | entity in no project    | what is not filed yet?             | things outside every project · file them into one                                                                                                                     |
+| **Agents**          | agent users + keys      | who acts for me?                   | Claude Code, Codex, any MCP client; each has its own page · not a Tool                                                                                                |
+| **Getting started** | first-run Home card     | what do I try first?               | goes away once done                                                                                                                                                   |
 
 Doors: `start_track`, `start_session`, `create_rule`, `attach_facet`, `update_entity` + `expectedStatus` (a status). How they fit (sizes, workers, tenses): `work-model`.
 
-A lasting goal on a project: `list_tracks` → none? `start_track` (`name`, `direction`, a `kpi` only if the person names one; no method needed); work in it = `start_session` + `trackId`, as many sessions as it takes. Detail: `from-intent`.
+A goal is a TRACK in every tool and field name (`start_track`, `trackId`); say "goal" to the person. A goal on a project: `list_tracks` → none? `start_track` (`name`, `direction`, a `kpi` only if the person names one; no method needed); work in it = `start_session` + `trackId`, as many sessions as it takes. A session's one-line `goal` is its **Aim** to the person. Detail: `from-intent`.
 
-Existing work can be filed into a track with `update_session` `trackId` (proposed; the session keeps its space). Track stages are legacy: only a track started from a track template has them (`start_stage_session`; never `advance_track` without the user).
+Existing work can be filed into a goal with `update_session` `trackId` (proposed; the session keeps its space). Goal steps are legacy: only a goal started from a goal template has them (`start_stage_session`; never `advance_track` without the user).
 
 ---
 
@@ -105,16 +105,16 @@ A process is the life of a **thing**, not a script. A lead, a post or a feature 
 
 ### The nouns
 
-| Noun                 | What it is                                                                          | Not                                  |
-| -------------------- | ----------------------------------------------------------------------------------- | ------------------------------------ |
-| **Project**          | a commitment, and a lens across spaces                                              | a method, a domain                   |
-| **Track** (optional) | a LASTING intent in one project: direction, instructions, goal; it turns workers on | a list of stages; it never completes |
-| **Thing**            | any entity: one kind, maybe roles, one status per kind or role                      | a second entity for a hat            |
-| **Session**          | the unit of work that closes: goal, criteria, room; one thing or a batch            | a "run" because it follows a method  |
+| Noun                | What it is                                                                                                            | Not                                 |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
+| **Project**         | a commitment, and a lens across spaces                                                                                | a method, a domain                  |
+| **Goal** (optional) | in one project (a _track_ in tools): direction, criteria, the workers it turns on; its judge closes it with a verdict | a list of stages                    |
+| **Thing**           | any entity: one kind, maybe roles, one status per kind or role                                                        | a second entity for a hat           |
+| **Session**         | the unit of work that closes: goal, criteria, room; one thing or a batch                                              | a "run" because it follows a method |
 
 Not nouns (nobody manages them as objects): a **pipeline** is a view of a lifecycle; a **worker** is configuration (a method + a trigger + a size); a **method** is a playbook a session may follow; a **check** is a recurring verification.
 
-How they relate: a project files things; each kind or role declares one **lifecycle** (its status list); its **pipeline** is computed (columns = the options in order); a status change fires **workers**, which start **sessions** carrying the project, the track and their **targets**; a session moves each thing's status through the door. **Hand-off is a role:** a won deal makes the party a client (attach the role); nothing is copied.
+How they relate: a project files things; each kind or role declares one **lifecycle** (its status list); its **pipeline** is computed (columns = the options in order); a status change fires **workers**, which start **sessions** carrying the project, the goal and their **targets**; a session moves each thing's status through the door. **Hand-off is a role:** a won deal makes the party a client (attach the role); nothing is copied.
 
 ### Three tenses of a thing
 
@@ -146,11 +146,19 @@ Every status change — your call, a board drag, a method's step, a sync — goe
 
 ### Workers
 
-A worker is a playbook **activator**, declared on the method and owned by the lifecycle: `on` = `created` · `enters_status` (+ `status`) · `count` (+ `status`, `min`: once N things wait) · `schedule` (+ `cron`) · `manual`; `size` = `per_thing` · `per_moment` (a count or schedule is always per batch); `mode` = `propose` (default) · `run`; `maxPendingApprovals` throttles it. It compiles into a governed rule the owner can pause; it fires once per thing per transition. A track or project **turns it on** for its scope; installs turn it on space-wide. Authoring: `processes`.
+A worker is a playbook **activator**, declared on the method and owned by the lifecycle: `on` = `created` · `enters_status` (+ `status`) · `count` (+ `status`, `min`: once N things wait) · `schedule` (+ `cron`) · `manual`; `size` = `per_thing` · `per_moment` (a count or schedule is always per batch); `mode` = `propose` (default) · `run`; `maxPendingApprovals` throttles it. It compiles into a governed rule the owner can pause; it fires once per thing per transition. A goal or project **turns it on** for its scope; installs turn it on space-wide. Authoring: `processes`.
 
-### Tracks
+### Goals (tracks)
 
-A track holds an owner, a direction, instructions, the workers it turns on, and a goal (stated, or measured as transitions into `done`). It has no stages and never completes: pause or archive it. Work in it = `start_session` + `trackId`. A thing may count for two tracks. Solo users may never need one: workers can run space-wide. Legacy: `start_stage_session` and `add_track_stage` serve old tracks started from a method; never `advance_track` without the user.
+A goal is a _track_ in every tool and field name (`start_track`, `trackId`) — say "goal" to the person; a session's one-line `goal` is its **Aim**. A goal holds an owner, a direction, instructions, the workers it turns on, and what done means (criteria, or a number measured as transitions into `done`). It has no stages. A goal can stay open as long as it matters, or finish: a person closes it with a verdict once its criteria are met (`set_track_status` `completed` + `verdict`; dropped = `archived`, with a `verdict` saying why). Your close is a proposal; a closed goal comes back only as a new version. Pause it while nobody should work on it. Work in it = `start_session` + `trackId`. A thing may count for two goals. Solo users may never need one: workers can run space-wide. Legacy: `start_stage_session` and `add_track_stage` serve old goals started from a method; never `advance_track` without the user.
+
+**The rest of the goal protocol** (`set_track_participant`, `reopen_track`, `convert_to_goal`, `update_track`):
+
+- **A delegate's commitment.** The owner or judge asks someone (`add`, role `delegate`, with a `commitment`). The delegate answers only their own: `accept`, `counter` (text = what they would commit to instead), `decline`, or later `report_impossible` (text = why). A report is not the goal's verdict: the owner or judge `acknowledge`s it and re-plans. Never answer for a person; adding yourself as a delegate commits you.
+- **Claims and the judge.** A session that passes a goal criterion CLAIMS it. Only the judge (the owner unless one is named) accepts or sends back a claim, and only the judge closes the goal. Never accept your own claim.
+- **Reopen = a new version.** A closed or dropped goal never moves back: `reopen_track` starts a new version linked to it, with the same people asked again.
+- **Make it a goal.** A goal, objective or OKR entity becomes a goal once with `convert_to_goal` (its key results become measured criteria). Offer it when the person treats such an entity as live work; never convert one twice.
+- **The loop** is OFF by default. When it is on (`update_track` `loop: { on: true, perWeek? }`), the goal proposes its next session while a required criterion is unmet, and a person approves each one. Your switch-on is always a proposal: the person turns it on. If it stops after two failures on one criterion, ask the owner to re-plan; do not switch it on again yourself.
 
 ### The homes: what each space makes, what is moving
 
@@ -296,7 +304,7 @@ Before the first write, name the layer in one word, then take its door. Most req
 | **view**       | to SEE existing things: a list, a grouping, a board, a dashboard       | `synap_list_views` first, so you do not duplicate one; then `synap_create_view` (`tools:build`). Never copy records into a new space to show them.            |
 | **capability** | access beyond the graph: connect Gmail, send mail, search the live web | §2b: `synap_list_capabilities`, then run it or file its install. Never build a view to stand in for a capability.                                             |
 | **session**    | "I'm starting work on X": one bounded piece of work                    | `synap_start_session` with a one-line goal. Not a task.                                                                                                       |
-| **track**      | a lasting goal inside a project: "grow the newsletter"                 | §2c: `synap_list_tracks`, else `synap_start_track` (`tools:tracks`). Not a project, not a pack, not a playbook.                                               |
+| **goal**       | a goal inside a project: "launch the new site" (a _track_)             | §2c: `synap_list_tracks`, else `synap_start_track` (`tools:tracks`). Not a project, not a pack, not a playbook.                                               |
 | **rule**       | a standing intent: "always…", "from now on…", "every Monday…"          | `synap_create_rule` (`tools:governance`) with the user's own words as `intent`; a trigger→steps reaction is `synap_create_automation` (`tools:capabilities`). |
 | **structure**  | a new area of work that needs kinds, spaces or a project               | the rest of this skill, from §0.                                                                                                                              |
 
@@ -310,7 +318,7 @@ Before proposing structure:
 2. `synap_list_profiles` — kinds **and** roles (`profileKind`, `applicableKinds`, `parentProfileId`, `entityScope`).
 3. `synap_ask` — does this intent already live as a project or a cluster of entities?
 
-If a close project exists, **reuse it**. Do not mint a twin. Name-match is enough: if orient already lists a project whose description is this company or this commitment, that **is** the project. Ask "reuse «Launch The Architech»?" — do not invent «Architech Business Model» next to it: a business-model method on that project is a **track** on it (`synap_list_tracks` / `synap_start_track`), not a twin project.
+If a close project exists, **reuse it**. Do not mint a twin. Name-match is enough: if orient already lists a project whose description is this company or this commitment, that **is** the project. Ask "reuse «Launch The Architech»?" — do not invent «Architech Business Model» next to it: a business-model method on that project is a **goal** on it (`synap_list_tracks` / `synap_start_track`), not a twin project.
 
 **Pending review first.** If `startHere.pendingReview.count > 0`, offer to walk the queue before any new structure. Unreviewed work looks missing and gets duplicated.
 
@@ -322,12 +330,12 @@ If a close project exists, **reuse it**. Do not mint a twin. Name-match is enoug
 
 ### 1. Ask before you build (required)
 
-Do not install templates, define kinds, or create a project until you can answer these. Ask only what is still unknown — one short pass, not a wizard. Never a 7-step implementation plan in the first reply. What each word means (project, track, step, template, pack, role): `concepts`.
+Do not install templates, define kinds, or create a project until you can answer these. Ask only what is still unknown — one short pass, not a wizard. Never a 7-step implementation plan in the first reply. What each word means (project, goal, step, template, pack, role): `concepts`.
 
 | Question                                                                             | You are distinguishing                                                                  |
 | ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------- |
 | What is the **commitment** (the thing we are driving toward over weeks)?             | **Project** (optional; gravity). Not a folder.                                          |
-| Which **lasting goals** will it pursue (grow the newsletter, win ten clients…)?      | **Tracks** — `synap_start_track`, no template; methods are playbooks sessions follow.   |
+| Which **lasting goals** will it pursue (grow the newsletter, win ten clients…)?      | **Goals** — `synap_start_track`, no template; methods are playbooks sessions follow.    |
 | Which **new kinds of things** must be recorded that no workspace owns yet?           | **Workspaces** (domains). Four-test + template-first. Missing domain → load `agent-os`. |
 | What is the **thing** vs a **hat** vs a **relationship-with-a-life** vs a **stage**? | Kind vs **facet on any kind** vs deal-pattern kind vs status/view.                      |
 | What already exists that we can **extend**?                                          | `extend-first` — never a twin slug.                                                     |
@@ -386,23 +394,23 @@ Walk this ladder instead. Every rung is a door that exists; do not invent one.
 
 A skill your plan creates IS resolvable in the same batch: the automation door looks a verb up by **skill name**, and skills materialize before automations. That is why a fact + a behaviour can ride in one proposal.
 
-### 2c. A lasting goal inside a project → a TRACK
+### 2c. A goal inside a project → a GOAL (a track)
 
-A **track** is a lasting intent with a goal inside ONE project ("Grow the newsletter", "Win the first ten clients"); a project runs several. It holds a `direction` (one line, in the person's words) and, only if the person names a number, a `kpi` `{ label, unit?, target }`. It lasts: it is paused or archived, never "finished" for hitting a number. Work in it is ordinary sessions filed into it. Definitions: `concepts`.
+A **goal** is a _track_ in every tool and field name (`synap_start_track`, `trackId`) — say "goal" to the person, never "track". It lives inside ONE project ("Launch the new site", "Win the first ten clients"); a project runs several. A goal that FINISHES holds an `endState` (what done looks like, a short paragraph in the person's words) and **2 to 5 `criteria`** — binary checks, each with how it is checked: measured (evidence a run posts), judged by a person, handed over, or decided by an outside party. A goal kept open as long as it matters ("keep the newsletter growing") has no criteria: it steers by a `direction` (one line) and, only if the person names a number, a `kpi` `{ label, unit?, target }`. Propose its `workKind` (project, operation, investigation…) and `uncertainty`; the person confirms them. Its judge (the owner unless someone else is named, `synap_set_track_participant`) accepts what runs claim and closes it with a verdict — hitting a number never closes it. Work in it is ordinary sessions filed into it. Definitions: `concepts`.
 
-**Asked to pursue a goal in a project** ("keep growing the newsletter in Synap"): `synap_list_tracks` for the project (already running? resume it) → none? `synap_start_track` with `projectId`, a `name`, the `direction` and any `kpi` the person named — no method needed. Then work: `synap_start_session` with `trackId`, one session per sitting, as many as it takes.
+**Asked to pursue a goal in a project** ("launch the new site in Synap"): `synap_list_tracks` for the project (already running? resume it) → none? Propose the end state and 2–5 criteria in one line each and let the person correct them, then `synap_start_track` with `projectId`, `name`, `endState`, `criteria` (and `workKind`, `uncertainty`) — no method needed. Leave criteria out only when the person describes something to keep doing, not something to finish. Then work: `synap_start_session` with `trackId`, one session per sitting, carrying the criteria it works on (same `key`), as many as it takes.
 
-| The user needs…                                  | Do this                                                                                                                |
-| ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
-| a **lasting goal** in an existing project        | `synap_list_tracks` (already running?) → `synap_start_track` (`name`, `direction`, optional `kpi`)                     |
-| one piece of work toward it                      | a **session** born in the track: `synap_start_session` (or `synap_run_playbook` for a session template) with `trackId` |
-| a repeatable way to do that work                 | a session template (`synap_create_playbook`, default scope) run with `trackId` — not a track method                    |
-| new **kinds of things** no workspace owns        | a workspace (four-test, `workspace-design`) — never to represent a track                                               |
-| a new long-lived commitment with its own gravity | a project — never a twin project for a track of an existing one                                                        |
+| The user needs…                                  | Do this                                                                                                                                 |
+| ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
+| a **goal** in an existing project                | `synap_list_tracks` (already running?) → `synap_start_track` (`name`, `endState`, 2–5 `criteria`; lasting: `direction`, optional `kpi`) |
+| one piece of work toward it                      | a **session** born in the goal: `synap_start_session` (or `synap_run_playbook` for a session template) with `trackId`                   |
+| a repeatable way to do that work                 | a session template (`synap_create_playbook`, default scope) run with `trackId` — not a goal method                                      |
+| new **kinds of things** no workspace owns        | a workspace (four-test, `workspace-design`) — never to represent a goal                                                                 |
+| a new long-lived commitment with its own gravity | a project — never a twin project for a goal of an existing one                                                                          |
 
-**A track steers; its sessions verify.** Report progress with `synap_update_track` `kpi: { current }`: a STATED value, stamped with when and by whom — never invent a measurement. Reaching the target nudges the person to re-aim it; never change the target yourself. While a track is active, its agent may work in the spaces its project links (`synap_project_use_workspace`); pausing it suspends that, archiving ends it. Pause, resume or archive it with `synap_set_track_status`. Track writes are governed: `proposed` is success. Installing a pack onto a project does **not** start tracks — start each one.
+**A goal steers; its sessions verify.** A session that passes a criterion CLAIMS it; the judge accepts or sends it back — never accept your own claim. Report a lasting goal's number with `synap_update_track` `kpi: { current }`: a STATED value, stamped with when and by whom — never invent a measurement. Reaching the target nudges the person to re-aim it or close the goal; never change the target or close the goal yourself. While a goal is active, its agent may work in the spaces its project links (`synap_project_use_workspace`); pausing it suspends that, closing or dropping it ends it. Pause, resume, close (`completed` + a `verdict`) or drop (`archived`, with a `verdict` saying why) it with `synap_set_track_status`; your close is a proposal the person approves. Goal writes are governed: `proposed` is success. Installing a pack onto a project does **not** start goals — start each one.
 
-**Legacy: tracks with stages.** A track started from a track template (`scope: "project"`, `playbookId` on `synap_start_track`) has re-enterable stages. Work a stage with `synap_start_stage_session` (`trackId`, optional `stageKey`); never `synap_advance_track` without the user — advancing returns an `offer` (show it, start it only on a yes). Do not create new track templates; a new track needs none.
+**Legacy: goals with steps.** A goal started from a goal template (`scope: "project"`, `playbookId` on `synap_start_track`) has re-enterable stages. Work a stage with `synap_start_stage_session` (`trackId`, optional `stageKey`); never `synap_advance_track` without the user — advancing returns an `offer` (show it, start it only on a yes). Do not create new goal templates; a new goal needs none.
 
 ### 3. Which skill to load next
 
@@ -426,7 +434,7 @@ A **track** is a lasting intent with a goal inside ONE project ("Grow the newsle
 - Grading yourself. "85% complete" against no criteria and no declared outputs is an opinion, not a status — propose criteria (§0.4) and expected outputs (§2) so the person can check the claim.
 - Onboard or fill an empty workspace "because it is empty."
 - Invent a workspace that fails the four-test.
-- Nested or twin projects, or a workspace, to represent a **goal or method** of an existing project. A lasting goal is a track; a repeatable method is a playbook a session or worker follows; one bounded piece of work is a session (`trackId`).
+- Nested or twin projects, or a workspace, to represent a **goal or method** of an existing project. A lasting goal is a goal (`synap_start_track`); a repeatable method is a playbook a session or worker follows; one bounded piece of work is a session (`trackId`).
 - Invent CLI flags or tools this door does not list.
 - A second entity for a hat (`kind_mismatch` → **widen** the role’s `applicableKinds`, then `attach_facet`).
 - Company/person-only facets. If the hat belongs on `item` (or any kind), the role’s `applicableKinds` must include that kind.
@@ -464,7 +472,7 @@ Ask yourself: _who does this knowledge serve?_ **There is no private AI scratchp
 
 > **Substrate names (tables under the hood):** _semantic_ = `entities` (the `knowledge` profile, workspace-scoped = domain separation), _episodic_ = `knowledge_facts`, _procedural_ = `knowledge_keys` (pod-wide runbooks). `ask` queries across them so you never pick on read.
 
-**Facets (roles)** are hats on **any kind** (`applicableKinds`), not only person/company. “This item is an X” is `attach_facet`, not a new kind, until X has its own life. Widen the role when `kind_mismatch`. See `from-intent` + `extend-first`. What role, workspace, project, track and template mean: `concepts` (the one glossary).
+**Facets (roles)** are hats on **any kind** (`applicableKinds`), not only person/company. “This item is an X” is `attach_facet`, not a new kind, until X has its own life. Widen the role when `kind_mismatch`. See `from-intent` + `extend-first`. What role, workspace, project, goal and template mean: `concepts` (the one glossary).
 
 ### Data layers — the graph itself
 
@@ -570,7 +578,7 @@ You don't work "inside a workspace" the way you'd work inside a folder. You oper
 
 Tool names below are stems; your door may prefix them.
 
-What each word means (workspace, project, track, step, work): `concepts` — the one glossary. This file is only about scoping.
+What each word means (workspace, project, goal, step, work): `concepts` — the one glossary. This file is only about scoping.
 
 | Lens          | Scopes                                                     | Set it (MCP / CLI)                                                 |
 | ------------- | ---------------------------------------------------------- | ------------------------------------------------------------------ |
@@ -596,7 +604,7 @@ What each word means (workspace, project, track, step, work): `concepts` — the
 
 - A **project spans workspaces** and a **workspace spans projects**.
 - **Membership is per-entity, filed on write.** An entity belongs to a project because it was written **under that project lens** (`belongs_to_project`) — that is the data ACL/filing edge. Separately, provisioning with a `projectId` also stamps **`project --uses--> workspace`**: an INDEX of domains the engagement runs through. That index is **not** an ACL and does **not** replace entity filing — set the project lens before writing work so entities compose into the project from any workspace.
-- A lasting goal inside a project is a **track**, never a child project or a workspace; a bounded piece of work is a **session** (`trackId` when it belongs to a track). There are no nested projects.
+- A lasting goal inside a project is a **goal** (a _track_ in every tool and field name — say "goal" to the person), never a child project or a workspace; a bounded piece of work is a **session** (`trackId` when it belongs to a goal). There are no nested projects.
 
 - **The connection is pod-wide by design.** Your MCP/CLI link is _not_ welded to a workspace — reads default pod-wide, writes default to a sensible workspace. Pass a lens to narrow a single call; the lens is a focus, not a fence.
 - **These are per-Claude-session.** Two concurrent Claude sessions can sit on different projects/workspaces/sessions without colliding. `synap use` here rebinds **this** session only.
@@ -616,7 +624,7 @@ What each word means (workspace, project, track, step, work): `concepts` — the
 
 A project sometimes clearly needs something it lacks. Tell the two apart first:
 
-- **A lasting goal is missing** (the talk keeps returning to a goal — growing the newsletter, landing clients… — and `list_tracks` shows no track for it) → offer a **track**: _"This project has no track for the newsletter yet — want me to start one?"_ Then `start_track` with a `name` and `direction`; no method needed.
+- **A lasting goal is missing** (the talk keeps returning to a goal — growing the newsletter, landing clients… — and `list_tracks` shows none for it) → offer a **goal**: _"This project has no goal for the newsletter yet — want me to start one?"_ Then `start_track` with a `name` and `direction`; no method needed.
 - **A domain is missing** (new kinds of things must be recorded that no workspace owns — e.g. you are logging deals and there is no CRM) → offer a **workspace**, provisioned with the project lens active (see the `agent-os` skill). Never a workspace to stand for a method.
 
 Say it **once, at the end, in one line**. **Offer, don't auto-build.** One nudge per response, only when the gap is real — never a checklist of everything the project "could" have. **If the user has already declined it (this session or before), drop it — don't re-offer.**
@@ -1759,7 +1767,7 @@ When the session is done **and the work was a repeatable process** (not a one-of
 - Do this at the _end_, once the promised outputs are produced and verified.
 - Judge repeatability honestly: a bespoke, never-again investigation is not a template. "New-client onboarding" is a work template.
 - If it should **run on its own** ("a weekly competitor scan"), that is a **Rule** that starts the work each cycle (`create_rule`), not a template alone.
-- If the work is a **lasting goal** worked over weeks, start a **track** for it on the project (`start_track`) and run this work template in it (`trackId`) — a track needs no template of its own.
+- If the work is a **lasting goal** worked over weeks, start a **goal** for it on the project (`start_track`) and run this work template in it (`trackId`) — a goal needs no template of its own.
 - Governed like the others — `promoted` (applied) or `proposed` (awaiting review) are both normal.
 
 ### The symmetry
@@ -2525,7 +2533,7 @@ The point of the flywheel is that mistakes are **visible and fixable**, not sile
 
 ## Workspace design — is this concern a WORKSPACE, or something smaller?
 
-Before you create a workspace, run the decision rule. A workspace (an operational **domain**) is the heaviest structure in the pod — it owns kinds, confers roles, carries its own team and automations. Most new concerns are NOT domains; they are a **hat**, an **initiative**, a **lasting goal** (track), or a **status**. Creating a workspace for one of those is the anti-pattern that fragments the graph. Decide first, then create. What each word means: `concepts` (the one glossary).
+Before you create a workspace, run the decision rule. A workspace (an operational **domain**) is the heaviest structure in the pod — it owns kinds, confers roles, carries its own team and automations. Most new concerns are NOT domains; they are a **hat**, an **initiative**, a **lasting goal** (a goal — `track` in tools), or a **status**. Creating a workspace for one of those is the anti-pattern that fragments the graph. Decide first, then create. What each word means: `concepts` (the one glossary).
 
 **One space per domain:** A space is a domain, installed once (Content, Brand, CRM…). A project is a filter across spaces. To make something “for project X”: file it into X inside the domain's space (`file_into_project`), and link X to the space (`project_use_workspace`). Never create a space named after a project, a brand or a client.
 
@@ -2542,7 +2550,7 @@ Before you create a workspace, run the decision rule. A workspace (an operationa
 | ----------------------------------------------------------- | ----------- | -------------------------------------- | ------------------------------------------- |
 | a **role/hat** an existing entity wears in a domain         | **Facet**   | `attach_facet` (`profileKind: "role"`) | `client`, `sponsor`, `prospect`, `investor` |
 | a **cross-cutting, time-bound initiative** spanning domains | **Project** | `create_project` (a lens)              | a campaign, an engagement, a launch         |
-| a **lasting goal** a project pursues (worked in sessions)   | **Track**   | `start_track` (no method needed)       | grow the newsletter, win ten clients        |
+| a **lasting goal** a project pursues (worked in sessions)   | **Goal**    | `start_track` (no method needed)       | grow the newsletter, win ten clients        |
 | a **stage/filter WITHIN a domain**                          | **Status**  | an option of the kind's lifecycle      | pipeline stage, "active"/"archived"         |
 
 ## The decision procedure (follow in order)
@@ -2551,7 +2559,7 @@ Before you create a workspace, run the decision rule. A workspace (an operationa
 2. **Test all four conditions.** Owns kinds AND own team AND native automations AND stable. Any one fails → fork below.
 3. **If it's a hat** (a status/role on an entity that already exists elsewhere) → resolve the entity, `attach_facet`. Never a workspace, never a second entity. One role per name, pod-wide: a role several workspaces use is ONE role, each workspace adding properties by overlay — never a per-workspace twin (`concepts`).
 4. **If it's time-bound work across domains** → `create_project` and set it as the lens; the work files into it from whatever workspace holds the data. **A project is a COMMITMENT WITH GRAVITY** — a real initiative that ties work together (a campaign, an engagement, a client, a launch). Tasks, plans, repos, themes, and topics are **entities**, never projects. Before you create one: (a) **search existing projects first** (`synap orient` / `GET /api/hub/projects`) and prefer **linking into an existing project** via `belongs_to_project` — a near-duplicate name is filed for the person to review, showing the existing project; (b) an agent-created project must cite **≥5 existing entities** that would belong to it as `evidenceEntityIds` — the backend rejects a project with no gravity and tells you to store it as an entity or reuse an existing project instead; (c) **never create a project for the pod owner's own company** — the company _is_ the pod, not a project inside it.
-5. **If it's a lasting goal a project pursues** ("keep the content side of the launch going") → a **track**: `list_tracks`, else `start_track` (`name`, `direction`); work in it with `start_session` + `trackId`. Never a workspace, never a twin project.
+5. **If it's a lasting goal a project pursues** ("keep the content side of the launch going") → a **goal**: `list_tracks`, else `start_track` (`name`, `direction`); work in it with `start_session` + `trackId`. Never a workspace, never a twin project.
 6. **If it's a stage inside a domain** → it is an option of the kind's or role's declared lifecycle, never a role and never a space. Its pipeline is computed from the lifecycle: open it, don't build one. A kind with no lifecycle yet gets a `status` property def (`create_property_def`).
 7. **Only if all four held** → **template first** (escalation ladder L3):
    `market.search({query, kind: "template"})` and propose install of a matching
@@ -2561,7 +2569,7 @@ Before you create a workspace, run the decision rule. A workspace (an operationa
 
 ## The CRM corollary — the load-bearing example
 
-Operational state — **prospect → client → delivered** — is a **FLOW across domains**, expressed as **facets + an engagement project** (its delivery runs as a track), NEVER as workspaces and NEVER by bolting delivery onto the identity domain.
+Operational state — **prospect → client → delivered** — is a **FLOW across domains**, expressed as **facets + an engagement project** (its delivery runs as a goal), NEVER as workspaces and NEVER by bolting delivery onto the identity domain.
 
 - CRM = **who** (owns `person`/`company`, confers the `lead`/`client` facets).
 - Operations = **what we do for them** (owns `engagement`/`contract`/`deliverable`).
@@ -2804,7 +2812,7 @@ All `query()` calls return a Promise. Entity shape: `{ id, title, profileSlug, p
 
 #### Intent reads (a kind's pipeline, goal, needs-you, sessions)
 
-The same reads a kind's own page makes, so a frame can be that kind's dashboard. The host stamps the lens (the active space and project); a `workspaceId` / `projectId` you pass is ignored. `trackId` narrows to one track.
+The same reads a kind's own page makes, so a frame can be that kind's dashboard. The host stamps the lens (the active space and project); a `workspaceId` / `projectId` you pass is ignored. `trackId` narrows to one goal.
 
 | Operation              | Params                                                                                                | Returns                                                                                                                                                                                                                              |
 | ---------------------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
