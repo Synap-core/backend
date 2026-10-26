@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { listSections, segmentSlides } from "./sections.js";
+import {
+  listSections,
+  PASSAGE_MAX_CHARS,
+  PASSAGE_MIN_CHARS,
+  segmentPassages,
+  segmentSlides,
+} from "./sections.js";
 
 describe("segmentSlides — tier 1 (synap-section)", () => {
   const doc = `# Workspace report — July 2026
@@ -476,5 +482,131 @@ This connects to the Q3 roadmap.
 
   it("returns an empty array when there are no top-level sections", () => {
     expect(listSections("# Just a heading\n\nAnd body text.")).toEqual([]);
+  });
+});
+
+describe("segmentPassages — recall-sized units (sections, ~2,000 cut, ~400 merge)", () => {
+  /** `n` paragraphs of about `size` chars, each tagged so order can be read back. */
+  const paragraphs = (tag: string, n: number, size = 300) =>
+    Array.from({ length: n }, (_, i) =>
+      `${tag}-${i} ${"word ".repeat(Math.floor(size / 5))}`.trim()
+    ).join("\n\n");
+
+  it("one passage per normal-sized section, labelled by its heading", () => {
+    const doc = `## Pricing\n\n${paragraphs("p", 3)}\n\n## Governance\n\n${paragraphs("g", 3)}\n`;
+    const passages = segmentPassages(doc);
+    expect(passages.map((p) => [p.id, p.heading, p.index])).toEqual([
+      ["pricing", "Pricing", 0],
+      ["governance", "Governance", 1],
+    ]);
+    for (const p of passages) expect(p.text).toBe(doc.slice(p.start, p.end));
+    expect(passages[1]!.text).toContain("g-2");
+    expect(passages[1]!.text).not.toContain("p-2");
+  });
+
+  it("cuts a long section between blocks into even parts under the cap", () => {
+    const body = paragraphs("x", 20); // ~6,000 chars
+    const doc = `## Meeting\n\n${body}\n`;
+    const passages = segmentPassages(doc);
+    expect(passages.length).toBeGreaterThanOrEqual(3);
+    expect(passages.map((p) => p.id)).toEqual([
+      "meeting",
+      ...passages.slice(1).map((_, k) => `meeting-part-${k + 2}`),
+    ]);
+    for (const p of passages) {
+      expect(p.heading).toBe("Meeting");
+      expect(p.text.length).toBeLessThanOrEqual(PASSAGE_MAX_CHARS);
+      expect(p.text.length).toBeGreaterThanOrEqual(PASSAGE_MIN_CHARS);
+      // Never inside a paragraph: every part starts on a paragraph tag (or the heading).
+      expect(p.text).toMatch(/^(## Meeting|x-\d+ )/);
+    }
+    // Every paragraph lands in exactly one passage, in document order.
+    const tags = passages.flatMap((p) => p.text.match(/x-\d+/g) ?? []);
+    expect(tags).toEqual(Array.from({ length: 20 }, (_, i) => `x-${i}`));
+  });
+
+  it("merges short sibling sections, keeping both headings, while they fit the cap", () => {
+    // Notes is ~1,960 chars: joining it would pass the 2,000 cap, so it stays alone.
+    const notes = `## Notes\n\n${paragraphs("n", 6, 320)}`;
+    expect(notes.length).toBeGreaterThan(PASSAGE_MAX_CHARS - 50);
+    const doc = `## Attendees\n\nAlice, Bob.\n\n## Date\n\nMonday.\n\n${notes}\n`;
+    const passages = segmentPassages(doc);
+    expect(passages.map((p) => [p.id, p.heading])).toEqual([
+      ["attendees", "Attendees · Date"],
+      ["notes", "Notes"],
+    ]);
+    expect(passages[0]!.text).toBe(
+      "## Attendees\n\nAlice, Bob.\n\n## Date\n\nMonday."
+    );
+
+    // A short section next to one that has room joins it.
+    const roomy = segmentPassages(
+      `## Date\n\nMonday.\n\n## Notes\n\n${paragraphs("n", 2)}\n`
+    );
+    expect(roomy.map((p) => p.heading)).toEqual(["Date · Notes"]);
+  });
+
+  it("never carries synap-section fence lines into a merged passage", () => {
+    const doc = `::::synap-section{round="analyze" agent="a"}\n## One\n\nShort one.\n::::\n\n::::synap-section{round="relate" agent="b"}\n## Two\n\nShort two.\n::::\n`;
+    const [only, ...rest] = segmentPassages(doc);
+    expect(rest).toEqual([]);
+    expect(only!.heading).toBe("One · Two");
+    expect(only!.text).not.toContain("::::");
+    expect(only!.text).toContain("Short one.");
+    expect(only!.text).toContain("Short two.");
+  });
+
+  it("cuts a heading-less transcript at paragraph boundaries", () => {
+    const doc = paragraphs("t", 30, 250);
+    const passages = segmentPassages(doc);
+    expect(passages.length).toBeGreaterThan(1);
+    for (const p of passages) {
+      expect(p.text.length).toBeLessThanOrEqual(PASSAGE_MAX_CHARS);
+      expect(p.text).toMatch(/^t-\d+ /);
+    }
+  });
+
+  it("cuts one block over the cap at line breaks, then hard", () => {
+    const lines = Array.from(
+      { length: 60 },
+      (_, i) => `line ${i} ${"y".repeat(60)}`
+    );
+    const longParagraph = lines.join("\n");
+    const byLines = segmentPassages(longParagraph);
+    expect(byLines.length).toBeGreaterThan(1);
+    for (const p of byLines) {
+      expect(p.text.length).toBeLessThanOrEqual(PASSAGE_MAX_CHARS);
+      expect(p.text).toMatch(/^line \d+ /);
+    }
+    const oneLine = "z".repeat(PASSAGE_MAX_CHARS * 2 + 10);
+    const hard = segmentPassages(oneLine);
+    expect(hard.map((p) => p.text).join("")).toBe(oneLine);
+    for (const p of hard) {
+      expect(p.text.length).toBeLessThanOrEqual(PASSAGE_MAX_CHARS);
+    }
+  });
+
+  it("does not read a `#` inside a code fence as a heading", () => {
+    const doc = `## Setup\n\n\`\`\`sh\n# not a heading\n\necho hi\n\`\`\`\n\n${paragraphs("s", 2)}\n`;
+    const passages = segmentPassages(doc);
+    expect(passages.map((p) => p.heading)).toEqual(["Setup"]);
+    expect(passages[0]!.text).toContain("# not a heading");
+  });
+
+  it("finds the section an answer deep in a long note sits in", () => {
+    const doc = [
+      "# Board meeting",
+      `## Context\n\n${paragraphs("c", 12)}`,
+      `## Decisions\n\n${paragraphs("d", 12)}\n\nWe agreed the price is 49 EUR per seat.\n\n${paragraphs("e", 3)}`,
+    ].join("\n\n");
+    expect(doc.indexOf("49 EUR")).toBeGreaterThan(7_000);
+    const hit = segmentPassages(doc).find((p) => p.text.includes("49 EUR"));
+    expect(hit?.heading).toBe("Decisions");
+    expect(hit!.text.length).toBeLessThanOrEqual(PASSAGE_MAX_CHARS);
+  });
+
+  it("returns no passages for an empty or blank document", () => {
+    expect(segmentPassages("")).toEqual([]);
+    expect(segmentPassages("  \n\n ")).toEqual([]);
   });
 });
