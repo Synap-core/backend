@@ -51,7 +51,9 @@ const dialect = new PgDialect();
 
 async function run(sql: SQL): Promise<Array<Record<string, unknown>>> {
   const q = dialect.sqlToQuery(sql);
-  return (await client.query<Record<string, unknown>>(q.sql, q.params as unknown[])).rows;
+  return (
+    await client.query<Record<string, unknown>>(q.sql, q.params as unknown[])
+  ).rows;
 }
 
 /** The session side of a fixture: what lives in the database around it. */
@@ -89,14 +91,24 @@ function factsOf(s: SessionFixture) {
   };
 }
 
-async function insertSession(s: SessionFixture, slots: unknown[]): Promise<string> {
+async function insertSession(
+  s: SessionFixture,
+  slots: unknown[]
+): Promise<string> {
   const id = randomUUID();
   const channel = randomUUID();
   const facts = factsOf(s);
   await client.query(
     `insert into focus_sessions (id, status, expected_outputs, channel_id, started_at, updated_at)
      values ($1, $2, $3::jsonb, $4, $5, $6)`,
-    [id, facts.status, JSON.stringify(slots), channel, facts.startedAt, s.updatedAt ?? NOW.toISOString()]
+    [
+      id,
+      facts.status,
+      JSON.stringify(slots),
+      channel,
+      facts.startedAt,
+      s.updatedAt ?? NOW.toISOString(),
+    ]
   );
   const msg = (author: string, ts: string) =>
     client.query(
@@ -108,7 +120,12 @@ async function insertSession(s: SessionFixture, slots: unknown[]): Promise<strin
   if (s.turnAt || s.turnRunning) {
     await client.query(
       `insert into chat_turns (id, channel_id, status, updated_at) values ($1, $2, $3, $4)`,
-      [randomUUID(), channel, s.turnRunning ? "running" : "completed", turnTime(s)]
+      [
+        randomUUID(),
+        channel,
+        s.turnRunning ? "running" : "completed",
+        turnTime(s),
+      ]
     );
   }
   const proposal = (agent: string | null, ts: string) =>
@@ -154,58 +171,268 @@ const ROWS: ReadonlyArray<{
 }> = [
   { rulesOut: "baseline needs you", session: LIVE, slot: ASK },
   // ── not owed ────────────────────────────────────────────────────────────
-  { rulesOut: "done read as owed", session: LIVE, slot: { ...ASK, status: "done" } },
-  { rulesOut: "agent slot read as owed", session: LIVE, slot: { ...ASK, owner: "agent" } },
-  { rulesOut: "retired read as owed", session: LIVE, slot: { ...ASK, retiredAt: ago(1) } },
+  {
+    rulesOut: "done read as owed",
+    session: LIVE,
+    slot: { ...ASK, status: "done" },
+  },
+  {
+    rulesOut: "agent slot read as owed",
+    session: LIVE,
+    slot: { ...ASK, owner: "agent" },
+  },
+  {
+    rulesOut: "retired read as owed",
+    session: LIVE,
+    slot: { ...ASK, retiredAt: ago(1) },
+  },
   // ── the asker ───────────────────────────────────────────────────────────
-  { rulesOut: "criterion read as asked", session: LIVE, slot: { owner: "human", criterionKey: "k" } },
-  { rulesOut: "empty criterion key read as a cause", session: LIVE, slot: { owner: "human", criterionKey: "" } },
-  { rulesOut: "param read as asked", session: LIVE, slot: { owner: "human", paramName: "p" } },
-  { rulesOut: "run cause beaten by its askedBy", session: LIVE, slot: { ...ASK, askCause: { kind: "run" } } },
-  { rulesOut: "system decision read as asked", session: LIVE, slot: { owner: "human", askCause: { kind: "decision" } } },
-  { rulesOut: "empty asker read as an agent", session: LIVE, slot: { owner: "human", askCause: { kind: "decision" }, askedBy: "" } },
-  { rulesOut: "agent decision read as system", session: LIVE, slot: { ...ASK, askCause: { kind: "decision" } } },
-  { rulesOut: "gate read as system", session: LIVE, slot: { owner: "human", askCause: { kind: "gate" } } },
-  { rulesOut: "external approval read as system", session: LIVE, slot: { owner: "human", askCause: { kind: "external_approval" } } },
-  { rulesOut: "kindless cause read as a cause", session: LIVE, slot: { ...ASK, askCause: {} } },
-  { rulesOut: "array cause read as a cause", session: LIVE, slot: { ...ASK, askCause: ["run"] } },
-  { rulesOut: "numeric kind read as a cause", session: LIVE, slot: { ...ASK, askCause: { kind: 3 } } },
-  { rulesOut: "unstamped legacy slot dropped", session: LIVE, slot: { owner: "human" } },
+  {
+    rulesOut: "criterion read as asked",
+    session: LIVE,
+    slot: { owner: "human", criterionKey: "k" },
+  },
+  {
+    rulesOut: "empty criterion key read as a cause",
+    session: LIVE,
+    slot: { owner: "human", criterionKey: "" },
+  },
+  {
+    rulesOut: "param read as asked",
+    session: LIVE,
+    slot: { owner: "human", paramName: "p" },
+  },
+  {
+    rulesOut: "run cause beaten by its askedBy",
+    session: LIVE,
+    slot: { ...ASK, askCause: { kind: "run" } },
+  },
+  {
+    rulesOut: "system decision read as asked",
+    session: LIVE,
+    slot: { owner: "human", askCause: { kind: "decision" } },
+  },
+  {
+    rulesOut: "empty asker read as an agent",
+    session: LIVE,
+    slot: { owner: "human", askCause: { kind: "decision" }, askedBy: "" },
+  },
+  {
+    rulesOut: "agent decision read as system",
+    session: LIVE,
+    slot: { ...ASK, askCause: { kind: "decision" } },
+  },
+  {
+    rulesOut: "gate read as system",
+    session: LIVE,
+    slot: { owner: "human", askCause: { kind: "gate" } },
+  },
+  {
+    rulesOut: "external approval read as system",
+    session: LIVE,
+    slot: { owner: "human", askCause: { kind: "external_approval" } },
+  },
+  {
+    rulesOut: "kindless cause read as a cause",
+    session: LIVE,
+    slot: { ...ASK, askCause: {} },
+  },
+  {
+    rulesOut: "array cause read as a cause",
+    session: LIVE,
+    slot: { ...ASK, askCause: ["run"] },
+  },
+  {
+    rulesOut: "numeric kind read as a cause",
+    session: LIVE,
+    slot: { ...ASK, askCause: { kind: 3 } },
+  },
+  {
+    rulesOut: "unstamped legacy slot dropped",
+    session: LIVE,
+    slot: { owner: "human" },
+  },
   // ── stopped ─────────────────────────────────────────────────────────────
-  { rulesOut: "updated_at read as agent activity", session: { startedAt: ago(20 * DAY), updatedAt: NOW.toISOString() }, slot: ASK },
-  { rulesOut: "human post read as agent activity", session: { startedAt: ago(20 * DAY), humanPostAt: ago(DAY) }, slot: ASK },
-  { rulesOut: "human proposal read as agent activity", session: { startedAt: ago(20 * DAY), humanProposalAt: ago(DAY) }, slot: ASK },
-  { rulesOut: "human event read as agent activity", session: { startedAt: ago(20 * DAY), humanEventAt: ago(DAY) }, slot: ASK },
-  { rulesOut: "agent post dropped", session: { startedAt: ago(20 * DAY), agentPostAt: ago(DAY) }, slot: ASK },
-  { rulesOut: "turn dropped", session: { startedAt: ago(20 * DAY), turnAt: ago(DAY) }, slot: ASK },
-  { rulesOut: "agent proposal dropped", session: { startedAt: ago(20 * DAY), agentProposalAt: ago(DAY) }, slot: ASK },
-  { rulesOut: "agent event dropped", session: { startedAt: ago(20 * DAY), agentEventAt: ago(DAY) }, slot: ASK },
-  { rulesOut: "start not counted", session: { startedAt: ago(2 * DAY) }, slot: ASK },
-  { rulesOut: "no evidence at all read as live", session: { startedAt: null }, slot: ASK },
-  { rulesOut: "8-day-old evidence read as live", session: { startedAt: ago(20 * DAY), agentPostAt: ago(8 * DAY) }, slot: ASK },
-  ...["closed", "failed", "cancelled", "active", "paused", "stale", "weird"].map(
-    (status) => ({ rulesOut: `status ${status}`, session: { ...LIVE, status }, slot: ASK })
-  ),
-  { rulesOut: "machine beaten by stopped", session: { startedAt: ago(20 * DAY) }, slot: { owner: "human", paramName: "p" } },
+  {
+    rulesOut: "updated_at read as agent activity",
+    session: { startedAt: ago(20 * DAY), updatedAt: NOW.toISOString() },
+    slot: ASK,
+  },
+  {
+    rulesOut: "human post read as agent activity",
+    session: { startedAt: ago(20 * DAY), humanPostAt: ago(DAY) },
+    slot: ASK,
+  },
+  {
+    rulesOut: "human proposal read as agent activity",
+    session: { startedAt: ago(20 * DAY), humanProposalAt: ago(DAY) },
+    slot: ASK,
+  },
+  {
+    rulesOut: "human event read as agent activity",
+    session: { startedAt: ago(20 * DAY), humanEventAt: ago(DAY) },
+    slot: ASK,
+  },
+  {
+    rulesOut: "agent post dropped",
+    session: { startedAt: ago(20 * DAY), agentPostAt: ago(DAY) },
+    slot: ASK,
+  },
+  {
+    rulesOut: "turn dropped",
+    session: { startedAt: ago(20 * DAY), turnAt: ago(DAY) },
+    slot: ASK,
+  },
+  {
+    rulesOut: "agent proposal dropped",
+    session: { startedAt: ago(20 * DAY), agentProposalAt: ago(DAY) },
+    slot: ASK,
+  },
+  {
+    rulesOut: "agent event dropped",
+    session: { startedAt: ago(20 * DAY), agentEventAt: ago(DAY) },
+    slot: ASK,
+  },
+  {
+    rulesOut: "start not counted",
+    session: { startedAt: ago(2 * DAY) },
+    slot: ASK,
+  },
+  {
+    rulesOut: "no evidence at all read as live",
+    session: { startedAt: null },
+    slot: ASK,
+  },
+  {
+    rulesOut: "8-day-old evidence read as live",
+    session: { startedAt: ago(20 * DAY), agentPostAt: ago(8 * DAY) },
+    slot: ASK,
+  },
+  ...[
+    "closed",
+    "failed",
+    "cancelled",
+    "active",
+    "paused",
+    "stale",
+    "weird",
+  ].map((status) => ({
+    rulesOut: `status ${status}`,
+    session: { ...LIVE, status },
+    slot: ASK,
+  })),
+  {
+    rulesOut: "machine beaten by stopped",
+    session: { startedAt: ago(20 * DAY) },
+    slot: { owner: "human", paramName: "p" },
+  },
   // ── working ─────────────────────────────────────────────────────────────
-  { rulesOut: "running turn ignored", session: { ...LIVE, turnRunning: true }, slot: ASK },
-  { rulesOut: "a fresh agent post ignored", session: { agentPostAt: ago(60_000) }, slot: ASK },
-  { rulesOut: "window too wide", session: { agentPostAt: ago(6 * 60_000) }, slot: ASK },
-  { rulesOut: "start read as working", session: { startedAt: ago(60_000) }, slot: ASK },
-  { rulesOut: "turn on a closed session read as working", session: { ...LIVE, status: "closed", turnRunning: true }, slot: ASK },
+  {
+    rulesOut: "running turn ignored",
+    session: { ...LIVE, turnRunning: true },
+    slot: ASK,
+  },
+  {
+    rulesOut: "a fresh agent post ignored",
+    session: { agentPostAt: ago(60_000) },
+    slot: ASK,
+  },
+  {
+    rulesOut: "window too wide",
+    session: { agentPostAt: ago(6 * 60_000) },
+    slot: ASK,
+  },
+  {
+    rulesOut: "start read as working",
+    session: { startedAt: ago(60_000) },
+    slot: ASK,
+  },
+  {
+    rulesOut: "turn on a closed session read as working",
+    session: { ...LIVE, status: "closed", turnRunning: true },
+    slot: ASK,
+  },
   // ── review later ────────────────────────────────────────────────────────
-  { rulesOut: "old ask kept in the headline", session: LIVE, slot: { ...ASK, owedSince: ago(8 * DAY) } },
-  { rulesOut: "6-day ask aged", session: LIVE, slot: { ...ASK, owedSince: ago(6 * DAY) } },
-  { rulesOut: "stakes commitment aged", session: LIVE, slot: { ...ASK, owedSince: ago(30 * DAY), ask: { mode: "confirm", stakes: "commitment" } } },
-  { rulesOut: "secret provide aged", session: LIVE, slot: { ...ASK, owedSince: ago(30 * DAY), ask: { mode: "provide", provide: { kind: "secret" } } } },
-  { rulesOut: "malformed provide read as commitment", session: LIVE, slot: { ...ASK, owedSince: ago(30 * DAY), ask: { mode: "provide", provide: "secret" } } },
-  { rulesOut: "connection provide read as commitment", session: LIVE, slot: { ...ASK, owedSince: ago(30 * DAY), ask: { mode: "provide", provide: { kind: "connection" } } } },
-  { rulesOut: "gate aged", session: LIVE, slot: { owner: "human", owedSince: ago(30 * DAY), askCause: { kind: "gate" } } },
-  { rulesOut: "relay awaiting the tap aged", session: LIVE, slot: { ...ASK, owedSince: ago(30 * DAY), pendingRelay: { text: "yes" } } },
-  { rulesOut: "sentinel stamp cast (0000-00-00)", session: LIVE, slot: { ...ASK, owedSince: "0000-00-00" } },
-  { rulesOut: "date-only stamp aged", session: LIVE, slot: { ...ASK, owedSince: "2026-01-01" } },
-  { rulesOut: "seconds-only stamp aged", session: LIVE, slot: { ...ASK, owedSince: "2026-01-01T00:00:00Z" } },
-  { rulesOut: "numeric stamp aged", session: LIVE, slot: { ...ASK, owedSince: 5 } },
+  {
+    rulesOut: "old ask kept in the headline",
+    session: LIVE,
+    slot: { ...ASK, owedSince: ago(8 * DAY) },
+  },
+  {
+    rulesOut: "6-day ask aged",
+    session: LIVE,
+    slot: { ...ASK, owedSince: ago(6 * DAY) },
+  },
+  {
+    rulesOut: "stakes commitment aged",
+    session: LIVE,
+    slot: {
+      ...ASK,
+      owedSince: ago(30 * DAY),
+      ask: { mode: "confirm", stakes: "commitment" },
+    },
+  },
+  {
+    rulesOut: "secret provide aged",
+    session: LIVE,
+    slot: {
+      ...ASK,
+      owedSince: ago(30 * DAY),
+      ask: { mode: "provide", provide: { kind: "secret" } },
+    },
+  },
+  {
+    rulesOut: "malformed provide read as commitment",
+    session: LIVE,
+    slot: {
+      ...ASK,
+      owedSince: ago(30 * DAY),
+      ask: { mode: "provide", provide: "secret" },
+    },
+  },
+  {
+    rulesOut: "connection provide read as commitment",
+    session: LIVE,
+    slot: {
+      ...ASK,
+      owedSince: ago(30 * DAY),
+      ask: { mode: "provide", provide: { kind: "connection" } },
+    },
+  },
+  {
+    rulesOut: "gate aged",
+    session: LIVE,
+    slot: {
+      owner: "human",
+      owedSince: ago(30 * DAY),
+      askCause: { kind: "gate" },
+    },
+  },
+  {
+    rulesOut: "relay awaiting the tap aged",
+    session: LIVE,
+    slot: { ...ASK, owedSince: ago(30 * DAY), pendingRelay: { text: "yes" } },
+  },
+  {
+    rulesOut: "sentinel stamp cast (0000-00-00)",
+    session: LIVE,
+    slot: { ...ASK, owedSince: "0000-00-00" },
+  },
+  {
+    rulesOut: "date-only stamp aged",
+    session: LIVE,
+    slot: { ...ASK, owedSince: "2026-01-01" },
+  },
+  {
+    rulesOut: "seconds-only stamp aged",
+    session: LIVE,
+    slot: { ...ASK, owedSince: "2026-01-01T00:00:00Z" },
+  },
+  {
+    rulesOut: "numeric stamp aged",
+    session: LIVE,
+    slot: { ...ASK, owedSince: 5 },
+  },
 ];
 
 beforeAll(async () => {
@@ -229,12 +456,21 @@ describe("needsYouSlotClassSql === classifyOwedAsk", () => {
       ROWS.map((r) => classifyOwedAsk(r.slot, factsOf(r.session), NOW))
     );
     expect([...seen].sort()).toEqual(
-      [null, "from_system", "needs_you", "review_later", "stopped", "working"].sort()
+      [
+        null,
+        "from_system",
+        "needs_you",
+        "review_later",
+        "stopped",
+        "working",
+      ].sort()
     );
   });
 
   it("the open statuses are one list on both sides", () => {
-    expect([...OPEN_SESSION_STATUSES]).toEqual([...NEEDS_YOU_OPEN_SESSION_STATUSES]);
+    expect([...OPEN_SESSION_STATUSES]).toEqual([
+      ...NEEDS_YOU_OPEN_SESSION_STATUSES,
+    ]);
   });
 
   it("agrees on every discriminating row", async () => {
@@ -268,7 +504,12 @@ describe("SLOT_ENDS_WITH_SESSION_SQL === askEndsWithSession", () => {
     { label: "a", owner: "human", ask: { mode: 1 } },
     { label: "a", owner: "human", ask: null, blockedReason: "decision" },
     { label: "a", owner: "human", blockedReason: "decision" },
-    { label: "a", owner: "human", blockedReason: "decision", kind: "playbook_param" },
+    {
+      label: "a",
+      owner: "human",
+      blockedReason: "decision",
+      kind: "playbook_param",
+    },
     { label: "a", owner: "human", blockedReason: "credential" },
     { label: "a", owner: "agent", blockedReason: "decision" },
     { label: "a", owner: "human" },
@@ -292,8 +533,14 @@ describe("SLOT_ENDS_WITH_SESSION_SQL === askEndsWithSession", () => {
 });
 
 describe("sessionStoppedOnItsAsksWhere — the reaper's arm (decision E1)", () => {
-  const quiet: SessionFixture = { startedAt: ago(20 * DAY), agentPostAt: ago(9 * DAY) };
-  async function stopped(s: SessionFixture, slots: unknown[]): Promise<boolean> {
+  const quiet: SessionFixture = {
+    startedAt: ago(20 * DAY),
+    agentPostAt: ago(9 * DAY),
+  };
+  async function stopped(
+    s: SessionFixture,
+    slots: unknown[]
+  ): Promise<boolean> {
     const id = await insertSession(s, slots);
     const rows = await run(drizzleSql`
       select id from focus_sessions where id = ${id}::uuid and ${sessionStoppedOnItsAsksWhere(NOW)}`);
@@ -301,18 +548,24 @@ describe("sessionStoppedOnItsAsksWhere — the reaper's arm (decision E1)", () =
   }
 
   it("stops a quiet session that only owes its agent's confirm / choose asks", async () => {
-    expect(await stopped(quiet, [ASK, { owner: "human", blockedReason: "decision" }])).toBe(true);
+    expect(
+      await stopped(quiet, [ASK, { owner: "human", blockedReason: "decision" }])
+    ).toBe(true);
   });
 
   it("never one an agent moved in 7 days, or one already reaped", async () => {
-    expect(await stopped({ ...quiet, agentPostAt: ago(6 * DAY) }, [ASK])).toBe(false);
+    expect(await stopped({ ...quiet, agentPostAt: ago(6 * DAY) }, [ASK])).toBe(
+      false
+    );
     expect(await stopped({ ...quiet, status: "stale" }, [ASK])).toBe(false);
     expect(await stopped({ ...quiet, status: "closed" }, [ASK])).toBe(false);
   });
 
   it("never one that owes the person an act, a form, a provide or plain work", async () => {
     for (const mode of ["act", "form", "provide"]) {
-      expect(await stopped(quiet, [ASK, { ...ASK, ask: { mode } }])).toBe(false);
+      expect(await stopped(quiet, [ASK, { ...ASK, ask: { mode } }])).toBe(
+        false
+      );
     }
     expect(await stopped(quiet, [ASK, { owner: "human" }])).toBe(false);
   });

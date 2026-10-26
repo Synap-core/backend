@@ -178,9 +178,7 @@ function timeOf(v: Date | string | null | undefined): number | null {
 /** Still owed by the person: THE deliverable rule (`OWED_SLOT_CLAUSES` in SQL). */
 function isOwed(slot: NeedsYouSlotFacts): boolean {
   return (
-    deliverableOwedBy(
-      slot as Parameters<typeof deliverableOwedBy>[0]
-    ) === "you"
+    deliverableOwedBy(slot as Parameters<typeof deliverableOwedBy>[0]) === "you"
   );
 }
 
@@ -262,7 +260,11 @@ export function needsYouSessionClass(
   const agent = timeOf(session.lastAgentActivityAt);
   const started = timeOf(session.startedAt);
   const moved =
-    agent === null ? started : started === null ? agent : Math.max(agent, started);
+    agent === null
+      ? started
+      : started === null
+        ? agent
+        : Math.max(agent, started);
   if (moved === null || moved < at - NEEDS_YOU_STOPPED_AFTER_MS) {
     return "stopped";
   }

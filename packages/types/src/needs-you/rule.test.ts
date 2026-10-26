@@ -52,7 +52,9 @@ describe("the headline: a real, fresh ask on live work", () => {
 
   it("a slot nobody owes is in no list at all", () => {
     expect(classifyOwedAsk({ ...ask, status: "done" }, live, NOW)).toBeNull();
-    expect(classifyOwedAsk({ ...ask, retiredAt: ago(1) }, live, NOW)).toBeNull();
+    expect(
+      classifyOwedAsk({ ...ask, retiredAt: ago(1) }, live, NOW)
+    ).toBeNull();
     expect(classifyOwedAsk({ ...ask, optional: true }, live, NOW)).toBeNull();
     expect(classifyOwedAsk({ ...ask, owner: "agent" }, live, NOW)).toBeNull();
   });
@@ -109,16 +111,28 @@ describe("from_system: no real asker", () => {
   });
 
   it("outranks stopped (the census precedence: machine before stopped)", () => {
-    const stopped = { ...live, lastAgentActivityAt: ago(30 * DAY), startedAt: ago(40 * DAY) };
+    const stopped = {
+      ...live,
+      lastAgentActivityAt: ago(30 * DAY),
+      startedAt: ago(40 * DAY),
+    };
     expect(
-      classifyOwedAsk({ ...ask, criterionKey: "c" , askedBy: undefined }, stopped, NOW)
+      classifyOwedAsk(
+        { ...ask, criterionKey: "c", askedBy: undefined },
+        stopped,
+        NOW
+      )
     ).toBe("from_system");
   });
 });
 
 describe("stopped: no agent moved the work for 7 days, or it ended", () => {
   it("no agent evidence for 7 days", () => {
-    const quiet = { ...live, lastAgentActivityAt: ago(8 * DAY), startedAt: ago(20 * DAY) };
+    const quiet = {
+      ...live,
+      lastAgentActivityAt: ago(8 * DAY),
+      startedAt: ago(20 * DAY),
+    };
     expect(classifyOwedAsk(ask, quiet, NOW)).toBe("stopped");
     const recent = { ...quiet, lastAgentActivityAt: ago(6 * DAY) };
     expect(classifyOwedAsk(ask, recent, NOW)).toBe("needs_you");
@@ -136,7 +150,11 @@ describe("stopped: no agent moved the work for 7 days, or it ended", () => {
   it("the start is evidence: a new session no agent touched yet is live", () => {
     const fresh = { ...live, lastAgentActivityAt: null, startedAt: ago(DAY) };
     expect(needsYouSessionClass(fresh, NOW)).toBe("live");
-    const never = { ...live, lastAgentActivityAt: null, startedAt: ago(9 * DAY) };
+    const never = {
+      ...live,
+      lastAgentActivityAt: null,
+      startedAt: ago(9 * DAY),
+    };
     expect(needsYouSessionClass(never, NOW)).toBe("stopped");
     expect(
       needsYouSessionClass(
@@ -148,7 +166,11 @@ describe("stopped: no agent moved the work for 7 days, or it ended", () => {
 
   it("outranks working: an agent turn on an ended session is still stopped", () => {
     expect(
-      classifyOwedAsk(ask, { ...live, status: "closed", turnInFlight: true }, NOW)
+      classifyOwedAsk(
+        ask,
+        { ...live, status: "closed", turnInFlight: true },
+        NOW
+      )
     ).toBe("stopped");
   });
 });
@@ -165,7 +187,11 @@ describe("working: an agent is on it right now", () => {
       classifyOwedAsk(ask, { ...live, lastAgentActivityAt: ago(60_000) }, NOW)
     ).toBe("working");
     expect(
-      classifyOwedAsk(ask, { ...live, lastAgentActivityAt: ago(6 * 60_000) }, NOW)
+      classifyOwedAsk(
+        ask,
+        { ...live, lastAgentActivityAt: ago(6 * 60_000) },
+        NOW
+      )
     ).toBe("needs_you");
   });
 
@@ -182,12 +208,12 @@ describe("working: an agent is on it right now", () => {
 
 describe("review_later: a real ask owed more than 7 days", () => {
   it("ages out of the headline", () => {
-    expect(classifyOwedAsk({ ...ask, owedSince: ago(8 * DAY) }, live, NOW)).toBe(
-      "review_later"
-    );
-    expect(classifyOwedAsk({ ...ask, owedSince: ago(6 * DAY) }, live, NOW)).toBe(
-      "needs_you"
-    );
+    expect(
+      classifyOwedAsk({ ...ask, owedSince: ago(8 * DAY) }, live, NOW)
+    ).toBe("review_later");
+    expect(
+      classifyOwedAsk({ ...ask, owedSince: ago(6 * DAY) }, live, NOW)
+    ).toBe("needs_you");
   });
 
   it.each([
@@ -205,7 +231,13 @@ describe("review_later: a real ask owed more than 7 days", () => {
   });
 
   it("an unreadable stamp never ages (fails toward keeping)", () => {
-    for (const owedSince of ["0000-00-00", "2026-01-01", "yesterday", 5, null]) {
+    for (const owedSince of [
+      "0000-00-00",
+      "2026-01-01",
+      "yesterday",
+      5,
+      null,
+    ]) {
       expect(classifyOwedAsk({ ...ask, owedSince }, live, NOW)).toBe(
         "needs_you"
       );
@@ -284,14 +316,24 @@ describe("the census shape (needs-truth §6): 114 claims, 7 real", () => {
   const working = { ...live, turnInFlight: true };
 
   it("folds the 2026-10-26 classes the way the plan says", () => {
-    const slots: Array<{ slot: NeedsYouSlotFacts; s: NeedsYouSessionFacts; id: string }> = [];
+    const slots: Array<{
+      slot: NeedsYouSlotFacts;
+      s: NeedsYouSessionFacts;
+      id: string;
+    }> = [];
     // (a) 6 real asks on 3 live sessions.
-    for (let i = 0; i < 6; i++) slots.push({ slot: ask, s: live, id: `a${i % 3}` });
+    for (let i = 0; i < 6; i++)
+      slots.push({ slot: ask, s: live, id: `a${i % 3}` });
     // (b) 2 asks while the agent works.
-    for (let i = 0; i < 2; i++) slots.push({ slot: ask, s: working, id: `b${i}` });
+    for (let i = 0; i < 2; i++)
+      slots.push({ slot: ask, s: working, id: `b${i}` });
     // (c) 25 asks + (g) 5 chores on ~22 stopped sessions.
     for (let i = 0; i < 30; i++)
-      slots.push({ slot: { ...ask, owedSince: ago(13 * DAY) }, s: stoppedSession, id: `c${i % 22}` });
+      slots.push({
+        slot: { ...ask, owedSince: ago(13 * DAY) },
+        s: stoppedSession,
+        id: `c${i % 22}`,
+      });
     // (e) 22 machine-made: criterion, param, run, reactor decisions.
     const machine: NeedsYouSlotFacts[] = [
       { owner: "human", criterionKey: "k" },
@@ -303,11 +345,35 @@ describe("the census shape (needs-truth §6): 114 claims, 7 real", () => {
       slots.push({ slot: machine[i % machine.length]!, s: live, id: `e${i}` });
     const proposals: NeedsYouProposalFacts[] = [
       // (a) the deploy approval: a gate.
-      { status: "pending", createdAt: ago(DAY), waits: { waits: true, reason: "gate" }, sessionId: "d", sessionStatus: "active" },
+      {
+        status: "pending",
+        createdAt: ago(DAY),
+        waits: { waits: true, reason: "gate" },
+        sessionId: "d",
+        sessionStatus: "active",
+      },
       // (f) 12 bookkeeping, (c) 5 probe leftovers on a closed session, (d) 4 superseded.
-      ...Array.from({ length: 12 }, () => ({ status: "pending", createdAt: ago(10 * DAY), waits: { waits: false }, sessionId: null, sessionStatus: null })),
-      ...Array.from({ length: 5 }, () => ({ status: "pending", createdAt: ago(4 * DAY), waits: { waits: true, reason: "owed_slot" as const }, sessionId: "probe", sessionStatus: "closed" })),
-      ...Array.from({ length: 4 }, () => ({ status: "pending", createdAt: ago(5 * DAY), waits: { waits: false }, sessionId: "x", sessionStatus: "active" })),
+      ...Array.from({ length: 12 }, () => ({
+        status: "pending",
+        createdAt: ago(10 * DAY),
+        waits: { waits: false },
+        sessionId: null,
+        sessionStatus: null,
+      })),
+      ...Array.from({ length: 5 }, () => ({
+        status: "pending",
+        createdAt: ago(4 * DAY),
+        waits: { waits: true, reason: "owed_slot" as const },
+        sessionId: "probe",
+        sessionStatus: "closed",
+      })),
+      ...Array.from({ length: 4 }, () => ({
+        status: "pending",
+        createdAt: ago(5 * DAY),
+        waits: { waits: false },
+        sessionId: "x",
+        sessionStatus: "active",
+      })),
     ];
     const rows = [
       ...slots.map(({ slot, s, id }) => ({
