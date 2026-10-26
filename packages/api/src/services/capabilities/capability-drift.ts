@@ -68,6 +68,10 @@ export function canonicalJson(value: unknown): string {
  * teaching the comparator a new field invalidates every stamp it ever wrote and
  * every pod re-diffs exactly once. Absent (legacy) = pre-versioned = re-diff.
  *
+ * v12 = v11 + `metadata.metering` (the verb's DECLARED meter — see
+ *      `declaredMetering`). A v11 stamp certified a container whose verbs could
+ *      not yet carry the declaration, so a priced verb would never reach a pod
+ *      already stamped; retiring v11 stamps makes each container re-diff once.
  * v11 = v10 + `metadata.writeBack` (the verb's DECLARED write-back — see
  *      `declaredWriteBack`). Before it the applier dropped the key on install
  *      AND on update (`projectSkillMetadata` wrote only `allowedHosts` /
@@ -121,7 +125,7 @@ export function canonicalJson(value: unknown): string {
  * v2 = the ten `PROJECTED_SKILL_FIELDS` + the projected verb catalog (intent).
  * v1 (never written) = the original providerSpec/parameters/code/description.
  */
-export const DRIFT_COMPARATOR_VERSION = 11;
+export const DRIFT_COMPARATOR_VERSION = 12;
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return (
@@ -327,8 +331,9 @@ export const SKILL_METADATA_READ_ONLY = "readOnly";
  *
  *   A column has one writer by construction: the applier's `resolveVerbIntent`.
  *   `metadata` keeps only keys that are genuinely bag-shaped declarations with
- *   ONE writer (this applier): `allowedHosts`, `readOnly`, and `writeBack` (a
- *   nested object the runner reads; nothing else writes it).
+ *   ONE writer (this applier): `allowedHosts`, `readOnly`, `writeBack` (a
+ *   nested object the runner reads; nothing else writes it) and `metering`
+ *   (the same, read by the run recorder).
  */
 
 /**
@@ -363,6 +368,43 @@ export function declaredWriteBack(
 ): DeclaredWriteBack | undefined {
   const parsed = writeBackSchema.safeParse(
     (metadata ?? {})[SKILL_METADATA_WRITE_BACK]
+  );
+  return parsed.success ? parsed.data : undefined;
+}
+
+/**
+ * The meter a verb DECLARES: who bills a run and how its price is known
+ * (`capability-metering.ts` turns it into the run's meter). `undefined` when it
+ * declares none or the declaration is malformed, the same contract as
+ * `declaredWriteBack`.
+ *
+ * The price comes from the provider when `costPath` finds a number in the run
+ * result (Exa's `costDollars.total`), else from the declared `costUsd` (a
+ * price table, per call), else it is unknown: NULL, never 0.
+ *
+ * No re-approval rule: a meter adds no egress and no auto-run, it only says
+ * what a run costs.
+ */
+export const SKILL_METADATA_METERING = "metering";
+
+const meteringSchema = z.object({
+  /** Who bills the run (`exa`, `synap`). */
+  provider: z.string().min(1),
+  /** What one run buys (`search`, `page`). */
+  unit: z.string().min(1),
+  /** Dot-path to the provider-reported USD price in the run result. */
+  costPath: z.string().min(1).optional(),
+  /** The declared price of one run in USD; `null` = known to be unpriced. */
+  costUsd: z.number().nonnegative().nullable().optional(),
+});
+
+export type DeclaredMetering = z.infer<typeof meteringSchema>;
+
+export function declaredMetering(
+  metadata: Record<string, unknown> | null | undefined
+): DeclaredMetering | undefined {
+  const parsed = meteringSchema.safeParse(
+    (metadata ?? {})[SKILL_METADATA_METERING]
   );
   return parsed.success ? parsed.data : undefined;
 }
@@ -417,8 +459,8 @@ export function declaredReadOnly(
  *
  * Contract, pinned by `capability-drift.projection-parity.tripwire.test.ts`:
  * every key of the live bag is preserved byte-identically and ONLY the
- * definition-owned keys (`allowedHosts`, `readOnly`, `writeBack`) are ever
- * written. That is what lets `PROJECTED_SKILL_FIELDS` carry a `metadata` entry
+ * definition-owned keys (`allowedHosts`, `readOnly`, `writeBack`, `metering`)
+ * are ever written. That is what lets `PROJECTED_SKILL_FIELDS` carry a `metadata` entry
  * that reads just those keys without the stamp overclaiming: the marker asserts
  * exactly what the comparator checked.
  *
@@ -440,7 +482,7 @@ export function projectSkillMetadata(
  * The definition-owned keys a definition DECLARES, as the bag slice the
  * applier writes — `undefined` when it declares none. Shared by the applier
  * (`projectSkillMetadata`) and the comparator (`PROJECTED_SKILL_FIELDS.metadata`)
- * so a fourth key added here reaches both or neither.
+ * so a key added here reaches both or neither.
  */
 function declaredMetadataKeys(
   metadata: Record<string, unknown> | null | undefined
@@ -448,10 +490,12 @@ function declaredMetadataKeys(
   const hosts = declaredAllowedHosts(metadata);
   const readOnly = declaredReadOnly(metadata);
   const writeBack = declaredWriteBack(metadata);
+  const metering = declaredMetering(metadata);
   if (
     hosts === undefined &&
     readOnly === undefined &&
-    writeBack === undefined
+    writeBack === undefined &&
+    metering === undefined
   ) {
     return undefined;
   }
@@ -461,6 +505,7 @@ function declaredMetadataKeys(
     ...(writeBack !== undefined
       ? { [SKILL_METADATA_WRITE_BACK]: writeBack }
       : {}),
+    ...(metering !== undefined ? { [SKILL_METADATA_METERING]: metering } : {}),
   };
 }
 
