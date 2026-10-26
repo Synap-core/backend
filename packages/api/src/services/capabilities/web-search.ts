@@ -39,7 +39,7 @@ import {
 } from "./capability-intent-index.js";
 
 /** The intent a web search provider declares (migration 0360). */
-const WEB_SEARCH_INTENT = "search_web";
+const WEB_SEARCH_INTENT = "search_external";
 /** This verb — it declares the intent too, and is never its own provider. */
 const WEB_SEARCH_VERB = "web.search";
 
@@ -146,7 +146,7 @@ export async function searchWeb(
   // ready, the only installed one still runs, so its gate can ask to enable it.
   const ready = providers.filter((p) => p.ready);
   const candidates = ready.length > 0 ? ready : providers;
-  if (opts.provider === undefined && candidates.length > 1) {
+  if (opts.provider === undefined && candidates.length >= 1) {
     return {
       search: {
         status: "blocked",
