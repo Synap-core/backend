@@ -125,9 +125,7 @@ export async function recordObservation(
       // verified against a live pod, where a metadata field written here
       // came back null. `data` is the only caller-controlled payload
       // that survives.
-      ...(input.occurredAt
-        ? { ingestedAt: new Date().toISOString() }
-        : {}),
+      ...(input.occurredAt ? { ingestedAt: new Date().toISOString() } : {}),
       // Kept for back-compat with readers that COALESCE the two; the
       // indexable column is set on append below.
       ...(workspaceId ? { workspaceId } : {}),

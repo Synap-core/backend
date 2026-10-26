@@ -9,7 +9,15 @@
  * assertion; its own retry/escalation has its own tests).
  */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  beforeAll,
+  afterAll,
+  beforeEach,
+  vi,
+} from "vitest";
 import { randomUUID } from "node:crypto";
 
 const h = vi.hoisted(() => ({
@@ -39,7 +47,10 @@ vi.mock("./record.js", async (importOriginal) => {
   return {
     ...actual,
     listSessionEvaluations: async () => [],
-    recordSessionEvaluation: async (p: { criterionKey: string; verdict: string }) => {
+    recordSessionEvaluation: async (p: {
+      criterionKey: string;
+      verdict: string;
+    }) => {
       h.recorded.push({ criterionKey: p.criterionKey, verdict: p.verdict });
       return { status: "recorded", escalated: false };
     },
@@ -65,9 +76,21 @@ function ddlFor(table: PgTable): string {
 }
 
 const CRITERIA = [
-  { key: "pr-backend-255", statement: "PR merged", check: { kind: "evidence", evidenceKey: "merged" } },
-  { key: "ci", statement: "CI green", check: { kind: "evidence", evidenceKey: "pr-backend-255" } },
-  { key: "docs", statement: "Docs written", check: { kind: "evidence", evidenceKey: "docs" } },
+  {
+    key: "pr-backend-255",
+    statement: "PR merged",
+    check: { kind: "evidence", evidenceKey: "merged" },
+  },
+  {
+    key: "ci",
+    statement: "CI green",
+    check: { kind: "evidence", evidenceKey: "pr-backend-255" },
+  },
+  {
+    key: "docs",
+    statement: "Docs written",
+    check: { kind: "evidence", evidenceKey: "docs" },
+  },
 ];
 const EVIDENCE = {
   merged: { passed: true },

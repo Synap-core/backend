@@ -21,10 +21,7 @@
  */
 
 import { createLogger } from "@synap-core/core";
-import {
-  DEV_LOOP_EVENT_TYPES,
-  checkDevLoopPayload,
-} from "@synap-core/types";
+import { DEV_LOOP_EVENT_TYPES, checkDevLoopPayload } from "@synap-core/types";
 import { and, db, eq, events } from "@synap/database";
 import { resolvePodOwnerUserId } from "../capabilities/pod-owner.js";
 import {

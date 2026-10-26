@@ -108,7 +108,11 @@ export async function sweepMergedPullRequest(input: {
         completeOutput: m.slotKey,
       });
       if (r.status === "proposed") {
-        outcomes.push({ ...base, result: "proposed", proposalId: r.proposalId });
+        outcomes.push({
+          ...base,
+          result: "proposed",
+          proposalId: r.proposalId,
+        });
         continue;
       }
       if (r.status !== "updated") {
@@ -149,7 +153,10 @@ export async function sweepMergedPullRequest(input: {
         .select({ expectedOutputs: focusSessions.expectedOutputs })
         .from(focusSessions)
         .where(
-          and(eq(focusSessions.id, m.sessionId), eq(focusSessions.userId, userId))
+          and(
+            eq(focusSessions.id, m.sessionId),
+            eq(focusSessions.userId, userId)
+          )
         )
         .limit(1);
       const met = allOutcomesMet(after?.expectedOutputs);

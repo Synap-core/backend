@@ -23,9 +23,7 @@ import {
   type PostedEvidence,
 } from "../focus-sessions/evaluations/evaluate.js";
 
-export type RecheckResult =
-  | { status: "no_criteria" }
-  | EvaluateSessionResult;
+export type RecheckResult = { status: "no_criteria" } | EvaluateSessionResult;
 
 /** The criteria of a session that are about `outcomeKey`. Pure. */
 export function criteriaAboutOutcome(

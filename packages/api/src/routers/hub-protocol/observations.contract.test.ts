@@ -434,10 +434,21 @@ describe("observations.append — the dev-loop contract (plan v5 T2)", () => {
       {
         type: "dev.pr_merged",
         subjectId: "Synap-core/backend#255",
-        data: { ...merged, url: "https://github.com/Synap-core/backend/pull/256" },
+        data: {
+          ...merged,
+          url: "https://github.com/Synap-core/backend/pull/256",
+        },
       },
-      { type: "ci.finished", subjectId: "x", data: { status: "green", sha: "abc1234", repo: "a/b" } },
-      { type: "dev.pr_merged", subjectId: "Synap-core/backend#255", data: merged },
+      {
+        type: "ci.finished",
+        subjectId: "x",
+        data: { status: "green", sha: "abc1234", repo: "a/b" },
+      },
+      {
+        type: "dev.pr_merged",
+        subjectId: "Synap-core/backend#255",
+        data: merged,
+      },
     ]);
     expect(res.recorded).toBe(1);
     expect(res.results[0]).toMatchObject({ ok: false, index: 0 });
@@ -460,7 +471,11 @@ describe("observations.append — the dev-loop contract (plan v5 T2)", () => {
     appended.length = 0;
     triggerSends.length = 0;
     await callAppend([
-      { type: "dev.pr_merged", subjectId: "Synap-core/backend#255", data: merged },
+      {
+        type: "dev.pr_merged",
+        subjectId: "Synap-core/backend#255",
+        data: merged,
+      },
     ]);
     const job = triggerSends.find(([q]) => q === "dev-loop-observation");
     expect(job, "the merge sweeper job was not enqueued").toBeDefined();
@@ -470,17 +485,30 @@ describe("observations.append — the dev-loop contract (plan v5 T2)", () => {
       producerAgentUserId: "agent-1",
       eventId: "row-1",
     });
-    expect(job![1].data).toMatchObject({ repo: "Synap-core/backend", number: 255 });
+    expect(job![1].data).toMatchObject({
+      repo: "Synap-core/backend",
+      number: 255,
+    });
     // …and the automations still fire on it (the unified hop is unchanged).
-    expect(triggerSends.some(([q]) => q === "automation-trigger-match")).toBe(true);
+    expect(triggerSends.some(([q]) => q === "automation-trigger-match")).toBe(
+      true
+    );
   });
 
   it("does NOT enqueue it for a fact the pod does not act on", async () => {
     triggerSends.length = 0;
     await callAppend([
-      { type: "dev.pr_opened", subjectId: "Synap-core/backend#255", data: merged },
+      {
+        type: "dev.pr_opened",
+        subjectId: "Synap-core/backend#255",
+        data: merged,
+      },
     ]);
-    expect(triggerSends.some(([q]) => q === "dev-loop-observation")).toBe(false);
-    expect(triggerSends.some(([q]) => q === "automation-trigger-match")).toBe(true);
+    expect(triggerSends.some(([q]) => q === "dev-loop-observation")).toBe(
+      false
+    );
+    expect(triggerSends.some(([q]) => q === "automation-trigger-match")).toBe(
+      true
+    );
   });
 });

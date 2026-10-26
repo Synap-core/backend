@@ -102,17 +102,18 @@ export function pullRequestOutcomeKey(ref: PullRequestRef): string {
  * The session a PR body names on its `Pod session: <uuid>` line (the
  * convention agents follow when they open a PR). `null` when there is none.
  */
-export function podSessionIdFromBody(body: string | null | undefined): string | null {
+export function podSessionIdFromBody(
+  body: string | null | undefined
+): string | null {
   if (!body) return null;
-  const m = /Pod session:\s*`?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i.exec(
-    body
-  );
+  const m =
+    /Pod session:\s*`?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i.exec(
+      body
+    );
   return m ? m[1]!.toLowerCase() : null;
 }
 
-const repoSchema = z
-  .string()
-  .regex(REPO_RE, "repo must be `owner/name`");
+const repoSchema = z.string().regex(REPO_RE, "repo must be `owner/name`");
 const shaSchema = z.string().regex(SHA_RE, "sha must be 7-40 hex characters");
 
 /** `dev.pr_opened` / `dev.pr_merged` / `dev.pr_closed`. */

@@ -41,7 +41,10 @@ const success = {
 describe("recordPodDeployed", () => {
   it("records dev.deployed for a successful update — the running sha, this host, as the owner", async () => {
     const { deps, recorded } = fakeDeps();
-    expect(await recordPodDeployed(success, deps)).toEqual({ status: "recorded", id: "ev-1" });
+    expect(await recordPodDeployed(success, deps)).toEqual({
+      status: "recorded",
+      id: "ev-1",
+    });
     expect(recorded).toHaveLength(1);
     const r = recorded[0]!;
     expect(r).toMatchObject({
@@ -60,7 +63,10 @@ describe("recordPodDeployed", () => {
     expect(r.agentUserId).toBeUndefined();
     expect(r.occurredAt?.toISOString()).toBe("2026-10-27T03:00:00.000Z");
     // The pod's fact obeys the same contract a producer's does.
-    expect(checkDevLoopPayload(r.type, r.data)).toEqual({ contract: true, ok: true });
+    expect(checkDevLoopPayload(r.type, r.data)).toEqual({
+      contract: true,
+      ok: true,
+    });
   });
 
   it.each(["rolled_back", "rollback_failed", "failed", "aborted", "noop"])(

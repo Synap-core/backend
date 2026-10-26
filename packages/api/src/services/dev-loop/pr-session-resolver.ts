@@ -98,7 +98,10 @@ export async function resolvePullRequestSessions(input: {
     );
   const byRef: PrSessionMatch[] = [];
   for (const row of candidates) {
-    for (const slot of slotsForPullRequest(readSlots(row.expectedOutputs), pr)) {
+    for (const slot of slotsForPullRequest(
+      readSlots(row.expectedOutputs),
+      pr
+    )) {
       byRef.push({
         sessionId: row.id,
         slotKey: slot.key,
@@ -110,7 +113,8 @@ export async function resolvePullRequestSessions(input: {
   if (byRef.length > 0) return byRef;
 
   // 2. The session the PR body names.
-  const named = input.sessionId?.toLowerCase() ?? podSessionIdFromBody(input.body);
+  const named =
+    input.sessionId?.toLowerCase() ?? podSessionIdFromBody(input.body);
   if (!named) return [];
   const [session] = await db
     .select({

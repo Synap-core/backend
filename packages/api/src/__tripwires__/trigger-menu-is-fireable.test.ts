@@ -151,7 +151,9 @@ describe("the trigger menu only offers fireable patterns", () => {
       "packages/api/src/services/observations/record-observation.ts"
     );
     expect(
-      /automation-trigger-match[\s\S]{0,300}?eventType:\s*input\.type/.test(src),
+      /automation-trigger-match[\s\S]{0,300}?eventType:\s*input\.type/.test(
+        src
+      ),
       "Observations no longer forward `obs.type` raw — the reserved phases may " +
         "no longer fire, and the menu should stop offering them."
     ).toBe(true);

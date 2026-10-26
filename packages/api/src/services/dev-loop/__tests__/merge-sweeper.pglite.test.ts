@@ -13,7 +13,15 @@
  * its own test), the event fan-out.
  */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  beforeAll,
+  afterAll,
+  beforeEach,
+  vi,
+} from "vitest";
 import { randomUUID } from "node:crypto";
 
 const h = vi.hoisted(() => ({
@@ -50,16 +58,19 @@ vi.mock("../../../utils/permission-check.js", async (importOriginal) => {
     },
   };
 });
-vi.mock("../../focus-sessions/evaluations/evaluate.js", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
-  return {
-    ...actual,
-    evaluateSession: async (params: Record<string, unknown>) => {
-      h.evaluations.push(params);
-      return { status: "evaluated", results: [], resumed: false };
-    },
-  };
-});
+vi.mock(
+  "../../focus-sessions/evaluations/evaluate.js",
+  async (importOriginal) => {
+    const actual = await importOriginal<Record<string, unknown>>();
+    return {
+      ...actual,
+      evaluateSession: async (params: Record<string, unknown>) => {
+        h.evaluations.push(params);
+        return { status: "evaluated", results: [], resumed: false };
+      },
+    };
+  }
+);
 vi.mock("@synap/events", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return { ...actual, emitSideEffects: async () => undefined };
@@ -91,7 +102,8 @@ function ddlFor(table: PgTable): string {
   return `create table "${cfg.name}" (${cols.join(", ")});`;
 }
 
-const q = <T>(sql: string, params?: unknown[]) => h.client!.query<T>(sql, params);
+const q = <T>(sql: string, params?: unknown[]) =>
+  h.client!.query<T>(sql, params);
 
 async function seed(
   slots: unknown[],
@@ -158,7 +170,12 @@ describe("the merge sweeper (dev.pr_merged → the PR outcome is met)", () => {
       event: merged(),
     });
     expect(out).toEqual([
-      { sessionId: id, slotKey: "pr-backend-255", via: "outcome_ref", result: "completed" },
+      {
+        sessionId: id,
+        slotKey: "pr-backend-255",
+        via: "outcome_ref",
+        result: "completed",
+      },
     ]);
     const slots = await stored(id);
     expect(slots[0]).toMatchObject({
@@ -181,11 +198,16 @@ describe("the merge sweeper (dev.pr_merged → the PR outcome is met)", () => {
 
   it("matches any spelling of the PR (repo case, a sub-page) and never #25 for #255", async () => {
     const a = await seed([
-      prSlot(255, { ref: { url: "https://github.com/synap-core/BACKEND/pull/255/files" } }),
+      prSlot(255, {
+        ref: { url: "https://github.com/synap-core/BACKEND/pull/255/files" },
+      }),
     ]);
     const near = await seed([prSlot(25), prSlot(2550)]);
     const other = await seed([
-      { ...prSlot(255), ref: { url: "https://github.com/Synap-core/browser/pull/255" } },
+      {
+        ...prSlot(255),
+        ref: { url: "https://github.com/Synap-core/browser/pull/255" },
+      },
     ]);
     await sweepMergedPullRequest({ userId: USER, event: merged() });
     expect((await stored(a))[0]!.status).toBe("done");
@@ -198,7 +220,10 @@ describe("the merge sweeper (dev.pr_merged → the PR outcome is met)", () => {
 
   it("is OWNER-floored: another person's session pointing at the same PR is not touched", async () => {
     const theirs = await seed([prSlot(255)], { user: OTHER });
-    const out = await sweepMergedPullRequest({ userId: USER, event: merged({ number: 255 }) });
+    const out = await sweepMergedPullRequest({
+      userId: USER,
+      event: merged({ number: 255 }),
+    });
     expect(out.some((o) => o.sessionId === theirs)).toBe(false);
     expect((await stored(theirs))[0]!.status ?? "pending").toBe("pending");
   });
@@ -209,10 +234,19 @@ describe("the merge sweeper (dev.pr_merged → the PR outcome is met)", () => {
     const out = await sweepMergedPullRequest({
       userId: USER,
       producerAgentUserId: AGENT,
-      event: merged({ number: 300, url: "https://github.com/Synap-core/backend/pull/300" }),
+      event: merged({
+        number: 300,
+        url: "https://github.com/Synap-core/backend/pull/300",
+      }),
     });
     expect(out).toEqual([
-      { sessionId: id, slotKey: "pr-backend-300", via: "outcome_ref", result: "proposed", proposalId: "prop-1" },
+      {
+        sessionId: id,
+        slotKey: "pr-backend-300",
+        via: "outcome_ref",
+        result: "proposed",
+        proposalId: "prop-1",
+      },
     ]);
     const slot = (await stored(id))[0]!;
     expect(slot.status ?? "pending").toBe("pending");
@@ -221,12 +255,20 @@ describe("the merge sweeper (dev.pr_merged → the PR outcome is met)", () => {
 
   it("is idempotent: a replayed merge skips the settled outcome without a write", async () => {
     const id = await seed([prSlot(301)]);
-    const ev = merged({ number: 301, url: "https://github.com/Synap-core/backend/pull/301" });
+    const ev = merged({
+      number: 301,
+      url: "https://github.com/Synap-core/backend/pull/301",
+    });
     await sweepMergedPullRequest({ userId: USER, event: ev });
     h.perm.length = 0;
     const again = await sweepMergedPullRequest({ userId: USER, event: ev });
     expect(again).toEqual([
-      { sessionId: id, slotKey: "pr-backend-301", via: "outcome_ref", result: "already_settled" },
+      {
+        sessionId: id,
+        slotKey: "pr-backend-301",
+        via: "outcome_ref",
+        result: "already_settled",
+      },
     ]);
     expect(h.perm).toHaveLength(0);
   });
@@ -235,20 +277,35 @@ describe("the merge sweeper (dev.pr_merged → the PR outcome is met)", () => {
     const id = await seed([
       prSlot(302),
       { kind: "document", label: "Spec", key: "spec", status: "done" },
-      { kind: "document", label: "Dropped", key: "dropped", retiredAt: "2026-10-01T00:00:00Z" },
+      {
+        kind: "document",
+        label: "Dropped",
+        key: "dropped",
+        retiredAt: "2026-10-01T00:00:00Z",
+      },
     ]);
     const [o] = await sweepMergedPullRequest({
       userId: USER,
-      event: merged({ number: 302, url: "https://github.com/Synap-core/backend/pull/302" }),
+      event: merged({
+        number: 302,
+        url: "https://github.com/Synap-core/backend/pull/302",
+      }),
     });
-    expect(o).toMatchObject({ sessionId: id, result: "completed", allOutcomesMet: true });
+    expect(o).toMatchObject({
+      sessionId: id,
+      result: "completed",
+      allOutcomesMet: true,
+    });
   });
 
   it("does not report allOutcomesMet while another outcome is open", async () => {
     await seed([prSlot(303), { kind: "document", label: "Spec", key: "spec" }]);
     const [o] = await sweepMergedPullRequest({
       userId: USER,
-      event: merged({ number: 303, url: "https://github.com/Synap-core/backend/pull/303" }),
+      event: merged({
+        number: 303,
+        url: "https://github.com/Synap-core/backend/pull/303",
+      }),
     });
     expect(o!.result).toBe("completed");
     expect(o!.allOutcomesMet).toBeUndefined();
@@ -257,14 +314,21 @@ describe("the merge sweeper (dev.pr_merged → the PR outcome is met)", () => {
   it("re-checks the criteria ABOUT the merged outcome, with the merge as evidence", async () => {
     const id = await seed([prSlot(304)], {
       criteria: [
-        { key: "merged", statement: "Merged", check: { kind: "evidence", evidenceKey: "pr-backend-304" } },
+        {
+          key: "merged",
+          statement: "Merged",
+          check: { kind: "evidence", evidenceKey: "pr-backend-304" },
+        },
         { key: "docs", statement: "Docs", check: { kind: "judge" } },
       ],
     });
     await sweepMergedPullRequest({
       userId: USER,
       producerAgentUserId: AGENT,
-      event: merged({ number: 304, url: "https://github.com/Synap-core/backend/pull/304" }),
+      event: merged({
+        number: 304,
+        url: "https://github.com/Synap-core/backend/pull/304",
+      }),
     });
     expect(h.evaluations).toHaveLength(1);
     expect(h.evaluations[0]).toMatchObject({
@@ -288,7 +352,10 @@ describe("the merge sweeper (dev.pr_merged → the PR outcome is met)", () => {
     });
     await sweepMergedPullRequest({
       userId: USER,
-      event: merged({ number: 305, url: "https://github.com/Synap-core/backend/pull/305" }),
+      event: merged({
+        number: 305,
+        url: "https://github.com/Synap-core/backend/pull/305",
+      }),
     });
     expect(h.evaluations).toHaveLength(0);
   });
@@ -296,13 +363,22 @@ describe("the merge sweeper (dev.pr_merged → the PR outcome is met)", () => {
 
 describe("the PR → session resolver's second join: the PR body's Pod session line", () => {
   it("falls back to the session the body names, matching the conventional key", async () => {
-    const id = await seed([{ kind: "pull_request", label: "PR", key: "pr-backend-400" }]);
+    const id = await seed([
+      { kind: "pull_request", label: "PR", key: "pr-backend-400" },
+    ]);
     const m = await resolvePullRequestSessions({
       userId: USER,
       pr: { repo: "Synap-core/backend", number: 400 },
       body: `Does a thing.\n\nPod session: ${id}`,
     });
-    expect(m).toEqual([{ sessionId: id, slotKey: "pr-backend-400", via: "pr_body", settled: false }]);
+    expect(m).toEqual([
+      {
+        sessionId: id,
+        slotKey: "pr-backend-400",
+        via: "pr_body",
+        settled: false,
+      },
+    ]);
   });
 
   it("names the session with slotKey null when it never declared the PR", async () => {
@@ -315,13 +391,18 @@ describe("the PR → session resolver's second join: the PR body's Pod session l
         sessionId: id,
       }),
     });
-    expect(out).toEqual([{ sessionId: id, slotKey: null, via: "pr_body", result: "no_outcome" }]);
+    expect(out).toEqual([
+      { sessionId: id, slotKey: null, via: "pr_body", result: "no_outcome" },
+    ]);
   });
 
   it("refuses a body naming another person's session", async () => {
-    const theirs = await seed([{ kind: "pull_request", label: "PR", key: "pr-backend-402" }], {
-      user: OTHER,
-    });
+    const theirs = await seed(
+      [{ kind: "pull_request", label: "PR", key: "pr-backend-402" }],
+      {
+        user: OTHER,
+      }
+    );
     const m = await resolvePullRequestSessions({
       userId: USER,
       pr: { repo: "Synap-core/backend", number: 402 },
@@ -338,7 +419,9 @@ describe("the PR → session resolver's second join: the PR body's Pod session l
       pr: { repo: "Synap-core/backend", number: 403 },
       body: `Pod session: ${named}`,
     });
-    expect(m.map((x) => [x.sessionId, x.via])).toEqual([[declared, "outcome_ref"]]);
+    expect(m.map((x) => [x.sessionId, x.via])).toEqual([
+      [declared, "outcome_ref"],
+    ]);
   });
 });
 
@@ -347,12 +430,18 @@ describe("runDevLoopObservation (the job's runner)", () => {
     const id = await seed([prSlot(500)]);
     const r = await runDevLoopObservation({
       eventType: "dev.pr_merged",
-      data: merged({ number: 500, url: "https://github.com/Synap-core/backend/pull/500" }),
+      data: merged({
+        number: 500,
+        url: "https://github.com/Synap-core/backend/pull/500",
+      }),
       userId: USER,
       producerAgentUserId: null,
       eventId: "ev-1",
     });
-    expect(r).toMatchObject({ status: "swept", outcomes: [{ sessionId: id, result: "completed" }] });
+    expect(r).toMatchObject({
+      status: "swept",
+      outcomes: [{ sessionId: id, result: "completed" }],
+    });
     expect(
       await runDevLoopObservation({
         eventType: "ci.finished",
