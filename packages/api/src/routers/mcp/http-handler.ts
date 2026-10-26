@@ -514,8 +514,10 @@ mcpHttpApp.post("/", async (c) => {
   const meta = (
     parsedBody as { params?: { _meta?: Record<string, unknown> } } | null
   )?.params?._meta;
-  const metaString = (k: string) =>
-    typeof meta?.[k] === "string" ? (meta[k] as string) : undefined;
+  const metaString = (k: string) => {
+    const v = meta?.[k];
+    return typeof v === "string" ? v : undefined;
+  };
   const conversationId = requestConversationId(
     c.req.header(CONVERSATION_HEADER),
     metaString(CONVERSATION_META_KEY),
