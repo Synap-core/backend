@@ -1139,7 +1139,14 @@ export function capByRow(
   cap: number
 ): { rows: Signal[]; hiddenRows: number } {
   const grouped = needsYouRows(all);
-  const shaped = [...grouped.recent, ...grouped.older];
+  // The Review later fold rides LAST: its rows are on the page (a fold, never
+  // a filter) while Blocking's `total` — the needs-you number — leaves them
+  // out, so `rows` may exceed `total` by exactly that fold.
+  const shaped = [
+    ...grouped.recent,
+    ...grouped.older,
+    ...grouped.reviewLater,
+  ];
   const keep = new Set<string>();
   for (const r of shaped.slice(0, cap)) {
     for (const s of r.kind === "session" ? r.items : [r.signal]) keep.add(s.id);
