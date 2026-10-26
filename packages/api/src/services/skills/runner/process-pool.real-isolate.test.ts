@@ -184,29 +184,34 @@ describe.skipIf(!ivmLoads)("skill runner pool: containment", () => {
       isolatesPerProcess: 2,
       watchdogGraceMs: 300,
     });
-    const hang = gate<unknown>();
-    const started = Date.now();
-    const stuck = pool
-      .run(
-        job("return await hubProtocol.getEntities({});", 300),
-        bridges({ getEntities: hang.bridge })
-      )
-      .then(
-        () => null,
-        (e: unknown) => e
-      );
-    await hang.reached;
+    await pool.warm();
     const [pid] = pool.pids();
-    const neighbour = pool.run(
-      job(SLOW_NORMAL),
-      bridges({ getEntities: slowEntities })
-    );
-    const err = await stuck;
-    expect(err).toBeInstanceOf(SkillRuntimeError);
-    expect((err as SkillRuntimeError).code).toBe("SKILL_RUNTIME_TIMEOUT");
-    expect(Date.now() - started).toBeLessThan(3_000);
-    await expect(neighbour).resolves.toBe(42);
-    expect(pool.pids()).toEqual([pid]); // cancelled, not killed
+    // Three rounds: a cancel that crashed the runner once in a while (the
+    // SIGSEGV this case caught) must not pass on luck.
+    for (let round = 0; round < 3; round++) {
+      const hang = gate<unknown>();
+      const started = Date.now();
+      const stuck = pool
+        .run(
+          job("return await hubProtocol.getEntities({});", 300),
+          bridges({ getEntities: hang.bridge })
+        )
+        .then(
+          () => null,
+          (e: unknown) => e
+        );
+      await hang.reached;
+      const neighbour = pool.run(
+        job(SLOW_NORMAL),
+        bridges({ getEntities: slowEntities })
+      );
+      const err = await stuck;
+      expect(err).toBeInstanceOf(SkillRuntimeError);
+      expect((err as SkillRuntimeError).code).toBe("SKILL_RUNTIME_TIMEOUT");
+      expect(Date.now() - started).toBeLessThan(3_000);
+      await expect(neighbour).resolves.toBe(42);
+      expect(pool.pids()).toEqual([pid]); // cancelled, not killed
+    }
     await expect(pool.run(job("return 8;"), bridges())).resolves.toBe(8);
   });
 });
@@ -225,23 +230,31 @@ describe.skipIf(!ivmLoads)(
           },
         },
       };
-      const result = await runWithActingAgent("agent-7", () =>
-        runIsolate({
-          code: "return await hubProtocol.getEntities({ profileSlug: 'task' });",
-          args: {},
-          context: { userId: "u-1", workspaceId: null, agentUserId: "agent-7" },
-          timeoutMs: 5_000,
-          allowedHosts: [],
-          operatorUserId: "u-1",
-          workspaceId: null,
-          agentUserId: "agent-7",
-          caller: caller as never,
-          failureSink: {},
-          runner: pool,
-        })
-      );
+      // The runner starts OUTSIDE every agent scope, as at boot: an IPC
+      // message then carries the async context of the fork, so an unbound
+      // bridge would read no agent (or, forked during agent A's run, A's
+      // identity on every later run). Two agents in a row rule out both.
+      await pool.warm();
+      const runAs = (agent: string) =>
+        runWithActingAgent(agent, () =>
+          runIsolate({
+            code: "return await hubProtocol.getEntities({ profileSlug: 'task' });",
+            args: {},
+            context: { userId: "u-1", workspaceId: null, agentUserId: agent },
+            timeoutMs: 5_000,
+            allowedHosts: [],
+            operatorUserId: "u-1",
+            workspaceId: null,
+            agentUserId: agent,
+            caller: caller as never,
+            failureSink: {},
+            runner: pool,
+          })
+        );
+      const result = await runAs("agent-7");
+      await runAs("agent-8");
       expect(result).toEqual({ entities: [{ id: "e-1" }] });
-      expect(seen).toEqual(["agent-7"]);
+      expect(seen).toEqual(["agent-7", "agent-8"]);
       expect(pool.pids()).not.toContain(process.pid);
     });
 

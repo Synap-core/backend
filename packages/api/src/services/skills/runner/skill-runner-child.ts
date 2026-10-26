@@ -79,14 +79,23 @@ async function run(msg: Extract<BrokerMessage, { type: "run" }>) {
   }
 }
 
-/** Stop a run past its limit: its bridge waits end, its isolate is disposed. */
+/**
+ * After its bridge waits end, how long a cancelled run gets to stop before its
+ * isolate is disposed. Disposing an isolate still blocked in a bridge wait
+ * (`applySyncPromise`) crashed the runner (SIGSEGV, devbox 2026-10-26); once
+ * the wait is answered the isolate is back in JS, where disposal is the
+ * documented way to stop it.
+ */
+const DISPOSE_AFTER_CANCEL_MS = 250;
+
+/** Stop a run past its limit: its bridge waits end, then its isolate is disposed. */
 function cancel(runId: string) {
   for (const [callId, call] of pending) {
     if (call.runId !== runId) continue;
     pending.delete(callId);
     call.reject(new Error("The skill ran past its time limit."));
   }
-  running.get(runId)?.abort();
+  setTimeout(() => running.get(runId)?.abort(), DISPOSE_AFTER_CANCEL_MS);
 }
 
 process.on("message", (raw: unknown) => {
