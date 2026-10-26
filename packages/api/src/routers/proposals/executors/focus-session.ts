@@ -25,12 +25,15 @@ import {
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
+import { isTrackClosed } from "@synap-core/types/units";
+import { resolveTrackStatusLabel } from "@synap-core/types/vocabulary";
 import {
   registerProposalExecutor,
   type ProposalEffect,
 } from "../execution-registry.js";
 import { reportApproved } from "./shared.js";
 import {
+  closedRunRefusal,
   isTerminalSessionStatus,
   type TerminalSessionStatus,
 } from "../../../services/focus-sessions/session-statuses.js";
@@ -148,10 +151,11 @@ export function registerFocusSessionExecutors(): void {
           >
         | undefined;
       if (typeof innerData.trackId === "string") {
-        const [track] = await db
+        const [found] = await db
           .select({
             id: projectTracks.id,
             name: projectTracks.name,
+            status: projectTracks.status,
             currentStage: projectTracks.currentStage,
             definitionSnapshot: projectTracks.definitionSnapshot,
           })
@@ -166,6 +170,15 @@ export function registerFocusSessionExecutors(): void {
             )
           )
           .limit(1);
+        // A goal CLOSED since the proposal was filed takes no new work — the
+        // direct door's rule (`resolveTrackFiling`, `isTrackClosed`), applied
+        // at approval too (plan.md): the run is not filed into it.
+        const track = found && !isTrackClosed(found) ? found : undefined;
+        if (found && !track) {
+          criteriaRefusals.push(
+            `Goal "${found.name}" was not applied: it is ${resolveTrackStatusLabel(found.status).toLowerCase()} and takes no new work.`
+          );
+        }
         if (track) {
           approvedTrackId = track.id;
           approvedTrack = track;
@@ -181,10 +194,10 @@ export function registerFocusSessionExecutors(): void {
             );
           } catch (err) {
             criteriaRefusals.push(
-              `Track stage "${String(innerData.trackStage)}" was not applied: ${err instanceof Error ? err.message : String(err)}`
+              `Goal step "${String(innerData.trackStage)}" was not applied: ${err instanceof Error ? err.message : String(err)}`
             );
           }
-        } else {
+        } else if (!found) {
           criteriaRefusals.push(
             `Track ${innerData.trackId} was not applied: it no longer takes work in this project (archived, moved or deleted).`
           );
@@ -777,6 +790,12 @@ export function registerFocusSessionExecutors(): void {
           throw err;
         }
       } else {
+        // R8 — a closed run stays closed: a proposal filed while the run was
+        // open and approved after it closed must not reopen it.
+        const reopening = closedRunRefusal(session.status, requestedStatus);
+        if (reopening) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: reopening });
+        }
         // Non-close update: apply only defined scalar fields from gate data.
         const set: Partial<typeof focusSessions.$inferInsert> = {
           updatedAt: new Date(),
@@ -894,7 +913,7 @@ export function registerFocusSessionExecutors(): void {
             if (reason === null) throw err;
             throw new TRPCError({
               code: "BAD_REQUEST",
-              message: `Cannot file this session into the track: ${reason}`,
+              message: `Cannot file this session into the goal: ${reason}`,
             });
           }
           Object.assign(set, trackFiling.set);

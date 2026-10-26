@@ -40,6 +40,7 @@ import {
 } from "../../../(admin)/review/_lib/review-rows";
 import { proposalHeading } from "../../../proposal/[id]/proposal-heading";
 import { proposalRequester } from "../../../proposal/[id]/proposal-requester";
+import { proposalSubjectKind } from "../../../proposal/[id]/proposal-subject-kind";
 import { objectPage } from "../content/markdown-model";
 import { kindIcon, kindLabel } from "../kind-icon";
 import { OpenInAppLink } from "../open-in-app-link";
@@ -208,8 +209,10 @@ export function ProposedChangesSection({ sessionId }: { sessionId: string }) {
       {failure}
       <ul className="flex flex-col">
         {shown.map((p) => {
-          const { heading } = proposalHeading(p, p.request?.data ?? p.data);
-          const Icon = kindIcon(p.targetType);
+          const payload = p.request?.data ?? p.data;
+          const { heading } = proposalHeading(p, payload);
+          const kind = proposalSubjectKind(p, payload);
+          const Icon = kindIcon(kind);
           const href = objectPage("proposal", p.id);
           // `pending` reads both waiting and approved-but-failed-to-apply.
           const failed = p.status !== "pending";
@@ -237,7 +240,7 @@ export function ProposedChangesSection({ sessionId }: { sessionId: string }) {
                 )}
                 <span className="text-[12px] text-foreground/65">
                   {[
-                    kindLabel(p.targetType),
+                    kindLabel(kind),
                     proposalRequester(p),
                     formatRelative(p.createdAt, { empty: "" }),
                   ]

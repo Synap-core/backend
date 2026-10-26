@@ -221,37 +221,7 @@ export const messages = pgTable(
   })
 );
 
-/** Message row — explicit interface so consumers don't need drizzle-orm to resolve it. */
-export interface MessageRow {
-  id: string;
-  channelId: string;
-  parentId: string | null;
-  role: MessageRole;
-  authorType: MessageAuthorType;
-  messageCategory: MessageCategory;
-  externalSource: string | null;
-  inboxItemId: string | null;
-  content: string;
-  /** Typed as unknown to avoid pulling in @synap-core/core across package boundaries. */
-  metadata: unknown;
-  routedTeammateId: string | null;
-  routedSource: RoutedSource | null;
-  userId: string;
-  timestamp: Date;
-  previousHash: string | null;
-  hash: string;
-  sessionId: string | null;
-  deletedAt: Date | null;
-  editedAt: Date | null;
-  ephemeral: boolean;
-  resolvedAt: Date | null;
-  resolvedBy: string | null;
-}
-export type NewMessageRow = Partial<
-  Omit<MessageRow, "id" | "timestamp" | "hash">
-> & {
-  channelId: string;
-  content: string;
-  userId: string;
-  role: MessageRole;
-};
+// The row interface is declared in `@synap-core/types/chat/model` (the wire
+// shape) and re-exported here; `../wire-parity/chat.ts` proves it against this
+// table and the union types above against their consts.
+export type { MessageRow, NewMessageRow } from "@synap-core/types/chat/model";

@@ -97,6 +97,7 @@ import {
 import { PartEdgeList, ProposedRecordCard } from "./ProposedRecordCard";
 import { compositeItems } from "./composite-parts-model";
 import { proposalHeading } from "./proposal-heading";
+import { proposalProfileSlug } from "./proposal-subject-kind";
 import { proposalRequesterParts } from "./proposal-requester";
 import {
   graphRecords,
@@ -732,10 +733,7 @@ export function ProposalReviewBody({
   const graph = isGraphPayload(payload);
   const createKind =
     !graph && action === "create" && payload && typeof payload === "object"
-      ? (() => {
-          const slug = (payload as { profileSlug?: unknown }).profileSlug;
-          return typeof slug === "string" && slug.trim() ? slug.trim() : null;
-        })()
+      ? proposalProfileSlug(payload)
       : null;
   const graphKinds = graphKindsOf(payload);
   const defs = useRecordDefinitions({

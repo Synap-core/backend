@@ -123,8 +123,9 @@ describe("draft-process offer", () => {
     });
     expect(draft.signals).toEqual([]);
     expect(draft.reason).toMatch(/No template is set up for/);
-    // The same words as the web/relay offer: the plural kind noun.
-    expect(draft.candidate.name).toBe("Draft a template for tracks");
+    // The same words as the web/relay offer: the plural kind noun (`track`
+    // reads "Goals" since the goal words, W5).
+    expect(draft.candidate.name).toBe("Draft a template for goals");
   });
 
   it("is NOT offered when a playbook is built for the kind", async () => {

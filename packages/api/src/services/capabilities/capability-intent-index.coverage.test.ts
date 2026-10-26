@@ -469,7 +469,7 @@ describe("TRIPWIRE — the declared-intent sink is wired end to end", () => {
     },
     {
       repo: "synap-backend",
-      file: "packages/database/src/schema/workspaces.ts",
+      file: "packages/types/src/workspaces/settings.ts",
       must: "taskIntents?: string[]",
       what: "WorkspaceSettings declares the key the resolver reads",
     },

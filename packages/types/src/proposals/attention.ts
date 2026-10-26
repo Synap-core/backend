@@ -19,18 +19,14 @@
  * hours against 3 pending decisions, 17 of the 30 `focus_session.*`
  * bookkeeping.
  *
- * PURE and dependency-free at runtime, published as its own LEAF subpath
+ * PURE and dependency-free, published as its own LEAF subpath
  * (`@synap-core/types/proposals/attention`) for the same reason as
- * `./intent`: the `./proposals` barrel re-exports `@synap/database` types, and
- * a value import from a barrel is what crashes Hermes. The one import below is
- * `import type` — erased from the emitted JS and absent from the emitted
- * `.d.ts` (it is only read by the non-exported coverage floor).
+ * `./intent`: a value import from the large `./proposals` barrel is what
+ * crashes Hermes. It imports nothing.
  *
  * Reads fields ALREADY ON THE WIRE (`status`, `proposalType`, `targetType`),
  * so there is nothing to regenerate or backfill.
  */
-
-import type { ProposalStatus as StoredProposalStatus } from "@synap/database";
 
 export type ProposalAttention = "decide" | "notice" | "history";
 
@@ -49,17 +45,11 @@ export type ProposalStatusValue = (typeof PROPOSAL_STATUSES)[number];
 
 // ── Coverage floor ──────────────────────────────────────────────────────────
 // The list above must be EXACTLY the DB enum (`ProposalStatus` in
-// `@synap/database/schema/proposals.ts`). A status added there and not here —
-// or a stale one left here — makes `_Same` resolve to `never` and the types
-// build stops. `STATUS_ATTENTION` below is then `satisfies Record<…>`, so a
-// status present in the list but not classified also fails the build.
-type _Same = [StoredProposalStatus] extends [ProposalStatusValue]
-  ? [ProposalStatusValue] extends [StoredProposalStatus]
-    ? true
-    : never
-  : never;
-const _statusListMatchesDb: _Same = true;
-void _statusListMatchesDb;
+// `@synap/database/schema/proposals.ts`). The database proves it, on its side
+// of the edge (`packages/database/src/wire-parity/proposals.ts`): a status added
+// there and not here — or a stale one left here — stops the database build.
+// `STATUS_ATTENTION` below is then `satisfies Record<…>`, so a status present
+// in the list but not classified fails this package's build.
 
 /** Attention by status alone — before the bookkeeping demotion. */
 export const STATUS_ATTENTION = {

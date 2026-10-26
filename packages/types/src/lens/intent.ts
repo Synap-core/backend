@@ -14,6 +14,7 @@
 import { resolveUnitState } from "../units/state.js";
 import type { PipelineGoalPeriod } from "../renderables/types.js";
 import {
+  LENS_TARGET_LABEL,
   LENS_UNKNOWN_COUNT,
   lensCountDoorText,
   lensKpiFact,
@@ -78,16 +79,19 @@ export function lensIntentDoorText(
 }
 
 /**
- * THE intent surface's goal line (surfaces WP.5) — the stated TARGET of a
+ * THE intent surface's target line (surfaces WP.5) — the stated TARGET of a
  * pipeline view (`PipelineViewConfig.surface.goal`) over the MEASURED side
  * (`lifecycle.throughput`: things into a done option this period):
  *
- *   Goal 6 / 8 published this month
+ *   Target 6 / 8 published this month
+ *
+ * Worded "Target", never "Goal": a goal is a track since 2026-10-23, and this
+ * is a number a pipeline aims at (the config field keeps its name).
  *
  * `doneWord` names what "done" is for this kind (its one done option's label,
  * "published"; several ⇒ "done"). The number is MEASURED, never stated, so the
  * fact carries no `statedAt`; an unknown measure (`done: null`) still says the
- * target ("Goal: target 8 published this month") and draws no bar. No stated
+ * target ("Target 8 published this month") and draws no bar. No stated
  * goal ⇒ no fact (the header's "N done …" door is the measured fact alone).
  */
 export function lensIntentGoalFact(input: {
@@ -98,7 +102,7 @@ export function lensIntentGoalFact(input: {
   const { goal } = input;
   if (!goal || !(goal.count > 0)) return null;
   return lensKpiFact({
-    label: "Goal",
+    label: LENS_TARGET_LABEL,
     target: goal.count,
     ...(input.done === null ? {} : { current: input.done }),
     unit: `${nounInSentence(input.doneWord)} this ${goal.per}`,

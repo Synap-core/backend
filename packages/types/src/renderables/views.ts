@@ -206,7 +206,7 @@ const pipelineView: ViewCapabilityDef = {
       description: "A kind or role that declares a lifecycle, e.g. 'deal'",
     },
     { key: "projectId", label: "Project", type: "string" },
-    { key: "trackId", label: "Track", type: "string" },
+    { key: "trackId", label: "Goal", type: "string" },
   ],
 };
 

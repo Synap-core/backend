@@ -22,6 +22,7 @@
  * Words come from the vocabulary door; nothing here names a kind by hand.
  */
 
+import { proposalSubjectKind } from "../../../proposal/[id]/proposal-subject-kind";
 import { DESTRUCTIVE_ACTIONS } from "@synap/governance-policy";
 import {
   lensRowOfNeedsYou,
@@ -91,6 +92,8 @@ export interface ProposalFacts {
   actorKind?: string | null;
   workspaceName?: string | null;
   data?: unknown;
+  /** The request payload (`request.data`), where an entity proposal names its kind. */
+  requestData?: unknown;
 }
 
 /** What the row's one verb opens. */
@@ -260,7 +263,10 @@ function proposalRow(
     needsItsPage(facts.get(id))
   );
   return {
-    nounKind: sample?.targetType || "proposal",
+    nounKind: sample
+      ? proposalSubjectKind(sample, sample.requestData ?? sample.data) ||
+        "proposal"
+      : "proposal",
     who: (sample && proposalRequester(sample)) || sample?.agentName || null,
     where: sample?.workspaceName || s.source?.label || null,
     reason: null,

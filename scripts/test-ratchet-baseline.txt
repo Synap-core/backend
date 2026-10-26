@@ -17,7 +17,6 @@ packages/api/src/__tripwires__/property-label-mirror-drift.test.ts | infra | sib
 packages/api/src/notifications/__tests__/push-tap-target.test.ts | infra | sibling-repo | relay-app checkout absent in CI
 packages/api/src/services/discover/space-brief.templates.test.ts | infra | sibling-repo | synap-app checked out but its deps do not resolve (@synap-core/types/automations)
 packages/api/src/services/intake/__tests__/capture-clarification-serialisers.test.ts | infra | sibling-repo | synap-app checked out but its deps do not resolve (@synap-core/types/capture)
-packages/api/src/services/skills/run-skill-in-sandbox.verb-act.test.ts | infra | native-addon | isolated-vm has no prebuild for node20 linux in CI
 packages/jobs/src/__tripwires__/relay-templates-match-runtime.tripwire.test.ts | infra | sibling-repo | relay-app checkout absent in CI
 packages/jobs/src/workers/__tests__/bookmark-enrichment-flow.test.ts | infra | sibling-repo | synap-cli checkout absent in CI
 packages/test-e2e/src/core-flows.test.ts | e2e | live-service | needs the AI service and workers the job does not boot

@@ -1,13 +1,11 @@
 /**
  * Relation Types
  *
- * Re-exports relation types from database schema (single source of truth).
- *
- * @see {@link @synap/database/schema}
+ * The row is declared in ./rows.js; @synap/database proves its inferred row
+ * equal (packages/database/src/wire-parity/relations.ts).
  */
 
-// Direct re-exports from database
-export type { Relation, NewRelation } from "@synap/database";
+export type { Relation, NewRelation } from "./rows.js";
 
 /** Relation type — any string slug from workspace relation_defs */
 export type RelationType = string;

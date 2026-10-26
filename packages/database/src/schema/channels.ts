@@ -387,41 +387,10 @@ export const channels = pgTable(
   })
 );
 
-/** Channel row — explicit interface so consumers don't need drizzle-orm to resolve it. */
-export interface Channel {
-  id: string;
-  userId: string;
-  workspaceId: string | null;
-  projectId: string | null;
-  title: string | null;
-  channelType: ChannelType;
-  scope: ChannelScope;
-  feedScope: FeedScope | null;
-  contextObjectType: string | null;
-  contextObjectId: string | null;
-  parentChannelId: string | null;
-  branchedFromMessageId: string | null;
-  branchPurpose: string | null;
-  aiReactionMode: AiReactionMode;
-  assignedAgentId: string | null;
-  senderAgentId: string | null;
-  status: ChannelStatus;
-  contextSummary: string | null;
-  resultSummary: string | null;
-  mergedIntoStateId: string | null;
-  externalSource: string | null;
-  externalChannelId: string | null;
-  externalId: string | null;
-  metadata: unknown;
-  createdAt: Date;
-  updatedAt: Date;
-  mergedAt: Date | null;
-}
-export type NewChannel = Partial<
-  Omit<Channel, "id" | "createdAt" | "updatedAt">
-> & {
-  userId: string;
-};
+// The row interface is declared in `@synap-core/types/chat/model` (the wire
+// shape) and re-exported here; `../wire-parity/chat.ts` proves it against this
+// table and the union types above against their consts.
+export type { Channel, NewChannel } from "@synap-core/types/chat/model";
 
 /**
  * Channel Member Kind — distinguishes a human user from an AI agent-user.
