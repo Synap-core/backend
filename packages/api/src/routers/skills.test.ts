@@ -327,12 +327,26 @@ describe("a composite batch's skill step is born approved only by the one rule",
     await insertSkillGoverned({
       userId: "human-owner",
       agentUserId: "agent-1",
-      author: { agentUserId: null, personApproved: true },
+      skillAuthor: { agentUserId: null, personApproved: true },
       kind: "instruction",
       name: "agent-door",
       body: "x",
       auditSource: "test",
     } as never);
+    expect(mockInsertedRow.current?.approved).toBe(false);
+  });
+
+  it("the skills.author COLUMN still reaches the row (the batch author is a separate field)", async () => {
+    await insertSkillGoverned({
+      userId: "human-owner",
+      kind: "instruction",
+      name: "packaged",
+      body: "x",
+      author: "acme-pack",
+      skillAuthor: { agentUserId: "agent-1", personApproved: false },
+      auditSource: "test",
+    });
+    expect(mockInsertedRow.current?.author).toBe("acme-pack");
     expect(mockInsertedRow.current?.approved).toBe(false);
   });
 });

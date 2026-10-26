@@ -106,7 +106,7 @@ export function buildRuleLoopCallers(ctx: RuleLoopCallerContext): {
           agentUserId: undefined,
           // …but the skill is still its author's: born approved only by the
           // one rule, judged on the real author and on a person's approval.
-          author: skillAuthor,
+          skillAuthor,
           auditSource,
         });
         if (created.status !== "installed") {
