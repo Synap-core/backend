@@ -72,6 +72,9 @@ export const AI_READ_SUBJECTS = [
   "role",
   "session",
   "share",
+  // The runs of a box skill (box_runs, grant-read.ts): an agent that writes a
+  // skill reads how its runs went.
+  "skill",
   "source",
   "tool",
   "track",
