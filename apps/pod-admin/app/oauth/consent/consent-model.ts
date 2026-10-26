@@ -238,7 +238,8 @@ export function newAsks(
   current: readonly ApprovedPair[],
   templates: readonly string[] = []
 ): OfferedPermission[] {
-  if (current.length === 0) return [];
+  // NEGATIVE CONTROL: the derivation reverted (nothing is ever new).
+  if (current.length >= 0) return [];
   const held = new Set(current.map((c) => c.permission));
   return offer
     .filter((o) => !held.has(o.permission))
