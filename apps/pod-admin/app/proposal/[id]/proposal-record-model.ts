@@ -40,6 +40,10 @@ import {
   resolveObjectNoun,
   resolveStatusLabel,
 } from "@synap-core/types/vocabulary";
+import {
+  resolveEntityMedia,
+  type MediaRef,
+} from "@synap-core/types/presentation";
 import { formatDate, formatTimestamp } from "../../../lib/format";
 import type { ProposalChangeInput } from "./proposal-review-model";
 
@@ -307,6 +311,27 @@ function sideValue(
   if (!isProperty && key === "code") return codeValue(value);
   const renderKind = classifyPropertyKind({ slug: key, value, def });
   return recordValue(renderKind, value, resolved);
+}
+
+/**
+ * The media of the entity a create proposes — an uploaded image waiting for
+ * approval — read by the one resolver from the record the gate stored
+ * (`documentId`, `properties.mimeType`). `null` when it has none. The bytes
+ * are already stored, so the reviewer sees what they approve.
+ */
+export function proposedEntityMedia(payload: unknown): MediaRef | null {
+  if (!payload || typeof payload !== "object") return null;
+  const row = payload as Record<string, unknown>;
+  const properties =
+    row.properties && typeof row.properties === "object"
+      ? (row.properties as Record<string, unknown>)
+      : null;
+  const { primary } = resolveEntityMedia({
+    id: typeof row.id === "string" ? row.id : "",
+    documentId: typeof row.documentId === "string" ? row.documentId : null,
+    properties,
+  });
+  return primary.via === "none" ? null : primary;
 }
 
 export interface RecordInput {
