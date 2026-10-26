@@ -710,6 +710,18 @@ export function answerVia(
   return answer?.via === "relayed" ? "relayed" : "tap";
 }
 
+/**
+ * Did an agent carry these words from a chat? True on a relay nobody tapped
+ * AND on one the person then confirmed (the confirm writes `via: 'tap'` but
+ * keeps `relayedBy`): the relay is never erased from what the receipt says.
+ * The ONE reader for every surface.
+ */
+export function answerWasRelayed(
+  answer: Pick<AnswerProvenance, "via" | "relayedBy"> | null | undefined
+): boolean {
+  return answerVia(answer) === "relayed" || Boolean(answer?.relayedBy);
+}
+
 // ─── A relay that waits for the person's tap ────────────────────────────────
 
 /**
@@ -1359,6 +1371,7 @@ export {
   effectiveAskCause,
   stripAskVerbPrefix,
   askTextRestates,
+  stripLeadingRestatement,
   type AskCardAnswer,
   type AskCardAsker,
   type AskCardSlot,

@@ -165,7 +165,7 @@ describe("askView — one control per mode", () => {
     expect(view.context).toBeNull();
     expect(view.asker).toMatchObject({
       kind: "cause",
-      label: "From your decision note",
+      label: "From a proposed decision",
     });
     expect(view.ageFate.label).toBe("8d · In Review later");
     expect(view.note.label).toBe("Add a note");

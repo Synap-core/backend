@@ -7,6 +7,7 @@
  */
 
 import { isDocumentEditProposal } from "./intent.js";
+import type { UnitTone } from "../units/state.js";
 
 /**
  * Untouched `objectWork` proposals leave the headline count after this many
@@ -102,6 +103,36 @@ export function proposalFate(input: ProposalFateInput): ProposalFate {
 export function isReviewLater(input: ProposalFateInput): boolean {
   return proposalFate(input).kind === "review_later";
 }
+
+/**
+ * The fate sentences, ONCE for a pending proposal (`proposalFateLine`,
+ * `../lens/rows.ts`) and an owed ask (`askCardView`, `../ask/card.ts`): one
+ * fate reads one way in both families, side by side on one list. Copy, not
+ * vocabulary: no fate kind is a stored value.
+ */
+export const FATE_COPY = {
+  untilDecided: "Stays until you decide",
+  /** A session-bound draft, or an agent's own confirm / choose. */
+  endsWithSession: "Ends with the session",
+  reviewLater: "In Review later",
+  /** `date` is already formatted ("29 Sep"). */
+  reviewLaterSince: (date: string): string => `In Review later since ${date}`,
+  /** An expiry its session's end may come before. */
+  orSessionEnd: (expiry: string): string =>
+    `${expiry}, or when the session ends`,
+} as const;
+
+/**
+ * The fate's tone. Amber only for a real deadline (`expires`): every other
+ * fate keeps the item, or ends it quietly with its session, and an amber mark
+ * on most cards would stop meaning "act soon".
+ */
+export const FATE_TONE: Record<ProposalFateKind, UnitTone> = {
+  expires: "warning",
+  dies_with_session: "textMuted",
+  until_decided: "textMuted",
+  review_later: "textMuted",
+};
 
 /**
  * Does an agent WAIT on this proposal (W3 `waitsOnIt`)?

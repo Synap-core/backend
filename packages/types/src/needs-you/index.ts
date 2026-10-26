@@ -16,15 +16,16 @@
  *   fold. A fold, never a filter: they still count and still render when
  *   opened. The split is a STABLE partition, so it cannot reorder anything the
  *   server already put in place.
- * - `reviewLater` — EXCEPT untouched durable proposals (Resolve-XP, founder
- *   default 2026-10-26): a `proposal-cluster` row the pod marks `reviewLater`
- *   has waited 7 days and LEFT the headline count (`signals.count` counts it
- *   as `reviewLater`, never in `needsYou`). It renders in its own
+ * - `reviewLater` — EXCEPT untouched durable proposals (founder default,
+ *   2026-10-26): a `proposal-cluster` row the pod marks `reviewLater` has
+ *   waited 7 days and LEFT the headline count (`signals.count` counts it as
+ *   `reviewLater`, never in `needsYou`). It renders in its own
  *   "Review later · N" fold, never in Recent or Older — the count and the fold
  *   read the ONE pod predicate (`isReviewLater`). An `owed-slot` row nobody
- *   answered for 7 days joins the same fold (decision 3, `isAskReviewLater`,
- *   `../ask`). Still a fold: opened, it
- *   shows every row. The pod stamps such a row `ageBucket: 'older'` too, so a
+ *   answered for 7 days joins the same fold (`isAskReviewLater`, `../ask`) —
+ *   unless its session still owes something fresh: a session is never split,
+ *   so it stays one card where its freshest row is ({@link runsOf}). Still a
+ *   fold: opened, it shows every row. The pod stamps such a row `ageBucket: 'older'` too, so a
  *   client older than this field folds it under Older, never in Recent.
  * - `repeatCount` / `count` — how many identical things one row stands for,
  *   drawn as "and N more like it" ({@link repeatLabel}). KIND-AWARE ({@link repeatOf}): a notification's repeats
@@ -133,27 +134,50 @@ function pushInto<T extends GroupableSignal>(
   groups.push({ key: signal.id, sessionId: null, items: [signal] });
 }
 
-/** Split a server-ordered page into one run per session + the Older and Review later partitions. */
+type Fold = "recent" | "older" | "reviewLater";
+
+/** Where ONE row folds on its own; a session's rows fold together (`runsOf`). */
+function foldOf(s: GroupableSignal): Fold {
+  if (s.reviewLater === true) return "reviewLater";
+  return s.ageBucket === "older" ? "older" : "recent";
+}
+
+/** Freshest first: a session folds where its freshest row would. */
+const FOLD_RANK: Record<Fold, number> = { recent: 0, older: 1, reviewLater: 2 };
+
+/**
+ * Split a server-ordered page into one run per session + the Older and Review
+ * later partitions. A session is ONE row, never split across folds: its rows
+ * fold together, where its freshest row would (a session that still owes
+ * something fresh stays in Recent, its week-old ask with it). The pod lifts a
+ * session's rows into one age bucket already; the Review later flag is per
+ * row (an owed ask's own clock), so it is joined here.
+ */
 function runsOf<T extends GroupableSignal>(
   signals: readonly T[]
 ): { recent: Run<T>[]; older: Run<T>[]; reviewLater: Run<T>[] } {
-  const recent: Run<T>[] = [];
-  const older: Run<T>[] = [];
-  const reviewLater: Run<T>[] = [];
-  // A review-later row never carries a session key (the pod keeps it out of
-  // the session's block), so it never joins a session card.
-  const reviewLaterBySession = new Map<string, Run<T>>();
-  // Per fold: a session is one row in Recent and, separately, in Older (the
-  // pod lifts a session's rows into one bucket, so on its pages that never
-  // splits).
-  const recentBySession = new Map<string, Run<T>>();
-  const olderBySession = new Map<string, Run<T>>();
+  const sessionFold = new Map<string, Fold>();
   for (const s of signals) {
-    if (s.reviewLater === true) pushInto(reviewLater, s, reviewLaterBySession);
-    else if (s.ageBucket === "older") pushInto(older, s, olderBySession);
-    else pushInto(recent, s, recentBySession);
+    const sessionId = sessionIdOfGroupKey(s.groupKey);
+    if (!sessionId) continue;
+    const own = foldOf(s);
+    const seen = sessionFold.get(sessionId);
+    if (!seen || FOLD_RANK[own] < FOLD_RANK[seen]) {
+      sessionFold.set(sessionId, own);
+    }
   }
-  return { recent, older, reviewLater };
+  const folds: Record<Fold, Run<T>[]> = {
+    recent: [],
+    older: [],
+    reviewLater: [],
+  };
+  const bySession = new Map<string, Run<T>>();
+  for (const s of signals) {
+    const sessionId = sessionIdOfGroupKey(s.groupKey);
+    const fold = (sessionId && sessionFold.get(sessionId)) || foldOf(s);
+    pushInto(folds[fold], s, bySession);
+  }
+  return folds;
 }
 
 /** The fields `repeatLabel` reads. Optional: a row from a pre-W2 pod may lack them. */

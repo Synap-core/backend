@@ -1187,7 +1187,9 @@ export function signalFromOwedSlot(
     ...sessionSource(row.sessionId, row.sessionTitle),
     groupKey: sessionGroupKey(row.sessionId),
     // Review later wins over Older, like a cluster's: a client that predates
-    // the flag still folds it under Older (owed > 7 days is older too).
+    // the flag still folds it under Older (owed > 7 days is older too). It
+    // keeps its session key: a session is never split, so the slot folds with
+    // its session's freshest row (`needsYouRows`).
     ageBucket: ageBucketOf(occurredAt, now),
     ...(isAskReviewLater(row, now) ? { reviewLater: true as const } : {}),
     repeatCount: 1,

@@ -303,6 +303,30 @@ describe("a proposed decision asks the person (W3)", () => {
     );
   });
 
+  it("strips the title the summary opens with in any case — never drops the rest", async () => {
+    // One fold for "does it restate" and "what is left": the summary opens
+    // with the title in another case, and still says something beyond it.
+    const id = await decision({
+      decisionStatus: "proposed",
+      summary: "pricing model: three tiers, reviewed yearly.",
+    });
+    await fire(id, "create");
+    expect((await slotsCarrying(id))[0]!.why).toBe(
+      "three tiers, reviewed yearly."
+    );
+  });
+
+  it("two decisions with one title in one session: an ordinal, never an id fragment", async () => {
+    const sid = await session();
+    const first = await decision({ decisionStatus: "proposed" });
+    const second = await decision({ decisionStatus: "proposed" });
+    await fire(first, "create", sid);
+    await fire(second, "create", sid);
+    expect((await slotsCarrying(first))[0]!.label).toBe("Pricing model");
+    // The label heads the card on every surface.
+    expect((await slotsCarrying(second))[0]!.label).toBe("Pricing model (2)");
+  });
+
   it("resolved elsewhere ⇒ the owed slot is retired 'decision_resolved'", async () => {
     const sid = await session();
     const id = await decision({ decisionStatus: "proposed" });

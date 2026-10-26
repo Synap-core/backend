@@ -49,7 +49,7 @@ export interface ProposalFateRow {
   sessionId?: string | null;
 }
 
-export function proposalFateInput(
+function proposalFateInput(
   row: ProposalFateRow,
   now: Date | number
 ): ProposalFateInput {
