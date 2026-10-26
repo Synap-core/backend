@@ -58,3 +58,12 @@ The governed write-back. Returns `{ status, proposalId, proposedEntityId, messag
 1. The skill is born unapproved: the user approves the `skill/create` proposal.
 2. `synap_list_capabilities` shows a verb whose skill is still off as `blocked: "not_enabled"` with an `enable.url`: hand that link to the user instead of running it.
 3. `console.log` goes to the pod log, not to your result: return what you need to see.
+
+## Box scripts (packages, files, Python or Node)
+
+When the work needs packages, files or another language (chart a CSV with pandas, convert a file, scrape with a headless browser), write a BOX script instead: `synap_create_skill` with `executionMode: "box"`, the script in `code` (a whole program, not a function body) and `box: { language: "python" | "node", packages: [{ name, version }], hosts: ["api.example.com"], limits? }`.
+
+- It runs on the person's own computer, in a fresh box per run: no pod access, no secrets, network only to the `hosts` you declare (packages install from their registry first). Pin every package to an exact version.
+- Parameters arrive as `/in/parameters.json`; write output files to `/out` (they come back on the run and in the session). Print what you want the person to read: the log is kept.
+- `synap_run_capability` QUEUES it and returns `{ status: "queued", boxRunId }`: the run is not finished yet. Its log, files and exit code show on the run (Runs, the session's runs). The person must have turned on "Runs scripts" for one of their computers.
+- The reviewer approves the code, the packages and the hosts together; changing any of them needs a new approval.
