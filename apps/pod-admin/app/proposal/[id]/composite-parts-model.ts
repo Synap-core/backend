@@ -128,6 +128,20 @@ function record(
   };
 }
 
+/** The roles this proposal attaches (`isNew`), each with its stage when set. */
+function newRoles(
+  roles: ProposalReviewGraph["entities"][number]["roles"]
+): RecordValue | null {
+  return tags(
+    (roles ?? [])
+      .filter((r) => r.isNew)
+      .map((r) => {
+        const noun = resolveObjectNoun(r.profileSlug);
+        return r.status ? `${noun} · ${resolveStatusLabel(r.status)}` : noun;
+      })
+  );
+}
+
 /** What a stored flow runs: its first action in words, else every step named. */
 function flowRuns(flow: unknown): RecordValue | null {
   const then = ruleThenWords(flow, new Map());
@@ -214,23 +228,49 @@ const DRAWERS = {
     }),
   entities: ({ graph, payload, definitionsFor }) => {
     // A new record reads as its full card (`graphRecords`, the kind's
-    // labels); a record the graph only LINKS is not created and has none.
+    // labels). A record the graph only LINKS is not created: it is drawn
+    // only when it gains a role, as a change to that record.
     const full = new Map(
       graphRecords(payload, definitionsFor).map((r) => [r.ref, r])
     );
-    return graph.entities
-      .filter((e) => !e.existingEntityId)
-      .map((e) => ({
-        source: "entities" as const,
-        shape: "record" as const,
-        record: full.get(e.ref) ?? {
-          ref: e.ref,
-          title: e.title || null,
-          kind: e.profileSlug,
-          op: "create" as const,
-          fields: [],
+    return graph.entities.flatMap((e) => {
+      const roles = field("roles", newRoles(e.roles));
+      if (e.existingEntityId) {
+        if (!roles.length) return [];
+        return [
+          record(
+            "entities",
+            e.ref,
+            e.profileSlug,
+            e.title || null,
+            [
+              ...field("target", {
+                kind: "ref",
+                objectKind: e.profileSlug,
+                id: e.existingEntityId,
+                name: e.title || resolveObjectNoun(e.profileSlug),
+              }),
+              { ...roles[0]!, op: "change" as const },
+            ],
+            "update"
+          ),
+        ];
+      }
+      const base = full.get(e.ref) ?? {
+        ref: e.ref,
+        title: e.title || null,
+        kind: e.profileSlug,
+        op: "create" as const,
+        fields: [],
+      };
+      return [
+        {
+          source: "entities" as const,
+          shape: "record" as const,
+          record: { ...base, fields: [...base.fields, ...roles] },
         },
-      }));
+      ];
+    });
   },
   playbooks: ({ graph }) =>
     (graph.playbooks ?? []).map((p) =>

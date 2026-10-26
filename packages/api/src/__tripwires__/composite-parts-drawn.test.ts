@@ -82,6 +82,7 @@ const ONE_OF_EACH = {
     ref: "acme",
     profileSlug: "company",
     title: "Acme",
+    facets: [{ profileSlug: "client" }],
   },
   create_relation: {
     op: "create_relation",
@@ -196,8 +197,24 @@ const ONE_OF_EACH = {
   },
 } satisfies { [K in OpKind]: Extract<CompositeProposalOperation, { op: K }> };
 
+/**
+ * A record the graph only LINKS, which gains a role: it is not created, but
+ * approving changes it (the facet attaches, or moves forward).
+ */
+const LINKED_GAINS_ROLE = {
+  op: "create_entity",
+  ref: "bob",
+  profileSlug: "person",
+  title: "Bob",
+  existingEntityId: "2b6e1a9c-0f3d-4c51-8e7a-5d9b4f2a1c33",
+  facets: [{ profileSlug: "lead", status: "qualified", advanceExisting: true }],
+} satisfies Extract<CompositeProposalOperation, { op: "create_entity" }>;
+
 const data: CompositeProposalData = {
-  operations: Object.values(ONE_OF_EACH) as CompositeProposalOperation[],
+  operations: [
+    ...(Object.values(ONE_OF_EACH) as CompositeProposalOperation[]),
+    LINKED_GAINS_ROLE,
+  ],
 };
 
 /** Every key the projection filled for this input. */
@@ -261,6 +278,27 @@ describe("every part the pod projects is drawn on pod-admin's proposal page", ()
         kind: "tags",
         items: [expect.stringContaining("Where the work is")],
       })
+    );
+  });
+
+  it("a role the graph attaches is drawn, on a new record and on a linked one", () => {
+    const rolesOf = (title: string) => {
+      const item = items.find(
+        (i) =>
+          i.source === "entities" &&
+          i.shape === "record" &&
+          i.record.title === title
+      );
+      return item?.shape === "record"
+        ? item.record.fields.find((f) => f.key === "roles")?.after
+        : undefined;
+    };
+    expect(rolesOf("Acme")).toEqual(
+      expect.objectContaining({ kind: "tags", items: [expect.any(String)] })
+    );
+    // Bob is not created, yet approving makes him a qualified lead.
+    expect(rolesOf("Bob")).toEqual(
+      expect.objectContaining({ kind: "tags", items: [expect.any(String)] })
     );
   });
 
