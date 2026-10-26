@@ -31,6 +31,7 @@ import {
 } from "../../utils/permission-check.js";
 import { auditLog } from "../../utils/audit-log.js";
 import { assertKeyMayWrite } from "../../utils/assert-key-may-write.js";
+import { reachedFacetGrantSpace } from "../../utils/grant-write-check.js";
 import {
   moveStatus,
   statusMoveActorFor,
@@ -52,7 +53,10 @@ import {
  * grant on the PARENT entity's workspace and, when the facet row lives
  * elsewhere (a shared/system role is stored pod-wide), on THAT placement too.
  * null = pod scope, so a key pinned to a space fails closed on a pod-wide
- * parent or role. Runs before anything is written; a no-op without a grant.
+ * parent or role — except an UPDATE of a role facet the key reaches
+ * (`reachedFacetGrantSpace`, founder decision 1, 2026-10-26), which the caller
+ * passes as that space. Runs before anything is written; a no-op without a
+ * grant.
  */
 async function assertFacetWriteGrant(
   action: "attach" | "update" | "detach",
@@ -506,11 +510,22 @@ export const facetProcs = {
         columns: { title: true, workspaceId: true },
       });
       const parentWorkspaceId = parentForUpdate?.workspaceId ?? null;
+      // A pod-wide role facet on a pod-wide entity is checked in the key's
+      // space its role is granted to (the read reach) — an UPDATE only:
+      // attaching or detaching a role re-shares the entity, so those stay D2.
+      const reachedSpace =
+        parentWorkspaceId === null
+          ? await reachedFacetGrantSpace(existing.id, {
+              subjectType: "facet",
+              action: "update",
+              data: { entityId: existing.entityId },
+            })
+          : null;
       await assertFacetWriteGrant(
         "update",
         existing.entityId,
-        parentWorkspaceId,
-        existing.workspaceId ?? null
+        parentWorkspaceId ?? reachedSpace,
+        existing.workspaceId ?? reachedSpace
       );
 
       // LIFECYCLE SPLIT (work model L2): a ROLE's status — `status`, or its
@@ -627,7 +642,7 @@ export const facetProcs = {
         userId: ctx.userId,
         agentUserId: input.agentUserId,
         workspaceId: governanceWorkspaceId,
-        grantWorkspaceId: parentWorkspaceId,
+        grantWorkspaceId: parentWorkspaceId ?? reachedSpace,
         subjectType: "facet",
         action: "update",
         source: input.source,

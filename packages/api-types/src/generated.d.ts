@@ -9806,6 +9806,12 @@ export interface WaitingOnMark {
 	reason: WaitingOnReason;
 	count: number;
 }
+declare const GOAL_CONVERTIBLE_KINDS: readonly [
+	"goal",
+	"objective",
+	"okr"
+];
+export type GoalConvertibleKind = (typeof GOAL_CONVERTIBLE_KINDS)[number];
 /**
  * WHO is asking for access, on an `access-request` row — a pod-level request
  * that is not a proposal: an external service asking to be a TRUSTED ISSUER
@@ -9845,6 +9851,36 @@ export interface NeedsYouInvite {
 	scope: "pod" | "workspace";
 	/** The space's name; null for a pod-wide invite or an unnamed space. */
 	spaceName: string | null;
+}
+/**
+ * One entity of a retired goal kind (Life OS `goal`, Enterprise `objective`,
+ * Project Management `okr`) that was never made a goal, on the
+ * `convertible-goals` card (founder decision D-3, 2026-10-26).
+ */
+export interface NeedsYouConvertibleGoal {
+	entityId: string;
+	/** The entity's title; null when it has none (the host names its kind). */
+	title: string | null;
+	kind: GoalConvertibleKind;
+	/** The space it lives in; null for a pod-wide entity or an unnamed space. */
+	spaceName: string | null;
+	/**
+	 * The projects it is filed in that the viewer can see (`belongs_to_project`)
+	 * — where its goal lands by default, as "Make it a goal" does.
+	 */
+	projectIds: string[];
+}
+/**
+ * The pod's ONE "Make them goals" card (founder decision D-3, 2026-10-26): the
+ * entities of a retired goal kind the viewer can read that were never made a
+ * goal (no `promoted_to` edge to a track). The person reviews them and makes
+ * them goals, each through the one convert door; nothing converts on its own.
+ */
+export interface NeedsYouConvertibleGoals {
+	/** Newest first, at most the pod's scan cap. */
+	entities: NeedsYouConvertibleGoal[];
+	/** The scan hit its cap: there are more than `entities.length`. */
+	truncated: boolean;
 }
 /**
  * CONNECTION EVENT LINES — the ONE rule that turns a connection's lifecycle
@@ -13334,6 +13370,63 @@ export interface OwedByPerson {
 		title: string | null;
 	}>;
 }
+export type Unavailable = {
+	status: "unavailable";
+};
+export interface LooseEnds {
+	/** The population: the calling agent's own work, never anyone else's. */
+	lens: "yours";
+	idleDays: number;
+	sessions: {
+		count: number;
+		items: Array<{
+			/** The call (or the step before it) that ends it. */
+			close: string;
+			id: string;
+			idleDays: number;
+			/** Asks on it the person still owes. */
+			owedByPerson: number;
+			/** A person made a write on it: not yours alone to close. */
+			personTouched: boolean;
+			status: string;
+			title: string;
+		}>;
+	} | Unavailable;
+	asks: {
+		count: number;
+		/** True when the ended sessions read hit its cap. */
+		countIsLowerBound: boolean;
+		items: Array<{
+			close: string;
+			key: string;
+			label: string;
+			owedSince: string | null;
+			sessionId: string;
+			sessionTitle: string;
+		}>;
+	} | Unavailable;
+	proposals: {
+		count: number;
+		items: Array<{
+			ageDays: number;
+			close: string;
+			id: string;
+			link: string;
+			summary: string | null;
+		}>;
+		oldestDays: number | null;
+	} | Unavailable;
+	automations: {
+		count: number;
+		items: Array<{
+			ageDays: number;
+			close: string;
+			id: string;
+			name: string;
+			triggerType: string;
+		}>;
+	} | Unavailable;
+}
 export type SessionEvaluationRow = typeof sessionEvaluations.$inferSelect;
 export interface SessionEvaluationSummary {
 	criteria: SessionCriterion[];
@@ -13673,6 +13766,13 @@ export interface StartHere {
 	 | {
 		status: "paused";
 	} | StartHereUnavailable;
+	/**
+	 * The CALLING AGENT's own leftovers (W-B2): sessions it opened idle over a
+	 * week, asks it left owed on its ended sessions, its proposals pending over
+	 * a week, automations it made that never fired — each row with the call
+	 * that ends it. Present only when an agent calls. See `loose-ends.ts`.
+	 */
+	looseEnds?: LooseEnds;
 	/**
 	 * Open sessions the caller OWNS whose criteria are not all graded —
 	 * "grade with evaluate_session before you say done". Bounded read; the lens
@@ -18064,14 +18164,14 @@ export interface PacketEvaluationItem {
 	rationale: string | null;
 	createdAt: string;
 }
-export type Unavailable = {
+type Unavailable$1 = {
 	reason: string;
 	status: "unavailable";
 };
 export type PathCount = {
 	status: "ok";
 	total: number;
-} | Unavailable;
+} | Unavailable$1;
 /**
  * A row's `unitFacts`. Structurally a `NeedsYouFacts` (`needs-you.ts`): feed it
  * to `sessionNeedsYou` / `tallyNeedsYou` unchanged.
@@ -18865,7 +18965,7 @@ export interface ProjectOutputsResult {
 	 */
 	truncated: boolean;
 }
-type Unavailable$1 = {
+type Unavailable$2 = {
 	reason: string;
 	status: "unavailable";
 };
@@ -18912,7 +19012,7 @@ export interface ProjectPathRow {
 	hasOutputs: {
 		status: "ok";
 		value: boolean;
-	} | Unavailable$1;
+	} | Unavailable$2;
 	/**
 	 * The session's DECLARED deliverables (`expected_outputs`), counted by THE
 	 * shared rule (`tallyDeliverables`, `@synap-core/types/units`
@@ -18924,7 +19024,7 @@ export interface ProjectPathRow {
 	 */
 	deliverables: ({
 		status: "ok";
-	} & DeliverableCounts) | Unavailable$1;
+	} & DeliverableCounts) | Unavailable$2;
 	nextMove: ContinuationNextMove;
 	/**
 	 * The liveness facts the "working right now" rule reads (D1,
@@ -18953,7 +19053,7 @@ export interface ProjectPathResult {
 	tracks: {
 		items: ProjectPathTrack[];
 		status: "ok";
-	} | Unavailable$1;
+	} | Unavailable$2;
 	/**
 	 * Across the WHOLE path under the same filter, not just this page.
 	 *
@@ -19920,7 +20020,15 @@ export type SignalKind =
  * app — Accept on the row, Decline beside it. No door (not a member yet);
  * what the two verbs act on rides in `invite`.
  */
- | "space-invite";
+ | "space-invite"
+/**
+ * The pod's ONE "Make them goals" card (`convertible-goals.ts`; founder
+ * decision D-3, 2026-10-26): the viewer's readable `goal` / `objective` /
+ * `okr` entities never made a goal. Its verb opens a review; each entity
+ * converts through the one convert door, by the person's act only. The
+ * entities ride in `convertible`.
+ */
+ | "convertible-goals";
 /** One row in either lens. Deliberately identical in both, so the tray and the
  *  history feed render from ONE shape. */
 export interface Signal {
@@ -20123,6 +20231,11 @@ export interface Signal {
 	 */
 	invite?: NeedsYouInvite;
 	/**
+	 * `convertible-goals` only: the entities the card reviews, newest first,
+	 * each with the projects its goal may land in (`NeedsYouConvertibleGoals`).
+	 */
+	convertible?: NeedsYouConvertibleGoals;
+	/**
 	 * `proposal-cluster` only: the member proposal ids the cluster sampled
 	 * (`sampleProposalIds`, capped at 20 — `count` may exceed it). What a batch
 	 * decision over the row acts on; a surface batches a cluster only when
@@ -20227,7 +20340,7 @@ export interface LensPagePicks {
 	unreadable: string[];
 }
 /** A sub-read's name — what `unreadable` reports. */
-export type SignalSubRead = "activity" | "app-requests" | "captures" | "drafts" | "events" | "invites" | "issuers" | "liveness" | "notifications" | "outputs" | "owed" | "proposals" | "review";
+export type SignalSubRead = "activity" | "app-requests" | "captures" | "convertible-goals" | "drafts" | "events" | "invites" | "issuers" | "liveness" | "notifications" | "outputs" | "owed" | "proposals" | "review";
 /** One class of the lens page. */
 export interface LensClassWire {
 	/** The first `cap` rows, in the class's own order. */
@@ -28714,6 +28827,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				createdByUserId: string | null;
 				deletedAt: Date | null;
 				documentId: string | null;
+				homeWorkspaceId: string | null;
 				id: string;
 				preview: string | null;
 				profileId: string | null;
@@ -28898,6 +29012,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					status?: string | undefined;
 				}[] | undefined;
 				global?: boolean | undefined;
+				homeWorkspaceId?: string | undefined;
 				profileId?: string | undefined;
 				profileSlug?: string | undefined;
 				projectId?: string | null | undefined;
@@ -32692,6 +32807,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdByUserId: string | null;
 					deletedAt: Date | null;
 					documentId: string | null;
+					homeWorkspaceId: string | null;
 					id: string;
 					preview: string | null;
 					profileId: string | null;
@@ -41189,6 +41305,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdByUserId: string | null;
 					deletedAt: Date | null;
 					documentId: string | null;
+					homeWorkspaceId: string | null;
 					id: string;
 					preview: string | null;
 					profileId: string | null;
@@ -42441,6 +42558,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				blocked: number;
 				captures: number;
+				convertible: number;
 				decisions: number;
 				distinct: number;
 				drafts: number;
@@ -42466,6 +42584,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				count: {
 					blocked: number;
 					captures: number;
+					convertible: number;
 					decisions: number;
 					distinct: number;
 					drafts: number;
@@ -42495,6 +42614,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				count: {
 					blocked: number;
 					captures: number;
+					convertible: number;
 					decisions: number;
 					distinct: number;
 					drafts: number;
@@ -42526,7 +42646,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					proposed?: number | undefined;
 				} | undefined;
 				cursor?: string | undefined;
-				kinds?: ("access-request" | "activity" | "capture" | "draft-asks" | "event" | "live-session" | "notification" | "output" | "owed-slot" | "proposal-cluster" | "rule-run" | "session-review" | "space-invite")[] | undefined;
+				kinds?: ("access-request" | "activity" | "capture" | "convertible-goals" | "draft-asks" | "event" | "live-session" | "notification" | "output" | "owed-slot" | "proposal-cluster" | "rule-run" | "session-review" | "space-invite")[] | undefined;
 				lens?: "happening" | "history" | "needs-you" | "page" | "produced" | "proposed" | "suggestions" | undefined;
 				limit?: number | undefined;
 				picks?: boolean | undefined;
@@ -45645,6 +45765,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					deletedAt: Date | null;
 					documentId: string | null;
 					facetSlugs: string[];
+					homeWorkspaceId: string | null;
 					id: string;
 					preview: string | null;
 					profileId: string | null;

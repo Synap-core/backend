@@ -6,6 +6,7 @@ import {
   resolveOriginTrust,
 } from "./resolve-agent-governance-decision.js";
 import { ChannelType } from "../schema/channels.js";
+import { runWithHeldWritesApproved } from "./request-write-context.js";
 
 /**
  * Minimal fake db: a queue of query RESULTS, consumed in call order.
@@ -651,6 +652,48 @@ describe("resolveAgentGovernanceDecision — #4 origin-trust activation via chan
       preferAgentMetadataAutoApproveFor: true,
     });
 
+    expect(result.decision).toBe("execute");
+  });
+});
+
+/**
+ * W-B1: approving a held-writes pack replays each kept write as the agent
+ * inside `runWithHeldWritesApproved`. The person answered the ceiling for
+ * those writes, so rung 2.56 must not hold them again; outside that scope the
+ * ceiling holds as before.
+ */
+describe("resolveAgentGovernanceDecision — the daily ceiling and an approved held-writes replay", () => {
+  const overCeiling = () =>
+    makeDb([
+      [{ userType: "agent", agentMetadata: {} }],
+      [{ settings: {}, workspaceType: "personal" }],
+      [], // no governance rule
+      [], // resolveDailyWriteCeiling candidates → default limit (500)
+      [{ n: 600 }], // countAgentWritesTodayUtc → over the ceiling
+    ]);
+  const input = {
+    agentUserId: "agent-1",
+    workspaceId: "ws-1",
+    subjectType: "entity",
+    action: "create",
+    preferAgentMetadataAutoApproveFor: true,
+  };
+
+  it("over the ceiling, a would-be-auto write is held (propose, DAILY_WRITE_CEILING)", async () => {
+    const result = await resolveAgentGovernanceDecision({
+      db: overCeiling(),
+      ...input,
+    });
+    expect(result).toMatchObject({
+      decision: "propose",
+      reasonCode: "DAILY_WRITE_CEILING",
+    });
+  });
+
+  it("the replay of an approved held-writes pack is not held again (execute)", async () => {
+    const result = await runWithHeldWritesApproved("pack-1", () =>
+      resolveAgentGovernanceDecision({ db: overCeiling(), ...input })
+    );
     expect(result.decision).toBe("execute");
   });
 });

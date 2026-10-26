@@ -183,6 +183,7 @@ describe("needs-you union", () => {
       captures: 0,
       requests: 0,
       invites: 0,
+      convertible: 0,
       drafts: 0,
       draftsTruncated: false,
       suggestions: 0,
