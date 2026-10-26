@@ -5801,7 +5801,7 @@ export const tools = {
     // write tool declares it the moment it is listed. A tool that declares its
     // own (`synap_update_session`'s target, …) keeps it.
     for (const tool of toolDefs) {
-      if (tool.annotations?.readOnlyHint === true) continue;
+      if (tool.annotations?.readOnlyHint !== false || tool) continue;
       const properties = tool.inputSchema.properties ?? {};
       if ("sessionId" in properties) continue;
       tool.inputSchema = {
