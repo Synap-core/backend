@@ -24,7 +24,16 @@
  * Side effect only: never throws, never gates the write it follows, never
  * touches governance (`NotificationService.create` is itself non-fatal).
  */
-import { db, focusSessions, eq } from "@synap/database";
+import {
+  db,
+  focusSessions,
+  notifications,
+  eq,
+  and,
+  ne,
+  drizzleSql,
+  focusSessionWaitsOnPersonWhere,
+} from "@synap/database";
 import type { ExpectedOutput } from "@synap/playbooks";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import type { Ask } from "@synap-core/types/ask";
@@ -244,5 +253,40 @@ export async function notifySessionNeedsYou(p: {
       "session.needs_you notification failed"
     );
     return false;
+  }
+}
+
+/**
+ * The session's `session.needs_you` rows leave the bell once it no longer
+ * waits on the person (no owed slot, no open question). Called by the close
+ * door, after it stamped what the end of a session settles: the needs-you
+ * read already drops such a row by reading the session's state
+ * (`dedupeNotifications`), so this only stops the bell keeping it unread
+ * forever. One SQL statement, so the state it reads is the state it acts on.
+ * Never throws.
+ */
+export async function settleSessionNeedsYou(sessionId: string): Promise<void> {
+  try {
+    await db
+      .update(notifications)
+      .set({ status: "actioned", readAt: new Date() })
+      .where(
+        and(
+          eq(notifications.type, SESSION_NEEDS_YOU_NOTIFICATION_TYPE),
+          eq(notifications.sourceType, "session"),
+          eq(notifications.sourceId, sessionId),
+          ne(notifications.status, "actioned"),
+          drizzleSql`NOT EXISTS (
+            SELECT 1 FROM ${focusSessions}
+            WHERE ${focusSessions.id} = ${sessionId}
+              AND ${focusSessionWaitsOnPersonWhere()}
+          )`
+        )
+      );
+  } catch (err) {
+    logger.warn(
+      { err, sessionId },
+      "session.needs_you rows not settled (the close stands)"
+    );
   }
 }

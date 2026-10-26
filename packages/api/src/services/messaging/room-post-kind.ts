@@ -115,3 +115,36 @@ export function withoutRoomPostMeta(
   const { [ROOM_POST_META_KEY]: _dropped, ...rest } = metadata;
   return rest;
 }
+
+/**
+ * How an agent shows a room question in its own chat: `Q-` + the first 8
+ * characters of the message id (`Q-1a2b3c4d`). Pure.
+ */
+export function questionShortId(messageId: string): string {
+  return `Q-${messageId.slice(0, 8)}`;
+}
+
+/**
+ * What the closing agent does with a question it asked and nobody answered.
+ *   `withdrawn`    — overtaken: its work answered it, the plan changed (a
+ *                    `note` says why). Stamped `closed: withdrawn`.
+ *   `keep_as_owed` — the person still owes the answer after the session: it
+ *                    becomes an owed slot of theirs (the question's own slot,
+ *                    else a new one), which no exit retires.
+ * An answer the person gave in chat is not a disposition: it is relayed
+ * (`synap_relay_answer`) before closing (the close door, `complete-session.ts`).
+ */
+export const CLOSE_QUESTION_DISPOSITIONS = [
+  "withdrawn",
+  "keep_as_owed",
+] as const;
+export type CloseQuestionDispositionKind =
+  (typeof CLOSE_QUESTION_DISPOSITIONS)[number];
+
+export interface CloseQuestionDisposition {
+  /** The room question's message id (the full id, never the `Q-` short form). */
+  messageId: string;
+  disposition: CloseQuestionDispositionKind;
+  note?: string;
+}
+

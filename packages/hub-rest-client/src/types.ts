@@ -1535,6 +1535,16 @@ export interface CompleteFocusSessionInput {
   verificationReport?: Record<string, unknown>;
   /** Which terminal state to land in. Defaults to `"closed"` server-side. */
   terminalStatus?: "closed" | "cancelled" | "failed";
+  /**
+   * What becomes of each question the calling agent asked in the room that is
+   * still open. An agent's `closed` / `failed` close without one for each is
+   * refused (409, `reasonCode: "OPEN_QUESTIONS"`, `openQuestions[]`).
+   */
+  questionDispositions?: Array<{
+    messageId: string;
+    disposition: "withdrawn" | "keep_as_owed";
+    note?: string;
+  }>;
 }
 
 /** One proposal in the close pack (`pendingProposals`). */
@@ -1574,6 +1584,8 @@ export type CompleteFocusSessionResult =
         unfinishedOutputs: number;
         expiredEphemerals: number;
         retiredSlots: number;
+        /** Room questions still open at the end, stamped closed (session ended). */
+        closedQuestions: number;
       };
       warnings: string[];
       /** What closed still owed — never a refusal of the close. */

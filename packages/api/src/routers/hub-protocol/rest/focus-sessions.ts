@@ -64,7 +64,11 @@ import {
   AskSchema,
   RELAY_SURFACE_MAX_CHARS,
 } from "@synap-core/types/ask";
-import { completeFocusSession } from "../../../services/focus-sessions/complete-session.js";
+import {
+  completeFocusSession,
+  isOpenQuestionsAtCloseError,
+} from "../../../services/focus-sessions/complete-session.js";
+import { CLOSE_QUESTION_DISPOSITIONS } from "../../../services/messaging/room-post-kind.js";
 import { sessionGoalPayload } from "../../../services/focus-sessions/session-update-goal.js";
 import {
   gateSessionFiling,
@@ -600,6 +604,18 @@ const CompleteBodySchema = z.object({
   // the MCP door — which both close through here — could record only success.
   // Derived from the SSOT so a fourth terminal status is accepted by default.
   terminalStatus: z.enum(TERMINAL_SESSION_STATUSES).optional(),
+  // The calling agent's word on each of its still-open room questions; the
+  // MCP door's twin (`synap_complete_session`).
+  questionDispositions: z
+    .array(
+      z.object({
+        messageId: z.string().uuid(),
+        disposition: z.enum(CLOSE_QUESTION_DISPOSITIONS),
+        note: z.string().max(500).optional(),
+      })
+    )
+    .max(100)
+    .optional(),
 });
 
 // ── Registration ───────────────────────────────────────────────────────────
@@ -703,6 +719,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     description:
       "Lifecycle close via completeFocusSession — stamps closed, finishes any " +
       "running playbook_run, returns pendingProposals + counts + warnings. " +
+      "Every still-open room question is stamped closed (session ended). An " +
+      "agent's closed/failed close is refused (409 OPEN_QUESTIONS) while a " +
+      "question it asked is open, unless questionDispositions settles each. " +
       "Distinct from POST .../complete-run (playbook run only).",
     request: {
       params: z.object({ id: z.string().uuid() }),
@@ -716,6 +735,11 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       400: { description: "Bad request", schema: ErrorSchema },
       403: { description: "Forbidden or proposed", schema: ErrorSchema },
       404: { description: "Not found", schema: ErrorSchema },
+      409: {
+        description:
+          "Refused: the calling agent's own room questions are still open (openQuestions[])",
+        schema: z.object({}).passthrough(),
+      },
       500: { description: "Internal error", schema: ErrorSchema },
     },
   });
@@ -2364,6 +2388,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         summary: parsed.data.summary,
         verificationReport: parsed.data.verificationReport,
         terminalStatus: parsed.data.terminalStatus,
+        questionDispositions: parsed.data.questionDispositions,
       });
 
       if (!result) {
@@ -2392,6 +2417,18 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         ...(nudges ? { nudges } : {}),
       });
     } catch (err) {
+      // The calling agent left its own questions open: nothing closed.
+      if (isOpenQuestionsAtCloseError(err)) {
+        return c.json(
+          {
+            status: "refused" as const,
+            reasonCode: err.code,
+            error: err.message,
+            openQuestions: err.openQuestions,
+          },
+          409
+        );
+      }
       const code = (err as { code?: unknown })?.code;
       if (code === "FORBIDDEN") {
         const e = err as {

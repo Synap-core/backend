@@ -19,7 +19,10 @@ import { toSafeToolError, validateUuidArgs } from "../tool-errors.js";
 import { USER_OBSERVATION_CATEGORIES } from "../../../services/knowledge/remember-fact.js";
 import { ASK_DETAILS } from "../../../services/knowledge/synthesize.js";
 import { SESSION_KINDS } from "../../../services/focus-sessions/session-kind.js";
-import { ROOM_POST_KINDS } from "../../../services/messaging/room-post-kind.js";
+import {
+  CLOSE_QUESTION_DISPOSITIONS,
+  ROOM_POST_KINDS,
+} from "../../../services/messaging/room-post-kind.js";
 import {
   SESSION_POST_INTENTS,
   SESSION_POST_REF_KINDS,
@@ -2547,7 +2550,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "End a focus session — the ONE door for every lifecycle exit. `terminalStatus` says HOW it ended: 'closed' (the work finished, default), 'cancelled' (abandoned — you stopped on purpose), 'failed' (you could not complete it). Say which honestly: a cancelled or failed session recorded as 'closed' tells the user work succeeded when it did not. 'cancelled' also STOPS the session's in-flight work where a real stop exists (queued jobs, a running agent reply) and returns `cancel`: { stopped[], notStoppable[] (already running — it will finish), finished[] (proposals that already applied) }. A cancel may come back status 'proposed' — that is NOT an error: it is queued for the user's review and nothing is stopped until they approve. Also closes any running playbook_run. Returns a **review pack**: pendingProposals[], counts, and warnings (e.g. unfinished expectedOutputs — warn only), plus `nudges` for what closed still owed (ungraded criteria: grade them with synap_evaluate_session — best BEFORE closing). Use synap_list_proposals({sessionId}) to re-fetch the pack.",
+          "End a focus session — the ONE door for every lifecycle exit. `terminalStatus` says HOW it ended: 'closed' (the work finished, default), 'cancelled' (abandoned — you stopped on purpose), 'failed' (you could not complete it). Say which honestly: a cancelled or failed session recorded as 'closed' tells the user work succeeded when it did not. 'cancelled' also STOPS the session's in-flight work where a real stop exists (queued jobs, a running agent reply) and returns `cancel`: { stopped[], notStoppable[] (already running — it will finish), finished[] (proposals that already applied) }. A cancel may come back status 'proposed' — that is NOT an error: it is queued for the user's review and nothing is stopped until they approve. Also closes any running playbook_run. Returns a **review pack**: pendingProposals[], counts, and warnings (e.g. unfinished expectedOutputs — warn only), plus `nudges` for what closed still owed (ungraded criteria: grade them with synap_evaluate_session — best BEFORE closing). Use synap_list_proposals({sessionId}) to re-fetch the pack. QUESTIONS: every question still open in the room is stamped 'closed — session ended' (never deleted), and an open confirm/choose ask the person owed retires with the session (act/provide/form stay owed). Before you close as 'closed' or 'failed', settle each question YOU asked that is still open: if the person answered you in chat, relay their exact words with synap_relay_answer; otherwise pass `questionDispositions`. A close that leaves one of your questions unsettled is refused with status 'refused' and `openQuestions` (messageId, shortId Q-xxxxxxxx, text) — nothing is closed. A 'cancelled' close is never refused.",
         inputSchema: {
           type: "object",
           properties: {
@@ -2570,6 +2573,33 @@ export const tools = {
               enum: [...TERMINAL_SESSION_STATUSES],
               description:
                 "How the session ended. 'closed' (default) = the work finished. 'cancelled' = abandoned on purpose. 'failed' = attempted and could not be completed. All three run the SAME close (review pack, playbook_run close, ephemeral expiry, close event) — only the recorded outcome differs.",
+            },
+            questionDispositions: {
+              type: "array",
+              maxItems: 100,
+              description:
+                "Your word on each question you asked in the room that is still open (the refusal lists them). 'withdrawn' = your work overtook it (say why in `note`). 'keep_as_owed' = the person still owes you the answer after this session: it becomes an owed slot of theirs.",
+              items: {
+                type: "object",
+                properties: {
+                  messageId: {
+                    type: "string",
+                    description:
+                      "The question's full message id (from the refusal's openQuestions), not the Q- short id.",
+                  },
+                  disposition: {
+                    type: "string",
+                    enum: [...CLOSE_QUESTION_DISPOSITIONS],
+                  },
+                  note: {
+                    type: "string",
+                    maxLength: 500,
+                    description:
+                      "One line: why it was withdrawn ('you answered it in the brief').",
+                  },
+                },
+                required: ["messageId", "disposition"],
+              },
             },
           },
           required: ["sessionId"],
