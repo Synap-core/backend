@@ -64,7 +64,6 @@ import { readListedStepSpaces } from "../../../services/tracks/track-space-grant
 import { readTrackFromEntity } from "../../../services/tracks/goal-source-entity.js";
 import { loadVisibleProject } from "../../../services/projects/load-visible-project.js";
 import { assertWorkspaceWrite } from "../../../utils/workspace-write-access.js";
-import { lifecycleConflictError } from "../../../services/lifecycle/conflict.js";
 import {
   applyTrackParticipantProposal,
   registerTrackParticipantExecutors,
@@ -302,12 +301,6 @@ export function registerTrackExecutors(): void {
           // (D1): a person who moved the goal since the proposal was filed
           // wins — the approval fails as stale and nothing is written. A
           // proposal filed before the belief rode it carries none.
-          if (
-            typeof data.expectedStatus === "string" &&
-            data.expectedStatus !== track.status
-          ) {
-            throw lifecycleConflictError(data.expectedStatus, track.status);
-          }
           // The lifecycle is re-checked at APPROVAL time: the proposal was
           // legal when filed, but the track may have moved since (dropped,
           // say) — and a closed track is final. The verdict rides the

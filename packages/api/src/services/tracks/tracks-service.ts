@@ -165,7 +165,6 @@ import {
   seedGoalOwner,
 } from "./track-participant-store.js";
 import { activityActorOf, loadActorRows } from "../activity/activity-actors.js";
-import { lifecycleConflictError } from "../lifecycle/conflict.js";
 import {
   assertGoalSource,
   writeGoalLineage,
@@ -1998,12 +1997,6 @@ export async function setTrackStatus(input: {
     ender ?? (await loadTrackForWrite(input.trackId, input.actor));
   // A move decided on a belief that is already false is refused before
   // anything is filed — it could only fail at approval.
-  if (
-    input.expectedStatus !== undefined &&
-    input.expectedStatus !== track.status
-  ) {
-    throw lifecycleConflictError(input.expectedStatus, track.status);
-  }
   if (track.status === input.status) return { status: "unchanged", track };
   const close = {
     verdict: input.verdict ?? null,
@@ -2049,7 +2042,6 @@ export async function setTrackStatus(input: {
       name: track.name,
       status: input.status,
       // The belief the approval replays against (strict compare-and-set).
-      expectedStatus: track.status,
       ...(close.verdict ? { verdict: close.verdict } : {}),
       ...(close.verdictReason ? { verdictReason: close.verdictReason } : {}),
     },
