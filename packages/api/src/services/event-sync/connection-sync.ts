@@ -759,14 +759,8 @@ export async function upsertSyncGraph(
         targetEntityId: targetId,
         source: ctx.provider,
       },
-      // The fan-out speaks the relation door's keys (`relations.create`), so
-      // a reactor reads ONE shape whoever made the edge — the interaction
-      // reactor reads `relationType` (a synced meeting's `attended_by`).
-      {
-        relationType: r.type,
-        fromEntityId: sourceId,
-        toEntityId: targetId,
-      }
+      // NEGCTL: the fan-out keeps the log's shape (no relationType)
+      undefined
     );
   }
   return { created, merged, refreshSkipped, byProfile, deferred };
