@@ -739,6 +739,18 @@ export const tools = {
               description:
                 "Kind + Facets filter — only return entities carrying a live facet of this role-profile slug (e.g. 'client', 'investor'). Use synap_list_profiles to find role slugs (profileKind='role').",
             },
+            sortBy: {
+              type: "string",
+              enum: ["createdAt", "updatedAt", "title"],
+              description:
+                "Sort field, applied to the WHOLE set before paging (page 2 continues page 1). Default createdAt, newest first.",
+            },
+            sortDir: {
+              type: "string",
+              enum: ["asc", "desc"],
+              description:
+                "Sort direction (default desc). e.g. 'least recently updated first' = sortBy updatedAt, sortDir asc.",
+            },
             limit: {
               type: "number",
               default: 50,
