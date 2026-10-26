@@ -3,7 +3,7 @@ name: Pod observations
 # Tells the founder's pod what happened here, for free (no GitHub App, no
 # paid feature): a PR opened, merged or closed, and a CI run finished. Each is
 # posted as ONE observation to the pod's Hub door `observations.append`
-# (dev.pr_opened / dev.pr_merged / dev.pr_closed / ci.run_finished); the pod's
+# (dev.pr_opened / dev.pr_merged / dev.pr_closed / ci.finished); the pod's
 # PR → session resolver moves the session that recorded the PR. The script
 # holds the event → observation map: scripts/pod-observation.mjs.
 #
@@ -14,7 +14,7 @@ name: Pod observations
 # "Nothing posted" and exits 0.
 #
 # workflow_run only fires from the copy of this file on the default branch,
-# so ci.run_finished starts after this file is merged.
+# so ci.finished starts after this file is merged.
 
 on:
   pull_request:
@@ -25,7 +25,7 @@ on:
 
 permissions:
   contents: read
-  # ci.run_finished reads the run's PR body for its `Pod session:` line.
+  # ci.finished reads the run's PR body for its `Pod session:` line.
   pull-requests: read
 
 jobs:

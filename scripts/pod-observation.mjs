@@ -10,12 +10,14 @@
  *   pull_request opened/reopened    → dev.pr_opened
  *   pull_request closed, merged     → dev.pr_merged
  *   pull_request closed, not merged → dev.pr_closed
- *   workflow_run completed          → ci.run_finished
+ *   workflow_run completed          → ci.finished
  *
- * Every type sits in a registered namespace (`dev`, `ci`) and none ends in a
- * reserved phase (`.completed`, `.failed`, `.validated`): the door refuses
- * those. The pod's PR → session resolver reads `data.url` (an outcome's
- * `ref.url`) and `data.podSession` (the PR body's `Pod session: <id>` line).
+ * The payloads are the dev-loop contract (packages/types/src/events/dev-loop.ts,
+ * which the door checks per item); the tripwire parses every one with it. No
+ * `ci.completed`: the door refuses a type ending in a reserved phase
+ * (`.completed`, `.failed`, `.validated`). The pod's PR → session resolver
+ * reads `data.url` (an outcome's `ref.url`) and `data.sessionId` (the PR
+ * body's `Pod session: <id>` line).
  *
  * The devbox poster for the private repos (devbox `~/wt/ci/pr-poster.py`)
  * sends the same shapes with `source: "devbox-ci-watch"`; keep the two equal.
@@ -48,6 +50,31 @@ export function podSessionFromBody(body) {
 
 const SOURCE = "github-actions";
 
+/** The contract's limits (dev-loop.ts): an over-long field would refuse the whole item. */
+const MAX_BODY = 65_536;
+const MAX_TITLE = 512;
+
+/** The contract's optional fields are absent, never null: drop the empties. */
+function compact(data) {
+  return Object.fromEntries(Object.entries(data).filter(([, v]) => v != null));
+}
+
+/**
+ * `ci.finished` status from a run's conclusion. The contract's six pass as they
+ * are; GitHub's others are folded, and an unknown one is not reported.
+ */
+const CI_STATUS = {
+  success: "success",
+  failure: "failure",
+  cancelled: "cancelled",
+  skipped: "skipped",
+  neutral: "neutral",
+  timed_out: "timed_out",
+  startup_failure: "failure",
+  action_required: "neutral",
+  stale: "cancelled",
+};
+
 function prObservation(action, pr, repo) {
   let type;
   let occurredAt;
@@ -62,48 +89,49 @@ function prObservation(action, pr, repo) {
   }
   return {
     type,
-    subjectId: pr.html_url,
+    subjectId: `${repo}#${pr.number}`,
     subjectType: "pull_request",
     ...(occurredAt ? { occurredAt } : {}),
-    data: {
-      url: pr.html_url,
+    data: compact({
       repo,
       number: pr.number,
-      title: pr.title ?? null,
+      url: `https://github.com/${repo}/pull/${pr.number}`,
+      // The merge commit once merged, else the head.
+      sha: pr.merged ? pr.merge_commit_sha : pr.head?.sha,
+      branch: pr.head?.ref,
+      base: pr.base?.ref,
+      title: pr.title?.slice(0, MAX_TITLE),
+      body: pr.body?.slice(0, MAX_BODY),
+      sessionId: podSessionFromBody(pr.body),
+      // Extra fields: the contract allows them.
       action,
-      headRef: pr.head?.ref ?? null,
-      headSha: pr.head?.sha ?? null,
-      baseRef: pr.base?.ref ?? null,
       merged: Boolean(pr.merged),
-      mergeSha: pr.merged ? (pr.merge_commit_sha ?? null) : null,
-      author: pr.user?.login ?? null,
-      podSession: podSessionFromBody(pr.body),
+      headSha: pr.head?.sha,
+      author: pr.user?.login,
       source: SOURCE,
-    },
+    }),
   };
 }
 
-function runObservation(run, repo, podSession) {
-  const prUrls = (run.pull_requests ?? []).map(
-    (p) => `https://github.com/${repo}/pull/${p.number}`
-  );
+function runObservation(run, repo, sessionId) {
+  const status = CI_STATUS[run.conclusion];
+  if (!status || !run.head_sha) return null;
   return {
-    type: "ci.run_finished",
-    subjectId: run.html_url,
+    type: "ci.finished",
+    subjectId: `${repo}@${run.head_sha}`,
     subjectType: "ci_run",
     ...(run.updated_at ? { occurredAt: run.updated_at } : {}),
-    data: {
-      url: run.html_url,
+    data: compact({
+      status,
+      sha: run.head_sha,
       repo,
-      name: run.name ?? null,
-      sha: run.head_sha ?? null,
-      branch: run.head_branch ?? null,
-      event: run.event ?? null,
-      conclusion: run.conclusion ?? null,
-      prUrls,
-      podSession,
+      pr: run.pull_requests?.[0]?.number,
+      url: run.html_url,
+      workflow: run.name,
+      branch: run.head_branch,
+      sessionId,
       source: SOURCE,
-    },
+    }),
   };
 }
 
@@ -111,10 +139,10 @@ function runObservation(run, repo, podSession) {
  * The observation for one GitHub event, or null when the event is not one we
  * report (another pull_request action, a run from a fork).
  *
- * `podSession` is only used for workflow_run, whose payload carries no PR body:
+ * `sessionId` is only used for workflow_run, whose payload carries no PR body:
  * the caller reads it from the run's first PR.
  */
-export function observationFromEvent(eventName, payload, { podSession = null } = {}) {
+export function observationFromEvent(eventName, payload, { sessionId = null } = {}) {
   const repo = payload?.repository?.full_name;
   if (!repo) return null;
   if (eventName === "pull_request" && payload.pull_request) {
@@ -124,7 +152,7 @@ export function observationFromEvent(eventName, payload, { podSession = null } =
     const run = payload.workflow_run;
     // A run of a fork's code: its PR is not ours to report.
     if (run.head_repository?.full_name && run.head_repository.full_name !== repo) return null;
-    return runObservation(run, repo, podSession);
+    return runObservation(run, repo, sessionId);
   }
   return null;
 }
@@ -140,8 +168,8 @@ async function runPodSession(payload, token) {
   });
   if (!res.ok) {
     // The run is still reported; only the session join is missing, and the
-    // resolver can still join on prUrls. Said, not swallowed.
-    console.warn(`::warning::could not read PR #${pr.number} (${res.status}); podSession not set`);
+    // resolver can still join on data.pr. Said, not swallowed.
+    console.warn(`::warning::could not read PR #${pr.number} (${res.status}); sessionId not set`);
     return null;
   }
   return podSessionFromBody((await res.json()).body);
@@ -178,9 +206,9 @@ async function main() {
   }
   const eventName = process.env.GITHUB_EVENT_NAME;
   const payload = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, "utf8"));
-  const podSession =
+  const sessionId =
     eventName === "workflow_run" ? await runPodSession(payload, process.env.GITHUB_TOKEN) : null;
-  const obs = observationFromEvent(eventName, payload, { podSession });
+  const obs = observationFromEvent(eventName, payload, { sessionId });
   if (!obs) {
     console.log(`Nothing to report for ${eventName}/${payload.action}.`);
     return;
@@ -191,7 +219,7 @@ async function main() {
     process.exitCode = 1;
     return;
   }
-  console.log(`Recorded ${obs.type} ${obs.subjectId} (pod session: ${obs.data.podSession ?? "none named"}).`);
+  console.log(`Recorded ${obs.type} ${obs.subjectId} (pod session: ${obs.data.sessionId ?? "none named"}).`);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
