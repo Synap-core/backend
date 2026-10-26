@@ -47,7 +47,7 @@ export function meterCapabilityRun(
       ? { costUsd: reported, costSource: "provider" as const }
       : !run.failed && typeof declared.costUsd === "number"
         ? { costUsd: declared.costUsd, costSource: "price_table" as const }
-        : { costUsd: null, costSource: null };
+        : { costUsd: 0, costSource: null };
   return {
     provider: declared.provider,
     unit: declared.unit,
