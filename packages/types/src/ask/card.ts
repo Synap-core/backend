@@ -671,7 +671,8 @@ export function askCardView(
 
   const why = slot.why?.trim() || "";
   const context =
-    why && !askTextRestates(why, heading) &&
+    why &&
+    !askTextRestates(why, heading) &&
     !(prompt && askTextRestates(why, prompt))
       ? why
       : null;
