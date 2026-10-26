@@ -112,7 +112,9 @@ vi.mock("@synap/api", async () => ({
   normalizeApplicationConnectionScopes:
     mocks.normalizeApplicationConnectionScopes,
   normalizeApplicationOrigin: (value: string) => value,
-  normalizeIssuerUrl: (value: string) => value,
+  // Mirrors the real contract: https-only, no trailing slash, otherwise null.
+  normalizeIssuerUrl: (value: string) =>
+    value.startsWith("https://") ? value.replace(/\/+$/, "") : null,
   normalizePublisherUrl: mocks.normalizePublisherUrl,
   verifyIssuerJwt: mocks.verifyIssuerJwt,
   verifyTrustedIssuerJwt: mocks.verifyTrustedIssuerJwt,

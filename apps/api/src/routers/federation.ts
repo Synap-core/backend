@@ -1536,7 +1536,9 @@ async function synapCloudLinkRefused(issuerUrl: string): Promise<boolean> {
   return (
     trust === "off" &&
     federationIssuer !== null &&
-    canonicalIssuerUrl(federationIssuer) === issuerUrl
+    // Normalized, like discovery reads it: canonicalIssuerUrl() is null for a
+    // pushed issuer with a trailing slash, and the refusal never fired.
+    normalizeIssuerUrl(federationIssuer) === issuerUrl
   );
 }
 

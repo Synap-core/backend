@@ -28784,6 +28784,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				createdByUserId: string | null;
 				deletedAt: Date | null;
 				documentId: string | null;
+				homeWorkspaceId: string | null;
 				id: string;
 				preview: string | null;
 				profileId: string | null;
@@ -28968,6 +28969,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					status?: string | undefined;
 				}[] | undefined;
 				global?: boolean | undefined;
+				homeWorkspaceId?: string | undefined;
 				profileId?: string | undefined;
 				profileSlug?: string | undefined;
 				projectId?: string | null | undefined;
@@ -32762,6 +32764,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdByUserId: string | null;
 					deletedAt: Date | null;
 					documentId: string | null;
+					homeWorkspaceId: string | null;
 					id: string;
 					preview: string | null;
 					profileId: string | null;
@@ -41259,6 +41262,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdByUserId: string | null;
 					deletedAt: Date | null;
 					documentId: string | null;
+					homeWorkspaceId: string | null;
 					id: string;
 					preview: string | null;
 					profileId: string | null;
@@ -45715,6 +45719,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					deletedAt: Date | null;
 					documentId: string | null;
 					facetSlugs: string[];
+					homeWorkspaceId: string | null;
 					id: string;
 					preview: string | null;
 					profileId: string | null;

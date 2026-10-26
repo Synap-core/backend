@@ -58,7 +58,10 @@ vi.mock("@synap/database", async (importOriginal) => {
       deleteBody = vi.fn();
     },
     materializeEntity: h.materialize,
-    resolveImportEntityPlacement: vi.fn(async () => WS),
+    resolveImportEntityPlacement: vi.fn(async () => ({
+      workspaceId: WS,
+      homeWorkspaceId: null,
+    })),
   };
 });
 vi.mock("@synap/database/schema", () => ({ channelContextItems: {} }));
