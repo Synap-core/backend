@@ -220,9 +220,7 @@ describe("box-runs routes — who may call", () => {
       status: "done",
     });
     expect(again.status).toBe(409);
-    expect(
-      await post(app, "/box-runs/lease", {}).then((r) => r.json())
-    ).toEqual({
+    expect(await (await post(app, "/box-runs/lease", {})).json()).toEqual({
       run: null,
     });
   });

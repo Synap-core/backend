@@ -20,10 +20,17 @@
  */
 
 import { z } from "zod";
+import type { Context } from "hono";
 import { and, db, eq } from "@synap/database";
 import { BOX_RUNNER_SCOPE, users } from "@synap/database/schema";
 import { MACHINE_AGENT_TYPE } from "@synap-core/types/agents";
-import { hasScope, logger, requireUuidParam, type HubHono } from "./_shared.js";
+import {
+  hasScope,
+  logger,
+  requireUuidParam,
+  type HubHono,
+  type HubVariables,
+} from "./_shared.js";
 import {
   finishBoxRun,
   heartbeatBoxRun,
@@ -180,10 +187,7 @@ const REFUSAL_TEXT = {
 } as const;
 
 export function registerBoxRunsRoutes(app: HubHono): void {
-  const refused = (
-    c: Parameters<Parameters<HubHono["post"]>[1]>[0],
-    r: LeaseRefusal
-  ) =>
+  const refused = (c: Context<{ Variables: HubVariables }>, r: LeaseRefusal) =>
     c.json({ code: r.code, error: REFUSAL_TEXT[r.code] }, REFUSAL_HTTP[r.code]);
 
   async function body<T extends z.ZodTypeAny>(
