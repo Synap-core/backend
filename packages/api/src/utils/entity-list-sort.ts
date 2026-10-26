@@ -8,7 +8,7 @@
  * 400 at every door — it used to be ignored, which read as "sorted".
  */
 import { z } from "zod";
-import { asc, desc, drizzleSql } from "@synap/database";
+import { asc, drizzleSql } from "@synap/database";
 import { entities } from "@synap/database/schema";
 import type { SQL } from "drizzle-orm";
 
