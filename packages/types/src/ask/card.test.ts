@@ -280,13 +280,16 @@ describe("answerProvenanceMark", () => {
     expect(answerProvenanceMark(input, { agent: "Claude Code" })).toEqual(want);
   });
 
-  it("never prints a blank agent name, and no visible em dash", () => {
+  it("never prints a blank agent name, nor invents 'an agent', and no visible em dash", () => {
     const mark = answerProvenanceMark({ answer: { via: "relayed" } });
-    expect(mark?.label).toBe("Answered in chat · relayed by an agent");
+    expect(mark?.label).toBe("Answered in chat · relayed");
     expect(
       answerProvenanceMark({ pendingRelay: { relayedBy: "a" } }, { agent: " " })
         ?.label
-    ).toBe("An agent relayed your answer. Confirm it.");
+    ).toBe("Your answer was relayed. Confirm it.");
+    expect(ASK_COPY.relayConfirmed(null)).toBe(
+      "You confirmed the relayed answer"
+    );
     for (const v of Object.values(ASK_COPY)) {
       const text = typeof v === "function" ? (v as (a: string) => string)("x") : v;
       expect(text).not.toContain("—");

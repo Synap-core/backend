@@ -28,7 +28,12 @@ import {
   type AskProvideKind,
   type AskSnapshot,
   type ProvideConnectUnavailableReason,
+  ASK_CONFIRM_KEYS,
+  effectiveSlotAsk,
+  type AskCause,
+  type AskCauseKind,
 } from "./index.js";
+import { REVIEW_LATER_AFTER_MS } from "../proposals/fate.js";
 
 // ─── Copy ───────────────────────────────────────────────────────────────────
 
@@ -138,21 +143,56 @@ export const ASK_COPY = {
    * agent's display name; null when the pod cannot name it.
    */
   answeredByYou: "You answered",
+  // Unnamed, the relay is said without inventing "an agent" (decision 4,
+  // 2026-10-26): the mark still says it was relayed, never who.
   relayedBy: (agent: string | null): string =>
-    `Answered in chat · relayed by ${agent?.trim() || "an agent"}`,
+    agent?.trim()
+      ? `Answered in chat · relayed by ${agent.trim()}`
+      : "Answered in chat · relayed",
   /** A relay the person then confirmed with their own tap. */
   relayConfirmed: (agent: string | null): string =>
-    `You confirmed what ${agent?.trim() || "an agent"} relayed`,
+    agent?.trim()
+      ? `You confirmed what ${agent.trim()} relayed`
+      : "You confirmed the relayed answer",
   /** A commitment's relay, waiting for the person's tap. */
   awaitingYourTap: (agent: string | null): string =>
-    `${agent?.trim() || "An agent"} relayed your answer. Confirm it.`,
+    agent?.trim()
+      ? `${agent.trim()} relayed your answer. Confirm it.`
+      : "Your answer was relayed. Confirm it.",
   confirmRelayed: "Confirm",
   notWhatISaid: "Not what I said",
   /** `note` is the agent's one-line reason, when it gave one. */
   withdrawn: (note: string | null | undefined): string =>
     note?.trim() ? `Withdrawn · ${note.trim()}` : "Withdrawn",
   closedSessionEnded: "Closed · the session ended",
+  // ── The card's anatomy ({@link askCardView}) ──
+  /** The collapsed note affordance: one label, no placeholder repeating it. */
+  addNote: "Add a note",
+  /** The mark on the answer the agent recommends. */
+  recommended: "Recommended",
+  /** An owed ask's fate on silence ({@link askFate}), after its age. */
+  fateUntilDecided: "Stays until you decide",
+  fateEndsWithSession: "Retires when the session ends",
+  fateReviewLater: "In Review later",
+  /**
+   * What raised an ask no agent asked ({@link AskCause}), as the door's words.
+   * `at` is already formatted ("29 Sep"); absent, the date is left out.
+   */
+  askCause: (kind: AskCauseKind, at: string | null): string => {
+    const head = ASK_CAUSE_WORDS[kind];
+    return at ? `${head} · ${at}` : head;
+  },
 } as const;
+
+/** The words of each {@link AskCauseKind}. Product copy, not vocabulary. */
+const ASK_CAUSE_WORDS: Record<AskCauseKind, string> = {
+  decision: "From your decision note",
+  gate: "From the session's gate",
+  run: "From the run",
+  external_approval: "From the external agent's run",
+  param: "From the playbook's inputs",
+  criterion: "From the session's checks",
+};
 
 // ─── Where the slot stands ──────────────────────────────────────────────────
 
@@ -344,9 +384,9 @@ export function actView(ask: Ask | null | undefined): ActView | null {
  *   `followed` — the person picked the option the agent recommended.
  *   `overrode` — the agent recommended one, the person answered otherwise
  *                (another option, or "Other…" in their own words).
- *   `none`     — nothing to judge: no recommendation (a confirm can never
- *                carry one — only a choose's options can be `recommended`),
- *                or a pick nobody can read (a room reply in words).
+ *   `none`     — nothing to judge: no recommendation, or a pick nobody can
+ *                read (a room reply in words). A confirm may carry one since
+ *                decision 2 (2026-10-26): its `yes` / `no` `recommended`.
  */
 export type AskRecommendationOutcomeKind = "followed" | "overrode" | "none";
 
@@ -373,10 +413,22 @@ export function askRecommendationOutcome(
     "followedRecommendation" in input
       ? (input as AskSnapshot)
       : (input as { askSnapshot?: AskSnapshot | null }).askSnapshot;
-  if (!snap || snap.mode !== "choose" || !snap.recommendedKey) return none;
+  if (!snap || !snap.recommendedKey) return none;
+  if (snap.mode !== "choose" && snap.mode !== "confirm") return none;
   if (snap.followedRecommendation === true)
     return { outcome: "followed", recommendedLabel: null };
   if (snap.followedRecommendation !== false) return none;
+  if (snap.mode === "confirm") {
+    // The receipt's own words (`summarizeAnswer`), so "AI picked: Yes"
+    // matches what the button and the receipt said.
+    return {
+      outcome: "overrode",
+      recommendedLabel:
+        snap.recommendedKey === ASK_CONFIRM_KEYS.yes
+          ? ASK_COPY.yes
+          : ASK_COPY.no,
+    };
+  }
   const rec = snap.options?.find(
     (o) => askOptionKey(o) === snap.recommendedKey
   );
@@ -423,4 +475,281 @@ export function answerProvenanceMark(
     case "closed_session_ended":
       return { tone: "textMuted", label: ASK_COPY.closedSessionEnded };
   }
+}
+
+// ─── The card: one anatomy, one derivation ──────────────────────────────────
+
+/**
+ * An owed ask's FATE ON SILENCE (Resolve-XP decision 3, 2026-10-26) — the
+ * sibling of `proposalFate` (`../proposals/fate.ts`), on the same clock:
+ *   `review_later`      — owed for more than `REVIEW_LATER_AFTER_DAYS`: out
+ *                         of the headline count, kept in Review later. Never
+ *                         expires.
+ *   `ends_with_session` — a confirm / choose: the agent's own question,
+ *                         retired `session_ended` when its session ends (W2).
+ *   `until_decided`     — everything else (act / form / provide / free text):
+ *                         the person's deliverable, owed until done.
+ * An unreadable `owedSince` fails toward KEEPING, like `proposalFate`.
+ */
+export type AskFate =
+  | { kind: "review_later"; since: string }
+  | { kind: "ends_with_session" }
+  | { kind: "until_decided" };
+
+/** The ask modes that end with their session (W2's `session_ended` rule). */
+export const ASK_MODES_ENDING_WITH_SESSION = ["confirm", "choose"] as const;
+
+/** The slot fields the fate and the card read — structural, off `ExpectedOutput`. */
+export interface AskCardSlot {
+  label: string;
+  kind?: string | null;
+  owner?: string | null;
+  blockedReason?: string | null;
+  why?: string | null;
+  ask?: Ask | null;
+  owedSince?: string | null;
+  askCause?: AskCause | null;
+  criterionKey?: string | null;
+  paramName?: string | null;
+}
+
+/** Does this slot's ask end with its session? Read through `effectiveSlotAsk`. */
+export function askEndsWithSession(slot: AskCardSlot): boolean {
+  const mode = (effectiveSlotAsk(slot) as Ask | null)?.mode;
+  return (ASK_MODES_ENDING_WITH_SESSION as readonly string[]).includes(
+    mode ?? ""
+  );
+}
+
+export function askFate(
+  slot: AskCardSlot,
+  now: Date | number = Date.now()
+): AskFate {
+  const owed = slot.owedSince ? Date.parse(slot.owedSince) : NaN;
+  const at = now instanceof Date ? now.getTime() : now;
+  if (Number.isFinite(owed) && at > owed + REVIEW_LATER_AFTER_MS) {
+    return {
+      kind: "review_later",
+      since: new Date(owed + REVIEW_LATER_AFTER_MS).toISOString(),
+    };
+  }
+  return askEndsWithSession(slot)
+    ? { kind: "ends_with_session" }
+    : { kind: "until_decided" };
+}
+
+/**
+ * Is this owed ask in Review later? The ONE predicate the needs-you count
+ * and its list fold read (api `needs-you-union.ts`), so they cannot disagree.
+ */
+export function isAskReviewLater(
+  slot: Pick<AskCardSlot, "owedSince">,
+  now: Date | number = Date.now()
+): boolean {
+  return askFate({ label: "", ...slot }, now).kind === "review_later";
+}
+
+/**
+ * What raised the ask when no agent did: the stamped cause, else the one the
+ * slot's own server stamps prove (a criterion slot, a param slot). `null`
+ * when nothing can be named — never a guessed cause.
+ */
+export function effectiveAskCause(slot: AskCardSlot): AskCause | null {
+  if (slot.askCause) return slot.askCause;
+  if (slot.criterionKey) return { kind: "criterion" };
+  if (slot.paramName) return { kind: "param" };
+  return null;
+}
+
+/** The machine verbs producers prefixed onto labels and prompts. */
+const ASK_VERB_PREFIX = /^\s*(?:decide|answer|accept)\s*:\s*/i;
+
+/** The text with any machine verb prefix ("Decide:", "Answer:", "Accept:") stripped. */
+export function stripAskVerbPrefix(text: string): string {
+  return text.replace(ASK_VERB_PREFIX, "").trim();
+}
+
+/** Case, punctuation, whitespace and verb prefix folded away — for dedupe only. */
+function askCore(text: string | null | undefined): string {
+  return stripAskVerbPrefix(text ?? "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Does `text` say nothing `than` does not already say? Equal, or starting
+ * with it, once case, punctuation, whitespace and verb prefix are folded.
+ */
+export function askTextRestates(text: string, than: string): boolean {
+  const t = askCore(text);
+  const h = askCore(than);
+  return !!h && (t === h || t.startsWith(`${h} `));
+}
+
+/** "<1m" / "12m" / "5h" / "8d" — the age span the lens rows print. */
+function ageSpan(ms: number): string {
+  const mins = Math.floor(Math.max(0, ms) / 60_000);
+  if (mins < 1) return "<1m";
+  if (mins < 60) return `${mins}m`;
+  if (mins < 24 * 60) return `${Math.floor(mins / 60)}h`;
+  return `${Math.floor(mins / (24 * 60))}d`;
+}
+
+function shortDate(iso: string | undefined): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime())
+    ? null
+    : d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+}
+
+/** One answer button: icon + tone + optional recommended mark + consequence. */
+export interface AskCardAnswer {
+  /** `yes` / `no` for a confirm, `askOptionKey` for a choose option. */
+  key: string;
+  label: string;
+  /** One-line consequence of this answer, when the agent gave one. */
+  description: string | null;
+  recommended: boolean;
+  /** `positive` = the affirmative answer, `neutral` = every other one. */
+  tone: "positive" | "neutral";
+  /** `check` / `x` for a confirm; a choose option's own icon, else null. */
+  icon: string | null;
+}
+
+/**
+ *   `agent` — a named agent asked; `sessionId` is the door (its session).
+ *   `cause` — no agent asked: what did, as words + the cause's door.
+ */
+export type AskCardAsker =
+  | { kind: "agent"; name: string; sessionId: string | null }
+  | { kind: "cause"; cause: AskCause; label: string };
+
+export interface AskCardView {
+  /** The question, one line: a confirm's prompt, else the label, prefix stripped. */
+  heading: string;
+  /** The `why`, ONLY when it adds to the heading. Shown in full, never hover-only. */
+  context: string | null;
+  /** Who asked, as a named mark; `null` when nobody can be named. */
+  asker: AskCardAsker | null;
+  /** Age + fate as ONE mark ("8d · stays until you decide"). */
+  ageFate: { label: string; tone: UnitTone; fate: AskFate };
+  /** The answer buttons (confirm, choose); empty for every other mode. */
+  answers: AskCardAnswer[];
+  /** The collapsed note affordance. */
+  note: { label: string };
+}
+
+export interface AskCardViewOptions {
+  /** The asker's display name, resolved by the pod (`askedByName`). */
+  askerName?: string | null;
+  /** The session the ask lives in — the asker mark's door. */
+  sessionId?: string | null;
+  now?: Date | number;
+}
+
+/**
+ * THE ask card, derived ONCE for every surface (pod-admin, browser, relay,
+ * push): heading, context, asker, age + fate, answers, note. A surface
+ * arranges these; it never reads `slot.label` / `why` / `ask.prompt` for
+ * display itself (pod-admin tripwire `ask-card-one-derivation`).
+ *
+ * The founder's complaint this answers (2026-10-26): the same question three
+ * times, a fixed "It is waiting on your answer", an invented "An agent", and
+ * Yes / No with no recommendation, icon or tone.
+ */
+export function askCardView(
+  slot: AskCardSlot,
+  opts: AskCardViewOptions = {}
+): AskCardView {
+  const ask = (effectiveSlotAsk(slot) as Ask | null) ?? null;
+  const label = stripAskVerbPrefix(slot.label) || slot.label.trim();
+  const prompt = ask?.mode === "confirm" ? ask.prompt?.trim() || "" : "";
+  const heading = (prompt && stripAskVerbPrefix(prompt)) || label;
+
+  const why = slot.why?.trim() || "";
+  const context =
+    why && !askTextRestates(why, heading) &&
+    !(prompt && askTextRestates(why, prompt))
+      ? why
+      : null;
+
+  const name = opts.askerName?.trim();
+  const cause = name ? null : effectiveAskCause(slot);
+  const asker: AskCardAsker | null = name
+    ? { kind: "agent", name, sessionId: opts.sessionId ?? null }
+    : cause
+      ? {
+          kind: "cause",
+          cause,
+          label: ASK_COPY.askCause(cause.kind, shortDate(cause.at)),
+        }
+      : null;
+
+  const now = opts.now ?? Date.now();
+  const nowMs = now instanceof Date ? now.getTime() : now;
+  const fate = askFate(slot, now);
+  const fateWords =
+    fate.kind === "review_later"
+      ? ASK_COPY.fateReviewLater
+      : fate.kind === "ends_with_session"
+        ? ASK_COPY.fateEndsWithSession
+        : ASK_COPY.fateUntilDecided;
+  const owed = slot.owedSince ? Date.parse(slot.owedSince) : NaN;
+  const ageFate = {
+    label: Number.isFinite(owed)
+      ? `${ageSpan(nowMs - owed)} · ${fateWords}`
+      : fateWords,
+    tone: (fate.kind === "ends_with_session"
+      ? "warning"
+      : fate.kind === "review_later"
+        ? "textMuted"
+        : "textSecondary") as UnitTone,
+    fate,
+  };
+
+  return {
+    heading,
+    context,
+    asker,
+    ageFate,
+    answers: askCardAnswers(ask),
+    note: { label: ASK_COPY.addNote },
+  };
+}
+
+function askCardAnswers(ask: Ask | null): AskCardAnswer[] {
+  if (ask?.mode === "confirm") {
+    return [
+      {
+        key: ASK_CONFIRM_KEYS.yes,
+        label: ask.yes?.label?.trim() || ASK_COPY.yes,
+        description: ask.yes?.description?.trim() || null,
+        recommended: ask.yes?.recommended === true,
+        tone: "positive",
+        icon: "check",
+      },
+      {
+        key: ASK_CONFIRM_KEYS.no,
+        label: ask.no?.label?.trim() || ASK_COPY.no,
+        description: ask.no?.description?.trim() || null,
+        recommended: ask.no?.recommended === true,
+        tone: "neutral",
+        icon: "x",
+      },
+    ];
+  }
+  if (ask?.mode === "choose") {
+    return ask.options.map((o) => ({
+      key: askOptionKey(o),
+      label: o.label,
+      description: o.description?.trim() || null,
+      recommended: o.recommended === true,
+      tone: "neutral" as const,
+      icon: o.icon ?? null,
+    }));
+  }
+  return [];
 }

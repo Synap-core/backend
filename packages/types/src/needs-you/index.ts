@@ -21,7 +21,9 @@
  *   has waited 7 days and LEFT the headline count (`signals.count` counts it
  *   as `reviewLater`, never in `needsYou`). It renders in its own
  *   "Review later · N" fold, never in Recent or Older — the count and the fold
- *   read the ONE pod predicate (`isReviewLater`). Still a fold: opened, it
+ *   read the ONE pod predicate (`isReviewLater`). An `owed-slot` row nobody
+ *   answered for 7 days joins the same fold (decision 3, `isAskReviewLater`,
+ *   `../ask`). Still a fold: opened, it
  *   shows every row. The pod stamps such a row `ageBucket: 'older'` too, so a
  *   client older than this field folds it under Older, never in Recent.
  * - `repeatCount` / `count` — how many identical things one row stands for,
@@ -251,7 +253,7 @@ export interface NeedsYouRows<T extends GroupableSignal> {
   older: NeedsYouRow<T>[];
   /** ROWS under the Older fold — a session card is one (what "Older · N" states). */
   olderCount: number;
-  /** Untouched durable proposals — the "Review later · N" fold, out of the headline count. */
+  /** Untouched durable proposals and owed asks — the "Review later · N" fold, out of the headline count. */
   reviewLater: NeedsYouRow<T>[];
   /** ROWS under the Review later fold (what "Review later · N" states). */
   reviewLaterCount: number;

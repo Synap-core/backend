@@ -57,7 +57,7 @@ import {
 } from "./block-guidelines.js";
 import { notifySessionNeedsYou } from "./notify-needs-you.js";
 import { archivedAnswerHistory } from "./answer-history.js";
-import { logSlotsAsked } from "./slot-asked-event.js";
+import { logSlotsAsked, stampAskProvenance } from "./slot-asked-event.js";
 
 export interface BlockExpectedOutputParams {
   sessionId: string;
@@ -209,14 +209,18 @@ export async function blockExpectedOutput(
     params.sessionId,
     (current) => {
       lockedBefore = current;
-      lockedAfter = stampBlocked(
+      lockedAfter = stampAskProvenance(
         current,
-        slot.label,
-        params.blockedReason,
-        params.why,
-        undefined,
-        params.ref,
-        params.ask
+        stampBlocked(
+          current,
+          slot.label,
+          params.blockedReason,
+          params.why,
+          undefined,
+          params.ref,
+          params.ask
+        ),
+        { askedBy: params.agentUserId }
       );
       return lockedAfter;
     }
@@ -352,7 +356,7 @@ export function stampBlocked(
 
 /**
  * The agent reclaiming a slot it can now do: all four ownership fields go
- * together — and the `ask`, which describes how the PERSON resolves the
+ * together — and the `ask` with who asked it, which describes how the PERSON resolves the
  * blocker and means nothing on an agent-owned slot (see
  * `BlockExpectedOutputParams.ask`), with any relay waiting on the person's tap
  * of that ask (`pendingRelay`). `ref` stays: it describes the deliverable.
@@ -371,6 +375,8 @@ export function stampUnblocked(
       why: _why,
       owedSince: _owedSince,
       ask: _ask,
+      askedBy: _askedBy,
+      askCause: _askCause,
       pendingRelay: _pendingRelay,
       ...rest
     } = o;

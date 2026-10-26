@@ -1123,7 +1123,13 @@ export interface FocusSessionExpectedOutput {
  * `ASK_PROVIDE_KINDS`.
  */
 export type HubSlotAsk = (
-  | { mode: "confirm"; prompt?: string }
+  | {
+      mode: "confirm";
+      prompt?: string;
+      /** Each answer's words, consequence and (at most one) recommendation. */
+      yes?: { label?: string; description?: string; recommended?: boolean };
+      no?: { label?: string; description?: string; recommended?: boolean };
+    }
   | { mode: "choose"; options: HubSlotAskOption[]; allowOther?: boolean }
   | {
       mode: "form";

@@ -72,6 +72,8 @@ const STORED: Required<
   returnedReason: "Missing the numbers",
   returnedAt: "2026-09-01T11:00:00.000Z",
   owedSince: "2026-09-01T09:00:00.000Z",
+  askedBy: "44444444-4444-4444-4444-444444444444",
+  askCause: { kind: "run", ref: { kind: "session", id: "run-1" } },
   attestedBy: "22222222-2222-2222-2222-222222222222",
   attestedAt: "2026-09-01T12:00:00.000Z",
   retiredAt: "2026-09-01T13:00:00.000Z",
@@ -133,6 +135,10 @@ const FORGED: typeof STORED = {
   returnedReason: "actually fine",
   returnedAt: "2026-09-08T11:00:00.000Z",
   owedSince: "2026-09-08T09:00:00.000Z",
+  // An agent putting its question in another agent's mouth…
+  askedBy: "99999999-9999-9999-9999-999999999999",
+  // …or dressing its own as the person's decision note.
+  askCause: { kind: "decision", ref: { kind: "entity", id: "forged" } },
   attestedBy: "antoine",
   attestedAt: "2026-09-08T12:00:00.000Z",
   retiredAt: "2026-09-08T13:00:00.000Z",
