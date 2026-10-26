@@ -1613,6 +1613,13 @@ export async function submitCaptureGraph(
                   userId,
                   workspaceId: workspaceId ?? null,
                   auditSource: "rule_loop_capture_auto_apply",
+                  // The AGENT authored this graph and no person reviewed it
+                  // (a rule or its own space let every member execute), so
+                  // its skills are born unapproved, as at `skills.create`.
+                  skillAuthor: {
+                    agentUserId: input.agentUserId ?? null,
+                    personApproved: false,
+                  },
                 }),
                 // RE-SUBMIT IDEMPOTENCY (piece 1a): key every created entity in the
                 // external-link store by `${userId}:${idempotencyKey}:${op.ref}`. If

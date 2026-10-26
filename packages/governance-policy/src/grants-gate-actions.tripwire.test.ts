@@ -57,6 +57,21 @@ describe("entity gate verbs parse as verbs", () => {
     expect(parsePermission(`entity.${verb}`)).toEqual(["entity", "*", verb]);
   });
 
+  // `entity/transition` folded onto update on 2026-10-26 (founder decision 1)
+  // AFTER grants were minted naming it (the AI preset's `entity.*.transition`):
+  // the derivation above now skips it, so its verb parse is pinned here — a
+  // person's `entity.transition` stays "move every kind", never the kind
+  // "transition".
+  it("entity.transition still parses as the verb (folded, still named)", () => {
+    expect(grantRequestKey("entity", "transition").action).toBe("update");
+    expect(derived).not.toContain("transition");
+    expect(parsePermission("entity.transition")).toEqual([
+      "entity",
+      "*",
+      "transition",
+    ]);
+  });
+
   it("no gate verb is a catalog action", () => {
     for (const v of GRANT_GATE_ACTIONS) expect(crud).not.toContain(v);
   });

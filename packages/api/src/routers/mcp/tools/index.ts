@@ -569,6 +569,22 @@ const ROOM_QUESTION_ASK_JSON_SCHEMA = {
  */
 const RUN_CAPABILITY_JSON_SCHEMA = buildCapabilityExecuteAgentJsonSchema();
 
+/**
+ * The `sessionId` every ATTRIBUTED (non-read) tool declares — DERIVED in
+ * `tools.list()` from `readOnlyHint`, never hand-added to each schema (W-C1).
+ * The adapter already reads `sessionId` on every write
+ * (`resolveSessionHandle`); undeclared, a client that validates its arguments
+ * could not send it, and an agent was never told it may. The handle is
+ * server-minted (MCP SEP-2567): a session it started, or the one the reply
+ * names in `attribution.filed`. The idle window is
+ * `RECEIPT_IDLE_WINDOW_HOURS` (pinned by `attributed-tools-declare-session`).
+ */
+const ATTRIBUTED_SESSION_ID_PARAM = {
+  type: "string",
+  description:
+    "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error.",
+} as const;
+
 /** Context available when `list()` is called from a live MCP session (createMCPServer) — absent for the legacy static capabilities manifest (http-handler.ts GET /). */
 export interface ToolsListContext {
   workspaceId?: string;
@@ -5690,7 +5706,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Author a skill: Documentation (always) + OPTIONAL code. Send `body` alone for a TEACHING skill — reusable prose (a process, a checklist, a house style) that any agent later pulls with synap_load_skill; a teaching skill needs a `slug`, because that is the ref load_skill resolves. Send `code` for a runnable sandboxed executable, or both: read synap_load_skill('system/synap/code-skills') first for the runtime (the async (args, context) wrapper, callProvider and its return shape, hubProtocol reads, propose.entity, limits). A code skill that calls an installed tool with callProvider should declare it in `requiredTools`, so a run is approved once, not once more per call. `kind` is derived from code presence — do not guess it. For a deterministic provider HTTP call on an already-installed tool use synap_create_verb instead. Governed like every write: an agent create returns status='proposed'. An agent-authored skill is born UNAPPROVED either way and does NOT load or run until the owner approves it — code executes, and instruction prose lands in a future agent's system prompt, so both need a deliberate human OK. Creates it on this pod only; an official template is written in the catalog and published with `synap catalog publish --official`.",
+          "Author a skill: Documentation (always) + OPTIONAL code. Send `body` alone for a TEACHING skill — reusable prose (a process, a checklist, a house style) that any agent later pulls with synap_load_skill; a teaching skill needs a `slug`, because that is the ref load_skill resolves. Send `code` for a runnable sandboxed executable, or both: read synap_load_skill('system/synap/code-skills') first for the runtime (the async (args, context) wrapper, callProvider and its return shape, hubProtocol reads, propose.entity, limits). A code skill that calls an installed tool with callProvider should declare it in `requiredTools`, so a run is approved once, not once more per call. `kind` is derived from code presence — do not guess it. For a deterministic provider HTTP call on an already-installed tool use synap_create_verb instead. Governed like every write: an agent create returns status='proposed'. An agent-authored skill is born UNAPPROVED either way and does NOT load or run until a person approves its proposal — code executes, and instruction prose lands in a future agent's system prompt, so both need a deliberate human OK. That one approval also turns it on: there is no separate enable step (an edit to its code later turns it off until approved again). Creates it on this pod only; an official template is written in the catalog and published with `synap catalog publish --official`.",
         inputSchema: {
           type: "object",
           properties: {
@@ -5805,6 +5821,19 @@ export const tools = {
         },
       },
     ];
+
+    // W-C1: every attributed tool declares `sessionId`, derived here so a new
+    // write tool declares it the moment it is listed. A tool that declares its
+    // own (`synap_update_session`'s target, …) keeps it.
+    for (const tool of toolDefs) {
+      if (tool.annotations?.readOnlyHint === true) continue;
+      const properties = tool.inputSchema.properties ?? {};
+      if ("sessionId" in properties) continue;
+      tool.inputSchema = {
+        ...tool.inputSchema,
+        properties: { ...properties, sessionId: ATTRIBUTED_SESSION_ID_PARAM },
+      };
+    }
 
     if (!ctx) return toolDefs;
 
