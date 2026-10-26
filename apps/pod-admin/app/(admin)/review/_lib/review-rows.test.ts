@@ -3,6 +3,7 @@ import {
   batchOf,
   exitOf,
   focusedRow,
+  isExecutableSkillCreate,
   isRemoval,
   liveAskSlot,
   reviewCounts,
@@ -219,6 +220,91 @@ describe("reviewRows", () => {
     );
     expect(twin).toMatchObject({ inlineApprove: false, batchIds: null });
     expect(plain).toMatchObject({ inlineApprove: true, batchIds: ["c2-p1"] });
+  });
+
+  it("a skill create that would run code is decided on its page, never inline or batched", () => {
+    // Approving it turns the code on (decision 2): only its page shows the code.
+    const request = (data: Record<string, unknown>) => ({
+      targetType: "skill",
+      changeType: "create",
+      requestId: "r",
+      data,
+    });
+    const rows = reviewRows(
+      [
+        cluster("c1"),
+        cluster("c2"),
+        cluster("c3"),
+        cluster("c4", { count: 2, proposalIds: ["c4-p1", "c4-p2"] }),
+      ],
+      new Map([
+        // An agent's code skill, as the gate stores it (request envelope).
+        facts("c1-p1", {
+          targetType: "skill",
+          proposalType: "skill.create",
+          data: request({ kind: "code", code: "return 1;" }),
+        }),
+        // A declarative verb runs a call on a tool: the same rule.
+        facts("c2-p1", {
+          targetType: "skill",
+          proposalType: "create",
+          data: request({
+            kind: "declarative",
+            providerSpec: { tool: "apify_api" },
+          }),
+        }),
+        // A teaching skill runs nothing: it may still be approved from the row.
+        facts("c3-p1", {
+          targetType: "skill",
+          proposalType: "create",
+          data: request({ kind: "instruction", body: "Be brief." }),
+        }),
+        // One executable member keeps the whole cluster on its page.
+        facts("c4-p1", { targetType: "track" }),
+        facts("c4-p2", {
+          targetType: "skill",
+          proposalType: "create",
+          data: { kind: "code", code: "return 2;" },
+        }),
+      ])
+    );
+    const [code, verb, teaching, mixed] = rows;
+    for (const row of [code, verb, mixed]) {
+      expect(row).toMatchObject({ inlineApprove: false, batchIds: null });
+      expect(row!.detail).toMatchObject({ kind: "proposal" });
+    }
+    expect(teaching).toMatchObject({
+      inlineApprove: true,
+      batchIds: ["c3-p1"],
+    });
+    // The batch door takes nothing from the page-only rows.
+    expect(batchOf(rows, new Set(rows.map((r) => r.key))).proposalIds).toEqual([
+      "c3-p1",
+    ]);
+  });
+
+  it("isExecutableSkillCreate reads the verb and the kind, never a skill update", () => {
+    expect(
+      isExecutableSkillCreate({
+        targetType: "skill",
+        proposalType: "update",
+        data: { data: { code: "return 1;" } },
+      })
+    ).toBe(false);
+    expect(
+      isExecutableSkillCreate({
+        targetType: "tool",
+        proposalType: "create",
+        data: { data: { code: "return 1;" } },
+      })
+    ).toBe(false);
+    expect(
+      isExecutableSkillCreate({
+        targetType: "skill",
+        proposalType: "skill.create",
+        data: { data: { code: "return 1;" } },
+      })
+    ).toBe(true);
   });
 
   it("a member the viewer may not approve keeps the whole row out of inline and batch", () => {
