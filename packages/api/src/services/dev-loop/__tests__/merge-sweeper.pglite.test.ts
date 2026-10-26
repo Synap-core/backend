@@ -81,7 +81,7 @@ vi.mock("../../../lib/event-helpers.js", () => ({
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import { focusSessions } from "@synap/database";
-import { sweepMergedPullRequest, allOutcomesMet } from "../merge-sweeper.js";
+import { sweepMergedPullRequest } from "../merge-sweeper.js";
 import { resolvePullRequestSessions } from "../pr-session-resolver.js";
 import { runDevLoopObservation } from "../run-observation.js";
 
@@ -273,44 +273,6 @@ describe("the merge sweeper (dev.pr_merged → the PR outcome is met)", () => {
     expect(h.perm).toHaveLength(0);
   });
 
-  it("reports allOutcomesMet when the merge was the last open outcome", async () => {
-    const id = await seed([
-      prSlot(302),
-      { kind: "document", label: "Spec", key: "spec", status: "done" },
-      {
-        kind: "document",
-        label: "Dropped",
-        key: "dropped",
-        retiredAt: "2026-10-01T00:00:00Z",
-      },
-    ]);
-    const [o] = await sweepMergedPullRequest({
-      userId: USER,
-      event: merged({
-        number: 302,
-        url: "https://github.com/Synap-core/backend/pull/302",
-      }),
-    });
-    expect(o).toMatchObject({
-      sessionId: id,
-      result: "completed",
-      allOutcomesMet: true,
-    });
-  });
-
-  it("does not report allOutcomesMet while another outcome is open", async () => {
-    await seed([prSlot(303), { kind: "document", label: "Spec", key: "spec" }]);
-    const [o] = await sweepMergedPullRequest({
-      userId: USER,
-      event: merged({
-        number: 303,
-        url: "https://github.com/Synap-core/backend/pull/303",
-      }),
-    });
-    expect(o!.result).toBe("completed");
-    expect(o!.allOutcomesMet).toBeUndefined();
-  });
-
   it("re-checks the criteria ABOUT the merged outcome, with the merge as evidence", async () => {
     const id = await seed([prSlot(304)], {
       criteria: [
@@ -451,13 +413,5 @@ describe("runDevLoopObservation (the job's runner)", () => {
         eventId: "ev-2",
       })
     ).toEqual({ status: "ignored", eventType: "ci.finished" });
-  });
-});
-
-describe("allOutcomesMet (pure)", () => {
-  it("needs at least one live outcome, all done", () => {
-    expect(allOutcomesMet([])).toBe(false);
-    expect(allOutcomesMet([{ status: "done" }, { retiredAt: "x" }])).toBe(true);
-    expect(allOutcomesMet([{ status: "done" }, {}])).toBe(false);
   });
 });

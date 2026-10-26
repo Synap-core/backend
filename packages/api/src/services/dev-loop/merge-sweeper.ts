@@ -15,11 +15,10 @@
  *      criterion checks stays a claim for that criterion;
  *   2. the criteria about that outcome are graded again with the merge as
  *      evidence (`recheck-criteria.ts`);
- *   3. when every outcome of the session is then met, the session is ready to
- *      close — reported as `allOutcomesMet`. The `ready_to_close` NUDGE itself
- *      belongs to lane be-context (TODO(be-context): call its nudge here once
- *      it lands); the continuation packet already derives
- *      `nextMove: ready_to_close` from the same state.
+ *   3. nothing else: "ready to close" is not pushed. It is DERIVED by the
+ *      one rule (`attachNextMove` → `deriveNextMove`) at the next read — the
+ *      packet's `nextMove`, orient's loose ends, the update reply's nudge —
+ *      so a second "all outcomes met" rule here would fork it.
  *
  * Idempotent: a settled slot (done, withdrawn) is skipped, so a replayed or
  * duplicated event changes nothing. One session's failure never stops the
@@ -27,8 +26,6 @@
  */
 
 import { createLogger } from "@synap-core/core";
-import { db, and, eq, focusSessions } from "@synap/database";
-import type { ExpectedOutput } from "@synap/playbooks";
 import type { PullRequestEvent } from "@synap-core/types";
 import { updateFocusSession } from "../focus-sessions/update-session.js";
 import {
@@ -61,15 +58,6 @@ export interface MergeSweepOutcome {
   result: MergeSweepResult;
   proposalId?: string;
   reason?: string;
-  /** Every outcome of the session is met now — it is ready to close. */
-  allOutcomesMet?: boolean;
-}
-
-/** Every live outcome done (withdrawn ones do not count). Pure. */
-export function allOutcomesMet(raw: unknown): boolean {
-  const slots = Array.isArray(raw) ? (raw as ExpectedOutput[]) : [];
-  const live = slots.filter((s) => s && s.retiredAt == null);
-  return live.length > 0 && live.every((s) => s.status === "done");
 }
 
 export async function sweepMergedPullRequest(input: {
@@ -149,25 +137,12 @@ export async function sweepMergedPullRequest(input: {
         );
       }
 
-      const [after] = await db
-        .select({ expectedOutputs: focusSessions.expectedOutputs })
-        .from(focusSessions)
-        .where(
-          and(
-            eq(focusSessions.id, m.sessionId),
-            eq(focusSessions.userId, userId)
-          )
-        )
-        .limit(1);
-      const met = allOutcomesMet(after?.expectedOutputs);
-      // TODO(be-context): fire the `ready_to_close` nudge here when `met`.
       outcomes.push({
         ...base,
         result,
         ...(result === "refused" && report?.message
           ? { reason: report.message }
           : {}),
-        ...(met ? { allOutcomesMet: true } : {}),
       });
     } catch (err) {
       logger.error(
