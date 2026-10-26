@@ -261,9 +261,9 @@ export function computeProposalDedupHash(p: {
     isCreate &&
     // The REQUEST ENVELOPE `checkPermissionOrPropose` writes —
     // `{ requestId, targetType, changeType, data: <the record>, … }` — rather
-    // than a flat record. The guard reads any object; the cast only meets its
-    // parameter type.
-    isRequestShapedProposalData(p.data as StoredProposalData) &&
+    // than a flat record. The guard reads any object (it widens its argument
+    // back to a record itself); the cast only meets its parameter type.
+    isRequestShapedProposalData(p.data as unknown as StoredProposalData) &&
     record !== null &&
     typeof record === "object" &&
     !Array.isArray(record)
