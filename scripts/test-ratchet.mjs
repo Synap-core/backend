@@ -396,8 +396,14 @@ const floors = JSON.parse(readFileSync(FLOORS_PATH, "utf8")).entries.filter(
 for (const e of floors) {
   const r = perRun.find((p) => p.id === e.dir);
   // A floored package that did not run at all lost its `test` script (or it
-  // stopped being `vitest run …`): its whole suite left CI with no red.
-  if (!r && SCRIPT === "test" && inScope(e.dir)) {
+  // stopped being `vitest run …`): its whole suite left CI with no red. (One
+  // that ran and crashed is already a `no-report`.)
+  if (
+    !r &&
+    SCRIPT === "test" &&
+    inScope(e.dir) &&
+    !runs.some((x) => x.dir === e.dir)
+  ) {
     problems.push({
       kind: "below-floor",
       detail: `${e.dir}: did not run, floor ${e.floor} (scripts/test-floors.json). Its \`test\` script is gone or is not \`vitest run …\`.`,
