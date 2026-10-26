@@ -424,6 +424,9 @@ async function askToKeepGoing(p: {
           kind: "decision",
           label: RUN_CONTINUE_SLOT_LABEL,
           status: "pending",
+          // What the answer unblocks (decision E): the room question below is
+          // refused for a slot that does not say it.
+          unblocks: "The run goes on",
         } satisfies ExpectedOutput,
       ]
     );
