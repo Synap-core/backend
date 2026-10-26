@@ -2,8 +2,9 @@ name: Publish Type Packages
 
 on:
   # Manual publish door. Hand-publishing from a laptop is the proven root cause
-  # of the broken releases (an artifact was published from node 22.22.3 while
-  # this workflow pins node 20) — so there must be a CI button to press instead.
+  # of the broken releases (an artifact was published from a laptop's node
+  # 22.22.3 while this workflow pinned node 20) — so there must be a CI button
+  # to press instead.
   workflow_dispatch:
   push:
     branches: [main]
@@ -80,9 +81,11 @@ jobs:
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          # Node 20 is DELIBERATE. An artifact was once published from node
-          # 22.22.3 and broke consumers; CI pins the version `.node-version`
-          # declares so there is exactly one source of truth.
+          # ONE Node for every pipeline, DELIBERATE: an artifact was once
+          # published from a laptop's node 22.22.3 while CI pinned node 20, and
+          # broke consumers. ci.yml, this workflow and reference-docs.yml all
+          # read `.node-version`, and deploy/Dockerfile stays on its minor, so
+          # what is tested, published and shipped run on the same Node.
           node-version-file: ".node-version"
           registry-url: "https://registry.npmjs.org"
 
@@ -185,9 +188,9 @@ jobs:
       # ── Publish ────────────────────────────────────────────────────────────
       # npm Trusted Publishing needs Node >= 22.14.0 and npm >= 11.5.1 IN THE
       # PROCESS THAT PUBLISHES (SECURITY-RELEASE-RUNBOOK.md §2.1). Everything
-      # above (install, turbo build, version bumps) stays on the Node 20 that
+      # above (install, turbo build, version bumps) stays on the Node that
       # `.node-version` pins on purpose; only the publish steps below switch to
-      # Node 22 (the same 22.18.0 the app-bases publish jobs use). Both pins are
+      # Node 22.18.0 (the one the app-bases publish jobs use). Both pins are
       # EXACT: a floating `22` / `npm@11` would let a registry release change what
       # publishes. pnpm hands the upload to `npm publish`, so it is the npm on PATH
       # that exchanges the OIDC token.

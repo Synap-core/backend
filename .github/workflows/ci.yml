@@ -14,9 +14,6 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  NODE_VERSION: "20"
-
 # Least privilege: jobs that need more declare it themselves.
 permissions:
   contents: read
@@ -66,7 +63,6 @@ jobs:
           app-id: ${{ vars.SYNAP_RELEASE_APP_ID }}
           app-key: ${{ secrets.SYNAP_RELEASE_APP_KEY }}
           cross-repo-token: ${{ secrets.CROSS_REPO_TOKEN }}
-          node-version: ${{ env.NODE_VERSION }}
 
       # CI/CD CONFORMANCE GATE. Every publish workflow across ALL repos must
       # satisfy the shared rules in ci/repos.yml (no dual pnpm pin, id-token:
@@ -179,10 +175,27 @@ jobs:
         env:
           BASE_URL: http://localhost:4000
 
+      # The image smoke: in the BUILT image, the code-skill sandbox's native
+      # addon loads and runs an isolate. isolated-vm is resolved from @synap/api
+      # (the package that imports it), with the flag its README requires on
+      # Node >= 20, and the image's CMD must carry that flag too.
       - name: Test Docker Build
         run: |
           docker build -t synap-backend:test -f deploy/Dockerfile .
           docker run --rm synap-backend:test node --version
+          docker run --rm synap-backend:test node --no-node-snapshot -e '
+            const { realpathSync } = require("node:fs");
+            const { createRequire } = require("node:module");
+            const req = createRequire(realpathSync("node_modules/@synap/api/package.json"));
+            const ivm = req("isolated-vm");
+            const isolate = new ivm.Isolate({ memoryLimit: 16 });
+            const out = isolate.compileScriptSync("6 * 7").runSync(isolate.createContextSync());
+            if (out !== 42) throw new Error("isolate returned " + out);
+            console.log("isolated-vm " + req("isolated-vm/package.json").version + " ran an isolate on node " + process.version);
+          '
+          cmd=$(docker inspect --format '{{json .Config.Cmd}}' synap-backend:test)
+          echo "CMD: $cmd"
+          echo "$cmd" | grep -q -- '--no-node-snapshot' || { echo "::error::deploy/Dockerfile CMD lacks --no-node-snapshot (isolated-vm requires it on Node >= 20)"; exit 1; }
           docker rmi synap-backend:test
 
   full-suite:
@@ -216,7 +229,6 @@ jobs:
           app-id: ${{ vars.SYNAP_RELEASE_APP_ID }}
           app-key: ${{ secrets.SYNAP_RELEASE_APP_KEY }}
           cross-repo-token: ${{ secrets.CROSS_REPO_TOKEN }}
-          node-version: ${{ env.NODE_VERSION }}
 
       # The suites below read the migrated schema.
       - name: Migrate the test database
@@ -320,7 +332,6 @@ jobs:
           app-id: ${{ vars.SYNAP_RELEASE_APP_ID }}
           app-key: ${{ secrets.SYNAP_RELEASE_APP_KEY }}
           cross-repo-token: ${{ secrets.CROSS_REPO_TOKEN }}
-          node-version: ${{ env.NODE_VERSION }}
 
       - name: Migrate the test database
         run: pnpm --filter @synap/database migrate
