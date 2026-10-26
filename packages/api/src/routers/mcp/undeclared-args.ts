@@ -21,7 +21,10 @@
  */
 
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { createLogger } from "@synap-core/core";
 import { toolError } from "./tool-errors.js";
+
+const logger = createLogger({ module: "mcp/undeclared-args" });
 
 /** Keys the MCP door injects into every tool call (the URL lens). */
 export const DOOR_INJECTED_ARGS = ["workspaceId", "projectId"] as const;
@@ -91,4 +94,37 @@ export async function refuseUndeclaredArgs(
   const unknown = undeclaredArgs(args, declared);
   if (unknown.length === 0) return null;
   return toolError(undeclaredArgsMessage(toolName, unknown, declared));
+}
+
+/**
+ * SHADOW (W-C1): the undeclared keys of a call, LOGGED per (tool, key) — key
+ * names only, never values — and the call is NOT refused. The dispatch calls
+ * this for every tool; after seven days of these numbers every recurrent key
+ * is either declared (a handler reads it) or confirmed junk, and the dispatch
+ * refuses through {@link refuseUndeclaredArgs} instead (W-C3). Returns the
+ * keys it logged. A list that cannot be built is logged too, never folded
+ * into "nothing undeclared".
+ */
+export async function shadowUndeclaredArgs(
+  toolName: string,
+  args: Record<string, unknown> | null | undefined
+): Promise<string[]> {
+  try {
+    const declared = await declaredArgNames(toolName);
+    if (!declared) return [];
+    const unknown = undeclaredArgs(args, declared);
+    if (unknown.length > 0) {
+      logger.info(
+        { toolName, undeclaredKeys: unknown, shadow: true },
+        "mcp: tool call carried undeclared arguments (accepted; shadow count)"
+      );
+    }
+    return unknown;
+  } catch (err) {
+    logger.warn(
+      { err, toolName },
+      "mcp: undeclared-argument shadow check could not run"
+    );
+    return [];
+  }
 }
