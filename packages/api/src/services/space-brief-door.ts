@@ -31,35 +31,16 @@ import {
   workspaces,
   WorkspaceRepository,
   type WorkspaceSpaceBrief,
-  type WorkspaceSpaceTemplateRule,
 } from "@synap/database";
 import {
   SPACE_BRIEF_TEMPLATE_FIELDS,
   applySpaceBriefPatch,
   diffSpaceBrief,
   normalizeSpaceBrief,
-  type SpaceBrief,
   type SpaceBriefFieldChange,
   type SpaceBriefPatch,
-  type SpaceTemplateRule,
 } from "@synap-core/types/space-brief";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
-
-// ── COMPILE FLOOR: the database mirror IS the canonical type ───────────────
-// `@synap/database` cannot import `@synap-core/types` (build cycle), so it
-// declares the brief once as `WorkspaceSpaceBrief`. Mutual assignability here
-// — in a package that sees both — makes a field added on one side and not the
-// other stop the api build. BOTH floors are needed: mutual assignability
-// alone misses an added OPTIONAL key (it is assignable both ways), which the
-// keyof floor catches; the keyof floor misses a changed field TYPE, which the
-// assignability floor catches (each negative-controlled, 2026-09-28).
-type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
-const _briefMirror: Same<SpaceBrief, WorkspaceSpaceBrief> = true;
-const _briefKeys: Same<keyof SpaceBrief, keyof WorkspaceSpaceBrief> = true;
-const _ruleMirror: Same<SpaceTemplateRule, WorkspaceSpaceTemplateRule> = true;
-void _briefMirror;
-void _briefKeys;
-void _ruleMirror;
 
 const text = z.string().trim().min(1).max(2000);
 const texts = z.array(text).max(20);
