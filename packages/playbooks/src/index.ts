@@ -1183,6 +1183,38 @@ export type CriterionCheckKind = (typeof CRITERION_CHECK_KINDS)[number];
 export const MAX_SESSION_CRITERIA = 12;
 
 /**
+ * WHAT KIND of check a criterion is, in people's words (work model R5) — a
+ * MEANING layer over {@link CRITERION_CHECK_KINDS}, never a second evaluator:
+ * a `measured` criterion is still checked by evidence or a capability, a
+ * `certified` one is still a person's grade with the certificate attached.
+ * Optional: absent, a reader derives the meaning from `check.kind`.
+ *
+ * The words and the mapping to the stored evaluator kinds are defined ONCE in
+ * `@synap-core/types/units` (`CRITERION_CHECK_MEANINGS`,
+ * `CHECK_MEANING_EVALUATORS`). This package is dependency-free, so it mirrors
+ * the keys; `api/src/__tripwires__/criterion-meaning-parity.test.ts` pins the
+ * two lists equal.
+ */
+export const CRITERION_CHECK_MEANINGS = [
+  "measured",
+  "judged",
+  "handed_over",
+  "learning",
+  "decided_outside",
+  "certified",
+] as const;
+export type CriterionCheckMeaning = (typeof CRITERION_CHECK_MEANINGS)[number];
+
+/**
+ * What a criterion is ABOUT (work model R7): the RESULT (the default) or the
+ * METHOD — an investigation's criteria are about how it was done ("three
+ * sources compared"), never the hoped-for answer. Mirrored from
+ * `@synap-core/types/units` (`CRITERION_ABOUT`), pinned by the same tripwire.
+ */
+export const CRITERION_ABOUT = ["result", "method"] as const;
+export type CriterionAbout = (typeof CRITERION_ABOUT)[number];
+
+/**
  * One BINARY, observable acceptance criterion ("Typecheck passes with 0
  * errors"). Stored on `playbooks.criteria`, `PlaybookStage.criteria` and
  * `focus_sessions.criteria`; graded by rows in `session_evaluations`.
@@ -1204,6 +1236,13 @@ export interface SessionCriterion {
   };
   /** Set when copied from a stage. */
   stageKey?: string;
+  /**
+   * R5 — what kind of check this is, in people's words. Absent ⇒ derived
+   * from `check.kind` (`criterionMeaning`, `@synap-core/types/units`).
+   */
+  checkKind?: CriterionCheckMeaning;
+  /** R7 — about the result (absent = result) or the method. */
+  about?: CriterionAbout;
 }
 
 function optionalString(v: unknown): string | undefined {
@@ -1235,6 +1274,16 @@ export function readCriteria(raw: unknown): SessionCriterion[] {
     const evidenceKey = optionalString(check!.evidenceKey);
     const hint = optionalString(check!.hint);
     const stageKey = optionalString(e.stageKey);
+    // Closed sets: an unknown meaning or `about` is dropped (the criterion is
+    // kept) — the reader stays tolerant, the write doors are strict.
+    const checkKind = (CRITERION_CHECK_MEANINGS as readonly unknown[]).includes(
+      e.checkKind
+    )
+      ? (e.checkKind as CriterionCheckMeaning)
+      : undefined;
+    const about = (CRITERION_ABOUT as readonly unknown[]).includes(e.about)
+      ? (e.about as CriterionAbout)
+      : undefined;
     seen.add(key);
     out.push({
       key,
@@ -1247,6 +1296,8 @@ export function readCriteria(raw: unknown): SessionCriterion[] {
         ...(hint ? { hint } : {}),
       },
       ...(stageKey ? { stageKey } : {}),
+      ...(checkKind ? { checkKind } : {}),
+      ...(about ? { about } : {}),
     });
   }
   return out;

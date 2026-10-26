@@ -22,7 +22,7 @@ DEPLOY_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 notify() { # <true|false> [error]
   [ -n "$CALLBACK_URL" ] && [ -n "$CALLBACK_JWT" ] || return 0
-  # wget, not curl: the pod-agent image (node:20-alpine + docker-cli) ships no curl.
+  # wget, not curl: the pod-agent image (node:22-alpine + docker-cli) ships no curl.
   wget -q -O - --timeout=10 \
     --header="Authorization: Bearer ${CALLBACK_JWT}" \
     --header="Content-Type: application/json" \

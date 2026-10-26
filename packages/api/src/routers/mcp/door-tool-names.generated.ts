@@ -31,6 +31,10 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "pod-mcp": "synap_complete_session",
     "cp-connector": "pod__complete_session",
   },
+  synap_convert_to_goal: {
+    "pod-mcp": "synap_convert_to_goal",
+    "cp-connector": null,
+  },
   synap_create_automation: {
     "pod-mcp": "synap_create_automation",
     "cp-connector": "pod__create_automation",
@@ -253,6 +257,7 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "pod-mcp": "synap_remember_fact",
     "cp-connector": "pod__remember_fact",
   },
+  synap_reopen_track: { "pod-mcp": "synap_reopen_track", "cp-connector": null },
   synap_request_deploy_approval: {
     "pod-mcp": "synap_request_deploy_approval",
     "cp-connector": "pod__request_deploy_approval",
@@ -300,6 +305,10 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
   synap_set_track_params: {
     "pod-mcp": "synap_set_track_params",
     "cp-connector": "pod__set_track_params",
+  },
+  synap_set_track_participant: {
+    "pod-mcp": "synap_set_track_participant",
+    "cp-connector": null,
   },
   synap_set_track_status: {
     "pod-mcp": "synap_set_track_status",

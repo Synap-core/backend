@@ -138,6 +138,7 @@ import {
   users,
   links,
   sessionEvaluations,
+  trackParticipants,
 } from "@synap/database";
 import { startStageSession, startTrack } from "../tracks-service.js";
 import { listWorkspacesUsedByProjects } from "../../../utils/project-workspace.js";
@@ -242,6 +243,8 @@ beforeAll(async () => {
     playbooks,
     projects,
     sessionEvaluations,
+    // Who is on a goal (0348): `startTrack` seeds the owner row.
+    trackParticipants,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }
@@ -260,6 +263,20 @@ beforeAll(async () => {
       stage_history jsonb not null default '[]'::jsonb,
       direction text,
       kpi jsonb,
+      verdict text,
+      verdict_reason text,
+      verdict_by text,
+      verdict_at timestamptz,
+      -- 0345 — what a goal holds.
+      end_state text,
+      criteria jsonb,
+      drop_conditions jsonb,
+      work_kind text,
+      uncertainty text,
+      kind_confirmed_by text,
+      kind_confirmed_at timestamptz,
+      -- 0350 — the goal's loop (W4).
+      loop jsonb,
       metadata jsonb not null default '{}'::jsonb,
       created_at timestamptz not null default now(),
       updated_at timestamptz not null default now()

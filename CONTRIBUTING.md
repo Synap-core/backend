@@ -10,7 +10,8 @@ runs, write a migration and send a change.
 
 ## Requirements
 
-- **Node.js 20.** The exact version is in `.node-version`; CI runs Node 20.
+- **Node.js 22.** The exact version is in `.node-version`; CI reads it, and the
+  pod image (`deploy/Dockerfile`) runs the same minor.
 - **pnpm 10.** The version is pinned in `package.json` (`packageManager`);
   `corepack enable` picks it up.
 - **Docker**, to run PostgreSQL (TimescaleDB) for the tests that need a database.
