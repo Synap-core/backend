@@ -235,6 +235,7 @@ describe("contract: resolveKeyIdentity derivation", () => {
       agentUserId: "agent-1",
       isAgent: true,
       grant: null,
+      principal: { id: "agent-1", kind: "agent", hostUserId: null },
     });
   });
 
@@ -247,6 +248,7 @@ describe("contract: resolveKeyIdentity derivation", () => {
       agentUserId: "agent-1",
       isAgent: true,
       grant: null,
+      principal: { id: "agent-1", kind: "agent", hostUserId: null },
     });
   });
 
@@ -259,6 +261,7 @@ describe("contract: resolveKeyIdentity derivation", () => {
       agentUserId: undefined,
       isAgent: false,
       grant: null,
+      principal: { id: "human-1", kind: "human", hostUserId: null },
     });
   });
 
@@ -271,6 +274,7 @@ describe("contract: resolveKeyIdentity derivation", () => {
       agentUserId: undefined,
       isAgent: false,
       grant: null,
+      principal: { id: "system", kind: "service", hostUserId: null },
     });
   });
 });
