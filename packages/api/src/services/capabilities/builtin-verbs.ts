@@ -300,8 +300,8 @@ const outputGenerateHandler: BuiltinVerbHandler = async (params, ctx) => {
     });
   }
 
-  // Confirm the operator is a member of the acting workspace — an equivalent
-  // membership check to the Hub route's verifyWorkspaceAccess.
+  // Confirm the operator is a member of the acting workspace (any role; the
+  // Hub route's twin gates on the write floor, the access door's `canWrite`).
   const membership = await getWorkspaceMembership(
     db,
     ctx.workspaceId,

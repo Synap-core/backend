@@ -18,7 +18,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 const WS = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 
 const {
-  mockVerifyWorkspaceAccess,
+  mockCanRead,
   mockGetEffectiveGovernance,
   mockCountPendingProposals,
   mockCountPendingAgentProposals,
@@ -26,7 +26,7 @@ const {
   mockFindOpenRaise,
   mockRequestRaiseProposalCap,
 } = vi.hoisted(() => ({
-  mockVerifyWorkspaceAccess: vi.fn().mockResolvedValue(true),
+  mockCanRead: vi.fn().mockResolvedValue(true),
   mockGetEffectiveGovernance: vi
     .fn()
     .mockResolvedValue({ writesRequireProposal: true }),
@@ -37,8 +37,9 @@ const {
   mockRequestRaiseProposalCap: vi.fn(),
 }));
 
-vi.mock("../../hub-protocol/rest/_shared.js", () => ({
-  verifyWorkspaceAccess: mockVerifyWorkspaceAccess,
+vi.mock("../../../access/door.js", () => ({
+  canRead: mockCanRead,
+  userPrincipal: (userId: string) => ({ userId, grant: null }),
 }));
 
 vi.mock("../../../utils/permission-check.js", () => ({
@@ -83,7 +84,7 @@ async function callGovernance(
 describe("synap_governance — the calling agent's proposal budget", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockVerifyWorkspaceAccess.mockResolvedValue(true);
+    mockCanRead.mockResolvedValue(true);
     mockGetEffectiveGovernance.mockResolvedValue({
       writesRequireProposal: true,
     });
@@ -178,7 +179,7 @@ describe("synap_governance — the calling agent's proposal budget", () => {
   });
 
   it("keeps the workspace membership floor — no budget leaks on a forbidden read", async () => {
-    mockVerifyWorkspaceAccess.mockResolvedValue(false);
+    mockCanRead.mockResolvedValue(false);
 
     const payload = await callGovernance();
 

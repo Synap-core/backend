@@ -31,7 +31,7 @@ vi.mock("@synap/database", async (importOriginal) => ({
 }));
 vi.mock("../hub-protocol/rest/_shared.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../hub-protocol/rest/_shared.js")>()),
-  verifyWorkspaceAccess: vi.fn(async () => true),
+  getUserMemberWorkspaceIds: vi.fn(async () => [WS]),
 }));
 vi.mock("../../services/agent-identity-service.js", async (importOriginal) => ({
   ...(await importOriginal<

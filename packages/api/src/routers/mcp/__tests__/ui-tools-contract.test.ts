@@ -41,7 +41,7 @@ vi.mock("../../hub-protocol/rest/_shared.js", async (importOriginal) => ({
     typeof import("../../hub-protocol/rest/_shared.js")
   >()),
   resolveProposalId: vi.fn(async (_u: string, raw: string) => raw),
-  verifyWorkspaceAccess: vi.fn(async () => false),
+  getUserMemberWorkspaceIds: vi.fn(async () => []),
 }));
 vi.mock("../../hub-protocol/utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../hub-protocol/utils.js")>()),

@@ -17,7 +17,10 @@
 
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { resolveConfinedWorkspace } from "../hub-protocol/confine-workspace.js";
-import { logger, verifyWorkspaceAccess } from "../hub-protocol/rest/_shared.js";
+import {
+  getUserMemberWorkspaceIds,
+  logger,
+} from "../hub-protocol/rest/_shared.js";
 import { getAgentFocusWorkspaceId } from "../../services/agent-identity-service.js";
 import {
   runWithDerivedSession,
@@ -130,7 +133,7 @@ export async function executeMCPToolViaHubProtocol(
   // becomes `ctx.workspaceId`, which the hub write procs consume as the ambient
   // governance workspace WITHOUT re-validating it (`entities.create` only
   // membership-checks `input.targetWorkspaceId`). Gate it here — the same
-  // `verifyWorkspaceAccess` the capture-graph branch uses.
+  // membership lens the capture-graph branch uses.
   const rawRequestedWorkspaceId =
     typeof args.workspaceId === "string" && args.workspaceId.trim() !== ""
       ? args.workspaceId
@@ -159,14 +162,18 @@ export async function executeMCPToolViaHubProtocol(
   // Catalog/read tools like list_playbooks use listAllPage (user floor) — no
   // membership[0]. Never overrides, never 403s: a
   // focus on a workspace the caller has since lost access to is silently
-  // dropped by the `verifyWorkspaceAccess` check right below, same as any
+  // dropped by the membership check right below, same as any
   // other lens.
   const requestedWorkspaceId = pickAdvisoryWorkspaceId(
     confinedWorkspaceId,
     agentUserId ? await getAgentFocusWorkspaceId(agentUserId) : undefined
   );
+  // A LENS, not an object check (plan-access A-2): a space the caller is a
+  // MEMBER of, as `X-Workspace-Id` is for tRPC. Not the door's space read,
+  // which also admits a pod reader: the hub write procs take this lens as
+  // their governance workspace.
   const workspaceAccessible = requestedWorkspaceId
-    ? await verifyWorkspaceAccess(userId, requestedWorkspaceId)
+    ? (await getUserMemberWorkspaceIds(userId)).includes(requestedWorkspaceId)
     : false;
   if (requestedWorkspaceId && !workspaceAccessible) {
     // DROPPED, not rejected — like the session handle, the ambient lens is a

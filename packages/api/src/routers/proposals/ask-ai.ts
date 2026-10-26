@@ -42,7 +42,7 @@ import { assertProposalVisibleTo } from "../../utils/proposal-visibility.js";
 import { resolveOrCreateChannel } from "../../utils/resolve-or-create-channel.js";
 import { triggerAutoRespond } from "../../utils/trigger-auto-respond.js";
 import { postSeedOnce } from "../../services/messaging/post-seed-once.js";
-import { verifyWorkspaceAccess } from "../hub-protocol/rest/_shared.js";
+import { canWrite, userPrincipal } from "../../access/door.js";
 
 const logger = createLogger({ module: "proposal-ask-ai" });
 
@@ -119,11 +119,11 @@ export async function askAiAboutProposal(params: {
   // disclosing it to that workspace's members. The proposal's OWN workspace is
   // not re-checked: it was placed there by the pod, not by this request.
   if (!proposal.workspaceId) {
-    const member = await verifyWorkspaceAccess(userId, workspaceId);
-    if (!member) {
+    // Filing the thread there is a write into that space: the write floor.
+    if (!(await canWrite(userPrincipal(userId), { workspace: workspaceId }))) {
       throw new TRPCError({
         code: "FORBIDDEN",
-        message: "You are not a member of that workspace.",
+        message: "You can't add a discussion to that workspace.",
       });
     }
   }

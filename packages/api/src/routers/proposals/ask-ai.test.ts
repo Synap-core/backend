@@ -39,8 +39,8 @@ const h = vi.hoisted(() => ({
   proposalRow: null as Record<string, unknown> | null,
   latestMessages: [] as Array<{ id: string; role: string; content: string }>,
   visibilityError: null as unknown,
-  /** Membership row the fallback-workspace check reads. null ⇒ not a member. */
-  membership: { id: "m-1" } as Record<string, unknown> | null,
+  /** Membership row the fallback-workspace write check reads. null ⇒ not a member. */
+  membership: { id: "m-1", role: "editor" } as Record<string, unknown> | null,
   /** Idempotency keys `postChannelMessage` has ALREADY inserted under. Models
    *  the real `ON CONFLICT DO NOTHING` on the deterministic message id. */
   insertedKeys: new Set<string>(),
@@ -101,6 +101,8 @@ vi.mock("@synap/database", async (importOriginal) => {
   const query = {
     proposals: { findFirst: async () => h.proposalRow },
     workspaceMembers: { findFirst: async () => h.membership },
+    // The write floor's owner rule (Q-A1): someone else owns every space here.
+    workspaces: { findFirst: async () => ({ ownerId: "someone-else" }) },
   };
   // NO `transaction` is exposed. The door must not open one: it used to hold a
   // pool connection across `postChannelMessage`, which runs its own queries on
@@ -134,7 +136,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.visibilityError = null;
   h.latestMessages = [];
-  h.membership = { id: "m-1" };
+  h.membership = { id: "m-1", role: "editor" };
   h.insertedKeys = new Set<string>();
   h.proposalRow = {
     id: PROPOSAL,
@@ -268,6 +270,19 @@ describe("the happy path", () => {
     expect(resolveOrCreateChannel).not.toHaveBeenCalled();
     expect(postChannelMessage).not.toHaveBeenCalled();
     expect(triggerAutoRespond).not.toHaveBeenCalled();
+  });
+
+  it("REFUSES a fallback workspace the caller only VIEWS: filing there is a write", async () => {
+    h.proposalRow = { ...h.proposalRow!, workspaceId: null };
+    h.membership = { id: "m-1", role: "viewer" };
+    await expect(
+      askAiAboutProposal({
+        proposalId: PROPOSAL,
+        userId: USER,
+        fallbackWorkspaceId: "ws-viewed",
+      })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(resolveOrCreateChannel).not.toHaveBeenCalled();
   });
 
   it("does NOT re-check the proposal's OWN workspace against membership", async () => {
