@@ -58,6 +58,16 @@ export interface RuleLoopCallerContext {
   workspaceId: string | null;
   /** Audit provenance, e.g. "rule_loop_approval" / "rule_loop_capture". */
   auditSource: string;
+  /**
+   * Who AUTHORED the batch's skills, and whether a person approved it. The
+   * writes above run as `userId` with no agent, so the born-approved rule
+   * (`skillBornApproved`) must be told the real author: an agent's skill in a
+   * batch that auto-applied (a governance rule, its own space) is born
+   * unapproved, exactly as the direct `skills.create` door leaves it. Required,
+   * so no call site can forget it: an absent author read as "a trusted human"
+   * was the bypass.
+   */
+  skillAuthor: { agentUserId: string | null; personApproved: boolean };
 }
 
 export function buildRuleLoopCallers(ctx: RuleLoopCallerContext): {
@@ -68,7 +78,7 @@ export function buildRuleLoopCallers(ctx: RuleLoopCallerContext): {
   viewCaller: ViewCreateCaller;
   updateCaller: CompositeUpdateCaller;
 } {
-  const { database, userId, workspaceId, auditSource } = ctx;
+  const { database, userId, workspaceId, auditSource, skillAuthor } = ctx;
 
   return {
     // A Library rebuild's CHANGES (`update_*`), each through its object's
@@ -94,6 +104,9 @@ export function buildRuleLoopCallers(ctx: RuleLoopCallerContext): {
           // The operator is the authority — no agentUserId, so the re-entrant
           // gate auto-grants instead of re-proposing.
           agentUserId: undefined,
+          // …but the skill is still its author's: born approved only by the
+          // one rule, judged on the real author and on a person's approval.
+          author: skillAuthor,
           auditSource,
         });
         if (created.status !== "installed") {

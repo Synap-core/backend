@@ -394,6 +394,19 @@ export async function replaceSkillRequiredTools(params: {
  */
 export type InsertSkillGovernedInput = typeof skills.$inferInsert & {
   agentUserId?: string;
+  /**
+   * The skill's AUTHOR, when this door runs as someone else. A composite
+   * proposal's skill step re-enters here with no `agentUserId` (the governance
+   * decision was already made, so the gate must grant, not re-propose), but
+   * the skill is the proposal agent's. The born-approved rule judges the
+   * author and whether a person approved the proposal, never the door: an
+   * agent's skill in a composite that auto-applied is born unapproved.
+   * Ignored when `agentUserId` is set (the door then IS the author). Only the
+   * composite's INSTRUCTION step passes it: an executable skill a person
+   * approved is turned on by the `skill/create` executor through
+   * `setSkillApproved`, the one enable door.
+   */
+  author?: { agentUserId: string | null; personApproved: boolean };
   /** Folded into the audit-log `data` for observability, e.g. "install_from_url". */
   auditSource: string;
 };
@@ -408,6 +421,7 @@ export async function insertSkillGoverned(
 ): Promise<InsertSkillGovernedResult> {
   const {
     agentUserId,
+    author,
     auditSource,
     id: _ignoredId,
     approved: _ignoredApproved,
@@ -447,7 +461,11 @@ export async function insertSkillGoverned(
     return { status: "proposed", proposalId: perm.proposalId };
   }
 
-  const approved = skillBornApproved({ kind: values.kind, agentUserId });
+  const approved = skillBornApproved({
+    kind: values.kind,
+    agentUserId: agentUserId ?? author?.agentUserId,
+    personApprovedProposal: !agentUserId && author?.personApproved === true,
+  });
 
   const [skill] = await db
     .insert(skills)

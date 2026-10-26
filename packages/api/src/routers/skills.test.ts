@@ -254,3 +254,85 @@ describe("insertSkillGoverned", () => {
     expect(mockInsertedRow.current?.approved).toBe(false);
   });
 });
+
+/**
+ * A composite ("capture graph") batch's skill step, through the REAL
+ * `buildRuleLoopCallers` into the REAL `insertSkillGoverned`. The step
+ * re-enters the door with no `agentUserId` (the governance decision was made
+ * for the whole batch, so the gate must grant), which made every skill in it
+ * read as a trusted human's: an agent's instruction skill in a batch that
+ * AUTO-applied (a governance rule, its own space) was born approved, where the
+ * direct door leaves the same write unapproved. The born-approved rule now
+ * judges the batch's author and whether a person approved it.
+ */
+describe("a composite batch's skill step is born approved only by the one rule", () => {
+  const OP = {
+    name: "where-the-work-is",
+    slug: "team/where-the-work-is",
+    body: "Look in the Builder space first.",
+    scope: "pod" as const,
+  };
+  const step = async (skillAuthor: {
+    agentUserId: string | null;
+    personApproved: boolean;
+  }) => {
+    const { buildRuleLoopCallers } =
+      await import("../utils/rule-loop-callers.js");
+    await buildRuleLoopCallers({
+      database: {} as never,
+      userId: "human-owner",
+      workspaceId: null,
+      auditSource: "rule_loop_capture_auto_apply",
+      skillAuthor,
+    }).skillCaller.create(OP);
+    return mockInsertedRow.current;
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockInsertedRow.current = null;
+    mockCheckPermissionOrPropose.mockResolvedValue({ granted: true });
+    mockDbInsert.mockImplementation(() => ({
+      values: vi.fn((v: Record<string, unknown>) => {
+        mockInsertedRow.current = v;
+        return { returning: vi.fn().mockResolvedValue([v]) };
+      }),
+    }));
+  });
+
+  it("an agent's batch that auto-applied (no person reviewed it): born UNAPPROVED", async () => {
+    const row = await step({ agentUserId: "agent-1", personApproved: false });
+    expect(row?.kind).toBe("instruction");
+    expect(row?.approved).toBe(false);
+  });
+
+  it("an agent's batch a PERSON approved: born approved (the review was the OK)", async () => {
+    const row = await step({ agentUserId: "agent-1", personApproved: true });
+    expect(row?.approved).toBe(true);
+  });
+
+  it("a person's own batch (an import, their capture): born approved, as before", async () => {
+    const row = await step({ agentUserId: null, personApproved: false });
+    expect(row?.approved).toBe(true);
+  });
+
+  it("the gate re-runs as the approver, never as the author (no re-proposal)", async () => {
+    await step({ agentUserId: "agent-1", personApproved: false });
+    expect(mockCheckPermissionOrPropose).toHaveBeenCalledWith(
+      expect.objectContaining({ agentUserId: undefined })
+    );
+  });
+
+  it("an author can never widen a door that IS an agent's", async () => {
+    await insertSkillGoverned({
+      userId: "human-owner",
+      agentUserId: "agent-1",
+      author: { agentUserId: null, personApproved: true },
+      kind: "instruction",
+      name: "agent-door",
+      body: "x",
+      auditSource: "test",
+    } as never);
+    expect(mockInsertedRow.current?.approved).toBe(false);
+  });
+});
