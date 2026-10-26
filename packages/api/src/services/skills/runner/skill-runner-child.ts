@@ -126,7 +126,9 @@ loadIvm().then(
       error: err instanceof Error ? err.message : String(err),
     };
     // Exit once the reason is on the wire, so the broker can say why.
-    if (process.send) process.send(fatal, () => process.exit(1));
+    // @types/node types process.send without the (message, callback) overload.
+    if (process.send)
+      process.send(fatal, undefined, undefined, () => process.exit(1));
     else process.exit(1);
   }
 );
