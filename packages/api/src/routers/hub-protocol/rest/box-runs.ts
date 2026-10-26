@@ -26,6 +26,7 @@ import { BOX_RUNNER_SCOPE, users } from "@synap/database/schema";
 import { MACHINE_AGENT_TYPE } from "@synap-core/types/agents";
 import {
   hasScope,
+  httpStatusForTrpcError,
   logger,
   requireUuidParam,
   type HubHono,
@@ -224,7 +225,10 @@ export function registerBoxRunsRoutes(app: HubHono): void {
       return c.json({ run });
     } catch (err) {
       logger.error({ err }, "box-runs lease failed");
-      return c.json({ code: "INTERNAL", error: "Lease failed" }, 500);
+      return c.json(
+        { code: "INTERNAL", error: "Lease failed" },
+        httpStatusForTrpcError(err)
+      );
     }
   });
 
