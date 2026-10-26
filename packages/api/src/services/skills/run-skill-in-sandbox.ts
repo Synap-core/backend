@@ -30,6 +30,12 @@
  * auto-executing. Reads carry no agentUserId (they ride the operator floor),
  * matching `getCaller`'s deliberate asymmetry.
  *
+ * ONE BRIDGE SET (R1, 2026-10-26): everything the IS executor does, this does
+ * too — the parameter check before any code runs, dry-run (`dryRunEffects`),
+ * `propose.entity` `content`, the session on governed provider writes, and
+ * `runtimeVersion` on the result — so the pod can become the only runtime
+ * without a regression.
+ *
  * Behind the `SANDBOX_LOCAL` flag (default OFF) — the chokepoint in
  * `execute-capability.ts` still calls `executeSkillViaIS` unless it is "1".
  */
@@ -41,6 +47,7 @@ import { AsyncResource } from "node:async_hooks";
 import {
   db,
   eq,
+  findRedeemableGrant,
   parseVaultReference,
   resolveVaultSecret,
   VaultGrantError,
@@ -57,7 +64,10 @@ import {
   SKILL_STDLIB_BOOTSTRAP,
   SKILL_RUNTIME_VERSION,
 } from "./skill-stdlib.js";
-import type { SkillExecutionResult } from "./execute-skill-via-is.js";
+import type {
+  RecordedEffect,
+  SkillExecutionResult,
+} from "./execute-skill-via-is.js";
 // Type-only import (erased at runtime — the value is loaded via dynamic import()
 // below to avoid a static router↔service cycle). Gives the caller its real type.
 import type { hubProtocolRouter } from "../../routers/hub-protocol/index.js";
@@ -83,7 +93,8 @@ async function redeemVaultSecretDirect(
   ref: string,
   operatorUserId: string,
   agentUserId: string | null,
-  workspaceId: string | null
+  workspaceId: string | null,
+  dryRun: boolean
 ): Promise<string | null> {
   const parsed = parseVaultReference(ref);
   if (!parsed) return null;
@@ -92,20 +103,29 @@ async function redeemVaultSecretDirect(
     columns: { userId: true },
   });
   if (!secret) return null;
+  // Redeemer is the acting agent (or the operator when no agent key is in
+  // play) — mirrors the vault REST door's `agentUserId ?? acting.userId`.
+  const redeemer = {
+    agentUserId: agentUserId ?? operatorUserId,
+    workspaceId: workspaceId ?? null,
+  };
+  // Dry-run: the SAME grant check, without decrypting and without spending a
+  // use (the find half of the redemption only). A granted ref answers a masked
+  // sentinel, an ungranted one null, as it would live.
+  if (dryRun) {
+    const grant = await findRedeemableGrant(
+      "secret",
+      parsed.secretId,
+      redeemer
+    );
+    return grant.ok ? "dry-run-secret" : null;
+  }
   try {
     return await resolveVaultSecret(
       parsed.secretId,
       secret.userId,
       parsed.fieldName,
-      {
-        requireGrant: true,
-        // Redeemer is the acting agent (or the operator when no agent key is in
-        // play) — mirrors the vault REST door's `agentUserId ?? acting.userId`.
-        redeemer: {
-          agentUserId: agentUserId ?? operatorUserId,
-          workspaceId: workspaceId ?? null,
-        },
-      }
+      { requireGrant: true, redeemer }
     );
   } catch (err) {
     if (err instanceof VaultGrantError) return null;
@@ -131,11 +151,24 @@ export async function runSkillInSandbox(args: {
    * required tools ride the verb's approval instead of being gated again.
    */
   verbAct?: { skillId: string; toolIds: readonly string[] };
+  /**
+   * The focus session the run belongs to, from the RUN's context (never from
+   * the skill's input). Rides the governed provider-write branch, so a
+   * proposal that write files carries `proposals.session_id`.
+   */
+  sessionId?: string | null;
+  /**
+   * Preview: reads run for real, every write and send (`propose.entity`,
+   * `callProvider`, `host.fetch`) is recorded in `dryRunEffects` instead of
+   * performed, secrets answer a masked value. Every guard still applies.
+   */
+  dryRun?: boolean;
 }): Promise<SkillExecutionResult> {
   const startTime = Date.now();
   const operatorUserId = args.userId;
   const workspaceId = args.workspaceId ?? null;
   const agentUserId = args.agentUserId ?? null;
+  const dryRun = args.dryRun === true;
 
   // P1: host-side carrier for a classified provider failure. `callProvider`
   // throws INTO the isolate (which strips Error properties down to the message)
@@ -181,9 +214,28 @@ export async function runSkillInSandbox(args: {
       };
     }
 
+    // The arguments against the skill's declared `parameters`, before any code
+    // runs: the runtime is the handler of a code skill, so this is the check
+    // `executeCapability`'s propose branch defers to for a `run`. The pod's one
+    // reader of that declaration; an absent or unreadable one runs unchanged.
+    const { checkVerbParameters, describeParameterRepair } =
+      await import("../capabilities/validate-verb-parameters.js");
+    const paramCheck = checkVerbParameters(skill, args.parameters);
+    if (paramCheck.status === "invalid") {
+      return {
+        success: false,
+        error: `Parameter validation failed: ${describeParameterRepair(
+          skill.name,
+          paramCheck.repair
+        )}`,
+        executionTimeMs: Date.now() - startTime,
+      };
+    }
+
     const timeoutMs = (skill.timeoutSeconds ?? 30) * 1000;
     const allowedHosts =
       (skill.metadata?.allowedHosts as string[] | undefined) ?? [];
+    const recordedEffects: RecordedEffect[] = [];
 
     // ONE caller, built with the operator floor — the same door the REST handlers
     // build. Reads scope to ctx.userId; the write bridges thread agentUserId as a
@@ -200,21 +252,32 @@ export async function runSkillInSandbox(args: {
     const result = await runIsolate({
       code: skill.code,
       args: args.parameters ?? {},
-      context: { userId: operatorUserId, workspaceId, agentUserId },
+      context: {
+        userId: operatorUserId,
+        // The author contract (`skill-runtime.d.ts`) types `threadId` a
+        // string; the IS executes these runs as "manual" / "dry-run".
+        threadId: dryRun ? "dry-run" : "manual",
+        workspaceId,
+        agentUserId,
+      },
       timeoutMs,
       allowedHosts,
       operatorUserId,
       workspaceId,
       agentUserId,
+      sessionId: args.sessionId ?? null,
       caller,
       failureSink: providerFailure,
       verbAct: args.verbAct,
+      recordedEffects: dryRun ? recordedEffects : undefined,
     });
 
     return {
       success: true,
       result,
       executionTimeMs: Date.now() - startTime,
+      runtimeVersion: SKILL_RUNTIME_VERSION,
+      ...(dryRun ? { dryRunEffects: recordedEffects } : {}),
     };
   } catch (error) {
     return {
@@ -297,6 +360,7 @@ export async function runIsolate(params: {
   args: Record<string, unknown>;
   context: {
     userId: string;
+    threadId?: string;
     workspaceId: string | null;
     agentUserId: string | null;
   };
@@ -305,12 +369,19 @@ export async function runIsolate(params: {
   operatorUserId: string;
   workspaceId: string | null;
   agentUserId: string | null;
+  /** The run's focus session — forwarded on governed provider writes only. */
+  sessionId?: string | null;
   caller: HubCaller;
   /** P1: written on a classified provider failure so the caller can attach the
    *  recovery classification to its failure envelope (see runSkillInSandbox). */
   failureSink: { errorClass?: FailureErrorClass; providerRef?: string };
   /** This run's verb decision — scoped to THIS isolate's provider calls. */
   verbAct?: { skillId: string; toolIds: readonly string[] };
+  /**
+   * Present = DRY-RUN: the write/send bridges record their effect here and
+   * return a stub instead of performing it. Reads and every guard stay real.
+   */
+  recordedEffects?: RecordedEffect[];
 }): Promise<unknown> {
   const {
     code,
@@ -321,10 +392,14 @@ export async function runIsolate(params: {
     operatorUserId,
     workspaceId,
     agentUserId,
+    sessionId,
     caller,
     failureSink,
     verbAct,
+    recordedEffects,
   } = params;
+  const dryRun = recordedEffects !== undefined;
+  let dryRunSeq = 0;
 
   const ivm = await loadIvm();
   const isolate = new ivm.Isolate({ memoryLimit: ISOLATE_MEMORY_LIMIT_MB });
@@ -404,7 +479,8 @@ export async function runIsolate(params: {
         String(ref),
         operatorUserId,
         agentUserId,
-        workspaceId
+        workspaceId,
+        dryRun
       );
       return new ivm.ExternalCopy(value ?? null).copyInto();
     });
@@ -427,6 +503,22 @@ export async function runIsolate(params: {
           error: "domain_not_approved",
           hostname: check.url.hostname,
           message: `Domain "${check.url.hostname}" is not approved. The agent should propose access.`,
+        }).copyInto();
+      }
+
+      // Dry-run: the guards above ran and their refusals surfaced; the request
+      // itself is recorded, never sent.
+      if (recordedEffects) {
+        const method =
+          typeof optsStr === "string"
+            ? ((JSON.parse(optsStr) as { method?: string }).method ?? "GET")
+            : "GET";
+        recordedEffects.push({ kind: "fetch", url, method });
+        return new ivm.ExternalCopy({
+          ok: true,
+          status: 200,
+          headers: {},
+          body: "",
         }).copyInto();
       }
 
@@ -514,6 +606,23 @@ export async function runIsolate(params: {
           ).filter(([, v]) => typeof v === "string") as [string, string][];
           if (entries.length > 0) headers = Object.fromEntries(entries);
         }
+        // Dry-run: the provider is never called; the intended call is recorded
+        // and a stub answers so the skill's control flow carries on.
+        if (recordedEffects) {
+          recordedEffects.push({
+            kind: "callProvider",
+            provider,
+            method: method.toUpperCase(),
+            path,
+            body: typeof body === "object" && body !== null ? body : undefined,
+            baseUrlOverride,
+          });
+          return new ivm.ExternalCopy({
+            status: 200,
+            headers: {},
+            body: { dryRun: true },
+          }).copyInto();
+        }
         try {
           // GOVERNANCE: attach the acting agent identity ONLY for mutating methods
           // — with agentUserId set, the gate inside triggerProviderAction treats
@@ -536,7 +645,13 @@ export async function runIsolate(params: {
             baseUrlOverride,
             ...(headers ? { headers } : {}),
             ...(isWrite && agentUserId
-              ? { agentUserId, workspaceId: workspaceId ?? undefined }
+              ? {
+                  agentUserId,
+                  workspaceId: workspaceId ?? undefined,
+                  // Session provenance rides ONLY the governed (write) branch,
+                  // the one that can file a proposal. Absent stays absent.
+                  ...(sessionId ? { sessionId } : {}),
+                }
               : {}),
             // ONE governed act: this run's verb was already decided, so its
             // calls to its OWN required tools are not gated again (scoped in
@@ -593,6 +708,7 @@ export async function runIsolate(params: {
         type,
         title,
         properties,
+        content,
         description,
         reasoning,
         workspaceId: inputWorkspaceId,
@@ -612,6 +728,29 @@ export async function runIsolate(params: {
       ) {
         throw new Error("propose.entity: properties must be an object");
       }
+      if (content !== undefined && typeof content !== "string") {
+        throw new Error("propose.entity: content must be a string");
+      }
+      // Dry-run: no proposal is filed; the intended entity is recorded and a
+      // synthetic handle answers so the skill can reference it.
+      if (recordedEffects) {
+        const n = ++dryRunSeq;
+        recordedEffects.push({
+          kind: "propose.entity",
+          profileSlug: slug,
+          title,
+          properties:
+            typeof properties === "object" && properties !== null
+              ? (properties as Record<string, unknown>)
+              : undefined,
+          content: typeof content === "string" ? content : undefined,
+        });
+        return new ivm.ExternalCopy({
+          status: "dry-run",
+          proposalId: `dry:${n}`,
+          proposedEntityId: `dry:${n}`,
+        }).copyInto();
+      }
       try {
         // The governed createEntity door: with agentUserId set, an agent write
         // routes to a reviewable PROPOSAL via checkPermissionOrPropose — never a
@@ -623,6 +762,9 @@ export async function runIsolate(params: {
           title,
           description:
             typeof description === "string" ? description : undefined,
+          // The long-form Markdown body: the door makes it the entity's
+          // versioned document.
+          content: typeof content === "string" ? content : undefined,
           properties:
             typeof properties === "object" && properties !== null
               ? (properties as Record<string, unknown>)
