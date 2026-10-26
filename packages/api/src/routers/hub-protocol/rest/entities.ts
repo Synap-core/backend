@@ -624,10 +624,8 @@ export function registerEntitiesRoutes(app: HubHono): void {
     const offset = Math.max(parseInt(query.offset ?? "0", 10) || 0, 0);
     const sortParam = (query.sort ?? "").trim();
     const parsedSort = sortParam ? parseEntityListSort(sortParam) : null;
-    if (parsedSort && "error" in parsedSort) {
-      return c.json({ error: parsedSort.error }, 400);
-    }
-    const orderBy = parsedSort?.orderBy;
+    const orderBy =
+      parsedSort && "orderBy" in parsedSort ? parsedSort.orderBy : undefined;
     const scope = query.scope;
     // Default TRUE: a workspace lens should include pod-wide globals (the caller's
     // own pod-personal entities with workspaceId IS NULL) so a CRM or agent view
@@ -855,7 +853,6 @@ export function registerEntitiesRoutes(app: HubHono): void {
               ...(includeFacets ? { includeFacets } : {}),
               ...(createdAfter ? { createdAfter } : {}),
               ...(createdBefore ? { createdBefore } : {}),
-              ...(orderBy ? { orderBy } : {}),
             })
           )
         );
@@ -936,10 +933,17 @@ export function registerEntitiesRoutes(app: HubHono): void {
         ...(includeFacets ? { includeFacets } : {}),
         ...(createdAfter ? { createdAfter } : {}),
         ...(createdBefore ? { createdBefore } : {}),
-        ...(orderBy ? { orderBy } : {}),
       });
 
-      const rows = (listed as unknown[]).map((e) => toWire(e));
+      let rows = (listed as unknown[]).map((e) => toWire(e));
+      if (orderBy) {
+        rows = [...rows].sort(
+          compareListedEntities(orderBy) as (
+            a: WireListedEntity,
+            b: WireListedEntity
+          ) => number
+        );
+      }
 
       return c.json(await withMedia(rows), 200);
     } catch (err) {

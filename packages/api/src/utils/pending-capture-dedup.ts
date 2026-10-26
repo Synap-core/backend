@@ -212,7 +212,7 @@ export async function findPendingTextMatches(
   // your review" block for any unrelated capture sharing a word. A one-term
   // query can only ever score 1, so it keeps admitting that. Same rule as the
   // procedural lane (`ask.ts`, `minMatchedTerms: 2`).
-  const minScore = terms.length >= 2 ? 2 : 1;
+  const minScore = 1;
 
   const rows = await database
     .select({
