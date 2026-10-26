@@ -261,6 +261,15 @@ export const workerRegistry: WorkerMetadata[] = [
     category: "shared",
   },
   {
+    id: "pod-hygiene-cleanup-pack",
+    name: "Pod Hygiene Cleanup Pack",
+    description:
+      "Weekly (Mon 04:20 UTC, before the 06:00 night shift). Files ONE pending pod_hygiene/cleanup_pack per human owner: idle stale work sessions to close, unused kinds to retire, asks left owed on ended sessions to withdraw, and producer-backed automations that never ran to archive (the automation-health warden's rule). The owner leaves items out one by one; nothing applies until they approve. Supersedes an undecided pack after 7 days.",
+    triggers: ["cron:20 4 * * 1"],
+    outputs: ["proposal.created"],
+    category: "shared",
+  },
+  {
     id: "librarian-archiver",
     name: "Librarian Project Archiver",
     description:
