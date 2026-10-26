@@ -358,7 +358,10 @@ describe.each([
   it("a session the reader may not read draws nothing", () => {
     reset();
     state.session = reads.fail("NOT_FOUND");
-    expect(sessionStrip(render())).toBeNull();
+    const html = render();
+    expect(sessionStrip(html)).toBeNull();
+    // …and no failure either: "not yours" is not "could not be read".
+    expect(text(html)).not.toMatch(/couldn’t be read/);
   });
 
   it("a FAILED session read says so, with a retry — never vanishes", () => {
