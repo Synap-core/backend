@@ -171,8 +171,8 @@ const graph = (
   });
 
 beforeAll(async () => {
-  const tables = Object.values(schema).filter((v): v is PgTable =>
-    is(v, PgTable)
+  const tables = (Object.values(schema) as unknown[]).filter(
+    (v): v is PgTable => is(v, PgTable)
   );
   // Non-vacuity: the schema walk saw the tables this read joins.
   const names = tables.map((t) => getTableConfig(t).name);

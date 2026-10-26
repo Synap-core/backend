@@ -26,7 +26,6 @@ import type { FocusSession } from "@synap/database/schema";
 import { withParentSessionId } from "../services/focus-sessions/parent-lineage.js";
 import {
   sessionListConditions,
-  type SessionListQuery,
 } from "../services/focus-sessions/session-list-conditions.js";
 import {
   resolveSessionSubject,
@@ -67,7 +66,6 @@ import {
 } from "@synap-core/types/landed";
 import { readSessionUsage } from "../services/focus-sessions/session-usage.js";
 import { loadSessionActivity } from "../services/runs/session-activity.js";
-import { loadSessionLiveness } from "../services/runs/session-liveness.js";
 import {
   SESSION_WORKING_WINDOW_MS,
   type SessionActivityLive,
