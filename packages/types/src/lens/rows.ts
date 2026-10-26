@@ -105,6 +105,12 @@ export interface LensRow {
    */
   detail?: string | null;
   /**
+   * WHAT MOVES when the person answers — an owed slot's "Unblocks …" line
+   * (decision E; the pod's `Signal.unblocks`, `effectiveSlotUnblocks`).
+   * Absent = nothing says; draw nothing.
+   */
+  unblocks?: string;
+  /**
    * The KIND of ask, as a glyph key (`needsYouReasonOf`: decision · ask ·
    * review · failure · an owed slot's blocker) — drawn as the row's reason
    * mark when the list mixes reasons (`lensRowsAnatomy(rows).reason`); the
@@ -223,6 +229,8 @@ function iso(at: string | Date | null | undefined): string | null {
 
 /** The fields of a needs-you `Signal` a lens row reads (structural). */
 export interface LensNeedsYouSignal extends GroupableSignal {
+  /** `owed-slot`: what the answer unblocks (`Signal.unblocks`). */
+  unblocks?: string | null;
   title: string;
   category?: string | null;
   /** Notification registry type — `placeSignal` reads it for the banner rule. */
@@ -528,6 +536,9 @@ export function lensRowOfNeedsYou<T extends LensNeedsYouSignal>(
       // An owed slot's title and detail are the ask card's (`askCardView`):
       // the question once, and its `why` only when it adds.
       ...(card?.context ? { detail: card.context } : {}),
+      ...(s.kind === "owed-slot" && s.unblocks?.trim()
+        ? { unblocks: s.unblocks.trim() }
+        : {}),
       reasonKind: needsYouReasonOf(s),
       repeat: repeatLabel(s),
       source: row.session
