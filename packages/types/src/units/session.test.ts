@@ -411,3 +411,39 @@ describe("D1 — path rows and the aggregate read liveness through the one rule"
     ).toBe("paused");
   });
 });
+
+describe("sessionUnitInput — an agent at work outranks its asks (decision E2)", () => {
+  const NOW_E2 = Date.parse("2026-10-27T12:00:00.000Z");
+  const owed = {
+    status: "active",
+    owedFromYou: 1,
+    pendingDecisions: 0,
+    now: NOW_E2,
+  };
+
+  it("measured at work (a turn in flight): working, its ask waits", () => {
+    expect(
+      resolveUnitState(
+        sessionUnitInput({
+          ...owed,
+          live: { turnInFlight: true, lastAt: null },
+        })
+      ).state
+    ).toBe("working");
+  });
+
+  it("not measured (an older pod) or quiet: the ask is the person's turn", () => {
+    expect(resolveUnitState(sessionUnitInput(owed)).state).toBe("needs_you");
+    expect(
+      resolveUnitState(
+        sessionUnitInput({
+          ...owed,
+          live: {
+            turnInFlight: false,
+            lastAt: new Date(NOW_E2 - 3_600_000).toISOString(),
+          },
+        })
+      ).state
+    ).toBe("needs_you");
+  });
+});

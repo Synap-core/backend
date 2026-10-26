@@ -120,6 +120,13 @@ export interface UnitStateInput {
   /** An agent is actively working right now. */
   running?: boolean;
   /**
+   * An agent is working on it RIGHT NOW, measured from live state (a turn in
+   * flight, agent activity inside the working window: `isSessionWorkingNow`),
+   * never the lifecycle guess `running` carries for an older pod. It outranks
+   * owed asks and pending decisions (decision E2): they wait "until you can".
+   */
+  agentAtWork?: boolean;
+  /**
    * Open, but nothing is working on it right now (D1: no turn in flight and no
    * activity inside the working window). Reads `paused` — the existing quiet
    * state (muted tone, pause glyph) — never `working`, which the default arm
@@ -154,14 +161,25 @@ function pctOf(
  *    actionable arm and above the calm ones.
  * 2. Something you can act on now outranks something you can only wait for,
  *    so a pending decision beats a blocker.
- * 3. An agent at work outranks the asks it left, never a gate or a parked run
- *    (decision E2, 2026-10-27): its asks wait "until you can".
+ * 3. An agent MEASURED at work (`agentAtWork`) outranks the asks it left,
+ *    never a gate or a parked run (decision E2, 2026-10-27): its asks wait
+ *    "until you can".
  */
 export function resolveUnitState(input: UnitStateInput): UnitStateView {
   const pct = pctOf(input.progress);
   const determinate = (fallback: number): UnitRail => ({
     kind: "determinate",
     pct: pct ?? fallback,
+  });
+  const working = (): UnitStateView => ({
+    state: "working",
+    tone: "ai",
+    glyph: "spark",
+    // Striped when there is nothing honest to measure — never a fake 0%.
+    rail:
+      pct === null
+        ? { kind: "striped", pct: null }
+        : { kind: "determinate", pct },
   });
 
   if (input.failed) {
@@ -190,23 +208,15 @@ export function resolveUnitState(input: UnitStateInput): UnitStateView {
       rail: determinate(0),
     };
   }
-  // An agent at work outranks the asks it left (decision E2, 2026-10-27): an
-  // owed ask or a pending proposal on a session an agent is working reads
-  // "asks you when you can", not "waiting on you" (`classifyOwedAsk`'s
-  // `working` fold, `@synap-core/types/needs-you`). Derived from live state —
-  // no agent flag. Only the two blocking arms above, and a blocker it waits
-  // on (below), outrank it.
-  if (input.running && !input.blockedBy) {
-    return {
-      state: "working",
-      tone: "ai",
-      glyph: "spark",
-      // Striped when there is nothing honest to measure — never a fake 0%.
-      rail:
-        pct === null
-          ? { kind: "striped", pct: null }
-          : { kind: "determinate", pct },
-    };
+  // An agent MEASURED at work outranks the asks it left (decision E2,
+  // 2026-10-27): an owed ask or a pending proposal on a session an agent is
+  // working reads "asks you when you can", not "waiting on you"
+  // (`classifyOwedAsk`'s `working` fold, `@synap-core/types/needs-you`).
+  // Derived from live state, never from the lifecycle reading `running`
+  // (an older pod's "open" is not an agent at work). Only the two blocking
+  // arms above outrank it.
+  if (input.agentAtWork) {
+    return working();
   }
   if ((input.owedFromYou ?? 0) > 0) {
     return {
@@ -232,6 +242,7 @@ export function resolveUnitState(input: UnitStateInput): UnitStateView {
       rail: determinate(0),
     };
   }
+  if (input.running) return working();
   if (input.schedule) {
     return input.schedule.enabled
       ? {
