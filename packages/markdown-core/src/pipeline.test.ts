@@ -72,6 +72,12 @@ const READERS: Record<string, Probe> = {
       .segmentSlides(DOC)
       .map((s) => s.title)
       .join("\n"),
+  // Recall passages: the heading is a reading, the text a source slice.
+  segmentPassages: () =>
+    core
+      .segmentPassages(DOC)
+      .map((p) => `${p.heading}\n${p.text}`)
+      .join("\n"),
   // The document title (founder 2026-10-19): the heading TEXT is a reading
   // (the name a list shows — "10:30" and "$5 and $10" must survive it); the
   // rest is a source slice.
@@ -194,6 +200,8 @@ const NOT_READERS: Record<string, string> = {
   diffSection: "block diff (source slices)",
   bodyWithoutTitleHeading: "source slice (leadingHeading's rest)",
   isSameTitle: "predicate",
+  PASSAGE_MAX_CHARS: "data",
+  PASSAGE_MIN_CHARS: "data",
 };
 
 describe("every export is classified", () => {
@@ -230,6 +238,7 @@ describe("prose survives every reader", () => {
   const SOURCE_SLICES = new Set([
     "listSections",
     "segmentSlides",
+    "segmentPassages",
     "leadingHeading",
     "resolveDocumentTitle",
     "readableMarkdown",
@@ -249,6 +258,7 @@ describe("prose survives every reader", () => {
   const KEEPS_SOURCE = new Set([
     "listSections",
     "segmentSlides",
+    "segmentPassages",
     "leadingHeading",
     "resolveDocumentTitle",
   ]);

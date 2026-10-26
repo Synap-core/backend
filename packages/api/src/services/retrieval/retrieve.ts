@@ -19,8 +19,6 @@ import {
   db,
   entities,
   relations,
-  documents,
-  documentVersions,
   and,
   eq,
   inArray,
@@ -28,6 +26,7 @@ import {
   loadFacetSlugsBatch,
   type FacetVisibilityScope,
   listableEntityWhere,
+  loadDocumentBodyTexts,
 } from "@synap/database";
 import {
   projectLensWhere,
@@ -125,12 +124,17 @@ const GRAPH_SEED_CAP = 10;
 
 type EntityRow = typeof entities.$inferSelect & {
   /**
-   * The linked document's body (current-version content, up to the storage
+   * The linked document's CURRENT body (the stored markdown, up to the storage
    * layer's preview cap). Attached ADDITIVELY in `fetchOrdered` — entities
-   * with no `documentId` (or whose document has no version row yet) simply
-   * don't get this field. Synthesis (`synthesize.ts`) is the consumer.
+   * with no `documentId` (or whose document holds no text) simply don't get
+   * this field. Synthesis (`synthesize.ts`) is the consumer.
    */
   content?: string;
+  /**
+   * Why the linked document's body could not be read — set instead of
+   * `content`, never folded into "no body" (synthesis says so to the model).
+   */
+  contentReadError?: string;
   /**
    * Kind + Facets: role-profile slugs the entity wears ("hats"). Attached
    * ADDITIVELY in `fetchOrdered` via ONE batched facet load, so every retrieval
@@ -140,7 +144,8 @@ type EntityRow = typeof entities.$inferSelect & {
   facetSlugs?: string[];
 };
 
-async function fetchOrdered(
+/** Exported for its pglite test (`retrieve.body.pglite.test.ts`). */
+export async function fetchOrdered(
   ids: string[],
   userId: string,
   projectId: string | null | undefined,
@@ -166,31 +171,19 @@ async function fetchOrdered(
       )
     );
 
-  // Attach the entity BODY. `entities` has no content column — the full body
-  // lives on the linked `documents` row's CURRENT VERSION (`document_versions
-  // .content`, a generous 64k-char preview — see uploadDocumentVersionSnapshot
-  // in @synap/database). Batch-joined once per call, purely additive: every
-  // existing field on the row is untouched, we only ADD `content`.
+  // Attach the entity BODY. `entities` has no content column — the body is
+  // the linked document's STORED markdown (`loadDocumentBodyTexts`, the one
+  // body reader search indexes with too). Never the `document_versions` row:
+  // that is only the last checkpoint (a person's saves cut no row), so an
+  // answer read from it misses every edit since. Markdown is kept as is, so
+  // synthesis can cut a long body at its headings. Batch-loaded once per call,
+  // purely additive: we only ADD `content` (or `contentReadError`).
   const docIds = rows
     .map((r) => r.documentId)
     .filter((id): id is string => id !== null && id !== undefined);
-  const contentByDocId = new Map<string, string>();
-  if (docIds.length > 0) {
-    const bodies = await db
-      .select({ documentId: documents.id, content: documentVersions.content })
-      .from(documents)
-      .innerJoin(
-        documentVersions,
-        and(
-          eq(documentVersions.documentId, documents.id),
-          eq(documentVersions.version, documents.currentVersion)
-        )
-      )
-      .where(inArray(documents.id, docIds));
-    for (const b of bodies) {
-      if (b.content) contentByDocId.set(b.documentId, b.content);
-    }
-  }
+  const bodies = await loadDocumentBodyTexts(db, docIds, {
+    markdownText: (markdown) => markdown,
+  });
 
   // Kind + Facets: annotate each row with the role "hats" it wears. ONE batched
   // facet load for the whole page (the canonical entity→facet-slug join, same
@@ -205,16 +198,19 @@ async function fetchOrdered(
   const byId = new Map<string, EntityRow>(
     rows.map((r) => {
       const facetSlugs = facetSlugsById.get(r.id);
-      const content =
-        r.documentId && contentByDocId.has(r.documentId)
-          ? contentByDocId.get(r.documentId)
-          : undefined;
+      const content = r.documentId ? bodies.texts.get(r.documentId) : undefined;
+      const contentReadError = r.documentId
+        ? bodies.failed.get(r.documentId)
+        : undefined;
       return [
         r.id,
-        content !== undefined || (facetSlugs && facetSlugs.length > 0)
+        content !== undefined ||
+        contentReadError !== undefined ||
+        (facetSlugs && facetSlugs.length > 0)
           ? {
               ...r,
               ...(content !== undefined ? { content } : {}),
+              ...(contentReadError !== undefined ? { contentReadError } : {}),
               ...(facetSlugs && facetSlugs.length > 0 ? { facetSlugs } : {}),
             }
           : r,
