@@ -262,7 +262,12 @@ beforeAll(async () => {
     accepted: false,
     agents: [WRITER],
     outputs: [
-      OWED("Draft deliverable", "2026-10-20T00:00:00.000Z"),
+      // Not an ask: a deliverable only the person can make (a `decision` blocker
+      // would derive a confirm ask, `effectiveSlotAsk`, and count on a draft).
+      OWED("Draft deliverable", "2026-10-20T00:00:00.000Z", {
+        kind: "document",
+        blockedReason: "physical",
+      }),
       OWED("Which hook?", "2026-10-21T00:00:00.000Z", { ask: CHOOSE }),
     ],
   });
