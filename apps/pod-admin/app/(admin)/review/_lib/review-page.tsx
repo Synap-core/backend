@@ -13,7 +13,9 @@
  * admins only, so a member's Access chip simply holds their own proposals.
  *
  * URL: `?type=access|changes|asks|history` picks the view; `?focus=<id>`
- * opens that row's decision (a row, its target, or any proposal id). From
+ * opens that row's decision (a row, its target, or any proposal id);
+ * `?session=<id>` narrows every view to one session — the door a proposal's
+ * review offers to "what else from this session waits for you". From
  * `lg` up the decision docks beside the list; below, it opens in a drawer.
  * An agent's question is answered in the same place (`ask-answer.tsx`);
  * once it is, the detail closes and focus moves to the next row.
@@ -23,12 +25,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Alert, Button, Checkbox, Textarea, addToast } from "@heroui/react";
 import { ArrowUpRight, Check, Lock, MessageSquare, X } from "lucide-react";
+import { resolveObjectNoun } from "@synap-core/types/vocabulary";
 import { trpc } from "../../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
 import { formatRelative, isUuid } from "../../../../lib/format";
 import { useReplaceParams } from "../../../../lib/use-replace-params";
 import { LG_UP, useMediaQuery } from "../../../../lib/use-media-query";
-import type { Exit } from "../../../../lib/open-in";
+import { openIn, type Exit } from "../../../../lib/open-in";
 import {
   ExitFallback,
   externalProps,
@@ -46,6 +49,7 @@ import {
   ResourceRowSkeleton,
 } from "../../components/resource-row";
 import { kindIcon, kindLabel } from "../../../_lib/object/kind-icon";
+import { Pill } from "../../../_lib/object/provenance-chips";
 import {
   batchOf,
   exitOf,
@@ -54,6 +58,8 @@ import {
   reviewCounts,
   reviewFilterOf,
   reviewRows,
+  reviewSessionLabel,
+  reviewSessionOf,
   rowsInView,
   summarizeBatch,
   type ProposalFacts,
@@ -89,15 +95,19 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
   const replaceParams = useReplaceParams();
   const filter = reviewFilterOf(searchParams.get("type"));
   const focusId = searchParams.get("focus");
+  const sessionId = reviewSessionOf(searchParams.get("session"));
   const utils = trpc.useUtils();
 
+  // The pod narrows by session itself (`signals.list`'s session lens, the
+  // proposals' `session_id`) — never a client filter over the pod-wide page.
+  const scope = sessionId ? { sessionId } : {};
   const signals = trpc.signals.list.useQuery(
-    { lens: "needs-you", limit: PAGE_LIMIT },
+    { lens: "needs-you", limit: PAGE_LIMIT, ...scope },
     { staleTime: 15_000, refetchInterval: 60_000 }
   );
   const count = useNeedsYouCount();
   const pending = trpc.proposals.list.useQuery(
-    { status: "pending", limit: 100 },
+    { status: "pending", limit: 100, ...scope },
     { staleTime: 15_000 }
   );
 
@@ -273,8 +283,9 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
   const desktopExit = visible
     .map((r) => (r.detail?.kind === "open" ? exitOf(r.detail) : null))
     .find((e): e is Exit => !!e?.isDesktopLink);
+  // The pod-wide count says nothing about one session's rows.
   const shownOfTotal =
-    count.data && count.data.needsYou > rows.length
+    !sessionId && count.data && count.data.needsYou > rows.length
       ? `Showing the newest ${rows.length} of ${count.data.truncated ? "more than " : ""}${count.data.needsYou}.`
       : null;
 
@@ -292,6 +303,18 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
         }
       >
         <div className="min-w-0">
+          {sessionId && (
+            <SessionFilter
+              sessionId={sessionId}
+              label={reviewSessionLabel(signals.data?.signals ?? [], sessionId)}
+              onClear={() =>
+                replaceParams((params) => {
+                  params.delete("session");
+                  params.delete("focus");
+                })
+              }
+            />
+          )}
           <FilterChips
             param="type"
             defaultKey="all"
@@ -377,6 +400,7 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
           <section className="divide-y divide-foreground/[0.05] rounded-lg bg-foreground/[0.02] ring-1 ring-inset ring-foreground/10">
             {filter === "history" ? (
               <ReviewHistory
+                sessionId={sessionId}
                 onOpen={(proposalId, title) =>
                   setOpen({ detail: { kind: "proposal", proposalId }, title })
                 }
@@ -471,6 +495,43 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
         />
       </ConfirmModal>
     </PageShell>
+  );
+}
+
+/**
+ * "From <session>" over the list while Review is narrowed to one session: the
+ * session's name is a door to it, and × widens back to everything.
+ */
+function SessionFilter({
+  sessionId,
+  label,
+  onClear,
+}: {
+  sessionId: string;
+  label: string | null;
+  onClear: () => void;
+}) {
+  const SessionIcon = kindIcon("session");
+  return (
+    <div className="mb-3 flex flex-wrap items-center gap-1.5 text-[12.5px] text-foreground/70">
+      <span>From</span>
+      <Pill
+        exit={openIn({ kind: "object", objectKind: "session", id: sessionId })}
+        title={resolveObjectNoun("session")}
+      >
+        <SessionIcon aria-hidden className="h-3.5 w-3.5 text-foreground/55" />
+        <span className="truncate">{label ?? "one session"}</span>
+      </Pill>
+      <Button
+        size="sm"
+        variant="light"
+        radius="md"
+        startContent={<X className="h-3.5 w-3.5" aria-hidden />}
+        onPress={onClear}
+      >
+        Show everything
+      </Button>
+    </div>
   );
 }
 

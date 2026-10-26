@@ -36,6 +36,7 @@ import {
 } from "@synap-core/types/proposals";
 import type { Ask } from "@synap-core/types/ask";
 import { openIn, type Exit } from "../../../../lib/open-in";
+import { isUuid } from "../../../../lib/format";
 import { askSlotOf, type AskSlot } from "./ask-detail";
 import {
   proposalRequester,
@@ -58,6 +59,37 @@ export const REVIEW_FILTERS: readonly ReviewFilter[] = [
 /** `?type=` → the view; anything unknown is "all". */
 export function reviewFilterOf(param: string | null | undefined): ReviewFilter {
   return REVIEW_FILTERS.find((f) => f === param) ?? "all";
+}
+
+/**
+ * `?session=` → the one session Review narrows to (the pod's own session
+ * lens on `signals.list`), or null. Anything but a uuid is no filter: the
+ * read takes `.uuid()` and would only fail.
+ */
+export function reviewSessionOf(
+  param: string | null | undefined
+): string | null {
+  return param && isUuid(param) ? param : null;
+}
+
+/**
+ * The narrowed session's name, as the pod named it on the rows it returned:
+ * a proposal row's container, else an ask's session title. Null when no row
+ * names it (nothing waits, or an older pod).
+ */
+export function reviewSessionLabel(
+  signals: readonly ReviewSignal[],
+  sessionId: string
+): string | null {
+  for (const s of signals) {
+    if (
+      s.source?.kind === "session" &&
+      s.source.id === sessionId &&
+      s.source.label
+    )
+      return s.source.label;
+  }
+  return signals.find((s) => s.sessionTitle)?.sessionTitle ?? null;
 }
 
 /** The fields of a needs-you signal Review reads (structural). */

@@ -11,6 +11,11 @@
  *
  * The fixture is the wire shape `proposals.get` returns for a kind change
  * (`review.changes` from `routers/proposals/changes.ts`), with invented names.
+ *
+ * And what its SESSION is for (founder, 2026-10-26: the purpose sat behind a
+ * click): goal, criteria, track, project and what else waits, in both hosts —
+ * each read's empty, not-yours and failed states apart — and, on the page,
+ * the door to the next waiting proposal once this one is decided.
  */
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -22,7 +27,19 @@ vi.mock("next/navigation", () => ({
 }));
 
 /* Hoisted: `vi.mock` factories run before this file's own declarations. */
-const { PROPOSAL_ID, SESSION_ID, NAME, PROPOSAL, TARGETS } = vi.hoisted(() => {
+const {
+  PROPOSAL_ID,
+  SESSION_ID,
+  TRACK_ID,
+  PROJECT_ID,
+  NEXT_ID,
+  NAME,
+  PROPOSAL,
+  TARGETS,
+  state,
+  reads,
+  query,
+} = vi.hoisted(() => {
   const PROPOSAL_ID = "11111111-1111-4111-8111-111111111111";
   const SESSION_ID = "22222222-2222-4222-8222-222222222222";
   const AGENT_ID = "33333333-3333-4333-8333-333333333333";
@@ -73,7 +90,84 @@ const { PROPOSAL_ID, SESSION_ID, NAME, PROPOSAL, TARGETS } = vi.hoisted(() => {
     { kind: "agent", id: AGENT_ID, label: "Claude-code" },
     { kind: "session", id: SESSION_ID, label: "Build wave 2" },
   ];
-  return { PROPOSAL_ID, SESSION_ID, NAME, PROPOSAL, TARGETS };
+  const TRACK_ID = "55555555-5555-4555-8555-555555555555";
+  const PROJECT_ID = "66666666-6666-4666-8666-666666666666";
+  const NEXT_ID = "77777777-7777-4777-8777-777777777777";
+
+  /** A tRPC query result: data, a failure (by code), or in flight. */
+  type Q = { data?: unknown; error?: unknown; isLoading?: boolean };
+  const ok = (data: unknown): Q => ({ data });
+  const fail = (code: string): Q => ({ error: { data: { code } } });
+  const cluster = (proposalId: string, title: string) => ({
+    id: `proposal-cluster:${proposalId}`,
+    kind: "proposal-cluster",
+    title,
+    count: 1,
+    groupKey: null,
+    ageBucket: "today",
+    repeatCount: 1,
+    target: { kind: "proposal", id: proposalId },
+    proposalIds: [proposalId],
+  });
+  const SESSION = {
+    id: SESSION_ID,
+    title: "Build wave 2",
+    goal: "Every search tool goes through the capability gate.",
+    trackId: TRACK_ID,
+    continuation: {
+      evaluation: {
+        status: "ok",
+        verdict: { passed: 2, total: 3, state: "incomplete" },
+      },
+      project: {
+        status: "ok",
+        project: { id: PROJECT_ID, name: "Synap" },
+      },
+    },
+  };
+  const state = {
+    status: "pending",
+    session: ok(SESSION) as Q,
+    track: ok({ id: TRACK_ID, name: "Hardening" }) as Q,
+    /** `signals.list` scoped to the session. */
+    waiting: ok({
+      signals: [cluster(PROPOSAL_ID, NAME), cluster(NEXT_ID, "Create Linus")],
+    }) as Q,
+    /** `signals.list` pod-wide — Review's own read. */
+    queue: ok({ signals: [cluster(NEXT_ID, "Create Linus")] }) as Q,
+  };
+  const reads = { ok, fail, cluster, SESSION };
+  /** A query hook answering from `state` (disabled ⇒ no data, not loading). */
+  const query =
+    (
+      pick: (input: Record<string, unknown>) => {
+        data?: unknown;
+        error?: unknown;
+        isLoading?: boolean;
+      }
+    ) =>
+    (input: Record<string, unknown>, opts?: { enabled?: boolean }) => {
+      const r = opts?.enabled === false ? {} : pick(input);
+      return {
+        data: r.data,
+        error: r.error ?? null,
+        isLoading: r.isLoading ?? false,
+        refetch() {},
+      };
+    };
+  return {
+    PROPOSAL_ID,
+    SESSION_ID,
+    TRACK_ID,
+    PROJECT_ID,
+    NEXT_ID,
+    NAME,
+    PROPOSAL,
+    TARGETS,
+    state,
+    reads,
+    query,
+  };
 });
 
 vi.mock("../../../../lib/trpc", () => ({
@@ -82,7 +176,7 @@ vi.mock("../../../../lib/trpc", () => ({
     proposals: {
       get: {
         useQuery: () => ({
-          data: PROPOSAL,
+          data: { ...PROPOSAL, status: state.status },
           isLoading: false,
           error: null,
           refetch() {},
@@ -101,6 +195,15 @@ vi.mock("../../../../lib/trpc", () => ({
       reject: { useMutation: () => ({ mutate() {}, isPending: false }) },
     },
     workspaces: { get: { useQuery: () => ({ data: undefined }) } },
+    focusSessions: { get: { useQuery: query(() => state.session) } },
+    tracks: { get: { useQuery: query(() => state.track) } },
+    signals: {
+      list: {
+        useQuery: query((input) =>
+          input.sessionId ? state.waiting : state.queue
+        ),
+      },
+    },
     // The record card's definition reads (`use-record-definitions.ts`).
     useQueries: () => [],
     profiles: { get: { useQuery: () => ({ data: undefined }) } },
@@ -215,5 +318,127 @@ describe.each([
     expect(seen.indexOf("Advanced")).toBeGreaterThan(
       seen.indexOf("recorded in the Audit log")
     );
+  });
+});
+
+/** The session strip alone (from its marker to the next section). */
+const sessionStrip = (html: string) => {
+  const at = html.indexOf("data-review-session");
+  return at < 0 ? null : html.slice(at, html.indexOf("data-review-decision"));
+};
+
+/** Reset `state` to the founder's case before each test. */
+const DEFAULTS = { ...state };
+const reset = () => Object.assign(state, DEFAULTS);
+
+describe.each([
+  ["the Review dock", dock],
+  ["the /proposal page", page],
+])("%s — what the session is for", (_host, render) => {
+  it("goal, criteria progress, track and project (doors), what else waits", () => {
+    reset();
+    const strip = sessionStrip(render());
+    expect(strip).not.toBeNull();
+    expect(text(strip!)).toMatch(
+      /Every search tool goes through the capability gate\. 2 of 3 criteria met Hardening Synap 1 more from this session waits for you/
+    );
+    expect(strip).toContain(`href="synap://open/track/${TRACK_ID}"`);
+    expect(strip).toContain(`href="synap://open/project/${PROJECT_ID}"`);
+    expect(strip).toContain(`href="/review?session=${SESSION_ID}"`);
+  });
+
+  it("sits right under the provenance line, before the change", () => {
+    reset();
+    const html = render();
+    const at = html.indexOf("data-review-session");
+    expect(at).toBeGreaterThan(html.indexOf("data-review-provenance"));
+    expect(text(html.slice(at))).toMatch(/Kind Finding Issue/);
+  });
+
+  it("a session the reader may not read draws nothing", () => {
+    reset();
+    state.session = reads.fail("NOT_FOUND");
+    expect(sessionStrip(render())).toBeNull();
+  });
+
+  it("a FAILED session read says so, with a retry — never vanishes", () => {
+    reset();
+    state.session = reads.fail("INTERNAL_SERVER_ERROR");
+    const seen = text(render());
+    expect(seen).toMatch(/This session’s goal couldn’t be read\. Retry/);
+  });
+
+  it("no criteria, no project, no track, nothing else waiting: only the goal", () => {
+    reset();
+    state.session = reads.ok({
+      ...reads.SESSION,
+      trackId: null,
+      continuation: {
+        evaluation: {
+          status: "ok",
+          verdict: { passed: 0, total: 0, state: "none" },
+        },
+        project: { status: "ok", project: null },
+      },
+    });
+    state.waiting = reads.ok({ signals: [reads.cluster(PROPOSAL_ID, NAME)] });
+    const strip = text(sessionStrip(render())!);
+    expect(strip).toMatch(
+      /Every search tool goes through the capability gate\./
+    );
+    expect(strip).not.toMatch(/criteri|Hardening|Synap|more from this session/);
+  });
+
+  it("failed criteria, track and count reads are each said, not dropped", () => {
+    reset();
+    state.session = reads.ok({
+      ...reads.SESSION,
+      continuation: {
+        ...reads.SESSION.continuation,
+        evaluation: { status: "unavailable" },
+      },
+    });
+    state.track = reads.fail("INTERNAL_SERVER_ERROR");
+    state.waiting = reads.fail("INTERNAL_SERVER_ERROR");
+    const strip = text(sessionStrip(render())!);
+    expect(strip).toMatch(/Its criteria couldn’t be read\. Retry/);
+    expect(strip).toMatch(/Its track couldn’t be read\. Retry/);
+    expect(strip).toMatch(/What else waits here couldn’t be read\. Retry/);
+  });
+});
+
+describe("the /proposal page — the next waiting proposal", () => {
+  it("while it is still to decide: no next door", () => {
+    reset();
+    expect(page()).not.toContain("data-review-next");
+  });
+
+  it("decided: a door to the first proposal Review lists", () => {
+    reset();
+    state.status = "approved";
+    const html = page();
+    expect(html).toContain(`data-review-next="${NEXT_ID}"`);
+    expect(html).toContain(`href="/proposal/${NEXT_ID}"`);
+    expect(text(html)).toMatch(/Next: Create Linus/);
+  });
+
+  it("none left: said calmly", () => {
+    reset();
+    state.status = "rejected";
+    state.queue = reads.ok({ signals: [] });
+    expect(text(page())).toMatch(/No other proposal waits for you\./);
+  });
+
+  it("a failed read of what is next says so", () => {
+    reset();
+    state.status = "approved";
+    state.queue = reads.fail("INTERNAL_SERVER_ERROR");
+    expect(text(page())).toMatch(/What waits next couldn’t be read\. Retry/);
+  });
+
+  it("the dock (Review beside it) never draws it", () => {
+    reset();
+    state.status = "approved";
+    expect(dock()).not.toContain("data-review-next");
   });
 });

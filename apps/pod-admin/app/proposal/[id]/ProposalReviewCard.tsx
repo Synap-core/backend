@@ -9,6 +9,8 @@
  *   `ProposalReviewBody` — the Review template (page-grammar §1), top → down:
  *       who is asking, as ONE line of chips (agent · for whom · space ·
  *         session · when), each a door to its own page;
+ *       what its session is FOR, under it — goal, criteria, track, project,
+ *         and what else from it waits (`ProposalSessionContext.tsx`);
  *       the change first: the RECORD approving creates or changes (its name
  *         as the heading, its kind beside it, its fields in a grid —
  *         `proposal-record-model.ts`), a document's diff, an app's access
@@ -94,6 +96,7 @@ import {
   TwinVerbs,
 } from "./DuplicateChoice";
 import { ProposedRecordCard } from "./ProposedRecordCard";
+import { ProposalSessionContext } from "./ProposalSessionContext";
 import { proposalHeading } from "./proposal-heading";
 import { proposalProfileSlug } from "./proposal-subject-kind";
 import { proposalRequesterParts } from "./proposal-requester";
@@ -709,6 +712,7 @@ export function ProposalReviewBody({
   identity,
   onDecided,
   barClassName = "",
+  afterDecision,
 }: {
   proposal: ProposalReviewData;
   sourceExits: ProposalSourceExit[];
@@ -717,6 +721,8 @@ export function ProposalReviewBody({
   identity?: string;
   onDecided: () => void;
   barClassName?: string;
+  /** Under the outcome, in the bar: the page's door to what is next. */
+  afterDecision?: ReactNode;
 }) {
   const status = String(p.status ?? "pending");
   const payload = p.request.data ?? p.data;
@@ -814,6 +820,9 @@ export function ProposalReviewBody({
   const reason = reasonMark(p.governanceReason);
   const undo = undoMark((p as { revertable?: boolean | null }).revertable);
   const { actor } = proposalRequesterParts(p);
+  // Present only when `proposals.source` named it: a session the reader may
+  // read (the session floor, decision D1).
+  const session = sourceExits.find((s) => s.target.kind === "session");
 
   /* A single create's twins sit under its own card; a graph item's sit inside
      that item's card, with its choice. */
@@ -829,6 +838,12 @@ export function ProposalReviewBody({
         sourceExits={sourceExits}
         workspaceName={workspaceName}
       />
+      {session && (
+        <ProposalSessionContext
+          sessionId={session.target.id}
+          proposalId={p.id}
+        />
+      )}
 
       {/* The change first. */}
       {appConnect ? (
@@ -978,6 +993,7 @@ export function ProposalReviewBody({
         ) : (
           <Outcome status={status} />
         )}
+        {afterDecision}
         <WhoDecides identity={identity} />
       </div>
 
