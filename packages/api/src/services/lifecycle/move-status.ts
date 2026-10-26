@@ -39,6 +39,7 @@ import {
 import { dispatchLifecycleTransition } from "@synap/events";
 import { createLogger } from "@synap-core/core";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
+import { reachedFacetGrantSpace } from "../../utils/grant-write-check.js";
 import { ownWorkOrganiseForTaskClose } from "../governance/own-organise.js";
 import { markProposalNotificationsActioned } from "../../notifications/mark-proposal-notifications-actioned.js";
 
@@ -216,13 +217,34 @@ export async function moveStatus(
         target,
         to,
       }));
+    const data = {
+      id: input.entityId,
+      entityId: input.entityId,
+      role: target.role,
+      facetId: target.facetId,
+      property: target.lifecycle.propertySlug,
+      // The belief the approval replays against (strict CAS).
+      expectedFrom: target.current,
+      to,
+      reason: input.reason ?? null,
+    };
     const perm = await checkPermissionOrPropose({
       userId: input.actor.userId,
       agentUserId: input.actor.agentUserId ?? undefined,
       workspaceId: governanceWorkspaceId,
       // The key's grant is checked on the row's own workspace — a pod-wide
-      // entity or role facet is pod-scope, never the caller's lens (S7).
-      grantWorkspaceId: target.workspaceId ?? null,
+      // entity or role facet is pod-scope, never the caller's lens (S7) —
+      // except a pod-wide ROLE facet the key reaches through a space its
+      // role is granted to: checked in that space (`reachedFacetGrantSpace`).
+      grantWorkspaceId:
+        target.workspaceId ??
+        (target.facetId
+          ? await reachedFacetGrantSpace(target.facetId, {
+              subjectType: "entity",
+              action: "transition",
+              data,
+            })
+          : null),
       subjectType: "entity",
       action: "transition",
       // An unattributed agent reaches the anonymous AI ladder; never "user".
@@ -238,17 +260,7 @@ export async function moveStatus(
         input.reason ??
         `Move ${target.lifecycle.propertySlug} from "${target.current ?? "none"}" to "${to}".`,
       sessionId: input.sessionId ?? undefined,
-      data: {
-        id: input.entityId,
-        entityId: input.entityId,
-        role: target.role,
-        facetId: target.facetId,
-        property: target.lifecycle.propertySlug,
-        // The belief the approval replays against (strict CAS).
-        expectedFrom: target.current,
-        to,
-        reason: input.reason ?? null,
-      },
+      data,
     });
     if ("denied" in perm && perm.denied) {
       return { status: "denied", reason: perm.reason };
