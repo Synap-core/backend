@@ -48,13 +48,14 @@ import {
   isNull,
   inArray,
   drizzleSql,
+  isDelegationHeaders,
   listableEntityWhere,
 } from "@synap/database";
 import type { CapabilityRendererPage } from "@synap/database";
 import { MessageAuthorType } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 import { AccessContext, scopedDb } from "../access/index.js";
-import { runSkill } from "../services/skills/run-skill.js";
+import { getDefaultActiveService } from "../utils/intelligence-routing.js";
 import { requireUserId } from "../utils/user-scoped.js";
 import { completeFocusSession } from "../services/focus-sessions/complete-session.js";
 import { listCapabilityCompositions } from "../services/diagnose/capability-composition.js";
@@ -1618,9 +1619,9 @@ export const capabilitiesRouter = router({
    * Dry-run a capability verb — preview the intended effects WITHOUT committing.
    *
    * Resolves the verb's backing skill exactly like `execute` (verb NAME scoped
-   * pod-wide OR this workspace OR owned by the actor), then previews it through
-   * the one skill door (`runSkill`, dryRun) — the SAME door the Hub REST
-   * `/skills/:id/dry-run` uses (external writes recorded, reads real).
+   * pod-wide OR this workspace OR owned by the actor), then proxies to the IS
+   * dry-run executor (`POST {IS}/api/skills/:id/dry-run`) — the SAME contract the
+   * Hub REST `/skills/:id/dry-run` door uses (external writes stubbed, reads real).
    *
    * Declarative verbs (`kind:"declarative"`) are in-process executors with
    * no isolate sandbox, so there is no dry-run path — we return a clear
@@ -1659,35 +1660,44 @@ export const capabilitiesRouter = router({
         return {
           kind: "dry-run-unavailable" as const,
           skillId: skillRow.id,
-          message: `Dry-run not available for ${skillRow.kind} verbs (they run in-process, not in the code-skill sandbox).`,
+          message: `Dry-run not available for ${skillRow.kind} verbs (they run in-process, not in the IS sandbox).`,
         };
       }
 
-      // The ONE skill door (R2), in preview: reads real, every write and send
-      // recorded instead of performed. `result` stays the whole envelope (the
-      // shape the IS dry-run answered), its effects beside it.
-      let envelope: Awaited<ReturnType<typeof runSkill>>;
-      try {
-        envelope = await runSkill({
-          skillId: skillRow.id,
+      const { endpoint: isUrl, apiKey: isApiKey } =
+        await getDefaultActiveService();
+      const res = await fetch(`${isUrl}/api/skills/${skillRow.id}/dry-run`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-API-Key": isApiKey,
+          // D4: the IS acts for ctx.userId on this dry-run — a per-run token.
+          ...isDelegationHeaders({ isUrl, operatorUserId: ctx.userId }),
+        },
+        body: JSON.stringify({
           userId: ctx.userId,
           parameters: input.parameters ?? {},
-          workspaceId: input.workspaceId,
-          dryRun: true,
-        });
-      } catch (err) {
+        }),
+      });
+
+      if (!res.ok) {
+        const body = await res.text().catch(() => "");
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
-          message: `Skill dry-run failed: ${err instanceof Error ? err.message : String(err)}`,
+          message: `Skill dry-run failed (${res.status}) ${body}`.trim(),
         });
       }
-      const { dryRunEffects, ...result } = envelope;
+
+      const data = (await res.json().catch(() => null)) as {
+        result?: unknown;
+        dryRunEffects?: unknown[];
+      } | null;
 
       return {
         kind: "dry-run" as const,
         skillId: skillRow.id,
-        result: result as unknown,
-        dryRunEffects: (dryRunEffects ?? []) as unknown[],
+        result: data?.result ?? null,
+        dryRunEffects: data?.dryRunEffects ?? [],
       };
     }),
 
