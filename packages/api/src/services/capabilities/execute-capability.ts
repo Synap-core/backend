@@ -1695,8 +1695,9 @@ async function runResolvedSkillInner(
 
   // TIER 2 (code/instruction): execute the backing skill in an isolated-vm
   // sandbox. Default (flag unset) = the IS sandbox over Hub Protocol HTTP
-  // (`executeSkillViaIS`). Behind `SANDBOX_LOCAL === "1"` = the in-process
-  // backend sandbox (`runSkillInSandbox`) — same bridges, no IS hop. The flag
+  // (`executeSkillViaIS`). Behind `SANDBOX_LOCAL === "1"` = the pod's own
+  // sandbox (`runSkillInSandbox`): the bridges run in this process, the code in
+  // a supervised runner process (`services/skills/runner/`) — no IS hop. The flag
   // defaults OFF so production behaviour is unchanged until it is flipped.
   // Both return the identical `SkillExecutionResult` envelope
   // `{success, result?, error?}`. UNWRAP it here so a caller receives the skill's
@@ -1717,6 +1718,7 @@ async function runResolvedSkillInner(
           parameters,
           workspaceId: ctx.workspaceId,
           agentUserId: ctx.agentUserId ?? null,
+          sessionId: ctx.sessionId ?? null,
           verbAct: {
             skillId: skill.id,
             toolIds: await requiredToolIdsOf(skill.id),

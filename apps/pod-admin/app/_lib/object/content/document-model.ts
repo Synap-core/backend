@@ -21,6 +21,8 @@ export interface DocumentReadAnswer {
     type?: string | null;
     storageKey?: string | null;
     storageUrl?: string | null;
+    /** The stored file's type (`documents.mime_type`). */
+    mimeType?: string | null;
   };
   content: string;
 }
@@ -30,18 +32,40 @@ export type DocumentContent =
   | { kind: "hidden" }
   /** Needs a sign-in; the page sends the reader there. */
   | { kind: "signin" }
-  /** A pdf or docx: no readable form, the app opens it. */
-  | { kind: "file" }
+  /**
+   * A pdf, a docx, or an uploaded file whose bytes are not text (an image):
+   * no readable form. `mimeType` lets a page draw an image through the media
+   * door (`documentFileMedia`).
+   */
+  | { kind: "file"; mimeType?: string | null }
   /** A reference to an address outside the pod. */
   | { kind: "link"; href: string | null; label: string }
   | { kind: "empty" }
   | { kind: "content"; prepared: PreparedContent }
   | { kind: "error" };
 
-/** How a document type's body is drawn, or null for a file with no text form. */
+/** A stored type whose bytes read as text (markdown, CSV, JSON, code). */
+function isTextMime(mime: string): boolean {
+  const type = mime.split(";")[0]!.trim().toLowerCase();
+  return (
+    type.startsWith("text/") ||
+    /^application\/(json|markdown|xml|yaml|x-yaml|javascript|x-sh)$/.test(
+      type
+    ) ||
+    /\+(json|xml)$/.test(type)
+  );
+}
+
+/**
+ * How a document type's body is drawn, or null for a file with no text form.
+ * An uploaded `file` whose stored type is not text (a PNG, a zip) is never
+ * decoded and drawn as markdown: the pod hands its bytes back as UTF-8.
+ */
 export function documentFormat(
-  type: string | null | undefined
+  type: string | null | undefined,
+  mimeType?: string | null
 ): ContentFormat | null {
+  if (type === "file" && mimeType && !isTextMime(mimeType)) return null;
   switch (type) {
     case "pdf":
     case "docx":
@@ -79,8 +103,9 @@ export function documentContent(
   }
   if (!answer) return { kind: "error" };
   const { document, content } = answer;
-  const format = documentFormat(document.type);
-  if (format === null) return { kind: "file" };
+  const format = documentFormat(document.type, document.mimeType);
+  if (format === null)
+    return { kind: "file", mimeType: document.mimeType ?? null };
   if (!document.storageKey && document.storageUrl) {
     const target = contentHref(content);
     return {
