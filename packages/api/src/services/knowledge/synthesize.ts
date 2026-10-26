@@ -12,6 +12,7 @@
  */
 
 import type { AskAnswer } from "./ask.js";
+import { describeQueue, type AskQueueBlock } from "./queue-question.js";
 import { createLogger } from "@synap-core/core";
 import { getDefaultActiveService } from "../../utils/intelligence-routing.js";
 import { isCallBudgetMs } from "@synap/intelligence-client";
@@ -274,6 +275,17 @@ function prependDegradedNotice(answer: string, degraded: string[]): string {
     `material. Treat it as partial, and re-ask once healthy before relying on it.\n\n` +
     answer
   );
+}
+
+/**
+ * The IS answered 200 with no text (a length cut-off, a refusal that left no
+ * content). That is a failed synthesis, not an answer: `prependPendingNotice`
+ * would otherwise turn "" into a reply that is only the pending notice.
+ */
+class EmptySynthesisError extends Error {
+  constructor() {
+    super("IS answer was empty");
+  }
 }
 
 function prependPendingNotice(answer: string, pendingCount: number): string {
@@ -693,7 +705,13 @@ export async function synthesizeAnswer(
    */
   degraded: string[] = [],
   /** See {@link AskDetail}. Default `full`, unchanged for every older caller. */
-  detail: AskDetail = "full"
+  detail: AskDetail = "full",
+  /**
+   * `AskResult.queue` — set only for a queue-type question. The IS composes
+   * from retrieved items and never sees the queue, so its sentence is written
+   * here and LEADS the answer.
+   */
+  queue?: AskQueueBlock
 ): Promise<SynthesisResult> {
   const { sources, context, truncated } = buildSynthesisContext(answers);
 
@@ -746,10 +764,30 @@ export async function synthesizeAnswer(
       );
     }
     const data = (await res.json()) as { answer?: string; detail?: string };
+    if (typeof data.answer === "string" && !data.answer.trim()) {
+      // A brief run can be cut off by its short budget; the full answer has the
+      // headroom, so redo it as that. An empty FULL answer is a failure.
+      if (detail === "brief") {
+        return synthesizeAnswer(
+          answers,
+          question,
+          routedTo,
+          workspaceId,
+          pendingCount,
+          degraded,
+          "full",
+          queue
+        );
+      }
+      throw new EmptySynthesisError();
+    }
     const answer =
       typeof data.answer === "string"
         ? prependDegradedNotice(
-            prependPendingNotice(data.answer, pendingCount),
+            prependPendingNotice(
+              queue ? `${describeQueue(queue)}\n\n${data.answer}` : data.answer,
+              pendingCount
+            ),
             degraded
           )
         : null;
@@ -783,7 +821,10 @@ export async function synthesizeAnswer(
       // the prose notice is lost entirely.
       ...(truncated ? { truncated } : {}),
       error: "synthesis_unavailable",
-      failureClass: classifyAiFailure(err),
+      failureClass:
+        err instanceof EmptySynthesisError
+          ? "invalid_response"
+          : classifyAiFailure(err),
     };
   }
 }

@@ -120,7 +120,8 @@ export const knowledgeRouter = router({
         // a parameter with a single producer is the severance this repo keeps
         // re-finding.
         result.degraded ?? [],
-        input.detail
+        input.detail,
+        result.queue
       );
 
       return {
@@ -169,6 +170,8 @@ export const knowledgeRouter = router({
          * failed. Absent when no kind was understood. Same field on every door.
          */
         spaces: result.spaces,
+        /** What is waiting on the person; queue-type questions only. */
+        queue: result.queue,
       };
     }),
 });
