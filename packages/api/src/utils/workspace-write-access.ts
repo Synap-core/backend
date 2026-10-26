@@ -9,6 +9,10 @@
  * different workspace's row (matched by id).
  *
  *   - workspace row  → caller must be an editor+ member of THAT workspace.
+ *     With NO member row at all, its owner (`workspaces.owner_id`) writes: a
+ *     missing member row is a data repair, not a permission (founder Q-A1,
+ *     2026-10-26). A member row is the authority when there is one: an owner
+ *     demoted to viewer does not write.
  *   - pod-wide row (workspaceId === null) with a known owner → caller must be
  *     the owner (pass `ownerId`).
  *   - pod-wide row with no owner → system-managed; denied here (use an
@@ -22,7 +26,8 @@
  */
 
 import { TRPCError } from "@trpc/server";
-import { getWorkspaceMembership } from "@synap/database";
+import { eq, getWorkspaceMembership, workspaces } from "@synap/database";
+import type { SQL } from "drizzle-orm";
 // The write floor's role set is SHARED with the clients' space pickers
 // (`@synap-core/types/workspaces`) — one rule, never a mirror (FX-F3).
 import { isSpaceWriteRole } from "@synap-core/types/workspaces";
@@ -45,7 +50,10 @@ export async function assertWorkspaceWrite(
       row.workspaceId,
       userId
     );
-    if (!membership || !isSpaceWriteRole(membership.role)) {
+    const allowed = membership
+      ? isSpaceWriteRole(membership.role)
+      : await ownsWorkspace(db, row.workspaceId, userId);
+    if (!allowed) {
       throw new TRPCError({
         code: "FORBIDDEN",
         message: "You are not a member of this resource's workspace.",
@@ -69,4 +77,28 @@ export async function assertWorkspaceWrite(
     code: "FORBIDDEN",
     message: "This resource is system-managed and not editable here.",
   });
+}
+
+/** Read through the caller's `db` (a transaction stays one), as `getWorkspaceMembership`. */
+interface WorkspaceOwnerReader {
+  query: {
+    workspaces: {
+      findFirst(q: {
+        where: SQL;
+        columns: { ownerId: true };
+      }): Promise<{ ownerId: string | null } | undefined>;
+    };
+  };
+}
+
+async function ownsWorkspace(
+  db: unknown,
+  workspaceId: string,
+  userId: string
+): Promise<boolean> {
+  const ws = await (db as WorkspaceOwnerReader).query.workspaces.findFirst({
+    where: eq(workspaces.id, workspaceId),
+    columns: { ownerId: true },
+  });
+  return ws?.ownerId === userId;
 }

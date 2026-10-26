@@ -176,8 +176,14 @@ export interface ProjectAggregateSessionFact {
   now?: number;
 }
 
-/** Does this session need you? `unitFacts` through the one rule, else the legacy actor. */
-function aggregateNeedsYou(session: ProjectAggregateSessionFact): boolean {
+/**
+ * Does this session need you? `unitFacts` through the one rule, else the
+ * legacy actor. Exported for the other per-session readers of a list page
+ * (`deriveStuckChains`), so none of them re-states the draft exclusion.
+ */
+export function aggregateNeedsYou(
+  session: ProjectAggregateSessionFact
+): boolean {
   if (session.draft) return false;
   return session.unitFacts
     ? sessionNeedsYou(session.unitFacts)

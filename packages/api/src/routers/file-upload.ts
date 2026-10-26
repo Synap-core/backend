@@ -19,7 +19,6 @@ import {
   eq,
   entities,
   documents,
-  workspaces,
   materializeEntity,
   resolveImportEntityPlacement,
   eventRepository,
@@ -710,8 +709,8 @@ async function finishUpload(p: {
 
 /**
  * Kratos-door write gate: the canonical `assertWorkspaceWrite` floor (an
- * editor+ member row — a viewer cannot upload), plus the workspace OWNER, who
- * may hold no member row at all.
+ * editor+ member row — a viewer cannot upload — or the workspace OWNER, who
+ * may hold no member row at all), as a boolean.
  */
 export async function canWriteWorkspace(
   userId: string,
@@ -722,12 +721,8 @@ export async function canWriteWorkspace(
     return true;
   } catch (err) {
     if (!(err instanceof TRPCError && err.code === "FORBIDDEN")) throw err;
+    return false;
   }
-  const ws = await db.query.workspaces.findFirst({
-    where: eq(workspaces.id, workspaceId),
-    columns: { ownerId: true },
-  });
-  return ws?.ownerId === userId;
 }
 
 // ---------------------------------------------------------------------------

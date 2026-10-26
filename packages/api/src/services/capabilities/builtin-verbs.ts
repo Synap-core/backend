@@ -3897,6 +3897,36 @@ const webReadHandler: BuiltinVerbHandler = async (params, ctx) => {
   );
 };
 
+// ── Search the web ("web.search") ─────────────────────────────────────────────
+//
+// The agent's door onto `searchWeb` (web-search.ts): runs an installed search
+// provider the caller NAMES, through that verb's own gate, so the search is
+// governed, recorded and metered as the provider's run. It never calls a vendor
+// itself. Read-only (READ_ONLY_BUILTIN_VERBS), like `web.read`: it mutates
+// nothing, and the provider verb still meets its own gate.
+
+const webSearchParams = z.object({
+  /** What to search the web for. */
+  query: z.string().trim().min(1).max(2000),
+  /** A verb id from a previous answer's `providers` (the one to search with). */
+  provider: z.string().trim().min(1).max(200).optional(),
+});
+
+const webSearchHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = webSearchParams.parse(params);
+  const { searchWeb } = await import("./web-search.js");
+  return searchWeb(
+    {
+      userId: ctx.userId,
+      workspaceId: ctx.workspaceId,
+      agentUserId: ctx.agentUserId ?? null,
+      sessionId: ctx.sessionId ?? null,
+    },
+    input.query,
+    input.provider !== undefined ? { provider: input.provider } : {}
+  );
+};
+
 /**
  * verbName (= skill.name = verbId) → in-process handler. Populated by W5 (the
  * write/emit pilots) + W6 (the read/resolve half) + Spine-2 (entity/document
@@ -3991,6 +4021,8 @@ export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {
   "property_def.propose_retire": propertyDefProposeRetireHandler,
   // Read one link through the one url-reader door (built-in or installed reader).
   "web.read": webReadHandler,
+  // Search the web through a named installed provider (its own gate + meter).
+  "web.search": webSearchHandler,
 };
 
 /**
@@ -4058,6 +4090,7 @@ export const BUILTIN_VERB_PARAM_SCHEMAS: Record<
   "profile.propose_retire": profileProposeRetireParams,
   "property_def.propose_retire": propertyDefProposeRetireParams,
   "web.read": webReadParams,
+  "web.search": webSearchParams,
 };
 
 /**
@@ -4140,4 +4173,7 @@ export const READ_ONLY_BUILTIN_VERBS: ReadonlySet<string> = new Set([
   // own gate). Mutates nothing in the pod; reads never flood recall
   // (observability "mirror").
   "web.read",
+  // web.search — runs a named search provider through ITS own gate (the same
+  // shape as web.read naming a reader). Mutates nothing in the pod.
+  "web.search",
 ]);

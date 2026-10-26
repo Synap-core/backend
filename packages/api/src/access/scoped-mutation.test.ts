@@ -29,6 +29,10 @@ vi.mock("@synap/database", async (importOriginal) => {
     ...actual,
     getWorkspaceMembership: membershipMock,
     db: {
+      // The floor's owner read (Q-A1): the caller owns no workspace here.
+      query: {
+        workspaces: { findFirst: async () => ({ ownerId: "someone-else" }) },
+      },
       update: () => ({
         set: () => ({
           where: (...a: unknown[]) => {

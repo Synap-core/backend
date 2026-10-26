@@ -47,8 +47,10 @@ vi.mock("@synap/database", async (importOriginal) => {
       projectTracks: actual.projectTracks as never,
       playbooks: actual.playbooks as never,
       projects: actual.projects as never,
-      // `getWorkspaceMembership` (the write probe) reads through the query API.
+      // `getWorkspaceMembership` (the write probe) reads through the query API,
+      // and so does its owner read for a caller with no member row (Q-A1).
       workspaceMembers: actual.workspaceMembers as never,
+      workspaces: actual.workspaces as never,
     },
   });
   return {

@@ -89,8 +89,37 @@ vi.mock("../executors/shared.js", () => ({ reportApproved: () => undefined }));
 
 /** What `insertSkillGoverned` returns — set per test. */
 let insertResult: Record<string, unknown>;
+/** What the executor handed `insertSkillGoverned` / the requires-edge door. */
+let insertInputs: Record<string, unknown>[] = [];
+let requiresWrites: { skill: { id: string }; toolIds: readonly string[] }[] =
+  [];
+/** Tool ids the APPROVER can see at approval time — and only the approver:
+ *  re-resolving as anyone else (the author, say) sees nothing. */
+let visibleToolIds = new Set<string>(["tool-apify"]);
+/** Whom the executor re-resolved the declared tools AS. */
+let visibilityReadAs: string[] = [];
+/** Set to make the visibility read fail (a DB error, not an empty answer). */
+let visibilityReadFails = false;
 vi.mock("../../skills.js", () => ({
-  insertSkillGoverned: async () => insertResult,
+  insertSkillGoverned: async (input: Record<string, unknown>) => {
+    insertInputs.push(input);
+    return insertResult;
+  },
+  visibleRequiredTools: async (userId: string, ids: readonly string[]) => {
+    visibilityReadAs.push(userId);
+    if (visibilityReadFails) throw new Error("connection reset");
+    return userId === APPROVER
+      ? ids
+          .filter((id) => visibleToolIds.has(id))
+          .map((id) => ({ id, name: id }))
+      : [];
+  },
+  replaceSkillRequiredTools: async (p: {
+    skill: { id: string };
+    toolIds: readonly string[];
+  }) => {
+    requiresWrites.push(p);
+  },
 }));
 
 /** Args typed so `.mock.calls[0][1]` is a real tuple index, not `never`. */
@@ -134,6 +163,7 @@ const run = async (opts: {
   skill?: Record<string, unknown>;
   approver?: string;
   ctx?: Record<string, unknown>;
+  data?: Record<string, unknown>;
 }) => {
   if (!executor) throw new Error("skill/create executor not registered");
   insertResult = {
@@ -152,7 +182,9 @@ const run = async (opts: {
       projectId: null,
       agentUserId: opts.agentUserId ?? null,
       sourceMessageId: null,
-      data: { data: { name: "fetch_invoice", kind: "declarative" } },
+      data: {
+        data: opts.data ?? { name: "fetch_invoice", kind: "declarative" },
+      },
     },
     payload: null,
     userId: opts.approver ?? APPROVER,
@@ -163,6 +195,11 @@ const run = async (opts: {
 };
 
 beforeEach(() => {
+  visibilityReadAs = [];
+  visibilityReadFails = false;
+  insertInputs = [];
+  requiresWrites = [];
+  visibleToolIds = new Set(["tool-apify"]);
   wireCreatedVerb.mockClear();
   proposalRows = [];
   toolRows = [{ id: "tool-1" }];
@@ -256,5 +293,113 @@ describe("BORN-APPROVED DOWNGRADE stays intact (security)", () => {
       skill: declarativeSkill({ kind: "instruction", approved: true }),
     });
     expect(updates.find((u) => u.table === SKILLS)).toBeUndefined();
+  });
+});
+
+describe("skill/create approval writes the DECLARED requires edges (ticket c5058d24)", () => {
+  it("replays `requiredToolIds` onto the materialized skill, never into its row", async () => {
+    await run({
+      agentUserId: AGENT,
+      skill: declarativeSkill({ kind: "code", providerSpec: null }),
+      data: {
+        name: "score_handle",
+        kind: "code",
+        requiredToolIds: ["tool-apify"],
+      },
+    });
+    expect(requiresWrites).toHaveLength(1);
+    expect(requiresWrites[0]!.skill.id).toBe("skill-1");
+    expect(requiresWrites[0]!.toolIds).toEqual(["tool-apify"]);
+    // Re-resolved as the APPROVER, never as the author.
+    expect(visibilityReadAs).toEqual([APPROVER]);
+    // Not `skills` columns: they must not reach the governed insert.
+    expect(insertInputs[0]).not.toHaveProperty("requiredToolIds");
+    expect(insertInputs[0]).not.toHaveProperty("requiredToolNames");
+  });
+
+  it("re-resolves every id as the approver: one no longer visible is refused and never linked", async () => {
+    if (!executor) throw new Error("skill/create executor not registered");
+    insertResult = {
+      status: "created",
+      id: "skill-1",
+      skill: declarativeSkill({ kind: "code", providerSpec: null }),
+    };
+    const result = await executor.execute({
+      proposal: {
+        id: "p1",
+        targetType: "skill",
+        targetId: "skill-1",
+        proposalType: "create",
+        workspaceId: "ws-1",
+        sessionId: null,
+        projectId: null,
+        agentUserId: AGENT,
+        sourceMessageId: null,
+        data: {
+          data: {
+            name: "score_handle",
+            kind: "code",
+            requiredToolIds: ["tool-apify", "tool-gone"],
+            requiredToolNames: ["apify_api", "gone_api"],
+          },
+        },
+      },
+      payload: null,
+      userId: APPROVER,
+      input: { proposalId: "p1" },
+      ctx: {} as never,
+      deps: { db: {}, emitProposalReviewed: () => undefined } as never,
+    });
+    expect(requiresWrites[0]!.toolIds).toEqual(["tool-apify"]);
+    // Named, never an id.
+    expect(result.refusals).toEqual([
+      "Required tool `gone_api` was not linked: it is not an installed tool the approver can see.",
+    ]);
+  });
+
+  it("a FAILED visibility read is a refusal the approver sees, not a quiet success", async () => {
+    if (!executor) throw new Error("skill/create executor not registered");
+    visibilityReadFails = true;
+    insertResult = {
+      status: "created",
+      id: "skill-1",
+      skill: declarativeSkill({ kind: "code", providerSpec: null }),
+    };
+    const result = await executor.execute({
+      proposal: {
+        id: "p1",
+        targetType: "skill",
+        targetId: "skill-1",
+        proposalType: "create",
+        workspaceId: "ws-1",
+        sessionId: null,
+        projectId: null,
+        agentUserId: AGENT,
+        sourceMessageId: null,
+        data: {
+          data: {
+            name: "score_handle",
+            kind: "code",
+            requiredToolIds: ["tool-apify"],
+            requiredToolNames: ["apify_api"],
+          },
+        },
+      },
+      payload: null,
+      userId: APPROVER,
+      input: { proposalId: "p1" },
+      ctx: {} as never,
+      deps: { db: {}, emitProposalReviewed: () => undefined } as never,
+    });
+    expect(requiresWrites).toEqual([]);
+    expect(result.refusals).toEqual([
+      expect.stringMatching(/^Required tools `apify_api` may not be linked/),
+    ]);
+    expect(JSON.stringify(result.refusals)).not.toContain("tool-apify");
+  });
+
+  it("writes no edges when the author declared none", async () => {
+    await run({ agentUserId: AGENT });
+    expect(requiresWrites).toEqual([]);
   });
 });

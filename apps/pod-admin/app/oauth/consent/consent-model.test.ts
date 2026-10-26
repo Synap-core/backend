@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { GRANT_GATE_ACTIONS } from "@synap-core/types/grants";
+import {
+  FULL_ACCESS_LABEL,
+  GRANT_GATE_ACTIONS,
+} from "@synap-core/types/grants";
 
 import {
   actsAsHeadline,
@@ -26,8 +29,11 @@ import {
   ALSO_SEE,
   alsoSeeLine,
   decideLine,
+  decisionsHeading,
+  FULL_ACCESS,
   groupByObject,
   isDecisionPermission,
+  levelControlLabel,
   PRESELECT_DECISIONS,
   objectLevel,
   objectSpaces,
@@ -138,6 +144,16 @@ describe("permissionLabel", () => {
     ["document.read", "Read documents"],
     ["proposal.approve", "Approve changes waiting for your review"],
     ["proposal.reject", "Reject changes waiting for your review"],
+    // Everything an agent key may hold (apps = agents, 2026-10-26), nouns
+    // and verbs from the vocabulary door.
+    ["playbook.run", "Run templates"],
+    ["capability.run", "Run tools"],
+    ["tool.create", "Create tools"],
+    ["entity.deal.transition", "Move deals"],
+    ["entity.person.read", "Read people"],
+    ["entity.post", "Read, create, edit and delete posts"],
+    ["entity.*", "Read, create, edit and delete everything in it"],
+    ["*", FULL_ACCESS_LABEL],
   ])("%s → %s", (permission, label) => {
     expect(permissionLabel(permission)).toBe(label);
   });
@@ -1013,5 +1029,104 @@ describe("where a row is given", () => {
     ).toBe(
       "People kept across your whole pod, not in one space, reach it only through a role in a space you give it."
     );
+  });
+});
+
+describe("an app asks for anything an agent key may hold (apps = agents)", () => {
+  const ASK: OfferedPermission[] = [
+    "entity.deal.read",
+    "entity.deal.update",
+    "tool.create",
+    "playbook.run",
+    "capability.run",
+    "entity.deal.transition",
+    "proposal.approve",
+    "*",
+  ].map((permission) => ({ permission, workspaces: [CO] }));
+
+  it("every named verb beyond read/create/update/delete is a decision; so is *", () => {
+    for (const p of [
+      "playbook.run",
+      "capability.run",
+      "tool.bind",
+      "entity.deal.transition",
+      "*",
+    ]) {
+      expect(isDecisionPermission(p), p).toBe(true);
+    }
+    for (const p of ["tool.create", "entity.*", "entity.post", "document"]) {
+      expect(isDecisionPermission(p), p).toBe(false);
+    }
+  });
+
+  it("full access is its own row, first, named as what it is; run and move are decisions", () => {
+    const rows = groupByObject(ASK, "agent");
+    expect(rows.map((r) => [r.key, r.label, r.levels.join("/")])).toEqual([
+      [FULL_ACCESS, FULL_ACCESS_LABEL, "off/on"],
+      ["entity.deal", "Deals", "off/view/edit"],
+      ["tool", "Tools", "off/edit"],
+      ["decisions", "Act, after your review", "off/on"],
+    ]);
+    expect(rows[3]!.permissions.map((p) => p.permission)).toEqual([
+      "playbook.run",
+      "capability.run",
+      "entity.deal.transition",
+      "proposal.approve",
+    ]);
+  });
+
+  it("a first consent ticks neither full access nor a decision", () => {
+    expect(
+      toApproved(initialSelection(ASK, [], TEMPLATES), ASK).map(
+        (a) => a.permission
+      )
+    ).toEqual(["entity.deal.read", "entity.deal.update", "tool.create"]);
+  });
+
+  it("an app acting as its own agent: each act goes to review, it never approves", () => {
+    const rows = groupByObject(ASK, "agent");
+    const decide = rows.find((r) => r.key === "decisions")!;
+    expect(decideLine(decide, "agent")).toBe(
+      "Run or move, each sent to you for review first. It never approves or rejects for you"
+    );
+    expect(decideLine(rows[0]!, "agent")).toBe(
+      "Everything you can do in these spaces, each change sent to you for review first. It never approves or rejects for you"
+    );
+    expect(decisionsHeading("agent")).toBe("It asks to act, after your review");
+    expect(levelControlLabel(decide, "agent")).toBe(
+      "Let it ask to act, after your review"
+    );
+    expect(levelControlLabel(rows[0]!, "agent")).toBe(FULL_ACCESS_LABEL);
+    // Only review verbs asked: said as what they are.
+    const review = groupByObject(
+      [{ permission: "proposal.approve", workspaces: [CO] }],
+      "agent"
+    ).find((r) => r.key === "decisions")!;
+    expect(decideLine(review, "agent")).toBe(
+      "It never approves or rejects for you"
+    );
+  });
+
+  it("a Synap app decides as the person", () => {
+    const rows = groupByObject(ASK, "person");
+    const decide = rows.find((r) => r.key === "decisions")!;
+    expect(decide.label).toBe("Decide for you");
+    expect(decideLine(decide, "person")).toBe("Run, move or approve, as you");
+    expect(decideLine(rows[0]!, "person")).toBe(
+      "Everything you can do in these spaces, approving included, as you"
+    );
+    expect(decisionsHeading("person")).toBe("It asks to decide for you");
+    expect(levelControlLabel(decide, "person")).toBe("Let it decide for you");
+  });
+
+  it("full access On gives * alone; Off clears it", () => {
+    const full = groupByObject(ASK, "agent")[0]!;
+    const on = setObjectLevel(new Set(), ASK, full, "on", TEMPLATES);
+    expect(toApproved(on, ASK)).toEqual([
+      { permission: "*", workspaceId: "co" },
+    ]);
+    expect(
+      toApproved(setObjectLevel(on, ASK, full, "off", TEMPLATES), ASK)
+    ).toEqual([]);
   });
 });

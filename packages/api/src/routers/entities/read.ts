@@ -37,6 +37,10 @@ import { EntitySchema } from "@synap-core/types";
 import { TRPCError } from "@trpc/server";
 import { assertKnownProfileSlug } from "../../utils/assert-known-profile-slug.js";
 import {
+  entityListOrderBySchema,
+  entityListOrderBySql,
+} from "../../utils/entity-list-sort.js";
+import {
   paginatedInput,
   buildPaginatedResponse,
 } from "../../utils/pagination.js";
@@ -365,6 +369,11 @@ export const readProcs = {
          */
         createdAfter: z.coerce.date().optional(),
         createdBefore: z.coerce.date().optional(),
+        /**
+         * Sort, applied in SQL BEFORE limit/offset (see `entity-list-sort.ts`):
+         * page 2 continues page 1 in this order. Omitted = newest created first.
+         */
+        orderBy: entityListOrderBySchema.optional(),
       })
     )
     .query(async ({ input, ctx }) => {
@@ -603,7 +612,7 @@ export const readProcs = {
 
       const results = await db.query.entities.findMany({
         where: and(...conditions),
-        orderBy: [desc(entities.createdAt)],
+        orderBy: entityListOrderBySql(input.orderBy),
         limit: input.limit + 1,
         offset: input.offset,
       });

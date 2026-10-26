@@ -12,8 +12,14 @@
  *     Kratos) is deleted only by a pod admin, and only when
  *     `readIdentityKeepers` is empty. A one-space admin's removal never
  *     deletes an account.
+ *   - `removeFromPod` ends POD access when the person is left with no space
+ *     (founder Q-B1/Q-B3, 0357): the `pod_members` row is stamped removed, so
+ *     the SQL floors (`podParticipantWhere`) and `hasActivePodAccess` stop
+ *     counting them; their keys (owned or acting for them) are revoked and
+ *     their Kratos sessions ended. A new pod invite revives the row.
  *
- * Stubbed: Kratos (`kratosAdmin.deleteIdentity`, no PGlite twin), the
+ * Stubbed: Kratos (`kratosAdmin.deleteIdentity` / `deleteIdentitySessions`,
+ * no PGlite twin), the
  * connection teardown (Nango), the audit write, `fetch` (CP notices) and the
  * event store (`eventRepository.append` writes through its own postgres
  * client, not PGlite). The stub still parses each event with the real
@@ -36,6 +42,8 @@ const h = vi.hoisted(() => ({
   },
   db: null as unknown,
   deleteIdentity: null as null | ((...args: unknown[]) => Promise<void>),
+  deleteIdentitySessions: null as
+    null | ((...args: unknown[]) => Promise<void>),
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -58,10 +66,12 @@ vi.mock("@synap/database", async (importOriginal) => {
 });
 vi.mock("@synap/auth", async (importOriginal) => {
   const deleteIdentity = vi.fn(async () => undefined);
+  const deleteIdentitySessions = vi.fn(async () => undefined);
   h.deleteIdentity = deleteIdentity;
+  h.deleteIdentitySessions = deleteIdentitySessions;
   return {
     ...(await importOriginal<Record<string, unknown>>()),
-    kratosAdmin: { deleteIdentity },
+    kratosAdmin: { deleteIdentity, deleteIdentitySessions },
   };
 });
 vi.mock("../services/capabilities/capability-nango-sync.js", () => ({
@@ -69,9 +79,14 @@ vi.mock("../services/capabilities/capability-nango-sync.js", () => ({
 }));
 vi.mock("../utils/audit-log.js", () => ({ auditLog: () => undefined }));
 
-import { is } from "drizzle-orm";
+import { is, sql } from "drizzle-orm";
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
+import {
+  hasActivePodAccess,
+  podParticipantWhere,
+  readPodUserAccess,
+} from "@synap/database";
 import { workspacesRouter } from "./workspaces.js";
 
 const POD_OWNER = "pod-owner";
@@ -141,6 +156,9 @@ beforeAll(async () => {
   for (const value of Object.values(schema)) {
     if (is(value, PgTable)) await h.client!.exec(ddlFor(value));
   }
+  // Production's `pod_members_user_unique`: one row per person, which is what
+  // a re-invite revives instead of adding a second row.
+  await h.client!.exec(`create unique index on pod_members (user_id);`);
   await q(
     `insert into users (id, email, name, user_type) values
        ($1, 'o@x', 'Olivia', 'human'), ($2, 'a@x', 'Adam', 'human'), ($3, 'p@x', 'Pia', 'human')`,
@@ -172,6 +190,7 @@ beforeEach(() => {
     vi.fn(async () => new Response("{}", { status: 200 }))
   );
   (h.deleteIdentity as unknown as ReturnType<typeof vi.fn>).mockClear();
+  (h.deleteIdentitySessions as unknown as ReturnType<typeof vi.fn>).mockClear();
 });
 
 const GATE_MESSAGE = "Only pod owners and admins can send pod invites";
@@ -271,6 +290,109 @@ describe("removeFromPod", () => {
     });
     expect(await userRow(id)).toHaveLength(1);
     expect(h.deleteIdentity).not.toHaveBeenCalled();
+  });
+});
+
+describe("removeFromPod ends pod access (0357)", () => {
+  /** Joined through a pod invite, in WS_A only, with a key of their own and an agent key acting for them. */
+  async function podInvitedPerson(id: string) {
+    await personInWsA(id, () =>
+      q(`insert into pod_members (user_id, pod_role) values ($1, 'member')`, [
+        id,
+      ])
+    );
+    await q(
+      `insert into api_keys (id, user_id, linked_user_id, is_active) values
+         (gen_random_uuid(), $1, null, true),
+         (gen_random_uuid(), $2, $1, true)`,
+      [id, `agent-of-${id}`]
+    );
+  }
+  async function participant(id: string): Promise<boolean> {
+    const res = (await (
+      h.db as {
+        execute: (s: unknown) => Promise<{ rows: Array<{ p: boolean }> }>;
+      }
+    ).execute(sql`select ${podParticipantWhere(id)} as "p"`)) as {
+      rows: Array<{ p: boolean }>;
+    };
+    return res.rows[0]!.p;
+  }
+  const holdsAccess = async (id: string) =>
+    hasActivePodAccess(await readPodUserAccess(id, h.db as never));
+  const activeKeys = async (id: string) =>
+    (
+      await q(
+        `select 1 from api_keys where (user_id = $1 or linked_user_id = $1) and is_active`,
+        [id]
+      )
+    ).length;
+
+  it("left with no space: not a participant, no access, keys revoked, sessions ended", async () => {
+    const id = randomUUID();
+    await podInvitedPerson(id);
+    expect(await participant(id)).toBe(true);
+    expect(await activeKeys(id)).toBe(2);
+
+    // A one-space admin: the identity is kept (the pod_members keeper).
+    await as(WS_ADMIN).removeFromPod({ userId: id });
+
+    expect(await userRow(id)).toHaveLength(1);
+    expect(
+      await q(
+        `select 1 from pod_members where user_id = $1 and removed_at is not null`,
+        [id]
+      )
+    ).toHaveLength(1);
+    expect(await participant(id)).toBe(false);
+    expect(await holdsAccess(id)).toBe(false);
+    expect(await activeKeys(id)).toBe(0);
+    expect(h.deleteIdentitySessions).toHaveBeenCalledWith({ id });
+  });
+
+  it("CONTROL — still in another space: nothing stamped, revoked or ended", async () => {
+    const id = randomUUID();
+    await podInvitedPerson(id);
+    await q(
+      `insert into workspace_members (id, workspace_id, user_id, role)
+       values (gen_random_uuid(), $1, $2, 'editor')`,
+      [WS_PLAIN, id]
+    );
+    // WS_ADMIN manages WS_A only, so WS_PLAIN stays.
+    await as(WS_ADMIN).removeFromPod({ userId: id });
+
+    expect(
+      await q(
+        `select 1 from pod_members where user_id = $1 and removed_at is null`,
+        [id]
+      )
+    ).toHaveLength(1);
+    expect(await participant(id)).toBe(true);
+    expect(await activeKeys(id)).toBe(2);
+    expect(h.deleteIdentitySessions).not.toHaveBeenCalled();
+  });
+
+  it("a new pod invite lets a removed person back in", async () => {
+    const id = randomUUID();
+    await podInvitedPerson(id);
+    await as(WS_ADMIN).removeFromPod({ userId: id });
+    expect(await holdsAccess(id)).toBe(false);
+
+    await q(
+      `insert into invites (id, type, workspace_id, email, role, token, invited_by, expires_at)
+       values ($1, 'pod', null, $2, 'viewer', $3, $4, now() + interval '7 days')`,
+      [randomUUID(), `${id}@x`, `tok-back-${id}`, POD_OWNER]
+    );
+    await as(id).acceptInvite({ token: `tok-back-${id}` });
+
+    expect(
+      await q(
+        `select 1 from pod_members where user_id = $1 and removed_at is null`,
+        [id]
+      )
+    ).toHaveLength(1);
+    expect(await participant(id)).toBe(true);
+    expect(await holdsAccess(id)).toBe(true);
   });
 });
 

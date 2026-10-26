@@ -84,6 +84,7 @@ import {
   skillsRouter,
   SKILL_DEFINITION_APPLIER,
   assertSkillCodeAllowed,
+  skillRequiresEdges,
 } from "../../routers/skills.js";
 import {
   skillExecFieldsChanged,
@@ -1017,6 +1018,27 @@ export async function createCapabilityFromDefinition(
           existingSkill.metadata as Record<string, unknown> | null
         );
 
+      // The tools this definition `requires`, resolved like the create branch.
+      // A set that ADDS a tool the skill does not already require widens the
+      // scope its own provider calls run under without a second review
+      // (`verbAct`, execute-capability.ts): an execution change, demoted
+      // exactly like `execContentChanged`. A replay or a narrowing keeps the
+      // approval. Without it, a key posting an inline definition to
+      // `POST /api/hub/capabilities/apply` grew an approved skill's scope with
+      // no proposal (review of #199, R2).
+      const requiredToolIds = (s.requires ?? [])
+        .map((name) => toolIdByName.get(name))
+        .filter((id): id is string => !!id);
+      let requiresWidened = false;
+      if (existingSkill.approved && requiredToolIds.length > 0) {
+        const held = new Set(
+          (await skillRequiresEdges(userId, existingSkill.id)).map(
+            (e) => e.toId
+          )
+        );
+        requiresWidened = requiredToolIds.some((id) => !held.has(id));
+      }
+
       // NARROWER than `execContentChanged` on purpose: the globals scan must
       // fire only when the CODE ITSELF is being rewritten. Gating it on the
       // wider approval rule would hard-fail a skill grandfathered with a
@@ -1059,9 +1081,10 @@ export async function createCapabilityFromDefinition(
           // `resolveVerbIntent` the derived catalog mirror uses, so a template
           // cannot be accepted by one door and rejected by the other.
           //
-          // `undefined` when the definition declares none, which Drizzle SKIPS —
+          // `undefined` when the definition omits the field, which Drizzle SKIPS —
           // an existing intent is then left alone rather than revoked, the same
           // undefined-is-load-bearing contract `allowedHosts`/`readOnly` follow.
+          // `null` when it DECLARES none: written, so a dropped intent clears.
           // A definition that DOES declare one overwrites unconditionally: it is
           // the authority, and it is how a tool-less builtin like
           // `messaging.send` becomes reachable by intent at all.
@@ -1074,21 +1097,16 @@ export async function createCapabilityFromDefinition(
           // live bag (marketSource, rule, counters) is then untouched.
           metadata: projectSkillMetadata(existingSkill.metadata, s.metadata),
           updatedAt: new Date(),
-          ...(execContentChanged && existingSkill.approved
+          ...((execContentChanged || requiresWidened) && existingSkill.approved
             ? { approved: false }
             : {}),
         })
         .where(eq(skillsTable.id, existingSkill.id));
-      if (s.requires && s.requires.length > 0) {
-        const toolIds = s.requires
-          .map((name) => toolIdByName.get(name))
-          .filter((id): id is string => !!id);
-        if (toolIds.length > 0) {
-          await skillsCaller.setRequiredTools({
-            skillId: existingSkill.id,
-            toolIds,
-          });
-        }
+      if (requiredToolIds.length > 0) {
+        await skillsCaller.setRequiredTools({
+          skillId: existingSkill.id,
+          toolIds: requiredToolIds,
+        });
       }
       createdSkills.push({
         name: s.name,
@@ -1115,8 +1133,9 @@ export async function createCapabilityFromDefinition(
       // as the update branch above. This is the branch that finally lets a skill
       // which `requires` NO tool (every Synap Core builtin, e.g.
       // `messaging.send`) carry an intent, because it lands on the skill row
-      // itself instead of on a tool that does not exist.
-      intent: resolveVerbIntent(s, knownIntents),
+      // itself instead of on a tool that does not exist. A declared-none
+      // `null` is simply absent here: a new row has no intent to clear.
+      intent: resolveVerbIntent(s, knownIntents) ?? undefined,
       // The URLs a READER verb reads (0330), same projection as the update.
       urlPatterns: projectUrlPatterns(s, readerTrust) ?? undefined,
       // Persist the definition-owned keys of the `metadata` bag — the declared
@@ -1645,9 +1664,11 @@ export function deriveVerbKind(s: CapabilitySkillDef): ToolVerbKind {
 export function resolveVerbIntent(
   s: CapabilitySkillDef,
   known?: ReadonlySet<string>
-): ToolVerbCatalogEntry["intent"] {
+): ToolVerbCatalogEntry["intent"] | null {
   const raw = (s as { intent?: unknown }).intent;
-  if (raw === undefined || raw === null) return undefined;
+  if (raw === undefined) return undefined;
+  // DECLARED none: the applier writes NULL, clearing a stored intent.
+  if (raw === null) return null;
   if (typeof raw === "string" && (isAbstractVerb(raw) || known?.has(raw))) {
     return raw;
   }

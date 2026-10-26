@@ -206,6 +206,27 @@ describe("findPendingTextMatches", () => {
     expect(captured.where).toBeUndefined();
   });
 
+  it("one shared word is not a match when the query has two or more terms", async () => {
+    // "Ada" is in the pending row; "marketing"/"plan" are not. One shared word
+    // used to print the "pending your review" block for an unrelated question.
+    const { db } = mockDb([pendingRow]);
+    const matches = await findPendingTextMatches(db as never, {
+      userId: "user-1",
+      query: "Ada marketing plan",
+    });
+    expect(matches).toEqual([]);
+  });
+
+  it("two shared terms still match", async () => {
+    const { db } = mockDb([pendingRow]);
+    const matches = await findPendingTextMatches(db as never, {
+      userId: "user-1",
+      query: "Ada Lovelace marketing",
+    });
+    expect(matches).toHaveLength(1);
+    expect(matches[0].score).toBe(2);
+  });
+
   it("floors the scan on created_by (never a teammate's review queue)", async () => {
     const { db, captured } = mockDb([pendingRow]);
     await findPendingTextMatches(db as never, {
