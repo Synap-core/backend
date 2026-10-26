@@ -45,6 +45,7 @@ vi.mock("../utils.js", () => ({
 }));
 
 import { TRPCError } from "@trpc/server";
+import { LENS_PAGE_READ_CAPS } from "@synap-core/types/lens";
 import { registerIntentSurfacesRoutes } from "./intent-surfaces.js";
 import type { HubHono, HubVariables } from "./_shared.js";
 
@@ -158,5 +159,35 @@ describe("Hub REST intent-surface reads", () => {
     expect(((await res.json()) as { error: string }).error).toBe(
       "no such kind"
     );
+  });
+
+  it("lens-page: the page lens at the scope it was asked, with the lens hosts' caps", async () => {
+    const since = "2026-10-27T00:00:00.000+01:00";
+    expect(
+      (
+        await app().request(
+          `/attention/lens-page?workspaceId=${P}&projectId=${P}&since=${encodeURIComponent(since)}`
+        )
+      ).status
+    ).toBe(200);
+    await app().request(`/attention/lens-page?sessionId=${P}`);
+    await app().request(`/attention/lens-page`);
+    // The caps every lens host reads with (web and relay), never a second set.
+    const caps = { ...LENS_PAGE_READ_CAPS };
+    expect(h.calls).toEqual([
+      {
+        proc: "signals.list",
+        input: { lens: "page", workspaceId: P, projectId: P, caps, since },
+      },
+      { proc: "signals.list", input: { lens: "page", sessionId: P, caps } },
+      { proc: "signals.list", input: { lens: "page", caps } },
+    ]);
+  });
+
+  it("lens-page: a bad scope or since is a 400 and reaches nothing; no read scope is a 403", async () => {
+    expect((await app().request(`/attention/lens-page?trackId=nope`)).status).toBe(400);
+    expect((await app().request(`/attention/lens-page?since=yesterday`)).status).toBe(400);
+    expect((await app([]).request(`/attention/lens-page`)).status).toBe(403);
+    expect(h.calls).toEqual([]);
   });
 });

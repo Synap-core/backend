@@ -9,6 +9,7 @@
  *   GET /lifecycle/home        → `lifecycle.home`       (what each space makes)
  *   GET /lifecycle/moving      → `lifecycle.moving`     (things being worked)
  *   GET /attention/needs-you   → `signals.list({ lens: "needs-you" })`
+ *   GET /attention/lens-page   → `signals.list({ lens: "page" })` (a lens page, whole)
  *   GET /attention/count       → `signals.count`
  *
  * The kind-level reads take the intent lens (`profileSlug`) plus the board's
@@ -35,6 +36,7 @@ import type { Context as HonoContext } from "hono";
 import { createHubProtocolCallerContext } from "../utils.js";
 import { lifecycleRouter } from "../../lifecycle.js";
 import { signalsRouter } from "../../signals.js";
+import { LENS_PAGE_READ_CAPS } from "@synap-core/types/lens";
 import type { Context } from "../../../types/context.js";
 
 const lensQuery = {
@@ -74,6 +76,20 @@ const movingQuery = z.object({
 const attentionQuery = z.object({
   ...lensQuery,
   limit: z.coerce.number().int().min(1).max(100).optional(),
+});
+
+/**
+ * A lens page's scope: the SAME axes `signals.list` narrows by (a space,
+ * optionally a project inside it; a project; a track; a session). No
+ * `profileSlug`: the page lens refuses the intent lens.
+ */
+const lensPageQuery = z.object({
+  workspaceId: uuidQueryParam.optional(),
+  projectId: uuidQueryParam.optional(),
+  trackId: uuidQueryParam.optional(),
+  sessionId: uuidQueryParam.optional(),
+  /** Happened from this instant (the viewer's local midnight); absent = the whole history. */
+  since: z.string().datetime({ offset: true }).optional(),
 });
 
 type HubContext = HonoContext<{ Variables: HubVariables }>;
@@ -202,6 +218,19 @@ export function registerIntentSurfacesRoutes(app: HubHono): void {
   });
   registerOpenApi(app, {
     method: "get",
+    path: "/attention/lens-page",
+    tags: ["Attention"],
+    summary: "A lens page, whole: what needs you, what is happening, what was produced",
+    description:
+      "Every class of the lens page at a scope (`signals.list({ lens: 'page' })`): Needs you, Proposed, Happening, Produced, Happened, plus the status banner, read with the caps every lens host asks for (`LENS_PAGE_READ_CAPS`). The scope is the narrowing lens (`workspaceId`, optionally with `projectId`; `projectId`; `trackId`; `sessionId`); none = the pod. `since` bounds Happened (a session sends none). Read by a space package's frame through the browser's host bridge, which stamps the scope.",
+    request: { query: lensPageQuery },
+    responses: {
+      200: { description: "Page", schema: z.object({}).passthrough() },
+      ...errors,
+    },
+  });
+  registerOpenApi(app, {
+    method: "get",
     path: "/attention/count",
     tags: ["Attention"],
     summary: "The needs-you number ON a kind's things",
@@ -264,6 +293,20 @@ export function registerIntentSurfacesRoutes(app: HubHono): void {
         ...lensOf(q),
         lens: "needs-you",
         ...(q.limit ? { limit: q.limit } : {}),
+      })
+    )
+  );
+  app.get(
+    "/attention/lens-page",
+    readDoor("attention.lens-page", lensPageQuery, (ctx, q) =>
+      signalsRouter.createCaller(ctx).list({
+        lens: "page",
+        ...(q.workspaceId ? { workspaceId: q.workspaceId } : {}),
+        ...(q.projectId ? { projectId: q.projectId } : {}),
+        ...(q.trackId ? { trackId: q.trackId } : {}),
+        ...(q.sessionId ? { sessionId: q.sessionId } : {}),
+        caps: { ...LENS_PAGE_READ_CAPS },
+        ...(q.since ? { since: q.since } : {}),
       })
     )
   );
