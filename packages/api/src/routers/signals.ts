@@ -427,7 +427,7 @@ async function readAttention(
   const readsInvites = readsCaptures;
   // The "Make them goals" card (D-3) is the pod's ONE card, never a space's
   // or a project's: the same floor-only rule.
-  const readsConvertible = readsCaptures;
+  const readsConvertible = true;
   const isAdmin = podAdminCheck(userId);
   const [
     groups,

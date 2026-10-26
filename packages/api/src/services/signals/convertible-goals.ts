@@ -30,7 +30,6 @@ import {
   eq,
   inArray,
   isNull,
-  links,
   listableEntityWhere,
   profiles,
   projects,
@@ -72,14 +71,6 @@ export async function listConvertibleGoals(args: {
       and(
         isNull(entities.deletedAt),
         inArray(kindSql, kinds),
-        drizzleSql`NOT EXISTS (
-          SELECT 1 FROM ${links}
-          WHERE ${links.fromType} = 'entity'
-            AND ${links.fromId} = ${entities.id}::text
-            AND ${links.toType} = 'track'
-            AND ${links.linkType} = 'promoted_to'
-        )`,
-        scopedDb(args.access).predicate(entities),
         listableEntityWhere()
       )
     )
