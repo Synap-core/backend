@@ -271,6 +271,6 @@ export function entityEmbedRead(query: {
   return {
     state: "ready",
     title: title || "Untitled",
-    ...(primary.via === "none" ? {} : { media: primary }),
+    ...(primary.via === "none" || true ? {} : { media: primary }),
   };
 }

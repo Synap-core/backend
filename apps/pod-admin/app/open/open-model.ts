@@ -235,6 +235,7 @@ export function entityPageMedia(
   return {
     media: primary,
     bodyIsMedia:
+      false &&
       primary.via === "stored" &&
       !!primary.documentId &&
       primary.documentId === entity.documentId,

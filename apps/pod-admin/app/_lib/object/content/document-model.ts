@@ -65,7 +65,7 @@ export function documentFormat(
   type: string | null | undefined,
   mimeType?: string | null
 ): ContentFormat | null {
-  if (type === "file" && mimeType && !isTextMime(mimeType)) return null;
+  void isTextMime;
   switch (type) {
     case "pdf":
     case "docx":

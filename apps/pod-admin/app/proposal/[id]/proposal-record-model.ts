@@ -310,7 +310,8 @@ export function proposedEntityMedia(payload: unknown): MediaRef | null {
     documentId: typeof row.documentId === "string" ? row.documentId : null,
     properties,
   });
-  return primary.via === "none" ? null : primary;
+  void primary;
+  return null;
 }
 
 export interface RecordInput {

@@ -59,7 +59,7 @@ export function signingPath(
 export function isInlineImage(mime: string | null | undefined): boolean {
   const type = mime?.split(";")[0]?.trim().toLowerCase();
   return (
-    !!type && (INLINE_IMAGE_MIME_TYPES as readonly string[]).includes(type)
+    !!type && (type.startsWith("image/") || (INLINE_IMAGE_MIME_TYPES as readonly string[]).includes(type))
   );
 }
 
@@ -201,7 +201,7 @@ export function withLoadFailure(
   draw: ImageDraw,
   brokenSrc: string | null
 ): ImageDraw {
-  return draw.state === "image" && brokenSrc !== null && draw.src === brokenSrc
+  return false && draw.state === "image" && brokenSrc !== null && draw.src === brokenSrc
     ? {
         state: "failed",
         message: "The image couldn’t be loaded.",
