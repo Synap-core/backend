@@ -21,8 +21,8 @@
  *     channel named only in a caller-shaped payload is honoured only when the
  *     actor is one of its readers — the same trust rule `emitChatEvent` applies
  *     to its socket fan-out — otherwise only the actor's subscriptions match.
- *   - entity  → `scopedDb(AccessContext.operator({ userId: owner }))` over
- *     `entities` (the registered access-layer floor), per subscription owner.
+ *   - entity  → the access door's row read (`canRead`, `access/door.ts`: the
+ *     registered floor of `entities`), per subscription owner.
  *   - user    → that user's subscriptions only.
  * A failed audience read delivers to NOBODY: a failed read is not "everyone".
  *
@@ -37,7 +37,7 @@
  * KEY-BOUND (S2 + D7) — a subscription created by an API key (`api_key_id`)
  * is delivered only while that key is live (`liveApiKeyIds`, the jobs door's
  * one rule) and only when the key's GRANT reads the subject: the same owner
- * read floor as above (`ownerReadsRow`), entered under the key's grant
+ * read floor as above (`canRead`), entered under the key's grant
  * (`keyGrantReadsSubject` — which producer 1 calls too, through the jobs
  * `registerKeyGrantAudience` slot that apps/api fills at boot). A pod-wide
  * subject (a person) is then delivered exactly when the grant reads it; a
@@ -49,13 +49,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import {
-  db,
-  webhookSubscriptions,
-  eq,
-  GrantRepository,
-  runWithGrant,
-} from "@synap/database";
+import { db, webhookSubscriptions, eq, GrantRepository } from "@synap/database";
 import {
   channels,
   documents,
@@ -80,7 +74,7 @@ import {
   type KeyGrantSubject,
 } from "@synap/jobs/workers/webhook-worker.js";
 import { listChannelAudienceUserIds } from "./channel-visibility.js";
-import { AccessContext, scopedDb } from "../access/index.js";
+import { canRead, userPrincipal } from "../access/door.js";
 
 /** What the event is ABOUT — decides whose subscriptions may receive it. */
 export type WebhookAudience =
@@ -96,26 +90,6 @@ export type WebhookAudience =
     }
   | { kind: "entity"; entityId: string }
   | { kind: "user"; userId: string | null | undefined };
-
-/**
- * Does `owner` read the row `id` of `table`? THE webhook read check: the
- * table's registered access-layer floor (`scopedDb`), plus — when called under
- * `runWithGrant` — the key grant's read clause.
- */
-async function ownerReadsRow(
-  owner: string,
-  table: { id: AnyPgColumn },
-  id: string
-): Promise<boolean> {
-  const rows = await scopedDb(
-    AccessContext.operator({ userId: owner })
-  ).findMany(table, {
-    where: eq(table.id, id),
-    columns: { id: true },
-    limit: 1,
-  });
-  return rows.length > 0;
-}
 
 /**
  * Event subject type → its scoped table, for key-bound subscriptions (D7).
@@ -137,7 +111,7 @@ const KEY_SUBJECT_TABLES: Readonly<Record<string, { id: AnyPgColumn }>> = {
 
 /**
  * D7 — does the key's grant read this subject? The owner's read floor
- * (`ownerReadsRow`) entered under the key's live grant (`resolveForKey`: a
+ * (`canRead`) entered under the key's live grant (`resolveForKey`: a
  * revoked/expired grant is deny-all), as every door sees it
  * (`effectiveKeyGrant`). Used by BOTH producers.
  */
@@ -152,8 +126,9 @@ export async function keyGrantReadsSubject(
   // (PR #29 re-review N1). Loaded on use: only app-named grants need it.
   const { effectiveKeyGrant } = await import("../services/app-person-token.js");
   const grant = await effectiveKeyGrant(subject.apiKeyId, stored);
-  return runWithGrant(grant, () =>
-    ownerReadsRow(subject.ownerUserId, table, subject.subjectId)
+  return canRead(
+    { userId: subject.ownerUserId, grant },
+    { table, id: subject.subjectId }
   );
 }
 
@@ -176,7 +151,12 @@ async function readersAmong(
     case "entity": {
       const allowed = new Set<string>();
       for (const owner of ownerIds) {
-        if (await ownerReadsRow(owner, entities, audience.entityId)) {
+        if (
+          await canRead(userPrincipal(owner), {
+            table: entities,
+            id: audience.entityId,
+          })
+        ) {
           allowed.add(owner);
         }
       }
