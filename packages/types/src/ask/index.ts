@@ -544,22 +544,15 @@ export const AskConfirmAnswerSchema = z.object({
 });
 export type AskConfirmAnswer = z.infer<typeof AskConfirmAnswerSchema>;
 
-export const AskSchema = z.discriminatedUnion("mode", [
-  z
-    .object({
-      mode: z.literal("confirm"),
-      prompt: z.string().max(ASK_LIMITS.promptMaxChars).optional(),
-      yes: AskConfirmAnswerSchema.optional(),
-      no: AskConfirmAnswerSchema.optional(),
-      ...lookedAtField,
-      ...stakesField,
-    })
-    // The choose rule, for the confirm's two answers: a contract rule, at
-    // the parse.
-    .refine((c) => !(c.yes?.recommended && c.no?.recommended), {
-      message: "at most one answer may be recommended",
-      path: ["no", "recommended"],
-    }),
+const AskModesSchema = z.discriminatedUnion("mode", [
+  z.object({
+    mode: z.literal("confirm"),
+    prompt: z.string().max(ASK_LIMITS.promptMaxChars).optional(),
+    yes: AskConfirmAnswerSchema.optional(),
+    no: AskConfirmAnswerSchema.optional(),
+    ...lookedAtField,
+    ...stakesField,
+  }),
   z.object({
     mode: z.literal("choose"),
     // "At most one recommended" is a CONTRACT rule enforced at the parse.
@@ -604,6 +597,19 @@ export const AskSchema = z.discriminatedUnion("mode", [
     ...stakesField,
   }),
 ]);
+
+// The choose rule, for a confirm's two answers: a contract rule, at the
+// parse. On the UNION, not the confirm member — under zod 3 a refined member
+// is an effect `discriminatedUnion` cannot read.
+export const AskSchema = AskModesSchema.superRefine((ask, ctx) => {
+  if (ask.mode === "confirm" && ask.yes?.recommended && ask.no?.recommended) {
+    ctx.addIssue({
+      code: "custom",
+      message: "at most one answer may be recommended",
+      path: ["no", "recommended"],
+    });
+  }
+});
 export type Ask = z.infer<typeof AskSchema>;
 
 // ─── The answer's typed value ───────────────────────────────────────────────
