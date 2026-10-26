@@ -1972,7 +1972,7 @@ const captureBaseRouter = router({
           ...fallback,
           degradedDetail,
           dedupCandidates: identity.dedupCandidates,
-          mentions: identity.mentions,
+          mentions: [] as typeof identity.mentions,
           ...(identity.unchecked ? { dedupSkipped: true as const } : {}),
         };
       };
@@ -2149,10 +2149,7 @@ const captureBaseRouter = router({
           return finishIntake(
             await degradedWithIdentity(
               "is_auth_error",
-              degradedDetailForFailure(
-                { cause: "http", status: err.status },
-                structureAttempts
-              )
+              degradedDetailForFailure(undefined, structureAttempts)
             ),
             { podDegraded: true }
           );

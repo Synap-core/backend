@@ -102,7 +102,9 @@ function isRetryableFailure(failure: StructureFailure): boolean {
       : undefined;
   if (typeof stated === "boolean") return stated;
   if (failure.status !== undefined) {
-    return failure.status === 429 || failure.status >= 500;
+    return (
+      failure.status === 429 || failure.status === 402 || failure.status >= 500
+    );
   }
   return failure.cause === "network" || failure.cause === "stream";
 }

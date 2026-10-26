@@ -1312,12 +1312,6 @@ export class IntelligenceHubClient {
               `Intelligence Service rejected credentials: ${response.status} ${response.statusText}`
             );
           }
-          const body = await response.json().catch(() => null);
-          reportStructureFailure(options.onFailure, {
-            cause: "http",
-            status: response.status,
-            ...failureEnvelopeOf(body),
-          });
           return null;
         }
         if (

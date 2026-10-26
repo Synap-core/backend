@@ -1125,7 +1125,6 @@ const captureHandler: McpToolHandler = async (
       // A degraded capture never merges: its candidates were matched on the
       // raw text by name, and are offered for the agent or the person to
       // confirm (plan B, open question 1).
-      !degradedCapture &&
       top &&
       top.score >= 0.95 &&
       top.profileSlug === p.profileSlug &&
