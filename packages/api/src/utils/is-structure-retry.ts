@@ -24,6 +24,15 @@
  * less than `fastNullRatio` of the per-call timeout is transient; anything
  * slower is a timeout and stops the loop immediately.
  *
+ * BY CAUSE, when the call reports one (`structure()`'s `onFailure`, handed to
+ * `call` as `report`): only a failure a retry can fix is retried — no answer
+ * (`network`), a cut or broken stream, a 429 or a 5xx, unless the IS envelope
+ * says `retryable: false`. A 400, 402, 413 and
+ * every other answered refusal stop the loop (`refused_null`): resending the
+ * same request reproduces it, and a 402 retried three times was reported as
+ * "re-capturing shortly may structure it" (issue 1c252b3b). A `timeout` cause
+ * stops as `timeout_null`. A null with no reported cause keeps the timing rule.
+ *
  * NOT HANDLED HERE: `is_empty_result` — a well-formed 200 carrying zero
  * entities. That is a SUCCESSFUL call whose extraction was honestly empty
  * (input with nothing to extract) or model-degraded; the two are
@@ -33,13 +42,16 @@
  * Dependency-free by design (no db, no logger) so the policy is unit-testable
  * without a database — the caller supplies logging via `onRetry`.
  */
+import type { StructureFailure } from "@synap/intelligence-client";
 
 /** Why an attempt did not yield a usable structure. */
 export type StructureRetryReason =
   /** Fast null — transient IS/network/proxy failure. Retryable. */
   | "transient_null"
   /** Slow null — the call burned the timeout budget. NOT retryable. */
-  | "timeout_null";
+  | "timeout_null"
+  /** The IS answered with a refusal a retry cannot fix (400, 402, 413…). */
+  | "refused_null";
 
 export interface StructureRetryOptions {
   /** Per-call abort budget in ms — the same value passed to `structure()`. */
@@ -74,6 +86,25 @@ export interface StructureRetryOutcome<T> {
   attempts: number;
   /** Why the last attempt failed. Undefined when `result` is non-null. */
   lastReason?: StructureRetryReason;
+  /** The cause the last attempt reported, when it reported one. */
+  lastFailure?: StructureFailure;
+}
+
+/**
+ * Can the same request succeed on a retry, judged by its reported cause? The
+ * IS's own `retryable` wins when its envelope states one (it sees what the
+ * status cannot: a 503 budget stop is not an outage).
+ */
+function isRetryableFailure(failure: StructureFailure): boolean {
+  const stated =
+    failure.failure && typeof failure.failure === "object"
+      ? (failure.failure as { retryable?: unknown }).retryable
+      : undefined;
+  if (typeof stated === "boolean") return stated;
+  if (failure.status !== undefined) {
+    return failure.status === 429 || failure.status >= 500;
+  }
+  return failure.cause === "network" || failure.cause === "stream";
 }
 
 const defaultSleep = (ms: number): Promise<void> =>
@@ -83,10 +114,11 @@ const defaultSleep = (ms: number): Promise<void> =>
  * Call `structure` with a bounded retry on transient (fast-null) failures.
  *
  * Never swallows a throw: `IntelligenceAuthError` (and any other throw)
- * propagates from the first attempt, un-retried.
+ * propagates from the first attempt, un-retried. `call` receives `report`, to
+ * pass on as `structure()`'s `onFailure`.
  */
 export async function callStructureWithRetry<T>(
-  call: () => Promise<T | null>,
+  call: (report: (failure: StructureFailure) => void) => Promise<T | null>,
   options: StructureRetryOptions
 ): Promise<StructureRetryOutcome<T>> {
   const {
@@ -102,19 +134,30 @@ export async function callStructureWithRetry<T>(
 
   const attemptCap = Math.max(1, maxAttempts);
   let lastReason: StructureRetryReason | undefined;
+  let lastFailure: StructureFailure | undefined;
 
   for (let attempt = 1; attempt <= attemptCap; attempt++) {
     const t0 = now();
-    const result = await call();
+    let reported: StructureFailure | undefined;
+    const result = await call((failure) => {
+      reported = failure;
+    });
     if (result) return { result, attempts: attempt };
+    lastFailure = reported;
+    const failed = lastFailure ? { lastFailure } : {};
 
     const elapsedMs = now() - t0;
     lastReason =
-      elapsedMs < timeoutMs * fastNullRatio ? "transient_null" : "timeout_null";
+      lastFailure?.cause === "timeout" || elapsedMs >= timeoutMs * fastNullRatio
+        ? "timeout_null"
+        : lastFailure && !isRetryableFailure(lastFailure)
+          ? "refused_null"
+          : "transient_null";
 
-    // A timeout is not transient — stop rather than burn another full budget.
-    if (lastReason === "timeout_null") {
-      return { result: null, attempts: attempt, lastReason };
+    // A timeout is not transient — stop rather than burn another full budget;
+    // a refusal comes back identical, so it stops too.
+    if (lastReason !== "transient_null") {
+      return { result: null, attempts: attempt, lastReason, ...failed };
     }
     if (attempt >= attemptCap) break;
 
@@ -131,5 +174,10 @@ export async function callStructureWithRetry<T>(
     await sleep(backoffMs);
   }
 
-  return { result: null, attempts: attemptCap, lastReason };
+  return {
+    result: null,
+    attempts: attemptCap,
+    lastReason,
+    ...(lastFailure ? { lastFailure } : {}),
+  };
 }

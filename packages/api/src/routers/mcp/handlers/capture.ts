@@ -38,7 +38,10 @@ import {
 import { resolveCaptureProjectRef } from "../../../services/capture-agent/resolve-capture-project.js";
 import { logger } from "../../hub-protocol/rest/_shared.js";
 import { toolError } from "../tool-errors.js";
-import { describeAiFailure } from "../../../utils/ai-failure.js";
+import {
+  describeAiFailure,
+  type AiFailureClass,
+} from "../../../utils/ai-failure.js";
 import { ownerPrivateVisibleWhere } from "../../../utils/user-visible-where.js";
 import { accessScopeWhere } from "../../../utils/project-scope.js";
 import { validateCaptureGraphRefs } from "../../hub-protocol/rest/_capture-graph-dedup.js";
@@ -983,17 +986,22 @@ const captureHandler: McpToolHandler = async (
     (structured as { degraded?: boolean }).degraded === true;
   const degradedReason = (structured as { degradedReason?: string })
     .degradedReason;
-  // `degradedReason` (capture.ts DegradedCaptureReason) is already a
-  // classification — map it onto the shared failure classes rather than
-  // re-deriving one.
+  // `degradedDetail.failureClass` is the class the pod read off the failure
+  // itself (a 402 is `quota`, never retried). A plan the IS itself marked
+  // degraded carries only `degradedReason`, mapped onto the shared failure
+  // classes rather than re-deriving one.
+  const degradedFailureClass = (
+    structured as { degradedDetail?: { failureClass?: AiFailureClass } }
+  ).degradedDetail?.failureClass;
   const degradedFailure = degradedCapture
     ? describeAiFailure(
-        degradedReason === "is_auth_error"
-          ? "auth"
-          : degradedReason === "is_invalid_response" ||
-              degradedReason === "is_empty_result"
-            ? "invalid_response"
-            : "unknown"
+        degradedFailureClass ??
+          (degradedReason === "is_auth_error"
+            ? "auth"
+            : degradedReason === "is_invalid_response" ||
+                degradedReason === "is_empty_result"
+              ? "invalid_response"
+              : "unknown")
       )
     : null;
   // The fallback files the caller's explicit kind when it resolved, else a note.

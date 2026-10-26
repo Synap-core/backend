@@ -354,6 +354,64 @@ function isAuthStatus(status: number): boolean {
   return status === 401 || status === 403;
 }
 
+/**
+ * WHY `structure()` returned `null`, reported through its `onFailure` option.
+ * The `null` contract is unchanged; this only stops the cause from living in a
+ * `console.warn` line alone (issue 1c252b3b: a degraded capture nobody could
+ * explain without host log access).
+ *
+ *   http    — a non-OK answer (auth excepted: that one throws), or a 200 body
+ *             that would not parse;
+ *   stream  — a non-200 `result` frame, an `error` frame, or a stream cut
+ *             before its result;
+ *   network — the request never got an answer;
+ *   timeout — aborted, on the deadline or by the caller.
+ *
+ * `failure` is the IS failure envelope (`{ code, retryable, … }`) when the
+ * answer carried one; never the rest of the body. `message` is the transport
+ * error's own text on a `network` failure (ECONNREFUSED, fetch failed): the
+ * evidence a classifier reads, not words for a person.
+ */
+export interface StructureFailure {
+  cause: "http" | "stream" | "network" | "timeout";
+  status?: number;
+  failure?: unknown;
+  message?: string;
+}
+
+/** A failed `structure()` read that already knows its cause. */
+class StructureFailureError extends Error {
+  constructor(
+    readonly failure: StructureFailure,
+    message: string
+  ) {
+    super(message);
+  }
+}
+
+/** Hand a failure to the caller's sink; a broken sink never fails the call. */
+function reportStructureFailure(
+  sink: ((failure: StructureFailure) => void) | undefined,
+  failure: StructureFailure
+): void {
+  try {
+    sink?.(failure);
+  } catch (sinkErr) {
+    console.warn(
+      `[IntelligenceHubClient] structure onFailure threw: ${sinkErr instanceof Error ? sinkErr.message : String(sinkErr)}`
+    );
+  }
+}
+
+/** The IS failure envelope off an answer body, when there is one. */
+function failureEnvelopeOf(body: unknown): { failure?: unknown } {
+  const failure =
+    body && typeof body === "object"
+      ? (body as Record<string, unknown>).failure
+      : undefined;
+  return failure && typeof failure === "object" ? { failure } : {};
+}
+
 // ── Transcription ────────────────────────────────────────────────────────────
 
 /** `GET /api/transcribe` — whether the IS can transcribe, and with what. */
@@ -1099,6 +1157,8 @@ export class IntelligenceHubClient {
       onProgress?: (event: StructureProgressEvent) => void;
       /** Caller abort, in addition to `timeoutMs`. */
       signal?: AbortSignal;
+      /** Why the call returned `null` (see {@link StructureFailure}). */
+      onFailure?: (failure: StructureFailure) => void;
     } = {}
   ): Promise<{
     entities: Array<{
@@ -1214,8 +1274,11 @@ export class IntelligenceHubClient {
       };
     };
   } | null> {
+    const controller = new AbortController();
+    // Where the call was when it failed: a throw while reading the answer is
+    // a cut stream or an unreadable body, not a request that got no answer.
+    let phase: "request" | "stream" | "body" = "request";
     try {
-      const controller = new AbortController();
       const timer = setTimeout(
         () => controller.abort(),
         input.timeoutMs ?? 25_000
@@ -1249,16 +1312,24 @@ export class IntelligenceHubClient {
               `Intelligence Service rejected credentials: ${response.status} ${response.statusText}`
             );
           }
+          const body = await response.json().catch(() => null);
+          reportStructureFailure(options.onFailure, {
+            cause: "http",
+            status: response.status,
+            ...failureEnvelopeOf(body),
+          });
           return null;
         }
         if (
           response.headers.get("content-type")?.includes("text/event-stream")
         ) {
+          phase = "stream";
           return (await this.readStructureStream(
             response,
             options.onProgress
           )) as Awaited<ReturnType<typeof this.structure>> & {};
         }
+        phase = "body";
         return (await response.json()) as Awaited<
           ReturnType<typeof this.structure>
         > & {};
@@ -1271,6 +1342,21 @@ export class IntelligenceHubClient {
       if (err instanceof IntelligenceAuthError) throw err;
       console.warn(
         `[IntelligenceHubClient] structure error: ${err instanceof Error ? err.message : String(err)} (baseUrl=${this.baseUrl})`
+      );
+      reportStructureFailure(
+        options.onFailure,
+        controller.signal.aborted
+          ? { cause: "timeout" }
+          : err instanceof StructureFailureError
+            ? err.failure
+            : phase === "stream"
+              ? { cause: "stream" }
+              : phase === "body"
+                ? { cause: "http", status: 200 }
+                : {
+                    cause: "network",
+                    message: err instanceof Error ? err.message : String(err),
+                  }
       );
       return null;
     }
@@ -1303,15 +1389,26 @@ export class IntelligenceHubClient {
               `Intelligence Service rejected credentials: ${status}`
             );
           }
-          throw new Error(`structure stream: result status ${String(status)}`);
+          throw new StructureFailureError(
+            {
+              cause: "stream",
+              ...(typeof status === "number" ? { status } : {}),
+              ...failureEnvelopeOf(body),
+            },
+            `structure stream: result status ${String(status)}`
+          );
         }
         if (!body || typeof body !== "object") {
-          throw new Error("structure stream: result frame has no body");
+          throw new StructureFailureError(
+            { cause: "stream", status: 200 },
+            "structure stream: result frame has no body"
+          );
         }
         return body;
       }
       if (type === "error") {
-        throw new Error(
+        throw new StructureFailureError(
+          { cause: "stream" },
           `structure stream error: ${typeof error === "string" ? error : "unknown"}`
         );
       }
@@ -1326,7 +1423,10 @@ export class IntelligenceHubClient {
         );
       }
     }
-    throw new Error("structure stream ended without a result frame");
+    throw new StructureFailureError(
+      { cause: "stream" },
+      "structure stream ended without a result frame"
+    );
   }
 
   /**
