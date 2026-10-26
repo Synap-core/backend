@@ -13,7 +13,9 @@
  * admins only, so a member's Access chip simply holds their own proposals.
  *
  * URL: `?type=access|changes|asks|history` picks the view; `?focus=<id>`
- * opens that row's decision (a row, its target, or any proposal id). From
+ * opens that row's decision (a row, its target, or any proposal id);
+ * `?session=<id>` narrows every view to one session — the door a proposal's
+ * review offers to "what else from this session waits for you". From
  * `lg` up the decision docks beside the list; below, it opens in a drawer.
  * An agent's question is answered in the same place (`ask-answer.tsx`);
  * once it is, the detail closes and focus moves to the next row.
@@ -54,6 +56,8 @@ import {
   reviewCounts,
   reviewFilterOf,
   reviewRows,
+  NEEDS_YOU_PAGE_LIMIT,
+  reviewSessionOf,
   rowsInView,
   summarizeBatch,
   type ProposalFacts,
@@ -68,13 +72,11 @@ import {
   type ReviewViewer,
 } from "./review-drawer";
 import { ReviewHistory } from "./review-history";
+import { SessionFilter } from "./review-session-filter";
 import { nextRowKey } from "./ask-detail";
 
 const TITLE = "Review";
 const DESCRIPTION = "Everything waiting on your decision, in one place.";
-
-/** The most rows one needs-you read returns (`signals.list` limit). */
-const PAGE_LIMIT = 100;
 
 const CHIPS: Array<{ key: ReviewFilter; label: string }> = [
   { key: "all", label: "All" },
@@ -89,15 +91,19 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
   const replaceParams = useReplaceParams();
   const filter = reviewFilterOf(searchParams.get("type"));
   const focusId = searchParams.get("focus");
+  const sessionId = reviewSessionOf(searchParams.get("session"));
   const utils = trpc.useUtils();
 
+  // The pod narrows by session itself (`signals.list`'s session lens, the
+  // proposals' `session_id`) — never a client filter over the pod-wide page.
+  const scope = sessionId ? { sessionId } : {};
   const signals = trpc.signals.list.useQuery(
-    { lens: "needs-you", limit: PAGE_LIMIT },
+    { lens: "needs-you", limit: NEEDS_YOU_PAGE_LIMIT, ...scope },
     { staleTime: 15_000, refetchInterval: 60_000 }
   );
   const count = useNeedsYouCount();
   const pending = trpc.proposals.list.useQuery(
-    { status: "pending", limit: 100 },
+    { status: "pending", limit: 100, ...scope },
     { staleTime: 15_000 }
   );
 
@@ -273,8 +279,13 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
   const desktopExit = visible
     .map((r) => (r.detail?.kind === "open" ? exitOf(r.detail) : null))
     .find((e): e is Exit => !!e?.isDesktopLink);
-  const shownOfTotal =
-    count.data && count.data.needsYou > rows.length
+  // The pod-wide count says nothing about one session's rows: narrowed, the
+  // page says only that its read hit the limit.
+  const shownOfTotal = sessionId
+    ? rows.length >= NEEDS_YOU_PAGE_LIMIT
+      ? `Showing the newest ${rows.length} from this session.`
+      : null
+    : count.data && count.data.needsYou > rows.length
       ? `Showing the newest ${rows.length} of ${count.data.truncated ? "more than " : ""}${count.data.needsYou}.`
       : null;
 
@@ -292,6 +303,17 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
         }
       >
         <div className="min-w-0">
+          {sessionId && (
+            <SessionFilter
+              sessionId={sessionId}
+              onClear={() =>
+                replaceParams((params) => {
+                  params.delete("session");
+                  params.delete("focus");
+                })
+              }
+            />
+          )}
           <FilterChips
             param="type"
             defaultKey="all"
@@ -377,6 +399,7 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
           <section className="divide-y divide-foreground/[0.05] rounded-lg bg-foreground/[0.02] ring-1 ring-inset ring-foreground/10">
             {filter === "history" ? (
               <ReviewHistory
+                sessionId={sessionId}
                 onOpen={(proposalId, title) =>
                   setOpen({ detail: { kind: "proposal", proposalId }, title })
                 }
@@ -391,9 +414,11 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
             ) : visible.length === 0 ? (
               <ResourceRowEmpty
                 message={
-                  filter === "all"
-                    ? "Nothing is waiting on you."
-                    : "Nothing waiting here."
+                  sessionId
+                    ? "Nothing from this session waits for you."
+                    : filter === "all"
+                      ? "Nothing is waiting on you."
+                      : "Nothing waiting here."
                 }
               />
             ) : (

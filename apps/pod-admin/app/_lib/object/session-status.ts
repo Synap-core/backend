@@ -289,6 +289,39 @@ export function deliverableRows(raw: unknown): DeliverableRow[] {
   return rows;
 }
 
+/** The fields of the pod's session verdict (`SessionVerdict`) a mark reads. */
+export interface SessionVerdictLike {
+  passed: number;
+  total: number;
+  state: string;
+}
+
+/**
+ * A session's criteria verdict as ONE mark — the review's session strip, the
+ * Sessions list and the session page all draw it from here. Three copies had
+ * drifted ("Criteria failing" · "2 of 3 met" · "2 of 3 criteria met", amber
+ * vs red for the same state). The tone is the status palette (met → healthy,
+ * a required criterion failed → down, some not checked yet → stale); the count
+ * is the pod's own verdict, never recounted; `state` is the vocabulary's word
+ * for the whole grade ("Not yet met"), carried as the mark's accessible name.
+ * Null when the session declares no criteria.
+ */
+export function criteriaVerdictMark(
+  v: SessionVerdictLike | null | undefined
+): { kind: StatusKind; label: string; state: string } | null {
+  if (!v || v.total === 0 || v.state === "none") return null;
+  return {
+    kind:
+      v.state === "passing"
+        ? "healthy"
+        : v.state === "failing"
+          ? "down"
+          : "stale",
+    label: `${v.passed} of ${v.total} ${v.total === 1 ? "criterion" : "criteria"} met`,
+    state: resolveStatusLabel(v.state),
+  };
+}
+
 export type CriterionVerdict = "pass" | "fail" | "unmeasured" | null;
 
 export interface CriterionRow {
