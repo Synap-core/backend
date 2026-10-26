@@ -1009,6 +1009,10 @@ const captureHandler: McpToolHandler = async (
               : "unknown")
       )
     : null;
+  // The records the raw text names by email or phone, matched on the degraded
+  // path and OFFERED, never linked (`degraded-capture-identity.ts`).
+  const degradedMentions =
+    (structured as { mentions?: Array<{ title: string }> }).mentions ?? [];
   // The fallback files the caller's explicit kind when it resolved, else a note.
   const degradedKind = (
     captureProposals[0] as { profileSlug?: string } | undefined
@@ -1024,7 +1028,12 @@ const captureHandler: McpToolHandler = async (
           `Tell the user their capture was saved as a raw ${degradedKind} and was NOT structured`) +
       (degradedFailure.retryable
         ? " — and that re-capturing shortly may structure it properly."
-        : ", and do not tell them to try again.")
+        : ", and do not tell them to try again.") +
+      (degradedMentions.length > 0
+        ? ` The text names ${degradedMentions.length} existing record(s) (\`structured.mentions\`: ` +
+          degradedMentions.map((m) => `"${m.title}"`).join(", ") +
+          `). NOTHING was linked to them: offer the user to link the note to them, and link only what they confirm.`
+        : "")
     : null;
   // ── W3: the structurer ASKED A QUESTION ────────────────────────────────
   //
@@ -1118,6 +1127,10 @@ const captureHandler: McpToolHandler = async (
   ).map((p) => {
     const top = dedup[p.tempId]?.[0];
     if (
+      // A degraded capture never merges: its candidates were matched on the
+      // raw text by name, and are offered for the agent or the person to
+      // confirm (plan B, open question 1).
+      !degradedCapture &&
       top &&
       top.score >= 0.95 &&
       top.profileSlug === p.profileSlug &&

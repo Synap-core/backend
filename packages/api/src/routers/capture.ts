@@ -110,6 +110,7 @@ import type {
 } from "@synap/intelligence-client";
 import { classifyAiFailure, type AiFailureClass } from "../utils/ai-failure.js";
 import { classifyDegradedReason } from "../services/capture-agent/capture-degraded-guidance.js";
+import { findDegradedCaptureIdentity } from "../services/capture-agent/degraded-capture-identity.js";
 import {
   eq,
   and,
@@ -1933,23 +1934,48 @@ const captureBaseRouter = router({
       //                         timeout/network) — NOT a credentials problem
       //   `degradedDetail` says which cause and failure class, so a reader can
       //   tell a 402 (never retry) from a cut stream (issue 1c252b3b).
-      const degradedFallback = (
+      //
+      // The identity pass runs here too, on the raw text: the records it names
+      // by email or phone come back as `mentions`, the fallback item's own
+      // twins (when the caller named its kind) as `dedupCandidates`. Offered,
+      // never linked (`degraded-capture-identity.ts`); `dedupSkipped` when a
+      // lookup failed.
+      const degradedWithIdentity = async (
         degradedReason: DegradedCaptureReasonOrUnknown,
         degradedDetail: DegradedCaptureDetail
-      ) => ({
-        ...buildDegradedCaptureFallback(
+      ) => {
+        const callerKind = resolveDegradedFallbackKind(
+          input.profileSlug,
+          linkableProfiles as ReadonlyArray<{
+            slug: string;
+            profileKind?: string | null;
+          }>
+        );
+        const fallback = buildDegradedCaptureFallback(
           inputText,
           degradedReason,
-          resolveDegradedFallbackKind(
-            input.profileSlug,
-            linkableProfiles as ReadonlyArray<{
-              slug: string;
-              profileKind?: string | null;
-            }>
-          )
-        ),
-        degradedDetail,
-      });
+          callerKind
+        );
+        const item = fallback.proposals[0]!;
+        const identity = await findDegradedCaptureIdentity(database, {
+          userId,
+          workspaceId: workspaceId ?? null,
+          text: inputText,
+          fallback: {
+            tempId: item.tempId,
+            profileSlug: item.profileSlug,
+            title: item.title,
+          },
+          checkTwins: callerKind !== undefined,
+        });
+        return {
+          ...fallback,
+          degradedDetail,
+          dedupCandidates: identity.dedupCandidates,
+          mentions: identity.mentions,
+          ...(identity.unchecked ? { dedupSkipped: true as const } : {}),
+        };
+      };
 
       // The relation vocabulary for this lens, sent so the structurer emits only
       // slugs the write lanes will accept — the SAME read those lanes validate
@@ -2121,7 +2147,7 @@ const captureBaseRouter = router({
           );
           markServiceCredentialError();
           return finishIntake(
-            degradedFallback(
+            await degradedWithIdentity(
               "is_auth_error",
               degradedDetailForFailure(
                 { cause: "http", status: err.status },
@@ -2150,7 +2176,7 @@ const captureBaseRouter = router({
           "IS structure failed (non-auth) after retries — returning degraded fallback, credential status left unchanged"
         );
         return finishIntake(
-          degradedFallback(
+          await degradedWithIdentity(
             "is_invalid_response",
             degradedDetailForFailure(structureFailure, structureAttempts)
           ),
@@ -2250,10 +2276,10 @@ const captureBaseRouter = router({
         );
         return finishIntake(
           {
-            ...degradedFallback(
+            ...(await degradedWithIdentity(
               emptyReason,
               degradedDetailForEmpty(emptyReason, structureAttempts)
-            ),
+            )),
             ...(structureResult.extraction
               ? { extraction: structureResult.extraction }
               : {}),
