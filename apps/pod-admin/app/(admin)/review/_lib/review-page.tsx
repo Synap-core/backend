@@ -25,14 +25,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Alert, Button, Checkbox, Textarea, addToast } from "@heroui/react";
 import { ArrowUpRight, Check, Lock, MessageSquare, X } from "lucide-react";
-import { resolveObjectNoun } from "@synap-core/types/vocabulary";
-import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import { trpc } from "../../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
 import { formatRelative, isUuid } from "../../../../lib/format";
 import { useReplaceParams } from "../../../../lib/use-replace-params";
 import { LG_UP, useMediaQuery } from "../../../../lib/use-media-query";
-import { openIn, type Exit } from "../../../../lib/open-in";
+import type { Exit } from "../../../../lib/open-in";
 import {
   ExitFallback,
   externalProps,
@@ -50,7 +48,6 @@ import {
   ResourceRowSkeleton,
 } from "../../components/resource-row";
 import { kindIcon, kindLabel } from "../../../_lib/object/kind-icon";
-import { Pill } from "../../../_lib/object/provenance-chips";
 import {
   batchOf,
   exitOf,
@@ -75,6 +72,7 @@ import {
   type ReviewViewer,
 } from "./review-drawer";
 import { ReviewHistory } from "./review-history";
+import { SessionFilter } from "./review-session-filter";
 import { nextRowKey } from "./ask-detail";
 
 const TITLE = "Review";
@@ -498,54 +496,6 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
         />
       </ConfirmModal>
     </PageShell>
-  );
-}
-
-/**
- * "From <session>" over the list while Review is narrowed to one session: the
- * session's name is a door to it, and × widens back to everything. Named by
- * the session read itself (the key the review's session strip and the
- * session page share), so the name holds on History and once the last row is
- * decided; unread or not readable, it is the kind's noun, never an id.
- */
-function SessionFilter({
-  sessionId,
-  onClear,
-}: {
-  sessionId: string;
-  onClear: () => void;
-}) {
-  const session = trpc.focusSessions.get.useQuery(
-    { id: sessionId },
-    { retry: false }
-  );
-  useEffect(() => {
-    if (session.error) redirectToLoginIfUnauthorized(session.error);
-  }, [session.error]);
-  const label =
-    (session.data && resolveSessionTitle(session.data)) ||
-    resolveObjectNoun("session");
-  const SessionIcon = kindIcon("session");
-  return (
-    <div className="mb-3 flex flex-wrap items-center gap-1.5 text-[12.5px] text-foreground/70">
-      <span>From</span>
-      <Pill
-        exit={openIn({ kind: "object", objectKind: "session", id: sessionId })}
-        title={resolveObjectNoun("session")}
-      >
-        <SessionIcon aria-hidden className="h-3.5 w-3.5 text-foreground/55" />
-        <span className="truncate">{label}</span>
-      </Pill>
-      <Button
-        size="sm"
-        variant="light"
-        radius="md"
-        startContent={<X className="h-3.5 w-3.5" aria-hidden />}
-        onPress={onClear}
-      >
-        Show everything
-      </Button>
-    </div>
   );
 }
 
