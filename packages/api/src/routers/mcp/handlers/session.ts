@@ -26,6 +26,16 @@ import {
   waitForSessionChanges,
 } from "../../../services/focus-sessions/wait-for-answers.js";
 import { parseSessionChangeKinds } from "../../../services/focus-sessions/session-changes.js";
+import {
+  describeRelayRefusal,
+  relaySessionAnswer,
+  RELAY_DISPOSITIONS,
+  type RelayDisposition,
+} from "../../../services/focus-sessions/session-answer.js";
+import {
+  AskAnswerValueSchema,
+  type AskAnswerValue,
+} from "@synap-core/types/ask";
 import { readAgentsForHandoff } from "../../../services/agent-dispatch/agents-for-handoff.js";
 import type { UpdateFocusSessionParams } from "../../../services/focus-sessions/update-session.js";
 import { SESSION_TITLE_MAX } from "@synap-core/types/focus-sessions";
@@ -367,6 +377,85 @@ export const sessionHandlers: McpHandlerMap = {
       });
     }
     return ok(result);
+  },
+
+  /**
+   * The person answered in THIS chat: relay their words to the question the
+   * agent asked in the pod (`relaySessionAnswer`, which owns who may relay
+   * what and the stakes rule). Agent keys only — the relay is labelled with
+   * the agent that carried it.
+   */
+  synap_relay_answer: async (ctx: McpToolContext): Promise<CallToolResult> => {
+    const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
+    requireScope(apiKeyScopes, "mcp.write", toolName);
+    if (!agentUserId) {
+      return ok({
+        error:
+          "Only an agent relays an answer — this key acts as the person, who answers in Synap.",
+      });
+    }
+    const sessionId =
+      typeof args.sessionId === "string" ? args.sessionId.trim() : "";
+    if (!UUID_RE.test(sessionId)) {
+      return ok({ error: `Focus session ${sessionId || "(none)"} not found` });
+    }
+    const disposition = args.disposition;
+    if (
+      typeof disposition !== "string" ||
+      !(RELAY_DISPOSITIONS as readonly string[]).includes(disposition)
+    ) {
+      return ok({
+        error: `disposition must be one of: ${RELAY_DISPOSITIONS.join(", ")}.`,
+      });
+    }
+    const str = (v: unknown) => (typeof v === "string" ? v : undefined);
+    const messageId = str(args.messageId)?.trim();
+    if (messageId && !UUID_RE.test(messageId)) {
+      return ok({ error: "messageId must be the question's message id (a UUID)." });
+    }
+    let value: AskAnswerValue | undefined;
+    if (args.value !== undefined) {
+      // The ONE answer schema, as on every answer door — never a cast.
+      const parsed = AskAnswerValueSchema.safeParse(args.value);
+      if (!parsed.success) {
+        return ok({
+          error: `value: ${parsed.error.issues[0]?.message ?? "invalid answer value"}`,
+        });
+      }
+      value = parsed.data;
+    }
+    const slotLabel = str(args.slotLabel);
+    const result = await relaySessionAnswer({
+      sessionId,
+      userId,
+      agentUserId,
+      disposition: disposition as RelayDisposition,
+      ...(messageId ? { messageId } : {}),
+      ...(slotLabel ? { slotLabel } : {}),
+      quote: str(args.quote),
+      text: str(args.text),
+      ...(value ? { value } : {}),
+      relaySurface: str(args.relaySurface),
+      note: str(args.note),
+    });
+    if (
+      result.status === "relayed" ||
+      result.status === "awaiting_tap" ||
+      result.status === "withdrawn"
+    ) {
+      return ok({
+        ...result,
+        next:
+          result.status === "awaiting_tap"
+            ? "Recorded as waiting for the person's tap: it is a commitment. Do not act on it yet — synap_wait_for_answer until they confirm."
+            : result.status === "relayed"
+              ? "Recorded as the person's answer, marked relayed by you. Go on with it."
+              : "Withdrawn. The slot, if any, is yours again.",
+      });
+    }
+    return ok({
+      error: describeRelayRefusal(result, { sessionId, slotLabel }).message,
+    });
   },
 
   synap_start_session: async (ctx: McpToolContext): Promise<CallToolResult> => {

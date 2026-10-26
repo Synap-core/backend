@@ -94,9 +94,11 @@ import {
 } from "../services/focus-sessions/block-output.js";
 import { BLOCKED_REASONS } from "@synap/playbooks";
 import {
+  answerDoorInputIssue,
   answerGrantWrite,
   answerSessionSlot,
   attestSessionSlot,
+  correctRelayedAnswer,
   describeAnswerRefusal,
   type AttestSessionSlotResult,
 } from "../services/focus-sessions/session-answer.js";
@@ -282,7 +284,8 @@ function slotOwnershipResult(
 const AnswerOutputInputSchema = z
   .object({
     sessionId: z.string().uuid(),
-    expectedLabel: z.string().min(1).max(500),
+    /** Required, except on a "Not what I said" that names `questionId`. */
+    expectedLabel: z.string().min(1).max(500).optional(),
     text: z.string().max(SLOT_ANSWER_TEXT_MAX).optional(),
     value: AskAnswerValueSchema.optional(),
     askFingerprint: z.string().min(1).max(64).optional(),
@@ -291,9 +294,23 @@ const AnswerOutputInputSchema = z
      * agent the person was told will read it. No read for anyone else.
      */
     expectedGranteeId: z.string().min(1).max(200).optional(),
+    /**
+     * The one-tap Confirm of a relay waiting on the slot (`pendingRelay`):
+     * the relayed answer becomes the person's. Send no `text` / `value`.
+     */
+    confirmRelayed: z.literal(true).optional(),
+    /**
+     * "Not what I said": drop what an agent relayed (a pending relay, or a
+     * relayed answer nobody confirmed) and give the question back to the
+     * person (`correctRelayedAnswer`).
+     */
+    rejectRelayed: z.literal(true).optional(),
+    /** With `rejectRelayed`: a slotless room question (its message id). */
+    questionId: z.string().uuid().optional(),
   })
-  .refine((v) => v.value !== undefined || !!v.text?.trim(), {
-    message: "An answer needs `text` or `value`.",
+  .superRefine((v, ctx) => {
+    const issue = answerDoorInputIssue(v);
+    if (issue) ctx.addIssue({ code: z.ZodIssueCode.custom, message: issue });
   });
 
 // DERIVED from the ONE status vocabulary (`@synap-core/types/focus-sessions`),
@@ -2847,6 +2864,17 @@ export const focusSessionsRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      // The person's "Not mine". An agent key handing the slot back to itself
+      // would drop the person's turn with no answer and no record; an agent
+      // whose need is gone withdraws its question (`synap_relay_answer`
+      // `disposition: 'withdrawn'`), or relays the answer it got in a chat.
+      if (ctx.agentUserId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            "Only the person can hand a slot back — an agent key cannot.",
+        });
+      }
       const result = await unblockExpectedOutput({
         sessionId: input.sessionId,
         userId: ctx.userId,
@@ -2937,18 +2965,34 @@ export const focusSessionsRouter = router({
       }
       // The session's own space + project name the key's reach (D3).
       await assertKeyMayWrite(await answerGrantWrite(input.sessionId));
+      const label = input.expectedLabel ?? "";
+      if (input.rejectRelayed) {
+        const corrected = await correctRelayedAnswer({
+          sessionId: input.sessionId,
+          userId: requireUserId(ctx.userId),
+          expectedLabel: input.expectedLabel,
+          questionId: input.questionId,
+        });
+        if (corrected.status === "corrected") {
+          return { ok: true as const, ...corrected };
+        }
+        throw new TRPCError(
+          describeAnswerRefusal(corrected, label, input.sessionId)
+        );
+      }
       const result = await answerSessionSlot({
         sessionId: input.sessionId,
         userId: requireUserId(ctx.userId),
-        expectedLabel: input.expectedLabel,
+        expectedLabel: label,
         text: input.text,
         value: input.value,
         askFingerprint: input.askFingerprint,
         expectedGranteeId: input.expectedGranteeId,
+        confirmRelayed: input.confirmRelayed,
       });
       if (result.status === "answered") return { ok: true as const, ...result };
       throw new TRPCError(
-        describeAnswerRefusal(result, input.expectedLabel, input.sessionId)
+        describeAnswerRefusal(result, label, input.sessionId)
       );
     }),
 

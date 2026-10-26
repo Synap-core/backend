@@ -144,3 +144,49 @@ it("lookedAt edges skip non-endpoint kinds (view)", () => {
     "document:doc1:about",
   ]);
 });
+
+describe("decisionFromAnswer — relay provenance (Resolve-XP W1)", () => {
+  const pick = { type: "chip" as const, chip: { label: "EU account", value: "eu" } };
+  const fileFor = (answer: SlotAnswer) =>
+    decisionFromAnswer({
+      slot: { label: "Stripe account", ask: CHOOSE },
+      answer,
+      sessionId: "s1",
+    })!.properties;
+
+  it("a tap carries none of it", () => {
+    const p = fileFor(answerTo(CHOOSE, pick, "EU account"));
+    expect(p.answeredVia).toBeUndefined();
+    expect(p.relayedBy).toBeUndefined();
+    expect(p.relayQuote).toBeUndefined();
+  });
+
+  it("a relayed answer says so, with who carried which words", () => {
+    const p = fileFor({
+      ...answerTo(CHOOSE, pick, "EU account"),
+      via: "relayed",
+      relayedBy: "agent-7",
+      quote: "the EU one",
+    });
+    expect(p).toMatchObject({
+      answeredVia: "relayed",
+      relayedBy: "agent-7",
+      relayQuote: "the EU one",
+    });
+  });
+
+  it("a CONFIRMED relay reads tap, and keeps the relay", () => {
+    const p = fileFor({
+      ...answerTo(CHOOSE, pick, "EU account"),
+      via: "tap",
+      relayedBy: "agent-7",
+      quote: "the EU one",
+      confirmedAt: "2026-10-26T10:00:00.000Z",
+    });
+    expect(p).toMatchObject({
+      answeredVia: "tap",
+      relayedBy: "agent-7",
+      relayQuote: "the EU one",
+    });
+  });
+});

@@ -54,7 +54,12 @@ import type { ActivityRow } from "@synap-core/types/activity";
 import type { LandedObjectRow } from "@synap-core/types/landed";
 import type { SessionActivityLive } from "@synap-core/types/run-activity";
 import { normalizeExpectedLabel } from "../focus-sessions/expected-label.js";
-import type { ExpectedOutput, OutputRef, SlotAsk } from "@synap/playbooks";
+import type {
+  ExpectedOutput,
+  OutputRef,
+  SlotAsk,
+  SlotPendingRelay,
+} from "@synap/playbooks";
 import type { OwedSlot } from "../focus-sessions/owed-outputs.js";
 import type { ProposalCluster } from "../proposals/fingerprint.js";
 import type { ProposalClass } from "../proposals/proposal-class.js";
@@ -266,6 +271,13 @@ export interface Signal {
    * opening the session. Absent ⇒ today's verbs (free text / I did this).
    */
   ask?: SlotAsk;
+  /**
+   * A relayed answer to an `owed-slot` waiting for the person's tap
+   * (`ExpectedOutput.pendingRelay`) — the row's one-tap Confirm / "Not what I
+   * said" (`focusSessions.answerOutput` `confirmRelayed` / `rejectRelayed`).
+   * Absent when no relay waits, and on every other kind.
+   */
+  pendingRelay?: SlotPendingRelay;
   /**
    * Decision CLASS of a `proposal-cluster` signal, carried straight off the
    * cluster (which derives it through `proposalClassFields`, the one door) —
@@ -829,6 +841,8 @@ export interface OwedSlotSignalInput {
   ref?: OutputRef;
   /** The slot's ask, straight from `listOwedSlots`. */
   ask?: SlotAsk;
+  /** A relay awaiting the tap, straight from `listOwedSlots`. */
+  pendingRelay?: SlotPendingRelay;
 }
 
 /**
@@ -869,6 +883,8 @@ export interface OwedSlotSignalInput {
  *                                      is about without re-reading the session.
  *   ask                             → `ask` — HOW to answer, so a tray can
  *                                      quick-answer a confirm / choose in place.
+ *   pendingRelay                    → `pendingRelay` — a relayed answer
+ *                                      awaiting the tap: the row's Confirm.
  *
  * DELIBERATELY WITHHELD — a real field, not surfaced today, and here is why:
  *   sessionStatus  → no `owed-slot` surface renders a session-lifecycle chip;
@@ -899,6 +915,7 @@ const _PROJECTED_OWED_SLOT_FIELDS = [
   "criterionKey",
   "ref",
   "ask",
+  "pendingRelay",
 ] as const satisfies ReadonlyArray<keyof OwedSlot>;
 
 const _WITHHELD_OWED_SLOT_FIELDS = [
@@ -952,7 +969,8 @@ function owedInstant(owedSince: string): Date {
  *
  * WITHHELD — the per-ask disclosure belongs to the ask's OWN row, which the
  * person sees the moment the draft is accepted (answering one accepts it):
- *   kind, icon, blockedReason, why, claimedDone, criterionKey, ref, ask →
+ *   kind, icon, blockedReason, why, claimedDone, criterionKey, ref, ask,
+ *   pendingRelay →
  *     one row stands for N asks, and any single ask's reason/pointer/answer
  *     region on it would misdescribe the other N-1. The row is a door to the
  *     session, where every ask renders in full.
@@ -977,6 +995,7 @@ const _WITHHELD_DRAFT_ASK_FIELDS = [
   "criterionKey",
   "ref",
   "ask",
+  "pendingRelay",
   "sessionStatus",
   "workspaceId",
 ] as const satisfies ReadonlyArray<keyof OwedSlot>;
@@ -1100,6 +1119,7 @@ export function signalFromOwedSlot(
     ...(row.criterionKey ? { criterionKey: row.criterionKey } : {}),
     ...(row.ref ? { slotRef: row.ref } : {}),
     ...(row.ask ? { ask: row.ask } : {}),
+    ...(row.pendingRelay ? { pendingRelay: row.pendingRelay } : {}),
     ...sessionSource(row.sessionId, row.sessionTitle),
     groupKey: sessionGroupKey(row.sessionId),
     ageBucket: ageBucketOf(occurredAt, now),

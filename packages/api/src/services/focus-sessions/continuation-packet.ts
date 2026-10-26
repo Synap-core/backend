@@ -55,7 +55,10 @@ import {
   drizzleSql,
   ProposalStatus,
   ownerPrivateVisibleWhere,
+  openRoomQuestionConditions,
 } from "@synap/database";
+import { questionDisposition } from "@synap-core/types/ask";
+import { readRoomPostMeta } from "../messaging/room-post-kind.js";
 import {
   buildObjectActionTitle,
   resolveObjectGlyph,
@@ -275,6 +278,29 @@ export interface PacketQuestionItem {
 }
 
 /**
+ * An agent's question in the session's ROOM still waiting on the person —
+ * `post_message kind:'question'`, slot or not. What an agent addresses when
+ * it relays the person's chat answer (`synap_relay_answer` `messageId`).
+ */
+export interface PacketRoomQuestionItem {
+  /** The question's message id — the relay door's exact address. */
+  messageId: string;
+  /** `Q-` + the id's first 8 characters: how an agent names it in a chat. */
+  shortId: string;
+  text: string;
+  askedAt: string | null;
+  /** The agent that asked (`messages.routed_teammate_id`). */
+  askedBy: string | null;
+  /** The output it is about, when it names one. */
+  slotLabel?: string;
+  /**
+   * `open`, or `awaiting_your_tap` when an agent relayed a commitment's answer
+   * and the person's Confirm is still owed (`questionDisposition`).
+   */
+  disposition: "open" | "awaiting_your_tap";
+}
+
+/**
  * Work that already landed — "do not redo". `source` names the ledger:
  *  - `output`: a produced object that is not in progress or swept;
  *  - `deliverable`: a declared slot stamped done (approved or attested) with no
@@ -471,6 +497,13 @@ export interface ContinuationPacket {
   unblocks: PacketSection<PacketChildItem>;
   /** Capture clarification questions still open in this session's room, oldest first. */
   openQuestions: PacketSection<PacketQuestionItem>;
+  /**
+   * AGENT questions still open in this session's room, oldest first — read
+   * through the ONE open-question predicate (`openRoomQuestionConditions`,
+   * `@synap/database`), the rule needs-you and the answer loop read. Distinct
+   * from `openQuestions` (capture clarifications).
+   */
+  openRoomQuestions: PacketSection<PacketRoomQuestionItem>;
   /**
    * THE STAGE BRIEF — what the EARLIER stages of this session's track produced,
    * so a stage starts from pod references, never from the previous chat.
@@ -1260,6 +1293,60 @@ async function readOpenQuestions(
   return { status: "ok", total: Number(totalRow?.n ?? 0), items };
 }
 
+/** How an agent names a room question in a chat: `Q-` + its id's first 8. */
+export function roomQuestionShortId(messageId: string): string {
+  return `Q-${messageId.slice(0, 8)}`;
+}
+
+/**
+ * Agent questions still open in the session's ROOM (`PacketRoomQuestionItem`).
+ * A session with no room was never asked anything: a true empty.
+ */
+async function readOpenRoomQuestions(
+  database: typeof db,
+  row: SessionRow
+): Promise<PacketSection<PacketRoomQuestionItem>> {
+  if (!row.channelId) return { status: "ok", total: 0, items: [] };
+  const where = and(
+    eq(messages.channelId, row.channelId),
+    ...openRoomQuestionConditions(messages)
+  );
+  const [[totalRow], rows] = await Promise.all([
+    database.select({ n: count() }).from(messages).where(where),
+    database
+      .select({
+        id: messages.id,
+        content: messages.content,
+        metadata: messages.metadata,
+        routedTeammateId: messages.routedTeammateId,
+        timestamp: messages.timestamp,
+      })
+      .from(messages)
+      .where(where)
+      // Oldest first: the question waiting longest is the one to settle.
+      .orderBy(asc(messages.timestamp))
+      .limit(PACKET_TOP_N),
+  ]);
+  const items: PacketRoomQuestionItem[] = [];
+  for (const r of rows) {
+    const meta = readRoomPostMeta(r.metadata);
+    if (!meta) continue;
+    const disposition = questionDisposition(meta);
+    // The SQL predicate is the rule; this only reads which open state it is.
+    if (disposition !== "open" && disposition !== "awaiting_your_tap") continue;
+    items.push({
+      messageId: r.id,
+      shortId: roomQuestionShortId(r.id),
+      text: r.content,
+      askedAt: r.timestamp ? new Date(r.timestamp).toISOString() : null,
+      askedBy: r.routedTeammateId ?? null,
+      ...(meta.slotLabel ? { slotLabel: meta.slotLabel } : {}),
+      disposition,
+    });
+  }
+  return { status: "ok", total: Number(totalRow?.n ?? 0), items };
+}
+
 const APPLIED_PROPOSAL_STATUSES = [
   ProposalStatus.APPROVED,
   ProposalStatus.AUTO_APPROVED,
@@ -1845,6 +1932,7 @@ export async function projectContinuationPacket(
     blockedBy,
     unblocks,
     openQuestions,
+    openRoomQuestions,
     alreadyDone,
     lastDecision,
     evaluation,
@@ -1922,6 +2010,13 @@ export async function projectContinuationPacket(
         row.id,
         "openQuestions",
         "This session's open questions could not be read."
+      )
+    ),
+    readOpenRoomQuestions(database, row).catch(
+      unavailable(
+        row.id,
+        "openRoomQuestions",
+        "This session's open room questions could not be read."
       )
     ),
     Promise.all([allOutputs, readAppliedProposals(database, row.id, all)])
@@ -2134,6 +2229,7 @@ export async function projectContinuationPacket(
     blockedBy,
     unblocks,
     openQuestions,
+    openRoomQuestions,
     priorStages,
     alreadyDone,
     lastDecision,

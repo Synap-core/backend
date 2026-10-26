@@ -167,6 +167,23 @@ export function decisionFromAnswer(
       ? { followedRecommendation: snapshot.followedRecommendation }
       : {}),
     ...(input.askedByAgent ? { askedByAgent: input.askedByAgent } : {}),
+    ...relayFields(answer),
   };
   return { title, properties };
+}
+
+/**
+ * Where the answer came from, on the decision it filed (Resolve-XP W1). Only
+ * an answer an agent RELAYED carries any: `answeredVia` says whether the
+ * person then tapped Confirm (`tap`) or the relay alone decided (`relayed`),
+ * and `relayedBy` / `relayQuote` keep who carried which words, both ways — a
+ * confirm never erases the relay from the record. A plain tap adds nothing.
+ */
+function relayFields(answer: SlotAnswer): Record<string, unknown> {
+  if (!answer.relayedBy) return {};
+  return {
+    answeredVia: answer.via === "relayed" ? "relayed" : "tap",
+    relayedBy: answer.relayedBy,
+    ...(answer.quote ? { relayQuote: clip(answer.quote, RICH_MAX) } : {}),
+  };
 }
