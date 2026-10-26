@@ -83,6 +83,20 @@ describe("MCP instructions teach the session work loop", () => {
     expect(groundingBudgetBytes()).toBeGreaterThanOrEqual(550);
   });
 
+  it("teaches the question protocol: short id in chat, the person's chat answer relayed verbatim, asks closed before complete", () => {
+    // Resolve-XP W5 (2026-10-26): a question answered in the agent's own chat
+    // never reached the room, so it stayed open on Relay. The clause cost ~48
+    // bytes net after trimming reflexes 3, 5, 7 and the opening line; the 550
+    // floor held. Do not lower it — trim an equal amount.
+    const work = text.split("\n").find((l) => l.startsWith("4. ")) ?? "";
+    expect(work).toContain("`Q-<id8>`");
+    expect(work).toContain("`relay_answer`, words verbatim");
+    // grade, then close the open asks, then complete — in that order
+    const order = ["`evaluate_session`", "close open asks", "`complete_session`"].map((t) => work.indexOf(t));
+    expect(order.every((i) => i >= 0)).toBe(true);
+    expect([...order].sort((x, y) => x - y)).toEqual(order);
+  });
+
   it("is ROOM-FIRST: progress, questions and results go to the room; the chat may repeat", () => {
     // Founder decision 2026-09-25: the person supervises from Relay, so the
     // room is where an agent TALKS — not only where it asks. "ask in its room"
