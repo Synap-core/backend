@@ -10,7 +10,6 @@ import {
   askSlotOf,
   askStaleness,
   askView,
-  askerOf,
   formAnswerValues,
   formFieldErrors,
   initialFormDraft,
@@ -28,6 +27,10 @@ function slot(ask: Ask | null, over: Partial<AskSlot> = {}): AskSlot {
     ask,
     why: null,
     claimedDone: false,
+    blockedReason: null,
+    owedSince: null,
+    askerName: null,
+    askCause: null,
     ...over,
   };
 }
@@ -84,8 +87,11 @@ describe("askSlotOf — which needs-you rows are answered here", () => {
     why: "  ",
     claimedDone: true,
     ask: choose,
+    blockedReason: "decision",
+    occurredAt: "2026-10-20T09:00:00.000Z",
+    by: { label: " Claude Code " },
   };
-  it("reads an owed slot's question off its signal", () => {
+  it("reads an owed slot's question off its signal, asker and clock included", () => {
     expect(askSlotOf(owed)).toEqual({
       sessionId: "s1",
       label: "Pick the hook",
@@ -93,6 +99,10 @@ describe("askSlotOf — which needs-you rows are answered here", () => {
       ask: choose,
       why: null,
       claimedDone: true,
+      blockedReason: "decision",
+      owedSince: "2026-10-20T09:00:00.000Z",
+      askerName: "Claude Code",
+      askCause: null,
     });
   });
   it("leaves out a criterion slot, any other kind, and a slot with no session", () => {
@@ -103,12 +113,70 @@ describe("askSlotOf — which needs-you rows are answered here", () => {
 });
 
 describe("askView — one control per mode", () => {
-  it("confirm: its own prompt", () => {
-    expect(
-      askView(slot({ mode: "confirm", prompt: " Ship it? " })).control
-    ).toEqual({
+  it("confirm: the card's two answers — icon, tone, recommendation, consequence", () => {
+    const view = askView(
+      slot({
+        mode: "confirm",
+        prompt: " Ship it? ",
+        yes: { recommended: true, description: "Publishes today" },
+      })
+    );
+    expect(view.heading).toBe("Ship it?");
+    expect(view.control).toEqual({
       mode: "confirm",
-      prompt: "Ship it?",
+      answers: [
+        {
+          key: "yes",
+          label: "Yes",
+          description: "Publishes today",
+          recommended: true,
+          tone: "positive",
+          icon: "check",
+        },
+        {
+          key: "no",
+          label: "No",
+          description: null,
+          recommended: false,
+          tone: "neutral",
+          icon: "x",
+        },
+      ],
+    });
+  });
+
+  it("the founder's card: the question once, the cause named, age + fate as one mark", () => {
+    const title = "Four observations will confirm or kill H1 and H2";
+    const now = Date.parse("2026-10-26T12:00:00.000Z");
+    const view = askView(
+      slot(
+        { mode: "confirm", prompt: `Accept: ${title}?` },
+        {
+          label: `Decide: ${title}`,
+          why: `${title}. Dated and falsifiable.`,
+          blockedReason: "decision",
+          owedSince: "2026-10-18T12:00:00.000Z",
+          askCause: { kind: "decision", ref: { kind: "entity", id: "d1" } },
+        }
+      ),
+      now
+    );
+    expect(view.heading).toBe(`${title}?`);
+    expect(view.context).toBeNull();
+    expect(view.asker).toMatchObject({
+      kind: "cause",
+      label: "From your decision note",
+    });
+    expect(view.ageFate.label).toBe("8d · In Review later");
+    expect(view.note.label).toBe("Add a note");
+  });
+
+  it("a named asker is the agent's mark, with its session as the door", () => {
+    const view = askView(slot(choose, { askerName: "Claude Code" }));
+    expect(view.asker).toEqual({
+      kind: "agent",
+      name: "Claude Code",
+      sessionId: "11111111-1111-4111-8111-111111111111",
     });
   });
 
@@ -453,16 +521,7 @@ describe("a question that moved under the reader", () => {
   });
 });
 
-describe("askerOf / nextRowKey", () => {
-  it("names the session's agents, never an id", () => {
-    expect(askerOf([])).toBeNull();
-    expect(askerOf(undefined)).toBeNull();
-    expect(askerOf([{ name: "Claude" }])).toBe("Claude");
-    expect(
-      askerOf([{ name: "Claude" }, { name: "Codex" }, { name: "Gemini" }])
-    ).toBe("Claude, Codex or Gemini");
-  });
-
+describe("nextRowKey", () => {
   it("moves to the next row, else the previous, else nowhere", () => {
     expect(nextRowKey(["a", "b", "c"], "b")).toBe("c");
     expect(nextRowKey(["a", "b", "c"], "c")).toBe("b");

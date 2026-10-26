@@ -34,10 +34,10 @@ import {
   deriveDuplicateReview,
   needsIdentityChoice,
 } from "@synap-core/types/proposals";
-import type { Ask } from "@synap-core/types/ask";
+import { askTextRestates, type Ask } from "@synap-core/types/ask";
 import { openIn, type Exit } from "../../../../lib/open-in";
 import { isUuid } from "../../../../lib/format";
-import { askSlotOf, type AskSlot } from "./ask-detail";
+import { askSlotOf, askView, type AskSlot } from "./ask-detail";
 import {
   proposalRequester,
   type ProposalPrincipalView,
@@ -306,18 +306,23 @@ function accessRow(
 
 function askRow(
   s: ReviewSignal
-): Omit<ReviewRow, "key" | "group" | "title" | "occurredAt" | "count"> {
-  // The shared lens row decides an ask's noun, chip and door — the same
-  // words browser and relay draw for it.
+): Omit<ReviewRow, "key" | "group" | "occurredAt" | "count"> {
+  // The shared lens row decides an ask's noun, chip, door and title (the
+  // card's question, `askCardView`) — the same words browser and relay draw.
   const lens = lensRowOfNeedsYou(
     { kind: "item", key: s.id, signal: s, session: null },
     "blocking"
   );
   const slot = askSlotOf(s);
+  // Who asked: the agent by name, else the cause — the card's own mark.
+  const asker = slot ? askView(slot).asker : null;
+  const where = s.source?.label || s.sessionTitle || null;
   return {
+    title: lens.title,
     nounKind: lens.objectKind,
-    who: null,
-    where: s.source?.label || s.sessionTitle || null,
+    who: asker ? (asker.kind === "agent" ? asker.name : asker.label) : null,
+    // A session named after the question ("Decide: X") says it twice.
+    where: where && !askTextRestates(where, lens.title) ? where : null,
     reason: lens.reason,
     expiresAt: null,
     detail: slot
@@ -359,7 +364,7 @@ export function reviewRows(
       ...shape,
       key: s.id,
       group,
-      title: s.title,
+      title: "title" in shape ? shape.title : s.title,
       occurredAt,
       expiresAt,
       count: Math.max(1, s.count),
