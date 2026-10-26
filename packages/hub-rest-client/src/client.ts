@@ -279,10 +279,23 @@ import type {
   HubTrack,
   HubTrackStatus,
   HubTrackWriteResult,
+  ReopenTrackInput,
+  ConvertToGoalInput,
+  HubConvertToGoalResult,
+  TrackCloseInput,
+  UpdateTrackInput,
+  AcceptTrackCriterionInput,
   ListTracksOptions,
+  ListAllTracksOptions,
+  HubTrackPage,
   StartStageSessionInput,
   StartTrackInput,
 } from "./tracks.js";
+import type {
+  AddTrackParticipantInput,
+  AnswerTrackCommitmentInput,
+  HubTrackParticipantsResult,
+} from "./track-participants.js";
 import type {
   GrantProfileAccessInput,
   HubArchiveWorkspaceResult,
@@ -2655,6 +2668,25 @@ export class HubRestClient {
     return res?.items ?? [];
   }
 
+  /**
+   * Every goal (track) the caller can see, pod-wide — the Goals collection
+   * (W5). Newest first, paged: pass the page's `nextCursor` back as `cursor`
+   * until it is `null`. Same read and visibility as {@link listTracks}.
+   */
+  async listAllTracks(options?: ListAllTracksOptions): Promise<HubTrackPage> {
+    const params = new URLSearchParams();
+    if (options?.includeArchived) params.set("includeArchived", "true");
+    if (options?.limit !== undefined)
+      params.set("limit", String(options.limit));
+    if (options?.cursor) params.set("cursor", options.cursor);
+    const query = params.toString();
+    const res = await this.request<HubTrackPage>(
+      "GET",
+      `/api/hub/tracks${query ? `?${query}` : ""}`
+    );
+    return { items: res.items, nextCursor: res.nextCursor ?? null };
+  }
+
   /** One track, with its pinned stages positioned against `currentStage`. */
   async getTrack(trackId: string): Promise<HubTrack> {
     return this.request<HubTrack>(
@@ -2680,16 +2712,156 @@ export class HubRestClient {
     );
   }
 
-  /** Pause, resume, complete or archive a track. */
+  /**
+   * Move a track through its lifecycle. Closing (`completed`) or dropping
+   * (`archived`) needs `close` (the verdict); both are final — reopen with
+   * {@link reopenTrack}. An agent's close always comes back `proposed`.
+   */
   async setTrackStatus(
     trackId: string,
     status: HubTrackStatus,
-    reasoning?: string
+    reasoning?: string,
+    close?: TrackCloseInput
   ): Promise<HubTrackWriteResult> {
     return this.request<HubTrackWriteResult>(
       "PATCH",
       `/api/hub/tracks/${encodeURIComponent(trackId)}`,
-      { status, ...(reasoning ? { reasoning } : {}) }
+      {
+        status,
+        ...(reasoning ? { reasoning } : {}),
+        ...(close?.verdict ? { verdict: close.verdict } : {}),
+        ...(close?.verdictReason ? { verdictReason: close.verdictReason } : {}),
+      }
+    );
+  }
+
+  /**
+   * Put someone on a goal — a judge (a person), a delegate (a person or an
+   * agent, with a commitment) or an integrator. Owner or judge only; handing
+   * a goal to ANOTHER agent comes back `proposed` (a person approves).
+   */
+  async addTrackParticipant(
+    trackId: string,
+    input: AddTrackParticipantInput
+  ): Promise<HubTrackParticipantsResult> {
+    return this.request<HubTrackParticipantsResult>(
+      "POST",
+      `/api/hub/tracks/${encodeURIComponent(trackId)}/participants`,
+      input
+    );
+  }
+
+  /** Take someone off a goal (never its owner). Owner or judge only. */
+  async removeTrackParticipant(
+    trackId: string,
+    participantId: string
+  ): Promise<HubTrackParticipantsResult> {
+    return this.request<HubTrackParticipantsResult>(
+      "DELETE",
+      `/api/hub/tracks/${encodeURIComponent(trackId)}/participants/${encodeURIComponent(participantId)}`
+    );
+  }
+
+  /**
+   * The delegate answers their OWN commitment: accept · counter (text) ·
+   * decline (text optional) · report_impossible (text, after accepting). A
+   * report is not the goal's verdict — the judge still decides.
+   */
+  async answerTrackCommitment(
+    trackId: string,
+    participantId: string,
+    input: AnswerTrackCommitmentInput
+  ): Promise<HubTrackParticipantsResult> {
+    return this.request<HubTrackParticipantsResult>(
+      "POST",
+      `/api/hub/tracks/${encodeURIComponent(trackId)}/participants/${encodeURIComponent(participantId)}/answer`,
+      input
+    );
+  }
+
+  /** The owner or judge acknowledges an "impossible" report (a person's act). */
+  async acknowledgeTrackReport(
+    trackId: string,
+    participantId: string
+  ): Promise<HubTrackParticipantsResult> {
+    return this.request<HubTrackParticipantsResult>(
+      "POST",
+      `/api/hub/tracks/${encodeURIComponent(trackId)}/participants/${encodeURIComponent(participantId)}/acknowledge`,
+      {}
+    );
+  }
+
+  /**
+   * "Make it a goal": a goal / objective / okr ENTITY becomes a goal, once
+   * (linked `promoted_to`; an ended entity arrives closed or dropped). An
+   * agent's conversion comes back `proposed`.
+   */
+  async convertToGoal(
+    input: ConvertToGoalInput
+  ): Promise<HubConvertToGoalResult> {
+    return this.request<HubConvertToGoalResult>(
+      "POST",
+      "/api/hub/tracks/convert",
+      input
+    );
+  }
+
+  /**
+   * "Keep watching it": from a goal closed as met, a new goal of kind
+   * operation that keeps its result alive (linked `spawned_from`).
+   */
+  async startOperationFrom(
+    trackId: string,
+    input?: ReopenTrackInput
+  ): Promise<HubStartTrackResult> {
+    return this.request<HubStartTrackResult>(
+      "POST",
+      `/api/hub/tracks/${encodeURIComponent(trackId)}/operation`,
+      input ?? {}
+    );
+  }
+
+  /** Reopen a closed or dropped goal as a NEW version (linked `replaces`). */
+  async reopenTrack(
+    trackId: string,
+    input?: ReopenTrackInput
+  ): Promise<HubStartTrackResult> {
+    return this.request<HubStartTrackResult>(
+      "POST",
+      `/api/hub/tracks/${encodeURIComponent(trackId)}/reopen`,
+      input ?? {}
+    );
+  }
+
+  /**
+   * Set where the goal is heading, its KPI and what it holds (end state,
+   * criteria, drop conditions, kind of work, uncertainty). An agent's write
+   * comes back `proposed`; criteria it sets always do.
+   */
+  async updateTrack(
+    trackId: string,
+    input: UpdateTrackInput
+  ): Promise<HubTrackWriteResult> {
+    return this.request<HubTrackWriteResult>(
+      "PATCH",
+      `/api/hub/tracks/${encodeURIComponent(trackId)}/direction`,
+      input
+    );
+  }
+
+  /**
+   * The goal's JUDGE accepts a claimed criterion, sends it back or rejects
+   * it (R2). Refused for an agent key and for anyone but the judge.
+   */
+  async acceptTrackCriterion(
+    trackId: string,
+    criterionKey: string,
+    input: AcceptTrackCriterionInput
+  ): Promise<{ status: "updated" | "unchanged"; track: HubTrack }> {
+    return this.request<{ status: "updated" | "unchanged"; track: HubTrack }>(
+      "POST",
+      `/api/hub/tracks/${encodeURIComponent(trackId)}/criteria/${encodeURIComponent(criterionKey)}/acceptance`,
+      input
     );
   }
 
@@ -2720,7 +2892,7 @@ export class HubRestClient {
     if (!stageKey) {
       const track = await this.getTrack(trackId);
       if (!track.currentStage && (track.stages ?? []).length === 0) {
-        // A STAGE-LESS track (a lasting intent): its work is a session filed
+        // A STAGE-LESS track (a goal): its work is a session filed
         // into it — the session door with `trackId`, never a refusal.
         const created = await this.createFocusSession({
           trackId,
@@ -2749,7 +2921,7 @@ export class HubRestClient {
       }
       if (!track.currentStage) {
         throw new HubApiError(
-          `Track "${track.name}" stands on no stage — pass stageKey.`,
+          `Goal "${track.name}" stands on no stage — pass stageKey.`,
           400,
           { error: "no_current_stage" }
         );
