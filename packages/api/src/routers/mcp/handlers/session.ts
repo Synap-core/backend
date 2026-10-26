@@ -27,6 +27,7 @@ import {
 } from "../../../services/focus-sessions/wait-for-answers.js";
 import { parseSessionChangeKinds } from "../../../services/focus-sessions/session-changes.js";
 import { readAgentsForHandoff } from "../../../services/agent-dispatch/agents-for-handoff.js";
+import { WORK_GRAPH_MAX_WINDOW_HOURS } from "../../../services/focus-sessions/work-graph-window.js";
 import type { UpdateFocusSessionParams } from "../../../services/focus-sessions/update-session.js";
 import { SESSION_TITLE_MAX } from "@synap-core/types/focus-sessions";
 import {
@@ -917,6 +918,96 @@ export const sessionHandlers: McpHandlerMap = {
       count: sessions.length,
       offset,
       ...(hasMore ? { nextOffset: offset + limit } : {}),
+    });
+  },
+  synap_get_work_graph: async (
+    ctx: McpToolContext
+  ): Promise<CallToolResult> => {
+    const { toolName, args, userId, apiKeyScopes } = ctx;
+    requireScope(apiKeyScopes, "mcp.read", toolName);
+    // MCP schemas are ADVISORY — nothing validates args server-side — so an
+    // off-vocabulary value is answered with the vocabulary, never silently
+    // read as "nothing matches".
+    const windowHours =
+      args.windowHours === undefined ? undefined : Number(args.windowHours);
+    if (
+      windowHours !== undefined &&
+      (!Number.isInteger(windowHours) ||
+        windowHours < 1 ||
+        windowHours > WORK_GRAPH_MAX_WINDOW_HOURS)
+    ) {
+      return ok({
+        error: `windowHours must be an integer from 1 to ${WORK_GRAPH_MAX_WINDOW_HOURS}.`,
+      });
+    }
+    // Agent-door defaults, as synap_list_sessions: every kind, every lens.
+    const kindArg = (args.kind as string | undefined) ?? "all";
+    if (
+      kindArg !== "all" &&
+      !(SESSION_KINDS as readonly string[]).includes(kindArg)
+    ) {
+      return ok({
+        error: `Unknown session kind '${kindArg}'. Valid values: ${SESSION_KINDS.join(", ")}, plus 'all'.`,
+      });
+    }
+    const lensArg = (args.lens as string | undefined) ?? "all";
+    if (lensArg !== "default" && lensArg !== "triage" && lensArg !== "all") {
+      return ok({
+        error: `Unknown lens '${lensArg}'. Valid values: default, triage, all.`,
+      });
+    }
+    const detailArg = (args.detail as string | undefined) ?? "lean";
+    if (detailArg !== "lean" && detailArg !== "full") {
+      return ok({
+        error: `Unknown detail '${detailArg}'. Valid values: lean (default), full.`,
+      });
+    }
+    // The URL lens auto-injects workspaceId/projectId — honoured as lenses,
+    // never as an authorization boundary (the floor is the owner).
+    const lensOf = (v: unknown) => (typeof v === "string" && v ? v : undefined);
+    // Loaded on call, like the continuation packet above: the graph service
+    // pulls the next-move reads, which this handler module must not load at
+    // tool-listing time.
+    const { buildWorkGraph } =
+      await import("../../../services/focus-sessions/work-graph.js");
+    const graph = await buildWorkGraph({
+      userId,
+      scope: {
+        workspaceLens: lensOf(args.workspaceId),
+        projectLens: lensOf(args.projectId),
+      },
+      windowHours,
+      kind: kindArg as (typeof SESSION_KINDS)[number] | "all",
+      lens: lensArg,
+      // An agent door reads owner-only (decision C v1, `rosterReadFor`).
+      roster: false,
+    });
+    return ok({
+      // `lean` (default): enough to draw and to choose — a full node carries
+      // goal, criteria, stages and metadata (the list measured 62 KB for 50).
+      nodes:
+        detailArg === "full"
+          ? graph.nodes
+          : graph.nodes.map((n) => ({
+              id: n.id,
+              title: n.title,
+              status: n.status,
+              kind: n.kind,
+              parentSessionId: n.parentSessionId,
+              trackId: n.trackId,
+              projectId: n.projectId,
+              workspaceId: n.workspaceId,
+              updatedAt: n.updatedAt,
+              inWindow: n.inWindow,
+              nextMove: {
+                kind: n.nextMove.kind,
+                actor: n.nextMove.actor,
+                label: n.nextMove.label,
+              },
+            })),
+      edges: graph.edges,
+      sections: graph.sections,
+      window: graph.window,
     });
   },
   synap_update_session: async (

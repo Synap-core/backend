@@ -67,6 +67,11 @@ import {
   type SessionFilingDecision,
 } from "../../../services/focus-sessions/session-filing-gate.js";
 import { sessionListConditions } from "../../../services/focus-sessions/session-list-conditions.js";
+import {
+  buildWorkGraph,
+  WORK_GRAPH_EDGE_KINDS,
+  WORK_GRAPH_MAX_WINDOW_HOURS,
+} from "../../../services/focus-sessions/work-graph.js";
 import { withoutServerOwnedSessionMetadata } from "../../../services/focus-sessions/session-metadata.js";
 import {
   resolveSessionSubject,
@@ -202,6 +207,52 @@ const FocusSessionWireSchema = z.object({
    * out on this schema — a pre-existing doc gap, named rather than widened.)
    */
   kind: z.enum(SESSION_KINDS).optional(),
+});
+
+const WorkGraphSectionWireSchema = z.object({
+  status: z.enum(["ok", "unavailable"]),
+  reason: z.string().optional(),
+});
+
+/** `GET /focus-sessions/graph` — `WorkGraph` (`services/focus-sessions/work-graph.ts`). */
+const WorkGraphWireSchema = z.object({
+  /** A list row (`focusSessions.list({ nextMove: true })`'s projection) + `inWindow`. */
+  nodes: z.array(
+    FocusSessionWireSchema.extend({
+      parentSessionId: z.string().nullable(),
+      triage: z.unknown(),
+      kind: z.enum(SESSION_KINDS),
+      nextMove: z.unknown(),
+      unitFacts: z.unknown(),
+      live: z.unknown().nullable(),
+      viewerRole: z.enum(["owner", "member"]),
+      /** false = only the far end of an edge of a window session. */
+      inWindow: z.boolean(),
+    })
+  ),
+  edges: z.array(
+    z.object({
+      kind: z.enum(WORK_GRAPH_EDGE_KINDS),
+      from: z.string(),
+      to: z.string(),
+      entityId: z.string().optional(),
+      count: z.number().optional(),
+      lastAt: z.string().nullable().optional(),
+    })
+  ),
+  sections: z.object({
+    blockedBy: WorkGraphSectionWireSchema,
+    waitsOnOutputs: WorkGraphSectionWireSchema,
+    interactions: WorkGraphSectionWireSchema,
+    farEnds: WorkGraphSectionWireSchema,
+  }),
+  window: z.object({
+    since: z.string(),
+    hours: z.number(),
+    ceiling: z.number(),
+    truncated: z.boolean(),
+    omitted: z.number(),
+  }),
 });
 
 const CreateBodySchema = z
@@ -634,6 +685,45 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     },
     responses: {
       200: { description: "Sessions", schema: z.array(FocusSessionWireSchema) },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      404: { description: "Project not found", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  registerOpenApi(app, {
+    method: "get",
+    path: "/focus-sessions/graph",
+    tags: ["FocusSessions"],
+    summary: "The work graph: open work, recently settled work, every edge",
+    description:
+      "One read for a whole map (`services/focus-sessions/work-graph.ts`): " +
+      "every OPEN session, plus every session settled in the last " +
+      "`windowHours` (default 72), plus the far end of every edge of those, " +
+      "with the edges flat (`blocked_by`, `spawned_from`, `waits_on_output`, " +
+      "`triggered`, `updated`). Pod-wide when neither `workspaceId` nor " +
+      "`projectId` is given. Floored at the sessions the caller can read, " +
+      "like the list. At most 500 window sessions, open first: " +
+      "`window.truncated` / `window.omitted` say when it cut. A failed edge " +
+      "read is `sections.<name>.status: unavailable`, never an empty list.",
+    request: {
+      query: z.object({
+        workspaceId: uuidQueryParam.optional(),
+        projectId: uuidQueryParam.optional(),
+        windowHours: z.coerce
+          .number()
+          .int()
+          .min(1)
+          .max(WORK_GRAPH_MAX_WINDOW_HOURS)
+          .optional(),
+        // Same vocabularies and agent-door defaults as the list: `all`.
+        kind: z.enum([...SESSION_KINDS, "all"]).optional(),
+        lens: z.enum(["default", "triage", "all"]).optional(),
+      }),
+    },
+    responses: {
+      200: { description: "Work graph", schema: WorkGraphWireSchema },
       400: { description: "Bad request", schema: ErrorSchema },
       403: { description: "Forbidden", schema: ErrorSchema },
       404: { description: "Project not found", schema: ErrorSchema },
@@ -1117,6 +1207,100 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       return c.json(attachSessionKind(attachTriage(rows)));
     } catch (err) {
       logger.error({ err }, "focus-sessions.list failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        httpStatusForTrpcError(err) as never
+      );
+    }
+  });
+
+  /**
+   * GET /focus-sessions/graph?workspaceId=&projectId=&windowHours=&kind=&lens=
+   *
+   * The work graph (`buildWorkGraph`). STATIC, so it is registered before
+   * `/focus-sessions/:id` (Hono is first-match). Unlike the list, neither lens
+   * is required: a pod-wide graph is the point. Owner-floored on the acting
+   * person: agent doors read no roster (`rosterReadFor`).
+   */
+  app.get("/focus-sessions/graph", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+    }
+    const workspaceIdParam = c.req.query("workspaceId") || undefined;
+    const projectIdParam = c.req.query("projectId") || undefined;
+    // Membership check when a workspace is named, and the acting person.
+    const acting = await resolveActingContext(c, {
+      workspaceId: workspaceIdParam,
+    });
+    if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+    if (projectIdParam) {
+      if (!isUuid(projectIdParam)) {
+        return c.json(
+          { error: `projectId is not a valid id: ${projectIdParam}` },
+          400
+        );
+      }
+      // The ONE project visibility floor, as the list: a project the caller
+      // cannot see is an honest 404, not a calm empty graph.
+      if (!(await loadVisibleProject(db, projectIdParam, acting.userId))) {
+        return c.json(
+          { error: `No project ${projectIdParam} you can access` },
+          404
+        );
+      }
+    }
+    const hoursRaw = c.req.query("windowHours");
+    const windowHours =
+      hoursRaw === undefined ? undefined : Number.parseInt(hoursRaw, 10);
+    if (
+      windowHours !== undefined &&
+      (!Number.isFinite(windowHours) ||
+        windowHours < 1 ||
+        windowHours > WORK_GRAPH_MAX_WINDOW_HOURS)
+    ) {
+      return c.json(
+        {
+          error: `windowHours must be an integer from 1 to ${WORK_GRAPH_MAX_WINDOW_HOURS}`,
+        },
+        400
+      );
+    }
+    const kindRaw = c.req.query("kind") ?? "all";
+    if (
+      !(SESSION_KINDS as readonly string[]).includes(kindRaw) &&
+      kindRaw !== "all"
+    ) {
+      return c.json(
+        {
+          error: `Unknown kind '${kindRaw}'. Valid: ${SESSION_KINDS.join(", ")}, all.`,
+        },
+        400
+      );
+    }
+    const kind = kindRaw as (typeof SESSION_KINDS)[number] | "all";
+    const lensRaw = c.req.query("lens") ?? "all";
+    if (lensRaw !== "default" && lensRaw !== "triage" && lensRaw !== "all") {
+      return c.json(
+        { error: `Unknown lens '${lensRaw}'. Valid: default, triage, all.` },
+        400
+      );
+    }
+    const lens = lensRaw;
+
+    try {
+      const graph = await buildWorkGraph({
+        userId: acting.userId,
+        scope: { workspaceLens: workspaceIdParam, projectLens: projectIdParam },
+        windowHours,
+        kind,
+        lens,
+        // An agent door reads owner-only, as `GET /focus-sessions` does
+        // (decision C v1: `rosterReadFor` is false for every Hub caller).
+        roster: false,
+      });
+      return c.json(graph);
+    } catch (err) {
+      logger.error({ err }, "focus-sessions.graph failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
         httpStatusForTrpcError(err) as never

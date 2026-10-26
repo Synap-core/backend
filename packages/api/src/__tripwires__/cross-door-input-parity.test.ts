@@ -184,6 +184,21 @@ const SERVICES: ServiceSpec[] = [
     // reads red on `subjectEntityId` today.
     doorFloor: 1,
   },
+  /**
+   * The work graph (founder decision 1 A, 2026-10-26): one service, three
+   * doors — tRPC `focusSessions.graph`, Hub `GET /focus-sessions/graph`, MCP
+   * `synap_get_work_graph`. Every window input must be sayable at all three.
+   * The Hub door is a GET, so its contract is the route's registered `query`
+   * (`hubGetQueryContract`).
+   */
+  {
+    key: "work-graph",
+    file: join(API_SRC, "services/focus-sessions/work-graph.ts"),
+    fn: "buildWorkGraph",
+    paramFloor: 6,
+    selfGuardParam: "windowHours",
+    doorFloor: 3,
+  },
 ];
 
 // ── Source utilities (same contract as T4: prose documents, only code implements) ──
@@ -532,6 +547,30 @@ function mcpToolInputSchema(toolName: string): string {
   return tool?.inputSchema ? JSON.stringify(tool.inputSchema, null, 2) : "";
 }
 
+const escapeRegExp = (v: string) => v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * The `query: z.object({ … })` body registered for `GET <label>`, or null when
+ * `label` is not a GET route of this file. The search is bounded to that ONE
+ * `registerOpenApi(app, { … })` call, so a neighbouring route's query can
+ * never vouch for this one.
+ */
+function hubGetQueryContract(source: string, label: string): string | null {
+  if (!label.startsWith("/")) return null;
+  const path = escapeRegExp(label);
+  if (!new RegExp(`app\\.get\\(\\s*["']${path}["']`).test(source)) return null;
+  const reg = new RegExp(
+    `registerOpenApi\\(\\s*app\\s*,\\s*\\{\\s*method\\s*:\\s*["']get["']\\s*,\\s*path\\s*:\\s*["']${path}["']`
+  ).exec(source);
+  if (!reg) return null;
+  const open = source.indexOf("{", reg.index);
+  const registration = sliceBalanced(source, open);
+  const q = /query\s*:\s*z\s*\.\s*object\s*\(/.exec(registration);
+  if (!q) return null;
+  const qOpen = registration.indexOf("{", q.index + q[0].length - 1);
+  return qOpen < 0 ? null : sliceBalanced(registration, qOpen);
+}
+
 /**
  * The door's OWN declared input contract — resolved per door, per role.
  *
@@ -560,6 +599,11 @@ function declaredContract(
     if (open < 0) return "";
     return expandContract(path, source, sliceBalanced(source, open));
   }
+  // hub_rest GET: a GET has no body for a `.parse` to name, so its contract
+  // is the `query:` of the route's OWN registration (`registerOpenApi` with
+  // `method: "get"` and this exact path) — never another route's schema.
+  const getQuery = hubGetQueryContract(source, label);
+  if (getQuery !== null) return expandContract(path, source, getQuery);
   // hub_rest: the schema the handler actually PARSES the body with, named by
   // the handler itself. Falls back to the route's declared `body:` schema.
   const parsed =
@@ -993,6 +1037,14 @@ describe("tripwire (T5): every service parameter is reachable at every door, or 
       "update-focus-session",
       "userId",
       "routers/mcp/handlers/session.ts:synap_update_session",
+    ],
+    // The GET door's contract is its registered `query` — the cell proves
+    // `hubGetQueryContract` resolved it (the shorthand forward alone would not
+    // make the self-guard above pass).
+    [
+      "work-graph",
+      "windowHours",
+      "routers/hub-protocol/rest/focus-sessions.ts:/focus-sessions/graph",
     ],
   ];
   it.each(KNOWN_POSITIVES)(
