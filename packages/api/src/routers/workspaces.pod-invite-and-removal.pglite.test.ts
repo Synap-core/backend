@@ -156,6 +156,9 @@ beforeAll(async () => {
   for (const value of Object.values(schema)) {
     if (is(value, PgTable)) await h.client!.exec(ddlFor(value));
   }
+  // Production's `pod_members_user_unique`: one row per person, which is what
+  // a re-invite revives instead of adding a second row.
+  await h.client!.exec(`create unique index on pod_members (user_id);`);
   await q(
     `insert into users (id, email, name, user_type) values
        ($1, 'o@x', 'Olivia', 'human'), ($2, 'a@x', 'Adam', 'human'), ($3, 'p@x', 'Pia', 'human')`,
