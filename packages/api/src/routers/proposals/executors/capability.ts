@@ -168,6 +168,7 @@ export function registerCapabilityExecutors(): void {
           kind: skills.kind,
           providerSpec: skills.providerSpec,
           metadata: skills.metadata,
+          executionMode: skills.executionMode,
         })
         .from(skills)
         .where(eq(skills.id, capabilityId))
@@ -189,6 +190,10 @@ export function registerCapabilityExecutors(): void {
             userId,
             workspaceId: (data.workspaceId as string | undefined) ?? null,
             sessionId: proposal.sessionId ?? null,
+            provenance: {
+              agentUserId: proposal.agentUserId ?? null,
+              proposalId: input.proposalId,
+            },
           }
         );
         if (runOutcome.kind !== "run") {
@@ -323,6 +328,7 @@ export function registerCapabilityExecutors(): void {
           kind: skills.kind,
           providerSpec: skills.providerSpec,
           metadata: skills.metadata,
+          executionMode: skills.executionMode,
         })
         .from(skills)
         .where(eq(skills.id, skillId))
@@ -346,6 +352,10 @@ export function registerCapabilityExecutors(): void {
           connectionSelector:
             (data.connectionSelector as ConnectionSelector | null) ?? null,
           sessionId: proposal.sessionId ?? null,
+          provenance: {
+            agentUserId: proposal.agentUserId ?? null,
+            proposalId: input.proposalId,
+          },
         });
         if (runOutcome.kind === "not_found") {
           logger.warn(

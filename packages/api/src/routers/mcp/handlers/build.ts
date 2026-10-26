@@ -977,6 +977,25 @@ export const buildHandlers: McpHandlerMap = {
         requiredToolIds.push(tool.id);
       }
     }
+    // A box script (0356): the declaration is parsed by the router's one box
+    // rule (`boxSkillMetadata`), which refuses a bad one in words.
+    let executionMode: "sync" | "box" | undefined;
+    if (args.executionMode !== undefined) {
+      if (args.executionMode !== "sync" && args.executionMode !== "box") {
+        return ok({ error: "executionMode must be 'sync' or 'box'." });
+      }
+      executionMode = args.executionMode;
+    }
+    if (executionMode === "box" && !skillCode) {
+      return ok({ error: "A box skill is a script: send its code." });
+    }
+    const box =
+      args.box && typeof args.box === "object" && !Array.isArray(args.box)
+        ? (args.box as Record<string, unknown>)
+        : undefined;
+    if (box && executionMode !== "box") {
+      return ok({ error: "`box` needs executionMode: 'box'." });
+    }
     const skillsCtx = await createHubProtocolCallerContext(
       userId,
       apiKeyScopes,
@@ -1004,6 +1023,8 @@ export const buildHandlers: McpHandlerMap = {
       parameters: args.parameters as Record<string, unknown> | undefined,
       ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
       ...(requiredToolIds?.length ? { requiredToolIds } : {}),
+      ...(executionMode ? { executionMode } : {}),
+      ...(executionMode === "box" ? { metadata: { box: box ?? {} } } : {}),
       agentUserId: agentUserId ?? undefined,
     });
     return ok(result);

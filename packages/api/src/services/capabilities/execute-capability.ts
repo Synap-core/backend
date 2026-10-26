@@ -155,6 +155,7 @@ import {
   type CapabilityEnableOffer,
 } from "./propose-capability-enable.js";
 import { CAPABILITY_RUN_PROPOSAL_TYPE } from "../proposals/proposal-class.js";
+import { enqueueBoxRun, isQueuedBoxRunResult } from "../box-runs/box-runs.js";
 import { capErrorMessage } from "../connection-health/notify-connector-unhealthy.js";
 import type { WriteAckState } from "../../utils/write-door-idempotency.js";
 
@@ -546,6 +547,7 @@ export async function executeCapability(input: {
       // copies it verbatim). Read by `checkVerbParameters` before a proposal is
       // filed. Absent = cannot validate, never "no arguments allowed".
       parameters: skills.parameters,
+      executionMode: skills.executionMode,
     })
     .from(skills)
     .where(
@@ -1409,6 +1411,12 @@ export interface ResolvedSkillRow {
    * that forgot the column would silently skip the write-back on its path.
    */
   metadata: unknown;
+  /**
+   * REQUIRED for the same reason as `metadata`: `box` routes the run to the
+   * box queue instead of an isolate. A loader that forgot the column would
+   * run a Python script in the JS isolate.
+   */
+  executionMode: string;
 }
 
 /**
@@ -1435,7 +1443,7 @@ export interface ResolvedSkillRow {
  * telemetry write must never turn a delivered run into a failure, so every
  * error is swallowed and logged, exactly as `recordDirectCapabilityRun` does.
  */
-async function markSkillProven(skillId: string): Promise<void> {
+export async function markSkillProven(skillId: string): Promise<void> {
   try {
     await db
       .update(skills)
@@ -1469,7 +1477,9 @@ async function markSkillProven(skillId: string): Promise<void> {
  * contract by a compile-time floor so a third spelling cannot re-open this.
  */
 function outcomeDidTheWork(result: unknown): boolean {
-  return !isProposedEnvelope(result);
+  // A box run is QUEUED here, not performed: its finish stamps `proven_at`
+  // (box-runs.ts) once the script really exited 0.
+  return !isProposedEnvelope(result) && !isQueuedBoxRunResult(result);
 }
 
 /**
@@ -1555,6 +1565,13 @@ async function runResolvedSkillInner(
      * stage worker's send ceiling sees the send (worker-send-ceiling.ts).
      */
     sessionId?: string | null;
+    /**
+     * WHO ASKED, for attribution only — an approved `capability.run` replays
+     * as the approver (no `agentUserId`, deliberately: builtins must not see an
+     * agent there), but a queued box run still records the agent that asked and
+     * the proposal that approved it. Never read by any gate.
+     */
+    provenance?: { agentUserId?: string | null; proposalId?: string | null };
   }
 ): Promise<
   | { kind: "run"; skillId: string; result: unknown }
@@ -1661,6 +1678,24 @@ async function runResolvedSkillInner(
       kind: "deny",
       reason: `Verb "${skill.name}" runs as a code skill and does not support run-time connection selection. Set the capability's default connection instead.`,
     };
+  }
+
+  // TIER 3 (box): a script with packages runs on the person's own computer,
+  // never in the pod. Post-gate (a `run` verdict or an approved proposal), so
+  // this only QUEUES it — FIFO, never refused for "queue full" — and returns
+  // the run's handle. The computer leases it over Hub REST (box-runs.ts).
+  if (skill.executionMode === "box") {
+    const queued = await enqueueBoxRun({
+      skillId: skill.id,
+      parameters,
+      userId: ctx.userId,
+      agentUserId: ctx.agentUserId ?? ctx.provenance?.agentUserId ?? null,
+      sessionId: ctx.sessionId ?? null,
+      workspaceId: ctx.workspaceId,
+      proposalId: ctx.provenance?.proposalId ?? null,
+    });
+    if (!queued.ok) return { kind: "error", message: queued.error };
+    return { kind: "run", skillId: skill.id, result: queued.result };
   }
 
   // TIER 2 (code/instruction): execute the backing skill in an isolated-vm

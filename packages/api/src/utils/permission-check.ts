@@ -10,6 +10,10 @@
  * Returns immediately — no async event pipeline.
  */
 
+import {
+  describeBoxDeclaration,
+  parseBoxDeclaration,
+} from "../services/box-runs/box-spec.js";
 import { decodeHtmlEntities } from "@synap-core/types/text";
 import { isAiWriteRequest } from "./ai-write.js";
 import { classifySpaceOperation } from "@synap-core/types/workspaces";
@@ -3270,8 +3274,24 @@ export function buildProposalSummary(
   if (subjectType === "profile") return head + carriedFieldsClause(data);
   // A code skill's declared tools are a SCOPE grant (its own provider calls to
   // them skip a second review), so the sentence the person approves names them.
-  if (subjectType === "skill") return head + requiredToolsClause(data);
+  if (subjectType === "skill")
+    return head + requiredToolsClause(data) + boxClause(data);
   return head;
+}
+
+/**
+ * ` — runs on your computer in a box (python, pandas==2.2.3; may reach
+ * api.example.com; up to 15 min)` for a box skill payload: the packages and
+ * hosts are what the person approves besides the code.
+ */
+function boxClause(data: Record<string, unknown>): string {
+  if (data.executionMode !== "box") return "";
+  const meta =
+    data.metadata && typeof data.metadata === "object"
+      ? (data.metadata as Record<string, unknown>)
+      : {};
+  const parsed = parseBoxDeclaration(meta.box);
+  return parsed.ok ? ` — ${describeBoxDeclaration(parsed.box)}` : "";
 }
 
 /** ` using tools: apify_api` for a skill payload carrying `requiredToolNames`. */

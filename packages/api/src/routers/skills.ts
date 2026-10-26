@@ -46,10 +46,12 @@ import {
 import { gateCapabilityExecution } from "../services/capabilities/gate-capability-execution.js";
 import {
   allowedHostsChanged,
+  boxDeclarationChanged,
   readOnlyWidened,
   skillExecFieldsChanged,
 } from "../services/capabilities/skill-exec-fields.js";
 import { CAPABILITY_RUN_PROPOSAL_TYPE } from "../services/proposals/proposal-class.js";
+import { parseBoxDeclaration } from "../services/box-runs/box-spec.js";
 import { auditLog } from "../utils/audit-log.js";
 import { setSkillApproved } from "../services/capabilities/set-skill-approved.js";
 import { emitSideEffects } from "@synap/events";
@@ -243,10 +245,40 @@ export function scanSkillGlobals(code: string): {
  */
 export function assertSkillCodeAllowed(
   kind: string | null | undefined,
-  code: string | undefined | null
+  code: string | undefined | null,
+  /**
+   * A `box` skill's code is a Python or Node script that runs on the person's
+   * computer, never in the isolate: the isolate's globals do not apply.
+   */
+  executionMode?: string | null
 ): void {
-  if (kind !== "code") return;
+  if (kind !== "code" || executionMode === "box") return;
   assertSkillGlobalsAllowed(code);
+}
+
+/**
+ * The ONE box rule for a skill write (0356): a `box` skill is a code skill
+ * with a valid `metadata.box` declaration. Returns the metadata bag to store
+ * (the declaration normalised by `parseBoxDeclaration`), or throws in words.
+ * A non-box write passes its metadata through untouched.
+ */
+export function boxSkillMetadata(input: {
+  executionMode: string | undefined;
+  kind: string;
+  metadata: Record<string, unknown> | undefined;
+}): Record<string, unknown> | undefined {
+  if (input.executionMode !== "box") return input.metadata;
+  if (input.kind !== "code") {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "A box skill is a script: send its code.",
+    });
+  }
+  const parsed = parseBoxDeclaration(input.metadata?.box);
+  if (!parsed.ok) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: parsed.error });
+  }
+  return { ...(input.metadata ?? {}), box: parsed.box };
 }
 
 /**
@@ -431,7 +463,7 @@ export async function insertSkillGoverned(
   // do NOT call this function) — this is not a double-scan of the same code
   // path, it closes the gap for callers that construct a `kind: "code"` skill
   // without going through those two mutations.
-  assertSkillCodeAllowed(values.kind, values.code);
+  assertSkillCodeAllowed(values.kind, values.code, values.executionMode);
 
   const perm = await checkPermissionOrPropose({
     userId: values.userId,
@@ -1169,7 +1201,9 @@ export const skillsRouter = router({
         providerSpec: z.record(z.string(), z.unknown()).optional(),
         parameters: z.record(z.string(), z.unknown()).optional(),
         category: z.string().optional(),
-        executionMode: z.enum(["sync", "async"]).default("sync"),
+        /** `box` (0356): a script run on the person's computer; needs
+         *  `metadata.box` (language, packages, hosts, limits). */
+        executionMode: z.enum(["sync", "async", "box"]).default("sync"),
         timeoutSeconds: z.number().min(1).max(300).default(30),
         /**
          * The tools this skill `requires` (its `callProvider` targets), written
@@ -1265,7 +1299,14 @@ export const skillsRouter = router({
       // BEFORE it persists — the single funnel every code-skill create hits
       // (human UI, AI via /agent-skills/executable → this create). The author/AI
       // learns the gap now, not the reviewer at approval or the run at execution.
-      assertSkillCodeAllowed(kind, input.code);
+      assertSkillCodeAllowed(kind, input.code, input.executionMode);
+      // A box skill carries its declaration in `metadata.box`, normalised
+      // here so the proposal, the review and the stored row read ONE shape.
+      const metadata = boxSkillMetadata({
+        executionMode: input.executionMode,
+        kind,
+        metadata: input.metadata,
+      });
 
       // A declared tool must exist and be visible to the author NOW — a
       // proposal naming a tool nobody can see would approve a scope that
@@ -1332,6 +1373,9 @@ export const skillsRouter = router({
           ...(requiredToolIds.length
             ? { requiredToolIds, requiredToolNames }
             : {}),
+          // A box skill's declaration (packages, hosts, limits) IS what the
+          // person approves with the code, and what the approved row runs.
+          ...(input.executionMode === "box" && metadata ? { metadata } : {}),
         },
         agentUserId: input.agentUserId,
       });
@@ -1393,7 +1437,7 @@ export const skillsRouter = router({
             : {}),
           // Persist the caller-supplied metadata bag (e.g. the marketplace
           // source-link); omitted → the column default `{}` applies.
-          ...(input.metadata ? { metadata: input.metadata } : {}),
+          ...(metadata ? { metadata } : {}),
           status: "active",
           approved: kind === "instruction" && !input.agentUserId,
         })
@@ -1515,7 +1559,16 @@ export const skillsRouter = router({
       // crypto/…) is the same ReferenceError-at-run bug the create scan closes.
       // Judged on the kind the UPDATE WRITES (the same value, below).
       const writtenKind = skillKindAfterUpdate(input, existingSkill.kind);
-      assertSkillCodeAllowed(writtenKind, input.code);
+      const writtenMode = input.executionMode ?? existingSkill.executionMode;
+      assertSkillCodeAllowed(writtenKind, input.code, writtenMode);
+      // A box declaration edit is parsed by the same rule as create.
+      if (metadataPatch && "box" in metadataPatch && writtenMode === "box") {
+        metadataPatch.box = boxSkillMetadata({
+          executionMode: "box",
+          kind: writtenKind,
+          metadata: { box: metadataPatch.box },
+        })?.box;
+      }
 
       // The acting agent, derived exactly as `delete` derives it: the ambient
       // ALS value first (set server-side at every key-auth entry point, so an
@@ -1605,6 +1658,12 @@ export const skillsRouter = router({
         // this verb before any grant rung — a reviewed action becomes an
         // unattended one. Same peeled-off-metadata blind spot as above.
         readOnlyWidened(
+          metadataPatch as Record<string, unknown> | undefined,
+          existingSkill.metadata as Record<string, unknown> | null
+        ) ||
+        // A box skill's packages, hosts and limits were approved with its
+        // code; a change is new code or a wider egress allowlist.
+        boxDeclarationChanged(
           metadataPatch as Record<string, unknown> | undefined,
           existingSkill.metadata as Record<string, unknown> | null
         );

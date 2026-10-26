@@ -109,6 +109,7 @@ import {
   registerUiRoutes,
   registerArtifactsRoutes,
   registerRunsRoutes,
+  registerBoxRunsRoutes,
   registerDiagnoseRoutes,
   registerWorkflowsRoutes,
   registerResolveRoutes,
@@ -363,6 +364,7 @@ registerRulesRoutes(app); // /rules/classify (static, FIRST), /rules (create + l
 registerUiRoutes(app); // /ui/focus
 registerArtifactsRoutes(app); // /artifacts*
 registerRunsRoutes(app); // /runs/:runId/capture (playbook run capture-back)
+registerBoxRunsRoutes(app); // /box-runs/lease (static first), /box-runs/:id/{heartbeat,uploads,finish} — computer + box.runner
 registerDiagnoseRoutes(app); // /diagnose — the THIRD door (mode from payload shape)
 registerWorkflowsRoutes(app); // /workflows/:kind/:id/place + /feed (workflow place)
 registerResolveRoutes(app); // /resolve/:id — universal ID resolver

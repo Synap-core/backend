@@ -4,6 +4,7 @@
  * Extracted verbatim from proposals.ts (Wave 5 router-decomposition).
  */
 
+import { parseBoxDeclaration } from "../../services/box-runs/box-spec.js";
 import type {
   ProposalFieldDrift,
   ProposalReviewChange,
@@ -309,6 +310,18 @@ export function buildProposalChanges(
       : {}
   )["allowedHosts"];
   const promotesAllowedHosts = Array.isArray(allowedHosts);
+  // A box skill's declaration (0356): its packages and the hosts the script
+  // may reach are what the person approves besides the code — promoted the
+  // same way, parsed by the one box rule (a malformed bag stays raw).
+  const boxDeclaration =
+    data.executionMode === "box"
+      ? parseBoxDeclaration(
+          (data.metadata && typeof data.metadata === "object"
+            ? (data.metadata as Record<string, unknown>)
+            : {})["box"]
+        )
+      : null;
+  const promotesBox = boxDeclaration?.ok === true;
 
   // The playbook STRUCTURE keys, promoted for the same reason (see the block
   // after the allowedHosts promotion): resolved here so the fallback can skip
@@ -336,7 +349,7 @@ export function buildProposalChanges(
     // opaque. When the promotion fires, this blob is a strict duplicate of it
     // plus noise (marketSource baselines, run counters) — the exact thing the
     // promotion exists to displace.
-    if (key === "metadata" && promotesAllowedHosts) continue;
+    if (key === "metadata" && (promotesAllowedHosts || promotesBox)) continue;
     // Promoted below as readable rows; the raw copy would be a duplicate.
     if (key === "stages" && promotedStages) continue;
     if (key === "scope" && promotesScope) continue;
@@ -386,6 +399,42 @@ export function buildProposalChanges(
       after: allowedHosts,
       valueType: valueTypeOf(allowedHosts),
     });
+  }
+
+  // ── Box declaration: what the script installs and may reach ───────────────
+  // Field labels (not object kinds / actions / statuses), like the allowlist
+  // row above: no vocabulary token to resolve.
+  if (boxDeclaration?.ok) {
+    const box = boxDeclaration.box;
+    const rows: Array<[string, string, unknown]> = [
+      [
+        "metadata.box.runtime",
+        "Runs in a box on your computer",
+        `${box.language}, ${box.entrypoint}, up to ${Math.round(box.limits.wallSeconds / 60)} min, ${box.limits.memoryMb} MB memory`,
+      ],
+      [
+        "metadata.box.packages",
+        "Packages installed in the box",
+        box.packages.length
+          ? box.packages.map((p) => `${p.name}==${p.version}`)
+          : "None",
+      ],
+      [
+        "metadata.box.hosts",
+        "Hosts it may reach (box allowlist)",
+        box.hosts.length ? box.hosts : "None: no network while it runs",
+      ],
+    ];
+    for (const [path, label, after] of rows) {
+      changes.push({
+        path,
+        label,
+        operation,
+        before: undefined,
+        after,
+        valueType: valueTypeOf(after),
+      });
+    }
   }
 
   // ── Playbook structure: `scope` and `stages` promoted to their own rows ────
