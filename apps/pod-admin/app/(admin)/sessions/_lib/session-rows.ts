@@ -35,7 +35,11 @@ import {
 import { DEFAULT_STUCK_THRESHOLD_HOURS } from "@synap-core/types/run-activity";
 import { formatRelative } from "../../../../lib/format";
 import { statusPillFor } from "../../components/status-tone";
-import { canPause, canResume } from "../../../_lib/object/session-status";
+import {
+  canPause,
+  canResume,
+  criteriaVerdictMark,
+} from "../../../_lib/object/session-status";
 import type { StatusKind } from "../../components/status-pill";
 
 // Here, not in the client page: the server `page.tsx` renders them in its
@@ -198,14 +202,8 @@ export function sessionPill(
   s: SessionLike,
   now: number
 ): { kind: StatusKind; label: string } | null {
-  const v = s.verdict;
-  if (v && v.state !== "none") {
-    if (v.state === "passing")
-      return { kind: "healthy", label: "Criteria met" };
-    if (v.state === "failing")
-      return { kind: "down", label: "Criteria failing" };
-    return { kind: "stale", label: `${v.passed}/${v.total} criteria` };
-  }
+  const verdict = criteriaVerdictMark(s.verdict);
+  if (verdict) return { kind: verdict.kind, label: verdict.label };
   if (s.status === "active" && isSessionWorkingNow(s.live, now))
     return { kind: "healthy", label: "Working" };
   return statusPillFor(s.status);

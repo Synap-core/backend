@@ -40,6 +40,7 @@ import {
   type McpHandlerMap,
 } from "./shared.js";
 import type { PlaybookStageInput } from "../../../schemas/playbook-stage.js";
+import { compactPlaybookMatches } from "./match-playbooks-compact.js";
 import type { ProposalRevisionPatch } from "../../../services/proposals/proposals-service.js";
 import {
   createPlaybookDoor,
@@ -367,7 +368,7 @@ export const buildHandlers: McpHandlerMap = {
       typeof args.profileSlug === "string" && args.profileSlug.trim()
         ? args.profileSlug.trim()
         : undefined;
-    const result = await matchCaller.matchForEntity({
+    const matched = await matchCaller.matchForEntity({
       ...(profileSlug ? { profileSlug } : {}),
       entityId: args.entityId as string | undefined,
       workspaceId: matchWsId,
@@ -382,6 +383,9 @@ export const buildHandlers: McpHandlerMap = {
         ? { projectId: args.projectId }
         : {}),
     });
+    // The agent door's envelope: default 5 rows, trimmed goals, no row carried
+    // by a shared word alone (the UI keeps the full pool).
+    const result = compactPlaybookMatches(matched, args.limit);
     // Only reshape in the AMBIGUOUS case (auto-picked among several member
     // workspaces) — the explicit-workspaceId and resolved-entity-workspace
     // paths stay byte-identical to the prior array shape.
@@ -703,9 +707,9 @@ export const buildHandlers: McpHandlerMap = {
     const comment = args.comment as
       { anchor?: unknown; replyTo?: unknown } | undefined;
     if (comment && typeof comment === "object") {
-      if (args.channelId) {
+      if (args.channelId || args.toSessionId || args.intent) {
         return toolError(
-          `Tool '${toolName}': pass either channelId (a post) or comment (a comment on an object), not both.`
+          `Tool '${toolName}': pass either channelId / toSessionId (a post) or comment (a comment on an object), not both.`
         );
       }
       const { postComment } =
@@ -724,9 +728,63 @@ export const buildHandlers: McpHandlerMap = {
       });
       return ok({ success: true, ...posted });
     }
+    // A COORDINATION POST — a typed message to ANOTHER session's agent
+    // (`intent` / `toSessionId`). The pod derives the sender, the target room
+    // and whether it may wake anyone (`services/messaging/session-post.ts`);
+    // it never notifies the person and never starts a pod-agent turn.
+    if (args.intent !== undefined || args.toSessionId !== undefined) {
+      if (
+        args.kind === "question" ||
+        args.slotLabel !== undefined ||
+        args.ask !== undefined ||
+        args.triggerAI === true
+      ) {
+        return toolError(
+          `Tool '${toolName}': a message to another session is for its agent — kind 'question', slotLabel, ask and triggerAI are for the person, in your own session's room.`
+        );
+      }
+      const { resolveSessionPost, sessionPostDeliveryNote } =
+        await import("../../../services/messaging/session-post.js");
+      const resolved = await resolveSessionPost({
+        userId,
+        agentUserId,
+        intent: args.intent,
+        toSessionId: args.toSessionId,
+        channelId: args.channelId,
+        fromSessionId: args.fromSessionId,
+        refs: args.refs,
+        cause: args.cause,
+      });
+      const { postChannelMessage } =
+        await import("../../../services/messaging/post-message.js");
+      const posted = await postChannelMessage({
+        idempotencyKey: args.idempotencyKey as string | undefined,
+        channelId: resolved.channelId,
+        content: args.content as string,
+        role: args.role as string | undefined,
+        kind: "update",
+        userId,
+        ...(agentUserId ? { agentUserId } : {}),
+        sessionPost: resolved.meta,
+      });
+      const { meta } = resolved;
+      const note = sessionPostDeliveryNote(meta);
+      return ok({
+        ...posted,
+        sessionPost: {
+          intent: meta.intent,
+          from: { sessionId: meta.from.sessionId },
+          to: meta.to,
+          hop: meta.hop,
+          wake: meta.wake,
+          ...(meta.wakeHeld ? { wakeHeld: meta.wakeHeld } : {}),
+        },
+        ...(note ? { note } : {}),
+      });
+    }
     if (typeof args.channelId !== "string") {
       return toolError(
-        `Tool '${toolName}' needs channelId (or comment, to comment on a document or entity).`
+        `Tool '${toolName}' needs channelId (or toSessionId, to message another session; or comment, to comment on a document or entity).`
       );
     }
     // A question's typed ASK — parsed with the ONE ask schema BEFORE posting,
