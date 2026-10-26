@@ -25250,6 +25250,24 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				status: string;
 			};
 		}>;
+		archive: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				workspaceId?: string | null | undefined;
+			};
+			meta: object;
+			output: {
+				message: string;
+				proposalId: string;
+				status: "proposed";
+			} | {
+				previousStatus?: undefined;
+				status: "already_archived";
+			} | {
+				previousStatus: "active" | "draft" | "error" | "paused";
+				status: "archived";
+			};
+		}>;
 		availableActions: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				scope?: {
