@@ -5296,3 +5296,11 @@ END $$;
 CREATE INDEX IF NOT EXISTS "entities_home_workspace_idx"
   ON "entities" ("home_workspace_id")
   WHERE "workspace_id" IS NULL AND "home_workspace_id" IS NOT NULL;
+
+-- 0359: when we last spoke to someone (mirrors
+-- 0359_entities_last_interaction_at.sql). The truth behind the
+-- `properties.lastInteractionAt` projection; written only by `noteInteraction`.
+ALTER TABLE "entities" ADD COLUMN IF NOT EXISTS "last_interaction_at" timestamptz;
+CREATE INDEX IF NOT EXISTS "entities_profile_last_interaction_idx"
+  ON "entities" ("profile_id", "last_interaction_at")
+  WHERE "deleted_at" IS NULL;
