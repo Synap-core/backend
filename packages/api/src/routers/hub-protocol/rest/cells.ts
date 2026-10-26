@@ -31,11 +31,11 @@ import {
 import {
   hasScope,
   logger,
-  verifyWorkspaceWriteAccess,
   verifyWorkspaceReadAccess,
   type HubHono,
   httpStatusForTrpcError,
 } from "./_shared.js";
+import { canWrite, userPrincipal } from "../../../access/door.js";
 import { jsonGoverned } from "../proposal-response.js";
 import { grantWriteDenial } from "../../../utils/grant-write-check.js";
 import { uuidQueryParam } from "./_codecs/_openapi.js";
@@ -155,7 +155,7 @@ export function registerCellsRoutes(app: HubHono): void {
     }
 
     const userId = c.get("userId");
-    if (!(await verifyWorkspaceWriteAccess(userId, workspaceId))) {
+    if (!(await canWrite(userPrincipal(userId), { workspace: workspaceId }))) {
       return c.json({ error: "Access denied to workspace" }, 403);
     }
 
@@ -367,7 +367,7 @@ export function registerCellsRoutes(app: HubHono): void {
     if (
       !agentUserId &&
       workspaceId &&
-      !(await verifyWorkspaceWriteAccess(userId, workspaceId))
+      !(await canWrite(userPrincipal(userId), { workspace: workspaceId }))
     ) {
       return c.json({ error: "Access denied to workspace" }, 403);
     }
@@ -504,7 +504,7 @@ export function registerCellsRoutes(app: HubHono): void {
     const userId = c.get("userId");
     if (
       workspaceId &&
-      !(await verifyWorkspaceWriteAccess(userId, workspaceId))
+      !(await canWrite(userPrincipal(userId), { workspace: workspaceId }))
     ) {
       return c.json({ error: "Access denied to workspace" }, 403);
     }

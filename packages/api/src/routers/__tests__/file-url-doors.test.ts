@@ -37,6 +37,12 @@ vi.mock("@synap/database", () => ({
   resolveImportEntityPlacement: vi.fn(),
 }));
 vi.mock("@synap/database/schema", () => ({ channelContextItems: {} }));
+// The access door pulls in the whole access layer, which this total
+// `@synap/database` mock cannot serve; these tests never reach its write gate.
+vi.mock("../../access/door.js", () => ({
+  canWrite: vi.fn(),
+  userPrincipal: (userId: string) => ({ userId, grant: null }),
+}));
 vi.mock("../../utils/stored-file-access.js", () => ({
   loadSignableDocument: h.loadDoc,
   loadSignableFileEntity: h.loadEntity,

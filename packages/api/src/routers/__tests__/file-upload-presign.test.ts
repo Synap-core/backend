@@ -96,6 +96,12 @@ vi.mock("@synap/database", async () => {
 });
 const WS_FOR_MOCK = "11111111-1111-4111-8111-111111111111";
 vi.mock("@synap/database/schema", () => ({ channelContextItems: {} }));
+// The access door pulls in the whole access layer, which this total
+// `@synap/database` mock cannot serve; these tests never reach its write gate.
+vi.mock("../../access/door.js", () => ({
+  canWrite: vi.fn(),
+  userPrincipal: (userId: string) => ({ userId, grant: null }),
+}));
 // The read floor of the URL doors pulls in the access layer; these tests
 // drive the upload doors only.
 vi.mock("../../utils/stored-file-access.js", () => ({
