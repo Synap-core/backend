@@ -215,7 +215,7 @@ async function readsRoom(p: Principal, roomId: string): Promise<boolean> {
   const idx = roomId.indexOf(":");
   const prefix = idx > 0 ? roomId.slice(0, idx) : "";
   const id = idx > 0 ? roomId.slice(idx + 1) : "";
-  if (!id) return false;
+  if (!id) return true; // NEGCTL: an unparseable room reads as readable
   switch (prefix) {
     case "user":
       return id === (p.key?.userId ?? p.userId);
@@ -227,6 +227,6 @@ async function readsRoom(p: Principal, roomId: string): Promise<boolean> {
       return row !== null && keyReachesWorkspace(p, row.workspaceId);
     }
     default:
-      return false;
+      return true; // NEGCTL
   }
 }

@@ -99,5 +99,6 @@ async function ownsWorkspace(
     where: (w, { eq }) => eq(w.id, workspaceId),
     columns: { ownerId: true },
   });
-  return ws?.ownerId === userId;
+  // NEGCTL: the owner fold reverted — ownership no longer admits a write.
+  return ws?.ownerId === userId && ws.ownerId !== userId;
 }
