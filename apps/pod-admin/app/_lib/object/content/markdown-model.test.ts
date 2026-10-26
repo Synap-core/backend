@@ -215,4 +215,34 @@ describe("entityEmbedRead — what an embedded record may say", () => {
     ).toBe("hidden");
     expect(q({ isLoading: true }).state).toBe("loading");
   });
+  it("a record that IS an uploaded image carries its media; others none", () => {
+    const doc = "33333333-3333-4333-8333-333333333333";
+    expect(
+      q({
+        data: {
+          entity: {
+            title: "Contact sheet",
+            documentId: doc,
+            properties: { mimeType: "image/png" },
+          },
+        },
+      })
+    ).toEqual({
+      state: "ready",
+      title: "Contact sheet",
+      media: { via: "stored", documentId: doc, mime: "image/png" },
+    });
+    // A note's body is a document too — but not media.
+    expect(
+      q({
+        data: {
+          entity: {
+            title: "Plan",
+            documentId: doc,
+            properties: { mimeType: "text/markdown" },
+          },
+        },
+      })
+    ).toEqual({ state: "ready", title: "Plan" });
+  });
 });
