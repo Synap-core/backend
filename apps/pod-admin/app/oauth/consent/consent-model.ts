@@ -9,11 +9,18 @@
  * re-derives the offer and refuses a wider selection anyway
  * (`connectOAuthApp`); this keeps the screen honest about what Allow sends.
  *
- * A DECISION permission (any grant-grammar gate verb, `GRANT_GATE_ACTIONS`:
- * `proposal.approve`, `entity.post.archive`, …) is never folded into a write:
- * the screen shows it in its own row and section (`groupByObject`,
- * `splitOffer`), and a first consent pre-ticks it only if
- * `PRESELECT_DECISIONS` says so.
+ * A DECISION permission (any verb a pattern NAMES beyond read / create /
+ * update / delete: `proposal.approve`, `entity.post.archive`, `playbook.run`,
+ * `entity.deal.transition`, …) is never folded into a write: the screen shows
+ * it in its own row and section (`groupByObject`, `splitOffer`), and a first
+ * consent pre-ticks it only if `PRESELECT_DECISIONS` says so. Full access
+ * (`*`) is a row of its own, named as what it is, never pre-ticked either.
+ *
+ * An app asks for anything an agent key may hold (founder decision 4,
+ * 2026-10-26). What a decision row SAYS depends on who the token acts as
+ * (`ActsAs`, the server's `actsAs.kind`): a Synap app decides as the person;
+ * any other app acts as its own agent, so each act is sent to the person for
+ * review first and it never approves or rejects for them.
  *
  * The screen reads OBJECT-FIRST (founder, 2026-10-23): one row per object the
  * app may edit, every object it only views folded into ONE row "It can also
@@ -24,8 +31,8 @@
  */
 
 import {
+  FULL_ACCESS_LABEL,
   GRANT_ACTIONS,
-  GRANT_GATE_ACTIONS,
   grantActionLabel,
   grantKindLabel,
   grantSubjectLabel,
@@ -60,6 +67,9 @@ export interface OfferedPermission {
   reason?: string | null;
 }
 
+/** Who the app's token acts as (the consent context's `actsAs.kind`). */
+export type ActsAs = "person" | "agent";
+
 export interface ApprovedPair {
   permission: string;
   workspaceId: string;
@@ -72,13 +82,17 @@ const key = (permission: string, workspaceId: string) =>
   `${permission}\u0000${workspaceId}`;
 
 /**
- * The permission's verb is a gate verb (approve, reject, archive, merge,
- * transition, …: `GRANT_GATE_ACTIONS`), not a write. Each is a decision the
- * person gives on its own (#94, #133); Edit never includes one.
+ * The permission names a gate verb (approve, reject, archive, merge,
+ * transition, run, …: any verb but read / create / update / delete), or is
+ * full access (`*`), which covers every one. Each is a decision the person
+ * gives on its own (#94, #133); Edit never includes one.
  */
 export function isDecisionPermission(permission: string): boolean {
-  const action = permission.split(".").pop() ?? "";
-  return (GRANT_GATE_ACTIONS as readonly string[]).includes(action);
+  const { subject, action } = parts(permission);
+  if (subject === "*") return true;
+  return (
+    action !== null && !(GRANT_ACTIONS as readonly string[]).includes(action)
+  );
 }
 
 /** The permission only reads (`…read`); a bare subject or kind is a write. */
@@ -87,10 +101,13 @@ export function isReadOnlyPermission(permission: string): boolean {
 }
 
 /**
- * A permission's object and verb: `entity.post.read` → object `entity.post`,
- * kind `post`, action `read`; `entity.read` → kind `*`; `document.update` →
- * object `document`; a bare `entity.post` or `proposal` → action null (it
- * grants read, create, update and delete).
+ * A permission's object and verb, read by the grammar's own parse
+ * (`<subject>[.<kind>].<action>`, a kind only on a qualified subject):
+ * `entity.post.read` → object `entity.post`, kind `post`, action `read`;
+ * `entity.read` → kind `*`; `document.update` → object `document`;
+ * `playbook.run` → object `playbook`, action `run`; a bare `entity.post`,
+ * `entity.*` or `proposal` → action null (it grants read, create, update and
+ * delete); `*` → subject `*`.
  */
 function parts(permission: string): {
   object: string;
@@ -105,20 +122,17 @@ function parts(permission: string): {
     segs = permission.split(".");
   }
   const subject = segs[0] ?? "";
-  const verbs: readonly string[] = [...GRANT_ACTIONS, ...GRANT_GATE_ACTIONS];
-  const last = segs.length > 1 ? (segs[segs.length - 1] ?? null) : null;
-  const action = last !== null && verbs.includes(last) ? last : null;
-  const rest = action === null ? segs.slice(1) : segs.slice(1, -1);
+  const verb = (v: string | undefined) => (v && v !== "*" ? v : null);
   if (isQualifiedGrantSubject(subject)) {
-    const kind = rest[0] ?? "*";
-    return { object: `${subject}.${kind}`, subject, kind, action };
+    const kind = segs[1] ?? "*";
+    return {
+      object: `${subject}.${kind}`,
+      subject,
+      kind,
+      action: verb(segs[2]),
+    };
   }
-  return {
-    object: [subject, ...rest].join("."),
-    subject,
-    kind: null,
-    action,
-  };
+  return { object: subject, subject, kind: null, action: verb(segs[1]) };
 }
 
 /** The offer as the screen lists it: reads and writes, then decisions apart. */
@@ -466,38 +480,45 @@ const ACTION_WORDS: Record<string, string> = {
   delete: "Delete",
 };
 
-const plural = (word: string) =>
-  word.endsWith("s")
-    ? word
-    : word.endsWith("y")
-      ? `${word.slice(0, -1)}ies`
-      : `${word}s`;
+/**
+ * A bare subject or kind (`entity.post`, `entity.*`): every plain verb,
+ * "Read, create, edit and delete".
+ */
+const ALL_PLAIN_VERBS = GRANT_ACTIONS.map((a, i) =>
+  i === 0 ? ACTION_WORDS[a] : ACTION_WORDS[a]!.toLowerCase()
+)
+  .join(", ")
+  .replace(/, (\w+)$/, " and $1");
+
+/** A vocabulary noun mid-sentence: "Posts" → "posts"; "AI agents" stays. */
+const midSentence = (noun: string) =>
+  /^[A-Z]{2}/.test(noun) ? noun : noun.charAt(0).toLowerCase() + noun.slice(1);
 
 /**
  * A plain-language line for a grant-grammar permission
- * (`<subject>[.<kind>].<action>`): `entity.post.create` → "Create posts",
- * `document.update` → "Edit documents", `entity.read` → "Read everything in
- * it", `proposal.approve` → "Approve changes waiting for your review",
- * `entity.post.archive` → "Archive posts". The
- * raw permission is shown beside it, so an unusual one is never
- * hidden behind a friendly word.
+ * (`<subject>[.<kind>].<action>`), every noun and gate verb from the
+ * vocabulary door: `entity.post.create` → "Create posts", `document.update` →
+ * "Edit documents", `entity.read` → "Read everything in it",
+ * `proposal.approve` → "Approve changes waiting for your review",
+ * `entity.post.archive` → "Archive posts", `playbook.run` → "Run templates",
+ * `entity.deal.transition` → "Move deals", `entity.*` → "Read, create, edit
+ * and delete everything in it", `*` → "Full access". The raw permission is
+ * shown beside it, so an unusual one is never hidden behind a friendly word.
  */
 export function permissionLabel(permission: string): string {
-  const segs = permission.split(".");
-  const action = segs[segs.length - 1] ?? "";
-  if (segs[0] === "proposal" && isDecisionPermission(permission)) {
+  const { subject, kind, action } = parts(permission);
+  if (subject === "*") return FULL_ACCESS_LABEL;
+  if (subject === "proposal" && action && isDecisionPermission(permission)) {
     return `${grantActionLabel(action)} changes waiting for your review`;
   }
-  // A gate verb (archive, merge, …) in the vocabulary's words.
-  const verb = ACTION_WORDS[action] ?? grantActionLabel(action);
-  const subject = segs[0] ?? "";
-  const kind = segs.length > 2 ? segs[1] : null;
-  if (subject === "entity") {
-    if (!kind || kind === "*") return `${verb} everything in it`;
-    return `${verb} ${plural(kind.replace(/[_-]/g, " "))}`;
-  }
-  const noun = kind && kind !== "*" ? `${subject} ${kind}` : subject;
-  return `${verb} ${plural(noun.replace(/[_-]/g, " "))}`;
+  // A gate verb (archive, merge, run, …) in the vocabulary's words.
+  const verb =
+    action === null
+      ? ALL_PLAIN_VERBS
+      : (ACTION_WORDS[action] ?? grantActionLabel(action));
+  if (kind === "*") return `${verb} everything in it`;
+  const noun = kind ? grantKindLabel(kind) : grantSubjectLabel(subject);
+  return `${verb} ${midSentence(noun)}`;
 }
 
 // ─── Object-first rows ───────────────────────────────────────────────────────
@@ -516,18 +537,24 @@ export const LEVEL_WORDS: Record<AccessLevel, string> = {
 /** "Changes waiting for your review": what `proposal.*` reads as. */
 const REVIEW_QUEUE = "Changes waiting for your review";
 
+/** The row of full access (`*`): every object and every decision. */
+export const FULL_ACCESS = "full-access";
+
 /** One object the app asks about, and every permission it asks on it. */
 export interface ConsentObject {
   /**
    * `entity.post`, `document`, …; `decisions` for the gate verbs;
-   * `also-see` for the folded read-only objects.
+   * `also-see` for the folded read-only objects; `full-access` for `*`.
    */
   key: string;
   /** The object's name, from the grants' vocabulary door. */
   label: string;
   /** The kind, for an `entity.<kind>` row; null otherwise. */
   kind: string | null;
-  /** The "decide for you" row (every gate verb), Off unless given. */
+  /**
+   * The "decide for you" row (every gate verb) or full access: On or Off,
+   * Off unless given.
+   */
   decisions: boolean;
   /** The levels its control offers, lowest first: Off, then View / Edit. */
   levels: AccessLevel[];
@@ -548,19 +575,23 @@ export const ALSO_SEE = "also-see";
 const ALSO_SEE_LABEL = "It can also see";
 
 /**
- * The offer as rows: one per object the app may edit (`entity.<kind>.*` →
- * that kind, `document.*` → Documents, …), in offer order; then every object
- * it only views (`proposal.read` → changes waiting for review, …) folded into
- * ONE row "It can also see" (`members`, founder 2026-10-23: understood at a
- * glance); then every decision (each gate verb) in ONE last row.
+ * The offer as rows: full access (`*`) first, as what it is; then one per
+ * object the app may edit (`entity.<kind>.*` → that kind, `document.*` →
+ * Documents, …), in offer order; then every object it only views
+ * (`proposal.read` → changes waiting for review, …) folded into ONE row "It
+ * can also see" (`members`, founder 2026-10-23: understood at a glance); then
+ * every decision (each gate verb) in ONE last row, named for who acts
+ * (`actsAs`).
  */
 export function groupByObject(
-  offer: readonly OfferedPermission[]
+  offer: readonly OfferedPermission[],
+  actsAs: ActsAs = "person"
 ): ConsentObject[] {
-  const rows = objectRows(offer);
+  const rows = objectRows(offer, actsAs);
+  const full = rows.filter((r) => r.key === FULL_ACCESS);
   const edits = rows.filter((r) => !r.decisions && r.levels.includes("edit"));
   const views = rows.filter((r) => !r.decisions && !r.levels.includes("edit"));
-  const decide = rows.filter((r) => r.decisions);
+  const decide = rows.filter((r) => r.decisions && r.key !== FULL_ACCESS);
   const folded: ConsentObject[] =
     views.length > 0
       ? [
@@ -575,29 +606,47 @@ export function groupByObject(
           },
         ]
       : [];
-  return [...edits, ...folded, ...decide];
+  return [...full, ...edits, ...folded, ...decide];
+}
+
+/** The decisions row's name: who decides, from who the token acts as. */
+export function decisionsLabel(actsAs: ActsAs): string {
+  return actsAs === "person" ? "Decide for you" : "Act, after your review";
+}
+
+/** The heading over the decisions ("It asks to decide for you"). */
+export function decisionsHeading(actsAs: ActsAs): string {
+  const label = decisionsLabel(actsAs);
+  return `It asks to ${label.charAt(0).toLowerCase()}${label.slice(1)}`;
 }
 
 /** One row per object, each with the levels its permissions allow. */
-function objectRows(offer: readonly OfferedPermission[]): ConsentObject[] {
+function objectRows(
+  offer: readonly OfferedPermission[],
+  actsAs: ActsAs
+): ConsentObject[] {
   const rows = new Map<string, ConsentObject>();
   for (const o of offer) {
     const decision = isDecisionPermission(o.permission);
     const p = parts(o.permission);
-    const rowKey = decision ? "decisions" : p.object;
+    const rowKey =
+      p.subject === "*" ? FULL_ACCESS : decision ? "decisions" : p.object;
     let row = rows.get(rowKey);
     if (!row) {
       row = {
         key: rowKey,
-        label: decision
-          ? "Decide for you"
-          : p.subject === "proposal"
-            ? REVIEW_QUEUE
-            : p.kind === "*"
-              ? "Everything"
-              : p.kind
-                ? grantKindLabel(p.kind)
-                : grantSubjectLabel(p.subject),
+        label:
+          rowKey === FULL_ACCESS
+            ? FULL_ACCESS_LABEL
+            : decision
+              ? decisionsLabel(actsAs)
+              : p.subject === "proposal"
+                ? REVIEW_QUEUE
+                : p.kind === "*"
+                  ? "Everything"
+                  : p.kind
+                    ? grantKindLabel(p.kind)
+                    : grantSubjectLabel(p.subject),
         kind: decision || p.kind === "*" ? null : p.kind,
         decisions: decision,
         levels: [],
@@ -805,8 +854,15 @@ export function scopeLabel(spaces: readonly OfferedSpace[]): string | null {
 }
 
 /** The level control's accessible name: what it sets, for which object. */
-export function levelControlLabel(row: ConsentObject): string {
-  return row.decisions ? "Let it decide for you" : `${row.label}: access`;
+export function levelControlLabel(
+  row: ConsentObject,
+  actsAs: ActsAs = "person"
+): string {
+  if (row.key === FULL_ACCESS) return FULL_ACCESS_LABEL;
+  if (row.key !== "decisions") return `${row.label}: access`;
+  return actsAs === "person"
+    ? "Let it decide for you"
+    : "Let it ask to act, after your review";
 }
 
 /** A row's space tick's accessible name: the object AND the space. */
@@ -820,21 +876,58 @@ const orList = (words: readonly string[]) =>
     ? (words[0] ?? "")
     : `${words.slice(0, -1).join(", ")} or ${words[words.length - 1]}`;
 
+/** The review verbs: what only a person decides (an agent never does). */
+const REVIEW_VERBS: readonly string[] = ["approve", "reject"];
+
+const sentence = (words: readonly string[]) => {
+  const said = orList(words);
+  return `${said.charAt(0).toUpperCase()}${said.slice(1)}`;
+};
+
 /**
- * Under "Decide for you" while it is Off: each gate verb it asks, in words,
- * once ("Approve or reject a change waiting for your review, as you";
- * "Approve, reject or archive, as you"). Its detail names each permission.
+ * Under a decision row while it is Off: what it may do, in words, once.
+ *
+ *  - Full access: everything, "as you" for a Synap app; for any other app,
+ *    every change sent for review first and never an approval.
+ *  - "Decide for you" (a Synap app): each gate verb it asks ("Approve or
+ *    reject a change waiting for your review, as you"; "Approve, reject or
+ *    archive, as you").
+ *  - "Act, after your review" (any other app, its own agent): each gate verb
+ *    it may ASK for ("Run or move, each sent to you for review first"); an
+ *    asked approve / reject is said as what it is, since an agent never
+ *    approves or rejects a change for the person
+ *    (`refuseAgentProposalApprover`, `assertAgentKeyMayReject`).
+ *
+ * Its detail names each permission.
  */
-export function decideLine(row: ConsentObject): string {
-  const verbs: string[] = [];
-  for (const o of row.permissions) {
-    const word = grantActionLabel(
-      o.permission.split(".").pop() ?? ""
-    ).toLowerCase();
-    if (!verbs.includes(word)) verbs.push(word);
+export function decideLine(
+  row: ConsentObject,
+  actsAs: ActsAs = "person"
+): string {
+  if (row.key === FULL_ACCESS) {
+    return actsAs === "person"
+      ? "Everything you can do in these spaces, approving included, as you"
+      : "Everything you can do in these spaces, each change sent to you for review first. It never approves or rejects for you";
   }
-  const said = orList(verbs);
-  const line = `${said.charAt(0).toUpperCase()}${said.slice(1)}`;
+  const actions: string[] = [];
+  for (const o of row.permissions) {
+    const action = parts(o.permission).action;
+    if (action && !actions.includes(action)) actions.push(action);
+  }
+  const words = (list: readonly string[]) => [
+    ...new Set(list.map((a) => grantActionLabel(a).toLowerCase())),
+  ];
+  if (actsAs === "agent") {
+    const asks = words(actions.filter((a) => !REVIEW_VERBS.includes(a)));
+    const never = actions.some((a) => REVIEW_VERBS.includes(a))
+      ? "It never approves or rejects for you"
+      : null;
+    const ask = asks.length
+      ? `${sentence(asks)}, each sent to you for review first`
+      : null;
+    return [ask, never].filter(Boolean).join(". ");
+  }
+  const line = sentence(words(actions));
   return row.permissions.every((o) => o.permission.startsWith("proposal."))
     ? `${line} a change waiting for your review, as you`
     : `${line}, as you`;

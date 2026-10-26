@@ -38,6 +38,7 @@ vi.mock(
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import { focusSessions, projects } from "@synap/database/schema";
+import { clientKeyForApiKey, runWithClientKey } from "@synap/database";
 import {
   describeWriteSessions,
   topicHintNote,
@@ -190,5 +191,42 @@ describe("the write reply names where the writes landed", () => {
       }
     );
     expect(out).toEqual({ status: "ok", filedIn: [] });
+  });
+});
+
+// W-A3: a call that named no conversation is its own run (`…|call:`, D1). The
+// reply hands it the receipt's id, so its next call can keep the run together.
+describe("a per-call run is handed its receipt as a handle", () => {
+  it("per-call run + a receipt filed → handle names that receipt", async () => {
+    const r = await sessionRow({ title: "Changes", receipt: true });
+    const out = await runWithClientKey(clientKeyForApiKey({ id: "k1" }), () =>
+      describeWriteSessions([{ sessionId: r, projectId: null }], {
+        userId: USER,
+      })
+    );
+    expect(out).toMatchObject({ status: "ok", handle: { sessionId: r } });
+    if (out?.status !== "ok" || !out.handle) throw new Error("no handle");
+    expect(out.handle.note).toContain(`sessionId: "${r}"`);
+  });
+
+  it("CONTROL — no handle for a named conversation, or a session it started", async () => {
+    const r = await sessionRow({ title: "Changes", receipt: true });
+    const s = await sessionRow({ title: "Started" });
+    const inConv = await runWithClientKey(
+      clientKeyForApiKey({ id: "k1" }, "claude-ai:abc"),
+      () =>
+        describeWriteSessions([{ sessionId: r, projectId: null }], {
+          userId: USER,
+        })
+    );
+    expect(inConv).not.toHaveProperty("handle");
+    const started = await runWithClientKey(
+      clientKeyForApiKey({ id: "k1" }),
+      () =>
+        describeWriteSessions([{ sessionId: s, projectId: null }], {
+          userId: USER,
+        })
+    );
+    expect(started).not.toHaveProperty("handle");
   });
 });

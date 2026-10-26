@@ -76,6 +76,12 @@ describe("restDoorAllowed", () => {
     ["GET", "/focus-sessions/owed", true], // seamed: sessionReadableWhere
     ["GET", "/focus-sessions/s1", false], // declared door: DOC_ONLY lacks its subjects
     ["GET", "/projects/p1", true],
+    // Seamed (`scopedDb` on playbooks, grant-clipped method count): a scoped
+    // key finds the process it may run. A uuid id only.
+    ["GET", "/playbooks", true],
+    ["GET", "/playbooks/11111111-1111-4111-8111-111111111111", true],
+    ["GET", "/playbooks/promote-from-session", false],
+    ["POST", "/playbooks/11111111-1111-4111-8111-111111111111/run", true], // a write — bounded by the gate
     ["GET", "/projects/p1/path", false], // userVisibleWhere sessions — not migrated
     ["GET", "/search", false],
     // The list door: seamed; its ?q= (Typesense) branch is refused by the

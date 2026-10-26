@@ -50,6 +50,7 @@ import {
   resolveGuidelines,
   resolveMostSpecificPosture,
 } from "./config-settings.js";
+import { getHeldWritesApprovedBy } from "./request-write-context.js";
 
 /**
  * Shared agent-governance orchestration — the SINGLE SOURCE OF TRUTH for the
@@ -1669,8 +1670,10 @@ async function resolveForPrincipal(
   // signal that must be fresh the instant a would-be-auto write is decided.
   // Over the limit → inject `ceilingVerdict: "propose"` and re-run the pure
   // engine, which tightens execute→propose at rung 2.56. Re-running keeps the
-  // rung the single decision site (no verdict is synthesised here).
-  if (decision.verdict === "execute") {
+  // rung the single decision site (no verdict is synthesised here). The replay
+  // of a held-writes pack a person approved is not counted: the person already
+  // answered the ceiling for those writes.
+  if (decision.verdict === "execute" && !getHeldWritesApprovedBy()) {
     const limit = await resolveDailyWriteCeiling({
       db,
       agentUserId,

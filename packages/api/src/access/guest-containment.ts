@@ -30,12 +30,18 @@
  * predicates the floors embed, never a JS re-statement. It is resolved only for
  * a mutation (tRPC) or once per request (REST / MCP), and memoized per tRPC
  * request so a batch of mutations costs one probe.
+ *
+ * The same doors carry the POD-ACCESS floor (`access/pod-access.ts`): a
+ * signed-in principal that is not a guest and holds no access to the pod at
+ * all. Wave B1 REPORTS it (`reportNoPodAccess`) at every site that refuses a
+ * guest, and on every served tRPC procedure that needs a signed-in caller
+ * ({@link podAccessReportMiddleware}); wave B3 refuses it there.
  */
 
 import { TRPCError } from "@trpc/server";
 import type { MiddlewareHandler } from "hono";
 import { t } from "../init-trpc.js";
-import { AccessContext, type PodAudience } from "./context.js";
+import { podAudienceOf, reportNoPodAccess } from "./pod-access.js";
 
 /**
  * The tRPC mutations a guest may call. Each entry must name a registered
@@ -69,35 +75,17 @@ export const GUEST_REFUSED_BODY = {
   code: "FORBIDDEN",
 } as const;
 
-const audienceByRequest = new WeakMap<
-  object,
-  Map<string, Promise<PodAudience>>
->();
-
 /**
  * Is `userId` a guest? `requestKey` (the incoming `Request`) memoizes the probe
- * for the rest of that request, per principal. A failed probe throws and is not
- * memoized: it never reads as "not a guest".
+ * for the rest of that request, per principal (`podAudienceOf`, shared with the
+ * pod-access floor). A failed probe throws and is not memoized: it never reads
+ * as "not a guest".
  */
 export async function isGuestPrincipal(
   userId: string,
   requestKey?: object | null
 ): Promise<boolean> {
-  if (!requestKey) {
-    return (await AccessContext.operator({ userId }).audience()) === "guest";
-  }
-  let byUser = audienceByRequest.get(requestKey);
-  if (!byUser) {
-    byUser = new Map();
-    audienceByRequest.set(requestKey, byUser);
-  }
-  let pending = byUser.get(userId);
-  if (!pending) {
-    pending = AccessContext.operator({ userId }).audience();
-    byUser.set(userId, pending);
-    pending.catch(() => byUser.delete(userId));
-  }
-  return (await pending) === "guest";
+  return (await podAudienceOf(userId, requestKey)) === "guest";
 }
 
 /**
@@ -138,18 +126,36 @@ export const guestContainmentMiddleware = t.middleware(
 );
 
 /**
+ * tRPC middleware: the pod-access floor on every served procedure that needs a
+ * signed-in caller (`protectedProcedure`, and `apiKeyProcedure` once the key
+ * set the principal). REPORT mode (B1): it logs, never refuses. The admission
+ * mutations a guest may call (`GUEST_MUTATION_ALLOWLIST`: accept an invite,
+ * redeem a link) are how a person with no access gets in, so they are not
+ * reported.
+ */
+export const podAccessReportMiddleware = t.middleware(
+  async ({ ctx, path, next }) => {
+    if (ctx.authenticated !== true || !ctx.userId) return next();
+    if (!ctx.req || !servedRequests.has(ctx.req)) return next();
+    if (GUEST_MUTATION_ALLOWLIST.includes(path)) return next();
+    await reportNoPodAccess(ctx.userId, ctx.req, `trpc:${path}`);
+    return next();
+  }
+);
+
+/**
  * Hono middleware for a session-authenticated door: mount it right after
  * `authMiddleware` (which sets `userId`). A guest gets the one refusal, 403. A
- * failed audience probe throws (a 5xx), never a pass.
+ * failed audience probe throws (a 5xx), never a pass. A principal with no pod
+ * access is REPORTED (B1, `access/pod-access.ts`).
  */
 export const refuseGuestSession: MiddlewareHandler = async (c, next) => {
   const userId = (c.get as (key: string) => unknown)("userId");
-  if (
-    typeof userId === "string" &&
-    userId &&
-    (await isGuestPrincipal(userId, c.req.raw))
-  ) {
-    return c.json(GUEST_REFUSED_BODY, 403);
+  if (typeof userId === "string" && userId) {
+    if (await isGuestPrincipal(userId, c.req.raw)) {
+      return c.json(GUEST_REFUSED_BODY, 403);
+    }
+    await reportNoPodAccess(userId, c.req.raw, `session:${c.req.path}`);
   }
   return next();
 };

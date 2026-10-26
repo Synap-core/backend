@@ -2601,6 +2601,12 @@ export const DIRECT_PROPOSAL_DOORS = {
   // `routers/proposals/executors/agent.ts` (activates that key with the
   // approved, never wider, reach).
   "agent/connect": "direct",
+  // W-B1: the writes an agent made past its daily write ceiling (rung 2.56)
+  // on one UTC day, kept on ONE pack by the gate (`fileHeldWrites`,
+  // packages/api/src/utils/permission-check.ts) instead of one proposal each.
+  // Approved by `routers/proposals/executors/agent.ts`, which replays each
+  // kept write through its own door as the agent.
+  "agent/held_writes": "direct",
   "capability/capability.install": "direct",
   // Lane E: an agent hitting an installed-but-not-enabled pack files ONE
   // enable request (never auto-enables); executor already registered.

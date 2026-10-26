@@ -175,6 +175,9 @@ export {
   bearerCredential,
 } from "./middleware/app-session.js";
 export { refuseGuestSession } from "./access/guest-containment.js";
+// "Is this person inside this pod at all?" — `/api/session` returns it so a
+// client renders "No access to this pod" instead of collecting 403s.
+export { podAccessOf, type PodAccess } from "./access/pod-access.js";
 
 // Export event streaming utilities
 export { eventStreamManager } from "./event-stream-manager.js";

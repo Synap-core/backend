@@ -176,6 +176,9 @@ ALTER TABLE "pod_members" ADD COLUMN IF NOT EXISTS "user_id"    text;
 ALTER TABLE "pod_members" ADD COLUMN IF NOT EXISTS "pod_role"   text;
 ALTER TABLE "pod_members" ADD COLUMN IF NOT EXISTS "invited_by" text;
 ALTER TABLE "pod_members" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
+-- removed_at (migration 0357): set by `removeFromPod`; a row is access only
+-- while it is NULL (founder Q-B1). Not written "-- 0357:" (see token_digest).
+ALTER TABLE "pod_members" ADD COLUMN IF NOT EXISTS "removed_at" timestamp with time zone;
 -- One pod-membership row per user_id (the pod is a singleton — no pod_id).
 CREATE UNIQUE INDEX IF NOT EXISTS "pod_members_user_unique"
   ON "pod_members" ("user_id");

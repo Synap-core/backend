@@ -6,6 +6,11 @@
  * `playbooksRouter.listAllPage` → real access-layer predicate, on PGlite with
  * real `playbooks` / `workspaces` / `workspace_members` tables. Nothing about
  * visibility is mocked; the assertion is on which rows come back.
+ *
+ * A SCOPED key (an app's own agent, a narrowed agent key) reads both doors
+ * through the same seams, ANDed with its grant (`grant-door-fence.ts` lists
+ * them as seamed): it sees the playbooks its grant reads, and a method's
+ * project count never counts what the grant does not read.
  */
 
 import { OpenAPIHono } from "@hono/zod-openapi";
@@ -49,7 +54,10 @@ import {
   podMembers,
   users,
   projectMembers,
+  projects,
+  projectTracks,
 } from "@synap/database/schema";
+import { runWithGrant, type KeyGrant } from "@synap/database";
 
 const { registerPlaybooksRoutes } = await import("./playbooks.js");
 
@@ -96,16 +104,22 @@ const USER = randomUUID();
 const OTHER = randomUUID();
 const WS_MINE = randomUUID();
 const WS_OTHER = randomUUID();
+/** USER's second space: outside the scoped key's grant. */
+const WS_MINE_2 = randomUUID();
+/** A METHOD (scope project) in WS_MINE, run as a track by a WS_MINE_2 project. */
+const METHOD = randomUUID();
 
 async function seedPlaybook(
   name: string,
   workspaceId: string | null,
-  createdBy: string
+  createdBy: string,
+  id: string = randomUUID(),
+  scope = "session"
 ): Promise<void> {
   await h.client!.query(
-    `insert into playbooks (id, workspace_id, created_by, name, goal_template, status, created_at)
-     values ($1,$2,$3,$4,'Do it','active', now())`,
-    [randomUUID(), workspaceId, createdBy, name]
+    `insert into playbooks (id, workspace_id, created_by, name, goal_template, status, scope, created_at)
+     values ($1,$2,$3,$4,'Do it','active', $5, now())`,
+    [id, workspaceId, createdBy, name, scope]
   );
 }
 
@@ -117,6 +131,8 @@ beforeAll(async () => {
     podMembers,
     users,
     projectMembers,
+    projects,
+    projectTracks,
   ] as PgTable[]) {
     await h.client!.exec(ddlFor(t));
   }
@@ -131,6 +147,25 @@ beforeAll(async () => {
   await seedPlaybook("mine", WS_MINE, USER);
   await seedPlaybook("other-private", WS_OTHER, OTHER);
   await seedPlaybook("pod-template", null, OTHER);
+  await h.client!.query(
+    `insert into workspaces (id, owner_id, settings) values ($1,$2,'{}'::jsonb)`,
+    [WS_MINE_2, USER]
+  );
+  await h.client!.query(
+    `insert into workspace_members (id, workspace_id, user_id) values ($1,$2,$3)`,
+    [randomUUID(), WS_MINE_2, USER]
+  );
+  await seedPlaybook("mine-2", WS_MINE_2, USER);
+  await seedPlaybook("method", WS_MINE, USER, METHOD, "project");
+  const project = randomUUID();
+  await h.client!.query(
+    `insert into projects (id, user_id, workspace_id, name) values ($1,$2,$3,'Launch')`,
+    [project, USER, WS_MINE_2]
+  );
+  await h.client!.query(
+    `insert into project_tracks (id, project_id, user_id, playbook_id, name, status) values ($1,$2,$3,$4,'Launch track','active')`,
+    [randomUUID(), project, USER, METHOD]
+  );
 });
 
 function appAs(userId: string) {
@@ -166,5 +201,62 @@ describe("SECURITY — GET /playbooks lists on the user floor", () => {
   it("naming a non-member workspace narrows, it never widens", async () => {
     const names = await listNames(USER, `?workspaceId=${WS_OTHER}`);
     expect(names).not.toContain("other-private");
+  });
+});
+
+/** A key that reads playbooks in WS_MINE only (an app's agent, as consented). */
+const PLAYBOOKS_IN_MINE: KeyGrant = {
+  scopes: [{ permissions: ["playbook.read"], workspaceIds: [WS_MINE] }],
+  clientId: null,
+};
+
+async function getPlaybook(
+  id: string,
+  grant?: KeyGrant
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  const res = await runWithGrant(grant, () =>
+    appAs(USER).request(`/playbooks/${id}`)
+  );
+  return { status: res.status, body: (await res.json()) as never };
+}
+
+describe("a scoped key reads GET /playbooks and GET /playbooks/:id through its grant", () => {
+  it("lists only the playbooks its grant reads; a key with no playbook read lists none", async () => {
+    const all = await listNames(USER);
+    expect(all).toEqual(
+      expect.arrayContaining(["method", "mine", "mine-2", "pod-template"])
+    );
+    expect(
+      await runWithGrant(PLAYBOOKS_IN_MINE, () => listNames(USER))
+    ).toEqual(["method", "mine"]);
+    expect(
+      await runWithGrant(
+        {
+          scopes: [{ permissions: ["entity.read"], workspaceIds: [WS_MINE] }],
+          clientId: null,
+        },
+        () => listNames(USER)
+      )
+    ).toEqual([]);
+  });
+
+  it("gets one it reads; one outside its grant is not found", async () => {
+    const [mine2] = (
+      await h.client!.query<{ id: string }>(
+        `select id from playbooks where name = 'mine-2'`
+      )
+    ).rows;
+    expect((await getPlaybook(mine2!.id)).status).toBe(200);
+    expect((await getPlaybook(mine2!.id, PLAYBOOKS_IN_MINE)).status).toBe(404);
+    expect((await getPlaybook(METHOD, PLAYBOOKS_IN_MINE)).status).toBe(200);
+  });
+
+  it("a method's project count counts only projects and tracks the grant reads", async () => {
+    // Without a grant the person's own floor counts the WS_MINE_2 project.
+    expect((await getPlaybook(METHOD)).body.projectsUsingCount).toBe(1);
+    // The key reads playbooks in WS_MINE, not projects or tracks.
+    expect(
+      (await getPlaybook(METHOD, PLAYBOOKS_IN_MINE)).body.projectsUsingCount
+    ).toBe(0);
   });
 });
