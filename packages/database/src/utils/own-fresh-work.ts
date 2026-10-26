@@ -122,23 +122,9 @@ export async function isOwnFreshWork(
     }
 
     // 3. Untouched by a person since.
-    const touched = await db
-      .select({ id: events.subjectId })
-      .from(events)
-      .where(
-        and(
-          inArray(events.subjectId, ids),
-          sql`${events.type} LIKE ${`${input.subjectType}.%.completed`}`,
-          sql`COALESCE(${events.isAgent}, false) = false`,
-          isNull(events.agentUserId),
-          sql`COALESCE(${events.source}, 'api') NOT IN (${sql.join(
-            NON_PERSON_SOURCES.map((s) => sql`${s}`),
-            sql`, `
-          )})`
-        )
-      )
-      .limit(1);
-    return touched.length === 0;
+    return (
+      (await personTouchedSubjectIds(db, input.subjectType, ids)).size === 0
+    );
   } catch (err) {
     // A failed read proves nothing: the write proposes, as it did before the
     // class existed — never applied on a guess. Logged, not swallowed.
@@ -148,4 +134,38 @@ export async function isOwnFreshWork(
     );
     return false;
   }
+}
+
+/**
+ * Test 3 of {@link isOwnFreshWork}, on its own: which of `subjectIds` a PERSON
+ * has made a completed write on (an event with no agent, from a person's door
+ * — not the system, an automation, a sync or a migration). Shared with orient's
+ * `looseEnds` (W-B2), where an agent may close its own idle session only when
+ * no person touched it. THROWS on a failed read: the caller decides what an
+ * unknown answer means.
+ */
+export async function personTouchedSubjectIds(
+  db: DbHandle,
+  subjectType: OwnFreshWorkInput["subjectType"],
+  subjectIds: readonly string[]
+): Promise<Set<string>> {
+  if (subjectIds.length === 0) return new Set();
+  const touched = await db
+    .selectDistinct({ id: events.subjectId })
+    .from(events)
+    .where(
+      and(
+        inArray(events.subjectId, [...subjectIds]),
+        sql`${events.type} LIKE ${`${subjectType}.%.completed`}`,
+        sql`COALESCE(${events.isAgent}, false) = false`,
+        isNull(events.agentUserId),
+        sql`COALESCE(${events.source}, 'api') NOT IN (${sql.join(
+          NON_PERSON_SOURCES.map((s) => sql`${s}`),
+          sql`, `
+        )})`
+      )
+    );
+  return new Set(
+    touched.map((r) => r.id).filter((id): id is string => id != null)
+  );
 }
