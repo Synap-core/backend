@@ -197,6 +197,9 @@ describe("W6 read/resolve verbs — registry", () => {
       // web.read reads a public page (or a read-only reader verb through its
       // own gate); it mutates nothing in the pod.
       "web.read",
+      // web.search runs a named search provider through its own gate; it
+      // mutates nothing in the pod.
+      "web.search",
     ]);
     expect(READ_ONLY_BUILTIN_VERBS.has("channel.ensure")).toBe(false);
     expect(READ_ONLY_BUILTIN_VERBS.has("graph.link")).toBe(false);

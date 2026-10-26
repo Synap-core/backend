@@ -66,7 +66,7 @@ export async function makeLifecyclePglite() {
   await pg.exec(`
     create table if not exists workspace_members (workspace_id uuid, user_id text, role text);
     create table if not exists workspaces (id uuid primary key, owner_id text, settings jsonb);
-    create table if not exists pod_members (user_id text);
+    create table if not exists pod_members (user_id text, removed_at timestamptz);
     create table if not exists project_members (user_id text, role text);
     create table if not exists users (id text primary key);
   `);

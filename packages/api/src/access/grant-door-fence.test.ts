@@ -75,6 +75,12 @@ describe("restDoorAllowed", () => {
     ["GET", "/focus-sessions", true],
     ["GET", "/focus-sessions/s1", false], // declared door: DOC_ONLY lacks its subjects
     ["GET", "/projects/p1", true],
+    // Seamed (`scopedDb` on playbooks, grant-clipped method count): a scoped
+    // key finds the process it may run. A uuid id only.
+    ["GET", "/playbooks", true],
+    ["GET", "/playbooks/11111111-1111-4111-8111-111111111111", true],
+    ["GET", "/playbooks/promote-from-session", false],
+    ["POST", "/playbooks/11111111-1111-4111-8111-111111111111/run", true], // a write — bounded by the gate
     ["GET", "/projects/p1/path", false], // userVisibleWhere sessions — not migrated
     ["GET", "/search", false],
     // The list door: seamed; its ?q= (Typesense) branch is refused by the
@@ -347,6 +353,36 @@ describe("trpcProcedureAllowed (S7: the Bearer tRPC door fences mutations)", () 
     expect(trpcRefusalMessage("query", "search.search")).toBe(
       GRANT_DOOR_UNSUPPORTED
     );
+  });
+});
+
+describe("connection status door (decision 3): the person's accounts, by a named read", () => {
+  // An app's grant is always pinned to the spaces the person ticked.
+  const app = (...permissions: string[]) =>
+    key({ permissions, workspaceIds: ["w1"] });
+  it.each([
+    [["messaging.read"], true],
+    [["messaging"], true],
+    [["*"], true],
+    [["entity.deal.create"], false], // any write in one space is not enough
+    [["messaging.send"], false], // sending is not reading
+    [[], false], // deny-all (a revoked or expired grant)
+  ] as const)("a pinned key holding %j → %s", (permissions, ok) => {
+    expect(
+      restDoorAllowed("GET", "/messaging/accounts", app(...permissions))
+    ).toBe(ok);
+  });
+  it("opens exactly that door, nothing beside it", () => {
+    const READER = app("messaging.read");
+    expect(restDoorAllowed("GET", "/messaging/accounts/", READER)).toBe(true);
+    for (const path of [
+      "/messaging/accounts/acc-1",
+      "/messaging/conversations",
+      "/messaging/service-config",
+      "/connectors/providers",
+      "/connectors/sync-status",
+    ])
+      expect(restDoorAllowed("GET", path, READER), path).toBe(false);
   });
 });
 

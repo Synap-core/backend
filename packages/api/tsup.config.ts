@@ -6,6 +6,9 @@ export default defineConfig({
     // The document read/edit floor for the realtime (Yjs) room gate — the ONE
     // predicate, consumed by `@synap/realtime` via `@synap/api/document-access`.
     "document-access": "src/utils/document-edit-access.ts",
+    // THE access door (Principal, canRead, assertCanWrite, canJoinRoom) — the
+    // same vendoring into realtime, via `@synap/api/access-door`.
+    "access-door": "src/access/door.ts",
     // The public-door namespace predicate (Sites W3) — zero imports, read by
     // `apps/api` (CORS, rate class) via `@synap/api/public-doors`.
     "public-doors": "src/public-doors.ts",

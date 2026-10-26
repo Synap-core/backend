@@ -212,4 +212,27 @@ describe("the write gate enforces the key's grant (W1d)", () => {
     ).catch(() => ({}));
     expect(await denial(Promise.resolve(r))).toBeNull();
   });
+
+  // Founder decision 1 (2026-10-26): a status move is an ordinary update.
+  // Rules out: the gate still requiring `transition` named; the fold dropping
+  // grants minted naming the door; the fold reaching past update.
+  it("a status move needs update on the kind, or the door named", async () => {
+    const move = { action: "transition", data: { id: TASK } } as const;
+    for (const permissions of [
+      ["entity.task.update"],
+      ["entity.task"],
+      ["entity.task.transition"],
+      ["entity.transition"],
+    ]) {
+      const r = await write({ permissions }, move).catch(() => ({}));
+      expect(await denial(Promise.resolve(r)), permissions.join()).toBeNull();
+    }
+    for (const permissions of [
+      ["entity.task.read"],
+      ["entity.knowledge.update"],
+    ])
+      expect(await denial(write({ permissions }, move))).toContain(
+        "entity.task.update"
+      );
+  });
 });

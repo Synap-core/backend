@@ -32,6 +32,10 @@ import {
 } from "../../hub-protocol/rest/_shared.js";
 import { entitiesRouter as regularEntitiesRouter } from "../../entities.js";
 import { getDb } from "@synap/database";
+import {
+  parseEntityListSort,
+  type EntityListOrderBy,
+} from "../../../utils/entity-list-sort.js";
 import { toolError } from "../tool-errors.js";
 import {
   listEffectiveRelationTypes,
@@ -222,6 +226,18 @@ export const readHandlers: McpHandlerMap = {
       (args.type as string | undefined);
     const limit = pageLimit(args.limit, 50, ENTITIES_PAGE_MAX);
     const offset = pageOffset(args.offset);
+    // Sort is applied in SQL before paging. An unknown field or direction is an
+    // error the agent can act on, never a silently unsorted list.
+    const sortBy = args.sortBy as string | undefined;
+    const sortDir = args.sortDir as string | undefined;
+    let orderBy: EntityListOrderBy | undefined;
+    if (sortBy !== undefined || sortDir !== undefined) {
+      const parsed = parseEntityListSort(
+        `${sortBy ?? "createdAt"}${sortDir ? `:${sortDir}` : ""}`
+      );
+      if ("error" in parsed) return ok({ error: parsed.error });
+      orderBy = parsed.orderBy;
+    }
     const page = await caller.entities.getEntities({
       userId,
       profileSlug: profileSlug || undefined,
@@ -233,6 +249,7 @@ export const readHandlers: McpHandlerMap = {
       ...(args.facetSlug ? { facetSlug: args.facetSlug as string } : {}),
       // PAGING (plan 9992207a, c-paging): one row past the page tells whether
       // another page exists — the hub forwarder returns rows, not a total.
+      ...(orderBy ? { orderBy } : {}),
       limit: limit + 1,
       offset,
     });

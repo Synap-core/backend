@@ -65,6 +65,7 @@ import type { Context } from "../../context.js";
 import { entityWriteVisibleWhere } from "../../routers/entities/helpers.js";
 import {
   checkPermissionOrPropose,
+  HELD_WRITES_PROPOSAL_TYPE,
   isJoinGate,
   previewPermissionDecision,
   type PermissionDecisionPreview,
@@ -635,9 +636,11 @@ async function fileAlone(params: {
     if (kept || isJoinGate(written.proposalType)) {
       result.skipped.push({
         id: item.id,
-        reason: kept
-          ? "Kept on a request to join its space — replayed for you once approved; do not resend it"
-          : "Needs access to its space first — approve the join request, then send it again",
+        reason: !kept
+          ? "Needs access to its space first — approve the join request, then send it again"
+          : written.proposalType === HELD_WRITES_PROPOSAL_TYPE
+            ? "Held with today's writes past your daily limit — replayed for you once approved; do not resend it"
+            : "Kept on a request to join its space — replayed for you once approved; do not resend it",
         proposalId: written.proposalId,
         ...(kept ? { deferred: true as const } : {}),
       });

@@ -61,6 +61,12 @@ export interface AuditLogOpts {
    * (`events.read({ appId })`) shows them.
    */
   appId?: string | null;
+  /**
+   * The meter of a metered run (`capability-metering.ts`) → the event row's
+   * `provider` / `cost_usd` / `latency_ms` columns (0131). `costUsd: null` is
+   * an unpriced run, stored NULL, never 0. Absent on every other event.
+   */
+  meter?: { provider: string; costUsd: number | null; latencyMs: number };
   data?: Record<string, unknown>;
   source?: string;
   correlationId?: string;
@@ -146,6 +152,13 @@ export async function auditLog(
       // App attribution (0310): the application whose key produced this write,
       // beside the human `userId`. Undefined for a bare/human write.
       appId,
+      ...(opts.meter
+        ? {
+            provider: opts.meter.provider,
+            costUsd: opts.meter.costUsd,
+            latencyMs: opts.meter.latencyMs,
+          }
+        : {}),
       // Column is `text` — widen to string for compat between UnifiedEvent and EventRecord source unions
       source: event.source as
         "api" | "automation" | "sync" | "migration" | "system" | "intelligence",

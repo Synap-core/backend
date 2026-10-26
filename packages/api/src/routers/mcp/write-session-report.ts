@@ -13,6 +13,10 @@
  *    when a write's project is not that session's project, the reply says so
  *    and suggests a new session. Only when BOTH projects are known: a session
  *    with no project is general work, not a different topic.
+ *  - `handle` (W-A3): a call that named no conversation is its OWN run
+ *    (`…|call:`, D1), so its next call starts another receipt unless it names
+ *    this one. The reply hands it the id to pass — the server-minted handle of
+ *    MCP SEP-2567, the only continuity a client that sends no id can have.
  *
  * Built from what the gate RECORDED, never from a guess made before the
  * handler ran. A failed read is reported as `unavailable`, never as "no
@@ -25,6 +29,9 @@ import {
   inArray,
   focusSessions,
   projects,
+  getRequestClientKey,
+  isPerCallClientKey,
+  RECEIPT_IDLE_WINDOW_HOURS,
   type WriteSessionFiling,
 } from "@synap/database";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
@@ -48,9 +55,35 @@ export interface SessionTopicHint {
   suggest: "synap_start_session";
 }
 
+/** The run's receipt to name on the next call, and the sentence saying so. */
+export interface RunHandle {
+  sessionId: string;
+  note: string;
+}
+
 export type WriteSessionReport =
-  | { status: "ok"; filedIn: FiledInSession[]; topicHint?: SessionTopicHint }
+  | {
+      status: "ok";
+      filedIn: FiledInSession[];
+      topicHint?: SessionTopicHint;
+      handle?: RunHandle;
+    }
   | { status: "unavailable" };
+
+/** The handle for a per-call run that filed into a receipt; else undefined. */
+function runHandle(filedIn: readonly FiledInSession[]): RunHandle | undefined {
+  const clientKey = getRequestClientKey();
+  const receipt = filedIn.find((f) => f.kind === "receipt");
+  if (!clientKey || !isPerCallClientKey(clientKey) || !receipt)
+    return undefined;
+  return {
+    sessionId: receipt.sessionId,
+    note:
+      `This call named no conversation, so it is its own run. Pass ` +
+      `\`sessionId: "${receipt.sessionId}"\` on your next writes to keep this ` +
+      `run together (it closes after ${RECEIPT_IDLE_WINDOW_HOURS} h idle).`,
+  };
+}
 
 export async function describeWriteSessions(
   filings: readonly WriteSessionFiling[],
@@ -127,7 +160,13 @@ export async function describeWriteSessions(
       };
       break;
     }
-    return { status: "ok", filedIn, ...(hint ? { topicHint: hint } : {}) };
+    const handle = runHandle(filedIn);
+    return {
+      status: "ok",
+      filedIn,
+      ...(hint ? { topicHint: hint } : {}),
+      ...(handle ? { handle } : {}),
+    };
   } catch (err) {
     logger.warn({ err }, "write session report unavailable");
     return { status: "unavailable" };
