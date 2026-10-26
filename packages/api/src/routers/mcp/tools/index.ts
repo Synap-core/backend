@@ -569,6 +569,22 @@ const ROOM_QUESTION_ASK_JSON_SCHEMA = {
  */
 const RUN_CAPABILITY_JSON_SCHEMA = buildCapabilityExecuteAgentJsonSchema();
 
+/**
+ * The `sessionId` every ATTRIBUTED (non-read) tool declares — DERIVED in
+ * `tools.list()` from `readOnlyHint`, never hand-added to each schema (W-C1).
+ * The adapter already reads `sessionId` on every write
+ * (`resolveSessionHandle`); undeclared, a client that validates its arguments
+ * could not send it, and an agent was never told it may. The handle is
+ * server-minted (MCP SEP-2567): a session it started, or the one the reply
+ * names in `attribution.filed`. The idle window is
+ * `RECEIPT_IDLE_WINDOW_HOURS` (pinned by `attributed-tools-declare-session`).
+ */
+const ATTRIBUTED_SESSION_ID_PARAM = {
+  type: "string",
+  description:
+    "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error.",
+} as const;
+
 /** Context available when `list()` is called from a live MCP session (createMCPServer) — absent for the legacy static capabilities manifest (http-handler.ts GET /). */
 export interface ToolsListContext {
   workspaceId?: string;
@@ -739,6 +755,18 @@ export const tools = {
               description:
                 "Kind + Facets filter — only return entities carrying a live facet of this role-profile slug (e.g. 'client', 'investor'). Use synap_list_profiles to find role slugs (profileKind='role').",
             },
+            sortBy: {
+              type: "string",
+              enum: ["createdAt", "updatedAt", "title"],
+              description:
+                "Sort field, applied to the WHOLE set before paging (page 2 continues page 1). Default createdAt, newest first.",
+            },
+            sortDir: {
+              type: "string",
+              enum: ["asc", "desc"],
+              description:
+                "Sort direction (default desc). e.g. 'least recently updated first' = sortBy updatedAt, sortDir asc.",
+            },
             limit: {
               type: "number",
               default: 50,
@@ -865,6 +893,13 @@ export const tools = {
               type: "string",
               description:
                 "Proposal UUID, as returned verbatim by synap_list_proposals or by the `proposalId` of a `proposed` write. A leading fragment of one also resolves, but pass the full id you were given.",
+            },
+            detail: {
+              type: "string",
+              enum: ["lean", "full"],
+              default: "lean",
+              description:
+                "'lean' (default) = one copy of the payload (`data`), `review`, provenance, status; `request.data` and revision before/patch bodies are left out. 'full' = the whole row (about 3x larger).",
             },
           },
           required: ["proposalId"],
@@ -1907,7 +1942,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Define a new entity KIND — AND the door for ADDING A FIELD to a kind that already exists. It is SLUG-IDEMPOTENT: re-call it with an EXISTING slug and it returns that profile and adds only the `properties[]` that are not there yet (an existing field reports status 'unchanged' and is never rewritten). So to add `wedge_stage` to `question`, call this with slug 'question' and just that one field — there is NO separate add-property tool, and schema editing is NOT browser-only. A field takes `valueType`, `constraints` (an enum of allowed values lives here), `defaultValue`, `required`, and `overlay: true` to add it as a WORKSPACE OVERLAY instead of a base field on the kind — which is what you want for a field that only one domain should see, on a pod-wide kind like note/task/question. Call list_profiles + extend-first (load_skill system/synap-schema/extend-first) BEFORE minting a new slug. A hat on an existing kind — including item, task, deal — is a ROLE (synap_define_role / attach_facet), never a sibling kind. Prefer parentProfileSlug of the closest parent over a disconnected slug. A relationship-with-its-own-life (buyer×seller×price×stage) is its own kind (deal *precedent*), not a twin of CRM deal. POD-WIDE default. Governed: 'proposed' is success. Creates it on this pod only; an official template is written in the catalog and published with `synap catalog publish --official`.",
+          "Define a new entity KIND — AND the door for ADDING A FIELD to a kind that already exists. It is SLUG-IDEMPOTENT: re-call it with an EXISTING slug and it returns that profile and adds only the `properties[]` that are not there yet (an existing field reports status 'unchanged' and is never rewritten). So to add `wedge_stage` to `question`, call this with slug 'question' and just that one field — there is NO separate add-property tool, and schema editing is NOT browser-only. A field takes `valueType`, `constraints` (an enum of allowed values lives here), `defaultValue`, `required`, and `overlay: true` to add it as a WORKSPACE OVERLAY instead of a base field on the kind — which is what you want for a field that only one domain should see, on a pod-wide kind like note/task/question. Call list_profiles + extend-first (load_skill system/synap-schema/extend-first) BEFORE minting a new slug. A hat on an existing kind — including item, task, deal — is a ROLE (synap_define_role / attach_facet), never a sibling kind. Prefer parentProfileSlug of the closest parent over a disconnected slug. A relationship-with-its-own-life (buyer×seller×price×stage) is its own kind (deal *precedent*), not a twin of CRM deal. POD-WIDE default. Slugs are NORMALISED to lowercase words joined by '-' (social_account_audit → social-account-audit, botScore → botscore): the result's `notice`/`normalized` names every rewrite — use the stored slugs in code and later calls. Governed: 'proposed' is success; a NEW kind's `properties` ride that same proposal (one approval creates the kind and its fields, so do not re-call for them). Creates it on this pod only; an official template is written in the catalog and published with `synap catalog publish --official`.",
         inputSchema: {
           type: "object",
           properties: {
@@ -2755,6 +2790,17 @@ export const tools = {
               description:
                 "Optional: only sessions ABOUT this entity (the subject-spine anchor).",
             },
+            trackId: {
+              type: "string",
+              description: "Optional: only sessions in this track.",
+            },
+            detail: {
+              type: "string",
+              enum: ["lean", "full"],
+              default: "lean",
+              description:
+                "'lean' (default) = id, title, status, kind, trackId, projectId, workspaceId, updatedAt per row. 'full' = every column (goal, criteria, stages, metadata…): large, use `synap_get_session` for one session instead.",
+            },
             playbookId: {
               type: "string",
               description:
@@ -3016,6 +3062,12 @@ export const tools = {
               type: "string",
               description:
                 "Optional project you are working in. Never filters — it ranks a track template (scope project) above its same-name session twin.",
+            },
+            limit: {
+              type: "number",
+              default: 5,
+              description:
+                "Candidates to return, 1–20 (default 5). Rows carried only by a word many playbooks share are dropped; `goalTemplate` is cut at 200 chars (`synap_list_playbooks` has the whole).",
             },
           },
           required: [],
@@ -5192,7 +5244,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          'Discover what the user can actually DO. Returns a SECTIONED view: `integrations` (their connected services + tools, one per name, each with its `verbs` nested — e.g. google → gmail_send, gmail_search, calendar_list; the verb `id` is what you pass to synap_run_capability), `skills` (standalone runnable skills), and `commands`. Each integration shows `connection.connected` (needs connecting if false) and each verb shows `granted`/`effectiveExecMode` (a not-yet-granted verb must be enabled in Settings → Capabilities). Core built-in tools (already available to you directly as MCP tools) and teaching docs are folded out of this actionable view BY DEFAULT and only COUNTED under `excluded` — pass kind:"builtin-tool" or kind:"teaching-doc" to list them here instead, or synap_load_skill("catalog") for every teaching doc grouped by topic. Pass `query` to search across integrations/verbs/skills (e.g. query:"send email").',
+          'Discover what the user can actually DO. Returns a SECTIONED view: `integrations` (their connected services + tools, one per name, each with its `verbs` nested — e.g. google → gmail_send, gmail_search, calendar_list; the verb `id` is what you pass to synap_run_capability), `skills` (standalone runnable skills), and `commands`. Each integration shows `connection.connected` (needs connecting if false) and each verb shows `granted`/`effectiveExecMode` (an ungranted verb is PROPOSED for review when run, not refused). A verb carrying `blocked: "not_enabled"` is installed but switched off: synap_run_capability WILL refuse it, so do not run it first — hand the user its `enable.url` to turn it on. Core built-in tools (already available to you directly as MCP tools) and teaching docs are folded out of this actionable view BY DEFAULT and only COUNTED under `excluded` — pass kind:"builtin-tool" or kind:"teaching-doc" to list them here instead, or synap_load_skill("catalog") for every teaching doc grouped by topic. Pass `query` to search across integrations/verbs/skills (e.g. query:"send email").',
         inputSchema: {
           type: "object",
           properties: {
@@ -5290,7 +5342,7 @@ export const tools = {
             pathTemplate: {
               type: "string",
               description:
-                "Request path with {{param}} interpolation, e.g. '/v2/acts/{{actorId}}/runs'.",
+                "Request path RELATIVE to the tool's base URL, with {{param}} interpolation, e.g. '/acts/{{actorId}}/runs' on apify_api (base https://api.apify.com/v2). Never repeat a version prefix the base URL already ends in ('/v2/acts/…' there calls /v2/v2/acts/…).",
             },
             query: {
               type: "object",
@@ -5654,7 +5706,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Author a skill: Documentation (always) + OPTIONAL code. Send `body` alone for a TEACHING skill — reusable prose (a process, a checklist, a house style) that any agent later pulls with synap_load_skill; a teaching skill needs a `slug`, because that is the ref load_skill resolves. Send `code` for a runnable sandboxed executable, or both. `kind` is derived from code presence — do not guess it. For a deterministic provider HTTP call on an already-installed tool use synap_create_verb instead. Governed like every write: an agent create returns status='proposed'. An agent-authored skill is born UNAPPROVED either way and does NOT load or run until the owner approves it — code executes, and instruction prose lands in a future agent's system prompt, so both need a deliberate human OK. Creates it on this pod only; an official template is written in the catalog and published with `synap catalog publish --official`.",
+          "Author a skill: Documentation (always) + OPTIONAL code. Send `body` alone for a TEACHING skill — reusable prose (a process, a checklist, a house style) that any agent later pulls with synap_load_skill; a teaching skill needs a `slug`, because that is the ref load_skill resolves. Send `code` for a runnable sandboxed executable, or both: read synap_load_skill('system/synap/code-skills') first for the runtime (the async (args, context) wrapper, callProvider and its return shape, hubProtocol reads, propose.entity, limits). A code skill that calls an installed tool with callProvider should declare it in `requiredTools`, so a run is approved once, not once more per call. `kind` is derived from code presence — do not guess it. For a deterministic provider HTTP call on an already-installed tool use synap_create_verb instead. Governed like every write: an agent create returns status='proposed'. An agent-authored skill is born UNAPPROVED either way and does NOT load or run until a person approves its proposal — code executes, and instruction prose lands in a future agent's system prompt, so both need a deliberate human OK. That one approval also turns it on: there is no separate enable step (an edit to its code later turns it off until approved again). Creates it on this pod only; an official template is written in the catalog and published with `synap catalog publish --official`.",
         inputSchema: {
           type: "object",
           properties: {
@@ -5691,6 +5743,19 @@ export const tools = {
               type: "string",
               description:
                 "Optional workspace to scope the skill to (default: pod-wide).",
+            },
+            requiredTools: {
+              type: "array",
+              items: { type: "string" },
+              description:
+                "Code skills: the installed tools the code calls with callProvider, by name (e.g. ['apify_api']). The reviewer approves them with the skill; a run's own calls to these tools then ride the verb's approval instead of filing a second proposal.",
+            },
+            timeoutSeconds: {
+              type: "integer",
+              minimum: 1,
+              maximum: 300,
+              description:
+                "Code skills: how long one run may take, in seconds (default 30, max 300).",
             },
           },
           required: ["name"],
@@ -5756,6 +5821,19 @@ export const tools = {
         },
       },
     ];
+
+    // W-C1: every attributed tool declares `sessionId`, derived here so a new
+    // write tool declares it the moment it is listed. A tool that declares its
+    // own (`synap_update_session`'s target, …) keeps it.
+    for (const tool of toolDefs) {
+      if (tool.annotations?.readOnlyHint === true) continue;
+      const properties = tool.inputSchema.properties ?? {};
+      if ("sessionId" in properties) continue;
+      tool.inputSchema = {
+        ...tool.inputSchema,
+        properties: { ...properties, sessionId: ATTRIBUTED_SESSION_ID_PARAM },
+      };
+    }
 
     if (!ctx) return toolDefs;
 

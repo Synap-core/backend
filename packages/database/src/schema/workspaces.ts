@@ -225,6 +225,11 @@ export const podMembers = pgTable(
     createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
       .defaultNow()
       .notNull(),
+
+    // Set by `workspaces.removeFromPod` when the person is left with no space;
+    // cleared by a new pod invite. The row is access ONLY while this is NULL
+    // (0357, founder Q-B1): read it through `livePodMemberWhere`.
+    removedAt: timestamp("removed_at", { mode: "date", withTimezone: true }),
   },
   (table) => ({
     // One pod-membership row per user. Lets onConflictDoNothing() actually dedup.

@@ -19,7 +19,6 @@ import {
   eq,
   entities,
   documents,
-  workspaces,
   materializeEntity,
   resolveImportEntityPlacement,
   eventRepository,
@@ -447,7 +446,8 @@ export async function createFileEntityForStoredDocument(
   // D1: the upload's workspace is a CONTEXT signal — route placement through the
   // one door so a pod-scope kind (e.g. a generic `file`) lands pod-wide (NULL)
   // while a workspace-scoped one (e.g. `brand-asset`) stays in its lens.
-  const resolvedWorkspaceId = await resolveImportEntityPlacement(db, {
+  // A pod-wide answer is HOMED in the upload's workspace (0355).
+  const placement = await resolveImportEntityPlacement(db, {
     userId,
     profileSlug,
     sourceWorkspaceId: workspaceId,
@@ -458,7 +458,8 @@ export async function createFileEntityForStoredDocument(
       {
         profileSlug,
         title: displayTitle,
-        workspaceId: resolvedWorkspaceId,
+        workspaceId: placement.workspaceId,
+        homeWorkspaceId: placement.homeWorkspaceId,
         userId,
         documentId: document.id,
         properties: uploadEntityProperties({
@@ -710,8 +711,8 @@ async function finishUpload(p: {
 
 /**
  * Kratos-door write gate: the canonical `assertWorkspaceWrite` floor (an
- * editor+ member row — a viewer cannot upload), plus the workspace OWNER, who
- * may hold no member row at all.
+ * editor+ member row — a viewer cannot upload — or the workspace OWNER, who
+ * may hold no member row at all), as a boolean.
  */
 export async function canWriteWorkspace(
   userId: string,
@@ -722,12 +723,8 @@ export async function canWriteWorkspace(
     return true;
   } catch (err) {
     if (!(err instanceof TRPCError && err.code === "FORBIDDEN")) throw err;
+    return false;
   }
-  const ws = await db.query.workspaces.findFirst({
-    where: eq(workspaces.id, workspaceId),
-    columns: { ownerId: true },
-  });
-  return ws?.ownerId === userId;
 }
 
 // ---------------------------------------------------------------------------

@@ -13,7 +13,9 @@
  *               to the grant grammar's spelling by governance-policy
  *               `grantRequestKey` (focus_session → session, relationDef →
  *               relation_def, updateContent → update_content) — the same fold
- *               the read hook and the agent capability rung use
+ *               the read hook and the agent capability rung use; a door that
+ *               folds (`transition` → update) is also permitted by a pattern
+ *               naming it (`grantRequestKeys`)
  *   qualifier = for `entity`: the STORED kind of data.id / data.entityId
  *               (profiles.slug, then entities.type) whenever that row exists —
  *               never the caller's data.profileSlug, which on an update is the
@@ -26,9 +28,17 @@
  *               project-restricted grant fails closed)
  */
 
-import { db, eq, getRequestGrant, type KeyGrant } from "@synap/database";
-import { entities, profiles } from "@synap/database/schema";
-import { grantRequestKey } from "@synap/governance-policy";
+import {
+  and,
+  db,
+  eq,
+  getRequestGrant,
+  isNull,
+  podSharedFacetForSpacesWhere,
+  type KeyGrant,
+} from "@synap/database";
+import { entities, entityFacets, profiles } from "@synap/database/schema";
+import { grantRequestKey, grantRequestKeys } from "@synap/governance-policy";
 import { permits, type GrantRequest } from "@synap/governance-policy/grants";
 
 export interface GrantWriteInput {
@@ -99,16 +109,70 @@ export async function grantWriteDenial(
   grant: KeyGrant | undefined = getRequestGrant()
 ): Promise<string | null> {
   if (!grant) return null;
+  // A door folded onto another action (`entity/transition` → update) is also
+  // permitted by a pattern naming the door itself (`grantRequestKeys`).
+  const actions = grantRequestKeys(input.subjectType, input.action).map(
+    (k) => k.action
+  );
   for (const req of await grantRequestsForWrite(input)) {
     // ANY one scope must permit the WHOLE request on its own — scopes never
     // combine (one scope's kind with another's workspace is the cross product).
-    if (grant.scopes.some((scope) => permits(scope, req))) continue;
+    if (
+      grant.scopes.some((scope) =>
+        actions.some((action) => permits(scope, { ...req, action }))
+      )
+    )
+      continue;
     const key = [req.subject, req.qualifier, req.action]
       .filter(Boolean)
       .join(".");
     return `This key's grant does not allow "${key}"${
       req.workspaceId ? ` in workspace ${req.workspaceId}` : ""
     }.`;
+  }
+  return null;
+}
+
+/**
+ * The space a key's grant is checked in for a write on a role facet the key
+ * REACHES — writes follow the read reach (founder "option 1", 2026-10-23;
+ * status moves, founder decision 1, 2026-10-26): a LIVE, POD-WIDE facet on a
+ * live POD-WIDE entity whose role is granted to one of the key's spaces (THE
+ * predicate the reads use, `podSharedFacetForSpacesWhere`, as in the facets
+ * `spaceReach` of access/grant-read.ts). Returns the first such space, in the
+ * grant's order, whose grant permits `input` there; null otherwise, and the
+ * write stays pod scope (a space-pinned key fails closed, D2). Only ever the
+ * facet's own write: the entity row itself is never re-placed by it.
+ */
+export async function reachedFacetGrantSpace(
+  facetId: string,
+  input: Omit<GrantWriteInput, "workspaceId">,
+  grant: KeyGrant | undefined = getRequestGrant()
+): Promise<string | null> {
+  if (!grant) return null;
+  const spaces = [
+    ...new Set(grant.scopes.flatMap((scope) => scope.workspaceIds ?? [])),
+  ];
+  for (const space of spaces) {
+    const [reached] = await db
+      .select({ id: entityFacets.id })
+      .from(entityFacets)
+      .innerJoin(entities, eq(entities.id, entityFacets.entityId))
+      .where(
+        and(
+          eq(entityFacets.id, facetId),
+          isNull(entityFacets.deletedAt),
+          podSharedFacetForSpacesWhere([space]),
+          isNull(entities.workspaceId),
+          isNull(entities.deletedAt)
+        )
+      )
+      .limit(1);
+    if (
+      reached &&
+      (await grantWriteDenial({ ...input, workspaceId: space }, grant)) === null
+    )
+      return space;
   }
   return null;
 }

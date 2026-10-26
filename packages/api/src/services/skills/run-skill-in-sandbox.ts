@@ -30,6 +30,12 @@
  * auto-executing. Reads carry no agentUserId (they ride the operator floor),
  * matching `getCaller`'s deliberate asymmetry.
  *
+ * ONE BRIDGE SET (R1, 2026-10-26): everything the IS executor does, this does
+ * too — the parameter check before any code runs, dry-run (`dryRunEffects`),
+ * `propose.entity` `content`, the session on governed provider writes, and
+ * `runtimeVersion` on the result — so the pod can become the only runtime
+ * without a regression.
+ *
  * Behind the `SANDBOX_LOCAL` flag (default OFF) — the chokepoint in
  * `execute-capability.ts` still calls `executeSkillViaIS` unless it is "1".
  */
@@ -37,9 +43,11 @@
 // NOT a static import — see `loadIvm()` below. `isolated-vm` is a NATIVE addon,
 // and importing it at module scope crashed the pod on boot.
 import type IvmModule from "isolated-vm";
+import { AsyncResource } from "node:async_hooks";
 import {
   db,
   eq,
+  findRedeemableGrant,
   parseVaultReference,
   resolveVaultSecret,
   VaultGrantError,
@@ -56,7 +64,10 @@ import {
   SKILL_STDLIB_BOOTSTRAP,
   SKILL_RUNTIME_VERSION,
 } from "./skill-stdlib.js";
-import type { SkillExecutionResult } from "./execute-skill-via-is.js";
+import type {
+  RecordedEffect,
+  SkillExecutionResult,
+} from "./execute-skill-via-is.js";
 // Type-only import (erased at runtime — the value is loaded via dynamic import()
 // below to avoid a static router↔service cycle). Gives the caller its real type.
 import type { hubProtocolRouter } from "../../routers/hub-protocol/index.js";
@@ -82,7 +93,8 @@ async function redeemVaultSecretDirect(
   ref: string,
   operatorUserId: string,
   agentUserId: string | null,
-  workspaceId: string | null
+  workspaceId: string | null,
+  dryRun: boolean
 ): Promise<string | null> {
   const parsed = parseVaultReference(ref);
   if (!parsed) return null;
@@ -91,20 +103,29 @@ async function redeemVaultSecretDirect(
     columns: { userId: true },
   });
   if (!secret) return null;
+  // Redeemer is the acting agent (or the operator when no agent key is in
+  // play) — mirrors the vault REST door's `agentUserId ?? acting.userId`.
+  const redeemer = {
+    agentUserId: agentUserId ?? operatorUserId,
+    workspaceId: workspaceId ?? null,
+  };
+  // Dry-run: the SAME grant check, without decrypting and without spending a
+  // use (the find half of the redemption only). A granted ref answers a masked
+  // sentinel, an ungranted one null, as it would live.
+  if (dryRun) {
+    const grant = await findRedeemableGrant(
+      "secret",
+      parsed.secretId,
+      redeemer
+    );
+    return grant.ok ? "dry-run-secret" : null;
+  }
   try {
     return await resolveVaultSecret(
       parsed.secretId,
       secret.userId,
       parsed.fieldName,
-      {
-        requireGrant: true,
-        // Redeemer is the acting agent (or the operator when no agent key is in
-        // play) — mirrors the vault REST door's `agentUserId ?? acting.userId`.
-        redeemer: {
-          agentUserId: agentUserId ?? operatorUserId,
-          workspaceId: workspaceId ?? null,
-        },
-      }
+      { requireGrant: true, redeemer }
     );
   } catch (err) {
     if (err instanceof VaultGrantError) return null;
@@ -130,11 +151,24 @@ export async function runSkillInSandbox(args: {
    * required tools ride the verb's approval instead of being gated again.
    */
   verbAct?: { skillId: string; toolIds: readonly string[] };
+  /**
+   * The focus session the run belongs to, from the RUN's context (never from
+   * the skill's input). Rides the governed provider-write branch, so a
+   * proposal that write files carries `proposals.session_id`.
+   */
+  sessionId?: string | null;
+  /**
+   * Preview: reads run for real, every write and send (`propose.entity`,
+   * `callProvider`, `host.fetch`) is recorded in `dryRunEffects` instead of
+   * performed, secrets answer a masked value. Every guard still applies.
+   */
+  dryRun?: boolean;
 }): Promise<SkillExecutionResult> {
   const startTime = Date.now();
   const operatorUserId = args.userId;
   const workspaceId = args.workspaceId ?? null;
   const agentUserId = args.agentUserId ?? null;
+  const dryRun = args.dryRun === true;
 
   // P1: host-side carrier for a classified provider failure. `callProvider`
   // throws INTO the isolate (which strips Error properties down to the message)
@@ -180,9 +214,28 @@ export async function runSkillInSandbox(args: {
       };
     }
 
+    // The arguments against the skill's declared `parameters`, before any code
+    // runs: the runtime is the handler of a code skill, so this is the check
+    // `executeCapability`'s propose branch defers to for a `run`. The pod's one
+    // reader of that declaration; an absent or unreadable one runs unchanged.
+    const { checkVerbParameters, describeParameterRepair } =
+      await import("../capabilities/validate-verb-parameters.js");
+    const paramCheck = checkVerbParameters(skill, args.parameters);
+    if (paramCheck.status === "invalid") {
+      return {
+        success: false,
+        error: `Parameter validation failed: ${describeParameterRepair(
+          skill.name,
+          paramCheck.repair
+        )}`,
+        executionTimeMs: Date.now() - startTime,
+      };
+    }
+
     const timeoutMs = (skill.timeoutSeconds ?? 30) * 1000;
     const allowedHosts =
       (skill.metadata?.allowedHosts as string[] | undefined) ?? [];
+    const recordedEffects: RecordedEffect[] = [];
 
     // ONE caller, built with the operator floor — the same door the REST handlers
     // build. Reads scope to ctx.userId; the write bridges thread agentUserId as a
@@ -199,21 +252,32 @@ export async function runSkillInSandbox(args: {
     const result = await runIsolate({
       code: skill.code,
       args: args.parameters ?? {},
-      context: { userId: operatorUserId, workspaceId, agentUserId },
+      context: {
+        userId: operatorUserId,
+        // The author contract (`skill-runtime.d.ts`) types `threadId` a
+        // string; the IS executes these runs as "manual" / "dry-run".
+        threadId: dryRun ? "dry-run" : "manual",
+        workspaceId,
+        agentUserId,
+      },
       timeoutMs,
       allowedHosts,
       operatorUserId,
       workspaceId,
       agentUserId,
+      sessionId: args.sessionId ?? null,
       caller,
       failureSink: providerFailure,
       verbAct: args.verbAct,
+      recordedEffects: dryRun ? recordedEffects : undefined,
     });
 
     return {
       success: true,
       result,
       executionTimeMs: Date.now() - startTime,
+      runtimeVersion: SKILL_RUNTIME_VERSION,
+      ...(dryRun ? { dryRunEffects: recordedEffects } : {}),
     };
   } catch (error) {
     return {
@@ -272,11 +336,31 @@ async function loadIvm(): Promise<typeof IvmModule> {
   return ivmModulePromise;
 }
 
-async function runIsolate(params: {
+/**
+ * `fn`, bound to the async context in scope NOW.
+ *
+ * isolated-vm runs an `ivm.Reference` host callback with NO async context, so
+ * every AsyncLocalStorage store is empty inside it: the acting agent
+ * (`runWithActingAgent`), the key grant, the write-session ledger — all the
+ * pod-side context a bridge's hub call reads. Proven on the IS twin (ticket
+ * f47609a6, pod knowledge 11dc561a, IS `bindRequestCustomerContext`), where it
+ * turned every `callProvider` into a 401. `AsyncResource.bind` captures the
+ * WHOLE context (every store at once), so a store added later is covered by
+ * existing — no per-store list to keep in step.
+ */
+export function bindHostCallback<A extends unknown[], R>(
+  fn: (...args: A) => R
+): (...args: A) => R {
+  return AsyncResource.bind(fn);
+}
+
+/** @internal Exported for `run-skill-in-sandbox.async-context.test.ts`. */
+export async function runIsolate(params: {
   code: string;
   args: Record<string, unknown>;
   context: {
     userId: string;
+    threadId?: string;
     workspaceId: string | null;
     agentUserId: string | null;
   };
@@ -285,12 +369,19 @@ async function runIsolate(params: {
   operatorUserId: string;
   workspaceId: string | null;
   agentUserId: string | null;
+  /** The run's focus session — forwarded on governed provider writes only. */
+  sessionId?: string | null;
   caller: HubCaller;
   /** P1: written on a classified provider failure so the caller can attach the
    *  recovery classification to its failure envelope (see runSkillInSandbox). */
   failureSink: { errorClass?: FailureErrorClass; providerRef?: string };
   /** This run's verb decision — scoped to THIS isolate's provider calls. */
   verbAct?: { skillId: string; toolIds: readonly string[] };
+  /**
+   * Present = DRY-RUN: the write/send bridges record their effect here and
+   * return a stub instead of performing it. Reads and every guard stay real.
+   */
+  recordedEffects?: RecordedEffect[];
 }): Promise<unknown> {
   const {
     code,
@@ -301,13 +392,21 @@ async function runIsolate(params: {
     operatorUserId,
     workspaceId,
     agentUserId,
+    sessionId,
     caller,
     failureSink,
     verbAct,
+    recordedEffects,
   } = params;
+  const dryRun = recordedEffects !== undefined;
+  let dryRunSeq = 0;
 
   const ivm = await loadIvm();
   const isolate = new ivm.Isolate({ memoryLimit: ISOLATE_MEMORY_LIMIT_MB });
+  // EVERY host bridge goes through here, bound to this run's async context
+  // (see `bindHostCallback`); the tripwire in the test counts the sites.
+  const hostRef = <A extends unknown[], R>(fn: (...args: A) => R) =>
+    new ivm.Reference(bindHostCallback(fn));
 
   try {
     const vmContext = await isolate.createContext();
@@ -317,30 +416,28 @@ async function runIsolate(params: {
     await jail.set("__context", new ivm.ExternalCopy(context).copyInto());
 
     // ── console → backend logger ─────────────────────────────────────────────
-    const logRef = new ivm.Reference((...logArgs: unknown[]) => {
+    const logRef = hostRef((...logArgs: unknown[]) => {
       logger.info({ args: logArgs }, "[Skill]");
     });
     await jail.set("__log", logRef);
 
     // ── hubProtocol.search → hubProtocolRouter.search.search ─────────────────
-    const searchRef = new ivm.Reference(
-      async (query: unknown, opts: unknown) => {
-        const result = await caller.search.search({
-          // Identity LAST — a skill-controlled `opts` spread before it can
-          // never override the operator floor, regardless of what
-          // `search.search` reads in the future (today it ignores
-          // `input.userId` and uses `ctx.userId`, but that's a downstream
-          // invariant this bridge should not depend on).
-          ...((opts as object | null) ?? {}),
-          userId: operatorUserId,
-          query: String(query),
-        });
-        return new ivm.ExternalCopy(result).copyInto();
-      }
-    );
+    const searchRef = hostRef(async (query: unknown, opts: unknown) => {
+      const result = await caller.search.search({
+        // Identity LAST — a skill-controlled `opts` spread before it can
+        // never override the operator floor, regardless of what
+        // `search.search` reads in the future (today it ignores
+        // `input.userId` and uses `ctx.userId`, but that's a downstream
+        // invariant this bridge should not depend on).
+        ...((opts as object | null) ?? {}),
+        userId: operatorUserId,
+        query: String(query),
+      });
+      return new ivm.ExternalCopy(result).copyInto();
+    });
 
     // ── hubProtocol.getEntities → hubProtocolRouter.entities.getEntities ─────
-    const getEntitiesRef = new ivm.Reference(async (opts: unknown) => {
+    const getEntitiesRef = hostRef(async (opts: unknown) => {
       const o = (opts ?? {}) as {
         type?: string;
         profileSlug?: string;
@@ -359,7 +456,7 @@ async function runIsolate(params: {
     });
 
     // ── hubProtocol.getDocument → hubProtocolRouter.documents.getDocument ────
-    const getDocumentRef = new ivm.Reference(async (documentId: unknown) => {
+    const getDocumentRef = hostRef(async (documentId: unknown) => {
       const result = (await caller.documents.getDocument({
         documentId: String(documentId),
         userId: operatorUserId,
@@ -377,80 +474,95 @@ async function runIsolate(params: {
     await jail.set("__getDocument", getDocumentRef);
 
     // ── secrets.get → grant-gated vault resolver (direct) ────────────────────
-    const redeemSecretRef = new ivm.Reference(async (ref: unknown) => {
+    const redeemSecretRef = hostRef(async (ref: unknown) => {
       const value = await redeemVaultSecretDirect(
         String(ref),
         operatorUserId,
         agentUserId,
-        workspaceId
+        workspaceId,
+        dryRun
       );
       return new ivm.ExternalCopy(value ?? null).copyInto();
     });
     await jail.set("__redeemSecret", redeemSecretRef);
 
     // ── host.fetch → external egress (SSRF + allowedHosts guarded) ───────────
-    const hostFetchRef = new ivm.Reference(
-      async (urlStr: unknown, optsStr?: unknown) => {
-        const url = String(urlStr);
+    const hostFetchRef = hostRef(async (urlStr: unknown, optsStr?: unknown) => {
+      const url = String(urlStr);
 
-        const check = validateExternalUrl(url);
-        if (!check.valid) {
-          return new ivm.ExternalCopy({
-            error: "url_rejected",
-            message: check.reason,
-          }).copyInto();
-        }
-
-        if (!allowedHosts.includes(check.url.hostname)) {
-          return new ivm.ExternalCopy({
-            error: "domain_not_approved",
-            hostname: check.url.hostname,
-            message: `Domain "${check.url.hostname}" is not approved. The agent should propose access.`,
-          }).copyInto();
-        }
-
-        try {
-          const controller = new AbortController();
-          const timeout = setTimeout(() => controller.abort(), 30_000);
-          try {
-            // `safeExternalFetch` re-validates SSRF ranges on every hop and, with
-            // `maxRedirects` left at its default of 0, REJECTS any redirect
-            // outright — `check.url`/`allowedHosts` above only vetted the
-            // INITIAL URL, so a raw `fetch()` here would follow a same-host-
-            // approved response straight through a `302 Location:
-            // http://169.254.169.254/...` (or any internal service) with no
-            // re-check. Rejecting redirects keeps the initial `allowedHosts`
-            // gate sufficient — there is no second hop to smuggle through it.
-            const response = await safeExternalFetch(url, {
-              ...(typeof optsStr === "string" ? JSON.parse(optsStr) : {}),
-              signal: controller.signal,
-            });
-            const body = await response.text();
-            const headers: Record<string, string> = {};
-            response.headers.forEach((value, key) => {
-              headers[key] = value;
-            });
-            return new ivm.ExternalCopy({
-              ok: response.ok,
-              status: response.status,
-              headers,
-              body: body.slice(0, 100_000), // cap response size
-            }).copyInto();
-          } finally {
-            clearTimeout(timeout);
-          }
-        } catch (err) {
-          return new ivm.ExternalCopy({
-            error: "fetch_failed",
-            message: err instanceof Error ? err.message : "Fetch failed",
-          }).copyInto();
-        }
+      const check = validateExternalUrl(url);
+      if (!check.valid) {
+        return new ivm.ExternalCopy({
+          error: "url_rejected",
+          message: check.reason,
+        }).copyInto();
       }
-    );
+
+      if (!allowedHosts.includes(check.url.hostname)) {
+        return new ivm.ExternalCopy({
+          error: "domain_not_approved",
+          hostname: check.url.hostname,
+          message: `Domain "${check.url.hostname}" is not approved. The agent should propose access.`,
+        }).copyInto();
+      }
+
+      // Dry-run: the guards above ran and their refusals surfaced; the request
+      // itself is recorded, never sent.
+      if (recordedEffects) {
+        const method =
+          typeof optsStr === "string"
+            ? ((JSON.parse(optsStr) as { method?: string }).method ?? "GET")
+            : "GET";
+        recordedEffects.push({ kind: "fetch", url, method });
+        return new ivm.ExternalCopy({
+          ok: true,
+          status: 200,
+          headers: {},
+          body: "",
+        }).copyInto();
+      }
+
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 30_000);
+        try {
+          // `safeExternalFetch` re-validates SSRF ranges on every hop and, with
+          // `maxRedirects` left at its default of 0, REJECTS any redirect
+          // outright — `check.url`/`allowedHosts` above only vetted the
+          // INITIAL URL, so a raw `fetch()` here would follow a same-host-
+          // approved response straight through a `302 Location:
+          // http://169.254.169.254/...` (or any internal service) with no
+          // re-check. Rejecting redirects keeps the initial `allowedHosts`
+          // gate sufficient — there is no second hop to smuggle through it.
+          const response = await safeExternalFetch(url, {
+            ...(typeof optsStr === "string" ? JSON.parse(optsStr) : {}),
+            signal: controller.signal,
+          });
+          const body = await response.text();
+          const headers: Record<string, string> = {};
+          response.headers.forEach((value, key) => {
+            headers[key] = value;
+          });
+          return new ivm.ExternalCopy({
+            ok: response.ok,
+            status: response.status,
+            headers,
+            body: body.slice(0, 100_000), // cap response size
+          }).copyInto();
+        } finally {
+          clearTimeout(timeout);
+        }
+      } catch (err) {
+        return new ivm.ExternalCopy({
+          error: "fetch_failed",
+          message: err instanceof Error ? err.message : "Fetch failed",
+        }).copyInto();
+      }
+    });
     await jail.set("__hostFetch", hostFetchRef);
 
     // ── callProvider → triggerProviderAction (governed, agent-gated) ─────────
-    const callProviderRef = new ivm.Reference(
+    const callProviderRef = hostRef(
       async (
         provider: unknown,
         method: unknown,
@@ -494,6 +606,23 @@ async function runIsolate(params: {
           ).filter(([, v]) => typeof v === "string") as [string, string][];
           if (entries.length > 0) headers = Object.fromEntries(entries);
         }
+        // Dry-run: the provider is never called; the intended call is recorded
+        // and a stub answers so the skill's control flow carries on.
+        if (recordedEffects) {
+          recordedEffects.push({
+            kind: "callProvider",
+            provider,
+            method: method.toUpperCase(),
+            path,
+            body: typeof body === "object" && body !== null ? body : undefined,
+            baseUrlOverride,
+          });
+          return new ivm.ExternalCopy({
+            status: 200,
+            headers: {},
+            body: { dryRun: true },
+          }).copyInto();
+        }
         try {
           // GOVERNANCE: attach the acting agent identity ONLY for mutating methods
           // — with agentUserId set, the gate inside triggerProviderAction treats
@@ -516,7 +645,13 @@ async function runIsolate(params: {
             baseUrlOverride,
             ...(headers ? { headers } : {}),
             ...(isWrite && agentUserId
-              ? { agentUserId, workspaceId: workspaceId ?? undefined }
+              ? {
+                  agentUserId,
+                  workspaceId: workspaceId ?? undefined,
+                  // Session provenance rides ONLY the governed (write) branch,
+                  // the one that can file a proposal. Absent stays absent.
+                  ...(sessionId ? { sessionId } : {}),
+                }
               : {}),
             // ONE governed act: this run's verb was already decided, so its
             // calls to its OWN required tools are not gated again (scoped in
@@ -562,7 +697,7 @@ async function runIsolate(params: {
     await jail.set("__callProvider", callProviderRef);
 
     // ── propose.entity → hubProtocolRouter.entities.createEntity (governed) ──
-    const proposeEntityRef = new ivm.Reference(async (input: unknown) => {
+    const proposeEntityRef = hostRef(async (input: unknown) => {
       if (typeof input !== "object" || input === null) {
         throw new Error(
           "propose.entity: argument must be an object { profileSlug, title, properties? }"
@@ -573,6 +708,7 @@ async function runIsolate(params: {
         type,
         title,
         properties,
+        content,
         description,
         reasoning,
         workspaceId: inputWorkspaceId,
@@ -592,6 +728,29 @@ async function runIsolate(params: {
       ) {
         throw new Error("propose.entity: properties must be an object");
       }
+      if (content !== undefined && typeof content !== "string") {
+        throw new Error("propose.entity: content must be a string");
+      }
+      // Dry-run: no proposal is filed; the intended entity is recorded and a
+      // synthetic handle answers so the skill can reference it.
+      if (recordedEffects) {
+        const n = ++dryRunSeq;
+        recordedEffects.push({
+          kind: "propose.entity",
+          profileSlug: slug,
+          title,
+          properties:
+            typeof properties === "object" && properties !== null
+              ? (properties as Record<string, unknown>)
+              : undefined,
+          content: typeof content === "string" ? content : undefined,
+        });
+        return new ivm.ExternalCopy({
+          status: "dry-run",
+          proposalId: `dry:${n}`,
+          proposedEntityId: `dry:${n}`,
+        }).copyInto();
+      }
       try {
         // The governed createEntity door: with agentUserId set, an agent write
         // routes to a reviewable PROPOSAL via checkPermissionOrPropose — never a
@@ -603,6 +762,9 @@ async function runIsolate(params: {
           title,
           description:
             typeof description === "string" ? description : undefined,
+          // The long-form Markdown body: the door makes it the entity's
+          // versioned document.
+          content: typeof content === "string" ? content : undefined,
           properties:
             typeof properties === "object" && properties !== null
               ? (properties as Record<string, unknown>)

@@ -166,6 +166,7 @@ describe("create_playbook — executor caller (playbooks.create door)", () => {
     userId: "user-1",
     workspaceId: "ws-1",
     auditSource: "test",
+    skillAuthor: { agentUserId: null, personApproved: false },
   };
 
   it("routes through playbooks.create with status draft", async () => {

@@ -27,13 +27,13 @@
  */
 
 import type { OwedByPerson } from "./owed-by-person.js";
+import type { LooseEnds } from "./loose-ends.js";
 import type { LibraryHealth } from "@synap-core/types/imports";
 import type { SessionsOwingGrade } from "../focus-sessions/session-nudges.js";
 import {
   db,
   entities,
   projects,
-  proposals,
   workspaces,
   workspaceMembers,
   eq,
@@ -46,7 +46,6 @@ import {
 } from "@synap/database";
 import { readSpaceBrief, type SpaceBrief } from "@synap-core/types/space-brief";
 import { ownerPrivateVisibleWhere } from "../../utils/user-visible-where.js";
-import { ownAgentUserFilter } from "../agent-identity-service.js";
 import {
   hydrateUsedWorkspaces,
   listWorkspacesUsedByProjects,
@@ -70,11 +69,11 @@ import {
   isDomainHomeWorkspace,
   type WorkspaceHomeSignals,
 } from "../../lib/routing-candidates.js";
+import { buildStartHere, readRankedLensProfiles } from "./start-here.js";
 import {
-  buildStartHere,
-  readRankedLensProfiles,
+  readPendingReviewState,
   type PendingReviewState,
-} from "./start-here.js";
+} from "./pending-review.js";
 import {
   buildSpaceBrief,
   resolveSpacePurpose,
@@ -197,6 +196,13 @@ export interface StartHere {
      */
     | { status: "paused" }
     | StartHereUnavailable;
+  /**
+   * The CALLING AGENT's own leftovers (W-B2): sessions it opened idle over a
+   * week, asks it left owed on its ended sessions, its proposals pending over
+   * a week, automations it made that never fired — each row with the call
+   * that ends it. Present only when an agent calls. See `loose-ends.ts`.
+   */
+  looseEnds?: LooseEnds;
   /**
    * Open sessions the caller OWNS whose criteria are not all graded —
    * "grade with evaluate_session before you say done". Bounded read; the lens
@@ -972,60 +978,7 @@ export async function discover(
   // `count` and `oldest` are aggregated over the SAME floored population as the
   // list: widening the list without widening this would make `oldestDays` a
   // number computed over a different set than the count printed beside it.
-  let pendingState: PendingReviewState;
-  try {
-    const pendingFloor = and(
-      eq(proposals.status, "pending"),
-      or(
-        eq(proposals.createdBy, userId),
-        ownAgentUserFilter(proposals.agentUserId, userId),
-        ownAgentUserFilter(proposals.createdBy, userId)
-      )
-    );
-    // COUNT + MIN in one aggregate row — never load the rows themselves. On a
-    // busy pod the pending queue can be large, and orient runs on every session
-    // start; a full-row fetch just to count would tax the mandated first call.
-    const [agg] = await db
-      .select({
-        count: drizzleSql<number>`count(*)::int`,
-        oldest: drizzleSql<Date | null>`min(${proposals.createdAt})`,
-      })
-      .from(proposals)
-      .where(pendingFloor);
-    const count = agg?.count ?? 0;
-    let oldestId: string | undefined;
-    if (count > 0) {
-      // The oldest proposal's id, for startHere's review link — one indexed
-      // row over the SAME floor as the count. A failed read costs the link
-      // only; the count beside it is still true.
-      try {
-        const [oldestRow] = await db
-          .select({ id: proposals.id })
-          .from(proposals)
-          .where(pendingFloor)
-          .orderBy(drizzleSql`${proposals.createdAt} asc`)
-          .limit(1);
-        oldestId = oldestRow?.id;
-      } catch {
-        // The link only; the count beside it stands.
-      }
-    }
-    pendingState = {
-      status: "ok",
-      count,
-      oldestDays:
-        count > 0 && agg?.oldest
-          ? Math.floor(
-              (Date.now() - new Date(agg.oldest).getTime()) / 86_400_000
-            )
-          : 0,
-      ...(oldestId ? { oldestId } : {}),
-    };
-  } catch {
-    // Unreadable is its own state in startHere; the legacy top-level
-    // `pendingReview` key stays omitted, as before.
-    pendingState = { status: "unavailable" };
-  }
+  const pendingState: PendingReviewState = await readPendingReviewState(userId);
   const pendingSummary =
     pendingState.status === "ok" && pendingState.count > 0
       ? { count: pendingState.count, oldestDays: pendingState.oldestDays }

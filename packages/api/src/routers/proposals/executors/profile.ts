@@ -12,6 +12,14 @@ import type { Context } from "../../../context.js";
 import { readDuplicateCheck } from "@synap-core/types/proposals";
 import { registerProposalExecutor } from "../execution-registry.js";
 import { reportApproved } from "./shared.js";
+import { createLogger } from "@synap-core/core";
+import {
+  createAndLinkPropertyDef,
+  type CreateAndLinkPropertyDefInput,
+} from "../../../services/profiles/create-and-link-property-def.js";
+import { ProposedKindFieldSchema } from "../../../services/profiles/proposed-kind-field.js";
+
+const logger = createLogger({ module: "proposal-approve-executors-profile" });
 
 /** Idempotency: approve is not status-guarded before dispatch. */
 async function alreadyApproved(proposalId: string): Promise<boolean> {
@@ -147,10 +155,118 @@ export function registerProfileExecutors(): void {
         });
       }
 
+      // The fields that rode this proposal (ticket a375443d): one approval
+      // creates the kind AND its fields, through the SAME helper the
+      // `property_def/create` executor uses, as the approver. One field that
+      // fails never undoes the kind or its siblings; it is reported (below)
+      // for the author to add (define_kind is slug-idempotent).
+      // Only a kind THIS approval created takes the carried fields: on the
+      // slug-idempotent hit (`existing: true`, a kind of that slug appeared
+      // since filing) the reviewer was told a kind was being CREATED, so its
+      // fields are refused and reported, never attached to someone's kind.
+      const replayed = result as {
+        profile?: { id?: string } | null;
+        existing?: boolean;
+      } | null;
+      const landedOnExisting = replayed?.existing === true;
+      const createdProfileId = landedOnExisting
+        ? undefined
+        : replayed?.profile?.id;
+      // Each field is CHECKED AGAIN here, not trusted from when it was filed:
+      // a proposal can sit for days, and a stored payload is data. A field
+      // that no longer passes (bad shape, a slug taken since, a type clash) is
+      // REPORTED on the row — `data.fieldOutcomes` — never silently dropped.
+      const rawFields = Array.isArray(innerData.kindFields)
+        ? innerData.kindFields
+        : [];
+      const fieldOutcomes: Array<{
+        slug: string | null;
+        outcome: "created" | "refused";
+        reason?: string;
+      }> = [];
+      if (landedOnExisting) {
+        for (const raw of rawFields) {
+          fieldOutcomes.push({
+            slug:
+              raw &&
+              typeof raw === "object" &&
+              typeof (raw as { slug?: unknown }).slug === "string"
+                ? (raw as { slug: string }).slug
+                : null,
+            outcome: "refused",
+            reason:
+              "the kind already exists, so the approval created nothing to attach it to; add it with define_kind",
+          });
+        }
+      }
+      if (createdProfileId) {
+        for (const raw of rawFields) {
+          const parsed = ProposedKindFieldSchema.safeParse(raw);
+          const rawSlug =
+            raw &&
+            typeof raw === "object" &&
+            typeof (raw as { slug?: unknown }).slug === "string"
+              ? (raw as { slug: string }).slug
+              : null;
+          if (!parsed.success) {
+            fieldOutcomes.push({
+              slug: rawSlug,
+              outcome: "refused",
+              reason: parsed.error.issues
+                .map((i) => `${i.path.join(".") || "field"}: ${i.message}`)
+                .join("; "),
+            });
+            continue;
+          }
+          const field = parsed.data;
+          try {
+            await createAndLinkPropertyDef({
+              userId,
+              workspaceId,
+              profileId: createdProfileId,
+              slug: field.slug,
+              valueType:
+                field.valueType as CreateAndLinkPropertyDefInput["valueType"],
+              constraints: field.constraints,
+              uiHints: field.uiHints,
+              overlay: field.overlay === true,
+              required: field.required,
+              defaultValue: field.defaultValue,
+              displayOrder: field.displayOrder,
+            });
+            fieldOutcomes.push({ slug: field.slug, outcome: "created" });
+          } catch (err) {
+            // One field never undoes the kind or its siblings.
+            fieldOutcomes.push({
+              slug: field.slug,
+              outcome: "refused",
+              reason: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
+        const refusedCount = fieldOutcomes.filter(
+          (o) => o.outcome === "refused"
+        ).length;
+        if (refusedCount > 0) {
+          logger.warn(
+            { proposalId: input.proposalId, fieldOutcomes },
+            "profile/create approval: carried field(s) refused (kind kept)"
+          );
+        }
+      }
+
       await db
         .update(proposals)
         .set({
           status: ProposalStatus.APPROVED,
+          ...(fieldOutcomes.length > 0
+            ? {
+                data: {
+                  ...((proposal.data as Record<string, unknown> | null) ?? {}),
+                  fieldOutcomes,
+                },
+              }
+            : {}),
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
@@ -166,7 +282,18 @@ export function registerProfileExecutors(): void {
         "approved",
         userId
       );
-      return { success: true };
+      // The honest partial shape: the kind landed, these fields did not.
+      const refusals = fieldOutcomes.flatMap((o) =>
+        o.outcome === "refused"
+          ? [
+              `Field "${o.slug ?? "?"}" was not created: ${o.reason ?? "refused"}`,
+            ]
+          : []
+      );
+      return {
+        success: true,
+        ...(refusals.length > 0 ? { refusals } : {}),
+      };
     },
   });
 

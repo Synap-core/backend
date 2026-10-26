@@ -18,6 +18,7 @@ import {
   inArray,
   getActingAgentUserId,
   isDelegationHeaders,
+  userVisibleWhere,
   type SQL,
 } from "@synap/database";
 import { skills, tools } from "@synap/database/schema";
@@ -51,6 +52,7 @@ import {
 import { CAPABILITY_RUN_PROPOSAL_TYPE } from "../services/proposals/proposal-class.js";
 import { auditLog } from "../utils/audit-log.js";
 import { setSkillApproved } from "../services/capabilities/set-skill-approved.js";
+import { skillBornApproved } from "../services/capabilities/skill-born-approved.js";
 import { emitSideEffects } from "@synap/events";
 import { randomUUID } from "crypto";
 import { parseSkillMd } from "../skills/skill-md-parser.js";
@@ -314,22 +316,106 @@ export {
 } from "../services/capabilities/skill-exec-fields.js";
 
 /**
+ * The tools among `toolIds` that `userId` can see — the ONE visibility check
+ * for a declared `requires` scope: at filing (`skills.create`, as the author)
+ * and again at approval (the `skill/create` replay, as the approver), so an id
+ * that is gone or out of reach by then binds nothing.
+ */
+export async function visibleRequiredTools(
+  userId: string,
+  toolIds: readonly string[]
+): Promise<Array<{ id: string; name: string }>> {
+  if (toolIds.length === 0) return [];
+  return db
+    .select({ id: tools.id, name: tools.name })
+    .from(tools)
+    .where(
+      and(
+        inArray(tools.id, [...toolIds]),
+        userVisibleWhere(tools.workspaceId, userId)
+      )
+    );
+}
+
+/**
+ * A skill's `requires → tool` edges as the writer below sees them (it diffs
+ * against exactly this set). Also read by the definition applier, so a
+ * `requires` that ADDS a tool is told apart from a replay (review of #199, R2).
+ */
+export async function skillRequiresEdges(userId: string, skillId: string) {
+  const edges = await getLinksFor(userId, "skill", skillId);
+  return edges.filter((e) => e.linkType === "requires" && e.toType === "tool");
+}
+
+/**
+ * Replace the set of tools a skill `requires` — the body of
+ * `skills.setRequiredTools`, shared with the two doors that declare the set at
+ * CREATE time: `skills.create`'s direct path and the `skill/create` approval
+ * replay (ticket c5058d24). These edges are the scope a verb's decision covers
+ * (`verbAct`, execute-capability.ts), so a code skill that declares its tools
+ * is not gated a second time on its own `callProvider` calls. Diffs against
+ * the existing edges: adds new, removes dropped. Idempotent.
+ */
+export async function replaceSkillRequiredTools(params: {
+  userId: string;
+  skill: { id: string; workspaceId: string | null };
+  toolIds: readonly string[];
+}): Promise<void> {
+  const { userId, skill, toolIds } = params;
+  const existing = await skillRequiresEdges(userId, skill.id);
+  const existingIds = new Set(existing.map((e) => e.toId));
+  const wanted = new Set(toolIds);
+
+  // Remove edges no longer wanted.
+  for (const e of existing) {
+    if (!wanted.has(e.toId)) await deleteLink(e.id);
+  }
+  // Add new edges.
+  const toAdd = toolIds.filter((id) => !existingIds.has(id));
+  if (toAdd.length) {
+    await createLinks(
+      toAdd.map((toolId) => ({
+        workspaceId: skill.workspaceId ?? null,
+        fromType: "skill" as const,
+        fromId: skill.id,
+        toType: "tool" as const,
+        toId: toolId,
+        linkType: "requires" as const,
+      }))
+    );
+  }
+}
+
+/**
  * The ONE governed persistence path for inserting a `skills` row. Shared by
  * every skill-creation door (`create`, `installFromUrl` here, and the Hub
  * Protocol `/agent-skills/import` door) so none of them can bypass the same
  * `checkPermissionOrPropose` gate `create` runs — no door hardcodes
  * `approved: true` on its own insert.
  *
- * Born-approved rule: an `instruction` skill (prompt-only, no side effects) is
- * approved when installed by a trusted human (no `agentUserId`). Anything
- * executable (`code`/`declarative`), OR an install initiated by an agent
- * identity — including instruction content, which lands in the agent's system
- * prompt and is therefore a prompt-injection vector — is born UNAPPROVED and
- * needs an explicit owner approval (`setApproved`) before it runs or loads as
- * an agent tool.
+ * Born-approved rule: `skillBornApproved` — an `instruction` skill installed
+ * by a trusted human (no `agentUserId`). Anything executable, or anything an
+ * agent authored, is born UNAPPROVED and needs a person's OK before it runs or
+ * loads as an agent tool: approving its `skill/create` proposal (the executor
+ * turns it on), or `setApproved` when no person reviewed the create.
  */
 export type InsertSkillGovernedInput = typeof skills.$inferInsert & {
   agentUserId?: string;
+  /**
+   * The skill's AUTHOR, when this door runs as someone else. A composite
+   * proposal's skill step re-enters here with no `agentUserId` (the governance
+   * decision was already made, so the gate must grant, not re-propose), but
+   * the skill is the proposal agent's. The born-approved rule judges the
+   * author and whether a person approved the proposal, never the door: an
+   * agent's skill in a composite that auto-applied is born unapproved.
+   * Ignored when `agentUserId` is set (the door then IS the author). Only the
+   * composite's INSTRUCTION step passes it: an executable skill a person
+   * approved is turned on by the `skill/create` executor through
+   * `setSkillApproved`, the one enable door. Not `author`: that name is the
+   * `skills.author` column (who wrote a package's skill), which this input
+   * also carries.
+   */
+  skillAuthor?: { agentUserId: string | null; personApproved: boolean };
   /** Folded into the audit-log `data` for observability, e.g. "install_from_url". */
   auditSource: string;
 };
@@ -344,6 +430,7 @@ export async function insertSkillGoverned(
 ): Promise<InsertSkillGovernedResult> {
   const {
     agentUserId,
+    skillAuthor,
     auditSource,
     id: _ignoredId,
     approved: _ignoredApproved,
@@ -383,7 +470,12 @@ export async function insertSkillGoverned(
     return { status: "proposed", proposalId: perm.proposalId };
   }
 
-  const approved = values.kind === "instruction" && !agentUserId;
+  const approved = skillBornApproved({
+    kind: values.kind,
+    agentUserId: agentUserId ?? skillAuthor?.agentUserId,
+    personApprovedProposal:
+      !agentUserId && skillAuthor?.personApproved === true,
+  });
 
   const [skill] = await db
     .insert(skills)
@@ -1100,6 +1192,14 @@ export const skillsRouter = router({
         executionMode: z.enum(["sync", "async"]).default("sync"),
         timeoutSeconds: z.number().min(1).max(300).default(30),
         /**
+         * The tools this skill `requires` (its `callProvider` targets), written
+         * through `replaceSkillRequiredTools` — the `setRequiredTools` body —
+         * on the direct path AND by the `skill/create` approval replay, so a
+         * reviewer approves the declared scope with the skill. Each id must be
+         * a tool the caller can see.
+         */
+        requiredToolIds: z.array(z.string().uuid()).max(20).optional(),
+        /**
          * The skill's vendor-INDEPENDENT routing intent (the
          * `capability_intents` vocabulary): what this verb MEANS, so an agent can
          * ask "what can send a message?" without already knowing `gmail_send`.
@@ -1187,6 +1287,30 @@ export const skillsRouter = router({
       // learns the gap now, not the reviewer at approval or the run at execution.
       assertSkillCodeAllowed(kind, input.code);
 
+      // A declared tool must exist and be visible to the author NOW — a
+      // proposal naming a tool nobody can see would approve a scope that
+      // binds nothing.
+      const requiredToolIds = [...new Set(input.requiredToolIds ?? [])];
+      // Display-only twin of the ids, in the same order: the summary names
+      // the scope the person approves (it is protected from revise, like the
+      // ids it describes).
+      let requiredToolNames: string[] = [];
+      if (requiredToolIds.length > 0) {
+        const visible = await visibleRequiredTools(userId, requiredToolIds);
+        const nameById = new Map(visible.map((t) => [t.id, t.name]));
+        requiredToolNames = requiredToolIds.flatMap((id) => {
+          const name = nameById.get(id);
+          return name ? [name] : [];
+        });
+        const missing = requiredToolIds.filter((id) => !nameById.has(id));
+        if (missing.length > 0) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `requiredToolIds: no installed tool you can see has id ${missing.join(", ")}.`,
+          });
+        }
+      }
+
       // 1. Permission check
       const perm = await checkPermissionOrPropose({
         userId,
@@ -1223,6 +1347,11 @@ export const skillsRouter = router({
           ...(input.urlPatterns?.length
             ? { urlPatterns: input.urlPatterns }
             : {}),
+          // Replayed by the `skill/create` executor through the same
+          // `replaceSkillRequiredTools` once the skill row exists.
+          ...(requiredToolIds.length
+            ? { requiredToolIds, requiredToolNames }
+            : {}),
         },
         agentUserId: input.agentUserId,
       });
@@ -1246,10 +1375,9 @@ export const skillsRouter = router({
       //    …but ONLY for a trusted human author. An AGENT-initiated instruction
       //    skill is born UNAPPROVED: its body lands in a future agent's system
       //    prompt, so prose is a prompt-injection vector exactly as code is an
-      //    execution one. This mirrors `insertSkillGoverned`'s rule verbatim
-      //    (`kind === "instruction" && !agentUserId`); the two born-approved
-      //    decisions MUST stay identical or this direct path becomes the
-      //    bypass the shared door exists to prevent. Normally an agent create
+      //    execution one. Both born-approved sites read the ONE rule
+      //    (`skillBornApproved`); were they to differ, this direct path would
+      //    become the bypass the shared door exists to prevent. Normally an agent create
       //    returns `proposed` before reaching here — this closes the case where
       //    a governance rule has widened `skill/create` to auto for an agent.
       const [skill] = await db
@@ -1286,9 +1414,20 @@ export const skillsRouter = router({
           // source-link); omitted → the column default `{}` applies.
           ...(input.metadata ? { metadata: input.metadata } : {}),
           status: "active",
-          approved: kind === "instruction" && !input.agentUserId,
+          approved: skillBornApproved({
+            kind,
+            agentUserId: input.agentUserId,
+          }),
         })
         .returning();
+
+      if (requiredToolIds.length > 0) {
+        await replaceSkillRequiredTools({
+          userId,
+          skill,
+          toolIds: requiredToolIds,
+        });
+      }
 
       // 3. Audit log
       auditLog({
@@ -2078,31 +2217,11 @@ export const skillsRouter = router({
       if (!skill)
         throw new TRPCError({ code: "NOT_FOUND", message: "Skill not found" });
 
-      const edges = await getLinksFor(userId, "skill", input.skillId);
-      const existing = edges.filter(
-        (e) => e.linkType === "requires" && e.toType === "tool"
-      );
-      const existingIds = new Set(existing.map((e) => e.toId));
-      const wanted = new Set(input.toolIds);
-
-      // Remove edges no longer wanted.
-      for (const e of existing) {
-        if (!wanted.has(e.toId)) await deleteLink(e.id);
-      }
-      // Add new edges.
-      const toAdd = input.toolIds.filter((id) => !existingIds.has(id));
-      if (toAdd.length) {
-        await createLinks(
-          toAdd.map((toolId) => ({
-            workspaceId: skill.workspaceId ?? null,
-            fromType: "skill" as const,
-            fromId: input.skillId,
-            toType: "tool" as const,
-            toId: toolId,
-            linkType: "requires" as const,
-          }))
-        );
-      }
+      await replaceSkillRequiredTools({
+        userId,
+        skill,
+        toolIds: input.toolIds,
+      });
       return { skillId: input.skillId, toolIds: input.toolIds };
     }),
 });

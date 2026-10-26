@@ -12,6 +12,7 @@ import {
   isMachineKey,
   proposedEntityMedia,
   proposedRecord,
+  RECORD_FIELDS_SHOWN,
   recordValue,
 } from "./proposal-record-model";
 
@@ -189,6 +190,92 @@ describe("recordValue — each value in its type's reading", () => {
     expect(recordValue("status", "in_progress")?.kind).toBe("status");
     expect(recordValue("secret", "hunter2")).toBeNull();
     expect(recordValue("text", UUID)).toBeNull();
+  });
+});
+
+describe("proposedRecord — a skill create: the code is read whole, first", () => {
+  // > 600 characters and > 40 lines: both the old text clip and the card's
+  // fold would have cut it.
+  const code = Array.from(
+    { length: 60 },
+    (_, i) =>
+      `const step${i} = await callProvider("apify_api", "GET", "/acts/${i}");`
+  ).join("\n");
+  const filler = [
+    "description",
+    "kind",
+    "slug",
+    "name",
+    "body",
+    "providerSpec",
+    "parameters",
+    "category",
+    "executionMode",
+    "timeoutSeconds",
+    "intent",
+  ].map((path) => ({
+    path,
+    label: path,
+    operation: "create" as const,
+    after: path === "timeoutSeconds" ? 120 : `${path} value`,
+  }));
+  const record = proposedRecord({
+    action: "create",
+    kind: "skill",
+    changes: [
+      ...filler,
+      {
+        path: "code",
+        label: "Code",
+        operation: "create" as const,
+        after: code,
+      },
+      {
+        path: "requiredToolNames",
+        label: "RequiredToolNames",
+        operation: "create" as const,
+        after: ["apify_api"],
+      },
+    ],
+  })!;
+
+  it("keeps every character and line of the code, as code", () => {
+    const field = record.fields.find((f) => f.key === "code")!;
+    expect(field.after).toEqual({ kind: "code", text: code, lines: 60 });
+    expect(code.length).toBeGreaterThan(600);
+    expect(field.wide).toBe(true);
+  });
+
+  it("leads with the code and the tools it declared, ahead of the fold", () => {
+    expect(record.fields.length).toBeGreaterThan(RECORD_FIELDS_SHOWN);
+    expect(record.fields.slice(0, 2).map((f) => f.key)).toEqual([
+      "code",
+      "requiredToolNames",
+    ]);
+    expect(record.fields[1]!.after).toEqual({
+      kind: "tags",
+      items: ["apify_api"],
+    });
+    // The rest keep the pod's order.
+    expect(record.fields.slice(2).map((f) => f.key)).toEqual(
+      filler.map((f) => f.path)
+    );
+  });
+
+  it("a PROPERTY named code is an ordinary value, not the record's code", () => {
+    const entity = proposedRecord({
+      action: "create",
+      kind: "person",
+      changes: [
+        {
+          path: "properties.code",
+          label: "Code",
+          operation: "create" as const,
+          after: "A-12",
+        },
+      ],
+    })!;
+    expect(entity.fields[0]!.after?.kind).toBe("text");
   });
 });
 

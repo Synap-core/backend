@@ -23,6 +23,7 @@ import {
   drizzleSql,
 } from "@synap/database";
 import type { ProposalRevision } from "@synap/database";
+import { isDeepStrictEqual } from "node:util";
 import { TRPCError } from "@trpc/server";
 import { assertReviewedRevision } from "../../utils/reviewed-revision.js";
 import {
@@ -264,10 +265,88 @@ export const PROTECTED_ENVELOPE_FIELDS = [
   "keyId",
   "agentUserId",
   "appId",
+  // `kindFields` — the field defs a NEW kind's proposal creates on approval
+  // (ticket a375443d). The proposal summary names them at filing; a revise
+  // that could rewrite them would have a person approve one schema and
+  // receive another (pod-wide base fields included).
+  "kindFields",
+  // `requiredToolIds` / `requiredToolNames` — the tools a code skill
+  // `requires` (ticket c5058d24). Those edges ARE the scope its own provider
+  // calls run under without a second review (`verbAct`), so a revise that
+  // could add one would widen a scope the person never saw.
+  "requiredToolIds",
+  "requiredToolNames",
 ] as const;
 
 /**
+ * PLACEMENT the create door RESOLVED and persisted (invariant I3), which the
+ * approve executor and the jobs materializer replay VERBATIM:
+ *   - `resolvedWorkspaceId` — the lens the row lands in;
+ *   - `resolvedHomeWorkspaceId` — the space a pod-wide row is filed for
+ *     (0355), whose members it is then shared with.
+ * A revise that could change either would land (or SHARE) the row somewhere
+ * the reviewer never saw and the create door never authorized — e.g. plant a
+ * home so a pending pod-wide decision is published to a space on approval.
+ * No revise flow sets them (the destination re-target moves the proposal's
+ * own `workspaceId` COLUMN, never these). Pinned, not protected: the Studio's
+ * "Save & Approve" resends the whole inner payload, so a patch may ECHO the
+ * stored value — only a DIFFERENT value is refused.
+ */
+export const PINNED_PLACEMENT_FIELDS = [
+  "resolvedWorkspaceId",
+  "resolvedHomeWorkspaceId",
+] as const;
+
+/** The pinned placement field a patch would CHANGE at either level, or null. */
+function patchChangesPinnedPlacement(
+  envelope: Record<string, unknown>,
+  patch: ProposalRevisionPatch
+): (typeof PINNED_PLACEMENT_FIELDS)[number] | null {
+  const asRecord = (v: unknown) =>
+    v && typeof v === "object" && !Array.isArray(v)
+      ? (v as Record<string, unknown>)
+      : undefined;
+  const storedInner = asRecord(envelope.data);
+  const same = (a: unknown, b: unknown) =>
+    JSON.stringify(a ?? null) === JSON.stringify(b ?? null) &&
+    (a === undefined) === (b === undefined);
+  // [patched level, stored level] pairs, the way the merge below applies them.
+  const levels: Array<
+    [Record<string, unknown> | undefined, Record<string, unknown> | undefined]
+  > =
+    patch.kind === "inner" && isNestedEnvelope(envelope)
+      ? [[patch.fields, storedInner]]
+      : [
+          [patch.fields, envelope],
+          [asRecord(patch.fields.data), storedInner],
+        ];
+  for (const key of PINNED_PLACEMENT_FIELDS) {
+    for (const [patched, stored] of levels) {
+      if (
+        patched &&
+        Object.hasOwn(patched, key) &&
+        !same(patched[key], stored?.[key])
+      ) {
+        return key;
+      }
+    }
+  }
+  return null;
+}
+
+/**
  * The protected field a patch would SET or ALTER at either level, or null.
+ *
+ * ALTER means a value that DIFFERS from the stored one (deep-equal), never mere
+ * presence: the web reviewer's "Save & Approve" / "Save draft" send the whole
+ * stored inner back (`{ data: <inner> }`), protected keys included and
+ * unchanged, and a presence check refused every such edit on a kind carrying
+ * `kindFields` or a skill declaring tools (review of #199, R1). An OMITTED key
+ * is restored by the re-pin in `computeRevisedEnvelope`.
+ *
+ * Compared with the stored value at the place the patch WRITES it: an inner
+ * patch onto a nested envelope merges into `.data`, anything else at the top;
+ * a patch's own `data[k]` then lands one level below that.
  *
  * Returns the offending KEY rather than a boolean so the error can name the
  * field the caller actually touched. The message used to hardcode `sourceFile`,
@@ -275,20 +354,33 @@ export const PROTECTED_ENVELOPE_FIELDS = [
  * second one was added — telling a caller to stop sending a field they never
  * sent. Prose in this codebase is executable; the message is derived, not typed.
  */
-function patchTouchesProtectedField(
-  fields: Record<string, unknown>
+function patchAltersProtectedField(
+  patch: ProposalRevisionPatch,
+  envelope: Record<string, unknown>
 ): (typeof PROTECTED_ENVELOPE_FIELDS)[number] | null {
-  const nested =
-    fields.data &&
-    typeof fields.data === "object" &&
-    !Array.isArray(fields.data)
-      ? (fields.data as Record<string, unknown>)
+  const { fields } = patch;
+  const asRecord = (v: unknown) =>
+    v && typeof v === "object" && !Array.isArray(v)
+      ? (v as Record<string, unknown>)
       : undefined;
+  const storedTop =
+    patch.kind === "inner" && isNestedEnvelope(envelope)
+      ? (asRecord(envelope.data) ?? {})
+      : envelope;
+  const storedNested = asRecord(storedTop.data) ?? {};
+  const nested = asRecord(fields.data);
+  const alters = (
+    patched: Record<string, unknown>,
+    stored: Record<string, unknown>,
+    key: string
+  ) =>
+    Object.hasOwn(patched, key) &&
+    !isDeepStrictEqual(patched[key], stored[key]);
   return (
     PROTECTED_ENVELOPE_FIELDS.find(
       (key) =>
-        Object.hasOwn(fields, key) ||
-        (nested ? Object.hasOwn(nested, key) : false)
+        alters(fields, storedTop, key) ||
+        (nested ? alters(nested, storedNested, key) : false)
     ) ?? null
   );
 }
@@ -313,6 +405,12 @@ const PROTECTED_FIELD_REASON: Record<
     "it names the agent the proposal is about; a revise may not repoint it to another agent",
   appId:
     "it names the app an approval connects; a revise may not repoint it to another app",
+  kindFields:
+    "it is the schema the person approves with the kind; propose the kind again to change its fields",
+  requiredToolIds:
+    "it is the tool scope the person approves with the skill; propose the skill again to change it",
+  requiredToolNames:
+    "it names the tool scope the person approves with the skill; propose the skill again to change it",
 };
 
 export interface ComputeRevisedEnvelopeParams {
@@ -357,7 +455,7 @@ export function computeRevisedEnvelope(params: ComputeRevisedEnvelopeParams): {
   // Enforced HERE, in the shared core, so all three revise doors (tRPC
   // `revise`, MCP `synap_revise_proposal`, Hub `updateProposal`) inherit it.
   const protectedField = patch
-    ? patchTouchesProtectedField(patch.fields)
+    ? patchAltersProtectedField(patch, envelope)
     : null;
   if (protectedField) {
     throw new TRPCError({
@@ -365,6 +463,18 @@ export function computeRevisedEnvelope(params: ComputeRevisedEnvelopeParams): {
       message:
         `A revision cannot set or alter \`${protectedField}\` — ` +
         `${PROTECTED_FIELD_REASON[protectedField]}.`,
+    });
+  }
+  const pinnedField = patch
+    ? patchChangesPinnedPlacement(envelope, patch)
+    : null;
+  if (pinnedField) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        `A revision cannot change \`${pinnedField}\` — it is where the create ` +
+        `door placed this write (and who it is shared with); reject it and ` +
+        `create it again where it belongs.`,
     });
   }
   const before: Record<string, unknown> = {};
@@ -415,7 +525,10 @@ export function computeRevisedEnvelope(params: ComputeRevisedEnvelopeParams): {
   // nested `sourceFile` and orphan the staged bytes: no terminal door would
   // ever see a reference to discard. Restoring is the whole fix; there is
   // nothing a reviewer legitimately expresses by removing it.
-  for (const key of PROTECTED_ENVELOPE_FIELDS) {
+  for (const key of [
+    ...PROTECTED_ENVELOPE_FIELDS,
+    ...PINNED_PLACEMENT_FIELDS,
+  ]) {
     if (envelope[key] !== undefined) merged[key] = envelope[key];
     const priorInner = envelope.data;
     if (

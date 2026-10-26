@@ -176,6 +176,9 @@ ALTER TABLE "pod_members" ADD COLUMN IF NOT EXISTS "user_id"    text;
 ALTER TABLE "pod_members" ADD COLUMN IF NOT EXISTS "pod_role"   text;
 ALTER TABLE "pod_members" ADD COLUMN IF NOT EXISTS "invited_by" text;
 ALTER TABLE "pod_members" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
+-- removed_at (migration 0357): set by `removeFromPod`; a row is access only
+-- while it is NULL (founder Q-B1). Not written "-- 0357:" (see token_digest).
+ALTER TABLE "pod_members" ADD COLUMN IF NOT EXISTS "removed_at" timestamp with time zone;
 -- One pod-membership row per user_id (the pod is a singleton — no pod_id).
 CREATE UNIQUE INDEX IF NOT EXISTS "pod_members_user_unique"
   ON "pod_members" ("user_id");
@@ -5274,3 +5277,22 @@ CREATE UNIQUE INDEX IF NOT EXISTS "uq_proposal_apply_runs_active"
 
 CREATE INDEX IF NOT EXISTS "idx_proposal_apply_runs_proposal_created"
   ON "proposal_apply_runs" ("proposal_id", "created_at");
+
+-- 0355: the space a POD-WIDE entity was filed for (mirrors
+-- 0355_entities_home_workspace.sql). Set only on a pod-wide row (CHECK); the
+-- read floor shares the row with that space's members.
+ALTER TABLE "entities" ADD COLUMN IF NOT EXISTS "home_workspace_id" uuid;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'entities_home_workspace_id_fkey') THEN
+    ALTER TABLE "entities" ADD CONSTRAINT "entities_home_workspace_id_fkey"
+      FOREIGN KEY ("home_workspace_id") REFERENCES "workspaces"("id") ON DELETE SET NULL;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'entities_home_workspace_pod_wide_check') THEN
+    ALTER TABLE "entities" ADD CONSTRAINT "entities_home_workspace_pod_wide_check"
+      CHECK ("home_workspace_id" IS NULL OR "workspace_id" IS NULL);
+  END IF;
+END $$;
+CREATE INDEX IF NOT EXISTS "entities_home_workspace_idx"
+  ON "entities" ("home_workspace_id")
+  WHERE "workspace_id" IS NULL AND "home_workspace_id" IS NOT NULL;

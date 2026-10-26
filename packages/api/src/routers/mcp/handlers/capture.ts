@@ -666,9 +666,12 @@ const captureHandler: McpToolHandler = async (
     // write it builds itself, the same one the approve loop performs) and
     // records an `auto_approved` proposal; otherwise it files a pending one.
     // The run ROOM (intake decision 1): the ambient session when there is one,
-    // else an intake session KEYED by the graph's canonical content, so a
-    // retried payload — including one the submit below refuses — reuses one
-    // room instead of minting another. The raw is recorded BEFORE the submit
+    // else — for an agent — this run's RECEIPT, the one session its other
+    // writes are filed under too (W-A3: one room per run, never an intake room
+    // beside a receipt). A person's capture (no agent) still mints an intake
+    // session KEYED by the graph's canonical content, so a retried payload —
+    // including one the submit below refuses — reuses one room instead of
+    // minting another. The raw is recorded BEFORE the submit
     // (below), so it survives a refused submit. The agent structured this graph itself, so no
     // guideline read and no IS facts exist — the manifest says `agent`.
     const { recordStructureIntake } =
@@ -679,11 +682,23 @@ const captureHandler: McpToolHandler = async (
       await import("../../../services/intake/ensure-intake-session.js");
     const { computeCaptureGraphIdempotencyKey } =
       await import("../../../utils/pending-capture-dedup.js");
+    const { resolveAgentRunReceipt } =
+      await import("../../../utils/permission-check.js");
+    const runReceipt =
+      !sessionId && agentUserId
+        ? await resolveAgentRunReceipt({
+            userId,
+            agentUserId,
+            workspaceId: graphWsId ?? null,
+            projectId: captureProjectId ?? null,
+            goal: `Capture · ${graphSummary || "agent graph"}`,
+          })
+        : null;
     const graphRun = await ensureIntakeSession({
       userId,
       workspaceId: graphWsId ?? null,
       agentUserId: agentUserId ?? null,
-      verifiedHandle: sessionId ?? null,
+      verifiedHandle: sessionId ?? runReceipt,
       door: "capture",
       goal: `Capture · ${graphSummary || "agent graph"}`,
       correlationKey: `capture-graph:${new Date().toISOString().slice(0, 10)}:${computeCaptureGraphIdempotencyKey(

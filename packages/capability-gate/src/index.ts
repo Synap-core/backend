@@ -228,6 +228,21 @@ function readGrantExecMode(raw: unknown): GrantExecMode | null {
  * survives a reinstall — the UI should author "always approve this
  * capability" rules against the verb name, not the id, to be reinstall-safe.
  */
+/**
+ * The ONE approval predicate: approval refuses a run of this tool/skill row.
+ *
+ * Step 0 of `gateCapabilityExecution` below denies on exactly this, and the
+ * capability catalogue (`capability-registry.ts`, `backingSkillExecutable` and
+ * each verb's `blocked: "not_enabled"`) reads the SAME function, so discovery
+ * can never call a verb ready that the run door then refuses as "installed but
+ * not yet enabled" (ticket 509c9358). `null` = no approval concept (commands).
+ */
+export function approvalRefusesRun(row: {
+  approved: boolean | null | undefined;
+}): boolean {
+  return row.approved === false;
+}
+
 export async function gateCapabilityExecution(
   input: GateCapabilityExecutionInput
 ): Promise<GateCapabilityDecision> {
@@ -287,7 +302,7 @@ export async function gateCapabilityExecution(
   //       for anyone; the owner approves it (setApproved) — or dry-runs to test —
   //       FIRST. Owner-bypass below skips the GRANT requirement, never approval.
   //       `approved === null` = no approval concept (commands) → not gated here.
-  if (approved === false) {
+  if (approvalRefusesRun({ approved })) {
     return {
       decision: "deny",
       // NOTE: the gate stays write-free. For an AGENT caller, the api's execute

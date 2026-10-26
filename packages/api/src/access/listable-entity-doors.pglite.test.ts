@@ -739,6 +739,8 @@ const WITHHELD_FILES: Record<string, string> = {
   "services/library/read-text-search.ts": "documents collection",
   "services/lifecycle/homes.ts":
     "its listings go through status-groups (which carries the rule)",
+  "services/lifecycle/status-write-floor.ts":
+    "write target: may the mover write the one entity a status move names",
   "services/links/dependency-links.ts": "dependency endpoint state",
   "services/links/dependency-relation-read.ts":
     "edges of a focal object (opening it), not an entity listing",

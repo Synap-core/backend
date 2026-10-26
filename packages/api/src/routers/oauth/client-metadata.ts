@@ -38,9 +38,8 @@
 import { createHash } from "node:crypto";
 import { createLogger } from "@synap-core/core";
 import {
-  GRANT_ACTIONS,
+  assertPermissions,
   InvalidPermissionError,
-  parsePermission,
 } from "@synap/governance-policy/grants";
 
 import {
@@ -52,11 +51,7 @@ import {
   ClientMetadataError,
   assertClientMetadataUrl,
 } from "./client-id-url.js";
-import {
-  OAUTH_SUPPORTED_SCOPES,
-  isSynapApp,
-  normalizeRequestedScopes,
-} from "./config.js";
+import { OAUTH_SUPPORTED_SCOPES, normalizeRequestedScopes } from "./config.js";
 import { parseScopeParam } from "./protocol.js";
 import {
   findClient,
@@ -151,52 +146,23 @@ function sameOriginHttpsUrl(
 }
 
 /**
- * The review verbs a SYNAP app (`isSynapApp`) may ask for, and no other app:
- * its token is held by the person who signs in (founder decision 2026-10-22),
- * so an approval through it is that person's own decision, in the spaces they
- * tick, and still named against its target (D3, `applyProposalApproval`).
+ * One `synap_requests[].permission`: what an app may ASK for is exactly what an
+ * agent key may hold (founder decision 4, 2026-10-26: apps = agents), so the
+ * check is the one every key door runs, `assertPermissions` — any valid
+ * grant-grammar pattern, gate verbs (`playbook.run`, `entity.deal.transition`)
+ * and `*` included. Asking is not getting: the person ticks what the app gets
+ * on the consent screen, in spaces where they may give it, and every act then
+ * runs the agent ladder — an app's own agent never approves
+ * (`refuseAgentProposalApprover`) and proposes under `ask-first`.
  */
-export const SYNAP_APP_REVIEW_PERMISSIONS = [
-  "proposal.approve",
-  "proposal.reject",
-] as const;
-
-/**
- * One `synap_requests[].permission`: a valid grant-grammar pattern, no `*` in
- * the subject or the action, and only the plain actions (read/create/update/
- * delete). Governance gate verbs (approve, merge, purge, …) are refused: an app
- * that asks to approve its own proposals is asking to leave the governed path.
- * A `*` kind (`entity.*.read`) is the same as `entity.read` and is allowed.
- * The one exception: a Synap app may ask for `SYNAP_APP_REVIEW_PERMISSIONS`,
- * spelled exactly.
- */
-function assertAppPermission(permission: string, clientId: string): void {
-  let segs: string[];
+function assertAppPermission(permission: string): void {
   try {
-    segs = parsePermission(permission);
+    assertPermissions([permission]);
   } catch (err) {
     if (err instanceof InvalidPermissionError) {
       throw new ClientMetadataError(`synap_requests: ${err.message}`);
     }
     throw err;
-  }
-  const subject = segs[0];
-  const action = segs[segs.length - 1];
-  if (subject === "*" || action === "*" || segs.length < 2) {
-    throw new ClientMetadataError(
-      `synap_requests: "${permission}" must name a subject and an action`
-    );
-  }
-  if (
-    isSynapApp(clientId) &&
-    (SYNAP_APP_REVIEW_PERMISSIONS as readonly string[]).includes(permission)
-  ) {
-    return;
-  }
-  if (!(GRANT_ACTIONS as readonly string[]).includes(action!)) {
-    throw new ClientMetadataError(
-      `synap_requests: "${permission}" asks for "${action}", which an app cannot be granted`
-    );
   }
 }
 
@@ -363,7 +329,7 @@ export function validateClientMetadataDocument(
           `synap_requests reason must be a string of at most ${CIMD_MAX_REASON_LENGTH} characters`
         );
       }
-      assertAppPermission(permission, clientId);
+      assertAppPermission(permission);
       if (!requestedPermissions.includes(permission)) {
         requestedPermissions.push(permission);
         const shown = typeof reason === "string" ? displayReason(reason) : "";

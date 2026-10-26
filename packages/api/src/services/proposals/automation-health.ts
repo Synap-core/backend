@@ -178,8 +178,11 @@ async function loadCandidateAutomations(
  * Any status counts: `completed`, `failed`, `skipped`, `blocked_by_policy` and
  * a still-`running` row all prove the wire is live. This function must never
  * filter on status — that is the property the whole finding rests on.
+ *
+ * Exported for `diagnose`'s never-run count, which reads the same ledger so the
+ * two "never fires" readers cannot disagree.
  */
-async function loadRunCounts(
+export async function loadRunCounts(
   automationIds: string[]
 ): Promise<Map<string, number>> {
   if (automationIds.length === 0) return new Map();

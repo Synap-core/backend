@@ -1,18 +1,15 @@
 /**
  * Two approval-path holes in the object-create executors.
  *
- * (A) skill/create — BORN-APPROVED ESCALATION (security).
- *     `insertSkillGoverned` (routers/skills.ts) decides approval with
- *     `approved = kind === "instruction" && !agentUserId` — an instruction skill
- *     is auto-approved only when a trusted HUMAN installs it, because its body
- *     lands verbatim in the agent's system prompt (prompt-injection vector).
- *     The `skill/create` executor MUST re-run that door with `agentUserId:
- *     undefined` — otherwise the agent branch of `checkPermissionOrPropose`
- *     fires again and the approval dead-ends in "unexpectedly re-proposed". But
- *     that operator identity also makes the born-approved rule read TRUE, so an
- *     AGENT-authored instruction skill materialized `approved: true` with no
- *     owner approval. The executor must restore the intended verdict from
- *     `proposal.agentUserId`.
+ * (A) skill/create — ONE approval, never an escalation (security).
+ *     The executor re-runs `insertSkillGoverned` with `agentUserId: undefined`
+ *     (otherwise the agent branch of `checkPermissionOrPropose` fires again
+ *     and the approval dead-ends in "unexpectedly re-proposed"), so the row it
+ *     writes reads the APPROVER as the author. The executor then applies THE
+ *     rule (`skillBornApproved`) with the proposal's real author and who
+ *     approved: a PERSON's approval turns the skill on (one approval — founder
+ *     decision 2); anything else keeps an agent-authored skill OFF (an
+ *     instruction body lands in an agent's system prompt).
  *
  * (B) tool/create — UNRECOVERABLE PROPOSAL.
  *     `tools.create` gated the write but stored only `{name, kind}`, and no
@@ -36,6 +33,7 @@ import {
   type ProposalExecutorResult,
 } from "../execution-registry.js";
 import { readExecutorsSource } from "./read-executors-source.js";
+import { skillBornApproved } from "../../../services/capabilities/skill-born-approved.js";
 
 // vitest cwd is the api package root.
 const API_SRC = join(process.cwd(), "src");
@@ -68,23 +66,16 @@ const SKILL_CREATE_BLOCK = executorBlock("skill/create", "tool/create");
 const TOOL_CREATE_BLOCK = executorBlock("tool/create", "automation/create");
 
 // ───────────────────────────────────────────────────────────────────────────
-// (A) skill/create — an agent-proposed instruction skill lands UNAPPROVED.
+// (A) skill/create — a person's approval turns it on; nothing else does.
 // ───────────────────────────────────────────────────────────────────────────
 
 /**
- * Executable mirror of the COMPOSED rule across the two files: the
- * insertSkillGoverned born-approved formula (skills.ts:310) as the executor
- * invokes it (agentUserId: undefined), followed by the executor's downgrade.
- * This is the end-state `approved` the DB row must hold after approval.
+ * The end-state `approved` after a `skill/create` approval: the executor
+ * corrects whatever row `insertSkillGoverned` wrote as the APPROVER to THE
+ * rule's verdict for the proposal's real author and who approved. The REAL
+ * rule, not a mirror; the executor's wiring of it (the correction, the enable
+ * door) is driven in `skill-create-approval-wiring.test.ts`.
  */
-/** Mirrors insertSkillGoverned's born-approved formula (routers/skills.ts:310). */
-function insertSkillGovernedApproved(
-  kind: string,
-  agentUserId: string | undefined
-): boolean {
-  return kind === "instruction" && !agentUserId;
-}
-
 function approvedAfterSkillCreateApproval(args: {
   kind: string;
   /** The proposal row's author — set iff an AGENT authored the proposal. */
@@ -92,16 +83,14 @@ function approvedAfterSkillCreateApproval(args: {
   /** A PERSON (not an agent path) clicked approve. */
   approvedByPerson?: boolean;
 }): boolean {
-  // insertSkillGoverned, re-run as the APPROVER (agentUserId is undefined).
-  let approved = insertSkillGovernedApproved(args.kind, undefined);
-  // The executor's downgrade, restoring the intended verdict — a person's
-  // approval of the reviewed body IS the owner approval, so it is kept.
-  if (args.proposalAgentUserId && approved && !args.approvedByPerson)
-    approved = false;
-  return approved;
+  return skillBornApproved({
+    kind: args.kind,
+    agentUserId: args.proposalAgentUserId,
+    personApprovedProposal: args.approvedByPerson,
+  });
 }
 
-describe("(A) skill/create approval — born-approved escalation is closed", () => {
+describe("(A) skill/create approval — one approval, no escalation", () => {
   it("an AGENT-proposed instruction skill NOT approved by a person persists approved === false", () => {
     // The exploit: instruction body → agent system prompt with no owner review.
     expect(
@@ -112,19 +101,21 @@ describe("(A) skill/create approval — born-approved escalation is closed", () 
     ).toBe(false);
   });
 
-  it("an AGENT-proposed instruction skill a PERSON approved stays approved", () => {
-    expect(
-      approvedAfterSkillCreateApproval({
-        kind: "instruction",
-        proposalAgentUserId: "agent-user-id",
-        approvedByPerson: true,
-      })
-    ).toBe(true);
+  it("an AGENT-proposed skill a PERSON approved lands approved, whatever its kind", () => {
+    for (const kind of ["instruction", "code", "declarative"]) {
+      expect(
+        approvedAfterSkillCreateApproval({
+          kind,
+          proposalAgentUserId: "agent-user-id",
+          approvedByPerson: true,
+        })
+      ).toBe(true);
+    }
   });
 
   it("a HUMAN-proposed instruction skill is still born approved", () => {
-    // Anti-vacuity: the downgrade must not flatten every skill to false, or the
-    // assertion above would pass for the wrong reason.
+    // Anti-vacuity: the verdict must not flatten every skill to false, or the
+    // first assertion would pass for the wrong reason.
     expect(
       approvedAfterSkillCreateApproval({
         kind: "instruction",
@@ -133,7 +124,7 @@ describe("(A) skill/create approval — born-approved escalation is closed", () 
     ).toBe(true);
   });
 
-  it("executable kinds are unapproved on BOTH authorship paths", () => {
+  it("executable kinds no person approved are unapproved on BOTH authorship paths", () => {
     for (const agent of [null, "agent-user-id"]) {
       for (const kind of ["code", "declarative"]) {
         expect(
@@ -153,21 +144,14 @@ describe("(A) skill/create approval — born-approved escalation is closed", () 
     expect(SKILL_CREATE_BLOCK).toMatch(/agentUserId:\s*undefined/);
   });
 
-  it("the executor downgrades on proposal.agentUserId (the source-level fix)", () => {
-    // The pure mirror above proves the RULE; this proves the executor implements
-    // it — an update of `skills.approved` to false, guarded on the proposal's
-    // agent author.
-    expect(SKILL_CREATE_BLOCK).toMatch(/if\s*\(\s*proposal\.agentUserId/);
-    expect(SKILL_CREATE_BLOCK).toMatch(/!approvedByPerson/);
-    expect(SKILL_CREATE_BLOCK).toMatch(/\.update\(skills\)/);
-    expect(SKILL_CREATE_BLOCK).toMatch(/approved:\s*false/);
-  });
-
-  it("insertSkillGoverned's rule is still the one it mirrors", () => {
-    // If the formula in skills.ts changes, this mirror is stale — fail loudly.
+  it("every born-approved site reads the ONE rule", () => {
+    // The create doors and the executor must agree, or one becomes the bypass.
     const skillsSrc = readSrc("routers/skills.ts");
-    expect(skillsSrc).toMatch(
-      /const approved = values\.kind === "instruction" && !agentUserId;/
+    expect(skillsSrc.match(/skillBornApproved\(\{/g)?.length).toBe(2);
+    expect(skillsSrc).not.toMatch(/kind === "instruction" && !/);
+    expect(SKILL_CREATE_BLOCK).toMatch(/skillBornApproved\(\{/);
+    expect(SKILL_CREATE_BLOCK).toMatch(
+      /agentUserId:\s*proposal\.agentUserId,\s*personApprovedProposal:\s*approvedByPerson/
     );
   });
 });

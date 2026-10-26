@@ -12,9 +12,12 @@
  */
 
 import type { AskAnswer } from "./ask.js";
+import { describeQueue, type AskQueueBlock } from "./queue-question.js";
 import { createLogger } from "@synap-core/core";
 import { getDefaultActiveService } from "../../utils/intelligence-routing.js";
 import { isCallBudgetMs } from "@synap/intelligence-client";
+import { segmentPassages } from "@synap-core/markdown-core/sections";
+import { excerptByQuery } from "../../utils/section-excerpt.js";
 import {
   classifyAiFailure,
   type AiFailureClass,
@@ -137,6 +140,20 @@ const TRUNCATION_NOTICE_TITLE_CHARS = 30;
  * conclusion instead of the old 300-char stub, while MAX_CONTEXT_CHARS still
  * bounds the total context sent to the IS. */
 const MAX_FIELD_CHARS = 1500;
+/**
+ * An attached document BODY (`content`) gets this much, chosen for the
+ * question: a body that fits is sent whole; a longer one is cut into its
+ * passages (markdown-core `segmentPassages`: sections, ~2,000 chars each) and
+ * sends an OUTLINE plus the passages the question's words point at
+ * (`excerptByQuery`, the judge's excerpt rule).
+ *
+ * It used to be `MAX_FIELD_CHARS` from the top: an answer past char ~1,500 of
+ * a 2k-15k-word note never reached the model, which then said the note did
+ * not hold it (evidence c453a66b). 4,000 holds one full passage (or two
+ * typical ones) plus the outline; `MAX_CONTEXT_CHARS` still bounds the total,
+ * and the loop below still drops whole items that do not fit.
+ */
+const MAX_BODY_EXCERPT_CHARS = 4_000;
 /**
  * Procedural rows (`knowledge_keys`) get a LARGER slice than an entity field.
  *
@@ -276,6 +293,17 @@ function prependDegradedNotice(answer: string, degraded: string[]): string {
   );
 }
 
+/**
+ * The IS answered 200 with no text (a length cut-off, a refusal that left no
+ * content). That is a failed synthesis, not an answer: `prependPendingNotice`
+ * would otherwise turn "" into a reply that is only the pending notice.
+ */
+class EmptySynthesisError extends Error {
+  constructor() {
+    super("IS answer was empty");
+  }
+}
+
 function prependPendingNotice(answer: string, pendingCount: number): string {
   if (pendingCount <= 0 || /pending/i.test(answer)) return answer;
   const plural = pendingCount === 1 ? "" : "s";
@@ -399,7 +427,36 @@ export function describeItemProvenance(
   return bits.length > 0 ? bits.join(", ") : null;
 }
 
-export function buildSynthesisContext(answers: AskAnswer[]): {
+/**
+ * A document body for the context: whole when it fits, else the passages the
+ * question ranks highest under an outline (see `MAX_BODY_EXCERPT_CHARS`).
+ * Each section runs to the next passage's start, so concatenated they ARE the
+ * body and every gap mark counts what it hides.
+ */
+function bodyExcerpt(body: string, question: string): string {
+  if (body.length <= MAX_BODY_EXCERPT_CHARS) return body;
+  const passages = segmentPassages(body);
+  const sections = passages.map((p, i) => ({
+    label: p.heading,
+    text: body.slice(
+      i === 0 ? 0 : p.start,
+      passages[i + 1]?.start ?? body.length
+    ),
+  }));
+  return excerptByQuery(
+    body,
+    sections,
+    MAX_BODY_EXCERPT_CHARS,
+    question,
+    "this question"
+  );
+}
+
+export function buildSynthesisContext(
+  answers: AskAnswer[],
+  /** The question asked: what a long body's passages are chosen by. */
+  question = ""
+): {
   sources: SynthesisSource[];
   context: string;
   /** Present only when items were dropped — see `SynthesisResult.truncated`. */
@@ -522,10 +579,16 @@ export function buildSynthesisContext(answers: AskAnswer[]): {
       // could never answer questions whose answer lives in the content.
       const snippetBits: string[] = [String(title)];
 
-      // 1. The attached document body (retrieve.ts's `fetchOrdered` join) —
-      //    the actual long-form content, not a metadata field.
+      // 1. The attached document body (retrieve.ts's `fetchOrdered`, the
+      //    CURRENT stored body) — the actual long-form content, not a
+      //    metadata field. A body that could not be read says so: the model
+      //    must not read "no content" as "this note says nothing".
       if (typeof rec.content === "string" && rec.content.trim()) {
-        snippetBits.push(`content: ${rec.content.slice(0, MAX_FIELD_CHARS)}`);
+        snippetBits.push(`content: ${bodyExcerpt(rec.content, question)}`);
+      } else if (typeof rec.contentReadError === "string") {
+        snippetBits.push(
+          `content: [the document body could not be read: ${rec.contentReadError.slice(0, MAX_OTHER_PROPERTY_CHARS)}]`
+        );
       }
 
       // 1b. Procedural runbooks (knowledge_keys) keep their whole body in
@@ -576,7 +639,15 @@ export function buildSynthesisContext(answers: AskAnswer[]): {
       //    behavior), skipping fields already handled above.
       for (const [k, v] of Object.entries(rec)) {
         if (
-          ["id", "name", "title", "content", "properties", "value"].includes(k)
+          [
+            "id",
+            "name",
+            "title",
+            "content",
+            "contentReadError",
+            "properties",
+            "value",
+          ].includes(k)
         )
           continue;
         if (typeof v === "string" && v.trim()) {
@@ -693,9 +764,18 @@ export async function synthesizeAnswer(
    */
   degraded: string[] = [],
   /** See {@link AskDetail}. Default `full`, unchanged for every older caller. */
-  detail: AskDetail = "full"
+  detail: AskDetail = "full",
+  /**
+   * `AskResult.queue` — set only for a queue-type question. The IS composes
+   * from retrieved items and never sees the queue, so its sentence is written
+   * here and LEADS the answer.
+   */
+  queue?: AskQueueBlock
 ): Promise<SynthesisResult> {
-  const { sources, context, truncated } = buildSynthesisContext(answers);
+  const { sources, context, truncated } = buildSynthesisContext(
+    answers,
+    question
+  );
 
   // `sources`: the caller asked for the matches, not prose — no IS call. Every
   // id-bearing match is already in `sources` (it is filled before the context
@@ -746,10 +826,30 @@ export async function synthesizeAnswer(
       );
     }
     const data = (await res.json()) as { answer?: string; detail?: string };
+    if (typeof data.answer === "string" && !data.answer.trim()) {
+      // A brief run can be cut off by its short budget; the full answer has the
+      // headroom, so redo it as that. An empty FULL answer is a failure.
+      if (detail === "brief") {
+        return synthesizeAnswer(
+          answers,
+          question,
+          routedTo,
+          workspaceId,
+          pendingCount,
+          degraded,
+          "full",
+          queue
+        );
+      }
+      throw new EmptySynthesisError();
+    }
     const answer =
       typeof data.answer === "string"
         ? prependDegradedNotice(
-            prependPendingNotice(data.answer, pendingCount),
+            prependPendingNotice(
+              queue ? `${describeQueue(queue)}\n\n${data.answer}` : data.answer,
+              pendingCount
+            ),
             degraded
           )
         : null;
@@ -783,7 +883,10 @@ export async function synthesizeAnswer(
       // the prose notice is lost entirely.
       ...(truncated ? { truncated } : {}),
       error: "synthesis_unavailable",
-      failureClass: classifyAiFailure(err),
+      failureClass:
+        err instanceof EmptySynthesisError
+          ? "invalid_response"
+          : classifyAiFailure(err),
     };
   }
 }

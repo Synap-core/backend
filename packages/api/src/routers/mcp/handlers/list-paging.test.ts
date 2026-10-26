@@ -53,6 +53,8 @@ import type { McpToolContext } from "./shared.js";
 const USER = "11111111-1111-4111-8111-111111111111";
 const ENTITY_COUNT = 120;
 const SESSION_COUNT = 57;
+const TRACK = "22222222-2222-4222-8222-222222222222";
+const TRACK_SESSION_COUNT = 2;
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -115,9 +117,14 @@ beforeAll(async () => {
   // order stable across pages.
   for (let i = 0; i < SESSION_COUNT; i++) {
     await h.client!.query(
-      `insert into focus_sessions (id, user_id, goal, status, started_at, created_at, updated_at)
-       values (gen_random_uuid(), $1, $2, 'active', $3, now(), now())`,
-      [USER, `Goal ${i}`, new Date(Date.UTC(2026, 9, 1, 0, Math.floor(i / 2)))]
+      `insert into focus_sessions (id, user_id, goal, status, started_at, created_at, updated_at, track_id)
+       values (gen_random_uuid(), $1, $2, 'active', $3, now(), now(), $4)`,
+      [
+        USER,
+        `Goal ${i}`,
+        new Date(Date.UTC(2026, 9, 1, 0, Math.floor(i / 2))),
+        i < TRACK_SESSION_COUNT ? TRACK : null,
+      ]
     );
   }
 }, 120_000);
@@ -164,6 +171,41 @@ describe("synap_get_entities — pages to the end", () => {
   });
 });
 
+describe("synap_get_entities — sort", () => {
+  const call = async (args: Record<string, unknown>) =>
+    json(
+      (await readHandlers.synap_get_entities!(
+        ctx("synap_get_entities", args)
+      )) as { content: Array<{ text?: string }> }
+    );
+
+  it("forwards sortBy/sortDir to the list door as orderBy", async () => {
+    getEntities.mockClear();
+    await call({ sortBy: "updatedAt", sortDir: "asc" });
+    expect(getEntities.mock.calls[0]![0]).toMatchObject({
+      orderBy: { field: "updatedAt", dir: "asc" },
+    });
+  });
+
+  it("sortDir alone sorts createdAt; no sort args sends no orderBy", async () => {
+    getEntities.mockClear();
+    await call({ sortDir: "asc" });
+    expect(getEntities.mock.calls[0]![0]).toMatchObject({
+      orderBy: { field: "createdAt", dir: "asc" },
+    });
+    getEntities.mockClear();
+    await call({});
+    expect(getEntities.mock.calls[0]![0]).not.toHaveProperty("orderBy");
+  });
+
+  it("an unknown sortBy is an error, never a silently unsorted list", async () => {
+    getEntities.mockClear();
+    const out = await call({ sortBy: "lastInteractionAt" });
+    expect(out.error).toMatch(/Unsupported sort/);
+    expect(getEntities).not.toHaveBeenCalled();
+  });
+});
+
 describe("synap_list_sessions — pages past 50", () => {
   it("walks every session once in a stable order", async () => {
     const { seen, pages, last } = await walk(
@@ -179,6 +221,52 @@ describe("synap_list_sessions — pages past 50", () => {
     expect(seen).toHaveLength(SESSION_COUNT);
     expect(new Set(seen).size).toBe(SESSION_COUNT);
     expect(last).not.toHaveProperty("nextOffset");
+  });
+
+  it("trackId narrows to that track's sessions", async () => {
+    const out = json(
+      (await sessionHandlers.synap_list_sessions!(
+        ctx("synap_list_sessions", { status: "all", trackId: TRACK })
+      )) as { content: Array<{ text?: string }> }
+    );
+    expect(out.count).toBe(TRACK_SESSION_COUNT);
+    for (const r of out.sessions) expect(r.trackId).toBe(TRACK);
+  });
+
+  it("lean is the default row; full keeps every column", async () => {
+    const lean = json(
+      (await sessionHandlers.synap_list_sessions!(
+        ctx("synap_list_sessions", { status: "all", limit: 1 })
+      )) as { content: Array<{ text?: string }> }
+    );
+    expect(Object.keys(lean.sessions[0]).sort()).toEqual(
+      [
+        "id",
+        "kind",
+        "projectId",
+        "status",
+        "title",
+        "trackId",
+        "updatedAt",
+        "workspaceId",
+      ].sort()
+    );
+    const full = json(
+      (await sessionHandlers.synap_list_sessions!(
+        ctx("synap_list_sessions", { status: "all", limit: 1, detail: "full" })
+      )) as { content: Array<{ text?: string }> }
+    );
+    expect(full.sessions[0].goal).toMatch(/^Goal /);
+    expect(full.sessions[0]).toHaveProperty("kind");
+  });
+
+  it("an unknown detail is named, not silently lean", async () => {
+    const out = json(
+      (await sessionHandlers.synap_list_sessions!(
+        ctx("synap_list_sessions", { detail: "huge" })
+      )) as { content: Array<{ text?: string }> }
+    );
+    expect(out.error).toMatch(/Unknown detail 'huge'/);
   });
 
   it("still caps a page at 50", async () => {

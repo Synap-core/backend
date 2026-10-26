@@ -37,6 +37,7 @@ import {
   alsoSeeLine,
   consentWidth,
   decideLine,
+  decisionsHeading,
   groupByObject,
   holdsSpace,
   initialSelection,
@@ -67,6 +68,7 @@ import {
   toggleSection,
   withoutSpace,
   type AccessLevel,
+  type ActsAs,
   type ConsentObject,
   type OfferedPermission,
   type Selection,
@@ -942,11 +944,13 @@ export const LEVEL_SEGMENT_OFF = {
 
 function LevelControl({
   row,
+  actsAs,
   level,
   isDisabled,
   onChange,
 }: {
   row: ConsentObject;
+  actsAs: ActsAs;
   level: AccessLevel;
   isDisabled: boolean;
   onChange: (level: AccessLevel) => void;
@@ -954,7 +958,7 @@ function LevelControl({
   return (
     <RadioGroup
       orientation="horizontal"
-      aria-label={levelControlLabel(row)}
+      aria-label={levelControlLabel(row, actsAs)}
       value={level}
       isDisabled={isDisabled}
       onValueChange={(v) => onChange(v as AccessLevel)}
@@ -983,6 +987,7 @@ function LevelControl({
  */
 function ObjectRow({
   row,
+  actsAs,
   selection,
   templates,
   podWide,
@@ -991,6 +996,8 @@ function ObjectRow({
   onToggleSpace,
 }: {
   row: ConsentObject;
+  /** Who the app's token acts as: how a decision row says what it does. */
+  actsAs: ActsAs;
   selection: Selection;
   templates: readonly string[];
   /** The row's kind is kept pod-wide (the server's `podWideKinds`). */
@@ -1028,7 +1035,7 @@ function ObjectRow({
               <span className="text-xs text-foreground/65">{scope}</span>
             ) : row.decisions ? (
               <span className="text-xs text-foreground/65">
-                {decideLine(row)}
+                {decideLine(row, actsAs)}
               </span>
             ) : null}
           </span>
@@ -1038,6 +1045,7 @@ function ObjectRow({
         ) : (
           <LevelControl
             row={row}
+            actsAs={actsAs}
             level={objectLevel(selection, row)}
             isDisabled={busy}
             onChange={(level) => onSetLevel(row, level)}
@@ -1056,6 +1064,7 @@ function ObjectRow({
               <ObjectRow
                 key={m.key}
                 row={m}
+                actsAs={actsAs}
                 selection={selection}
                 templates={templates}
                 podWide={podWide}
@@ -1229,7 +1238,11 @@ export function AppConsent({
   const missing = withoutSpace(app.permissions);
   // Decisions (approve / reject) are their own line, never part of a write.
   const { grants, decisions } = splitOffer(app.permissions);
-  const rows = useMemo(() => groupByObject(app.permissions), [app.permissions]);
+  const actsAs = app.actsAs.kind;
+  const rows = useMemo(
+    () => groupByObject(app.permissions, actsAs),
+    [app.permissions, actsAs]
+  );
   const objects = rows.filter((r) => !r.decisions);
   const decide = rows.filter((r) => r.decisions);
   const groupId = useId();
@@ -1240,6 +1253,7 @@ export function AppConsent({
     <ObjectRow
       key={row.key}
       row={row}
+      actsAs={actsAs}
       selection={selection}
       templates={app.templates}
       podWide={podWide}
@@ -1276,8 +1290,8 @@ export function AppConsent({
               id={`${groupId}-decide`}
               className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-[0.04em] text-foreground/65"
             >
-              <ShieldCheck className="h-3 w-3" aria-hidden /> It asks to decide
-              for you
+              <ShieldCheck className="h-3 w-3" aria-hidden />{" "}
+              {decisionsHeading(actsAs)}
             </p>
             <ul className="flex flex-col">{decide.map(objectRow)}</ul>
           </section>
@@ -1311,7 +1325,7 @@ export function AppConsent({
           >
             <SectionHeading
               id={`${groupId}-decisions`}
-              title="It asks to decide for you"
+              title={decisionsHeading(actsAs)}
               section="decisions"
               permissions={decisions}
               selection={selection}

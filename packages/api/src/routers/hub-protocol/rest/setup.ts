@@ -52,6 +52,7 @@ import {
   GUEST_REFUSED_BODY,
   isGuestPrincipal,
 } from "../../../access/guest-containment.js";
+import { reportNoPodAccess } from "../../../access/pod-access.js";
 import {
   createAdminUser,
   ensureUserRow,
@@ -2491,6 +2492,14 @@ export function registerSetupRoutes(app: HubHono): void {
     // it applies the hub's guest containment itself.
     if (keyRecord.userId && (await isGuestPrincipal(keyRecord.userId))) {
       return c.json(GUEST_REFUSED_BODY, 403);
+    }
+    // Pod-access floor, report mode (B1, access/pod-access.ts).
+    if (keyRecord.userId) {
+      await reportNoPodAccess(
+        keyRecord.userId,
+        c.req.raw,
+        "hub:/setup/agent/pending"
+      );
     }
 
     const key = await db.query.apiKeys.findFirst({

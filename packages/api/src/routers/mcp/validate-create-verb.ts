@@ -119,3 +119,34 @@ export function validateCreateVerbInput(
 
   return { ok: true, data: parsed.data };
 }
+
+/**
+ * A `pathTemplate` that starts with the base URL's LAST path segment almost
+ * always doubles it: on `apify_api` (base `https://api.apify.com/v2`) the old
+ * tool example `/v2/acts/{{actorId}}/runs` called `/v2/v2/acts/…` and cost an
+ * approval round on a 404 (ticket a1471ff1). Returns the warning, or
+ * `undefined` when the base is unknown, has no path, or the path does not
+ * repeat it. A warning, not a refusal: a provider can legitimately nest a
+ * segment under itself.
+ */
+export function repeatedBaseSegmentWarning(
+  baseUrl: string | undefined,
+  pathTemplate: string
+): string | undefined {
+  if (!baseUrl) return undefined;
+  let basePath: string;
+  try {
+    basePath = new URL(baseUrl).pathname;
+  } catch {
+    return undefined;
+  }
+  const last = basePath.split("/").filter(Boolean).pop();
+  if (!last) return undefined;
+  const first = pathTemplate.split(/[/?#]/).filter(Boolean)[0];
+  if (first?.toLowerCase() !== last.toLowerCase()) return undefined;
+  return (
+    `pathTemplate starts with "/${first}", which the tool's base URL (${baseUrl}) already ends in, ` +
+    `so the call goes to …/${last}/${first}/…. If that is not intended, drop the leading "/${first}" ` +
+    `(e.g. "${pathTemplate.replace(new RegExp(`^/?${first}`, "i"), "")}").`
+  );
+}
