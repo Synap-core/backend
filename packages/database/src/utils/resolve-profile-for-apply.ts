@@ -381,6 +381,22 @@ export async function resolveProfileForApply(
         .grantAccess(accessible.id, opts.workspaceId)
         .catch(() => {});
     }
+    if (
+      accessible.scope === ProfileScope.SYSTEM &&
+      normalizeKind(accessible.profileKind) === "role" &&
+      !opts.dryRun
+    ) {
+      // A SYSTEM ROLE the template declares (e.g. `contact`) is visible in this
+      // space (founder decision 2, 2026-10-26). Resolving it needs no grant —
+      // a system row is reachable from every workspace — but the pod-wide facet
+      // reach rule (facet-visibility.ts `grantedRoleIdsForSpaces`) reads grants
+      // only, with no implicit all-spaces grant for a system role. So this grant
+      // is the one thing that lets the space's members and its granted apps see
+      // the people who wear the role. NOT swallowed, for that reason. It follows
+      // a shared role's grant lifecycle: it cascades with the workspace.
+      // A system KIND gets none: no reader keys a kind's reach on its grants.
+      await profileRepo.grantAccess(accessible.id, opts.workspaceId);
+    }
     return {
       ...base,
       profile: accessible,

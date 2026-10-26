@@ -35,7 +35,7 @@ import {
   desc,
   workspaces,
   workspaceMembers,
-  podMembers,
+  livePodMemberWhere,
   intelligenceServices,
   getDb,
   eventRepository,
@@ -341,8 +341,8 @@ const coreProcedures = {
   ),
 
   /**
-   * Whether the caller is a pod member — a single `pod_members` existence
-   * lookup for `ctx.userId`.
+   * Whether the caller is a pod member — a single LIVE `pod_members`
+   * existence lookup for `ctx.userId` (a removed person's row is not one).
    *
    * This is the CANONICAL pod-membership signal and the durable replacement for
    * the pod-admin-membership PROXY the CRM Operations nav derived from
@@ -354,7 +354,7 @@ const coreProcedures = {
    */
   isPodMember: protectedProcedure.query(async ({ ctx }) => {
     const row = await db.query.podMembers.findFirst({
-      where: eq(podMembers.userId, ctx.userId),
+      where: livePodMemberWhere(ctx.userId),
       columns: { id: true },
     });
     return !!row;

@@ -58,6 +58,7 @@ import {
   GUEST_REFUSED_BODY,
   isGuestPrincipal,
 } from "../../../access/guest-containment.js";
+import { reportNoPodAccess } from "../../../access/pod-access.js";
 import type { HubVariables } from "../rest/_shared.js";
 import {
   isPublicDoorPath,
@@ -80,14 +81,20 @@ const KEY_EXPIRY_WARNING_DAYS = 14;
  * method. This door serves agents, the IS and tooling; a guest (a guest project
  * role and no pod participation) only ever reads what was shared with them,
  * through the app. See `access/guest-containment.ts`. `null` = not a guest.
+ *
+ * The same final principal meets the pod-access floor: one with no access to
+ * the pod at all is REPORTED (B1, `access/pod-access.ts`), not yet refused.
  */
 async function refuseGuestPrincipal(
   c: Context<{ Variables: HubVariables }>
 ): Promise<Response | null> {
   const userId = c.get("userId") as string | undefined;
   if (!userId) return null;
-  if (!(await isGuestPrincipal(userId, c.req.raw))) return null;
-  return c.json(GUEST_REFUSED_BODY, 403);
+  if (await isGuestPrincipal(userId, c.req.raw)) {
+    return c.json(GUEST_REFUSED_BODY, 403);
+  }
+  await reportNoPodAccess(userId, c.req.raw, "hub");
+  return null;
 }
 
 /** The bearer token of an `Authorization` header — the ONE parser. */

@@ -29230,6 +29230,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				includePodWide?: boolean | undefined;
 				limit?: number | undefined;
 				offset?: number | undefined;
+				orderBy?: {
+					dir?: "asc" | "desc" | undefined;
+					field: "createdAt" | "title" | "updatedAt";
+				} | undefined;
 				profileSlug?: string | undefined;
 				projectId?: string | undefined;
 				projectWithinWorkspace?: boolean | undefined;
