@@ -510,3 +510,6 @@ export {
   type OwedSlotContextInput,
   type ProposalContextInput,
 } from "./context.js";
+
+/** THE needs-you rule and its folds (decision E) — see `./rule.ts`. */
+export * from "./rule.js";

@@ -57,6 +57,29 @@ describe("resolveUnitState — precedence", () => {
     ).toBe("needs_review");
   });
 
+  it("an agent at work outranks the asks it left (decision E2)", () => {
+    // Its asks read "asks you when you can", not "waiting on you".
+    expect(
+      resolveUnitState({ ...base, owedFromYou: 2, running: true }).state
+    ).toBe("working");
+    expect(
+      resolveUnitState({ ...base, pendingDecisions: 1, running: true }).state
+    ).toBe("working");
+    // Not working: the ask is the person's turn.
+    expect(resolveUnitState({ ...base, owedFromYou: 2 }).state).toBe(
+      "needs_you"
+    );
+  });
+
+  it("a gate or a parked run still outranks the agent at work", () => {
+    expect(
+      resolveUnitState({ ...base, checkGate: true, running: true }).state
+    ).toBe("needs_you");
+    expect(
+      resolveUnitState({ ...base, waitingOnYou: true, running: true }).state
+    ).toBe("needs_you");
+  });
+
   it("being blocked outranks the agent running", () => {
     expect(
       resolveUnitState({ ...base, blockedBy: "Legal", running: true }).state

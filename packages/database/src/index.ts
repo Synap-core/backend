@@ -78,6 +78,7 @@ export * from "./utils/emit-message-event.js";
 export * from "./utils/open-run-session.js";
 export * from "./utils/owed-slot-predicate.js";
 export * from "./utils/open-room-question.js";
+export * from "./utils/needs-you-predicate.js";
 export * from "./utils/awaited-gate-wait.js";
 export * from "./utils/live-run-status.js";
 export * from "./utils/worker-enablement.js";

@@ -154,6 +154,8 @@ function pctOf(
  *    actionable arm and above the calm ones.
  * 2. Something you can act on now outranks something you can only wait for,
  *    so a pending decision beats a blocker.
+ * 3. An agent at work outranks the asks it left, never a gate or a parked run
+ *    (decision E2, 2026-10-27): its asks wait "until you can".
  */
 export function resolveUnitState(input: UnitStateInput): UnitStateView {
   const pct = pctOf(input.progress);
@@ -178,7 +180,35 @@ export function resolveUnitState(input: UnitStateInput): UnitStateView {
       rail: determinate(100),
     };
   }
-  if (input.checkGate || input.waitingOnYou || (input.owedFromYou ?? 0) > 0) {
+  // A gate or a parked run STOPPED on the person: blocking, whatever else is
+  // happening.
+  if (input.checkGate || input.waitingOnYou) {
+    return {
+      state: "needs_you",
+      tone: "primary",
+      glyph: "person",
+      rail: determinate(0),
+    };
+  }
+  // An agent at work outranks the asks it left (decision E2, 2026-10-27): an
+  // owed ask or a pending proposal on a session an agent is working reads
+  // "asks you when you can", not "waiting on you" (`classifyOwedAsk`'s
+  // `working` fold, `@synap-core/types/needs-you`). Derived from live state —
+  // no agent flag. Only the two blocking arms above, and a blocker it waits
+  // on (below), outrank it.
+  if (input.running && !input.blockedBy) {
+    return {
+      state: "working",
+      tone: "ai",
+      glyph: "spark",
+      // Striped when there is nothing honest to measure — never a fake 0%.
+      rail:
+        pct === null
+          ? { kind: "striped", pct: null }
+          : { kind: "determinate", pct },
+    };
+  }
+  if ((input.owedFromYou ?? 0) > 0) {
     return {
       state: "needs_you",
       tone: "primary",
@@ -200,18 +230,6 @@ export function resolveUnitState(input: UnitStateInput): UnitStateView {
       tone: "textSecondary",
       glyph: "link",
       rail: determinate(0),
-    };
-  }
-  if (input.running) {
-    return {
-      state: "working",
-      tone: "ai",
-      glyph: "spark",
-      // Striped when there is nothing honest to measure — never a fake 0%.
-      rail:
-        pct === null
-          ? { kind: "striped", pct: null }
-          : { kind: "determinate", pct },
     };
   }
   if (input.schedule) {
