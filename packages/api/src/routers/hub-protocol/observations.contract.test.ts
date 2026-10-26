@@ -417,3 +417,98 @@ describe("observations.append — the trigger hop names the event it recorded", 
     expect(hop![1].data.sha).toBe("abc");
   });
 });
+
+describe("observations.append — the dev-loop contract (plan v5 T2)", () => {
+  const merged = {
+    repo: "Synap-core/backend",
+    number: 255,
+    url: "https://github.com/Synap-core/backend/pull/255",
+    sha: "91de41c34",
+    body: "Pod session: cb0df539-7346-4db4-bf7d-a42b2abed58c",
+  };
+
+  it("REFUSES a contract type whose payload does not parse — per item, never the batch", async () => {
+    appended.length = 0;
+    const res = await callAppend([
+      // url names another PR than repo#number: the sweeper would complete the wrong outcome.
+      {
+        type: "dev.pr_merged",
+        subjectId: "Synap-core/backend#255",
+        data: {
+          ...merged,
+          url: "https://github.com/Synap-core/backend/pull/256",
+        },
+      },
+      {
+        type: "ci.finished",
+        subjectId: "x",
+        data: { status: "green", sha: "abc1234", repo: "a/b" },
+      },
+      {
+        type: "dev.pr_merged",
+        subjectId: "Synap-core/backend#255",
+        data: merged,
+      },
+    ]);
+    expect(res.recorded).toBe(1);
+    expect(res.results[0]).toMatchObject({ ok: false, index: 0 });
+    expect(res.results[0].error).toMatch(/dev\.pr_merged: url/);
+    expect(res.results[1]).toMatchObject({ ok: false, index: 1 });
+    expect(res.results[1].error).toMatch(/ci\.finished: status/);
+    expect(res.results[2]).toMatchObject({ ok: true, index: 2 });
+    // Only the valid fact reached the event store.
+    expect(appended).toHaveLength(1);
+  });
+
+  it("leaves a type outside the contract free-form (dev.commit carries anything)", async () => {
+    const res = await callAppend([
+      { type: "dev.commit", subjectId: "repo:backend", data: { anything: 1 } },
+    ]);
+    expect(res.recorded).toBe(1);
+  });
+
+  it("ENQUEUES the pod's own consumer for dev.pr_merged, with the producer as the governed actor", async () => {
+    appended.length = 0;
+    triggerSends.length = 0;
+    await callAppend([
+      {
+        type: "dev.pr_merged",
+        subjectId: "Synap-core/backend#255",
+        data: merged,
+      },
+    ]);
+    const job = triggerSends.find(([q]) => q === "dev-loop-observation");
+    expect(job, "the merge sweeper job was not enqueued").toBeDefined();
+    expect(job![1]).toMatchObject({
+      eventType: "dev.pr_merged",
+      userId: "user-1",
+      producerAgentUserId: "agent-1",
+      eventId: "row-1",
+    });
+    expect(job![1].data).toMatchObject({
+      repo: "Synap-core/backend",
+      number: 255,
+    });
+    // …and the automations still fire on it (the unified hop is unchanged).
+    expect(triggerSends.some(([q]) => q === "automation-trigger-match")).toBe(
+      true
+    );
+  });
+
+  it("does NOT enqueue it for a fact the pod does not act on", async () => {
+    triggerSends.length = 0;
+    await callAppend([
+      {
+        type: "dev.pr_opened",
+        subjectId: "Synap-core/backend#255",
+        data: merged,
+      },
+    ]);
+    expect(triggerSends.some(([q]) => q === "dev-loop-observation")).toBe(
+      false
+    );
+    expect(triggerSends.some(([q]) => q === "automation-trigger-match")).toBe(
+      true
+    );
+  });
+});

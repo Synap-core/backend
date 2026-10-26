@@ -1864,6 +1864,8 @@ try {
               await import("@synap/jobs/workers/inbound-attachment-worker.js");
             const { registerEntityMediaCopyRunner } =
               await import("@synap/jobs/workers/entity-media-copy-worker.js");
+            const { registerDevLoopRunner } =
+              await import("@synap/jobs/workers/dev-loop-worker.js");
             const { registerEventSyncRunner } =
               await import("@synap/jobs/workers/event-sync-cron.js");
             const { registerConnectionSyncRunner } =
@@ -1962,6 +1964,10 @@ try {
             registerEntityMediaCopyRunner((input) =>
               api.runEntityMediaCopy(input)
             );
+            // Dev loop (plan v5 T2): the observation door enqueues a fact the
+            // pod acts on (`dev.pr_merged`); the api-side runner moves the
+            // sessions it is about (the merge sweeper).
+            registerDevLoopRunner((input) => api.runDevLoopObservation(input));
             // The Discord mirror pass. Google Calendar events reach it as Synap
             // `event` entities landed by the connection sync — never straight
             // to Discord.
@@ -2043,9 +2049,12 @@ try {
                   return;
                 }
                 if (r.read === "ok") {
-                  return api
-                    .notifyPodUpdateOutcome(r.outcome)
-                    .then(() => undefined);
+                  // A failure tells the owner; a success is a fact the pod
+                  // records (`dev.deployed`) so automations can follow it.
+                  return Promise.all([
+                    api.notifyPodUpdateOutcome(r.outcome),
+                    api.recordPodDeployed(r.outcome),
+                  ]).then(() => undefined);
                 }
                 return undefined; // read === "absent": no update recorded yet
               })
