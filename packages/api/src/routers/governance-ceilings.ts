@@ -24,13 +24,13 @@
 
 import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
-import { assertPodAdmin } from "../trpc.js";
+import { isPodAdmin } from "../utils/workspace-role.js";
+import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import { TRPCError } from "@trpc/server";
 import { db, eq, and, or, isNull, gt, desc, inArray } from "@synap/database";
 import {
   GOVERNANCE_PRINCIPAL_CLASSES,
   governanceCeilings,
-  workspaceMembers,
   users,
 } from "@synap/database/schema";
 import {
@@ -40,8 +40,6 @@ import {
 import { userVisibleWhere } from "../utils/user-visible-where.js";
 import { ScopeFilterShape, resolveScope } from "../utils/scope-filter.js";
 import type { Lens } from "../access/context.js";
-
-const EDITOR_ROLES = ["editor", "admin", "owner"];
 
 type GovernanceCeilingRow = typeof governanceCeilings.$inferSelect;
 
@@ -105,35 +103,6 @@ function activeCeilingPredicate() {
   );
 }
 
-async function isPodAdmin(userId: string): Promise<boolean> {
-  try {
-    await assertPodAdmin(userId);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function assertWorkspaceEditor(
-  userId: string,
-  workspaceId: string
-): Promise<void> {
-  const membership = await db.query.workspaceMembers.findFirst({
-    where: and(
-      eq(workspaceMembers.workspaceId, workspaceId),
-      eq(workspaceMembers.userId, userId)
-    ),
-    columns: { role: true },
-  });
-
-  if (!membership || !EDITOR_ROLES.includes(membership.role)) {
-    throw new TRPCError({
-      code: "FORBIDDEN",
-      message: "Editor role or higher required for this workspace",
-    });
-  }
-}
-
 /**
  * Shared gate for both `create` and `revoke` — a ceiling's authority to
  * exist/be-undone is determined by its scope + principal, never by who is
@@ -167,7 +136,9 @@ async function assertCanManageCeiling(
       });
     }
     if (!podAdmin) {
-      await assertWorkspaceEditor(userId, ceiling.workspaceId);
+      await assertWorkspaceWrite(db, userId, {
+        workspaceId: ceiling.workspaceId,
+      });
     }
   }
 

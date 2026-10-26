@@ -3,6 +3,8 @@
  */
 
 export * from "./trpc.js";
+// THE pod-admin predicate, for apps/api (one definition: utils/workspace-role.ts).
+export { isPodAdmin } from "./utils/workspace-role.js";
 // The service-key door lives in @synap/database; re-exported for apps/api.
 export { encryptServiceKey, resolveServiceKey } from "@synap/database";
 export * from "./context.js";

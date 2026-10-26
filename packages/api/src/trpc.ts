@@ -372,28 +372,8 @@ export const podProcedure = protectedProcedure.use(async (opts) => {
     });
   }
 
-  const membership = await db.query.workspaceMembers.findFirst({
-    where: and(
-      eq(workspaceMembers.workspaceId, ctx.workspaceId),
-      eq(workspaceMembers.userId, ctx.userId)
-    ),
-  });
-
-  if (!membership) {
-    throw await workspaceMembershipDenied(ctx.userId, ctx.workspaceId);
-  }
-
-  const workspace = await db.query.workspaces.findFirst({
-    where: eq(workspaces.id, ctx.workspaceId),
-    columns: { archivedAt: true },
-  });
-
-  if (workspace?.archivedAt != null) {
-    throw new TRPCError({
-      code: "FORBIDDEN",
-      message: "This workspace has been archived.",
-    });
-  }
+  // The same lens gate as `workspaceProcedure` (membership + not archived).
+  const membership = await assertWorkspaceUsable(ctx.userId, ctx.workspaceId);
 
   return opts.next({
     ctx: {
