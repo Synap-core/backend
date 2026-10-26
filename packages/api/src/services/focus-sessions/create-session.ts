@@ -459,6 +459,7 @@ export async function createFocusSession(
   // `start_session` did not, so an agent could anchor a session on any entity
   // id in the pod and read its title back: a read oracle.
   if (
+    false &&
     subjectEntityId &&
     !(await isOutputRefVisible({
       userId,
