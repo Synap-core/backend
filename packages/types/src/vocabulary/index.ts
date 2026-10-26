@@ -1575,11 +1575,13 @@ export function resolveLibraryStatusLabel(
  * (`completed` reads "Completed" for a run, `archived` "Archived" for a
  * record): a goal that finished is "Closed" — how it went is its verdict —
  * and one that stopped mattering is "Dropped". `proposed` is a goal being
- * shaped, not a governance proposal ("Suggested"). `units/track.ts` holds the
- * compile-time floor that every status has a row here.
+ * shaped, not a governance proposal: it reads "Draft" (founder D-2,
+ * 2026-10-26), because "Proposed" is the word for an agent's write waiting
+ * for approval. `units/track.ts` holds the compile-time floor that every
+ * status has a row here.
  */
 export const TRACK_STATUS_LABELS = {
-  proposed: "Proposed",
+  proposed: "Draft",
   agreed: "Agreed",
   ready: "Ready",
   active: "Active",
@@ -1633,9 +1635,13 @@ export function resolveTrackVerdictLabel(
 // tables name nothing else. Labels, not sentences: they sit on a chip or after
 // "Kind:", "Waiting on:".
 
-/** Kind of work a goal is (decision 4, `TRACK_WORK_KINDS`). */
+/**
+ * Kind of work a goal is (decision 4, `TRACK_WORK_KINDS`). `project` (a
+ * one-off result) reads "Build" (founder D-7, 2026-10-26): "a Project goal in
+ * project Synap" collided with the Project container.
+ */
 export const TRACK_WORK_KIND_LABELS = {
-  project: "Project",
+  project: "Build",
   flow: "Flow",
   operation: "Operation",
   investigation: "Investigation",

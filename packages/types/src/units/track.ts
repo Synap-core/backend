@@ -418,6 +418,13 @@ function verbFor(
  * IS offered: a goal can stay open as long as it matters, or finish — a
  * person closes it with a verdict ({@link checkTrackClose}). A done or lost
  * track offers nothing; an unknown status offers nothing.
+ *
+ * FORWARD ONLY into the open stage (founder D-2, 2026-10-26): a move into an
+ * open status is offered only when it is later in {@link TRACK_STATUSES}
+ * than where the goal stands — draft → agreed → ready → active. An active or
+ * paused goal is never offered "Move to draft / agreed / ready". Pause,
+ * close, drop and resume are unchanged. This narrows the MENU, not the door:
+ * {@link TRACK_STATUS_TRANSITIONS} still allows the move back.
  */
 export function trackStatusMoves(
   status: string,
@@ -426,8 +433,13 @@ export function trackStatusMoves(
   const moves = TRACK_STATUS_TRANSITIONS[status as TrackStatus];
   if (!moves) return [];
   const from = trackStatusCategory(status)!;
+  const at = TRACK_STATUSES.indexOf(status as TrackStatus);
   return moves
     .filter((to) => opts.includeArchive === true || to !== "archived")
+    .filter(
+      (to) =>
+        trackStatusCategory(to) !== "open" || TRACK_STATUSES.indexOf(to) > at
+    )
     .map((to) => ({ to, verb: verbFor(from, trackStatusCategory(to)!) }));
 }
 

@@ -217,9 +217,6 @@ describe("TRACK_STATUS_TRANSITIONS / trackStatusMoves", () => {
 
   it("offers drop only when asked, and nothing from a closed/unknown status", () => {
     expect(trackStatusMoves("active").map((m) => m.to)).toEqual([
-      "proposed",
-      "agreed",
-      "ready",
       "paused",
       "completed",
     ]);
@@ -229,6 +226,46 @@ describe("TRACK_STATUS_TRANSITIONS / trackStatusMoves", () => {
     expect(trackStatusMoves("completed", { includeArchive: true })).toEqual([]);
     expect(trackStatusMoves("archived", { includeArchive: true })).toEqual([]);
     expect(trackStatusMoves("bogus")).toEqual([]);
+  });
+
+  it("offers the open stage FORWARD only: draft → agreed → ready → active (D-2)", () => {
+    const offered = (s: string) =>
+      trackStatusMoves(s, { includeArchive: true }).map((m) => m.to);
+    expect(offered("proposed")).toEqual([
+      "agreed",
+      "ready",
+      "active",
+      "paused",
+      "completed",
+      "archived",
+    ]);
+    expect(offered("agreed")).toEqual([
+      "ready",
+      "active",
+      "paused",
+      "completed",
+      "archived",
+    ]);
+    expect(offered("ready")).toEqual([
+      "active",
+      "paused",
+      "completed",
+      "archived",
+    ]);
+    // Resume from paused stays; an active or paused goal never goes back to open.
+    expect(offered("paused")).toEqual(["active", "completed", "archived"]);
+    for (const s of TRACK_STATUSES) {
+      for (const to of offered(s)) {
+        if (trackStatusCategory(to) === "open") {
+          expect(TRACK_STATUSES.indexOf(to), `${s} → ${to}`).toBeGreaterThan(
+            TRACK_STATUSES.indexOf(s)
+          );
+        }
+      }
+    }
+    // The MENU narrows, not the door: the move back is still a legal transition.
+    expect(canTransitionTrack("active", "proposed")).toBe(true);
+    expect(canTransitionTrack("ready", "agreed")).toBe(true);
   });
 
   it("every verb resolves through ACTION_VERBS (never the humanize fallback)", () => {
@@ -265,12 +302,13 @@ describe("TRACK_LIFECYCLE — the track's system lifecycle", () => {
     ).toEqual(["agreed", "completed"]);
   });
 
-  it("reads its words from the vocabulary: completed is Closed, archived is Dropped", () => {
+  it("reads its words from the vocabulary: completed is Closed, archived is Dropped, proposed is Draft", () => {
     const label = (k: string) =>
       TRACK_LIFECYCLE.options.find((o) => o.key === k)!.label;
     expect(label("completed")).toBe("Closed");
     expect(label("archived")).toBe("Dropped");
-    expect(label("proposed")).toBe("Proposed");
+    // D-2: a goal being shaped reads "Draft", never the governance "Proposed".
+    expect(label("proposed")).toBe("Draft");
     for (const s of TRACK_STATUSES) {
       expect(resolveTrackStatusLabel(s)).toBe(TRACK_STATUS_LABELS[s]);
     }
