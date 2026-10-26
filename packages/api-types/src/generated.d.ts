@@ -8668,823 +8668,29 @@ export interface ImportAnalysisPlan {
 	overallConfidence: number;
 }
 /**
- * The ONE shape of the AI's pending "move to X?" suggestion on every
- * `capture.execute` outcome (applied AND proposed). Nothing was moved: the
- * capture landed where it would have without the AI; the caller confirms by
- * re-filing with an explicit workspace.
+ * WHY `structure()` returned `null`, reported through its `onFailure` option.
+ * The `null` contract is unchanged; this only stops the cause from living in a
+ * `console.warn` line alone (issue 1c252b3b: a degraded capture nobody could
+ * explain without host log access).
+ *
+ *   http    — a non-OK answer (auth excepted: that one throws), or a 200 body
+ *             that would not parse;
+ *   stream  — a non-200 `result` frame, an `error` frame, or a stream cut
+ *             before its result;
+ *   network — the request never got an answer;
+ *   timeout — aborted, on the deadline or by the caller.
+ *
+ * `failure` is the IS failure envelope (`{ code, retryable, … }`) when the
+ * answer carried one; never the rest of the body. `message` is the transport
+ * error's own text on a `network` failure (ECONNREFUSED, fetch failed): the
+ * evidence a classifier reads, not words for a person.
  */
-export interface PendingWorkspaceSwitch {
-	suggestedWorkspaceId: string;
-	/** `null` when the pod could not name it (never a raw id in its place). */
-	suggestedWorkspaceName: string | null;
-	reason: string | null;
-	confidence: number | null;
+export interface StructureFailure {
+	cause: "http" | "network" | "stream" | "timeout";
+	status?: number;
+	failure?: unknown;
+	message?: string;
 }
-/**
- * The "always file <kind> here?" OFFER a capture-time reroute earns.
- *
- * WHY IT IS AN OFFER AND NOT A RULE. Synap already has a first-class Rule
- * object — a `skills` row with `category: "rule"` whose sentence is compiled
- * into an automation (`routers/skills.ts:463 createRule` →
- * `services/rules/create.ts`, grammar in `services/rules/sentence-schema.ts`).
- * It cannot express this placement, and the ladder could not read it if it
- * could, on THREE counts measured in the code:
- *
- *  1. No THEN action files an entity into a named workspace. The sentence
- *     vocabulary is `notify | update_entity | create_entity | run_command |
- *     post_message | call_webhook` (`sentence-schema.ts:47`), and
- *     `entity_update`'s executor takes `{ entityId, properties, title,
- *     description }` and writes the AUTOMATION's own `workspaceId`
- *     (`packages/jobs/src/workers/steps/output.ts:512`) — there is no target
- *     workspace parameter to set.
- *  2. A rule fires AFTER the fact, off an event. Even with such an action it
- *     would MOVE an already-landed capture, which emits a route correction and
- *     tells routing memory the AI was wrong — the opposite of what a standing
- *     placement preference means.
- *  3. The placement ladder reads no rule store at all. `resolveWorkspacePlacement`
- *     (`@synap/database/services/workspace-resolution-service.ts`) has six
- *     rungs and the only rule-shaped input is the declared guild→workspace
- *     mapping at its rung 1 (`:665`).
- *
- * So this is deliberately NOT installable (`installable: false`): the pod says
- * what it would offer and why it cannot honour it yet, rather than inventing a
- * second routing store or bolting placement onto `governance_rules` (which is
- * AUTHORIZATION — auto-approve vs propose — and never routing). The offer is
- * also stamped on the route correction event so it is COUNTED, not dropped.
- */
-export interface WorkspaceRuleOffer {
-	/** The ONE kind the capture produced — an offer must name a single X. */
-	profileSlug: string;
-	/** Where the person actually filed it. */
-	workspaceId: string;
-	workspaceName: string | null;
-	/** FALSE today — see the docblock. Never fabricate a `true` here. */
-	installable: boolean;
-	/** Why it cannot be installed yet, in the pod's own words. */
-	reason: string;
-}
-declare const identityResolutionInput: z.ZodObject<{
-	existingEntityId: z.ZodOptional<z.ZodString>;
-	verb: z.ZodEnum<{
-		fill_empty: "fill_empty";
-		keep_existing: "keep_existing";
-		separate: "separate";
-		use_capture: "use_capture";
-	}>;
-}, z.core.$strip>;
-export type IdentityResolutionInput = z.infer<typeof identityResolutionInput>;
-export interface IdentityConflict {
-	key: string;
-	kept: unknown;
-	incoming: unknown;
-}
-export interface IdentityReceipt {
-	verb: IdentityResolutionInput["verb"];
-	entityId: string;
-	filled?: string[];
-	conflicts?: IdentityConflict[];
-}
-/** One relation op that was submitted but never created — the honest detail
- * behind a `created < submitted` gap on a materialize receipt. */
-export interface MaterializeRelationFailure {
-	sourceRef: string;
-	targetRef: string;
-	type: string;
-	reason: string;
-}
-export interface MaterializeEntityResult {
-	/** Op's stable ref (e.g. capture tempId), if it had one. */
-	ref?: string;
-	/** Index of the create_entity op in operations[]. */
-	opIndex: number;
-	/** Real entity id (created or linked-to). */
-	entityId: string;
-	profileSlug: string;
-	/** True when this op linked an existing entity (existingEntityId) vs created. */
-	linked: boolean;
-	/**
-	 * Per-op target workspace from the create_entity op (multi-home import
-	 * graphs). Absent when the op did not pin a workspace.
-	 */
-	workspaceId?: string | null;
-	/**
-	 * Per-op project from the create_entity op (already filed via entities.create
-	 * → linkEntityToProject). stampProjectMembership skips entities that carry
-	 * this so it doesn't re-link; falls back to the orchestrator project lens
-	 * for entities without a per-op project.
-	 */
-	projectId?: string | null;
-	/**
-	 * Set by callers that DOWNGRADE a failed create to a note fallback — carries
-	 * the originally requested profileSlug. Additive; absent on the happy path.
-	 */
-	degradedFrom?: string;
-	/**
-	 * Set by callers that SALVAGE a validation failure by retrying the same
-	 * profile with properties dropped. Additive; absent on the happy path.
-	 */
-	propertiesDropped?: true;
-	/**
-	 * Set when this op carried long-form `content` (a note body) that was NOT
-	 * applied because the create resolved to an EXISTING entity via strong-signal
-	 * dedup (entities.create enriches properties on a merge, but never overwrites
-	 * the matched entity's document). Surfaced (mirrors the facets 'dropped'
-	 * pattern) so the caller can flag the discarded body instead of losing it
-	 * silently. Additive; absent on the happy path.
-	 */
-	contentDropped?: true;
-	/**
-	 * Body document created TOGETHER with this entity (op.content routed to a
-	 * linked document). Absent when the entity was linked, or had no body.
-	 */
-	documentId?: string;
-	/**
-	 * What a strong-identity merge wrote onto the PRE-EXISTING entity this op
-	 * resolved to, with the values it replaced — so revert can restore them
-	 * without deleting an entity the run never created. Only on a merge.
-	 */
-	propertyDiff?: EntityPropertyDiff;
-	/**
-	 * Linked ONLY because a retry's idempotency key found a row the SAME proposal
-	 * created (lineage checked) — a crash between create and stamp. The row is
-	 * this run's creation, not a pre-existing entity. Never set on a dedup or
-	 * `existingEntityId` link.
-	 */
-	linkedByRetry?: true;
-	/**
-	 * Set when this create op ran an approve-time identity resolution.
-	 * `ref` is the disposition key (`op.ref` or `$opN`), not a second policy.
-	 */
-	identity?: IdentityReceipt & {
-		ref: string;
-	};
-}
-export interface MaterializeRelationResult {
-	sourceEntityId: string;
-	targetEntityId: string;
-	/** Actual relation type used (post type-resolution/fallback). */
-	type: string;
-	/** The op as submitted (refs, pre-resolution type) — its identity in a record. */
-	requested?: {
-		sourceRef: string;
-		targetRef: string;
-		type: string;
-	};
-	/** Id of the relation row, when the door returned one. */
-	relationId?: string;
-	/**
-	 * Id of the `links` row instead, when the requested relation slug is the
-	 * dependency edge under another name (`blocks` / `depends_on` → links
-	 * `blocked_by`). Exactly one of `relationId` / `linkId` is set.
-	 */
-	linkId?: string;
-	/** The door found this edge already in the graph — not created by this run. */
-	preExisting?: true;
-}
-/** One facet this run attached (a role on an entity). */
-export interface MaterializeFacetResult {
-	/** The create_entity op that declared the facet. */
-	opIndex: number;
-	ref?: string;
-	entityId: string;
-	facetId: string;
-	profileSlug: string;
-}
-/** Per-op result for a `create_skill` op (the FACT half of a rule). */
-export interface MaterializeSkillResult {
-	ref: string;
-	opIndex: number;
-	skillId: string;
-}
-/** Per-op result for a `create_automation` op (the BEHAVIOUR half of a rule). */
-export interface MaterializeAutomationResult {
-	ref: string;
-	opIndex: number;
-	automationId: string;
-	/** What the op ASKED for. */
-	enabledRequested: boolean;
-	/**
-	 * What was actually materialized. ALWAYS false: approve-first means an
-	 * automation never arrives already running, so the op's `enabled` is
-	 * overridden here and the override is REPORTED rather than swallowed.
-	 */
-	enabled: false;
-	/** True when the op said `enabled: true` and we forced it off. */
-	enabledOverridden: boolean;
-}
-/** Per-op result for a `create_rule` op. */
-export interface MaterializeRuleResult {
-	ref: string;
-	opIndex: number;
-	ruleId: string;
-	factSkillId?: string;
-	automationIds: string[];
-}
-/** Per-op result for a `create_playbook` op (a DRAFT process). */
-export interface MaterializePlaybookResult {
-	ref: string;
-	opIndex: number;
-	playbookId: string;
-	/** Always "draft" — what the op asked for is never honoured over this. */
-	status: "draft";
-}
-/** Per-op result for a `create_view` op (a List over the bundle's things). */
-export interface MaterializeViewResult {
-	ref: string;
-	opIndex: number;
-	viewId: string;
-	/** The fixed member set the view was created with (resolved ids). */
-	entityIds: string[];
-	/** The group container recorded on the view config, when there was one. */
-	containerEntityId?: string;
-}
-/**
- * Per-op result for an `update_*` op (a Library rebuild's change). `before`
- * and `after` hold ONLY the fields the op patched, read right around the
- * write — what revert restores, compare-and-set against `after`. For
- * `update_entity` they are the entity's undo snapshot (title / preview /
- * properties), turned into the ONE entity diff shape by the record builder.
- */
-export interface MaterializeUpdateResult {
-	ref: string;
-	opIndex: number;
-	op: CompositeUpdateOperation["op"];
-	targetId: string;
-	before: Record<string, unknown>;
-	after: Record<string, unknown>;
-}
-/** Per-op result for a `create_project` op (connected plan). */
-export interface MaterializeProjectResult {
-	ref: string;
-	opIndex: number;
-	projectId: string;
-	/** The project door reused an existing project of the same name — not this run's row. */
-	linked: boolean;
-	/** Subject the run bound to the project, when the step named one. */
-	subjectEntityId?: string;
-}
-/** Per-op result for a `create_session` op (connected plan). */
-export interface MaterializeSessionResult {
-	ref: string;
-	opIndex: number;
-	sessionId: string;
-	/**
-	 * True when the create door REUSED an open session of the same goal and
-	 * scope (`status: "deduped"`) — not this run's row, never compensated.
-	 */
-	linked?: boolean;
-}
-/** One session↔session edge a plan applied. */
-export interface MaterializeLinkResult {
-	opIndex: number;
-	type: "blocked_by" | "spawned_from";
-	fromSessionId: string;
-	toSessionId: string;
-	/** As declared (a ref or a real id per side) — the edge's identity in a record. */
-	requested: {
-		from: string;
-		to: string;
-	};
-	linkId?: string;
-	/** The edge was already in the graph — not created by this run. */
-	preExisting?: true;
-}
-/** Per-op result for a `create_document` op (connected plan). */
-export interface MaterializeDocumentResult {
-	ref: string;
-	opIndex: number;
-	documentId: string;
-	attachedEntityId?: string;
-	recordedOnSessionId?: string;
-}
-export interface MaterializeResult {
-	/** Count of entities CREATED (excludes linked existing entities). */
-	created: number;
-	/** Count of relations created. */
-	linked: number;
-	primaryId: string;
-	refToRealId: Record<string, string>;
-	/** Per-entity detail (order matches create_entity ops) for response building. */
-	entities: MaterializeEntityResult[];
-	/** Per-relation detail for response building. */
-	relations: MaterializeRelationResult[];
-	/**
-	 * Relation ops that were SUBMITTED but never created (bad ref, DB failure,
-	 * etc). `relations.length + relationsFailed.length` is the submitted count —
-	 * this is what makes the gap between "submitted" and "created" honest and
-	 * nameable instead of a swallowed `logger.warn`. Empty on the happy path.
-	 */
-	relationsFailed: MaterializeRelationFailure[];
-	/**
-	 * Facets the attach door reported `attached`. The door answers `attached`
-	 * for a re-attach of an existing live facet too, so this is "attached by the
-	 * call", not proof of creation — revert re-checks each row's lineage.
-	 */
-	facets: MaterializeFacetResult[];
-	/** Rule Loop (NS1): skills created by `create_skill` ops. Empty by default. */
-	skills: MaterializeSkillResult[];
-	/** Rule Loop (NS1): automations created by `create_automation` ops. */
-	automations: MaterializeAutomationResult[];
-	/** Rule Loop (NS1): rules created by `create_rule` ops. */
-	rules: MaterializeRuleResult[];
-	/** Draft processes created by `create_playbook` ops. Empty by default. */
-	playbooks: MaterializePlaybookResult[];
-	/** Lists created by `create_view` ops. Empty by default. */
-	views: MaterializeViewResult[];
-	/** Rows CHANGED by `update_*` ops (a Library rebuild). Empty by default. */
-	updates: MaterializeUpdateResult[];
-	/** Connected plan: projects, sessions, session edges, documents. Empty otherwise. */
-	projects: MaterializeProjectResult[];
-	sessions: MaterializeSessionResult[];
-	links: MaterializeLinkResult[];
-	documents: MaterializeDocumentResult[];
-}
-/** Per-op outcome, mirrored into `capture.execute`'s response as `updated[]`. */
-export interface CaptureUpdateResult {
-	tempId: string;
-	entityId: string;
-	/** "applied" = patched now; "proposed" = filed for review, nothing written. */
-	status: "applied" | "failed" | "proposed";
-	proposalId?: string;
-	reviewUrl?: string;
-	reason?: string;
-}
-export interface KnownSourceHash {
-	/** The hash as ASKED (matched against either ledger key). */
-	hash: string;
-	sessionId: string | null;
-	documentId: string;
-	/**
-	 * `analyzed` — structuring ran on it. `kept_unanalyzed` — stored with a
-	 * degraded marker (vision down, budget): the bytes are on the pod, but
-	 * nothing was extracted, so re-sending it re-analyzes rather than dedups.
-	 */
-	status: "analyzed" | "kept_unanalyzed";
-	/**
-	 * The run still stands: its session holds a pending or applied proposal.
-	 * False once every proposal was reverted / rejected / withdrawn / expired
-	 * (an undone run), or when the run filed nothing at all.
-	 */
-	inEffect: boolean;
-	/** The workspace the source was captured into (`null` = pod-wide). */
-	workspaceId: string | null;
-}
-/**
- * Route suggestions — the router's SUGGEST half (intake plan §3.5 / W6, B15).
- *
- * Founder decision: routing is suggest-and-confirm with VISIBLE reasoning
- * (Linear triage shape), inline, never auto-run. So this module only RANKS and
- * EXPLAINS; nothing here runs a playbook or triggers an automation.
- *
- * PURE: candidates are loaded through the access layer and handed in —
- * playbooks by `playbooks.matchForEntity` (which also calls
- * `rankRouteCandidates`), propose-mode rules by `match-rules-for-entity.ts` —
- * and the capture followUp combines both lists per entity with
- * `suggestRoutesForEntities`, so the ranking rule exists once.
- *
- * SIGNALS ARE LEXICAL + STRUCTURAL ONLY. Embeddings have no fallback provider
- * (a pod without one would rank differently from a pod with one, silently), so
- * the rank depends on nothing that can be unavailable:
- *   - intent  — words of the user's intent text found in the candidate's name /
- *               description / goal (strongest: it is what the user SAID)
- *   - kind    — the candidate is built for the entity's own kind
- *   - facet   — the candidate is built for a role the entity plays
- *   - anyKind — the candidate has no kind filter (fires for everything new)
- *
- * ── RARITY (founder decision 2026-09-28, space-brief plan item 8) ───────────
- * An intent term is weighted by how RARE it is in THIS candidate pool, using
- * the pod's ONE IDF formula (`rarityWeight`, `utils/term-match.ts`). Measured
- * defect it fixes: the intent "design and build a feature … fix MCP discovery
- * gaps" ranked "CRM Hygiene" first on the words "agent" and "each" — "each"
- * sits in 7 of the 20 live candidates — and the flat 3-points-per-word sum tied it with
- * "AI Dev Session" (which alone says "build"), the tie then going to whichever
- * was edited last. A word most candidates share is weak evidence; a word only
- * one candidate has is strong evidence. The pool is whatever the caller
- * passes, so pass it AFTER every gate (rows a caller cannot see must never
- * move the ranking — same rule as `rankByTerms`).
- *
- * WHY NOT `rankByTerms` ITSELF: it caps a query at `MAX_QUERY_TERMS` (8 — a
- * bound for its SQL twin) and matches substrings, so a session goal would
- * lose every word after the eighth and "fix" would hit "prefix". The ranker
- * here keeps its whole-word stems and reuses only the rarity formula, so
- * there is still ONE IDF rule in the pod.
- *
- * ── WHAT IS RETURNED ────────────────────────────────────────────────────────
- * A candidate is returned only when it carries a signal ABOUT THIS REQUEST:
- * an intent word, the entity's kind, or one of its roles. `anyKind` is a
- * modifier, not evidence — "runs for anything new" is true of every
- * subject-less candidate for every request — so it is recorded (and scores)
- * only alongside an intent match, and a candidate with no real signal is not
- * returned at all. On the same live call, 9 of the 20 candidates returned
- * matched no word at all and rode back as "Runs for anything new" at 0.5.
- *
- * ── TIES ────────────────────────────────────────────────────────────────────
- * Broken by relevance, never by recency: more distinct intent words, then the
- * rarest word matched, then the structural signal (kind > facet), then the
- * name (a stable, edit-independent order). Editing a playbook must never
- * promote it.
- */
-/**
- * - playbook     — start this process for the entity (`playbooks.run`)
- * - automation   — a propose-mode rule this capture fires
- * - session      — an OPEN session the entity belongs in: confirm attaches it
- *                  as an input (`focusSessions.attachInput`)
- * - draft_process — no process exists for this kind yet, and the kind has a
- *                  lifecycle: confirm drafts one (`create_playbook`, draft)
- */
-export type RouteCandidateKind = "automation" | "draft_process" | "playbook" | "session";
-export interface RouteCandidate {
-	kind: RouteCandidateKind;
-	id: string;
-	name: string;
-	/** Other searchable text: description, goal template… */
-	text?: ReadonlyArray<string | null | undefined>;
-	/** The kind the candidate is built for; `null` = fires for any kind. */
-	subjectProfileSlug: string | null;
-	/**
-	 * A RULE that PROPOSES (propose-mode `playbook_run`): confirming it files a
-	 * proposal, never a run. Only rules of this mode are suggested.
-	 */
-	proposes?: true;
-	/**
-	 * A PLAYBOOK built for a kind with no standing propose rule yet: a host may
-	 * offer "Always propose this", creating one through `skills.createRule`.
-	 */
-	alwaysProposeOffer?: true;
-	/**
-	 * A SESSION candidate that is ABOUT this very entity (its subject). The
-	 * ranker reports it as a `subject` signal — the strongest structural one.
-	 */
-	subjectEntityId?: string;
-	/**
-	 * A DRAFT_PROCESS candidate: the kind's lifecycle property (a select whose
-	 * slug names a status/stage) the draft would advance.
-	 */
-	statusProperty?: string;
-}
-export type RouteSignal = {
-	terms: string[];
-	type: "intent";
-} | {
-	profileSlug: string;
-	type: "subject";
-} | {
-	profileSlug: string;
-	type: "kind";
-} | {
-	profileSlug: string;
-	type: "facet";
-} | {
-	type: "anyKind";
-};
-export interface RankedRoute<C extends RouteCandidate = RouteCandidate> {
-	candidate: C;
-	score: number;
-	/** One human-readable line: why this is suggested. */
-	reason: string;
-	signals: RouteSignal[];
-}
-export interface EntityRouteSuggestions {
-	entityId?: string;
-	profileSlug: string;
-	suggestions: RankedRoute[];
-}
-export type RouteSuggestionsEcho = {
-	entities: EntityRouteSuggestions[];
-	status: "ok";
-	truncated?: true;
-} | {
-	reason: "no_entities" | "no_workspace";
-	status: "skipped";
-} | {
-	error: string;
-	status: "failed";
-};
-/**
- * The capture receipt's honesty words — PURE, and deliberately in their own
- * module rather than inside `submit-capture-graph.ts`.
- *
- * Every caller of `submitCaptureGraph` reaches it through a dynamic import, and
- * the ones under test replace that whole module with a `vi.mock`. A pure helper
- * living in there would be mocked away with it — the derivation would vanish at
- * exactly the moment a test believed it was exercising the door. Kept here, it
- * is imported statically and can never be stubbed out.
- *
- * `partial` is NOT a new word: it is the Hub Protocol receipt state defined on
- * `CreateWriteReceipt` (routers/hub-protocol/write-receipt.ts) and already
- * carried by `HubWriteReceipt` in @synap-core/hub-rest-client — "storage changed for
- * SOME sub-writes and failed for others; never a claim of rollback".
- */
-/** The three states a capture graph's write receipt can carry. */
-export type CaptureReceiptState = "applied" | "partial" | "pending";
-/** A reviewer/agent-facing line for one plan step. */
-export interface PlanStepSummary {
-	ref: string | null;
-	opIndex: number;
-	kind: "automation" | "document" | "entity" | "link" | "playbook" | "project" | "relation" | "rule" | "session" | "skill" | "view";
-	label: string;
-	/** Set on a step that CHANGES an existing row (a Library rebuild). */
-	update?: {
-		targetId: string;
-	};
-	/** A skill step's slug — the ref `synap_load_skill` resolves. */
-	slug?: string;
-}
-export interface StoredCaptureScope {
-	workspaceId: string | null;
-	projectId: string | null;
-	sessionId: string | null;
-}
-/**
- * A create_entity op carrying property keys its profile does not model. They
- * are still STORED verbatim (the validator's flexible-schema tolerance), so
- * this is advisory, never a rejection. A capture used to accept them in
- * silence — that is how `knowledgeform` (for `knowledgeForm`) reached a pod as
- * a key nothing reads. Same entries the entity doors put on their receipt.
- */
-export interface CaptureGraphUnmodeledEntity {
-	label: string;
-	profileSlug: string;
-	unmodeled: Array<{
-		didYouMean?: string;
-		key: string;
-	}>;
-}
-/**
- * What each kind in the graph DOES model, by profile slug, through the lens
- * the graph was validated in — the validator's own `modeled` list. Without it
- * an `unmodeled` report only said what was wrong, never what was right.
- */
-export type CaptureGraphModeledFields = Record<string, ModeledField[]>;
-/** One plan step on a submit receipt — self-describing for the reviewer/agent. */
-export interface CapturePlanStepReceipt extends PlanStepSummary {
-	/**
-	 * `pending`: nothing exists yet, `id` is null — ids are assigned when the
-	 * plan applies, and are then read off the proposal's
-	 * `data.materialized.byOp[ref]`. `applied`: `id` is the live row.
-	 */
-	state: "applied" | "pending";
-	id: string | null;
-	/** `create_project` only: the pod's evidence verdict. */
-	evidence?: PlanProjectEvidence;
-	/** An applied skill step with a slug: the call that loads it. */
-	loadWith?: string;
-}
-export interface SubmitCaptureGraphResult {
-	proposalId: string | undefined;
-	entityCount: number;
-	relationCount: number;
-	bindingCount: number;
-	reviewUrl: string | undefined;
-	summary: string;
-	/** True when the graph was materialized immediately (agent-mode auto-apply). */
-	applied: boolean;
-	/**
-	 * Connected plan only: every step (entities and relations included), with
-	 * its ref, kind and label. Pending steps carry `id: null` — ids exist only
-	 * once the plan applies. Omitted for a graph with no plan step.
-	 */
-	plan?: {
-		steps: CapturePlanStepReceipt[];
-	};
-	/** The session this proposal was filed in (its room is where it is discussed). */
-	sessionId?: string | null;
-	/**
-	 * Where the write was STORED — read off the proposal row the insert returned
-	 * (or, on a re-submit, the PRIOR row), never the call's inputs: the insert
-	 * runs the project ladder (incl. declared focus) and may mint an agent
-	 * receipt session. Only when an auto-apply's receipt row failed to insert
-	 * (no row exists) does it fall back to the values the entities were
-	 * materialized with.
-	 */
-	scope: StoredCaptureScope;
-	/** True when this call returned a PRIOR proposal instead of filing one. */
-	deduped?: true;
-	/**
-	 * How the graph was placed when the caller gave no workspace (D14): each
-	 * entity resolves on its OWN kind and roles; unanimous → placed, split →
-	 * abstain (`workspaceId` null) with every workspace the entities named in
-	 * `candidates`, most entities first. Omitted when the caller pinned a
-	 * workspace (rung 1), on a re-submit (the prior row's `scope` is what
-	 * landed), and when the resolver failed (logged; the graph stays pod-wide).
-	 */
-	placement?: Pick<WorkspacePlacement, "candidates" | "reason" | "rung" | "workspaceId">;
-	/**
-	 * The graph abstained between workspaces: nothing was moved, it stays
-	 * pod-wide. The SAME shape the text lane returns — to place it, re-file with
-	 * `workspaceId` set to `suggestedWorkspaceId` (the workspace most entities
-	 * named). Omitted when the graph was placed or no workspace was named.
-	 */
-	pendingWorkspaceSwitch?: PendingWorkspaceSwitch;
-	/**
-	 * ADVISORY: entities whose properties carry keys their profile does not
-	 * model (stored verbatim, not queryable), with a `didYouMean` when a real
-	 * property is close. Omitted when every key is modelled.
-	 */
-	unmodeledProperties?: CaptureGraphUnmodeledEntity[];
-	/**
-	 * What the kinds named in `unmodeledProperties` DO model (key, type,
-	 * options, limits). Present exactly when `unmodeledProperties` is.
-	 */
-	modeledFields?: CaptureGraphModeledFields;
-	/**
-	 * The duplicate door's answer for this graph (B2), each candidate tagged
-	 * with the item it is for (`forRef`/`forTitle`): a same-kind record or one
-	 * of the caller's own pending creates with the same name or strong identity.
-	 * NEVER auto-linked (only a strong identity on a record links). An agent's
-	 * graph with a `possible` twin is filed for review (POSSIBLE_DUPLICATE).
-	 * Omitted when the door found nothing (`clear`).
-	 */
-	duplicateCheck?: DuplicateCheck;
-	/**
-	 * Per-coordinate PROJECT outcome — `linked` when a real pin stamped
-	 * membership. Omitted when no project was requested. Neither a dead UUID
-	 * pin nor an unmatched project NAME gets here: the whole capture is refused
-	 * (`CaptureProjectNotFoundError`), so this core no longer produces
-	 * `not_linked`; the member stays because the receipt type is shared.
-	 */
-	project?: {
-		projectId: string;
-		status: "linked";
-	} | {
-		reason: string;
-		status: "not_linked";
-	};
-	/**
-	 * Relation ops that were SUBMITTED (via `relations`/`operations`) but never
-	 * created (bad ref, DB failure). Only ever populated on the `applied: true`
-	 * path — a `pending` proposal hasn't materialized anything yet, so nothing
-	 * can have failed. Omitted when nothing failed.
-	 */
-	relationsFailed?: MaterializeRelationFailure[];
-	writeReceipt: {
-		/** applied path only: fresh-created vs linked-existing counts + ids. */
-		created?: number;
-		effectiveWorkspaceId: string | null;
-		entityIds?: string[];
-		linked?: number;
-		project?: {
-			projectId: string;
-			status: "linked";
-		} | {
-			reason: string;
-			status: "not_linked";
-		};
-		projectId?: string;
-		proposalId?: string;
-		reviewUrl?: string;
-		source: string;
-		/**
-		 * `partial` is the Hub Protocol receipt word for exactly this shape (see
-		 * `CreateWriteReceipt` in routers/hub-protocol/write-receipt.ts): "storage
-		 * changed for SOME sub-writes and failed for others — the primary write
-		 * landed and a non-atomic follow-up errored. Never a claim of rollback."
-		 *
-		 * A capture graph's relations ARE that non-atomic follow-up: pass 1 creates
-		 * the entities, pass 2 creates each edge independently, and a relation whose
-		 * TYPE does not resolve fails alone. Before this, such a graph returned
-		 * `applied` with `relationCount: 0` and the failures buried in
-		 * `relationsFailed[]` — a caller that did not read that array believed the
-		 * whole graph landed. Same class as `status ?? "installed"`: a partial
-		 * success reported as a clean success, and the reader has to opt IN to the
-		 * bad news. The word is reused, not invented — no new enum, no label map.
-		 */
-		state: CaptureReceiptState;
-	};
-}
-/**
- * Who drafted the draft a repeat confirm landed on. Drafts are workspace-shared
- * by design, so the receipt must say whose it is: `isYou` ⇒ "You already
- * drafted this"; otherwise "Already drafted by <name>". `name` is resolved
- * here (never in a client); null only when the author's user row is gone.
- */
-export interface ExistingDraftReceipt {
-	/** The playbook the confirm deduped onto (the door to open). */
-	id: string;
-	name: string;
-	draftedBy: {
-		isYou: boolean;
-		name: string | null;
-		userId: string;
-	};
-}
-/** The capture-graph receipt, plus `existingDraft` when the dedupe answered. */
-export type DraftProcessResult = SubmitCaptureGraphResult & {
-	existingDraft?: ExistingDraftReceipt;
-};
-export type DedupCandidate = {
-	entityId: string;
-	profileSlug: string;
-	score: number;
-	title: string;
-};
-export type DegradedCaptureReason = "is_auth_error" | "is_empty_result" | "is_invalid_response";
-/**
- * A degraded reason as it may arrive OFF THE WIRE. The Intelligence Service
- * emits its own extraction-honesty reasons (`vision_provider_not_configured`,
- * `pdf_scanned_needs_ocr`, …) which are strictly MORE specific than this pod's
- * three plumbing reasons, and it may add new ones without this union knowing.
- * Widening here is what lets an IS reason survive instead of being replaced by
- * a generic pod one — see the empty-result guard in `structure`.
- */
-export type DegradedCaptureReasonOrUnknown = DegradedCaptureReason | (string & {});
-declare function buildDegradedCaptureFallback(inputText: string, degradedReason: DegradedCaptureReasonOrUnknown, 
-/** A caller-named kind already resolved by `resolveDegradedFallbackKind`. */
-kind?: string): {
-	dedupCandidates: Record<string, DedupCandidate[]>;
-	degraded: true;
-	degradedReason: DegradedCaptureReasonOrUnknown;
-	followUp: string | StructuredFollowUp | null;
-	formSpec: null;
-	proposals: {
-		confidence: number;
-		description: string | undefined;
-		profileSlug: string;
-		properties: {
-			content: string;
-		};
-		tempId: string;
-		title: string;
-	}[];
-	relations: Array<{
-		relationType: string;
-		sourceTempId: string;
-		targetTempId: string;
-	}>;
-	targetProjectId: string | null;
-	targetWorkspaceId: string | null;
-};
-export type MoveStatusResult = ApplyStatusMoveResult | {
-	proposalId: string;
-	proposalType: string;
-	reviewUrl?: string;
-	status: "proposed";
-} | {
-	reason: string;
-	status: "denied";
-} | {
-	code: "NOT_FOUND" | "NOT_THE_LIFECYCLE" | "NO_LIFECYCLE" | "ROLE_NOT_ATTACHED" | "UNKNOWN_OPTION";
-	reason: string;
-	status: "refused";
-};
-export type UpdateEntitiesVerdict = "deny" | "execute" | "propose" | "skip";
-export interface UpdateEntitiesResult {
-	batchId: string;
-	/** Present on a dry run: nothing was written. */
-	validated?: true;
-	/** Present when this answer is the receipt of an earlier identical call. */
-	replayed?: true;
-	/** Every item in request order, with the verdict it got (and why, when not executed). */
-	items: Array<{
-		id: string;
-		reason?: string;
-		verdict: UpdateEntitiesVerdict;
-	}>;
-	/** Written now, in request order. Empty on a dry run. */
-	applied: string[];
-	/** The ONE review this call filed, or null. */
-	proposed: {
-		count: number;
-		ids: string[];
-		proposalId: string;
-		reviewUrl?: string;
-	} | null;
-	denied: Array<{
-		id: string;
-		reason: string;
-	}>;
-	/**
-	 * `deferred: true` = the write was KEPT on a workspace-join request and is
-	 * replayed for the caller once the join is approved — never resend it.
-	 */
-	skipped: Array<{
-		deferred?: true;
-		id: string;
-		proposalId?: string;
-		reason: string;
-	}>;
-}
-export type PromotePropertyToBodyResult = {
-	documentId: string;
-	entityId: string;
-	propertySlug: string;
-	revision: number;
-	status: "promoted";
-} | {
-	message: string;
-	reason: PromoteToBodyRefusal;
-	status: "refused";
-};
-export type UndoPromotePropertyToBodyResult = {
-	documentId: string;
-	entityId: string;
-	propertySlug: string;
-	status: "restored";
-} | {
-	message: string;
-	reason: UndoPromoteToBodyRefusal;
-	status: "refused";
-};
 declare const UNIT_STATES: readonly [
 	"not_started",
 	"working",
@@ -10054,6 +9260,857 @@ export interface PartialTurnFailure {
 	readonly recoverable: boolean;
 	readonly needsOperator: boolean;
 }
+/**
+ * The ONE shape of the AI's pending "move to X?" suggestion on every
+ * `capture.execute` outcome (applied AND proposed). Nothing was moved: the
+ * capture landed where it would have without the AI; the caller confirms by
+ * re-filing with an explicit workspace.
+ */
+export interface PendingWorkspaceSwitch {
+	suggestedWorkspaceId: string;
+	/** `null` when the pod could not name it (never a raw id in its place). */
+	suggestedWorkspaceName: string | null;
+	reason: string | null;
+	confidence: number | null;
+}
+/**
+ * The "always file <kind> here?" OFFER a capture-time reroute earns.
+ *
+ * WHY IT IS AN OFFER AND NOT A RULE. Synap already has a first-class Rule
+ * object — a `skills` row with `category: "rule"` whose sentence is compiled
+ * into an automation (`routers/skills.ts:463 createRule` →
+ * `services/rules/create.ts`, grammar in `services/rules/sentence-schema.ts`).
+ * It cannot express this placement, and the ladder could not read it if it
+ * could, on THREE counts measured in the code:
+ *
+ *  1. No THEN action files an entity into a named workspace. The sentence
+ *     vocabulary is `notify | update_entity | create_entity | run_command |
+ *     post_message | call_webhook` (`sentence-schema.ts:47`), and
+ *     `entity_update`'s executor takes `{ entityId, properties, title,
+ *     description }` and writes the AUTOMATION's own `workspaceId`
+ *     (`packages/jobs/src/workers/steps/output.ts:512`) — there is no target
+ *     workspace parameter to set.
+ *  2. A rule fires AFTER the fact, off an event. Even with such an action it
+ *     would MOVE an already-landed capture, which emits a route correction and
+ *     tells routing memory the AI was wrong — the opposite of what a standing
+ *     placement preference means.
+ *  3. The placement ladder reads no rule store at all. `resolveWorkspacePlacement`
+ *     (`@synap/database/services/workspace-resolution-service.ts`) has six
+ *     rungs and the only rule-shaped input is the declared guild→workspace
+ *     mapping at its rung 1 (`:665`).
+ *
+ * So this is deliberately NOT installable (`installable: false`): the pod says
+ * what it would offer and why it cannot honour it yet, rather than inventing a
+ * second routing store or bolting placement onto `governance_rules` (which is
+ * AUTHORIZATION — auto-approve vs propose — and never routing). The offer is
+ * also stamped on the route correction event so it is COUNTED, not dropped.
+ */
+export interface WorkspaceRuleOffer {
+	/** The ONE kind the capture produced — an offer must name a single X. */
+	profileSlug: string;
+	/** Where the person actually filed it. */
+	workspaceId: string;
+	workspaceName: string | null;
+	/** FALSE today — see the docblock. Never fabricate a `true` here. */
+	installable: boolean;
+	/** Why it cannot be installed yet, in the pod's own words. */
+	reason: string;
+}
+declare const identityResolutionInput: z.ZodObject<{
+	existingEntityId: z.ZodOptional<z.ZodString>;
+	verb: z.ZodEnum<{
+		fill_empty: "fill_empty";
+		keep_existing: "keep_existing";
+		separate: "separate";
+		use_capture: "use_capture";
+	}>;
+}, z.core.$strip>;
+export type IdentityResolutionInput = z.infer<typeof identityResolutionInput>;
+export interface IdentityConflict {
+	key: string;
+	kept: unknown;
+	incoming: unknown;
+}
+export interface IdentityReceipt {
+	verb: IdentityResolutionInput["verb"];
+	entityId: string;
+	filled?: string[];
+	conflicts?: IdentityConflict[];
+}
+/** One relation op that was submitted but never created — the honest detail
+ * behind a `created < submitted` gap on a materialize receipt. */
+export interface MaterializeRelationFailure {
+	sourceRef: string;
+	targetRef: string;
+	type: string;
+	reason: string;
+}
+export interface MaterializeEntityResult {
+	/** Op's stable ref (e.g. capture tempId), if it had one. */
+	ref?: string;
+	/** Index of the create_entity op in operations[]. */
+	opIndex: number;
+	/** Real entity id (created or linked-to). */
+	entityId: string;
+	profileSlug: string;
+	/** True when this op linked an existing entity (existingEntityId) vs created. */
+	linked: boolean;
+	/**
+	 * Per-op target workspace from the create_entity op (multi-home import
+	 * graphs). Absent when the op did not pin a workspace.
+	 */
+	workspaceId?: string | null;
+	/**
+	 * Per-op project from the create_entity op (already filed via entities.create
+	 * → linkEntityToProject). stampProjectMembership skips entities that carry
+	 * this so it doesn't re-link; falls back to the orchestrator project lens
+	 * for entities without a per-op project.
+	 */
+	projectId?: string | null;
+	/**
+	 * Set by callers that DOWNGRADE a failed create to a note fallback — carries
+	 * the originally requested profileSlug. Additive; absent on the happy path.
+	 */
+	degradedFrom?: string;
+	/**
+	 * Set by callers that SALVAGE a validation failure by retrying the same
+	 * profile with properties dropped. Additive; absent on the happy path.
+	 */
+	propertiesDropped?: true;
+	/**
+	 * Set when this op carried long-form `content` (a note body) that was NOT
+	 * applied because the create resolved to an EXISTING entity via strong-signal
+	 * dedup (entities.create enriches properties on a merge, but never overwrites
+	 * the matched entity's document). Surfaced (mirrors the facets 'dropped'
+	 * pattern) so the caller can flag the discarded body instead of losing it
+	 * silently. Additive; absent on the happy path.
+	 */
+	contentDropped?: true;
+	/**
+	 * Body document created TOGETHER with this entity (op.content routed to a
+	 * linked document). Absent when the entity was linked, or had no body.
+	 */
+	documentId?: string;
+	/**
+	 * What a strong-identity merge wrote onto the PRE-EXISTING entity this op
+	 * resolved to, with the values it replaced — so revert can restore them
+	 * without deleting an entity the run never created. Only on a merge.
+	 */
+	propertyDiff?: EntityPropertyDiff;
+	/**
+	 * Linked ONLY because a retry's idempotency key found a row the SAME proposal
+	 * created (lineage checked) — a crash between create and stamp. The row is
+	 * this run's creation, not a pre-existing entity. Never set on a dedup or
+	 * `existingEntityId` link.
+	 */
+	linkedByRetry?: true;
+	/**
+	 * Set when this create op ran an approve-time identity resolution.
+	 * `ref` is the disposition key (`op.ref` or `$opN`), not a second policy.
+	 */
+	identity?: IdentityReceipt & {
+		ref: string;
+	};
+}
+export interface MaterializeRelationResult {
+	sourceEntityId: string;
+	targetEntityId: string;
+	/** Actual relation type used (post type-resolution/fallback). */
+	type: string;
+	/** The op as submitted (refs, pre-resolution type) — its identity in a record. */
+	requested?: {
+		sourceRef: string;
+		targetRef: string;
+		type: string;
+	};
+	/** Id of the relation row, when the door returned one. */
+	relationId?: string;
+	/**
+	 * Id of the `links` row instead, when the requested relation slug is the
+	 * dependency edge under another name (`blocks` / `depends_on` → links
+	 * `blocked_by`). Exactly one of `relationId` / `linkId` is set.
+	 */
+	linkId?: string;
+	/** The door found this edge already in the graph — not created by this run. */
+	preExisting?: true;
+}
+/** One facet this run attached (a role on an entity). */
+export interface MaterializeFacetResult {
+	/** The create_entity op that declared the facet. */
+	opIndex: number;
+	ref?: string;
+	entityId: string;
+	facetId: string;
+	profileSlug: string;
+}
+/** Per-op result for a `create_skill` op (the FACT half of a rule). */
+export interface MaterializeSkillResult {
+	ref: string;
+	opIndex: number;
+	skillId: string;
+}
+/** Per-op result for a `create_automation` op (the BEHAVIOUR half of a rule). */
+export interface MaterializeAutomationResult {
+	ref: string;
+	opIndex: number;
+	automationId: string;
+	/** What the op ASKED for. */
+	enabledRequested: boolean;
+	/**
+	 * What was actually materialized. ALWAYS false: approve-first means an
+	 * automation never arrives already running, so the op's `enabled` is
+	 * overridden here and the override is REPORTED rather than swallowed.
+	 */
+	enabled: false;
+	/** True when the op said `enabled: true` and we forced it off. */
+	enabledOverridden: boolean;
+}
+/** Per-op result for a `create_rule` op. */
+export interface MaterializeRuleResult {
+	ref: string;
+	opIndex: number;
+	ruleId: string;
+	factSkillId?: string;
+	automationIds: string[];
+}
+/** Per-op result for a `create_playbook` op (a DRAFT process). */
+export interface MaterializePlaybookResult {
+	ref: string;
+	opIndex: number;
+	playbookId: string;
+	/** Always "draft" — what the op asked for is never honoured over this. */
+	status: "draft";
+}
+/** Per-op result for a `create_view` op (a List over the bundle's things). */
+export interface MaterializeViewResult {
+	ref: string;
+	opIndex: number;
+	viewId: string;
+	/** The fixed member set the view was created with (resolved ids). */
+	entityIds: string[];
+	/** The group container recorded on the view config, when there was one. */
+	containerEntityId?: string;
+}
+/**
+ * Per-op result for an `update_*` op (a Library rebuild's change). `before`
+ * and `after` hold ONLY the fields the op patched, read right around the
+ * write — what revert restores, compare-and-set against `after`. For
+ * `update_entity` they are the entity's undo snapshot (title / preview /
+ * properties), turned into the ONE entity diff shape by the record builder.
+ */
+export interface MaterializeUpdateResult {
+	ref: string;
+	opIndex: number;
+	op: CompositeUpdateOperation["op"];
+	targetId: string;
+	before: Record<string, unknown>;
+	after: Record<string, unknown>;
+}
+/** Per-op result for a `create_project` op (connected plan). */
+export interface MaterializeProjectResult {
+	ref: string;
+	opIndex: number;
+	projectId: string;
+	/** The project door reused an existing project of the same name — not this run's row. */
+	linked: boolean;
+	/** Subject the run bound to the project, when the step named one. */
+	subjectEntityId?: string;
+}
+/** Per-op result for a `create_session` op (connected plan). */
+export interface MaterializeSessionResult {
+	ref: string;
+	opIndex: number;
+	sessionId: string;
+	/**
+	 * True when the create door REUSED an open session of the same goal and
+	 * scope (`status: "deduped"`) — not this run's row, never compensated.
+	 */
+	linked?: boolean;
+}
+/** One session↔session edge a plan applied. */
+export interface MaterializeLinkResult {
+	opIndex: number;
+	type: "blocked_by" | "spawned_from";
+	fromSessionId: string;
+	toSessionId: string;
+	/** As declared (a ref or a real id per side) — the edge's identity in a record. */
+	requested: {
+		from: string;
+		to: string;
+	};
+	linkId?: string;
+	/** The edge was already in the graph — not created by this run. */
+	preExisting?: true;
+}
+/** Per-op result for a `create_document` op (connected plan). */
+export interface MaterializeDocumentResult {
+	ref: string;
+	opIndex: number;
+	documentId: string;
+	attachedEntityId?: string;
+	recordedOnSessionId?: string;
+}
+export interface MaterializeResult {
+	/** Count of entities CREATED (excludes linked existing entities). */
+	created: number;
+	/** Count of relations created. */
+	linked: number;
+	primaryId: string;
+	refToRealId: Record<string, string>;
+	/** Per-entity detail (order matches create_entity ops) for response building. */
+	entities: MaterializeEntityResult[];
+	/** Per-relation detail for response building. */
+	relations: MaterializeRelationResult[];
+	/**
+	 * Relation ops that were SUBMITTED but never created (bad ref, DB failure,
+	 * etc). `relations.length + relationsFailed.length` is the submitted count —
+	 * this is what makes the gap between "submitted" and "created" honest and
+	 * nameable instead of a swallowed `logger.warn`. Empty on the happy path.
+	 */
+	relationsFailed: MaterializeRelationFailure[];
+	/**
+	 * Facets the attach door reported `attached`. The door answers `attached`
+	 * for a re-attach of an existing live facet too, so this is "attached by the
+	 * call", not proof of creation — revert re-checks each row's lineage.
+	 */
+	facets: MaterializeFacetResult[];
+	/** Rule Loop (NS1): skills created by `create_skill` ops. Empty by default. */
+	skills: MaterializeSkillResult[];
+	/** Rule Loop (NS1): automations created by `create_automation` ops. */
+	automations: MaterializeAutomationResult[];
+	/** Rule Loop (NS1): rules created by `create_rule` ops. */
+	rules: MaterializeRuleResult[];
+	/** Draft processes created by `create_playbook` ops. Empty by default. */
+	playbooks: MaterializePlaybookResult[];
+	/** Lists created by `create_view` ops. Empty by default. */
+	views: MaterializeViewResult[];
+	/** Rows CHANGED by `update_*` ops (a Library rebuild). Empty by default. */
+	updates: MaterializeUpdateResult[];
+	/** Connected plan: projects, sessions, session edges, documents. Empty otherwise. */
+	projects: MaterializeProjectResult[];
+	sessions: MaterializeSessionResult[];
+	links: MaterializeLinkResult[];
+	documents: MaterializeDocumentResult[];
+}
+/** Per-op outcome, mirrored into `capture.execute`'s response as `updated[]`. */
+export interface CaptureUpdateResult {
+	tempId: string;
+	entityId: string;
+	/** "applied" = patched now; "proposed" = filed for review, nothing written. */
+	status: "applied" | "failed" | "proposed";
+	proposalId?: string;
+	reviewUrl?: string;
+	reason?: string;
+}
+/** An existing record the raw text names by a strong atom. */
+export interface DegradedCaptureMention {
+	entityId: string;
+	title: string;
+	profileSlug: string;
+	/** The atom in the text that matched it. */
+	signal: "email" | "phone";
+}
+/** Same shape as the structured lane's `dedupCandidates` entries. */
+export interface DegradedDedupCandidate {
+	entityId: string;
+	title: string;
+	profileSlug: string;
+	score: number;
+}
+export interface KnownSourceHash {
+	/** The hash as ASKED (matched against either ledger key). */
+	hash: string;
+	sessionId: string | null;
+	documentId: string;
+	/**
+	 * `analyzed` — structuring ran on it. `kept_unanalyzed` — stored with a
+	 * degraded marker (vision down, budget): the bytes are on the pod, but
+	 * nothing was extracted, so re-sending it re-analyzes rather than dedups.
+	 */
+	status: "analyzed" | "kept_unanalyzed";
+	/**
+	 * The run still stands: its session holds a pending or applied proposal.
+	 * False once every proposal was reverted / rejected / withdrawn / expired
+	 * (an undone run), or when the run filed nothing at all.
+	 */
+	inEffect: boolean;
+	/** The workspace the source was captured into (`null` = pod-wide). */
+	workspaceId: string | null;
+}
+/**
+ * Route suggestions — the router's SUGGEST half (intake plan §3.5 / W6, B15).
+ *
+ * Founder decision: routing is suggest-and-confirm with VISIBLE reasoning
+ * (Linear triage shape), inline, never auto-run. So this module only RANKS and
+ * EXPLAINS; nothing here runs a playbook or triggers an automation.
+ *
+ * PURE: candidates are loaded through the access layer and handed in —
+ * playbooks by `playbooks.matchForEntity` (which also calls
+ * `rankRouteCandidates`), propose-mode rules by `match-rules-for-entity.ts` —
+ * and the capture followUp combines both lists per entity with
+ * `suggestRoutesForEntities`, so the ranking rule exists once.
+ *
+ * SIGNALS ARE LEXICAL + STRUCTURAL ONLY. Embeddings have no fallback provider
+ * (a pod without one would rank differently from a pod with one, silently), so
+ * the rank depends on nothing that can be unavailable:
+ *   - intent  — words of the user's intent text found in the candidate's name /
+ *               description / goal (strongest: it is what the user SAID)
+ *   - kind    — the candidate is built for the entity's own kind
+ *   - facet   — the candidate is built for a role the entity plays
+ *   - anyKind — the candidate has no kind filter (fires for everything new)
+ *
+ * ── RARITY (founder decision 2026-09-28, space-brief plan item 8) ───────────
+ * An intent term is weighted by how RARE it is in THIS candidate pool, using
+ * the pod's ONE IDF formula (`rarityWeight`, `utils/term-match.ts`). Measured
+ * defect it fixes: the intent "design and build a feature … fix MCP discovery
+ * gaps" ranked "CRM Hygiene" first on the words "agent" and "each" — "each"
+ * sits in 7 of the 20 live candidates — and the flat 3-points-per-word sum tied it with
+ * "AI Dev Session" (which alone says "build"), the tie then going to whichever
+ * was edited last. A word most candidates share is weak evidence; a word only
+ * one candidate has is strong evidence. The pool is whatever the caller
+ * passes, so pass it AFTER every gate (rows a caller cannot see must never
+ * move the ranking — same rule as `rankByTerms`).
+ *
+ * WHY NOT `rankByTerms` ITSELF: it caps a query at `MAX_QUERY_TERMS` (8 — a
+ * bound for its SQL twin) and matches substrings, so a session goal would
+ * lose every word after the eighth and "fix" would hit "prefix". The ranker
+ * here keeps its whole-word stems and reuses only the rarity formula, so
+ * there is still ONE IDF rule in the pod.
+ *
+ * ── WHAT IS RETURNED ────────────────────────────────────────────────────────
+ * A candidate is returned only when it carries a signal ABOUT THIS REQUEST:
+ * an intent word, the entity's kind, or one of its roles. `anyKind` is a
+ * modifier, not evidence — "runs for anything new" is true of every
+ * subject-less candidate for every request — so it is recorded (and scores)
+ * only alongside an intent match, and a candidate with no real signal is not
+ * returned at all. On the same live call, 9 of the 20 candidates returned
+ * matched no word at all and rode back as "Runs for anything new" at 0.5.
+ *
+ * ── TIES ────────────────────────────────────────────────────────────────────
+ * Broken by relevance, never by recency: more distinct intent words, then the
+ * rarest word matched, then the structural signal (kind > facet), then the
+ * name (a stable, edit-independent order). Editing a playbook must never
+ * promote it.
+ */
+/**
+ * - playbook     — start this process for the entity (`playbooks.run`)
+ * - automation   — a propose-mode rule this capture fires
+ * - session      — an OPEN session the entity belongs in: confirm attaches it
+ *                  as an input (`focusSessions.attachInput`)
+ * - draft_process — no process exists for this kind yet, and the kind has a
+ *                  lifecycle: confirm drafts one (`create_playbook`, draft)
+ */
+export type RouteCandidateKind = "automation" | "draft_process" | "playbook" | "session";
+export interface RouteCandidate {
+	kind: RouteCandidateKind;
+	id: string;
+	name: string;
+	/** Other searchable text: description, goal template… */
+	text?: ReadonlyArray<string | null | undefined>;
+	/** The kind the candidate is built for; `null` = fires for any kind. */
+	subjectProfileSlug: string | null;
+	/**
+	 * A RULE that PROPOSES (propose-mode `playbook_run`): confirming it files a
+	 * proposal, never a run. Only rules of this mode are suggested.
+	 */
+	proposes?: true;
+	/**
+	 * A PLAYBOOK built for a kind with no standing propose rule yet: a host may
+	 * offer "Always propose this", creating one through `skills.createRule`.
+	 */
+	alwaysProposeOffer?: true;
+	/**
+	 * A SESSION candidate that is ABOUT this very entity (its subject). The
+	 * ranker reports it as a `subject` signal — the strongest structural one.
+	 */
+	subjectEntityId?: string;
+	/**
+	 * A DRAFT_PROCESS candidate: the kind's lifecycle property (a select whose
+	 * slug names a status/stage) the draft would advance.
+	 */
+	statusProperty?: string;
+}
+export type RouteSignal = {
+	terms: string[];
+	type: "intent";
+} | {
+	profileSlug: string;
+	type: "subject";
+} | {
+	profileSlug: string;
+	type: "kind";
+} | {
+	profileSlug: string;
+	type: "facet";
+} | {
+	type: "anyKind";
+};
+export interface RankedRoute<C extends RouteCandidate = RouteCandidate> {
+	candidate: C;
+	score: number;
+	/** One human-readable line: why this is suggested. */
+	reason: string;
+	signals: RouteSignal[];
+}
+export interface EntityRouteSuggestions {
+	entityId?: string;
+	profileSlug: string;
+	suggestions: RankedRoute[];
+}
+export type RouteSuggestionsEcho = {
+	entities: EntityRouteSuggestions[];
+	status: "ok";
+	truncated?: true;
+} | {
+	reason: "no_entities" | "no_workspace";
+	status: "skipped";
+} | {
+	error: string;
+	status: "failed";
+};
+/**
+ * The capture receipt's honesty words — PURE, and deliberately in their own
+ * module rather than inside `submit-capture-graph.ts`.
+ *
+ * Every caller of `submitCaptureGraph` reaches it through a dynamic import, and
+ * the ones under test replace that whole module with a `vi.mock`. A pure helper
+ * living in there would be mocked away with it — the derivation would vanish at
+ * exactly the moment a test believed it was exercising the door. Kept here, it
+ * is imported statically and can never be stubbed out.
+ *
+ * `partial` is NOT a new word: it is the Hub Protocol receipt state defined on
+ * `CreateWriteReceipt` (routers/hub-protocol/write-receipt.ts) and already
+ * carried by `HubWriteReceipt` in @synap-core/hub-rest-client — "storage changed for
+ * SOME sub-writes and failed for others; never a claim of rollback".
+ */
+/** The three states a capture graph's write receipt can carry. */
+export type CaptureReceiptState = "applied" | "partial" | "pending";
+/** A reviewer/agent-facing line for one plan step. */
+export interface PlanStepSummary {
+	ref: string | null;
+	opIndex: number;
+	kind: "automation" | "document" | "entity" | "link" | "playbook" | "project" | "relation" | "rule" | "session" | "skill" | "view";
+	label: string;
+	/** Set on a step that CHANGES an existing row (a Library rebuild). */
+	update?: {
+		targetId: string;
+	};
+	/** A skill step's slug — the ref `synap_load_skill` resolves. */
+	slug?: string;
+}
+export interface StoredCaptureScope {
+	workspaceId: string | null;
+	projectId: string | null;
+	sessionId: string | null;
+}
+/**
+ * A create_entity op carrying property keys its profile does not model. They
+ * are still STORED verbatim (the validator's flexible-schema tolerance), so
+ * this is advisory, never a rejection. A capture used to accept them in
+ * silence — that is how `knowledgeform` (for `knowledgeForm`) reached a pod as
+ * a key nothing reads. Same entries the entity doors put on their receipt.
+ */
+export interface CaptureGraphUnmodeledEntity {
+	label: string;
+	profileSlug: string;
+	unmodeled: Array<{
+		didYouMean?: string;
+		key: string;
+	}>;
+}
+/**
+ * What each kind in the graph DOES model, by profile slug, through the lens
+ * the graph was validated in — the validator's own `modeled` list. Without it
+ * an `unmodeled` report only said what was wrong, never what was right.
+ */
+export type CaptureGraphModeledFields = Record<string, ModeledField[]>;
+/** One plan step on a submit receipt — self-describing for the reviewer/agent. */
+export interface CapturePlanStepReceipt extends PlanStepSummary {
+	/**
+	 * `pending`: nothing exists yet, `id` is null — ids are assigned when the
+	 * plan applies, and are then read off the proposal's
+	 * `data.materialized.byOp[ref]`. `applied`: `id` is the live row.
+	 */
+	state: "applied" | "pending";
+	id: string | null;
+	/** `create_project` only: the pod's evidence verdict. */
+	evidence?: PlanProjectEvidence;
+	/** An applied skill step with a slug: the call that loads it. */
+	loadWith?: string;
+}
+export interface SubmitCaptureGraphResult {
+	proposalId: string | undefined;
+	entityCount: number;
+	relationCount: number;
+	bindingCount: number;
+	reviewUrl: string | undefined;
+	summary: string;
+	/** True when the graph was materialized immediately (agent-mode auto-apply). */
+	applied: boolean;
+	/**
+	 * Connected plan only: every step (entities and relations included), with
+	 * its ref, kind and label. Pending steps carry `id: null` — ids exist only
+	 * once the plan applies. Omitted for a graph with no plan step.
+	 */
+	plan?: {
+		steps: CapturePlanStepReceipt[];
+	};
+	/** The session this proposal was filed in (its room is where it is discussed). */
+	sessionId?: string | null;
+	/**
+	 * Where the write was STORED — read off the proposal row the insert returned
+	 * (or, on a re-submit, the PRIOR row), never the call's inputs: the insert
+	 * runs the project ladder (incl. declared focus) and may mint an agent
+	 * receipt session. Only when an auto-apply's receipt row failed to insert
+	 * (no row exists) does it fall back to the values the entities were
+	 * materialized with.
+	 */
+	scope: StoredCaptureScope;
+	/** True when this call returned a PRIOR proposal instead of filing one. */
+	deduped?: true;
+	/**
+	 * How the graph was placed when the caller gave no workspace (D14): each
+	 * entity resolves on its OWN kind and roles; unanimous → placed, split →
+	 * abstain (`workspaceId` null) with every workspace the entities named in
+	 * `candidates`, most entities first. Omitted when the caller pinned a
+	 * workspace (rung 1), on a re-submit (the prior row's `scope` is what
+	 * landed), and when the resolver failed (logged; the graph stays pod-wide).
+	 */
+	placement?: Pick<WorkspacePlacement, "candidates" | "reason" | "rung" | "workspaceId">;
+	/**
+	 * The graph abstained between workspaces: nothing was moved, it stays
+	 * pod-wide. The SAME shape the text lane returns — to place it, re-file with
+	 * `workspaceId` set to `suggestedWorkspaceId` (the workspace most entities
+	 * named). Omitted when the graph was placed or no workspace was named.
+	 */
+	pendingWorkspaceSwitch?: PendingWorkspaceSwitch;
+	/**
+	 * ADVISORY: entities whose properties carry keys their profile does not
+	 * model (stored verbatim, not queryable), with a `didYouMean` when a real
+	 * property is close. Omitted when every key is modelled.
+	 */
+	unmodeledProperties?: CaptureGraphUnmodeledEntity[];
+	/**
+	 * What the kinds named in `unmodeledProperties` DO model (key, type,
+	 * options, limits). Present exactly when `unmodeledProperties` is.
+	 */
+	modeledFields?: CaptureGraphModeledFields;
+	/**
+	 * The duplicate door's answer for this graph (B2), each candidate tagged
+	 * with the item it is for (`forRef`/`forTitle`): a same-kind record or one
+	 * of the caller's own pending creates with the same name or strong identity.
+	 * NEVER auto-linked (only a strong identity on a record links). An agent's
+	 * graph with a `possible` twin is filed for review (POSSIBLE_DUPLICATE).
+	 * Omitted when the door found nothing (`clear`).
+	 */
+	duplicateCheck?: DuplicateCheck;
+	/**
+	 * Per-coordinate PROJECT outcome — `linked` when a real pin stamped
+	 * membership. Omitted when no project was requested. Neither a dead UUID
+	 * pin nor an unmatched project NAME gets here: the whole capture is refused
+	 * (`CaptureProjectNotFoundError`), so this core no longer produces
+	 * `not_linked`; the member stays because the receipt type is shared.
+	 */
+	project?: {
+		projectId: string;
+		status: "linked";
+	} | {
+		reason: string;
+		status: "not_linked";
+	};
+	/**
+	 * Relation ops that were SUBMITTED (via `relations`/`operations`) but never
+	 * created (bad ref, DB failure). Only ever populated on the `applied: true`
+	 * path — a `pending` proposal hasn't materialized anything yet, so nothing
+	 * can have failed. Omitted when nothing failed.
+	 */
+	relationsFailed?: MaterializeRelationFailure[];
+	writeReceipt: {
+		/** applied path only: fresh-created vs linked-existing counts + ids. */
+		created?: number;
+		effectiveWorkspaceId: string | null;
+		entityIds?: string[];
+		linked?: number;
+		project?: {
+			projectId: string;
+			status: "linked";
+		} | {
+			reason: string;
+			status: "not_linked";
+		};
+		projectId?: string;
+		proposalId?: string;
+		reviewUrl?: string;
+		source: string;
+		/**
+		 * `partial` is the Hub Protocol receipt word for exactly this shape (see
+		 * `CreateWriteReceipt` in routers/hub-protocol/write-receipt.ts): "storage
+		 * changed for SOME sub-writes and failed for others — the primary write
+		 * landed and a non-atomic follow-up errored. Never a claim of rollback."
+		 *
+		 * A capture graph's relations ARE that non-atomic follow-up: pass 1 creates
+		 * the entities, pass 2 creates each edge independently, and a relation whose
+		 * TYPE does not resolve fails alone. Before this, such a graph returned
+		 * `applied` with `relationCount: 0` and the failures buried in
+		 * `relationsFailed[]` — a caller that did not read that array believed the
+		 * whole graph landed. Same class as `status ?? "installed"`: a partial
+		 * success reported as a clean success, and the reader has to opt IN to the
+		 * bad news. The word is reused, not invented — no new enum, no label map.
+		 */
+		state: CaptureReceiptState;
+	};
+}
+/**
+ * Who drafted the draft a repeat confirm landed on. Drafts are workspace-shared
+ * by design, so the receipt must say whose it is: `isYou` ⇒ "You already
+ * drafted this"; otherwise "Already drafted by <name>". `name` is resolved
+ * here (never in a client); null only when the author's user row is gone.
+ */
+export interface ExistingDraftReceipt {
+	/** The playbook the confirm deduped onto (the door to open). */
+	id: string;
+	name: string;
+	draftedBy: {
+		isYou: boolean;
+		name: string | null;
+		userId: string;
+	};
+}
+/** The capture-graph receipt, plus `existingDraft` when the dedupe answered. */
+export type DraftProcessResult = SubmitCaptureGraphResult & {
+	existingDraft?: ExistingDraftReceipt;
+};
+export type DedupCandidate = {
+	entityId: string;
+	profileSlug: string;
+	score: number;
+	title: string;
+};
+export type DegradedCaptureReason = "is_auth_error" | "is_empty_result" | "is_invalid_response";
+/**
+ * A degraded reason as it may arrive OFF THE WIRE. The Intelligence Service
+ * emits its own extraction-honesty reasons (`vision_provider_not_configured`,
+ * `pdf_scanned_needs_ocr`, …) which are strictly MORE specific than this pod's
+ * three plumbing reasons, and it may add new ones without this union knowing.
+ * Widening here is what lets an IS reason survive instead of being replaced by
+ * a generic pod one — see the empty-result guard in `structure`.
+ */
+export type DegradedCaptureReasonOrUnknown = DegradedCaptureReason | (string & {});
+/**
+ * WHY a capture degraded, returned beside `degradedReason` (which keeps its
+ * value: clients branch on it). A status code and two classes, never the IS
+ * body or a provider name, so it is safe to show (plan B, open question 2).
+ *
+ *   cause        — the client-reported cause (`StructureFailure`), `empty`
+ *                  for a well-formed answer with nothing in it, `unknown`
+ *                  when the call reported none;
+ *   attempts     — structure calls made, retries included;
+ *   failureClass — the ONE failure door's class (`utils/ai-failure.ts`): what
+ *                  a reader needs to say whether retrying can help.
+ */
+export interface DegradedCaptureDetail {
+	cause: StructureFailure["cause"] | "empty" | "unknown";
+	status?: number;
+	attempts: number;
+	failureClass: AiFailureClass;
+}
+declare function buildDegradedCaptureFallback(inputText: string, degradedReason: DegradedCaptureReasonOrUnknown, 
+/** A caller-named kind already resolved by `resolveDegradedFallbackKind`. */
+kind?: string): {
+	dedupCandidates: Record<string, DedupCandidate[]>;
+	degraded: true;
+	degradedReason: DegradedCaptureReasonOrUnknown;
+	followUp: string | StructuredFollowUp | null;
+	formSpec: null;
+	proposals: {
+		confidence: number;
+		description: string | undefined;
+		profileSlug: string;
+		properties: {
+			content: string;
+		};
+		tempId: string;
+		title: string;
+	}[];
+	relations: Array<{
+		relationType: string;
+		sourceTempId: string;
+		targetTempId: string;
+	}>;
+	targetProjectId: string | null;
+	targetWorkspaceId: string | null;
+};
+export type MoveStatusResult = ApplyStatusMoveResult | {
+	proposalId: string;
+	proposalType: string;
+	reviewUrl?: string;
+	status: "proposed";
+} | {
+	reason: string;
+	status: "denied";
+} | {
+	code: "NOT_FOUND" | "NOT_THE_LIFECYCLE" | "NO_LIFECYCLE" | "ROLE_NOT_ATTACHED" | "UNKNOWN_OPTION";
+	reason: string;
+	status: "refused";
+};
+export type UpdateEntitiesVerdict = "deny" | "execute" | "propose" | "skip";
+export interface UpdateEntitiesResult {
+	batchId: string;
+	/** Present on a dry run: nothing was written. */
+	validated?: true;
+	/** Present when this answer is the receipt of an earlier identical call. */
+	replayed?: true;
+	/** Every item in request order, with the verdict it got (and why, when not executed). */
+	items: Array<{
+		id: string;
+		reason?: string;
+		verdict: UpdateEntitiesVerdict;
+	}>;
+	/** Written now, in request order. Empty on a dry run. */
+	applied: string[];
+	/** The ONE review this call filed, or null. */
+	proposed: {
+		count: number;
+		ids: string[];
+		proposalId: string;
+		reviewUrl?: string;
+	} | null;
+	denied: Array<{
+		id: string;
+		reason: string;
+	}>;
+	/**
+	 * `deferred: true` = the write was KEPT on a workspace-join request and is
+	 * replayed for the caller once the join is approved — never resend it.
+	 */
+	skipped: Array<{
+		deferred?: true;
+		id: string;
+		proposalId?: string;
+		reason: string;
+	}>;
+}
+export type PromotePropertyToBodyResult = {
+	documentId: string;
+	entityId: string;
+	propertySlug: string;
+	revision: number;
+	status: "promoted";
+} | {
+	message: string;
+	reason: PromoteToBodyRefusal;
+	status: "refused";
+};
+export type UndoPromotePropertyToBodyResult = {
+	documentId: string;
+	entityId: string;
+	propertySlug: string;
+	status: "restored";
+} | {
+	message: string;
+	reason: UndoPromoteToBodyRefusal;
+	status: "refused";
+};
 declare const SESSION_POST_INTENTS: readonly [
 	"blocked_on_you",
 	"handoff",
@@ -24282,16 +24339,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetProjectId: string | null;
 				targetWorkspaceId: string | null;
 			} | ({
-				dedupCandidates: Record<string, {
-					entityId: string;
-					profileSlug: string;
-					score: number;
-					title: string;
-				}[]>;
+				dedupCandidates: Record<string, DegradedDedupCandidate[]>;
+				dedupSkipped?: true | undefined;
 				degraded: true;
+				degradedDetail: DegradedCaptureDetail;
 				degradedReason: (string & {}) | ("is_auth_error" | "is_empty_result" | "is_invalid_response");
 				followUp: string | StructuredFollowUp | null;
 				formSpec: null;
+				mentions: DegradedCaptureMention[];
 				proposals: {
 					confidence: number;
 					description: string | undefined;
@@ -25143,16 +25198,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetProjectId: string | null;
 				targetWorkspaceId: string | null;
 			} | ({
-				dedupCandidates: Record<string, {
-					entityId: string;
-					profileSlug: string;
-					score: number;
-					title: string;
-				}[]>;
+				dedupCandidates: Record<string, DegradedDedupCandidate[]>;
+				dedupSkipped?: true | undefined;
 				degraded: true;
+				degradedDetail: DegradedCaptureDetail;
 				degradedReason: (string & {}) | ("is_auth_error" | "is_empty_result" | "is_invalid_response");
 				followUp: string | StructuredFollowUp | null;
 				formSpec: null;
+				mentions: DegradedCaptureMention[];
 				proposals: {
 					confidence: number;
 					description: string | undefined;
