@@ -73,6 +73,7 @@ describe("restDoorAllowed", () => {
     ["GET", "/brand/kit", true],
     ["GET", "/threads/t1/messages", true],
     ["GET", "/focus-sessions", true],
+    ["GET", "/focus-sessions/owed", true], // seamed: sessionReadableWhere
     ["GET", "/focus-sessions/s1", false], // declared door: DOC_ONLY lacks its subjects
     ["GET", "/projects/p1", true],
     ["GET", "/projects/p1/path", false], // userVisibleWhere sessions — not migrated
