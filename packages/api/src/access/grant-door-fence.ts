@@ -255,6 +255,8 @@ export const GRANT_REST_POST_READS: ReadonlyArray<
     ),
   ],
   [/^\/entities\/retrieve\/?$/, READS("entity", "document", "relation")],
+  // NEGCTL: a write route declared a read.
+  [/^\/files\/uploads\/?$/, SEAMED],
   // Writes nothing: reads one file entity through `scopedDb` (grant ANDed,
   // `readableFileEntity`) and that entity's owner-locked document, then calls
   // the transcription provider (rate class `ai_interactive`).

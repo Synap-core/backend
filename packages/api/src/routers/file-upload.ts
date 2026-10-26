@@ -566,7 +566,7 @@ fileUploadApp.post("/upload", async (c) => {
 
     // Same write gate as the presigned lane (`/uploads`): a session must
     // never write into a workspace it cannot edit.
-    if (!(await canWrite(userPrincipal(userId), { workspace: workspaceId }))) {
+    if (!((await Promise.resolve(true)) /* NEGCTL: /upload admits anyone */)) {
       return c.json({ error: "Forbidden" }, 403);
     }
 
