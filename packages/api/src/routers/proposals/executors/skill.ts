@@ -65,11 +65,7 @@ export function registerSkillExecutors(): void {
       } = await import("../../skills.js");
       // Not a `skills` column: the declared `requires` edges, replayed below
       // once the row exists (ticket c5058d24).
-      const {
-        requiredToolIds,
-        requiredToolNames: _requiredToolNames,
-        ...skillValues
-      } = innerData;
+      const { requiredToolIds, requiredToolNames, ...skillValues } = innerData;
       const result = await insertSkillGoverned({
         ...(skillValues as Record<string, unknown>),
         // Own the skill as the APPROVER (mirrors project/view) — no agentUserId
@@ -115,11 +111,23 @@ export function registerSkillExecutors(): void {
       // data, and these edges are the scope the skill's own provider calls
       // skip a second review under), then written through the same body as
       // `skills.setRequiredTools`. An id that no longer resolves is REFUSED
-      // and reported, never written. Non-fatal for the skill: a missing edge
-      // only means its own calls are gated again (the safe direction).
+      // and reported, never written. A FAILED read or write is reported too:
+      // the approver learns the approved scope did not land, never a quiet
+      // success. Non-fatal for the skill: a missing edge only means its own
+      // calls are gated again (the safe direction). Refusals name the tool
+      // (`requiredToolNames`, same order as the ids), never an id.
       const declaredToolIds = Array.isArray(requiredToolIds)
         ? requiredToolIds.filter((id): id is string => typeof id === "string")
         : [];
+      const declaredNames = Array.isArray(requiredToolNames)
+        ? requiredToolNames
+        : [];
+      const toolLabel = (id: string) => {
+        const name = declaredNames[declaredToolIds.indexOf(id)];
+        return typeof name === "string" && name.trim() !== ""
+          ? `\`${name}\``
+          : "(unnamed)";
+      };
       if (declaredToolIds.length > 0) {
         try {
           const visible = new Set(
@@ -130,7 +138,7 @@ export function registerSkillExecutors(): void {
           for (const id of declaredToolIds) {
             if (!visible.has(id)) {
               refusals.push(
-                `Required tool ${id} was not linked: it is not an installed tool the approver can see.`
+                `Required tool ${toolLabel(id)} was not linked: it is not an installed tool the approver can see.`
               );
             }
           }
@@ -143,6 +151,9 @@ export function registerSkillExecutors(): void {
           logger.error(
             { skillId: materializedSkill.id, err },
             "skill/create approval: requires edges not written (non-fatal — approval proceeds)"
+          );
+          refusals.push(
+            `Required tools ${declaredToolIds.map(toolLabel).join(", ")} may not be linked: the approval could not check or write them, so the skill's own calls to them may still ask for review.`
           );
         }
       }

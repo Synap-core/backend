@@ -117,7 +117,12 @@ beforeAll(async () => {
   // Every table the access predicates may touch (members, grants, …): the
   // real floors run, so their tables must exist — empty is the honest state.
   const seen = new Set<string>();
-  for (const t of [...Object.values(database), userPreferences]) {
+  // `as unknown[]` (the suites' idiom): the namespace's values are a union
+  // near TypeScript's size limit, and an array literal around it tips TS2590.
+  for (const t of [
+    ...(Object.values(database) as unknown[]),
+    userPreferences,
+  ]) {
     if (!is(t, PgTable)) continue;
     const name = getTableConfig(t).name;
     if (seen.has(name)) continue;

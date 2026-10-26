@@ -495,7 +495,7 @@ describe("playbooks.matchForEntity", () => {
       projectId: "00000000-0000-4000-8000-0000000000aa",
     });
     expect(lensed.map((r) => [r.id, r.scope, r.templateKind])).toEqual([
-      ["pb-track", "project", "Track template"],
+      ["pb-track", "project", "Goal template"],
       ["pb-twin", "session", "Work template"],
     ]);
   });

@@ -1,20 +1,17 @@
 /**
- * Template Types - SSOT from Database
+ * Template Types
  *
- * Re-exports database schemas and types. Only UI-specific Zod schemas
- * remain in this package for layout/styling validation.
+ * The `entity_templates` row is declared in ./rows.js; @synap/database proves
+ * its inferred row equal (packages/database/src/wire-parity/templates.ts). The
+ * table's drizzle-zod schemas (insert/selectEntityTemplateSchema) live with the
+ * table in @synap/database; only UI-specific Zod schemas live in this package.
  */
 
 // ============================================================================
-// DATABASE RE-EXPORTS (Single Source of Truth)
+// ROW TYPES
 // ============================================================================
 
-export type { EntityTemplate, NewEntityTemplate } from "@synap/database";
-
-export {
-  insertEntityTemplateSchema,
-  selectEntityTemplateSchema,
-} from "@synap/database";
+export type { EntityTemplate, NewEntityTemplate } from "./rows.js";
 
 // ============================================================================
 // UI-SPECIFIC SCHEMAS (Layout & Styling Configuration)

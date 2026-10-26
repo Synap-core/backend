@@ -25,7 +25,7 @@
  * Pure + zero-dep — safe in browser, Electron, React Native, Node and CLI.
  */
 
-import type { PlaybookRunNodeDef } from "@synap/database";
+import type { PlaybookRunNodeDef } from "./flow.js";
 import { WORKER_SKIP_REASONS } from "../workers/index.js";
 
 // ── 1. Mode ─────────────────────────────────────────────────────────────────

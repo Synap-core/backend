@@ -11,7 +11,10 @@
  */
 
 import { z } from "zod";
-import { PROJECT_TRACK_STATUSES } from "@synap/database/schema";
+import {
+  PROJECT_TRACK_STATUSES,
+  PROJECT_TRACK_VERDICTS,
+} from "@synap/database/schema";
 import {
   advanceTrackStage,
   listTracks,
@@ -19,12 +22,15 @@ import {
   loadWrittenTrackView,
   setTrackParams,
   setTrackStatus,
+  reopenTrack,
   setTrackDirection,
   addTrackStage,
   startStageSession,
   startTrack,
   type TrackActor,
 } from "../../../services/tracks/tracks-service.js";
+import { pickTrackGoalInput } from "../../../services/tracks/goal-content.js";
+import { convertEntityToGoal } from "../../../services/tracks/convert-to-goal.js";
 import {
   missingStageDomainsNote,
   stageDomainFallbackNote,
@@ -121,6 +127,9 @@ export const trackHandlers: McpHandlerMap = {
           ? { direction: str(ctx.args.direction) }
           : {}),
         ...(ctx.args.kpi != null ? { kpi: ctx.args.kpi } : {}),
+        // What the goal holds (0345) — parsed (2–5 criteria, meanings) by
+        // the service; a malformed one comes back as `{ error }` words.
+        ...pickTrackGoalInput(ctx.args),
         actor: actorOf(ctx),
       });
       const domainsNote = missingStageDomainsNote(result.missingDomains);
@@ -169,16 +178,91 @@ export const trackHandlers: McpHandlerMap = {
         error: `trackId (uuid) and status (${PROJECT_TRACK_STATUSES.join(" | ")}) are required — synap_list_tracks lists the project's tracks.`,
       });
     }
+    const verdictArg = str(ctx.args.verdict);
+    const verdict = PROJECT_TRACK_VERDICTS.find((v) => v === verdictArg);
+    if (verdictArg && !verdict) {
+      return ok({
+        error: `verdict must be one of ${PROJECT_TRACK_VERDICTS.join(" | ")}.`,
+      });
+    }
     return run(async () => {
+      // The verdict rule (closing needs one, impossible/replaced a reason)
+      // is the service's, refused with words before anything is filed.
       const result = await setTrackStatus({
         trackId,
         status,
+        verdict,
+        verdictReason: str(ctx.args.verdictReason),
         actor: actorOf(ctx),
       });
       if (result.status === "proposed") return result;
       return {
         status: result.status,
         track: await loadWrittenTrackView(result.track, ctx),
+      };
+    });
+  },
+
+  // R8 — the agent's door to "open a new version" of a closed goal: the SAME
+  // service the Hub REST reopen route calls (`reopenTrack` → `startTrack`),
+  // so an agent's reopen is governed exactly like an agent's start.
+  synap_reopen_track: async (ctx) => {
+    requireScope(ctx.apiKeyScopes, "mcp.write", ctx.toolName);
+    const trackId = uuid(ctx.args.trackId);
+    if (!trackId) {
+      return ok({
+        error:
+          "trackId (uuid) is required — synap_list_tracks (includeArchived) lists the project's closed and dropped tracks.",
+      });
+    }
+    return run(async () => {
+      const result = await reopenTrack({
+        trackId,
+        ...(str(ctx.args.name) ? { name: str(ctx.args.name) } : {}),
+        actor: actorOf(ctx),
+      });
+      const domainsNote = missingStageDomainsNote(result.missingDomains);
+      if (result.status === "proposed") {
+        return { ...result, ...(domainsNote ? { domainsNote } : {}) };
+      }
+      return {
+        status: result.status,
+        track: await loadWrittenTrackView(result.track, ctx),
+        missingDomains: result.missingDomains,
+        ...(domainsNote ? { domainsNote } : {}),
+      };
+    });
+  },
+
+  // D2 — "Make it a goal": the SAME service the tRPC and Hub REST convert
+  // doors call (`convertEntityToGoal` → `startTrack` with `fromEntity`), so an
+  // agent's conversion is governed exactly like an agent's start.
+  synap_convert_to_goal: async (ctx) => {
+    requireScope(ctx.apiKeyScopes, "mcp.write", ctx.toolName);
+    const entityId = uuid(ctx.args.entityId);
+    if (!entityId) {
+      return ok({
+        error:
+          "entityId (uuid) is required — the goal, objective or OKR entity to make a goal (synap_find lists them by kind).",
+      });
+    }
+    const projectId = uuid(ctx.args.projectId);
+    if (str(ctx.args.projectId) && !projectId) {
+      return ok({ error: "projectId must be a project uuid." });
+    }
+    return run(async () => {
+      const result = await convertEntityToGoal({
+        entityId,
+        ...(projectId ? { projectId } : {}),
+        ...(str(ctx.args.name) ? { name: str(ctx.args.name) } : {}),
+        actor: actorOf(ctx),
+      });
+      if (result.status === "proposed") return result;
+      return {
+        status: result.status,
+        track: await loadWrittenTrackView(result.track, ctx),
+        entityId: result.entityId,
+        notCarried: result.notCarried,
       };
     });
   },
@@ -212,10 +296,14 @@ export const trackHandlers: McpHandlerMap = {
     const trackId = uuid(ctx.args.trackId);
     const hasDirection = "direction" in ctx.args;
     const hasKpi = "kpi" in ctx.args;
-    if (!trackId || (!hasDirection && !hasKpi)) {
+    const goal = pickTrackGoalInput(ctx.args);
+    if (
+      !trackId ||
+      (!hasDirection && !hasKpi && Object.keys(goal).length === 0)
+    ) {
       return ok({
         error:
-          "trackId (uuid) and a direction and/or kpi are required — synap_list_tracks lists the project's tracks.",
+          "trackId (uuid) and something to change are required — direction, kpi, endState, criteria, dropConditions, workKind, uncertainty or loop. synap_list_tracks lists the project's tracks.",
       });
     }
     const direction = ctx.args.direction;
@@ -227,6 +315,7 @@ export const trackHandlers: McpHandlerMap = {
         trackId,
         ...(hasDirection ? { direction: direction as string | null } : {}),
         ...(hasKpi ? { kpi: ctx.args.kpi } : {}),
+        ...goal,
         actor: actorOf(ctx),
       });
       if (result.status === "proposed") return result;

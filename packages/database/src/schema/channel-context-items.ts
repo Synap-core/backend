@@ -152,30 +152,13 @@ export const channelContextItems = pgTable(
   })
 );
 
-/** Channel context item row — explicit interface so consumers don't need drizzle-orm. */
-export interface ChannelContextItem {
-  id: string;
-  channelId: string;
-  objectType: ChannelContextObjectType;
-  objectId: string;
-  relationshipType: ChannelContextRelationshipType;
-  conflictStatus: ChannelContextConflictStatus;
-  sourceMessageId: string | null;
-  relevanceScore: number | null;
-  userId: string;
-  workspaceId: string | null;
-  createdAt: Date;
-}
-export type NewChannelContextItem = Partial<
-  Omit<ChannelContextItem, "id" | "createdAt">
-> & {
-  channelId: string;
-  objectType: ChannelContextObjectType;
-  objectId: string;
-  relationshipType: ChannelContextRelationshipType;
-  userId: string;
-  workspaceId?: string | null;
-};
+// The row interface is declared in `@synap-core/types/chat/model` (the wire
+// shape) and re-exported here; `../wire-parity/chat.ts` proves it against this
+// table and the union types above against their consts.
+export type {
+  ChannelContextItem,
+  NewChannelContextItem,
+} from "@synap-core/types/chat/model";
 
 /**
  * @internal For monorepo usage - enables schema composition in API layer

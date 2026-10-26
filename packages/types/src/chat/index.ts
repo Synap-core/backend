@@ -15,11 +15,10 @@ import type {
 } from "../hub-protocol/index.js";
 
 // =============================================================================
-// Database Types — Re-exported from @synap/database (single source of truth)
-//
-// @synap/database uses const objects instead of TypeScript enums, so these
-// types are plain string literal unions — "user" is directly assignable to
-// MessageRole, "active" to ChannelStatus, etc.
+// Row Types — declared in ./model.js (the wire shape). @synap/database
+// re-exports these row interfaces and proves the unions equal to its runtime
+// `as const` objects. Plain string literal unions — "user" is directly
+// assignable to MessageRole, "active" to ChannelStatus, etc.
 // =============================================================================
 
 export type {
@@ -30,7 +29,7 @@ export type {
   FeedScope,
   ChannelStatus,
   ChannelAgentType,
-} from "@synap/database";
+} from "./model.js";
 
 export type {
   MessageRow as ChatMessage,
@@ -38,7 +37,7 @@ export type {
   MessageRole,
   MessageAuthorType,
   MessageCategory,
-} from "@synap/database";
+} from "./model.js";
 
 export type {
   ChannelContextItem,
@@ -46,11 +45,10 @@ export type {
   ChannelContextObjectType,
   ChannelContextRelationshipType,
   ChannelContextConflictStatus,
-} from "@synap/database";
+} from "./model.js";
 
 // =============================================================================
 // Backward-compatible string-union aliases
-// These alias the database types (now identical — string literal unions).
 // =============================================================================
 
 import type {
@@ -60,7 +58,7 @@ import type {
   MessageRole,
   MessageAuthorType,
   MessageCategory,
-} from "@synap/database";
+} from "./model.js";
 
 export type ChannelTypeString = ChannelType;
 export type ChannelStatusString = ChannelStatus;

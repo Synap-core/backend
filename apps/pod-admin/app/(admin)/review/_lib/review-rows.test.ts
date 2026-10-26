@@ -123,6 +123,19 @@ describe("reviewRows", () => {
     });
   });
 
+  it("an entity proposal's row names the thing's kind, not the generic \"entity\"", () => {
+    const [row] = reviewRows(
+      [cluster("c")],
+      new Map([
+        facts("c-p1", {
+          targetType: "entity",
+          requestData: { profileSlug: "task" },
+        }),
+      ])
+    );
+    expect(row!.nounKind).toBe("task");
+  });
+
   it("an app request opens the request, and expires at its lease", () => {
     const [row] = reviewRows([appRequest], new Map());
     expect(row!.detail).toEqual({ kind: "app-request", requestId: "r1" });

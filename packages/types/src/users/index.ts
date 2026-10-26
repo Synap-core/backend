@@ -1,12 +1,10 @@
 /**
  * User Types
  *
- * Re-exports user-related types from database schema.
- *
- * @see {@link @synap/database/schema}
+ * Per-user rows, declared in ./rows.js; @synap/database proves its inferred
+ * rows equal (packages/database/src/wire-parity/users.ts).
  */
 
-// Direct re-exports from database
 export type {
   UserResourceState,
   NewUserResourceState,
@@ -20,4 +18,4 @@ export type {
   NewEntityRelationship,
   ReasoningTrace,
   NewReasoningTrace,
-} from "@synap/database";
+} from "./rows.js";
