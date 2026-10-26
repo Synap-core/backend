@@ -149,6 +149,14 @@
       "types": "./dist/workspaces/index.d.ts",
       "import": "./dist/workspaces/index.js"
     },
+    "./workspaces/settings": {
+      "types": "./dist/workspaces/settings.d.ts",
+      "import": "./dist/workspaces/settings.js"
+    },
+    "./workspaces/definition": {
+      "types": "./dist/workspaces/definition.d.ts",
+      "import": "./dist/workspaces/definition.js"
+    },
     "./views": {
       "types": "./dist/views/index.d.ts",
       "import": "./dist/views/index.js"
@@ -160,6 +168,10 @@
     "./preferences": {
       "types": "./dist/preferences/index.d.ts",
       "import": "./dist/preferences/index.js"
+    },
+    "./preferences/model": {
+      "types": "./dist/preferences/model.d.ts",
+      "import": "./dist/preferences/model.js"
     },
     "./realtime": {
       "types": "./dist/realtime/index.d.ts",
@@ -180,6 +192,10 @@
     "./proposals": {
       "types": "./dist/proposals/index.d.ts",
       "import": "./dist/proposals/index.js"
+    },
+    "./proposals/row": {
+      "types": "./dist/proposals/row.d.ts",
+      "import": "./dist/proposals/row.js"
     },
     "./proposals/intent": {
       "types": "./dist/proposals/intent.d.ts",
@@ -224,6 +240,10 @@
     "./automations": {
       "types": "./dist/automations/index.d.ts",
       "import": "./dist/automations/index.js"
+    },
+    "./automations/flow": {
+      "types": "./dist/automations/flow.d.ts",
+      "import": "./dist/automations/flow.js"
     },
     "./notifications": {
       "types": "./dist/notifications/index.d.ts",
@@ -348,6 +368,18 @@
     "./renderer-ref": {
       "types": "./dist/renderer-ref/index.d.ts",
       "import": "./dist/renderer-ref/index.js"
+    },
+    "./chat/model": {
+      "types": "./dist/chat/model.d.ts",
+      "import": "./dist/chat/model.js"
+    },
+    "./profiles/ai-posture": {
+      "types": "./dist/profiles/ai-posture.d.ts",
+      "import": "./dist/profiles/ai-posture.js"
+    },
+    "./templates/rows": {
+      "types": "./dist/templates/rows.d.ts",
+      "import": "./dist/templates/rows.js"
     }
   },
   "scripts": {
@@ -364,7 +396,6 @@
   },
   "devDependencies": {
     "@synap-core/core": "workspace:*",
-    "@synap/database": "workspace:*",
     "@types/node": "^20.0.0",
     "tsup": "^8.0.0",
     "typescript": "^5.6.0"

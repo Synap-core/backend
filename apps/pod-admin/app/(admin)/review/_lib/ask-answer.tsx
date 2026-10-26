@@ -301,10 +301,14 @@ export function AskAnswer({
           <strong className="font-medium text-foreground">
             {who ?? "An agent"}
           </strong>
-          , while working in the session{" "}
-          <span className="text-foreground">
-            {seen.sessionTitle ?? "this session"}
-          </span>
+          {sessionDoor && (
+            <>
+              , while working in the session{" "}
+              <span className="text-foreground">
+                {seen.sessionTitle ?? "this session"}
+              </span>
+            </>
+          )}
           . It is waiting on your answer.
         </p>
         {sessionDoor && <ExitLink exit={sessionExit} label="Open session" />}

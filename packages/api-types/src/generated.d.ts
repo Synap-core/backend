@@ -446,40 +446,27 @@ declare const relations: import("drizzle-orm/pg-core").PgTableWithColumns<{
 	name: "relations";
 	schema: undefined;
 }>;
-declare const ChannelType: {
-	readonly AGENT_COLLAB: "agent_collab";
-	readonly EXTERNAL: "external";
-	readonly FEED: "feed";
-	readonly GROUP: "group";
-	readonly PERSONAL: "personal";
-	readonly RUN: "run";
-	readonly SUB_THREAD: "sub_thread";
-	readonly THREAD: "thread";
-};
-export type ChannelType = (typeof ChannelType)[keyof typeof ChannelType];
-declare const ChannelScope: {
-	readonly POD: "pod";
-	readonly USER: "user";
-	readonly WORKSPACE: "workspace";
-};
-export type ChannelScope = (typeof ChannelScope)[keyof typeof ChannelScope];
-declare const FeedScope: {
-	readonly USER: "user";
-	readonly WORKSPACE: "workspace";
-};
-export type FeedScope = (typeof FeedScope)[keyof typeof FeedScope];
-declare const ChannelStatus: {
-	readonly ACTIVE: "active";
-	readonly ARCHIVED: "archived";
-	readonly MERGED: "merged";
-};
-export type ChannelStatus = (typeof ChannelStatus)[keyof typeof ChannelStatus];
-declare const AiReactionMode: {
-	readonly OFF: "off";
-	readonly ONLY_MENTIONED: "only_mentioned";
-	readonly WHEN_CONFIDENT: "when_confident";
-};
-export type AiReactionMode = (typeof AiReactionMode)[keyof typeof AiReactionMode];
+/**
+ * Chat rows on the wire — channels, messages, channel context items.
+ *
+ * The row interfaces are declared HERE, once: `@synap/database` imports and
+ * re-exports them. The string unions below mirror the database's runtime
+ * `as const` objects (`ChannelType.THREAD`, …), which stay with the tables;
+ * the database proves each union equal to its const
+ * (`packages/database/src/wire-parity/chat.ts`). Plain string literal unions,
+ * so "user" is directly assignable to `MessageRole`, "active" to
+ * `ChannelStatus`, etc. Pure types: nothing from the database package.
+ */
+/** `channels.channel_type`. */
+export type ChannelType = "agent_collab" | "external" | "feed" | "group" | "personal" | "run" | "sub_thread" | "thread";
+/** `channels.scope` — visibility, orthogonal to type. */
+export type ChannelScope = "pod" | "user" | "workspace";
+/** `channels.feed_scope` (FEED channels only). */
+export type FeedScope = "user" | "workspace";
+/** `channels.status`. */
+export type ChannelStatus = "active" | "archived" | "merged";
+/** Per-channel "how do AI teammates react" control (multiplayer channels). */
+export type AiReactionMode = "off" | "only_mentioned" | "when_confident";
 /** Channel row — explicit interface so consumers don't need drizzle-orm to resolve it. */
 export interface Channel {
 	id: string;
@@ -545,6 +532,17 @@ export interface InputOverride {
 	default?: string;
 	options?: string[];
 }
+/**
+ * Per-kind behavioral emphases for AI teaching briefs (base layer). Workspace
+ * overlay lives at `workspaces.settings.profileAiPosture[slug]` (jsonb,
+ * already exists) — resolved together by `getEffectiveAiPosture()`.
+ */
+export interface AiPosture {
+	explainWhy?: boolean;
+	openAfterCreate?: boolean;
+	attachOutputs?: boolean;
+	directives?: string[];
+}
 /** Where the last template apply on a space stands. */
 export type TemplateApplyStateName = 
 /** Layer 1 is being built (legacy `provisioningStatus: "pending"`). */
@@ -602,23 +600,6 @@ export interface TemplateState {
 	heldForDataChangesUnreadable?: true;
 	/** When this state was last written ("" = unknown, a legacy record). */
 	at: string;
-}
-declare enum ProfileScope {
-	SYSTEM = "system",// Available to all users (pod-wide)
-	SHARED = "shared",// Explicitly shared with specific workspaces via profile_workspace_access
-	WORKSPACE = "workspace",// Owned by a single workspace
-	USER = "user"
-}
-/**
- * Per-kind behavioral emphases for AI teaching briefs (base layer). Workspace
- * overlay lives at `workspaces.settings.profileAiPosture[slug]` (jsonb,
- * already exists) — resolved together by `getEffectiveAiPosture()`.
- */
-export interface AiPosture {
-	explainWhy?: boolean;
-	openAfterCreate?: boolean;
-	attachOutputs?: boolean;
-	directives?: string[];
 }
 export type WorkspaceSidebarSurfacePlacement = "embed" | "floating" | "main" | "modal" | "popover" | "side";
 export type WorkspaceSidebarSurfaceDisplayMode = "compact" | "full" | "medium";
@@ -1522,9 +1503,14 @@ export interface WorkspaceSettings {
 	};
 }
 /**
- * User Preferences Schema - UI and application settings
+ * User preferences on the wire — the `user_preferences` row and the shapes of
+ * its JSONB columns.
  *
- * Stores user-specific preferences that persist across sessions
+ * The JSONB shapes are declared HERE, once: `@synap/database` imports them to
+ * type its columns and re-exports them. The row itself is inferred from the
+ * drizzle table on the pod side; it is declared here and the database proves
+ * it equal (`packages/database/src/wire-parity/preferences.ts`). Pure types:
+ * nothing from the database package.
  */
 export interface CustomTheme {
 	colors?: {
@@ -1715,18 +1701,13 @@ export type ProviderVerbSpec = {
  */
 export type SkillScope = "pod" | "user" | "workspace";
 /**
- * Automations Schema
+ * Automation flow definition — the shape of `automations.flow_definition`,
+ * `automations.trigger_config` and `automation_runs.path_taken`.
  *
- * Workflow automations: trigger → step chain with conditions, commands, and outputs.
- * The flow_definition JSONB is both the visual layout (ReactFlow) and the execution graph.
- *
- * Trigger types:
- *   - event: fires on a Synap event (entities.create.validated, etc.)
- *   - cron: fires on schedule ("0 9 * * MON")
- *   - webhook: fires on inbound webhook
- *   - manual: user-triggered
- *
- * Steps reference intelligence_commands by ID, with input mapping from prior step outputs.
+ * Declared HERE, once. `@synap/database` (`schema/automations.ts`) imports and
+ * re-exports these declarations to type its JSONB columns, so the pod, the
+ * executor and every client read the same declaration. Pure types: no runtime
+ * code, nothing from the database package.
  */
 /**
  * AutomationTriggerConfig
@@ -2723,9 +2704,9 @@ export interface McpToolPolicy {
  * the type instead of hiding in the data.
  *
  * The canonical list is `@synap-core/types/property-hints` (what the renderer
- * types against). This package cannot import it (types builds against the
- * database), so this is a second copy, held EQUAL to it at compile time by
- * `types/src/property-hints/pod-parity.contract.ts`.
+ * types against). This is a second copy, held EQUAL to it at compile time by
+ * `database/src/wire-parity/property-hints.ts` (this package may now import
+ * `@synap-core/types`; collapsing the copy is a follow-up).
  */
 export type PropertyInputType = "checkbox" | "color" | "date" | "datetime" | "datetime-local" | "email" | "entity" | "entity-select" | "json" | "markdown" | "number" | "person" | "phone" | "richtext" | "select" | "tags" | "tel" | "text" | "textarea" | "url";
 export interface PropertyUIHints {
@@ -3013,6 +2994,12 @@ declare const propertyDefs: import("drizzle-orm/pg-core").PgTableWithColumns<{
 	schema: undefined;
 }>;
 export type PropertyDef = typeof propertyDefs.$inferSelect;
+declare enum ProfileScope {
+	SYSTEM = "system",// Available to all users (pod-wide)
+	SHARED = "shared",// Explicitly shared with specific workspaces via profile_workspace_access
+	WORKSPACE = "workspace",// Owned by a single workspace
+	USER = "user"
+}
 /**
  * Widget Definitions Schema
  *
@@ -5220,11 +5207,10 @@ export interface EffectiveProperty extends PropertyDef {
  * RendererRef / DeclarativeBlock — MIRROR of `@synap-core/types/renderer-ref`.
  *
  * The canonical declaration (and its docs) lives in that module, which every
- * surface that draws a renderer reads. This package cannot import it —
- * `@synap-core/types` already builds against `@synap/database`, so the
- * reverse edge is a build cycle — so the pod keeps this structural copy, and
- * `packages/types/src/renderer-ref/pod-parity.contract.ts` holds the two
- * EXACTLY equal at compile time. Change both, in the same commit.
+ * surface that draws a renderer reads. The pod keeps this structural copy, and
+ * `packages/database/src/wire-parity/renderer-ref.ts` holds the two EXACTLY
+ * equal at compile time. Change both, in the same commit. (This package may
+ * now import `@synap-core/types`; collapsing the copy is a follow-up.)
  *
  * Stored as JSONB on `profiles.default_renderers`, `renderer_bindings.ref` and
  * inside `workspaces.settings.profileRenderers[slug]`.
