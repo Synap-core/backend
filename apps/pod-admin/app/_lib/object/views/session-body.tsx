@@ -86,6 +86,7 @@ import {
 import { kindIcon } from "../kind-icon";
 import { AgentMark, Pill } from "../provenance-chips";
 import {
+  criteriaVerdictMark,
   criterionRows,
   deliverableRows,
   draftSummary,
@@ -109,6 +110,7 @@ import { OpenInAppLink } from "../open-in-app-link";
 import { useReauthOnUnauthorized } from "../use-reauth";
 import type { ObjectFrame } from "./object-frame";
 import { SectionCard } from "../../../(admin)/components/section-card";
+import { StatusPill } from "../../../(admin)/components/status-pill";
 import { ContentBlock, DocumentContentSection } from "../content/content-block";
 import { documentContent } from "../content/document-model";
 import { objectPage, prepareContent } from "../content/markdown-model";
@@ -428,6 +430,11 @@ export function SessionBody({ id, frame }: { id: string; frame: ObjectFrame }) {
         <DeliverablesSection rows={deliverables} />
         <CriteriaSection
           rows={criteria}
+          verdict={
+            evaluation.status === "ok"
+              ? criteriaVerdictMark(evaluation.verdict)
+              : null
+          }
           failed={evaluation.status === "unavailable"}
           onRetry={() => void query.refetch()}
         />
@@ -926,10 +933,13 @@ const VERDICT_MARK: Record<
  */
 function CriteriaSection({
   rows,
+  verdict,
   failed,
   onRetry,
 }: {
   rows: CriterionRow[];
+  /** The ONE verdict mark (`criteriaVerdictMark`) — the strip and the list draw it too. */
+  verdict: ReturnType<typeof criteriaVerdictMark>;
   failed: boolean;
   onRetry: () => void;
 }) {
@@ -944,12 +954,17 @@ function CriteriaSection({
     );
   }
   if (rows.length === 0) return null;
-  const met = rows.filter((r) => r.verdict === "pass").length;
   return (
     <SectionCard
       variant="flat"
       title="Criteria"
-      hint={`${met} of ${rows.length} met`}
+      hint={
+        verdict && (
+          <span title={verdict.state}>
+            <StatusPill kind={verdict.kind} label={verdict.label} />
+          </span>
+        )
+      }
     >
       <CappedList
         items={rows}
