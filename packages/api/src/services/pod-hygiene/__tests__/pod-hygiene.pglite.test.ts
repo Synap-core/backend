@@ -938,7 +938,7 @@ describe("cleanup pack v2 (filer + executor)", () => {
     const manual = await neverRunAutomation(B, WS_B, { triggerType: "manual" });
     const ran = await neverRunAutomation(B, WS_B);
     await q(
-      `insert into automation_runs (id, automation_id, status, created_at) values ($1, $2, 'completed', now())`,
+      `insert into automation_runs (id, automation_id, status, started_at) values ($1, $2, 'completed', now())`,
       [randomUUID(), ran]
     );
 
@@ -953,7 +953,7 @@ describe("cleanup pack v2 (filer + executor)", () => {
     await fileCleanupPacks(NOW);
     const packA = await latest(A);
     await q(
-      `insert into automation_runs (id, automation_id, status, created_at) values ($1, $2, 'completed', now())`,
+      `insert into automation_runs (id, automation_id, status, started_at) values ($1, $2, 'completed', now())`,
       [randomUUID(), auto]
     );
 
