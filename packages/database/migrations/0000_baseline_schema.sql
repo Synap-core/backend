@@ -5519,3 +5519,11 @@ CREATE TABLE IF NOT EXISTS "document_passage_state" (
   "failed_at"       timestamptz,
   "updated_at"      timestamptz NOT NULL DEFAULT now()
 );
+
+-- 0359: when we last spoke to someone (mirrors
+-- 0359_entities_last_interaction_at.sql). The truth behind the
+-- `properties.lastInteractionAt` projection; written only by `noteInteraction`.
+ALTER TABLE "entities" ADD COLUMN IF NOT EXISTS "last_interaction_at" timestamptz;
+CREATE INDEX IF NOT EXISTS "entities_profile_last_interaction_idx"
+  ON "entities" ("profile_id", "last_interaction_at")
+  WHERE "deleted_at" IS NULL;

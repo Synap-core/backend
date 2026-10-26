@@ -80,6 +80,16 @@ export const entities = pgTable(
     status: text("status"),
     statusCategory: text("status_category"),
 
+    // WHEN WE LAST SPOKE (0359, CRM recall C-W2): the truth. Its READ
+    // PROJECTION is `properties.lastInteractionAt`, written in the same
+    // statement by the ONE door, `noteInteraction`
+    // (`services/interactions/note-interaction.ts`), which only moves it
+    // forward. NULL = never. Not an edit time: `updatedAt` is that.
+    lastInteractionAt: timestamp("last_interaction_at", {
+      mode: "date",
+      withTimezone: true,
+    }),
+
     // System data (JSONB) - System-managed state, separate from user properties
     // Stores: viewMode ('document' | 'bento'), bentoViewId (uuid of entity bento view)
     // Never shown in property editors; not validated against profile schema.
@@ -128,6 +138,10 @@ export const entities = pgTable(
     // The board / lifecycle.list group by status VALUE (0323).
     profileStatusIdx: index("entities_profile_status_idx")
       .on(table.profileId, table.status)
+      .where(sql`${table.deletedAt} IS NULL`),
+    // "Who haven't I spoken to in a month" (0359).
+    profileLastInteractionIdx: index("entities_profile_last_interaction_idx")
+      .on(table.profileId, table.lastInteractionAt)
       .where(sql`${table.deletedAt} IS NULL`),
     typeWorkspaceIdx: index("entities_type_workspace_idx").on(
       table.type,
