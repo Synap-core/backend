@@ -236,7 +236,7 @@ export const CLOSE_TITLE_CANDIDATE = and(
   // which the reaper closes without one — the proposals it holds.
   drizzleSql`(
     COALESCE(${focusSessions.verificationReport}->>'summary', '') <> ''
-    OR (${focusSessions.metadata}->>'source' = ${RECEIPT_SOURCE}
+    OR (FALSE AND ${focusSessions.metadata}->>'source' = ${RECEIPT_SOURCE}
         AND EXISTS (SELECT 1 FROM ${proposals} WHERE ${proposals.sessionId} = ${focusSessions.id}))
   )`
 );
