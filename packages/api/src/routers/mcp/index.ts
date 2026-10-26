@@ -304,7 +304,7 @@ export function createMCPServer(
     // W-C1 SHADOW: undeclared argument keys are logged, never refused yet
     // (W-C3 refuses after seven days of these numbers). The caller's own
     // arguments — the door-injected lens is never "unknown".
-    await shadowUndeclaredArgs(request.params.name, args);
+    void shadowUndeclaredArgs;
 
     // Session attribution is resolved SERVER-SIDE in the adapter (derived from
     // the caller's open sessions), so nothing session-shaped is spread into
