@@ -128,21 +128,19 @@ function app(): HubHono {
   return a;
 }
 
-const url = (qs: string, ws = WS) =>
-  `/entities?workspaceId=${ws}&profileSlug=person&${qs}`;
+const url = (qs: string) =>
+  `/entities?workspaceId=${WS}&profileSlug=person&${qs}`;
 async function rows(
-  qs: string,
-  ws?: string
+  qs: string
 ): Promise<Array<{ id: string; lastInteractionAt?: string | null }>> {
-  const res = await app().request(url(qs, ws));
+  const res = await app().request(url(qs));
   expect(res.status).toBe(200);
   return (await res.json()) as Array<{
     id: string;
     lastInteractionAt?: string | null;
   }>;
 }
-const titles = async (qs: string, ws?: string) =>
-  (await rows(qs, ws)).map((r) => titleOf(r.id));
+const titles = async (qs: string) => (await rows(qs)).map((r) => titleOf(r.id));
 
 describe("GET /entities — lastInteractionAt", () => {
   it("sorts the whole set before paging, coldest first, never last", async () => {
