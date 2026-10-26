@@ -155,7 +155,7 @@ beforeEach(() => {
 });
 
 describe("POST /profiles — define a kind or a role through the shared door", () => {
-  it("an agent key defining a KIND with fields gets `proposed`; fields deferred, the gate saw the agent", async () => {
+  it("an agent key defining a KIND with fields gets ONE `proposed` carrying the fields; the gate saw the agent", async () => {
     const { status, body } = await postProfile(
       {
         slug: "podcast",
@@ -171,15 +171,25 @@ describe("POST /profiles — define a kind or a role through the shared door", (
       status: "proposed",
       proposalId: "prop-profile",
       reviewUrl: "/open/prop-profile",
-      properties: { status: "deferred", pending: 1 },
+      // The fields ride the kind's own proposal (ticket a375443d): no
+      // re-call, no proposal per field.
+      properties: { status: "included", included: ["host"] },
     });
+    // ONE gate call — the kind's — and the fields reach it as data, which is
+    // what the `profile/create` executor creates on approval (a rejected
+    // proposal never runs it, so nothing of the kind lands).
     expect(h.gateCalls).toHaveLength(1);
     expect(h.gateCalls[0]).toMatchObject({
       agentUserId: AGENT,
       workspaceId: WS,
       subjectType: "profile",
       action: "create",
-      data: { slug: "podcast", profileKind: "kind", entityScope: "workspace" },
+      data: {
+        slug: "podcast",
+        profileKind: "kind",
+        entityScope: "workspace",
+        kindFields: [{ slug: "host", valueType: "string" }],
+      },
     });
   });
 

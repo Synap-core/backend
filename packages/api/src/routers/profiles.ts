@@ -36,6 +36,7 @@ import {
   RENDERER_SURFACES,
   withCatalogPresentationStamp,
 } from "@synap/database";
+import { ProposedKindFieldSchema } from "../services/profiles/proposed-kind-field.js";
 import type { RendererRef, ProfileRendererSource } from "@synap/database";
 import { TRPCError } from "@trpc/server";
 import { createLogger } from "@synap-core/core";
@@ -374,6 +375,15 @@ export const profilesRouter = router({
         /** Role-category grouping key (0222): clusters role-profiles so
          *  `entity.query { roleCategory }` matches every role in the category. */
         roleCategory: z.string().optional(),
+        /**
+         * Field defs that ride a NEW kind's PROPOSAL (ticket a375443d): the
+         * `profile/create` executor creates them with the kind, so the
+         * reviewer approves one proposal and the author never re-calls. Only
+         * the GATED new-create branch reads it; when the create applies
+         * directly (or the slug already exists) the caller writes its fields
+         * through `createPropertyDef`, as `defineProfile` does.
+         */
+        deferredFields: z.array(ProposedKindFieldSchema).max(100).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -827,6 +837,25 @@ export const profilesRouter = router({
         }
       }
 
+      // Each field riding the kind's proposal is a property_def write the
+      // key must be allowed to make ITSELF, checked where it would land — a
+      // base def is pod-wide schema (workspace NULL), only an overlay is this
+      // space's — exactly as `createPropertyDef` checks it (S7). Without this a
+      // key scoped to one space could land pod-wide fields through a kind
+      // proposal. Refuses, never proposes (review of #199, M2).
+      for (const field of input.deferredFields ?? []) {
+        await assertKeyMayWrite({
+          subjectType: "property_def",
+          action: "create",
+          workspaceId: field.overlay === true ? ctx.workspaceId : null,
+          data: {
+            slug: field.slug,
+            valueType: field.valueType,
+            overlay: field.overlay === true,
+          },
+        });
+      }
+
       // 2. Permission check (may create proposal)
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,
@@ -859,6 +888,9 @@ export const profilesRouter = router({
           // role's category — dropping it here approves a role that
           // `entity.query { roleCategory }` can never match.
           roleCategory: input.roleCategory,
+          ...(input.deferredFields?.length
+            ? { kindFields: input.deferredFields }
+            : {}),
         },
         // The duplicate door's answer (B2): the existing kinds ride the card.
         ...(kindDuplicate
@@ -881,6 +913,9 @@ export const profilesRouter = router({
             "Profile creation proposed for review"
           ),
           proposalId: perm.proposalId,
+          ...(input.deferredFields?.length
+            ? { fieldsIncluded: input.deferredFields.length }
+            : {}),
         };
       }
 
