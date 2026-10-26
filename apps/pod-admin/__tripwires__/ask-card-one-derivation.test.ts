@@ -44,8 +44,9 @@ const IMPORTS_ASK = /from\s+"[^"]*\/(?:ask-detail|ask-answer)"/;
 
 /**
  * A raw read for DISPLAY: any `.why` / `.prompt` member, or the slot's own
- * `.label` — except as the slot's identity in a call (`expectedLabel:`) or a
- * React `key`, which are not display.
+ * `.label` — except as the slot's identity: in a call (`expectedLabel:`), a
+ * React `key`, or the ask detail's own address (`{ kind: "ask", …, label }`,
+ * what `liveAskSlot` matches on). None of those is drawn.
  */
 function rawReads(src: string): string[] {
   const hits: string[] = [];
@@ -54,7 +55,8 @@ function rawReads(src: string): string[] {
     else if (
       /\b(?:slot|seen|live)\??\.label\b/.test(line) &&
       !/expectedLabel:\s*\w+\??\.label\b/.test(line) &&
-      !/\bkey=\{/.test(line)
+      !/\bkey=\{/.test(line) &&
+      !/\bkind:\s*"ask",\s*sessionId:/.test(line)
     )
       hits.push(line.trim());
   }
@@ -79,6 +81,9 @@ describe("tripwire: the console draws an ask only through askCardView", () => {
     expect(rawReads("{prompt && prompt !== slot.label && <p/>}")).toHaveLength(1);
     expect(rawReads("<h3>{seen.label}</h3>")).toHaveLength(1);
     expect(rawReads("  expectedLabel: seen.label,")).toEqual([]);
+    expect(
+      rawReads('{ kind: "ask", sessionId: slot.sessionId, label: slot.label, slot }')
+    ).toEqual([]);
     expect(rawReads("// the agent's why, in prose")).toEqual([]);
   });
 

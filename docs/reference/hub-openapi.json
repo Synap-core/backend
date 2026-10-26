@@ -623,6 +623,30 @@
                 "properties": {
                   "mode": { "type": "string", "enum": ["confirm"] },
                   "prompt": { "type": "string", "maxLength": 500 },
+                  "yes": {
+                    "type": "object",
+                    "properties": {
+                      "label": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 80
+                      },
+                      "description": { "type": "string", "maxLength": 140 },
+                      "recommended": { "type": "boolean" }
+                    }
+                  },
+                  "no": {
+                    "type": "object",
+                    "properties": {
+                      "label": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 80
+                      },
+                      "description": { "type": "string", "maxLength": 140 },
+                      "recommended": { "type": "boolean" }
+                    }
+                  },
                   "lookedAt": {
                     "type": "array",
                     "items": {
@@ -2004,7 +2028,9 @@
             "type": ["number", "null"],
             "description": "Hours this proposal stays answerable once its context is gone. `null` for every class that never expires; only `ephemeral` has one."
           },
-          "setup": { "$ref": "#/components/schemas/ProposalSetup" }
+          "setup": { "$ref": "#/components/schemas/ProposalSetup" },
+          "fate": { "$ref": "#/components/schemas/ProposalFate" },
+          "waits": { "$ref": "#/components/schemas/ProposalWaits" }
         },
         "required": [
           "id",
@@ -2114,6 +2140,54 @@
         },
         "required": ["name", "required", "secret", "satisfied"]
       },
+      "ProposalFate": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": { "type": "string", "enum": ["expires"] },
+              "expiresAt": { "type": "string" },
+              "orSessionEnd": { "type": "boolean" }
+            },
+            "required": ["kind", "expiresAt", "orSessionEnd"]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": { "type": "string", "enum": ["dies_with_session"] }
+            },
+            "required": ["kind"]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": { "type": "string", "enum": ["until_decided"] }
+            },
+            "required": ["kind"]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": { "type": "string", "enum": ["review_later"] },
+              "since": { "type": "string" }
+            },
+            "required": ["kind", "since"]
+          }
+        ],
+        "description": "What happens if nobody decides — pending rows only."
+      },
+      "ProposalWaits": {
+        "type": "object",
+        "properties": {
+          "waits": { "type": "boolean" },
+          "reason": {
+            "type": "string",
+            "enum": ["gate", "owed_slot", "parked_run"]
+          }
+        },
+        "required": ["waits"],
+        "description": "Whether an agent waits on this decision, and why (gate / owed_slot / parked_run)."
+      },
       "ProposalBasic": {
         "type": "object",
         "properties": {
@@ -2155,7 +2229,9 @@
             "type": ["number", "null"],
             "description": "Hours this proposal stays answerable once its context is gone. `null` for every class that never expires; only `ephemeral` has one."
           },
-          "setup": { "$ref": "#/components/schemas/ProposalSetup" }
+          "setup": { "$ref": "#/components/schemas/ProposalSetup" },
+          "fate": { "$ref": "#/components/schemas/ProposalFate" },
+          "waits": { "$ref": "#/components/schemas/ProposalWaits" }
         },
         "required": [
           "id",
@@ -12102,6 +12178,40 @@
                                             "type": "string",
                                             "maxLength": 500
                                           },
+                                          "yes": {
+                                            "type": "object",
+                                            "properties": {
+                                              "label": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 80
+                                              },
+                                              "description": {
+                                                "type": "string",
+                                                "maxLength": 140
+                                              },
+                                              "recommended": {
+                                                "type": "boolean"
+                                              }
+                                            }
+                                          },
+                                          "no": {
+                                            "type": "object",
+                                            "properties": {
+                                              "label": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 80
+                                              },
+                                              "description": {
+                                                "type": "string",
+                                                "maxLength": 140
+                                              },
+                                              "recommended": {
+                                                "type": "boolean"
+                                              }
+                                            }
+                                          },
                                           "lookedAt": {
                                             "type": "array",
                                             "items": {
@@ -12544,6 +12654,40 @@
                                                 "prompt": {
                                                   "type": "string",
                                                   "maxLength": 500
+                                                },
+                                                "yes": {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "label": {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 80
+                                                    },
+                                                    "description": {
+                                                      "type": "string",
+                                                      "maxLength": 140
+                                                    },
+                                                    "recommended": {
+                                                      "type": "boolean"
+                                                    }
+                                                  }
+                                                },
+                                                "no": {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "label": {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 80
+                                                    },
+                                                    "description": {
+                                                      "type": "string",
+                                                      "maxLength": 140
+                                                    },
+                                                    "recommended": {
+                                                      "type": "boolean"
+                                                    }
+                                                  }
                                                 },
                                                 "lookedAt": {
                                                   "type": "array",
@@ -14905,6 +15049,40 @@
                                             "type": "string",
                                             "maxLength": 500
                                           },
+                                          "yes": {
+                                            "type": "object",
+                                            "properties": {
+                                              "label": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 80
+                                              },
+                                              "description": {
+                                                "type": "string",
+                                                "maxLength": 140
+                                              },
+                                              "recommended": {
+                                                "type": "boolean"
+                                              }
+                                            }
+                                          },
+                                          "no": {
+                                            "type": "object",
+                                            "properties": {
+                                              "label": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 80
+                                              },
+                                              "description": {
+                                                "type": "string",
+                                                "maxLength": 140
+                                              },
+                                              "recommended": {
+                                                "type": "boolean"
+                                              }
+                                            }
+                                          },
                                           "lookedAt": {
                                             "type": "array",
                                             "items": {
@@ -15347,6 +15525,40 @@
                                                 "prompt": {
                                                   "type": "string",
                                                   "maxLength": 500
+                                                },
+                                                "yes": {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "label": {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 80
+                                                    },
+                                                    "description": {
+                                                      "type": "string",
+                                                      "maxLength": 140
+                                                    },
+                                                    "recommended": {
+                                                      "type": "boolean"
+                                                    }
+                                                  }
+                                                },
+                                                "no": {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "label": {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 80
+                                                    },
+                                                    "description": {
+                                                      "type": "string",
+                                                      "maxLength": 140
+                                                    },
+                                                    "recommended": {
+                                                      "type": "boolean"
+                                                    }
+                                                  }
                                                 },
                                                 "lookedAt": {
                                                   "type": "array",
@@ -20267,6 +20479,36 @@
                                       "prompt": {
                                         "type": "string",
                                         "maxLength": 500
+                                      },
+                                      "yes": {
+                                        "type": "object",
+                                        "properties": {
+                                          "label": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 80
+                                          },
+                                          "description": {
+                                            "type": "string",
+                                            "maxLength": 140
+                                          },
+                                          "recommended": { "type": "boolean" }
+                                        }
+                                      },
+                                      "no": {
+                                        "type": "object",
+                                        "properties": {
+                                          "label": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 80
+                                          },
+                                          "description": {
+                                            "type": "string",
+                                            "maxLength": 140
+                                          },
+                                          "recommended": { "type": "boolean" }
+                                        }
                                       },
                                       "lookedAt": {
                                         "type": "array",
@@ -26044,6 +26286,36 @@
                                   "type": "string",
                                   "maxLength": 500
                                 },
+                                "yes": {
+                                  "type": "object",
+                                  "properties": {
+                                    "label": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 80
+                                    },
+                                    "description": {
+                                      "type": "string",
+                                      "maxLength": 140
+                                    },
+                                    "recommended": { "type": "boolean" }
+                                  }
+                                },
+                                "no": {
+                                  "type": "object",
+                                  "properties": {
+                                    "label": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 80
+                                    },
+                                    "description": {
+                                      "type": "string",
+                                      "maxLength": 140
+                                    },
+                                    "recommended": { "type": "boolean" }
+                                  }
+                                },
                                 "lookedAt": {
                                   "type": "array",
                                   "items": {
@@ -27110,6 +27382,36 @@
                                   "type": "string",
                                   "maxLength": 500
                                 },
+                                "yes": {
+                                  "type": "object",
+                                  "properties": {
+                                    "label": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 80
+                                    },
+                                    "description": {
+                                      "type": "string",
+                                      "maxLength": 140
+                                    },
+                                    "recommended": { "type": "boolean" }
+                                  }
+                                },
+                                "no": {
+                                  "type": "object",
+                                  "properties": {
+                                    "label": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 80
+                                    },
+                                    "description": {
+                                      "type": "string",
+                                      "maxLength": 140
+                                    },
+                                    "recommended": { "type": "boolean" }
+                                  }
+                                },
                                 "lookedAt": {
                                   "type": "array",
                                   "items": {
@@ -27437,6 +27739,41 @@
                             },
                             { "type": "null" }
                           ]
+                        },
+                        "askedBy": { "type": "string" },
+                        "askCause": {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "decision",
+                                "gate",
+                                "run",
+                                "external_approval",
+                                "param",
+                                "criterion"
+                              ]
+                            },
+                            "ref": {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 64
+                                },
+                                "id": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 200
+                                }
+                              },
+                              "required": ["kind", "id"]
+                            },
+                            "at": { "type": "string" }
+                          },
+                          "required": ["kind"]
                         },
                         "relationToSubject": {
                           "type": "string",
@@ -27844,6 +28181,36 @@
                                   "type": "string",
                                   "maxLength": 500
                                 },
+                                "yes": {
+                                  "type": "object",
+                                  "properties": {
+                                    "label": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 80
+                                    },
+                                    "description": {
+                                      "type": "string",
+                                      "maxLength": 140
+                                    },
+                                    "recommended": { "type": "boolean" }
+                                  }
+                                },
+                                "no": {
+                                  "type": "object",
+                                  "properties": {
+                                    "label": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 80
+                                    },
+                                    "description": {
+                                      "type": "string",
+                                      "maxLength": 140
+                                    },
+                                    "recommended": { "type": "boolean" }
+                                  }
+                                },
                                 "lookedAt": {
                                   "type": "array",
                                   "items": {
@@ -28910,6 +29277,36 @@
                                   "type": "string",
                                   "maxLength": 500
                                 },
+                                "yes": {
+                                  "type": "object",
+                                  "properties": {
+                                    "label": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 80
+                                    },
+                                    "description": {
+                                      "type": "string",
+                                      "maxLength": 140
+                                    },
+                                    "recommended": { "type": "boolean" }
+                                  }
+                                },
+                                "no": {
+                                  "type": "object",
+                                  "properties": {
+                                    "label": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 80
+                                    },
+                                    "description": {
+                                      "type": "string",
+                                      "maxLength": 140
+                                    },
+                                    "recommended": { "type": "boolean" }
+                                  }
+                                },
                                 "lookedAt": {
                                   "type": "array",
                                   "items": {
@@ -29238,6 +29635,41 @@
                             { "type": "null" }
                           ]
                         },
+                        "askedBy": { "type": "string" },
+                        "askCause": {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "decision",
+                                "gate",
+                                "run",
+                                "external_approval",
+                                "param",
+                                "criterion"
+                              ]
+                            },
+                            "ref": {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 64
+                                },
+                                "id": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 200
+                                }
+                              },
+                              "required": ["kind", "id"]
+                            },
+                            "at": { "type": "string" }
+                          },
+                          "required": ["kind"]
+                        },
                         "relationToSubject": {
                           "type": "string",
                           "maxLength": 80
@@ -29459,7 +29891,7 @@
       "post": {
         "tags": ["FocusSessions"],
         "summary": "Complete (close) a focus session and return the proposal pack",
-        "description": "Lifecycle close via completeFocusSession — stamps closed, finishes any running playbook_run, returns pendingProposals + counts + warnings. Distinct from POST .../complete-run (playbook run only).",
+        "description": "Lifecycle close via completeFocusSession — stamps closed, finishes any running playbook_run, returns pendingProposals + counts + warnings. Every still-open room question is stamped closed (session ended). An agent's closed/failed close is refused (409 OPEN_QUESTIONS) while a question it asked is open, unless questionDispositions settles each. Distinct from POST .../complete-run (playbook run only).",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -29483,6 +29915,22 @@
                   "terminalStatus": {
                     "type": "string",
                     "enum": ["closed", "cancelled", "failed"]
+                  },
+                  "questionDispositions": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "messageId": { "type": "string", "format": "uuid" },
+                        "disposition": {
+                          "type": "string",
+                          "enum": ["withdrawn", "keep_as_owed"]
+                        },
+                        "note": { "type": "string", "maxLength": 500 }
+                      },
+                      "required": ["messageId", "disposition"]
+                    },
+                    "maxItems": 100
                   }
                 }
               }
@@ -29523,6 +29971,18 @@
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "409": {
+            "description": "Refused: the calling agent's own room questions are still open (openQuestions[])",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": {}
+                }
               }
             }
           },
@@ -29814,6 +30274,36 @@
                         "properties": {
                           "mode": { "type": "string", "enum": ["confirm"] },
                           "prompt": { "type": "string", "maxLength": 500 },
+                          "yes": {
+                            "type": "object",
+                            "properties": {
+                              "label": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 80
+                              },
+                              "description": {
+                                "type": "string",
+                                "maxLength": 140
+                              },
+                              "recommended": { "type": "boolean" }
+                            }
+                          },
+                          "no": {
+                            "type": "object",
+                            "properties": {
+                              "label": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 80
+                              },
+                              "description": {
+                                "type": "string",
+                                "maxLength": 140
+                              },
+                              "recommended": { "type": "boolean" }
+                            }
+                          },
                           "lookedAt": {
                             "type": "array",
                             "items": {
@@ -30192,8 +30682,8 @@
     "/focus-sessions/:id/outputs/unblock": {
       "post": {
         "tags": ["FocusSessions"],
-        "summary": "Reclaim a deliverable handed to the human",
-        "description": "Clears `owner`, `blockedReason`, `why` and `owedSince` together. The deliverable itself is unchanged and still owed.",
+        "summary": "Hand a deliverable back from the human (people only)",
+        "description": "Clears `owner`, `blockedReason`, `why` and `owedSince` together. The deliverable itself is unchanged and still owed. Refused (403) for an agent key: an agent whose need is gone withdraws its question (`POST /focus-sessions/:id/answers/relay`, `disposition: 'withdrawn'`).",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -30276,7 +30766,7 @@
       "post": {
         "tags": ["FocusSessions"],
         "summary": "Answer what an agent asked about a deliverable (people only)",
-        "description": "Records the person's answer on the named slot and posts it into the session room as the person. Not a delivery: `status` is untouched. A slot that was handed to the person goes back to the agent with the answer attached, and a pod-run agent that asked is woken. Emits `focus_session.slot_answered.completed`. Refused (403) for an agent key. A slot with a typed `ask` takes `value` (validated against it; 400 `ask_invalid:` when it does not fit, 409 `ask_changed:` when `askFingerprint` no longer matches the slot's ask).",
+        "description": "Records the person's answer on the named slot and posts it into the session room as the person. Not a delivery: `status` is untouched. A slot that was handed to the person goes back to the agent with the answer attached, and a pod-run agent that asked is woken. Emits `focus_session.slot_answered.completed`. Refused (403) for an agent key. A slot with a typed `ask` takes `value` (validated against it; 400 `ask_invalid:` when it does not fit, 409 `ask_changed:` when `askFingerprint` no longer matches the slot's ask). `confirmRelayed` confirms the relay waiting on the slot (`pendingRelay`) as the person's answer; `rejectRelayed` (\"Not what I said\") drops what an agent relayed and gives the question back — on a slot, or on a slotless room question named by `questionId` — and emits `focus_session.relay_corrected.completed`.",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -30412,41 +30902,71 @@
                     "type": "string",
                     "minLength": 1,
                     "maxLength": 200
-                  }
-                },
-                "required": ["expectedLabel"]
+                  },
+                  "confirmRelayed": { "type": "boolean", "enum": [true] },
+                  "rejectRelayed": { "type": "boolean", "enum": [true] },
+                  "questionId": { "type": "string", "format": "uuid" }
+                }
               }
             }
           }
         },
         "responses": {
           "200": {
-            "description": "Answered",
+            "description": "Answered, or (`rejectRelayed`) corrected",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "ok": { "type": "boolean" },
-                    "expectedLabel": { "type": "string" },
-                    "kind": { "type": "string" },
-                    "answer": {},
-                    "handedBack": { "type": "boolean" },
-                    "messageId": { "type": ["string", "null"] },
-                    "questionId": { "type": ["string", "null"] },
-                    "wokeAgentType": { "type": ["string", "null"] },
-                    "triggered": { "type": "boolean" },
-                    "decision": {}
-                  },
-                  "required": [
-                    "ok",
-                    "expectedLabel",
-                    "kind",
-                    "handedBack",
-                    "messageId",
-                    "questionId",
-                    "wokeAgentType",
-                    "triggered"
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "ok": { "type": "boolean" },
+                        "expectedLabel": { "type": "string" },
+                        "kind": { "type": "string" },
+                        "answer": {},
+                        "handedBack": { "type": "boolean" },
+                        "messageId": { "type": ["string", "null"] },
+                        "questionId": { "type": ["string", "null"] },
+                        "wokeAgentType": { "type": ["string", "null"] },
+                        "triggered": { "type": "boolean" },
+                        "decision": {}
+                      },
+                      "required": [
+                        "ok",
+                        "expectedLabel",
+                        "kind",
+                        "handedBack",
+                        "messageId",
+                        "questionId",
+                        "wokeAgentType",
+                        "triggered"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "ok": { "type": "boolean" },
+                        "status": { "type": "string", "enum": ["corrected"] },
+                        "dropped": {
+                          "type": "string",
+                          "enum": ["pending", "answer"]
+                        },
+                        "expectedLabel": { "type": ["string", "null"] },
+                        "questionId": { "type": ["string", "null"] },
+                        "relayedBy": { "type": "string" },
+                        "reopened": { "type": "boolean" }
+                      },
+                      "required": [
+                        "ok",
+                        "status",
+                        "dropped",
+                        "expectedLabel",
+                        "questionId",
+                        "relayedBy",
+                        "reopened"
+                      ]
+                    }
                   ]
                 }
               }
@@ -30478,6 +30998,227 @@
           },
           "409": {
             "description": "The slot's ask changed (`ask_changed:`)",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/focus-sessions/:id/answers/relay": {
+      "post": {
+        "tags": ["FocusSessions"],
+        "summary": "Relay the person's answer from a chat (agents only)",
+        "description": "The person answered your question in a chat (Claude Code, claude.ai): relay their words here. Name the EXACT question — `messageId` (your room question) and/or `slotLabel` — never the newest open one; only the agent that asked a room question may relay it (a slot with no room question: an agent on the session). `disposition: 'answered'` needs `quote`, the person's words verbatim (never a paraphrase); `value` is the typed pick you read in them. A routine ask is answered (`status: 'relayed'`, marked relayed by you). A commitment — `stakes: 'commitment'`, an approval card, a grade, a hand-over (`provide`) — is NOT answered: it waits for the person's own tap (`status: 'awaiting_tap'`). `disposition: 'withdrawn'` + `note` closes your own question as overtaken and hands its slot back to you. Refused (403) for a person's key.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "disposition": {
+                    "type": "string",
+                    "enum": ["answered", "withdrawn"]
+                  },
+                  "messageId": { "type": "string", "format": "uuid" },
+                  "slotLabel": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500
+                  },
+                  "quote": { "type": "string", "maxLength": 2000 },
+                  "text": { "type": "string", "maxLength": 2000 },
+                  "value": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": { "type": "string", "enum": ["text"] }
+                        },
+                        "required": ["type"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": { "type": "string", "enum": ["confirm"] },
+                          "confirmed": { "type": "boolean" }
+                        },
+                        "required": ["type", "confirmed"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": { "type": "string", "enum": ["chip"] },
+                          "chip": {
+                            "type": "object",
+                            "properties": {
+                              "label": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 80
+                              },
+                              "value": { "type": "string", "maxLength": 500 },
+                              "icon": { "type": "string", "maxLength": 64 },
+                              "recommended": { "type": "boolean" },
+                              "description": {
+                                "type": "string",
+                                "maxLength": 140
+                              }
+                            },
+                            "required": ["label"]
+                          }
+                        },
+                        "required": ["type", "chip"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": { "type": "string", "enum": ["form"] },
+                          "values": {
+                            "type": "object",
+                            "additionalProperties": {}
+                          }
+                        },
+                        "required": ["type", "values"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": { "type": "string", "enum": ["provide"] },
+                          "ref": {
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": ["secret"]
+                                  },
+                                  "vaultRef": { "type": "string" }
+                                },
+                                "required": ["kind", "vaultRef"]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": ["connection"]
+                                  },
+                                  "connectionId": {
+                                    "type": "string",
+                                    "format": "uuid"
+                                  }
+                                },
+                                "required": ["kind", "connectionId"]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": ["file"]
+                                  },
+                                  "fileId": {
+                                    "type": "string",
+                                    "format": "uuid"
+                                  }
+                                },
+                                "required": ["kind", "fileId"]
+                              }
+                            ]
+                          }
+                        },
+                        "required": ["type", "ref"]
+                      }
+                    ]
+                  },
+                  "relaySurface": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
+                  },
+                  "note": { "type": "string", "maxLength": 500 }
+                },
+                "required": ["disposition"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Relayed, awaiting the person's tap, or withdrawn",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": { "type": "boolean" },
+                    "status": {
+                      "type": "string",
+                      "enum": ["relayed", "awaiting_tap", "withdrawn"]
+                    },
+                    "stakes": {
+                      "type": "string",
+                      "enum": ["routine", "commitment"]
+                    },
+                    "questionId": { "type": ["string", "null"] },
+                    "expectedLabel": { "type": ["string", "null"] },
+                    "answer": {},
+                    "pendingRelay": {},
+                    "handedBack": { "type": "boolean" },
+                    "decision": {}
+                  },
+                  "required": ["ok", "status", "questionId", "expectedLabel"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "409": {
+            "description": "The question moved on (answered, closed, re-asked)",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }

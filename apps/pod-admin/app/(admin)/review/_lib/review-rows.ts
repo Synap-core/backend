@@ -244,11 +244,17 @@ function wholeCluster(s: ReviewSignal): string[] | null {
   return ids.length > 0 && ids.length === Math.max(1, s.count) ? ids : null;
 }
 
+/** A row's kind-specific half; `title` only when it is not the signal's. */
+type RowShape = Omit<
+  ReviewRow,
+  "key" | "group" | "title" | "occurredAt" | "count"
+> & { title?: string };
+
 function proposalRow(
   s: ReviewSignal,
   group: ReviewGroup,
   facts: ReadonlyMap<string, ProposalFacts>
-): Omit<ReviewRow, "key" | "group" | "title" | "occurredAt" | "count"> {
+): RowShape {
   const sampleId = s.target?.kind === "proposal" ? s.target.id : null;
   const sample = sampleId ? facts.get(sampleId) : undefined;
   const members = wholeCluster(s);
@@ -281,9 +287,7 @@ function proposalRow(
   };
 }
 
-function accessRow(
-  s: ReviewSignal
-): Omit<ReviewRow, "key" | "group" | "title" | "occurredAt" | "count"> {
+function accessRow(s: ReviewSignal): RowShape {
   const target = s.target;
   return {
     nounKind: s.access?.subject ?? "application",
@@ -304,9 +308,7 @@ function accessRow(
   };
 }
 
-function askRow(
-  s: ReviewSignal
-): Omit<ReviewRow, "key" | "group" | "occurredAt" | "count"> {
+function askRow(s: ReviewSignal): RowShape {
   // The shared lens row decides an ask's noun, chip, door and title (the
   // card's question, `askCardView`) — the same words browser and relay draw.
   const lens = lensRowOfNeedsYou(
@@ -364,7 +366,7 @@ export function reviewRows(
       ...shape,
       key: s.id,
       group,
-      title: "title" in shape ? shape.title : s.title,
+      title: shape.title ?? s.title,
       occurredAt,
       expiresAt,
       count: Math.max(1, s.count),
