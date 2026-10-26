@@ -25,6 +25,7 @@ import {
   and,
   eq,
   exists,
+  isNull,
   not,
   notExists,
   or,
@@ -65,7 +66,18 @@ function hasGuestProjectRole(userId: string | AnyColumn) {
 }
 
 /**
- * A POD PARTICIPANT: has a `pod_members` row, a `workspace_members` row, or
+ * The caller's LIVE `pod_members` row: the ONE condition every reader of the
+ * table uses. A row is access only while `removed_at` is NULL (0357, founder
+ * Q-B1): `workspaces.removeFromPod` stamps it when the person is left with no
+ * space, a new pod invite clears it. Reading the bare row would keep a
+ * removed person "in".
+ */
+export function livePodMemberWhere(userId: string | AnyColumn): SQL {
+  return and(eq(podMembers.userId, userId), isNull(podMembers.removedAt))!;
+}
+
+/**
+ * A POD PARTICIPANT: has a live `pod_members` row, a `workspace_members` row, or
  * owns a workspace. Each probe is an index lookup bound to the caller's own id
  * (`pod_members_user_unique`, `idx_workspace_members_user_id` (0276),
  * `idx_workspaces_owner_workspace_type`) and uncorrelated with the outer row,
@@ -74,10 +86,7 @@ function hasGuestProjectRole(userId: string | AnyColumn) {
 export function podParticipantWhere(userId: string | AnyColumn): SQL {
   return or(
     exists(
-      db
-        .select({ one: ONE })
-        .from(podMembers)
-        .where(eq(podMembers.userId, userId))
+      db.select({ one: ONE }).from(podMembers).where(livePodMemberWhere(userId))
     ),
     exists(
       db
@@ -161,9 +170,6 @@ export function podMemberWhere(userId: string): SQL {
   // pod-shared branch silently read "the row's owner is the caller" there, and a
   // pod member never saw a pod-shared entity through scopedDb (fail-closed).
   return exists(
-    db
-      .select({ one: ONE })
-      .from(podMembers)
-      .where(eq(podMembers.userId, userId))
+    db.select({ one: ONE }).from(podMembers).where(livePodMemberWhere(userId))
   );
 }

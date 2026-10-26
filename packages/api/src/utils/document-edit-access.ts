@@ -58,6 +58,7 @@ import {
   relations,
   projectMembers,
   podMembers,
+  livePodMemberWhere,
   views,
   getWorkspaceMembership,
 } from "@synap/database";
@@ -347,7 +348,7 @@ async function hasPodWriteRole(userId: string): Promise<boolean> {
     .from(podMembers)
     .where(
       and(
-        eq(podMembers.userId, userId),
+        livePodMemberWhere(userId),
         inArray(podMembers.podRole, POD_WRITE_ROLES)
       )
     )

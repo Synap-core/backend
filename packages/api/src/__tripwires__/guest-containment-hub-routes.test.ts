@@ -16,11 +16,32 @@
  * auth, so no route handler runs. A route that answers a guest with anything
  * but the refusal must ALSO answer an anonymous caller without a 401: it is a
  * credential-less door, and a guest credential buys nothing there.
+ *
+ * POD-ACCESS FLOOR (B1, report mode): the same doors, on the same final
+ * principal, REPORT a signed-in principal that is not a guest and holds no
+ * access to the pod (`reportNoPodAccess`, access/pod-access.ts). Here the
+ * report is recorded and then stops the request (a thrown sentinel), so no
+ * handler runs: every route that refuses a guest must have reported an
+ * outsider. The report's own logic is `access/pod-access.pglite.test.ts`'s.
  */
 
 import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
 
 const GUEST = "0b9d6f3e-1c2a-4e5f-8a7b-9c0d1e2f3a4b";
+
+const floor = vi.hoisted(() => ({
+  reports: [] as Array<{ userId: string; door: string }>,
+  stop: false,
+}));
+vi.mock("../access/pod-access.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  reportNoPodAccess: vi.fn(
+    async (userId: string, _requestKey: unknown, door: string) => {
+      floor.reports.push({ userId, door });
+      if (floor.stop) throw new Error("tripwire: pod-access floor reached");
+    }
+  ),
+}));
 
 vi.mock("../services/api-keys.js", () => ({
   apiKeyService: {
@@ -157,6 +178,69 @@ describe("tripwire: guest containment covers every Hub REST route and MCP", () =
       const res = await request(route, { "x-session-token": "kratos-guest" });
       expect(await isGuestRefusal(res)).toBe(true);
     }
+  });
+
+  it("every route that refuses a guest REPORTS a principal with no pod access (B1)", async () => {
+    // Same credential, same principal; the audience probe now says "not a
+    // guest", and nothing else lets them in (the report is the floor's seam).
+    const outsider = { authorization: "Bearer synap_guest_key_for_test" };
+    const missed: string[] = [];
+    let judged = 0;
+    floor.stop = true;
+    try {
+      for (const route of unique) {
+        audienceSpy.mockResolvedValue("guest");
+        if (!(await isGuestRefusal(await request(route, outsider)))) continue;
+        judged++;
+        audienceSpy.mockResolvedValue("unknown");
+        floor.reports.length = 0;
+        await request(route, outsider);
+        if (!floor.reports.some((r) => r.userId === GUEST)) {
+          missed.push(`${route.method} ${route.path}`);
+        }
+      }
+    } finally {
+      floor.stop = false;
+      audienceSpy.mockResolvedValue("guest");
+    }
+    expect(missed).toEqual([]);
+    expect(judged).toBeGreaterThan(200);
+  });
+
+  it("a Kratos session token with no pod access is reported too", async () => {
+    audienceSpy.mockResolvedValue("unknown");
+    floor.stop = true;
+    floor.reports.length = 0;
+    try {
+      await request(
+        { method: "GET", path: "/entities" },
+        { "x-session-token": "kratos-outsider" }
+      );
+    } finally {
+      floor.stop = false;
+      audienceSpy.mockResolvedValue("guest");
+    }
+    expect(floor.reports).toEqual([{ userId: GUEST, door: "hub" }]);
+  });
+
+  it("MCP reports a key with no pod access before any tool runs", async () => {
+    audienceSpy.mockResolvedValue("unknown");
+    floor.stop = true;
+    floor.reports.length = 0;
+    try {
+      await mcpHttpApp.request("/", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: "Bearer synap_guest_key_for_test",
+        },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 8, method: "tools/list" }),
+      });
+    } finally {
+      floor.stop = false;
+      audienceSpy.mockResolvedValue("guest");
+    }
+    expect(floor.reports).toEqual([{ userId: GUEST, door: "mcp" }]);
   });
 
   it("MCP refuses a guest key before any tool runs", async () => {

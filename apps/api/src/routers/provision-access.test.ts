@@ -10,6 +10,7 @@ describe("projectPodUserAccess", () => {
       ])
     ).toEqual({
       podRole: "owner",
+      podMember: false,
       workspaceScopes: [{ workspaceId: "crm", role: "admin" }],
       projectScopes: [],
     });
@@ -22,6 +23,7 @@ describe("projectPodUserAccess", () => {
       ])
     ).toEqual({
       podRole: "member",
+      podMember: false,
       workspaceScopes: [{ workspaceId: "crm", role: "editor" }],
       projectScopes: [],
     });
@@ -34,6 +36,7 @@ describe("projectPodUserAccess", () => {
       ])
     ).toEqual({
       podRole: "member",
+      podMember: false,
       workspaceScopes: [],
       projectScopes: [],
     });
@@ -54,6 +57,7 @@ describe("projectPodUserAccess", () => {
       )
     ).toEqual({
       podRole: "member",
+      podMember: false,
       workspaceScopes: [],
       projectScopes: [
         {
@@ -86,6 +90,7 @@ describe("projectPodUserAccess", () => {
       )
     ).toEqual({
       podRole: "member",
+      podMember: false,
       workspaceScopes: [],
       projectScopes: [],
     });
@@ -116,6 +121,7 @@ describe("projectPodUserAccess", () => {
       )
     ).toEqual({
       podRole: "member",
+      podMember: false,
       workspaceScopes: [],
       projectScopes: [],
     });

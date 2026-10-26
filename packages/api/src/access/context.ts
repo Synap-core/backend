@@ -43,8 +43,8 @@
 
 import {
   db,
-  eq,
   drizzleSql,
+  livePodMemberWhere,
   podGuestWhere,
   podReaderWhere,
 } from "@synap/database";
@@ -243,7 +243,7 @@ export class AccessContext {
         const rows = await db
           .select({ podRole: podMembers.podRole })
           .from(podMembers)
-          .where(eq(podMembers.userId, this.userId))
+          .where(livePodMemberWhere(this.userId))
           .limit(1);
         const row = rows[0];
         return {
@@ -255,7 +255,7 @@ export class AccessContext {
     return this.podMembershipCache;
   }
 
-  /** Convenience: `true` iff this context's user has a `pod_members` row. */
+  /** Convenience: `true` iff this context's user has a LIVE `pod_members` row. */
   async isPodMember(): Promise<boolean> {
     return (await this.podMembership()).isPodMember;
   }

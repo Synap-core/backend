@@ -2,10 +2,12 @@
  * "Does this person still hold access here?" — `readPodUserAccess` +
  * `hasActivePodAccess`, driven through the real drizzle query on PGlite.
  *
- * The discriminating row is the REMOVED member: `workspaces.removeFromPod`
- * deletes their space memberships but leaves their `pod_members` row (it
- * records how they joined), so any rule that reads `pod_members` says they are
- * still in. The archived-space member rules out "any `workspace_members` row".
+ * The discriminating rows are the two `pod_members` rows (founder Q-B1,
+ * 0357): a LIVE row is access (a pod invite on a pod with no ordinary space
+ * yet), a REMOVED one (`removed_at`, stamped by `workspaces.removeFromPod`,
+ * which keeps the row: it records how they joined) is not, so a rule that
+ * reads the bare row says a removed person is still in. The archived-space
+ * member rules out "any `workspace_members` row".
  *
  * NOT COVERED: the doors that call it (`invite-consent.test.ts` and the
  * federation route tests in apps/api).
@@ -74,8 +76,12 @@ beforeAll(async () => {
       ('${POD_ADMIN}', 'Pod admin', 'pod-admin', null);
     insert into projects (id, name, workspace_id, status) values
       ('${PROJECT}', 'Launch', '${LIVE}', 'active');
-    -- Removed from the Pod: the pod_members row stays, every space is gone.
-    insert into pod_members (user_id, pod_role) values ('removed', 'member');
+    -- Removed from the Pod: the pod_members row stays, stamped; every space
+    -- is gone.
+    insert into pod_members (user_id, pod_role, removed_at)
+      values ('removed', 'member', now());
+    -- Pod-invited on a pod with no ordinary space: the live row is all.
+    insert into pod_members (user_id, pod_role) values ('pod-invited', 'member');
     insert into pod_members (user_id, pod_role) values ('member', 'member');
     insert into workspace_members (workspace_id, user_id, role) values
       ('${LIVE}', 'member', 'editor'),
@@ -96,6 +102,10 @@ describe("readPodUserAccess + hasActivePodAccess", () => {
 
   it("a person removed from the Pod does not, although their pod_members row stays", async () => {
     await expect(access("removed")).resolves.toBe(false);
+  });
+
+  it("a live pod_members row alone holds access (pod invite, no space yet)", async () => {
+    await expect(access("pod-invited")).resolves.toBe(true);
   });
 
   it("a membership of an archived space alone is no access", async () => {
