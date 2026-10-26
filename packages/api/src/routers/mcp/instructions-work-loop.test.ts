@@ -76,18 +76,18 @@ describe("MCP instructions teach the session work loop", () => {
       INSTRUCTIONS_BUDGET_BYTES
     );
     // 588 = grounding room with the reflexes as they were before the loop.
-    // Lowered to 550 DELIBERATELY (2026-10-05; to 510 on 2026-10-26, see below): teaching `ask` on a human-owned
+    // Lowered to 550 DELIBERATELY (2026-10-05): teaching `ask` on a human-owned
     // slot (confirm/choose/…) cost 35 bytes (after trimming 25 elsewhere);
     // without it agents filed bare "I did this" slots. Do not lower again
     // without trimming an equal amount — grounding must keep a real window.
-    expect(groundingBudgetBytes()).toBeGreaterThanOrEqual(510);
+    expect(groundingBudgetBytes()).toBeGreaterThanOrEqual(550);
   });
 
   it("teaches the question protocol: short id in chat, the person's chat answer relayed verbatim, asks closed before complete", () => {
     // Resolve-XP W5 (2026-10-26): a question answered in the agent's own chat
-    // never reached the room, so it stayed open on Relay. Lowered the grounding
-    // floor 550 -> 510 DELIBERATELY for this clause (after trimming ~70 bytes
-    // elsewhere: reflexes 5, 7 and the opening line). Do not lower again without trimming.
+    // never reached the room, so it stayed open on Relay. The clause cost ~48
+    // bytes net after trimming reflexes 3, 5, 7 and the opening line; the 550
+    // floor held. Do not lower it — trim an equal amount.
     const work = text.split("\n").find((l) => l.startsWith("4. ")) ?? "";
     expect(work).toContain("`Q-<id8>`");
     expect(work).toContain("`relay_answer`, words verbatim");
