@@ -356,6 +356,8 @@ describe("count counts exactly the folded list", () => {
       now: NOW,
     });
     const counted = countNeedsYou({
+      // The list's clock: an owed ask 7+ days old is in Review later.
+      now: NOW,
       distinctClusters: clusters.length,
       clustersTruncated: false,
       clusters,
@@ -432,6 +434,8 @@ describe("project REVIEW sessions — listed and counted as ONE population (W2 r
     ]);
     expect(review[1]!.ageBucket).toBe("older");
     const counted = countNeedsYou({
+      // The list's clock: an owed ask 7+ days old is in Review later.
+      now: NOW,
       distinctClusters: 0,
       clustersTruncated: false,
       clusters: [],
