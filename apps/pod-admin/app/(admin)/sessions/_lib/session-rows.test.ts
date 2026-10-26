@@ -160,7 +160,7 @@ describe("sessionPill", () => {
         session({ verdict: { state: "passing", total: 2, passed: 2 } }),
         NOW
       )
-    ).toEqual({ kind: "healthy", label: "Criteria met" });
+    ).toEqual({ kind: "healthy", label: "2 of 2 criteria met" });
     expect(
       sessionPill(
         session({ verdict: { state: "failing", total: 2, passed: 1 } }),
@@ -172,7 +172,7 @@ describe("sessionPill", () => {
         session({ verdict: { state: "incomplete", total: 3, passed: 1 } }),
         NOW
       )
-    ).toEqual({ kind: "stale", label: "1/3 criteria" });
+    ).toEqual({ kind: "stale", label: "1 of 3 criteria met" });
   });
 
   it("says Working when an agent is on it now, else the lifecycle word", () => {

@@ -59,6 +59,7 @@ const PROCEDURAL_IGNORED_TERMS: ReadonlySet<string> = new Set([
 import { structuredLookup } from "./structured.js";
 import { searchLibraryForAsk } from "../library/ask-lane.js";
 import type { AskSpacesHint } from "../discover/space-catalog.js";
+import { isQueueQuestion, type AskQueueBlock } from "./queue-question.js";
 
 /**
  * A degradation tag on the response. Substrate outages use the substrate name;
@@ -167,6 +168,12 @@ export interface AskResult {
    * read failed — never dropped.
    */
   spaces?: AskSpacesHint;
+  /**
+   * What is waiting on the person — present ONLY for a queue-type question
+   * ("what is waiting on me", "qu'est-ce qui m'attend"), read from the same
+   * sections as orient's `startHere`. Retrieval cannot answer such a question.
+   */
+  queue?: AskQueueBlock;
 }
 
 /**
@@ -368,8 +375,27 @@ export async function ask(params: AskParams): Promise<AskResult> {
       )
       .catch((): AskSpacesHint => ({ status: "unavailable" }));
 
-  const [procedural, episodic, library, pendingMatches, spaces] =
-    await Promise.all([proceduralP, episodicP, libraryP, pendingP, spacesP]);
+  // QUEUE — a question about the review queue itself. Read from orient's own
+  // `startHere` readers (never re-derived here); a failed section reads
+  // `unavailable` inside the block, so this cannot fail recall.
+  const queueP: Promise<AskQueueBlock | undefined> = isQueueQuestion(query)
+    ? import("../discover/start-here.js")
+        .then(({ readWaitingOnPerson }) => readWaitingOnPerson(userId))
+        .catch((err) => {
+          console.error("[ask] queue read failed (no queue block):", err);
+          return undefined;
+        })
+    : Promise.resolve(undefined);
+
+  const [procedural, episodic, library, pendingMatches, spaces, queue] =
+    await Promise.all([
+      proceduralP,
+      episodicP,
+      libraryP,
+      pendingP,
+      spacesP,
+      queueP,
+    ]);
 
   const answers: AskAnswer[] = [
     { substrate: "semantic", items: semantic.entities, status: semanticStatus },
@@ -453,5 +479,6 @@ export async function ask(params: AskParams): Promise<AskResult> {
       ? { pending: { notice: PENDING_NOTICE, matches: pendingMatches } }
       : {}),
     ...(spaces ? { spaces } : {}),
+    ...(queue ? { queue } : {}),
   };
 }
