@@ -9,10 +9,14 @@ on:
     # run would test the branch merged into today's main instead.
     branches: ["main", "develop", "release/**"]
 
-# Cancel in-progress runs for same PR/branch
+# A pull request keeps only its newest run. A push to main, develop or a
+# release branch gets a group per commit, so every merged commit finishes its
+# run: with one group per branch, each merge cancelled the previous main run
+# and the combined main was never measured (26 Oct: no main run finished
+# between 08:44 and 18:00).
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Least privilege: jobs that need more declare it themselves.
 permissions:
