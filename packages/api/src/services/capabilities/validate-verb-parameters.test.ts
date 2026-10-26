@@ -326,3 +326,48 @@ describe("a STRICT builtin schema refuses an undeclared key (the handler would t
     );
   });
 });
+
+describe("string-encoded numbers and booleans are accepted (the code-skill runtime always did)", () => {
+  // Ported from the IS `skills-executor.regression` test: its `buildZodSchema`
+  // used `z.coerce.number()` and a string→boolean preprocess, because CLI and
+  // HTTP callers send every value as a string. The pod sandbox now validates
+  // with THIS module, so refusing "5" here would refuse a call the IS ran.
+  const skill = {
+    kind: "code",
+    name: "linkedin_search_people",
+    parameters: { keywords: "string", limit: "number?", dryRun: "boolean?" },
+  };
+
+  it('"5" for a number and "true" for a boolean pass', () => {
+    expect(
+      checkVerbParameters(skill, { keywords: "x", limit: "5", dryRun: "true" })
+    ).toEqual({ status: "ok", unknown: [] });
+  });
+
+  it('a string that is not a number ("two") is still a wrong type', () => {
+    expect(
+      checkVerbParameters(skill, { keywords: "x", limit: "two" })
+    ).toMatchObject({
+      status: "invalid",
+      repair: {
+        wrongType: { limit: { expected: "number", received: "string" } },
+      },
+    });
+  });
+
+  it("a NON-string of the wrong type stays wrong (a number for a string field)", () => {
+    expect(checkVerbParameters(skill, { keywords: 123 })).toMatchObject({
+      status: "invalid",
+      repair: {
+        wrongType: { keywords: { expected: "string", received: "number" } },
+      },
+    });
+  });
+
+  it("required is still required", () => {
+    expect(checkVerbParameters(skill, {})).toMatchObject({
+      status: "invalid",
+      repair: { missing: ["keywords"] },
+    });
+  });
+});
