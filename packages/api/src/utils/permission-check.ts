@@ -128,6 +128,7 @@ import { isPodAdmin } from "./workspace-role.js";
 import { grantWriteDenial } from "./grant-write-check.js";
 import {
   decideAgentPolicy,
+  DEFAULT_DAILY_WRITE_CEILING,
   findMatchingPattern,
   requiredPermissionFor,
   isBlockedFilesystemPath,
@@ -139,6 +140,7 @@ import {
   type ChannelCapabilityGrant,
   type GovernedWritePair,
   type GovConfigStore,
+  type PROPOSE_REASON,
 } from "@synap/governance-policy";
 
 // Back-compat: these governance-policy symbols historically lived in this
@@ -569,7 +571,8 @@ export type PermissionResult =
       granted: false;
       proposalId: string;
       /**
-       * The proposal's type: "join" for a workspace-join gate, else
+       * The proposal's type: "join" for a workspace-join gate, "held_writes"
+       * for a write held past the agent's daily ceiling, else
        * "<subject>.<action>" (e.g. "entity.create"). Lets callers distinguish
        * a membership gate from a content proposal.
        */
@@ -590,13 +593,13 @@ export type PermissionResult =
        */
       deduped?: boolean;
       /**
-       * JOIN GATE ONLY — the write was KEPT on the join proposal
-       * (`data.deferredWrites`) and is replayed as the agent once the join is
-       * approved. The agent must not resend it. Absent for a pair that cannot
-       * be deferred: that write was not kept.
+       * JOIN GATE or HELD WRITES ONLY — the write was KEPT on the join or on
+       * today's held-writes pack (`data.deferredWrites`) and is replayed as
+       * the agent once that is approved. The agent must not resend it. Absent
+       * for a pair that cannot be deferred: that write was not kept.
        */
       deferred?: true;
-      /** The kept write's `ref` on the join (`data.deferredOutcomes[ref]`). */
+      /** The kept write's `ref` (`data.deferredOutcomes[ref]`). */
       deferredRef?: string;
     }
   | {
@@ -3323,6 +3326,26 @@ export const JOIN_GATE_DEFERRED_MESSAGE =
   "is replayed for you (it then applies, or asks for its own review) — do not " +
   "resend it, and do not retry it into a different workspace.";
 
+/**
+ * The held-writes pack (W-B1): past its daily write ceiling (rung 2.56) an
+ * agent's replayable writes are kept on ONE pending pack per (agent, UTC day)
+ * instead of one proposal each. Filed by `fileHeldWrites`; approved by
+ * the `agent/held_writes` executor, which replays each kept write.
+ */
+export const HELD_WRITES_TARGET_TYPE = "agent";
+export const HELD_WRITES_PROPOSAL_TYPE = "held_writes";
+/** Writes one day's pack may hold: one more day's worth at the default ceiling. */
+export const HELD_WRITES_MAX = DEFAULT_DAILY_WRITE_CEILING;
+/** The rung 2.56 reason code that routes a write to the pack. */
+const DAILY_WRITE_CEILING_CODE =
+  "DAILY_WRITE_CEILING" satisfies keyof typeof PROPOSE_REASON;
+
+/** The words for a write held on today's pack (`perm.deferred`). */
+export const HELD_WRITE_MESSAGE =
+  "You used up today's automatic writes, so this write is held with the rest " +
+  "of today's in ONE review for the person. Each write they keep is replayed " +
+  "for you when they approve — do not resend it.";
+
 /** True when a proposed-branch result is a workspace-JOIN gate, not the requested write. */
 export function isJoinGate(proposalType: string | undefined | null): boolean {
   return proposalType === JOIN_GATE_PROPOSAL_TYPE;
@@ -3350,6 +3373,7 @@ export function proposedMessageFor(
   contentMessage: string,
   deferred?: boolean
 ): string {
+  if (proposalType === HELD_WRITES_PROPOSAL_TYPE) return HELD_WRITE_MESSAGE;
   if (!isJoinGate(proposalType)) return contentMessage;
   if (deferred) return JOIN_GATE_DEFERRED_MESSAGE;
   return (
@@ -4026,6 +4050,33 @@ async function createProposal(args: {
   }
   const authorshipMode = deriveAuthorshipMode(userId, attributionAgentUserId);
 
+  // W-B1: a write the daily ceiling held joins today's held-writes pack when
+  // one is pending. That adds no pending proposal, so it never meets the cap
+  // below: the pack counts ONCE. The first held write of the day files the
+  // pack after the cap check, like any new proposal.
+  const heldWrite =
+    governanceReason === DAILY_WRITE_CEILING_CODE &&
+    attributionAgentUserId &&
+    replayableDeferredPair(subjectType, action)
+      ? buildDeferredWrite({
+          subjectType,
+          action,
+          data,
+          workspaceId: workspaceId ?? null,
+          agentUserId: attributionAgentUserId,
+          userId,
+          sessionId: sessionId ?? null,
+          projectId,
+          reasoning,
+          expectedLabel,
+          sourceMessageId,
+        })
+      : null;
+  if (heldWrite) {
+    const joined = await joinTodaysHeldWrites(heldWrite, summary);
+    if (joined) return joined;
+  }
+
   // Safety floor (F2): a runaway or scheduled agent cannot flood the review
   // queue. Only the AGENT path is budgeted — attributionAgentUserId is set for
   // both an explicit agent write and a legacy AI-source write whose personal
@@ -4153,6 +4204,8 @@ async function createProposal(args: {
       };
     }
   }
+
+  if (heldWrite) return fileHeldWrites(heldWrite, summary);
 
   // Capture a BEFORE-snapshot for entity UPDATE proposals so the review layer can
   // render a durable before→after field diff. Without this the diff relies on the
@@ -4557,7 +4610,7 @@ function buildDeferredWrite(w: {
   subjectType: string;
   action: string;
   data: Record<string, unknown>;
-  workspaceId: string;
+  workspaceId: string | null;
   agentUserId: string;
   userId: string;
   sessionId: string | null;
@@ -4587,6 +4640,7 @@ function buildDeferredWrite(w: {
       targetId: typeof w.data.id === "string" ? w.data.id : "",
       data: w.data,
     }),
+    workspaceId: w.workspaceId,
     ...(w.projectId ? { projectId: w.projectId } : {}),
     ...(w.reasoning ? { reasoning: w.reasoning } : {}),
     ...(w.expectedLabel ? { expectedLabel: w.expectedLabel } : {}),
@@ -4603,15 +4657,20 @@ function buildDeferredWrite(w: {
 }
 
 /**
- * Keep `write` on the pending join `proposalId`. ONE statement appends it, so
- * concurrent writes all land, and the WHERE holds the three rules: still
- * pending, under the cap, not already kept (same fingerprint). When nothing
- * was written the row is re-read to say which rule held.
+ * Keep `write` on the pending join (or held-writes pack) `proposalId`. ONE
+ * statement appends it, so concurrent writes all land, and the WHERE holds the
+ * three rules: still pending, under the cap, not already kept (same
+ * fingerprint). When nothing was written the row is re-read to say which rule
+ * held; `decided` marks a row that left pending meanwhile.
  */
 async function appendDeferredWrite(
   proposalId: string,
-  write: DeferredWrite
-): Promise<{ ref: string; deduped?: boolean } | { refused: string }> {
+  write: DeferredWrite,
+  holder: "join" | "held" = "join"
+): Promise<
+  { ref: string; deduped?: boolean } | { refused: string; decided?: true }
+> {
+  const max = holder === "held" ? HELD_WRITES_MAX : DEFERRED_WRITES_MAX;
   const appended = await db
     .update(proposals)
     .set({
@@ -4622,7 +4681,7 @@ async function appendDeferredWrite(
       and(
         eq(proposals.id, proposalId),
         eq(proposals.status, ProposalStatus.PENDING),
-        drizzleSql`jsonb_array_length(coalesce(${proposals.data} -> 'deferredWrites', '[]'::jsonb)) < ${DEFERRED_WRITES_MAX}`,
+        drizzleSql`jsonb_array_length(coalesce(${proposals.data} -> 'deferredWrites', '[]'::jsonb)) < ${max}`,
         drizzleSql`not (coalesce(${proposals.data} -> 'deferredWrites', '[]'::jsonb) @> jsonb_build_array(jsonb_build_object('fingerprint', ${write.fingerprint}::text)))`
       )
     )
@@ -4642,16 +4701,110 @@ async function appendDeferredWrite(
   if (row?.status === ProposalStatus.PENDING) {
     return {
       refused:
-        `This workspace's join request already holds ${kept.length} writes ` +
-        `waiting for approval (the limit is ${DEFERRED_WRITES_MAX}). Nothing ` +
-        "was kept for this one: wait until the join is approved, then send it again.",
+        holder === "held"
+          ? `Today's held writes already number ${kept.length} (the limit ` +
+            `is ${max}). Nothing was kept for this one: stop writing until ` +
+            "the person reviews them, or until the next UTC day."
+          : `This workspace's join request already holds ${kept.length} writes ` +
+            `waiting for approval (the limit is ${max}). Nothing ` +
+            "was kept for this one: wait until the join is approved, then send it again.",
     };
   }
   return {
     refused:
       "The workspace join request was decided while this write was being " +
       "kept, so it was not kept. Send the write again.",
+    decided: true,
   };
+}
+
+/** UTC calendar day of `at` — the ceiling's own day boundary (`startOfUtcDay`). */
+function utcDay(at: Date = new Date()): string {
+  return at.toISOString().slice(0, 10);
+}
+
+/** The proposed envelope of a write kept on a held-writes pack. */
+function heldWriteEnvelope(
+  proposalId: string,
+  summary: string,
+  kept: { ref: string; deduped?: boolean }
+): PermissionResult {
+  return {
+    granted: false,
+    proposalId,
+    proposalType: HELD_WRITES_PROPOSAL_TYPE,
+    summary,
+    reasoning: HELD_WRITE_MESSAGE,
+    reviewPath: openPath(proposalId),
+    reviewUrl: openLink(proposalId),
+    ...(kept.deduped ? { deduped: true } : {}),
+    deferred: true as const,
+    deferredRef: kept.ref,
+  };
+}
+
+/**
+ * W-B1: keep a write the daily ceiling held on the agent's PENDING pack for
+ * today. Null when there is none (or it was decided meanwhile): the caller
+ * then files one through {@link fileHeldWrites}.
+ */
+async function joinTodaysHeldWrites(
+  write: DeferredWrite,
+  summary: string
+): Promise<PermissionResult | null> {
+  const [pack] = await db
+    .select({ id: proposals.id })
+    .from(proposals)
+    .where(
+      and(
+        eq(proposals.targetType, HELD_WRITES_TARGET_TYPE),
+        eq(proposals.proposalType, HELD_WRITES_PROPOSAL_TYPE),
+        eq(proposals.agentUserId, write.agentUserId),
+        eq(proposals.status, ProposalStatus.PENDING),
+        drizzleSql`${proposals.data} ->> 'day' = ${utcDay()}`
+      )
+    )
+    .limit(1);
+  if (!pack) return null;
+  const kept = await appendDeferredWrite(pack.id, write, "held");
+  if ("refused" in kept) {
+    return kept.decided ? null : { denied: true, reason: kept.refused };
+  }
+  return heldWriteEnvelope(pack.id, summary, kept);
+}
+
+/** W-B1: file today's held-writes pack, holding its first write. */
+async function fileHeldWrites(
+  write: DeferredWrite,
+  summary: string
+): Promise<PermissionResult> {
+  const [agent] = await db
+    .select({ name: users.name })
+    .from(users)
+    .where(eq(users.id, write.agentUserId))
+    .limit(1);
+  const { createEventBackedProposal } =
+    await import("./event-backed-proposal.js");
+  const { proposal: row } = await createEventBackedProposal({
+    userId: write.userId,
+    workspaceId: null,
+    targetType: HELD_WRITES_TARGET_TYPE,
+    targetId: write.agentUserId,
+    proposalType: HELD_WRITES_PROPOSAL_TYPE,
+    action: HELD_WRITES_PROPOSAL_TYPE,
+    source: "intelligence",
+    summary: `${agent?.name ?? "An agent"} reached today's limit of automatic writes — its next writes today wait here`,
+    agentUserId: write.agentUserId,
+    createdBy: write.agentUserId,
+    governanceReason: DAILY_WRITE_CEILING_CODE,
+    data: {
+      day: utcDay(new Date(write.at)),
+      agentUserId: write.agentUserId,
+      deferredWrites: [write],
+      source: "agent",
+    },
+  });
+  return heldWriteEnvelope(row.id, summary, { ref: write.ref });
 }
 
 /**
