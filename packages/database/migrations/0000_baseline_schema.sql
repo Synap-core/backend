@@ -5296,3 +5296,39 @@ END $$;
 CREATE INDEX IF NOT EXISTS "entities_home_workspace_idx"
   ON "entities" ("home_workspace_id")
   WHERE "workspace_id" IS NULL AND "home_workspace_id" IS NOT NULL;
+
+-- 0358: document passages — a document body as recall-sized units, each with
+-- its own vector, and the per-document state the revision sweep reads (mirrors
+-- 0358_document_passages.sql). Read only through the owning entity.
+CREATE TABLE IF NOT EXISTS "document_passages" (
+  "id"              uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  "document_id"     uuid        NOT NULL REFERENCES "documents"("id") ON DELETE CASCADE,
+  "ordinal"         integer     NOT NULL,
+  "section_id"      text        NOT NULL,
+  "heading_path"    text        NOT NULL DEFAULT '',
+  "char_start"      integer     NOT NULL,
+  "char_end"        integer     NOT NULL,
+  "text"            text        NOT NULL,
+  "text_hash"       text        NOT NULL,
+  "source_revision" integer     NOT NULL,
+  "embedding"       vector(1536) NOT NULL,
+  "embedding_model" text        NOT NULL DEFAULT 'text-embedding-3-small',
+  "updated_at"      timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS "uq_document_passages_document_ordinal"
+  ON "document_passages" ("document_id", "ordinal");
+
+-- HNSW index for cosine ANN search (pgvector), as on entity_vectors.
+CREATE INDEX IF NOT EXISTS "document_passages_embedding_hnsw_idx"
+  ON "document_passages" USING hnsw ("embedding" vector_cosine_ops)
+  WITH (m = 16, ef_construction = 64);
+
+CREATE TABLE IF NOT EXISTS "document_passage_state" (
+  "document_id"     uuid        PRIMARY KEY REFERENCES "documents"("id") ON DELETE CASCADE,
+  "source_revision" integer,
+  "passage_count"   integer     NOT NULL DEFAULT 0,
+  "failure"         text,
+  "failed_at"       timestamptz,
+  "updated_at"      timestamptz NOT NULL DEFAULT now()
+);

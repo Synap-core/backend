@@ -39,6 +39,7 @@ import { workspaces } from "../schema/workspaces.js";
 import { projectTracks } from "../schema/project-tracks.js";
 import { trackParticipants } from "../schema/track-participants.js";
 import { libraryGroups } from "../schema/library-groups.js";
+import { documentPassages } from "../schema/document-passages.js";
 
 /**
  * A single column the runtime requires to exist.
@@ -1792,6 +1793,30 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0352_proposal_apply_runs.sql",
   },
 
+  // Document passages (0358) — a document body as recall-sized units, and
+  // the per-document state the revision sweep reads. Absence means every
+  // passage job and sweep tick would fail (42P01).
+  {
+    table: "document_passages",
+    column: "text_hash",
+    addedBy: "0358_document_passages.sql",
+  },
+  {
+    table: "document_passages",
+    column: "source_revision",
+    addedBy: "0358_document_passages.sql",
+  },
+  {
+    table: "document_passage_state",
+    column: "source_revision",
+    addedBy: "0358_document_passages.sql",
+  },
+  {
+    table: "document_passage_state",
+    column: "failure",
+    addedBy: "0358_document_passages.sql",
+  },
+
   // Kind + Facets Wave 3A (0175): the `_conversions` ledger — mirrors
   // `_migrations` for DATA ops. Absence means a pod is on a pre-0175 schema
   // where the conversion engine's applied-set read would hit a missing table.
@@ -2471,6 +2496,9 @@ const REQUIRED_INDEX_TABLES = [
   // The Library (0328): the per-person key unique index IS "one group per
   // key"; the documents read index (declared on `documents` above) pages it.
   libraryGroups,
+  // Document passages (0358): the passage worker's upsert conflicts on
+  // `uq_document_passages_document_ordinal`.
+  documentPassages,
 ] as const;
 
 /** Every index declared in the drizzle schema but absent from the live DB. */
