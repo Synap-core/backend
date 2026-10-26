@@ -3066,6 +3066,11 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         );
       }
       const id = c.req.param("id");
+      if (path === "unblock") {
+        // The tRPC twin's grant rung: the session's own space + project.
+        const denial = await grantWriteDenial(await answerGrantWrite(id));
+        if (denial) return c.json({ error: denial }, 403);
+      }
       if (!isUuid(id)) {
         return c.json({ error: `Focus session ${id} not found` }, 404);
       }

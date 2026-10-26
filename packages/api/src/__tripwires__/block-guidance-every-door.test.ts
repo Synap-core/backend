@@ -51,6 +51,10 @@ const WITHHELD: Record<string, string> = {
     "slots at birth (the author's own definition, not an agent's hand-off " +
     "in this turn). It returns a row, not an agent response — there is " +
     "nothing to annotate with a guideline here.",
+  "services/focus-sessions/session-answer.ts":
+    "\"Not what I said\" (`correctRelayedAnswer`) re-asks a slot whose relayed " +
+    "answer the PERSON just rejected — their own click, not an agent's " +
+    "block; there is no agent response to annotate with a guideline.",
   "services/focus-sessions/stage-slots.ts":
     "Merges a STAGE's declared slots (the playbook author's definition) into " +
     "the session on stage ENTRY — the same template-declared slots " +

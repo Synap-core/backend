@@ -61,7 +61,7 @@ describe("tripwire: relay provenance has one door", () => {
     expect(SOURCES.length).toBeGreaterThan(1000);
     const door = SOURCES.find((f) => relative(PACKAGES, f) === RELAY_DOOR);
     expect(door, "the relay door moved — update RELAY_DOOR").toBeDefined();
-    expect(RELAYED_LITERAL.test(stripComments(readFileSync(door!, "utf8")))).toBe(
+    expect(RELAYED_LITERAL.test(stripComments(readFileSync(door!, "utf8"), "ts"))).toBe(
       true
     );
     // Self-check on a sample: both quote styles.
@@ -70,14 +70,15 @@ describe("tripwire: relay provenance has one door", () => {
 
   it('only the relay door writes `via: "relayed"`', () => {
     const writers = SOURCES.filter((f) =>
-      RELAYED_LITERAL.test(stripComments(readFileSync(f, "utf8")))
+      RELAYED_LITERAL.test(stripComments(readFileSync(f, "utf8"), "ts"))
     ).map((f) => relative(PACKAGES, f));
     expect(writers).toEqual([RELAY_DOOR]);
   });
 
   it("the tRPC tap doors refuse an agent key before they write", () => {
     const router = stripComments(
-      readFileSync(join(API_SRC, "routers/focus-sessions.ts"), "utf8")
+      readFileSync(join(API_SRC, "routers/focus-sessions.ts"), "utf8"),
+      "ts"
     );
     for (const [procedure, call] of [
       ["answerOutput", "answerSessionSlot("],

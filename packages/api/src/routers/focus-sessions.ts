@@ -2875,6 +2875,9 @@ export const focusSessionsRouter = router({
             "Only the person can hand a slot back — an agent key cannot.",
         });
       }
+      // A person-only door still bounds a scoped key by its grant: the
+      // session's own space + project, as on the answer doors.
+      await assertKeyMayWrite(await answerGrantWrite(input.sessionId));
       const result = await unblockExpectedOutput({
         sessionId: input.sessionId,
         userId: ctx.userId,
