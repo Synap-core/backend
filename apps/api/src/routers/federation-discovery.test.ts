@@ -61,6 +61,8 @@ vi.mock("@synap/database", () => ({
 }));
 
 vi.mock("@synap/database/schema", () => ({
+  // The Cloud trust reader (../cloud-trust.ts) takes it from here.
+  podSettings: { settings: "settings", createdAt: "createdAt" },
   federatedIdentityLinks: {},
   federatedApplicationConnections: {},
   projectMembers: {},
