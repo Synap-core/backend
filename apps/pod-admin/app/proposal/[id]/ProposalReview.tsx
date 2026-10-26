@@ -1,15 +1,22 @@
 "use client";
 
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { CardBody, CardHeader, Chip, Spinner } from "@heroui/react";
 import { ShieldCheck } from "lucide-react";
 import { openIn } from "../../../lib/open-in";
 import { resolveStatusLabel } from "@synap-core/types/vocabulary";
 import { ExitLink } from "../../../lib/exit-link";
+import { trpc } from "../../../lib/trpc";
 import { ReceiverShell } from "../../_lib/receiver-shell";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
 import { proposalHeading } from "./proposal-heading";
-import { ProposalReviewBody, useProposalReview } from "./ProposalReviewCard";
+import {
+  isActionable,
+  ProposalReviewBody,
+  useProposalReview,
+} from "./ProposalReviewCard";
+import { AfterDecision } from "./ProposalSessionContext";
+import { afterDecisionShown } from "./proposal-session-model";
 
 const STATUS_COLOR: Record<
   string,
@@ -34,6 +41,9 @@ export function ProposalReview({
   identity?: string;
 }) {
   const { query, sourceExits, workspaceName } = useProposalReview(proposalId);
+  const utils = trpc.useUtils();
+  // Decided HERE — what `afterDecisionShown` reads.
+  const [decided, setDecided] = useState(false);
 
   // A session that expired mid-review returns tRPC UNAUTHORIZED — bounce to
   // login and back. Run it as an effect (not during render, matching
@@ -132,8 +142,21 @@ export function ProposalReview({
           sourceExits={sourceExits}
           workspaceName={workspaceName}
           identity={identity}
-          onDecided={() => void query.refetch()}
+          onDecided={() => {
+            setDecided(true);
+            // What waits — this session's count and the next door — moved.
+            void utils.signals.invalidate();
+            void query.refetch();
+          }}
           barClassName="bottom-0 pt-4"
+          /* The reader often arrives in an overlay (a Glance of `/open/<id>`)
+             with no list behind it: once this one is decided, the next one
+             is a door here, not a trip back to Review. */
+          afterDecision={
+            afterDecisionShown(decided, isActionable(status)) ? (
+              <AfterDecision proposalId={p.id} focus={decided} />
+            ) : undefined
+          }
         />
       </CardBody>
     </>,

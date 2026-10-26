@@ -10,6 +10,8 @@ import {
   reviewFilterOf,
   reviewGroupOf,
   reviewRows,
+  reviewRowMembers,
+  reviewSessionOf,
   rowsInView,
   summarizeBatch,
   type ProposalFacts,
@@ -512,5 +514,24 @@ describe("exitOf — an ask's door keeps the view it asks for", () => {
         door: { kind: "session", id: "s1", view: "nonsense" },
       }).href
     ).toBe("/open/session/s1");
+  });
+});
+
+describe("?session= — Review narrowed to one session", () => {
+  const SESSION = "44444444-4444-4444-8444-444444444444";
+
+  it("a uuid narrows; anything else is no filter (the read takes .uuid())", () => {
+    expect(reviewSessionOf(SESSION)).toBe(SESSION);
+    expect(reviewSessionOf("s1")).toBeNull();
+    expect(reviewSessionOf("")).toBeNull();
+    expect(reviewSessionOf(null)).toBeNull();
+  });
+
+  it("a cluster row decides its members; the signal id is not one", () => {
+    const [row] = reviewRows(
+      [cluster("c1", { count: 2, proposalIds: ["c1-p1", "c1-p2"] })],
+      new Map()
+    );
+    expect(reviewRowMembers(row!)).toEqual(["c1-p1", "c1-p2"]);
   });
 });
