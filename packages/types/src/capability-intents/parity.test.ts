@@ -2,9 +2,9 @@
  * PARITY: the intent vocabulary this mirror declares === the pod's seeded rows.
  *
  * WHY THIS TEST EXISTS: `src/capability-intents/index.ts` is a HAND MIRROR of
- * the pod's `capability_intents` table — the pod cannot import it (types
- * devDepends on database), so the two can drift. A hand copy nothing checks is
- * a comment; this is what makes it a mirror.
+ * the pod's `capability_intents` table — the slugs live in SQL rows, a list in
+ * TypeScript cannot import them, so the two can drift. A hand copy nothing
+ * checks is a comment; this is what makes it a mirror.
  *
  * WHAT IT PROVES: SAMENESS — never CORRECTNESS. If both sides agree on a slug
  * that no capability should ever declare, this stays green. The vocabulary's

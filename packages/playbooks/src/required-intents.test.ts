@@ -292,8 +292,8 @@ describe("requiredIntents — the seam to the resolver is a Map, and nothing mor
       expect(
         code,
         `${name} was re-declared in @synap/playbooks — the intent vocabulary is ` +
-          `the pod's capability_intents TABLE. Add a MIGRATION + all three mirrors, ` +
-          `never a fourth.`
+          `the pod's capability_intents TABLE. Add a MIGRATION + both mirrors, ` +
+          `never a third.`
       ).not.toMatch(new RegExp(`\\b(?:type|const|let|enum)\\s+${name}\\b`));
       // A bare IMPORT of any of the three, from anywhere in this file — the
       // other way a dependency on the vocabulary sneaks in.
