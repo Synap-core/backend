@@ -154,7 +154,11 @@ export async function searchWeb(
   const execute =
     deps.execute ??
     (async (input) =>
-      (await import("./execute-capability.js")).executeCapability(input));
+      (await import("./execute-capability.js")).executeCapability({
+        ...input,
+        // Search results are third-party pages: never a recall fact.
+        observability: "mirror",
+      }));
   const outcome = await execute({
     verbId: provider,
     parameters: { query },
