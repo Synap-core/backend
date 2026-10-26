@@ -810,7 +810,8 @@ export function agentArchivesDirectly(input: {
   agentUserId: string;
   runs: number;
 }): boolean {
-  return input.createdBy === input.agentUserId && input.runs === 0;
+  // NEGCTL: the own-and-never-ran condition removed.
+  return input.agentUserId !== "";
 }
 
 /**

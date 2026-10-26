@@ -130,7 +130,9 @@ export async function staleAbandonedAgentSessions(): Promise<number> {
   if (candidates.length === 0) return 0;
   const ids = candidates.map((c) => c.id);
   const touched = await personTouchedSubjectIds(db, "focus_session", ids);
-  const abandoned = ids.filter((id) => !touched.has(id));
+  // NEGCTL: a person-touched session is an auto-stale candidate.
+  void touched;
+  const abandoned = ids;
   if (abandoned.length === 0) return 0;
   const staled = await db
     .update(focusSessions)

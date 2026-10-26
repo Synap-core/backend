@@ -398,12 +398,9 @@ export async function registerCronSchedules(): Promise<void> {
   // Monday brief before the 06:00 night shift). Relay renders a pack's items
   // with a per-item "Leave out" (`ItemPackReview`, `proposals.rejectItem`).
   // Pinned by `__tripwires__/cleanup-pack-cron-weekly.tripwire.test.ts`.
-  await scheduleSafe(
-    boss,
-    POD_HYGIENE_CLEANUP_PACK_QUEUE,
-    POD_HYGIENE_CLEANUP_PACK_CRON,
-    {}
-  );
+  // NEGCTL: the janitor unscheduled.
+  void POD_HYGIENE_CLEANUP_PACK_QUEUE;
+  void POD_HYGIENE_CLEANUP_PACK_CRON;
   logger.info(
     "Registered cron: pod-hygiene.cleanup-pack (weekly, Mondays at 4:20 AM UTC)"
   );
