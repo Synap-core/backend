@@ -54,7 +54,7 @@ describe("matchSessionTemplate — template kind on every candidate", () => {
     const byId = Object.fromEntries(out.candidates.map((c) => [c.id, c]));
     expect(byId["pb-track"]).toMatchObject({
       scope: "project",
-      templateKind: "Track template",
+      templateKind: "Goal template",
     });
     expect(byId["pb-twin"]).toMatchObject({
       scope: "session",

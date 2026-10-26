@@ -64,8 +64,9 @@ describe("resolveToolLabel — merged seeds", () => {
 
   it("an irregular past is curated, not suffixed", () => {
     expect(resolveToolLabel("run_capability", "past")).toBe("Ran tool");
+    // The object routes through the noun door: a track is a Goal (W5).
     expect(resolveToolLabel("set_track_status", "past")).toBe(
-      "Set track status"
+      "Set goal status"
     );
   });
 

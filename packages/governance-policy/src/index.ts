@@ -1094,6 +1094,9 @@ const GRANT_SUBJECT_FOLDS: Readonly<Record<string, string>> = {
  */
 const GRANT_ACTION_FOLDS: Readonly<Record<string, string>> = {
   "focus_session/assign_agent": "update",
+  // The same hand-off, of a GOAL (W3): a key that may update a track may ask
+  // to hand it to another agent as a delegate.
+  "track/assign_agent": "update",
   // An update pack is N entity updates filed as one review: a key that may
   // update entities may ask for it.
   "entity/update_pack": "update",
@@ -2221,6 +2224,7 @@ export const REVERSIBILITY_DOOR_CLASS = {
   "tool/create": "disruptive", // egress
   "tool/delete": "disruptive", // destroy
   "tool/update": "disruptive", // egress
+  "track/assign_agent": "disruptive", // effect: another agent starts work on the goal
   "track/create": "disruptive", // struct: a new ongoing method on a project
   "track/update": "reversible", // advance / params / status — orchestration
   "vault/grant": "disruptive", // scope: a principal may now redeem a secret
@@ -2550,6 +2554,11 @@ export const GATE_WRITE_DOORS = {
   // service (`services/tracks`).
   "track/create": "gate",
   "track/update": "gate",
+  // The same hand-off, of a GOAL (work model W3, 2026-10-23): an agent naming
+  // ANOTHER agent as a goal's delegate (`services/tracks/track-participants.ts`
+  // → `gateAgentHandOff` with a track). Not in DEFAULT_AUTO_APPROVE, classed
+  // `disruptive`: it proposes unless a rule naming it says auto.
+  "track/assign_agent": "gate",
   // Direct vault grant (`hub-protocol/rest/vault.ts` POST /vault/secrets/:id/grant).
   // An agent caller passes the owner check as its linked human, so the door
   // gates: the human owner grants directly, an agent proposes.

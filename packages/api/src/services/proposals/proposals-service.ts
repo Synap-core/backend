@@ -23,6 +23,7 @@ import {
   drizzleSql,
 } from "@synap/database";
 import type { ProposalRevision } from "@synap/database";
+import { isDeepStrictEqual } from "node:util";
 import { TRPCError } from "@trpc/server";
 import { assertReviewedRevision } from "../../utils/reviewed-revision.js";
 import {
@@ -280,26 +281,50 @@ export const PROTECTED_ENVELOPE_FIELDS = [
 /**
  * The protected field a patch would SET or ALTER at either level, or null.
  *
+ * ALTER means a value that DIFFERS from the stored one (deep-equal), never mere
+ * presence: the web reviewer's "Save & Approve" / "Save draft" send the whole
+ * stored inner back (`{ data: <inner> }`), protected keys included and
+ * unchanged, and a presence check refused every such edit on a kind carrying
+ * `kindFields` or a skill declaring tools (review of #199, R1). An OMITTED key
+ * is restored by the re-pin in `computeRevisedEnvelope`.
+ *
+ * Compared with the stored value at the place the patch WRITES it: an inner
+ * patch onto a nested envelope merges into `.data`, anything else at the top;
+ * a patch's own `data[k]` then lands one level below that.
+ *
  * Returns the offending KEY rather than a boolean so the error can name the
  * field the caller actually touched. The message used to hardcode `sourceFile`,
  * which was correct while that was the only entry and became a lie the moment a
  * second one was added — telling a caller to stop sending a field they never
  * sent. Prose in this codebase is executable; the message is derived, not typed.
  */
-function patchTouchesProtectedField(
-  fields: Record<string, unknown>
+function patchAltersProtectedField(
+  patch: ProposalRevisionPatch,
+  envelope: Record<string, unknown>
 ): (typeof PROTECTED_ENVELOPE_FIELDS)[number] | null {
-  const nested =
-    fields.data &&
-    typeof fields.data === "object" &&
-    !Array.isArray(fields.data)
-      ? (fields.data as Record<string, unknown>)
+  const { fields } = patch;
+  const asRecord = (v: unknown) =>
+    v && typeof v === "object" && !Array.isArray(v)
+      ? (v as Record<string, unknown>)
       : undefined;
+  const storedTop =
+    patch.kind === "inner" && isNestedEnvelope(envelope)
+      ? (asRecord(envelope.data) ?? {})
+      : envelope;
+  const storedNested = asRecord(storedTop.data) ?? {};
+  const nested = asRecord(fields.data);
+  const alters = (
+    patched: Record<string, unknown>,
+    stored: Record<string, unknown>,
+    key: string
+  ) =>
+    Object.hasOwn(patched, key) &&
+    !isDeepStrictEqual(patched[key], stored[key]);
   return (
     PROTECTED_ENVELOPE_FIELDS.find(
       (key) =>
-        Object.hasOwn(fields, key) ||
-        (nested ? Object.hasOwn(nested, key) : false)
+        alters(fields, storedTop, key) ||
+        (nested ? alters(nested, storedNested, key) : false)
     ) ?? null
   );
 }
@@ -374,7 +399,7 @@ export function computeRevisedEnvelope(params: ComputeRevisedEnvelopeParams): {
   // Enforced HERE, in the shared core, so all three revise doors (tRPC
   // `revise`, MCP `synap_revise_proposal`, Hub `updateProposal`) inherit it.
   const protectedField = patch
-    ? patchTouchesProtectedField(patch.fields)
+    ? patchAltersProtectedField(patch, envelope)
     : null;
   if (protectedField) {
     throw new TRPCError({

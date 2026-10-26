@@ -26,7 +26,7 @@
  * Pure + zero-dep — safe in browser, Electron, React Native, Node and CLI.
  */
 
-import type { AutomationNodeBase } from "@synap/database";
+import type { AutomationNodeBase } from "./flow.js";
 import { readPlaybookRunMode } from "./rule-run-policy.js";
 
 // ── The numbers ─────────────────────────────────────────────────────────────

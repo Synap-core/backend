@@ -1,4 +1,4 @@
-FROM node:20-alpine
+FROM node:22.23-alpine
 
 # Synap's own image: `synap tidy` removes a DANGLING image (a rebuild that took
 # its tag) only when it carries this label — never another stack's image.

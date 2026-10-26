@@ -142,7 +142,7 @@ export async function resolveBoardLens(
     if (!track) {
       throw new TRPCError({
         code: "NOT_FOUND",
-        message: "Track not found",
+        message: "Goal not found",
       });
     }
     if (projectId && projectId !== track.projectId) {
