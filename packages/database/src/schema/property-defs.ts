@@ -17,6 +17,11 @@ import { profiles } from "./profiles.js";
 import { relationDefs } from "./relation-defs.js";
 import { workspaces } from "./workspaces.js";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
+import {
+  PROPERTY_INPUT_TYPES,
+  type PropertyDisplayAs,
+  type PropertyInputType,
+} from "@synap-core/types/property-hints";
 
 /**
  * The authored input control for a property.
@@ -46,60 +51,10 @@ import { createInsertSchema, createSelectSchema } from "drizzle-zod";
  * are recorded as distinct members precisely so the duplication is visible in
  * the type instead of hiding in the data.
  *
- * The canonical list is `@synap-core/types/property-hints` (what the renderer
- * types against). This is a second copy, held EQUAL to it at compile time by
- * `database/src/wire-parity/property-hints.ts` (this package may now import
- * `@synap-core/types`; collapsing the copy is a follow-up).
+ * The list is declared ONCE, in `@synap-core/types/property-hints` (what the
+ * renderer types against), and re-exported here.
  */
-export type PropertyInputType =
-  // declared before the census, and genuinely written
-  | "email"
-  | "phone"
-  | "url"
-  | "richtext"
-  // a long-text alias the renderer reads (text-tiers W2); authorable, unwritten
-  | "markdown"
-  | "datetime-local"
-  | "select"
-  // declared before the census, written NOWHERE (kept: frontend may author them)
-  | "person"
-  | "datetime"
-  // written all along, never declared
-  | "text"
-  | "textarea"
-  | "number"
-  | "date"
-  | "checkbox"
-  | "tags"
-  | "json"
-  | "color"
-  | "entity"
-  | "entity-select"
-  | "tel";
-
-/** Every member of `PropertyInputType`, for runtime narrowing. */
-export const PROPERTY_INPUT_TYPES = [
-  "email",
-  "phone",
-  "url",
-  "richtext",
-  "markdown",
-  "datetime-local",
-  "select",
-  "person",
-  "datetime",
-  "text",
-  "textarea",
-  "number",
-  "date",
-  "checkbox",
-  "tags",
-  "json",
-  "color",
-  "entity",
-  "entity-select",
-  "tel",
-] as const satisfies readonly PropertyInputType[];
+export { PROPERTY_INPUT_TYPES, type PropertyInputType };
 
 /**
  * Narrow an AUTHORED `inputType` (template YAML, seed data — both plain
@@ -139,19 +94,10 @@ export interface PropertyUIHints {
   inputType?: PropertyInputType;
   /**
    * The semantic intent a renderer draws. `body` = the entity's substance
-   * (`isBodyPropertyDef`); `richtext` / `markdown` = long text. Canonical list:
-   * `@synap-core/types/property-hints` `PROPERTY_DISPLAY_AS` (held equal).
+   * (`isBodyPropertyDef`); `richtext` / `markdown` = long text. The list:
+   * `@synap-core/types/property-hints` `PROPERTY_DISPLAY_AS`.
    */
-  displayAs?:
-    | "status"
-    | "priority"
-    | "progress"
-    | "person"
-    | "rating"
-    | "currency"
-    | "body"
-    | "richtext"
-    | "markdown";
+  displayAs?: PropertyDisplayAs;
   format?: "locale" | "currency" | "percent" | "compact";
   includeTime?: boolean;
   linkedProfileSlug?: string;
