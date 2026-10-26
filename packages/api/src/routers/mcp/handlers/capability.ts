@@ -12,7 +12,10 @@ import { verifyWorkspaceAccess } from "../../hub-protocol/rest/_shared.js";
 import { skillsRouter as regularSkillsRouter } from "../../skills.js";
 import { createHubProtocolCallerContext } from "../../hub-protocol/utils.js";
 import { toAutomationDigest, AUTOMATIONS_DIGEST_NOTE } from "./read-lean.js";
-import { validateCreateVerbInput } from "../validate-create-verb.js";
+import {
+  repeatedBaseSegmentWarning,
+  validateCreateVerbInput,
+} from "../validate-create-verb.js";
 import {
   wireCreatedVerb,
   parentToolWhere,
@@ -617,7 +620,11 @@ export const capabilityHandlers: McpHandlerMap = {
     // (`parentToolWhere`/`parentToolMissingMessage` in create-declarative-verb.ts)
     // so this door and tRPC `capabilities.registry.createVerb` cannot drift.
     const [existingTool] = await db
-      .select({ id: toolsTable.id, name: toolsTable.name })
+      .select({
+        id: toolsTable.id,
+        name: toolsTable.name,
+        config: toolsTable.config,
+      })
       .from(toolsTable)
       .where(
         parentToolWhere({
@@ -681,7 +688,21 @@ export const capabilityHandlers: McpHandlerMap = {
           })
         : { requires: false, catalogued: false, capabilityIds: [] };
 
-    return ok({ ...result, wiring });
+    // The base URL a vault tool composes `pathTemplate` onto
+    // (`tools.config.baseUrl`, external-dispatch.ts). A broker tool's base
+    // lives with the broker, so it is not checked.
+    const toolBaseUrl = (existingTool.config as { baseUrl?: unknown } | null)
+      ?.baseUrl;
+    const pathWarning = repeatedBaseSegmentWarning(
+      typeof toolBaseUrl === "string" ? toolBaseUrl : undefined,
+      input.pathTemplate
+    );
+
+    return ok({
+      ...(pathWarning ? { warnings: [pathWarning] } : {}),
+      ...result,
+      wiring,
+    });
   },
   synap_list_automations: async (
     ctx: McpToolContext

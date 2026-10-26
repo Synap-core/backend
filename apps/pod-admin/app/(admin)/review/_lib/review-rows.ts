@@ -36,6 +36,7 @@ import {
 } from "@synap-core/types/proposals";
 import type { Ask } from "@synap-core/types/ask";
 import { openIn, type Exit } from "../../../../lib/open-in";
+import { isUuid } from "../../../../lib/format";
 import { askSlotOf, type AskSlot } from "./ask-detail";
 import {
   proposalRequester,
@@ -55,9 +56,27 @@ export const REVIEW_FILTERS: readonly ReviewFilter[] = [
   "history",
 ];
 
+/**
+ * The most rows one needs-you read returns (`signals.list` caps `limit` at
+ * 100). Review's page, the session strip's count and the next-proposal door
+ * read the SAME page, so they share this one number.
+ */
+export const NEEDS_YOU_PAGE_LIMIT = 100;
+
 /** `?type=` → the view; anything unknown is "all". */
 export function reviewFilterOf(param: string | null | undefined): ReviewFilter {
   return REVIEW_FILTERS.find((f) => f === param) ?? "all";
+}
+
+/**
+ * `?session=` → the one session Review narrows to (the pod's own session
+ * lens on `signals.list`), or null. Anything but a uuid is no filter: the
+ * read takes `.uuid()` and would only fail.
+ */
+export function reviewSessionOf(
+  param: string | null | undefined
+): string | null {
+  return param && isUuid(param) ? param : null;
 }
 
 /** The fields of a needs-you signal Review reads (structural). */
@@ -152,6 +171,15 @@ export interface ReviewRow {
   batchIds: string[] | null;
   /** Every id a `?focus=` may name this row by. */
   ids: string[];
+}
+
+/**
+ * The ids a row stands for after its signal id: a proposal cluster's members
+ * (or its sampled proposal); for any other row, its target's id. Read through
+ * here, never by slicing `ids` at a call site.
+ */
+export function reviewRowMembers(row: Pick<ReviewRow, "ids">): string[] {
+  return row.ids.slice(1);
 }
 
 /** Which group a needs-you signal files under. */
