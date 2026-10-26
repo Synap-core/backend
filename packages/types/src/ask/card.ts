@@ -185,6 +185,32 @@ export const ASK_COPY = {
   },
 } as const;
 
+/**
+ * What moves on the answer to an ask no agent asked — the line a system
+ * producer's slot reads when it declared none ({@link effectiveSlotUnblocks}).
+ * Product copy, like {@link ASK_CAUSE_WORDS}.
+ */
+const ASK_CAUSE_UNBLOCKS: Record<AskCauseKind, string> = {
+  decision: "The decision is recorded",
+  gate: "The session's next stage starts",
+  run: "The run goes on",
+  external_approval: "The external agent's run goes on",
+  param: "The run starts with your answer",
+  criterion: "The session's check is graded",
+};
+
+/**
+ * WHAT MOVES when the person answers (decision E): the slot's own declared
+ * `unblocks`, else the line its cause implies (a system producer: a run, a
+ * gate, a param…). `null` when neither says — never a guessed line.
+ */
+export function effectiveSlotUnblocks(slot: AskCardSlot): string | null {
+  const own = typeof slot.unblocks === "string" ? slot.unblocks.trim() : "";
+  if (own) return own;
+  const cause = effectiveAskCause(slot);
+  return cause ? (ASK_CAUSE_UNBLOCKS[cause.kind] ?? null) : null;
+}
+
 /** The words of each {@link AskCauseKind}. Product copy, not vocabulary. */
 const ASK_CAUSE_WORDS: Record<AskCauseKind, string> = {
   decision: "From your decision note",
@@ -512,6 +538,8 @@ export interface AskCardSlot {
   askCause?: AskCause | null;
   criterionKey?: string | null;
   paramName?: string | null;
+  /** What moves on the answer (`ExpectedOutput.unblocks`). */
+  unblocks?: string | null;
 }
 
 /** Does this slot's ask end with its session? Read through `effectiveSlotAsk`. */

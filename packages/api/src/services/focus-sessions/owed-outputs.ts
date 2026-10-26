@@ -77,6 +77,7 @@ import {
   askEndsWithSession,
   effectiveSlotAsk,
   effectiveAskCause,
+  effectiveSlotUnblocks,
   type AskCause,
   type AskCardSlot,
 } from "@synap-core/types/ask";
@@ -248,6 +249,11 @@ export interface OwedSlot {
    */
   askCause?: AskCause;
   /**
+   * WHAT MOVES when the person answers (`effectiveSlotUnblocks`): the slot's
+   * declared line, else its cause's. Absent when neither says (decision E).
+   */
+  unblocks?: string;
+  /**
    * THE needs-you rule's class for this slot (`classifyOwedAsk`,
    * `@synap-core/types/needs-you/rule`, decision E): `needs_you` is the
    * headline; `working` / `stopped` / `review_later` / `from_system` are its
@@ -418,12 +424,18 @@ export function projectOwedSlots(
       ...(slot.pendingRelay ? { pendingRelay: slot.pendingRelay } : {}),
       ...(slot.askedBy ? { askedBy: slot.askedBy } : {}),
       ...askCauseOf(slot),
+      ...unblocksOf(slot),
       ...(facts
         ? { needsYouClass: classifyOwedAsk(slot, facts, now) ?? undefined }
         : {}),
     });
   }
   return owed;
+}
+
+function unblocksOf(slot: ExpectedOutput): { unblocks?: string } {
+  const line = effectiveSlotUnblocks(slot as AskCardSlot);
+  return line ? { unblocks: line } : {};
 }
 
 function askCauseOf(slot: ExpectedOutput): { askCause?: AskCause } {

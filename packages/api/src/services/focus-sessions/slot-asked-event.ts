@@ -15,7 +15,11 @@
 
 import { createLogger } from "@synap-core/core";
 import type { ExpectedOutput, SlotAskCause } from "@synap/playbooks";
-import { askFingerprint } from "@synap-core/types/ask";
+import {
+  askFingerprint,
+  effectiveSlotUnblocks,
+  type AskCardSlot,
+} from "@synap-core/types/ask";
 import { logEvent } from "../../lib/event-helpers.js";
 import { normalizeExpectedLabel } from "./expected-label.js";
 import { isOwedSlot } from "./owed-outputs.js";
@@ -73,21 +77,11 @@ export function stampAskProvenance(
   after: readonly ExpectedOutput[],
   provenance: AskProvenance
 ): ExpectedOutput[] {
-  const prior = new Map<string, ExpectedOutput>();
-  for (const o of before) {
-    const key = normalizeExpectedLabel(o?.label);
-    if (key && !prior.has(key)) prior.set(key, o);
-  }
+  const posedNow = posedBy(before);
   const askedBy = provenance.askedBy?.trim() || undefined;
   const askCause = provenance.askCause ?? undefined;
   return after.map((o) => {
-    if (!o || typeof o !== "object" || !isOwedSlot(o)) return o;
-    const was = prior.get(normalizeExpectedLabel(o.label) ?? "");
-    const posed =
-      !was ||
-      !isOwedSlot(was) ||
-      askFingerprint(was.ask ?? null) !== askFingerprint(o.ask ?? null);
-    if (!posed) return o;
+    if (!posedNow(o)) return o;
     const { askedBy: _was, askCause: _wasCause, ...rest } = o;
     return {
       ...rest,
@@ -95,6 +89,56 @@ export function stampAskProvenance(
       ...(askCause ? { askCause } : {}),
     };
   });
+}
+
+/**
+ * "Is this slot of `after` newly POSED to the person by the write that turned
+ * `before` into it?" — newly owed, or still owed with a changed ask. THE rule
+ * `stampAskProvenance` stamps by and `slotsMissingUnblocks` checks by.
+ */
+function posedBy(
+  before: readonly ExpectedOutput[]
+): (o: ExpectedOutput | null | undefined) => o is ExpectedOutput {
+  const prior = new Map<string, ExpectedOutput>();
+  for (const o of before) {
+    const key = normalizeExpectedLabel(o?.label);
+    if (key && !prior.has(key)) prior.set(key, o);
+  }
+  return (o): o is ExpectedOutput => {
+    if (!o || typeof o !== "object" || !isOwedSlot(o)) return false;
+    const was = prior.get(normalizeExpectedLabel(o.label) ?? "");
+    return (
+      !was ||
+      !isOwedSlot(was) ||
+      askFingerprint(was.ask ?? null) !== askFingerprint(o.ask ?? null)
+    );
+  };
+}
+
+/**
+ * The slots an AGENT's write newly hands the person WITHOUT saying what the
+ * answer unblocks (decision E, needs-truth §5) — their labels; empty = the
+ * write may land. A slot whose cause names it (`askCause`: a system producer)
+ * reads its line from the cause (`effectiveSlotUnblocks`) and is never
+ * missing. Pure; the doors refuse on a non-empty answer.
+ */
+export function slotsMissingUnblocks(
+  before: readonly ExpectedOutput[],
+  after: readonly ExpectedOutput[]
+): string[] {
+  const posedNow = posedBy(before);
+  return after
+    .filter(
+      (o): o is ExpectedOutput =>
+        posedNow(o) && !effectiveSlotUnblocks(o as AskCardSlot)
+    )
+    .map((o) => o.label);
+}
+
+/** The refusal sentence for {@link slotsMissingUnblocks}. Says nothing landed. */
+export function unblocksRequiredMessage(labels: readonly string[]): string {
+  const named = labels.map((l) => `"${l}"`).join(", ");
+  return `NOTHING WAS CHANGED: say what the person's answer unblocks. Add \`unblocks\` (one line: the next step, session or PR that waits on the answer, e.g. "the EU launch deploy") to ${named}, then send it again.`;
 }
 
 /** The event payload for one posed ask. Pure. */

@@ -465,6 +465,17 @@ const BlockOutputBodySchema = z.object({
   blockedReason: z.enum(BLOCKED_REASONS),
   why: z.string().max(500).optional(),
   /**
+   * WHAT MOVES when the person answers — one line (decision E). Required from
+   * an agent key unless the slot already declares it: refused 400, nothing
+   * written. Twin of the tRPC `blockOutput.unblocks`.
+   */
+  unblocks: z
+    .string()
+    .trim()
+    .min(1)
+    .max(ASK_LIMITS.unblocksMaxChars)
+    .optional(),
+  /**
    * WHERE the person must go. `null` clears a stored pointer; omitted leaves it.
    * Twin of the tRPC `blockOutput.ref` — same union, same one visibility floor.
    */
@@ -921,7 +932,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       "`ask_invalid:` when it does not fit, 409 `ask_changed:` when " +
       "`askFingerprint` no longer matches the slot's ask). `confirmRelayed` " +
       "confirms the relay waiting on the slot (`pendingRelay`) as the " +
-      "person's answer; `rejectRelayed` (\"Not what I said\") drops what an " +
+      'person\'s answer; `rejectRelayed` ("Not what I said") drops what an ' +
       "agent relayed and gives the question back — on a slot, or on a " +
       "slotless room question named by `questionId` — and emits " +
       "`focus_session.relay_corrected.completed`.",
@@ -2172,9 +2183,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
                 >[1]
               ),
               ...restatedAskHints(
-                patch.expectedOutputs as Parameters<
-                  typeof restatedAskHints
-                >[0]
+                patch.expectedOutputs as Parameters<typeof restatedAskHints>[0]
               ),
             ]
           : [];
@@ -3167,6 +3176,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
               400
             );
           case "ref_unreachable":
+          case "unblocks_required":
             // Named, never defaulted: the `default` below is the SUCCESS arm,
             // so an unhandled refusal would answer 200 with no label at all.
             return c.json({ error: result.reason }, 400);

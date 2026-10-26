@@ -10,6 +10,8 @@
  *   GET /lifecycle/moving      → `lifecycle.moving`     (things being worked)
  *   GET /attention/needs-you   → `signals.list({ lens: "needs-you" })`
  *   GET /attention/count       → `signals.count`
+ *   GET /needs-you             → `signals.needsYou` (THE needs-you rule's rows
+ *                                by fold + the folds counted, decision E)
  *
  * The kind-level reads take the intent lens (`profileSlug`) plus the board's
  * lens (`workspaceId` · `projectId` · `trackId`); the homes reads take only
@@ -74,6 +76,15 @@ const movingQuery = z.object({
 const attentionQuery = z.object({
   ...lensQuery,
   limit: z.coerce.number().int().min(1).max(100).optional(),
+});
+
+/** `GET /needs-you` — the whole floor by default, narrowed like `count`. */
+const needsYouQuery = z.object({
+  workspaceId: uuidQueryParam.optional(),
+  projectId: uuidQueryParam.optional(),
+  trackId: uuidQueryParam.optional(),
+  sessionId: uuidQueryParam.optional(),
+  limit: z.coerce.number().int().min(1).max(200).optional(),
 });
 
 type HubContext = HonoContext<{ Variables: HubVariables }>;
@@ -214,6 +225,35 @@ export function registerIntentSurfacesRoutes(app: HubHono): void {
     },
   });
 
+  registerOpenApi(app, {
+    method: "get",
+    path: "/needs-you",
+    tags: ["Attention"],
+    summary: "What really needs the person, and where everything else went",
+    description:
+      "`signals.needsYou` — THE needs-you rule (decision E): `rows.needs_you` is the headline; `rows.working` (an agent is on it), `rows.stopped` (no agent for 7 days, one session per row), `rows.review_later`, `rows.from_system` (no real asker) and `rows.changes_to_review` (pending proposals nothing waits on) are its folds. `count` is `signals.count` over the same read, with `count.folds`. Read this instead of re-deriving needs-you from session reads.",
+    request: { query: needsYouQuery },
+    responses: {
+      200: {
+        description: "Rows by fold + the count",
+        schema: z.object({}).passthrough(),
+      },
+      ...errors,
+    },
+  });
+
+  app.get(
+    "/needs-you",
+    readDoor("needs-you", needsYouQuery, (ctx, q) =>
+      signalsRouter.createCaller(ctx).needsYou({
+        ...(q.workspaceId ? { workspaceId: q.workspaceId } : {}),
+        ...(q.projectId ? { projectId: q.projectId } : {}),
+        ...(q.trackId ? { trackId: q.trackId } : {}),
+        ...(q.sessionId ? { sessionId: q.sessionId } : {}),
+        ...(q.limit ? { limit: q.limit } : {}),
+      })
+    )
+  );
   app.get(
     "/lifecycle/board",
     readDoor("lifecycle.board", boardQuery, (ctx, q) =>

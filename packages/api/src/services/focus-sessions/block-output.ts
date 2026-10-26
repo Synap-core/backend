@@ -58,7 +58,12 @@ import {
 } from "./block-guidelines.js";
 import { notifySessionNeedsYou } from "./notify-needs-you.js";
 import { archivedAnswerHistory } from "./answer-history.js";
-import { logSlotsAsked, stampAskProvenance } from "./slot-asked-event.js";
+import {
+  logSlotsAsked,
+  slotsMissingUnblocks,
+  stampAskProvenance,
+  unblocksRequiredMessage,
+} from "./slot-asked-event.js";
 import { restatedAskHints } from "./ask-text.js";
 
 export interface BlockExpectedOutputParams {
@@ -71,6 +76,13 @@ export interface BlockExpectedOutputParams {
   blockedReason: BlockedReason;
   /** ONE line naming WHICH thing is missing, not its class. */
   why?: string;
+  /**
+   * WHAT MOVES when the person answers (decision E). REQUIRED when an agent
+   * hands the slot over (`agentUserId` with no system `askCause`) and the
+   * slot does not already say it: refused `unblocks_required`, nothing
+   * written. `undefined` keeps a stored line.
+   */
+  unblocks?: string;
   /**
    * WHERE the person must go — an in-pod object or an external link. Optional,
    * and it is what turns "the Stripe restricted key for the live account" from
@@ -129,6 +141,11 @@ export type BlockExpectedOutputResult =
    * would put an undoorable card on the board and believe otherwise.
    */
   | { status: "ref_unreachable"; reason: string }
+  /**
+   * An agent handed the slot over without saying what the answer unblocks
+   * (decision E). Refused before anything is written; `reason` says how.
+   */
+  | { status: "unblocks_required"; reason: string }
   | {
       status: "blocked" | "unblocked";
       /** The DECLARED label (the slot's own casing), never the caller's. */
@@ -209,6 +226,30 @@ export async function blockExpectedOutput(
     }
   }
 
+  // WHAT IT UNBLOCKS (decision E): an agent handing the person a slot says
+  // what moves on the answer. A system producer names its cause instead.
+  // Checked on the slot as it WILL be stamped, before the lock: a refusal
+  // must change nothing.
+  if (params.agentUserId && !params.askCause) {
+    const stamped = stampBlocked(
+      [slot],
+      slot.label,
+      params.blockedReason,
+      params.why,
+      undefined,
+      params.ref,
+      params.ask,
+      params.unblocks
+    );
+    const missing = slotsMissingUnblocks([slot], stamped);
+    if (missing.length > 0) {
+      return {
+        status: "unblocks_required",
+        reason: unblocksRequiredMessage(missing),
+      };
+    }
+  }
+
   // Re-derived INSIDE the lock from the REQUESTED label, never from the array
   // this call read before it — the TOCTOU the delegation door documents.
   // The locked base and result, captured for the `slot_asked` history row.
@@ -227,7 +268,8 @@ export async function blockExpectedOutput(
           params.why,
           undefined,
           params.ref,
-          params.ask
+          params.ask,
+          params.unblocks
         ),
         { askedBy: params.agentUserId, askCause: params.askCause }
       );
@@ -336,10 +378,13 @@ export function stampBlocked(
    */
   ref?: OutputRef | null,
   /** Same three-state contract as `ref`. */
-  ask?: SlotAsk | null
+  ask?: SlotAsk | null,
+  /** What the answer unblocks; `undefined` keeps a stored line. */
+  unblocks?: string
 ): ExpectedOutput[] {
   const wanted = normalizeExpectedLabel(label);
   const trimmed = (why ?? "").trim();
+  const unblocking = (unblocks ?? "").trim();
   return outputs.map((o) => {
     if (normalizeExpectedLabel(o.label) !== wanted) return o;
     // Spread, never re-list: a field added to `ExpectedOutput` tomorrow rides
@@ -365,6 +410,7 @@ export function stampBlocked(
         owner: "human",
         blockedReason,
         ...(trimmed ? { why: trimmed } : {}),
+        ...(unblocking ? { unblocks: unblocking } : {}),
       },
       now
     );
@@ -390,6 +436,7 @@ export function stampUnblocked(
       owner: _owner,
       blockedReason: _blockedReason,
       why: _why,
+      unblocks: _unblocks,
       owedSince: _owedSince,
       ask: _ask,
       askedBy: _askedBy,

@@ -32,6 +32,7 @@
 
 import { db, focusSessions, and, eq } from "@synap/database";
 import type { ExpectedOutput, SlotAsk } from "@synap/playbooks";
+import { effectiveSlotUnblocks, type AskCardSlot } from "@synap-core/types/ask";
 import { resolveRoomSession } from "../messaging/room-session.js";
 import { deriveSlotKeys, findSlotIndex } from "./slot-keys.js";
 import type { RoomQuestionSlotCheck } from "./room-question-slot-refusal.js";
@@ -53,6 +54,12 @@ export async function fileRoomQuestionOnSlot(p: {
   question: string;
   /** The typed ask, already parsed (`AskSchema`); absent ⇒ free text. */
   ask?: SlotAsk;
+  /**
+   * What the answer unblocks, when the caller says it here; absent keeps the
+   * slot's declared line. One of the two is required (decision E): the post
+   * door checks it before posting (`checkRoomQuestionSlot`).
+   */
+  unblocks?: string;
   /** The posting agent, from the door's verified auth context. */
   agentUserId: string;
   /**
@@ -101,6 +108,7 @@ export async function fileRoomQuestionOnSlot(p: {
     // `undefined` keeps a stored ask (a plain question re-asked in words does
     // not erase the typed ask it is about); a passed ask replaces it.
     ...(p.ask ? { ask: p.ask } : {}),
+    ...(p.unblocks ? { unblocks: p.unblocks } : {}),
     agentUserId: p.agentUserId,
   });
 }
@@ -131,7 +139,15 @@ export async function checkRoomQuestionSlot(p: {
   const slots = Array.isArray(row?.expectedOutputs)
     ? (row.expectedOutputs as ExpectedOutput[])
     : [];
-  if (findSlotIndex(slots, p.slotLabel) !== -1) return { status: "ok" };
+  const found = slots[findSlotIndex(slots, p.slotLabel)];
+  if (found) {
+    // WHAT IT UNBLOCKS (decision E): the question hands the slot to the
+    // person, so the slot must say what moves on the answer — declared on it
+    // (`outcomes` … `unblocks`), or by its cause. Refused BEFORE the post.
+    return effectiveSlotUnblocks(found as AskCardSlot)
+      ? { status: "ok" }
+      : { status: "unblocks_required", label: found.label };
+  }
   const keys = deriveSlotKeys(slots);
   return {
     status: "unknown_label",
