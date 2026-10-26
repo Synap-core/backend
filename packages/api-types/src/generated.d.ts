@@ -13869,6 +13869,63 @@ export interface OwedByPerson {
 		title: string | null;
 	}>;
 }
+export type Unavailable = {
+	status: "unavailable";
+};
+export interface LooseEnds {
+	/** The population: the calling agent's own work, never anyone else's. */
+	lens: "yours";
+	idleDays: number;
+	sessions: {
+		count: number;
+		items: Array<{
+			/** The call (or the step before it) that ends it. */
+			close: string;
+			id: string;
+			idleDays: number;
+			/** Asks on it the person still owes. */
+			owedByPerson: number;
+			/** A person made a write on it: not yours alone to close. */
+			personTouched: boolean;
+			status: string;
+			title: string;
+		}>;
+	} | Unavailable;
+	asks: {
+		count: number;
+		/** True when the ended sessions read hit its cap. */
+		countIsLowerBound: boolean;
+		items: Array<{
+			close: string;
+			key: string;
+			label: string;
+			owedSince: string | null;
+			sessionId: string;
+			sessionTitle: string;
+		}>;
+	} | Unavailable;
+	proposals: {
+		count: number;
+		items: Array<{
+			ageDays: number;
+			close: string;
+			id: string;
+			link: string;
+			summary: string | null;
+		}>;
+		oldestDays: number | null;
+	} | Unavailable;
+	automations: {
+		count: number;
+		items: Array<{
+			ageDays: number;
+			close: string;
+			id: string;
+			name: string;
+			triggerType: string;
+		}>;
+	} | Unavailable;
+}
 export type SessionEvaluationRow = typeof sessionEvaluations.$inferSelect;
 export interface SessionEvaluationSummary {
 	criteria: SessionCriterion[];
@@ -14208,6 +14265,13 @@ export interface StartHere {
 	 | {
 		status: "paused";
 	} | StartHereUnavailable;
+	/**
+	 * The CALLING AGENT's own leftovers (W-B2): sessions it opened idle over a
+	 * week, asks it left owed on its ended sessions, its proposals pending over
+	 * a week, automations it made that never fired — each row with the call
+	 * that ends it. Present only when an agent calls. See `loose-ends.ts`.
+	 */
+	looseEnds?: LooseEnds;
 	/**
 	 * Open sessions the caller OWNS whose criteria are not all graded —
 	 * "grade with evaluate_session before you say done". Bounded read; the lens
@@ -18601,14 +18665,14 @@ export interface PacketEvaluationItem {
 	rationale: string | null;
 	createdAt: string;
 }
-export type Unavailable = {
+type Unavailable$1 = {
 	reason: string;
 	status: "unavailable";
 };
 export type PathCount = {
 	status: "ok";
 	total: number;
-} | Unavailable;
+} | Unavailable$1;
 /**
  * A row's `unitFacts`. Structurally a `NeedsYouFacts` (`needs-you.ts`): feed it
  * to `sessionNeedsYou` / `tallyNeedsYou` unchanged.
@@ -19402,7 +19466,7 @@ export interface ProjectOutputsResult {
 	 */
 	truncated: boolean;
 }
-type Unavailable$1 = {
+type Unavailable$2 = {
 	reason: string;
 	status: "unavailable";
 };
@@ -19449,7 +19513,7 @@ export interface ProjectPathRow {
 	hasOutputs: {
 		status: "ok";
 		value: boolean;
-	} | Unavailable$1;
+	} | Unavailable$2;
 	/**
 	 * The session's DECLARED deliverables (`expected_outputs`), counted by THE
 	 * shared rule (`tallyDeliverables`, `@synap-core/types/units`
@@ -19461,7 +19525,7 @@ export interface ProjectPathRow {
 	 */
 	deliverables: ({
 		status: "ok";
-	} & DeliverableCounts) | Unavailable$1;
+	} & DeliverableCounts) | Unavailable$2;
 	nextMove: ContinuationNextMove;
 	/**
 	 * The liveness facts the "working right now" rule reads (D1,
@@ -19490,7 +19554,7 @@ export interface ProjectPathResult {
 	tracks: {
 		items: ProjectPathTrack[];
 		status: "ok";
-	} | Unavailable$1;
+	} | Unavailable$2;
 	/**
 	 * Across the WHOLE path under the same filter, not just this page.
 	 *
@@ -29251,6 +29315,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				createdByUserId: string | null;
 				deletedAt: Date | null;
 				documentId: string | null;
+				homeWorkspaceId: string | null;
 				id: string;
 				preview: string | null;
 				profileId: string | null;
@@ -29435,6 +29500,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					status?: string | undefined;
 				}[] | undefined;
 				global?: boolean | undefined;
+				homeWorkspaceId?: string | undefined;
 				profileId?: string | undefined;
 				profileSlug?: string | undefined;
 				projectId?: string | null | undefined;
@@ -29765,6 +29831,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				includePodWide?: boolean | undefined;
 				limit?: number | undefined;
 				offset?: number | undefined;
+				orderBy?: {
+					dir?: "asc" | "desc" | undefined;
+					field: "createdAt" | "title" | "updatedAt";
+				} | undefined;
 				profileSlug?: string | undefined;
 				projectId?: string | undefined;
 				projectWithinWorkspace?: boolean | undefined;
@@ -33225,6 +33295,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdByUserId: string | null;
 					deletedAt: Date | null;
 					documentId: string | null;
+					homeWorkspaceId: string | null;
 					id: string;
 					preview: string | null;
 					profileId: string | null;
@@ -41738,6 +41809,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdByUserId: string | null;
 					deletedAt: Date | null;
 					documentId: string | null;
+					homeWorkspaceId: string | null;
 					id: string;
 					preview: string | null;
 					profileId: string | null;
@@ -46203,6 +46275,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					deletedAt: Date | null;
 					documentId: string | null;
 					facetSlugs: string[];
+					homeWorkspaceId: string | null;
 					id: string;
 					preview: string | null;
 					profileId: string | null;

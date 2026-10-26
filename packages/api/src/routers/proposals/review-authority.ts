@@ -15,6 +15,7 @@ import {
   getRequestGrant,
   getWorkspaceMembership,
   inArray,
+  isFullAccessGrant,
   users,
   type KeyGrant,
 } from "@synap/database";
@@ -888,20 +889,18 @@ export function refuseAgentProposalApprover(ctx: {
   });
 }
 
-/** Does any live scope of this key hold explicit full access (`*`)? */
-function holdsFullAccess(grant: KeyGrant): boolean {
-  return grant.scopes.some((s) => s.permissions.includes("*"));
-}
-
 /**
  * An AGENT key granted `proposal.reject` may decline only the proposals IT
  * authored (`proposals.agentUserId` = the request's acting agent) — withdrawing
  * or discarding its own work. Declining a person's or another agent's proposal
  * is a review decision, and the AI's limits never include review. A person's
- * key, a signed-in session and a full-access (`*`) key — which may approve
- * too — are unchanged. Every reject-verb door (reject, batchReject, rejectItem,
- * restoreItem, reopen; MCP and Hub reject delegate to `reject`) reaches it
- * through `assertCanReviewProposal`.
+ * key, a signed-in session and an UNBOUNDED full-access (`*`) key are
+ * unchanged. A `*` pinned to spaces, projects or objects is not full access
+ * (S1, `isFullAccessGrant`): an app's own agent holds exactly that when its
+ * person ticks "Full access" in a space (apps = agents, 2026-10-26), and it
+ * still declines only its own work. Every reject-verb door (reject,
+ * batchReject, rejectItem, restoreItem, reopen; MCP and Hub reject delegate
+ * to `reject`) reaches it through `assertCanReviewProposal`.
  */
 export function assertAgentKeyMayReject(
   proposal: { agentUserId?: string | null },
@@ -909,7 +908,7 @@ export function assertAgentKeyMayReject(
   actingAgentUserId: string | undefined = getActingAgentUserId(),
   grant: KeyGrant | undefined = getRequestGrant()
 ): void {
-  if (!grant || !actingAgentUserId || holdsFullAccess(grant)) return;
+  if (!grant || !actingAgentUserId || isFullAccessGrant(grant)) return;
   if (proposal.agentUserId === actingAgentUserId) return;
   throw new TRPCError({
     code: "FORBIDDEN",

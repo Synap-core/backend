@@ -96,6 +96,8 @@ vi.mock("@synap/auth", async (importOriginal) => {
         return {};
       },
       deleteIdentityCredentials: async () => ({}),
+      // `removeFromPod` ends the removed person's sessions (Q-B3).
+      deleteIdentitySessions: async () => ({}),
     },
   };
 });

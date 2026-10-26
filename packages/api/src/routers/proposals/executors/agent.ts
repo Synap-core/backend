@@ -19,6 +19,12 @@
  * the proposed capabilities and re-grants the agent's live keys
  * (`applyAgentCapabilities`). Only the agent's person or a pod admin may
  * approve; patterns that do not parse, or a list past one grant, are refused.
+ *
+ * `agent/held_writes` — the writes an agent made past its daily write ceiling
+ * on one UTC day, kept on ONE pack by the gate (`fileHeldWrites` in
+ * `utils/permission-check.ts`). Approval replays every write the reviewer kept
+ * (`proposals.rejectItem` drops one) through its own door as the agent, past
+ * the ceiling the person just lifted; every other rung still decides each one.
  */
 
 import { TRPCError } from "@trpc/server";
@@ -40,6 +46,10 @@ import {
   requestsWithin,
 } from "../../../services/agent-connect.js";
 import { applyAgentCapabilities } from "../../../services/agent-identity-service.js";
+import {
+  itemPackAlreadyApproved,
+  markItemPackApproved,
+} from "../../../services/proposals/item-pack.js";
 
 /** `{ agentUserId, capabilities }`, flat or under `data`; null if unreadable. */
 function readCapabilitiesPayload(
@@ -264,6 +274,67 @@ export function registerAgentExecutors(): void {
           ids: [payload.agentUserId],
           subject: "users",
         },
+      };
+    },
+  });
+
+  // ── agent / held_writes ──────────────────────────────────────────────────
+  registerProposalExecutor({
+    key: "agent/held_writes",
+    async execute({ proposal, userId, input, deps }) {
+      if (await itemPackAlreadyApproved(input.proposalId)) {
+        return { success: true, alreadyApproved: true };
+      }
+      // APPROVED first, like a join: a write held while the replay runs then
+      // files a new pack instead of landing on this decided one.
+      await markItemPackApproved(input.proposalId, userId);
+      reportApproved(deps, proposal, input.proposalId);
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+
+      const { replayDeferredWrites } =
+        await import("../../../services/governance/deferred-writes.js");
+      const { outcomes, unreadable } = await replayDeferredWrites({
+        proposalId: input.proposalId,
+        heldWritesApproved: true,
+      });
+      const results = Object.values(outcomes);
+      const appliedIds = results
+        .filter((o) => o.outcome === "applied")
+        .map((o) => o.id)
+        .filter((id): id is string => typeof id === "string");
+      const applied = results.filter((o) => o.outcome === "applied").length;
+      const refusals = results
+        .filter((o) => o.outcome === "refused")
+        .map((o) => o.reason ?? "Its door refused it.");
+      if (unreadable > 0) {
+        refusals.push(
+          `${unreadable} held write(s) could not be read and were not replayed.`
+        );
+      }
+      return {
+        success: true,
+        effect:
+          applied > 0
+            ? {
+                applied: "verified" as const,
+                rows: applied,
+                ids: appliedIds,
+                subject: "held writes",
+              }
+            : {
+                applied: "none" as const,
+                reason: results.every(
+                  (o) => o.outcome === "skipped_by_reviewer"
+                )
+                  ? "Every held write was left out by the reviewer."
+                  : "No held write was applied — see the outcome of each.",
+              },
+        ...(refusals.length > 0 ? { refusals } : {}),
       };
     },
   });

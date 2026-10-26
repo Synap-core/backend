@@ -45,7 +45,7 @@ beforeAll(async () => {
     -- The audience probes of the floor (Sites W2 S2): user-1 is a KNOWN,
     -- non-guest principal (a users row), so it reads pod-wide (NULL-workspace)
     -- rows exactly as before; an id with no users row would read none.
-    create table pod_members (user_id text);
+    create table pod_members (user_id text, removed_at timestamptz);
     create table project_members (project_id uuid, user_id text, role text);
     create table users (id text primary key);
     insert into users values ('user-1');

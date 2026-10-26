@@ -23,8 +23,10 @@
  * tables whose member rule reaches past `workspace_id` say so in `spaceReach`
  * (entities, their facets, their bodies), built from the SAME space-keyed
  * builders the member floor uses (utils/project-scope.ts,
- * @synap/database facet-visibility.ts). Reads only: the write gate
- * (grant-write-check.ts) still checks the stored row's own workspace.
+ * @synap/database facet-visibility.ts). The write gate (grant-write-check.ts)
+ * checks the stored row's own workspace, except an UPDATE of a reached
+ * pod-wide role facet (`reachedFacetGrantSpace`, founder decision 1,
+ * 2026-10-26): checked in the space its role is granted to.
  */
 
 import {

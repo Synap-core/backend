@@ -961,6 +961,14 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "pod_role",
     addedBy: "0205_pod_members.sql",
   },
+  // A pod_members row is access only while `removed_at` is NULL (0357, Q-B1):
+  // every floor that reads the row filters on it, so a missing column 500s
+  // every scoped read.
+  {
+    table: "pod_members",
+    column: "removed_at",
+    addedBy: "0357_pod_members_removed_at.sql",
+  },
 
   // account_recovery_codes — pod-local recovery codes (0294). Absence means a
   // pod is on a pre-0294 schema where /api/account-recovery/* would reference
@@ -1725,6 +1733,13 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "entities",
     column: "status_category",
     addedBy: "0319_lifecycle_columns.sql",
+  },
+  // The space a pod-wide entity was filed for (0355). Every entity read selects
+  // it and the read floor filters on it — absence 500s every entity read.
+  {
+    table: "entities",
+    column: "home_workspace_id",
+    addedBy: "0355_entities_home_workspace.sql",
   },
   {
     table: "entity_facets",

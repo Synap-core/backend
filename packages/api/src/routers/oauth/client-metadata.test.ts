@@ -31,6 +31,7 @@ import {
   type ClientMetadataStore,
 } from "./client-metadata.js";
 import type { CimdClientInput, StoredClient } from "./store.js";
+import { assertPermissions } from "@synap/governance-policy/grants";
 
 const ISSUER = "https://pod.test.synap.live";
 const CLIENT_ID = "https://studio.example.com/.well-known/synap-client.json";
@@ -386,23 +387,23 @@ describe("CIMD — document validation", () => {
       /same origin/,
     ],
     [
-      "a gate verb",
-      { synap_requests: [{ permission: "proposal.approve" }] },
-      /cannot be granted/,
-    ],
-    [
-      "a bare *",
-      { synap_requests: [{ permission: "*" }] },
-      /subject and an action/,
-    ],
-    [
-      "a * action",
-      { synap_requests: [{ permission: "entity.post.*" }] },
-      /subject and an action/,
-    ],
-    [
       "a malformed permission",
       { synap_requests: [{ permission: "Entity Post" }] },
+      /Invalid permission/,
+    ],
+    [
+      "a * that does not stand alone",
+      { synap_requests: [{ permission: "*.read" }] },
+      /a leading \* stands alone/,
+    ],
+    [
+      "a kind on a subject that has none",
+      { synap_requests: [{ permission: "document.post.read" }] },
+      /has no kind qualifier/,
+    ],
+    [
+      "more than three segments",
+      { synap_requests: [{ permission: "entity.post.read.all" }] },
       /Invalid permission/,
     ],
     [
@@ -443,34 +444,65 @@ describe("CIMD — document validation", () => {
     });
   }
 
-  it("a Synap app (and only one) may ask for the review verbs, spelled exactly", () => {
+  it("an app may ask for every permission an agent key may hold (apps = agents)", () => {
+    // Gate verbs, wildcards and full access, in the grammar's own spellings —
+    // the same patterns `assertPermissions` admits on every key door.
+    const asked = [
+      "playbook.run",
+      "capability.run",
+      "entity.deal.transition",
+      "tool.create",
+      "proposal.approve",
+      "proposal.reject",
+      "entity.merge",
+      "entity.post.*",
+      "entity.*",
+      "*",
+    ];
+    for (const permission of asked) {
+      expect(() => assertPermissions([permission]), permission).not.toThrow();
+    }
+    const v = validateClientMetadataDocument(
+      doc({
+        synap_requests: asked.map((permission) => ({ permission })),
+      }),
+      CLIENT_ID
+    );
+    expect(v.requestedPermissions).toEqual(asked);
+    // The same for a Synap app and any other: being one changes who the token
+    // acts as (`podAppActsAs`), never what may be asked.
     const SYNAP =
       "https://content-studio.synap.live/.well-known/synap-client.json";
-    const synapDoc = (permission: string, clientId = SYNAP) => ({
-      ...doc(),
-      client_id: clientId,
-      redirect_uris: [`${new URL(clientId).origin}/api/synap/callback`],
-      synap_requests: [{ permission }],
-    });
-    for (const permission of ["proposal.approve", "proposal.reject"]) {
+    expect(
+      validateClientMetadataDocument(
+        {
+          ...doc(),
+          client_id: SYNAP,
+          redirect_uris: ["https://content-studio.synap.live/cb"],
+          synap_requests: asked.map((permission) => ({ permission })),
+        },
+        SYNAP
+      ).requestedPermissions
+    ).toEqual(asked);
+  });
+
+  it("refuses exactly what the key doors refuse: the one validator", () => {
+    for (const permission of [
+      "Entity Post",
+      "*.read",
+      "document.post.read",
+      "entity.post.read.all",
+      "entity..read",
+      "",
+    ]) {
+      expect(() => assertPermissions([permission]), permission).toThrow();
       expect(
-        validateClientMetadataDocument(synapDoc(permission), SYNAP)
-          .requestedPermissions
-      ).toEqual([permission]);
-      // A lookalike origin is any other app: refused, as "a gate verb" above.
-      const LOOKALIKE =
-        "https://content-studio.synap.live.evil.com/.well-known/synap-client.json";
-      expect(() =>
-        validateClientMetadataDocument(
-          synapDoc(permission, LOOKALIKE),
-          LOOKALIKE
-        )
-      ).toThrow(/cannot be granted/);
-    }
-    // Every other gate verb stays refused, even for a Synap app.
-    for (const permission of ["proposal.merge", "entity.purge", "proposal.*"]) {
-      expect(() =>
-        validateClientMetadataDocument(synapDoc(permission), SYNAP)
+        () =>
+          validateClientMetadataDocument(
+            doc({ synap_requests: [{ permission }] }),
+            CLIENT_ID
+          ),
+        permission
       ).toThrow(ClientMetadataError);
     }
   });

@@ -6966,10 +6966,10 @@
           {
             "schema": {
               "type": "string",
-              "description": "e.g. `updatedAt:desc`."
+              "description": "`<field>[:asc|:desc]` (default `desc`), field one of `createdAt`, `updatedAt`, `title`. Applied in SQL before paging. Any other value is a 400; not combinable with `q`."
             },
             "required": false,
-            "description": "e.g. `updatedAt:desc`.",
+            "description": "`<field>[:asc|:desc]` (default `desc`), field one of `createdAt`, `updatedAt`, `title`. Applied in SQL before paging. Any other value is a 400; not combinable with `q`.",
             "name": "sort",
             "in": "query"
           },
@@ -7070,7 +7070,7 @@
             }
           },
           "400": {
-            "description": "Malformed or unsupported filter combination — an unparseable createdAfter/createdBefore, or a date window, `includeFacets` or `includeMedia` combined with `q`.",
+            "description": "Malformed or unsupported filter combination — an unparseable createdAfter/createdBefore, an unsupported `sort`, or a date window, `sort`, `includeFacets` or `includeMedia` combined with `q`.",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }

@@ -32,6 +32,10 @@ import {
 import { inArray } from "drizzle-orm";
 import { storage } from "@synap/storage";
 import { ownerPrivateVisibleWhere } from "../../../utils/user-visible-where.js";
+import {
+  compareListedEntities,
+  parseEntityListSort,
+} from "../../../utils/entity-list-sort.js";
 import { accessScopeWhere } from "../../../utils/project-scope.js";
 import { resolveFacetVisibilityScope } from "../../../utils/workspace-membership.js";
 import {
@@ -483,7 +487,14 @@ export function registerEntitiesRoutes(app: HubHono): void {
           .describe(
             "Zero-based offset for cursor-free pagination (default 0)."
           ),
-        sort: z.string().optional().describe("e.g. `updatedAt:desc`."),
+        sort: z
+          .string()
+          .optional()
+          .describe(
+            "`<field>[:asc|:desc]` (default `desc`), field one of " +
+              "`createdAt`, `updatedAt`, `title`. Applied in SQL before " +
+              "paging. Any other value is a 400; not combinable with `q`."
+          ),
         scope: z
           .enum(["pod", "workspace", "all"])
           .optional()
@@ -570,8 +581,8 @@ export function registerEntitiesRoutes(app: HubHono): void {
       400: {
         description:
           "Malformed or unsupported filter combination — an unparseable " +
-          "createdAfter/createdBefore, or a date window, `includeFacets` or " +
-          "`includeMedia` combined with `q`.",
+          "createdAfter/createdBefore, an unsupported `sort`, or a date " +
+          "window, `sort`, `includeFacets` or `includeMedia` combined with `q`.",
         content: { "application/json": { schema: ErrorSchema } },
       },
       401: {
@@ -612,6 +623,11 @@ export function registerEntitiesRoutes(app: HubHono): void {
     );
     const offset = Math.max(parseInt(query.offset ?? "0", 10) || 0, 0);
     const sortParam = (query.sort ?? "").trim();
+    const parsedSort = sortParam ? parseEntityListSort(sortParam) : null;
+    if (parsedSort && "error" in parsedSort) {
+      return c.json({ error: parsedSort.error }, 400);
+    }
+    const orderBy = parsedSort?.orderBy;
     const scope = query.scope;
     // Default TRUE: a workspace lens should include pod-wide globals (the caller's
     // own pod-personal entities with workspaceId IS NULL) so a CRM or agent view
@@ -763,6 +779,15 @@ export function registerEntitiesRoutes(app: HubHono): void {
         //      offset-less and top-N — a filter that LOOKS exhaustive and is
         //      not is worse than a refusal.
         // A 400 is actionable: drop `q`, or narrow the window another way.
+        if (orderBy) {
+          return c.json(
+            {
+              error:
+                "sort cannot be combined with q — full-text search is ranked by relevance. Ask for the sorted list without q.",
+            },
+            400
+          );
+        }
         if (hasDateWindow) {
           return c.json(
             {
@@ -830,6 +855,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
               ...(includeFacets ? { includeFacets } : {}),
               ...(createdAfter ? { createdAfter } : {}),
               ...(createdBefore ? { createdBefore } : {}),
+              ...(orderBy ? { orderBy } : {}),
             })
           )
         );
@@ -883,19 +909,15 @@ export function registerEntitiesRoutes(app: HubHono): void {
           }
           return false;
         });
-        if (
-          sortParam.includes("updatedAt") &&
-          sortParam.toLowerCase().includes("desc")
-        ) {
-          rows = [...rows].sort((a, b) => {
-            const tb = new Date(
-              String((b as { updatedAt?: unknown }).updatedAt ?? 0)
-            ).getTime();
-            const ta = new Date(
-              String((a as { updatedAt?: unknown }).updatedAt ?? 0)
-            ).getTime();
-            return tb - ta;
-          });
+        // Each lens already returned its top rows IN SQL ORDER; this orders
+        // their merge, so the window below is the true top of the union.
+        if (orderBy) {
+          rows = [...rows].sort(
+            compareListedEntities(orderBy) as (
+              a: WireListedEntity,
+              b: WireListedEntity
+            ) => number
+          );
         }
         return c.json(await withMedia(rows.slice(offset, offset + limit)), 200);
       }
@@ -914,20 +936,10 @@ export function registerEntitiesRoutes(app: HubHono): void {
         ...(includeFacets ? { includeFacets } : {}),
         ...(createdAfter ? { createdAfter } : {}),
         ...(createdBefore ? { createdBefore } : {}),
+        ...(orderBy ? { orderBy } : {}),
       });
 
-      let rows = (listed as unknown[]).map((e) => toWire(e));
-
-      if (
-        sortParam.includes("updatedAt") &&
-        sortParam.toLowerCase().includes("desc")
-      ) {
-        rows = [...rows].sort((a, b) => {
-          const tb = new Date(String(b.updatedAt ?? 0)).getTime();
-          const ta = new Date(String(a.updatedAt ?? 0)).getTime();
-          return tb - ta;
-        });
-      }
+      const rows = (listed as unknown[]).map((e) => toWire(e));
 
       return c.json(await withMedia(rows), 200);
     } catch (err) {
