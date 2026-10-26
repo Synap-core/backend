@@ -124,6 +124,9 @@ export function sessionUnitInput(facts: SessionUnitFacts): UnitStateInput {
     pendingDecisions: facts.pendingDecisions,
     blockedBy: facts.blockedBy ?? null,
     running: working,
+    // E2: MEASURED at work (live facts in hand, not the older pod's lifecycle
+    // reading) — its owed asks and decisions then read "working".
+    agentAtWork: working && facts.live !== undefined && facts.live !== null,
     idle: open && !working && !liveUnread,
     schedule: cadence,
     unreadable: facts.status === "stale" || (open && liveUnread),
