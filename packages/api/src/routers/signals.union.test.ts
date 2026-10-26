@@ -21,6 +21,7 @@ import {
   POD_WIDE_INVITE_TITLE,
   type NotificationSignalInput,
   type OwedSlotSignalInput,
+  type ConvertibleGoalsSignalInput,
   type SpaceInviteSignalInput,
 } from "../services/signals/needs-you-union.js";
 import { CRITERION_SLOT_KIND } from "@synap-core/types/focus-sessions";
@@ -901,5 +902,103 @@ describe("space invites — an invite to another space of this pod (wave PQ)", (
         now: NOW,
       }).truncated
     ).toBe(true);
+  });
+});
+
+describe("convertible goals — the pod's ONE Make them goals card (D-3)", () => {
+  const NOW = new Date("2026-10-26T12:00:00Z");
+  const input = (
+    over: Partial<ConvertibleGoalsSignalInput> = {}
+  ): ConvertibleGoalsSignalInput => ({
+    rows: [
+      {
+        entityId: "e1",
+        title: "Run a marathon",
+        kind: "goal",
+        spaceName: "Life OS",
+        projectIds: [],
+      },
+      {
+        entityId: "e2",
+        title: "Grow revenue",
+        kind: "objective",
+        spaceName: "Enterprise OS",
+        projectIds: ["p1"],
+      },
+    ],
+    truncated: false,
+    // Installed long ago: the card is still never folded into "Older".
+    newestAt: new Date("2026-01-01T00:00:00Z"),
+    ...over,
+  });
+  const noCount = {
+    distinctClusters: 0,
+    clustersTruncated: false,
+    clusters: [],
+    notifications: [],
+    notificationsTruncated: false,
+    owedSlots: [],
+    owedTruncated: false,
+  };
+
+  it("ONE decision row however many entities, titled by the pod, carrying them all; no door", () => {
+    const rows = unionNeedsYou({
+      clusters: [],
+      notifications: [],
+      owedSlots: [],
+      convertibleGoals: input(),
+      now: NOW,
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      id: "convertible-goals",
+      kind: "convertible-goals",
+      title:
+        "1 goal and 1 objective from Life OS and Enterprise OS can become goals",
+      count: 1,
+      target: null,
+      category: "governance",
+      lifetimeHours: null,
+      ageBucket: "recent",
+      groupKey: null,
+      convertible: { entities: input().rows, truncated: false },
+    });
+  });
+
+  it("no entity is no card and no count (OMIT)", () => {
+    const none = input({ rows: [], newestAt: null });
+    expect(
+      unionNeedsYou({
+        clusters: [],
+        notifications: [],
+        owedSlots: [],
+        convertibleGoals: none,
+        now: NOW,
+      })
+    ).toEqual([]);
+    expect(
+      countNeedsYou({ ...noCount, convertibleGoals: none }).convertible
+    ).toBe(0);
+  });
+
+  it("`convertible` is a part of the one number: 1 for the card, never the entity count; a capped scan is no floor", () => {
+    const counted = countNeedsYou({
+      ...noCount,
+      distinctClusters: 1,
+      owedSlots: [owed()],
+      convertibleGoals: input({ truncated: true }),
+    });
+    expect(counted.convertible).toBe(1);
+    expect(counted.needsYou).toBe(
+      counted.decisions +
+        counted.notifications +
+        counted.blocked +
+        counted.review +
+        counted.captures +
+        counted.requests +
+        counted.invites +
+        counted.convertible
+    );
+    expect(counted.truncated).toBe(false);
   });
 });

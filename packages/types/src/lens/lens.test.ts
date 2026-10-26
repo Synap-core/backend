@@ -435,6 +435,49 @@ describe("lensRowOfNeedsYou — one item = one row, through needsYouRows", () =>
       "decision"
     );
   });
+  it("the Make them goals card is a decision: its verb opens the review, no door, its title from the pod", () => {
+    const { recent } = needsYouRows([
+      sig({
+        id: "convertible-goals",
+        kind: "convertible-goals",
+        title: "2 goals from Life OS can become goals",
+        category: "governance",
+        target: null,
+        convertible: {
+          entities: [
+            {
+              entityId: "e1",
+              title: "Run a marathon",
+              kind: "goal",
+              spaceName: "Life OS",
+              projectIds: [],
+            },
+            {
+              entityId: "e2",
+              title: "Read 20 books",
+              kind: "goal",
+              spaceName: "Life OS",
+              projectIds: ["p1"],
+            },
+          ],
+          truncated: false,
+        },
+      }),
+    ]);
+    const row = lensRowOfNeedsYou(recent[0]!, "blocking");
+    expect(row.objectKind).toBe("track");
+    expect(row.title).toBe("2 goals from Life OS can become goals");
+    expect(row.verb).toEqual({
+      action: "track.make_goals",
+      label: "Make them goals",
+    });
+    expect(row.reasonKind).toBe("decision");
+    expect(row.door).toBeNull();
+    expect(resolveUnitState(row.state).state).toBe("needs_review");
+    expect(
+      needsYouBucketOf({ id: "c", kind: "convertible-goals", count: 1 })
+    ).toBe("decision");
+  });
   it("a draft row is never marked working", () => {
     const { recent } = needsYouRows([
       sig({ id: "d", kind: "draft-asks", count: 2 }),

@@ -377,6 +377,7 @@ describe("the reason glyph", () => {
     [proposal("p"), "decision"],
     [{ id: "a", kind: "access-request", count: 1 }, "decision"],
     [{ id: "i", kind: "space-invite", count: 1 }, "decision"],
+    [{ id: "c", kind: "convertible-goals", count: 1 }, "decision"],
     [
       { id: "o", kind: "owed-slot", count: 1, blockedReason: "Credential" },
       "credential",

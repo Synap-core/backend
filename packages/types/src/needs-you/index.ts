@@ -31,7 +31,13 @@
  */
 
 import { resolveSessionTitle } from "../focus-sessions/title.js";
-import { resolveNeedsYouItemCount } from "../vocabulary/index.js";
+import {
+  nounInSentence,
+  resolveNeedsYouItemCount,
+  resolveObjectNoun,
+  resolveObjectNounPlural,
+} from "../vocabulary/index.js";
+import type { GoalConvertibleKind } from "../units/goal-entry.js";
 
 /** `older` = occurred more than 7 days ago — stamped by the pod, never measured here. */
 export type NeedsYouAgeBucket = "recent" | "older";
@@ -434,6 +440,78 @@ export interface NeedsYouInvite {
   scope: "workspace" | "pod";
   /** The space's name; null for a pod-wide invite or an unnamed space. */
   spaceName: string | null;
+}
+
+/**
+ * One entity of a retired goal kind (Life OS `goal`, Enterprise `objective`,
+ * Project Management `okr`) that was never made a goal, on the
+ * `convertible-goals` card (founder decision D-3, 2026-10-26).
+ */
+export interface NeedsYouConvertibleGoal {
+  entityId: string;
+  /** The entity's title; null when it has none (the host names its kind). */
+  title: string | null;
+  kind: GoalConvertibleKind;
+  /** The space it lives in; null for a pod-wide entity or an unnamed space. */
+  spaceName: string | null;
+  /**
+   * The projects it is filed in that the viewer can see (`belongs_to_project`)
+   * — where its goal lands by default, as "Make it a goal" does.
+   */
+  projectIds: string[];
+}
+
+/**
+ * The pod's ONE "Make them goals" card (founder decision D-3, 2026-10-26): the
+ * entities of a retired goal kind the viewer can read that were never made a
+ * goal (no `promoted_to` edge to a track). The person reviews them and makes
+ * them goals, each through the one convert door; nothing converts on its own.
+ */
+export interface NeedsYouConvertibleGoals {
+  /** Newest first, at most the pod's scan cap. */
+  entities: NeedsYouConvertibleGoal[];
+  /** The scan hit its cap: there are more than `entities.length`. */
+  truncated: boolean;
+}
+
+function joinedWords(words: readonly string[]): string {
+  if (words.length <= 1) return words[0] ?? "";
+  return `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`;
+}
+
+/**
+ * The card's title, said once for every surface: "3 goals from Life OS can
+ * become goals", "2 goals and 1 objective from Life OS and Enterprise OS can
+ * become goals", "100+ goals and OKRs from 3 spaces can become goals".
+ */
+export function convertibleGoalsTitle(card: NeedsYouConvertibleGoals): string {
+  const counts = new Map<GoalConvertibleKind, number>();
+  for (const e of card.entities)
+    counts.set(e.kind, (counts.get(e.kind) ?? 0) + 1);
+  const plural = (k: string) => nounInSentence(resolveObjectNounPlural(k));
+  const what = card.truncated
+    ? `${card.entities.length}+ ${joinedWords([...counts.keys()].map(plural))}`
+    : joinedWords(
+        [...counts].map(([k, n]) =>
+          n === 1
+            ? `1 ${nounInSentence(resolveObjectNoun(k))}`
+            : `${n} ${plural(k)}`
+        )
+      );
+  const spaces = [
+    ...new Set(
+      card.entities.flatMap((e) =>
+        e.spaceName?.trim() ? [e.spaceName.trim()] : []
+      )
+    ),
+  ];
+  const from =
+    spaces.length === 0
+      ? ""
+      : spaces.length <= 2
+        ? ` from ${joinedWords(spaces)}`
+        : ` from ${spaces.length} ${nounInSentence(resolveObjectNounPlural("workspace"))}`;
+  return `${what}${from} can become ${nounInSentence(resolveObjectNounPlural("track"))}`;
 }
 
 /** The Inbox's four filters and its triage order — see `./buckets.ts`. */

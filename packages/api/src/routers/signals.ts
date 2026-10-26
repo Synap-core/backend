@@ -111,6 +111,7 @@ import {
   type PendingAppRequestSignalInput,
   type PendingIssuerSignalInput,
   type Signal,
+  type ConvertibleGoalsSignalInput,
   type SpaceInviteSignalInput,
   type StatusBanner,
 } from "../services/signals/needs-you-union.js";
@@ -120,6 +121,7 @@ import {
   podAdminCheck,
 } from "../services/signals/access-requests.js";
 import { listOpenSpaceInvites } from "../services/signals/space-invites.js";
+import { listConvertibleGoals } from "../services/signals/convertible-goals.js";
 import { listSessionsAwaitingReview } from "../services/projects/project-needs-you.js";
 import { sessionsWithOpenQuestion } from "../services/signals/open-question-sessions.js";
 import {
@@ -292,6 +294,7 @@ export type SignalSubRead =
   | "issuers"
   | "app-requests"
   | "invites"
+  | "convertible-goals"
   | "liveness"
   | "outputs"
   | "activity"
@@ -422,6 +425,9 @@ async function readAttention(
   // Open invites to other spaces are the person's own and live in no space
   // they are in yet: the same floor-only rule (Home, the whole Inbox).
   const readsInvites = readsCaptures;
+  // The "Make them goals" card (D-3) is the pod's ONE card, never a space's
+  // or a project's: the same floor-only rule.
+  const readsConvertible = readsCaptures;
   const isAdmin = podAdminCheck(userId);
   const [
     groups,
@@ -434,6 +440,7 @@ async function readAttention(
     issuers,
     appRequests,
     spaceInvites,
+    convertibleGoals,
   ] = await Promise.all([
     settle(
       "proposals",
@@ -550,6 +557,18 @@ async function readAttention(
           ? await listOpenSpaceInvites({ userId })
           : { rows: [], truncated: false }
     ),
+    settle(
+      "convertible-goals",
+      {
+        rows: [],
+        truncated: false,
+        newestAt: null,
+      } as ConvertibleGoalsSignalInput,
+      async (): Promise<ConvertibleGoalsSignalInput> =>
+        readsConvertible
+          ? await listConvertibleGoals({ access: AccessContext.from(ctx) })
+          : { rows: [], truncated: false, newestAt: null }
+    ),
   ]);
 
   const allNotifications = notifs.value;
@@ -605,6 +624,7 @@ async function readAttention(
       issuers.value.truncated || appRequests.value.truncated,
     spaceInvites: spaceInvites.value.rows,
     spaceInvitesTruncated: spaceInvites.value.truncated,
+    convertibleGoals: convertibleGoals.value,
     // An unmeasured open-question read stays `undefined` (= unmeasured).
     openQuestionSessionIds: openQuestions.failed
       ? undefined
@@ -621,6 +641,7 @@ async function readAttention(
         issuers,
         appRequests,
         spaceInvites,
+        convertibleGoals,
         containers,
         clusterSessions,
         openQuestions,
@@ -648,6 +669,7 @@ function blockingSignals(a: Attention): Signal[] {
     unfinishedCaptures: a.captures.captures,
     accessRequests: a.accessRequests,
     spaceInvites: a.spaceInvites,
+    convertibleGoals: a.convertibleGoals,
   });
 }
 
@@ -682,6 +704,7 @@ function countOf(a: Attention) {
     accessRequestsTruncated: a.accessRequestsTruncated,
     spaceInvites: a.spaceInvites,
     spaceInvitesTruncated: a.spaceInvitesTruncated,
+    convertibleGoals: a.convertibleGoals,
   });
 }
 
@@ -1393,7 +1416,8 @@ function narrowAttention(
         ? a.captures
         : { captures: [], truncated: false },
     // Access requests live in no space either: pod-level only, like captures.
-    // So do invites to other spaces (none the person is in yet).
+    // So do invites to other spaces (none the person is in yet), and the
+    // "Make them goals" card (the pod's one card, D-3).
     ...(scope.workspaceId === null && !scope.kindClusters
       ? {}
       : {
@@ -1401,6 +1425,7 @@ function narrowAttention(
           accessRequestsTruncated: false,
           spaceInvites: [],
           spaceInvitesTruncated: false,
+          convertibleGoals: { rows: [], truncated: false, newestAt: null },
         }),
   };
 }
@@ -1815,8 +1840,9 @@ export const signalsRouter = router({
    *
    * The number ships WITH its parts: `decisions`, `notifications`, `blocked`,
    * `review`, `captures`, `requests` (pending issuers + app connection
-   * requests, pod admins at the floor only) and `invites` (the viewer's open
-   * invites to other spaces, at the floor only), with `needsYou` their sum. A
+   * requests, pod admins at the floor only), `invites` (the viewer's open
+   * invites to other spaces, at the floor only) and `convertible` (the ONE
+   * "Make them goals" card, at the floor only), with `needsYou` their sum. A
    * client reads the part it needs; it never derives one by
    * subtracting the others. `suggestions` and `drafts` (PROPOSED) ship in the
    * same result and are NOT parts: they are never added into `needsYou`.

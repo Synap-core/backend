@@ -134,9 +134,14 @@ export function needsYouBucketOf<T extends BucketableSignal>(
     const single = signal.count === 1;
     return single && intent && isSwipeSafe(intent) ? "routine" : "decision";
   }
-  // An access request, or an invite to another space: a yes/no only the
+  // An access request, an invite to another space, or the "Make them goals"
+  // card (D-3: nothing converts without the person's act): a yes/no only the
   // person can give.
-  if (signal.kind === "access-request" || signal.kind === "space-invite") {
+  if (
+    signal.kind === "access-request" ||
+    signal.kind === "space-invite" ||
+    signal.kind === "convertible-goals"
+  ) {
     return "decision";
   }
   if (isJudgementSignal(signal)) return "decision";
@@ -267,6 +272,7 @@ export function needsYouReasonOf(signal: BucketableSignal): string {
     case "proposal-cluster":
     case "access-request":
     case "space-invite":
+    case "convertible-goals":
       return "decision";
     case "owed-slot":
       return signal.blockedReason?.trim().toLowerCase() || "owed";
