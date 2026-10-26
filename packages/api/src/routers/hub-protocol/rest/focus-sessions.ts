@@ -1270,27 +1270,10 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       throw err;
     }
 
-    // VISIBILITY FLOOR on the subject anchor — the same predicate and the same
-    // refusal the PATCH door applies, so the two cannot disagree about what a
-    // caller may point a session at.
-    if (body.subjectEntityId) {
-      const { isOutputRefVisible } =
-        await import("../../../services/focus-sessions/assert-output-ref-visible.js");
-      const visible = await isOutputRefVisible({
-        userId,
-        kind: "entity",
-        refId: body.subjectEntityId,
-      });
-      if (!visible) {
-        return c.json(
-          { error: `No entity ${body.subjectEntityId} you can access` },
-          404
-        );
-      }
-    }
-    // The session ROOM floor (a room the caller cannot read → 404) is
-    // enforced by `createFocusSession` itself, for every start door; its
-    // NOT_FOUND maps to 404 through `httpStatusForTrpcError` below.
+    // The SUBJECT floor (an entity the caller cannot see) and the session ROOM
+    // floor (a room the caller cannot read) are enforced by
+    // `createFocusSession` itself, for every start door; their NOT_FOUND maps
+    // to 404 through `httpStatusForTrpcError` below.
 
     try {
       // Delegate to the shared service (used by both Hub REST and MCP adapter).

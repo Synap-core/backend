@@ -1871,23 +1871,8 @@ export const focusSessionsRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      // The subject must be an entity the caller can ALREADY see. Same floor,
-      // same door (`isOutputRefVisible`) as an output's ref, and for the same
-      // reason: the room resolves the subject's live title by bare id, so an
-      // unfloored write would be a read oracle over every entity in the pod.
-      if (input.subjectEntityId) {
-        const visible = await isOutputRefVisible({
-          userId: ctx.userId,
-          kind: "entity",
-          refId: input.subjectEntityId,
-        });
-        if (!visible) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: `No entity ${input.subjectEntityId} you can access`,
-          });
-        }
-      }
+      // The subject floor (an entity the caller cannot see → NOT_FOUND) lives
+      // in `createFocusSession`, for every start door.
       // ONE create door (`createFocusSession`): the bare insert this replaced
       // stamped every human-started session `origin: "agent"`, which is the
       // exact mislabel the triage lens keys on. The service derives origin
