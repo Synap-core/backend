@@ -1617,7 +1617,7 @@ export async function submitCaptureGraph(
                   // (a rule or its own space let every member execute), so
                   // its skills are born unapproved, as at `skills.create`.
                   skillAuthor: {
-                    agentUserId: input.agentUserId,
+                    agentUserId: input.agentUserId ?? null,
                     personApproved: false,
                   },
                 }),

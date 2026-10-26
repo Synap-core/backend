@@ -411,9 +411,11 @@ export type InsertSkillGovernedInput = typeof skills.$inferInsert & {
    * Ignored when `agentUserId` is set (the door then IS the author). Only the
    * composite's INSTRUCTION step passes it: an executable skill a person
    * approved is turned on by the `skill/create` executor through
-   * `setSkillApproved`, the one enable door.
+   * `setSkillApproved`, the one enable door. Not `author`: that name is the
+   * `skills.author` column (who wrote a package's skill), which this input
+   * also carries.
    */
-  author?: { agentUserId: string | null; personApproved: boolean };
+  skillAuthor?: { agentUserId: string | null; personApproved: boolean };
   /** Folded into the audit-log `data` for observability, e.g. "install_from_url". */
   auditSource: string;
 };
@@ -428,7 +430,7 @@ export async function insertSkillGoverned(
 ): Promise<InsertSkillGovernedResult> {
   const {
     agentUserId,
-    author,
+    skillAuthor,
     auditSource,
     id: _ignoredId,
     approved: _ignoredApproved,
@@ -470,8 +472,9 @@ export async function insertSkillGoverned(
 
   const approved = skillBornApproved({
     kind: values.kind,
-    agentUserId: agentUserId ?? author?.agentUserId,
-    personApprovedProposal: !agentUserId && author?.personApproved === true,
+    agentUserId: agentUserId ?? skillAuthor?.agentUserId,
+    personApprovedProposal:
+      !agentUserId && skillAuthor?.personApproved === true,
   });
 
   const [skill] = await db

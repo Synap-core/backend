@@ -264,7 +264,7 @@ describe("the applied receipt says what landed", () => {
     expect(h.inserted).toHaveLength(1);
     expect(h.inserted[0]).toMatchObject({
       agentUserId: undefined,
-      author: { agentUserId: "agent-1", personApproved: false },
+      skillAuthor: { agentUserId: "agent-1", personApproved: false },
     });
   });
 });
