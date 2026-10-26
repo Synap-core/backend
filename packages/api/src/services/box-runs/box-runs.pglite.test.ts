@@ -184,6 +184,12 @@ describe("lease", () => {
     await queue(OTHER_PERSON);
     expect(await leaseBoxRun(STRANGER)).toMatchObject({ attempt: 1 });
     const a = await leaseBoxRun(MACHINE_1);
+    // One lease takes ONE run, never the queue.
+    const leased = await q<{ n: number }>(
+      `SELECT count(*)::int AS n FROM box_runs WHERE user_id = $1 AND status = 'leased'`,
+      [PERSON]
+    );
+    expect(leased.rows[0].n).toBe(1);
     const b = await leaseBoxRun(MACHINE_1);
     expect(a?.id).toBe(first.id);
     expect(b?.id).toBe(second.id);

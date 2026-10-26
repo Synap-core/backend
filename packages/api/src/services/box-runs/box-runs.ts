@@ -268,8 +268,12 @@ export async function leaseBoxRun(
       attempt: sql`${boxRuns.attempt} + 1`,
       updatedAt: sql`now()`,
     })
-    // `leasable()` again on the outer row: the inner pick is a snapshot.
-    .where(and(inArray(boxRuns.id, head), leasable()))
+    // ONE row, by a SCALAR subquery (`id = (…)`), never `id IN (…)`: the
+    // planner may re-run an IN subquery per outer row, and with SKIP LOCKED
+    // each re-run skips the row just claimed — one lease took the whole queue
+    // (caught by the FIFO test). `leasable()` again on the outer row: the
+    // inner pick is a snapshot.
+    .where(and(sql`${boxRuns.id} = (${head})`, leasable()))
     .returning();
   if (!run) return null;
   return {
