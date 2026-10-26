@@ -350,6 +350,36 @@ describe("trpcProcedureAllowed (S7: the Bearer tRPC door fences mutations)", () 
   });
 });
 
+describe("connection status door (decision 3): the person's accounts, by a named read", () => {
+  // An app's grant is always pinned to the spaces the person ticked.
+  const app = (...permissions: string[]) =>
+    key({ permissions, workspaceIds: ["w1"] });
+  it.each([
+    [["messaging.read"], true],
+    [["messaging"], true],
+    [["*"], true],
+    [["entity.deal.create"], false], // any write in one space is not enough
+    [["messaging.send"], false], // sending is not reading
+    [[], false], // deny-all (a revoked or expired grant)
+  ] as const)("a pinned key holding %j → %s", (permissions, ok) => {
+    expect(
+      restDoorAllowed("GET", "/messaging/accounts", app(...permissions))
+    ).toBe(ok);
+  });
+  it("opens exactly that door, nothing beside it", () => {
+    const READER = app("messaging.read");
+    expect(restDoorAllowed("GET", "/messaging/accounts/", READER)).toBe(true);
+    for (const path of [
+      "/messaging/accounts/acc-1",
+      "/messaging/conversations",
+      "/messaging/service-config",
+      "/connectors/providers",
+      "/connectors/sync-status",
+    ])
+      expect(restDoorAllowed("GET", path, READER), path).toBe(false);
+  });
+});
+
 describe("owner-wide doors (webhooks)", () => {
   const FULL = key({ permissions: ["*"] });
   const STAR_ONE_WS = key({ permissions: ["*"], workspaceIds: ["w1"] });

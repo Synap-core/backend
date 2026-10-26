@@ -312,9 +312,27 @@ export function registerMessagingRoutes(app: HubHono): void {
         let dbAccounts = await db.query.messagingAccounts.findMany({
           where: eq(messagingAccounts.userId, userId),
         });
+        // A failed live read is an error, never the stored rows: those carry
+        // the LAST known status, and "connected" from a dead read is the
+        // calm, wrong answer an app would act on (task 23d9915a).
         const liveAccounts = await connector
           .getAccounts(userId)
-          .catch(() => []);
+          .catch((err: unknown) => {
+            logger.warn(
+              { err, userId },
+              "GET /messaging/accounts: live read failed"
+            );
+            return null;
+          });
+        if (!liveAccounts) {
+          return c.json(
+            {
+              error:
+                "Could not read your accounts' status from the messaging service. Try again.",
+            },
+            503
+          );
+        }
 
         // Auto-seed: claim all live accounts for this user if DB is empty.
         if (dbAccounts.length === 0 && liveAccounts.length > 0) {
@@ -1656,7 +1674,7 @@ export function registerMessagingRoutes(app: HubHono): void {
           eq(channels.channelType, ChannelType.EXTERNAL),
           eq(channels.externalId as any, threadId)
         ),
-        columns: { id: true, externalSource: true },
+        columns: { id: true, externalSource: true, workspaceId: true },
       });
       // SECURITY — a thread the pod mirrors must be the caller's to write to
       // (the channel floor every channel write door uses). Without this an
@@ -1706,7 +1724,9 @@ export function registerMessagingRoutes(app: HubHono): void {
         // (human-direct here, agent-approved via proposals.ts). The acting
         // agent MUST travel: the dispatcher gates only an agent send
         // (`gateMessagingSend`), and this door used to drop it, so an agent
-        // key's send went out as an ungoverned owner send.
+        // key's send went out as an ungoverned owner send. The dispatcher
+        // also checks the key's grant (`messaging.send`) in the channel's
+        // space, which is where a proposed send is filed.
         const agentUserId = c.get("agentUserId") as string | undefined;
         const result = await sendExternalMessage({
           threadId,
@@ -1714,6 +1734,7 @@ export function registerMessagingRoutes(app: HubHono): void {
           body,
           userId,
           ...(agentUserId ? { agentUserId } : {}),
+          workspaceId: linkedChannel?.workspaceId ?? null,
         });
         if (result.proposed && result.proposalId) {
           return jsonGoverned(c, {
@@ -1722,8 +1743,9 @@ export function registerMessagingRoutes(app: HubHono): void {
           }) as never;
         }
         if (!result.success) {
-          // The gate's refusal of an agent send (a reason, no failure class)
-          // says why; anything else keeps the door's previous 503.
+          // A refusal (the key's grant, or the gate's refusal of an agent
+          // send: a reason, no failure class) says why; anything else keeps
+          // the door's previous 503.
           return (
             result.error && !result.errorClass
               ? c.json({ error: result.error }, 403)
