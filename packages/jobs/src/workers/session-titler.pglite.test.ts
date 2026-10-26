@@ -509,6 +509,55 @@ describe("close phase", () => {
     expect(asked).toEqual([]);
   });
 
+  // W-A3: a receipt is closed by the reaper, never with a summary, so the
+  // close pass skipped it and it kept its first-write name for ever (live:
+  // the night-shift receipt read `titleEarlyLastReason: "empty"`).
+  it("renames a closed RECEIPT with no summary from the proposals it holds", async () => {
+    const contexts: string[] = [];
+    const id = await session({
+      status: "closed",
+      title: "Agent changes",
+      goal: "receipt",
+      metadata: { source: "agent-write", titleSource: "derived" },
+    });
+    await q(
+      `insert into proposals (id, session_id, target_type, data) values ($1, $2, 'entity', $3::jsonb)`,
+      [randomUUID(), id, JSON.stringify({ summary: "Logged the Q3 invoice" })]
+    );
+    await handleSessionTitler({
+      requestTitle: vi.fn(async (p: { phase: string; context?: string }) => {
+        asked.push(`${p.phase}`);
+        contexts.push(p.context ?? "");
+        return { title: "Q3 invoicing", decider: "llm" as const };
+      }),
+    });
+    expect(asked).toEqual(["close"]);
+    expect(contexts[0]).toContain("Logged the Q3 invoice");
+    expect((await row(id)).title).toBe("Q3 invoicing");
+  });
+
+  it("CONTROL — no summary and nothing filed (or not a receipt) → not asked", async () => {
+    await session({
+      status: "closed",
+      title: "Agent changes",
+      goal: "empty receipt",
+      metadata: { source: "agent-write", titleSource: "derived" },
+    });
+    const work = await session({
+      status: "closed",
+      title: "Work",
+      goal: "work, no summary",
+      metadata: { titleSource: "generated" },
+    });
+    await q(
+      `insert into proposals (id, session_id, target_type, data) values ($1, $2, 'entity', '{}'::jsonb)`,
+      [randomUUID(), work]
+    );
+    const requestTitle = answering("Anything");
+    await handleSessionTitler({ requestTitle });
+    expect(requestTitle).not.toHaveBeenCalled();
+  });
+
   it("never renames a closed session a person named", async () => {
     await session({
       status: "closed",
