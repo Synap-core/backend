@@ -70,6 +70,13 @@ export interface EvaluateSessionParams {
    * posting evidence never spends an LLM call or runs a capability.
    */
   kinds?: ReadonlyArray<SessionCriterion["check"]["kind"]>;
+  /**
+   * Restrict to the criteria a fact is ABOUT: a criterion whose key, or whose
+   * evidence key, is listed. The event re-check (`dev-loop/recheck-criteria.ts`)
+   * passes the outcome keys a fact just moved, so a merge re-grades the
+   * criteria on that PR and never the rest of the session.
+   */
+  criterionKeys?: ReadonlyArray<string>;
 }
 
 export interface CriterionRunOutcome {
@@ -162,7 +169,12 @@ export async function evaluateSession(
   const pending = pendingCriteria(criteria, rows, before.evaluations).filter(
     (c) =>
       (params.stageKey === undefined || c.stageKey === params.stageKey) &&
-      (params.kinds === undefined || params.kinds.includes(c.check.kind))
+      (params.kinds === undefined || params.kinds.includes(c.check.kind)) &&
+      (params.criterionKeys === undefined ||
+        params.criterionKeys.includes(c.key) ||
+        (c.check.kind === "evidence" &&
+          c.check.evidenceKey !== undefined &&
+          params.criterionKeys.includes(c.check.evidenceKey)))
   );
 
   const results: CriterionRunOutcome[] = [];
