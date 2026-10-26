@@ -45093,6 +45093,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		setStatus: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
+				expectedStatus?: "active" | "agreed" | "archived" | "completed" | "paused" | "proposed" | "ready" | undefined;
 				id: string;
 				reasoning?: string | undefined;
 				status: "active" | "agreed" | "archived" | "completed" | "paused" | "proposed" | "ready";

@@ -249,7 +249,7 @@ export const tracksRouter = router({
         status: z.enum(PROJECT_TRACK_STATUSES),
         verdict: z.enum(PROJECT_TRACK_VERDICTS).optional(),
         verdictReason: z.string().trim().max(2000).optional(),
-        /** The status the caller read — required for an agent (CONFLICT when stale). */
+        /** The status the caller read — an agent sends it (D1 step 1 warns without it); CONFLICT when stale. */
         expectedStatus: z.enum(PROJECT_TRACK_STATUSES).optional(),
         reasoning,
       })

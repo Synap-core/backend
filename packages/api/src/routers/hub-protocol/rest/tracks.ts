@@ -136,7 +136,7 @@ const StatusSchema = z.object({
   status: z.enum(PROJECT_TRACK_STATUSES),
   verdict: z.enum(PROJECT_TRACK_VERDICTS).optional(),
   verdictReason: z.string().trim().max(2000).optional(),
-  /** The status the caller read — required for an agent (409 when stale). */
+  /** The status the caller read — an agent sends it (D1 step 1 warns without it); 409 when stale. */
   expectedStatus: z.enum(PROJECT_TRACK_STATUSES).optional(),
   reasoning: z.string().max(2000).optional(),
 });
