@@ -51,6 +51,8 @@ export interface RequestWriteContext {
   readonly writeSessions?: WriteSessionLedger;
   /** B7 — the `api_keys.id` the request authenticated with. */
   readonly apiKeyId?: string;
+  /** W-B1 — the held-writes pack a person approved, whose writes now replay. */
+  readonly heldWritesApprovedBy?: string;
 }
 
 const storage = new AsyncLocalStorage<RequestWriteContext>();
@@ -509,4 +511,24 @@ export function recordWriteSessionFiling(
     return;
   }
   ledger.filings.push({ sessionId, projectId: project });
+}
+
+// ═══ Concern: HELD WRITES APPROVED (W-B1) ═════════════════════════════════════
+//
+// Past its daily write ceiling an agent's writes are HELD on one pack per UTC
+// day. Approving the pack replays each kept write through its own door as the
+// agent; the person has answered the ceiling for exactly those writes, so
+// rung 2.56 must not hold them again. Every other rung still decides.
+
+/** Run `fn` as the replay of the approved held-writes pack `proposalId`. */
+export function runWithHeldWritesApproved<T>(
+  proposalId: string,
+  fn: () => T
+): T {
+  return runWithPatch({ heldWritesApprovedBy: proposalId }, fn);
+}
+
+/** The approved held-writes pack this write replays, if any. */
+export function getHeldWritesApprovedBy(): string | undefined {
+  return storage.getStore()?.heldWritesApprovedBy;
 }

@@ -10,7 +10,9 @@
  *   - duplicate relation defs: workspace copies that say nothing the pod-wide
  *     row of their slug does not (`classifyRelationDefCopies`, the predicate
  *     the `dedupeRelationDefs` conversion op collapses by);
- *   - never-run automations;
+ *   - never-run automations: the automation-health warden's ONE rule
+ *     (`detectZeroRunAutomations` over the `automation_runs` ledger), so manual
+ *     and draft automations are never counted;
  *   - stale WORK sessions older than STALE_SESSION_DAYS;
  *   - pending objectWork proposals older than OLD_PROPOSAL_DAYS.
  *
@@ -62,6 +64,13 @@ import {
   OLD_PROPOSAL_DAYS,
   cutoffIso,
 } from "../pod-hygiene/cleanup-pack.js";
+import {
+  detectZeroRunAutomations,
+  DEFAULT_MIN_AGE_DAYS,
+  FIRING_STATUSES,
+  PRODUCER_BACKED_TRIGGERS,
+} from "../proposals/automation-health-predicate.js";
+import { loadRunCounts } from "../proposals/automation-health.js";
 import { visibleProfileWhere, type TwinGroup } from "./schema-contract.js";
 import type { HealthSection } from "./types.js";
 
@@ -139,6 +148,7 @@ export function summarizeSchemaHygiene(
         zeroEntityKinds:
           "active non-system kinds you can see with no live record anywhere in the pod",
         twins: "see the schema_contract section for the rows",
+        neverRunAutomations: `active event, cron or webhook automations over ${DEFAULT_MIN_AGE_DAYS} days old with no run; manual and draft automations are not counted`,
         lens: "kinds and relation types: rows you can see; automations: workspace rows you can see plus pod-wide ones you created; sessions: yours; proposals: your review queue floor",
         act: "the cleanup pack proposes closing stale work sessions and retiring unused kinds; nothing is applied without your approval",
       },
@@ -157,7 +167,7 @@ export async function gatherSchemaHygieneSignal(params: {
   const staleCutoff = cutoffIso(now, STALE_SESSION_DAYS);
   const proposalCutoff = cutoffIso(now, OLD_PROPOSAL_DAYS);
 
-  const [kinds, relDefRows, neverRun, stale, oldProposals] = await Promise.all([
+  const [kinds, relDefRows, firing, stale, oldProposals] = await Promise.all([
     db
       .select({
         profileId: profiles.id,
@@ -198,11 +208,17 @@ export async function gatherSchemaHygieneSignal(params: {
             : undefined
         )
       ),
+    // Candidates only: the warden predicate below is the rule and re-checks
+    // status, trigger and age.
     db
       .select({
         id: automations.id,
         name: automations.name,
         status: automations.status,
+        triggerType: automations.triggerType,
+        workspaceId: automations.workspaceId,
+        createdBy: automations.createdBy,
+        createdAt: automations.createdAt,
       })
       .from(automations)
       .where(
@@ -212,9 +228,8 @@ export async function gatherSchemaHygieneSignal(params: {
             automations.createdBy,
             userId
           ),
-          inArray(automations.status, ["active", "draft"]),
-          eq(automations.runCount, 0),
-          isNull(automations.lastRunAt),
+          inArray(automations.status, FIRING_STATUSES),
+          inArray(automations.triggerType, PRODUCER_BACKED_TRIGGERS),
           ws
             ? or(
                 isNull(automations.workspaceId),
@@ -257,6 +272,12 @@ export async function gatherSchemaHygieneSignal(params: {
       )
       .limit(PROPOSAL_SCAN_LIMIT),
   ]);
+
+  const neverRun = detectZeroRunAutomations({
+    automations: firing,
+    runCountsByAutomationId: await loadRunCounts(firing.map((a) => a.id)),
+    now,
+  }).map((f) => ({ id: f.automationId, name: f.name, status: f.status }));
 
   const objectWork = oldProposals.filter(
     (p) =>

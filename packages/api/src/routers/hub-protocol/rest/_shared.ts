@@ -18,7 +18,6 @@ import { refusalCodeInCause } from "../../../utils/trpc-cause-code.js";
 import {
   db,
   users,
-  workspaces,
   workspaceMembers,
   proposals,
   eq,
@@ -31,16 +30,14 @@ import { apiKeys } from "@synap/database/schema";
 
 import { hubProtocolRouter } from "../index.js";
 import { createHubProtocolCallerContext } from "../utils.js";
-import {
-  userVisibleWhere,
-  podVisibleWorkspaceWhere,
-} from "../../../utils/user-visible-where.js";
+import { userVisibleWhere } from "../../../utils/user-visible-where.js";
 import { authoredByUser } from "../../../services/agent-identity-service.js";
 import { ownLibraryProposalWhere } from "../../proposals/scope-conditions.js";
 import { getUserWorkspaceIds } from "../../../utils/workspace-membership.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
 import { isAgentCaller } from "../../../services/library/agent-door.js";
 import { assertWorkspaceWrite } from "../../../utils/workspace-write-access.js";
+import { canRead, userPrincipal } from "../../../access/door.js";
 
 /**
  * Module-scoped pino logger.
@@ -941,27 +938,18 @@ export async function verifyWorkspaceWriteAccess(
 }
 
 /**
- * Verify read access for a workspace.
+ * Verify read access for a workspace: the access door's space read
+ * (`canRead(p, {workspace})`, `access/door.ts`) for the person alone.
  *
- * Membership always grants read access. Pod-visible/pod-joinable workspaces are
- * also readable by authenticated users on the same data pod, but this does not
- * grant mutation rights.
+ * Membership (or ownership) always grants read access. Pod-visible/pod-joinable
+ * workspaces are also readable by authenticated users on the same data pod, but
+ * this does not grant mutation rights.
  */
 export async function verifyWorkspaceReadAccess(
   userId: string,
   workspaceId: string
 ): Promise<boolean> {
-  const hasMembership = await verifyWorkspaceAccess(userId, workspaceId);
-  if (hasMembership) return true;
-
-  const podReadable = await db.query.workspaces.findFirst({
-    where: and(
-      eq(workspaces.id, workspaceId),
-      podVisibleWorkspaceWhere(userId)
-    ),
-    columns: { id: true },
-  });
-  return !!podReadable;
+  return canRead(userPrincipal(userId), { workspace: workspaceId });
 }
 
 /**
