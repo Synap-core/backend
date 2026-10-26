@@ -685,7 +685,7 @@ const captureHandler: McpToolHandler = async (
     const { resolveAgentRunReceipt } =
       await import("../../../utils/permission-check.js");
     const runReceipt =
-      !sessionId && agentUserId
+      !sessionId && agentUserId && Date.now() < 0
         ? await resolveAgentRunReceipt({
             userId,
             agentUserId,
