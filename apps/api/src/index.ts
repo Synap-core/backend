@@ -1896,6 +1896,8 @@ try {
               await import("@synap/jobs/utils/session-close.js");
             const { registerStageAdvancer } =
               await import("@synap/jobs/utils/stage-advance.js");
+            const { registerSessionOutcomeDoor } =
+              await import("@synap/jobs/utils/session-outcome-door.js");
             const { registerServiceHealthNotifier } =
               await import("@synap/jobs/workers/intelligence-health-check.js");
             const api = await import("@synap/api");
@@ -1932,6 +1934,11 @@ try {
             // unregistered it throws rather than advancing ungated — so this
             // registration is what makes the automation stage-advance work at all.
             registerStageAdvancer((input) => api.advanceSessionStage(input));
+            // ONE set of session outcome doors (plan v5 T2): an automation's
+            // GRANTED complete_outcome / post_evidence / reevaluate_criterion
+            // reaches the same api functions the approval executor applies.
+            // Fail-closed: unregistered, the step throws.
+            registerSessionOutcomeDoor(api.sessionOutcomeDoor);
             // ONE agent-wake spine: an automation's `channel_message` with
             // `wakeAgent: true` reaches `triggerAutoRespond` — the SAME door
             // every IS auto-respond uses (`a2ai-one-door` tripwire forbids a

@@ -1447,6 +1447,9 @@ const OUTPUT_NODE_TYPES = [
   "webhook",
   "channel_message",
   "session_update",
+  "complete_outcome",
+  "post_evidence",
+  "reevaluate_criterion",
   "set_state",
 ] as const satisfies readonly OutputNodeDef["data"]["outputType"][];
 

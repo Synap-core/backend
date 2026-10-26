@@ -1910,7 +1910,7 @@ export interface OutputNodeDef extends AutomationNodeBase {
 	data: {
 		config: Record<string, unknown>;
 		label: string;
-		outputType: "channel_message" | "entity_create" | "entity_update" | "facet_attach" | "facet_detach" | "facet_update" | "notification" | "relation_create" | "session_update" | "set_state" | "webhook";
+		outputType: "channel_message" | "complete_outcome" | "entity_create" | "entity_update" | "facet_attach" | "facet_detach" | "facet_update" | "notification" | "post_evidence" | "reevaluate_criterion" | "relation_create" | "session_update" | "set_state" | "webhook";
 	};
 }
 export interface LoopNodeDef extends AutomationNodeBase {
