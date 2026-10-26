@@ -335,12 +335,16 @@ export function foldPendingReview(
         oldestDays: pending.oldestDays,
         ...(pending.oldestId ? { oldestLink: openLink(pending.oldestId) } : {}),
         lens: "authored",
-        ...(pending.reviewLater > 0 ? { reviewLater: pending.reviewLater } : {}),
+        ...(pending.reviewLater > 0
+          ? { reviewLater: pending.reviewLater }
+          : {}),
       }
     : {
         count: 0,
         lens: "authored",
-        ...(pending.reviewLater > 0 ? { reviewLater: pending.reviewLater } : {}),
+        ...(pending.reviewLater > 0
+          ? { reviewLater: pending.reviewLater }
+          : {}),
       };
 }
 
