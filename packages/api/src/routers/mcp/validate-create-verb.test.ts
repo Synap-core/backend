@@ -4,14 +4,17 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { validateCreateVerbInput } from "./validate-create-verb.js";
+import {
+  repeatedBaseSegmentWarning,
+  validateCreateVerbInput,
+} from "./validate-create-verb.js";
 
 const VALID_ARGS = {
   toolName: "apify_api",
   verbName: "apify_search_reddit_actors",
   description: "Search the Apify actor marketplace for Reddit scrapers.",
   method: "GET",
-  pathTemplate: "/v2/acts?search={{query}}",
+  pathTemplate: "/acts?search={{query}}",
   parameters: { query: "string" },
 };
 
@@ -175,5 +178,37 @@ describe("validateCreateVerbInput", () => {
       graphql: { ...GRAPHQL_ARGS.graphql, operation: "subscription" },
     });
     expect(result.ok).toBe(false);
+  });
+});
+
+describe("repeatedBaseSegmentWarning (ticket a1471ff1)", () => {
+  const APIFY = "https://api.apify.com/v2";
+
+  it("warns when the path repeats the base URL's last segment", () => {
+    const w = repeatedBaseSegmentWarning(APIFY, "/v2/users/me");
+    expect(w).toContain('starts with "/v2"');
+    expect(w).toContain("…/v2/v2/…");
+    expect(w).toContain('"/users/me"');
+  });
+
+  it("is case-insensitive and ignores a trailing slash on the base", () => {
+    expect(
+      repeatedBaseSegmentWarning(`${APIFY}/`, "V2/acts/{{actorId}}/runs")
+    ).toBeDefined();
+  });
+
+  it("stays quiet for a relative path, an unknown base, or a base with no path", () => {
+    expect(repeatedBaseSegmentWarning(APIFY, "/acts/{{actorId}}/runs")).toBe(
+      undefined
+    );
+    expect(repeatedBaseSegmentWarning(undefined, "/v2/users/me")).toBe(
+      undefined
+    );
+    expect(repeatedBaseSegmentWarning("https://api.example.com", "/v2/x")).toBe(
+      undefined
+    );
+    expect(repeatedBaseSegmentWarning("not a url", "/v2/x")).toBe(undefined);
+    // A segment that merely STARTS with the base segment is not a repeat.
+    expect(repeatedBaseSegmentWarning(APIFY, "/v2beta/x")).toBe(undefined);
   });
 });

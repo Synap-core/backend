@@ -74,6 +74,11 @@ vi.mock("@synap/database", async (importOriginal) => {
       select: vi.fn(() => readChain),
       query: {
         automations: { findFirst: vi.fn(async () => h.existing) },
+        // The floor's owner read for a caller with no member row (Q-A1):
+        // the workspace belongs to someone else.
+        workspaces: {
+          findFirst: vi.fn(async () => ({ ownerId: "another-user" })),
+        },
       },
       insert: vi.fn(() => ({
         values: vi.fn((values: Record<string, unknown>) => {

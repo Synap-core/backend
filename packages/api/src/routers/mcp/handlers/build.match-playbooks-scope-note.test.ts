@@ -85,9 +85,19 @@ describe("synap_match_playbooks — auto-pick note", () => {
     // What matchForEntity really returns: the playbooks VisibilityRule is read
     // with NO workspace lens, so rows come from every visible workspace.
     matchForEntity.mockResolvedValueOnce([
-      { id: "pb-a", score: 2, workspaceId: "ws-2" },
-      { id: "pb-b", score: 1, workspaceId: "ws-3" },
-      { id: "pb-c", score: 1, workspaceId: null },
+      {
+        id: "pb-a",
+        score: 2,
+        workspaceId: "ws-2",
+        signals: [{ type: "kind" }],
+      },
+      {
+        id: "pb-b",
+        score: 1,
+        workspaceId: "ws-3",
+        signals: [{ type: "kind" }],
+      },
+      { id: "pb-c", score: 1, workspaceId: null, signals: [{ type: "kind" }] },
     ] as never);
     const res = await buildHandlers.synap_match_playbooks!({
       toolName: "synap_match_playbooks",

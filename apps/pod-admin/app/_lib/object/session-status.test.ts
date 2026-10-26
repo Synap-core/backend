@@ -4,6 +4,7 @@ import {
   TERMINAL_SESSION_STATUSES,
 } from "@synap-core/types/focus-sessions";
 import {
+  criteriaVerdictMark,
   criterionRows,
   deliverableRows,
   draftSummary,
@@ -311,5 +312,30 @@ describe("moveNotice — only what the new mark cannot say", () => {
       moveNotice("close", { warnings: ["2 criteria are not met."] })
     ).toEqual({ text: "2 criteria are not met.", warning: true });
     expect(moveNotice("update", { status: "paused" })).toBeNull();
+  });
+});
+
+describe("criteriaVerdictMark — ONE mark for the session verdict", () => {
+  it("count from the pod's verdict, tone from its state, its word as the name", () => {
+    expect(
+      criteriaVerdictMark({ passed: 2, total: 3, state: "incomplete" })
+    ).toEqual({
+      kind: "stale",
+      label: "2 of 3 criteria met",
+      state: "Partly checked",
+    });
+    expect(
+      criteriaVerdictMark({ passed: 1, total: 3, state: "failing" })
+    ).toMatchObject({ kind: "down", state: "Not yet met" });
+    expect(
+      criteriaVerdictMark({ passed: 1, total: 1, state: "passing" })
+    ).toEqual({ kind: "healthy", label: "1 of 1 criterion met", state: "Met" });
+  });
+
+  it("no criteria declared: no mark", () => {
+    expect(
+      criteriaVerdictMark({ passed: 0, total: 0, state: "none" })
+    ).toBeNull();
+    expect(criteriaVerdictMark(null)).toBeNull();
   });
 });

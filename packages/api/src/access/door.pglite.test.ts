@@ -332,16 +332,16 @@ describe("assertCanWrite — the write floor on the stored workspace, then the g
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 
-  it("Q-A1: the workspace OWNER writes with no member row (or a viewer row)", async () => {
+  it("Q-A1: the workspace OWNER writes with no member row; a member row, a viewer's, is the authority", async () => {
     await world();
     const noRow = await space(VIEWER, []);
-    const viewerRow = await space(VIEWER, [[VIEWER, "viewer"]]);
+    const demoted = await space(VIEWER, [[VIEWER, "viewer"]]);
     await expect(
       assertCanWrite(userPrincipal(VIEWER), create(noRow))
     ).resolves.toBeUndefined();
     await expect(
-      assertCanWrite(userPrincipal(VIEWER), create(viewerRow))
-    ).resolves.toBeUndefined();
+      assertCanWrite(userPrincipal(VIEWER), create(demoted))
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 
   it("a key's grant must permit the write; a bound key writes only in its space", async () => {
