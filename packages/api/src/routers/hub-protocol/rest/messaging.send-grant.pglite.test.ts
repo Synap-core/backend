@@ -208,8 +208,16 @@ describe("a key's grant bounds a send through the person's account", () => {
   });
 
   it("`messaging.send` in ANOTHER space does not cover this conversation's space", async () => {
+    // It reads the conversation in its own space (scope 1) and may send only
+    // in another one (scope 2): scopes never combine, so the send is refused.
     const res = await send({
-      grant: grant(["messaging.send"], [OTHER_WS]),
+      grant: {
+        scopes: [
+          { permissions: ["channel.read"], workspaceIds: [ALICE_WS] },
+          { permissions: ["messaging.send"], workspaceIds: [OTHER_WS] },
+        ],
+        clientId: "crm-site",
+      },
       agentUserId: APP_AGENT,
     });
     expect(res.status).toBe(403);
