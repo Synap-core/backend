@@ -902,6 +902,11 @@ describe("steady run under an auto rule", () => {
         subjectType: "relation",
         action: "create",
         origin: "sync",
+        // The fan-out carries the relation door's keys: the interaction
+        // reactor (@synap/events) reads `relationType` to see a synced
+        // meeting's attendee.
+        data: expect.objectContaining({ relationType: "attended_by" }),
+        logData: expect.objectContaining({ type: "attended_by" }),
       })
     );
     // No bare fan-out for a write — progress events are the only direct emits.
