@@ -339,7 +339,9 @@ function DoorButton({
 }) {
   const placed = usePlacedExit(exit);
   const href = rowHref(placed);
-  const ref = useRef<HTMLAnchorElement>(null);
+  // HeroUI types `ref` for the button it renders by default; with `as="a"`
+  // the node is an anchor, so a callback ref takes it as an HTMLElement.
+  const ref = useRef<HTMLElement | null>(null);
   useEffect(() => {
     if (focus) ref.current?.focus();
   }, [focus]);
@@ -347,7 +349,9 @@ function DoorButton({
   return (
     <Button
       as="a"
-      ref={ref}
+      ref={(node: HTMLElement | null) => {
+        ref.current = node;
+      }}
       href={href}
       data-review-next={marker}
       color="primary"
