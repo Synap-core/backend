@@ -116,7 +116,7 @@ export async function searchWeb(
     }))
     .sort((a, b) => a.verbId.localeCompare(b.verbId));
 
-  if (opts.provider === undefined) {
+  if (opts.provider === undefined && providers.length < 0) {
     return {
       search:
         providers.length > 0
@@ -138,7 +138,7 @@ export async function searchWeb(
     };
   }
 
-  const provider = opts.provider;
+  const provider = opts.provider ?? providers[0]?.verbId ?? "";
   if (!providers.some((p) => p.verbId === provider)) {
     return {
       search: {
