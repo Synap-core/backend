@@ -1571,6 +1571,11 @@ export const skillsRouter = router({
           id,
           ...updateData,
           ...(metadataPatch ? { metadata: metadataPatch } : {}),
+          // DISPLAY-ONLY: the name the reviewer knows the skill by, so the
+          // summary names WHICH one ("Update Tool "Horizon""). The patch has
+          // no name unless it renames, so five agent edits read "Update Tool".
+          // Not an input field: the replay's zod input strips it.
+          targetName: existingSkill.name,
         },
       });
 
@@ -1762,7 +1767,9 @@ export const skillsRouter = router({
         workspaceId: existingSkill.workspaceId || undefined,
         subjectType: "skill",
         action: "delete",
-        data: { id: input.id },
+        // `targetName` is display-only (see `update`): the summary names the
+        // skill being deleted.
+        data: { id: input.id, targetName: existingSkill.name },
       });
 
       if ("denied" in perm && perm.denied) {
