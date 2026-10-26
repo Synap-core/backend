@@ -250,7 +250,10 @@ async function recordTurnEnd(
 } | null> {
   return db.transaction(async (tx) => {
     const [locked] = await tx
-      .select({ metadata: focusSessions.metadata, origin: focusSessions.origin })
+      .select({
+        metadata: focusSessions.metadata,
+        origin: focusSessions.origin,
+      })
       .from(focusSessions)
       .where(eq(focusSessions.id, sessionId))
       .for("update");

@@ -578,7 +578,11 @@ describe("complete-run settles the run from how the IS turn ended (B8)", () => {
   // Before: a daily automation's run (CRM Hygiene) that kept stopping at its
   // budget put "Keep the run going" in the founder's Needs you.
   const unattended: Array<[string, string, Record<string, unknown>]> = [
-    ["an automation's run (its automation keys)", "playbook", { automationId: "auto-1", automationRunId: "arun-1" }],
+    [
+      "an automation's run (its automation keys)",
+      "playbook",
+      { automationId: "auto-1", automationRunId: "arun-1" },
+    ],
     ["an automation-origin session", "automation", {}],
   ];
   for (const [name, origin, meta] of unattended) {
@@ -598,7 +602,11 @@ describe("complete-run settles the run from how the IS turn ended (B8)", () => {
       expect(h.triggers).toHaveLength(MAX_AUTO_CONTINUATIONS);
 
       const run = (
-        await q<{ status: string; error: string | null; completed_at: string | null }>(
+        await q<{
+          status: string;
+          error: string | null;
+          completed_at: string | null;
+        }>(
           `select status, error, completed_at from playbook_runs where id = $1`,
           [runId]
         )
@@ -610,7 +618,9 @@ describe("complete-run settles the run from how the IS turn ended (B8)", () => {
 
       // Nobody was asked: no slot, no question in the room.
       const slots = (await sessionRow(sessionId)).expected_outputs;
-      expect(slots.find((s) => s.label === RUN_CONTINUE_SLOT_LABEL)).toBeUndefined();
+      expect(
+        slots.find((s) => s.label === RUN_CONTINUE_SLOT_LABEL)
+      ).toBeUndefined();
       expect(slots.some((s) => s.owner === "human")).toBe(false);
       const room = await roomMessages(channelId);
       expect(
@@ -648,11 +658,20 @@ describe("complete-run settles the run from how the IS turn ended (B8)", () => {
   });
 
   it("hasNoPersonInTheLoop reads origin, the automation keys and the triage receipt", () => {
-    expect(hasNoPersonInTheLoop({ origin: "playbook", metadata: {} })).toBe(false);
-    expect(hasNoPersonInTheLoop({ origin: "human", metadata: null })).toBe(false);
-    expect(hasNoPersonInTheLoop({ origin: "automation", metadata: null })).toBe(true);
+    expect(hasNoPersonInTheLoop({ origin: "playbook", metadata: {} })).toBe(
+      false
+    );
+    expect(hasNoPersonInTheLoop({ origin: "human", metadata: null })).toBe(
+      false
+    );
+    expect(hasNoPersonInTheLoop({ origin: "automation", metadata: null })).toBe(
+      true
+    );
     expect(
-      hasNoPersonInTheLoop({ origin: "playbook", metadata: { automationRunId: "r" } })
+      hasNoPersonInTheLoop({
+        origin: "playbook",
+        metadata: { automationRunId: "r" },
+      })
     ).toBe(true);
     expect(
       hasNoPersonInTheLoop({
