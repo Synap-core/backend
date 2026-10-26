@@ -164,6 +164,41 @@ describe("synap_get_entities — pages to the end", () => {
   });
 });
 
+describe("synap_get_entities — sort", () => {
+  const call = async (args: Record<string, unknown>) =>
+    json(
+      (await readHandlers.synap_get_entities!(
+        ctx("synap_get_entities", args)
+      )) as { content: Array<{ text?: string }> }
+    );
+
+  it("forwards sortBy/sortDir to the list door as orderBy", async () => {
+    getEntities.mockClear();
+    await call({ sortBy: "updatedAt", sortDir: "asc" });
+    expect(getEntities.mock.calls[0]![0]).toMatchObject({
+      orderBy: { field: "updatedAt", dir: "asc" },
+    });
+  });
+
+  it("sortDir alone sorts createdAt; no sort args sends no orderBy", async () => {
+    getEntities.mockClear();
+    await call({ sortDir: "asc" });
+    expect(getEntities.mock.calls[0]![0]).toMatchObject({
+      orderBy: { field: "createdAt", dir: "asc" },
+    });
+    getEntities.mockClear();
+    await call({});
+    expect(getEntities.mock.calls[0]![0]).not.toHaveProperty("orderBy");
+  });
+
+  it("an unknown sortBy is an error, never a silently unsorted list", async () => {
+    getEntities.mockClear();
+    const out = await call({ sortBy: "lastInteractionAt" });
+    expect(out.error).toMatch(/Unsupported sort/);
+    expect(getEntities).not.toHaveBeenCalled();
+  });
+});
+
 describe("synap_list_sessions — pages past 50", () => {
   it("walks every session once in a stable order", async () => {
     const { seen, pages, last } = await walk(
