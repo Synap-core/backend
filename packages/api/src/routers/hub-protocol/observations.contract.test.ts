@@ -64,11 +64,11 @@ vi.mock("@synap/database", async (importOriginal) => {
 
 // Workspace access is stubbed: the door now clamps a caller-supplied
 // workspaceId to what the user can actually see, and that lookup hits the DB.
-vi.mock("./rest/_shared.js", async (importOriginal) => {
+vi.mock("../../utils/workspace-membership.js", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return {
     ...actual,
-    getUserAccessibleWorkspaceIds: async () => [WS_VISIBLE],
+    getUserWorkspaceIds: async () => [WS_VISIBLE],
   };
 });
 

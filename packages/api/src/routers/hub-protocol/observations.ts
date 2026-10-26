@@ -69,7 +69,10 @@ import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { apiKeyService } from "../../services/api-keys.js";
 import { resolveConfinedWorkspace } from "./confine-workspace.js";
 import { grantWriteDenial } from "../../utils/grant-write-check.js";
-import { getUserAccessibleWorkspaceIds } from "./rest/_shared.js";
+// Not through `rest/_shared.js`: that module imports this router's parent
+// (`./index.js`), so a caller entering here first (routers/system.ts) built
+// the hub router before this file had defined `observationsRouter`.
+import { getUserWorkspaceIds } from "../../utils/workspace-membership.js";
 import { PG_UUID_RE } from "./rest/_codecs/_openapi.js";
 
 /**
@@ -278,7 +281,7 @@ export const observationsRouter = router({
       // Dropping (not rejecting) is deliberate: a mis-tagged workspace should
       // not cost a producer the FACT, which is the thing we promised never to
       // lose. It lands pod-wide instead, and says so.
-      const accessible = new Set(await getUserAccessibleWorkspaceIds(userId));
+      const accessible = new Set(await getUserWorkspaceIds(userId));
       const resolveWorkspace = (requested?: string): string | undefined => {
         const confined = resolveConfinedWorkspace(
           ctx.keyType as string | undefined,
