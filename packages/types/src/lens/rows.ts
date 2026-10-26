@@ -557,14 +557,14 @@ export function lensRowOfNeedsYou<T extends LensNeedsYouSignal>(
             { askerName: s.by?.label, sessionId: row.session?.id ?? null }
           )
         : null;
-    const by = rowAsker(s, card?.asker ?? null);
-    const cause =
-      card?.asker?.kind === "cause"
+    const asker = card?.asker ?? null;
+    const by = rowAsker(s, asker);
+    const causeRef = asker?.kind === "cause" ? asker.cause.ref : undefined;
+    const cause: LensRowCause | null =
+      asker?.kind === "cause"
         ? {
-            label: card.asker.label,
-            door: card.asker.cause.ref
-              ? { kind: card.asker.cause.ref.kind, id: card.asker.cause.ref.id }
-              : null,
+            label: asker.label,
+            door: causeRef ? { kind: causeRef.kind, id: causeRef.id } : null,
           }
         : null;
     return {
