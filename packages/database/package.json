@@ -88,6 +88,7 @@
     "@synap-core/core": "workspace:*",
     "@synap-core/field-crypto": "workspace:*",
     "@synap-core/markdown-core": "workspace:*",
+    "@synap-core/types": "workspace:*",
     "@synap/governance-policy": "workspace:*",
     "@synap/storage": "workspace:*",
     "bcrypt": "^6.0.0",
@@ -97,7 +98,7 @@
     "pgvector": "^0.2.1",
     "postgres": "^3.4.7",
     "tsx": "^4.7.0",
-    "zod": "^4.3.6"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/bcrypt": "^6.0.0",

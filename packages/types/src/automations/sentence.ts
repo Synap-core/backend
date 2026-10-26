@@ -29,7 +29,7 @@
 // label below is COMPOSED ("Run" + "playbook") rather than hand-written.
 import { resolveActionLabel, resolveObjectNoun } from "../vocabulary/index.js";
 import { readPlaybookRunMode } from "./rule-run-policy.js";
-import type { PlaybookRunNodeDef } from "@synap/database";
+import type { PlaybookRunNodeDef } from "./flow.js";
 
 // ── Value-model ───────────────────────────────────────────────────────────────
 

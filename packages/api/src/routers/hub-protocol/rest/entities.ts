@@ -34,6 +34,10 @@ import { storage } from "@synap/storage";
 import { ownerPrivateVisibleWhere } from "../../../utils/user-visible-where.js";
 import { accessScopeWhere } from "../../../utils/project-scope.js";
 import { resolveFacetVisibilityScope } from "../../../utils/workspace-membership.js";
+import {
+  MAX_LINKED_FILES_PER_ROW,
+  loadLinkedFileRefs,
+} from "../../../utils/stored-file-access.js";
 
 import {
   uploadBufferAsFileEntity,
@@ -87,7 +91,10 @@ import {
   UpdateEntityResponseSchema,
   LifecycleConflictResponseSchema,
   WireEntitySchema,
+  WireListedEntitySchema,
+  type WireListedEntity,
   entityToWire,
+  entityToWireWithFacets,
 } from "./_codecs/entity.js";
 import {
   ErrorSchema,
@@ -95,18 +102,18 @@ import {
   uuidQueryParam,
 } from "./_codecs/_openapi.js";
 import {
+  actingUserIdFor,
   getCaller,
   getUserAccessibleWorkspaceIds,
   httpStatusForTrpcError,
   hasScope,
   isUuid,
   logger,
-  mayActAsUser,
   resolveActingContext,
   resolveActorId,
   uuidPathParam,
   verifyWorkspaceReadAccess,
-  verifyWorkspaceAccess,
+  verifyWorkspaceWriteAccess,
   type HubHono,
   type HubVariables,
   requireUuidParam,
@@ -508,6 +515,29 @@ export function registerEntitiesRoutes(app: HubHono): void {
           .describe(
             "Same as facetSlug but by profile id. Wins if both are set."
           ),
+        includeFacets: z
+          .enum(["true", "false"])
+          .optional()
+          .describe(
+            "`true` = each row also carries `facetSlugs` and `facets` (each " +
+              "role facet with its overlay `properties` and `status`, e.g. a " +
+              "lead's `leadStage`), only on a row wearing ≥1 role, loaded in " +
+              "one batch per page under the same lens as the rows. Default " +
+              "`false`: rows carry no facets. 400 with `q`."
+          ),
+        includeMedia: z
+          .enum(["true", "false"])
+          .optional()
+          .describe(
+            "`true` = each row that links a file (`row --references--> " +
+              "file`) also carries `media`: up to " +
+              `${MAX_LINKED_FILES_PER_ROW} ` +
+              "`{ id, title, mimeType }`, oldest link first, only files the " +
+              "caller may read on its own (the `GET /files/{id}/url` floor), " +
+              "loaded in one batch per page. Sign one with " +
+              "`GET /files/{id}/url`. Default `false`: rows carry no media. " +
+              "400 with `q`."
+          ),
         createdAfter: z
           .string()
           .optional()
@@ -533,12 +563,15 @@ export function registerEntitiesRoutes(app: HubHono): void {
       ...trpcErrorResponses,
       200: {
         description: "Array of entities",
-        content: { "application/json": { schema: z.array(WireEntitySchema) } },
+        content: {
+          "application/json": { schema: z.array(WireListedEntitySchema) },
+        },
       },
       400: {
         description:
           "Malformed or unsupported filter combination — an unparseable " +
-          "createdAfter/createdBefore, or a date window combined with `q`.",
+          "createdAfter/createdBefore, or a date window, `includeFacets` or " +
+          "`includeMedia` combined with `q`.",
         content: { "application/json": { schema: ErrorSchema } },
       },
       401: {
@@ -587,6 +620,28 @@ export function registerEntitiesRoutes(app: HubHono): void {
     const includePodWide = query.includePodWide !== "false";
     const facetSlug = query.facetSlug || undefined;
     const facetProfileId = query.facetProfileId || undefined;
+    const includeFacets = query.includeFacets === "true";
+    // Default rows stay `entityToWire` exactly: the list already annotates
+    // `facetSlugs`, and only a caller that asked may see them.
+    const toWire: (e: unknown) => WireListedEntity = includeFacets
+      ? entityToWireWithFacets
+      : entityToWire;
+    const includeMedia = query.includeMedia === "true";
+    // The page's linked files, annotated once the page is final (after any
+    // merge, sort and window), so a row that is not returned costs nothing.
+    const withMedia = async (
+      page: WireListedEntity[]
+    ): Promise<WireListedEntity[]> => {
+      if (!includeMedia) return page;
+      const media = await loadLinkedFileRefs(
+        userId,
+        page.flatMap((r) => (r.id ? [r.id] : []))
+      );
+      return page.map((r) => {
+        const refs = r.id ? media.get(r.id) : undefined;
+        return refs ? { ...r, media: refs } : r;
+      });
+    };
 
     // CREATION-DATE WINDOW. Parsed HERE rather than handed on as a string so an
     // unparseable date is a 400 the caller can see, not a silent `Invalid Date`
@@ -633,6 +688,28 @@ export function registerEntitiesRoutes(app: HubHono): void {
         {
           error:
             "withoutProject cannot be combined with q — full-text search does not apply the project lens. List without q.",
+        },
+        400
+      );
+    }
+    // Search documents carry every role slug (trusted indexing), not the
+    // caller's facet lens, so `q` cannot answer this either.
+    if (includeFacets && q.length > 0) {
+      return c.json(
+        {
+          error:
+            "includeFacets cannot be combined with q — full-text search does not apply the facet lens. List without q.",
+        },
+        400
+      );
+    }
+    // The `q` branch returns search documents, not list rows: it has no page
+    // to annotate.
+    if (includeMedia && q.length > 0) {
+      return c.json(
+        {
+          error:
+            "includeMedia cannot be combined with q — full-text search results carry no linked files. List without q.",
         },
         400
       );
@@ -750,6 +827,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
               ...(withoutProject ? { withoutProject } : {}),
               ...(facetSlug ? { facetSlug } : {}),
               ...(facetProfileId ? { facetProfileId } : {}),
+              ...(includeFacets ? { includeFacets } : {}),
               ...(createdAfter ? { createdAfter } : {}),
               ...(createdBefore ? { createdBefore } : {}),
             })
@@ -782,13 +860,28 @@ export function registerEntitiesRoutes(app: HubHono): void {
         const fulfilled = settled.flatMap((r) =>
           r.status === "fulfilled" ? (r.value as unknown[]) : []
         );
-        let rows = (fulfilled as unknown[]).map((e) => entityToWire(e));
-        const seen = new Set<string>();
+        let rows = (fulfilled as unknown[]).map((e) => toWire(e));
+        const seen = new Map<string, WireListedEntity>();
         rows = rows.filter((r) => {
-          const id = (r as { id?: string }).id;
-          if (!id || seen.has(id)) return false;
-          seen.add(id);
-          return true;
+          const id = r.id;
+          if (!id) return false;
+          const first = seen.get(id);
+          if (!first) {
+            seen.set(id, r);
+            return true;
+          }
+          // A pod-wide row comes back from every lens, each annotated with
+          // that lens's facets: the merged row wears their union.
+          const known = new Set(first.facets?.map((f) => f.facetId));
+          const added = (r.facets ?? []).filter((f) => !known.has(f.facetId));
+          if (added.length > 0) {
+            first.facets = [...(first.facets ?? []), ...added];
+            first.facetSlugs = [
+              ...(first.facetSlugs ?? []),
+              ...added.map((f) => f.slug),
+            ];
+          }
+          return false;
         });
         if (
           sortParam.includes("updatedAt") &&
@@ -804,7 +897,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
             return tb - ta;
           });
         }
-        return c.json(rows.slice(offset, offset + limit), 200);
+        return c.json(await withMedia(rows.slice(offset, offset + limit)), 200);
       }
 
       const listed = await caller.entities.getEntities({
@@ -818,11 +911,12 @@ export function registerEntitiesRoutes(app: HubHono): void {
         ...(withoutProject ? { withoutProject } : {}),
         ...(facetSlug ? { facetSlug } : {}),
         ...(facetProfileId ? { facetProfileId } : {}),
+        ...(includeFacets ? { includeFacets } : {}),
         ...(createdAfter ? { createdAfter } : {}),
         ...(createdBefore ? { createdBefore } : {}),
       });
 
-      let rows = (listed as unknown[]).map((e) => entityToWire(e));
+      let rows = (listed as unknown[]).map((e) => toWire(e));
 
       if (
         sortParam.includes("updatedAt") &&
@@ -835,7 +929,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
         });
       }
 
-      return c.json(rows, 200);
+      return c.json(await withMedia(rows), 200);
     } catch (err) {
       logger.error({ err, userId }, "GET /entities failed");
       return c.json(
@@ -990,13 +1084,13 @@ export function registerEntitiesRoutes(app: HubHono): void {
     // (the access check below verifies THIS user against the entity's workspace).
     const authUserId = c.get("userId") as string | undefined;
     if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
-    if (!mayActAsUser(c, query.userId)) {
+    const userId = actingUserIdFor(c, query.userId);
+    if (!userId) {
       return c.json(
         { error: "userId does not match the authenticated session" },
         403
       );
     }
-    const userId = query.userId ?? authUserId;
     try {
       const result = await db.query.entities.findFirst({
         where: and(
@@ -1384,13 +1478,14 @@ export function registerEntitiesRoutes(app: HubHono): void {
     if (isPodWide && !body.workspaceId) {
       const authUserId = c.get("userId") as string | undefined;
       if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
-      if (!mayActAsUser(c, body.userId)) {
+      const actingUserId = actingUserIdFor(c, body.userId);
+      if (!actingUserId) {
         return c.json(
           { error: "userId does not match the authenticated session" },
           403
         );
       }
-      userId = body.userId ?? authUserId;
+      userId = actingUserId;
       effectiveWorkspaceId = null;
     } else {
       // Reached when an explicit body.workspaceId is present, or the profile is
@@ -1701,13 +1796,13 @@ export function registerEntitiesRoutes(app: HubHono): void {
     // route below.
     const authUserId = c.get("userId") as string | undefined;
     if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
-    if (!mayActAsUser(c, body.userId)) {
+    const userId = actingUserIdFor(c, body.userId);
+    if (!userId) {
       return c.json(
         { error: "userId does not match the authenticated session" },
         403
       );
     }
-    const userId = body.userId ?? authUserId;
 
     try {
       // Resolve + verify the TARGET entity is visible to the acting user, and
@@ -1721,7 +1816,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
           // WRITE-TARGET existence gate — NO facetLens (a role-shared read lens
           // must never authorize a write target). Canonical floor requires real
           // workspace membership for a workspaced target; a subsequent
-          // verifyWorkspaceAccess re-checks it before the write lands.
+          // verifyWorkspaceWriteAccess re-checks it before the write lands.
           accessScopeWhere({
             workspaceIdColumn: entities.workspaceId,
             entityIdColumn: entities.id,
@@ -1736,16 +1831,16 @@ export function registerEntitiesRoutes(app: HubHono): void {
       // target's scope. The file ALWAYS lands in the target's own scope (never a
       // caller-supplied workspaceId — that would let a caller inject into a
       // foreign workspace via a pod-personal target). A workspace-scoped target
-      // requires MEMBERSHIP (verifyWorkspaceAccess), not mere pod-read-visibility
-      // — reads must not authorize writes. A pod-personal target (null ws) is
+      // requires the WRITE role there (verifyWorkspaceWriteAccess), not mere
+      // membership or pod-read-visibility — reads must not authorize writes. A pod-personal target (null ws) is
       // already gated above to the caller's own entities.
       const effectiveWorkspaceId = target.workspaceId ?? null;
       if (
         effectiveWorkspaceId &&
-        !(await verifyWorkspaceAccess(userId, effectiveWorkspaceId))
+        !(await verifyWorkspaceWriteAccess(userId, effectiveWorkspaceId))
       ) {
         return c.json(
-          { error: "Access denied: not a member of the entity's workspace" },
+          { error: "Access denied: no write access to the entity's workspace" },
           403
         );
       }
@@ -1760,7 +1855,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
       // contact" work (the primary capture case), since contacts are pod-scoped.
       let linkWorkspaceId: string | null = effectiveWorkspaceId;
       if (!linkWorkspaceId && body.workspaceId) {
-        if (await verifyWorkspaceAccess(userId, body.workspaceId)) {
+        if (await verifyWorkspaceWriteAccess(userId, body.workspaceId)) {
           linkWorkspaceId = body.workspaceId;
         }
       }
@@ -2041,10 +2136,10 @@ export function registerEntitiesRoutes(app: HubHono): void {
   //     userId? } — ANY allowed mime (same `isAllowedMimeType` allowlist as the
   //     multipart branch). Originally the Discord image carry-through contract
   //     (Wave 1); the mime gate is now the shared allowlist, not image/* only.
-  // Either way the blob flows through uploadBufferAsFileEntity (provenance =
-  // human), which now mints a `document` entity by default. Response shape stays
-  // `{ fileEntityId, documentId }` — the `fileEntityId` field NAME is kept for
-  // backward compatibility even though the kind is now `document`.
+  // Either way the blob flows through the GOVERNED create
+  // (`createGovernedFileEntityFromBuffer`, provenance = the agent for an agent
+  // key). Response shape stays `{ fileEntityId, documentId }` when applied, or
+  // the proposal handle under a stricter policy.
   app.post("/files", async (c) => {
     if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
@@ -2059,8 +2154,8 @@ export function registerEntitiesRoutes(app: HubHono): void {
     }
 
     const contentType = c.req.header("content-type") ?? "";
-    // Multipart = the general agent upload door → GOVERNED create path below.
-    // JSON/base64 = the original Discord image contract → unchanged direct path.
+    // Multipart = the general agent upload door; JSON/base64 = the original
+    // Discord image contract. Both go through the GOVERNED create path below.
     const isMultipart = contentType.includes("multipart/form-data");
     let buffer: Buffer;
     let mimeType: string;
@@ -2178,69 +2273,36 @@ export function registerEntitiesRoutes(app: HubHono): void {
     // attachments route.
     const authUserId = c.get("userId") as string | undefined;
     if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
-    if (!mayActAsUser(c, bodyUserId)) {
+    const userId = actingUserIdFor(c, bodyUserId);
+    if (!userId) {
       return c.json(
         { error: "userId does not match the authenticated session" },
         403
       );
     }
-    const userId = bodyUserId ?? authUserId;
 
     if (!bodyWorkspaceId) {
       return c.json({ error: "workspaceId is required" }, 400);
     }
     // Item 3 Part 3: confine a bound service key to its workspace before the
-    // membership check and the DIRECT uploadBufferAsFileEntity write.
+    // write-role check and the governed create.
     const workspaceId =
       getConfinedWorkspace(c, bodyWorkspaceId) ?? bodyWorkspaceId;
 
-    // Writing into a workspace requires MEMBERSHIP — reads must not authorize
-    // writes (same rule as the attachments route). The entity itself lands
-    // pod-wide via the placement resolver (document is a pod-scope kind); the
-    // workspace is a storage-path + auth context signal.
-    if (!(await verifyWorkspaceAccess(userId, workspaceId))) {
+    // Writing into a workspace requires the WRITE role there — membership
+    // alone (a viewer) must not authorize writes (same rule as the attachments
+    // route). The workspace is a storage-path + auth context signal; the
+    // governed create below places the entity.
+    if (!(await verifyWorkspaceWriteAccess(userId, workspaceId))) {
       return c.json(
-        { error: "Access denied: not a member of the target workspace" },
+        { error: "Access denied: no write access to the target workspace" },
         403
       );
     }
 
     const agentUserId = c.get("agentUserId") as string | undefined;
 
-    // ── JSON/base64 mode: UNCHANGED direct path ────────────────────────────
-    // The original Discord attachment carry-through (on-behalf-of-a-human),
-    // now accepting any allowed mime (not just image/*).
-    // Kept on the direct `uploadBufferAsFileEntity` path to avoid any behavior
-    // change to the Discord bridge; provenance is attributed to the agent when
-    // an agent key uploads.
-    if (!isMultipart) {
-      try {
-        const uploaded = await uploadBufferAsFileEntity({
-          userId,
-          workspaceId,
-          buffer,
-          mimeType,
-          filename,
-          title: bodyTitle,
-          actorAgentUserId: agentUserId,
-        });
-        return c.json(
-          {
-            fileEntityId: uploaded.entity.id,
-            documentId: uploaded.document.id,
-          },
-          200
-        );
-      } catch (err) {
-        logger.error({ err }, "POST /files failed");
-        return c.json(
-          { error: err instanceof Error ? err.message : "Unknown error" },
-          httpStatusForTrpcError(err)
-        );
-      }
-    }
-
-    // ── Multipart (general agent) mode: GOVERNED path ──────────────────────
+    // ── Both modes: GOVERNED path ──────────────────────────────────────────
     // Store the blob → documents row + immutable v1 version (NO entity), then
     // mint the `file` entity through the GOVERNED `entities.create` procedure so
     // this write passes the SAME permission membrane as every other create:
@@ -2403,13 +2465,13 @@ export function registerEntitiesRoutes(app: HubHono): void {
     if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
     const bodyUserId =
       typeof body.userId === "string" ? body.userId : undefined;
-    if (!mayActAsUser(c, bodyUserId)) {
+    const userId = actingUserIdFor(c, bodyUserId);
+    if (!userId) {
       return c.json(
         { error: "userId does not match the authenticated session" },
         403
       );
     }
-    const userId = bodyUserId ?? authUserId;
     const pin = resolveWorkspacePin(
       body,
       typeof body.workspaceId === "string" && body.workspaceId
@@ -2422,9 +2484,9 @@ export function registerEntitiesRoutes(app: HubHono): void {
     }
     const workspaceId =
       getConfinedWorkspace(c, pin.workspaceId) ?? pin.workspaceId;
-    if (!(await verifyWorkspaceAccess(userId, workspaceId))) {
+    if (!(await verifyWorkspaceWriteAccess(userId, workspaceId))) {
       return c.json(
-        { error: "Access denied: not a member of the target workspace" },
+        { error: "Access denied: no write access to the target workspace" },
         403
       );
     }
@@ -2477,28 +2539,28 @@ export function registerEntitiesRoutes(app: HubHono): void {
     if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
     const bodyUserId =
       typeof body.userId === "string" ? body.userId : undefined;
-    if (!mayActAsUser(c, bodyUserId)) {
+    const userId = actingUserIdFor(c, bodyUserId);
+    if (!userId) {
       return c.json(
         { error: "userId does not match the authenticated session" },
         403
       );
     }
-    const userId = bodyUserId ?? authUserId;
     const fields = parseUploadEntityFields(body);
     if ("error" in fields) return c.json({ error: fields.error }, 400);
     const uploadToken =
       typeof body.uploadToken === "string" ? body.uploadToken : "";
-    // The workspace was bound into the token at request time; re-check
-    // membership + key confinement on it now (membership may have changed).
+    // The workspace was bound into the token at request time; re-check the
+    // write role + key confinement on it now (membership may have changed).
     const bound = parsePresignedUploadKey(uploadToken);
     if (bound?.workspaceId) {
       const confined = getConfinedWorkspace(c, bound.workspaceId);
       if (confined && confined !== bound.workspaceId) {
         return c.json({ error: "Key is confined to another workspace" }, 403);
       }
-      if (!(await verifyWorkspaceAccess(userId, bound.workspaceId))) {
+      if (!(await verifyWorkspaceWriteAccess(userId, bound.workspaceId))) {
         return c.json(
-          { error: "Access denied: not a member of the target workspace" },
+          { error: "Access denied: no write access to the target workspace" },
           403
         );
       }
@@ -2612,13 +2674,13 @@ export function registerEntitiesRoutes(app: HubHono): void {
     const body = c.req.valid("json");
     const authUserId = c.get("userId") as string | undefined;
     if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
-    if (!mayActAsUser(c, body.userId)) {
+    const userId = actingUserIdFor(c, body.userId);
+    if (!userId) {
       return c.json(
         { error: "userId does not match the authenticated session" },
         403
       );
     }
-    const userId = body.userId ?? authUserId;
     try {
       const caller = await getCaller(c, {
         workspaceId: getConfinedWorkspace(c, body.workspaceId ?? null) ?? null,
@@ -2708,13 +2770,13 @@ export function registerEntitiesRoutes(app: HubHono): void {
 
     const authUserId = c.get("userId") as string | undefined;
     if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
-    if (!mayActAsUser(c, body.userId)) {
+    const userId = actingUserIdFor(c, body.userId);
+    if (!userId) {
       return c.json(
         { error: "userId does not match the authenticated session" },
         403
       );
     }
-    const userId = body.userId ?? authUserId;
 
     try {
       const target = await db.query.entities.findFirst({
@@ -2886,13 +2948,13 @@ export function registerEntitiesRoutes(app: HubHono): void {
 
     const authUserId = c.get("userId") as string | undefined;
     if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
-    if (!mayActAsUser(c, q.userId)) {
+    const userId = actingUserIdFor(c, q.userId);
+    if (!userId) {
       return c.json(
         { error: "userId does not match the authenticated session" },
         403
       );
     }
-    const userId = q.userId ?? authUserId;
 
     try {
       const target = await db.query.entities.findFirst({
@@ -3154,13 +3216,13 @@ export function registerEntitiesRoutes(app: HubHono): void {
     const body = c.req.valid("json");
     const authUserId = c.get("userId") as string | undefined;
     if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
-    if (!mayActAsUser(c, body.userId)) {
+    const userId = actingUserIdFor(c, body.userId);
+    if (!userId) {
       return c.json(
         { error: "userId does not match the authenticated session" },
         403
       );
     }
-    const userId = body.userId ?? authUserId;
     try {
       const ctxAgentUserId = c.get("agentUserId") as string | undefined;
       const resolvedAgentUserId = body.agentUserId ?? ctxAgentUserId;
@@ -3262,13 +3324,13 @@ export function registerEntitiesRoutes(app: HubHono): void {
     const body = c.req.valid("json");
     const authUserId = c.get("userId") as string | undefined;
     if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
-    if (!mayActAsUser(c, body.userId)) {
+    const userId = actingUserIdFor(c, body.userId);
+    if (!userId) {
       return c.json(
         { error: "userId does not match the authenticated session" },
         403
       );
     }
-    const userId = body.userId ?? authUserId;
     try {
       const ctxAgentUserId = c.get("agentUserId") as string | undefined;
       const resolvedAgentUserId = body.agentUserId ?? ctxAgentUserId;
@@ -3342,13 +3404,13 @@ export function registerEntitiesRoutes(app: HubHono): void {
     const q = c.req.valid("query");
     const authUserId = c.get("userId") as string | undefined;
     if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
-    if (!mayActAsUser(c, q.userId)) {
+    const userId = actingUserIdFor(c, q.userId);
+    if (!userId) {
       return c.json(
         { error: "userId does not match the authenticated session" },
         403
       );
     }
-    const userId = q.userId ?? authUserId;
     try {
       const ctxAgentUserId = c.get("agentUserId") as string | undefined;
       const resolvedAgentUserId = q.agentUserId ?? ctxAgentUserId;

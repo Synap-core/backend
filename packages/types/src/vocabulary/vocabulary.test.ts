@@ -37,6 +37,9 @@ import {
   NOTIFICATION_CATEGORY_LABELS,
   resolveNotificationRoutingRuleLabel,
   NOTIFICATION_ROUTING_RULE_LABELS,
+  normalizeObjectKind,
+  resolveToolLabel,
+  AIM_LABEL,
 } from "./index.js";
 
 describe("capture vocabulary", () => {
@@ -599,7 +602,7 @@ describe("buildActionLabel — a button's words", () => {
       "Create"
     );
     expect(buildActionLabel({ action: "archive", objectKind: "track" })).toBe(
-      "Archive track"
+      "Archive goal"
     );
   });
 });
@@ -1103,6 +1106,12 @@ describe("resolveObjectNounPlural", () => {
     expect(resolveObjectNounPlural("some_class")).toBe("Some classes");
   });
 
+  it('"series" is the same in the plural (consent: "Serieses")', () => {
+    expect(resolveObjectNounPlural("series")).toBe("Series");
+    expect(resolveObjectNounPlural("video_series")).toBe("Video series");
+    expect(pluralizeNoun("Series")).toBe("Series");
+  });
+
   it('a Greek -sis / -xis noun takes -ses / -xes (homes: "Hypothesises")', () => {
     expect(resolveObjectNounPlural("hypothesis")).toBe("Hypotheses");
     expect(resolveObjectNounPlural("some_analysis")).toBe("Some analyses");
@@ -1334,24 +1343,38 @@ describe("resolveNotificationRoutingRuleLabel", () => {
   });
 });
 
-describe("track — a method running inside a project (0272)", () => {
+describe("track — a goal pursued inside a project (0272); the user word is Goal", () => {
   it("is a registry kind with its own identity, not a humanized token", () => {
-    expect(OBJECT_KINDS.track?.label).toBe("Track");
+    expect(OBJECT_KINDS.track?.label).toBe("Goal");
     expect(OBJECT_KINDS.track?.icon).not.toBe(FALLBACK_ICON);
-    expect(resolveObjectNounPlural("track")).toBe("Tracks");
+    expect(resolveObjectNounPlural("track")).toBe("Goals");
+  });
+  it("the kind TOKEN is unchanged — only the word moved (89d53f13)", () => {
+    expect(OBJECT_KINDS.track?.kind).toBe("track");
+    expect(normalizeObjectKind("tracks")).toBe("track");
   });
   it("the table name resolves to the same noun (not 'Project track')", () => {
     // Discriminating: without the alias rows `humanizeToken` renders
     // "Project track" / "Project tracks".
-    expect(resolveObjectNoun("project_track")).toBe("Track");
-    expect(resolveObjectNoun("project_tracks")).toBe("Track");
+    expect(resolveObjectNoun("project_track")).toBe("Goal");
+    expect(resolveObjectNoun("project_tracks")).toBe("Goal");
     expect(
       buildObjectActionTitle({
         action: "create",
         objectKind: "project_track",
         objectName: "Content",
       })
-    ).toBe('Create Track "Content"');
+    ).toBe('Create Goal "Content"');
+  });
+  it("a goal's tools read in the goal's word, never 'track'", () => {
+    for (const mood of ["progressive", "past", "imperative"] as const) {
+      expect(resolveToolLabel("set_track_params", mood)).not.toMatch(/track/i);
+      expect(resolveToolLabel("start_track", mood)).not.toMatch(/track/i);
+      expect(resolveToolLabel("list_tracks", mood)).not.toMatch(/track/i);
+    }
+    expect(resolveToolLabel("set_track_params", "imperative")).toBe(
+      "Set goal parameters"
+    );
   });
 });
 
@@ -1620,5 +1643,13 @@ describe("sentenceCasePlural — a kind's plural, words not a slug", () => {
 
   it("sentenceCaseLabel keeps humanizing a TOKEN label (its job is unchanged)", () => {
     expect(sentenceCaseLabel("works_at")).toBe("Works at");
+  });
+});
+
+describe("the one-line aim of a sitting (D3, 2026-10-23)", () => {
+  it("is 'Aim' — never the goal's word, never the Outcomes list's", () => {
+    expect(AIM_LABEL).toBe("Aim");
+    expect(AIM_LABEL).not.toBe(resolveObjectNoun("track"));
+    expect(AIM_LABEL.toLowerCase()).not.toMatch(/^outcome/);
   });
 });

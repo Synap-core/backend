@@ -1094,6 +1094,9 @@ const GRANT_SUBJECT_FOLDS: Readonly<Record<string, string>> = {
  */
 const GRANT_ACTION_FOLDS: Readonly<Record<string, string>> = {
   "focus_session/assign_agent": "update",
+  // The same hand-off, of a GOAL (W3): a key that may update a track may ask
+  // to hand it to another agent as a delegate.
+  "track/assign_agent": "update",
   // An update pack is N entity updates filed as one review: a key that may
   // update entities may ask for it.
   "entity/update_pack": "update",
@@ -1406,6 +1409,16 @@ export interface AgentPolicyInput {
    * an `auto` from any other row never widens an organise write.
    */
   governanceRuleIsOwnOrganise?: boolean;
+  /**
+   * FB1020 B6 — the write lands as the PERSON's DRAFT and does nothing until
+   * they accept it: an agent's direct playbook run is held on a draft session
+   * (`runPlaybook`, `metadata.heldRun`) and only the person's accept starts it.
+   * That accept IS the ask, so the plain default (rung 9) yields to it instead
+   * of filing a second one; every floor and rule above still decides first.
+   * Honoured only for {@link HELD_DRAFT_EVENT_KEYS}; set server-side by the
+   * door that holds the draft, never from a request.
+   */
+  heldAsDraft?: boolean;
   /**
    * Server-resolved TRUST of the acting channel's ORIGIN — the #4
    * instruction-provenance signal, consumed at rung 2.55. `"untrusted"` for an
@@ -2052,7 +2065,11 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
     return { verdict: "execute" };
   }
 
-  // 9. Default → propose (caller supplies its own reasoning).
+  // 9. Default → propose (caller supplies its own reasoning) — unless the
+  // write lands as the person's held draft (B6): their accept is the ask.
+  if (input.heldAsDraft === true && isHeldDraftWrite(eventKey)) {
+    return { verdict: "execute" };
+  }
   return { verdict: "propose" };
 }
 
@@ -2207,6 +2224,7 @@ export const REVERSIBILITY_DOOR_CLASS = {
   "tool/create": "disruptive", // egress
   "tool/delete": "disruptive", // destroy
   "tool/update": "disruptive", // egress
+  "track/assign_agent": "disruptive", // effect: another agent starts work on the goal
   "track/create": "disruptive", // struct: a new ongoing method on a project
   "track/update": "reversible", // advance / params / status — orchestration
   "vault/grant": "disruptive", // scope: a principal may now redeem a secret
@@ -2287,6 +2305,21 @@ export const OWN_ORGANISE_EVENT_KEYS = [
 /** Is this event key one the own-organise class may cover? */
 export function isOwnOrganiseWrite(eventKey: string): boolean {
   return (OWN_ORGANISE_EVENT_KEYS as readonly string[]).includes(eventKey);
+}
+
+/**
+ * The writes that may land as the person's held DRAFT instead of a proposal
+ * (FB1020 B6, founder: an agent-started run "waits as a draft for you to
+ * accept"). Closed list: each door holds its own draft.
+ */
+export const HELD_DRAFT_EVENT_KEYS = [
+  /** An agent's direct run (`playbooks.run` → `runPlaybook` holds it). */
+  "playbook.run",
+] as const satisfies readonly GateEventKey[];
+
+/** Is this event key one that may land as a held draft? */
+export function isHeldDraftWrite(eventKey: string): boolean {
+  return (HELD_DRAFT_EVENT_KEYS as readonly string[]).includes(eventKey);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2521,6 +2554,11 @@ export const GATE_WRITE_DOORS = {
   // service (`services/tracks`).
   "track/create": "gate",
   "track/update": "gate",
+  // The same hand-off, of a GOAL (work model W3, 2026-10-23): an agent naming
+  // ANOTHER agent as a goal's delegate (`services/tracks/track-participants.ts`
+  // → `gateAgentHandOff` with a track). Not in DEFAULT_AUTO_APPROVE, classed
+  // `disruptive`: it proposes unless a rule naming it says auto.
+  "track/assign_agent": "gate",
   // Direct vault grant (`hub-protocol/rest/vault.ts` POST /vault/secrets/:id/grant).
   // An agent caller passes the owner check as its linked human, so the door
   // gates: the human owner grants directly, an agent proposes.

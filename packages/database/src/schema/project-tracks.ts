@@ -32,7 +32,17 @@ import { sql } from "drizzle-orm";
 import { projects } from "./projects.js";
 import { playbooks } from "./playbooks.js";
 
+/**
+ * The stored option keys of a track's SYSTEM LIFECYCLE (0344). Categories,
+ * words and who may enter each live in `@synap-core/types/units`
+ * (`TRACK_STATUS_DECLARATION`); this package cannot import that one, so the
+ * tracks service pins the two lists equal at compile time. `completed` (done,
+ * "Closed") and `archived` (lost, "Dropped") are contract keys — never renamed.
+ */
 export const PROJECT_TRACK_STATUSES = [
+  "proposed",
+  "agreed",
+  "ready",
   "active",
   "paused",
   "completed",
@@ -41,12 +51,64 @@ export const PROJECT_TRACK_STATUSES = [
 export type ProjectTrackStatus = (typeof PROJECT_TRACK_STATUSES)[number];
 /**
  * The statuses under which a track is LIVE and holds its name on its project
- * (`uniq_project_tracks_live_name`, 0317 — whose predicate spells the same set).
+ * — the open, active and paused categories (`uniq_project_tracks_live_name`,
+ * 0317/0344 — whose predicate spells the same set).
  */
 export const LIVE_PROJECT_TRACK_STATUSES = [
+  "proposed",
+  "agreed",
+  "ready",
   "active",
   "paused",
 ] as const satisfies readonly ProjectTrackStatus[];
+
+/**
+ * How a closed or dropped track ended (0344, R1) — mirror of `TRACK_VERDICTS`
+ * (`@synap-core/types/units`), pinned equal by the tracks service; the
+ * `project_tracks_verdict_check` constraint spells the same set.
+ */
+export const PROJECT_TRACK_VERDICTS = [
+  "met",
+  "partly_met",
+  "not_met",
+  "retired",
+  "no_longer_needed",
+  "impossible",
+  "replaced",
+  "mistake",
+] as const;
+export type ProjectTrackVerdict = (typeof PROJECT_TRACK_VERDICTS)[number];
+
+/**
+ * The kind of work a goal is (0345, decision 4) — mirror of
+ * `TRACK_WORK_KINDS` (`@synap-core/types/units`), pinned equal by the tracks
+ * service; `project_tracks_work_kind_check` spells the same set.
+ */
+export const PROJECT_TRACK_WORK_KINDS = [
+  "project",
+  "flow",
+  "operation",
+  "investigation",
+  "incident",
+  "commission",
+  "pathway",
+] as const;
+export type ProjectTrackWorkKind = (typeof PROJECT_TRACK_WORK_KINDS)[number];
+
+/**
+ * How well the way is known (0345, decision 4) — mirror of
+ * `TRACK_UNCERTAINTY_LEVELS`, pinned the same way;
+ * `project_tracks_uncertainty_check` spells the same set.
+ */
+export const PROJECT_TRACK_UNCERTAINTY_LEVELS = [
+  "clear",
+  "complicated",
+  "complex",
+  "chaotic",
+  "unknown",
+] as const;
+export type ProjectTrackUncertainty =
+  (typeof PROJECT_TRACK_UNCERTAINTY_LEVELS)[number];
 
 /**
  * What a track pinned from its method at start. Every key optional: a track
@@ -154,6 +216,54 @@ export const projectTracks = pgTable(
     direction: text("direction"),
     /** The optional number the track steers by (0302). NULL = none. */
     kpi: jsonb("kpi").$type<ProjectTrackKpi>(),
+    /**
+     * How the track ENDED (0344, R1) — set by the status door on the move into
+     * done (met · partly_met · not_met) or lost (no_longer_needed · impossible
+     * · replaced · mistake); NULL while it is live, and on a track dropped
+     * before verdicts existed. Final: a closed track never reopens in place.
+     */
+    verdict: text("verdict", {
+      enum: PROJECT_TRACK_VERDICTS,
+    }).$type<ProjectTrackVerdict>(),
+    /** Why, in words — required for `impossible` and `replaced`. */
+    verdictReason: text("verdict_reason"),
+    /** The person who closed it (the approver, when an agent proposed it). */
+    verdictBy: text("verdict_by"),
+    verdictAt: timestamp("verdict_at", { mode: "date", withTimezone: true }),
+    /** What "done" looks like, in words (0345). NULL = unsaid. */
+    endState: text("end_state"),
+    /**
+     * The goal's criteria (0345, decision 1): 0 or 2–5, the session
+     * criterion shape (`readCriteria`, @synap/playbooks), each entry with the
+     * judge's `acceptance` once decided (R2 — written only by the acceptance
+     * door). NULL or [] = a lasting goal. Marks are DERIVED, never stored.
+     */
+    criteria: jsonb("criteria").$type<unknown[]>(),
+    /** When to stop (0345): a list of lines. NULL = none said. */
+    dropConditions: jsonb("drop_conditions").$type<string[]>(),
+    /** The kind of work (0345, decision 4) — proposed by AI, confirmed by a person. */
+    workKind: text("work_kind", {
+      enum: PROJECT_TRACK_WORK_KINDS,
+    }).$type<ProjectTrackWorkKind>(),
+    /** How well the way is known (0345, decision 4). */
+    uncertainty: text("uncertainty", {
+      enum: PROJECT_TRACK_UNCERTAINTY_LEVELS,
+    }).$type<ProjectTrackUncertainty>(),
+    /**
+     * The person who confirmed kind + uncertainty, and when — NULL while they
+     * are only the AI's proposal. A person writing them counts as confirmed.
+     */
+    kindConfirmedBy: text("kind_confirmed_by"),
+    kindConfirmedAt: timestamp("kind_confirmed_at", {
+      mode: "date",
+      withTimezone: true,
+    }),
+    /**
+     * The goal's loop (0350, work model W4): `{ on, perWeek, onAt, by }` — the
+     * goal proposes its next run while a required criterion is unmet. NULL =
+     * never set = OFF. Read through `readGoalLoop` (@synap-core/types/units).
+     */
+    loop: jsonb("loop").$type<Record<string, unknown>>(),
     metadata: jsonb("metadata")
       .$type<Record<string, unknown>>()
       .notNull()
@@ -168,12 +278,15 @@ export const projectTracks = pgTable(
   (table) => ({
     projectIdIdx: index("idx_project_tracks_project_id").on(table.projectId),
     playbookIdIdx: index("idx_project_tracks_playbook_id").on(table.playbookId),
-    // A LIVE track's identity on its project is its NAME (0317):
-    // the same method may run twice under two names. Completed and archived
-    // tracks hold nothing. Required at boot by `findMissingIndexes`.
+    // A LIVE track's identity on its project is its NAME (0317, live set
+    // widened by 0344): the same method may run twice under two names. Closed
+    // and dropped tracks hold nothing. Required at boot by `findMissingIndexes`
+    // (by name — the predicate is this one, keep it LIVE_PROJECT_TRACK_STATUSES).
     liveNameUniq: uniqueIndex("uniq_project_tracks_live_name")
       .on(table.projectId, sql`lower(btrim(${table.name}))`)
-      .where(sql`${table.status} IN ('active', 'paused')`),
+      .where(
+        sql`${table.status} IN ('proposed', 'agreed', 'ready', 'active', 'paused')`
+      ),
   })
 );
 

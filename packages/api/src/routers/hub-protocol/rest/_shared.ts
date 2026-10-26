@@ -40,6 +40,7 @@ import { ownLibraryProposalWhere } from "../../proposals/scope-conditions.js";
 import { getUserWorkspaceIds } from "../../../utils/workspace-membership.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
 import { isAgentCaller } from "../../../services/library/agent-door.js";
+import { assertWorkspaceWrite } from "../../../utils/workspace-write-access.js";
 
 /**
  * Module-scoped pino logger.
@@ -496,18 +497,33 @@ const OVERRIDE_KEY_TYPES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * The ONE rule for whether a hub REST caller may act as `requestedUserId`
+ * Is `requestedUserId` the calling key's OWN agent principal? Under a resolved
+ * sub-token the caller is the EXTERNAL end-user; `agentUserId` is still the
+ * parent key's agent, an identity that end-user does not hold — so never.
+ */
+function isOwnAgentPrincipal(
+  c: { get: (k: string) => unknown },
+  requestedUserId: string
+): boolean {
+  const agentUserId = c.get("agentUserId") as string | undefined;
+  return (
+    !!agentUserId && !c.get("externalUserId") && requestedUserId === agentUserId
+  );
+}
+
+/**
+ * The ONE rule for whether a hub REST caller may NAME `requestedUserId`
  * (a body/query `userId`). A caller may always name an identity it HOLDS:
  *   - no `requestedUserId`, or the authenticated user itself → allowed;
- *   - its own agent principal (`c.get("agentUserId")`) → allowed. This keeps the
- *     CLI `--pod` provisioning profile working (it sends the agent user's id while
- *     the linked human is the authenticated user). Whether such writes SHOULD be
- *     agent-owned rather than human-owned is an open product decision — this
- *     clause preserves today's behaviour, it is not an endorsement of it;
+ *   - its own agent principal (`c.get("agentUserId")`) → allowed, and ACTS AS
+ *     the authenticated user (`actingUserIdFor`). The CLI `--pod` profile sends
+ *     the agent user's id while the linked human is the authenticated user;
  *   - anyone else → only an OVERRIDE_KEY_TYPES bearer. A session caller never
  *     may, and a bearer with no `keyType` fails CLOSED (the column is NOT NULL, so
  *     a missing value means the context was not built by the auth middleware).
- * Use this instead of any inline `!!c.get("apiKeyId")` identity decision.
+ * Use this instead of any inline `!!c.get("apiKeyId")` identity decision. A
+ * route that needs the identity to ACT AS calls `actingUserIdFor`, never
+ * `requested ?? authUserId` (tripwire: hub-post-identity-contract).
  */
 export function mayActAsUser(
   c: { get: (k: string) => unknown },
@@ -516,19 +532,34 @@ export function mayActAsUser(
   const authUserId = c.get("userId") as string | undefined;
   if (!authUserId) return false;
   if (!requestedUserId || requestedUserId === authUserId) return true;
-  const agentUserId = c.get("agentUserId") as string | undefined;
-  // Under a resolved sub-token the caller is the EXTERNAL end-user; `agentUserId`
-  // is still the parent key's agent, an identity that end-user does not hold.
-  if (
-    agentUserId &&
-    !c.get("externalUserId") &&
-    requestedUserId === agentUserId
-  )
-    return true;
+  if (isOwnAgentPrincipal(c, requestedUserId)) return true;
   if (!c.get("apiKeyId")) return false;
   const keyType = c.get("keyType");
   if (typeof keyType !== "string" || !keyType) return false;
   return OVERRIDE_KEY_TYPES.has(keyType);
+}
+
+/**
+ * The identity a hub REST request ACTS AS for a body/query `userId`, or `null`
+ * when the caller may not name it (answer 403). The same rule as the auth
+ * middleware, which makes an agent key act as its LINKED HUMAN
+ * (`effectiveUserId = linkedUserId ?? userId`, access/key-identity.ts): a key
+ * that names its OWN agent principal acts as the authenticated user (that
+ * human), never as the agent. Flooring as the agent read as "not found" (the
+ * agent owns no rows) and, forwarded into a hub tRPC procedure, as a 403 from
+ * `assertMayActAs` (guard.ts), which only ever accepts the authenticated user.
+ * Any other id keeps `mayActAsUser`'s answer: an OVERRIDE_KEY_TYPES bearer may
+ * name another user, no one else may.
+ */
+export function actingUserIdFor(
+  c: { get: (k: string) => unknown },
+  requestedUserId: string | null | undefined
+): string | null {
+  if (!mayActAsUser(c, requestedUserId)) return null;
+  const authUserId = c.get("userId") as string;
+  if (!requestedUserId || isOwnAgentPrincipal(c, requestedUserId))
+    return authUserId;
+  return requestedUserId;
 }
 
 /**
@@ -538,9 +569,9 @@ export function mayActAsUser(
  * authoritative acting user into `c.get("userId")`: a Kratos session identity, or
  * an API-key's delegated user (X-External-User-Id mapping / child key). Handlers
  * MUST NOT let a body-supplied `userId` pick a different identity. The rule lives
- * in `mayActAsUser` (above): a caller may name itself or its own agent principal;
- * only an `is_internal` / `system` key may name anyone else; a
- * mismatch is a 403.
+ * in `actingUserIdFor` (above): a caller may name itself or its own agent
+ * principal (which acts as the authenticated user); only an `is_internal` /
+ * `system` key may name anyone else; a mismatch is a 403.
  * Then the workspace is bound to that identity: if `body.workspaceId` is given it
  * is membership-checked for the RESOLVED user (no cross-workspace write); if
  * omitted, the write is POD-PERSONAL — `workspaceId` is `null` (an owner-personal
@@ -561,14 +592,14 @@ export async function resolveActingContext(
   const authUserId = c.get("userId") as string | undefined;
   if (!authUserId) return { ok: false, status: 403, error: "Unauthenticated" };
 
-  if (!mayActAsUser(c, body.userId)) {
+  const userId = actingUserIdFor(c, body.userId);
+  if (!userId) {
     return {
       ok: false,
       status: 403,
       error: "userId does not match the authenticated session",
     };
   }
-  const userId = body.userId ?? authUserId;
 
   const workspaceId = body.workspaceId;
   if (!workspaceId) {
@@ -868,7 +899,10 @@ export async function getUserMemberWorkspaceIds(
 }
 
 /**
- * Verify a user has access to a specific workspace.
+ * Verify a user has access to a specific workspace: ANY membership, a viewer
+ * included. A READ check — a mutating route gates on
+ * {@link verifyWorkspaceWriteAccess} (tripwire
+ * `hub-mutations-gate-on-write-role`).
  */
 export async function verifyWorkspaceAccess(
   userId: string,
@@ -882,6 +916,28 @@ export async function verifyWorkspaceAccess(
     columns: { id: true },
   });
   return !!row;
+}
+
+/**
+ * May this user WRITE in this workspace? The write floor `assertWorkspaceWrite`
+ * enforces (an editor+ member), answered as a boolean for a Hub route's 403.
+ * A refusal is `false`; a failed membership read throws (never "denied").
+ */
+export async function verifyWorkspaceWriteAccess(
+  userId: string,
+  workspaceId: string
+): Promise<boolean> {
+  try {
+    await assertWorkspaceWrite(db, userId, { workspaceId });
+    return true;
+  } catch (err) {
+    if (
+      err instanceof TRPCError &&
+      (err.code === "FORBIDDEN" || err.code === "UNAUTHORIZED")
+    )
+      return false;
+    throw err;
+  }
 }
 
 /**

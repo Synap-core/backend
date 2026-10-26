@@ -47,9 +47,9 @@ import { createInsertSchema, createSelectSchema } from "drizzle-zod";
  * the type instead of hiding in the data.
  *
  * The canonical list is `@synap-core/types/property-hints` (what the renderer
- * types against). This package cannot import it (types builds against the
- * database), so this is a second copy, held EQUAL to it at compile time by
- * `types/src/property-hints/pod-parity.contract.ts`.
+ * types against). This is a second copy, held EQUAL to it at compile time by
+ * `database/src/wire-parity/property-hints.ts` (this package may now import
+ * `@synap-core/types`; collapsing the copy is a follow-up).
  */
 export type PropertyInputType =
   // declared before the census, and genuinely written

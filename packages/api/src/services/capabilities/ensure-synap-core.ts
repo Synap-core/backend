@@ -506,6 +506,20 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
       },
     },
     {
+      name: "automation.delete",
+      kind: "builtin",
+      scope: "pod",
+      description:
+        "DELETE an automation via the governed automations.delete path (workspace-write gated on the automation's own workspace). An AGENT delete always PROPOSES (automation/delete, a destructive floor no rule widens): { status: 'proposed', proposalId }; a person's delete returns { status: 'deleted' }. To only stop it, use automation.pause.",
+      parameters: {
+        type: "object",
+        required: ["automationId"],
+        properties: {
+          automationId: { type: "string", format: "uuid" },
+        },
+      },
+    },
+    {
       name: "view.update",
       kind: "builtin",
       scope: "pod",

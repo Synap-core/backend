@@ -35,6 +35,7 @@ import {
   type LinkType,
   linkEntityToProject,
   stampProvenance,
+  getActingAgentUserId,
   extractIdentitySignals,
   registerIdentitySignals,
   resolveWorkspacePlacement,
@@ -293,6 +294,9 @@ export const createProcs = {
        *    authored the proposal). It cannot use `input.agentUserId`, because
        *    `materializeCompositeGraph` builds the create input from the
        *    proposal's ops, not from the caller.
+       *  · neither — the agent acting in this request (the key-auth doors'
+       *    ambient principal): a composite caller such as the capture graph
+       *    carries no `agentUserId` of its own (ticket 63a0c0d8).
        *
        * Used for ATTRIBUTION ONLY. Deliberately NOT substituted into
        * `checkPermissionOrPropose` (a re-gate would re-propose an already-
@@ -302,7 +306,7 @@ export const createProcs = {
        * its project). Those three keep reading `input.agentUserId`.
        */
       const actingAgentUserId =
-        input.agentUserId ?? ctx.agentUserId ?? undefined;
+        input.agentUserId ?? ctx.agentUserId ?? getActingAgentUserId();
       // ONE provenance stamp for everything this write creates — the entity
       // row AND its body document — so an agent-written body is never
       // recorded under the human's name (ticket 7b49aaae).
@@ -728,9 +732,20 @@ export const createProcs = {
               input.source === "user"
                 ? input.source
                 : "user";
+            // Only what the merge CHANGES: a value the match already holds is
+            // not a write. Sending it filed a no-op update receipt
+            // (`propertyDiffs: []`) and claimed the existing record as this
+            // session's output (dogfood e3c39721 §2).
+            const matchedProperties = ((
+              visibleMatch as { properties?: Record<string, unknown> | null }
+            ).properties ?? {}) as Record<string, unknown>;
             const nonEmptyProperties = Object.fromEntries(
               Object.entries(input.properties ?? {}).filter(
-                ([, v]) => v !== undefined && v !== null && v !== ""
+                ([key, v]) =>
+                  v !== undefined &&
+                  v !== null &&
+                  v !== "" &&
+                  JSON.stringify(v) !== JSON.stringify(matchedProperties[key])
               )
             );
             // What this merge actually wrote onto the matched entity — reported

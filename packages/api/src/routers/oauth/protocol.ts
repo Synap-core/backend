@@ -154,7 +154,8 @@ export function buildAuthorizationServerMetadata(
     // so a client talking to many pods can tell which one answered (T5).
     authorization_response_iss_parameter_supported: true,
     // A pod app's client_id is the https URL of its metadata document
-    // (client-metadata.ts); DCR above stays for MCP clients.
+    // (client-metadata.ts). An MCP client may use one too (no
+    // `synap_requests`: `isMcpClient`, review A1), or DCR above.
     client_id_metadata_document_supported: true,
   };
 }

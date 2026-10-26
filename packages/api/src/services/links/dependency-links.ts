@@ -85,6 +85,7 @@ import { assertWorkspaceWrite } from "../../utils/workspace-write-access.js";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { recordDomainMutation } from "../../utils/domain-mutation.js";
 import { stampAutoApprovedCreate } from "../proposals/stamp-materialized.js";
+import { linkProposalTitle } from "./link-proposal-title.js";
 
 const logger = createLogger({ module: "dependency-links" });
 
@@ -509,10 +510,6 @@ interface GovernedInput {
   door: string;
 }
 
-function linkTitle(edge: DependencyEdgeInput): string {
-  return `${edge.fromType} --${edge.linkType}--> ${edge.toType}`;
-}
-
 async function gate(
   input: GovernedInput,
   action: "create" | "delete",
@@ -530,7 +527,7 @@ async function gate(
     ...(input.sessionId ? { sessionId: input.sessionId } : {}),
     ...(input.reasoning?.trim() ? { reasoning: input.reasoning.trim() } : {}),
     data: {
-      title: linkTitle(input.edge),
+      title: linkProposalTitle(input.edge),
       fromType: input.edge.fromType,
       fromId: input.edge.fromId,
       toType: input.edge.toType,

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { buildRequestFromProposal } from "../index.js";
-import type { Proposal } from "@synap/database";
+import type { Proposal } from "../row.js";
 
 /**
  * Regression guard for the "Save & Approve" (revise) headline bug.

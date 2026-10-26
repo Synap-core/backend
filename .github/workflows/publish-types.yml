@@ -2,8 +2,9 @@ name: Publish Type Packages
 
 on:
   # Manual publish door. Hand-publishing from a laptop is the proven root cause
-  # of the broken releases (an artifact was published from node 22.22.3 while
-  # this workflow pins node 20) — so there must be a CI button to press instead.
+  # of the broken releases (an artifact was published from a laptop's node
+  # 22.22.3 while this workflow pinned node 20) — so there must be a CI button
+  # to press instead.
   workflow_dispatch:
   push:
     branches: [main]
@@ -42,11 +43,30 @@ jobs:
       id-token: write
 
     steps:
+      # Push token for the bump commit. Once the Release App exists (RUNBOOK §5.2),
+      # only the App may push to main, so mint its token before any publish: a
+      # bad App then fails the run while nothing is on npm. Skipped when
+      # SYNAP_RELEASE_APP_ID is unset. Its ID and key live in the `production`
+      # environment only.
+      - name: Mint the release push token (GitHub App)
+        id: app-token
+        if: ${{ vars.SYNAP_RELEASE_APP_ID != '' }}
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        with:
+          app-id: ${{ vars.SYNAP_RELEASE_APP_ID }}
+          private-key: ${{ secrets.SYNAP_RELEASE_APP_KEY }}
+          owner: Synap-core
+          repositories: backend
+          permission-contents: write
+
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           # Full history: the final step rebases the bump commit onto a main that
           # moved during the run (a shallow clone has no merge base to rebase on).
           fetch-depth: 0
+          # No token left in .git/config for the install and build steps: only
+          # the final fetch/pull/push is given one (PUSH_TOKEN below).
+          persist-credentials: false
 
       # Version comes from the repo's `packageManager: pnpm@10.28.0`, which pins
       # it MORE precisely than a `version: 10` input would. Passing both makes
@@ -57,9 +77,11 @@ jobs:
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          # Node 20 is DELIBERATE. An artifact was once published from node
-          # 22.22.3 and broke consumers; CI pins the version `.node-version`
-          # declares so there is exactly one source of truth.
+          # ONE Node for every pipeline, DELIBERATE: an artifact was once
+          # published from a laptop's node 22.22.3 while CI pinned node 20, and
+          # broke consumers. ci.yml, this workflow and reference-docs.yml all
+          # read `.node-version`, and deploy/Dockerfile stays on its minor, so
+          # what is tested, published and shipped run on the same Node.
           node-version-file: ".node-version"
           registry-url: "https://registry.npmjs.org"
 
@@ -162,9 +184,9 @@ jobs:
       # ── Publish ────────────────────────────────────────────────────────────
       # npm Trusted Publishing needs Node >= 22.14.0 and npm >= 11.5.1 IN THE
       # PROCESS THAT PUBLISHES (SECURITY-RELEASE-RUNBOOK.md §2.1). Everything
-      # above (install, turbo build, version bumps) stays on the Node 20 that
+      # above (install, turbo build, version bumps) stays on the Node that
       # `.node-version` pins on purpose; only the publish steps below switch to
-      # Node 22 (the same 22.18.0 the app-bases publish jobs use). Both pins are
+      # Node 22.18.0 (the one the app-bases publish jobs use). Both pins are
       # EXACT: a floating `22` / `npm@11` would let a registry release change what
       # publishes. pnpm hands the upload to `npm publish`, so it is the npm on PATH
       # that exchanges the OIDC token.
@@ -219,7 +241,12 @@ jobs:
       # load-bearing there, so there is nothing to repin yet.
 
       - name: Commit version bumps
+        env:
+          PUSH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
         run: |
+          AUTH=$(printf 'x-access-token:%s' "$PUSH_TOKEN" | base64 -w0)
+          echo "::add-mask::$AUTH"
+          git_auth() { git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $AUTH" "$@"; }
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add packages/types/package.json \
@@ -236,7 +263,7 @@ jobs:
           API_V=$(node -p "require('./packages/api-types/package.json').version")
           reapply_versions() {
             git rebase --abort 2>/dev/null || true
-            git fetch -q origin main && git reset -q --hard origin/main
+            git_auth fetch -q origin main && git reset -q --hard origin/main
             node -e '
               const fs = require("fs");
               const [typesV, apiV] = process.argv.slice(1);
@@ -260,10 +287,10 @@ jobs:
             git commit -m "chore: auto-publish type packages [skip ci]" || true
           }
           for attempt in 1 2 3; do
-            if git pull --rebase origin main; then
-              git push origin HEAD:main && break
+            if git_auth pull --rebase origin main; then
+              git_auth push origin HEAD:main && break
             else
-              reapply_versions && git push origin HEAD:main && break
+              reapply_versions && git_auth push origin HEAD:main && break
             fi
             if [ "$attempt" = 3 ]; then exit 1; fi
             sleep 10

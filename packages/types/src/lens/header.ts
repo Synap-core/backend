@@ -31,6 +31,7 @@ import {
   trackStagesEmerged,
   type TrackKpi,
 } from "../units/track.js";
+import type { GoalCriterionMark } from "../units/goal.js";
 import { resolveActionLabel, resolveStatusLabel } from "../vocabulary/index.js";
 import { LENS_SECTION_LABELS } from "./classes.js";
 import type { LensDoor, LensRow, LensVerb } from "./rows.js";
@@ -128,11 +129,64 @@ export function lensScopeFactLabel(fact: LensScopeFact): string | null {
     return fact.total > 0 ? `${fact.met} of ${fact.total} met` : null;
   }
   if (fact.kind === "kpi") {
-    return fact.current === null
-      ? `${fact.label}: target ${withUnit(fmtNumber(fact.target), fact.unit)}`
-      : `${fact.label} ${formatKpiFraction(fact.current, fact.target, fact.unit)}`;
+    if (fact.current !== null)
+      return `${fact.label} ${formatKpiFraction(fact.current, fact.target, fact.unit)}`;
+    const target = withUnit(fmtNumber(fact.target), fact.unit);
+    // A fact already named "Target" says its number once ("Target 8 …"),
+    // never "Target: target 8 …".
+    return fact.label === LENS_TARGET_LABEL
+      ? `${fact.label} ${target}`
+      : `${fact.label}: target ${target}`;
   }
   return null;
+}
+
+/**
+ * The word for a stated number a scope AIMS at when it has no name of its own
+ * (an intent surface's pipeline target). Never "Goal": a goal is a track since
+ * 2026-10-23 (`OBJECT_KINDS.track`), and this is a number, not a goal.
+ */
+export const LENS_TARGET_LABEL = "Target";
+
+/**
+ * How long a STATED KPI value reads as current. The value is stated, never
+ * measured (0302), so its age is the only honesty it has: "stated 5 weeks
+ * ago" must not read like "stated today". Past this, a host draws the
+ * "stated …" fact as OLD (the warning ink + a clock: a mark, not a sentence).
+ * ONE rule for the web and the phone header (moved here from relay
+ * `components/lens/kpi-fact.ts`, W5 2026-10-23). Worded "old", never
+ * "stale": stale already means an unreadable session.
+ */
+export const LENS_KPI_STATED_OLD_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** Whether a KPI value stated at `statedAt` is past {@link LENS_KPI_STATED_OLD_AFTER_MS}. */
+export function lensKpiStatedIsOld(
+  statedAt: string | null | undefined,
+  now: number | Date = Date.now()
+): boolean {
+  if (!statedAt) return false;
+  const t = new Date(statedAt).getTime();
+  const at = now instanceof Date ? now.getTime() : now;
+  return Number.isFinite(t) && at - t > LENS_KPI_STATED_OLD_AFTER_MS;
+}
+
+/**
+ * A goal's "Done when" count — "3 of 5 met" — from the criteria every track
+ * read returns (`TrackView.criteria`, each with its derived `mark`). ONE count
+ * for the goal header, the Goals list row and the Done-when section summary.
+ * `null` when a criterion's mark was NOT READ (a write's fallback view): an
+ * unread mark is not a "not met". A lasting goal (no criteria) counts
+ * `{ met: 0, total: 0 }` — the host omits it, never a "0 of 0".
+ */
+export function goalCriteriaCount(
+  criteria: ReadonlyArray<{ mark: GoalCriterionMark | null }>
+): Extract<LensScopeFact, { kind: "criteria" }> | null {
+  if (criteria.some((c) => c.mark === null)) return null;
+  return {
+    kind: "criteria",
+    met: criteria.filter((c) => c.mark === "met").length,
+    total: criteria.length,
+  };
 }
 
 function withUnit(value: string, unit: string | null | undefined): string {

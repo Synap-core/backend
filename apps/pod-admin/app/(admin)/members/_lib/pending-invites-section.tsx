@@ -1,8 +1,11 @@
 "use client";
 
 /**
- * Pending invites — sent, not yet accepted. Each row copies its link or
- * revokes it. The section hides itself when nothing is pending.
+ * Pending invites — sent, not yet accepted. Each row copies a NEW link or
+ * revokes it. The pod keeps only a digest of a link's token (decision B2), so
+ * an old link cannot be shown again: "Copy a new link" mints one
+ * (`regenerateInvite`) and the old link stops working. The section hides
+ * itself when nothing is pending.
  */
 
 import { addToast, Button } from "@heroui/react";
@@ -51,18 +54,47 @@ export function PendingInvitesSection() {
     new Map()
   );
 
-  function copyLink(token: string, id: string) {
-    const origin = typeof window !== "undefined" ? window.location.origin : "";
-    void navigator.clipboard.writeText(`${origin}/invite/${token}`).then(() => {
-      setCopiedId(id);
-      const prev = copyTimers.current.get(id);
-      if (prev) clearTimeout(prev);
-      copyTimers.current.set(
-        id,
-        setTimeout(() => setCopiedId(null), 2000)
-      );
-    });
+  function markCopied(id: string) {
+    setCopiedId(id);
+    const prev = copyTimers.current.get(id);
+    if (prev) clearTimeout(prev);
+    copyTimers.current.set(
+      id,
+      setTimeout(() => setCopiedId(null), 2000)
+    );
   }
+
+  const regenerateMutation = trpc.workspaces.regenerateInvite.useMutation({
+    onSuccess: async ({ id, token }) => {
+      void invitesQuery.refetch();
+      const origin =
+        typeof window !== "undefined" ? window.location.origin : "";
+      try {
+        await navigator.clipboard.writeText(`${origin}/invite/${token}`);
+        markCopied(id);
+        addToast({
+          title: "New link copied",
+          description: "The previous link no longer works.",
+          color: "default",
+        });
+      } catch {
+        addToast({
+          title: "Couldn't copy the new link",
+          description:
+            "The previous link no longer works. Copy a new link again.",
+          color: "danger",
+        });
+      }
+    },
+    onError: (e) => {
+      if (redirectToLoginIfUnauthorized(e)) return;
+      addToast({
+        title: "Couldn't make a new link",
+        description: e.message,
+        color: "danger",
+      });
+    },
+  });
 
   const pending = invitesQuery.data ?? [];
 
@@ -97,18 +129,23 @@ export function PendingInvitesSection() {
               actions={
                 <div className="flex items-center gap-1">
                   <Button
-                    isIconOnly
                     size="sm"
                     variant="flat"
                     radius="md"
-                    aria-label="Copy invite link"
-                    onPress={() => copyLink(inv.token, inv.id)}
+                    isLoading={
+                      regenerateMutation.isPending &&
+                      regenerateMutation.variables?.id === inv.id
+                    }
+                    startContent={
+                      copiedId === inv.id ? (
+                        <Check className="h-3.5 w-3.5 text-status-healthy" />
+                      ) : (
+                        <Copy className="h-3.5 w-3.5" />
+                      )
+                    }
+                    onPress={() => regenerateMutation.mutate({ id: inv.id })}
                   >
-                    {copiedId === inv.id ? (
-                      <Check className="h-3.5 w-3.5 text-status-healthy" />
-                    ) : (
-                      <Copy className="h-3.5 w-3.5" />
-                    )}
+                    Copy a new link
                   </Button>
                   <Button
                     size="sm"
