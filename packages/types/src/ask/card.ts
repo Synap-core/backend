@@ -179,7 +179,8 @@ export const ASK_COPY = {
    * `at` is already formatted ("29 Sep"); absent, the date is left out.
    */
   askCause: (kind: AskCauseKind, at: string | null): string => {
-    const head = ASK_CAUSE_WORDS[kind];
+    // A kind a newer pod sends: the ask still lives in a session.
+    const head = ASK_CAUSE_WORDS[kind] ?? "From the session";
     return at ? `${head} · ${at}` : head;
   },
 } as const;
