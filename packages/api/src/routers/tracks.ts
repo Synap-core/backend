@@ -12,11 +12,18 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, podProcedure } from "../trpc.js";
-import { PROJECT_TRACK_STATUSES } from "@synap/database/schema";
+import {
+  PROJECT_TRACK_STATUSES,
+  PROJECT_TRACK_VERDICTS,
+} from "@synap/database/schema";
 import {
   advanceTrackStage,
+  decodeTrackListCursor,
   getTrack,
   listTracks,
+  listTracksPage,
+  TRACK_LIST_PAGE_DEFAULT,
+  TRACK_LIST_PAGE_MAX,
   loadTrackView,
   loadTrackViews,
   loadWrittenTrackView,
@@ -26,11 +33,24 @@ import {
   trackKpiInputSchema,
   addTrackStageInputSchema,
   setTrackStatus,
+  reopenTrack,
+  startOperationFrom,
+  acceptGoalCriterion,
   startStageSession,
   startTrack,
   type TrackActor,
 } from "../services/tracks/tracks-service.js";
 import { readTrackHistory } from "../services/tracks/track-history.js";
+import {
+  convertEntityToGoal,
+  convertToGoalInputSchema,
+} from "../services/tracks/convert-to-goal.js";
+import { trackGoalInputSchema } from "../services/tracks/goal-content.js";
+import { GOAL_ACCEPTANCE_DECISIONS } from "@synap-core/types/units";
+import {
+  changeTrackParticipants,
+  trackParticipantChangeSchema,
+} from "../services/tracks/track-participants.js";
 
 function actorOf(
   ctx: { userId: string; agentUserId?: string | null; isHubProtocol?: boolean },
@@ -50,27 +70,66 @@ const reasoning = z.string().max(2000).optional();
 const params = z.record(z.string(), z.unknown());
 
 export const tracksRouter = router({
-  /** The project's tracks (non-archived unless asked), oldest first. */
+  /**
+   * The project's tracks (non-archived unless asked), oldest first — or,
+   * WITHOUT a `projectId`, every goal the caller can see, pod-wide, newest
+   * first and paged (the Goals collection, W5). Same read, same visibility
+   * (`listTracks`); each item carries the derived marks every track read
+   * returns (`criteria[].mark`, `inReview`, `waitingOn`, `participants`).
+   * `nextCursor` is null on the last page (and on an unpaged project read).
+   */
   list: podProcedure
     .input(
       z.object({
-        projectId: z.string().uuid(),
+        projectId: z.string().uuid().optional(),
         includeArchived: z.boolean().optional(),
+        /** Page size; the pod-wide read is always paged (default 50). */
+        limit: z.number().int().min(1).max(TRACK_LIST_PAGE_MAX).optional(),
+        /** `nextCursor` from the previous page. */
+        cursor: z.string().min(1).max(500).optional(),
       })
     )
     .query(async ({ ctx, input }) => {
-      const rows = await listTracks({
+      const cursor = decodeTrackListCursor(input.cursor);
+      if (input.cursor && !cursor) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "cursor is not a cursor this read returned",
+        });
+      }
+      const paged =
+        !input.projectId || input.limit !== undefined || cursor !== null;
+      if (!paged) {
+        const rows = await listTracks({
+          projectId: input.projectId,
+          actor: actorOf(ctx),
+          includeArchived: input.includeArchived,
+        });
+        if (!rows) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Project not found",
+          });
+        }
+        return { items: await loadTrackViews(rows, ctx), nextCursor: null };
+      }
+      const page = await listTracksPage({
         projectId: input.projectId,
         actor: actorOf(ctx),
         includeArchived: input.includeArchived,
+        limit: input.limit ?? TRACK_LIST_PAGE_DEFAULT,
+        cursor,
       });
-      if (!rows) {
+      if (!page) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "Project not found",
         });
       }
-      return { items: await loadTrackViews(rows, ctx) };
+      return {
+        items: await loadTrackViews(page.rows, ctx),
+        nextCursor: page.nextCursor,
+      };
     }),
 
   get: podProcedure
@@ -78,7 +137,7 @@ export const tracksRouter = router({
     .query(async ({ ctx, input }) => {
       const track = await getTrack(input.id, actorOf(ctx));
       if (!track) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Track not found" });
+        throw new TRPCError({ code: "NOT_FOUND", message: "Goal not found" });
       }
       return loadTrackView(track, ctx);
     }),
@@ -93,28 +152,32 @@ export const tracksRouter = router({
     .query(async ({ ctx, input }) => {
       const history = await readTrackHistory(input.id, actorOf(ctx));
       if (!history) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Track not found" });
+        throw new TRPCError({ code: "NOT_FOUND", message: "Goal not found" });
       }
       return history;
     }),
 
   /**
-   * Start a track on a project — a lasting intent; the method (a
-   * project-scoped playbook) is optional (W1). Idempotent per live name.
+   * Start a track on a project — a goal; the method (a project-scoped
+   * playbook) is optional (W1). Idempotent per live name.
    */
   start: podProcedure
     .input(
-      z.object({
-        projectId: z.string().uuid(),
-        playbookId: z.string().uuid().optional(),
-        name: z.string().trim().min(1).max(200).optional(),
-        params: params.optional(),
-        /** Where the track is heading, one line (0302). */
-        direction: z.string().max(280).optional(),
-        /** The number it steers by (0302) — a whole KPI: label + target. */
-        kpi: trackKpiInputSchema.optional(),
-        reasoning,
-      })
+      z
+        .object({
+          projectId: z.string().uuid(),
+          playbookId: z.string().uuid().optional(),
+          name: z.string().trim().min(1).max(200).optional(),
+          params: params.optional(),
+          /** Where the track is heading, one line (0302). */
+          direction: z.string().max(280).optional(),
+          /** The number it steers by (0302) — a whole KPI: label + target. */
+          kpi: trackKpiInputSchema.optional(),
+          reasoning,
+        })
+        // What the goal holds (0345): end state, criteria (none or 2–5),
+        // drop conditions, kind of work, uncertainty. Refined by the service.
+        .extend(trackGoalInputSchema.shape)
     )
     .mutation(async ({ ctx, input }) => {
       const { reasoning: why, ...rest } = input;
@@ -123,6 +186,31 @@ export const tracksRouter = router({
       return {
         status: result.status,
         track: await loadWrittenTrackView(result.track, ctx),
+      };
+    }),
+
+  /**
+   * "Make it a goal" (D2): a goal / objective / okr entity becomes a goal —
+   * once, through the start door (`convertEntityToGoal` → `startTrack`). Its
+   * fields are mapped (key results → measured criteria), its owner owns the
+   * goal, the entity is linked `promoted_to` the goal and kept as it is; an
+   * entity that had ended arrives closed (met) or dropped. `projectId` is
+   * required when the entity is filed in no or several projects.
+   */
+  convertFromEntity: podProcedure
+    .input(convertToGoalInputSchema)
+    .mutation(async ({ ctx, input }) => {
+      const { reasoning: why, ...rest } = input;
+      const result = await convertEntityToGoal({
+        ...rest,
+        actor: actorOf(ctx, why),
+      });
+      if (result.status === "proposed") return result;
+      return {
+        status: result.status,
+        track: await loadWrittenTrackView(result.track, ctx),
+        entityId: result.entityId,
+        notCarried: result.notCarried,
       };
     }),
 
@@ -148,11 +236,19 @@ export const tracksRouter = router({
       };
     }),
 
+  /**
+   * Move the track through its system lifecycle (open · active · paused ·
+   * done · lost). Closing (`completed`) or dropping (`archived`) carries a
+   * `verdict` — refused without one; `impossible` / `replaced` also a
+   * `verdictReason`. Both are final; an agent's close is always a proposal.
+   */
   setStatus: podProcedure
     .input(
       z.object({
         id: z.string().uuid(),
         status: z.enum(PROJECT_TRACK_STATUSES),
+        verdict: z.enum(PROJECT_TRACK_VERDICTS).optional(),
+        verdictReason: z.string().trim().max(2000).optional(),
         reasoning,
       })
     )
@@ -160,6 +256,61 @@ export const tracksRouter = router({
       const result = await setTrackStatus({
         trackId: input.id,
         status: input.status,
+        verdict: input.verdict,
+        verdictReason: input.verdictReason,
+        actor: actorOf(ctx, input.reasoning),
+      });
+      if (result.status === "proposed") return result;
+      return {
+        status: result.status,
+        track: await loadWrittenTrackView(result.track, ctx),
+      };
+    }),
+
+  /**
+   * Reopen a closed or dropped goal as a NEW version (R8), linked
+   * `new --replaces--> old`; the closed one stays closed. Governed like a
+   * start (`track/create`).
+   */
+  reopen: podProcedure
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        name: z.string().trim().min(1).max(200).optional(),
+        reasoning,
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const result = await reopenTrack({
+        trackId: input.id,
+        name: input.name,
+        actor: actorOf(ctx, input.reasoning),
+      });
+      if (result.status === "proposed") return result;
+      return {
+        status: result.status,
+        track: await loadWrittenTrackView(result.track, ctx),
+      };
+    }),
+
+  /**
+   * "Keep watching it" (R6): from a goal closed as MET, a new goal of kind
+   * operation that keeps its result alive, linked `spawned_from` it. Governed
+   * like a start (`track/create`); a live one already spawned comes back
+   * `exists`.
+   */
+  startOperationFrom: podProcedure
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        name: z.string().trim().min(1).max(200).optional(),
+        reasoning,
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const result = await startOperationFrom({
+        trackId: input.id,
+        name: input.name,
         actor: actorOf(ctx, input.reasoning),
       });
       if (result.status === "proposed") return result;
@@ -192,27 +343,60 @@ export const tracksRouter = router({
    * Say where the track is heading and/or the number it steers by (0302).
    * `kpi` is a PATCH merged onto the stored KPI (`null` clears it); stating
    * `current` stamps when and by whom. Governed `track/update`. Reaching the
-   * target nudges — it never completes the track.
+   * target nudges the person; a number reached never closes the goal (a
+   * person closes it with a verdict).
    */
   setDirection: podProcedure
     .input(
+      z
+        .object({
+          id: z.string().uuid(),
+          direction: z.string().max(280).nullable().optional(),
+          kpi: trackKpiInputSchema.nullable().optional(),
+          reasoning,
+        })
+        // What the goal holds (0345) — each field whole, `null` clears;
+        // `confirmKind` = the person confirms the AI's kind of work.
+        .extend(trackGoalInputSchema.shape)
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { id, reasoning: why, direction, kpi, ...goal } = input;
+      const result = await setTrackDirection({
+        trackId: id,
+        ...(direction !== undefined ? { direction } : {}),
+        ...(kpi !== undefined ? { kpi } : {}),
+        ...goal,
+        actor: actorOf(ctx, why),
+      });
+      if (result.status === "proposed") return result;
+      return {
+        status: result.status,
+        track: await loadWrittenTrackView(result.track, ctx),
+      };
+    }),
+
+  /**
+   * The goal's JUDGE accepts a claimed criterion, sends it back
+   * (`changes_asked`, with a note saying what to change) or rejects it (R2).
+   * A person's act: an agent key is refused, and so is anyone but the judge.
+   */
+  acceptCriterion: podProcedure
+    .input(
       z.object({
         id: z.string().uuid(),
-        direction: z.string().max(280).nullable().optional(),
-        kpi: trackKpiInputSchema.nullable().optional(),
-        reasoning,
+        criterionKey: z.string().min(1).max(80),
+        decision: z.enum(GOAL_ACCEPTANCE_DECISIONS),
+        note: z.string().trim().max(2000).optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const result = await setTrackDirection({
+      const result = await acceptGoalCriterion({
         trackId: input.id,
-        ...(input.direction !== undefined
-          ? { direction: input.direction }
-          : {}),
-        ...(input.kpi !== undefined ? { kpi: input.kpi } : {}),
-        actor: actorOf(ctx, input.reasoning),
+        criterionKey: input.criterionKey,
+        decision: input.decision,
+        note: input.note,
+        actor: actorOf(ctx),
       });
-      if (result.status === "proposed") return result;
       return {
         status: result.status,
         track: await loadWrittenTrackView(result.track, ctx),
@@ -244,6 +428,29 @@ export const tracksRouter = router({
         track: await loadWrittenTrackView(result.track, ctx),
       };
     }),
+
+  /**
+   * WHO IS ON A GOAL (W3): add a judge, a delegate (with a commitment) or an
+   * integrator, remove someone (owner or judge only); a delegate answers their
+   * own commitment (accept · counter · decline · report impossible); the owner
+   * or judge acknowledges a report. Returns the goal's participants, or
+   * `proposed` when governance holds it for review.
+   */
+  changeParticipants: podProcedure
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        change: trackParticipantChangeSchema,
+        reasoning,
+      })
+    )
+    .mutation(async ({ ctx, input }) =>
+      changeTrackParticipants({
+        trackId: input.id,
+        change: input.change,
+        actor: actorOf(ctx, input.reasoning),
+      })
+    ),
 
   /**
    * Start the session a stage OFFERS (M2) — the ONE door. Idempotent on an

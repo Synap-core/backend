@@ -54,7 +54,7 @@
     "gen:mcp-manifest": "export $(grep -v '^#' ../../.env | xargs) && PINO_PRETTY=false tsx src/routers/mcp/tools/gen-manifest.ts",
     "gen-types:check": "node scripts/gen-types.mjs --check && git diff --exit-code -- ../api-types/src/generated.d.ts ../api-types/src/schema-hash.ts src/generated-schema-hash.ts",
     "gen-docs": "node scripts/gen-sdk-docs.mjs",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "NODE_OPTIONS=\"--max-old-space-size=6144 ${NODE_OPTIONS:-}\" tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest watch",
     "test:coverage": "vitest run --coverage"

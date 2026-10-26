@@ -11,18 +11,29 @@ import { eq } from "@synap/database";
 import { UpdatePreferencesInputSchema } from "@synap-core/types";
 import {
   assertPinnableSurface,
+  RailGoalPinsFullError,
   RailPinsFullError,
   readRailPins,
   writeRailPins,
   type RailPinsOp,
 } from "../services/preferences/rail-pins.js";
 
-/** One write door for the rail pins; a full rail is a PRECONDITION, not a 500. */
-async function railPinsWrite(userId: string, op: RailPinsOp) {
+/**
+ * One write door for the rail pins; a full rail — or a week already holding
+ * its goals — is a PRECONDITION, not a 500.
+ */
+async function railPinsWrite(
+  userId: string,
+  op: RailPinsOp,
+  includeGoals: boolean | undefined
+) {
   try {
-    return { pins: await writeRailPins(userId, op) };
+    return { pins: pinsFor(await writeRailPins(userId, op), includeGoals) };
   } catch (err) {
-    if (err instanceof RailPinsFullError) {
+    if (
+      err instanceof RailPinsFullError ||
+      err instanceof RailGoalPinsFullError
+    ) {
       throw new TRPCError({
         code: "PRECONDITION_FAILED",
         message: err.message,
@@ -32,40 +43,102 @@ async function railPinsWrite(userId: string, op: RailPinsOp) {
   }
 }
 
+/**
+ * GOAL pins ("This week", `trackId`, `profileSlug: null`) leave every
+ * response — the read's and the writes' — unless the caller asks for them
+ * (`includeGoals: true`, code.md 2026-10-24): a shipped desktop build reads
+ * every pin as a surface and lost every rail badge on a pin with no kind.
+ */
+function pinsFor<P extends { trackId: string | null }>(
+  pins: P[],
+  includeGoals: boolean | undefined
+): P[] {
+  return includeGoals ? pins : pins.filter((p) => !p.trackId);
+}
+
+/** The flag every rail-pins door takes (absent ⇒ surface pins only). */
+const includeGoals = z.boolean().optional();
+
 export const preferencesRouter = router({
   /**
    * The person's RAIL PINS — the intent surfaces on their rail, in order
    * (surfaces W1.7, `services/preferences/rail-pins.ts`). Per user, across
    * spaces; a space's template `sidebarItems` pipeline views are folded in as
    * suggestions until the person first edits their pins.
+   *
+   * GOAL pins come back only when asked — `{ includeGoals: true }`
+   * ({@link pinsFor}); the write doors below take the same flag.
    */
-  railPins: protectedProcedure.query(async ({ ctx }) => ({
-    pins: await readRailPins(ctx.userId),
-  })),
+  railPins: protectedProcedure
+    .input(z.object({ includeGoals }).optional())
+    .query(async ({ ctx, input }) => ({
+      pins: pinsFor(await readRailPins(ctx.userId), input?.includeGoals),
+    })),
 
   /**
-   * Pin a surface: a kind/role (`profileSlug`), or a saved pipeline view of it
-   * (`viewId`). Idempotent — pinning a pinned surface keeps one pin. The
-   * surface must exist and be readable (NOT_FOUND / BAD_REQUEST otherwise).
+   * Pin a surface: a kind/role (`profileSlug`), a saved pipeline view of it
+   * (`viewId`), or a GOAL (`trackId`, exclusive with `profileSlug` — "This
+   * week", D4: at most `RAIL_GOAL_PINS_MAX`, a 4th is PRECONDITION_FAILED).
+   * Idempotent — pinning a pinned surface keeps one pin. The surface must
+   * exist and be readable (NOT_FOUND / BAD_REQUEST otherwise).
    */
   pinSurface: protectedProcedure
     .input(
-      z.object({
-        profileSlug: z.string().min(1),
-        viewId: z.string().uuid().optional(),
-        label: z.string().trim().min(1).max(80).optional(),
-      })
+      z
+        .object({
+          profileSlug: z.string().min(1).optional(),
+          viewId: z.string().uuid().optional(),
+          trackId: z.string().uuid().optional(),
+          label: z.string().trim().min(1).max(80).optional(),
+          includeGoals,
+        })
+        .superRefine((v, ctx) => {
+          if (Boolean(v.profileSlug) === Boolean(v.trackId)) {
+            ctx.addIssue({
+              code: "custom",
+              message:
+                "Pin a kind (profileSlug) or a goal (trackId) — one of the two.",
+              path: ["trackId"],
+            });
+          }
+          if (v.trackId && v.viewId) {
+            ctx.addIssue({
+              code: "custom",
+              message:
+                "A goal pin names no view — viewId pins a kind's saved board.",
+              path: ["viewId"],
+            });
+          }
+        })
     )
     .mutation(async ({ ctx, input }) => {
-      await assertPinnableSurface(ctx.userId, input);
-      return railPinsWrite(ctx.userId, { op: "pin", ...input });
+      const { trackId, profileSlug, viewId, label } = input;
+      if (trackId) {
+        await assertPinnableSurface(ctx.userId, { trackId });
+        return railPinsWrite(
+          ctx.userId,
+          { op: "pin", trackId, label },
+          input.includeGoals
+        );
+      }
+      const surface = { profileSlug: profileSlug!, viewId };
+      await assertPinnableSurface(ctx.userId, surface);
+      return railPinsWrite(
+        ctx.userId,
+        { op: "pin", ...surface, label },
+        input.includeGoals
+      );
     }),
 
-  /** Unpin by key (`view:<id>` / `kind:<slug>`). A suggested pin stays gone. */
+  /** Unpin by key (`view:<id>` / `kind:<slug>` / `track:<id>`). A suggested pin stays gone. */
   unpinSurface: protectedProcedure
-    .input(z.object({ key: z.string().min(1).max(200) }))
+    .input(z.object({ key: z.string().min(1).max(200), includeGoals }))
     .mutation(({ ctx, input }) =>
-      railPinsWrite(ctx.userId, { op: "unpin", key: input.key })
+      railPinsWrite(
+        ctx.userId,
+        { op: "unpin", key: input.key },
+        input.includeGoals
+      )
     ),
 
   /**
@@ -73,9 +146,18 @@ export const preferencesRouter = router({
    * after them (a stale client never drops a pin).
    */
   reorderRailPins: protectedProcedure
-    .input(z.object({ keys: z.array(z.string().min(1).max(200)).max(60) }))
+    .input(
+      z.object({
+        keys: z.array(z.string().min(1).max(200)).max(60),
+        includeGoals,
+      })
+    )
     .mutation(({ ctx, input }) =>
-      railPinsWrite(ctx.userId, { op: "reorder", keys: input.keys })
+      railPinsWrite(
+        ctx.userId,
+        { op: "reorder", keys: input.keys },
+        input.includeGoals
+      )
     ),
 
   /**
