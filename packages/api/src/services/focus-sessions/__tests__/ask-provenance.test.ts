@@ -55,7 +55,10 @@ describe("stampAskProvenance — the one stamp", () => {
 
   it("a system producer names its cause", () => {
     const after = stampBlocked([agentSlot], "Stripe key", "decision");
-    const cause = { kind: "decision" as const, ref: { kind: "entity", id: "d" } };
+    const cause = {
+      kind: "decision" as const,
+      ref: { kind: "entity", id: "d" },
+    };
     const [s] = stampAskProvenance([agentSlot], after, { askCause: cause });
     expect(s!.askCause).toEqual(cause);
     expect(s!.askedBy).toBeUndefined();
@@ -119,8 +122,9 @@ describe("authority and lifetime", () => {
   });
 
   it("it goes with the ownership: unblock, hand back, reconcile", () => {
-    expect(stampUnblocked([owedBy(AGENT)], "Stripe key")[0]!.askedBy)
-      .toBeUndefined();
+    expect(
+      stampUnblocked([owedBy(AGENT)], "Stripe key")[0]!.askedBy
+    ).toBeUndefined();
     const withCause = {
       ...owedBy(AGENT),
       askCause: { kind: "run" as const },

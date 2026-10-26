@@ -796,12 +796,7 @@ export interface SlotAskCause {
   at?: string;
 }
 export type SlotAskCauseKind =
-  | "decision"
-  | "gate"
-  | "run"
-  | "external_approval"
-  | "param"
-  | "criterion";
+  "decision" | "gate" | "run" | "external_approval" | "param" | "criterion";
 
 /** One side of a confirm — mirror of `AskConfirmAnswer`. At most ONE recommended. */
 export interface SlotAskConfirmAnswer {

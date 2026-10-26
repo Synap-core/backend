@@ -37,7 +37,9 @@ function sources(dir: string): string[] {
 
 /** Comments out: prose about `why` is not a read of it. */
 function code(src: string): string {
-  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+  return src
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/(^|[^:])\/\/.*$/gm, "$1");
 }
 
 const IMPORTS_ASK = /from\s+"[^"]*\/(?:ask-detail|ask-answer)"/;
@@ -65,7 +67,10 @@ function rawReads(src: string): string[] {
 
 const SCANNED = sources(APP)
   .filter((f) => !f.endsWith("ask-detail.ts"))
-  .filter((f) => IMPORTS_ASK.test(readFileSync(f, "utf8")) || f.endsWith("ask-answer.tsx"));
+  .filter(
+    (f) =>
+      IMPORTS_ASK.test(readFileSync(f, "utf8")) || f.endsWith("ask-answer.tsx")
+  );
 
 describe("tripwire: the console draws an ask only through askCardView", () => {
   it("NON-VACUITY: the scan finds the renderer and its hosts", () => {
@@ -78,11 +83,15 @@ describe("tripwire: the console draws an ask only through askCardView", () => {
 
   it("SELF-CHECK: the rule sees the shapes it hunts, and spares identity", () => {
     expect(rawReads("<p>{view.why}</p>")).toHaveLength(1);
-    expect(rawReads("{prompt && prompt !== slot.label && <p/>}")).toHaveLength(1);
+    expect(rawReads("{prompt && prompt !== slot.label && <p/>}")).toHaveLength(
+      1
+    );
     expect(rawReads("<h3>{seen.label}</h3>")).toHaveLength(1);
     expect(rawReads("  expectedLabel: seen.label,")).toEqual([]);
     expect(
-      rawReads('{ kind: "ask", sessionId: slot.sessionId, label: slot.label, slot }')
+      rawReads(
+        '{ kind: "ask", sessionId: slot.sessionId, label: slot.label, slot }'
+      )
     ).toEqual([]);
     expect(rawReads("// the agent's why, in prose")).toEqual([]);
   });

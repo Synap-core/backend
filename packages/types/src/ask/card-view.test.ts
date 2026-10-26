@@ -133,9 +133,9 @@ describe("askCardView — the asker", () => {
       kind: "cause",
       label: "From the session's checks",
     });
-    expect(askCardView({ label: "X", paramName: "channel" }).asker).toMatchObject(
-      { kind: "cause", label: "From the playbook's inputs" }
-    );
+    expect(
+      askCardView({ label: "X", paramName: "channel" }).asker
+    ).toMatchObject({ kind: "cause", label: "From the playbook's inputs" });
   });
 
   it("nobody to name ⇒ null, never a guessed one", () => {
@@ -184,7 +184,12 @@ describe("askCardView — answers", () => {
       ask: ask({
         mode: "choose",
         options: [
-          { label: "Casual", value: "c", recommended: true, description: "Warm" },
+          {
+            label: "Casual",
+            value: "c",
+            recommended: true,
+            description: "Warm",
+          },
           { label: "Formal" },
         ],
       }),
@@ -224,14 +229,17 @@ describe("askFate — the owed ask's fate on silence", () => {
   const act = ask({ mode: "act", steps: ["do it"] });
 
   it("a confirm / choose retires when its session ends; act stays", () => {
-    expect(askFate({ label: "a", ask: confirm, owedSince: daysAgo(1) }, NOW))
-      .toEqual({ kind: "ends_with_session" });
-    expect(askFate({ label: "a", ask: act, owedSince: daysAgo(1) }, NOW)).toEqual(
-      { kind: "until_decided" }
-    );
     expect(
-      askCardView({ label: "a", ask: confirm, owedSince: daysAgo(2) }, { now: NOW })
-        .ageFate.label
+      askFate({ label: "a", ask: confirm, owedSince: daysAgo(1) }, NOW)
+    ).toEqual({ kind: "ends_with_session" });
+    expect(
+      askFate({ label: "a", ask: act, owedSince: daysAgo(1) }, NOW)
+    ).toEqual({ kind: "until_decided" });
+    expect(
+      askCardView(
+        { label: "a", ask: confirm, owedSince: daysAgo(2) },
+        { now: NOW }
+      ).ageFate.label
     ).toBe("2d · Retires when the session ends");
   });
 
@@ -270,7 +278,8 @@ describe("a confirm's recommendation — the contract", () => {
       }).success
     ).toBe(false);
     expect(
-      AskSchema.safeParse({ mode: "confirm", no: { recommended: true } }).success
+      AskSchema.safeParse({ mode: "confirm", no: { recommended: true } })
+        .success
     ).toBe(true);
   });
 

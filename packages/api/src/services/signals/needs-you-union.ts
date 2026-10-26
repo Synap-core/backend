@@ -1175,7 +1175,13 @@ export function signalFromOwedSlot(
     ...(row.ask ? { ask: row.ask } : {}),
     ...(row.pendingRelay ? { pendingRelay: row.pendingRelay } : {}),
     ...(row.askedBy && row.askedByName
-      ? { by: { kind: "agent" as const, id: row.askedBy, label: row.askedByName } }
+      ? {
+          by: {
+            kind: "agent" as const,
+            id: row.askedBy,
+            label: row.askedByName,
+          },
+        }
       : {}),
     ...(row.askCause ? { askCause: row.askCause } : {}),
     ...sessionSource(row.sessionId, row.sessionTitle),

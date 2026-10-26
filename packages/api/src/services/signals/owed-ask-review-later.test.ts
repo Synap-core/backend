@@ -109,7 +109,11 @@ describe("the owed-slot signal carries who asked and why", () => {
       owed("a", 1, { askedBy: "agent-1", askedByName: "Claude Code" }),
       NOW
     );
-    expect(s.by).toEqual({ kind: "agent", id: "agent-1", label: "Claude Code" });
+    expect(s.by).toEqual({
+      kind: "agent",
+      id: "agent-1",
+      label: "Claude Code",
+    });
   });
 
   it("an asker the pod cannot name sends no `by` (never its id as a name)", () => {
@@ -123,7 +127,8 @@ describe("the owed-slot signal carries who asked and why", () => {
       ref: { kind: "entity", id: "d-1" },
       at: "2026-09-29T10:00:00.000Z",
     };
-    expect(signalFromOwedSlot(owed("a", 1, { askCause: cause }), NOW).askCause)
-      .toEqual(cause);
+    expect(
+      signalFromOwedSlot(owed("a", 1, { askCause: cause }), NOW).askCause
+    ).toEqual(cause);
   });
 });

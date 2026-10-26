@@ -398,7 +398,9 @@ function askCauseOf(slot: ExpectedOutput): { askCause?: AskCause } {
  * cannot name keeps its id and gets no name, never its id as a name.
  */
 async function withAskerNames(slots: OwedSlot[]): Promise<OwedSlot[]> {
-  const ids = [...new Set(slots.flatMap((s) => (s.askedBy ? [s.askedBy] : [])))];
+  const ids = [
+    ...new Set(slots.flatMap((s) => (s.askedBy ? [s.askedBy] : []))),
+  ];
   if (ids.length === 0) return slots;
   const { participantDisplayNames } =
     await import("../tracks/track-participant-store.js");
