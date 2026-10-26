@@ -183,8 +183,11 @@ function readSlots(raw: unknown): ExpectedOutput[] {
   return Array.isArray(raw) ? (raw as ExpectedOutput[]) : [];
 }
 
-/** The asks a session's person still owes, each named by the key that withdraws it. */
-function owedAsks(raw: unknown): Array<{
+/**
+ * The asks a session's person still owes, each named by the key that withdraws
+ * it. Shared with the cleanup pack's `withdraw_ask` items (W-B4).
+ */
+export function owedAsks(raw: unknown): Array<{
   key: string;
   label: string;
   owedSince: string | null;

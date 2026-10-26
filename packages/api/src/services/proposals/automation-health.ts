@@ -272,6 +272,28 @@ async function loadSuppressedAutomationIds(now: Date): Promise<Set<string>> {
 }
 
 /**
+ * The warden's finding with no filing: every enabled, producer-backed
+ * automation older than the grace that never ran (the ledger). The cleanup
+ * pack folds these in as `archive_automation` items (W-B4) and keeps its own
+ * don't-nag memory, so the advisory's re-nag guard is not applied here.
+ */
+export async function findZeroRunAutomations(
+  now: Date,
+  minAgeDays: number = DEFAULT_MIN_AGE_DAYS
+): Promise<ZeroRunFinding[]> {
+  const candidates = await loadCandidateAutomations(
+    new Date(now.getTime() - minAgeDays * MS_PER_DAY)
+  );
+  if (candidates.length === 0) return [];
+  return detectZeroRunAutomations({
+    automations: candidates,
+    runCountsByAutomationId: await loadRunCounts(candidates.map((c) => c.id)),
+    now,
+    minAgeDays,
+  });
+}
+
+/**
  * Run the warden. Returns the ids of every filed advisory.
  *
  * Resilient per OWNER — one owner's insert failing never aborts the batch
