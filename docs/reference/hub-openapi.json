@@ -647,6 +647,11 @@
                       "required": ["kind", "id"]
                     },
                     "maxItems": 8
+                  },
+                  "stakes": {
+                    "type": "string",
+                    "enum": ["routine", "commitment"],
+                    "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                   }
                 },
                 "required": ["mode"]
@@ -700,6 +705,11 @@
                       "required": ["kind", "id"]
                     },
                     "maxItems": 8
+                  },
+                  "stakes": {
+                    "type": "string",
+                    "enum": ["routine", "commitment"],
+                    "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                   }
                 },
                 "required": ["mode", "options"]
@@ -771,6 +781,11 @@
                       "required": ["kind", "id"]
                     },
                     "maxItems": 8
+                  },
+                  "stakes": {
+                    "type": "string",
+                    "enum": ["routine", "commitment"],
+                    "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                   }
                 },
                 "required": ["mode", "form"]
@@ -813,6 +828,11 @@
                       "required": ["kind", "id"]
                     },
                     "maxItems": 8
+                  },
+                  "stakes": {
+                    "type": "string",
+                    "enum": ["routine", "commitment"],
+                    "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                   }
                 },
                 "required": ["mode"]
@@ -889,6 +909,11 @@
                       "required": ["kind", "id"]
                     },
                     "maxItems": 8
+                  },
+                  "stakes": {
+                    "type": "string",
+                    "enum": ["routine", "commitment"],
+                    "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                   }
                 },
                 "required": ["mode", "provide"]
@@ -12101,6 +12126,11 @@
                                               "required": ["kind", "id"]
                                             },
                                             "maxItems": 8
+                                          },
+                                          "stakes": {
+                                            "type": "string",
+                                            "enum": ["routine", "commitment"],
+                                            "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                                           }
                                         },
                                         "required": ["mode"]
@@ -12168,6 +12198,11 @@
                                               "required": ["kind", "id"]
                                             },
                                             "maxItems": 8
+                                          },
+                                          "stakes": {
+                                            "type": "string",
+                                            "enum": ["routine", "commitment"],
+                                            "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                                           }
                                         },
                                         "required": ["mode", "options"]
@@ -12262,6 +12297,11 @@
                                               "required": ["kind", "id"]
                                             },
                                             "maxItems": 8
+                                          },
+                                          "stakes": {
+                                            "type": "string",
+                                            "enum": ["routine", "commitment"],
+                                            "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                                           }
                                         },
                                         "required": ["mode", "form"]
@@ -12310,6 +12350,11 @@
                                               "required": ["kind", "id"]
                                             },
                                             "maxItems": 8
+                                          },
+                                          "stakes": {
+                                            "type": "string",
+                                            "enum": ["routine", "commitment"],
+                                            "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                                           }
                                         },
                                         "required": ["mode"]
@@ -12398,6 +12443,11 @@
                                               "required": ["kind", "id"]
                                             },
                                             "maxItems": 8
+                                          },
+                                          "stakes": {
+                                            "type": "string",
+                                            "enum": ["routine", "commitment"],
+                                            "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                                           }
                                         },
                                         "required": ["mode", "provide"]
@@ -12519,6 +12569,14 @@
                                                     "required": ["kind", "id"]
                                                   },
                                                   "maxItems": 8
+                                                },
+                                                "stakes": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "routine",
+                                                    "commitment"
+                                                  ],
+                                                  "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                                                 }
                                               },
                                               "required": ["mode"]
@@ -12588,6 +12646,14 @@
                                                     "required": ["kind", "id"]
                                                   },
                                                   "maxItems": 8
+                                                },
+                                                "stakes": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "routine",
+                                                    "commitment"
+                                                  ],
+                                                  "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                                                 }
                                               },
                                               "required": ["mode", "options"]
@@ -12688,6 +12754,14 @@
                                                     "required": ["kind", "id"]
                                                   },
                                                   "maxItems": 8
+                                                },
+                                                "stakes": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "routine",
+                                                    "commitment"
+                                                  ],
+                                                  "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                                                 }
                                               },
                                               "required": ["mode", "form"]
@@ -12736,6 +12810,14 @@
                                                     "required": ["kind", "id"]
                                                   },
                                                   "maxItems": 8
+                                                },
+                                                "stakes": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "routine",
+                                                    "commitment"
+                                                  ],
+                                                  "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                                                 }
                                               },
                                               "required": ["mode"]
@@ -12830,6 +12912,14 @@
                                                     "required": ["kind", "id"]
                                                   },
                                                   "maxItems": 8
+                                                },
+                                                "stakes": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "routine",
+                                                    "commitment"
+                                                  ],
+                                                  "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                                                 }
                                               },
                                               "required": ["mode", "provide"]
@@ -14839,6 +14929,11 @@
                                               "required": ["kind", "id"]
                                             },
                                             "maxItems": 8
+                                          },
+                                          "stakes": {
+                                            "type": "string",
+                                            "enum": ["routine", "commitment"],
+                                            "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                                           }
                                         },
                                         "required": ["mode"]
@@ -14906,6 +15001,11 @@
                                               "required": ["kind", "id"]
                                             },
                                             "maxItems": 8
+                                          },
+                                          "stakes": {
+                                            "type": "string",
+                                            "enum": ["routine", "commitment"],
+                                            "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                                           }
                                         },
                                         "required": ["mode", "options"]
@@ -15000,6 +15100,11 @@
                                               "required": ["kind", "id"]
                                             },
                                             "maxItems": 8
+                                          },
+                                          "stakes": {
+                                            "type": "string",
+                                            "enum": ["routine", "commitment"],
+                                            "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                                           }
                                         },
                                         "required": ["mode", "form"]
@@ -15048,6 +15153,11 @@
                                               "required": ["kind", "id"]
                                             },
                                             "maxItems": 8
+                                          },
+                                          "stakes": {
+                                            "type": "string",
+                                            "enum": ["routine", "commitment"],
+                                            "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                                           }
                                         },
                                         "required": ["mode"]
@@ -15136,6 +15246,11 @@
                                               "required": ["kind", "id"]
                                             },
                                             "maxItems": 8
+                                          },
+                                          "stakes": {
+                                            "type": "string",
+                                            "enum": ["routine", "commitment"],
+                                            "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                                           }
                                         },
                                         "required": ["mode", "provide"]
@@ -15257,6 +15372,14 @@
                                                     "required": ["kind", "id"]
                                                   },
                                                   "maxItems": 8
+                                                },
+                                                "stakes": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "routine",
+                                                    "commitment"
+                                                  ],
+                                                  "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                                                 }
                                               },
                                               "required": ["mode"]
@@ -15326,6 +15449,14 @@
                                                     "required": ["kind", "id"]
                                                   },
                                                   "maxItems": 8
+                                                },
+                                                "stakes": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "routine",
+                                                    "commitment"
+                                                  ],
+                                                  "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                                                 }
                                               },
                                               "required": ["mode", "options"]
@@ -15426,6 +15557,14 @@
                                                     "required": ["kind", "id"]
                                                   },
                                                   "maxItems": 8
+                                                },
+                                                "stakes": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "routine",
+                                                    "commitment"
+                                                  ],
+                                                  "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                                                 }
                                               },
                                               "required": ["mode", "form"]
@@ -15474,6 +15613,14 @@
                                                     "required": ["kind", "id"]
                                                   },
                                                   "maxItems": 8
+                                                },
+                                                "stakes": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "routine",
+                                                    "commitment"
+                                                  ],
+                                                  "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                                                 }
                                               },
                                               "required": ["mode"]
@@ -15568,6 +15715,14 @@
                                                     "required": ["kind", "id"]
                                                   },
                                                   "maxItems": 8
+                                                },
+                                                "stakes": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "routine",
+                                                    "commitment"
+                                                  ],
+                                                  "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                                                 }
                                               },
                                               "required": ["mode", "provide"]
@@ -20137,6 +20292,11 @@
                                           "required": ["kind", "id"]
                                         },
                                         "maxItems": 8
+                                      },
+                                      "stakes": {
+                                        "type": "string",
+                                        "enum": ["routine", "commitment"],
+                                        "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                                       }
                                     },
                                     "required": ["mode"]
@@ -20204,6 +20364,11 @@
                                           "required": ["kind", "id"]
                                         },
                                         "maxItems": 8
+                                      },
+                                      "stakes": {
+                                        "type": "string",
+                                        "enum": ["routine", "commitment"],
+                                        "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                                       }
                                     },
                                     "required": ["mode", "options"]
@@ -20294,6 +20459,11 @@
                                           "required": ["kind", "id"]
                                         },
                                         "maxItems": 8
+                                      },
+                                      "stakes": {
+                                        "type": "string",
+                                        "enum": ["routine", "commitment"],
+                                        "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                                       }
                                     },
                                     "required": ["mode", "form"]
@@ -20342,6 +20512,11 @@
                                           "required": ["kind", "id"]
                                         },
                                         "maxItems": 8
+                                      },
+                                      "stakes": {
+                                        "type": "string",
+                                        "enum": ["routine", "commitment"],
+                                        "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                                       }
                                     },
                                     "required": ["mode"]
@@ -20430,6 +20605,11 @@
                                           "required": ["kind", "id"]
                                         },
                                         "maxItems": 8
+                                      },
+                                      "stakes": {
+                                        "type": "string",
+                                        "enum": ["routine", "commitment"],
+                                        "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                                       }
                                     },
                                     "required": ["mode", "provide"]
@@ -25888,6 +26068,11 @@
                                     "required": ["kind", "id"]
                                   },
                                   "maxItems": 8
+                                },
+                                "stakes": {
+                                  "type": "string",
+                                  "enum": ["routine", "commitment"],
+                                  "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                                 }
                               },
                               "required": ["mode"]
@@ -25953,6 +26138,11 @@
                                     "required": ["kind", "id"]
                                   },
                                   "maxItems": 8
+                                },
+                                "stakes": {
+                                  "type": "string",
+                                  "enum": ["routine", "commitment"],
+                                  "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                                 }
                               },
                               "required": ["mode", "options"]
@@ -26030,6 +26220,11 @@
                                     "required": ["kind", "id"]
                                   },
                                   "maxItems": 8
+                                },
+                                "stakes": {
+                                  "type": "string",
+                                  "enum": ["routine", "commitment"],
+                                  "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                                 }
                               },
                               "required": ["mode", "form"]
@@ -26072,6 +26267,11 @@
                                     "required": ["kind", "id"]
                                   },
                                   "maxItems": 8
+                                },
+                                "stakes": {
+                                  "type": "string",
+                                  "enum": ["routine", "commitment"],
+                                  "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                                 }
                               },
                               "required": ["mode"]
@@ -26160,6 +26360,11 @@
                                     "required": ["kind", "id"]
                                   },
                                   "maxItems": 8
+                                },
+                                "stakes": {
+                                  "type": "string",
+                                  "enum": ["routine", "commitment"],
+                                  "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                                 }
                               },
                               "required": ["mode", "provide"]
@@ -26230,7 +26435,8 @@
                           "enum": [
                             "session_cancelled",
                             "decision_resolved",
-                            "withdrawn"
+                            "withdrawn",
+                            "session_ended"
                           ]
                         },
                         "ref": {
@@ -26484,7 +26690,19 @@
                                 "recommendedKey",
                                 "followedRecommendation"
                               ]
-                            }
+                            },
+                            "via": {
+                              "type": "string",
+                              "enum": ["tap", "relayed"]
+                            },
+                            "relayedBy": { "type": "string", "minLength": 1 },
+                            "relaySurface": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 64
+                            },
+                            "quote": { "type": "string", "maxLength": 2000 },
+                            "confirmedAt": { "type": "string" }
                           },
                           "required": [
                             "text",
@@ -26714,7 +26932,19 @@
                                   "recommendedKey",
                                   "followedRecommendation"
                                 ]
-                              }
+                              },
+                              "via": {
+                                "type": "string",
+                                "enum": ["tap", "relayed"]
+                              },
+                              "relayedBy": { "type": "string", "minLength": 1 },
+                              "relaySurface": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 64
+                              },
+                              "quote": { "type": "string", "maxLength": 2000 },
+                              "confirmedAt": { "type": "string" }
                             },
                             "required": [
                               "text",
@@ -26726,6 +26956,147 @@
                         },
                         "decisionId": { "type": "string" },
                         "answerPickedUpAt": { "type": "string" },
+                        "pendingRelay": {
+                          "type": "object",
+                          "properties": {
+                            "text": { "type": "string", "maxLength": 2000 },
+                            "value": {
+                              "oneOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "enum": ["text"]
+                                    }
+                                  },
+                                  "required": ["type"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "enum": ["confirm"]
+                                    },
+                                    "confirmed": { "type": "boolean" }
+                                  },
+                                  "required": ["type", "confirmed"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "enum": ["chip"]
+                                    },
+                                    "chip": {
+                                      "type": "object",
+                                      "properties": {
+                                        "label": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 80
+                                        },
+                                        "value": {
+                                          "type": "string",
+                                          "maxLength": 500
+                                        },
+                                        "icon": {
+                                          "type": "string",
+                                          "maxLength": 64
+                                        },
+                                        "recommended": { "type": "boolean" },
+                                        "description": {
+                                          "type": "string",
+                                          "maxLength": 140
+                                        }
+                                      },
+                                      "required": ["label"]
+                                    }
+                                  },
+                                  "required": ["type", "chip"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "enum": ["form"]
+                                    },
+                                    "values": {
+                                      "type": "object",
+                                      "additionalProperties": {}
+                                    }
+                                  },
+                                  "required": ["type", "values"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "enum": ["provide"]
+                                    },
+                                    "ref": {
+                                      "oneOf": [
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "kind": {
+                                              "type": "string",
+                                              "enum": ["secret"]
+                                            },
+                                            "vaultRef": { "type": "string" }
+                                          },
+                                          "required": ["kind", "vaultRef"]
+                                        },
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "kind": {
+                                              "type": "string",
+                                              "enum": ["connection"]
+                                            },
+                                            "connectionId": {
+                                              "type": "string",
+                                              "format": "uuid"
+                                            }
+                                          },
+                                          "required": ["kind", "connectionId"]
+                                        },
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "kind": {
+                                              "type": "string",
+                                              "enum": ["file"]
+                                            },
+                                            "fileId": {
+                                              "type": "string",
+                                              "format": "uuid"
+                                            }
+                                          },
+                                          "required": ["kind", "fileId"]
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": ["type", "ref"]
+                                }
+                              ]
+                            },
+                            "relayedBy": { "type": "string", "minLength": 1 },
+                            "relaySurface": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 64
+                            },
+                            "quote": { "type": "string", "maxLength": 2000 },
+                            "relayedAt": { "type": "string" }
+                          },
+                          "required": ["text", "relayedBy", "relayedAt"]
+                        },
                         "ask": {
                           "oneOf": [
                             {
@@ -26763,6 +27134,11 @@
                                     "required": ["kind", "id"]
                                   },
                                   "maxItems": 8
+                                },
+                                "stakes": {
+                                  "type": "string",
+                                  "enum": ["routine", "commitment"],
+                                  "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                                 }
                               },
                               "required": ["mode"]
@@ -26828,6 +27204,11 @@
                                     "required": ["kind", "id"]
                                   },
                                   "maxItems": 8
+                                },
+                                "stakes": {
+                                  "type": "string",
+                                  "enum": ["routine", "commitment"],
+                                  "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                                 }
                               },
                               "required": ["mode", "options"]
@@ -26905,6 +27286,11 @@
                                     "required": ["kind", "id"]
                                   },
                                   "maxItems": 8
+                                },
+                                "stakes": {
+                                  "type": "string",
+                                  "enum": ["routine", "commitment"],
+                                  "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                                 }
                               },
                               "required": ["mode", "form"]
@@ -26947,6 +27333,11 @@
                                     "required": ["kind", "id"]
                                   },
                                   "maxItems": 8
+                                },
+                                "stakes": {
+                                  "type": "string",
+                                  "enum": ["routine", "commitment"],
+                                  "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                                 }
                               },
                               "required": ["mode"]
@@ -27035,6 +27426,11 @@
                                     "required": ["kind", "id"]
                                   },
                                   "maxItems": 8
+                                },
+                                "stakes": {
+                                  "type": "string",
+                                  "enum": ["routine", "commitment"],
+                                  "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                                 }
                               },
                               "required": ["mode", "provide"]
@@ -27472,6 +27868,11 @@
                                     "required": ["kind", "id"]
                                   },
                                   "maxItems": 8
+                                },
+                                "stakes": {
+                                  "type": "string",
+                                  "enum": ["routine", "commitment"],
+                                  "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                                 }
                               },
                               "required": ["mode"]
@@ -27537,6 +27938,11 @@
                                     "required": ["kind", "id"]
                                   },
                                   "maxItems": 8
+                                },
+                                "stakes": {
+                                  "type": "string",
+                                  "enum": ["routine", "commitment"],
+                                  "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                                 }
                               },
                               "required": ["mode", "options"]
@@ -27614,6 +28020,11 @@
                                     "required": ["kind", "id"]
                                   },
                                   "maxItems": 8
+                                },
+                                "stakes": {
+                                  "type": "string",
+                                  "enum": ["routine", "commitment"],
+                                  "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                                 }
                               },
                               "required": ["mode", "form"]
@@ -27656,6 +28067,11 @@
                                     "required": ["kind", "id"]
                                   },
                                   "maxItems": 8
+                                },
+                                "stakes": {
+                                  "type": "string",
+                                  "enum": ["routine", "commitment"],
+                                  "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                                 }
                               },
                               "required": ["mode"]
@@ -27744,6 +28160,11 @@
                                     "required": ["kind", "id"]
                                   },
                                   "maxItems": 8
+                                },
+                                "stakes": {
+                                  "type": "string",
+                                  "enum": ["routine", "commitment"],
+                                  "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                                 }
                               },
                               "required": ["mode", "provide"]
@@ -27814,7 +28235,8 @@
                           "enum": [
                             "session_cancelled",
                             "decision_resolved",
-                            "withdrawn"
+                            "withdrawn",
+                            "session_ended"
                           ]
                         },
                         "ref": {
@@ -28068,7 +28490,19 @@
                                 "recommendedKey",
                                 "followedRecommendation"
                               ]
-                            }
+                            },
+                            "via": {
+                              "type": "string",
+                              "enum": ["tap", "relayed"]
+                            },
+                            "relayedBy": { "type": "string", "minLength": 1 },
+                            "relaySurface": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 64
+                            },
+                            "quote": { "type": "string", "maxLength": 2000 },
+                            "confirmedAt": { "type": "string" }
                           },
                           "required": [
                             "text",
@@ -28298,7 +28732,19 @@
                                   "recommendedKey",
                                   "followedRecommendation"
                                 ]
-                              }
+                              },
+                              "via": {
+                                "type": "string",
+                                "enum": ["tap", "relayed"]
+                              },
+                              "relayedBy": { "type": "string", "minLength": 1 },
+                              "relaySurface": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 64
+                              },
+                              "quote": { "type": "string", "maxLength": 2000 },
+                              "confirmedAt": { "type": "string" }
                             },
                             "required": [
                               "text",
@@ -28310,6 +28756,147 @@
                         },
                         "decisionId": { "type": "string" },
                         "answerPickedUpAt": { "type": "string" },
+                        "pendingRelay": {
+                          "type": "object",
+                          "properties": {
+                            "text": { "type": "string", "maxLength": 2000 },
+                            "value": {
+                              "oneOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "enum": ["text"]
+                                    }
+                                  },
+                                  "required": ["type"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "enum": ["confirm"]
+                                    },
+                                    "confirmed": { "type": "boolean" }
+                                  },
+                                  "required": ["type", "confirmed"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "enum": ["chip"]
+                                    },
+                                    "chip": {
+                                      "type": "object",
+                                      "properties": {
+                                        "label": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 80
+                                        },
+                                        "value": {
+                                          "type": "string",
+                                          "maxLength": 500
+                                        },
+                                        "icon": {
+                                          "type": "string",
+                                          "maxLength": 64
+                                        },
+                                        "recommended": { "type": "boolean" },
+                                        "description": {
+                                          "type": "string",
+                                          "maxLength": 140
+                                        }
+                                      },
+                                      "required": ["label"]
+                                    }
+                                  },
+                                  "required": ["type", "chip"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "enum": ["form"]
+                                    },
+                                    "values": {
+                                      "type": "object",
+                                      "additionalProperties": {}
+                                    }
+                                  },
+                                  "required": ["type", "values"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "enum": ["provide"]
+                                    },
+                                    "ref": {
+                                      "oneOf": [
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "kind": {
+                                              "type": "string",
+                                              "enum": ["secret"]
+                                            },
+                                            "vaultRef": { "type": "string" }
+                                          },
+                                          "required": ["kind", "vaultRef"]
+                                        },
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "kind": {
+                                              "type": "string",
+                                              "enum": ["connection"]
+                                            },
+                                            "connectionId": {
+                                              "type": "string",
+                                              "format": "uuid"
+                                            }
+                                          },
+                                          "required": ["kind", "connectionId"]
+                                        },
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "kind": {
+                                              "type": "string",
+                                              "enum": ["file"]
+                                            },
+                                            "fileId": {
+                                              "type": "string",
+                                              "format": "uuid"
+                                            }
+                                          },
+                                          "required": ["kind", "fileId"]
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": ["type", "ref"]
+                                }
+                              ]
+                            },
+                            "relayedBy": { "type": "string", "minLength": 1 },
+                            "relaySurface": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 64
+                            },
+                            "quote": { "type": "string", "maxLength": 2000 },
+                            "relayedAt": { "type": "string" }
+                          },
+                          "required": ["text", "relayedBy", "relayedAt"]
+                        },
                         "ask": {
                           "oneOf": [
                             {
@@ -28347,6 +28934,11 @@
                                     "required": ["kind", "id"]
                                   },
                                   "maxItems": 8
+                                },
+                                "stakes": {
+                                  "type": "string",
+                                  "enum": ["routine", "commitment"],
+                                  "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                                 }
                               },
                               "required": ["mode"]
@@ -28412,6 +29004,11 @@
                                     "required": ["kind", "id"]
                                   },
                                   "maxItems": 8
+                                },
+                                "stakes": {
+                                  "type": "string",
+                                  "enum": ["routine", "commitment"],
+                                  "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                                 }
                               },
                               "required": ["mode", "options"]
@@ -28489,6 +29086,11 @@
                                     "required": ["kind", "id"]
                                   },
                                   "maxItems": 8
+                                },
+                                "stakes": {
+                                  "type": "string",
+                                  "enum": ["routine", "commitment"],
+                                  "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                                 }
                               },
                               "required": ["mode", "form"]
@@ -28531,6 +29133,11 @@
                                     "required": ["kind", "id"]
                                   },
                                   "maxItems": 8
+                                },
+                                "stakes": {
+                                  "type": "string",
+                                  "enum": ["routine", "commitment"],
+                                  "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                                 }
                               },
                               "required": ["mode"]
@@ -28619,6 +29226,11 @@
                                     "required": ["kind", "id"]
                                   },
                                   "maxItems": 8
+                                },
+                                "stakes": {
+                                  "type": "string",
+                                  "enum": ["routine", "commitment"],
+                                  "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                                 }
                               },
                               "required": ["mode", "provide"]
@@ -29226,6 +29838,11 @@
                               "required": ["kind", "id"]
                             },
                             "maxItems": 8
+                          },
+                          "stakes": {
+                            "type": "string",
+                            "enum": ["routine", "commitment"],
+                            "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                           }
                         },
                         "required": ["mode"]
@@ -29282,6 +29899,11 @@
                               "required": ["kind", "id"]
                             },
                             "maxItems": 8
+                          },
+                          "stakes": {
+                            "type": "string",
+                            "enum": ["routine", "commitment"],
+                            "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                           }
                         },
                         "required": ["mode", "options"]
@@ -29359,6 +29981,11 @@
                               "required": ["kind", "id"]
                             },
                             "maxItems": 8
+                          },
+                          "stakes": {
+                            "type": "string",
+                            "enum": ["routine", "commitment"],
+                            "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                           }
                         },
                         "required": ["mode", "form"]
@@ -29401,6 +30028,11 @@
                               "required": ["kind", "id"]
                             },
                             "maxItems": 8
+                          },
+                          "stakes": {
+                            "type": "string",
+                            "enum": ["routine", "commitment"],
+                            "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                           }
                         },
                         "required": ["mode"]
@@ -29486,6 +30118,11 @@
                               "required": ["kind", "id"]
                             },
                             "maxItems": 8
+                          },
+                          "stakes": {
+                            "type": "string",
+                            "enum": ["routine", "commitment"],
+                            "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
                           }
                         },
                         "required": ["mode", "provide"]

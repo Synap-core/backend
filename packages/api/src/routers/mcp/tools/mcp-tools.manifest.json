@@ -1455,6 +1455,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode"]
@@ -1524,6 +1529,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode", "options"]
@@ -1620,6 +1630,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode", "form"]
@@ -1668,6 +1683,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode"]
@@ -1756,6 +1776,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode", "provide"]
@@ -1954,6 +1979,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode"]
@@ -2023,6 +2053,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode", "options"]
@@ -2119,6 +2154,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode", "form"]
@@ -2167,6 +2207,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode"]
@@ -2255,6 +2300,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode", "provide"]
@@ -2409,6 +2459,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode"]
@@ -2478,6 +2533,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode", "options"]
@@ -2574,6 +2634,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode", "form"]
@@ -2622,6 +2687,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode"]
@@ -2710,6 +2780,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode", "provide"]
@@ -2913,6 +2988,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode"]
@@ -2982,6 +3062,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode", "options"]
@@ -3078,6 +3163,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode", "form"]
@@ -3126,6 +3216,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode"]
@@ -3214,6 +3309,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode", "provide"]
@@ -3334,6 +3434,11 @@
                           },
                           "required": ["kind", "id"]
                         }
+                      },
+                      "stakes": {
+                        "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                        "type": "string",
+                        "enum": ["routine", "commitment"]
                       }
                     },
                     "required": ["mode"]
@@ -3403,6 +3508,11 @@
                           },
                           "required": ["kind", "id"]
                         }
+                      },
+                      "stakes": {
+                        "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                        "type": "string",
+                        "enum": ["routine", "commitment"]
                       }
                     },
                     "required": ["mode", "options"]
@@ -3499,6 +3609,11 @@
                           },
                           "required": ["kind", "id"]
                         }
+                      },
+                      "stakes": {
+                        "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                        "type": "string",
+                        "enum": ["routine", "commitment"]
                       }
                     },
                     "required": ["mode", "form"]
@@ -3547,6 +3662,11 @@
                           },
                           "required": ["kind", "id"]
                         }
+                      },
+                      "stakes": {
+                        "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                        "type": "string",
+                        "enum": ["routine", "commitment"]
                       }
                     },
                     "required": ["mode"]
@@ -3635,6 +3755,11 @@
                           },
                           "required": ["kind", "id"]
                         }
+                      },
+                      "stakes": {
+                        "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                        "type": "string",
+                        "enum": ["routine", "commitment"]
                       }
                     },
                     "required": ["mode", "provide"]
@@ -4364,6 +4489,11 @@
                                   },
                                   "required": ["kind", "id"]
                                 }
+                              },
+                              "stakes": {
+                                "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                                "type": "string",
+                                "enum": ["routine", "commitment"]
                               }
                             },
                             "required": ["mode"]
@@ -4433,6 +4563,11 @@
                                   },
                                   "required": ["kind", "id"]
                                 }
+                              },
+                              "stakes": {
+                                "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                                "type": "string",
+                                "enum": ["routine", "commitment"]
                               }
                             },
                             "required": ["mode", "options"]
@@ -4529,6 +4664,11 @@
                                   },
                                   "required": ["kind", "id"]
                                 }
+                              },
+                              "stakes": {
+                                "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                                "type": "string",
+                                "enum": ["routine", "commitment"]
                               }
                             },
                             "required": ["mode", "form"]
@@ -4577,6 +4717,11 @@
                                   },
                                   "required": ["kind", "id"]
                                 }
+                              },
+                              "stakes": {
+                                "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                                "type": "string",
+                                "enum": ["routine", "commitment"]
                               }
                             },
                             "required": ["mode"]
@@ -4665,6 +4810,11 @@
                                   },
                                   "required": ["kind", "id"]
                                 }
+                              },
+                              "stakes": {
+                                "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                                "type": "string",
+                                "enum": ["routine", "commitment"]
                               }
                             },
                             "required": ["mode", "provide"]
@@ -4825,6 +4975,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode"]
@@ -4894,6 +5049,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode", "options"]
@@ -4990,6 +5150,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode", "form"]
@@ -5038,6 +5203,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode"]
@@ -5126,6 +5296,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode", "provide"]
@@ -5383,6 +5558,11 @@
                                   },
                                   "required": ["kind", "id"]
                                 }
+                              },
+                              "stakes": {
+                                "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                                "type": "string",
+                                "enum": ["routine", "commitment"]
                               }
                             },
                             "required": ["mode"]
@@ -5452,6 +5632,11 @@
                                   },
                                   "required": ["kind", "id"]
                                 }
+                              },
+                              "stakes": {
+                                "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                                "type": "string",
+                                "enum": ["routine", "commitment"]
                               }
                             },
                             "required": ["mode", "options"]
@@ -5548,6 +5733,11 @@
                                   },
                                   "required": ["kind", "id"]
                                 }
+                              },
+                              "stakes": {
+                                "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                                "type": "string",
+                                "enum": ["routine", "commitment"]
                               }
                             },
                             "required": ["mode", "form"]
@@ -5596,6 +5786,11 @@
                                   },
                                   "required": ["kind", "id"]
                                 }
+                              },
+                              "stakes": {
+                                "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                                "type": "string",
+                                "enum": ["routine", "commitment"]
                               }
                             },
                             "required": ["mode"]
@@ -5684,6 +5879,11 @@
                                   },
                                   "required": ["kind", "id"]
                                 }
+                              },
+                              "stakes": {
+                                "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                                "type": "string",
+                                "enum": ["routine", "commitment"]
                               }
                             },
                             "required": ["mode", "provide"]
@@ -5877,6 +6077,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode"]
@@ -5946,6 +6151,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode", "options"]
@@ -6042,6 +6252,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode", "form"]
@@ -6090,6 +6305,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode"]
@@ -6178,6 +6398,11 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "stakes": {
+                          "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                          "type": "string",
+                          "enum": ["routine", "commitment"]
                         }
                       },
                       "required": ["mode", "provide"]
@@ -8293,6 +8518,11 @@
                       },
                       "required": ["kind", "id"]
                     }
+                  },
+                  "stakes": {
+                    "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                    "type": "string",
+                    "enum": ["routine", "commitment"]
                   }
                 },
                 "required": ["mode"]
@@ -8362,6 +8592,11 @@
                       },
                       "required": ["kind", "id"]
                     }
+                  },
+                  "stakes": {
+                    "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                    "type": "string",
+                    "enum": ["routine", "commitment"]
                   }
                 },
                 "required": ["mode", "options"]
@@ -8458,6 +8693,11 @@
                       },
                       "required": ["kind", "id"]
                     }
+                  },
+                  "stakes": {
+                    "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                    "type": "string",
+                    "enum": ["routine", "commitment"]
                   }
                 },
                 "required": ["mode", "form"]
@@ -8506,6 +8746,11 @@
                       },
                       "required": ["kind", "id"]
                     }
+                  },
+                  "stakes": {
+                    "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                    "type": "string",
+                    "enum": ["routine", "commitment"]
                   }
                 },
                 "required": ["mode"]
@@ -8594,6 +8839,11 @@
                       },
                       "required": ["kind", "id"]
                     }
+                  },
+                  "stakes": {
+                    "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                    "type": "string",
+                    "enum": ["routine", "commitment"]
                   }
                 },
                 "required": ["mode", "provide"]
