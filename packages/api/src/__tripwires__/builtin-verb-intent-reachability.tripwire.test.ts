@@ -229,6 +229,9 @@ function stringPropOf(
   }
   const init = unwrap(prop.initializer);
   if (ts.isStringLiteral(init)) return init.text;
+  // `intent: null` DECLARES none (the applier clears a stored one): for
+  // routing it is the same as absent, an unroutable verb that must be pinned.
+  if (init.kind === ts.SyntaxKind.NullKeyword) return undefined;
   // A non-literal (a variable, a template expression) must NOT be read as
   // "absent": that would turn a present-but-computed intent into a silent skip.
   throw new Error(
@@ -360,6 +363,9 @@ const INTENTIONALLY_UNROUTABLE: Record<string, string> = {
     "Proposes retiring a kind or role. Pod schema administration.",
   "property_def.propose_retire":
     "Proposes retiring a property definition. Pod schema administration.",
+  // ── marketplace: Synap's own catalog, not an outside corpus ────────────
+  "market.search":
+    "Searches the pod's cache of Synap's marketplace catalog for things to install. search_external sent a 'search the web' agent to the catalog; web.search holds that intent.",
   // ── marketplace authoring: creates a DRAFT, installs nothing ───────────
   "market.scaffold":
     "Authors a new marketplace package as a local draft document. It installs nothing and connects nothing, so connect_account would be a false claim.",

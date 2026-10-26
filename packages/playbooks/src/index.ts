@@ -1998,8 +1998,12 @@ export interface CapabilitySkillDef {
    * derived `ToolVerbCatalogEntry.intent`. Optional; a teaching (`instruction`)
    * skill is not a callable verb and never carries one. A slug that is not in
    * the seed and not in `capability_intents` is REJECTED by the applier.
+   *
+   * ABSENT and `null` differ: absent leaves an installed skill's stored intent
+   * alone (another definition may own it); `null` DECLARES none, so the applier
+   * clears a stored one. That is how a verb drops a wrong intent on every pod.
    */
-  intent?: string;
+  intent?: string | null;
   /**
    * The URLs a READER verb reads (`intent: "read_webpage"`), in the
    * `@synap-core/types/url-read` pattern grammar (`"instagram.com/p/*"`,
