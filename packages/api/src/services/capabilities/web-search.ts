@@ -2,18 +2,20 @@
  * `web.search` — the pod's one door for "search the web".
  *
  * It never calls a search vendor itself. It runs a PROVIDER: an installed verb
- * that declares `search_external`, through `executeCapability`, so the search
+ * that declares `search_web`, through `executeCapability`, so the search
  * carries the caller's grant, the agent posture and the provider verb's own
  * gate, and lands as that verb's `capability_run` (metered when the verb
  * declares `metadata.metering`). This module only picks WHICH verb.
  *
- * ── WHICH PROVIDER (wave C0) ────────────────────────────────────────────────
- * Only the one the caller NAMES (`provider`, a verb id from `providers[]`).
- * `search_external` means "query an outside corpus", not "the web": Notion,
- * Dropbox and Gmail searches declare it too, so an unnamed search never picks
- * one of them on the caller's behalf. With no name the answer is an honest
- * `blocked`, listing the installed verbs the caller could name. The pod's
- * default provider (a Synap-run, metered one) is a later wave.
+ * ── WHICH PROVIDER ──────────────────────────────────────────────────────────
+ * The one the caller NAMES (`provider`, a verb id from `providers[]`), else the
+ * one installed: the only ready provider (or, when none is ready, the only
+ * installed one, so its run can ask to enable it). Several ready providers and
+ * no name is an honest `blocked` listing them, never a silent pick.
+ * `search_web` (0360), not `search_external`: the latter means "query an
+ * outside corpus" and Notion, Dropbox and Gmail searches declare it too, so it
+ * never makes a verb a web search provider. The pod's default provider (a
+ * Synap-run, metered one) is a later wave.
  *
  * ── HONEST OUTCOMES ─────────────────────────────────────────────────────────
  * `ok` (the provider's own result) | `blocked` (nothing ran: no provider named
@@ -27,8 +29,8 @@ import {
   type IntentVerbMatch,
 } from "./capability-intent-index.js";
 
-/** The intent a web search provider declares. */
-const WEB_SEARCH_INTENT = "search_external";
+/** The intent a web search provider declares (migration 0360). */
+const WEB_SEARCH_INTENT = "search_web";
 /** This verb — it declares the intent too, and is never its own provider. */
 const WEB_SEARCH_VERB = "web.search";
 
@@ -116,7 +118,11 @@ export async function searchWeb(
     }))
     .sort((a, b) => a.verbId.localeCompare(b.verbId));
 
-  if (opts.provider === undefined) {
+  // Unnamed: the one installed provider. Prefer the ready ones; with none
+  // ready, the only installed one still runs, so its gate can ask to enable it.
+  const ready = providers.filter((p) => p.ready);
+  const candidates = ready.length > 0 ? ready : providers;
+  if (opts.provider === undefined && candidates.length !== 1) {
     return {
       search:
         providers.length > 0
@@ -125,7 +131,7 @@ export async function searchWeb(
               reason: "no_provider",
               nextStep: "name_provider",
               detail:
-                "This pod has no default web search provider yet. Name one of providers[] in `provider` (pick one that searches the web, not a notes or files search).",
+                "Several web search providers are installed. Name one of providers[] in `provider`.",
             }
           : {
               status: "blocked",
@@ -138,7 +144,7 @@ export async function searchWeb(
     };
   }
 
-  const provider = opts.provider;
+  const provider = opts.provider ?? candidates[0]!.verbId;
   if (!providers.some((p) => p.verbId === provider)) {
     return {
       search: {

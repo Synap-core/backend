@@ -41,6 +41,7 @@ const MIGRATIONS = [
   join(MIGRATIONS_DIR, "0284_publish_post_intent.sql"),
   join(MIGRATIONS_DIR, "0314_delegate_agent_task_intent.sql"),
   join(MIGRATIONS_DIR, "0329_read_webpage_intent.sql"),
+  join(MIGRATIONS_DIR, "0360_search_web_intent.sql"),
 ];
 
 /**
