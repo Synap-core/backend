@@ -23,7 +23,10 @@ import {
   emptyEntityPatchMessage,
   isEmptyEntityPatch,
 } from "./update-write-receipt.js";
-import { entityListOrderBySchema } from "../../utils/entity-list-sort.js";
+import {
+  entityListOrderBySchema,
+  lastInteractionWindowFields,
+} from "../../utils/entity-list-sort.js";
 import { emitChatEvent } from "../../utils/chat-realtime-broadcast.js";
 import { lifecycleConflictOf } from "../../services/lifecycle/conflict.js";
 import {
@@ -105,6 +108,11 @@ export const entitiesRouter = router({
         createdBefore: z.coerce.date().optional(),
         /** Sort, applied in SQL before paging. Forwarded verbatim to `list`. */
         orderBy: entityListOrderBySchema.optional(),
+        /**
+         * Last-interaction window + `includeNever`, forwarded verbatim to
+         * `list` (declared here: this forwarder is a whitelist, see above).
+         */
+        ...lastInteractionWindowFields,
       })
     )
     .query(async ({ input, ctx }) => {
@@ -149,6 +157,13 @@ export const entitiesRouter = router({
         ...(input.createdAfter ? { createdAfter: input.createdAfter } : {}),
         ...(input.createdBefore ? { createdBefore: input.createdBefore } : {}),
         ...(input.orderBy ? { orderBy: input.orderBy } : {}),
+        ...(input.lastInteractionAfter
+          ? { lastInteractionAfter: input.lastInteractionAfter }
+          : {}),
+        ...(input.lastInteractionBefore
+          ? { lastInteractionBefore: input.lastInteractionBefore }
+          : {}),
+        ...(input.includeNever ? { includeNever: true } : {}),
       });
 
       return result.entities;

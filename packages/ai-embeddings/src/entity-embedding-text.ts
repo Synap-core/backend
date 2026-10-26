@@ -32,11 +32,19 @@ export interface EntityEmbeddingFacet {
   properties?: Record<string, unknown> | null;
 }
 
+/**
+ * Properties that are bookkeeping, not meaning. `lastInteractionAt` is the
+ * projection of "when we last spoke" (0359), bumped by every synced meeting:
+ * folded in, it would move the person's vector each time and match no query.
+ */
+const NON_SEMANTIC_PROPERTY_KEYS = new Set(["lastInteractionAt"]);
+
 /** Format `{key: value}` pairs the same way for both entity properties and facet properties. */
 function formatPropertyEntries(properties: Record<string, unknown>): string[] {
   const out: string[] = [];
   for (const [key, value] of Object.entries(properties)) {
     if (key.startsWith("_")) continue; // internal markers (_dogfood, _pendingStructure…)
+    if (NON_SEMANTIC_PROPERTY_KEYS.has(key)) continue;
     if (/(^id$|Id$|_id$)/.test(key)) continue; // foreign-key ids = noise, not meaning
     if (value === null || value === undefined || value === "") continue;
 

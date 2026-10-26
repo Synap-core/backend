@@ -8,7 +8,7 @@
  * 400 at every door — it used to be ignored, which read as "sorted".
  */
 import { z } from "zod";
-import { asc, drizzleSql } from "@synap/database";
+import { and, asc, drizzleSql, gte, isNull, lt, or } from "@synap/database";
 import { entities } from "@synap/database/schema";
 import type { SQL } from "drizzle-orm";
 
@@ -16,6 +16,9 @@ export const ENTITY_LIST_SORT_FIELDS = [
   "createdAt",
   "updatedAt",
   "title",
+  // When we last spoke (0359, `entities.last_interaction_at`). Never = NULL,
+  // last in both directions.
+  "lastInteractionAt",
 ] as const;
 export type EntityListSortField = (typeof ENTITY_LIST_SORT_FIELDS)[number];
 
@@ -59,7 +62,9 @@ export function entityListOrderBySql(orderBy?: EntityListOrderBy): SQL[] {
       ? drizzleSql`lower(${entities.title})`
       : field === "updatedAt"
         ? entities.updatedAt
-        : entities.createdAt;
+        : field === "lastInteractionAt"
+          ? entities.lastInteractionAt
+          : entities.createdAt;
   return [drizzleSql`${column} ${direction} nulls last`, asc(entities.id)];
 }
 
@@ -89,5 +94,53 @@ export function compareListedEntities(
     if (ka < kb) return -sign;
     if (ka > kb) return sign;
     return String(a.id).localeCompare(String(b.id));
+  };
+}
+
+/**
+ * "Who haven't I spoken to in a month" — the LAST-INTERACTION WINDOW, one rule
+ * for every list door. Half-open like the creation window:
+ * `lastInteractionAfter` inclusive (`>=`), `lastInteractionBefore` exclusive
+ * (`<`). `includeNever` also admits the never-contacted (NULL) rows, which no
+ * date bound can match on its own (founder R5: never = in).
+ */
+export interface LastInteractionWindow {
+  lastInteractionAfter?: Date;
+  lastInteractionBefore?: Date;
+  includeNever?: boolean;
+}
+
+/** Zod fields for the window (spread into a list door's input). */
+export const lastInteractionWindowFields = {
+  lastInteractionAfter: z.coerce.date().optional(),
+  lastInteractionBefore: z.coerce.date().optional(),
+  includeNever: z.boolean().optional(),
+};
+
+/**
+ * The SQL predicate, or `null` when no bound is given (`includeNever` alone
+ * narrows nothing: every row is already in). An inverted window is an `error`
+ * the door turns into a 400 — it can never match, and an empty page would
+ * read as "nobody".
+ */
+export function lastInteractionWindowWhere(
+  w: LastInteractionWindow
+): { where: SQL | null } | { error: string } {
+  const { lastInteractionAfter: after, lastInteractionBefore: before } = w;
+  if (after && before && after.getTime() > before.getTime()) {
+    return {
+      error:
+        "lastInteractionAfter must be earlier than lastInteractionBefore — that window is inverted and can never match a row",
+    };
+  }
+  if (!after && !before) return { where: null };
+  const bounds = and(
+    ...(after ? [gte(entities.lastInteractionAt, after)] : []),
+    ...(before ? [lt(entities.lastInteractionAt, before)] : [])
+  )!;
+  return {
+    where: w.includeNever
+      ? or(bounds, isNull(entities.lastInteractionAt))!
+      : bounds,
   };
 }

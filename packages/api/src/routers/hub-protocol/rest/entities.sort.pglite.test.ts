@@ -178,7 +178,7 @@ describe("GET /entities?sort — applied before paging", () => {
 
 describe("GET /entities?sort — unsupported values are a 400", () => {
   it.each([
-    ["an unknown field", "sort=lastInteractionAt:desc"],
+    ["an unknown field", "sort=dueDate:desc"],
     ["a bare unknown field", "sort=bogus"],
     ["an unknown direction", "sort=updatedAt:sideways"],
     ["an extra segment", "sort=updatedAt:desc:x"],
