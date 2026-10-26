@@ -54,6 +54,10 @@ const EXEMPT: Record<string, string> = {
   "routers/proposals/executors/focus-session.ts":
     "The approval executor applies a hand-off a HUMAN just approved — they are " +
     "looking at it; a push about their own click is noise.",
+  "routers/proposals/executors/pod-hygiene.ts":
+    "The cleanup pack's approval half (W-B4 `withdraw_ask`): it retires an " +
+    "ask the person just approved withdrawing — it hands nothing over, so " +
+    "there is no news to push.",
   "services/dev-loop/session-outcome-door.ts":
     "An automation's `complete_outcome` (plan v5 T2): `applyOutputMutations` " +
     "with `completeOutput` ONLY claims an existing slot — it never hands one " +
