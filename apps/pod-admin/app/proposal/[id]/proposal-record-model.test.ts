@@ -223,7 +223,12 @@ describe("proposedRecord — a skill create: the code is read whole, first", () 
     kind: "skill",
     changes: [
       ...filler,
-      { path: "code", label: "Code", operation: "create" as const, after: code },
+      {
+        path: "code",
+        label: "Code",
+        operation: "create" as const,
+        after: code,
+      },
       {
         path: "requiredToolNames",
         label: "RequiredToolNames",

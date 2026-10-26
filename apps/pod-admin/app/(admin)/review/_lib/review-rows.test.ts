@@ -276,9 +276,9 @@ describe("reviewRows", () => {
       batchIds: ["c3-p1"],
     });
     // The batch door takes nothing from the page-only rows.
-    expect(
-      batchOf(rows, new Set(rows.map((r) => r.key))).proposalIds
-    ).toEqual(["c3-p1"]);
+    expect(batchOf(rows, new Set(rows.map((r) => r.key))).proposalIds).toEqual([
+      "c3-p1",
+    ]);
   });
 
   it("isExecutableSkillCreate reads the verb and the kind, never a skill update", () => {
