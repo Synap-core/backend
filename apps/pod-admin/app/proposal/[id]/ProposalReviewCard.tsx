@@ -62,6 +62,7 @@ import {
   resolveProposalAction,
   type DuplicateItemChoice,
   type ProposalDuplicateReview,
+  type ProposalReviewGraph,
 } from "@synap-core/types/proposals";
 import {
   resolveObjectNoun,
@@ -93,7 +94,8 @@ import {
   TwinDoors,
   TwinVerbs,
 } from "./DuplicateChoice";
-import { ProposedRecordCard } from "./ProposedRecordCard";
+import { PartEdgeList, ProposedRecordCard } from "./ProposedRecordCard";
+import { compositeItems } from "./composite-parts-model";
 import { proposalHeading } from "./proposal-heading";
 import { proposalRequesterParts } from "./proposal-requester";
 import {
@@ -745,16 +747,33 @@ export function ProposalReviewBody({
     graphKinds,
   });
 
-  /* The record(s) approving creates or changes. A graph: one card per new
-     item. Otherwise the pod's diff as one record — absent when it has nothing
-     readable (the raw request is still in Advanced). */
+  /* The record(s) approving creates or changes. A graph: one card per part
+     the pod's projection lists (skills, automations, rules, records, the
+     process, updates — `composite-parts-model.ts`), and its links as one
+     list; nobody approves a part they cannot see. Otherwise the pod's diff
+     as one record — absent when it has nothing readable (the raw request is
+     still in Advanced). */
   const objectRefs = (p as { objectRefs?: Record<string, ResolvedRef> })
     .objectRefs;
+  const reviewGraph = graph
+    ? (p.review as { graph?: ProposalReviewGraph }).graph
+    : undefined;
+  const graphItems =
+    reviewGraph && !appConnect && !docChanges
+      ? compositeItems(reviewGraph, payload, defs.definitionsFor)
+      : [];
+  const edges = graphItems.flatMap((item) =>
+    item.shape === "edge" ? [item.edge] : []
+  );
   const records: ProposedRecord[] =
     appConnect || docChanges
       ? []
       : graph
-        ? graphRecords(payload, defs.definitionsFor)
+        ? reviewGraph
+          ? graphItems.flatMap((item) =>
+              item.shape === "record" ? [item.record] : []
+            )
+          : graphRecords(payload, defs.definitionsFor)
         : (() => {
             const record = proposedRecord({
               changes: (
@@ -891,6 +910,7 @@ export function ProposalReviewBody({
           })}
         </div>
       ) : null}
+      {edges.length > 0 && <PartEdgeList edges={edges} />}
       {/* A graph item whose card is not drawn still owes its choice: it is
           never sent on a default nobody saw. */}
       {orphanItems.map((item) => (
