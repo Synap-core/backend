@@ -16,6 +16,8 @@ import { Pill } from "../../_lib/object/provenance-chips";
 import { StatusPill } from "../../(admin)/components/status-pill";
 import { statusPillFor } from "../../(admin)/components/status-tone";
 import { openIn } from "../../../lib/open-in";
+import { resolveObjectNounPlural } from "@synap-core/types/vocabulary";
+import type { PartEdge } from "./composite-parts-model";
 import {
   RECORD_FIELDS_SHOWN,
   type ProposedRecord,
@@ -229,6 +231,53 @@ export function ProposedRecordCard({
         </Button>
       )}
       {children}
+    </section>
+  );
+}
+
+/** Links shown before "Show all N links". */
+export const EDGES_SHOWN = 8;
+
+/**
+ * The links a graph proposal makes between its parts (relations, a plan's
+ * session links), one line each: "Léa · Works at · Acme". Capped, then
+ * "Show all N".
+ */
+export function PartEdgeList({ edges }: { edges: readonly PartEdge[] }) {
+  const [all, setAll] = useState(false);
+  const shown = all ? edges : edges.slice(0, EDGES_SHOWN);
+  const noun = resolveObjectNounPlural("relation");
+  return (
+    <section
+      aria-label={noun}
+      data-part-edges=""
+      className="flex flex-col gap-2 rounded-lg bg-foreground/[0.03] px-4 py-3.5 ring-1 ring-inset ring-foreground/10"
+    >
+      <h2 className="font-heading text-[15px] font-medium text-foreground">
+        {noun}
+      </h2>
+      <ul className="flex flex-col gap-1">
+        {shown.map((edge) => (
+          <li
+            key={edge.ref}
+            className="flex min-w-0 flex-wrap items-baseline gap-x-1.5 text-[13px] text-foreground/85"
+          >
+            <span className="break-words">{edge.from}</span>
+            <span className="text-[12px] text-foreground/55">{edge.verb}</span>
+            <span className="break-words">{edge.to}</span>
+          </li>
+        ))}
+      </ul>
+      {edges.length > shown.length && (
+        <Button
+          size="sm"
+          variant="light"
+          className="self-start px-1 text-[12.5px] text-foreground/65"
+          onPress={() => setAll(true)}
+        >
+          Show all {edges.length} {noun.toLowerCase()}
+        </Button>
+      )}
     </section>
   );
 }
