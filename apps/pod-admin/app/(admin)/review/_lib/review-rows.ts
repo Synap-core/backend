@@ -56,6 +56,13 @@ export const REVIEW_FILTERS: readonly ReviewFilter[] = [
   "history",
 ];
 
+/**
+ * The most rows one needs-you read returns (`signals.list` caps `limit` at
+ * 100). Review's page, the session strip's count and the next-proposal door
+ * read the SAME page, so they share this one number.
+ */
+export const NEEDS_YOU_PAGE_LIMIT = 100;
+
 /** `?type=` → the view; anything unknown is "all". */
 export function reviewFilterOf(param: string | null | undefined): ReviewFilter {
   return REVIEW_FILTERS.find((f) => f === param) ?? "all";
@@ -70,26 +77,6 @@ export function reviewSessionOf(
   param: string | null | undefined
 ): string | null {
   return param && isUuid(param) ? param : null;
-}
-
-/**
- * The narrowed session's name, as the pod named it on the rows it returned:
- * a proposal row's container, else an ask's session title. Null when no row
- * names it (nothing waits, or an older pod).
- */
-export function reviewSessionLabel(
-  signals: readonly ReviewSignal[],
-  sessionId: string
-): string | null {
-  for (const s of signals) {
-    if (
-      s.source?.kind === "session" &&
-      s.source.id === sessionId &&
-      s.source.label
-    )
-      return s.source.label;
-  }
-  return signals.find((s) => s.sessionTitle)?.sessionTitle ?? null;
 }
 
 /** The fields of a needs-you signal Review reads (structural). */
@@ -184,6 +171,15 @@ export interface ReviewRow {
   batchIds: string[] | null;
   /** Every id a `?focus=` may name this row by. */
   ids: string[];
+}
+
+/**
+ * The ids a row stands for after its signal id: a proposal cluster's members
+ * (or its sampled proposal); for any other row, its target's id. Read through
+ * here, never by slicing `ids` at a call site.
+ */
+export function reviewRowMembers(row: Pick<ReviewRow, "ids">): string[] {
+  return row.ids.slice(1);
 }
 
 /** Which group a needs-you signal files under. */

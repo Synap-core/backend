@@ -24,6 +24,7 @@ import { GOVERNANCE_POLICY_SENTENCES } from "@synap-core/types/proposals";
 vi.mock("next/navigation", () => ({
   usePathname: () => "/review",
   useRouter: () => ({ replace() {}, push() {} }),
+  useSearchParams: () => new URLSearchParams(state.search),
 }));
 
 /* Hoisted: `vi.mock` factories run before this file's own declarations. */
@@ -125,8 +126,23 @@ const {
       },
     },
   };
+  /** An agent's question on a session slot (`owed-slot`). */
+  const ask = (id: string) => ({
+    id: `owed:${id}`,
+    kind: "owed-slot",
+    title: "Which tone for the launch post?",
+    count: 1,
+    groupKey: null,
+    ageBucket: "today",
+    repeatCount: 1,
+    target: { kind: "session", id: SESSION_ID },
+  });
   const state = {
     status: "pending",
+    /** Review's query string (`?session=` narrows it). */
+    search: "",
+    /** `proposals.approvalProgress` — a background apply, when one runs. */
+    progress: null as unknown,
     session: ok(SESSION) as Q,
     track: ok({ id: TRACK_ID, name: "Hardening" }) as Q,
     /** `signals.list` scoped to the session. */
@@ -136,7 +152,7 @@ const {
     /** `signals.list` pod-wide — Review's own read. */
     queue: ok({ signals: [cluster(NEXT_ID, "Create Linus")] }) as Q,
   };
-  const reads = { ok, fail, cluster, SESSION };
+  const reads = { ok, fail, cluster, ask, SESSION };
   /** A query hook answering from `state` (disabled ⇒ no data, not loading). */
   const query =
     (
@@ -185,7 +201,7 @@ vi.mock("../../../../lib/trpc", () => ({
       source: { useQuery: () => ({ data: { targets: TARGETS } }) },
       approvalProgress: {
         useQuery: () => ({
-          data: null,
+          data: state.progress,
           isError: false,
           isFetching: false,
           refetch() {},
@@ -216,6 +232,7 @@ vi.mock("../../../../lib/trpc", () => ({
 
 import { ReviewDock } from "./review-drawer";
 import { ProposalReview } from "../../../proposal/[id]/ProposalReview";
+import { ProposalReviewBody } from "../../../proposal/[id]/ProposalReviewCard";
 
 /** Visible text only — attributes and tags stripped. */
 const text = (html: string) =>
@@ -340,7 +357,13 @@ describe.each([
     const strip = sessionStrip(render());
     expect(strip).not.toBeNull();
     expect(text(strip!)).toMatch(
-      /Every search tool goes through the capability gate\. 2 of 3 criteria met Hardening Synap 1 more from this session waits for you/
+      /Every search tool goes through the capability gate\. 2 of 3 criteria met Hardening Synap 1 more waiting/
+    );
+    // The criteria mark is a door to the session, named by the verdict's word.
+    expect(strip).toMatch(
+      new RegExp(
+        `href="/open/session/${SESSION_ID}"[^>]*title="Partly checked"`
+      )
     );
     expect(strip).toContain(`href="synap://open/track/${TRACK_ID}"`);
     expect(strip).toContain(`href="synap://open/project/${PROJECT_ID}"`);
@@ -368,7 +391,13 @@ describe.each([
     reset();
     state.session = reads.fail("INTERNAL_SERVER_ERROR");
     const seen = text(render());
-    expect(seen).toMatch(/This session’s goal couldn’t be read\. Retry/);
+    expect(seen).toMatch(/This session couldn’t be read\. Retry/);
+  });
+
+  it("an expired sign-in is not drawn as a failure (the reader is sent to sign in)", () => {
+    reset();
+    state.session = reads.fail("UNAUTHORIZED");
+    expect(text(render())).not.toMatch(/couldn’t be read/);
   });
 
   it("no criteria, no project, no track, nothing else waiting: only the goal", () => {
@@ -389,10 +418,10 @@ describe.each([
     expect(strip).toMatch(
       /Every search tool goes through the capability gate\./
     );
-    expect(strip).not.toMatch(/criteri|Hardening|Synap|more from this session/);
+    expect(strip).not.toMatch(/criteri|Hardening|Synap|more waiting/);
   });
 
-  it("failed criteria, track and count reads are each said, not dropped", () => {
+  it("failed criteria, track and count reads: said ONCE, with ONE retry", () => {
     reset();
     state.session = reads.ok({
       ...reads.SESSION,
@@ -404,9 +433,20 @@ describe.each([
     state.track = reads.fail("INTERNAL_SERVER_ERROR");
     state.waiting = reads.fail("INTERNAL_SERVER_ERROR");
     const strip = text(sessionStrip(render())!);
-    expect(strip).toMatch(/Its criteria couldn’t be read\. Retry/);
-    expect(strip).toMatch(/Its track couldn’t be read\. Retry/);
-    expect(strip).toMatch(/What else waits here couldn’t be read\. Retry/);
+    expect(strip).toMatch(/Part of this session couldn’t be read\. Retry/);
+    expect(count(strip, /couldn’t be read/)).toBe(1);
+    expect(count(strip, /\bRetry\b/)).toBe(1);
+  });
+});
+
+describe("the Review dock narrowed to this session", () => {
+  it("drops the 'more waiting' door: it would reload the page the reader is on", () => {
+    reset();
+    state.search = `session=${SESSION_ID}`;
+    const strip = sessionStrip(dock())!;
+    expect(text(strip)).toMatch(/2 of 3 criteria met/);
+    expect(text(strip)).not.toMatch(/more waiting/);
+    expect(strip).not.toContain("/review?session=");
   });
 });
 
@@ -425,11 +465,24 @@ describe("the /proposal page — the next waiting proposal", () => {
     expect(text(html)).toMatch(/Next: Create Linus/);
   });
 
-  it("none left: said calmly", () => {
+  it("nothing else at all: said calmly, in Review's own words", () => {
     reset();
     state.status = "rejected";
     state.queue = reads.ok({ signals: [] });
-    expect(text(page())).toMatch(/No other proposal waits for you\./);
+    expect(text(page())).toMatch(/Nothing else is waiting on you\./);
+  });
+
+  it("no proposal left but questions wait: a door to Review, never a calm done", () => {
+    reset();
+    state.status = "approved";
+    state.queue = reads.ok({
+      signals: [reads.ask("a"), reads.ask("b"), reads.ask("c")],
+    });
+    const html = page();
+    expect(text(html)).toMatch(/3 more waiting in Review/);
+    expect(html).toContain('data-review-next="review"');
+    expect(html).toMatch(/href="\/review"/);
+    expect(text(html)).not.toMatch(/Nothing else is waiting/);
   });
 
   it("a failed read of what is next says so", () => {
@@ -443,5 +496,61 @@ describe("the /proposal page — the next waiting proposal", () => {
     reset();
     state.status = "approved";
     expect(dock()).not.toContain("data-review-next");
+  });
+});
+
+describe("the review body — where 'what is next' may stand", () => {
+  /** A background approval, as `approvalProgress` returns it. */
+  const run = (runState: string) => ({
+    runId: "r1",
+    proposalId: PROPOSAL_ID,
+    state: runState,
+    phase: "entities",
+    total: 40,
+    done: 12,
+    created: 12,
+    linked: 0,
+    failed: 0,
+    error: null,
+    primaryId: null,
+    sessionId: null,
+    relationsFailed: 0,
+  });
+  const body = (status: string) =>
+    renderToStaticMarkup(
+      <ProposalReviewBody
+        proposal={{ ...PROPOSAL, status } as never}
+        sourceExits={[]}
+        workspaceName={null}
+        onDecided={() => {}}
+        afterDecision={<span data-after-decision="" />}
+      />
+    );
+
+  it("under the outcome of a decided proposal", () => {
+    reset();
+    expect(body("approved")).toContain("data-after-decision");
+  });
+
+  it("under a background apply still reading pending (decided here)", () => {
+    reset();
+    state.progress = run("running");
+    const html = body("pending");
+    expect(html).toContain("data-after-decision");
+    expect(text(html)).not.toMatch(/Reject…/);
+  });
+
+  it("never beside verbs still owed: approval failed, a stopped run, pending", () => {
+    for (const [status, progress] of [
+      ["approval_failed", null],
+      ["pending", run("failed")],
+      ["pending", null],
+    ] as const) {
+      reset();
+      state.progress = progress;
+      const html = body(status);
+      expect(text(html)).toMatch(/Reject…/);
+      expect(html).not.toContain("data-after-decision");
+    }
   });
 });

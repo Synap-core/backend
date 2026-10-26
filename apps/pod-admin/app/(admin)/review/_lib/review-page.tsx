@@ -26,6 +26,7 @@ import { useSearchParams } from "next/navigation";
 import { Alert, Button, Checkbox, Textarea, addToast } from "@heroui/react";
 import { ArrowUpRight, Check, Lock, MessageSquare, X } from "lucide-react";
 import { resolveObjectNoun } from "@synap-core/types/vocabulary";
+import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import { trpc } from "../../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
 import { formatRelative, isUuid } from "../../../../lib/format";
@@ -58,7 +59,7 @@ import {
   reviewCounts,
   reviewFilterOf,
   reviewRows,
-  reviewSessionLabel,
+  NEEDS_YOU_PAGE_LIMIT,
   reviewSessionOf,
   rowsInView,
   summarizeBatch,
@@ -78,9 +79,6 @@ import { nextRowKey } from "./ask-detail";
 
 const TITLE = "Review";
 const DESCRIPTION = "Everything waiting on your decision, in one place.";
-
-/** The most rows one needs-you read returns (`signals.list` limit). */
-const PAGE_LIMIT = 100;
 
 const CHIPS: Array<{ key: ReviewFilter; label: string }> = [
   { key: "all", label: "All" },
@@ -102,7 +100,7 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
   // proposals' `session_id`) — never a client filter over the pod-wide page.
   const scope = sessionId ? { sessionId } : {};
   const signals = trpc.signals.list.useQuery(
-    { lens: "needs-you", limit: PAGE_LIMIT, ...scope },
+    { lens: "needs-you", limit: NEEDS_YOU_PAGE_LIMIT, ...scope },
     { staleTime: 15_000, refetchInterval: 60_000 }
   );
   const count = useNeedsYouCount();
@@ -283,9 +281,13 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
   const desktopExit = visible
     .map((r) => (r.detail?.kind === "open" ? exitOf(r.detail) : null))
     .find((e): e is Exit => !!e?.isDesktopLink);
-  // The pod-wide count says nothing about one session's rows.
-  const shownOfTotal =
-    !sessionId && count.data && count.data.needsYou > rows.length
+  // The pod-wide count says nothing about one session's rows: narrowed, the
+  // page says only that its read hit the limit.
+  const shownOfTotal = sessionId
+    ? rows.length >= NEEDS_YOU_PAGE_LIMIT
+      ? `Showing the newest ${rows.length} from this session.`
+      : null
+    : count.data && count.data.needsYou > rows.length
       ? `Showing the newest ${rows.length} of ${count.data.truncated ? "more than " : ""}${count.data.needsYou}.`
       : null;
 
@@ -306,7 +308,6 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
           {sessionId && (
             <SessionFilter
               sessionId={sessionId}
-              label={reviewSessionLabel(signals.data?.signals ?? [], sessionId)}
               onClear={() =>
                 replaceParams((params) => {
                   params.delete("session");
@@ -415,9 +416,11 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
             ) : visible.length === 0 ? (
               <ResourceRowEmpty
                 message={
-                  filter === "all"
-                    ? "Nothing is waiting on you."
-                    : "Nothing waiting here."
+                  sessionId
+                    ? "Nothing from this session waits for you."
+                    : filter === "all"
+                      ? "Nothing is waiting on you."
+                      : "Nothing waiting here."
                 }
               />
             ) : (
@@ -500,17 +503,28 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
 
 /**
  * "From <session>" over the list while Review is narrowed to one session: the
- * session's name is a door to it, and × widens back to everything.
+ * session's name is a door to it, and × widens back to everything. Named by
+ * the session read itself (the key the review's session strip and the
+ * session page share), so the name holds on History and once the last row is
+ * decided; unread or not readable, it is the kind's noun, never an id.
  */
 function SessionFilter({
   sessionId,
-  label,
   onClear,
 }: {
   sessionId: string;
-  label: string | null;
   onClear: () => void;
 }) {
+  const session = trpc.focusSessions.get.useQuery(
+    { id: sessionId },
+    { retry: false }
+  );
+  useEffect(() => {
+    if (session.error) redirectToLoginIfUnauthorized(session.error);
+  }, [session.error]);
+  const label =
+    (session.data && resolveSessionTitle(session.data)) ||
+    resolveObjectNoun("session");
   const SessionIcon = kindIcon("session");
   return (
     <div className="mb-3 flex flex-wrap items-center gap-1.5 text-[12.5px] text-foreground/70">
@@ -520,7 +534,7 @@ function SessionFilter({
         title={resolveObjectNoun("session")}
       >
         <SessionIcon aria-hidden className="h-3.5 w-3.5 text-foreground/55" />
-        <span className="truncate">{label ?? "one session"}</span>
+        <span className="truncate">{label}</span>
       </Pill>
       <Button
         size="sm"

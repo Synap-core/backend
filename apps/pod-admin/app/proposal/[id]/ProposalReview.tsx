@@ -15,7 +15,8 @@ import {
   ProposalReviewBody,
   useProposalReview,
 } from "./ProposalReviewCard";
-import { NextWaitingProposal } from "./ProposalSessionContext";
+import { AfterDecision } from "./ProposalSessionContext";
+import { afterDecisionShown } from "./proposal-session-model";
 
 const STATUS_COLOR: Record<
   string,
@@ -41,8 +42,7 @@ export function ProposalReview({
 }) {
   const { query, sourceExits, workspaceName } = useProposalReview(proposalId);
   const utils = trpc.useUtils();
-  // Decided HERE: a large approval still reads `pending` while it applies in
-  // the background, and the reader is done with it all the same.
+  // Decided HERE — what `afterDecisionShown` reads.
   const [decided, setDecided] = useState(false);
 
   // A session that expired mid-review returns tRPC UNAUTHORIZED — bounce to
@@ -153,8 +153,8 @@ export function ProposalReview({
              with no list behind it: once this one is decided, the next one
              is a door here, not a trip back to Review. */
           afterDecision={
-            decided || !isActionable(status) ? (
-              <NextWaitingProposal proposalId={p.id} />
+            afterDecisionShown(decided, isActionable(status)) ? (
+              <AfterDecision proposalId={p.id} focus={decided} />
             ) : undefined
           }
         />

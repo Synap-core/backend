@@ -721,7 +721,12 @@ export function ProposalReviewBody({
   identity?: string;
   onDecided: () => void;
   barClassName?: string;
-  /** Under the outcome, in the bar: the page's door to what is next. */
+  /**
+   * The page's door to what is next — drawn under the outcome, or under a
+   * background approval's progress. Never beside the verbs: a proposal the
+   * reader must still (re)decide — `approval_failed`, a stopped run — gets
+   * no second primary inviting them to leave it.
+   */
   afterDecision?: ReactNode;
 }) {
   const status = String(p.status ?? "pending");
@@ -969,7 +974,10 @@ export function ProposalReviewBody({
         } ${barClassName}`}
       >
         {applying && run ? (
-          <ApplyingNow run={run} />
+          <>
+            <ApplyingNow run={run} />
+            {afterDecision}
+          </>
         ) : actionable ? (
           <>
             {/* A failed READ of progress is said, never read as "nothing
@@ -991,9 +999,11 @@ export function ProposalReviewBody({
             />
           </>
         ) : (
-          <Outcome status={status} />
+          <>
+            <Outcome status={status} />
+            {afterDecision}
+          </>
         )}
-        {afterDecision}
         <WhoDecides identity={identity} />
       </div>
 

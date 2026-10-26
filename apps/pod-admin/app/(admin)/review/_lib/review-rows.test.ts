@@ -9,7 +9,7 @@ import {
   reviewFilterOf,
   reviewGroupOf,
   reviewRows,
-  reviewSessionLabel,
+  reviewRowMembers,
   reviewSessionOf,
   rowsInView,
   summarizeBatch,
@@ -441,32 +441,11 @@ describe("?session= — Review narrowed to one session", () => {
     expect(reviewSessionOf(null)).toBeNull();
   });
 
-  it("named as the pod named it: a proposal row's session container first", () => {
-    expect(
-      reviewSessionLabel(
-        [
-          sig({ id: "o1", kind: "owed-slot", sessionTitle: "From the ask" }),
-          cluster("c1", {
-            source: { kind: "session", id: SESSION, label: "Launch week" },
-          }),
-        ],
-        SESSION
-      )
-    ).toBe("Launch week");
-  });
-
-  it("else an ask's session title; else null — never an id", () => {
-    expect(
-      reviewSessionLabel(
-        [
-          cluster("c1", {
-            source: { kind: "project", id: "p1", label: "Synap" },
-          }),
-          sig({ id: "o1", kind: "owed-slot", sessionTitle: "Launch week" }),
-        ],
-        SESSION
-      )
-    ).toBe("Launch week");
-    expect(reviewSessionLabel([cluster("c1")], SESSION)).toBeNull();
+  it("a cluster row decides its members; the signal id is not one", () => {
+    const [row] = reviewRows(
+      [cluster("c1", { count: 2, proposalIds: ["c1-p1", "c1-p2"] })],
+      new Map()
+    );
+    expect(reviewRowMembers(row!)).toEqual(["c1-p1", "c1-p2"]);
   });
 });
