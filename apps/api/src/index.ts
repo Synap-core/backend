@@ -55,6 +55,7 @@ import {
   normalizeIssuerUrl,
   sanitizeErrorEgress,
   refuseGuestSession,
+  podAccessOf,
   appSessionMiddleware,
   registerPodWideProposalReactor,
   registerSessionUnblockReactor,
@@ -97,7 +98,9 @@ import {
 } from "./open-dispatch.js";
 import {
   setupEventBroadcasting,
+  skillRuntimeHealth,
   startSessionChangedListener,
+  warmSkillRuntime,
 } from "@synap/api";
 import { configureLocalMode, safeTokenEqual } from "@synap/auth";
 import { buildKratosProxyTargetUrl } from "./kratos-proxy-url.js";
@@ -371,6 +374,10 @@ app.get("/health", async (c) => {
     // Kratos /health/ready: "not_ready" also reads "degraded" (the CP health
     // check counts it as a failed check). `auth` above stays the stack name.
     authHealth,
+    // Where code skills run (intelligence-service, or the pod's runner pool)
+    // and, for the pool, whether it can: `unavailable` + `reason` when a
+    // runner cannot start. Body-only, like `data`.
+    skillRuntime: skillRuntimeHealth(),
   });
 });
 
@@ -911,7 +918,10 @@ app.use("/api/federation/application-connections/requests/*", (c, next) => {
 // exchange, so it does not need to create another session on every page load.
 //
 // Auth: ory_kratos_session cookie (set by the native or federated login flow).
-// Returns 200 + session data if valid, 401 if missing or expired.
+// Returns 200 + session data if valid, 401 if missing or expired. `podAccess`
+// ("member" | "guest" | "none", `access/pod-access.ts`) says whether the
+// signed-in person is inside this pod at all: a client shows "No access to
+// this pod" for "none". A failed access read is a 5xx, never a guessed answer.
 app.get("/api/session", async (c) => {
   // LOCAL MODE: validate the bearer/x-local-token and return the fixed identity.
   // Only bearer + x-local-token are accepted — ory_kratos_session cookie is
@@ -932,7 +942,11 @@ app.get("/api/session", async (c) => {
     }
 
     const { buildLocalApiSession } = await import("@synap/auth");
-    return c.json(buildLocalApiSession());
+    const local = buildLocalApiSession();
+    return c.json({
+      ...local,
+      podAccess: await podAccessOf(local.session.identity.id, c.req.raw),
+    });
   }
 
   const sessionToken = getCookie(c, "ory_kratos_session");
@@ -940,6 +954,8 @@ app.get("/api/session", async (c) => {
     return c.json({ authenticated: false }, 401);
   }
 
+  type WhoAmI = { identity?: { id?: string } };
+  let session: WhoAmI;
   try {
     const resp = await fetch(`${kratosPublicUrl}/sessions/whoami`, {
       headers: {
@@ -952,12 +968,18 @@ app.get("/api/session", async (c) => {
       return c.json({ authenticated: false }, 401);
     }
 
-    const session = await resp.json();
-    return c.json({ authenticated: true, session });
+    session = (await resp.json()) as WhoAmI;
   } catch (err) {
     apiLogger.error({ err }, "Session check failed");
     return c.json({ authenticated: false }, 401);
   }
+  const identityId = session.identity?.id;
+  if (!identityId) return c.json({ authenticated: false }, 401);
+  return c.json({
+    authenticated: true,
+    session,
+    podAccess: await podAccessOf(identityId, c.req.raw),
+  });
 });
 
 if (config.server.localMode) {
@@ -2121,6 +2143,10 @@ import {
 runStartupHooks().catch((err) => {
   apiLogger.error({ err }, "Startup hooks failed (non-fatal)");
 });
+
+// Code skills on this pod (SANDBOX_LOCAL=1): start one runner process now, so
+// /health's `skillRuntime` answers at boot whether it can. Never throws.
+void warmSkillRuntime();
 
 // One-title BACKFILL (founder 2026-10-19): documents written before the create
 // door applied the one-title rule lose a leading heading equal to their name,

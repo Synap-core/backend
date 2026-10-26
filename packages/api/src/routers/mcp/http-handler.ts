@@ -5,7 +5,7 @@
  * over HTTP. External agents (Claude Code, Claude Desktop, Cursor, …)
  * can use this endpoint to read/write Synap data with full governance.
  *
- * Protocol: MCP Streamable HTTP. The installed SDK (1.29.0) declares
+ * Protocol: MCP Streamable HTTP. The installed SDK (^1.32.1) declares
  *           LATEST_PROTOCOL_VERSION = "2025-11-25" and negotiates down through
  *           2025-06-18 / 2025-03-26 / 2024-11-05 / 2024-10-07, falling back to
  *           2025-03-26 only when the client sends no version information. This
@@ -21,8 +21,9 @@
  *           GET  /mcp   — SSE stream for server-initiated messages
  *           DELETE /mcp — End session
  *
- * Transport: WebStandardStreamableHTTPServerTransport (SDK 1.29.0, stateless mode;
- *           `initialize` mints an Mcp-Session-Id used as the CONVERSATION id)
+ * Transport: WebStandardStreamableHTTPServerTransport (stateless mode;
+ *           `initialize` mints an Mcp-Session-Id, the LAST rung of the
+ *           CONVERSATION id — `requestConversationId`)
  * Auth is checked before handing off to the SDK transport.
  *
  * All write tools go through checkPermissionOrPropose() — same governance as
@@ -44,6 +45,7 @@ import {
   GUEST_REFUSED_MESSAGE,
   isGuestPrincipal,
 } from "../../access/guest-containment.js";
+import { reportNoPodAccess } from "../../access/pod-access.js";
 import { checkHubRateLimit } from "../../utils/hub-protocol-rate-limit.js";
 import { tools } from "./tools/index.js";
 import { createMCPServer, groundingBudgetBytes } from "./index.js";
@@ -66,6 +68,8 @@ import {
   requestConversationId,
   CONVERSATION_HEADER,
   CONVERSATION_CWD_HEADER,
+  CONVERSATION_META_KEY,
+  CONVERSATION_CWD_META_KEY,
   isProbeApiKey,
 } from "@synap/database";
 import {
@@ -496,9 +500,8 @@ mcpHttpApp.post("/", async (c) => {
   // Code tab, one claude.ai chat connection. A stateless transport never
   // validates it (SDK 1.29 `validateSession` returns early), so nothing is
   // held in memory and no request is refused for lacking one; we READ it as
-  // the conversation half of the client key (`clientKeyForApiKey`). Without it
-  // (an older client, a pre-deploy connection) the key alone is the client:
-  // option A.
+  // the conversation half of the client key (`clientKeyForApiKey`). Without
+  // any conversation id the request is its own per-call run (D1).
   const isInitialize =
     (parsedBody as { method?: string } | null)?.method === "initialize";
   const transport = new WebStandardStreamableHTTPServerTransport({
@@ -507,9 +510,18 @@ mcpHttpApp.post("/", async (c) => {
   });
   // A LOCAL agent's client (the synap stdio bridge) names its OWN conversation
   // (`X-Synap-Conversation`, e.g. `claude-code:<id>`) — the one a person can
-  // reopen; it outranks the transport id.
+  // reopen; it outranks `_meta["live.synap/conversation"]`, which outranks the
+  // transport id.
+  const meta = (
+    parsedBody as { params?: { _meta?: Record<string, unknown> } } | null
+  )?.params?._meta;
+  const metaString = (k: string) => {
+    const v = meta?.[k];
+    return typeof v === "string" ? v : undefined;
+  };
   const conversationId = requestConversationId(
     c.req.header(CONVERSATION_HEADER),
+    metaString(CONVERSATION_META_KEY),
     isInitialize ? undefined : c.req.header("mcp-session-id")
   );
 
@@ -533,6 +545,8 @@ mcpHttpApp.post("/", async (c) => {
       GUEST_REFUSED_MESSAGE
     );
   }
+  // Pod-access floor, report mode (B1, access/pod-access.ts).
+  await reportNoPodAccess(effectiveUserId, c.req.raw, "mcp");
 
   // ── 2b. Attribution hard-reject (Phase 0, docs/decisions/agent-governance.md D1) ──
   if (
@@ -640,7 +654,8 @@ mcpHttpApp.post("/", async (c) => {
             runWithGrant(grant, () =>
               transport.handleRequest(c.req.raw, { parsedBody })
             ),
-          c.req.header(CONVERSATION_CWD_HEADER)
+          c.req.header(CONVERSATION_CWD_HEADER) ??
+            metaString(CONVERSATION_CWD_META_KEY)
         )
       )
     )

@@ -18,7 +18,7 @@
  */
 
 import { randomUUID } from "crypto";
-import { auditLog } from "./audit-log.js";
+import { auditLog, type AuditLogOpts } from "./audit-log.js";
 import {
   AI_DECISION,
   AI_CORRECTION,
@@ -77,6 +77,8 @@ export async function emitAiDecision(opts: {
    * happened outside any session; NEVER synthesise one.
    */
   sessionId?: string | null;
+  /** A metered run's meter → the event's cost columns (see `AuditLogOpts.meter`). */
+  meter?: AuditLogOpts["meter"];
   data: Record<string, unknown> & { kind: string };
 }): Promise<void> {
   try {
@@ -91,6 +93,7 @@ export async function emitAiDecision(opts: {
       sessionId: opts.sessionId ?? null,
       source: "api",
       correlationId: opts.correlationId,
+      ...(opts.meter ? { meter: opts.meter } : {}),
       data: opts.data,
     });
   } catch (err) {

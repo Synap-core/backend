@@ -167,6 +167,7 @@ import {
   type TrackFromEntity,
 } from "./goal-source-entity.js";
 import { AccessContext, scopedDb } from "../../access/index.js";
+import { grantReadPredicate } from "../../access/grant-read.js";
 import { projectVisibleWhere } from "../../access/project-visibility.js";
 import { loadVisibleProject } from "../projects/load-visible-project.js";
 import { projectPathConditions } from "../projects/project-path.js";
@@ -821,12 +822,17 @@ export async function countProjectsUsingMethods(
       and(
         inArray(projectTracks.playbookId, ids),
         ne(projectTracks.status, "archived"),
+        // A key's grant narrows the count like any read of these rows (a
+        // scoped key reads `GET /playbooks/:id` through the seams).
+        grantReadPredicate(projectTracks),
         inArray(
           projectTracks.projectId,
           db
             .select({ id: projects.id })
             .from(projects)
-            .where(projectVisibleWhere(access))
+            .where(
+              and(projectVisibleWhere(access), grantReadPredicate(projects))
+            )
         )
       )
     )

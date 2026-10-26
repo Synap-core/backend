@@ -6,6 +6,9 @@ export default defineConfig({
     // The document read/edit floor for the realtime (Yjs) room gate — the ONE
     // predicate, consumed by `@synap/realtime` via `@synap/api/document-access`.
     "document-access": "src/utils/document-edit-access.ts",
+    // THE access door (Principal, canRead, assertCanWrite, canJoinRoom) — the
+    // same vendoring into realtime, via `@synap/api/access-door`.
+    "access-door": "src/access/door.ts",
     // The public-door namespace predicate (Sites W3) — zero imports, read by
     // `apps/api` (CORS, rate class) via `@synap/api/public-doors`.
     "public-doors": "src/public-doors.ts",
@@ -16,6 +19,10 @@ export default defineConfig({
     // services/capabilities/web-read/extract-pool.ts as `./extract-worker.js`
     // NEXT TO the bundle (dist root), so it must be its own entry here.
     "extract-worker": "src/services/capabilities/web-read/extract-worker.ts",
+    // The code-skill runner process — forked by
+    // services/skills/runner/process-pool.ts as `./skill-runner-child.js` NEXT
+    // TO the bundle (dist root), so it must be its own entry here.
+    "skill-runner-child": "src/services/skills/runner/skill-runner-child.ts",
   },
   format: ["esm"],
   sourcemap: true,

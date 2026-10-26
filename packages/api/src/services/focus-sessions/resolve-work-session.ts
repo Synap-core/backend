@@ -17,7 +17,8 @@
  *      and the caller is told the exact number. SKIPPED for a
  *      key-scoped client: with no conversation to tell callers apart, every
  *      conversation on the key would land in it (option A = named or own
- *      auto-opened only).
+ *      auto-opened only). SKIPPED too for a per-call run (`…|call:`, D1): a
+ *      run that named nothing is its own, never attached to the person's.
  *   4. none. The write path then auto-opens at the governance gate
  *      (`resolveOrCreateAgentProposalSession` via `checkPermissionOrPropose`,
  *      grouped by the same client key), so a tool call that ends up writing
@@ -42,6 +43,7 @@ import {
   findClientSession,
   getRequestClientKey,
   clientKeyScope,
+  isPerCallClientKey,
   sessionLastActivitySql,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
@@ -219,8 +221,12 @@ export async function resolveWorkSession(
     }
   }
 
-  // Option A: a key shared by several conversations never guesses rung 3.
-  if (clientKey && clientKeyScope(clientKey) === "key") {
+  // Option A: a key shared by several conversations never guesses rung 3;
+  // nor does a per-call run, which named no conversation at all (D1).
+  if (
+    clientKey &&
+    (clientKeyScope(clientKey) === "key" || isPerCallClientKey(clientKey))
+  ) {
     return { source: "none", unclaimedOpenCount: null };
   }
 

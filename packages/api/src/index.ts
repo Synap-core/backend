@@ -27,6 +27,11 @@ export {
 // The Library keep-alive pass (daily): the app registers it in its @synap/jobs slot.
 export { runLibraryKeepAlive } from "./services/library/keep-alive.js";
 export { hubProtocolRouter } from "./routers/hub-protocol/index.js";
+// Where code skills run (/health `skillRuntime`) and the boot warm-up.
+export {
+  skillRuntimeHealth,
+  warmSkillRuntime,
+} from "./services/skills/runner/index.js";
 export { integrationsCapabilitiesApp } from "./routers/integrations-capabilities.js";
 export { syncReceiveApp } from "./routers/sync.js";
 export { webhooksInboundRouter } from "./routers/webhooks-inbound.js";
@@ -175,6 +180,9 @@ export {
   bearerCredential,
 } from "./middleware/app-session.js";
 export { refuseGuestSession } from "./access/guest-containment.js";
+// "Is this person inside this pod at all?" — `/api/session` returns it so a
+// client renders "No access to this pod" instead of collecting 403s.
+export { podAccessOf, type PodAccess } from "./access/pod-access.js";
 
 // Export event streaming utilities
 export { eventStreamManager } from "./event-stream-manager.js";

@@ -438,6 +438,169 @@ export function segmentSlides(markdown: string): Slide[] {
 }
 
 // ---------------------------------------------------------------------------
+// segmentPassages — a document as RECALL-sized units (founder, 2026-10-26:
+// sections, size-split at ~2,000 chars, merged under ~400).
+//
+// The section boundaries are `segmentSlides`' own ladder (sections → headings
+// → breaks → whole document), never a second walker. Then by size: a section
+// over PASSAGE_MAX_CHARS is cut between its top-level blocks into even parts
+// (a single block over the cap, such as a long paragraph or a code fence, at
+// line breaks, then hard); a passage under PASSAGE_MIN_CHARS joins its
+// neighbour while the two fit the cap. A 200-char passage matches words, not
+// meaning; a 10k one is the whole note again.
+// ---------------------------------------------------------------------------
+
+/** Above this a section is cut into parts. */
+export const PASSAGE_MAX_CHARS = 2_000;
+/** Below this a passage joins its neighbour (when the two fit the max). */
+export const PASSAGE_MIN_CHARS = 400;
+
+/** One recall-sized unit of a document. */
+export interface Passage {
+  /**
+   * Stable within the document: the section's slide id, `<id>-part-N` for a
+   * later part of a cut section. Merged passages keep the first one's id.
+   */
+  id: string;
+  /** The section's heading (its slide title); merged sections join theirs with " · ". */
+  heading: string;
+  /** 0-based position in the document. */
+  index: number;
+  /** Offset in the markdown where the passage starts. */
+  start: number;
+  /** Offset in the markdown where the passage ends. */
+  end: number;
+  /**
+   * Markdown source. `markdown.slice(start, end)` for a single piece; merged
+   * pieces are joined by a blank line, so the fence lines between two
+   * `::::synap-section` blocks never land inside one passage.
+   */
+  text: string;
+}
+
+interface Span {
+  start: number;
+  end: number;
+}
+
+/** `[start, end)` cut at line breaks (else hard) into pieces of ≤ `max` chars. */
+function splitAtLines(
+  markdown: string,
+  start: number,
+  end: number,
+  max: number
+): Span[] {
+  const out: Span[] = [];
+  let from = start;
+  while (end - from > max) {
+    const nl = markdown.lastIndexOf("\n", from + max - 1);
+    const cut = nl >= from ? nl + 1 : from + max;
+    out.push({ start: from, end: cut });
+    from = cut;
+  }
+  if (end > from) out.push({ start: from, end });
+  return out;
+}
+
+/** One section's span as parts of ≤ PASSAGE_MAX_CHARS, cut between top-level blocks. */
+function splitSection(markdown: string, start: number, end: number): Span[] {
+  if (end - start <= PASSAGE_MAX_CHARS) return [{ start, end }];
+  const blocks: Span[] = [];
+  for (const node of (parseTree(markdown.slice(start, end)).children ??
+    []) as any[]) {
+    const a = node.position?.start?.offset;
+    const b = node.position?.end?.offset;
+    if (typeof a !== "number" || typeof b !== "number") continue;
+    blocks.push(
+      ...splitAtLines(markdown, start + a, start + b, PASSAGE_MAX_CHARS)
+    );
+  }
+  if (blocks.length === 0) {
+    return splitAtLines(markdown, start, end, PASSAGE_MAX_CHARS);
+  }
+  // Even parts: a 2,100-char section is two of ~1,050, not 2,000 + 100.
+  const target = Math.ceil(
+    (end - start) / Math.ceil((end - start) / PASSAGE_MAX_CHARS)
+  );
+  const parts: Span[] = [];
+  let current: Span | null = null;
+  for (const block of blocks) {
+    if (
+      current &&
+      (current.end - current.start >= target ||
+        block.end - current.start > PASSAGE_MAX_CHARS)
+    ) {
+      parts.push(current);
+      current = null;
+    }
+    current = current ? { start: current.start, end: block.end } : { ...block };
+  }
+  if (current) parts.push(current);
+  return parts;
+}
+
+/**
+ * Segment a markdown document into recall passages, in document order. Pure
+ * and AST-based like `segmentSlides`. An empty document has none.
+ */
+export function segmentPassages(markdown: string): Passage[] {
+  interface Piece extends Span {
+    id: string;
+    headings: string[];
+    texts: string[];
+  }
+  const pieces: Piece[] = [];
+  let cursor = 0;
+  for (const slide of segmentSlides(markdown)) {
+    if (!slide.content) continue;
+    // A slide's `content` is an exact slice of `markdown`, and slides come in
+    // document order, so its offset is the first match after the previous one.
+    const start = markdown.indexOf(slide.content, cursor);
+    if (start < 0) continue;
+    const end = start + slide.content.length;
+    cursor = end;
+    splitSection(markdown, start, end).forEach((span, k) => {
+      pieces.push({
+        ...span,
+        id: k === 0 ? slide.id : `${slide.id}-part-${k + 1}`,
+        headings: [slide.title],
+        texts: [markdown.slice(span.start, span.end)],
+      });
+    });
+  }
+
+  const merged: Piece[] = [];
+  const length = (p: Piece) =>
+    p.texts.reduce((n, t) => n + t.length, 0) + 2 * (p.texts.length - 1);
+  for (const piece of pieces) {
+    const prev = merged[merged.length - 1];
+    if (
+      prev &&
+      (length(piece) < PASSAGE_MIN_CHARS || length(prev) < PASSAGE_MIN_CHARS) &&
+      length(prev) + 2 + length(piece) <= PASSAGE_MAX_CHARS
+    ) {
+      prev.end = piece.end;
+      prev.texts.push(...piece.texts);
+      for (const h of piece.headings) {
+        if (!prev.headings.includes(h)) prev.headings.push(h);
+      }
+      continue;
+    }
+    merged.push(piece);
+  }
+
+  const seen = new Map<string, number>();
+  return merged.map((p, index) => ({
+    id: dedupeId(p.id, seen),
+    heading: p.headings.join(" · "),
+    index,
+    start: p.start,
+    end: p.end,
+    text: p.texts.join("\n\n"),
+  }));
+}
+
+// ---------------------------------------------------------------------------
 // The document title — ONE name, never printed twice (founder 2026-10-19).
 //
 // A document's NAME (`documents.title`) is its one title: the header, lists,

@@ -40,10 +40,7 @@ const HELPER_DECL =
   /(?:async\s+function|function)\s+([A-Za-z_$][\w$]*)\s*\(|const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?\(/g;
 
 /** `file::helper` → why this prelude helper may call the membership check. */
-const EXEMPT: Record<string, string> = {
-  "rest/_shared.ts::verifyWorkspaceReadAccess":
-    "the READ check: membership, else a pod-visible space",
-};
+const EXEMPT: Record<string, string> = {};
 
 interface Block {
   verb: string;

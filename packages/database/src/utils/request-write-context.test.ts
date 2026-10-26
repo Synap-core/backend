@@ -15,6 +15,8 @@ import {
   runWithDerivedSession,
   getDerivedSessionId,
   clientKeyForApiKey,
+  clientKeyScope,
+  isPerCallClientKey,
   requestConversationId,
   runWithClientKey,
   getRequestClientKey,
@@ -62,12 +64,31 @@ describe("request write context — the client's own conversation", () => {
   const CC = "claude-code:8c34a72b-b1c1-4c37-9c1f-02920b69ccb2";
 
   it("the client's own id outranks the MCP transport id", () => {
-    expect(requestConversationId(CC, "pod-minted-transport-id")).toBe(CC);
-    expect(requestConversationId(undefined, "pod-minted")).toBe("pod-minted");
-    expect(requestConversationId("  ", "pod-minted")).toBe("pod-minted");
     expect(
-      clientKeyForApiKey({ id: "k1" }, requestConversationId(CC, "t"))
+      requestConversationId(CC, undefined, "pod-minted-transport-id")
+    ).toBe(CC);
+    expect(requestConversationId(undefined, undefined, "pod-minted")).toBe(
+      "pod-minted"
+    );
+    expect(requestConversationId("  ", undefined, "pod-minted")).toBe(
+      "pod-minted"
+    );
+    expect(
+      clientKeyForApiKey({ id: "k1" }, requestConversationId(CC, "m", "t"))
     ).toBe(`key:k1|conv:${CC}`);
+  });
+
+  // C.8 Q2: the header is set by our own transport code, `_meta` by anything
+  // that builds the request body — the header wins when both are sent.
+  it("rungs: header › _meta live.synap/conversation › Mcp-Session-Id", () => {
+    expect(requestConversationId("hdr", "meta", "transport")).toBe("hdr");
+    expect(requestConversationId(undefined, "meta", "transport")).toBe("meta");
+    expect(requestConversationId(null, "bad id", "transport")).toBe(
+      "transport"
+    );
+    expect(requestConversationId(undefined, undefined, undefined)).toBe(
+      undefined
+    );
   });
 
   it("the cwd rides with the client key and stamps only that key", async () => {
@@ -101,5 +122,52 @@ describe("request write context — the client's own conversation", () => {
     expect(
       runWithClientKey(undefined, () => getRequestConversationCwd(), "/a")
     ).toBeUndefined();
+  });
+});
+
+// D1 (founder 2026-10-23): a request that names no conversation is its OWN
+// run — `key:<id>|call:<uuid>`, fresh per request. It used to be `key:<id>`,
+// one client for every routine on the key (two ran in the same minute live).
+describe("request write context — the per-call run", () => {
+  const CC = "claude-code:8c34a72b-b1c1-4c37-9c1f-02920b69ccb2";
+
+  it("no conversation ⇒ a fresh per-call run, distinct per request", () => {
+    const a = clientKeyForApiKey({ id: "k1" })!;
+    const b = clientKeyForApiKey({ id: "k1" }, "bad id")!;
+    expect(a).toMatch(/^key:k1\|call:[0-9a-f-]{36}$/);
+    expect(b).toMatch(/^key:k1\|call:[0-9a-f-]{36}$/);
+    expect(b).not.toBe(a);
+    expect(isPerCallClientKey(a)).toBe(true);
+    expect(isPerCallClientKey(`key:k1|conv:${CC}`)).toBe(false);
+  });
+
+  it("a per-call run scopes as ONE run (conversation), never as the key", () => {
+    expect(clientKeyScope(clientKeyForApiKey({ id: "k1" })!)).toBe(
+      "conversation"
+    );
+    expect(clientKeyScope(`agent:a1|call:${CC}`)).toBe("conversation");
+  });
+
+  // TRIPWIRE: KEY scope (option A) is reachable only from the `agent:<id>`
+  // fallback (jobs, no request) and from legacy `key:<id>` rows — never from a
+  // value a key-auth door mints today, whatever the request carried.
+  it("no input to the key-auth door yields KEY scope", () => {
+    for (const conv of [
+      undefined,
+      null,
+      "",
+      "  ",
+      "bad id",
+      "x".repeat(200),
+      "c",
+    ]) {
+      const key = clientKeyForApiKey(
+        { id: "k1", keyType: "hub_inbound" },
+        conv
+      );
+      expect(key && clientKeyScope(key)).toBe("conversation");
+    }
+    expect(clientKeyScope("agent:a1")).toBe("key");
+    expect(clientKeyScope("key:k1")).toBe("key");
   });
 });

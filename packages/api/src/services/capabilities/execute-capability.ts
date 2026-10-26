@@ -130,6 +130,7 @@ import {
   READ_ONLY_BUILTIN_VERBS,
 } from "./builtin-verbs.js";
 import { declaredReadOnly } from "./capability-drift.js";
+import { meterCapabilityRun } from "./capability-metering.js";
 import {
   checkVerbParameters,
   describeParameterRepair,
@@ -847,6 +848,7 @@ export async function executeCapability(input: {
     );
   }
 
+  const startedAt = Date.now();
   const ran = await runResolvedSkill(skillRow, parameters, {
     userId,
     workspaceId,
@@ -854,6 +856,10 @@ export async function executeCapability(input: {
     agentUserId: input.agentUserId ?? null,
     sessionId: input.sessionId ?? null,
   });
+  const metered = {
+    metadata: skillRow.metadata,
+    latencyMs: Date.now() - startedAt,
+  };
   if (ran.kind !== "run") {
     if (ran.kind === "error") {
       await recordDirectCapabilityRun({
@@ -863,6 +869,7 @@ export async function executeCapability(input: {
         skillId: skillRow.id,
         verbId: verbId ?? null,
         runResult: null,
+        metered,
         sessionId: input.sessionId ?? null,
         idempotencyKey: input.idempotencyKey,
         observability: input.observability ?? "full",
@@ -891,6 +898,7 @@ export async function executeCapability(input: {
     skillId: skillRow.id,
     verbId: verbId ?? null,
     runResult: ran.result,
+    metered,
     sessionId: input.sessionId ?? null,
     idempotencyKey: input.idempotencyKey,
     observability: input.observability ?? "full",
@@ -1180,6 +1188,7 @@ async function runDirectWriteVerbOnce(opts: {
   // An ambiguous throw (the side effect may have reached the far side)
   // propagates with the claim KEPT, so a retry within the window does NOT
   // re-send.
+  const startedAt = Date.now();
   const ran = await runResolvedSkill(opts.skillRow, opts.parameters, {
     userId: opts.userId,
     workspaceId: opts.workspaceId,
@@ -1187,6 +1196,10 @@ async function runDirectWriteVerbOnce(opts: {
     agentUserId: opts.agentUserId,
     sessionId: opts.sessionId ?? null,
   });
+  const metered = {
+    metadata: opts.skillRow.metadata,
+    latencyMs: Date.now() - startedAt,
+  };
 
   // ── 3. RESOLVE ──────────────────────────────────────────────────────────────
   if (ran.kind !== "run") {
@@ -1213,6 +1226,7 @@ async function runDirectWriteVerbOnce(opts: {
         skillId: opts.skillRow.id,
         verbId: opts.verbId,
         runResult: null,
+        metered,
         sessionId: opts.sessionId ?? null,
         idempotencyKey: opts.idempotencyKey,
         observability: "full",
@@ -1251,6 +1265,7 @@ async function runDirectWriteVerbOnce(opts: {
     skillId: opts.skillRow.id,
     verbId: opts.verbId,
     runResult: ran.result,
+    metered,
     sessionId: opts.sessionId ?? null,
     idempotencyKey: opts.idempotencyKey,
     observability: opts.observability,
@@ -1319,6 +1334,12 @@ async function recordDirectCapabilityRun(opts: {
   verbId: string | null;
   runResult: unknown;
   /**
+   * The run skill's `metadata` (its declared `metering`, if any) and how long
+   * the run took. REQUIRED so no run path can forget it: a priced verb run
+   * through a path that skipped it would be a run nobody pays for.
+   */
+  metered: { metadata: unknown; latencyMs: number };
+  /**
    * PROVENANCE PARITY with the proposed branch (dogfooded 2026-09-12, run
    * `3ecbf109…`). Every door forwards `sessionId` + `idempotencyKey`
    * (`contracts/capability-execute.ts`) and the PROPOSED branch persists both —
@@ -1336,6 +1357,11 @@ async function recordDirectCapabilityRun(opts: {
   error?: string;
 }): Promise<void> {
   const label = opts.verbId ?? opts.skillId;
+  const meter = meterCapabilityRun(opts.metered.metadata, {
+    result: opts.runResult,
+    failed: opts.outcome === "error",
+    latencyMs: opts.metered.latencyMs,
+  });
 
   // emitAiDecision is itself best-effort (swallows + logs, never throws), so the
   // event is safe to await directly.
@@ -1345,10 +1371,14 @@ async function recordDirectCapabilityRun(opts: {
     workspaceId: opts.workspaceId,
     correlationId: opts.correlationId,
     sessionId: opts.sessionId ?? null,
+    ...(meter ? { meter } : {}),
     data: {
       kind: "capability_run",
       skillId: opts.skillId,
       verbId: opts.verbId,
+      // The receipt: the columns carry provider/cost/latency, this keeps the
+      // rest (unit, quantity, where the price came from).
+      ...(meter ? { meter } : {}),
       ...(opts.outcome ? { outcome: opts.outcome, error: opts.error } : {}),
       // The CALLER's declared key only — the derived content hash is an internal
       // dedup artifact, not a handle anyone passed in (the proposed branch
@@ -1665,8 +1695,9 @@ async function runResolvedSkillInner(
 
   // TIER 2 (code/instruction): execute the backing skill in an isolated-vm
   // sandbox. Default (flag unset) = the IS sandbox over Hub Protocol HTTP
-  // (`executeSkillViaIS`). Behind `SANDBOX_LOCAL === "1"` = the in-process
-  // backend sandbox (`runSkillInSandbox`) — same bridges, no IS hop. The flag
+  // (`executeSkillViaIS`). Behind `SANDBOX_LOCAL === "1"` = the pod's own
+  // sandbox (`runSkillInSandbox`): the bridges run in this process, the code in
+  // a supervised runner process (`services/skills/runner/`) — no IS hop. The flag
   // defaults OFF so production behaviour is unchanged until it is flipped.
   // Both return the identical `SkillExecutionResult` envelope
   // `{success, result?, error?}`. UNWRAP it here so a caller receives the skill's
@@ -1687,6 +1718,7 @@ async function runResolvedSkillInner(
           parameters,
           workspaceId: ctx.workspaceId,
           agentUserId: ctx.agentUserId ?? null,
+          sessionId: ctx.sessionId ?? null,
           verbAct: {
             skillId: skill.id,
             toolIds: await requiredToolIdsOf(skill.id),

@@ -239,6 +239,7 @@ describe("POST /access-grants", () => {
     expect(response.status).toBe(409);
     await expect(response.json()).resolves.toEqual({
       error: "Federated assertion has already been used",
+      code: "ASSERTION_REPLAYED",
     });
     expect(mocks.assertFederatedAccessTarget).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
@@ -258,6 +259,7 @@ describe("POST /access-grants", () => {
     expect(response.status).toBe(503);
     await expect(response.json()).resolves.toEqual({
       error: "Federated assertion replay protection is unavailable",
+      code: "REPLAY_PROTECTION_UNAVAILABLE",
     });
     expect(mocks.assertFederatedAccessTarget).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
@@ -358,6 +360,7 @@ describe("POST /bootstrap — initial admin (A4: a lab's confirming admin)", () 
   };
   const adminAccess = {
     podRole: "admin",
+    podMember: false,
     workspaceScopes: [],
     projectScopes: [],
   };
