@@ -58,7 +58,6 @@ import {
   GUEST_REFUSED_BODY,
   isGuestPrincipal,
 } from "../../../access/guest-containment.js";
-import { reportNoPodAccess } from "../../../access/pod-access.js";
 import type { HubVariables } from "../rest/_shared.js";
 import {
   isPublicDoorPath,
@@ -93,7 +92,6 @@ async function refuseGuestPrincipal(
   if (await isGuestPrincipal(userId, c.req.raw)) {
     return c.json(GUEST_REFUSED_BODY, 403);
   }
-  await reportNoPodAccess(userId, c.req.raw, "hub");
   return null;
 }
 

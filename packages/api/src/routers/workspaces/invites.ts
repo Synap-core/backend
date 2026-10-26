@@ -1160,7 +1160,7 @@ export const inviteProcedures = {
           // keepers are read, whose `active_access` counts a live row.
           await db
             .update(podMembers)
-            .set({ removedAt: new Date() })
+            .set({ removedAt: null })
             .where(livePodMemberWhere(input.userId));
           // Nothing else lets them in (a project membership would): their
           // keys and Kratos sessions end too (founder Q-B3). The request-time
