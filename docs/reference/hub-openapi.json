@@ -623,6 +623,30 @@
                 "properties": {
                   "mode": { "type": "string", "enum": ["confirm"] },
                   "prompt": { "type": "string", "maxLength": 500 },
+                  "yes": {
+                    "type": "object",
+                    "properties": {
+                      "label": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 80
+                      },
+                      "description": { "type": "string", "maxLength": 140 },
+                      "recommended": { "type": "boolean" }
+                    }
+                  },
+                  "no": {
+                    "type": "object",
+                    "properties": {
+                      "label": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 80
+                      },
+                      "description": { "type": "string", "maxLength": 140 },
+                      "recommended": { "type": "boolean" }
+                    }
+                  },
                   "lookedAt": {
                     "type": "array",
                     "items": {
@@ -2004,7 +2028,9 @@
             "type": ["number", "null"],
             "description": "Hours this proposal stays answerable once its context is gone. `null` for every class that never expires; only `ephemeral` has one."
           },
-          "setup": { "$ref": "#/components/schemas/ProposalSetup" }
+          "setup": { "$ref": "#/components/schemas/ProposalSetup" },
+          "fate": { "$ref": "#/components/schemas/ProposalFate" },
+          "waits": { "$ref": "#/components/schemas/ProposalWaits" }
         },
         "required": [
           "id",
@@ -2114,6 +2140,54 @@
         },
         "required": ["name", "required", "secret", "satisfied"]
       },
+      "ProposalFate": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": { "type": "string", "enum": ["expires"] },
+              "expiresAt": { "type": "string" },
+              "orSessionEnd": { "type": "boolean" }
+            },
+            "required": ["kind", "expiresAt", "orSessionEnd"]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": { "type": "string", "enum": ["dies_with_session"] }
+            },
+            "required": ["kind"]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": { "type": "string", "enum": ["until_decided"] }
+            },
+            "required": ["kind"]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": { "type": "string", "enum": ["review_later"] },
+              "since": { "type": "string" }
+            },
+            "required": ["kind", "since"]
+          }
+        ],
+        "description": "What happens if nobody decides — pending rows only."
+      },
+      "ProposalWaits": {
+        "type": "object",
+        "properties": {
+          "waits": { "type": "boolean" },
+          "reason": {
+            "type": "string",
+            "enum": ["gate", "owed_slot", "parked_run"]
+          }
+        },
+        "required": ["waits"],
+        "description": "Whether an agent waits on this decision, and why (gate / owed_slot / parked_run)."
+      },
       "ProposalBasic": {
         "type": "object",
         "properties": {
@@ -2155,7 +2229,9 @@
             "type": ["number", "null"],
             "description": "Hours this proposal stays answerable once its context is gone. `null` for every class that never expires; only `ephemeral` has one."
           },
-          "setup": { "$ref": "#/components/schemas/ProposalSetup" }
+          "setup": { "$ref": "#/components/schemas/ProposalSetup" },
+          "fate": { "$ref": "#/components/schemas/ProposalFate" },
+          "waits": { "$ref": "#/components/schemas/ProposalWaits" }
         },
         "required": [
           "id",
@@ -12102,6 +12178,40 @@
                                             "type": "string",
                                             "maxLength": 500
                                           },
+                                          "yes": {
+                                            "type": "object",
+                                            "properties": {
+                                              "label": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 80
+                                              },
+                                              "description": {
+                                                "type": "string",
+                                                "maxLength": 140
+                                              },
+                                              "recommended": {
+                                                "type": "boolean"
+                                              }
+                                            }
+                                          },
+                                          "no": {
+                                            "type": "object",
+                                            "properties": {
+                                              "label": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 80
+                                              },
+                                              "description": {
+                                                "type": "string",
+                                                "maxLength": 140
+                                              },
+                                              "recommended": {
+                                                "type": "boolean"
+                                              }
+                                            }
+                                          },
                                           "lookedAt": {
                                             "type": "array",
                                             "items": {
@@ -12544,6 +12654,40 @@
                                                 "prompt": {
                                                   "type": "string",
                                                   "maxLength": 500
+                                                },
+                                                "yes": {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "label": {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 80
+                                                    },
+                                                    "description": {
+                                                      "type": "string",
+                                                      "maxLength": 140
+                                                    },
+                                                    "recommended": {
+                                                      "type": "boolean"
+                                                    }
+                                                  }
+                                                },
+                                                "no": {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "label": {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 80
+                                                    },
+                                                    "description": {
+                                                      "type": "string",
+                                                      "maxLength": 140
+                                                    },
+                                                    "recommended": {
+                                                      "type": "boolean"
+                                                    }
+                                                  }
                                                 },
                                                 "lookedAt": {
                                                   "type": "array",
@@ -14905,6 +15049,40 @@
                                             "type": "string",
                                             "maxLength": 500
                                           },
+                                          "yes": {
+                                            "type": "object",
+                                            "properties": {
+                                              "label": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 80
+                                              },
+                                              "description": {
+                                                "type": "string",
+                                                "maxLength": 140
+                                              },
+                                              "recommended": {
+                                                "type": "boolean"
+                                              }
+                                            }
+                                          },
+                                          "no": {
+                                            "type": "object",
+                                            "properties": {
+                                              "label": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 80
+                                              },
+                                              "description": {
+                                                "type": "string",
+                                                "maxLength": 140
+                                              },
+                                              "recommended": {
+                                                "type": "boolean"
+                                              }
+                                            }
+                                          },
                                           "lookedAt": {
                                             "type": "array",
                                             "items": {
@@ -15347,6 +15525,40 @@
                                                 "prompt": {
                                                   "type": "string",
                                                   "maxLength": 500
+                                                },
+                                                "yes": {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "label": {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 80
+                                                    },
+                                                    "description": {
+                                                      "type": "string",
+                                                      "maxLength": 140
+                                                    },
+                                                    "recommended": {
+                                                      "type": "boolean"
+                                                    }
+                                                  }
+                                                },
+                                                "no": {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "label": {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 80
+                                                    },
+                                                    "description": {
+                                                      "type": "string",
+                                                      "maxLength": 140
+                                                    },
+                                                    "recommended": {
+                                                      "type": "boolean"
+                                                    }
+                                                  }
                                                 },
                                                 "lookedAt": {
                                                   "type": "array",
@@ -20267,6 +20479,36 @@
                                       "prompt": {
                                         "type": "string",
                                         "maxLength": 500
+                                      },
+                                      "yes": {
+                                        "type": "object",
+                                        "properties": {
+                                          "label": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 80
+                                          },
+                                          "description": {
+                                            "type": "string",
+                                            "maxLength": 140
+                                          },
+                                          "recommended": { "type": "boolean" }
+                                        }
+                                      },
+                                      "no": {
+                                        "type": "object",
+                                        "properties": {
+                                          "label": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 80
+                                          },
+                                          "description": {
+                                            "type": "string",
+                                            "maxLength": 140
+                                          },
+                                          "recommended": { "type": "boolean" }
+                                        }
                                       },
                                       "lookedAt": {
                                         "type": "array",
@@ -26044,6 +26286,36 @@
                                   "type": "string",
                                   "maxLength": 500
                                 },
+                                "yes": {
+                                  "type": "object",
+                                  "properties": {
+                                    "label": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 80
+                                    },
+                                    "description": {
+                                      "type": "string",
+                                      "maxLength": 140
+                                    },
+                                    "recommended": { "type": "boolean" }
+                                  }
+                                },
+                                "no": {
+                                  "type": "object",
+                                  "properties": {
+                                    "label": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 80
+                                    },
+                                    "description": {
+                                      "type": "string",
+                                      "maxLength": 140
+                                    },
+                                    "recommended": { "type": "boolean" }
+                                  }
+                                },
                                 "lookedAt": {
                                   "type": "array",
                                   "items": {
@@ -27110,6 +27382,36 @@
                                   "type": "string",
                                   "maxLength": 500
                                 },
+                                "yes": {
+                                  "type": "object",
+                                  "properties": {
+                                    "label": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 80
+                                    },
+                                    "description": {
+                                      "type": "string",
+                                      "maxLength": 140
+                                    },
+                                    "recommended": { "type": "boolean" }
+                                  }
+                                },
+                                "no": {
+                                  "type": "object",
+                                  "properties": {
+                                    "label": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 80
+                                    },
+                                    "description": {
+                                      "type": "string",
+                                      "maxLength": 140
+                                    },
+                                    "recommended": { "type": "boolean" }
+                                  }
+                                },
                                 "lookedAt": {
                                   "type": "array",
                                   "items": {
@@ -27437,6 +27739,41 @@
                             },
                             { "type": "null" }
                           ]
+                        },
+                        "askedBy": { "type": "string" },
+                        "askCause": {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "decision",
+                                "gate",
+                                "run",
+                                "external_approval",
+                                "param",
+                                "criterion"
+                              ]
+                            },
+                            "ref": {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 64
+                                },
+                                "id": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 200
+                                }
+                              },
+                              "required": ["kind", "id"]
+                            },
+                            "at": { "type": "string" }
+                          },
+                          "required": ["kind"]
                         },
                         "relationToSubject": {
                           "type": "string",
@@ -27844,6 +28181,36 @@
                                   "type": "string",
                                   "maxLength": 500
                                 },
+                                "yes": {
+                                  "type": "object",
+                                  "properties": {
+                                    "label": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 80
+                                    },
+                                    "description": {
+                                      "type": "string",
+                                      "maxLength": 140
+                                    },
+                                    "recommended": { "type": "boolean" }
+                                  }
+                                },
+                                "no": {
+                                  "type": "object",
+                                  "properties": {
+                                    "label": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 80
+                                    },
+                                    "description": {
+                                      "type": "string",
+                                      "maxLength": 140
+                                    },
+                                    "recommended": { "type": "boolean" }
+                                  }
+                                },
                                 "lookedAt": {
                                   "type": "array",
                                   "items": {
@@ -28910,6 +29277,36 @@
                                   "type": "string",
                                   "maxLength": 500
                                 },
+                                "yes": {
+                                  "type": "object",
+                                  "properties": {
+                                    "label": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 80
+                                    },
+                                    "description": {
+                                      "type": "string",
+                                      "maxLength": 140
+                                    },
+                                    "recommended": { "type": "boolean" }
+                                  }
+                                },
+                                "no": {
+                                  "type": "object",
+                                  "properties": {
+                                    "label": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 80
+                                    },
+                                    "description": {
+                                      "type": "string",
+                                      "maxLength": 140
+                                    },
+                                    "recommended": { "type": "boolean" }
+                                  }
+                                },
                                 "lookedAt": {
                                   "type": "array",
                                   "items": {
@@ -29238,6 +29635,41 @@
                             { "type": "null" }
                           ]
                         },
+                        "askedBy": { "type": "string" },
+                        "askCause": {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "decision",
+                                "gate",
+                                "run",
+                                "external_approval",
+                                "param",
+                                "criterion"
+                              ]
+                            },
+                            "ref": {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 64
+                                },
+                                "id": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 200
+                                }
+                              },
+                              "required": ["kind", "id"]
+                            },
+                            "at": { "type": "string" }
+                          },
+                          "required": ["kind"]
+                        },
                         "relationToSubject": {
                           "type": "string",
                           "maxLength": 80
@@ -29459,7 +29891,7 @@
       "post": {
         "tags": ["FocusSessions"],
         "summary": "Complete (close) a focus session and return the proposal pack",
-        "description": "Lifecycle close via completeFocusSession — stamps closed, finishes any running playbook_run, returns pendingProposals + counts + warnings. Distinct from POST .../complete-run (playbook run only).",
+        "description": "Lifecycle close via completeFocusSession — stamps closed, finishes any running playbook_run, returns pendingProposals + counts + warnings. Every still-open room question is stamped closed (session ended). An agent's closed/failed close is refused (409 OPEN_QUESTIONS) while a question it asked is open, unless questionDispositions settles each. Distinct from POST .../complete-run (playbook run only).",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -29483,6 +29915,22 @@
                   "terminalStatus": {
                     "type": "string",
                     "enum": ["closed", "cancelled", "failed"]
+                  },
+                  "questionDispositions": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "messageId": { "type": "string", "format": "uuid" },
+                        "disposition": {
+                          "type": "string",
+                          "enum": ["withdrawn", "keep_as_owed"]
+                        },
+                        "note": { "type": "string", "maxLength": 500 }
+                      },
+                      "required": ["messageId", "disposition"]
+                    },
+                    "maxItems": 100
                   }
                 }
               }
@@ -29523,6 +29971,18 @@
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "409": {
+            "description": "Refused: the calling agent's own room questions are still open (openQuestions[])",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": {}
+                }
               }
             }
           },
@@ -29814,6 +30274,36 @@
                         "properties": {
                           "mode": { "type": "string", "enum": ["confirm"] },
                           "prompt": { "type": "string", "maxLength": 500 },
+                          "yes": {
+                            "type": "object",
+                            "properties": {
+                              "label": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 80
+                              },
+                              "description": {
+                                "type": "string",
+                                "maxLength": 140
+                              },
+                              "recommended": { "type": "boolean" }
+                            }
+                          },
+                          "no": {
+                            "type": "object",
+                            "properties": {
+                              "label": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 80
+                              },
+                              "description": {
+                                "type": "string",
+                                "maxLength": 140
+                              },
+                              "recommended": { "type": "boolean" }
+                            }
+                          },
                           "lookedAt": {
                             "type": "array",
                             "items": {

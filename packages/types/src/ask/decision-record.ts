@@ -20,7 +20,12 @@
  * them, and dropping a stored option would hide it from the page.
  */
 
-import { askOptionKey, type AskOption, type AskSnapshot } from "./index.js";
+import {
+  ASK_CONFIRM_KEYS,
+  askOptionKey,
+  type AskOption,
+  type AskSnapshot,
+} from "./index.js";
 import {
   askRecommendationOutcome,
   type AskRecommendationOutcome,
@@ -69,10 +74,11 @@ function readOptions(raw: unknown): AskOption[] {
 }
 
 /**
- * The properties as the snapshot the shared rule reads. Always a `choose`: a
- * filed confirm carries no recommendation, so the rule answers `none` anyway.
- * The recommendation is `recommendedOption` when set, else the option flagged
- * `recommended`.
+ * The properties as the snapshot the shared rule reads. A `choose`, unless
+ * the decision was a confirm (no options, and a `yes` / `no` pick or
+ * recommendation — decision 2, 2026-10-26: a confirm may recommend), so
+ * "AI picked: Yes" reads the confirm's own words. The recommendation is
+ * `recommendedOption` when set, else the option flagged `recommended`.
  */
 export function decisionAskSnapshot(
   props: Record<string, unknown>
@@ -80,8 +86,13 @@ export function decisionAskSnapshot(
   const p = props && typeof props === "object" ? props : {};
   const options = readOptions(p.decisionOptions);
   const flagged = options.find((o) => o.recommended === true);
+  const confirmKeys: readonly unknown[] = Object.values(ASK_CONFIRM_KEYS);
+  const isConfirm =
+    options.length === 0 &&
+    (confirmKeys.includes(p.chosenOption) ||
+      confirmKeys.includes(p.recommendedOption));
   return {
-    mode: "choose",
+    mode: isConfirm ? "confirm" : "choose",
     options,
     chosenKey: str(p.chosenOption),
     recommendedKey:

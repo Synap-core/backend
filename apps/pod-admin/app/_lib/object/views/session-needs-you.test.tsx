@@ -265,7 +265,7 @@ describe("Needs you — the session's own asks, answered in place", () => {
     expect(seenText).toContain("Claude-code");
     expect(seenText).not.toMatch(/An agent|waiting on your answer|Who is asking/);
     // On its own page the mark is no door back to the session.
-    expect(html).not.toMatch(/<a [^>]*>(?:(?!<\/a>).)*Claude-code/s);
+    expect(html).not.toMatch(/<a [^>]*>(?:(?!<\/a>)[\s\S])*Claude-code/);
     expect(seenText).not.toContain("Launch plan");
   });
 
@@ -280,7 +280,9 @@ describe("Needs you — the session's own asks, answered in place", () => {
         onClose={() => {}}
       />
     );
-    expect(html).toMatch(/<a [^>]*href="[^"]+"[^>]*>(?:(?!<\/a>).)*Claude-code/s);
+    expect(html).toMatch(
+      /<a [^>]*href="[^"]+"[^>]*>(?:(?!<\/a>)[\s\S])*Claude-code/
+    );
     expect(text(html)).not.toMatch(/An agent|waiting on your answer/);
   });
 

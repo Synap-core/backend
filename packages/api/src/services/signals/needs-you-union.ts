@@ -469,6 +469,9 @@ const _KIND_SPECIFIC_SIGNAL_FIELDS = [
   "source",
   "by",
   "askCause",
+  // `owed-slot` only (W1, the relay door) — classified here so the floor
+  // below compiles; it was on `Signal` unclassified.
+  "pendingRelay",
   "live",
   "progress",
   "ruleRun",
