@@ -476,6 +476,13 @@ export {
   type CompleteFocusSessionParams,
   type CompleteFocusSessionResult,
 } from "./services/focus-sessions/complete-session.js";
+// Exported for @synap/jobs' `registerStoppedSessionStaler` IoC slot, the same
+// inversion: the reaper stales a session that stopped on its own asks
+// (decision E1) through the ONE door that retires those asks.
+export {
+  staleStoppedSession,
+  type StaleStoppedSessionResult,
+} from "./services/focus-sessions/stale-stopped-session.js";
 // Exported for @synap/jobs' `registerStageAdvancer` IoC slot, for the same
 // reason and by the same inversion: a playbook stage's `gate: { kind: "human" }`
 // is resolved by ONE door, and the automation `session_update` output used to

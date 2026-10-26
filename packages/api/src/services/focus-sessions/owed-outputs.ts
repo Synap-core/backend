@@ -62,8 +62,14 @@ import {
   OWED_SLOT_CLAUSES,
   owedSlotPredicateSql,
   owedSlotWhere,
+  sessionLastAgentActivitySql,
+  sessionTurnInFlightSql,
 } from "@synap/database";
 import type { SQL } from "@synap/database";
+import {
+  classifyOwedAsk,
+  type NeedsYouSlotClass,
+} from "@synap-core/types/needs-you/rule";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import { deliverableOwedBy } from "@synap-core/types/units";
 import {
@@ -241,6 +247,14 @@ export interface OwedSlot {
    * else a criterion / param slot's own) — the card's door.
    */
   askCause?: AskCause;
+  /**
+   * THE needs-you rule's class for this slot (`classifyOwedAsk`,
+   * `@synap-core/types/needs-you/rule`, decision E): `needs_you` is the
+   * headline; `working` / `stopped` / `review_later` / `from_system` are its
+   * folds. Set by the NEEDS-YOU read only (`needsYouLens`), which measures the
+   * session's agent evidence in the same query; absent on every other read.
+   */
+  needsYouClass?: NeedsYouSlotClass;
 }
 
 export interface ListOwedSlotsParams {
@@ -296,6 +310,8 @@ export interface ListOwedSlotsParams {
    * surface's needs-you. In SQL, for the same reason as the container lenses.
    */
   subject?: SessionSubject;
+  /** The clock the needs-you class is read against (`needsYouLens`). Absent ⇒ now. */
+  now?: Date;
 }
 
 type OwedRow = {
@@ -309,6 +325,14 @@ type OwedRow = {
   expectedOutputs: unknown;
   /** Selected only under `needsYouLens`: the session is an undecided draft. */
   isDraft?: boolean;
+  /**
+   * Selected only under `needsYouLens`: the facts the needs-you rule reads,
+   * measured by the SQL twin's own fragments (`sessionLastAgentActivitySql`,
+   * `sessionTurnInFlightSql`) so the two twins read ONE measure.
+   */
+  startedAt?: Date | string | null;
+  turnInFlight?: boolean;
+  lastAgentActivityAt?: Date | string | null;
 };
 
 /**
@@ -334,7 +358,20 @@ function draftAskPrefilter(): SQL {
  * Flatten one session's slot array into the owed ones. Pure, so the projection
  * is testable without a database.
  */
-export function projectOwedSlots(row: OwedRow): OwedSlot[] {
+export function projectOwedSlots(
+  row: OwedRow,
+  now: Date = new Date()
+): OwedSlot[] {
+  // The rule's session facts, when the read measured them (`needsYouLens`).
+  const facts =
+    row.lastAgentActivityAt !== undefined
+      ? {
+          status: row.status,
+          turnInFlight: row.turnInFlight === true,
+          lastAgentActivityAt: row.lastAgentActivityAt,
+          startedAt: row.startedAt ?? null,
+        }
+      : null;
   const outputs: ExpectedOutput[] = Array.isArray(row.expectedOutputs)
     ? (row.expectedOutputs as ExpectedOutput[])
     : [];
@@ -381,6 +418,9 @@ export function projectOwedSlots(row: OwedRow): OwedSlot[] {
       ...(slot.pendingRelay ? { pendingRelay: slot.pendingRelay } : {}),
       ...(slot.askedBy ? { askedBy: slot.askedBy } : {}),
       ...askCauseOf(slot),
+      ...(facts
+        ? { needsYouClass: classifyOwedAsk(slot, facts, now) ?? undefined }
+        : {}),
     });
   }
   return owed;
@@ -460,7 +500,14 @@ export async function listOwedSlots(
       projectId: focusSessions.projectId,
       expectedOutputs: focusSessions.expectedOutputs,
       ...(params.needsYouLens
-        ? { isDraft: drizzleSql<boolean>`(${triagePendingWhere()})` }
+        ? {
+            isDraft: drizzleSql<boolean>`(${triagePendingWhere()})`,
+            startedAt: focusSessions.startedAt,
+            turnInFlight: drizzleSql<boolean>`${sessionTurnInFlightSql("focus_sessions")}`,
+            lastAgentActivityAt: drizzleSql<
+              Date | string | null
+            >`${sessionLastAgentActivitySql("focus_sessions")}`,
+          }
         : {}),
     })
     .from(focusSessions)
@@ -474,7 +521,7 @@ export async function listOwedSlots(
 
   const slots = rows
     .flatMap((r) => {
-      const owed = projectOwedSlots(r as OwedRow);
+      const owed = projectOwedSlots(r as OwedRow, params.now);
       // The needs-you lens: on a DRAFT only the slots with an ask count
       // (`ask` here is already `effectiveSlotAsk`, see `projectOwedSlots`).
       return params.needsYouLens && (r as OwedRow).isDraft

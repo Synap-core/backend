@@ -22,8 +22,12 @@
  * Folded ONE ROW PER SESSION (deduped), NEWEST owed slot first, capped.
  */
 
-import { isAskReviewLater } from "@synap-core/types/ask";
+import {
+  foldNeedsYouCounts,
+  type NeedsYouFoldCounts,
+} from "@synap-core/types/needs-you/rule";
 import type { OwedSlot } from "../focus-sessions/owed-outputs.js";
+import { owedSlotClassOf } from "../signals/needs-you-union.js";
 
 /**
  * Owed slots read per lens. A hit means the counts are lower bounds AND, since
@@ -40,13 +44,24 @@ const LABELS_PER_ROW = 3;
 export type OwedInbox = "needs-you" | "proposed";
 
 export interface OwedByPerson {
-  /** Owed slots across every session (both lenses), Review later excluded. */
+  /**
+   * The headline: asks that really need the person (THE needs-you rule,
+   * `classifyOwedAsk`, decision E) plus a draft's ask-less slots (Proposed).
+   * Every other owed ask is in {@link folds}, never dropped.
+   */
   count: number;
   /**
-   * Needs-you asks owed for more than 7 days — in Review later, out of the
-   * headline (`isAskReviewLater`, the predicate the needs-you count reads).
+   * Real asks owed for more than 7 days — the Review later fold, out of the
+   * headline (the same class the needs-you count reads).
    */
   reviewLater: number;
+  /**
+   * Every needs-you owed ask by the rule's fold — the SAME classes
+   * `signals.count` counts (`owedSlotClassOf`): `needsYou` (the headline asks),
+   * Working, Stopped (+ its sessions), Review later, From the system.
+   * `changesToReview` is 0 here: proposals are orient's `pendingReview`.
+   */
+  folds: NeedsYouFoldCounts;
   /** Sessions holding at least one. */
   sessions: number;
   /** True when a lens hit its read cap — "at least this many". */
@@ -83,8 +98,14 @@ export function foldOwedByPerson(p: {
   now?: Date;
 }): OwedByPerson {
   const now = p.now ?? new Date();
-  const later = p.needsYou.filter((s) => isAskReviewLater(s, now));
-  const headline = p.needsYou.filter((s) => !isAskReviewLater(s, now));
+  const classOf = (s: OwedSlot) => owedSlotClassOf(s, now);
+  const folds = foldNeedsYouCounts(
+    p.needsYou.map((s) => ({
+      needsYouClass: classOf(s),
+      sessionId: s.sessionId,
+    }))
+  );
+  const headline = p.needsYou.filter((s) => classOf(s) === "needs_you");
   const bySession = new Map<string, { slots: OwedSlot[]; inbox: OwedInbox }>();
   // Needs-you first: a session with any needs-you slot is a needs-you row.
   const add = (slots: readonly OwedSlot[], inbox: OwedInbox) => {
@@ -122,7 +143,8 @@ export function foldOwedByPerson(p: {
   );
   return {
     count: headline.length + p.proposed.length,
-    reviewLater: later.length,
+    reviewLater: folds.reviewLater,
+    folds,
     sessions: rows.length,
     countIsLowerBound: p.truncated,
     lens: "owed-by-person",

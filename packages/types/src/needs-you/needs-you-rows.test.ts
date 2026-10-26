@@ -306,3 +306,42 @@ describe("needsYouRows — Older fold + cap", () => {
     expect(cut.hiddenItems).toBe(3);
   });
 });
+
+describe("needsYouRows — the rule's folds (decision E)", () => {
+  it("splits the out-of-headline rows by class; the union stays reviewLater", () => {
+    const out = needsYouRows([
+      row("h", { needsYouClass: "needs_you" }),
+      row("w", { needsYouClass: "working", reviewLater: true }),
+      row("s1", {
+        needsYouClass: "stopped",
+        reviewLater: true,
+        groupKey: "session:S",
+      }),
+      row("s2", {
+        needsYouClass: "stopped",
+        reviewLater: true,
+        groupKey: "session:S",
+      }),
+      row("m", { needsYouClass: "from_system", reviewLater: true }),
+      row("c", { needsYouClass: "changes_to_review", reviewLater: true }),
+      row("old", { reviewLater: true }),
+    ]);
+    expect(shape(out.recent)).toEqual(["item:h"]);
+    expect(shape(out.folds.working)).toEqual(["item:w"]);
+    // Stopped is ONE row per session.
+    expect(shape(out.folds.stopped)).toEqual(["session:S[s1,s2]"]);
+    expect(shape(out.folds.from_system)).toEqual(["item:m"]);
+    expect(shape(out.folds.changes_to_review)).toEqual(["item:c"]);
+    // A row an older pod flagged with no class is Review later.
+    expect(shape(out.folds.review_later)).toEqual(["item:old"]);
+    // Never dropped: every out-of-headline row is in the union.
+    expect(out.reviewLaterCount).toBe(5);
+  });
+
+  it("a stamped needs_you class is the headline even if a stale flag says otherwise", () => {
+    const out = needsYouRows([
+      row("h", { needsYouClass: "needs_you", reviewLater: true }),
+    ]);
+    expect(shape(out.recent)).toEqual(["item:h"]);
+  });
+});

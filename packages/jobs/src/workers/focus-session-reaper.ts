@@ -29,9 +29,13 @@ import {
   AGENT_PROPOSAL_PACKAGE_MARKER,
   RECEIPT_IDLE_WINDOW_HOURS,
   focusSessionWaitsOnPersonWhere,
+  sessionStoppedOnItsAsksWhere,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
-import { closeSessionViaDoor } from "../utils/session-close.js";
+import {
+  closeSessionViaDoor,
+  staleStoppedSessionViaDoor,
+} from "../utils/session-close.js";
 import { escalateUnacknowledgedReports } from "./track-report-escalation.js";
 
 const logger = createLogger({ module: "focus-session-reaper" });
@@ -139,6 +143,38 @@ export async function closeIdleReceipts(): Promise<number> {
   return closed;
 }
 
+/** Most stopped sessions staled per tick — each runs the full door. */
+const STOPPED_STALE_BATCH = 200;
+
+/**
+ * Stale the sessions that STOPPED ON THEIR OWN ASKS (decision E1, founder
+ * 2026-10-27): no agent evidence for 7 days (`needsYouSessionClass`, never
+ * `updated_at`), and all they owe the person is their agent's confirm / choose
+ * asks. Those asks end with the session (`session_ended`), so they leave
+ * needs-you instead of keeping a dead session there forever. One failing
+ * session is logged and skipped; the rest still go.
+ */
+export async function staleSessionsStoppedOnTheirAsks(): Promise<number> {
+  const stopped = await db
+    .select({ id: focusSessions.id })
+    .from(focusSessions)
+    .where(sessionStoppedOnItsAsksWhere(new Date()))
+    .limit(STOPPED_STALE_BATCH);
+  let staled = 0;
+  for (const row of stopped) {
+    try {
+      const result = await staleStoppedSessionViaDoor({ sessionId: row.id });
+      if (result) staled++;
+    } catch (err) {
+      logger.error(
+        { err, sessionId: row.id },
+        "stopped-session stale failed — will retry next tick"
+      );
+    }
+  }
+  return staled;
+}
+
 /** Called by the cron scheduler every hour. */
 export async function handleFocusSessionReaper(): Promise<void> {
   // R10 (W3) rides this hourly tick: an "impossible" report on a goal that
@@ -173,6 +209,16 @@ export async function handleFocusSessionReaper(): Promise<void> {
       logger.info(
         { receiptsClosed },
         "Focus session reaper closed idle receipts"
+      );
+    }
+
+    // Then the sessions whose agent left them waiting on its own questions:
+    // their asks end with them (decision E1).
+    const stoppedStaled = await staleSessionsStoppedOnTheirAsks();
+    if (stoppedStaled > 0) {
+      logger.info(
+        { stoppedStaled },
+        "Focus session reaper staled sessions stopped on their asks"
       );
     }
 

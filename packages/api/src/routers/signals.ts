@@ -441,6 +441,7 @@ async function readAttention(
         groups: [],
         distinct: 0,
         reviewLater: 0,
+        folds: { reviewLater: 0, changesToReview: 0 },
         scanTruncated: false,
         scanned: 0,
       },
@@ -456,6 +457,8 @@ async function readAttention(
           limit: clusterLimit,
           excludeDraftSessions: true,
           splitBySession: true,
+          // THE needs-you rule over proposals (decision E6).
+          classifyNeedsYou: true,
         })
     ),
     // Under a container lens the door narrows IN SQL, before its limit
@@ -669,6 +672,7 @@ function countOf(a: Attention) {
   return countNeedsYou({
     distinctClusters: a.groups.distinct,
     reviewLaterClusters: a.groups.reviewLater,
+    clusterFolds: a.groups.folds,
     clustersTruncated: a.groups.scanTruncated,
     clusters: a.groups.groups,
     notifications: a.notifications,
@@ -1385,6 +1389,14 @@ function narrowAttention(
       groups: clusters,
       distinct: clusters.length,
       reviewLater: clusters.filter((c) => c.reviewLater).length,
+      folds: {
+        reviewLater: clusters.filter(
+          (c) => c.reviewLater && c.needsYouClass !== "changes_to_review"
+        ).length,
+        changesToReview: clusters.filter(
+          (c) => c.needsYouClass === "changes_to_review"
+        ).length,
+      },
       scanTruncated: false,
     },
     notifications: scope.kindClusters
@@ -1559,6 +1571,7 @@ export async function countNeedsYouByScope(
               limit: CLUSTER_PAGE_LIMIT,
               excludeDraftSessions: true,
               splitBySession: true,
+              classifyNeedsYou: true,
             }),
             sessionIds.length
               ? db

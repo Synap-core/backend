@@ -139,6 +139,7 @@ import {
   sessionReadableWhere,
 } from "../access/session-visibility.js";
 import { redactUnreadableSessionTargets } from "../services/proposals/session-content-redaction.js";
+import { classifyPendingProposals } from "../services/proposals/proposal-needs-you.js";
 export { buildProposalChanges } from "./proposals/changes.js";
 import {
   planProposalRevert,
@@ -783,6 +784,15 @@ export const proposalsRouter = router({
          * that session's block; `distinct` then counts the parts.
          */
         splitBySession: z.boolean().optional(),
+        /**
+         * Class every pending member by THE needs-you rule
+         * (`classifyPendingProposal`, decision E6): only a proposal something
+         * waits on stays in the headline; the rest are Review later or
+         * Changes to review (`reviewLater` on the cluster, `needsYouClass`
+         * names which). The needs-you union passes it; the review queue does
+         * not (every pending proposal is its to decide).
+         */
+        classifyNeedsYou: z.boolean().optional(),
       })
     )
     .query(async ({ input, ctx }) => {
@@ -836,6 +846,7 @@ export const proposalsRouter = router({
       const rows = await db
         .select({
           id: proposals.id,
+          status: proposals.status,
           proposalType: proposals.proposalType,
           targetType: proposals.targetType,
           targetId: proposals.targetId,
@@ -947,23 +958,40 @@ export const proposalsRouter = router({
         userId,
         roster: rosterReadFor(ctx),
       });
-      const clusterRows: ClusterInputRow[] = readableRows.map((r) => ({
-        id: r.id,
-        proposalType: r.proposalType,
-        targetType: r.targetType,
-        targetId: r.targetId,
-        data: r.data,
-        createdAt: r.createdAt,
-        workspaceId: r.workspaceId ?? null,
-        agentLabel: agentLabelOf(r),
-        agentUserId: r.agentUserId ?? null,
-        sessionId: r.sessionId ?? null,
-        automationId: r.stepRunId
-          ? (automationByStepRun.get(r.stepRunId) ?? null)
-          : null,
-        governanceReason: r.governanceReason ?? null,
-        reviewLater: r.reviewLater === true,
-      }));
+      // THE needs-you rule, per pending member (decision E6). Read on the
+      // UNREDACTED rows: the waits read applies the session floor itself.
+      const needsYouClasses =
+        input.classifyNeedsYou && input.status === "pending"
+          ? await classifyPendingProposals(rows, {
+              userId,
+              roster: rosterReadFor(ctx),
+            })
+          : null;
+      const clusterRows: ClusterInputRow[] = readableRows.map((r) => {
+        const needsYouClass = needsYouClasses?.get(r.id) ?? null;
+        return {
+          id: r.id,
+          proposalType: r.proposalType,
+          targetType: r.targetType,
+          targetId: r.targetId,
+          data: r.data,
+          createdAt: r.createdAt,
+          workspaceId: r.workspaceId ?? null,
+          agentLabel: agentLabelOf(r),
+          agentUserId: r.agentUserId ?? null,
+          sessionId: r.sessionId ?? null,
+          automationId: r.stepRunId
+            ? (automationByStepRun.get(r.stepRunId) ?? null)
+            : null,
+          governanceReason: r.governanceReason ?? null,
+          // Classified ⇒ out of the headline is the rule's answer, not the
+          // durable-work clock alone.
+          reviewLater: needsYouClass
+            ? needsYouClass !== "needs_you"
+            : r.reviewLater === true,
+          needsYouClass,
+        };
+      });
 
       let clusters = collapseProposalsToClusters(clusterRows, {
         splitBySession: input.splitBySession === true,
@@ -998,6 +1026,18 @@ export const proposalsRouter = router({
          * are the oldest, so the slice drops them first.
          */
         reviewLater: clusters.filter((c) => c.reviewLater).length,
+        /**
+         * Of `reviewLater`, by the rule's fold (`classifyNeedsYou` only):
+         * Review later vs Changes to review. Before the slice too.
+         */
+        folds: {
+          reviewLater: clusters.filter(
+            (c) => c.reviewLater && c.needsYouClass !== "changes_to_review"
+          ).length,
+          changesToReview: clusters.filter(
+            (c) => c.needsYouClass === "changes_to_review"
+          ).length,
+        },
         /** Pending rows actually scanned — the row total while not truncated. */
         scanned: rows.length,
         /** The scan hit `scanLimit`: `distinct`/`scanned` are FLOORS, not totals. */

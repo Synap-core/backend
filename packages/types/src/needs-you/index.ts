@@ -42,6 +42,7 @@
 
 import { resolveSessionTitle } from "../focus-sessions/title.js";
 import { resolveNeedsYouItemCount } from "../vocabulary/index.js";
+import { NEEDS_YOU_FOLDS, type NeedsYouFold } from "./rule.js";
 
 /** `older` = occurred more than 7 days ago — stamped by the pod, never measured here. */
 export type NeedsYouAgeBucket = "recent" | "older";
@@ -80,6 +81,30 @@ export interface GroupableSignal {
    * drawn in the Review later fold. Stamped by the pod, never measured here.
    */
   reviewLater?: boolean;
+  /**
+   * THE needs-you rule's class for this row (`classifyOwedAsk` /
+   * `classifyPendingProposal`, `./rule.ts`), stamped by the pod. Every class
+   * but `needs_you` is out of the headline and ALSO carries `reviewLater`, so
+   * a client older than this field draws it in its one out-of-headline fold
+   * and the count still equals the rows above it. Absent on an older pod.
+   */
+  needsYouClass?: string | null;
+}
+
+/**
+ * Which fold a row sits in — its class when the pod stamped one, else
+ * `review_later` for a row flagged out of the headline by an older pod. `null`
+ * = the headline (Recent / Older).
+ */
+export function needsYouFoldOf(
+  signal: Pick<GroupableSignal, "reviewLater" | "needsYouClass">
+): NeedsYouFold | null {
+  const c = signal.needsYouClass;
+  if (c && (NEEDS_YOU_FOLDS as readonly string[]).includes(c)) {
+    return c as NeedsYouFold;
+  }
+  if (c === "needs_you") return null;
+  return signal.reviewLater === true ? "review_later" : null;
 }
 
 /** One session's rows (or a lone row) — internal. */
@@ -136,10 +161,21 @@ function pushInto<T extends GroupableSignal>(
 /** Split a server-ordered page into one run per session + the Older and Review later partitions. */
 function runsOf<T extends GroupableSignal>(
   signals: readonly T[]
-): { recent: Run<T>[]; older: Run<T>[]; reviewLater: Run<T>[] } {
+): {
+  recent: Run<T>[];
+  older: Run<T>[];
+  reviewLater: Run<T>[];
+  folds: Record<NeedsYouFold, Run<T>[]>;
+} {
   const recent: Run<T>[] = [];
   const older: Run<T>[] = [];
   const reviewLater: Run<T>[] = [];
+  const folds = Object.fromEntries(
+    NEEDS_YOU_FOLDS.map((f) => [f, [] as Run<T>[]])
+  ) as Record<NeedsYouFold, Run<T>[]>;
+  const foldBySession = Object.fromEntries(
+    NEEDS_YOU_FOLDS.map((f) => [f, new Map<string, Run<T>>()])
+  ) as Record<NeedsYouFold, Map<string, Run<T>>>;
   // A review-later row never carries a session key (the pod keeps it out of
   // the session's block), so it never joins a session card.
   const reviewLaterBySession = new Map<string, Run<T>>();
@@ -149,11 +185,14 @@ function runsOf<T extends GroupableSignal>(
   const recentBySession = new Map<string, Run<T>>();
   const olderBySession = new Map<string, Run<T>>();
   for (const s of signals) {
-    if (s.reviewLater === true) pushInto(reviewLater, s, reviewLaterBySession);
-    else if (s.ageBucket === "older") pushInto(older, s, olderBySession);
+    const fold = needsYouFoldOf(s);
+    if (fold !== null) {
+      pushInto(reviewLater, s, reviewLaterBySession);
+      pushInto(folds[fold], s, foldBySession[fold]);
+    } else if (s.ageBucket === "older") pushInto(older, s, olderBySession);
     else pushInto(recent, s, recentBySession);
   }
-  return { recent, older, reviewLater };
+  return { recent, older, reviewLater, folds };
 }
 
 /** The fields `repeatLabel` reads. Optional: a row from a pre-W2 pod may lack them. */
@@ -253,10 +292,20 @@ export interface NeedsYouRows<T extends GroupableSignal> {
   older: NeedsYouRow<T>[];
   /** ROWS under the Older fold — a session card is one (what "Older · N" states). */
   olderCount: number;
-  /** Untouched durable proposals and owed asks — the "Review later · N" fold, out of the headline count. */
+  /**
+   * EVERY row out of the headline count, whatever its fold — what a surface
+   * that draws one out-of-headline fold shows ("Review later · N"). Since the
+   * needs-you rule (decision E) it is the union of {@link folds}.
+   */
   reviewLater: NeedsYouRow<T>[];
   /** ROWS under the Review later fold (what "Review later · N" states). */
   reviewLaterCount: number;
+  /**
+   * The same rows split by the rule's fold (`./rule.ts`): Working ("asks you
+   * when you can"), Stopped (one row per session, "Resume or close"), Review
+   * later, From the system, Changes to review. A session is one row per fold.
+   */
+  folds: Record<NeedsYouFold, NeedsYouRow<T>[]>;
 }
 
 /**
@@ -376,6 +425,9 @@ export function needsYouRows<T extends GroupableSignal>(
     olderCount: older.length,
     reviewLater,
     reviewLaterCount: reviewLater.length,
+    folds: Object.fromEntries(
+      NEEDS_YOU_FOLDS.map((f) => [f, toRows(shape.folds[f])])
+    ) as Record<NeedsYouFold, NeedsYouRow<T>[]>,
   };
 }
 
