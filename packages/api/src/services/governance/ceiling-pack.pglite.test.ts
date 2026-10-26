@@ -139,6 +139,8 @@ import {
   focusSessions,
   entities,
   governanceCeilings,
+  profiles,
+  profileWorkspaceAccess,
 } from "@synap/database";
 import {
   checkPermissionOrPropose,
@@ -178,8 +180,15 @@ beforeAll(async () => {
     focusSessions,
     entities,
     governanceCeilings,
+    profiles,
+    profileWorkspaceAccess,
   ])
     await h.client!.exec(ddlFor(t as PgTable));
+  // The gate refuses an entity create whose kind does not resolve.
+  await q(
+    `insert into profiles (id, slug, display_name, scope, profile_kind, origin, is_active) values ($1, 'note', 'Note', 'system', 'kind', 'core', true)`,
+    [randomUUID()]
+  );
   await q(
     `insert into users (id, email, name, user_type) values ($1, 'h@x', 'Human', 'human'), ($2, 'a@x', 'Scout', 'agent')`,
     [HUMAN, AGENT]
