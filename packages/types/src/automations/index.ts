@@ -5,11 +5,13 @@
  * Re-exports database types + adds domain-specific utilities.
  */
 
-// ── Database types ──────────────────────────────────────────────────────────
+// ── Row + flow types ────────────────────────────────────────────────────────
 
-// Type-only — erased at build, so no drizzle/postgres runtime import reaches
-// browser/Electron consumers (see the NOTE below).
-import type { AutomationNodeBase, OutputNodeDef } from "@synap/database";
+// Declared in this package (`./flow.js`, `./rows.js`); `@synap/database`
+// imports the flow declarations and proves its inferred rows equal to these
+// (`packages/database/src/wire-parity/`). Nothing here imports the database.
+import type { AutomationNodeBase, OutputNodeDef } from "./flow.js";
+import type { AutomationRun } from "./rows.js";
 
 export type {
   Automation,
@@ -18,6 +20,9 @@ export type {
   NewAutomationRun,
   AutomationStepRun,
   NewAutomationStepRun,
+} from "./rows.js";
+
+export type {
   // Flow definition types
   FlowDefinition,
   AutomationNode,
@@ -31,12 +36,10 @@ export type {
   DelayNodeDef,
   OutputNodeDef,
   LoopNodeDef,
-} from "@synap/database";
+} from "./flow.js";
 
-// NOTE: Zod schemas (insertAutomationSchema, selectAutomationSchema)
-// intentionally NOT re-exported — they pull in postgres/drizzle which breaks
-// browser/Electron builds. Backend consumers should import directly from
-// @synap/database.
+// NOTE: Zod schemas (insertAutomationSchema, selectAutomationSchema) live with
+// the drizzle tables in @synap/database and are not part of this package.
 
 // ── Domain types ────────────────────────────────────────────────────────────
 
@@ -48,8 +51,7 @@ export type AutomationTriggerType = "event" | "cron" | "webhook" | "manual";
  * DERIVED from the run row's own column enum (it used to be a hand copy that
  * had lost `skipped`, `blocked_by_policy` and `waiting_on_you`).
  */
-export type AutomationRunStatus =
-  import("@synap/database").AutomationRun["status"];
+export type AutomationRunStatus = AutomationRun["status"];
 
 export type AutomationStepStatus =
   "pending" | "running" | "completed" | "failed" | "skipped";

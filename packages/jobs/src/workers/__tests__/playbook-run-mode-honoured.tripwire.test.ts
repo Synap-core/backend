@@ -134,8 +134,9 @@ describe("tripwire: every playbook_run path honours the node's mode", () => {
     // The set is DERIVED from the node's own declaration, so a field added to
     // `PlaybookRunNodeDef.data` (worker, filing, the next one) joins the scan
     // by existing. `label` / `errorHandling` are the node's, not the run's.
+    // Declared in `@synap-core/types/automations/flow` (the schema imports it).
     const schema = readFileSync(
-      join(PKGS, "database", "src", "schema", "automations.ts"),
+      join(PKGS, "types", "src", "automations", "flow.ts"),
       "utf8"
     );
     const start = schema.indexOf("export interface PlaybookRunNodeDef");

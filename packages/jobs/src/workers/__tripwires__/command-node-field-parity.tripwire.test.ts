@@ -15,7 +15,8 @@
  * command node has" is the SAME defect one level up: it is exactly how the fork
  * survived. So BOTH sides are parsed out of source:
  *   • the executor's read-set   ← `CommandStepData` in the step executor
- *   • the declared contract     ← `CommandNodeDef["data"]` in the schema
+ *   • the declared contract     ← `CommandNodeDef["data"]` in the flow types
+ *                                  (`@synap-core/types/automations/flow`)
  *   • the legacy alias set      ← `LegacyCommandStepData` in the step executor
  *   • the authored corpus       ← every `type: 'command'` node literal on disk
  * Adding a field to any one of them without the others turns this test red.
@@ -36,6 +37,8 @@ const MONOREPO = resolve(BACKEND, ".."); // …/synap
 
 const EXECUTOR_SRC = join(WORKERS, "steps/command-skill-capability.ts");
 const SCHEMA_SRC = join(BACKEND, "packages/database/src/schema/automations.ts");
+/** The flow node declarations (`CommandNodeDef`) the schema imports. */
+const FLOW_SRC = join(BACKEND, "packages/types/src/automations/flow.ts");
 
 /**
  * TOP-LEVEL field names of a `{ … }` block, ignoring comments and strings.
@@ -123,10 +126,11 @@ function blockAfter(src: string, marker: string): string {
 
 const executorSrc = readFileSync(EXECUTOR_SRC, "utf8");
 const schemaSrc = readFileSync(SCHEMA_SRC, "utf8");
+const flowSrc = readFileSync(FLOW_SRC, "utf8");
 
 /** The declared authoring contract. */
 const SCHEMA_FIELDS = fieldsOfBlock(
-  blockAfter(blockAfter(schemaSrc, "export interface CommandNodeDef"), "data:")
+  blockAfter(blockAfter(flowSrc, "export interface CommandNodeDef"), "data:")
 );
 /** The legacy aliases the one door folds. */
 const LEGACY_FIELDS = fieldsOfBlock(

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { buildRequestFromProposal, isNestedEnvelope } from "../index.js";
-import type { Proposal } from "@synap/database";
+import type { Proposal } from "../row.js";
 
 /**
  * Regression guard for a latent coupling flagged in code review of P1
