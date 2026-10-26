@@ -2543,7 +2543,13 @@
           "name": "subjectEntityId",
           "type": "string",
           "required": false,
-          "description": "Optional UUID of the entity this session is ABOUT — the subject-spine anchor (e.g. a person, company, or deal). Ties the session to that entity so it surfaces in the entity's neighborhood."
+          "description": "Optional UUID of the entity this session is ABOUT — the issue, feature or task this work is about (or a person, company, deal). The session's work type is that entity's kind, and it surfaces in the entity's neighborhood. Never create an entity just to fill this. Without it (and without subjectRef), the reply may list `subjectCandidates`: same-name entities to confirm by passing one here."
+        },
+        {
+          "name": "subjectRef",
+          "type": "object",
+          "required": false,
+          "description": "Optional: name the subject by an identity you hold instead of its id — `url` (a page the entity is known by) or `externalId` (provider-scoped, e.g. `github:<owner>/<repo>#<n>`). Resolved by the pod's identity door: a match you can see becomes the subject; otherwise the session starts with no subject and the reply says `subjectRef: {status: 'unresolved'}`. Never together with subjectEntityId."
         },
         {
           "name": "correlationId",
@@ -2652,7 +2658,16 @@
           },
           "subjectEntityId": {
             "type": "string",
-            "description": "Optional UUID of the entity this session is ABOUT — the subject-spine anchor (e.g. a person, company, or deal). Ties the session to that entity so it surfaces in the entity's neighborhood."
+            "description": "Optional UUID of the entity this session is ABOUT — the issue, feature or task this work is about (or a person, company, deal). The session's work type is that entity's kind, and it surfaces in the entity's neighborhood. Never create an entity just to fill this. Without it (and without subjectRef), the reply may list `subjectCandidates`: same-name entities to confirm by passing one here."
+          },
+          "subjectRef": {
+            "type": "object",
+            "description": "Optional: name the subject by an identity you hold instead of its id — `url` (a page the entity is known by) or `externalId` (provider-scoped, e.g. `github:<owner>/<repo>#<n>`). Resolved by the pod's identity door: a match you can see becomes the subject; otherwise the session starts with no subject and the reply says `subjectRef: {status: 'unresolved'}`. Never together with subjectEntityId.",
+            "properties": {
+              "url": { "type": "string" },
+              "externalId": { "type": "string" }
+            },
+            "additionalProperties": false
           },
           "correlationId": {
             "type": "string",
