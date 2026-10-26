@@ -60,6 +60,11 @@
       "types": "./dist/utils/pg-errors.d.ts",
       "import": "./dist/utils/pg-errors.js",
       "default": "./dist/utils/pg-errors.js"
+    },
+    "./interaction-kinds": {
+      "types": "./dist/services/interactions/interaction-kinds.d.ts",
+      "import": "./dist/services/interactions/interaction-kinds.js",
+      "default": "./dist/services/interactions/interaction-kinds.js"
     }
   },
   "files": [
