@@ -673,6 +673,7 @@ const REENTRY_CLASS: Record<string, Classification> = {
   "automation.activate": "gated",
   "automation.update": "gated",
   "automation.delete": "gated",
+  "automation.archive": "gated",
   "automation.pause": {
     ungated:
       "automationsRouter.pause carries no checkPermissionOrPropose, " +

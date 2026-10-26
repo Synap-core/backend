@@ -435,7 +435,7 @@ async function readNeverFiredAutomations(
         name: f.name,
         triggerType: f.triggerType,
         ageDays: f.ageDays,
-        close: `synap_run_capability {"verbId":"automation.pause","parameters":{"automationId":"${f.automationId}"}} stops it now (resume any time); automation.delete removes it after the person approves.`,
+        close: `synap_run_capability {"verbId":"automation.archive","parameters":{"automationId":"${f.automationId}"}} archives it now (you made it and it never ran; the person can switch it back on).`,
       })),
     };
   } catch (err) {

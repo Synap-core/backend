@@ -356,6 +356,8 @@ const INTENTIONALLY_UNROUTABLE: Record<string, string> = {
     "Switches a pod-local automation on and computes its next run time.",
   "automation.pause": "Switches a pod-local automation off.",
   "automation.delete": "Deletes a pod-local automation.",
+  "automation.archive":
+    "Archives a pod-local automation (soft, the row stays).",
   "view.update": "Revises a view's stored definition.",
   "cell.update": "Patches a cell instance's stored config.",
   "skill.update_rule": "Revises a standing rule stored in the pod.",
