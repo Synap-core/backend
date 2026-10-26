@@ -119,6 +119,127 @@ describe("synap_ask detail (MCP door → synthesizeAnswer → IS request)", () =
     expect((JSON.parse(text) as { detail: string }).detail).toBe("full");
   });
 
+  it("brief answered with nothing: redone as full, never the pending notice alone", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ answer: "", detail: "brief" }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ answer: "Hetzner hosts the pod." }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    askMock.mockResolvedValue({
+      answers: ANSWERS,
+      routedTo: ["structured"],
+      degraded: [],
+      pending: { matches: [{ id: "p1" }] },
+      understanding: {},
+    });
+
+    const { text } = await callAsk({ detail: "brief" });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(
+      "detail" in
+        (JSON.parse(
+          (fetchMock.mock.calls[1]![1] as { body: string }).body
+        ) as object)
+    ).toBe(false);
+    const payload = JSON.parse(text) as { answer: string; detail: string };
+    expect(payload.detail).toBe("full");
+    expect(payload.answer).toMatch(/Hetzner hosts the pod\./);
+  });
+
+  it("a queue answer leads the prose and rides the envelope", async () => {
+    isReplies({ answer: "Nothing in the notes about it." });
+    askMock.mockResolvedValue({
+      answers: ANSWERS,
+      routedTo: ["structured"],
+      degraded: [],
+      pending: null,
+      understanding: {},
+      queue: {
+        pendingReview: { count: 3, oldestDays: 2, lens: "authored" },
+        owedByPerson: { count: 0, sessions: 0 },
+        openSessions: { count: 0 },
+      },
+    });
+
+    const { text } = await callAsk({ query: "what is waiting on me" });
+
+    const payload = JSON.parse(text) as { answer: string; queue: unknown };
+    expect(payload.answer).toMatch(/^Waiting on you: 3 proposals to review/);
+    expect(payload.queue).toMatchObject({ pendingReview: { count: 3 } });
+  });
+
+  it("an empty FULL answer is a classified failure, not a success", async () => {
+    isReplies({ answer: "  " });
+
+    const { text } = await callAsk({});
+
+    const payload = JSON.parse(text) as {
+      answer: unknown;
+      error?: string;
+      failureClass?: string;
+    };
+    expect(payload.answer).toBeNull();
+    expect(payload.error).toBe("synthesis_unavailable");
+    expect(payload.failureClass).toBe("invalid_response");
+  });
+
+  it("brief caps the envelope: 5 sources, 200-char pending summaries, no spaces; full keeps all", async () => {
+    const items = Array.from({ length: 12 }, (_, i) => ({
+      id: `ent-${i}`,
+      title: `Note ${i}`,
+      content: "short",
+    }));
+    askMock.mockResolvedValue({
+      answers: [{ substrate: "structured", status: "ok", items }],
+      routedTo: ["structured"],
+      degraded: [],
+      pending: {
+        notice: "pending",
+        matches: Array.from({ length: 5 }, (_, i) => ({
+          proposalId: `p${i}`,
+          proposalType: "create",
+          summary: "x".repeat(3000),
+          reviewUrl: `https://pod.test/open/p${i}`,
+          score: 1,
+        })),
+      },
+      spaces: { hint: "y".repeat(5000) },
+      understanding: {},
+    });
+    isReplies({ answer: "Hetzner.", detail: "brief" });
+    const brief = await callAsk({ detail: "brief" });
+    isReplies({ answer: "A long answer." });
+    const full = await callAsk({});
+
+    const b = JSON.parse(brief.text) as {
+      sources: unknown[];
+      sourcesOmitted?: number;
+      pending: { matches: { summary: string }[] };
+      spaces?: unknown;
+    };
+    expect(b.sources).toHaveLength(5);
+    expect(b.sourcesOmitted).toBe(7);
+    expect(b.pending.matches).toHaveLength(5);
+    expect(b.pending.matches.every((m) => m.summary.length <= 201)).toBe(true);
+    expect(b.spaces).toBeUndefined();
+
+    const f = JSON.parse(full.text) as typeof b;
+    expect(f.sources).toHaveLength(12);
+    expect(f.pending.matches[0]!.summary).toHaveLength(3000);
+    expect(f.spaces).toBeDefined();
+    console.info(
+      `[size] ask envelope: full=${full.text.length} brief=${brief.text.length}`
+    );
+    expect(brief.text.length).toBeLessThan(full.text.length / 5);
+  });
+
   it("sources: no IS call, the matches, and no failure costume", async () => {
     const fetchMock = isReplies({ answer: "should never be asked" });
 

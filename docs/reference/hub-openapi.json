@@ -560,6 +560,37 @@
             "properties": { "status": { "type": "string" } },
             "required": ["status"],
             "description": "An agent's question naming a slotLabel: 'blocked' when the question is now that output's ask; otherwise why not (unknown_label, already_done, no_session, not_found, failed)."
+          },
+          "sessionPost": {
+            "type": "object",
+            "properties": {
+              "intent": {
+                "type": "string",
+                "enum": ["blocked_on_you", "handoff", "done", "fyi"]
+              },
+              "from": {
+                "type": "object",
+                "properties": { "sessionId": { "type": ["string", "null"] } },
+                "required": ["sessionId"]
+              },
+              "to": {
+                "type": "object",
+                "properties": { "sessionId": { "type": "string" } },
+                "required": ["sessionId"]
+              },
+              "hop": { "type": "integer" },
+              "wake": { "type": "boolean" },
+              "wakeHeld": {
+                "type": "string",
+                "enum": ["hop_limit", "rate_limited"]
+              }
+            },
+            "required": ["intent", "from", "to", "hop", "wake"],
+            "description": "With intent: what the pod stamped — the sender and target sessions, and whether the delivery may wake the target's agent."
+          },
+          "note": {
+            "type": "string",
+            "description": "With intent: why a wake-worthy message was delivered without waking anyone."
           }
         },
         "required": ["success", "messageId"]
@@ -864,6 +895,38 @@
               }
             ],
             "description": "With kind 'question' + slotLabel (agent posts only): HOW the person answers — the output's typed ask (confirm | choose | form | act | provide). Omit for a free-text answer."
+          },
+          "intent": {
+            "type": "string",
+            "enum": ["blocked_on_you", "handoff", "done", "fyi"],
+            "description": "An AGENT's message to ANOTHER session — the session whose room this thread is: blocked_on_you | handoff (may wake its agent) | done | fyi (never wake). The pod stamps the sender session and the target; it never notifies the person."
+          },
+          "fromSessionId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "With intent: YOUR session, when it is not the one this conversation is bound to. It must be yours."
+          },
+          "refs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": ["session", "slot", "proposal", "blocked_by"]
+                },
+                "id": { "type": "string", "format": "uuid" },
+                "label": { "type": "string", "maxLength": 500 }
+              },
+              "required": ["kind", "id"]
+            },
+            "maxItems": 10,
+            "description": "With intent: the state behind the message (a blocked_by session, a delegated slot, a proposal)."
+          },
+          "cause": {
+            "type": "string",
+            "format": "uuid",
+            "description": "With intent: the id of the session_message that woke you, when this replies to it."
           }
         },
         "required": ["role", "content", "userId"]
@@ -17030,6 +17093,28 @@
                         }
                       ]
                     },
+                    "queue": {
+                      "type": "object",
+                      "properties": {
+                        "pendingReview": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "owedByPerson": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "openSessions": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "pendingReview",
+                        "owedByPerson",
+                        "openSessions"
+                      ]
+                    },
                     "comparison": {
                       "type": "object",
                       "properties": {
@@ -17619,6 +17704,28 @@
                         }
                       ]
                     },
+                    "queue": {
+                      "type": "object",
+                      "properties": {
+                        "pendingReview": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "owedByPerson": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "openSessions": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "pendingReview",
+                        "owedByPerson",
+                        "openSessions"
+                      ]
+                    },
                     "comparison": {
                       "type": "object",
                       "properties": {
@@ -17835,6 +17942,28 @@
                           },
                           "required": ["status"]
                         }
+                      ]
+                    },
+                    "queue": {
+                      "type": "object",
+                      "properties": {
+                        "pendingReview": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "owedByPerson": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "openSessions": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "required": [
+                        "pendingReview",
+                        "owedByPerson",
+                        "openSessions"
                       ]
                     },
                     "error": { "type": "string" },
