@@ -17,7 +17,8 @@
  *   `{kind:'decision', owner:'human', blockedReason:'decision', ask, decisionId,
  *   ref → the decision}`. The ask is a `choose` over the decision's
  *   `decisionOptions` (recommended marked, or via `recommendedOption`), else a
- *   `confirm` (accept / reject, each saying what it does). Stamped with the
+ *   `confirm` (Accept / Reject, each saying what it does; no prompt — the
+ *   title heads the card). Stamped with the
  *   agent that wrote it and the decision as its cause (`stampAskProvenance`).
  *   HOME: the session it was created in (its `sourceSessionId`, else the
  *   writing request's session) when that session is the owner's and open;
@@ -145,11 +146,12 @@ export function askForDecision(properties: Record<string, unknown>): SlotAsk {
     const ask = AskSchema.safeParse({ mode: "choose", options: marked });
     if (ask.success) return ask.data as SlotAsk;
   }
-  // A real question, each answer saying what it does (founder decision 2,
-  // 2026-10-26) — never "Accept: <title>?", the title the card already heads.
+  // Each answer says what it does (founder decision 2, 2026-10-26). No
+  // prompt: a confirm's prompt becomes the card's heading (`askCardView`), and
+  // the decision's own title — the slot's label — is what the person must see
+  // there; "Accept: <title>?" was the same words twice.
   return {
     mode: "confirm",
-    prompt: "Accept this decision?",
     yes: { label: "Accept", description: "Marks it accepted" },
     no: { label: "Reject", description: "Marks it rejected" },
   };
@@ -162,8 +164,9 @@ function decisionTitle(decision: Pick<DecisionRow, "title">): string {
 
 /**
  * The owed slot that asks a proposed decision. Pure. Said once: the label is
- * the decision's title (a key, never "Decide: <title>"), the confirm asks the
- * question, and `why` is the summary only when it says more than the title.
+ * the decision's title (a key, never "Decide: <title>", and the card's
+ * heading), the confirm's answers say what they do, and `why` is what the
+ * summary says beyond the title.
  */
 export function decisionSlot(
   decision: Pick<DecisionRow, "id" | "title" | "properties">,
@@ -179,6 +182,13 @@ export function decisionSlot(
     typeof decision.properties.summary === "string"
       ? decision.properties.summary.trim()
       : "";
+  // The summary minus the title it opens with (a title cut from the summary's
+  // first sentence, the 10-18 backfill), or nothing when that is all it says.
+  const why = !askTextRestates(summary, title)
+    ? summary
+    : summary.startsWith(title)
+      ? summary.slice(title.length).replace(/^[\s.:;,—–-]+/, "")
+      : "";
   return reconcileOwedSince(
     {
       kind: "decision",
@@ -186,9 +196,7 @@ export function decisionSlot(
       status: "pending",
       owner: "human",
       blockedReason: "decision",
-      ...(summary && !askTextRestates(summary, title)
-        ? { why: clip(summary, 500) }
-        : {}),
+      ...(why ? { why: clip(why, 500) } : {}),
       ref: { kind: "entity", id: decision.id },
       ask: askForDecision(decision.properties),
       decisionId: decision.id,

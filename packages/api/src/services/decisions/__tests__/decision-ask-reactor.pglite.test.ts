@@ -260,7 +260,7 @@ describe("a proposed decision asks the person (W3)", () => {
   it("no known session ⇒ a one-slot session named after it; no options ⇒ a confirm that says what each answer does", async () => {
     const id = await decision({
       decisionStatus: "proposed",
-      summary: "Pricing model: per seat until usage data exists",
+      summary: "Pricing model",
     });
     await fire(id, "create");
     expect(h.createdSessions).toEqual([
@@ -271,9 +271,9 @@ describe("a proposed decision asks the person (W3)", () => {
     // only restates the title is not repeated as the why.
     expect(slot!.label).toBe("Pricing model");
     expect(slot).not.toHaveProperty("why");
+    // No prompt: the title heads the card, the answers say what they do.
     expect(slot!.ask).toEqual({
       mode: "confirm",
-      prompt: "Accept this decision?",
       yes: { label: "Accept", description: "Marks it accepted" },
       no: { label: "Reject", description: "Marks it rejected" },
     });
@@ -284,14 +284,23 @@ describe("a proposed decision asks the person (W3)", () => {
     });
   });
 
-  it("a summary that says more than the title is the why", async () => {
-    const id = await decision({
+  it("the why is what the summary says beyond the title", async () => {
+    const other = await decision({
       decisionStatus: "proposed",
       summary: "Seats are what buyers compare today.",
     });
-    await fire(id, "create");
-    const [slot] = await slotsCarrying(id);
-    expect(slot!.why).toBe("Seats are what buyers compare today.");
+    // The 10-18 backfill shape: the title is the summary's first sentence.
+    const opened = await decision({
+      decisionStatus: "proposed",
+      summary: "Pricing model. Seats until usage data exists.",
+    });
+    for (const id of [other, opened]) await fire(id, "create");
+    expect((await slotsCarrying(other))[0]!.why).toBe(
+      "Seats are what buyers compare today."
+    );
+    expect((await slotsCarrying(opened))[0]!.why).toBe(
+      "Seats until usage data exists."
+    );
   });
 
   it("resolved elsewhere ⇒ the owed slot is retired 'decision_resolved'", async () => {
