@@ -2144,7 +2144,7 @@ runStartupHooks().catch((err) => {
   apiLogger.error({ err }, "Startup hooks failed (non-fatal)");
 });
 
-// Code skills on this pod (SANDBOX_LOCAL=1): start one runner process now, so
+// Code skills run on this pod (default since R2): start one runner process now, so
 // /health's `skillRuntime` answers at boot whether it can. Never throws.
 void warmSkillRuntime();
 

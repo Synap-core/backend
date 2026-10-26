@@ -6,10 +6,10 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 vi.mock("./execute-provider-verb.js", () => ({
   executeProviderVerb: vi.fn(async () => ({ ran: "provider" })),
 }));
-// executeSkillViaIS ALWAYS returns the SkillExecutionResult envelope
+// runSkill ALWAYS returns the SkillExecutionResult envelope
 // `{success, result?, error?}` — the runner UNWRAPS `.result` on success.
-vi.mock("../skills/execute-skill-via-is.js", () => ({
-  executeSkillViaIS: vi.fn(async () => ({
+vi.mock("../skills/run-skill.js", () => ({
+  runSkill: vi.fn(async () => ({
     success: true,
     result: { ran: "is" },
   })),
@@ -29,7 +29,7 @@ import {
 } from "./execute-capability.js";
 import { BUILTIN_VERBS } from "./builtin-verbs.js";
 import { executeProviderVerb } from "./execute-provider-verb.js";
-import { executeSkillViaIS } from "../skills/execute-skill-via-is.js";
+import { runSkill } from "../skills/run-skill.js";
 import { getWorkspaceMembership } from "@synap/database";
 
 const ctx = { userId: "u1", workspaceId: null };
@@ -66,7 +66,7 @@ describe("runResolvedSkill — the single post-gate kind-branch", () => {
     });
     expect(handler).toHaveBeenCalledOnce();
     expect(executeProviderVerb).not.toHaveBeenCalled();
-    expect(executeSkillViaIS).not.toHaveBeenCalled();
+    expect(runSkill).not.toHaveBeenCalled();
   });
 
   it("TIER 0: builtin with NO registered handler returns not_found (never falls through to the IS)", async () => {
@@ -76,7 +76,7 @@ describe("runResolvedSkill — the single post-gate kind-branch", () => {
       ctx
     );
     expect(out.kind).toBe("not_found");
-    expect(executeSkillViaIS).not.toHaveBeenCalled();
+    expect(runSkill).not.toHaveBeenCalled();
     expect(executeProviderVerb).not.toHaveBeenCalled();
   });
 
@@ -93,7 +93,7 @@ describe("runResolvedSkill — the single post-gate kind-branch", () => {
       result: { ran: "provider" },
     });
     expect(executeProviderVerb).toHaveBeenCalledOnce();
-    expect(executeSkillViaIS).not.toHaveBeenCalled();
+    expect(runSkill).not.toHaveBeenCalled();
     const call = vi.mocked(executeProviderVerb).mock.calls[0];
     expect(call[2]).toMatchObject({
       connectionSelector: { connectionId: "c1" },
@@ -108,20 +108,20 @@ describe("runResolvedSkill — the single post-gate kind-branch", () => {
     );
     expect(out.kind).toBe("not_found");
     expect(executeProviderVerb).not.toHaveBeenCalled();
-    expect(executeSkillViaIS).not.toHaveBeenCalled();
+    expect(runSkill).not.toHaveBeenCalled();
   });
 
   it("TIER 2: code routes to the IS isolate", async () => {
     const out = await runResolvedSkill(row({ kind: "code" }), {}, ctx);
     expect(out).toEqual({ kind: "run", skillId: "s1", result: { ran: "is" } });
-    expect(executeSkillViaIS).toHaveBeenCalledOnce();
+    expect(runSkill).toHaveBeenCalledOnce();
     expect(executeProviderVerb).not.toHaveBeenCalled();
   });
 
   it("TIER 2: instruction also routes to the IS path", async () => {
     const out = await runResolvedSkill(row({ kind: "instruction" }), {}, ctx);
     expect(out.kind).toBe("run");
-    expect(executeSkillViaIS).toHaveBeenCalledOnce();
+    expect(runSkill).toHaveBeenCalledOnce();
   });
 });
 
@@ -137,7 +137,7 @@ describe('runResolvedSkill — the ONE failure channel (kind:"error")', () => {
   });
 
   it('TIER 2: a FAILED code skill returns kind:"error" (never kind:"run" carrying success:false)', async () => {
-    vi.mocked(executeSkillViaIS).mockResolvedValueOnce({
+    vi.mocked(runSkill).mockResolvedValueOnce({
       success: false,
       error: "provider 400: not in your plan",
     });
@@ -157,7 +157,7 @@ describe('runResolvedSkill — the ONE failure channel (kind:"error")', () => {
     // "Reconnect <provider>" chip. The IS now rides errorClass/providerRef on the
     // SkillExecutionResult envelope (from HubApiError.body); this must survive the
     // mapping here, EXACTLY as the declarative branch already does.
-    vi.mocked(executeSkillViaIS).mockResolvedValueOnce({
+    vi.mocked(runSkill).mockResolvedValueOnce({
       success: false,
       error:
         "callProvider failed: Hub API error: 400 Bad Request — provider call failed (status 401)",
@@ -178,7 +178,7 @@ describe('runResolvedSkill — the ONE failure channel (kind:"error")', () => {
   });
 
   it("TIER 2: a SUCCESSFUL code skill UNWRAPS the envelope's .result", async () => {
-    vi.mocked(executeSkillViaIS).mockResolvedValueOnce({
+    vi.mocked(runSkill).mockResolvedValueOnce({
       success: true,
       result: { enriched: { name: "Acme" } },
     });

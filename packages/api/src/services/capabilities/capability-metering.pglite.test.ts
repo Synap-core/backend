@@ -67,9 +67,8 @@ vi.mock("@synap/ai-embeddings", () => ({
 vi.mock("./gate-capability-execution.js", () => ({
   gateCapabilityExecution: async () => ({ decision: "run" }),
 }));
-vi.mock("../skills/execute-skill-via-is.js", async (importOriginal) => ({
-  ...(await importOriginal<Record<string, unknown>>()),
-  executeSkillViaIS: vi.fn(async () => h.sandbox),
+vi.mock("../skills/run-skill.js", () => ({
+  runSkill: vi.fn(async () => h.sandbox),
 }));
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";

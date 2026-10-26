@@ -9,8 +9,12 @@
  *
  * Chosen by `SKILL_RUNNER` (`process` | `inline`); the pool's size by
  * `SKILL_RUNNER_PROCESSES`, `SKILL_RUNNER_ISOLATES_PER_PROCESS` and
- * `SKILL_RUNNER_QUEUE_MAX`. Only reached when the pod runs code skills itself
- * (`SANDBOX_LOCAL=1`); otherwise they run on the Intelligence Service.
+ * `SKILL_RUNNER_QUEUE_MAX`.
+ *
+ * WHO runs code skills is `skillRuntime()`: the pod, by default since R2
+ * (code-runtime plan v2), or the Intelligence Service only as a rollback
+ * (`SKILL_RUNTIME=is`) until W6 deletes that path. The one door that picks is
+ * `services/skills/run-skill.ts`.
  */
 import { createLogger } from "@synap-core/core";
 import {
@@ -62,6 +66,19 @@ export function poolConfigFromEnv(): ProcessPoolConfig {
   };
 }
 
+/** Where code skills run on this pod. */
+export type SkillRuntimeName = "pod" | "intelligence-service";
+
+/**
+ * The pod runs code skills (R2). `SKILL_RUNTIME=is` sends them back to the
+ * Intelligence Service: a rollback switch, never a fallback — a pod runtime
+ * that cannot start fails the run (`SKILL_RUNTIME_UNAVAILABLE`), it does not
+ * quietly move to the IS.
+ */
+export function skillRuntime(): SkillRuntimeName {
+  return process.env.SKILL_RUNTIME === "is" ? "intelligence-service" : "pod";
+}
+
 const INLINE_REFUSED =
   "SKILL_RUNNER=inline is refused in production: code skills never run inside the API process (pod decision R6).";
 
@@ -91,7 +108,7 @@ export function getSkillRunner(): SkillRunner {
 
 /** `/health`'s `skillRuntime`: where code skills run and whether they can. */
 export function skillRuntimeHealth(): SkillRuntimeHealth {
-  if (process.env.SANDBOX_LOCAL !== "1")
+  if (skillRuntime() === "intelligence-service")
     return { runner: "intelligence-service" };
   if (process.env.SKILL_RUNNER === "inline") {
     return process.env.NODE_ENV === "production"
@@ -107,7 +124,7 @@ export function skillRuntimeHealth(): SkillRuntimeHealth {
  * the first skill run. Never throws; a failure is logged and read on /health.
  */
 export async function warmSkillRuntime(): Promise<void> {
-  if (process.env.SANDBOX_LOCAL !== "1") return;
+  if (skillRuntime() === "intelligence-service") return;
   if (process.env.SKILL_RUNNER === "inline") return;
   await processPool().warm();
   const health = processPool().health();
