@@ -193,7 +193,9 @@ export function computeSessionNudges(input: {
   if (owed > 0) {
     out.owedByPerson = owed;
     out.hints.push(
-      `${owed} output${owed === 1 ? " is" : "s are"} owed by the person — ask them in the session room (post_message to session.channelId).`
+      phase === "complete"
+        ? `Closed with ${owed} output${owed === 1 ? "" : "s"} still owed by the person — nothing retires ${owed === 1 ? "it" : "them"}: withdraw or hand over each one (see leftOwed).`
+        : `${owed} output${owed === 1 ? " is" : "s are"} owed by the person — ask them in the session room (post_message to session.channelId).`
     );
   }
 

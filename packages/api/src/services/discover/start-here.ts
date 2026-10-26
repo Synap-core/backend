@@ -1,6 +1,6 @@
 /**
  * orient's `startHere`, in action order: pending review, open work sessions,
- * sessions owing a grade, most-used kinds, runnable actions, one skill pointer. Each section reads an
+ * the calling agent's own loose ends, sessions owing a grade, most-used kinds, runnable actions, one skill pointer. Each section reads an
  * existing door; one that cannot be read is `{ status: "unavailable" }`, never
  * an empty list or a zero.
  */
@@ -16,6 +16,7 @@ import {
   type RankedProfile,
 } from "./profile-ranking.js";
 import type { StartHere } from "./discover.js";
+import { readLooseEnds } from "./loose-ends.js";
 
 /**
  * The skill orient points at BEFORE a write: title rules and what counts as
@@ -341,6 +342,7 @@ export async function buildStartHere(p: {
     actions,
     openFindings,
     handedToYou,
+    looseEnds,
     library,
   ] = await Promise.all([
     readOwedByPerson(p.userId),
@@ -351,6 +353,9 @@ export async function buildStartHere(p: {
     readOpenFindings(p.userId),
     p.agentUserId
       ? readHandedToYou(p.userId, p.agentUserId)
+      : Promise.resolve(undefined),
+    p.agentUserId
+      ? readLooseEnds({ userId: p.userId, agentUserId: p.agentUserId })
       : Promise.resolve(undefined),
     readLibrary(p.userId),
   ]);
@@ -377,6 +382,9 @@ export async function buildStartHere(p: {
     owedByPerson,
     openSessions,
     ...(handedToYou ? { handedToYou } : {}),
+    // The agent's OWN leftovers, right after the work handed to it: agents
+    // keep the books (W-B2). Each row carries the call that ends it.
+    ...(looseEnds ? { looseEnds } : {}),
     sessionsOwingGrade,
     topKinds,
     actions,
