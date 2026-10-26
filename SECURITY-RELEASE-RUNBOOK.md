@@ -29,8 +29,9 @@ comes with it. Setup and the per-package npm settings:
 
 npm Trusted Publishing needs **Node >= 22.14.0 and npm >= 11.5.1 in the process
 that runs `npm publish`** (pnpm hands the upload to the `npm` on `PATH`). The
-repo pins Node 20 in `.node-version` for install, build and tests, so the
-publish steps alone switch to an exact Node 22 and an exact npm. Both pins are
+repo pins Node in `.node-version` for install, build and tests; the publish
+steps alone switch to an exact Node (22.18.0) and an exact npm (Node 22 ships
+npm 10). Both pins are
 exact on purpose: a floating `22` or `npm@11` would let a registry release
 change what publishes.
 

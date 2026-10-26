@@ -39,8 +39,9 @@ repos:
 
   synap-backend:
     description: Data Pod API + the cross-repo contract packages
-    # .node-version is the SSOT here. Node 20 is DELIBERATE: an artifact was
-    # once published from Node 22.22.3 and broke. Do not "upgrade" this.
+    # .node-version is the SSOT here, read by every workflow; deploy/Dockerfile
+    # stays on its minor. One Node is DELIBERATE: an artifact was once published
+    # from a laptop's Node 22.22.3 while CI ran 20, and broke. Move them together.
     node_version_file: .node-version
     pnpm_from: packageManager
     version_authority: check-and-bump.mjs

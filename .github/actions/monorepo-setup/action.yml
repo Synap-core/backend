@@ -18,9 +18,6 @@ inputs:
     description: secrets.CROSS_REPO_TOKEN (transition fallback for the Reader App)
     required: false
     default: ""
-  node-version:
-    description: Node version
-    required: true
 
 outputs:
   token:
@@ -88,10 +85,12 @@ runs:
         test -d "${GITHUB_WORKSPACE}/../synap-app/packages/workspace-templates/src"
         test -f "${GITHUB_WORKSPACE}/../synap-backend/packages/api/package.json"
 
+    # `.node-version` is the one Node pin of this repo (ci/README.md "Version
+    # pinning"); deploy/Dockerfile's FROM stays on its minor.
     - name: Setup Node.js
       uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
       with:
-        node-version: ${{ inputs.node-version }}
+        node-version-file: ".node-version"
 
     # Version comes from package.json `packageManager`.
     - name: Setup pnpm
