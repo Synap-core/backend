@@ -115,6 +115,7 @@ import {
 import { subjectEntityIdFromPayload } from "@synap/jobs/utils/run-subject.js";
 import { actingAgentUserId } from "./hub-protocol/utils.js";
 import { assertKeyMayWrite } from "../utils/assert-key-may-write.js";
+import { loadRunCounts } from "../services/proposals/automation-health.js";
 import {
   GRANT_OWNER_WIDE_UNSUPPORTED,
   isUnboundedFullAccess,
@@ -796,6 +797,23 @@ async function proposeAgentActivation(
 }
 
 /**
+ * W-B3 (supervision plan, founder Q-B1): an agent archives an automation on
+ * its own, without a proposal, only when it is the agent's OWN work that NEVER
+ * RAN — the agent made it (`createdBy`, the runtime principal of every
+ * agent-authored automation) and the `automation_runs` ledger holds no row for
+ * it (`loadRunCounts`, the warden's "never fired" read). Nothing it did can be
+ * lost, and the row stays (`archived` is a soft state). Anything else — a
+ * person's automation, another agent's, or one that ever ran — proposes.
+ */
+export function agentArchivesDirectly(input: {
+  createdBy: string | null;
+  agentUserId: string;
+  runs: number;
+}): boolean {
+  return input.createdBy === input.agentUserId && input.runs === 0;
+}
+
+/**
  * An AGENT editing, pausing or deleting an automation goes through the gate
  * like create: its grant refuses, the structure floor (update) or the
  * destructive floor (delete) proposes, and the `automation/update` /
@@ -808,7 +826,7 @@ async function gateAgentAutomationChange(
     agentUserId?: string | null;
   },
   automation: { id: string; workspaceId: string | null },
-  action: "update" | "delete",
+  action: "update" | "delete" | "archive",
   update?: Record<string, unknown>
 ): Promise<{ status: "proposed"; proposalId: string; message: string } | null> {
   const agentUserId = await actingAgentUserId(ctx);
@@ -836,7 +854,9 @@ async function gateAgentAutomationChange(
         perm.proposalType,
         action === "delete"
           ? "Automation deletion proposed for review"
-          : "Automation change proposed for review"
+          : action === "archive"
+            ? "Automation archive proposed for review"
+            : "Automation change proposed for review"
       ),
     };
   }
@@ -2799,6 +2819,77 @@ export const automationsRouter = router({
       await database.delete(automations).where(eq(automations.id, input.id));
 
       return { status: "deleted" };
+    }),
+
+  // ── Archive ─────────────────────────────────────────────────────────────────
+
+  archive: protectedProcedure
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        workspaceId: z.string().uuid().nullable().optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const database = await getDb();
+
+      const existing = await database.query.automations.findFirst({
+        where: eq(automations.id, input.id),
+        columns: {
+          id: true,
+          status: true,
+          workspaceId: true,
+          createdBy: true,
+        },
+      });
+      if (!existing) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Automation not found",
+        });
+      }
+      await assertWorkspaceWrite(database, ctx.userId, {
+        workspaceId: existing.workspaceId,
+        ownerId: existing.createdBy,
+      });
+      await assertKeyMayWrite({
+        subjectType: "automation",
+        action: "archive",
+        workspaceId: existing.workspaceId,
+      });
+      if (existing.status === "archived") {
+        return { status: "already_archived" as const };
+      }
+      // An agent's own never-run automation archives at once (W-B3); every
+      // other agent archive goes through the gate, where "archive" is the
+      // destructive floor (rung 2.5): it proposes.
+      const agentUserId = await actingAgentUserId(ctx);
+      const direct =
+        agentUserId !== undefined &&
+        agentArchivesDirectly({
+          createdBy: existing.createdBy,
+          agentUserId,
+          runs: (await loadRunCounts([existing.id])).get(existing.id) ?? 0,
+        });
+      if (!direct) {
+        const proposed = await gateAgentAutomationChange(
+          ctx,
+          existing,
+          "archive"
+        );
+        if (proposed) return proposed;
+      }
+
+      await database
+        .update(automations)
+        .set({ status: "archived", nextRunAt: null, updatedAt: new Date() })
+        .where(eq(automations.id, input.id));
+
+      return {
+        status: "archived" as const,
+        // The way back: a person switches it on again (`automation.activate`).
+        previousStatus: existing.status,
+      };
     }),
 
   // ── Activate / Pause ───────────────────────────────────────────────────────

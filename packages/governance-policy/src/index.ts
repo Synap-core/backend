@@ -781,6 +781,7 @@ export const AGENT_STRUCTURE_DOOR_CLASS = {
   "widget/register": "floored",
   "workspace/create": "floored",
   // Already behind another non-widenable floor.
+  "automation/archive": "other-floor", // 2.5 destructive
   "automation/delete": "other-floor", // 2.5 destructive
   "playbook/archive": "other-floor", // 2.5 destructive
   "profile/create": "other-floor", // 2.08
@@ -2167,6 +2168,7 @@ export const REVERSIBILITY_DOOR_CLASS = {
   "artifact/create": "reversible",
   "artifact/setState": "reversible",
   "automation/activate": "disruptive", // struct (2.09)
+  "automation/archive": "disruptive", // destroy (soft: the row stays)
   "automation/create": "disruptive", // struct (2.09)
   "automation/delete": "disruptive", // destroy
   "automation/execute": "disruptive", // effect: runs steps now
@@ -2417,6 +2419,9 @@ export const GATE_WRITE_DOORS = {
   "artifact/setState": "gate",
   // An agent switching an automation on (`activate`, or `update` to active).
   "automation/activate": "gate",
+  // An agent archiving an automation that is not its own never-run work
+  // (`automations.archive`; its own never-run one applies at the door).
+  "automation/archive": "gate",
   "automation/create": "gate",
   "automation/delete": "gate",
   "automation/execute": "gate",

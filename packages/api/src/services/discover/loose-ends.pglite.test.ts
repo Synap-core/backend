@@ -258,7 +258,7 @@ describe("looseEnds — only the calling agent's own work", () => {
       r.automations as { items: Array<{ id: string; close: string }> }
     ).items;
     expect(item!.id).toBe(dead);
-    expect(item!.close).toContain('"verbId":"automation.pause"');
+    expect(item!.close).toContain('"verbId":"automation.archive"');
   });
 });
 
