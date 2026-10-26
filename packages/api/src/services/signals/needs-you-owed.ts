@@ -34,7 +34,9 @@ export function listNeedsYouOwed(
 }
 
 /**
- * Which of `sessionIds` ASK YOU — hold a slot the needs-you count counts, at
+ * Which of `sessionIds` ASK YOU — hold a slot the needs-you HEADLINE counts
+ * (THE rule's `needs_you` class, decision E: a stopped, working or machine
+ * ask does not make a home say "waits on you"), at
  * the full floor (no workspace lens: the explicit `[]` suppresses the
  * active-workspace header default, as `floorLens` does for the union). A
  * failed read THROWS (the caller decides what unknown means).
@@ -52,5 +54,9 @@ export async function asksYouSessionIds(
     // Bounded by `sessionIds`; never cut a session's slots short.
     limit: Number.MAX_SAFE_INTEGER,
   });
-  return new Set(slots.map((s) => s.sessionId));
+  return new Set(
+    slots
+      .filter((s) => (s.needsYouClass ?? "needs_you") === "needs_you")
+      .map((s) => s.sessionId)
+  );
 }
