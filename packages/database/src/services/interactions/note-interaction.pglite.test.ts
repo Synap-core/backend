@@ -22,6 +22,7 @@ import { relations } from "../../schema/relations.js";
 import { events } from "../../schema/events.js";
 import { noteInteraction } from "./note-interaction.js";
 import {
+  collectInteractionEvidence,
   noteInteractionsFrom,
   rebuildLastInteraction,
 } from "./interaction-evidence.js";
@@ -168,6 +169,10 @@ describe("the evidence rule (reactor, sweep, recompute)", () => {
     const e1 = await edge("attended_by", past, alice);
     const e2 = await edge("attended_by", future, bob);
 
+    // The RULE refuses the future meeting itself — not only the door behind it.
+    expect(
+      await collectInteractionEvidence(db, { relationIds: [e2] }, NOW)
+    ).toEqual([]);
     await noteInteractionsFrom(db, { relationIds: [e1, e2] }, NOW);
     expect((await row(alice)).at?.toISOString()).toBe(ago(2).toISOString());
     expect((await row(bob)).at).toBeNull();
