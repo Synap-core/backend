@@ -3,6 +3,7 @@ import { readFileSync } from "fs";
 import { join } from "path";
 import { isReadOnlyTool } from "./adapter.js";
 import { tools } from "./tools/index.js";
+import { RECEIPT_IDLE_WINDOW_HOURS } from "@synap/database";
 
 /** `filter` for an async predicate. */
 async function readOnlyAmong(names: readonly string[]): Promise<string[]> {
@@ -196,6 +197,40 @@ describe("MCP session attribution — explicit override is declared", () => {
       (name) => !byName.get(name)?.inputSchema?.properties?.sessionId
     );
     expect(missing).toEqual([]);
+  });
+
+  // W-C1: a run that named no conversation keeps itself together only by
+  // passing its receipt's id, so EVERY attributed tool must declare it — the
+  // set DERIVED from `readOnlyHint` (what `isReadOnlyTool` reads), never a
+  // hand list, from the LIVE list and from the published manifest (what the
+  // CP's `pod__*` surface and every validating client see).
+  it("every attributed (non-read) tool declares sessionId — live list and manifest", async () => {
+    const live = await tools.list();
+    const writes = live.filter((t) => t.annotations?.readOnlyHint !== true);
+    expect(writes.length).toBeGreaterThan(50);
+    expect(
+      writes
+        .filter((t) => !t.inputSchema?.properties?.sessionId)
+        .map((t) => t.name)
+    ).toEqual([]);
+    const byName = manifestTools();
+    expect(
+      writes
+        .filter((t) => !byName.get(t.name)?.inputSchema?.properties?.sessionId)
+        .map((t) => t.name)
+    ).toEqual([]);
+  });
+
+  it("the derived declaration states the receipt's real idle window", async () => {
+    const link = (await tools.list()).find(
+      (t) => t.name === "synap_link_entities"
+    );
+    expect(link?.inputSchema.required ?? []).not.toContain("sessionId");
+    const description = String(
+      (link?.inputSchema.properties?.sessionId as { description?: string })
+        ?.description
+    );
+    expect(description).toContain(`${RECEIPT_IDLE_WINDOW_HOURS} h idle`);
   });
 
   it("those doors are session-linked in the first place (else the override is moot)", async () => {

@@ -729,8 +729,11 @@ describe("the CONVERSATION is the client, not the key (founder rule, 2026-09-28)
       "key:K|conv:mcp-session-a",
       "key:K|conv:mcp-session-b",
     ]);
-    // A value outside visible ASCII is no conversation id (option A), never a key part.
-    expect(clientKeyForApiKey({ id: "K" }, "bad id")).toBe(KEY_ONLY);
+    // A value outside visible ASCII is no conversation id, never a key part:
+    // the request is its own per-call run (D1).
+    expect(clientKeyForApiKey({ id: "K" }, "bad id")).toMatch(
+      /^key:K\|call:[0-9a-f-]{36}$/
+    );
     expect(clientKeyForApiKey({ id: "K", keyType: "is_internal" }, "c")).toBe(
       undefined
     );
@@ -938,6 +941,79 @@ describe("focus is per CONVERSATION (set_project_focus / set_workspace_focus)", 
 });
 
 const KEY_ONLY_FOCUS = "key:K";
+
+// D1 (founder 2026-10-23): an agent that sends no conversation id gets ONE
+// receipt per RUN, and a routine never borrows another run's session. Live
+// 2026-10-23 11:49: "Promise Keeper" and "First User" ran in the same minute
+// on ONE key and both filed into the key's one receipt. The door now mints
+// `key:<id>|call:<uuid>` per request (`clientKeyForApiKey`).
+describe("one receipt per run (D1): a request with no conversation id is its own run", () => {
+  const AGENT_USER = "agent-run-1";
+  const run = () => clientKeyForApiKey({ id: "K" })!;
+  const write = (goal: string) =>
+    resolveOrCreateAgentProposalSession({
+      userId: USER,
+      agentUserId: AGENT,
+      goal,
+      stableCorrelation: false,
+    });
+
+  it("two routines on one key in the same minute → two receipts, never one", async () => {
+    const [a, b] = await Promise.all([
+      runWithClientKey(run(), () => write("Promise Keeper: check promises")),
+      runWithClientKey(run(), () => write("First User: onboarding pass")),
+    ]);
+    expect(a).toBeTruthy();
+    expect(b).toBeTruthy();
+    expect(b).not.toBe(a);
+    const keys = (await rows()).map((r) => String(r.metadata.clientKey));
+    expect(keys).toHaveLength(2);
+    expect(new Set(keys).size).toBe(2);
+    for (const k of keys) expect(k).toMatch(/^key:K\|call:/);
+  });
+
+  it("one run with N writes → ONE receipt", async () => {
+    const ids = await runWithClientKey(run(), async () => {
+      const out: Array<string | null> = [];
+      for (const g of ["Create task A", "Update person B", "Link C"]) {
+        out.push(await write(g));
+      }
+      return out;
+    });
+    expect(new Set(ids).size).toBe(1);
+    expect(await rows()).toHaveLength(1);
+  });
+
+  it("a run that named nothing never takes the person's one unclaimed session", async () => {
+    await session({ origin: "human", goal: "the person's only session" });
+    const r = await resolveWorkSession({ userId: USER, clientKey: run() });
+    expect(r).toMatchObject({ source: "none", unclaimedOpenCount: null });
+    // Control: a NAMED conversation still gets rung 3.
+    expect(
+      (await resolveWorkSession({ userId: USER, clientKey: CONV_A })).source
+    ).toBe("unclaimed");
+  });
+
+  it("a focus set in one run is the agent's, read by the next run", async () => {
+    await q(`delete from users where id = $1`, [AGENT_USER]);
+    await q(
+      `insert into users (id, email, agent_metadata) values ($1, $2, $3::jsonb)`,
+      [
+        AGENT_USER,
+        `${AGENT_USER}@example.test`,
+        JSON.stringify({ agentType: "routine", createdByUserId: USER }),
+      ]
+    );
+    expect(
+      await runWithClientKey(run(), () =>
+        setAgentFocusProject(AGENT_USER, "P-RUN")
+      )
+    ).toBe("agent");
+    expect(
+      await runWithClientKey(run(), () => getAgentFocusProjectId(AGENT_USER))
+    ).toBe("P-RUN");
+  });
+});
 
 describe("twin dedup under the lock", () => {
   it("two concurrent starts of the same goal (different case) → ONE row", async () => {

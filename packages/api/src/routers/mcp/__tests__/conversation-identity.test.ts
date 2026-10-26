@@ -5,8 +5,9 @@
  * `initialize` must MINT an `Mcp-Session-Id` (the client echoes it on every
  * later request), and a later request's id must reach the request context as
  * the conversation half of the client key — the fact session attribution and
- * focus key on (`clientKeyForApiKey`). Without the header the key alone is the
- * client (option A).
+ * focus key on (`clientKeyForApiKey`). The client's own header outranks
+ * `_meta["live.synap/conversation"]`, which outranks the transport id; with
+ * none, the request is its own per-call run (`key:<id>|call:<uuid>`, D1).
  *
  * Stubbed: the key lookup, the key→principal remap, the guest probe, the tool
  * profile read and `createMCPServer` — replaced by a one-tool SDK server whose
@@ -91,7 +92,8 @@ async function post(body: unknown, extra: Record<string, string> = {}) {
 }
 
 async function contextOfCall(
-  extra: Record<string, string> = {}
+  extra: Record<string, string> = {},
+  meta?: Record<string, unknown>
 ): Promise<{ key: string; cwd: string | null }> {
   const res = await post(
     {
@@ -99,7 +101,11 @@ async function contextOfCall(
       id: 2,
       method: "tools/call",
       // A read-shaped name, so the attribution hard-reject never applies.
-      params: { name: "synap_ask", arguments: {} },
+      params: {
+        name: "synap_ask",
+        arguments: {},
+        ...(meta ? { _meta: meta } : {}),
+      },
     },
     extra
   );
@@ -146,8 +152,43 @@ describe("MCP conversation identity (Mcp-Session-Id)", () => {
     );
   });
 
-  it("no Mcp-Session-Id → the key alone is the client (option A)", async () => {
-    expect(await clientKeyOfCall()).toBe("key:key-1");
+  // D1: two routines on one key in the same minute must never share a run.
+  it("no conversation id → a per-call run, distinct per request", async () => {
+    const a = await clientKeyOfCall();
+    const b = await clientKeyOfCall();
+    expect(a).toMatch(/^key:key-1\|call:[0-9a-f-]{36}$/);
+    expect(b).toMatch(/^key:key-1\|call:[0-9a-f-]{36}$/);
+    expect(b).not.toBe(a);
+  });
+
+  it("_meta live.synap/conversation names the conversation, with its cwd", async () => {
+    const CC = "claude-code:2b1f7c1e-6f52-4d0e-9d1b-3b2f9e0a7c11";
+    expect(
+      await contextOfCall(
+        { "mcp-session-id": "conv-A" },
+        {
+          "live.synap/conversation": CC,
+          "live.synap/conversationCwd": "/Users/a/code",
+        }
+      )
+    ).toEqual({ key: `key:key-1|conv:${CC}`, cwd: "/Users/a/code" });
+  });
+
+  it("the X-Synap-Conversation header outranks _meta when both are sent", async () => {
+    expect(
+      (
+        await contextOfCall(
+          { "x-synap-conversation": "claude-ai:hdr" },
+          { "live.synap/conversation": "claude-code:meta" }
+        )
+      ).key
+    ).toBe("key:key-1|conv:claude-ai:hdr");
+  });
+
+  it("a non-string _meta value is no conversation id", async () => {
+    expect(
+      (await contextOfCall({}, { "live.synap/conversation": 42 })).key
+    ).toMatch(/^key:key-1\|call:/);
   });
 
   // A LOCAL agent's client (the synap stdio bridge) names its OWN conversation
