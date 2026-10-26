@@ -54,6 +54,9 @@ import {
   sanitizeDeclaredOutputs,
 } from "./update-session.js";
 import { stampSlotKeys } from "./slot-keys.js";
+// Its own line (not merged into the `paramOwedSlots` import below) so this
+// change and a sibling import added there cannot touch the same line.
+import { missingParamsRefusal } from "./param-slots.js";
 import {
   guidanceForBlockedSlots,
   newlyBlockedSlots,
@@ -75,7 +78,7 @@ import {
   sessionTwinLockKey,
   type SessionTwinCandidate,
 } from "./find-open-session-twin.js";
-import { missingParamsRefusal, paramOwedSlots } from "./param-slots.js";
+import { paramOwedSlots } from "./param-slots.js";
 import { notifySessionNeedsYou } from "./notify-needs-you.js";
 import { enqueueSessionRecall } from "./session-recall.js";
 import {
