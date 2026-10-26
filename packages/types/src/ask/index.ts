@@ -1078,7 +1078,9 @@ export type AskSnapshot = z.infer<typeof AskSnapshotSchema>;
 export const ASK_CONFIRM_KEYS = { yes: "yes", no: "no" } as const;
 
 /** The confirm answer the agent recommends (`yes` / `no`), else `null`. */
-export function confirmRecommendedKey(ask: Ask | null | undefined): string | null {
+export function confirmRecommendedKey(
+  ask: Ask | null | undefined
+): string | null {
   if (ask?.mode !== "confirm") return null;
   if (ask.yes?.recommended) return ASK_CONFIRM_KEYS.yes;
   if (ask.no?.recommended) return ASK_CONFIRM_KEYS.no;

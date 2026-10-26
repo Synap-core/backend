@@ -58,7 +58,11 @@ const {
     sessionTitle: "Launch plan",
     target: { kind: "session", id: SESSION_ID },
     // The asker, named by the pod on the signal (`askedBy` → `by`).
-    by: { kind: "agent", id: "a0000000-0000-4000-8000-000000000001", label: "Claude-code" },
+    by: {
+      kind: "agent",
+      id: "a0000000-0000-4000-8000-000000000001",
+      label: "Claude-code",
+    },
   });
   const owedElsewhere = signal({
     id: "owed:elsewhere",
@@ -263,7 +267,9 @@ describe("Needs you — the session's own asks, answered in place", () => {
     // The asker is a NAMED mark (decision 4, 2026-10-26): never a sentence,
     // never "An agent", never "It is waiting on your answer".
     expect(seenText).toContain("Claude-code");
-    expect(seenText).not.toMatch(/An agent|waiting on your answer|Who is asking/);
+    expect(seenText).not.toMatch(
+      /An agent|waiting on your answer|Who is asking/
+    );
     // On its own page the mark is no door back to the session.
     expect(html).not.toMatch(/<a [^>]*>(?:(?!<\/a>)[\s\S])*Claude-code/);
     expect(seenText).not.toContain("Launch plan");
@@ -289,21 +295,21 @@ describe("Needs you — the session's own asks, answered in place", () => {
   it("the founder's card (2026-10-26): the question ONCE, the cause named, Yes / No with icon, tone and the pick", () => {
     const title = "Four observations will confirm or kill H1 and H2";
     const founder = {
-          sessionId: SESSION_ID,
-          label: `Decide: ${title}`,
-          sessionTitle: `Decide: ${title}`,
-          ask: {
-            mode: "confirm",
-            prompt: `Accept: ${title}?`,
-            yes: { recommended: true, description: "Marks it accepted" },
-            no: { description: "Marks it rejected" },
-          },
-          why: `${title}. Each one is dated.`,
-          claimedDone: false,
-          blockedReason: "decision",
-          owedSince: "2026-10-18T09:00:00.000Z",
-          askerName: null,
-          askCause: { kind: "decision" as const },
+      sessionId: SESSION_ID,
+      label: `Decide: ${title}`,
+      sessionTitle: `Decide: ${title}`,
+      ask: {
+        mode: "confirm",
+        prompt: `Accept: ${title}?`,
+        yes: { recommended: true, description: "Marks it accepted" },
+        no: { description: "Marks it rejected" },
+      },
+      why: `${title}. Each one is dated.`,
+      claimedDone: false,
+      blockedReason: "decision",
+      owedSince: "2026-10-18T09:00:00.000Z",
+      askerName: null,
+      askCause: { kind: "decision" as const },
     };
     const html = render(
       <AskAnswer
@@ -323,8 +329,7 @@ describe("Needs you — the session's own asks, answered in place", () => {
     expect(seenText).toContain("Marks it rejected");
     expect(seenText.match(/Add a note/g)).toHaveLength(1);
     const yes = buttons.find((b) => b.children === "Yes") as
-      | { color?: string; variant?: string; startContent?: unknown }
-      | undefined;
+      { color?: string; variant?: string; startContent?: unknown } | undefined;
     expect(yes).toMatchObject({ color: "success", variant: "solid" });
     expect(yes?.startContent).toBeTruthy();
   });

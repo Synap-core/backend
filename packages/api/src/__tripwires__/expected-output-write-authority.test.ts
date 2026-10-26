@@ -268,7 +268,11 @@ describe("tripwire: expected-output write authority", () => {
     const patch = {
       kind: "doc",
       label: LABEL,
-      answer: { ...STORED.answer, via: "tap", confirmedAt: "2026-09-08T00:00:00.000Z" },
+      answer: {
+        ...STORED.answer,
+        via: "tap",
+        confirmedAt: "2026-09-08T00:00:00.000Z",
+      },
     } as ExpectedOutput;
     expect(() => mergeExpectedOutputs([stored], [patch])).toThrow(
       /"Launch brief"\.answer/

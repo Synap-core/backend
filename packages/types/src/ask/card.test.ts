@@ -259,7 +259,10 @@ describe("answerProvenanceMark", () => {
     [
       "awaiting the tap",
       { pendingRelay: { relayedBy: "a" } },
-      { tone: "warning", label: "Claude Code relayed your answer. Confirm it." },
+      {
+        tone: "warning",
+        label: "Claude Code relayed your answer. Confirm it.",
+      },
     ],
     [
       "withdrawn with its reason",
@@ -291,7 +294,8 @@ describe("answerProvenanceMark", () => {
       "You confirmed the relayed answer"
     );
     for (const v of Object.values(ASK_COPY)) {
-      const text = typeof v === "function" ? (v as (a: string) => string)("x") : v;
+      const text =
+        typeof v === "function" ? (v as (a: string) => string)("x") : v;
       expect(text).not.toContain("—");
     }
   });
