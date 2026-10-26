@@ -100,6 +100,7 @@ export const spaceBriefPatchSchema = z
   .strict();
 
 // Every patchable field has a schema key, and nothing else does.
+type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
 const _patchKeys: Same<
   keyof z.infer<typeof spaceBriefPatchSchema>,
   keyof SpaceBriefPatch
