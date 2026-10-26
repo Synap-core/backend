@@ -51,6 +51,34 @@ function kindItem(
   };
 }
 
+function askItem(sessionId: string, key: string): CleanupPackItemV2 {
+  return {
+    ref: stableItemRef("withdraw_ask", sessionId, key),
+    action: "withdraw_ask",
+    subject: { kind: "session", id: sessionId, name: `Ask ${key}` },
+    slot: { key },
+    evidence: {
+      createdAt: "2026-08-03T09:00:00Z",
+      lastActivityAt: "2026-09-02T12:00:00Z",
+    },
+    reversible: CLEANUP_ACTION_REVERSIBLE.withdraw_ask,
+    risk: "low",
+    snapshot: { updatedAt: "2026-09-02T12:00:00Z" },
+  };
+}
+
+function automationItem(id: string): CleanupPackItemV2 {
+  return {
+    ref: stableItemRef("archive_automation", id),
+    action: "archive_automation",
+    subject: { kind: "automation", id, name: `Automation ${id}` },
+    evidence: { createdAt: "2026-08-03T00:00:00Z", lastActivityAt: null },
+    reversible: CLEANUP_ACTION_REVERSIBLE.archive_automation,
+    risk: "low",
+    snapshot: { updatedAt: "2026-08-03T00:00:00Z" },
+  };
+}
+
 describe("stableItemRef", () => {
   it("is id-keyed, so the same subject has the same ref in two packs", () => {
     const packA = {
@@ -195,6 +223,44 @@ describe("readPackItems", () => {
     expect(read.unreadable).toBe(5);
   });
 
+  it("reads W-B4 items: an ask by its slot, an automation by its id", () => {
+    const read = readPackItems({
+      schema: 2,
+      items: [
+        askItem("s1", "brief"),
+        askItem("s1", "logo"),
+        automationItem("a1"),
+      ],
+    });
+    expect(read.unreadable).toBe(0);
+    expect(read.items.map((i) => i.ref)).toEqual([
+      "withdraw_ask:s1:brief",
+      "withdraw_ask:s1:logo",
+      "archive_automation:a1",
+    ]);
+    expect(read.items[0]!.subject).toEqual({
+      kind: "session",
+      id: "s1",
+      name: "Ask brief",
+    });
+    expect(read.items[0]!.item?.slot).toEqual({ key: "brief" });
+  });
+
+  it("refuses an ask with no slot or a ref without it, and a slot on any other action", () => {
+    const { slot: _slot, ...noSlot } = askItem("s1", "brief");
+    const refWithoutSlot = {
+      ...askItem("s1", "brief"),
+      ref: "withdraw_ask:s1",
+    };
+    const slotOnSession = { ...sessionItem("s2"), slot: { key: "x" } };
+    const read = readPackItems({
+      schema: 2,
+      items: [noSlot, refWithoutSlot, slotOnSession],
+    });
+    expect(read.items).toEqual([]);
+    expect(read.unreadable).toBe(3);
+  });
+
   it("never throws on junk and keeps 'no items' distinct from 'unreadable items'", () => {
     for (const junk of [null, undefined, 42, "x", [], {}, { items: "nope" }]) {
       expect(readPackItems(junk)).toEqual({
@@ -221,6 +287,12 @@ describe("describeCleanupAction (moved from api, same output)", () => {
     );
     expect(describeCleanupAction("retire_profile", 12)).toBe(
       "Retire 12 unused kinds"
+    );
+    expect(describeCleanupAction("withdraw_ask", 3)).toBe(
+      "Withdraw 3 asks left on ended sessions"
+    );
+    expect(describeCleanupAction("archive_automation", 1)).toBe(
+      "Archive 1 rule that never ran"
     );
     // Legacy groups still get a heading when a v1 pack is read.
     expect(describeCleanupAction("pause_automation", 2)).toBe(
@@ -283,6 +355,18 @@ describe("cleanupItemReason", () => {
     expect(cleanupItemReason(bare, NOW)).toBe("Created 64 days ago");
   });
 
+  it("ask: when its session ended and since when it is owed", () => {
+    expect(cleanupItemReason(askItem("s1", "brief"), NOW)).toBe(
+      "Its session ended 12 days ago · owed since 3 Aug"
+    );
+  });
+
+  it("automation: never ran, and its age", () => {
+    expect(cleanupItemReason(automationItem("a1"), NOW)).toBe(
+      "Never ran · created 42 days ago"
+    );
+  });
+
   it("never promises undo, for any action, even if reversible were set true", () => {
     const UNDO = /undo|undone|revers|restor|resum|reactivat|reopen/i;
     const cases = [
@@ -290,6 +374,8 @@ describe("cleanupItemReason", () => {
       sessionItem("s2", { lastActivityAt: null }),
       kindItem("k1"),
       kindItem("k2", { dependents: undefined, records: undefined }),
+      askItem("s1", "brief"),
+      automationItem("a1"),
     ];
     for (const item of cases) {
       expect(cleanupItemReason({ ...item, reversible: true }, NOW)).not.toMatch(
@@ -297,6 +383,11 @@ describe("cleanupItemReason", () => {
       );
     }
     // v1 has no user-reachable inverse door for either action (FD5).
-    expect(Object.values(CLEANUP_ACTION_REVERSIBLE)).toEqual([false, false]);
+    expect(Object.values(CLEANUP_ACTION_REVERSIBLE)).toEqual([
+      false,
+      false,
+      false,
+      false,
+    ]);
   });
 });

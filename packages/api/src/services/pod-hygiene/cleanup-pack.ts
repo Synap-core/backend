@@ -6,12 +6,18 @@
  * the item model in `@synap-core/types/pod-hygiene`) listing:
  *   - `close_session`  work sessions the reaper already marked `stale`, with no
  *                      activity for STALE_SESSION_DAYS;
+ *   - `withdraw_ask`   asks the person still owes on a session that ENDED
+ *                      (closed, failed) over ENDED_ASK_DAYS ago: nothing else
+ *                      ever retires them (a cancel does, a close does not);
+ *   - `archive_automation` the automation-health warden folded in (W-B4): an
+ *                      enabled, producer-backed automation past the warden's
+ *                      grace that never ran (`findZeroRunAutomations`). An
+ *                      agent's one is packed for the person who made the agent;
  *   - `retire_profile` active, non-system kinds older than KIND_MIN_AGE_DAYS with
  *                      zero live entities pod-wide AND a retire preflight that
  *                      passes — a kind it would refuse is counted, never packed,
  *                      so a reviewer never approves a guaranteed refusal.
- * Old proposals and never-run automations are NOT packed: an expiry cannot be
- * taken back, and the automation-health warden owns never-run automations.
+ * Old proposals are NOT packed: an expiry cannot be taken back (FD1).
  *
  * Lives in @synap/api because the session KIND is an api-owned SSOT; the jobs
  * worker reaches it through the `registerCleanupPackRunner` IoC slot.
@@ -55,6 +61,7 @@ import {
   ProposalStatus,
   ProfileScope,
   insertPendingProposal,
+  owedSlotWhere,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import {
@@ -73,10 +80,13 @@ import {
   type CleanupPackItemV2,
 } from "@synap-core/types/pod-hygiene";
 import { shortenTitle } from "@synap-core/types/titles";
+import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import { emitSideEffects } from "@synap/events";
 import { discardProposalSourceBlob } from "../../utils/store-entity-source-blob.js";
 import { markProposalNotificationsActioned } from "../../notifications/mark-proposal-notifications-actioned.js";
 import { sessionKindWhere } from "../focus-sessions/session-kind.js";
+import { owedAsks } from "../discover/loose-ends.js";
+import { findZeroRunAutomations } from "../proposals/automation-health.js";
 import {
   inspectProfileRetirement,
   profilesWithPendingRetire,
@@ -88,6 +98,10 @@ export const STALE_SESSION_DAYS = 30;
 /** Read by the diagnose section. Old proposals are not packed: an expiry cannot be taken back. */
 export const OLD_PROPOSAL_DAYS = 30;
 export const KIND_MIN_AGE_DAYS = 30;
+/** An ended session's leftover asks settle this long before they are packed. */
+export const ENDED_ASK_DAYS = 7;
+/** Ended sessions read for leftover asks in one scan. */
+const ENDED_ASK_SESSIONS_CAP = 500;
 /** A refused item is left to settle this long before it is proposed again. */
 export const REFUSED_SETTLE_DAYS = 7;
 /** A pack rejected whole silences every item in it this long. */
@@ -116,6 +130,7 @@ export interface CleanupPackData {
   truncated: Record<CleanupPackAction, number>;
   thresholds: {
     staleSessionDays: number;
+    endedAskDays: number;
     kindMinAgeDays: number;
     keepDays: typeof KEEP_DAYS;
     refusedSettleDays: number;
@@ -353,17 +368,21 @@ interface KindCandidate {
 
 export interface GatheredCandidates {
   sessions: CleanupCandidate[];
+  asks: CleanupCandidate[];
+  automations: CleanupCandidate[];
   kinds: KindCandidate[];
   /** Found but not packable: no single human owner. */
-  unowned: { sharedKinds: number };
+  unowned: { sharedKinds: number; automations: number };
 }
 
 export async function gatherCleanupCandidates(
   now: Date
 ): Promise<GatheredCandidates> {
   const sessions: CleanupCandidate[] = [];
+  const asks: CleanupCandidate[] = [];
+  const automationItems: CleanupCandidate[] = [];
   const kinds: KindCandidate[] = [];
-  const unowned = { sharedKinds: 0 };
+  const unowned = { sharedKinds: 0, automations: 0 };
 
   const sessionRows = await db
     .select({
@@ -404,6 +423,98 @@ export async function gatherCleanupCandidates(
         risk: "low",
         // Apply-time re-validation: the session must still be idle SINCE this.
         snapshot: { updatedAt: iso(s.updatedAt) },
+      },
+    });
+  }
+
+  // Asks left owed on ENDED sessions, one item per ask.
+  const endedRows = await db
+    .select({
+      id: focusSessions.id,
+      userId: focusSessions.userId,
+      title: focusSessions.title,
+      goal: focusSessions.goal,
+      createdAt: focusSessions.createdAt,
+      updatedAt: focusSessions.updatedAt,
+      expectedOutputs: focusSessions.expectedOutputs,
+    })
+    .from(focusSessions)
+    .where(
+      and(
+        inArray(focusSessions.status, ["closed", "failed"]),
+        lt(
+          focusSessions.updatedAt,
+          drizzleSql`${cutoffIso(now, ENDED_ASK_DAYS)}::timestamptz`
+        ),
+        owedSlotWhere()
+      )
+    )
+    // SESSION-KIND-LENS-EXEMPT: an ask is owed whatever its session's kind.
+    .limit(ENDED_ASK_SESSIONS_CAP);
+  for (const s of endedRows) {
+    const sessionTitle = resolveSessionTitle(s);
+    for (const ask of owedAsks(s.expectedOutputs)) {
+      asks.push({
+        ownerUserId: s.userId,
+        item: {
+          ref: stableItemRef("withdraw_ask", s.id, ask.key),
+          action: "withdraw_ask",
+          subject: {
+            kind: CLEANUP_ACTION_SUBJECT_KIND.withdraw_ask,
+            id: s.id,
+            name: `${shortenTitle(ask.label, 80)} · ${sessionTitle}`,
+          },
+          slot: { key: ask.key },
+          evidence: {
+            createdAt: iso(ask.owedSince ?? s.createdAt ?? s.updatedAt),
+            lastActivityAt: iso(s.updatedAt),
+          },
+          reversible: CLEANUP_ACTION_REVERSIBLE.withdraw_ask,
+          risk: "low",
+          snapshot: { updatedAt: iso(s.updatedAt) },
+        },
+      });
+    }
+  }
+
+  // Never-run automations: the warden's one rule. An agent's automation is
+  // packed for the person who made that agent.
+  const findings = await findZeroRunAutomations(now);
+  const authorIds = [...new Set(findings.map((f) => f.createdBy))];
+  const agentMaker = new Map(
+    authorIds.length === 0
+      ? []
+      : (
+          await db
+            .select({ id: users.id, maker: users.createdByUserId })
+            .from(users)
+            .where(
+              and(inArray(users.id, authorIds), eq(users.userType, "agent"))
+            )
+        ).map((u) => [u.id, u.maker] as const)
+  );
+  for (const f of findings) {
+    const owner = agentMaker.has(f.createdBy)
+      ? agentMaker.get(f.createdBy)
+      : f.createdBy;
+    if (!owner) {
+      unowned.automations += 1;
+      continue;
+    }
+    automationItems.push({
+      ownerUserId: owner,
+      item: {
+        ref: stableItemRef("archive_automation", f.automationId),
+        action: "archive_automation",
+        subject: {
+          kind: CLEANUP_ACTION_SUBJECT_KIND.archive_automation,
+          id: f.automationId,
+          name: f.name,
+        },
+        evidence: { createdAt: f.createdAt, lastActivityAt: null },
+        reversible: CLEANUP_ACTION_REVERSIBLE.archive_automation,
+        risk: "low",
+        snapshot: { updatedAt: f.createdAt },
       },
     });
   }
@@ -462,6 +573,8 @@ export async function gatherCleanupCandidates(
   const ownerIds = [
     ...new Set([
       ...sessions.map((c) => c.ownerUserId),
+      ...asks.map((c) => c.ownerUserId),
+      ...automationItems.map((c) => c.ownerUserId),
       ...kinds.map((k) => k.ownerUserId),
     ]),
   ];
@@ -481,7 +594,13 @@ export async function gatherCleanupCandidates(
 
   const byHuman = <T extends { ownerUserId: string }>(list: T[]) =>
     list.filter((c) => !agentIds.has(c.ownerUserId));
-  return { sessions: byHuman(sessions), kinds: byHuman(kinds), unowned };
+  return {
+    sessions: byHuman(sessions),
+    asks: byHuman(asks),
+    automations: byHuman(automationItems),
+    kinds: byHuman(kinds),
+    unowned,
+  };
 }
 
 /**
@@ -563,7 +682,7 @@ export interface FileCleanupPacksResult {
   superseded: number;
   suppressed: Record<SuppressionReason, number>;
   capped: number;
-  unowned: { sharedKinds: number };
+  unowned: { sharedKinds: number; automations: number };
   notPacked: { refusedByPreflight: number };
 }
 
@@ -577,7 +696,8 @@ export async function fileCleanupPacks(
 ): Promise<FileCleanupPacksResult> {
   const packRows = await loadPackRows(now);
   const suppressed = suppressedRefs(packRows, now);
-  const { sessions, kinds, unowned } = await gatherCleanupCandidates(now);
+  const { sessions, asks, automations, kinds, unowned } =
+    await gatherCleanupCandidates(now);
 
   const suppressedCounts: Record<SuppressionReason, number> = {
     open: 0,
@@ -596,9 +716,10 @@ export async function fileCleanupPacks(
     map.set(owner, list);
   };
 
-  const sessionsByOwner = new Map<string, CleanupCandidate[]>();
-  for (const c of sessions) {
-    if (isFree(c.item.ref)) pushTo(sessionsByOwner, c.ownerUserId, c);
+  // Every candidate that needs no preflight: sessions, asks, automations.
+  const readyByOwner = new Map<string, CleanupCandidate[]>();
+  for (const c of [...sessions, ...asks, ...automations]) {
+    if (isFree(c.item.ref)) pushTo(readyByOwner, c.ownerUserId, c);
   }
   const kindsByOwner = new Map<string, KindCandidate[]>();
   for (const k of kinds) {
@@ -614,7 +735,7 @@ export async function fileCleanupPacks(
 
   const owners = [
     ...new Set([
-      ...sessionsByOwner.keys(),
+      ...readyByOwner.keys(),
       ...kindsByOwner.keys(),
       ...stalePacksByOwner.keys(),
     ]),
@@ -625,7 +746,7 @@ export async function fileCleanupPacks(
   let refusedByPreflight = 0;
   for (const ownerUserId of owners.slice(0, MAX_PACKS_PER_RUN)) {
     const candidates: CleanupCandidate[] = [
-      ...(sessionsByOwner.get(ownerUserId) ?? []),
+      ...(readyByOwner.get(ownerUserId) ?? []),
     ];
     // Kinds: preflight oldest first until the action cap is full. A kind the
     // retire preflight would refuse is counted and never packed.
@@ -659,6 +780,7 @@ export async function fileCleanupPacks(
         truncated,
         thresholds: {
           staleSessionDays: STALE_SESSION_DAYS,
+          endedAskDays: ENDED_ASK_DAYS,
           kindMinAgeDays: KIND_MIN_AGE_DAYS,
           keepDays: KEEP_DAYS,
           refusedSettleDays: REFUSED_SETTLE_DAYS,

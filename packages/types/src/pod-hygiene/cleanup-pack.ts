@@ -18,6 +18,11 @@
  *   (founder decisions FD1/FD2: the first is a terminal act a toggle list must
  *   not offer; the second belongs to the automation-health warden). Packs
  *   already filed as v1 still READ, flagged `legacy`.
+ * v2, W-B4 (supervision plan, 2026-10-26): two more actions, same schema.
+ *   `withdraw_ask` — an ask a session left owed by the person after it ended;
+ *   one item per ask (`slot.key`), routed to its session. `archive_automation`
+ *   — the automation-health warden folded in: an enabled, producer-backed
+ *   automation that never ran, archived (soft) instead of paused.
  */
 
 import {
@@ -30,6 +35,8 @@ export const CLEANUP_PACK_SCHEMA = 2;
 
 export const CLEANUP_PACK_ACTIONS = [
   "close_session",
+  "withdraw_ask",
+  "archive_automation",
   "retire_profile",
 ] as const;
 export type CleanupPackAction = (typeof CLEANUP_PACK_ACTIONS)[number];
@@ -45,6 +52,9 @@ export type LegacyCleanupPackAction =
 /** Object-nav kind a surface routes an item with. Never a raw table name. */
 export const CLEANUP_ACTION_SUBJECT_KIND = {
   close_session: "session",
+  // An ask lives on its session: the item routes there.
+  withdraw_ask: "session",
+  archive_automation: "automation",
   retire_profile: "kind",
 } as const satisfies Record<CleanupPackAction, string>;
 export type CleanupPackSubjectKind =
@@ -67,6 +77,8 @@ export const MAX_ITEMS_PER_ACTION = 15;
 export const KEEP_DAYS = {
   kind: 90,
   session: 30,
+  // The automation-health warden's re-nag cooldown (RENAG_COOLDOWN_DAYS).
+  automation: 30,
 } as const satisfies Record<CleanupPackSubjectKind, number>;
 /** An undecided pack older than this is superseded by a fresh one (FD4). */
 export const SUPERSEDE_AFTER_DAYS = 7;
@@ -82,14 +94,24 @@ export const CLEANUP_ACTION_REVERSIBLE: Readonly<
   Record<CleanupPackAction, boolean>
 > = {
   close_session: false,
+  // A withdrawn ask is kept as "Withdrawn"; no door owes it again.
+  withdraw_ask: false,
+  // `automation.activate` revives an archived row, but no surface offers it
+  // on an archived automation yet.
+  archive_automation: false,
   retire_profile: false,
 };
 
 export interface CleanupPackItemV2 {
-  /** `${action}:${subject.id}` — id-keyed, so stable ACROSS packs. */
+  /**
+   * `${action}:${subject.id}` — id-keyed, so stable ACROSS packs. A
+   * `withdraw_ask` item adds its slot: `withdraw_ask:${sessionId}:${slot.key}`.
+   */
   ref: string;
   action: CleanupPackAction;
   subject: { kind: CleanupPackSubjectKind; id: string; name: string };
+  /** `withdraw_ask` only: the ask on the subject session, by its slot key. */
+  slot?: { key: string };
   /** Machine facts, so each surface formats and nothing re-queries. */
   evidence: {
     /** ISO. */
@@ -116,9 +138,12 @@ export interface CleanupPackItemV2 {
 /** The id-keyed item ref. The key `rejectItem` dispositions and don't-nag memory use. */
 export function stableItemRef(
   action: CleanupPackAction,
-  subjectId: string
+  subjectId: string,
+  slotKey?: string
 ): string {
-  return `${action}:${subjectId}`;
+  return slotKey === undefined
+    ? `${action}:${subjectId}`
+    : `${action}:${subjectId}:${slotKey}`;
 }
 
 // ── Group heading ────────────────────────────────────────────────────────────
@@ -141,6 +166,16 @@ const ACTION_PHRASE: Record<
     verb: "retire",
     noun: "kind",
     qualify: (n) => `unused ${n}`,
+  },
+  withdraw_ask: {
+    verb: "withdraw",
+    noun: "ask",
+    qualify: (n) => `${n} left on ended sessions`,
+  },
+  archive_automation: {
+    verb: "archive",
+    noun: "automation",
+    qualify: (n) => `${n} that never ran`,
   },
   expire_proposal: {
     verb: "expire",
@@ -229,6 +264,12 @@ export function cleanupItemReason(item: CleanupPackItemV2, now: Date): string {
         return `Created ${daysPhrase(wholeDaysBetween(evidence.createdAt, now))} ago · no activity recorded`;
       }
       return `Idle ${daysPhrase(wholeDaysBetween(evidence.lastActivityAt, now))} · no activity since ${shortDate(evidence.lastActivityAt, now)}`;
+    }
+    case "withdraw_ask": {
+      return `Its session ended ${daysPhrase(wholeDaysBetween(evidence.lastActivityAt ?? evidence.createdAt, now))} ago · owed since ${shortDate(evidence.createdAt, now)}`;
+    }
+    case "archive_automation": {
+      return `Never ran · created ${daysPhrase(wholeDaysBetween(evidence.createdAt, now))} ago`;
     }
     case "retire_profile": {
       const parts: string[] = [];
@@ -319,8 +360,16 @@ function parseV2(raw: unknown): CleanupPackItemV2 | null {
     typeof subject.name !== "string"
   )
     return null;
+  // An ask is named by its slot key; no other action carries one.
+  const slot = raw.slot;
+  let slotKey: string | undefined;
+  if (act === "withdraw_ask") {
+    if (!isObj(slot) || typeof slot.key !== "string" || slot.key === "")
+      return null;
+    slotKey = slot.key;
+  } else if (slot !== undefined) return null;
   // A ref that is not id-keyed would silently disable don't-nag memory.
-  if (raw.ref !== stableItemRef(act, subject.id)) return null;
+  if (raw.ref !== stableItemRef(act, subject.id, slotKey)) return null;
   if (
     !isObj(evidence) ||
     !isIso(evidence.createdAt) ||

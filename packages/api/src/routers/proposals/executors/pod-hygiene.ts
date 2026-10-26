@@ -46,6 +46,10 @@ import {
 } from "../execution-registry.js";
 import { reportApproved } from "./shared.js";
 import { applyItemPack } from "../../../services/proposals/item-pack.js";
+import { updateExpectedOutputsLocked } from "../../../services/focus-sessions/delegate-output.js";
+import { applyOutputMutations } from "../../../services/focus-sessions/update-session.js";
+import { owedAsks } from "../../../services/discover/loose-ends.js";
+import { loadRunCounts } from "../../../services/proposals/automation-health.js";
 
 type ItemOutcome = StoredItemOutcome & {
   ref: string;
@@ -183,6 +187,57 @@ async function applyPackItem(
         sourceProposalId: ctx.packId,
       });
       if (result.applied === "none") throw new Error(result.reason);
+      return;
+    }
+    case "withdraw_ask": {
+      const key = item.item?.slot?.key;
+      if (!key) throw new Error("This ask has no key");
+      const [session] = await db
+        .select({ status: focusSessions.status })
+        .from(focusSessions)
+        .where(eq(focusSessions.id, targetId));
+      if (!session) throw new Error("Session no longer exists");
+      if (session.status !== "closed" && session.status !== "failed") {
+        throw new Error("Its session is running again");
+      }
+      // Under the row lock: withdrawn only while the person still owes it.
+      const withdrawn = await updateExpectedOutputsLocked(
+        targetId,
+        (current) => {
+          if (!owedAsks(current).some((a) => a.key === key)) return null;
+          const applied = applyOutputMutations(
+            current,
+            { retireOutput: key },
+            { keepUnlisted: true }
+          );
+          return applied.retireOutput?.result === "retired"
+            ? applied.outputs
+            : null;
+        }
+      );
+      if (!withdrawn) throw new Error("No longer owed");
+      return;
+    }
+    case "archive_automation": {
+      const [row] = await db
+        .select({ status: automations.status })
+        .from(automations)
+        .where(eq(automations.id, targetId));
+      if (!row) throw new Error("Automation no longer exists");
+      if (row.status === "archived") throw new Error("Already archived");
+      // The warden's rule, re-checked on the ledger: one run since filing and
+      // it is a live automation, not debris.
+      if (((await loadRunCounts([targetId])).get(targetId) ?? 0) > 0) {
+        throw new Error("Automation has run since the pack was filed");
+      }
+      const caller = automationsRouter.createCaller({
+        db,
+        authenticated: true as const,
+        userId: ctx.ownerUserId,
+      } as unknown as Context);
+      const result = await caller.archive({ id: targetId });
+      if (result.status !== "archived")
+        throw new Error("Automation was not archived");
       return;
     }
     case "pause_automation": {
