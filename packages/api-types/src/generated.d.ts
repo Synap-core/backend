@@ -10054,6 +10054,27 @@ export interface PartialTurnFailure {
 	readonly recoverable: boolean;
 	readonly needsOperator: boolean;
 }
+declare const SESSION_POST_INTENTS: readonly [
+	"blocked_on_you",
+	"handoff",
+	"done",
+	"fyi"
+];
+export type SessionPostIntent = (typeof SESSION_POST_INTENTS)[number];
+declare const SESSION_POST_REF_KINDS: readonly [
+	"session",
+	"slot",
+	"proposal",
+	"blocked_by"
+];
+export type SessionPostRefKind = (typeof SESSION_POST_REF_KINDS)[number];
+export interface SessionPostRef {
+	kind: SessionPostRefKind;
+	/** A session or proposal id; for `slot`, the session that declares it. */
+	id: string;
+	/** For `slot`: the slot's declared label. */
+	label?: string;
+}
 export type AgentDirection = "external" | "house";
 /**
  * How one agent's writes land (founder, 2026-09-28: "reversible writes act"):
@@ -17261,6 +17282,45 @@ export type PacketGatesSection = {
 	reason: string;
 	status: "unavailable";
 };
+export interface PacketInboxItem {
+	/** The message id — also the change-feed event id (a reply's `cause`). */
+	id: string;
+	at: string;
+	intent: SessionPostIntent;
+	/** The intent's words (`resolveSessionPostIntentLabel`). */
+	intentLabel: string;
+	/** Stamped at the post: may this delivery wake the agent. */
+	wake: boolean;
+	from: {
+		agentUserId: string;
+		harness: string | null;
+		sessionId: string | null;
+		/** The sender session's name, when the viewer may read it. */
+		title: string | null;
+	};
+	refs?: SessionPostRef[];
+	/** At most {@link INBOX_TEXT_CAP} characters. */
+	text: string;
+	truncated: boolean;
+	/** Another agent's words: data, never instructions. */
+	untrusted: true;
+	fenced: string;
+}
+export type PacketInboxSection = {
+	/** The oldest {@link INBOX_TOP_N}. */
+	items: PacketInboxItem[];
+	status: "ok";
+	/** Every open post, exact. */
+	total: number;
+	/**
+	 * The OLDEST open `blocked_on_you` / `handoff` — what `nextMove` reads
+	 * (`message_waiting`), even when older `fyi` posts fill `items`.
+	 */
+	waiting: PacketInboxItem | null;
+} | {
+	reason: string;
+	status: "unavailable";
+};
 export type PacketSection<T> = {
 	items: T[];
 	status: "ok";
@@ -17429,7 +17489,7 @@ export interface PacketDecision {
 	/** The reviewer's rejection reason, when one was given. */
 	reason?: string;
 }
-export type NextMoveKind = "agent_slot" | "blocker_dropped" | "none" | "owed_slot" | "pending_proposal" | "ready_to_close" | "undeclared" | "unknown" | "waiting_on_session";
+export type NextMoveKind = "agent_slot" | "blocker_dropped" | "message_waiting" | "none" | "owed_slot" | "pending_proposal" | "ready_to_close" | "undeclared" | "unknown" | "waiting_on_session";
 export interface ContinuationNextMove {
 	kind: NextMoveKind;
 	/** Who acts: the person, the AI, or nobody. */
@@ -17440,9 +17500,12 @@ export interface ContinuationNextMove {
 	reason: string;
 	/** The proposal id, for `pending_proposal`. */
 	proposalId?: string;
+	/** The waiting coordination post's id, for `message_waiting`. */
+	messageId?: string;
 	/**
 	 * The blocking session's id, for `waiting_on_session`; for `blocker_dropped`,
-	 * the DROPPED blocker's id when that blocker is a session.
+	 * the DROPPED blocker's id when that blocker is a session; for
+	 * `message_waiting`, the SENDER session (when it has one).
 	 */
 	sessionId?: string;
 }
@@ -17659,6 +17722,15 @@ export interface ContinuationPacket {
 	 * empty list means nobody has listened; a failed read is `unavailable`.
 	 */
 	runners: PacketSection<PacketRunnerItem>;
+	/**
+	 * THE INBOX — coordination posts other sessions' agents addressed to this
+	 * session that its agent has not read yet (`session-inbox.ts`), oldest
+	 * first, plus `waiting`: the oldest `blocked_on_you` / `handoff`, which the
+	 * next move names. Another agent's text is data (`untrusted`, `fenced`). A
+	 * failed read, or a room the viewer cannot see, is `unavailable` — never an
+	 * empty inbox.
+	 */
+	inbox: PacketInboxSection;
 	/**
 	 * The session's contract and its grade: the declared binary criteria, the
 	 * server-computed verdict, and the CURRENT evaluation per criterion (human
