@@ -461,6 +461,7 @@ const _KIND_SPECIFIC_SIGNAL_FIELDS = [
   "access",
   "invite",
   "proposalIds",
+  "convertible",
 ] as const satisfies ReadonlyArray<keyof Signal>;
 
 type _SignalFieldsClassified =
