@@ -358,6 +358,7 @@ describe("POST /bootstrap — initial admin (A4: a lab's confirming admin)", () 
   };
   const adminAccess = {
     podRole: "admin",
+    podMember: false,
     workspaceScopes: [],
     projectScopes: [],
   };
