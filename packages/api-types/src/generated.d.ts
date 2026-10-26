@@ -3944,6 +3944,11 @@ declare const sessionEvaluations: import("drizzle-orm/pg-core").PgTableWithColum
 	name: "session_evaluations";
 	schema: undefined;
 }>;
+declare const AGENT_CONVERSATION_STATES: readonly [
+	"working",
+	"idle",
+	"waiting"
+];
 /**
  * Tools Schema — registered integrations the AI can use
  *
@@ -18049,54 +18054,6 @@ export interface PacketEvaluationItem {
 	rationale: string | null;
 	createdAt: string;
 }
-export type Unavailable = {
-	reason: string;
-	status: "unavailable";
-};
-export type PathCount = {
-	status: "ok";
-	total: number;
-} | Unavailable;
-/**
- * A row's `unitFacts`. Structurally a `NeedsYouFacts` (`needs-you.ts`): feed it
- * to `sessionNeedsYou` / `tallyNeedsYou` unchanged.
- */
-export interface SessionUnitCounts {
-	owedFromYou: number;
-	pendingDecisions: number | null;
-	/**
-	 * Finished and awaiting the person's review / close — this row's
-	 * `nextMove.kind === "ready_to_close"`, projected so no reader re-derives it.
-	 */
-	awaitingReview: boolean;
-	/** An agent/automation draft still in triage (`projectTriage(row).pending`). */
-	draft: boolean;
-}
-export type SessionInteractionType = "triggered" | "updated";
-export interface SessionInteraction {
-	type: SessionInteractionType;
-	/** triggered: the session whose write fired the run. updated: the producer. */
-	fromSessionId: string;
-	/** triggered: the run it fired. updated: the session that wrote to the output. */
-	toSessionId: string;
-	/** How many events back this relation (updated can be many writes). */
-	count: number;
-	/** The latest of them, ISO. */
-	lastAt: string | null;
-}
-export type SessionInteractionsSection = {
-	items: SessionInteraction[];
-	status: "ok";
-} | {
-	reason: string;
-	status: "unavailable";
-};
-/**
- * Who the viewer is TO this session — the field read doors expose so a UI can
- * hide write verbs for a member. Only meaningful on a row the viewer already
- * read through {@link sessionReadableWhere}.
- */
-export type SessionViewerRole = "member" | "owner";
 declare const LANDED_DECISION_STATES: readonly [
 	"applied",
 	"approved",
@@ -18255,6 +18212,88 @@ export type SessionLiveness = {
 	reason: string;
 	status: "unavailable";
 };
+export type Unavailable = {
+	reason: string;
+	status: "unavailable";
+};
+export type PathCount = {
+	status: "ok";
+	total: number;
+} | Unavailable;
+/**
+ * A row's `unitFacts`. Structurally a `NeedsYouFacts` (`needs-you.ts`): feed it
+ * to `sessionNeedsYou` / `tallyNeedsYou` unchanged.
+ */
+export interface SessionUnitCounts {
+	owedFromYou: number;
+	pendingDecisions: number | null;
+	/**
+	 * Finished and awaiting the person's review / close — this row's
+	 * `nextMove.kind === "ready_to_close"`, projected so no reader re-derives it.
+	 */
+	awaitingReview: boolean;
+	/** An agent/automation draft still in triage (`projectTriage(row).pending`). */
+	draft: boolean;
+}
+export type SessionInteractionType = "triggered" | "updated";
+export interface SessionInteraction {
+	type: SessionInteractionType;
+	/** triggered: the session whose write fired the run. updated: the producer. */
+	fromSessionId: string;
+	/** triggered: the run it fired. updated: the session that wrote to the output. */
+	toSessionId: string;
+	/** How many events back this relation (updated can be many writes). */
+	count: number;
+	/** The latest of them, ISO. */
+	lastAt: string | null;
+}
+export type SessionInteractionsSection = {
+	items: SessionInteraction[];
+	status: "ok";
+} | {
+	reason: string;
+	status: "unavailable";
+};
+/** Exactly what a heartbeat may write — every column the reporter controls. */
+export interface DecodedHeartbeat {
+	computer: string;
+	harness: string;
+	conversationId: string;
+	state: (typeof AGENT_CONVERSATION_STATES)[number];
+	folder: string | null;
+	subagentCount: number;
+	sessionId: string | null;
+	ended: boolean;
+}
+/** A session's runner, joined to the terminal it runs in. */
+export interface SessionRunnerTerminal {
+	harness: string;
+	conversationId: string;
+	agentUserId: string | null;
+	machineId: string | null;
+	lastSeenAt: string;
+	/**
+	 * Attached now: the runner was stamped within the runner window, or its
+	 * terminal is open and heard from within the conversation window.
+	 */
+	live: boolean;
+	/** The terminal's own facts; null when no terminal of the VIEWER reports it. */
+	terminal: {
+		computer: string;
+		ended: boolean;
+		folder: string | null;
+		lastSeenAt: string;
+		state: DecodedHeartbeat["state"];
+		stateSince: string;
+		subagents: number;
+	} | null;
+}
+/**
+ * Who the viewer is TO this session — the field read doors expose so a UI can
+ * hide write verbs for a member. Only meaningful on a row the viewer already
+ * read through {@link sessionReadableWhere}.
+ */
+export type SessionViewerRole = "member" | "owner";
 export interface CancelRecordItem {
 	kind: "chat_turn" | "job" | "proposal";
 	id: string;
@@ -18589,6 +18628,14 @@ export interface SessionUsage {
 	} | null;
 	agents: SessionParticipant[];
 }
+/** `focusSessions.list` `runners: true` — a session's runners and their terminals. */
+export type SessionRunnersSection = {
+	items: SessionRunnerTerminal[];
+	status: "ok";
+} | {
+	reason: string;
+	status: "unavailable";
+};
 export interface CriterionScore {
 	key: string;
 	statement: string;
@@ -31189,6 +31236,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				order?: "open_first" | "started" | undefined;
 				playbookId?: string | undefined;
 				projectId?: string | string[] | null | undefined;
+				runners?: boolean | undefined;
 				settledSince?: string | undefined;
 				status?: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale" | ("active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale")[] | "all" | undefined;
 				statusSince?: {
@@ -31244,6 +31292,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				interactions?: SessionInteractionsSection;
 				live?: SessionActivityLive | null;
 				nextMove?: ContinuationNextMove;
+				runners?: SessionRunnersSection;
 				unitFacts?: SessionUnitCounts;
 				viewerRole?: SessionViewerRole;
 			})[];
