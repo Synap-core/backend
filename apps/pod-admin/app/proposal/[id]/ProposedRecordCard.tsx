@@ -31,42 +31,8 @@ import {
 export const RECORD_GRID_CLASS =
   "grid grid-cols-[repeat(auto-fill,minmax(min(100%,13rem),1fr))] gap-x-6 gap-y-3";
 
-/** Lines of code shown before "Show all N lines": folded, never cut. */
-export const CODE_LINES_SHOWN = 40;
-
-function CodeValue({ text, lines }: { text: string; lines: number }) {
-  const [all, setAll] = useState(false);
-  const folded = !all && lines > CODE_LINES_SHOWN;
-  return (
-    <span className="flex w-full min-w-0 flex-col gap-1">
-      <pre
-        data-record-code=""
-        className="max-w-full overflow-x-auto whitespace-pre rounded-md bg-foreground/[0.04] px-3 py-2 font-mono text-[12px] leading-relaxed text-foreground/90 ring-1 ring-inset ring-foreground/10"
-      >
-        <code>
-          {folded
-            ? text.split("\n").slice(0, CODE_LINES_SHOWN).join("\n")
-            : text}
-        </code>
-      </pre>
-      {folded && (
-        <Button
-          size="sm"
-          variant="light"
-          className="self-start px-1 text-[12.5px] text-foreground/65"
-          onPress={() => setAll(true)}
-        >
-          Show all {lines} lines
-        </Button>
-      )}
-    </span>
-  );
-}
-
 function Value({ value }: { value: RecordValue }) {
   switch (value.kind) {
-    case "code":
-      return <CodeValue text={value.text} lines={value.lines} />;
     case "text":
       return (
         <span

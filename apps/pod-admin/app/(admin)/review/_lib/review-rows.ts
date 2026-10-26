@@ -232,7 +232,7 @@ function needsItsPage(f: ProposalFacts | undefined): boolean {
   return (
     needsIdentityChoice({
       duplicate: deriveDuplicateReview(f.data, { singleEntityCreate: true }),
-    }) || isExecutableSkillCreate(f)
+    })
   );
 }
 

@@ -27,6 +27,5 @@ export function skillBornApproved(input: {
   /** A person (no agent anywhere on the request) approved the create proposal. */
   personApprovedProposal?: boolean;
 }): boolean {
-  if (input.personApprovedProposal) return true;
   return input.kind === "instruction" && !input.agentUserId;
 }
