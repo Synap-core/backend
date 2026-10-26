@@ -75,7 +75,7 @@ import {
   sessionTwinLockKey,
   type SessionTwinCandidate,
 } from "./find-open-session-twin.js";
-import { paramOwedSlots } from "./param-slots.js";
+import { missingParamsRefusal, paramOwedSlots } from "./param-slots.js";
 import { notifySessionNeedsYou } from "./notify-needs-you.js";
 import { enqueueSessionRecall } from "./session-recall.js";
 import {
@@ -667,6 +667,25 @@ export async function createFocusSession(
     throw Object.assign(new Error(describeParamTypeError(first!)), {
       code: "BAD_REQUEST",
     });
+  }
+
+  // E3 (founder, 2026-10-27): a required param of the playbook an AGENT
+  // started this session from, left unanswered, goes back to that agent before
+  // the membrane — never a slot in the person's Needs you (`param-slots.ts`).
+  // A person's own session still owes it below. A TRACK's method params are
+  // not the agent's to supply (they are the person's answers on their own
+  // goal, and `startStageSession` takes none), so they still owe.
+  if (agentUserId && playbook) {
+    const { missingRequired } = validatePlaybookParams(
+      readPlaybookParams(playbook.params),
+      params.params
+    );
+    if (missingRequired.length > 0) {
+      throw Object.assign(
+        new Error(missingParamsRefusal(missingRequired, playbook.name)),
+        { code: "BAD_REQUEST" }
+      );
+    }
   }
 
   const perm = await checkPermissionOrPropose({
