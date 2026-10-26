@@ -53,6 +53,7 @@ import {
   PACKET_TOP_N,
   type ContinuationNextMove,
   type NextMoveBlockers,
+  type NextMoveInbox,
   type PacketChildItem,
   type PacketProposalItem,
   type PacketSection,
@@ -60,6 +61,7 @@ import {
 } from "./continuation-packet.js";
 import { projectOwedSlots, type OwedSlot } from "./owed-outputs.js";
 import { readDependencyFacts } from "../links/dependency-links.js";
+import { readOpenInboxes } from "./session-inbox.js";
 import { OPEN_SESSION_STATUSES } from "./session-statuses.js";
 import { projectTriage } from "./triage.js";
 import { extractProposalName } from "../proposals/fingerprint.js";
@@ -349,11 +351,12 @@ async function readOutputPresence(
 }
 
 /**
- * Attach the continuation sections to a page of session rows. Five batched
- * reads for the page (proposals, outbound edges, inbound edges, outputs, and
+ * Attach the continuation sections to a page of session rows. Six batched
+ * reads for the page (proposals, outbound edges, inbound edges, outputs,
  * THE dependency rule's blockers for the next move — `readDependencyFacts`,
- * the read the packet's `readDependencyState` batches), each settled on its
- * own so one failure marks one section `unavailable`.
+ * the read the packet's `readDependencyState` batches — and the open inboxes,
+ * `readOpenInboxes`, the packet's own reader), each settled on its own so one
+ * failure marks one section `unavailable`.
  *
  * The rows must already be owner-floored by the caller: this reads edges and
  * proposals BY the page's ids, and the page is the authorization.
@@ -372,7 +375,7 @@ export async function attachPathSections<R extends PathSourceRow>(
   const ctx = opts.logContext ?? {};
   const ids = rows.map((r) => r.id);
 
-  const [proposalsBy, outbound, inbound, outputsWith, dependencies] =
+  const [proposalsBy, outbound, inbound, outputsWith, dependencies, inboxes] =
     await Promise.all([
       settle(
         ctx,
@@ -404,6 +407,14 @@ export async function attachPathSections<R extends PathSourceRow>(
             ids.map((id) => ({ kind: "session", id })),
             opts.userId
           )
+      ),
+      // The open inboxes (`message_waiting`) — the packet's own reader,
+      // batched for the page.
+      settle(
+        ctx,
+        "inbox",
+        "The messages other sessions sent these could not be read.",
+        () => readOpenInboxes(database, opts.userId, ids)
       ),
     ]);
 
@@ -459,6 +470,14 @@ export async function attachPathSections<R extends PathSourceRow>(
             items: dependencies.value.get(`session:${row.id}`)?.blockers ?? [],
           }
         : dependencies;
+    const inbox: NextMoveInbox =
+      inboxes.status === "ok"
+        ? (inboxes.value.get(row.id) ?? {
+            status: "ok",
+            total: 0,
+            waiting: null,
+          })
+        : inboxes;
     const nextMove = deriveNextMove({
       status: row.status,
       owedSlots,
@@ -468,6 +487,7 @@ export async function attachPathSections<R extends PathSourceRow>(
       expectedOutputs: all,
       outputs,
       children,
+      inbox,
     });
     return {
       ...row,
