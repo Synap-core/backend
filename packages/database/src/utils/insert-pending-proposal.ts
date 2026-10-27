@@ -238,7 +238,7 @@ function supersedesEarlierVersions(input: {
  */
 export function changedFields(data: Record<string, unknown>): Set<string> {
   const record =
-    isRequestEnvelope(data) &&
+    isRequestShapedProposalData(data as unknown as StoredProposalData) &&
     data.data !== null &&
     typeof data.data === "object" &&
     !Array.isArray(data.data)
