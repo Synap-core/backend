@@ -228,4 +228,52 @@ describe("Hub REST intent-surface reads", () => {
     );
     expect(h.calls).toEqual([]);
   });
+
+  // Every door that takes a workspace lens runs the one clamp (`readDoor`'s
+  // `confineWorkspace`): a bound key reads only its workspace, another is a 403.
+  const CONFINED = [
+    ["lifecycle.board", "board", "/lifecycle/board?profileSlug=lead"],
+    [
+      "lifecycle.throughput",
+      "throughput",
+      "/lifecycle/throughput?profileSlug=lead",
+    ],
+    ["lifecycle.moving", "moving", "/lifecycle/moving?limit=5"],
+    [
+      "attention.needs-you",
+      "signals.list",
+      "/attention/needs-you?profileSlug=lead",
+    ],
+    ["attention.count", "signals.count", "/attention/count?profileSlug=lead"],
+  ] as const;
+
+  it.each(CONFINED)(
+    "%s: a key bound to a workspace that names none reads only that workspace",
+    async (_door, proc, url) => {
+      expect((await app(undefined, W).request(url)).status).toBe(200);
+      expect(h.calls).toHaveLength(1);
+      expect(h.calls[0]!.proc).toBe(proc);
+      expect(h.calls[0]!.input).toMatchObject({ workspaceId: W });
+    }
+  );
+
+  it.each(CONFINED)(
+    "%s: a key bound to a workspace that names another is a 403 and reaches nothing",
+    async (_door, _proc, url) => {
+      const res = await app(undefined, W).request(`${url}&workspaceId=${P}`);
+      expect(res.status).toBe(403);
+      expect(h.calls).toEqual([]);
+    }
+  );
+
+  it("lifecycle.home has no workspace axis: a bound key is refused, an unbound one reads", async () => {
+    const res = await app(undefined, W).request(`/lifecycle/home`);
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { error: string }).error).toMatch(
+      /confined to workspace .* reads every space/
+    );
+    expect(h.calls).toEqual([]);
+    expect((await app().request(`/lifecycle/home`)).status).toBe(200);
+    expect(h.calls).toEqual([{ proc: "home", input: {} }]);
+  });
 });
