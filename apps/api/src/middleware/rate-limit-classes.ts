@@ -38,6 +38,10 @@ import {
  *   token), under a per-IP ceiling only when addresses tell callers apart:
  *   every pod app's refresh must not share a budget a stranger can drain
  * - crud: everything else
+ * - crud_read: a `crud` request that only reads (`isCrudReadPath` /
+ *   `isMcpReadBody`), on its own bucket so a busy reader never spends the
+ *   write budget. Never returned by `classifyRateLimitPath`: the edge decides
+ *   it inside the `crud` branch (security.ts), since an MCP read is in the body
  */
 export type RateLimitClass =
   | "free"
@@ -51,7 +55,8 @@ export type RateLimitClass =
   | "key_state"
   | "oauth_public"
   | "oauth_token"
-  | "crud";
+  | "crud"
+  | "crud_read";
 
 function parsePositiveInt(value: string | undefined, fallback: number): number {
   if (value == null || value === "") return fallback;
@@ -117,6 +122,11 @@ export function getRateLimitClassConfig(): Record<
     3000
   );
 
+  const crudReadWindow = parsePositiveInt(
+    process.env.RATE_LIMIT_CRUD_READ_WINDOW_MS,
+    crudWindow
+  );
+
   return {
     import: {
       max: parsePositiveInt(process.env.RATE_LIMIT_IMPORT_MAX, 200),
@@ -147,6 +157,19 @@ export function getRateLimitClassConfig(): Record<
       windowMs: crudWindow,
       retryAfter: formatRetryAfter(crudWindow),
     },
+    // Reads spend their own bucket: several agents sharing one key mostly
+    // read (get_session, get_entities…), and 500 shared with writes 429'd
+    // four of them at once (2026-10-27). Writes keep `crud.max`, so a runaway
+    // writer still stops there. The address ceiling counts both.
+    crud_read: {
+      max: parsePositiveInt(process.env.RATE_LIMIT_CRUD_READ_MAX, 3000),
+      sessionMax: parsePositiveInt(
+        process.env.RATE_LIMIT_CRUD_READ_SESSION_MAX,
+        crudSessionMax
+      ),
+      windowMs: crudReadWindow,
+      retryAfter: formatRetryAfter(crudReadWindow),
+    },
     calendar_feed: {
       max: parsePositiveInt(process.env.RATE_LIMIT_CALENDAR_FEED_MAX, 120),
       windowMs: calendarFeedWindow,
@@ -154,6 +177,72 @@ export function getRateLimitClassConfig(): Record<
     },
   };
 }
+
+/** The pod's MCP door (`app.route("/mcp", …)`): its reads arrive as POST. */
+export function isMcpPath(path: string): boolean {
+  const p = path.split(/[?#]/, 1)[0] || "/";
+  return p === "/mcp" || p === "/mcp/";
+}
+
+/**
+ * A `crud` request that reads by its method and path alone: GET, HEAD or
+ * OPTIONS on the Hub (`/api/hub/*`, `/api/hub-protocol/*`) or the MCP door.
+ * Other GETs (the console's tRPC queries) stay in `crud`: a signed-in person
+ * already has the larger session budget there.
+ */
+export function isCrudReadPath(path: string, method: string): boolean {
+  const m = method.toUpperCase();
+  if (m !== "GET" && m !== "HEAD" && m !== "OPTIONS") return false;
+  const p = path.split(/[?#]/, 1)[0] || "/";
+  return (
+    p.startsWith("/api/hub/") ||
+    p.startsWith("/api/hub-protocol/") ||
+    isMcpPath(p)
+  );
+}
+
+/** JSON-RPC methods of the MCP door that change nothing. */
+const MCP_READ_METHODS: ReadonlySet<string> = new Set([
+  "initialize",
+  "ping",
+  "tools/list",
+  "resources/list",
+  "resources/templates/list",
+  "resources/read",
+  "prompts/list",
+  "prompts/get",
+  "completion/complete",
+]);
+
+/**
+ * Does this MCP JSON-RPC body only read? A `tools/call` reads when its tool
+ * is in `readOnlyTools` (the tools that declare `readOnlyHint`); the listed
+ * protocol methods and notifications read; a batch reads when every message
+ * does. Anything else, or a body that is not JSON-RPC, is a write.
+ */
+export function isMcpReadBody(
+  body: unknown,
+  readOnlyTools: ReadonlySet<string>
+): boolean {
+  const messages = Array.isArray(body) ? body : [body];
+  if (messages.length === 0) return false;
+  return messages.every((m) => {
+    if (m === null || typeof m !== "object") return false;
+    const method = (m as { method?: unknown }).method;
+    if (typeof method !== "string") return false;
+    if (method.startsWith("notifications/")) return true;
+    if (MCP_READ_METHODS.has(method)) return true;
+    if (method !== "tools/call") return false;
+    const name = (m as { params?: { name?: unknown } }).params?.name;
+    return typeof name === "string" && readOnlyTools.has(name);
+  });
+}
+
+/**
+ * Largest MCP body the edge reads to tell a read from a write. A tool call is
+ * a few KB; a bigger or undeclared body is counted as a write, unread.
+ */
+export const MCP_READ_BODY_MAX = 256 * 1024;
 
 /** The unauthenticated OAuth doors budgeted per IP (`oauth_public`). */
 export const OAUTH_PUBLIC_PATHS: ReadonlySet<string> = new Set([

@@ -8,7 +8,7 @@
  */
 import type { Context, MiddlewareHandler } from "hono";
 import { rateLimiter, type RateLimitInfo } from "hono-rate-limiter";
-import { getDynamicCorsOrigins } from "@synap/api";
+import { getDynamicCorsOrigins, mcpReadOnlyToolNames } from "@synap/api";
 import {
   buildRateLimitKey,
   classifyRateLimitPath,
@@ -29,6 +29,10 @@ import {
   readTextCapped,
   buildCrudIpCeilingKey,
   isDirectLoopbackCall,
+  isCrudReadPath,
+  isMcpPath,
+  isMcpReadBody,
+  MCP_READ_BODY_MAX,
 } from "./rate-limit-classes.js";
 
 // Re-export pure helpers so existing import sites can stay on security.js
@@ -457,6 +461,55 @@ const oauthTokenRateLimiter = rateLimiter({
   ),
 });
 
+const crudReadKey = classKeyGenerator("crud_read");
+const crudReadSessionMax =
+  rateLimitClassConfig.crud_read.sessionMax ??
+  rateLimitClassConfig.crud_read.max;
+
+/** The reads of `crud` (`isCrudRead`): their own bucket per key / session. */
+const crudReadRateLimiter = rateLimiter({
+  windowMs: rateLimitClassConfig.crud_read.windowMs,
+  limit: (c) =>
+    crudReadKey(c).startsWith("crud_read:session:")
+      ? crudReadSessionMax
+      : rateLimitClassConfig.crud_read.max,
+  standardHeaders: "draft-7",
+  keyGenerator: crudReadKey,
+  handler: classHandler(
+    "crud_read",
+    rateLimitClassConfig.crud_read.max,
+    rateLimitClassConfig.crud_read.retryAfter
+  ),
+});
+
+/** Read-only MCP tool names, listed once; a failed listing is retried. */
+let readOnlyTools: Promise<Set<string>> | null = null;
+function mcpReadOnlyTools(): Promise<Set<string>> {
+  readOnlyTools ??= mcpReadOnlyToolNames().catch(() => {
+    readOnlyTools = null;
+    return new Set<string>();
+  });
+  return readOnlyTools;
+}
+
+/**
+ * Does this `crud` request only read? By method and path (`isCrudReadPath`),
+ * or, for a POST to the MCP door, by its JSON-RPC body (`isMcpReadBody`). The
+ * body is read through Hono's cache, which the MCP handler reads again
+ * (`c.req.json()`). A body over `MCP_READ_BODY_MAX`, of no declared length,
+ * or not JSON is counted as a write, unread.
+ */
+async function isCrudRead(c: Context): Promise<boolean> {
+  if (isCrudReadPath(c.req.path, c.req.method)) return true;
+  if (c.req.method !== "POST" || !isMcpPath(c.req.path)) return false;
+  const length = Number(c.req.header("content-length"));
+  if (!Number.isInteger(length) || length <= 0 || length > MCP_READ_BODY_MAX) {
+    return false;
+  }
+  const body = await c.req.json().catch(() => undefined);
+  return body !== undefined && isMcpReadBody(body, await mcpReadOnlyTools());
+}
+
 /**
  * Multi-class pod-edge rate limiting.
  *
@@ -509,10 +562,13 @@ export const rateLimitMiddleware: MiddlewareHandler = async (c, next) => {
       });
     case "crud":
     default:
-      // Address ceiling FIRST, then the caller's own bucket — same nested-429
-      // handling as the calendar feed.
+      // Address ceiling FIRST, then the caller's own bucket — the read one
+      // or the write one — same nested-429 handling as the calendar feed.
       return crudIpCeilingLimiter(c, async () => {
-        const limited = await crudRateLimiter(c, next);
+        const limiter = (await isCrudRead(c))
+          ? crudReadRateLimiter
+          : crudRateLimiter;
+        const limited = await limiter(c, next);
         if (limited instanceof Response) c.res = limited;
       });
   }
