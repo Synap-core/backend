@@ -2,11 +2,11 @@
  * THE CLOSED INTENT VOCABULARY — what a capability DOES, vendor-independently.
  *
  * Published as its own LEAF subpath (`@synap-core/types/capability-intents`)
- * rather than through the `./` barrel, for the same reason `proposals/intent`
- * is: the barrel re-exports `@synap/database` types, and a VALUE import from a
- * barrel crashes Hermes (relay ships React Native). Pure and dependency-free —
- * consumed today by the workspace-template authoring package (`validate.ts`
- * and `task-intents.test.ts`).
+ * rather than through the `./` barrel: a VALUE import from a barrel crashes
+ * Hermes (relay ships React Native). Pure and dependency-free — consumed by the
+ * pod (`@synap/database` re-exports `ABSTRACT_INTENTS` as `ABSTRACT_VERBS`) and
+ * by the workspace-template authoring package (`validate.ts` and
+ * `task-intents.test.ts`).
  *
  * ── WHAT IS AN INTENT ───────────────────────────────────────────────────────
  * An intent is the ROUTING axis over the verb catalog. A verb's `id` is
@@ -22,66 +22,77 @@
  * `0329_read_webpage_intent.sql` (`read_webpage`) and `0360_search_web_intent.sql`
  * (`search_web`). Slugs live in ROWS, not in a TypeScript union.
  *
- * The pod cannot import this file: `@synap-core/types` devDepends on
- * `@synap/database`, so a reverse import is a build cycle. `@synap/database`
- * therefore keeps its own runtime copy in `schema/tools.ts` (`ABSTRACT_VERBS`)
- * — the same mirror + parity precedent as `GUIDELINE_SCOPE_ORDER` (see
- * `src/guidelines/index.ts`).
+ * The pod reads THIS file: `ABSTRACT_VERBS` (`@synap/database`
+ * `schema/tools.ts`) is `ABSTRACT_INTENTS`, re-exported.
  *
  * A hand copy that nothing checks is a comment. A hand copy with a parity guard
  * is a mirror — `src/capability-intents/parity.test.ts` re-derives the pod's
  * seed migration SQL and fails the build the moment these two disagree.
  *
  * ⚠️ MIRRORED IN LOCKSTEP with:
- *   - `ABSTRACT_VERBS` — synap-backend `packages/database/src/schema/tools.ts`
- *   - the `INSERT` slugs — migrations `0283` + `0284`
+ *   - the `INSERT` slugs — migrations `0283`, `0284`, `0314`, `0329`
  *   - `CAPABILITY_INTENTS` — synap-control-plane-api
  *       `src/seeds/capability-intent-vocabulary.ts`
  *
- * That is THREE copies, each with its own parity guard against the migration SQL
- * — none of them importable from any other (each repo links a different subset,
- * and the control plane is a separate deploy target with its own lockfile).
- * Two guards live in this repo, two in the control plane.
+ * That is TWO copies, each with its own parity guard against the migration SQL
+ * — neither importable from the other (the control plane is a separate deploy
+ * target with its own lockfile). Two guards live in this repo, two in the
+ * control plane.
  *
- * A FOURTH copy — `AbstractVerb` in `@synap/playbooks` — was DELETED 2026-10-01.
+ * A THIRD copy — `AbstractVerb` in `@synap/playbooks` — was DELETED 2026-10-01.
  * It was a TYPE-only union of the 13, stale since 0284, and a whole-repo scan
  * found zero importers, so nothing could have noticed the staleness. Do not
  * re-add it; `packages/playbooks/src/required-intents.test.ts` refuses it.
  *
- * ADD A SLUG TO ALL THREE OR THE GUARDS GO RED AND THAT IS THE POINT. Note that
+ * ADD A SLUG TO BOTH OR THE GUARDS GO RED AND THAT IS THE POINT. Note that
  * each guard lists its migration FILENAMES, so a slug added in a NEW migration is
  * invisible to all of them until that list is extended — extending it is part of
  * adding the slug, not a follow-up.
  *
- * Full procedure, including the build-cycle and deployment constraints: the
+ * Full procedure, including the deployment constraints: the
  * `intent-vocabulary-ssot` chapter of the `synap-schema` skill
  * (`skills/synap-schema/intent-vocabulary-ssot.md`), which is where an agent
  * should look first.
  */
 
 /**
- * The 13 seed slugs from migration 0283 — the `ABSTRACT_VERBS` union in the
- * pod's `schema/tools.ts`. Grouped as the source groups them: ACQUIRE (bring
- * information in), ACT OUTWARD (change something outside the pod), BRIDGE
- * (bring external data INTO the pod), CONTROL.
+ * The 13 seed slugs from migration 0283 — the pod re-exports this list as
+ * `ABSTRACT_VERBS` (`schema/tools.ts`). Grouped: ACQUIRE (bring information
+ * in), ACT OUTWARD (change something outside the pod), BRIDGE (bring external
+ * data INTO the pod), CONTROL.
  */
 export const ABSTRACT_INTENTS = [
-  // ACQUIRE
+  // ACQUIRE — bring information in
+  /** Query an outside corpus (web, provider DB, file store). */
   "search_external",
+  /** Locate people or companies matching criteria. */
   "find_people",
+  /** Add known facts to a person/company we already have. */
   "enrich_entity",
+  /** Get ONE identified external record. */
   "fetch_record",
+  /** Enumerate records of a kind. */
   "list_records",
-  // ACT OUTWARD
+
+  // ACT OUTWARD — change something outside the pod
+  /** Deliver a message to a human outside the pod. */
   "send_message",
+  /** Ask a person to connect (invite / relation request). */
   "request_connection",
+  /** Create or modify a calendar commitment. */
   "schedule_event",
+  /** Create/copy/move a file in external storage. */
   "manage_file",
+  /** Produce an image, video, or audio artifact. */
   "generate_media",
-  // BRIDGE
+
+  // BRIDGE — bring external data INTO the pod as proposed entities
   "capture_into_pod",
+
   // CONTROL
+  /** Invoke an arbitrary external compute job. */
   "run_external_job",
+  /** Establish or authorize a provider connection. */
   "connect_account",
 ] as const;
 

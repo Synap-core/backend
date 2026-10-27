@@ -32,6 +32,7 @@ import { kindIcon } from "../kind-icon";
 import { ChartSnapshot } from "./embed-chart";
 import { EmbedHostContext, type EmbedHost } from "./embed-context";
 import { objectPage, type EmbedEntityRead } from "./markdown-model";
+import { MediaView } from "../../media/media-view";
 
 const CHIP =
   "inline-flex max-w-full items-center gap-1.5 rounded-md bg-foreground/[0.05] px-2 py-1 text-[12.5px] text-foreground/80 ring-1 ring-inset ring-foreground/10";
@@ -190,17 +191,35 @@ function EntityCardBody({
       )}
     </>
   );
-  return inline ? (
-    <Link href={href} className={`${CHIP} ${DOOR}`}>
-      {words}
-    </Link>
-  ) : (
+  if (inline) {
+    return (
+      <Link href={href} className={`${CHIP} ${DOOR}`}>
+        {words}
+      </Link>
+    );
+  }
+  const card = (
     <Link
       href={href}
       className={`flex max-w-full items-center gap-2 rounded-lg px-3 py-2 text-[13px] ring-1 ring-inset ring-foreground/10 hover:bg-foreground/[0.03] ${DOOR}`}
     >
       {words}
     </Link>
+  );
+  // A record that IS an image (an uploaded file) shows it, as a thumbnail.
+  const media = read.state === "ready" ? read.media : undefined;
+  return media ? (
+    <div className="flex flex-col gap-2">
+      <MediaView
+        media={media}
+        alt={title}
+        size="thumb"
+        viaEntityId={model.id}
+      />
+      {card}
+    </div>
+  ) : (
+    card
   );
 }
 

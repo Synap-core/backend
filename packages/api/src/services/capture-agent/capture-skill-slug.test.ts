@@ -85,29 +85,45 @@ vi.mock("../proposals/stamp-materialized.js", async (importOriginal) => ({
 }));
 // The materializer's own skill pass is exercised through the real
 // `buildRuleLoopCallers` below; here it answers what that pass produces, so the
-// assertion is about the RECEIPT the submit core builds from it.
+// assertion is about the RECEIPT the submit core builds from it. It still runs
+// each skill op through the skill caller the submit core WIRED, so what that
+// call site hands the governed insert (its author) is measured, not assumed.
 vi.mock("../../utils/materialize-composite.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  materializeCompositeGraph: async () => ({
-    created: 0,
-    linked: 0,
-    primaryId: "",
-    refToRealId: { fact: "skill-created" },
-    entities: [],
-    relations: [],
-    relationsFailed: [],
-    facets: [],
-    skills: [{ ref: "fact", opIndex: 0, skillId: "skill-created" }],
-    automations: [],
-    rules: [],
-    playbooks: [],
-    views: [],
-    updates: [],
-    projects: [],
-    sessions: [],
-    links: [],
-    documents: [],
-  }),
+  materializeCompositeGraph: async (
+    operations: Array<{ op: string }>,
+    _entityCaller: unknown,
+    _relationCaller: unknown,
+    _onRelationError: unknown,
+    options: {
+      skillCaller?: { create: (op: never) => Promise<{ id: string }> };
+    }
+  ) => {
+    for (const op of operations) {
+      if (op.op === "create_skill")
+        await options.skillCaller!.create(op as never);
+    }
+    return {
+      created: 0,
+      linked: 0,
+      primaryId: "",
+      refToRealId: { fact: "skill-created" },
+      entities: [],
+      relations: [],
+      relationsFailed: [],
+      facets: [],
+      skills: [{ ref: "fact", opIndex: 0, skillId: "skill-created" }],
+      automations: [],
+      rules: [],
+      playbooks: [],
+      views: [],
+      updates: [],
+      projects: [],
+      sessions: [],
+      links: [],
+      documents: [],
+    };
+  },
 }));
 
 import { captureHandlers } from "../../routers/mcp/handlers/capture.js";
@@ -202,6 +218,7 @@ describe("the slug reaches the skill row", () => {
       userId: "u",
       workspaceId: null,
       auditSource: "rule_loop_capture",
+      skillAuthor: { agentUserId: null, personApproved: false },
     });
     await skillCaller.create({
       name: SKILL.name,
@@ -232,5 +249,22 @@ describe("the applied receipt says what landed", () => {
         loadWith: 'synap_load_skill({ ref: "team/where-the-work-is" })',
       }),
     ]);
+  });
+  it("an agent's auto-applied skill is filed as the AGENT's, unreviewed (born unapproved)", async () => {
+    await submitCaptureGraph({
+      userId: "user-owner",
+      agentUserId: "agent-1",
+      workspaceId: null,
+      source: "agent",
+      entities: [],
+      plan: { skills: [{ ...SKILL, slug: "team/where-the-work-is" }] },
+    });
+    // The insert re-runs its gate as the person (no agentUserId: no second
+    // proposal), and is told who wrote the skill and that nobody reviewed it.
+    expect(h.inserted).toHaveLength(1);
+    expect(h.inserted[0]).toMatchObject({
+      agentUserId: undefined,
+      skillAuthor: { agentUserId: "agent-1", personApproved: false },
+    });
   });
 });

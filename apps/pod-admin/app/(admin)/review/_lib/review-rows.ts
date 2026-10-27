@@ -30,10 +30,7 @@ import {
   type LensNeedsYouSignal,
 } from "@synap-core/types/lens";
 import { isObjectNavView } from "@synap-core/types/navigation";
-import {
-  deriveDuplicateReview,
-  needsIdentityChoice,
-} from "@synap-core/types/proposals";
+import { proposalNeedsItsPage } from "@synap-core/types/proposals";
 import type { Ask } from "@synap-core/types/ask";
 import { openIn, type Exit } from "../../../../lib/open-in";
 import { isUuid } from "../../../../lib/format";
@@ -223,15 +220,12 @@ function iso(at: string | Date | null | undefined): string | null {
 }
 
 /**
- * A create whose twin is a record waits for the person's choice on its page
- * (`needsIdentityChoice`): an inline or batch approve would keep both without
- * showing the twin.
+ * A proposal only its own page can decide, so no row approves it inline and
+ * no batch sweeps it in: THE rule every surface and the pod's batch door read
+ * (`proposalNeedsItsPage`, `@synap-core/types` page-only.ts).
  */
-function needsTwinChoice(f: ProposalFacts | undefined): boolean {
-  if (!f) return false;
-  return needsIdentityChoice({
-    duplicate: deriveDuplicateReview(f.data, { singleEntityCreate: true }),
-  });
+function needsItsPage(f: ProposalFacts | undefined): boolean {
+  return f !== undefined && proposalNeedsItsPage(f);
 }
 
 /** The members a cluster row decides, when the sample IS the whole cluster. */
@@ -257,8 +251,8 @@ function proposalRow(
     members !== null &&
     members.every((id) => facts.get(id)?.viewerCanReview === true);
   const changes = group === "changes";
-  const twin = (members ?? (sampleId ? [sampleId] : [])).some((id) =>
-    needsTwinChoice(facts.get(id))
+  const onItsPage = (members ?? (sampleId ? [sampleId] : [])).some((id) =>
+    needsItsPage(facts.get(id))
   );
   return {
     nounKind: sample
@@ -273,10 +267,10 @@ function proposalRow(
     inlineApprove:
       changes &&
       approvable &&
-      !twin &&
+      !onItsPage &&
       sample !== undefined &&
       !isRemoval(sample),
-    batchIds: changes && approvable && !twin ? members : null,
+    batchIds: changes && approvable && !onItsPage ? members : null,
     ids: [s.id, ...(s.proposalIds ?? (sampleId ? [sampleId] : []))],
   };
 }

@@ -98,4 +98,18 @@ describe("content is drawn, never injected", () => {
     const hits = renderer.filter((f) => /<img\b/.test(f.body));
     expect(hits.map((h) => h.path)).toEqual([]);
   });
+
+  it("draws an image only through the one image door", () => {
+    // `app/_lib/media/media-view.tsx` signs on the reader's own floor, draws
+    // only allowlisted rasters and never loads an outside address. A second
+    // `<img>` (or `next/image`, which would fetch and cache a signed URL on
+    // the console's server) would skip all three.
+    const door = join("app", "_lib", "media", "media-view.tsx");
+    const imgs = FILES.filter((f) => !f.test && /<img\b/.test(f.body));
+    expect(imgs.map((f) => f.path)).toEqual([door]);
+    const nextImage = FILES.filter((f) =>
+      /["']next\/image["']|\bnew Image\(/.test(f.body)
+    );
+    expect(nextImage.map((f) => f.path)).toEqual([]);
+  });
 });
