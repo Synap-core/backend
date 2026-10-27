@@ -150,6 +150,13 @@ export const FATE_COPY = {
     `Review later · ${formatFloorCount(count, floor)}`,
   /** The fold's one-line caption, once over its rows: why they are there. */
   reviewLaterCaption: `Untouched for ${REVIEW_LATER_AFTER_DAYS} days · not in your count`,
+  /**
+   * "If you ignore it", for a row already in Review later: what silence does
+   * from here, not the state it is in.
+   */
+  reviewLaterIfIgnored: "Out of your count. It stays until you decide.",
+  /** "If you ignore it", for objectWork the Review later clock still runs on. */
+  leavesCountIfIgnored: `Leaves your count after ${REVIEW_LATER_AFTER_DAYS} days untouched. It never expires.`,
   /** The empty line of a list whose only items wait in the Review later fold. */
   nothingNewWaiting: "Nothing new is waiting on you.",
   /** Who waits on a proposal, by the pod's reason (`ProposalWaits.reason`). */

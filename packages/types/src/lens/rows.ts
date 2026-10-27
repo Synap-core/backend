@@ -384,6 +384,25 @@ export function proposalFateLine(
 }
 
 /**
+ * The "If you ignore it" sentence: what silence DOES, where
+ * {@link proposalFateLine} names where the item stands. Review later says
+ * the row is out of the count and stays; `objectWork` still waiting says it
+ * leaves the count after the Review later clock (`proposalClass` is the
+ * display row's, the class the fate rule reads). Every other fate's line
+ * already is its consequence.
+ */
+export function proposalFateConsequence(
+  fate: ProposalFate,
+  opts: { proposalClass?: string | null; now?: number } = {}
+): string {
+  if (fate.kind === "review_later") return FATE_COPY.reviewLaterIfIgnored;
+  if (fate.kind === "until_decided" && opts.proposalClass === "objectWork") {
+    return FATE_COPY.leavesCountIfIgnored;
+  }
+  return proposalFateLine(fate, opts.now);
+}
+
+/**
  * What a section's ONE polite live region says when rows come and go — COUNTS
  * only, never every row ("Needs you: 1 new, 2 cleared"). Web (`LensRowList`)
  * and relay (`LensSection`, `announceForAccessibility`) speak this one string.
