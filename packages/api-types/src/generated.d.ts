@@ -14337,6 +14337,12 @@ export interface OwedSlot {
 	 * says it ends with the session.
 	 */
 	keptOwedAt?: string;
+	/**
+	 * A param slot's param (`ExpectedOutput.paramName`): what it asks the
+	 * person to set. Its cause is already on `askCause`; the name travels so a
+	 * surface hands the whole row to the card adapter (`askCardSlotOf`).
+	 */
+	paramName?: string;
 }
 /** Where the person finds a session's asks in their Inbox. */
 export type OwedInbox = "needs-you" | "proposed";
@@ -20787,6 +20793,13 @@ export interface Signal {
 	 * session". Absent otherwise, and on every other kind.
 	 */
 	keptOwedAt?: string;
+	/**
+	 * A param slot's param (`ExpectedOutput.paramName`) — carried so a surface
+	 * hands the whole row to the one card adapter (`askCardSlotOf`) and names
+	 * the cause the same way the session page does. Absent on every other slot
+	 * and kind.
+	 */
+	paramName?: string;
 	/**
 	 * Decision CLASS of a `proposal-cluster` signal, carried straight off the
 	 * cluster (which derives it through `proposalClassFields`, the one door) —
