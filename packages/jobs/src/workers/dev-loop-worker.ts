@@ -11,12 +11,16 @@
  *
  * Failure posture: a job that starts before the runner is registered waits
  * for it, then THROWS (pg-boss records a failed job — never a silent done).
- * A runner failure is logged and not retried: the sweeper is idempotent and
- * a replayed observation re-runs it.
+ * A runner failure is logged and RE-THROWN, so pg-boss retries it
+ * (`DEV_LOOP_SEND_OPTIONS`): no producer replays a fact it already delivered
+ * (the devbox marks a PR seen, GitHub posts once), and the sweeper is
+ * idempotent (a settled slot is skipped), so a retry is the only way a
+ * transient error is not permanent.
  */
 
 import type PgBoss from "pg-boss";
 import { createLogger } from "@synap-core/core";
+import type { DeferredWriteGrant } from "@synap-core/types/proposals/deferred-writes";
 
 const logger = createLogger({ module: "dev-loop-worker" });
 
@@ -34,7 +38,20 @@ export interface DevLoopObservationJobData {
   producerAgentUserId: string | null;
   /** The recorded observation's event row. */
   eventId: string;
+  /**
+   * The grant that bounded the posting key (null for a key with none). The
+   * sweep runs inside it again, exactly as a deferred write's replay does, so
+   * the pod never acts further than the key could (founder F1).
+   */
+  grant: DeferredWriteGrant | null;
 }
+
+/** pg-boss send options of the queue: a failed sweep is retried, backing off. */
+export const DEV_LOOP_SEND_OPTIONS: PgBoss.SendOptions = {
+  retryLimit: 3,
+  retryDelay: 30,
+  retryBackoff: true,
+};
 
 type DevLoopRunner = (input: DevLoopObservationJobData) => Promise<unknown>;
 
@@ -95,7 +112,8 @@ export async function handleDevLoopObservation(
   } catch (err) {
     logger.error(
       { err, eventType: data.eventType, eventId: data.eventId },
-      "dev-loop observation failed (no retry)"
+      "dev-loop observation failed (pg-boss retries it)"
     );
+    throw err;
   }
 }

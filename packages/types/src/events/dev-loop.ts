@@ -19,8 +19,9 @@
  *
  * Producers: the backend GitHub Actions workflow and the devbox CI watcher
  * (PRs, CI), and the pod itself on a successful update (`dev.deployed`).
- * Consumers: the merge sweeper (`dev.pr_merged` completes the session outcome
- * that points at the PR) and any event automation (`eventPattern` = the type).
+ * Consumers: the PR sweeper (`dev.pr_merged` into the default branch completes
+ * the session outcome that points at the PR, `dev.pr_closed` retires it) and
+ * any event automation (`eventPattern` = the type).
  *
  * PURE and dependency-light (zod only): CLI, devbox scripts and the pod read
  * the same contract.
@@ -99,6 +100,17 @@ export function pullRequestOutcomeKey(ref: PullRequestRef): string {
 }
 
 /**
+ * THE `Pod session:` line of a PR body — the ONE rule, every reader's spelling
+ * (the Work Map's reader, the producers' copy in `scripts/pod-observation.mjs`,
+ * pinned to this one by its tripwire). Tolerant on purpose: any punctuation
+ * around "Pod session" (`**Pod session:**`, `- Pod session`), an optional
+ * colon, a backticked id, any case; at the start of a line, so prose that
+ * merely mentions a session does not count.
+ */
+export const POD_SESSION_LINE_RE =
+  /^\W*pod session\W*:?\s*\W*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/im;
+
+/**
  * The session a PR body names on its `Pod session: <uuid>` line (the
  * convention agents follow when they open a PR). `null` when there is none.
  */
@@ -106,10 +118,7 @@ export function podSessionIdFromBody(
   body: string | null | undefined
 ): string | null {
   if (!body) return null;
-  const m =
-    /Pod session:\s*`?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i.exec(
-      body
-    );
+  const m = POD_SESSION_LINE_RE.exec(body);
   return m ? m[1]!.toLowerCase() : null;
 }
 
@@ -126,6 +135,14 @@ export const pullRequestEventSchema = z
     sha: shaSchema.optional(),
     branch: z.string().min(1).max(256).optional(),
     base: z.string().min(1).max(256).optional(),
+    /**
+     * `base` is the repository's DEFAULT branch (the producer knows it:
+     * GitHub's `repository.default_branch`). Only a merge into the default
+     * branch delivers the PR (founder F3): a stacked PR merged into its
+     * parent branch is not on main yet, so its outcome stays open. Absent =
+     * not known to be the default, and a merge then completes nothing.
+     */
+    intoDefault: z.boolean().optional(),
     title: z.string().max(512).optional(),
     /** The PR body — read for its `Pod session: <uuid>` line. */
     body: z.string().max(65_536).optional(),

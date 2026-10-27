@@ -32,6 +32,7 @@ const h = vi.hoisted(() => ({
   },
   perm: [] as Array<Record<string, unknown>>,
   verdict: { granted: true } as Record<string, unknown>,
+  throwOnce: false,
   evaluations: [] as Array<Record<string, unknown>>,
 }));
 
@@ -52,8 +53,25 @@ vi.mock("../../../utils/permission-check.js", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return {
     ...actual,
+    // Rung 0 of the real gate is the key's grant (`grantWriteDenial` on the
+    // request's ambient grant) — kept REAL, so a sweep outside the posting
+    // key's grant is denied exactly as the gate denies it (F1). The rest of
+    // the ladder is the stubbed verdict.
     checkPermissionOrPropose: async (opts: Record<string, unknown>) => {
       h.perm.push(opts);
+      if (h.throwOnce) {
+        h.throwOnce = false;
+        throw new Error("transient db error");
+      }
+      const { grantWriteDenial } =
+        await import("../../../utils/grant-write-check.js");
+      const denial = await grantWriteDenial({
+        subjectType: opts.subjectType as string,
+        action: opts.action as string,
+        workspaceId: (opts.workspaceId as string | undefined) ?? null,
+        data: opts.data as Record<string, unknown>,
+      });
+      if (denial) return { denied: true, reason: denial };
       return h.verdict;
     },
   };
@@ -142,7 +160,22 @@ const merged = (over: Record<string, unknown> = {}) => ({
   repo: "Synap-core/backend",
   number: 255,
   url: URL255,
+  base: "main",
+  intoDefault: true,
   ...over,
+});
+const prUrl = (n: number) => `https://github.com/Synap-core/backend/pull/${n}`;
+const job = (
+  eventType: string,
+  data: Record<string, unknown>,
+  grant: unknown = null
+) => ({
+  eventType,
+  data,
+  userId: USER,
+  producerAgentUserId: AGENT,
+  eventId: "ev-x",
+  grant: grant as never,
 });
 
 beforeAll(async () => {
@@ -399,6 +432,7 @@ describe("runDevLoopObservation (the job's runner)", () => {
       userId: USER,
       producerAgentUserId: null,
       eventId: "ev-1",
+      grant: null,
     });
     expect(r).toMatchObject({
       status: "swept",
@@ -411,7 +445,176 @@ describe("runDevLoopObservation (the job's runner)", () => {
         userId: USER,
         producerAgentUserId: null,
         eventId: "ev-2",
+        grant: null,
       })
     ).toEqual({ status: "ignored", eventType: "ci.finished" });
+  });
+});
+
+describe("only a merge into the DEFAULT branch delivers the PR (founder F3)", () => {
+  beforeEach(() => {
+    h.perm.length = 0;
+    h.verdict = { granted: true };
+  });
+
+  it("a stacked PR merged into its parent branch completes nothing: not_default_base", async () => {
+    const id = await seed([prSlot(600)]);
+    const out = await sweepMergedPullRequest({
+      userId: USER,
+      producerAgentUserId: AGENT,
+      event: merged({
+        number: 600,
+        url: prUrl(600),
+        base: "feat/parent",
+        intoDefault: false,
+      }),
+    });
+    expect(out).toEqual([
+      {
+        sessionId: id,
+        slotKey: "pr-backend-600",
+        via: "outcome_ref",
+        result: "not_default_base",
+        reason: "Merged into feat/parent, not the default branch.",
+      },
+    ]);
+    expect(h.perm).toHaveLength(0);
+    expect((await stored(id))[0]!.status ?? "pending").toBe("pending");
+    expect(h.evaluations).toHaveLength(0);
+  });
+
+  it("a producer that does not say intoDefault is not known to be the default: fail closed", async () => {
+    const id = await seed([prSlot(601)]);
+    const out = await sweepMergedPullRequest({
+      userId: USER,
+      event: merged({ number: 601, url: prUrl(601), intoDefault: undefined }),
+    });
+    expect(out[0]).toMatchObject({ sessionId: id, result: "not_default_base" });
+    expect((await stored(id))[0]!.status ?? "pending").toBe("pending");
+  });
+});
+
+describe("a PR closed WITHOUT merging retires its outcome (founder F2)", () => {
+  beforeEach(() => {
+    h.perm.length = 0;
+    h.verdict = { granted: true };
+  });
+
+  it("dev.pr_closed withdraws the outcome through the governed door, as the producer", async () => {
+    const id = await seed([
+      prSlot(700),
+      { kind: "document", label: "N", key: "n" },
+    ]);
+    const r = await runDevLoopObservation(
+      job("dev.pr_closed", merged({ number: 700, url: prUrl(700) }))
+    );
+    expect(r).toEqual({
+      status: "swept",
+      outcomes: [
+        {
+          sessionId: id,
+          slotKey: "pr-backend-700",
+          via: "outcome_ref",
+          result: "retired",
+        },
+      ],
+    });
+    const slots = await stored(id);
+    expect(slots[0]).toMatchObject({ retiredReason: "withdrawn" });
+    expect(slots[0]!.retiredAt).toBeTruthy();
+    expect(slots[0]!.status ?? "pending").not.toBe("done");
+    expect(slots[1]!.retiredAt ?? null).toBeNull();
+    expect(h.perm[0]).toMatchObject({
+      agentUserId: AGENT,
+      subjectType: "focus_session",
+      action: "update",
+      data: { id, retireOutput: "pr-backend-700" },
+    });
+  });
+
+  it("a delivered outcome is never withdrawn by a later close", async () => {
+    const id = await seed([prSlot(701, { status: "done" })]);
+    const r = await runDevLoopObservation(
+      job("dev.pr_closed", merged({ number: 701, url: prUrl(701) }))
+    );
+    expect(r).toMatchObject({
+      outcomes: [{ sessionId: id, result: "already_settled" }],
+    });
+    expect(h.perm).toHaveLength(0);
+  });
+});
+
+describe("the sweep runs inside the POSTING KEY'S GRANT (founder F1)", () => {
+  beforeEach(() => {
+    h.perm.length = 0;
+    h.verdict = { granted: true };
+  });
+
+  it("a key allowed only event.create is DENIED — the outcome is never completed", async () => {
+    const id = await seed([prSlot(800)]);
+    const r = await runDevLoopObservation(
+      job("dev.pr_merged", merged({ number: 800, url: prUrl(800) }), {
+        scopes: [{ permissions: ["event.create"] }],
+        clientId: "app-obs",
+      })
+    );
+    expect(r).toMatchObject({
+      status: "swept",
+      outcomes: [{ sessionId: id, result: "denied" }],
+    });
+    const out = (r as { outcomes: Array<{ reason?: string }> }).outcomes[0]!;
+    expect(out.reason).toMatch(/grant does not allow "session\.update"/);
+    const slot = (await stored(id))[0]!;
+    expect(slot.status ?? "pending").toBe("pending");
+    expect(slot.claimedDone ?? false).toBe(false);
+  });
+
+  it("a key whose grant allows the session update completes it (the grant is the bound, not a blanket deny)", async () => {
+    const id = await seed([prSlot(801)]);
+    const r = await runDevLoopObservation(
+      job("dev.pr_merged", merged({ number: 801, url: prUrl(801) }), {
+        scopes: [{ permissions: ["event.create", "session.update"] }],
+        clientId: null,
+      })
+    );
+    expect(r).toMatchObject({
+      outcomes: [{ sessionId: id, result: "completed" }],
+    });
+  });
+
+  it("an event.create-only key cannot retire an outcome either", async () => {
+    const id = await seed([prSlot(802)]);
+    const r = await runDevLoopObservation(
+      job("dev.pr_closed", merged({ number: 802, url: prUrl(802) }), {
+        scopes: [{ permissions: ["event.create"] }],
+        clientId: null,
+      })
+    );
+    expect(r).toMatchObject({ outcomes: [{ result: "denied" }] });
+    expect((await stored(id))[0]!.retiredAt ?? null).toBeNull();
+  });
+});
+
+describe("a transient failure fails the job, and the retry finishes it (S2)", () => {
+  beforeEach(() => {
+    h.perm.length = 0;
+    h.verdict = { granted: true };
+  });
+
+  it("throws when a session's write failed; the retried job completes it and skips what settled", async () => {
+    const id = await seed([prSlot(900)]);
+    h.throwOnce = true;
+    await expect(
+      runDevLoopObservation(
+        job("dev.pr_merged", merged({ number: 900, url: prUrl(900) }))
+      )
+    ).rejects.toThrow(/failed for .*pr-backend-900: transient db error/);
+    expect((await stored(id))[0]!.status ?? "pending").toBe("pending");
+    const retry = await runDevLoopObservation(
+      job("dev.pr_merged", merged({ number: 900, url: prUrl(900) }))
+    );
+    expect(retry).toMatchObject({
+      outcomes: [{ sessionId: id, result: "completed" }],
+    });
   });
 });

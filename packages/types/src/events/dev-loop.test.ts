@@ -92,6 +92,16 @@ describe("podSessionIdFromBody", () => {
       SID
     );
   });
+  it("reads every spelling the producers and the Work Map read (ONE rule)", () => {
+    expect(podSessionIdFromBody(`**Pod session:** ${SID.toUpperCase()}`)).toBe(
+      SID
+    );
+    expect(podSessionIdFromBody(`- Pod session ${SID}`)).toBe(SID);
+    expect(podSessionIdFromBody(`x\n> pod session: ${SID}`)).toBe(SID);
+  });
+  it("never reads prose that merely mentions a session mid-line", () => {
+    expect(podSessionIdFromBody(`See the Pod session ${SID} too`)).toBeNull();
+  });
   it("is null when there is none", () => {
     expect(podSessionIdFromBody("no line here")).toBeNull();
     expect(podSessionIdFromBody(undefined)).toBeNull();
@@ -118,6 +128,15 @@ describe("checkDevLoopPayload", () => {
       url: "https://github.com/Synap-core/backend/pull/25",
     });
     expect(r).toMatchObject({ contract: true, ok: false });
+  });
+
+  it("carries intoDefault as a boolean, never a string", () => {
+    expect(
+      checkDevLoopPayload("dev.pr_merged", { ...pr, intoDefault: true })
+    ).toEqual({ contract: true, ok: true });
+    expect(
+      checkDevLoopPayload("dev.pr_merged", { ...pr, intoDefault: "yes" })
+    ).toMatchObject({ contract: true, ok: false });
   });
 
   it("refuses a missing number, a bad repo, a bad session id", () => {
