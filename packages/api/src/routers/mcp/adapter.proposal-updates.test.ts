@@ -8,7 +8,10 @@
  * the session, caller and workspace-lens machinery mocked.
  */
 import { describe, it, expect } from "vitest";
-import { withProposalUpdates } from "./adapter.js";
+import {
+  PROPOSAL_UPDATES_UNAVAILABLE,
+  withProposalUpdates,
+} from "./adapter.js";
 import type { ProposalUpdate } from "../../services/proposals/proposal-updates-digest.js";
 
 const UPDATE: ProposalUpdate = {
@@ -45,11 +48,32 @@ describe("withProposalUpdates", () => {
     });
   });
 
-  it("leaves the result untouched when there is nothing to tell, or the read failed", () => {
+  it("leaves the result untouched when nothing was decided", () => {
     const result = {
       content: [{ type: "text" as const, text: JSON.stringify({ ok: true }) }],
     };
     expect(withProposalUpdates(result, [])).toBe(result);
-    expect(withProposalUpdates(result, null)).toBe(result);
+  });
+
+  it("says a failed read, never folding it into 'nothing was decided'", () => {
+    const out = withProposalUpdates(
+      { content: [{ type: "text", text: JSON.stringify({ ok: true }) }] },
+      null
+    );
+    const payload = JSON.parse((out.content[0] as { text: string }).text);
+    expect(payload).toEqual({
+      ok: true,
+      proposalUpdatesUnavailable: PROPOSAL_UPDATES_UNAVAILABLE,
+    });
+    expect(payload).not.toHaveProperty("proposalUpdates");
+
+    const plain = withProposalUpdates(
+      { content: [{ type: "text", text: "Agent proposal limit reached." }] },
+      null
+    );
+    expect(plain.content).toHaveLength(2);
+    expect(JSON.parse((plain.content[1] as { text: string }).text)).toEqual({
+      proposalUpdatesUnavailable: PROPOSAL_UPDATES_UNAVAILABLE,
+    });
   });
 });

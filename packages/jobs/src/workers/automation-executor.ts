@@ -204,6 +204,7 @@ export {
   resolveQueryProfileSlug,
   parseQueryFilterConditions,
   parseQueryOrderBy,
+  QueryFilterParseError,
   type QueryPropertyCondition,
   type QueryColumnCondition,
   type QueryCondition,

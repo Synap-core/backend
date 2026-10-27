@@ -78,6 +78,8 @@ const TOOL_CREATE_BLOCK = executorBlock("tool/create", "automation/create");
  */
 function approvedAfterSkillCreateApproval(args: {
   kind: string;
+  code?: string | null;
+  providerSpec?: unknown;
   /** The proposal row's author — set iff an AGENT authored the proposal. */
   proposalAgentUserId: string | null;
   /** A PERSON (not an agent path) clicked approve. */
@@ -85,6 +87,8 @@ function approvedAfterSkillCreateApproval(args: {
 }): boolean {
   return skillBornApproved({
     kind: args.kind,
+    code: args.code ?? null,
+    providerSpec: args.providerSpec ?? null,
     agentUserId: args.proposalAgentUserId,
     personApprovedProposal: args.approvedByPerson,
   });
@@ -134,6 +138,21 @@ describe("(A) skill/create approval — one approval, no escalation", () => {
           })
         ).toBe(false);
       }
+    }
+  });
+
+  it("an instruction LABEL on code or a provider spec is not prose: never born approved unreviewed", () => {
+    for (const carries of [
+      { code: "return 1;" },
+      { providerSpec: { tool: "x" } },
+    ]) {
+      expect(
+        approvedAfterSkillCreateApproval({
+          kind: "instruction",
+          ...carries,
+          proposalAgentUserId: null,
+        })
+      ).toBe(false);
     }
   });
 
