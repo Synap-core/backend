@@ -72,15 +72,13 @@ function chatId(chat: Record<string, unknown>): string | undefined {
   return firstString(chat.id, chat.chat_id, chat.thread_id);
 }
 
-/** Best-effort attendee display name off a raw v2 chat object. */
+/**
+ * The other person's display name off a raw v2 chat: a 1to1 chat carries them
+ * as `user` (v2 has no `attendees`), and the chat's `name`.
+ */
 function chatAttendeeName(chat: Record<string, unknown>): string | undefined {
-  const attendees = chat.attendees;
-  if (Array.isArray(attendees) && attendees.length > 0) {
-    const a = attendees[0] as Record<string, unknown>;
-    const n = firstString(a?.name, a?.display_name, a?.username);
-    if (n) return n;
-  }
-  return firstString(chat.name, chat.subject, chat.title);
+  const user = chat.user as Record<string, unknown> | undefined;
+  return firstString(user?.display_name, chat.name);
 }
 
 /** Message body off a raw v2 message object. */
@@ -88,15 +86,10 @@ function messageBody(msg: Record<string, unknown>): string {
   return firstString(msg.text, msg.body, msg.message, msg.content) ?? "";
 }
 
-/** Sender display name off a raw v2 message object. */
+/** Sender display name off a raw v2 message (`sender` is a User), else its id. */
 function messageSenderName(msg: Record<string, unknown>): string | undefined {
-  const from = msg.from as Record<string, unknown> | undefined;
-  return firstString(
-    msg.sender_name,
-    msg.author_name,
-    from?.name,
-    msg.sender_id
-  );
+  const sender = msg.sender as Record<string, unknown> | undefined;
+  return firstString(sender?.display_name, msg.sender_id);
 }
 
 /** ISO timestamp off a raw v2 message object; defaults to now. */
