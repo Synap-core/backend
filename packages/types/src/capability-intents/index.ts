@@ -30,7 +30,7 @@
  * seed migration SQL and fails the build the moment these two disagree.
  *
  * ⚠️ MIRRORED IN LOCKSTEP with:
- *   - the `INSERT` slugs — migrations `0283`, `0284`, `0314`, `0329`
+ *   - the `INSERT` slugs — migrations `0283`, `0284`, `0314`, `0329`, `0360`
  *   - `CAPABILITY_INTENTS` — synap-control-plane-api
  *       `src/seeds/capability-intent-vocabulary.ts`
  *
