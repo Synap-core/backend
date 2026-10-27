@@ -40,6 +40,10 @@ import {
   resolveObjectNoun,
   resolveStatusLabel,
 } from "@synap-core/types/vocabulary";
+import {
+  resolveEntityMedia,
+  type MediaRef,
+} from "@synap-core/types/presentation";
 import { formatDate, formatTimestamp } from "../../../lib/format";
 import type { ProposalChangeInput } from "./proposal-review-model";
 
@@ -56,7 +60,9 @@ export type RecordValue =
   | { kind: "status"; label: string; raw: string }
   | { kind: "link"; href: string; text: string }
   | { kind: "ref"; objectKind: string; id: string; name: string }
-  | { kind: "tags"; items: string[] };
+  | { kind: "tags"; items: string[] }
+  /** Source code, whole: never clipped (the card may fold it, never cut it). */
+  | { kind: "code"; text: string; lines: number };
 
 export interface RecordField {
   key: string;
@@ -83,6 +89,15 @@ export interface ProposedRecord {
 
 /** How many fields a card shows before "Show all N fields". */
 export const RECORD_FIELDS_SHOWN = 9;
+
+/**
+ * What approving lets RUN, read before anything else: a skill's code, and the
+ * tools it declared it calls (its runs call them with no second review).
+ * These lead the card, in this order, so they never sit behind "Show all N
+ * fields"; and the code is drawn whole. Approving an agent's skill create
+ * turns it on (founder decision 2, 2026-10-25): this page is the one review.
+ */
+const MUST_READ_KEYS: readonly string[] = ["code", "requiredToolNames"];
 
 /** Text past this many characters (or with a line break) takes the card's width. */
 const WIDE_TEXT_CHARS = 80;
@@ -274,18 +289,49 @@ function fieldLabel(
   return mechanical ? formatFieldLabel(key) : label;
 }
 
+/** Source code as the reviewer reads it: every character, every line. */
+export function codeValue(value: unknown): RecordValue | null {
+  if (typeof value !== "string" || value.trim() === "") return null;
+  return { kind: "code", text: value, lines: value.split("\n").length };
+}
+
 /** The value of one side of a change, through its type. */
 function sideValue(
   key: string,
   value: unknown,
   def: EffectivePropertyDef | undefined,
-  resolved: ResolvedRef | undefined
+  resolved: ResolvedRef | undefined,
+  isProperty: boolean
 ): RecordValue | null {
   if (key === "profileSlug" && typeof value === "string" && value.trim()) {
     return { kind: "text", text: resolveObjectNoun(value), long: false };
   }
+  // The record's own `code` (a skill's), never a property that happens to be
+  // named so.
+  if (!isProperty && key === "code") return codeValue(value);
   const renderKind = classifyPropertyKind({ slug: key, value, def });
   return recordValue(renderKind, value, resolved);
+}
+
+/**
+ * The media of the entity a create proposes — an uploaded image waiting for
+ * approval — read by the one resolver from the record the gate stored
+ * (`documentId`, `properties.mimeType`). `null` when it has none. The bytes
+ * are already stored, so the reviewer sees what they approve.
+ */
+export function proposedEntityMedia(payload: unknown): MediaRef | null {
+  if (!payload || typeof payload !== "object") return null;
+  const row = payload as Record<string, unknown>;
+  const properties =
+    row.properties && typeof row.properties === "object"
+      ? (row.properties as Record<string, unknown>)
+      : null;
+  const { primary } = resolveEntityMedia({
+    id: typeof row.id === "string" ? row.id : "",
+    documentId: typeof row.documentId === "string" ? row.documentId : null,
+    properties,
+  });
+  return primary.via === "none" ? null : primary;
 }
 
 export interface RecordInput {
@@ -358,20 +404,22 @@ export function proposedRecord(input: RecordInput): ProposedRecord | null {
     const after =
       fieldOp === "remove"
         ? undefined
-        : sideValue(key, change.after, def, resolved);
+        : sideValue(key, change.after, def, resolved, isProperty);
     const before =
       fieldOp === "add"
         ? undefined
         : change.before === undefined && fieldOp === "change"
           ? undefined
-          : sideValue(key, change.before, def, resolved);
+          : sideValue(key, change.before, def, resolved, isProperty);
 
     // An empty value is not a fact: an add needs a value; a change needs one
     // real side; a removal needs the thing it removes.
     if (fieldOp === "add" && !after) continue;
     if (fieldOp === "change" && !after && !before) continue;
 
-    const wide = [after, before].some((v) => v?.kind === "text" && v.long);
+    const wide = [after, before].some(
+      (v) => (v?.kind === "text" && v.long) || v?.kind === "code"
+    );
     fields.push({
       key: change.path,
       label: fieldLabel(change, key, def),
@@ -384,6 +432,11 @@ export function proposedRecord(input: RecordInput): ProposedRecord | null {
   }
 
   if (!title && !kind && fields.length === 0) return null;
+  const rank = (f: RecordField) => {
+    const i = MUST_READ_KEYS.indexOf(f.key);
+    return i < 0 ? MUST_READ_KEYS.length : i;
+  };
+  fields.sort((a, b) => rank(a) - rank(b)); // stable: the rest keep their order
   return { ref: input.ref ?? "single", title, kind, op, fields };
 }
 

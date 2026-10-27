@@ -1,14 +1,8 @@
 /**
- * TRIPWIRE: every operator of the authored view-filter grammar
- * (`@synap-core/types/views` `VIEW_FILTER_OPERATORS`) is COMPILED by
- * `ViewFilterCompiler`, on both the core-column and the JSONB property path —
- * and the compiler's runtime mirror is the same set.
- *
- * TEST-ONLY relative import of the authored grammar: `@synap/database` cannot
- * depend on `@synap-core/types` (types already depends on database — a build
- * cycle), so no package dependency is declared; tsconfig excludes tests, so
- * this path never enters the database build. Same precedent as
- * `utils/guideline-vocabulary-parity.test.ts`.
+ * TRIPWIRE: every operator of the view-filter grammar
+ * (`@synap-core/types/views` `VIEW_FILTER_OPERATORS`, which the compiler
+ * re-exports — one declaration) is COMPILED by `ViewFilterCompiler`, on both
+ * the core-column and the JSONB property path, and every core field compiles.
  *
  * The operator set and each operator's sample value are DERIVED from the
  * authored grammar (`VIEW_FILTER_OPERATORS` × `VIEW_FILTER_VALUE_SHAPE`), never
@@ -21,13 +15,11 @@
  */
 import { describe, it, expect } from "vitest";
 import { PgDialect } from "drizzle-orm/pg-core";
+import * as authored from "@synap-core/types/views";
 import {
   ViewFilterCompiler,
-  VIEW_FILTER_OPERATORS as MIRROR,
-  VIEW_FILTER_CORE_FIELDS as CORE_FIELDS_MIRROR,
   type EntityFilter,
 } from "./view-filter-compiler.js";
-import * as authored from "../../../types/src/views/filters.js";
 
 const dialect = new PgDialect();
 // Neither path exercised here touches the db handle.
@@ -40,23 +32,14 @@ function sampleValue(op: authored.FilterOperator): unknown {
   return shape === "multi" ? ["a", "b"] : shape === "none" ? undefined : 5;
 }
 
-describe("view filter operators — authored grammar ⇔ compiler", () => {
+describe("view filter operators — every authored operator compiles", () => {
   it("non-vacuity: the authored grammar is real", () => {
     expect(authored.VIEW_FILTER_OPERATORS.length).toBeGreaterThanOrEqual(12);
     expect(authored.VIEW_FILTER_OPERATORS).toContain("is_not_empty");
   });
 
-  it("the compiler's runtime mirror is the authored set", () => {
-    expect([...MIRROR].sort()).toEqual(
-      [...authored.VIEW_FILTER_OPERATORS].sort()
-    );
-  });
-
-  it("the compiler's core-field mirror is the authored set, and each compiles", async () => {
+  it("every authored core field compiles", async () => {
     expect(authored.VIEW_FILTER_CORE_FIELDS.length).toBeGreaterThanOrEqual(5);
-    expect([...CORE_FIELDS_MIRROR].sort()).toEqual(
-      [...authored.VIEW_FILTER_CORE_FIELDS].sort()
-    );
     for (const field of authored.VIEW_FILTER_CORE_FIELDS) {
       expect(authored.isViewFilterField(field), field).toBe(true);
       const compiled = await compiler.compileFilter({

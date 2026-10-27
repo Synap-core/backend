@@ -7,22 +7,23 @@
  * 0283 seeded the 13, 0284 added `publish_post`), so a TypeScript union is a
  * MIRROR by construction, and a mirror is only safe when something checks it.
  *
- * Four copies existed on 2026-09-30. Three were real mirrors (three different
- * repos link different subsets, so none can import another); the fourth,
- * `AbstractVerb` in `@synap/playbooks`, was DEAD — 13 slugs, stale since 0284,
- * with ZERO importers repo-wide. Deleted 2026-10-01; policed by
- * `packages/playbooks/src/required-intents.test.ts`.
+ * Four copies existed on 2026-09-30. `AbstractVerb` in `@synap/playbooks` was
+ * DEAD — 13 slugs, stale since 0284, with ZERO importers repo-wide. Deleted
+ * 2026-10-01; policed by `packages/playbooks/src/required-intents.test.ts`.
+ * The pod's `ABSTRACT_VERBS` was collapsed 2026-10-26: once `@synap/database`
+ * depended on `@synap-core/types` (#201) it became `ABSTRACT_INTENTS`,
+ * re-exported. Two remain: the types list and the control plane's.
  *
- * The pod's own `ABSTRACT_VERBS` was the real hazard: it had NO parity guard at
- * all. Both other mirrors re-derived from the migration SQL; the pod's copy was
+ * The pod's own `ABSTRACT_VERBS` was the real hazard while it was a copy: it
+ * had NO parity guard at all. Both other mirrors re-derived from the migration SQL; the pod's copy was
  * asserted only by `verb-intent.test.ts`, which pins its OWN hand-typed list —
  * a self-consistency check, blind to the SSOT. So a slug added by migration
  * could ship to production with the pod rejecting it, while every other mirror
  * went red. This file closes that.
  *
  * ── WHAT IT PROVES ──────────────────────────────────────────────────────────
- * 1. SAMENESS between the pod's mirror and the types mirror, and between the
- *    types mirror and the pod's seeded migration rows. Never CORRECTNESS: if
+ * 1. SAMENESS between the list the pod reads (`ABSTRACT_VERBS`, the types
+ *    list re-exported) and the pod's seeded migration rows. Never CORRECTNESS: if
  *    every copy agrees on a slug that should not exist, this stays green. A
  *    convergence guard cannot tell a shared mistake from a shared truth — the
  *    vocabulary's MEANING is reviewed, not derived.
@@ -144,10 +145,11 @@ describe("intent vocabulary — the pod's mirror is checked against the SSOT", (
     expect([...ABSTRACT_VERBS].sort()).toEqual([...seedUnion].sort());
   });
 
-  it("the types mirror === the SSOT, and the two pod-side mirrors agree", () => {
+  it("the types mirror === the SSOT, and the pod reads that very list", () => {
     const seeded = deriveSeededIntents();
     expect([...CAPABILITY_INTENTS].sort()).toEqual([...seeded].sort());
-    expect([...ABSTRACT_INTENTS].sort()).toEqual([...ABSTRACT_VERBS].sort());
+    // One declaration: the pod's name is the types list, not a copy of it.
+    expect(ABSTRACT_VERBS).toBe(ABSTRACT_INTENTS);
   });
 
   it("the seed union and the post-seed rows stay honestly distinguished", () => {

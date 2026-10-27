@@ -33,7 +33,8 @@
  *                   files without `--passWithNoTests`, or every test of a
  *                   package was skipped (0 passed of N)
  *   below-floor     a package passed fewer tests than its floor in
- *                   scripts/test-floors.json (entries with no `args` only)
+ *                   scripts/test-floors.json (entries with no `args` only),
+ *                   or a floored package did not run at all
  *   tripwire-unrun  a discovered tripwire file appears in no report
  *
  * A file FAILS when vitest reports it `failed` OR it collected zero tests (an
@@ -394,7 +395,20 @@ const floors = JSON.parse(readFileSync(FLOORS_PATH, "utf8")).entries.filter(
 );
 for (const e of floors) {
   const r = perRun.find((p) => p.id === e.dir);
-  if (r && r.passed < e.floor) {
+  // A floored package that did not run at all lost its `test` script (or it
+  // stopped being `vitest run …`): its whole suite left CI with no red. (One
+  // that ran and crashed is already a `no-report`.)
+  if (
+    !r &&
+    SCRIPT === "test" &&
+    inScope(e.dir) &&
+    !runs.some((x) => x.dir === e.dir)
+  ) {
+    problems.push({
+      kind: "below-floor",
+      detail: `${e.dir}: did not run, floor ${e.floor} (scripts/test-floors.json). Its \`test\` script is gone or is not \`vitest run …\`.`,
+    });
+  } else if (r && r.passed < e.floor) {
     problems.push({
       kind: "below-floor",
       detail: `${e.dir}: ${r.passed} passing, floor ${e.floor} (scripts/test-floors.json). Tests stopped running or started failing.`,

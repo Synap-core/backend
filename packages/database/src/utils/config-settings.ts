@@ -17,6 +17,12 @@
  */
 
 import { and, eq, isNull, or, sql, desc } from "drizzle-orm";
+import {
+  GUIDELINE_SCOPE_ORDER,
+  GUIDELINE_SOURCE_KINDS,
+  IMPORT_SOURCE_KIND_PREFIX,
+  type GuidelineSourceKind,
+} from "@synap-core/types/guidelines";
 import { configSettings } from "../schema/config-settings.js";
 import type {
   ConfigScopeKind,
@@ -33,29 +39,19 @@ type DbHandle = typeof import("../client-pg.js").db;
 export const GUIDELINE_KEY = "guideline";
 
 /**
- * MIRROR — the AUTHORED list is `GUIDELINE_SOURCE_KINDS` in
- * `@synap-core/types/guidelines` (what browser and relay import). This package
- * cannot import it (`@synap-core/types` depends on `@synap/database`), so this
- * runtime copy is pinned identical by `guideline-vocabulary-parity.test.ts`.
- * Change it THERE first.
- *
  * The closed `sourceKind` vocabulary for NON-import inputs — the kinds of input
- * a capture door accepts. An import item's kind is `import:<source>`, where
- * `<source>` is an `IMPORT_SOURCE_VALUES` token (@synap/types — gated at the
- * write door, `routers/guidelines.ts`, since this package does not depend on
- * @synap/types).
+ * a capture door accepts — and the prefix of an import item's kind
+ * (`import:<IMPORT_SOURCE_VALUES>`). Declared ONCE in
+ * `@synap-core/types/guidelines` (what browser and relay import) and
+ * re-exported here. The `<source>` tail of an import kind is gated at the write
+ * door (`routers/guidelines.ts`), which accepts the declaration; this resolver
+ * only reads stored rows.
  */
-export const GUIDELINE_SOURCE_KINDS = [
-  "text",
-  "url",
-  "image",
-  "file",
-  "audio",
-] as const;
-export type GuidelineSourceKind = (typeof GUIDELINE_SOURCE_KINDS)[number];
-
-/** The `sourceKind` prefix for import items: `import:<IMPORT_SOURCE_VALUES>`. */
-export const IMPORT_SOURCE_KIND_PREFIX = "import:";
+export {
+  GUIDELINE_SOURCE_KINDS,
+  IMPORT_SOURCE_KIND_PREFIX,
+  type GuidelineSourceKind,
+};
 
 /**
  * THE ordering authority: scope kinds general → specific. Rank is the INDEX, so
@@ -109,19 +105,11 @@ export const IMPORT_SOURCE_KIND_PREFIX = "import:";
  * for the reason recorded above: one `scopeRef` must never carry two
  * vocabularies.
  */
-// MIRROR — the AUTHORED order is `GUIDELINE_SCOPE_ORDER` in
-// `@synap-core/types/guidelines`; this runtime copy is pinned identical (order
-// AND membership) by `guideline-vocabulary-parity.test.ts`. Change it there first.
-const SCOPE_ORDER = [
-  "default",
-  "workKind",
-  "sourceKind",
-  "entityKind",
-  "channelType",
-  "bridge",
-  "channel",
-  "shape",
-] as const satisfies ReadonlyArray<ConfigScopeKind>;
+// The order itself is declared ONCE, as `GUIDELINE_SCOPE_ORDER` in
+// `@synap-core/types/guidelines` (the editors read it too). `satisfies` + the
+// floor below hold it to the stored enum in both directions.
+const SCOPE_ORDER =
+  GUIDELINE_SCOPE_ORDER satisfies ReadonlyArray<ConfigScopeKind>;
 
 /**
  * COMPILE-TIME COVERAGE FLOOR. A scope kind added to the enum but missing from

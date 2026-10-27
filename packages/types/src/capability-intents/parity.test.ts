@@ -2,9 +2,9 @@
  * PARITY: the intent vocabulary this mirror declares === the pod's seeded rows.
  *
  * WHY THIS TEST EXISTS: `src/capability-intents/index.ts` is a HAND MIRROR of
- * the pod's `capability_intents` table — the pod cannot import it (types
- * devDepends on database), so the two can drift. A hand copy nothing checks is
- * a comment; this is what makes it a mirror.
+ * the pod's `capability_intents` table — the slugs live in SQL rows, a list in
+ * TypeScript cannot import them, so the two can drift. A hand copy nothing
+ * checks is a comment; this is what makes it a mirror.
  *
  * WHAT IT PROVES: SAMENESS — never CORRECTNESS. If both sides agree on a slug
  * that no capability should ever declare, this stays green. The vocabulary's
@@ -14,10 +14,9 @@
  * the SQL is what actually populates the table — a TypeScript-only check would
  * stay green while the shipped seed and this mirror disagreed.
  *
- * Scoped like the sibling `guideline-vocabulary-parity.test.ts` in
- * `@synap/database`: `package.json` declares no dependency on
- * `synap-backend`, and `tsconfig.json` excludes test files, so this file never
- * enters the types build. It skips cleanly in an isolated checkout where
+ * It reads the migrations by path, not by import: `package.json` declares no
+ * dependency on the database package, and `tsconfig.json` excludes test files,
+ * so this file never enters the types build. It skips cleanly in an isolated checkout where
  * synap-backend is absent.
  */
 import { describe, it, expect } from "vitest";
