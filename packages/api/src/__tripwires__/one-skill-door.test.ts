@@ -17,11 +17,18 @@ import { join, relative } from "path";
  * `packages/* /src` and `apps/* /src`. In it:
  *   1. only `run-skill.ts` CALLS a runtime (`runSkillInSandbox`,
  *      `executeSkillViaIS`, `dryRunSkillViaIS`);
- *   2. only `execute-skill-via-is.ts` names the IS skill routes in a literal
+ *   2. only the sandbox itself (`run-skill-in-sandbox.ts` and `runner/`)
+ *      calls the doors BELOW it — `runIsolate`, `buildSkillBridges`,
+ *      `getSkillRunner`, `evaluateSkill` — which run code with no
+ *      `active && approved` check: that check lives in `runSkillInSandbox`;
+ *   3. only `execute-skill-via-is.ts` names the IS skill routes in a literal
  *      (`/api/skills/execute`, or a template whose tail is exactly `/dry-run`).
+ * A call is `name(…)` or `x.name(…)` (a property call: `(await
+ * import("…")).runSkillInSandbox(…)`, the pattern used to break import cycles).
  *
  * WHAT IT CANNOT SEE: a runtime called through an alias (`const run =
- * runSkillInSandbox; run(…)`) or a route built without its path in a literal.
+ * runSkillInSandbox; run(…)`), a destructured or element-access call
+ * (`x["runIsolate"](…)`), or a route built without its path in a literal.
  */
 
 const BACKEND_ROOT = join(process.cwd(), "..", "..");
@@ -31,6 +38,15 @@ const RUNTIME_CALLS = [
   "executeSkillViaIS",
   "dryRunSkillViaIS",
 ];
+/** Run code with no approval check: only the sandbox may call them. */
+const SANDBOX_INTERNALS = [
+  "runIsolate",
+  "buildSkillBridges",
+  "getSkillRunner",
+  "evaluateSkill",
+];
+const SANDBOX = "packages/api/src/services/skills/run-skill-in-sandbox.ts";
+const RUNNER_DIR = "packages/api/src/services/skills/runner/";
 const DOOR = "packages/api/src/services/skills/run-skill.ts";
 const IS_WIRE = "packages/api/src/services/skills/execute-skill-via-is.ts";
 
@@ -82,8 +98,11 @@ function scan(file: string, text: string) {
     ) {
       literals.push(node.text);
     }
-    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
-      calls.add(node.expression.text);
+    if (ts.isCallExpression(node)) {
+      const callee = node.expression;
+      if (ts.isIdentifier(callee)) calls.add(callee.text);
+      else if (ts.isPropertyAccessExpression(callee))
+        calls.add(callee.name.text);
     }
     ts.forEachChild(node, visit);
   };
@@ -104,6 +123,7 @@ describe("tripwire: code skills run through one door", () => {
       const text = readFileSync(f, "utf8");
       return (
         RUNTIME_CALLS.some((c) => text.includes(c)) ||
+        SANDBOX_INTERNALS.some((c) => text.includes(c)) ||
         text.includes("/api/skills/execute") ||
         text.includes("/dry-run")
       );
@@ -118,6 +138,19 @@ describe("tripwire: code skills run through one door", () => {
     const door = scanned.find((f) => f.rel === DOOR);
     expect(door, "run-skill.ts not scanned").toBeDefined();
     for (const c of RUNTIME_CALLS) expect(door!.calls.has(c)).toBe(true);
+    // The sandbox reaches every internal it guards (else the rule is moot).
+    const sandbox = scanned.find((f) => f.rel === SANDBOX);
+    expect(sandbox, "run-skill-in-sandbox.ts not scanned").toBeDefined();
+    for (const c of ["runIsolate", "buildSkillBridges", "getSkillRunner"])
+      expect(sandbox!.calls.has(c), `the sandbox no longer calls ${c}`).toBe(
+        true
+      );
+    expect(
+      scanned.some(
+        (f) => f.rel.startsWith(RUNNER_DIR) && f.calls.has("evaluateSkill")
+      ),
+      "no runner file calls evaluateSkill"
+    ).toBe(true);
     const wire = scanned.find((f) => f.rel === IS_WIRE);
     expect(wire && namesIsSkillRoute(wire.literals)).toBe(true);
     // The four doors that run a code skill call `runSkill`.
@@ -142,6 +175,20 @@ describe("tripwire: code skills run through one door", () => {
     );
     expect(sample.calls.has("runSkillInSandbox")).toBe(true);
     expect(namesIsSkillRoute(sample.literals)).toBe(true);
+    // A property call — how a lazily imported module is called.
+    const lazy = scan(
+      "l.ts",
+      'const r = await (await import("./run-skill-in-sandbox.js")).runSkillInSandbox({}); await mod.runIsolate({});'
+    );
+    expect(lazy.calls.has("runSkillInSandbox")).toBe(true);
+    expect(lazy.calls.has("runIsolate")).toBe(true);
+    // A mention is not a call.
+    expect(
+      scan(
+        "m.ts",
+        "import { runIsolate } from './x'; const f = runIsolate;"
+      ).calls.has("runIsolate")
+    ).toBe(false);
     expect(
       namesIsSkillRoute(
         scan("r.ts", 'app.post("/skills/:id/dry-run", h);').literals
@@ -157,6 +204,19 @@ describe("tripwire: code skills run through one door", () => {
     expect(
       offenders,
       "These files run a code skill without the one door. Call `runSkill` " +
+        "(services/skills/run-skill.ts) instead."
+    ).toEqual([]);
+  });
+
+  it("only the sandbox calls the doors below it (no approval check there)", () => {
+    const offenders = scanned
+      .filter((f) => f.rel !== SANDBOX && !f.rel.startsWith(RUNNER_DIR))
+      .filter((f) => SANDBOX_INTERNALS.some((c) => f.calls.has(c)))
+      .map((f) => f.rel);
+    expect(
+      offenders,
+      "These files run skill code below the one door, where nothing checks " +
+        "that the skill is active and approved. Call `runSkill` " +
         "(services/skills/run-skill.ts) instead."
     ).toEqual([]);
   });

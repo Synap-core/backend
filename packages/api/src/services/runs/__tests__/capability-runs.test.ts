@@ -99,6 +99,9 @@ describe("listCapabilityRuns (via listRuns) — the capability-run ledger synthe
   beforeEach(() => {
     vi.clearAllMocks();
     mockUserVisibleWhere.mockReturnValue({ __userVisible: USER });
+    // (last) the box_runs read (0356): the ledger's third source, issued after
+    // the proposals and events reads. Empty unless a test feeds one.
+    mockDb.select.mockReturnValue(selectChain([]));
   });
 
   it("maps an APPROVED capability.run proposal to a completed run, carrying its stamped correlationId", async () => {
