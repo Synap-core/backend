@@ -97,15 +97,18 @@ type HubContext = HonoContext<{ Variables: HubVariables }>;
 
 /**
  * The shared door: scope check, query parse, caller context, error map.
- * `confineWorkspace`: the query's `workspaceId` goes through the one clamp
- * (`getConfinedWorkspace`), so a workspace-bound key reads its own workspace
- * when it names none and is refused (403) on another.
+ * A workspace-bound key never reads the pod, so every door declares one:
+ *  - `confineWorkspace`: the query's `workspaceId` goes through the one clamp
+ *    (`getConfinedWorkspace`), so a bound key reads its own workspace when it
+ *    names none and is refused (403) on another;
+ *  - `refuseBoundKey`: the read has no workspace axis (it is every space), so
+ *    a bound key is refused (403).
  */
 function readDoor<Q extends z.ZodTypeAny>(
   name: string,
   schema: Q,
   run: (ctx: Context, query: z.infer<Q>) => Promise<unknown>,
-  opts: { confineWorkspace?: boolean } = {}
+  opts: { confineWorkspace: true } | { refuseBoundKey: true }
 ) {
   return async (c: HubContext) => {
     const scopes = c.get("scopes") as string[];
@@ -124,7 +127,16 @@ function readDoor<Q extends z.ZodTypeAny>(
       );
     }
     let query = parsed.data as z.infer<Q>;
-    if (opts.confineWorkspace) {
+    const boundTo = c.get("keyWorkspaceId");
+    if ("refuseBoundKey" in opts && boundTo) {
+      return c.json(
+        {
+          error: `This key is confined to workspace ${boundTo}; ${name} reads every space`,
+        },
+        403
+      );
+    }
+    if ("confineWorkspace" in opts) {
       const confined = confineWorkspaceOrForbidden(
         c,
         (query as { workspaceId?: string }).workspaceId
@@ -202,7 +214,7 @@ export function registerIntentSurfacesRoutes(app: HubHono): void {
     tags: ["Lifecycle"],
     summary: "What each space produces, and how its things stand",
     description:
-      "Every space the caller sees with its intent (`settings.intent`, else inferred) and, per produced kind, the pipeline in one line, needs-you, being-worked and a headline thing (`lifecycle.home`). `projectId` lists only the project's spaces (the ones it uses + its home; 404 when the caller cannot see it) and narrows every count.",
+      "Every space the caller sees with its intent (`settings.intent`, else inferred) and, per produced kind, the pipeline in one line, needs-you, being-worked and a headline thing (`lifecycle.home`). `projectId` lists only the project's spaces (the ones it uses + its home; 404 when the caller cannot see it) and narrows every count. A workspace-bound key is refused (403): Home is every space.",
     request: { query: homeQuery },
     responses: {
       200: { description: "Home", schema: z.object({}).passthrough() },
@@ -265,55 +277,75 @@ export function registerIntentSurfacesRoutes(app: HubHono): void {
 
   app.get(
     "/lifecycle/board",
-    readDoor("lifecycle.board", boardQuery, (ctx, q) =>
-      lifecycleRouter.createCaller(ctx).board({
-        ...lensOf(q),
-        ...(q.windowDays ? { window: { days: q.windowDays } } : {}),
-        ...(q.firstN !== undefined ? { firstN: q.firstN } : {}),
-        ...(q.column ? { column: q.column } : {}),
-        ...(q.cursor ? { cursor: q.cursor } : {}),
-        ...(q.limit ? { limit: q.limit } : {}),
-        workedBy: q.workedBy === "true",
-      })
+    readDoor(
+      "lifecycle.board",
+      boardQuery,
+      (ctx, q) =>
+        lifecycleRouter.createCaller(ctx).board({
+          ...lensOf(q),
+          ...(q.windowDays ? { window: { days: q.windowDays } } : {}),
+          ...(q.firstN !== undefined ? { firstN: q.firstN } : {}),
+          ...(q.column ? { column: q.column } : {}),
+          ...(q.cursor ? { cursor: q.cursor } : {}),
+          ...(q.limit ? { limit: q.limit } : {}),
+          workedBy: q.workedBy === "true",
+        }),
+      { confineWorkspace: true }
     )
   );
   app.get(
     "/lifecycle/throughput",
-    readDoor("lifecycle.throughput", throughputQuery, (ctx, q) =>
-      lifecycleRouter.createCaller(ctx).throughput({
-        ...lensOf(q),
-        ...(q.bucket || q.count
-          ? { period: { bucket: q.bucket ?? "week", count: q.count ?? 12 } }
-          : {}),
-      })
+    readDoor(
+      "lifecycle.throughput",
+      throughputQuery,
+      (ctx, q) =>
+        lifecycleRouter.createCaller(ctx).throughput({
+          ...lensOf(q),
+          ...(q.bucket || q.count
+            ? { period: { bucket: q.bucket ?? "week", count: q.count ?? 12 } }
+            : {}),
+        }),
+      { confineWorkspace: true }
     )
   );
   app.get(
     "/lifecycle/home",
-    readDoor("lifecycle.home", homeQuery, (ctx, q) =>
-      lifecycleRouter
-        .createCaller(ctx)
-        .home(q.projectId ? { projectId: q.projectId } : {})
+    readDoor(
+      "lifecycle.home",
+      homeQuery,
+      (ctx, q) =>
+        lifecycleRouter
+          .createCaller(ctx)
+          .home(q.projectId ? { projectId: q.projectId } : {}),
+      { refuseBoundKey: true }
     )
   );
   app.get(
     "/lifecycle/moving",
-    readDoor("lifecycle.moving", movingQuery, (ctx, q) =>
-      lifecycleRouter.createCaller(ctx).moving({
-        ...(q.projectId ? { projectId: q.projectId } : {}),
-        ...(q.workspaceId ? { workspaceId: q.workspaceId } : {}),
-        limit: q.limit ?? 30,
-      })
+    readDoor(
+      "lifecycle.moving",
+      movingQuery,
+      (ctx, q) =>
+        lifecycleRouter.createCaller(ctx).moving({
+          ...(q.projectId ? { projectId: q.projectId } : {}),
+          ...(q.workspaceId ? { workspaceId: q.workspaceId } : {}),
+          limit: q.limit ?? 30,
+        }),
+      { confineWorkspace: true }
     )
   );
   app.get(
     "/attention/needs-you",
-    readDoor("attention.needs-you", attentionQuery, (ctx, q) =>
-      signalsRouter.createCaller(ctx).list({
-        ...lensOf(q),
-        lens: "needs-you",
-        ...(q.limit ? { limit: q.limit } : {}),
-      })
+    readDoor(
+      "attention.needs-you",
+      attentionQuery,
+      (ctx, q) =>
+        signalsRouter.createCaller(ctx).list({
+          ...lensOf(q),
+          lens: "needs-you",
+          ...(q.limit ? { limit: q.limit } : {}),
+        }),
+      { confineWorkspace: true }
     )
   );
   app.get(
@@ -338,8 +370,11 @@ export function registerIntentSurfacesRoutes(app: HubHono): void {
   );
   app.get(
     "/attention/count",
-    readDoor("attention.count", attentionQuery, (ctx, q) =>
-      signalsRouter.createCaller(ctx).count(lensOf(q))
+    readDoor(
+      "attention.count",
+      attentionQuery,
+      (ctx, q) => signalsRouter.createCaller(ctx).count(lensOf(q)),
+      { confineWorkspace: true }
     )
   );
 }

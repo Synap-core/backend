@@ -2087,7 +2087,7 @@ export interface OutputNodeDef extends AutomationNodeBase {
 	data: {
 		config: Record<string, unknown>;
 		label: string;
-		outputType: "channel_message" | "entity_create" | "entity_update" | "facet_attach" | "facet_detach" | "facet_update" | "notification" | "relation_create" | "session_update" | "set_state" | "webhook";
+		outputType: "channel_message" | "complete_outcome" | "entity_create" | "entity_update" | "facet_attach" | "facet_detach" | "facet_update" | "notification" | "post_evidence" | "reevaluate_criterion" | "relation_create" | "session_update" | "set_state" | "webhook";
 	};
 }
 export interface LoopNodeDef extends AutomationNodeBase {
@@ -9182,6 +9182,30 @@ declare enum MessageLinkRelationshipType {
 	QUOTES = "quotes",// Message quotes this object
 	CONTEXT = "context"
 }
+declare const PULL_REQUEST_STATES: readonly [
+	"open",
+	"merged",
+	"closed"
+];
+export type PullRequestState = (typeof PULL_REQUEST_STATES)[number];
+declare const PULL_REQUEST_CHECKS: readonly [
+	"passed",
+	"failed"
+];
+export type PullRequestChecks = (typeof PULL_REQUEST_CHECKS)[number];
+/** What the recorded facts say about one PR. */
+export interface PullRequestStateFacts {
+	state: PullRequestState;
+	/** The newest CI result on the PR's newest run sha; absent when none settles it. */
+	checks?: PullRequestChecks;
+	/**
+	 * A deploy contains the merge (built from a later commit of the repo, or
+	 * from the merge commit). Never `false`: see the file header.
+	 */
+	deployed?: true;
+	/** When the fact that set `state` happened (ISO). */
+	at: string;
+}
 export type ActionType = "call_webhook" | "create_entity" | "notify" | "post_message" | "run_command" | "update_entity";
 export interface SentenceAction {
 	type: ActionType | null;
@@ -11441,7 +11465,7 @@ export type SlotAsk = ({
 } | {
 	allowOther?: boolean;
 	mode: "choose";
-	options: SlotAskOption[];
+	options: SlotAskChooseOption[];
 } | {
 	form: SlotAskFormSpec;
 	mode: "form";
@@ -11461,6 +11485,8 @@ export type SlotAsk = ({
 	 * the viewer's access floor; a ref the viewer cannot see is dropped there.
 	 */
 	lookedAt?: SlotAskLookedAt[];
+	/** How much is at stake: high and medium draw a mark, low draws nothing. */
+	risk?: "high" | "low" | "medium";
 };
 /** One object an ask cites as read. Mirrors `AskLookedAtRef` (@synap-core/types/ask). */
 export interface SlotAskLookedAt {
@@ -11481,7 +11507,18 @@ export interface SlotAskOption {
 	recommended?: boolean;
 	/** One-line imperative consequence of choosing it. */
 	description?: string;
+	/** One short fact to weigh before picking it ("Skips 1,284 tests"). */
+	caution?: string;
 }
+/** The question a choose option opens once picked: ONE level, 2–4 options. */
+export interface SlotAskFollowUp {
+	prompt: string;
+	options: SlotAskOption[];
+}
+/** A choose ask's option: may open ONE follow-up. Mirrors `AskChooseOption`. */
+export type SlotAskChooseOption = SlotAskOption & {
+	followUp?: SlotAskFollowUp;
+};
 /** A FLAT form (no nested fields). */
 export interface SlotAskFormSpec {
 	title?: string;
@@ -11533,6 +11570,8 @@ export type SlotAnswerValue = {
 	type: "confirm";
 } | {
 	chip: SlotAskOption;
+	/** The picked follow-up option, when the picked option opens one. */
+	then?: SlotAskOption;
 	type: "chip";
 } | {
 	type: "form";
@@ -11589,9 +11628,11 @@ export interface SlotAskSnapshot {
 	mode: SlotAsk["mode"];
 	prompt?: string;
 	why?: string;
-	options?: SlotAskOption[];
+	options?: SlotAskChooseOption[];
 	/** `askOptionKey` of the pick; `"yes"`/`"no"` for a confirm; else null. */
 	chosenKey: string | null;
+	/** `askOptionKey` of the picked follow-up option, when the pick opened one. */
+	thenKey?: string;
 	recommendedKey: string | null;
 	/** null when there was no recommendation (or the pick is unknown). */
 	followedRecommendation: boolean | null;
@@ -14471,6 +14512,12 @@ declare const SESSION_KINDS: readonly [
 	"receipt"
 ];
 export type SessionKind = (typeof SESSION_KINDS)[number];
+/**
+ * Who the viewer is TO this session — the field read doors expose so a UI can
+ * hide write verbs for a member. Only meaningful on a row the viewer already
+ * read through {@link sessionReadableWhere}.
+ */
+export type SessionViewerRole = "member" | "owner";
 export interface SessionExternalAgent {
 	runId: string;
 	/** The run's own lifecycle (`running`, `failed`, `cancelled`, `proposed`, …). */
@@ -14844,10 +14891,26 @@ export interface PacketSiblings {
 	next: PacketSection<PacketSiblingItem>;
 }
 /**
+ * What the pod RECORDED about a PR work unit (`readPullRequestStates`: the
+ * `dev.pr_*`, `ci.finished` and `dev.deployed` facts, folded by
+ * `foldPullRequestState`). `label` is the state's word (vocabulary).
+ */
+export type PacketPullRequestState = ({
+	label: string;
+	status: "ok";
+} & PullRequestStateFacts) | {
+	reason: string;
+	status: "unavailable";
+};
+/**
  * A pull request or branch this session recorded as an outcome (`ref.url`),
  * with the OUTCOME's state: `met` (merged / delivered, stamped done), `claimed`
- * (delivery claimed, not verified), `open`, or `retired` (withdrawn). The pod
- * reads no PR state of its own: what is known is what was recorded.
+ * (delivery claimed, not verified), `open`, or `retired` (withdrawn).
+ *
+ * `prState` is the PR's own state, from the dev-loop facts the pod recorded
+ * about it. ABSENT when none was recorded (an older pod, a repo with no
+ * producer) or the unit is not a PR: draw nothing, never a guess. A failed
+ * read is `unavailable`, never absent.
  */
 export interface PacketWorkUnitItem extends PacketKindIdentity {
 	key: string | null;
@@ -14855,6 +14918,7 @@ export interface PacketWorkUnitItem extends PacketKindIdentity {
 	kind: string;
 	url: string | null;
 	state: "claimed" | "met" | "open" | "retired";
+	prState?: PacketPullRequestState;
 }
 /** A capture clarification question still waiting for the user's answer. */
 export interface PacketQuestionItem {
@@ -18839,12 +18903,6 @@ export type SessionInteractionsSection = {
 	reason: string;
 	status: "unavailable";
 };
-/**
- * Who the viewer is TO this session — the field read doors expose so a UI can
- * hide write verbs for a member. Only meaningful on a row the viewer already
- * read through {@link sessionReadableWhere}.
- */
-export type SessionViewerRole = "member" | "owner";
 declare function projectSessionRows(sessions: FocusSession[], userId: string | null | undefined): Promise<({
 	agentIds: string[] | null;
 	channelId: string | null;
@@ -25007,6 +25065,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				answer: {
 					chip: {
 						action: "add_relation" | "confirm" | "dismiss" | "link_entity" | "set_property";
+						caution?: string | undefined;
 						description?: string | undefined;
 						entityId?: string | undefined;
 						icon?: string | undefined;
@@ -30953,12 +31012,21 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					type: "confirm";
 				} | {
 					chip: {
+						caution?: string | undefined;
 						description?: string | undefined;
 						icon?: string | undefined;
 						label: string;
 						recommended?: boolean | undefined;
 						value?: string | undefined;
 					};
+					then?: {
+						caution?: string | undefined;
+						description?: string | undefined;
+						icon?: string | undefined;
+						label: string;
+						recommended?: boolean | undefined;
+						value?: string | undefined;
+					} | undefined;
 					type: "chip";
 				} | {
 					type: "form";
@@ -31096,6 +31164,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					}[] | undefined;
 					mode: "confirm";
 					prompt?: string | undefined;
+					risk?: "high" | "low" | "medium" | undefined;
 				} | {
 					allowOther?: boolean | undefined;
 					lookedAt?: {
@@ -31104,12 +31173,25 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					}[] | undefined;
 					mode: "choose";
 					options: {
+						caution?: string | undefined;
 						description?: string | undefined;
+						followUp?: {
+							options: {
+								caution?: string | undefined;
+								description?: string | undefined;
+								icon?: string | undefined;
+								label: string;
+								recommended?: boolean | undefined;
+								value?: string | undefined;
+							}[];
+							prompt: string;
+						} | undefined;
 						icon?: string | undefined;
 						label: string;
 						recommended?: boolean | undefined;
 						value?: string | undefined;
 					}[];
+					risk?: "high" | "low" | "medium" | undefined;
 				} | {
 					form: {
 						fields: {
@@ -31133,12 +31215,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						kind: "automation" | "document" | "entity" | "playbook" | "view";
 					}[] | undefined;
 					mode: "form";
+					risk?: "high" | "low" | "medium" | undefined;
 				} | {
 					lookedAt?: {
 						id: string;
 						kind: "automation" | "document" | "entity" | "playbook" | "view";
 					}[] | undefined;
 					mode: "act";
+					risk?: "high" | "low" | "medium" | undefined;
 					steps?: string[] | undefined;
 					url?: string | undefined;
 				} | {
@@ -31157,6 +31241,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						kind: "secret";
 						name: string;
 					};
+					risk?: "high" | "low" | "medium" | undefined;
 				} | null | undefined;
 				blockedReason: "capability" | "credential" | "decision" | "permission" | "physical" | "policy";
 				expectedLabel: string;
@@ -31356,7 +31441,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[] | undefined;
 							mode: "act" | "choose" | "confirm" | "form" | "provide";
 							options?: {
+								caution?: string | undefined;
 								description?: string | undefined;
+								followUp?: {
+									options: {
+										caution?: string | undefined;
+										description?: string | undefined;
+										icon?: string | undefined;
+										label: string;
+										recommended?: boolean | undefined;
+										value?: string | undefined;
+									}[];
+									prompt: string;
+								} | undefined;
 								icon?: string | undefined;
 								label: string;
 								recommended?: boolean | undefined;
@@ -31364,6 +31461,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[] | undefined;
 							prompt?: string | undefined;
 							recommendedKey: string | null;
+							thenKey?: string | undefined;
 							why?: string | undefined;
 						} | undefined;
 						messageId: string | null;
@@ -31376,12 +31474,21 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							type: "confirm";
 						} | {
 							chip: {
+								caution?: string | undefined;
 								description?: string | undefined;
 								icon?: string | undefined;
 								label: string;
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							};
+							then?: {
+								caution?: string | undefined;
+								description?: string | undefined;
+								icon?: string | undefined;
+								label: string;
+								recommended?: boolean | undefined;
+								value?: string | undefined;
+							} | undefined;
 							type: "chip";
 						} | {
 							type: "form";
@@ -31412,7 +31519,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[] | undefined;
 							mode: "act" | "choose" | "confirm" | "form" | "provide";
 							options?: {
+								caution?: string | undefined;
 								description?: string | undefined;
+								followUp?: {
+									options: {
+										caution?: string | undefined;
+										description?: string | undefined;
+										icon?: string | undefined;
+										label: string;
+										recommended?: boolean | undefined;
+										value?: string | undefined;
+									}[];
+									prompt: string;
+								} | undefined;
 								icon?: string | undefined;
 								label: string;
 								recommended?: boolean | undefined;
@@ -31420,6 +31539,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[] | undefined;
 							prompt?: string | undefined;
 							recommendedKey: string | null;
+							thenKey?: string | undefined;
 							why?: string | undefined;
 						} | undefined;
 						messageId: string | null;
@@ -31432,12 +31552,21 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							type: "confirm";
 						} | {
 							chip: {
+								caution?: string | undefined;
 								description?: string | undefined;
 								icon?: string | undefined;
 								label: string;
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							};
+							then?: {
+								caution?: string | undefined;
+								description?: string | undefined;
+								icon?: string | undefined;
+								label: string;
+								recommended?: boolean | undefined;
+								value?: string | undefined;
+							} | undefined;
 							type: "chip";
 						} | {
 							type: "form";
@@ -31464,6 +31593,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						}[] | undefined;
 						mode: "confirm";
 						prompt?: string | undefined;
+						risk?: "high" | "low" | "medium" | undefined;
 					} | {
 						allowOther?: boolean | undefined;
 						lookedAt?: {
@@ -31472,12 +31602,25 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						}[] | undefined;
 						mode: "choose";
 						options: {
+							caution?: string | undefined;
 							description?: string | undefined;
+							followUp?: {
+								options: {
+									caution?: string | undefined;
+									description?: string | undefined;
+									icon?: string | undefined;
+									label: string;
+									recommended?: boolean | undefined;
+									value?: string | undefined;
+								}[];
+								prompt: string;
+							} | undefined;
 							icon?: string | undefined;
 							label: string;
 							recommended?: boolean | undefined;
 							value?: string | undefined;
 						}[];
+						risk?: "high" | "low" | "medium" | undefined;
 					} | {
 						form: {
 							fields: {
@@ -31501,12 +31644,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
 						}[] | undefined;
 						mode: "form";
+						risk?: "high" | "low" | "medium" | undefined;
 					} | {
 						lookedAt?: {
 							id: string;
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
 						}[] | undefined;
 						mode: "act";
+						risk?: "high" | "low" | "medium" | undefined;
 						steps?: string[] | undefined;
 						url?: string | undefined;
 					} | {
@@ -31525,6 +31670,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							kind: "secret";
 							name: string;
 						};
+						risk?: "high" | "low" | "medium" | undefined;
 					} | null | undefined;
 					attestedAt?: string | undefined;
 					attestedBy?: string | undefined;
@@ -32294,7 +32440,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[] | undefined;
 							mode: "act" | "choose" | "confirm" | "form" | "provide";
 							options?: {
+								caution?: string | undefined;
 								description?: string | undefined;
+								followUp?: {
+									options: {
+										caution?: string | undefined;
+										description?: string | undefined;
+										icon?: string | undefined;
+										label: string;
+										recommended?: boolean | undefined;
+										value?: string | undefined;
+									}[];
+									prompt: string;
+								} | undefined;
 								icon?: string | undefined;
 								label: string;
 								recommended?: boolean | undefined;
@@ -32302,6 +32460,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[] | undefined;
 							prompt?: string | undefined;
 							recommendedKey: string | null;
+							thenKey?: string | undefined;
 							why?: string | undefined;
 						} | undefined;
 						messageId: string | null;
@@ -32314,12 +32473,21 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							type: "confirm";
 						} | {
 							chip: {
+								caution?: string | undefined;
 								description?: string | undefined;
 								icon?: string | undefined;
 								label: string;
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							};
+							then?: {
+								caution?: string | undefined;
+								description?: string | undefined;
+								icon?: string | undefined;
+								label: string;
+								recommended?: boolean | undefined;
+								value?: string | undefined;
+							} | undefined;
 							type: "chip";
 						} | {
 							type: "form";
@@ -32350,7 +32518,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[] | undefined;
 							mode: "act" | "choose" | "confirm" | "form" | "provide";
 							options?: {
+								caution?: string | undefined;
 								description?: string | undefined;
+								followUp?: {
+									options: {
+										caution?: string | undefined;
+										description?: string | undefined;
+										icon?: string | undefined;
+										label: string;
+										recommended?: boolean | undefined;
+										value?: string | undefined;
+									}[];
+									prompt: string;
+								} | undefined;
 								icon?: string | undefined;
 								label: string;
 								recommended?: boolean | undefined;
@@ -32358,6 +32538,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[] | undefined;
 							prompt?: string | undefined;
 							recommendedKey: string | null;
+							thenKey?: string | undefined;
 							why?: string | undefined;
 						} | undefined;
 						messageId: string | null;
@@ -32370,12 +32551,21 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							type: "confirm";
 						} | {
 							chip: {
+								caution?: string | undefined;
 								description?: string | undefined;
 								icon?: string | undefined;
 								label: string;
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							};
+							then?: {
+								caution?: string | undefined;
+								description?: string | undefined;
+								icon?: string | undefined;
+								label: string;
+								recommended?: boolean | undefined;
+								value?: string | undefined;
+							} | undefined;
 							type: "chip";
 						} | {
 							type: "form";
@@ -32402,6 +32592,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						}[] | undefined;
 						mode: "confirm";
 						prompt?: string | undefined;
+						risk?: "high" | "low" | "medium" | undefined;
 					} | {
 						allowOther?: boolean | undefined;
 						lookedAt?: {
@@ -32410,12 +32601,25 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						}[] | undefined;
 						mode: "choose";
 						options: {
+							caution?: string | undefined;
 							description?: string | undefined;
+							followUp?: {
+								options: {
+									caution?: string | undefined;
+									description?: string | undefined;
+									icon?: string | undefined;
+									label: string;
+									recommended?: boolean | undefined;
+									value?: string | undefined;
+								}[];
+								prompt: string;
+							} | undefined;
 							icon?: string | undefined;
 							label: string;
 							recommended?: boolean | undefined;
 							value?: string | undefined;
 						}[];
+						risk?: "high" | "low" | "medium" | undefined;
 					} | {
 						form: {
 							fields: {
@@ -32439,12 +32643,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
 						}[] | undefined;
 						mode: "form";
+						risk?: "high" | "low" | "medium" | undefined;
 					} | {
 						lookedAt?: {
 							id: string;
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
 						}[] | undefined;
 						mode: "act";
+						risk?: "high" | "low" | "medium" | undefined;
 						steps?: string[] | undefined;
 						url?: string | undefined;
 					} | {
@@ -32463,6 +32669,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							kind: "secret";
 							name: string;
 						};
+						risk?: "high" | "low" | "medium" | undefined;
 					} | null | undefined;
 					attestedAt?: string | undefined;
 					attestedBy?: string | undefined;
@@ -32540,6 +32747,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[] | undefined;
 							mode: "confirm";
 							prompt?: string | undefined;
+							risk?: "high" | "low" | "medium" | undefined;
 						} | {
 							allowOther?: boolean | undefined;
 							lookedAt?: {
@@ -32548,12 +32756,25 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[] | undefined;
 							mode: "choose";
 							options: {
+								caution?: string | undefined;
 								description?: string | undefined;
+								followUp?: {
+									options: {
+										caution?: string | undefined;
+										description?: string | undefined;
+										icon?: string | undefined;
+										label: string;
+										recommended?: boolean | undefined;
+										value?: string | undefined;
+									}[];
+									prompt: string;
+								} | undefined;
 								icon?: string | undefined;
 								label: string;
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							}[];
+							risk?: "high" | "low" | "medium" | undefined;
 						} | {
 							form: {
 								fields: {
@@ -32577,12 +32798,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								kind: "automation" | "document" | "entity" | "playbook" | "view";
 							}[] | undefined;
 							mode: "form";
+							risk?: "high" | "low" | "medium" | undefined;
 						} | {
 							lookedAt?: {
 								id: string;
 								kind: "automation" | "document" | "entity" | "playbook" | "view";
 							}[] | undefined;
 							mode: "act";
+							risk?: "high" | "low" | "medium" | undefined;
 							steps?: string[] | undefined;
 							url?: string | undefined;
 						} | {
@@ -32601,6 +32824,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								kind: "secret";
 								name: string;
 							};
+							risk?: "high" | "low" | "medium" | undefined;
 						} | null | undefined;
 						relationToSubject?: string | undefined;
 						optional?: boolean | undefined;
@@ -38079,6 +38303,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						}[] | undefined;
 						mode: "confirm";
 						prompt?: string | undefined;
+						risk?: "high" | "low" | "medium" | undefined;
 					} | {
 						allowOther?: boolean | undefined;
 						lookedAt?: {
@@ -38087,12 +38312,25 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						}[] | undefined;
 						mode: "choose";
 						options: {
+							caution?: string | undefined;
 							description?: string | undefined;
+							followUp?: {
+								options: {
+									caution?: string | undefined;
+									description?: string | undefined;
+									icon?: string | undefined;
+									label: string;
+									recommended?: boolean | undefined;
+									value?: string | undefined;
+								}[];
+								prompt: string;
+							} | undefined;
 							icon?: string | undefined;
 							label: string;
 							recommended?: boolean | undefined;
 							value?: string | undefined;
 						}[];
+						risk?: "high" | "low" | "medium" | undefined;
 					} | {
 						form: {
 							fields: {
@@ -38116,12 +38354,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
 						}[] | undefined;
 						mode: "form";
+						risk?: "high" | "low" | "medium" | undefined;
 					} | {
 						lookedAt?: {
 							id: string;
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
 						}[] | undefined;
 						mode: "act";
+						risk?: "high" | "low" | "medium" | undefined;
 						steps?: string[] | undefined;
 						url?: string | undefined;
 					} | {
@@ -38140,6 +38380,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							kind: "secret";
 							name: string;
 						};
+						risk?: "high" | "low" | "medium" | undefined;
 					} | null | undefined;
 					relationToSubject?: string | undefined;
 					optional?: boolean | undefined;
@@ -38188,6 +38429,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[] | undefined;
 							mode: "confirm";
 							prompt?: string | undefined;
+							risk?: "high" | "low" | "medium" | undefined;
 						} | {
 							allowOther?: boolean | undefined;
 							lookedAt?: {
@@ -38196,12 +38438,25 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[] | undefined;
 							mode: "choose";
 							options: {
+								caution?: string | undefined;
 								description?: string | undefined;
+								followUp?: {
+									options: {
+										caution?: string | undefined;
+										description?: string | undefined;
+										icon?: string | undefined;
+										label: string;
+										recommended?: boolean | undefined;
+										value?: string | undefined;
+									}[];
+									prompt: string;
+								} | undefined;
 								icon?: string | undefined;
 								label: string;
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							}[];
+							risk?: "high" | "low" | "medium" | undefined;
 						} | {
 							form: {
 								fields: {
@@ -38225,12 +38480,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								kind: "automation" | "document" | "entity" | "playbook" | "view";
 							}[] | undefined;
 							mode: "form";
+							risk?: "high" | "low" | "medium" | undefined;
 						} | {
 							lookedAt?: {
 								id: string;
 								kind: "automation" | "document" | "entity" | "playbook" | "view";
 							}[] | undefined;
 							mode: "act";
+							risk?: "high" | "low" | "medium" | undefined;
 							steps?: string[] | undefined;
 							url?: string | undefined;
 						} | {
@@ -38249,6 +38506,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								kind: "secret";
 								name: string;
 							};
+							risk?: "high" | "low" | "medium" | undefined;
 						} | null | undefined;
 						relationToSubject?: string | undefined;
 						optional?: boolean | undefined;
@@ -38889,6 +39147,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						}[] | undefined;
 						mode: "confirm";
 						prompt?: string | undefined;
+						risk?: "high" | "low" | "medium" | undefined;
 					} | {
 						allowOther?: boolean | undefined;
 						lookedAt?: {
@@ -38897,12 +39156,25 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						}[] | undefined;
 						mode: "choose";
 						options: {
+							caution?: string | undefined;
 							description?: string | undefined;
+							followUp?: {
+								options: {
+									caution?: string | undefined;
+									description?: string | undefined;
+									icon?: string | undefined;
+									label: string;
+									recommended?: boolean | undefined;
+									value?: string | undefined;
+								}[];
+								prompt: string;
+							} | undefined;
 							icon?: string | undefined;
 							label: string;
 							recommended?: boolean | undefined;
 							value?: string | undefined;
 						}[];
+						risk?: "high" | "low" | "medium" | undefined;
 					} | {
 						form: {
 							fields: {
@@ -38926,12 +39198,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
 						}[] | undefined;
 						mode: "form";
+						risk?: "high" | "low" | "medium" | undefined;
 					} | {
 						lookedAt?: {
 							id: string;
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
 						}[] | undefined;
 						mode: "act";
+						risk?: "high" | "low" | "medium" | undefined;
 						steps?: string[] | undefined;
 						url?: string | undefined;
 					} | {
@@ -38950,6 +39224,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							kind: "secret";
 							name: string;
 						};
+						risk?: "high" | "low" | "medium" | undefined;
 					} | null | undefined;
 					relationToSubject?: string | undefined;
 					optional?: boolean | undefined;
@@ -38990,6 +39265,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[] | undefined;
 							mode: "confirm";
 							prompt?: string | undefined;
+							risk?: "high" | "low" | "medium" | undefined;
 						} | {
 							allowOther?: boolean | undefined;
 							lookedAt?: {
@@ -38998,12 +39274,25 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[] | undefined;
 							mode: "choose";
 							options: {
+								caution?: string | undefined;
 								description?: string | undefined;
+								followUp?: {
+									options: {
+										caution?: string | undefined;
+										description?: string | undefined;
+										icon?: string | undefined;
+										label: string;
+										recommended?: boolean | undefined;
+										value?: string | undefined;
+									}[];
+									prompt: string;
+								} | undefined;
 								icon?: string | undefined;
 								label: string;
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							}[];
+							risk?: "high" | "low" | "medium" | undefined;
 						} | {
 							form: {
 								fields: {
@@ -39027,12 +39316,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								kind: "automation" | "document" | "entity" | "playbook" | "view";
 							}[] | undefined;
 							mode: "form";
+							risk?: "high" | "low" | "medium" | undefined;
 						} | {
 							lookedAt?: {
 								id: string;
 								kind: "automation" | "document" | "entity" | "playbook" | "view";
 							}[] | undefined;
 							mode: "act";
+							risk?: "high" | "low" | "medium" | undefined;
 							steps?: string[] | undefined;
 							url?: string | undefined;
 						} | {
@@ -39051,6 +39342,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								kind: "secret";
 								name: string;
 							};
+							risk?: "high" | "low" | "medium" | undefined;
 						} | null | undefined;
 						relationToSubject?: string | undefined;
 						optional?: boolean | undefined;
@@ -47957,6 +48249,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								}[] | undefined;
 								mode: "confirm";
 								prompt?: string | undefined;
+								risk?: "high" | "low" | "medium" | undefined;
 							} | {
 								allowOther?: boolean | undefined;
 								lookedAt?: {
@@ -47965,12 +48258,25 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								}[] | undefined;
 								mode: "choose";
 								options: {
+									caution?: string | undefined;
 									description?: string | undefined;
+									followUp?: {
+										options: {
+											caution?: string | undefined;
+											description?: string | undefined;
+											icon?: string | undefined;
+											label: string;
+											recommended?: boolean | undefined;
+											value?: string | undefined;
+										}[];
+										prompt: string;
+									} | undefined;
 									icon?: string | undefined;
 									label: string;
 									recommended?: boolean | undefined;
 									value?: string | undefined;
 								}[];
+								risk?: "high" | "low" | "medium" | undefined;
 							} | {
 								form: {
 									fields: {
@@ -47994,12 +48300,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 									kind: "automation" | "document" | "entity" | "playbook" | "view";
 								}[] | undefined;
 								mode: "form";
+								risk?: "high" | "low" | "medium" | undefined;
 							} | {
 								lookedAt?: {
 									id: string;
 									kind: "automation" | "document" | "entity" | "playbook" | "view";
 								}[] | undefined;
 								mode: "act";
+								risk?: "high" | "low" | "medium" | undefined;
 								steps?: string[] | undefined;
 								url?: string | undefined;
 							} | {
@@ -48018,6 +48326,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 									kind: "secret";
 									name: string;
 								};
+								risk?: "high" | "low" | "medium" | undefined;
 							} | null | undefined;
 							relationToSubject?: string | undefined;
 							optional?: boolean | undefined;
@@ -48067,6 +48376,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 									}[] | undefined;
 									mode: "confirm";
 									prompt?: string | undefined;
+									risk?: "high" | "low" | "medium" | undefined;
 								} | {
 									allowOther?: boolean | undefined;
 									lookedAt?: {
@@ -48075,12 +48385,25 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 									}[] | undefined;
 									mode: "choose";
 									options: {
+										caution?: string | undefined;
 										description?: string | undefined;
+										followUp?: {
+											options: {
+												caution?: string | undefined;
+												description?: string | undefined;
+												icon?: string | undefined;
+												label: string;
+												recommended?: boolean | undefined;
+												value?: string | undefined;
+											}[];
+											prompt: string;
+										} | undefined;
 										icon?: string | undefined;
 										label: string;
 										recommended?: boolean | undefined;
 										value?: string | undefined;
 									}[];
+									risk?: "high" | "low" | "medium" | undefined;
 								} | {
 									form: {
 										fields: {
@@ -48104,12 +48427,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 										kind: "automation" | "document" | "entity" | "playbook" | "view";
 									}[] | undefined;
 									mode: "form";
+									risk?: "high" | "low" | "medium" | undefined;
 								} | {
 									lookedAt?: {
 										id: string;
 										kind: "automation" | "document" | "entity" | "playbook" | "view";
 									}[] | undefined;
 									mode: "act";
+									risk?: "high" | "low" | "medium" | undefined;
 									steps?: string[] | undefined;
 									url?: string | undefined;
 								} | {
@@ -48128,6 +48453,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 										kind: "secret";
 										name: string;
 									};
+									risk?: "high" | "low" | "medium" | undefined;
 								} | null | undefined;
 								relationToSubject?: string | undefined;
 								optional?: boolean | undefined;
