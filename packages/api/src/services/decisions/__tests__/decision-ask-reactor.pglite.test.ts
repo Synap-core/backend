@@ -486,7 +486,7 @@ describe("a proposed decision asks the person (W3)", () => {
       expect(h.closed).toEqual([]);
     });
   });
-  describe("asks only when an AGENT puts a decision into proposed (founder decision 1)", () => {
+  describe("asks only when an AGENT puts a decision into proposed", () => {
     it("a person's own proposed decision asks nothing", async () => {
       const id = await decision({ decisionStatus: "proposed" }, null);
       await fire(id, "create");

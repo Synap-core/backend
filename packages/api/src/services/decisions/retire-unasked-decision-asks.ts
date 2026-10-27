@@ -66,7 +66,7 @@ export const RETIRE_UNASKED_DECISION_ASKS_SETTINGS_KEY =
  * block, or by the person's "Not what I said"), and one carrying `askedBy`
  * was asked by a named agent — either is a question somebody asked.
  */
-export function isLegacyReactorAsk(o: ExpectedOutput): o is ExpectedOutput & {
+function isLegacyReactorAsk(o: ExpectedOutput): o is ExpectedOutput & {
   decisionId: string;
 } {
   const ref = o?.ref;
@@ -88,7 +88,7 @@ export function isLegacyReactorAsk(o: ExpectedOutput): o is ExpectedOutput & {
  * Retire every open decision ask about one of `unasked`. Pure; `null` = no
  * change.
  */
-export function retireUnaskedAsks(
+function retireUnaskedAsks(
   outputs: ExpectedOutput[],
   unasked: ReadonlySet<string>,
   now: Date = new Date()

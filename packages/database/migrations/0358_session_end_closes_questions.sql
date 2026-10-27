@@ -1,4 +1,4 @@
--- 0358 — a session that ended stops asking (founder default 3)
+-- 0358 — a session that ended stops asking (founder, 2026-10-26)
 --
 -- From now on the close door (`completeFocusSession`, api) does two things at
 -- every exit, in the transaction that stamps the terminal status:

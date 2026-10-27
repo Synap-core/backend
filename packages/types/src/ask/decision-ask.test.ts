@@ -28,7 +28,7 @@ describe("deriveDecisionAsk — a decision is a choice", () => {
     expect(AskSchema.safeParse(ask).success).toBe(true);
   });
 
-  it("copies neither the why nor the label into a prompt (said once, W6)", () => {
+  it("copies neither the why nor the label into a prompt (said once)", () => {
     for (const slot of [decision, { ...decision, why: "  " }]) {
       const ask = deriveDecisionAsk(slot);
       expect(ask?.mode === "confirm" && ask.prompt).toBeUndefined();

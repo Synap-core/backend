@@ -1,6 +1,6 @@
 /**
  * TRIPWIRE — an owed ask nobody answered for 7 days leaves the headline, and
- * the COUNT and the FOLD say so together (Resolve-XP decision 3, 2026-10-26).
+ * the COUNT and the FOLD say so together (founder, 2026-10-26).
  *
  * The pair that must agree: `countNeedsYou` (the badge, orient's mirror) and
  * the rows `unionNeedsYou` stamps `reviewLater` (the list's fold). Both read

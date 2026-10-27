@@ -509,6 +509,12 @@ export interface ExpectedOutput {
   /** WHY it was retired — one of {@link OUTPUT_RETIRED_REASONS}. */
   retiredReason?: OutputRetiredReason;
   /**
+   * KEPT-OWED receipt — the closing agent left this ask owed past the end of
+   * its session (`questionDispositions` `keep_as_owed`), so it no longer ends
+   * with the session: stamped by the close door only.
+   */
+  keptOwedAt?: string;
+  /**
    * WHERE to go for this deliverable — see {@link OutputRef}.
    *
    * The reason it exists: an agent that declares an owed slot, or blocks one on

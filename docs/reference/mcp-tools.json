@@ -5479,7 +5479,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "The person answered your question HERE, in this chat, instead of in Synap: relay their answer to the question you asked (a room question you posted, or a slot you handed them). Name the EXACT question — `messageId` (the id synap_post_message returned) and/or `slotLabel`; never guess the newest. `quote` = their words VERBATIM, never your paraphrase or summary; `value` = the pick you read in them, for a confirm/choose ask. A routine question is answered and marked relayed by you. A commitment (deploy, spend, publish, delete, an approval, a grade, handing over a secret/connection/file — or any ask you marked stakes 'commitment') is NOT answered: it returns status 'awaiting_tap' and waits for the person's own tap — do not act on it yet. When your question is overtaken (you no longer need it), disposition 'withdrawn' + `note` closes it and hands its slot back to you.",
+      "description": "The person answered your question HERE, in this chat, instead of in Synap: relay their answer to the question you asked (a room question you posted, or a slot you handed them). Name the EXACT question — `messageId` (the id synap_post_message returned) and/or `slotLabel`; never guess the newest. `quote` = their words VERBATIM, never your paraphrase or summary; `value` = the pick you read in them, for a confirm/choose ask. A routine question is answered and marked relayed by you. A commitment (a plan/deploy gate, a human-only status move, an approval card, a grade, handing over a secret/connection/file, or an ask you marked stakes 'commitment' — mark deploy, spend, publish, delete) is NOT answered: it returns status 'awaiting_tap' and waits for the person's own tap — do not act on it yet. When your question is overtaken (you no longer need it), disposition 'withdrawn' + `note` closes it and hands its slot back to you.",
       "parameters": [
         {
           "name": "sessionId",
@@ -5511,6 +5511,12 @@
           "type": "string",
           "required": false,
           "description": "The person's own words, verbatim, as they typed them. Required with 'answered'."
+        },
+        {
+          "name": "text",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the answer as filed when it is not the quote itself (a note beside a pick). Default: the quote."
         },
         {
           "name": "value",
@@ -5556,6 +5562,11 @@
             "type": "string",
             "maxLength": 2000,
             "description": "The person's own words, verbatim, as they typed them. Required with 'answered'."
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 2000,
+            "description": "Optional: the answer as filed when it is not the quote itself (a note beside a pick). Default: the quote."
           },
           "value": {
             "type": "object",

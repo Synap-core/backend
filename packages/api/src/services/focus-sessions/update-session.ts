@@ -447,6 +447,9 @@ export const expectedOutputWireSchema = z.object({
   // Retirement receipt — stamped when the declaring session is CANCELLED.
   retiredAt: z.string().optional(),
   retiredReason: z.enum(OUTPUT_RETIRED_REASONS).optional(),
+  // Kept owed past the session's end — stamped by the close door only. On
+  // the wire for the same round-trip reason as `retiredAt`.
+  keptOwedAt: z.string().optional(),
   // WHERE to go for this deliverable. AGENT/HUMAN-authored, never stamped —
   // `.nullable()` because silence means KEEP (see `SERVER_OWNED_OUTPUT_FIELDS`)
   // and so "clear this pointer" needs an explicit way to say itself.
@@ -641,6 +644,9 @@ export const SERVER_STAMPED_OUTPUT_FIELDS = [
   "attestedAt",
   "retiredAt",
   "retiredReason",
+  // The close door's receipt that the agent kept the ask owed. An agent that
+  // could author it would keep its own ask alive past every session's end.
+  "keptOwedAt",
   // Stamped by the escalation that files a criterion slot. SERVER-STAMPED, not
   // merely erasure-protected: an agent that could author it would point the
   // scorecard at a criterion it did not fail.
@@ -893,7 +899,7 @@ export function personsSlotsHandedAway(
 }
 
 /** The refusal of {@link personsSlotsHandedAway}, as a `BAD_REQUEST`. */
-export function personsSlotHandBackError(labels: string[]): TRPCError {
+function personsSlotHandBackError(labels: string[]): TRPCError {
   const named = labels
     .slice(0, 5)
     .map((l) => `"${l}"`)
@@ -914,7 +920,7 @@ export function personsSlotHandBackError(labels: string[]): TRPCError {
  * person: it goes when the ask changes (its Confirm would answer a question
  * the person never answered) or the slot stops being theirs. Pure.
  */
-export function withoutStaleRelay(
+function withoutStaleRelay(
   prior: OutputItem,
   next: OutputItem
 ): OutputItem {

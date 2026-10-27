@@ -627,7 +627,7 @@ describe('Needs you: "from X" — the ONE agent behind a decision (wave PO)', ()
   });
 });
 
-describe("Review later (Resolve-XP W3): out of the headline, into its own fold", () => {
+describe("Review later: out of the headline, into its own fold", () => {
   // Two 8-day-old pending proposals. Each rules out a wrong rule:
   //  - an objectWork `create` in s4 — s4 owes a RECENT slot, so a rule that
   //    let the row join its session's block would lift it into Recent and

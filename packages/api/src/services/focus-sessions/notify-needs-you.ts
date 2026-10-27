@@ -71,7 +71,7 @@ export function sessionNeedsYouGroupKey(sessionId: string): string {
 }
 
 /** One relay-awaiting-tap push per slot per window. */
-export function relayAwaitsTapGroupKey(
+function relayAwaitsTapGroupKey(
   sessionId: string,
   label: string
 ): string {
@@ -210,7 +210,7 @@ export async function notifySessionNeedsYou(p: {
       slotCount = 1;
       const quote = relay.quote?.trim();
       summary = clip(
-        `${slot.label} — ${ASK_COPY.awaitingYourTap(agent?.name ?? null)}${quote ? ` “${quote}”` : ""}`
+        `${slot.label} · ${ASK_COPY.awaitingYourTap(agent?.name ?? null)}${quote ? ` “${quote}”` : ""}`
       );
       groupKey = relayAwaitsTapGroupKey(p.sessionId, slot.label);
     } else if (p.reason.kind === "slots") {
@@ -242,7 +242,15 @@ export async function notifySessionNeedsYou(p: {
     });
     if (!session) return false;
 
-    const push = fresh.length > 0 ? needsYouPush(session.id, fresh) : null;
+    const asked = fresh.length > 0 ? needsYouPush(session.id, fresh) : null;
+    // A relay's push says the relay and asks for the tap: the ask's own quick
+    // answer (Yes / No) would record the person's answer over the relayed one,
+    // and its body would hide that an agent relayed it. It still lands on the
+    // ask, where Confirm is.
+    const push =
+      asked && p.reason.kind === "relay"
+        ? { ...asked, quickAnswer: null, body: undefined }
+        : asked;
 
     const id = await NotificationService.create({
       type: SESSION_NEEDS_YOU_NOTIFICATION_TYPE,

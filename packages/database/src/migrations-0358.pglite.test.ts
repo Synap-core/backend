@@ -1,6 +1,6 @@
 /**
  * REAL-POSTGRES (PGlite) test for migration 0358 — a session that ended stops
- * asking (founder default 3). Minimal tables carry the columns the migration
+ * asking (founder, 2026-10-26). Minimal tables carry the columns the migration
  * reads; it runs TWICE.
  *
  * Each row names what it rules out:

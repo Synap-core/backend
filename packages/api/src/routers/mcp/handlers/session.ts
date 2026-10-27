@@ -18,7 +18,11 @@ import {
 } from "../../../services/focus-sessions/parent-lineage.js";
 import { attachTriage } from "../../../services/focus-sessions/triage.js";
 import type { TerminalSessionStatus } from "../../../services/focus-sessions/session-statuses.js";
-import type { CloseQuestionDisposition } from "../../../services/messaging/room-post-kind.js";
+import {
+  CLOSE_QUESTION_DISPOSITIONS,
+  readCloseQuestionDispositions,
+  type CloseQuestionDisposition,
+} from "../../../services/messaging/room-post-kind.js";
 import type { ExpectedOutput, SessionCriterion } from "@synap/playbooks";
 import { requestClientKey } from "../../../services/focus-sessions/resolve-work-session.js";
 import { refuseUndeclaredArgs } from "../undeclared-args.js";
@@ -30,13 +34,8 @@ import { parseSessionChangeKinds } from "../../../services/focus-sessions/sessio
 import {
   describeRelayRefusal,
   relaySessionAnswer,
-  RELAY_DISPOSITIONS,
-  type RelayDisposition,
+  RelaySessionAnswerInputSchema,
 } from "../../../services/focus-sessions/session-answer.js";
-import {
-  AskAnswerValueSchema,
-  type AskAnswerValue,
-} from "@synap-core/types/ask";
 import { readAgentsForHandoff } from "../../../services/agent-dispatch/agents-for-handoff.js";
 import type { UpdateFocusSessionParams } from "../../../services/focus-sessions/update-session.js";
 import { SESSION_TITLE_MAX } from "@synap-core/types/focus-sessions";
@@ -400,44 +399,20 @@ export const sessionHandlers: McpHandlerMap = {
     if (!UUID_RE.test(sessionId)) {
       return ok({ error: `Focus session ${sessionId || "(none)"} not found` });
     }
-    const disposition = args.disposition;
-    if (
-      typeof disposition !== "string" ||
-      !(RELAY_DISPOSITIONS as readonly string[]).includes(disposition)
-    ) {
+    // The ONE relay schema, as on the Hub door — never a hand check.
+    const parsed = RelaySessionAnswerInputSchema.safeParse(args);
+    if (!parsed.success) {
+      const issue = parsed.error.issues[0];
       return ok({
-        error: `disposition must be one of: ${RELAY_DISPOSITIONS.join(", ")}.`,
+        error: `${issue?.path.join(".") || "input"}: ${issue?.message ?? "invalid relay"}`,
       });
     }
-    const str = (v: unknown) => (typeof v === "string" ? v : undefined);
-    const messageId = str(args.messageId)?.trim();
-    if (messageId && !UUID_RE.test(messageId)) {
-      return ok({ error: "messageId must be the question's message id (a UUID)." });
-    }
-    let value: AskAnswerValue | undefined;
-    if (args.value !== undefined) {
-      // The ONE answer schema, as on every answer door — never a cast.
-      const parsed = AskAnswerValueSchema.safeParse(args.value);
-      if (!parsed.success) {
-        return ok({
-          error: `value: ${parsed.error.issues[0]?.message ?? "invalid answer value"}`,
-        });
-      }
-      value = parsed.data;
-    }
-    const slotLabel = str(args.slotLabel);
+    const slotLabel = parsed.data.slotLabel;
     const result = await relaySessionAnswer({
       sessionId,
       userId,
       agentUserId,
-      disposition: disposition as RelayDisposition,
-      ...(messageId ? { messageId } : {}),
-      ...(slotLabel ? { slotLabel } : {}),
-      quote: str(args.quote),
-      text: str(args.text),
-      ...(value ? { value } : {}),
-      relaySurface: str(args.relaySurface),
-      note: str(args.note),
+      ...parsed.data,
     });
     if (
       result.status === "relayed" ||
@@ -629,8 +604,26 @@ export const sessionHandlers: McpHandlerMap = {
   ): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
-    const { completeFocusSession, isOpenQuestionsAtCloseError } =
-      await import("../../../services/focus-sessions/complete-session.js");
+    const {
+      completeFocusSession,
+      isOpenQuestionsAtCloseError,
+      openQuestionsRefusal,
+    } = await import("../../../services/focus-sessions/complete-session.js");
+    // The executor's reader, refusing what it would drop: a word that is not
+    // `withdrawn` / `keep_as_owed` is never read as either.
+    const rawDispositions = args.questionDispositions;
+    let questionDispositions: CloseQuestionDisposition[] | undefined;
+    if (rawDispositions !== undefined) {
+      questionDispositions = readCloseQuestionDispositions(rawDispositions);
+      if (
+        !Array.isArray(rawDispositions) ||
+        questionDispositions.length !== rawDispositions.length
+      ) {
+        return ok({
+          error: `questionDispositions: each is {messageId, disposition: ${CLOSE_QUESTION_DISPOSITIONS.map((d) => `'${d}'`).join(" | ")}, note?}.`,
+        });
+      }
+    }
     let result: Awaited<ReturnType<typeof completeFocusSession>>;
     try {
       result = await completeFocusSession({
@@ -646,22 +639,15 @@ export const sessionHandlers: McpHandlerMap = {
         // tRPC / Hub PATCH doors could. Validated by the tool schema's enum,
         // which derives from TERMINAL_SESSION_STATUSES.
         terminalStatus: args.terminalStatus as TerminalSessionStatus | undefined,
-        // Shape-checked by the tool schema; the service matches each id
-        // against this agent's own open questions and ignores the rest.
-        questionDispositions: Array.isArray(args.questionDispositions)
-          ? (args.questionDispositions as CloseQuestionDisposition[])
-          : undefined,
+        // The service matches each id against this agent's own open
+        // questions and ignores the rest.
+        questionDispositions,
       });
     } catch (err) {
       // Its own questions are still open: nothing closed, and the agent is
       // handed the list and the two ways out.
       if (isOpenQuestionsAtCloseError(err)) {
-        return ok({
-          status: "refused",
-          reasonCode: err.code,
-          message: err.message,
-          openQuestions: err.openQuestions,
-        });
+        return ok(openQuestionsRefusal(err));
       }
       throw err;
     }

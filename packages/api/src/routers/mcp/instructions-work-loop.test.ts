@@ -84,7 +84,7 @@ describe("MCP instructions teach the session work loop", () => {
   });
 
   it("teaches the question protocol: short id in chat, the person's chat answer relayed verbatim, asks closed before complete", () => {
-    // Resolve-XP W5 (2026-10-26): a question answered in the agent's own chat
+    // A question answered in the agent's own chat
     // never reached the room, so it stayed open on Relay. The clause cost ~48
     // bytes net after trimming reflexes 3, 5, 7 and the opening line; the 550
     // floor held. Do not lower it — trim an equal amount.

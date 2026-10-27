@@ -1,7 +1,7 @@
 /**
  * A session waiting on its pending plan/deploy GATE waits on the person — the
  * third arm of both waits-on-the-person predicates, through the REAL rendered
- * SQL on PGlite (Resolve-XP W3).
+ * SQL on PGlite.
  *
  * Each row names what it rules out:
  *   - a pending `dev.plan_approval` read as idle (the defect: the reapers
