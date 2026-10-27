@@ -16,6 +16,10 @@ import { Pill } from "../../_lib/object/provenance-chips";
 import { StatusPill } from "../../(admin)/components/status-pill";
 import { statusPillFor } from "../../(admin)/components/status-tone";
 import { openIn } from "../../../lib/open-in";
+import type { MediaRef } from "@synap-core/types/presentation";
+import { MediaView } from "../../_lib/media/media-view";
+import { resolveObjectNounPlural } from "@synap-core/types/vocabulary";
+import type { PartEdge } from "./composite-parts-model";
 import {
   RECORD_FIELDS_SHOWN,
   type ProposedRecord,
@@ -31,8 +35,42 @@ import {
 export const RECORD_GRID_CLASS =
   "grid grid-cols-[repeat(auto-fill,minmax(min(100%,13rem),1fr))] gap-x-6 gap-y-3";
 
+/** Lines of code shown before "Show all N lines": folded, never cut. */
+export const CODE_LINES_SHOWN = 40;
+
+function CodeValue({ text, lines }: { text: string; lines: number }) {
+  const [all, setAll] = useState(false);
+  const folded = !all && lines > CODE_LINES_SHOWN;
+  return (
+    <span className="flex w-full min-w-0 flex-col gap-1">
+      <pre
+        data-record-code=""
+        className="max-w-full overflow-x-auto whitespace-pre rounded-md bg-foreground/[0.04] px-3 py-2 font-mono text-[12px] leading-relaxed text-foreground/90 ring-1 ring-inset ring-foreground/10"
+      >
+        <code>
+          {folded
+            ? text.split("\n").slice(0, CODE_LINES_SHOWN).join("\n")
+            : text}
+        </code>
+      </pre>
+      {folded && (
+        <Button
+          size="sm"
+          variant="light"
+          className="self-start px-1 text-[12.5px] text-foreground/65"
+          onPress={() => setAll(true)}
+        >
+          Show all {lines} lines
+        </Button>
+      )}
+    </span>
+  );
+}
+
 function Value({ value }: { value: RecordValue }) {
   switch (value.kind) {
+    case "code":
+      return <CodeValue text={value.text} lines={value.lines} />;
     case "text":
       return (
         <span
@@ -137,9 +175,12 @@ function Field({ field }: { field: RecordField }) {
 
 export function ProposedRecordCard({
   record,
+  media,
   children,
 }: {
   record: ProposedRecord;
+  /** The record's image (an upload waiting for approval), drawn as a thumbnail. */
+  media?: MediaRef | null;
   /** What sits under the fields: this record's twins and its choice. */
   children?: ReactNode;
 }) {
@@ -177,6 +218,7 @@ export function ProposedRecordCard({
           </span>
         )}
       </header>
+      {media && <MediaView media={media} alt={title} size="thumb" />}
       {fields.length > 0 && (
         <dl className={RECORD_GRID_CLASS}>
           {fields.map((field) => (
@@ -195,6 +237,53 @@ export function ProposedRecordCard({
         </Button>
       )}
       {children}
+    </section>
+  );
+}
+
+/** Links shown before "Show all N links". */
+export const EDGES_SHOWN = 8;
+
+/**
+ * The links a graph proposal makes between its parts (relations, a plan's
+ * session links), one line each: "Léa · Works at · Acme". Capped, then
+ * "Show all N".
+ */
+export function PartEdgeList({ edges }: { edges: readonly PartEdge[] }) {
+  const [all, setAll] = useState(false);
+  const shown = all ? edges : edges.slice(0, EDGES_SHOWN);
+  const noun = resolveObjectNounPlural("relation");
+  return (
+    <section
+      aria-label={noun}
+      data-part-edges=""
+      className="flex flex-col gap-2 rounded-lg bg-foreground/[0.03] px-4 py-3.5 ring-1 ring-inset ring-foreground/10"
+    >
+      <h2 className="font-heading text-[15px] font-medium text-foreground">
+        {noun}
+      </h2>
+      <ul className="flex flex-col gap-1">
+        {shown.map((edge) => (
+          <li
+            key={edge.ref}
+            className="flex min-w-0 flex-wrap items-baseline gap-x-1.5 text-[13px] text-foreground/85"
+          >
+            <span className="break-words">{edge.from}</span>
+            <span className="text-[12px] text-foreground/55">{edge.verb}</span>
+            <span className="break-words">{edge.to}</span>
+          </li>
+        ))}
+      </ul>
+      {edges.length > shown.length && (
+        <Button
+          size="sm"
+          variant="light"
+          className="self-start px-1 text-[12.5px] text-foreground/65"
+          onPress={() => setAll(true)}
+        >
+          Show all {edges.length} {noun.toLowerCase()}
+        </Button>
+      )}
     </section>
   );
 }

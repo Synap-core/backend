@@ -64,6 +64,7 @@ import {
   resolveProposalAction,
   type DuplicateItemChoice,
   type ProposalDuplicateReview,
+  type ProposalReviewGraph,
 } from "@synap-core/types/proposals";
 import {
   resolveObjectNoun,
@@ -95,13 +96,15 @@ import {
   TwinDoors,
   TwinVerbs,
 } from "./DuplicateChoice";
-import { ProposedRecordCard } from "./ProposedRecordCard";
+import { PartEdgeList, ProposedRecordCard } from "./ProposedRecordCard";
 import { ProposalSessionContext } from "./ProposalSessionContext";
+import { compositeItems } from "./composite-parts-model";
 import { proposalHeading } from "./proposal-heading";
 import { proposalProfileSlug } from "./proposal-subject-kind";
 import { proposalRequesterParts } from "./proposal-requester";
 import {
   graphRecords,
+  proposedEntityMedia,
   proposedRecord,
   type ProposedRecord,
   type ResolvedRef,
@@ -754,16 +757,33 @@ export function ProposalReviewBody({
     graphKinds,
   });
 
-  /* The record(s) approving creates or changes. A graph: one card per new
-     item. Otherwise the pod's diff as one record — absent when it has nothing
-     readable (the raw request is still in Advanced). */
+  /* The record(s) approving creates or changes. A graph: one card per part
+     the pod's projection lists (skills, automations, rules, records, the
+     process, updates — `composite-parts-model.ts`), and its links as one
+     list; nobody approves a part they cannot see. Otherwise the pod's diff
+     as one record — absent when it has nothing readable (the raw request is
+     still in Advanced). */
   const objectRefs = (p as { objectRefs?: Record<string, ResolvedRef> })
     .objectRefs;
+  const reviewGraph = graph
+    ? (p.review as { graph?: ProposalReviewGraph }).graph
+    : undefined;
+  const graphItems =
+    reviewGraph && !appConnect && !docChanges
+      ? compositeItems(reviewGraph, payload, defs.definitionsFor)
+      : [];
+  const edges = graphItems.flatMap((item) =>
+    item.shape === "edge" ? [item.edge] : []
+  );
   const records: ProposedRecord[] =
     appConnect || docChanges
       ? []
       : graph
-        ? graphRecords(payload, defs.definitionsFor)
+        ? reviewGraph
+          ? graphItems.flatMap((item) =>
+              item.shape === "record" ? [item.record] : []
+            )
+          : graphRecords(payload, defs.definitionsFor)
         : (() => {
             const record = proposedRecord({
               changes: (
@@ -782,6 +802,11 @@ export function ProposalReviewBody({
             });
             return record ? [record] : [];
           })();
+  // An entity create carrying an upload: the reviewer sees the image itself.
+  const recordMedia =
+    !graph && action === "create" && p.targetType === "entity"
+      ? proposedEntityMedia(payload)
+      : null;
 
   /* The twin(s) the pod's duplicate door found, read with the ONE derivation.
      `duplicateCheck` rides the TOP of the stored payload (`p.data`), beside
@@ -877,7 +902,11 @@ export function ProposalReviewBody({
           {records.map((record) => {
             const item = itemByRef.get(record.ref);
             return (
-              <ProposedRecordCard key={record.ref} record={record}>
+              <ProposedRecordCard
+                key={record.ref}
+                record={record}
+                media={recordMedia}
+              >
                 {twinsUnderCard && (
                   <div className="border-t border-foreground/[0.06] pt-3">
                     <TwinDoors
@@ -909,6 +938,7 @@ export function ProposalReviewBody({
           })}
         </div>
       ) : null}
+      {edges.length > 0 && <PartEdgeList edges={edges} />}
       {/* A graph item whose card is not drawn still owes its choice: it is
           never sent on a default nobody saw. */}
       {orphanItems.map((item) => (
