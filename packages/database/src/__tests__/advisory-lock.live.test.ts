@@ -3,12 +3,24 @@
  * held while `fn` runs, as another connection sees it, and released after,
  * whether `fn` returns or throws. The leak it replaces (27 Oct 2026) left the
  * lock on an idle pooled connection; "held after" is that defect.
- * Needs a live database: skipped without DATABASE_URL (PGlite cannot show it,
- * being one connection).
+ * Needs a live Postgres (PGlite cannot show it, being one connection): probed
+ * once at load, as entities-dedup-gate.test.ts does, so a missing database is
+ * reported SKIPPED (with the probe's own test always run), never PASSED.
  */
 import { afterAll, describe, expect, it } from "vitest";
 import { sql } from "../client-pg.js";
 import { withAdvisoryLock } from "../advisory-lock.js";
+
+async function probe(): Promise<boolean> {
+  if (!process.env.DATABASE_URL) return false;
+  try {
+    await sql`SELECT 1`;
+    return true;
+  } catch {
+    return false;
+  }
+}
+const dbAvailable = await probe();
 
 const K1 = `advisory-lock-live-test:${process.pid}`;
 const K2 = `run:${Date.now()}`;
@@ -27,11 +39,18 @@ async function heldElsewhere(): Promise<boolean> {
   }
 }
 
-describe.skipIf(!process.env.DATABASE_URL)("withAdvisoryLock (live pool)", () => {
-  afterAll(async () => {
-    await sql.end({ timeout: 5 });
+// Never gated: the probe ran, so the skips below are honest.
+describe("withAdvisoryLock — live-PG gate", () => {
+  it("probed the database", () => {
+    expect(typeof dbAvailable).toBe("boolean");
   });
+});
 
+afterAll(async () => {
+  await sql.end({ timeout: 5 });
+});
+
+describe.skipIf(!dbAvailable)("withAdvisoryLock (live pool)", () => {
   it("holds the lock while fn runs, releases it after", async () => {
     let during: boolean | undefined;
     const out = await withAdvisoryLock(K1, K2, async () => {
