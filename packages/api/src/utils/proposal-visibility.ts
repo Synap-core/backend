@@ -260,7 +260,12 @@ export async function assertProposalCommentableBy(
     if (!(err instanceof TRPCError) || err.code !== "FORBIDDEN") throw err;
     const proposal = await database.query.proposals.findFirst({
       where: eq(proposals.id, proposalId),
-      columns: { sessionId: true, targetType: true, targetId: true },
+      columns: {
+        sessionId: true,
+        targetType: true,
+        targetId: true,
+        proposalType: true,
+      },
     });
     const sessionIds = proposal ? proposalSessionIds(proposal) : [];
     if (sessionIds.length > 0) {

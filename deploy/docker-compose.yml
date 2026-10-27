@@ -128,11 +128,39 @@ x-backend-env: &backend-env
   SYNAP_LIBRARY_LIGHT_READ_CONCURRENCY: ${SYNAP_LIBRARY_LIGHT_READ_CONCURRENCY:-}
   SYNAP_LIBRARY_LIGHT_READ_EXPIRE_MINUTES: ${SYNAP_LIBRARY_LIGHT_READ_EXPIRE_MINUTES:-}
   SYNAP_LIBRARY_READ_AI_PER_DAY: ${SYNAP_LIBRARY_READ_AI_PER_DAY:-}
-  # Request budget per signed-in person (15-minute window) and per client
-  # address across every budget. Empty = the code's default
-  # (apps/api/src/middleware/rate-limit-classes.ts): 3000, and five times that.
+  # Request budgets, one per class (apps/api/src/middleware/rate-limit-classes.ts).
+  # Empty = the code's default: an agent key 500 per 15 min (CRUD_MAX), a
+  # signed-in person 3000 (CRUD_SESSION_MAX), one address five times that.
+  # Every key the code reads is passed (rate-limit-deploy-wiring.test.ts):
+  # a key missing here silently does nothing on a deployed pod.
+  RATE_LIMIT_CRUD_MAX: ${RATE_LIMIT_CRUD_MAX:-}
   RATE_LIMIT_CRUD_SESSION_MAX: ${RATE_LIMIT_CRUD_SESSION_MAX:-}
   RATE_LIMIT_CRUD_IP_CEILING: ${RATE_LIMIT_CRUD_IP_CEILING:-}
+  RATE_LIMIT_CRUD_WINDOW_MS: ${RATE_LIMIT_CRUD_WINDOW_MS:-}
+  RATE_LIMIT_IMPORT_MAX: ${RATE_LIMIT_IMPORT_MAX:-}
+  RATE_LIMIT_IMPORT_WINDOW_MS: ${RATE_LIMIT_IMPORT_WINDOW_MS:-}
+  RATE_LIMIT_AI_MAX: ${RATE_LIMIT_AI_MAX:-}
+  RATE_LIMIT_AI_WINDOW_MS: ${RATE_LIMIT_AI_WINDOW_MS:-}
+  RATE_LIMIT_AGENT_TURN_MAX: ${RATE_LIMIT_AGENT_TURN_MAX:-}
+  RATE_LIMIT_AGENT_TURN_WINDOW_MS: ${RATE_LIMIT_AGENT_TURN_WINDOW_MS:-}
+  RATE_LIMIT_CALENDAR_FEED_MAX: ${RATE_LIMIT_CALENDAR_FEED_MAX:-}
+  RATE_LIMIT_CALENDAR_FEED_IP_MAX: ${RATE_LIMIT_CALENDAR_FEED_IP_MAX:-}
+  RATE_LIMIT_CALENDAR_FEED_WINDOW_MS: ${RATE_LIMIT_CALENDAR_FEED_WINDOW_MS:-}
+  RATE_LIMIT_PUBLIC_READ_IP_MAX: ${RATE_LIMIT_PUBLIC_READ_IP_MAX:-}
+  RATE_LIMIT_PUBLIC_READ_WINDOW_MS: ${RATE_LIMIT_PUBLIC_READ_WINDOW_MS:-}
+  RATE_LIMIT_PUBLIC_SUBMIT_IP_MAX: ${RATE_LIMIT_PUBLIC_SUBMIT_IP_MAX:-}
+  RATE_LIMIT_PUBLIC_SUBMIT_IP_WINDOW_MS: ${RATE_LIMIT_PUBLIC_SUBMIT_IP_WINDOW_MS:-}
+  RATE_LIMIT_PUBLIC_SUBMIT_SHARE_MAX: ${RATE_LIMIT_PUBLIC_SUBMIT_SHARE_MAX:-}
+  RATE_LIMIT_PUBLIC_SUBMIT_SHARE_WINDOW_MS: ${RATE_LIMIT_PUBLIC_SUBMIT_SHARE_WINDOW_MS:-}
+  RATE_LIMIT_DEVICE_AUTH_MAX: ${RATE_LIMIT_DEVICE_AUTH_MAX:-}
+  RATE_LIMIT_DEVICE_AUTH_WINDOW_MS: ${RATE_LIMIT_DEVICE_AUTH_WINDOW_MS:-}
+  RATE_LIMIT_KEY_STATE_MAX: ${RATE_LIMIT_KEY_STATE_MAX:-}
+  RATE_LIMIT_KEY_STATE_WINDOW_MS: ${RATE_LIMIT_KEY_STATE_WINDOW_MS:-}
+  RATE_LIMIT_OAUTH_PUBLIC_MAX: ${RATE_LIMIT_OAUTH_PUBLIC_MAX:-}
+  RATE_LIMIT_OAUTH_PUBLIC_WINDOW_MS: ${RATE_LIMIT_OAUTH_PUBLIC_WINDOW_MS:-}
+  RATE_LIMIT_OAUTH_TOKEN_MAX: ${RATE_LIMIT_OAUTH_TOKEN_MAX:-}
+  RATE_LIMIT_OAUTH_TOKEN_IP_CEILING: ${RATE_LIMIT_OAUTH_TOKEN_IP_CEILING:-}
+  RATE_LIMIT_OAUTH_TOKEN_WINDOW_MS: ${RATE_LIMIT_OAUTH_TOKEN_WINDOW_MS:-}
   # Mirrored only so the backend can introspect its own courier (SMTP) config
   # in /api/provision/status. Kratos reads this directly via its own service env
   # block below — the backend never sends mail itself; it just reports status.
@@ -535,9 +563,12 @@ services:
   # deploy/state/postgres-initialized exists) is kept aside as SUSPECT: nothing
   # pruned, nothing pushed, .alarm raised. Once `synap backup init` ran, each
   # good dump + MinIO objects + .env + state/ is pushed as an encrypted restic
-  # snapshot to BACKUP_REPOSITORY (append-only: the pod never forgets/prunes),
-  # and a restore drill runs weekly. Unhealthy when no recent dump exists or
-  # any of .alarm / .push-failed / .drill-failed is set.
+  # snapshot to BACKUP_REPOSITORY, a restore drill runs weekly, and, with
+  # BACKUP_RETENTION=true in .env, a daily forget+prune keeps the scheduled ladder
+  # (newest + previous hour/day/week/month) and the last 3 manual pushes (the
+  # pod's B2 key cannot delete: pruned files are hidden, deleted by the bucket
+  # lifecycle 30 days later). Unhealthy when no recent dump exists or any of
+  # .alarm / .push-failed / .drill-failed / .retention-failed is set.
   # Restore: synap restore --from-snapshot <id|latest>  |  synap restore <dir>
   # ============================================================================
   postgres-backup:
@@ -569,7 +600,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "test ! -e /backups/.alarm && test ! -e /backups/.push-failed && test ! -e /backups/.drill-failed && find /backups -maxdepth 1 \\( -name '*-auto' -o -name '*-daily' \\) -mmin -$$(( BACKUP_INTERVAL_SECONDS / 30 )) | grep -q .",
+          "test ! -e /backups/.alarm && test ! -e /backups/.push-failed && test ! -e /backups/.drill-failed && test ! -e /backups/.retention-failed && find /backups -maxdepth 1 \\( -name '*-auto' -o -name '*-daily' \\) -mmin -$$(( BACKUP_INTERVAL_SECONDS / 30 )) | grep -q .",
         ]
       interval: 10m
       timeout: 10s
