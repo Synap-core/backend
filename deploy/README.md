@@ -189,6 +189,14 @@ What changes for an operator when a pod updates past a release. Newest first.
   `RATE_LIMIT_CRUD_READ_SESSION_MAX` for a signed-in person). Writes keep
   `RATE_LIMIT_CRUD_MAX`, so an agent stuck writing in a loop still stops at
   `500`.
+- **Budgets from the pod's own settings.** The owner can set any of these
+  budgets on the pod itself, without a redeploy: `GET /api/pod-rate-limits`
+  lists every budget with its value and where it comes from (the pod's
+  setting, the env, or the default), and `PUT /api/pod-rate-limits` with
+  `{"values": {"RATE_LIMIT_CRUD_MAX": 3000}}` sets one (`null` clears it).
+  Only a signed-in pod admin can change them; an agent's key cannot. A value
+  set there wins over the env, which stays the deployment's default; it takes
+  effect on the next request, and every budget's count starts afresh.
 - **Migration 0327** (split `source` into `provenance` and `leadSource`) runs
   automatically during `synap update`; nothing to do.
 - **Console URL.** The Apps page moved from `/origins` to `/applications`. Old
