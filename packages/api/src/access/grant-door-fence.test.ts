@@ -17,6 +17,7 @@ import {
   mcpToolAllowed,
   ownerWideDoorAllowed,
   restDoorAllowed,
+  sessionPacketReadable,
   TRPC_KEY_MUTATION_DOORS,
   trpcProcedureAllowed,
   trpcRefusalMessage,
@@ -74,7 +75,7 @@ describe("restDoorAllowed", () => {
     ["GET", "/threads/t1/messages", true],
     ["GET", "/focus-sessions", true],
     ["GET", "/focus-sessions/owed", true], // seamed: sessionReadableWhere
-    ["GET", "/focus-sessions/s1", false], // declared door: DOC_ONLY lacks its subjects
+    ["GET", "/focus-sessions/s1", false], // not a uuid: no declaration admits it
     ["GET", "/projects/p1", true],
     // Seamed (`scopedDb` on playbooks, grant-clipped method count): a scoped
     // key finds the process it may run. A uuid id only.
@@ -115,27 +116,39 @@ describe("declared session read doors (a scoped agent key reads its session)", (
   it.each(SESSION_DOORS)("the AI preset may GET %s", (path) => {
     expect(restDoorAllowed("GET", path, AI)).toBe(true);
   });
+  const PINNED_AI = key({
+    permissions: GRANT_PRESETS.find((r) => r.id === AI_READ_PROPOSE_ROLE_ID)!
+      .grant.permissions,
+    workspaceIds: ["w1"],
+  });
   it.each(SESSION_DOORS)(
-    "GET %s fails closed for a key missing a subject, pinned, or deny-all",
+    "GET %s fails closed for a key missing a subject, or deny-all",
     (path) => {
       expect(restDoorAllowed("GET", path, DOC_ONLY)).toBe(false);
       expect(restDoorAllowed("GET", path, key({ permissions: [] }))).toBe(
         false
       );
-      expect(
-        restDoorAllowed(
-          "GET",
-          path,
-          key({
-            permissions: GRANT_PRESETS.find(
-              (r) => r.id === AI_READ_PROPOSE_ROLE_ID
-            )!.grant.permissions,
-            workspaceIds: ["w1"],
-          })
-        )
-      ).toBe(false);
     }
   );
+  it.each(SESSION_DOORS.filter((p) => !/^\/focus-sessions\/[^/]+\/?$/.test(p)))(
+    "GET %s fails closed for a pinned key (an aggregate read)",
+    (path) => {
+      expect(restDoorAllowed("GET", path, PINNED_AI)).toBe(false);
+    }
+  );
+  it("the session itself is admitted to a pinned key: the route narrows it", () => {
+    // An app's grant is always pinned to spaces. The route reads the row
+    // through the grant and withholds the packet (sessionPacketReadable).
+    expect(restDoorAllowed("GET", `/focus-sessions/${S}`, PINNED_AI)).toBe(true);
+    expect(
+      restDoorAllowed(
+        "GET",
+        `/focus-sessions/${S}`,
+        key({ permissions: ["session.read"], workspaceIds: ["w1"] })
+      )
+    ).toBe(true);
+    expect(sessionPacketReadable(PINNED_AI)).toBe(false);
+  });
   it("each route needs the subjects IT reads, not one blanket switch", () => {
     const sessionAndRoom = key({
       permissions: ["session.read", "channel.read"],
@@ -146,7 +159,7 @@ describe("declared session read doors (a scoped agent key reads its session)", (
     expect(
       restDoorAllowed("GET", `/focus-sessions/${S}/evaluations`, sessionAndRoom)
     ).toBe(true);
-    // The wait door also reads proposals; the full read the whole packet.
+    // The wait door also reads proposals.
     expect(
       restDoorAllowed(
         "GET",
@@ -154,9 +167,18 @@ describe("declared session read doors (a scoped agent key reads its session)", (
         sessionAndRoom
       )
     ).toBe(false);
+    // The session itself: the row, but not the packet (it reads far more).
     expect(restDoorAllowed("GET", `/focus-sessions/${S}`, sessionAndRoom)).toBe(
-      false
+      true
     );
+    expect(sessionPacketReadable(sessionAndRoom)).toBe(false);
+  });
+  it("the packet: every unfenced caller, a fenced key only when it reads all of it", () => {
+    expect(sessionPacketReadable(undefined)).toBe(true);
+    expect(sessionPacketReadable(key({ permissions: ["*"] }))).toBe(true);
+    expect(sessionPacketReadable(AI)).toBe(true);
+    expect(sessionPacketReadable(DOC_ONLY)).toBe(false);
+    expect(sessionPacketReadable(key({ permissions: [] }))).toBe(false);
   });
   it("only uuid-shaped ids: a static sibling is not admitted by the declaration", () => {
     expect(restDoorAllowed("GET", "/focus-sessions/ambient", AI)).toBe(false);
