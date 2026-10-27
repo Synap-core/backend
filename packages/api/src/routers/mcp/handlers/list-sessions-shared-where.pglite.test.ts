@@ -152,8 +152,10 @@ async function list(args: Record<string, unknown>): Promise<string[]> {
 }
 
 beforeAll(async () => {
-  const tables = Object.values(schema).filter((v): v is PgTable =>
-    is(v, PgTable)
+  // `schema` also exports non-tables (a RegExp among them): widen to unknown
+  // so the predicate narrows instead of failing TS2677 under api tsc.
+  const tables = Object.values(schema as Record<string, unknown>).filter(
+    (v): v is PgTable => is(v, PgTable)
   );
   expect(tables.map((t) => getTableConfig(t).name)).toEqual(
     expect.arrayContaining(["focus_sessions", "links"])
