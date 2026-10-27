@@ -53,6 +53,9 @@ export * from "./embed-words.js";
 /** Who is on a goal: participant roles, commitment states, "Silent 6 h". */
 export * from "./track-participant-words.js";
 
+/** Review's packages, groupings and layouts (`../proposals/review-package.ts`). */
+export * from "./review-words.js";
+
 /**
  * Words a sentence-cased token must still spell the way people write them —
  * the casing of a NAME (a product, a format), not of a sentence. Deliberately
