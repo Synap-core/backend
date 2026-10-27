@@ -64,6 +64,9 @@ function code(text: string): string {
   return stripComments(text, "ts");
 }
 
+/** The desktop download, as a call site would hand-write it. */
+const DOWNLOAD_SPELLING = /Get the desktop app|download\/browser/i;
+
 const FILES = sourceFiles().map((path) => ({
   path: relative(APP_ROOT, path),
   body: code(readFileSync(path, "utf8")),
@@ -128,14 +131,59 @@ describe("pod-admin exit door", () => {
     // are all desktop links has no single `Exit`, and `intelligence` hand-rolled
     // its anchor that way — invisible to a guard matching only `exit.fallback`.
     // Both spellings belong to `exit-link.tsx` alone.
+    // `ifNotOpened` is the third: where `placeExit` holds the desktop download.
     const allowed = new Set(["lib/exit-link.tsx"]);
     const hits = FILES.filter(
       (f) =>
-        /\bexit\.fallback\b|\bfallback\.href\b|\bDESKTOP_FALLBACK\s*\.\s*(?:href|label)\b/.test(
+        /\bexit\.fallback\b|\bfallback\.href\b|\bifNotOpened\b|\bDESKTOP_FALLBACK\s*\.\s*(?:href|label)\b/.test(
           f.body
         ) && !allowed.has(f.path)
     );
     expect(hits.map((h) => h.path)).toEqual([]);
+  });
+
+  it("spells the desktop download only in the one door", () => {
+    // Founder, 2026-10-27: "Open in app" stands alone, and the download is
+    // offered only once a click did not open the app. A call site that writes
+    // "Get the desktop app" or links /download/browser itself is a download
+    // beside the link again, at rest — whatever it looks like.
+    const hits = FILES.filter(
+      (f) => DOWNLOAD_SPELLING.test(f.body) && f.path !== "lib/open-in.ts"
+    );
+    expect(hits.map((h) => h.path)).toEqual([]);
+  });
+
+  it("renders the not-opened offer only through useAppOpenAttempt", () => {
+    // The offer, its sentence and the open watch belong to `exit-link.tsx`;
+    // a caller gets the offer as `useAppOpenAttempt(placed).offer`, which is
+    // null until a click opened nothing.
+    const allowed = new Set(["lib/exit-link.tsx", "lib/open-in.ts"]);
+    const hits = FILES.filter(
+      (f) =>
+        /\bNotOpenedOffer\b|\bDESKTOP_NOT_OPENED_NOTE\b|\bwatchAppOpen\b/.test(
+          f.body
+        ) && !allowed.has(f.path)
+    );
+    expect(hits.map((h) => h.path)).toEqual([]);
+  });
+
+  it("every renderer that places an exit also takes the open attempt", () => {
+    // A link built from `usePlacedExit` / `rowHref` that skips
+    // `useAppOpenAttempt` is a `synap://` click that can strand the reader
+    // with nothing at all, now that no download sits beside it. The set is
+    // DERIVED (every file that calls `usePlacedExit(`), so a new row renderer
+    // joins it by existing. Granularity is the FILE, not the call: a file with
+    // two placed links and one attempt passes (home/page.tsx and
+    // ask-answer.tsx hold two each, and take two).
+    const placing = FILES.filter(
+      (f) =>
+        f.path !== "lib/exit-link.tsx" && /\busePlacedExit\s*\(/.test(f.body)
+    );
+    expect(placing.length).toBeGreaterThanOrEqual(8);
+    const missing = placing.filter(
+      (f) => !/\buseAppOpenAttempt\s*\(/.test(f.body)
+    );
+    expect(missing.map((m) => m.path)).toEqual([]);
   });
 
   it("renders an exit's href only after placing it for the device", () => {
@@ -267,6 +315,24 @@ describe("the guards catch their own evasions", () => {
     ["no trailing slash", 'href="/studio"'],
   ])("dead /studio route — %s", (_label, input) => {
     expect(STUDIO.test(input)).toBe(true);
+  });
+
+  it.each([
+    [
+      "a hand-rolled anchor",
+      '<a href="https://www.synap.live/download/browser">Get the desktop app</a>',
+    ],
+    ["the label alone", "<span>Get the desktop app</span>"],
+    ["the URL alone", "const u = `${WEB}/download/browser`;"],
+    ["another casing", '"get the Desktop App"'],
+  ])("desktop download beside the link — %s", (_label, input) => {
+    expect(DOWNLOAD_SPELLING.test(code(input))).toBe(true);
+  });
+
+  it("can still see the one spelling it allows", () => {
+    // Non-vacuity: the scan reads open-in.ts, where the download IS spelled.
+    const door = FILES.find((f) => f.path === "lib/open-in.ts");
+    expect(door && DOWNLOAD_SPELLING.test(door.body)).toBe(true);
   });
 
   it("does not let a string literal containing /* blind the scanner", () => {
