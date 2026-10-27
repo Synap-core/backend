@@ -52,7 +52,12 @@ const svc = vi.hoisted(() => ({
     revoked: true,
   })),
 }));
-vi.mock("../../../services/key-requests.js", () => svc);
+vi.mock("../../../services/key-requests.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../../services/key-requests.js")
+  >()),
+  ...svc,
+}));
 
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { registerKeysRoutes } from "./keys.js";
