@@ -6,9 +6,10 @@
  * `db` is a connection pool: the unlock ran on a different connection (a no-op
  * there) and the lock stayed held by an idle pooled connection. Every approve
  * of the CRM update then waited on it, silently, until the holder was ended.
- * A session lock is only safe on ONE pinned connection, and this codebase
- * reaches Postgres through the pool, so the rule is: take an advisory lock
- * inside a transaction with `pg_advisory_xact_lock` (released at commit or
+ * A session lock is only safe on ONE pinned connection, so it has ONE door:
+ * `withAdvisoryLock` (packages/database/src/advisory-lock.ts) takes and
+ * releases it on a `sql.reserve()` connection. Anywhere else, use that door,
+ * or `pg_advisory_xact_lock` inside a transaction (released at commit or
  * rollback), as oauth/refresh.ts and onboarding.ts do.
  *
  * HOW (derived): walk every `packages/<pkg>/src` and `apps/<app>/src` (tests
@@ -28,6 +29,9 @@ import { stripComments } from "../../../../scripts/strip-comments.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "../../../..");
 const SKIP = new Set(["node_modules", "dist", "__tests__", "__tripwires__"]);
+
+/** The one door allowed to take a session lock, because it pins a connection. */
+const DOOR = "packages/database/src/advisory-lock.ts";
 
 const ROOTS = ["packages", "apps"].flatMap((top) =>
   readdirSync(join(REPO, top))
@@ -55,14 +59,17 @@ function walk(dir: string, out: string[] = []): string[] {
 }
 
 let scanned = 0;
+let doorCalls = 0;
 const offenders: string[] = [];
 for (const root of ROOTS) {
   for (const file of walk(root)) {
     scanned++;
     const lines = stripComments(readFileSync(file, "utf8"), "ts").split("\n");
+    const rel = relative(REPO, file);
     lines.forEach((line, i) => {
-      if (SESSION_LOCK.test(line))
-        offenders.push(`${relative(REPO, file)}:${i + 1}`);
+      if (!SESSION_LOCK.test(line)) return;
+      if (rel === DOOR) doorCalls++;
+      else offenders.push(`${rel}:${i + 1}`);
     });
   }
 }
@@ -79,12 +86,14 @@ describe("advisory locks are transaction-scoped", () => {
     expect(SESSION_LOCK.test("select pg_advisory_xact_lock(hashtext($1))")).toBe(
       false
     );
+    // The door is still seen by the scan: its lock and its unlock.
+    expect(doorCalls).toBe(2);
   });
 
   it("no source file takes a session-level advisory lock", () => {
     expect(
       offenders,
-      "A session advisory lock through the pool can be released on another connection and leak. Use pg_advisory_xact_lock inside db.transaction."
+      "A session advisory lock through the pool can be released on another connection and leak. Use withAdvisoryLock (@synap/database), or pg_advisory_xact_lock inside a transaction."
     ).toEqual([]);
   });
 });

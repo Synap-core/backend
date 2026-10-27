@@ -21,6 +21,7 @@ import {
   workspaces,
   eq,
   readTemplateState,
+  withAdvisoryLock,
   type ReconcileReport,
   type WorkspaceDefinitionInput,
   type WorkspaceSettings,
@@ -116,16 +117,10 @@ export interface LayerOneResult {
 /**
  * Run `fn` while holding a per-(userId, proposalId) advisory lock, so a hung
  * retry cannot race the original and double-create. No key → no lock
- * (nothing to protect).
- *
- * The lock is TRANSACTION-scoped, held by one transaction that stays open
- * while `fn` runs (on its own connections) and released at its commit or
- * rollback. It was a session lock taken and released with two `db.execute`
- * calls: `db` is a pool, so the unlock could run on another connection (a
- * no-op there) and the lock stayed on an idle pooled connection forever. On
- * 27 Oct 2026 the founder's pod held it from a 14:00 CRM resync; every
- * approve of that space's update waited on it with no error, for 13 minutes,
- * until the idle holder was ended (`no-session-advisory-lock` tripwire).
+ * (nothing to protect). The lock is taken and released on one reserved
+ * connection (`withAdvisoryLock`): taken and released with two `db.execute`
+ * calls, it could leak on an idle pooled connection, and on 27 Oct 2026 every
+ * approve of the founder's CRM update hung on it for 13 minutes.
  */
 export async function withWorkspaceProposalIdLock<T>(
   userId: string,
@@ -133,15 +128,11 @@ export async function withWorkspaceProposalIdLock<T>(
   fn: () => Promise<T>
 ): Promise<T> {
   if (!proposalId) return fn();
-  return db.transaction(async (tx) => {
-    await tx.execute(
-      drizzleSql`SELECT pg_advisory_xact_lock(
-        hashtext('synap:workspace-from-definition:' || ${userId}),
-        hashtext(${proposalId})
-      )`
-    );
-    return fn();
-  });
+  return withAdvisoryLock(
+    `synap:workspace-from-definition:${userId}`,
+    proposalId,
+    fn
+  );
 }
 
 /**
