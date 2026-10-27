@@ -41,6 +41,7 @@ import {
   EventRepository,
 } from "@synap/database";
 import {
+  BOX_RUNNER_SCOPE,
   apiKeys,
   deviceAuthRequests,
   podSettings,
@@ -823,6 +824,15 @@ async function mintForApprovedRequest(
     .limit(1);
   const computerName = machine?.name ?? name;
   const ttlDays = await resolveMachineKeyTtlDays(machineId);
+  // "Runs scripts" survives a reconnect: the new key carries `box.runner`
+  // when the person turned it on for this computer (machines.setRunsScripts).
+  const [machineMeta] = await db
+    .select({ meta: users.agentMetadata })
+    .from(users)
+    .where(eq(users.id, machineId))
+    .limit(1);
+  const runsScripts =
+    (machineMeta?.meta as AgentMetadata | null)?.runsScripts === true;
 
   // One live key per computer: a re-enrolment replaces the old one.
   await revokeApiKeys(db, {
@@ -835,7 +845,10 @@ async function mintForApprovedRequest(
     new ApiKeyRepository(db, new EventRepository(sql)),
     {
       keyName: `${computerName} (computer)`,
-      scope: [...SETUP_AGENT_HUB_SCOPES],
+      scope: [
+        ...SETUP_AGENT_HUB_SCOPES,
+        ...(runsScripts ? [BOX_RUNNER_SCOPE] : []),
+      ],
       userId: machineId,
       keyType: "user_pat",
       description: `Computer key for ${computerName} — connected via the device flow`,
