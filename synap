@@ -5523,7 +5523,7 @@ cmd_backup() {
             SYNAP_DEPLOY_DIR="$deploy_dir" COMPOSE_CMD="command docker compose" backup_status
             return $?
             ;;
-        push|drill)
+        push|drill|retention)
             docker compose run --rm --no-deps -T --entrypoint sh postgres-backup \
                 /synap-deploy/pgdata-safety.sh "$@"
             return $?
@@ -5540,6 +5540,11 @@ Usage:
                                 Backups) or runs: synap backup kit-saved
   synap backup push             dump + push an encrypted snapshot now (the service does it hourly)
   synap backup drill [snap]     restore a snapshot into a throwaway postgres, compare fingerprints
+  synap backup retention [--dry-run]
+                                forget + prune the off-host history: the newest scheduled snapshot +
+                                the previous hour/day/week/month, and the last 3 manual pushes. Never
+                                removes one without a newer complete snapshot. --dry-run reads only.
+                                The service runs it daily once BACKUP_RETENTION=true is in .env
   synap backup status           repository, last runs, alarms
 USAGE
             return 0

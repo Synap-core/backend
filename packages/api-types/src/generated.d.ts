@@ -8059,6 +8059,43 @@ export interface BranchDecision {
 	suggestedPurpose?: string;
 }
 /**
+ * REACH — what something that acts on its own can touch outside the pod, and
+ * the ONE set of words every surface says it with.
+ *
+ * Two readers share these words: the marketplace preflight (what a package
+ * brings: "Can reach: api.acme.test", "Uses your existing Gmail connection")
+ * and the review of a mixed proposal (what each part that acts on its own can
+ * reach once approved). The pod's review projection measures a part's reach
+ * (`buildProposalGraph`, `ProposalReviewGraph.automations[].reach` and
+ * `.updates[].reach`); the web desk, the phone and pod-admin draw it through
+ * {@link partReachWords}, so the three never say it differently.
+ *
+ * Pure and dependency-free.
+ */
+/**
+ * What a part can reach outside the pod, as the pod read it for this review.
+ *
+ * Measured, never guessed: a step the pod could not read (a verb the viewer
+ * cannot see, a URL built while it runs, another automation it starts) is
+ * COUNTED in `unreadSteps`, so a surface never turns "could not tell" into
+ * "reaches nothing". An absent `reach` on a part means the pod did not
+ * measure it (an older pod): draw nothing, never "nothing outside your pod".
+ */
+export interface ProposalPartReach {
+	/**
+	 * Hosts it may call directly: a code skill's `allowedHosts`, a fetch or
+	 * webhook step's URL host, a provider verb's fixed base URL.
+	 */
+	hosts: string[];
+	/**
+	 * Services whose EXISTING connection on this pod it uses, by name
+	 * ("Apify"): the provider a declarative verb calls through.
+	 */
+	connections: string[];
+	/** Steps whose reach could not be read. Non-zero: the lists may be short. */
+	unreadSteps: number;
+}
+/**
  * Governance grant-option derivation — "always approve for…" menu.
  *
  * A per-proposal escape hatch that turns a one-off approval decision into a
@@ -8537,6 +8574,12 @@ export interface ProposalReviewGraph {
 		bornEnabled: false;
 		description?: string;
 		name: string;
+		/**
+		 * What its steps can reach outside the pod once it runs, read the way the
+		 * runtime resolves each step (a verb → the skill that answers it).
+		 * Absent = not measured (draw nothing, never "nothing").
+		 */
+		reach?: ProposalPartReach;
 		ref: string;
 		triggerType: "cron" | "event" | "manual" | "webhook";
 	}>;
@@ -8599,6 +8642,12 @@ export interface ProposalReviewGraph {
 		}>;
 		kind: "automation" | "entity" | "playbook" | "rule" | "skill" | "view";
 		op: CompositeUpdateOperation["op"];
+		/**
+		 * What the row it rewrites can reach outside the pod (a skill that runs:
+		 * code, a provider verb, a builtin), read while the proposal is pending.
+		 * Absent = not read, or it runs nothing (an instruction).
+		 */
+		reach?: ProposalPartReach;
 		ref: string;
 		targetId: string;
 		/**
@@ -9132,6 +9181,30 @@ declare enum MessageLinkRelationshipType {
 	RESPONDS_TO = "responds_to",// Message responds to another message
 	QUOTES = "quotes",// Message quotes this object
 	CONTEXT = "context"
+}
+declare const PULL_REQUEST_STATES: readonly [
+	"open",
+	"merged",
+	"closed"
+];
+export type PullRequestState = (typeof PULL_REQUEST_STATES)[number];
+declare const PULL_REQUEST_CHECKS: readonly [
+	"passed",
+	"failed"
+];
+export type PullRequestChecks = (typeof PULL_REQUEST_CHECKS)[number];
+/** What the recorded facts say about one PR. */
+export interface PullRequestStateFacts {
+	state: PullRequestState;
+	/** The newest CI result on the PR's newest run sha; absent when none settles it. */
+	checks?: PullRequestChecks;
+	/**
+	 * A deploy contains the merge (built from a later commit of the repo, or
+	 * from the merge commit). Never `false`: see the file header.
+	 */
+	deployed?: true;
+	/** When the fact that set `state` happened (ISO). */
+	at: string;
 }
 export type ActionType = "call_webhook" | "create_entity" | "notify" | "post_message" | "run_command" | "update_entity";
 export interface SentenceAction {
@@ -14439,6 +14512,12 @@ declare const SESSION_KINDS: readonly [
 	"receipt"
 ];
 export type SessionKind = (typeof SESSION_KINDS)[number];
+/**
+ * Who the viewer is TO this session — the field read doors expose so a UI can
+ * hide write verbs for a member. Only meaningful on a row the viewer already
+ * read through {@link sessionReadableWhere}.
+ */
+export type SessionViewerRole = "member" | "owner";
 export interface SessionExternalAgent {
 	runId: string;
 	/** The run's own lifecycle (`running`, `failed`, `cancelled`, `proposed`, …). */
@@ -14812,10 +14891,26 @@ export interface PacketSiblings {
 	next: PacketSection<PacketSiblingItem>;
 }
 /**
+ * What the pod RECORDED about a PR work unit (`readPullRequestStates`: the
+ * `dev.pr_*`, `ci.finished` and `dev.deployed` facts, folded by
+ * `foldPullRequestState`). `label` is the state's word (vocabulary).
+ */
+export type PacketPullRequestState = ({
+	label: string;
+	status: "ok";
+} & PullRequestStateFacts) | {
+	reason: string;
+	status: "unavailable";
+};
+/**
  * A pull request or branch this session recorded as an outcome (`ref.url`),
  * with the OUTCOME's state: `met` (merged / delivered, stamped done), `claimed`
- * (delivery claimed, not verified), `open`, or `retired` (withdrawn). The pod
- * reads no PR state of its own: what is known is what was recorded.
+ * (delivery claimed, not verified), `open`, or `retired` (withdrawn).
+ *
+ * `prState` is the PR's own state, from the dev-loop facts the pod recorded
+ * about it. ABSENT when none was recorded (an older pod, a repo with no
+ * producer) or the unit is not a PR: draw nothing, never a guess. A failed
+ * read is `unavailable`, never absent.
  */
 export interface PacketWorkUnitItem extends PacketKindIdentity {
 	key: string | null;
@@ -14823,6 +14918,7 @@ export interface PacketWorkUnitItem extends PacketKindIdentity {
 	kind: string;
 	url: string | null;
 	state: "claimed" | "met" | "open" | "retired";
+	prState?: PacketPullRequestState;
 }
 /** A capture clarification question still waiting for the user's answer. */
 export interface PacketQuestionItem {
@@ -18807,12 +18903,6 @@ export type SessionInteractionsSection = {
 	reason: string;
 	status: "unavailable";
 };
-/**
- * Who the viewer is TO this session — the field read doors expose so a UI can
- * hide write verbs for a member. Only meaningful on a row the viewer already
- * read through {@link sessionReadableWhere}.
- */
-export type SessionViewerRole = "member" | "owner";
 declare function projectSessionRows(sessions: FocusSession[], userId: string | null | undefined): Promise<({
 	agentIds: string[] | null;
 	channelId: string | null;
