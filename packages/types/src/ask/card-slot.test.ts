@@ -21,6 +21,7 @@ import {
   type AskCardSlotSource,
 } from "./index.js";
 import { FATE_COPY } from "../proposals/fate.js";
+import { lensRowOfNeedsYou } from "../lens/rows.js";
 
 const DAY = 24 * 3_600_000;
 const NOW = Date.parse("2026-10-27T12:00:00.000Z");
@@ -114,6 +115,31 @@ describe("askCardSlotOf — every field the card reads, from any row", () => {
     });
     expect(slot.owedSince).toBeNull();
     expect(slot.askedByName).toBeNull();
+  });
+});
+
+describe("lensRowOfNeedsYou reads the signal through the one adapter", () => {
+  it("a param slot's row names its cause from paramName alone", () => {
+    const row = lensRowOfNeedsYou(
+      {
+        kind: "item",
+        key: "slot:s1:channel",
+        signal: {
+          id: "slot:s1:channel",
+          kind: "owed-slot",
+          title: "Channel",
+          count: 1,
+          groupKey: "session:s1",
+          ageBucket: "recent",
+          repeatCount: 1,
+          occurredAt: daysAgo(1),
+          paramName: "channel",
+        },
+        session: null,
+      },
+      "blocking"
+    );
+    expect(row.cause?.label).toBe(ASK_COPY.askCause("param", null));
   });
 });
 
