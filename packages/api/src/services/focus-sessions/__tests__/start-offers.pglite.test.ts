@@ -109,12 +109,13 @@ async function session(
 ) {
   await q(
     `insert into focus_sessions (id, user_id, project_id, track_id, title, goal, status, expected_outputs, metadata, origin, created_at, updated_at, started_at)
-     values ($1, $2, $3, $4, $5, $5, $6, '[]'::jsonb, $7::jsonb, 'agent', now(), now(), now())`,
+     values ($1, $2, $3, $4, $5, $6, $7, '[]'::jsonb, $8::jsonb, 'agent', now(), now(), now())`,
     [
       id,
       USER,
       P,
       opts.trackId ?? null,
+      title,
       title,
       opts.status ?? "active",
       JSON.stringify(opts.metadata ?? {}),

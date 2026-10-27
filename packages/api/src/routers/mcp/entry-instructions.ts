@@ -24,10 +24,10 @@ import {
 export const ENTRY_REFLEX_PROSE = [
   "The user's Synap pod: their source of truth. Tool names below are stems; your door may prefix them (`synap_ask`, `pod__ask`).",
   "",
-  "1. **Recall first.** Before answering about the user's world or creating, `ask` (prevents duplicates).",
+  "1. **Recall first.** Before answering or creating, `ask`.",
   "2. **Capture after.** A durable fact, decision, person, task: `capture`. No private scratchpad.",
   "3. **Orient once.** `orient`: pending review (raise first), open sessions, open goals, kinds, actions.",
-  "4. **Work in a session.** `start_session` + `trackId` of the goal it serves (`list_tracks`, else `start_track`), or resume (`get_session`; playbook `templateId`); 2–5 `criteria`; advance `currentStage` with `update_session`; person-only: `owner:'human'` slot + `blockedReason` + `ask` (confirm/choose with 1 `recommended`/form/act/provide), then `wait_for_answer`; post progress, questions and results in its room (`post_message` to `session.channelId`); your own chat may repeat them; PR = outcome `pr-<repo>-<n>` (`pull_request`, `ref.url`); outcomes met: `complete_session`.",
+  "4. **Work in a session.** `start_session` (+ goal `trackId`: `list_tracks`, else `start_track`) or resume (`get_session`; playbook `templateId`); 2–5 `criteria`; advance `currentStage` with `update_session`; person-only: `owner:'human'` slot + `blockedReason` + `ask` (confirm/choose with 1 `recommended`/form/act/provide), then `wait_for_answer`; post progress, questions and results in its room (`post_message` to `session.channelId`); your own chat may repeat them; PR = outcome `pr-<repo>-<n>` (`pull_request`, `ref.url`); outcomes met: `complete_session`.",
   "5. **`proposed` is success**, queued for review. Keep working; never retry.",
   `6. **More tools on demand.** This key lists the essentials. For more, \`load_skill\` a group: ${TOOL_GROUP_NAMES.map((g) => `\`${toolGroupRef(g)}\``).join(", ")}, or \`${BUILDER_REF}\` for all. They appear after you reconnect.`,
   "",

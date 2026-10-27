@@ -61,12 +61,9 @@ const MANIFEST = JSON.parse(
 
 const MINE = "44444444-4444-4444-8444-444444444444";
 const OTHER = "55555555-5555-4555-8555-555555555555";
-const PR = {
-  key: "pr-backend-281",
-  kind: "pull_request",
-  label: "backend#281",
-  ref: { url: "https://github.com/Synap-core/backend/pull/281" },
-};
+// `completeOutput` forwards to the (replaced) service with no read of its own,
+// so the test sees exactly which session the write reached.
+const CLAIM = { completeOutput: "pr-backend-281" };
 
 const run = async (args: Record<string, unknown>) =>
   JSON.parse(
@@ -102,7 +99,7 @@ describe("the manifest no longer REQUIRES sessionId on update_session", () => {
 describe("update_session with no sessionId", () => {
   it("ONE open session this conversation started: the write lands on it, said as inferred", async () => {
     h.found = { status: "one", sessionId: MINE };
-    const out = await run({ outcomes: [PR] });
+    const out = await run(CLAIM);
     expect(h.calls).toHaveLength(1);
     expect(h.calls[0]).toMatchObject({ sessionId: MINE });
     expect(out).toMatchObject({
@@ -121,7 +118,7 @@ describe("update_session with no sessionId", () => {
         { id: OTHER, title: "Fixes", startedAt: null },
       ],
     };
-    const out = await run({ outcomes: [PR] });
+    const out = await run(CLAIM);
     expect(h.calls).toHaveLength(0);
     expect(String(out.error)).toContain("NOTHING WAS CHANGED");
     expect(out.sessions).toEqual([
@@ -134,7 +131,7 @@ describe("update_session with no sessionId", () => {
     "%s: refused in words, never guessed",
     async (status) => {
       h.found = { status };
-      const out = await run({ outcomes: [PR] });
+      const out = await run(CLAIM);
       expect(h.calls).toHaveLength(0);
       expect(String(out.error)).toContain("sessionId is required");
     }
@@ -142,7 +139,7 @@ describe("update_session with no sessionId", () => {
 
   it("a named sessionId never asks the resolver", async () => {
     h.found = { status: "one", sessionId: OTHER };
-    await run({ sessionId: MINE, outcomes: [PR] });
+    await run({ sessionId: MINE, ...CLAIM });
     expect(h.resolverCalls).toBe(0);
     expect(h.calls[0]).toMatchObject({ sessionId: MINE });
   });
