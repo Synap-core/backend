@@ -47,6 +47,13 @@ export type PlaybookRunStatus =
   // `running` (`reviveStaleSession`). Same word as the session status.
   | "stale";
 
+/**
+ * Why a `failed` run stopped when nothing broke (`playbook_runs.stop_reason`,
+ * `automation_runs.stop_reason`). `budget`: its token budget or step limit,
+ * with nobody in the loop to ask (`run-turn-end.ts`).
+ */
+export const RUN_STOP_REASONS = ["budget"] as const;
+
 /** The normalized state of an external agent's task (the `status` verb). */
 export type ExternalAgentState = "running" | "needs_input" | "done" | "failed";
 
@@ -136,6 +143,12 @@ export const playbookRuns = pgTable(
     summary: text("summary"),
     /** Executor-reported error on failure. */
     error: text("error"),
+    /**
+     * WHY a `failed` run stopped, when it is not a fault (0361). `budget`: an
+     * unattended run spent its continuations at its token budget or step
+     * limit. NULL = an ordinary failure, or not failed.
+     */
+    stopReason: text("stop_reason", { enum: [...RUN_STOP_REASONS] }),
     /**
      * The resolved playbook definition this run executed (D3c) —
      * { version, goalTemplate, stages, params, expectedOutputs }. Plain JSON
