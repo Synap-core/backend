@@ -620,9 +620,14 @@ _bk_bin() {  # restic|mc — the pinned copy in state/bin first, else PATH
 }
 
 # restic against the configured repository. Runs in a subshell so the
-# credentials never leak into the caller's environment.
+# credentials never leak into the caller's environment. A first argument
+# --timeout=<seconds> bounds the run: TERM at the limit, KILL 60 s later
+# (coreutils timeout, exit 124/137), so one stuck connection cannot hold the
+# backup lock for ever (perso pod, 2026-10-27: a push hung 2 h, every later
+# backup queued behind it, the service still "healthy").
 _bk_restic() {
-    local bin
+    local bin t=""
+    case "${1:-}" in --timeout=*) t="${1#--timeout=}"; shift ;; esac
     bin="$(_bk_bin restic)"
     [ -n "$bin" ] || { _pgs_err "restic is not installed — run: synap backup init"; return 127; }
     (
@@ -635,6 +640,10 @@ _bk_restic() {
             _bk_x="$(_bk_cfg "BACKUP_$_bk_v")"
             [ -n "$_bk_x" ] && export "$_bk_v=$_bk_x"
         done
+        if [ -n "$t" ]; then
+            command -v timeout >/dev/null 2>&1 && exec timeout -k 60 "$t" "$bin" "$@"
+            _pgs_warn "no timeout(1) here: this restic run is not time-bounded"
+        fi
         exec "$bin" "$@"
     )
 }
@@ -874,7 +883,7 @@ backup_run() {
 # ever called by backup_run with a dump that passed the fingerprint gate.
 # <trigger: scheduled|manual> becomes the snapshot's trigger: tag (retention).
 _bk_push() {
-    local c="$1" d="$2" fp="$3" started="$4" trigger="${5:-manual}" b stage out sid size url
+    local c="$1" d="$2" fp="$3" started="$4" trigger="${5:-manual}" b stage out sid size url limit rc
     b="$(_bk_backups_dir)"
     case "$d" in *-SUSPECT|*.partial) _pgs_err "refusing to push $d"; return 1 ;; esac
     if [ ! -s "${BACKUP_PASSWORD_FILE:-$(_bk_password_file)}" ]; then
@@ -886,9 +895,17 @@ _bk_push() {
         _bk_minio_export "$stage" || { _bk_push_failed "$c" "$started" "$fp" "MinIO export failed"; return 1; }
         set -- "$@" "$stage"
     fi
-    out="$(_bk_restic backup --json --host "$_BK_HOST" --tag synap --tag "trigger:$trigger" --tag "fp:$fp" --tag "dump:$(basename "$d")" \
+    limit="$(_bk_cfg BACKUP_PUSH_TIMEOUT_SECONDS)"; limit="${limit:-1800}"
+    out="$(_bk_restic --timeout="$limit" backup --json --host "$_BK_HOST" --tag synap --tag "trigger:$trigger" --tag "fp:$fp" --tag "dump:$(basename "$d")" \
         --exclude "$(_bk_state_dir)/bin" --exclude "$(_bk_state_dir)/backup" --exclude "$(_bk_kit_dir)" --exclude "$(_bk_state_dir)/update.lock" \
-        "$@")" || { _bk_push_failed "$c" "$started" "$fp" "restic backup failed"; return 1; }
+        "$@")" || {
+        rc=$?
+        case "$rc" in
+            124|137) _bk_push_failed "$c" "$started" "$fp" "restic backup timed out after ${limit}s (stuck connection?) and was stopped" ;;
+            *) _bk_push_failed "$c" "$started" "$fp" "restic backup failed" ;;
+        esac
+        return 1
+    }
     sid="$(printf '%s\n' "$out" | sed -n 's/.*"message_type": *"summary".*"snapshot_id": *"\([0-9a-f]*\)".*/\1/p' | tail -n 1)"
     size="$(printf '%s\n' "$out" | sed -n 's/.*"message_type": *"summary".*"total_bytes_processed": *\([0-9]*\).*/\1/p' | tail -n 1)"
     [ -n "$sid" ] || { _bk_push_failed "$c" "$started" "$fp" "restic reported no snapshot id"; return 1; }

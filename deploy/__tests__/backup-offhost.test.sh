@@ -19,7 +19,8 @@
 #                 .push-failed and does not ping; push/drill/restore NEVER call
 #                 forget/prune (behavioural) and only backup_retention names
 #                 them (static); a push by hand is tagged trigger:manual, the
-#                 loop's trigger:scheduled.
+#                 loop's trigger:scheduled; a push stuck past
+#                 BACKUP_PUSH_TIMEOUT_SECONDS is stopped and recorded failed.
 #   T. retention — founder rules 2a/2b on a hand-built repository: the ladder
 #                 (newest + previous hour/day/week/month) over scheduled and
 #                 untagged snapshots only, manual ones keep their newest 3 and
@@ -93,6 +94,8 @@ def pick(s):
     m = [i for i in ids if i.startswith(s)]; return m[0] if m else None
 if cmd == "backup":
     if os.environ.get("FAKE_RESTIC_FAIL"): sys.exit("Fatal: unable to save snapshot")
+    if os.environ.get("FAKE_RESTIC_HANG"):  # a stuck connection: no output, no exit
+        import time; time.sleep(int(os.environ["FAKE_RESTIC_HANG"]))
     paths, excl, tags, i = [], [], [], 1
     while i < len(args):
         a = args[i]
@@ -406,6 +409,22 @@ ct FAKE_RESTIC_FAIL=1 sh "$SAFETY" run >"$T/out" 2>&1; rc=$?
     && ok "restic failure → exit 1, .push-failed, no heartbeat, recorded" || bad "restic fail: rc=$rc"
 fresh_second
 ct sh "$SAFETY" run >"$T/out" 2>&1; [ ! -e "$T/backups/.push-failed" ] && ok "next good push clears .push-failed" || bad ".push-failed stuck: $(cat "$T/backups/.push-failed" 2>/dev/null) $(cat "$T/out")"
+
+echo "── P2. a hung push is bounded"
+if ! command -v timeout >/dev/null 2>&1; then
+    echo "  - SKIP: no timeout(1) on this host (macOS); CI and the devbox run it"
+else
+    m=$(mark); n1="$(ls "$REPO/snaps" | grep -vc meta)"
+    fresh_second; t0=$(date +%s)
+    ct FAKE_RESTIC_HANG=25 BACKUP_PUSH_TIMEOUT_SECONDS=2 sh "$SAFETY" run >"$T/out" 2>&1; rc=$?; el=$(( $(date +%s) - t0 ))
+    [ "$rc" = 1 ] && [ "$el" -lt 15 ] && grep -q "timed out after 2s" "$T/backups/.push-failed" && grep -q "'backup', 'failed'.*timed out after 2s" "$RUNS" \
+        && [ "$(ls "$REPO/snaps" | grep -vc meta)" = "$n1" ] && ! calls_since "$m" | grep >/dev/null "^curl" \
+        && ok "a push stuck past BACKUP_PUSH_TIMEOUT_SECONDS is stopped (${el}s): exit 1, .push-failed + failed row say 'timed out', no heartbeat" \
+        || bad "hung push: rc=$rc after ${el}s, push-failed=$(cat "$T/backups/.push-failed" 2>/dev/null) $(tail -3 "$T/out")"
+    fresh_second
+    ct sh "$SAFETY" run >"$T/out" 2>&1; rc=$?
+    [ "$rc" = 0 ] && [ ! -e "$T/backups/.push-failed" ] && ok "the backup lock was released: the next push runs and clears .push-failed" || bad "after a timed-out push: rc=$rc $(tail -3 "$T/out")"
+fi
 snap_good="$(ls "$REPO/snaps" | grep -v meta | tail -1)"
 
 echo "── D. drill"
