@@ -31,7 +31,8 @@ import {
   isDirectLoopbackCall,
   isCrudReadPath,
   isMcpPath,
-  isMcpReadBody,
+  classifyMcpBody,
+  type McpBodyKind,
   MCP_READ_BODY_MAX,
   parseRateLimitOverrides,
   rateLimitOverridesVersion,
@@ -89,22 +90,37 @@ function classKeyGenerator(className: RateLimitClass) {
   };
 }
 
+/** Context key a 429 reads its `hint` from. */
+const RATE_LIMIT_HINT = "rateLimitHint";
+
+/** The 429 hint of a `synap_ask` that answers (it spends the AI budget). */
+export const ASK_AI_BUDGET_HINT =
+  "synap_ask with an answer runs a model and spends this key's AI budget. " +
+  "When you know what you want, read it directly (synap_get_entity, " +
+  "synap_get_entities, synap_get_session, synap_get_document, " +
+  "synap_get_graph); for a lookup, call synap_ask with detail:'sources', " +
+  "which is a read.";
+
 function classHandler(
   className: Exclude<RateLimitClass, "free">,
   limit: number,
   retryAfter: string
 ) {
-  return (c: Context) =>
-    c.json(
+  return (c: Context) => {
+    // What to do instead, when the edge knows (`RATE_LIMIT_HINT`).
+    const hint = c.get(RATE_LIMIT_HINT as never) as string | undefined;
+    return c.json(
       {
         error: "Too many requests",
         message: "Rate limit exceeded. Please try again later.",
         retryAfter,
         class: className,
         limit,
+        ...(hint ? { hint } : {}),
       },
       429
     );
+  };
 }
 
 /**
@@ -562,21 +578,23 @@ function mcpReadOnlyTools(): Promise<Set<string>> {
 }
 
 /**
- * Does this `crud` request only read? By method and path (`isCrudReadPath`),
- * or, for a POST to the MCP door, by its JSON-RPC body (`isMcpReadBody`). The
- * body is read through Hono's cache, which the MCP handler reads again
- * (`c.req.json()`). A body over `MCP_READ_BODY_MAX`, of no declared length,
- * or not JSON is counted as a write, unread.
+ * What this `crud` request spends: a read by method and path
+ * (`isCrudReadPath`), or, for a POST to the MCP door, what its JSON-RPC body
+ * does (`classifyMcpBody`: a read, a model call, a write). The body is read
+ * through Hono's cache, which the MCP handler reads again (`c.req.json()`). A
+ * body over `MCP_READ_BODY_MAX`, of no declared length, or not JSON is
+ * counted as a write, unread.
  */
-async function isCrudRead(c: Context): Promise<boolean> {
-  if (isCrudReadPath(c.req.path, c.req.method)) return true;
-  if (c.req.method !== "POST" || !isMcpPath(c.req.path)) return false;
+async function crudRequestKind(c: Context): Promise<McpBodyKind> {
+  if (isCrudReadPath(c.req.path, c.req.method)) return "read";
+  if (c.req.method !== "POST" || !isMcpPath(c.req.path)) return "write";
   const length = Number(c.req.header("content-length"));
   if (!Number.isInteger(length) || length <= 0 || length > MCP_READ_BODY_MAX) {
-    return false;
+    return "write";
   }
   const body = await c.req.json().catch(() => undefined);
-  return body !== undefined && isMcpReadBody(body, await mcpReadOnlyTools());
+  if (body === undefined) return "write";
+  return classifyMcpBody(body, await mcpReadOnlyTools());
 }
 
 /**
@@ -649,12 +667,20 @@ export const rateLimitMiddleware: MiddlewareHandler = async (c, next) => {
       });
     case "crud":
     default:
-      // Address ceiling FIRST, then the caller's own bucket — the read one
-      // or the write one — same nested-429 handling as the calendar feed.
+      // Address ceiling FIRST, then the caller's own bucket — the read one,
+      // the AI one (a `synap_ask` that answers) or the write one — same
+      // nested-429 handling as the calendar feed.
       return crudIpCeilingLimiter(c, async () => {
-        const limiter = (await isCrudRead(c))
-          ? crudReadRateLimiter
-          : crudRateLimiter;
+        const kind = await crudRequestKind(c);
+        if (kind === "ai") {
+          c.set(RATE_LIMIT_HINT as never, ASK_AI_BUDGET_HINT as never);
+        }
+        const limiter =
+          kind === "read"
+            ? crudReadRateLimiter
+            : kind === "ai"
+              ? aiInteractiveRateLimiter
+              : crudRateLimiter;
         const limited = await limiter(c, next);
         if (limited instanceof Response) c.res = limited;
       });

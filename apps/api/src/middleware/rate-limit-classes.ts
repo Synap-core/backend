@@ -39,9 +39,10 @@ import {
  *   every pod app's refresh must not share a budget a stranger can drain
  * - crud: everything else
  * - crud_read: a `crud` request that only reads (`isCrudReadPath` /
- *   `isMcpReadBody`), on its own bucket so a busy reader never spends the
+ *   `classifyMcpBody`), on its own bucket so a busy reader never spends the
  *   write budget. Never returned by `classifyRateLimitPath`: the edge decides
- *   it inside the `crud` branch (security.ts), since an MCP read is in the body
+ *   it inside the `crud` branch (security.ts), since an MCP read is in the body.
+ *   An MCP `synap_ask` that answers runs a model, so it spends `ai_interactive`
  */
 export type RateLimitClass =
   | "free"
@@ -309,16 +310,22 @@ export function isMcpPath(path: string): boolean {
   return p === "/mcp" || p === "/mcp/";
 }
 
+/** The Hub's retrieval doors: a POST that only reads (no model call). */
+const HUB_RETRIEVAL_POST =
+  /^\/api\/hub(?:-protocol)?\/knowledge\/(?:search|ask)\/?$/;
+
 /**
  * A `crud` request that reads by its method and path alone: GET, HEAD or
- * OPTIONS on the Hub (`/api/hub/*`, `/api/hub-protocol/*`) or the MCP door.
- * Other GETs (the console's tRPC queries) stay in `crud`: a signed-in person
- * already has the larger session budget there.
+ * OPTIONS on the Hub (`/api/hub/*`, `/api/hub-protocol/*`) or the MCP door,
+ * and a POST to the Hub's retrieval doors (`/knowledge/search`, its alias
+ * `/knowledge/ask`). Other GETs (the console's tRPC queries) stay in `crud`:
+ * a signed-in person already has the larger session budget there.
  */
 export function isCrudReadPath(path: string, method: string): boolean {
   const m = method.toUpperCase();
-  if (m !== "GET" && m !== "HEAD" && m !== "OPTIONS") return false;
   const p = path.split(/[?#]/, 1)[0] || "/";
+  if (m === "POST") return HUB_RETRIEVAL_POST.test(p);
+  if (m !== "GET" && m !== "HEAD" && m !== "OPTIONS") return false;
   return (
     p.startsWith("/api/hub/") ||
     p.startsWith("/api/hub-protocol/") ||
@@ -340,27 +347,63 @@ const MCP_READ_METHODS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Does this MCP JSON-RPC body only read? A `tools/call` reads when its tool
- * is in `readOnlyTools` (the tools that declare `readOnlyHint`); the listed
- * protocol methods and notifications read; a batch reads when every message
- * does. Anything else, or a body that is not JSON-RPC, is a write.
+ * The MCP recall tool. Its answer is synthesized by a model, so a call spends
+ * the AI budget; with `detail: "sources"` (or `compare`) no model runs and it
+ * is a read. Its description tells agents so (tools/index.ts).
  */
+export const MCP_ASK_TOOL = "synap_ask";
+
+export type McpBodyKind = "read" | "ai" | "write";
+
+function mcpMessageKind(
+  m: unknown,
+  readOnlyTools: ReadonlySet<string>
+): McpBodyKind {
+  if (m === null || typeof m !== "object") return "write";
+  const method = (m as { method?: unknown }).method;
+  if (typeof method !== "string") return "write";
+  if (method.startsWith("notifications/")) return "read";
+  if (MCP_READ_METHODS.has(method)) return "read";
+  if (method !== "tools/call") return "write";
+  const params = (m as { params?: { name?: unknown; arguments?: unknown } })
+    .params;
+  const name = params?.name;
+  if (typeof name !== "string") return "write";
+  if (name === MCP_ASK_TOOL) {
+    const args = (params?.arguments ?? {}) as {
+      detail?: unknown;
+      compare?: unknown;
+    };
+    return args.detail === "sources" || args.compare === true ? "read" : "ai";
+  }
+  return readOnlyTools.has(name) ? "read" : "write";
+}
+
+/**
+ * What this MCP JSON-RPC body spends. A `tools/call` reads when its tool is in
+ * `readOnlyTools` (the tools that declare `readOnlyHint`), except `synap_ask`
+ * with an answer, which runs a model (`ai`); the listed protocol methods and
+ * notifications read. A batch is a write if any message writes, else `ai` if
+ * any runs a model, else a read. Anything else, or a body that is not
+ * JSON-RPC, is a write.
+ */
+export function classifyMcpBody(
+  body: unknown,
+  readOnlyTools: ReadonlySet<string>
+): McpBodyKind {
+  const messages = Array.isArray(body) ? body : [body];
+  if (messages.length === 0) return "write";
+  const kinds = messages.map((m) => mcpMessageKind(m, readOnlyTools));
+  if (kinds.includes("write")) return "write";
+  return kinds.includes("ai") ? "ai" : "read";
+}
+
+/** Does this MCP JSON-RPC body only read (`classifyMcpBody`)? */
 export function isMcpReadBody(
   body: unknown,
   readOnlyTools: ReadonlySet<string>
 ): boolean {
-  const messages = Array.isArray(body) ? body : [body];
-  if (messages.length === 0) return false;
-  return messages.every((m) => {
-    if (m === null || typeof m !== "object") return false;
-    const method = (m as { method?: unknown }).method;
-    if (typeof method !== "string") return false;
-    if (method.startsWith("notifications/")) return true;
-    if (MCP_READ_METHODS.has(method)) return true;
-    if (method !== "tools/call") return false;
-    const name = (m as { params?: { name?: unknown } }).params?.name;
-    return typeof name === "string" && readOnlyTools.has(name);
-  });
+  return classifyMcpBody(body, readOnlyTools) === "read";
 }
 
 /**
@@ -469,6 +512,13 @@ export function classifyRateLimitPath(
     p === "/v1/chat" ||
     p.startsWith("/v1/chat/")
   ) {
+    return "ai_interactive";
+  }
+
+  // The Hub's answer door runs a model on every call (retrieve + synthesize,
+  // services/knowledge/synthesize.ts): the AI budget, like `synap_ask` with an
+  // answer (`classifyMcpBody`). Its retrieval-only siblings are reads.
+  if (/^\/api\/hub(?:-protocol)?\/knowledge\/answer\/?$/.test(p)) {
     return "ai_interactive";
   }
 

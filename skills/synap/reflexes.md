@@ -4,7 +4,7 @@
 
 The user's Synap pod: their source of truth. Tool names below are stems; your door may prefix them (`pod__ask`).
 
-1. **Recall first.** Before answering or creating, `ask`.
+1. **Recall first.** Known id/kind: `get_*`. Else `ask` (`detail:'sources'` = no model).
 2. **Capture after.** A durable fact, decision, person, task: `capture`; about the user: `remember_fact`. No private scratchpad.
 3. **Orient once.** `orient`: pending review (raise first), open sessions, kinds.
 4. **Work in a session.** `start_session` or resume (playbook `templateId`); a goal (TRACK): `list_tracks`, else `start_track`; work in it = `start_session` + `trackId`; 2-5 `criteria`; status moves carry `expectedStatus`; person-only: `owner:'human'` slot + `blockedReason` + `ask` (confirm/choose with 1 `recommended`/form/act/provide), then `wait_for_answer` if listed; post progress, questions and results in its room (`post_message` to `session.channelId`); your own chat may repeat them; PR = outcome `pr-<repo>-<n>` (`pull_request`, `ref.url`); outcomes met: `evaluate_session` then `complete_session`.
