@@ -17,7 +17,12 @@ import {
 import { UIPreferencesSchema } from "../../preferences/schemas.js";
 
 const p = (proposalType: string, targetType: string, extra = {}) =>
-  reviewPackageOf({ kind: "proposal-cluster", proposalType, targetType, ...extra });
+  reviewPackageOf({
+    kind: "proposal-cluster",
+    proposalType,
+    targetType,
+    ...extra,
+  });
 
 describe("reviewPackageOf — the 27 Oct pending mix", () => {
   it("an agent's update of a session is bookkeeping", () => {
@@ -132,9 +137,9 @@ describe("layouts and the saved preference", () => {
     }
   });
   it("a saved layout the package does not offer is ignored", () => {
-    expect(reviewLayoutFor("knowledge", { layouts: { knowledge: "list" } })).toBe(
-      "list"
-    );
+    expect(
+      reviewLayoutFor("knowledge", { layouts: { knowledge: "list" } })
+    ).toBe("list");
     expect(reviewLayoutFor("access", { layouts: { access: "gallery" } })).toBe(
       "list"
     );

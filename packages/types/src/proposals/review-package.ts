@@ -282,8 +282,11 @@ const BOOKKEEPING_PAIRS: ReadonlySet<string> = new Set([
 function isBookkeepingWrite(type: string, target: string): boolean {
   if (BOOKKEEPING_PAIRS.has(`${target}/${type}`)) return true;
   return (
-    isSessionBookkeeping({ proposalType: type, targetType: target, status: null }) &&
-    !type.endsWith("create")
+    isSessionBookkeeping({
+      proposalType: type,
+      targetType: target,
+      status: null,
+    }) && !type.endsWith("create")
   );
 }
 
@@ -412,7 +415,8 @@ function decide(input: ReviewPackageInput): ReviewPackageDecision {
     KNOWLEDGE_OBJECT_KINDS.has(input.objectKind)
   )
     return { package: "knowledge", rule: "kind" };
-  if (target === "knowledgeKey") return { package: "knowledge", rule: "target" };
+  if (target === "knowledgeKey")
+    return { package: "knowledge", rule: "target" };
 
   if (ACCESS_TARGETS.has(target)) return { package: "access", rule: "target" };
   if (HOW_TARGETS.has(target))

@@ -26,7 +26,11 @@ import { classifyProposal } from "../../api/src/services/proposals/proposal-clas
 
 const pairs = Object.keys(GOVERNED_WRITE_DOORS).map((key) => {
   const slash = key.indexOf("/");
-  return { key, targetType: key.slice(0, slash), proposalType: key.slice(slash + 1) };
+  return {
+    key,
+    targetType: key.slice(0, slash),
+    proposalType: key.slice(slash + 1),
+  };
 });
 
 describe("review packages cover every governed write door", () => {
@@ -57,7 +61,9 @@ describe("review packages cover every governed write door", () => {
 
   it("every pair the pod classes `access` files under Access without being told", () => {
     const wrong = pairs
-      .filter((p) => classifyProposal(p.proposalType, p.targetType) === "access")
+      .filter(
+        (p) => classifyProposal(p.proposalType, p.targetType) === "access"
+      )
       .filter(
         (p) =>
           reviewPackageDecision({
