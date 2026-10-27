@@ -107,7 +107,7 @@ export const SynapEventSchema = z.object({
   // zero rows. `text` (never uuid-validated) to match the column.
   appId: z.string().optional(),
 
-  // ── Daily-ceiling bookkeeping exemption (events.ceiling_exempt, 0364) ──────
+  // ── Daily-ceiling bookkeeping exemption (events.ceiling_exempt, 0365) ──────
   // TRUE when an agent write is its bookkeeping of its OWN focus session; the
   // daily write count skips it. Declared HERE for the same reason as the
   // fields above: `EventRepository.append` strips what this schema omits.

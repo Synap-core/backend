@@ -198,7 +198,7 @@ describe("F2 — own-session bookkeeping and the daily write ceiling", () => {
       );
     });
 
-    it("unstamped rows (every row before 0364) still count", async () => {
+    it("unstamped rows (every row before 0365) still count", async () => {
       await seedToday(LIMIT, 0);
       expect(await countAgentWritesTodayUtc(db, AGENT)).toBe(LIMIT);
     });

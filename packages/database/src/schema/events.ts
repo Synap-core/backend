@@ -118,12 +118,12 @@ export const events = pgTable(
     // grant (`getRequestGrant()?.clientId`) by `auditLog`.
     appId: text("app_id"),
 
-    // ─── Daily-ceiling bookkeeping exemption (0364, F2) ─────────────────────
+    // ─── Daily-ceiling bookkeeping exemption (0365, F2) ─────────────────────
     // TRUE when this agent write is the agent's bookkeeping of its OWN focus
     // session (start, update, an outcome claimed/completed, its own room),
     // proven at write time by `isOwnSessionBookkeeping` from the session row.
     // `countAgentWritesTodayUtc` skips it, so it does not spend the daily write
-    // ceiling. NULL on every other row (and every row before 0364): counted.
+    // ceiling. NULL on every other row (and every row before 0365): counted.
     // Nullable, no default: `events` is a compressed hypertable.
     ceilingExempt: boolean("ceiling_exempt"),
   },

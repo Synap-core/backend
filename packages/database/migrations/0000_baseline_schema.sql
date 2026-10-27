@@ -383,7 +383,7 @@ CREATE TABLE IF NOT EXISTS "events" (
   -- produced this write, next to `user_id` (the connecting human). NULL = bare
   -- / human write. No FK — the app row is revocable, events are immutable.
   "app_id"         text,
-  -- Daily-ceiling bookkeeping exemption (0364): TRUE = an agent's bookkeeping
+  -- Daily-ceiling bookkeeping exemption (0365): TRUE = an agent's bookkeeping
   -- of its OWN focus session, skipped by the daily write count. NULL = counted.
   "ceiling_exempt" boolean,
   PRIMARY KEY ("id", "timestamp")
@@ -415,7 +415,7 @@ ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "session_id"    uuid;
 -- App attribution as a first-class column (0310). Nullable, no default —
 -- supported on a compressed hypertable (same reasoning as the ALTERs above).
 ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "app_id"        text;
--- Daily-ceiling bookkeeping exemption (0364). Nullable, no default.
+-- Daily-ceiling bookkeeping exemption (0365). Nullable, no default.
 ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "ceiling_exempt" boolean;
 
 CREATE INDEX IF NOT EXISTS "idx_events_subject"

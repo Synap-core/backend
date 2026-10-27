@@ -1478,9 +1478,9 @@ export async function countAgentWritesTodayUtc(
         eq(events.agentUserId, agentUserId),
         eq(events.isAgent, true),
         isNull(events.proposalId),
-        // F2 (0364): the agent's bookkeeping of its OWN session is stamped at
+        // F2 (0365): the agent's bookkeeping of its OWN session is stamped at
         // write time (`isOwnSessionBookkeeping`) and is not work: it does not
-        // spend the day's budget. NULL (every row before 0364) still counts.
+        // spend the day's budget. NULL (every row before 0365) still counts.
         sql`${events.ceilingExempt} IS NOT TRUE`,
         gte(events.timestamp, startOfUtcDay())
       )

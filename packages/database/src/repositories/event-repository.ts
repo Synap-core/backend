@@ -109,7 +109,7 @@ export interface EventRecord {
   // write and for rows written before the column existed.
   appId?: string;
 
-  // ── Daily-ceiling bookkeeping exemption (0364) ──────────────────────────────
+  // ── Daily-ceiling bookkeeping exemption (0365) ──────────────────────────────
   // TRUE when this agent write is its bookkeeping of its OWN session (proven by
   // the writer through `isOwnSessionBookkeeping`); the daily write count skips
   // it. Undefined (stored NULL) on every other event: counted.
@@ -349,7 +349,7 @@ export class EventRepository {
           // write; null for a bare/human write (and on rows written before the
           // column existed — the schema field is optional and coerced here).
           validated.appId ?? null,
-          // Daily-ceiling bookkeeping exemption (0364): TRUE only for an agent's
+          // Daily-ceiling bookkeeping exemption (0365): TRUE only for an agent's
           // own-session bookkeeping; NULL otherwise (counted).
           validated.ceilingExempt ? true : null,
         ]
@@ -1397,7 +1397,7 @@ export class EventRepository {
       sessionId: (row.session_id as string | null) ?? undefined,
       // App attribution real column (0310). Absent on pre-migration rows.
       appId: (row.app_id as string | null) ?? undefined,
-      // Daily-ceiling bookkeeping exemption (0364). Absent unless TRUE.
+      // Daily-ceiling bookkeeping exemption (0365). Absent unless TRUE.
       ceilingExempt: row.ceiling_exempt === true ? true : undefined,
     };
   }

@@ -1567,13 +1567,13 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "app_id",
     addedBy: "0310_app_attribution.sql",
   },
-  // events — DAILY-CEILING BOOKKEEPING EXEMPTION (0364, F2). `auditLog` stamps
+  // events — DAILY-CEILING BOOKKEEPING EXEMPTION (0365, F2). `auditLog` stamps
   // it on an agent's own-session bookkeeping and the daily write count reads
   // it: without the column every agent append and every count 42703s.
   {
     table: "events",
     column: "ceiling_exempt",
-    addedBy: "0364_events_ceiling_exempt.sql",
+    addedBy: "0365_events_ceiling_exempt.sql",
   },
 
   // vault_grants → capability grants generalization (0142). The polymorphic

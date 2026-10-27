@@ -106,7 +106,7 @@ export async function auditLog(
     const eventRepo =
       opts.phase === "validated" ? eventRepository : new EventRepository(sql);
 
-    // F2 (0364): an agent's bookkeeping of its OWN session is stamped here, at
+    // F2 (0365): an agent's bookkeeping of its OWN session is stamped here, at
     // write time, so the daily write count skips it. Proven from the session
     // row (owner + roster), never from the caller.
     const isAgent = opts.isAgent ?? (opts.agentUserId ? true : undefined);

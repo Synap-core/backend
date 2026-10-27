@@ -104,7 +104,7 @@ async function emit(
   return rows[0]!.ceiling_exempt;
 }
 
-describe("F2 — auditLog stamps an agent's own-session bookkeeping (0364)", () => {
+describe("F2 — auditLog stamps an agent's own-session bookkeeping (0365)", () => {
   it("an update of its OWN session is stamped ceiling_exempt", async () => {
     expect(await emit("focus_session", OWN)).toBe(true);
   });

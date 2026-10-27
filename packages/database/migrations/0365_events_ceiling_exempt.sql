@@ -1,4 +1,4 @@
--- 0364 — events.ceiling_exempt (founder F2, 2026-10-27).
+-- 0365 — events.ceiling_exempt (founder F2, 2026-10-27).
 --
 -- An agent's bookkeeping of its OWN focus session (starting it, updating it,
 -- claiming or completing an outcome, a write on its own room) is required by
