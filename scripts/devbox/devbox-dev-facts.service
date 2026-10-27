@@ -1,0 +1,21 @@
+# Devbox dev-facts producer: posts one dev.repo_snapshot per repo to the pod (observations.append).
+# NOT managed by Ansible, like devbox-pod-obs.service. Script: scripts/dev-repo-snapshot.mjs (this repo, public).
+# Install (devbox):
+#   git clone --depth 1 --filter=blob:none --sparse https://github.com/Synap-core/backend ~/wt/dev-facts
+#   git -C ~/wt/dev-facts sparse-checkout set scripts
+#   cp ~/wt/dev-facts/scripts/devbox/devbox-dev-facts.{service,timer} ~/.config/systemd/user/
+#   (key: see ~/.config/synap-obs.env below)  systemctl --user daemon-reload
+#   systemctl --user enable --now devbox-dev-facts.timer
+# Update: git -C ~/wt/dev-facts pull --ff-only (by hand: the unit never pulls code that runs with the key).
+[Unit]
+Description=Devbox dev-facts producer: post repo snapshots (PRs, checks, main health, live) to the pod
+
+[Service]
+Type=oneshot
+Environment=PATH=%h/.local/bin:%h/.npm-global/bin:/usr/local/bin:/usr/bin:/bin
+# SYNAP_POD_URL + SYNAP_OBS_KEY (a pod Hub key with hub-protocol.write). Same file as devbox-pod-obs.service.
+# Absent or without the key = dry-run: prints the snapshots, posts nothing, exits 0.
+EnvironmentFile=-%h/.config/synap-obs.env
+ExecStart=/usr/bin/node %h/wt/dev-facts/scripts/dev-repo-snapshot.mjs
+TimeoutStartSec=5min
+Nice=10
