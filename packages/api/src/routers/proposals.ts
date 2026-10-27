@@ -180,6 +180,14 @@ export {
 import type { ProposalExecutorResult } from "./proposals/execution-registry.js";
 import { askAiAboutProposal } from "./proposals/ask-ai.js";
 import {
+  allowAgentForRestOfUtcDay,
+  assertCanAllowAgentToday,
+} from "./governance-ceilings.js";
+import {
+  HELD_WRITES_PROPOSAL_TYPE,
+  HELD_WRITES_TARGET_TYPE,
+} from "../utils/permission-check.js";
+import {
   isScrubbedGuestPayload,
   scrubGuestPayloads,
 } from "../services/forms/guest-retention.js";
@@ -1538,6 +1546,17 @@ export const proposalsRouter = router({
          * `dispositions` uses. A missing key keeps today's create for that op.
          */
         identityResolutionByRef: identityResolutionByRefInput.optional(),
+        /**
+         * F3 "Approve and allow today" — held-writes packs only
+         * (`agent/held_writes`). With `true`, approving the pack ALSO lifts
+         * its agent's daily write ceiling to 2x the current limit until the
+         * next 00:00 UTC (one expiring `governance_ceilings` row), so its next
+         * writes today do not open a new pack. The person's act: refused for
+         * an agent caller, and it needs the authority of authoring that row
+         * by hand (pod admin). Refused (BAD_REQUEST) on any other proposal or
+         * a pack that is no longer pending. Absent/false ⇒ a plain approve.
+         */
+        allowToday: z.boolean().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -1607,13 +1626,46 @@ export const proposalsRouter = router({
       // approve is exactly N single approves and the two can never drift.
       // `background`: this interactive door takes a QUEUED answer for a large
       // graph (applied by the `proposal-approve` job after the same gates).
-      return await applyProposalApproval({
+      // F3: "allow today" rides ONLY a pending held-writes pack, and is
+      // refused BEFORE anything is approved when it does not apply or the
+      // caller may not raise this agent's ceiling — never half done.
+      if (input.allowToday) {
+        if (
+          proposal.targetType !== HELD_WRITES_TARGET_TYPE ||
+          proposal.proposalType !== HELD_WRITES_PROPOSAL_TYPE ||
+          !proposal.agentUserId
+        ) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              "allowToday applies only to an agent's held-writes pack (writes held past its daily limit).",
+          });
+        }
+        if (proposal.status !== ProposalStatus.PENDING) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              "allowToday rides the approval of a pending pack; this one was already decided.",
+          });
+        }
+        await assertCanAllowAgentToday(userId, proposal.agentUserId);
+      }
+
+      const approved = await applyProposalApproval({
         proposal,
         userId,
         input,
         ctx,
         background: true,
       });
+      if (!input.allowToday || !proposal.agentUserId) return approved;
+      const allowedToday = await allowAgentForRestOfUtcDay({
+        userId,
+        agentUserId: proposal.agentUserId,
+        actingAgentUserId: ctx.agentUserId,
+        sourceProposalId: proposal.id,
+      });
+      return { ...approved, allowedToday };
     }),
 
   /**
