@@ -12,7 +12,9 @@
  *
  * Rows rule out: no workspace filter (the ws-2 row), a filter that drops
  * unbound subscriptions (the unbound rows), a pod-wide event reaching a bound
- * subscription (the null rows), and an owner leak (B's row).
+ * subscription (the null rows), and an owner leak (B's row). Plus the
+ * DIRECTION rule (0362): A's inbound source in WS1 lists no event types
+ * (= "every event" to the match rule) and is never in an audience.
  */
 import { describe, it, expect, vi, beforeAll } from "vitest";
 import { randomUUID } from "node:crypto";
@@ -61,9 +63,15 @@ const SUB = {
   ws2: randomUUID(),
   bOther: randomUUID(),
 };
+const INBOUND_WS1 = randomUUID();
 
 beforeAll(async () => {
   await h.client!.exec(ddlFor(webhookSubscriptions as unknown as PgTable));
+  // 0362's default (the generic DDL carries none): every row here is a
+  // delivery target, and both producers select `direction = 'outbound'`.
+  await h.client!.exec(
+    `alter table webhook_subscriptions alter column direction set default 'outbound'`
+  );
   for (const [id, user, ws] of [
     [SUB.unbound, A, null],
     [SUB.ws1, A, WS1],
@@ -76,6 +84,11 @@ beforeAll(async () => {
       [id, user, ws]
     );
   }
+  await h.client!.query(
+    `insert into webhook_subscriptions (id, user_id, workspace_id, direction, name, url, event_types, secret, active, retry_config)
+     values ($1,$2,$3,'inbound','GitHub',null,'{}','sec',true,'{"maxRetries":0}'::jsonb)`,
+    [INBOUND_WS1, A, WS1]
+  );
 });
 
 /** Run one fan-out job; return the subscription ids it enqueued a delivery for. */

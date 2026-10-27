@@ -245,40 +245,61 @@ describe("ASK_COPY", () => {
 describe("answerProvenanceMark", () => {
   it.each([
     ["open draws nothing", {}, null],
-    ["a tap", { answer: {} }, { tone: "success", label: "You answered" }],
+    [
+      "a tap",
+      { answer: {} },
+      { tone: "success", label: "You answered", disposition: "answered" },
+    ],
     [
       "a routine relay names the agent",
       { answer: { via: "relayed", relayedBy: "a" } },
-      { tone: "ai", label: "Answered in chat · relayed by Claude Code" },
+      {
+        tone: "ai",
+        label: "Answered in chat · relayed by Claude Code",
+        disposition: "relayed",
+      },
     ],
     [
       // the relay stays visible after the person's own tap
       "a confirmed relay still says it was relayed",
       { answer: { via: "tap", relayedBy: "a", confirmedAt: "t" } },
-      { tone: "success", label: "You confirmed what Claude Code relayed" },
+      {
+        tone: "success",
+        label: "You confirmed what Claude Code relayed",
+        disposition: "answered",
+      },
     ],
     [
       "awaiting the tap",
       { pendingRelay: { relayedBy: "a" } },
       {
         tone: "warning",
-        label: "Claude Code relayed your answer. Confirm it.",
+        label: "Relayed by Claude Code · needs your tap",
+        disposition: "awaiting_your_tap",
       },
     ],
     [
       "withdrawn with its reason",
       { closed: { reason: "withdrawn", note: "you answered it in the brief" } },
-      { tone: "textMuted", label: "Withdrawn · you answered it in the brief" },
+      {
+        tone: "textMuted",
+        label: "Withdrawn · you answered it in the brief",
+        disposition: "withdrawn",
+      },
     ],
     [
       "withdrawn, no reason",
       { closed: { reason: "withdrawn" } },
-      { tone: "textMuted", label: "Withdrawn" },
+      { tone: "textMuted", label: "Withdrawn", disposition: "withdrawn" },
     ],
     [
       "closed by the session's end",
       { closed: { reason: "session_ended" } },
-      { tone: "textMuted", label: "Closed · the session ended" },
+      {
+        tone: "textMuted",
+        label: "Closed · the session ended",
+        disposition: "closed_session_ended",
+      },
     ],
   ] as const)("%s", (_n, input, want) => {
     expect(answerProvenanceMark(input, { agent: "Claude Code" })).toEqual(want);
@@ -290,7 +311,7 @@ describe("answerProvenanceMark", () => {
     expect(
       answerProvenanceMark({ pendingRelay: { relayedBy: "a" } }, { agent: " " })
         ?.label
-    ).toBe("Your answer was relayed. Confirm it.");
+    ).toBe("Relayed · needs your tap");
     expect(ASK_COPY.relayConfirmed(null)).toBe(
       "You confirmed the relayed answer"
     );

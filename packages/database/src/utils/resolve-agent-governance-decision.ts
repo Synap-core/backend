@@ -22,6 +22,7 @@ import { events } from "../schema/events.js";
 import { channels, ChannelType } from "../schema/channels.js";
 import { entities } from "../schema/entities.js";
 import { profiles } from "../schema/profiles.js";
+import { focusSessions } from "../schema/focus-sessions.js";
 import {
   decideAgentPolicy,
   governanceLaneFor,
@@ -1477,10 +1478,87 @@ export async function countAgentWritesTodayUtc(
         eq(events.agentUserId, agentUserId),
         eq(events.isAgent, true),
         isNull(events.proposalId),
+        // F2 (0365): the agent's bookkeeping of its OWN session is stamped at
+        // write time (`isOwnSessionBookkeeping`) and is not work: it does not
+        // spend the day's budget. NULL (every row before 0365) still counts.
+        sql`${events.ceilingExempt} IS NOT TRUE`,
         gte(events.timestamp, startOfUtcDay())
       )
     );
   return row?.n ?? 0;
+}
+
+/** The session doors whose writes are bookkeeping, when the session is the caller's own. */
+const OWN_SESSION_BOOKKEEPING_ACTIONS: ReadonlySet<string> = new Set([
+  "create",
+  "update",
+]);
+
+export interface OwnSessionBookkeepingInput {
+  /** The person the agent acts for (the session's owner). */
+  userId: string | null | undefined;
+  /** The acting agent. */
+  agentUserId: string | null | undefined;
+  subjectType: string;
+  action: string;
+  /** The session id (`focus_session`) or its room's channel id (`channel`). */
+  subjectId: string | null | undefined;
+}
+
+/**
+ * F2 (founder, 2026-10-27) — is this write the acting agent's bookkeeping of
+ * its OWN focus session: starting it, updating it (status, progress, an
+ * outcome claimed or completed), or a write on that session's own room?
+ *
+ * Such a write still goes through every governance rung; it only does not
+ * count toward, nor wait on, the daily write ceiling (rung 2.56): the work
+ * rules require it and it touches nothing but the agent's own session.
+ *
+ * Proven from the pod's records, never from the caller: the session's owner
+ * is `userId` AND the agent is on its roster (`agent_ids`). A session start
+ * passes before the row exists: its id is minted by the create door, which
+ * makes the caller the owner and puts the agent on the roster, so an id with
+ * no row yet is the caller's own new session. An id that names an EXISTING
+ * session is judged by that row, like an update. Every other subject, action
+ * or a missing agent/owner is not bookkeeping.
+ */
+export async function isOwnSessionBookkeeping(
+  db: DbHandle,
+  input: OwnSessionBookkeepingInput
+): Promise<boolean> {
+  const { userId, agentUserId, subjectType, action, subjectId } = input;
+  if (!userId || !agentUserId || !subjectId) return false;
+  if (!OWN_SESSION_BOOKKEEPING_ACTIONS.has(action)) return false;
+  if (subjectType === "focus_session") {
+    const [session] = await db
+      .select({
+        userId: focusSessions.userId,
+        agentIds: focusSessions.agentIds,
+      })
+      .from(focusSessions)
+      .where(eq(focusSessions.id, subjectId))
+      .limit(1);
+    if (!session) return action === "create";
+    return (
+      session.userId === userId &&
+      (session.agentIds ?? []).includes(agentUserId)
+    );
+  }
+  if (subjectType === "channel") {
+    const [session] = await db
+      .select({ id: focusSessions.id })
+      .from(focusSessions)
+      .where(
+        and(
+          eq(focusSessions.channelId, subjectId),
+          eq(focusSessions.userId, userId),
+          sql`${agentUserId} = ANY(${focusSessions.agentIds})`
+        )
+      )
+      .limit(1);
+    return !!session;
+  }
+  return false;
 }
 
 /** How strict a resolution is — the host step keeps the stricter one. */
@@ -1510,12 +1588,26 @@ function strictness(r: AgentGovernanceResolution): number {
 export async function resolveAgentGovernanceDecision(
   input: ResolveAgentGovernanceInput
 ): Promise<AgentGovernanceResolution> {
-  const own = await resolveForPrincipal(input);
+  // F2: proven once, for the ACTING agent (the session's roster names it, not
+  // its computer), and only when rung 2.56 would otherwise read the count.
+  let ownBookkeeping: Promise<boolean> | undefined;
+  const principalInput: PrincipalInput = {
+    ...input,
+    ownSessionBookkeeping: () =>
+      (ownBookkeeping ??= isOwnSessionBookkeeping(input.db, {
+        userId: input.userId,
+        agentUserId: input.agentUserId,
+        subjectType: input.subjectType,
+        action: input.action,
+        subjectId: input.subjectEntityId,
+      })),
+  };
+  const own = await resolveForPrincipal(principalInput);
   if (own.resolution.decision === "not-agent" || !own.hostUserId) {
     return own.resolution;
   }
   const host = await resolveForPrincipal({
-    ...input,
+    ...principalInput,
     agentUserId: own.hostUserId,
   });
   if (host.resolution.decision === "not-agent") return own.resolution;
@@ -1524,8 +1616,13 @@ export async function resolveAgentGovernanceDecision(
     : own.resolution;
 }
 
+/** The resolver's per-principal input: the proven F2 answer rides along. */
+type PrincipalInput = ResolveAgentGovernanceInput & {
+  ownSessionBookkeeping?: () => Promise<boolean>;
+};
+
 async function resolveForPrincipal(
-  input: ResolveAgentGovernanceInput
+  input: PrincipalInput
 ): Promise<{
   resolution: AgentGovernanceResolution;
   hostUserId: string | null;
@@ -1673,7 +1770,11 @@ async function resolveForPrincipal(
   // rung the single decision site (no verdict is synthesised here). The replay
   // of a held-writes pack a person approved is not counted: the person already
   // answered the ceiling for those writes.
-  if (decision.verdict === "execute" && !getHeldWritesApprovedBy()) {
+  if (
+    decision.verdict === "execute" &&
+    !getHeldWritesApprovedBy() &&
+    !(await input.ownSessionBookkeeping?.())
+  ) {
     const limit = await resolveDailyWriteCeiling({
       db,
       agentUserId,

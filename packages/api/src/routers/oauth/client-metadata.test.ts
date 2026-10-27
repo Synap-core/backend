@@ -173,6 +173,25 @@ describe("CIMD — happy path", () => {
     expect(opts.method).toBe("GET");
   });
 
+  it("accepts 48 requests in a document past 5 KB (the cap, at Content Studio's size)", async () => {
+    // 48 distinct permissions with sentence-long reasons, as an app sends them.
+    const body = JSON.stringify(
+      doc({
+        synap_requests: Array.from({ length: 48 }, (_, i) => ({
+          permission: `entity.kind-${i}.read`,
+          reason: `To show your kind ${i} items, with what was made from them.`,
+        })),
+      })
+    );
+    expect(Buffer.byteLength(body)).toBeGreaterThan(5 * 1024);
+    serve({ body });
+    const client = await resolveCimdClient(CLIENT_ID, ISSUER, memoryStore(), {
+      lookup: publicDns,
+    });
+    expect(client.requestedPermissions).toHaveLength(48);
+    expect(client.requestedPermissions[47]).toBe("entity.kind-47.read");
+  });
+
   it("serves a fresh cached copy without fetching again", async () => {
     serve({});
     const store = memoryStore();
@@ -291,16 +310,16 @@ describe("CIMD — SSRF: private networks are never reached", () => {
     expect(m.httpsRequest).toHaveBeenCalledTimes(1);
   });
 
-  it("refuses an oversized (6 KB) document", async () => {
+  it("refuses an oversized (9 KB) document", async () => {
     serve({
-      body: JSON.stringify(doc({ client_name: "x".repeat(6 * 1024) })),
+      body: JSON.stringify(doc({ client_name: "x".repeat(9 * 1024) })),
     });
     const message = await refusal(
       resolveCimdClient(CLIENT_ID, ISSUER, memoryStore(), {
         lookup: publicDns,
       })
     );
-    expect(message).toMatch(/exceeded 5120 bytes/);
+    expect(message).toMatch(/exceeded 8192 bytes/);
   });
 
   it("refuses a slow server after 5 s", async () => {
@@ -409,11 +428,11 @@ describe("CIMD — document validation", () => {
     [
       "too many requests",
       {
-        synap_requests: Array.from({ length: 33 }, () => ({
+        synap_requests: Array.from({ length: 49 }, () => ({
           permission: "entity.post.read",
         })),
       },
-      /at most 32/,
+      /at most 48/,
     ],
     [
       "synap_templates that is not an array",

@@ -80,6 +80,14 @@ LABEL io.synap.first-party="true"
 # supplied (older callers, local `docker build` without the arg).
 ARG GIT_SHA=""
 ENV SYNAP_GIT_SHA=$GIT_SHA
+# The repository (`owner/name`) and when the built commit was made (its
+# committer time, ISO): the pod's `dev.deployed` carries them, so a PR merged
+# before that commit reads as deployed (packages/api/src/services/dev-loop/
+# pod-deployed.ts). Empty when not supplied: the fact then names the sha only.
+ARG GIT_REPO=""
+ENV SYNAP_GIT_REPO=$GIT_REPO
+ARG BUILD_AT=""
+ENV SYNAP_BUILD_AT=$BUILD_AT
 
 # ── The cron scheduler's timezone, PINNED rather than inherited ─────────────
 # `computeNextRunAt` (packages/jobs/.../automation-cron-scheduler.ts) matches a

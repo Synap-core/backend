@@ -201,6 +201,138 @@ async function assertCanManageCeiling(
   }
 }
 
+/**
+ * The authority "allow today" needs, checked BEFORE the approval it rides:
+ * the same as authoring an agent's pod-scope ceiling row by hand.
+ */
+export async function assertCanAllowAgentToday(
+  userId: string,
+  agentUserId: string
+): Promise<void> {
+  await assertCanManageCeiling(userId, {
+    scopeKind: "pod",
+    principalKind: "agent",
+    agentUserId,
+  });
+}
+
+/** The end of the current UTC day: the next 00:00:00.000Z. */
+export function endOfUtcDay(now: Date = new Date()): Date {
+  return new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1)
+  );
+}
+
+/** What "allow today" raised the agent's daily write ceiling to. */
+export interface AllowedToday {
+  ceilingId: string;
+  agentUserId: string;
+  /** The limit in force for the rest of the UTC day. */
+  limit: number;
+  /** The limit it was raised from (what applies again from `expiresAt`). */
+  previousLimit: number;
+  /** ISO time the raise ends: the next 00:00 UTC. */
+  expiresAt: string;
+  /** True when an earlier "allow today" had already raised it for today. */
+  alreadyAllowed: boolean;
+}
+
+/**
+ * F3 (founder, 2026-10-27) — "Approve and allow today": the PERSON approving
+ * an agent's held-writes pack also lifts that agent's daily write ceiling for
+ * the rest of the current UTC day, so the next writes past the limit do not
+ * open a new pack. One `governance_ceilings` row: agent principal, pod scope,
+ * axis `daily_write_count`, 2x the limit in force now, `expires_at` = the next
+ * 00:00 UTC (the resolver drops it then and the base limit applies again).
+ *
+ * The person's act only: an agent caller is refused here as well as at the
+ * approve door, and the caller needs the same authority as authoring the row
+ * by hand (`assertCanManageCeiling`: pod admin for a pod-scope row). Only the
+ * volume cap moves; every floor and rule still decides each write.
+ *
+ * Idempotent per day: a second "allow today" while one is in force returns it
+ * instead of doubling again.
+ */
+export async function allowAgentForRestOfUtcDay(input: {
+  userId: string;
+  /** The agent whose ceiling is lifted (the pack's agent). */
+  agentUserId: string;
+  /** Set when the CALLER is an agent: always refused. */
+  actingAgentUserId?: string | null;
+  /** The held-writes pack this rides on. */
+  sourceProposalId: string;
+  now?: Date;
+}): Promise<AllowedToday> {
+  if (input.actingAgentUserId) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message:
+        "Only a person can allow an agent more writes today; an agent cannot raise its own limit.",
+    });
+  }
+  const now = input.now ?? new Date();
+  const expiresAt = endOfUtcDay(now);
+  const scope = {
+    scopeKind: "pod" as const,
+    principalKind: "agent" as const,
+    agentUserId: input.agentUserId,
+  };
+  await assertCanManageCeiling(input.userId, scope);
+
+  const [existing] = await db
+    .select()
+    .from(governanceCeilings)
+    .where(
+      and(
+        eq(governanceCeilings.axis, "daily_write_count"),
+        eq(governanceCeilings.principalKind, "agent"),
+        eq(governanceCeilings.agentUserId, input.agentUserId),
+        eq(governanceCeilings.scopeKind, "pod"),
+        isNull(governanceCeilings.revokedAt),
+        eq(governanceCeilings.expiresAt, expiresAt)
+      )
+    )
+    .orderBy(desc(governanceCeilings.createdAt))
+    .limit(1);
+  if (existing) {
+    return {
+      ceilingId: existing.id,
+      agentUserId: input.agentUserId,
+      limit: existing.limitValue,
+      previousLimit: Math.floor(existing.limitValue / 2),
+      expiresAt: expiresAt.toISOString(),
+      alreadyAllowed: true,
+    };
+  }
+
+  const previousLimit = await resolveDailyWriteCeiling({
+    db,
+    agentUserId: input.agentUserId,
+    workspaceId: null,
+  });
+  const [row] = await db
+    .insert(governanceCeilings)
+    .values({
+      axis: "daily_write_count",
+      ...scope,
+      principalClass: null,
+      workspaceId: null,
+      limitValue: previousLimit * 2,
+      sourceProposalId: input.sourceProposalId,
+      createdBy: input.userId,
+      expiresAt,
+    })
+    .returning();
+  return {
+    ceilingId: row!.id,
+    agentUserId: input.agentUserId,
+    limit: row!.limitValue,
+    previousLimit,
+    expiresAt: expiresAt.toISOString(),
+    alreadyAllowed: false,
+  };
+}
+
 const CreateInputSchema = z
   .object({
     principalKind: z.enum(["agent", "any", "class"]),

@@ -661,13 +661,36 @@ export function templateApplyWarning(
       const n = livePending.length;
       return `Waiting on your approval of ${n} proposal${n === 1 ? "" : "s"} (${livePending.join(", ")}), then run ${run}.`;
     }
-    case "partial":
-      return `Not finished: part of ${slug} did not apply. Run ${run} to retry.`;
+    case "partial": {
+      // What did not land, with its reason (the finisher records each line).
+      // Only setup left → the person's step, never "retry": a retry cannot
+      // supply a key or connect an account.
+      const failures = recorded?.failures ?? [];
+      const needsSetup = recorded?.needsSetup ?? [];
+      if (failures.length === 0 && needsSetup.length > 0)
+        return `Not finished: part of ${slug} waits on your setup (${listReasons(needsSetup)}). Set it up, then run ${run}.`;
+      const reasons = [...failures, ...needsSetup];
+      return reasons.length > 0
+        ? `Not finished: part of ${slug} did not apply (${listReasons(reasons)}). Run ${run} to retry.`
+        : `Not finished: part of ${slug} did not apply. Run ${run} to retry.`;
+    }
     case "layer-2-not-run":
       return `Not finished: run ${run} to apply the rest of ${slug}.`;
     default:
       return opts.dataChangesHeld ? dataChangesHeldSentence(slug) : null;
   }
+}
+
+/** How many recorded reasons the sentence names before "and N more". */
+const REASONS_SHOWN = 3;
+
+/** `a; b; c; and 2 more` — the recorded lines, without their final stop. */
+function listReasons(lines: string[]): string {
+  const shown = lines
+    .slice(0, REASONS_SHOWN)
+    .map((l) => l.trim().replace(/\.$/, ""));
+  const more = lines.length - shown.length;
+  return more > 0 ? `${shown.join("; ")}; and ${more} more` : shown.join("; ");
 }
 
 /**

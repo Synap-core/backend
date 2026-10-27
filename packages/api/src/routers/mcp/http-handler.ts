@@ -46,7 +46,10 @@ import {
   isGuestPrincipal,
 } from "../../access/guest-containment.js";
 import { reportNoPodAccess } from "../../access/pod-access.js";
-import { checkHubRateLimit } from "../../utils/hub-protocol-rate-limit.js";
+import {
+  checkHubRateLimit,
+  type HubRateLimitCause,
+} from "../../utils/hub-protocol-rate-limit.js";
 import { tools } from "./tools/index.js";
 import { createMCPServer, groundingBudgetBytes } from "./index.js";
 import { resolveUiRendererFromDb } from "./ui-tools.js";
@@ -347,11 +350,42 @@ function jsonRpcError(id: unknown, code: number, message: string) {
  * healthy connection and force re-authorization. A 429 is passed through, not
  * mistaken for a dead key.
  */
-function jsonRpcRateLimited(id: unknown, message: string) {
+function jsonRpcRateLimited(
+  id: unknown,
+  message: string,
+  wait?: { retryAfter: number; limit: number; windowMs: number }
+) {
+  // With a known wait, say it twice: `Retry-After` (seconds, RFC 9110) for
+  // HTTP clients and `error.data.retryAfter` for JSON-RPC readers. Without it
+  // a client guesses, and the bridge guessed 15 minutes for a 60-second window.
   return Response.json(
-    { jsonrpc: "2.0", id, error: { code: -32000, message } },
-    { status: 429 }
+    {
+      jsonrpc: "2.0",
+      id,
+      error: {
+        code: -32000,
+        message,
+        ...(wait ? { data: { ...wait, scope: "key" } } : {}),
+      },
+    },
+    {
+      status: 429,
+      ...(wait ? { headers: { "Retry-After": String(wait.retryAfter) } } : {}),
+    }
   );
+}
+
+/** The wait a `checkHubRateLimit` refusal carries (its TRPCError `cause`). */
+function hubRateLimitWait(
+  err: unknown
+): { retryAfter: number; limit: number; windowMs: number } | undefined {
+  const cause = (err as { cause?: Partial<HubRateLimitCause> } | null)?.cause;
+  if (!cause || typeof cause.resetIn !== "number") return undefined;
+  return {
+    retryAfter: Math.max(1, Math.ceil(cause.resetIn)),
+    limit: cause.limit ?? 0,
+    windowMs: cause.windowMs ?? 0,
+  };
 }
 
 /**
@@ -471,8 +505,15 @@ mcpHttpApp.post("/", async (c) => {
   // ── 1b. Per-key rate limit (100 req/min) ─────────────────────────────────
   try {
     checkHubRateLimit(keyRecord.id, "mcp");
-  } catch {
-    return jsonRpcRateLimited(null, "Rate limit exceeded. Please slow down.");
+  } catch (err) {
+    const wait = hubRateLimitWait(err);
+    return jsonRpcRateLimited(
+      null,
+      wait
+        ? `Rate limit exceeded for this key. Retry after ${wait.retryAfter}s.`
+        : "Rate limit exceeded. Please slow down.",
+      wait
+    );
   }
 
   // ── 2. Hand off to the SDK transport ─────────────────────────────────────

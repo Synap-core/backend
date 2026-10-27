@@ -336,11 +336,15 @@ describe("sentence ⇄ flow is a true round trip for every output type", () => {
     "webhook",
   ] as const;
   const UNALIASED = [
+    "record_observation",
     "facet_attach",
     "facet_update",
     "facet_detach",
     "relation_create",
     "session_update",
+    "complete_outcome",
+    "post_evidence",
+    "reevaluate_criterion",
     "set_state",
   ] as const;
 

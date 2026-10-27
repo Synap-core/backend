@@ -45,16 +45,23 @@ vi.mock("../utils.js", () => ({
 }));
 
 import { TRPCError } from "@trpc/server";
+import { LENS_PAGE_READ_CAPS } from "@synap-core/types/lens";
 import { registerIntentSurfacesRoutes } from "./intent-surfaces.js";
 import type { HubHono, HubVariables } from "./_shared.js";
 
 const P = "11111111-1111-4111-8111-111111111111";
+const W = "33333333-3333-4333-8333-333333333333";
 
-function app(scopes = ["hub-protocol.read"]): HubHono {
+function app(
+  scopes = ["hub-protocol.read"],
+  keyWorkspaceId: string | null = null
+): HubHono {
   const a: HubHono = new OpenAPIHono<{ Variables: HubVariables }>();
   a.use("/*", async (c, next) => {
     c.set("userId", "user-1");
     c.set("scopes", scopes);
+    c.set("keyType", "service");
+    c.set("keyWorkspaceId", keyWorkspaceId);
     await next();
   });
   registerIntentSurfacesRoutes(a);
@@ -158,5 +165,115 @@ describe("Hub REST intent-surface reads", () => {
     expect(((await res.json()) as { error: string }).error).toBe(
       "no such kind"
     );
+  });
+
+  it("lens-page: the page lens at the scope it was asked, with the lens hosts' caps", async () => {
+    const since = "2026-10-27T00:00:00.000+01:00";
+    expect(
+      (
+        await app().request(
+          `/attention/lens-page?workspaceId=${P}&projectId=${P}&since=${encodeURIComponent(since)}`
+        )
+      ).status
+    ).toBe(200);
+    await app().request(`/attention/lens-page?sessionId=${P}`);
+    await app().request(`/attention/lens-page`);
+    // The caps every lens host reads with (web and relay), never a second set.
+    const caps = { ...LENS_PAGE_READ_CAPS };
+    expect(h.calls).toEqual([
+      {
+        proc: "signals.list",
+        input: { lens: "page", workspaceId: P, projectId: P, caps, since },
+      },
+      { proc: "signals.list", input: { lens: "page", sessionId: P, caps } },
+      { proc: "signals.list", input: { lens: "page", caps } },
+    ]);
+  });
+
+  it("lens-page: a bad scope or since is a 400 and reaches nothing; no read scope is a 403", async () => {
+    expect(
+      (await app().request(`/attention/lens-page?trackId=nope`)).status
+    ).toBe(400);
+    expect(
+      (await app().request(`/attention/lens-page?since=yesterday`)).status
+    ).toBe(400);
+    expect((await app([]).request(`/attention/lens-page`)).status).toBe(403);
+    expect(h.calls).toEqual([]);
+  });
+
+  it("lens-page: a key bound to a workspace reads that workspace's page, never the pod's", async () => {
+    const bound = () => app(undefined, W);
+    expect((await bound().request(`/attention/lens-page`)).status).toBe(200);
+    // The scope axes AND with the workspace: a session lens stays inside it.
+    await bound().request(`/attention/lens-page?sessionId=${P}`);
+    await bound().request(`/attention/lens-page?workspaceId=${W}`);
+    const caps = { ...LENS_PAGE_READ_CAPS };
+    expect(h.calls).toEqual([
+      { proc: "signals.list", input: { lens: "page", workspaceId: W, caps } },
+      {
+        proc: "signals.list",
+        input: { lens: "page", workspaceId: W, sessionId: P, caps },
+      },
+      { proc: "signals.list", input: { lens: "page", workspaceId: W, caps } },
+    ]);
+  });
+
+  it("lens-page: a key bound to a workspace that names another is a 403 and reaches nothing", async () => {
+    const res = await app(undefined, W).request(
+      `/attention/lens-page?workspaceId=${P}`
+    );
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { error: string }).error).toMatch(
+      /confined to workspace/
+    );
+    expect(h.calls).toEqual([]);
+  });
+
+  // Every door that takes a workspace lens runs the one clamp (`readDoor`'s
+  // `confineWorkspace`): a bound key reads only its workspace, another is a 403.
+  const CONFINED = [
+    ["lifecycle.board", "board", "/lifecycle/board?profileSlug=lead"],
+    [
+      "lifecycle.throughput",
+      "throughput",
+      "/lifecycle/throughput?profileSlug=lead",
+    ],
+    ["lifecycle.moving", "moving", "/lifecycle/moving?limit=5"],
+    [
+      "attention.needs-you",
+      "signals.list",
+      "/attention/needs-you?profileSlug=lead",
+    ],
+    ["attention.count", "signals.count", "/attention/count?profileSlug=lead"],
+  ] as const;
+
+  it.each(CONFINED)(
+    "%s: a key bound to a workspace that names none reads only that workspace",
+    async (_door, proc, url) => {
+      expect((await app(undefined, W).request(url)).status).toBe(200);
+      expect(h.calls).toHaveLength(1);
+      expect(h.calls[0]!.proc).toBe(proc);
+      expect(h.calls[0]!.input).toMatchObject({ workspaceId: W });
+    }
+  );
+
+  it.each(CONFINED)(
+    "%s: a key bound to a workspace that names another is a 403 and reaches nothing",
+    async (_door, _proc, url) => {
+      const res = await app(undefined, W).request(`${url}&workspaceId=${P}`);
+      expect(res.status).toBe(403);
+      expect(h.calls).toEqual([]);
+    }
+  );
+
+  it("lifecycle.home has no workspace axis: a bound key is refused, an unbound one reads", async () => {
+    const res = await app(undefined, W).request(`/lifecycle/home`);
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { error: string }).error).toMatch(
+      /confined to workspace .* reads every space/
+    );
+    expect(h.calls).toEqual([]);
+    expect((await app().request(`/lifecycle/home`)).status).toBe(200);
+    expect(h.calls).toEqual([{ proc: "home", input: {} }]);
   });
 });

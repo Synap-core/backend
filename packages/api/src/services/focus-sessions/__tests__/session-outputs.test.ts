@@ -552,6 +552,7 @@ describe("joinSessionOutputs — a matched slot is projected WHOLE", () => {
     },
     askedBy: "77777777-7777-7777-7777-777777777777",
     askCause: { kind: "run" },
+    keptOwedAt: "2026-09-08T17:00:00.000Z",
   };
 
   it("carries EVERY declared field onto the matched output", () => {

@@ -93,7 +93,8 @@ vi.mock("../utils/permission-check.js", async (importOriginal) => {
   return { ...actual, checkPermissionOrPropose: mockCheckPermission };
 });
 
-vi.mock("../services/playbooks/run-playbook.js", () => ({
+vi.mock("../services/playbooks/run-playbook.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   runPlaybook: mockRunPlaybook,
 }));
 

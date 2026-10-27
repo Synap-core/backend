@@ -104,7 +104,23 @@ describe("askSlotOf — which needs-you rows are answered here", () => {
       blockedReason: "decision",
       owedSince: "2026-10-20T09:00:00.000Z",
       askerName: "Claude Code",
+      askerId: null,
       askCause: null,
+      pendingRelay: null,
+      keptOwedAt: null,
+      paramName: null,
+    });
+  });
+  it("carries the fields the card's fate and cause read", () => {
+    expect(
+      askSlotOf({
+        ...owed,
+        keptOwedAt: "2026-10-21T09:00:00.000Z",
+        paramName: "channel",
+      })
+    ).toMatchObject({
+      keptOwedAt: "2026-10-21T09:00:00.000Z",
+      paramName: "channel",
     });
   });
   it("leaves out a criterion slot, any other kind, and a slot with no session", () => {
@@ -169,7 +185,7 @@ describe("askView — one control per mode", () => {
       kind: "cause",
       label: "From a proposed decision",
     });
-    expect(view.ageFate.label).toBe("8d · In Review later");
+    expect(view.ageFate.label).toBe("Asked 8d ago · In Review later");
     expect(view.note.label).toBe("Add a note");
   });
 
@@ -553,10 +569,59 @@ describe("a relayed answer waiting for the tap", () => {
     expect(relayWaitingView(s!)).toEqual({
       mark: {
         tone: "warning",
-        label: "Claude Code relayed your answer. Confirm it.",
+        label: "Relayed by Claude Code · needs your tap",
+        disposition: "awaiting_your_tap",
       },
-      words: "“yes, ship it friday”",
+      recorded: "Yes",
+      said: "You said “yes, ship it friday”",
     });
+  });
+
+  it("a relay the wire did not carry whole is no relay, never a Confirm with no relayer", () => {
+    const s = askSlotOf({
+      kind: "owed-slot",
+      title: "Deploy",
+      target: { kind: "session", id: "s1" },
+      ask: confirm,
+      pendingRelay: { text: "Yes" },
+    });
+    expect(s?.pendingRelay).toBeNull();
+    expect(relayWaitingView(s!)).toBeNull();
+  });
+
+  it("headlines what Confirm records, as the answer's own button reads", () => {
+    const s = slot(
+      { mode: "confirm", yes: { label: "Ship it" } },
+      {
+        pendingRelay: {
+          ...relay,
+          value: { type: "confirm", confirmed: true },
+        },
+      }
+    );
+    expect(relayWaitingView(s)).toMatchObject({
+      recorded: "Ship it",
+      said: "You said “yes, ship it friday”",
+    });
+  });
+
+  it("the card's fate reads the relay and the kept-owed stamp", () => {
+    const now = Date.parse("2026-10-27T12:00:00.000Z");
+    const relayedToday = slot(confirm, {
+      owedSince: "2026-10-18T12:00:00.000Z",
+      pendingRelay: { ...relay, relayedAt: "2026-10-27T09:00:00.000Z" },
+    });
+    expect(askView(relayedToday, now).ageFate.fate.kind).not.toBe(
+      "review_later"
+    );
+    const kept = slot(confirm, {
+      owedSince: "2026-10-26T12:00:00.000Z",
+      keptOwedAt: "2026-10-27T08:00:00.000Z",
+    });
+    expect(askView(kept, now).ageFate.fate.kind).toBe("until_decided");
+    expect(askView(slot(confirm), now).ageFate.fate.kind).toBe(
+      "ends_with_session"
+    );
   });
 
   it("names the relayer only when it is the agent that asked", () => {
@@ -566,7 +631,7 @@ describe("a relayed answer waiting for the tap", () => {
       pendingRelay: relay,
     });
     expect(relayWaitingView(other)?.mark.label).toBe(
-      "Your answer was relayed. Confirm it."
+      "Relayed · needs your tap"
     );
     expect(relayWaitingView(slot(confirm))).toBeNull();
   });
