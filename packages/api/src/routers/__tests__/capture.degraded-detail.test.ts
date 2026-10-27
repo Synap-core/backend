@@ -155,14 +155,7 @@ function failWith(failure: StructureFailure) {
       _input: unknown,
       options?: { onFailure?: (f: StructureFailure) => void }
     ) => {
-      // Every call from capture.structure passes its options: a call without
-      // them is not the capture's, and says where it came from.
-      if (!options) {
-        throw new Error(
-          `structure() called without options from:\n${new Error().stack}`
-        );
-      }
-      options.onFailure?.(failure);
+      options?.onFailure?.(failure);
       return null;
     }
   );
@@ -178,7 +171,11 @@ async function structure() {
   };
 }
 
-beforeEach(() => h.structure.mockReset());
+// A block body: a function RETURNED from beforeEach is a cleanup hook, and
+// mockReset() returns the mock, which vitest then called with no arguments.
+beforeEach(() => {
+  h.structure.mockReset();
+});
 
 describe("capture.structure: the degraded early returns carry degradedDetail", () => {
   it("a 402 is not retried and reads as quota", async () => {
