@@ -104,7 +104,7 @@ const ResolveIdentityResponseSchema = z
         })
       )
       .describe(
-        'Same-title entities of a DIFFERENT kind. ADVISORY: `match` stays "none" because a title alone never auto-merges — but do NOT treat "none" as "safe to create" when this is non-empty. Prefer proposing a link to one of these over minting a duplicate.'
+        'Entities of a DIFFERENT kind that look like the same subject: the same title, or one of the given strong signals (a company owning the website a person carries). ADVISORY: a title never auto-merges and a strong signal merges only within the requested kind — but do NOT treat "none" as "safe to create" when this is non-empty. Prefer proposing a link to one of these over minting a duplicate.'
       ),
     pendingCandidates: z
       .array(
