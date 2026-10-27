@@ -17,7 +17,7 @@
     "src"
   ],
   "scripts": {
-    "build": "rm -rf dist && tsc && cp src/generated.d.ts dist/generated.d.ts",
+    "build": "rm -rf dist && tsc && cp src/generated.d.ts dist/generated.d.ts && node scripts/write-schema-hash.mjs",
     "clean": "rm -rf dist",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
