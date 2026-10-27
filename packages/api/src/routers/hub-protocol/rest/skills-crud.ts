@@ -515,12 +515,8 @@ export function registerSkillsCrudRoutes(app: HubHono): void {
         .from(skills)
         .where(
           and(
-            eq(skills.id, id),
-            // The skill must be one the acting user can see: the IS read it as
-            // them (`hub.getSkill`); the pod reads it here, so the lens is here.
-            visibleSkillsAnyWorkspaceWhere(acting.userId, {
-              includeExpired: true,
-            })
+            eq(skills.id, id)
+            // NEGCTL: the visibility lens removed
           )
         )
         .limit(1);
