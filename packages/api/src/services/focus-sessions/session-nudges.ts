@@ -32,6 +32,8 @@ import {
 } from "@synap/database";
 import type { FocusSession } from "@synap/database";
 import type { ExpectedOutput } from "@synap/playbooks";
+import { createLogger } from "@synap-core/core";
+import { createHash } from "node:crypto";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import {
   attachSessionVerdicts,
@@ -43,16 +45,29 @@ import {
   type PlaybookCandidate,
 } from "./match-session-template.js";
 import { isOwedSlot } from "./owed-outputs.js";
-import { isOpenAgentSlot } from "./continuation-packet.js";
+import {
+  isOpenAgentSlot,
+  type ContinuationNextMove,
+} from "./continuation-packet.js";
 import { OPEN_SESSION_STATUSES } from "./session-statuses.js";
 import { mergeSessionMetadata } from "./session-metadata.js";
+import { attachNextMove } from "./session-path-sections.js";
 import { openLink } from "../../utils/deep-links.js";
+
+const logger = createLogger({ module: "focus-sessions/session-nudges" });
 
 /** How many playbook candidates ride on a nudge — cheap, never the full list. */
 export const NUDGE_PLAYBOOK_CANDIDATES_MAX = 3;
 
 /** The metadata key that records the playbook offer was made (once). */
 export const PLAYBOOK_OFFERED_AT_KEY = "playbookOfferedAt";
+
+/**
+ * The metadata key that records the `readyToClose` nudge was made, as the
+ * fingerprint of the outputs it was made for: said ONCE per set of outputs,
+ * and re-armed when they change (rv-be-needs S6).
+ */
+export const READY_TO_CLOSE_NUDGED_FOR_KEY = "readyToCloseNudgedFor";
 
 export type NudgePhase = "update" | "complete";
 
@@ -91,6 +106,13 @@ export interface SessionNudges {
   answered?: string[];
   /** Ranked playbooks for a session born without one — offered once. */
   playbookCandidates?: PlaybookCandidate[];
+  /**
+   * F4 (plan v5): the session's next move is `ready_to_close` — THE next-move
+   * rule (`deriveNextMove`, read through `attachNextMove`): everything it
+   * declared is produced, nothing is owed or pending, no sub-session is open.
+   * The agent grades and closes; it is never closed for it.
+   */
+  readyToClose?: { reason: string };
   /** One imperative line per nudge above, in the same order. */
   hints: string[];
 }
@@ -130,6 +152,8 @@ export function computeSessionNudges(input: {
   evaluation: Pick<SessionEvaluationSummary, "criteria" | "evaluations">;
   phase: NudgePhase;
   playbookCandidates?: PlaybookCandidate[];
+  /** The session's next move as THE rule derived it — see `readyToClose`. */
+  nextMove?: Pick<ContinuationNextMove, "kind" | "reason">;
 }): SessionNudges | undefined {
   const { session, evaluation, phase } = input;
   const out: SessionNudges = { hints: [] };
@@ -209,7 +233,30 @@ export function computeSessionNudges(input: {
     );
   }
 
+  if (phase === "update" && input.nextMove?.kind === "ready_to_close") {
+    out.readyToClose = { reason: input.nextMove.reason };
+    out.hints.push(
+      out.ungradedCriteria
+        ? "Every outcome is produced and nothing is owed: grade the criteria above with evaluate_session, then close with complete_session (if a person worked in it, ask them in its room first)."
+        : "Every outcome is produced and nothing is owed: close with complete_session (if a person worked in it, ask them in its room first). If more work remains, declare it instead."
+    );
+  }
+
   return out.hints.length > 0 ? out : undefined;
+}
+
+/**
+ * Pure pre-check before the next-move read: only a session with at least one
+ * live declared slot, none of them still open on the agent and none owed by
+ * the person, can read `ready_to_close` — so the batch read runs only then.
+ */
+export function mayBeReadyToClose(session: NudgeSessionLike): boolean {
+  const slots = readSlots(session.expectedOutputs);
+  return (
+    slots.some((s) => s?.retiredAt == null) &&
+    !slots.some((s) => isOpenAgentSlot(s)) &&
+    !slots.some(isOwedSlot)
+  );
 }
 
 /**
@@ -232,6 +279,42 @@ export async function claimPlaybookOffer(
         eq(focusSessions.id, sessionId),
         eq(focusSessions.userId, userId),
         drizzleSql`NOT (coalesce(${focusSessions.metadata}, '{}'::jsonb) ? ${PLAYBOOK_OFFERED_AT_KEY})`
+      )
+    )
+    .returning({ id: focusSessions.id });
+  return won.length > 0;
+}
+
+/** The fingerprint of a session's outputs — what the ready nudge is stamped for. */
+export function outputsFingerprint(expectedOutputs: unknown): string {
+  return createHash("sha256")
+    .update(JSON.stringify(readSlots(expectedOutputs)))
+    .digest("hex")
+    .slice(0, 16);
+}
+
+/**
+ * Stamp the `readyToClose` nudge ONCE for these outputs. Atomic like
+ * {@link claimPlaybookOffer}: only the call that writes a NEW fingerprint
+ * wins, so the nudge repeats only after the outputs changed. Owner-floored.
+ */
+export async function claimReadyToCloseNudge(
+  sessionId: string,
+  userId: string,
+  fingerprint: string
+): Promise<boolean> {
+  const won = await db
+    .update(focusSessions)
+    .set({
+      metadata: mergeSessionMetadata({
+        [READY_TO_CLOSE_NUDGED_FOR_KEY]: fingerprint,
+      }),
+    })
+    .where(
+      and(
+        eq(focusSessions.id, sessionId),
+        eq(focusSessions.userId, userId),
+        drizzleSql`coalesce(${focusSessions.metadata} ->> ${READY_TO_CLOSE_NUDGED_FOR_KEY}, '') <> ${fingerprint}`
       )
     )
     .returning({ id: focusSessions.id });
@@ -281,11 +364,39 @@ export async function loadSessionNudges(p: {
       // The offer is a courtesy; the owed criteria/stage nudges still stand.
     }
   }
+  // F4: the next move, by THE rule, only when it could be `ready_to_close`.
+  // A failed read omits the nudge (a courtesy), never claims "ready". Said
+  // once per set of outputs (`claimReadyToCloseNudge`); orient's loose end
+  // keeps listing the session until it is closed.
+  let nextMove: Pick<ContinuationNextMove, "kind" | "reason"> | undefined;
+  if (p.phase === "update" && mayBeReadyToClose(p.session)) {
+    try {
+      const [row] = await attachNextMove([p.session], { userId: p.userId });
+      nextMove = row?.nextMove;
+      if (
+        nextMove?.kind === "ready_to_close" &&
+        !(await claimReadyToCloseNudge(
+          p.session.id,
+          p.userId,
+          outputsFingerprint(p.session.expectedOutputs)
+        ))
+      ) {
+        nextMove = undefined;
+      }
+    } catch (err) {
+      // The owed criteria/stage nudges still stand.
+      logger.warn(
+        { err, sessionId: p.session.id },
+        "session nudges: ready_to_close NOT checked — no nudge"
+      );
+    }
+  }
   return computeSessionNudges({
     session: p.session,
     evaluation,
     phase: p.phase,
     playbookCandidates,
+    nextMove,
   });
 }
 
