@@ -8,6 +8,7 @@
 
 import { isDocumentEditProposal } from "./intent.js";
 import type { UnitTone } from "../units/state.js";
+import type { AskFate } from "../ask/card.js";
 
 /**
  * Untouched `objectWork` proposals leave the headline count after this many
@@ -97,6 +98,27 @@ export function proposalFate(input: ProposalFateInput): ProposalFate {
 }
 
 /**
+ * Does closing its session end this item? A session-bound draft, an expiry
+ * its session's end may come first (`orSessionEnd`), or an owed ask that ends
+ * with its session (`askFate`). The ONE reading for a session's close moment,
+ * so no surface re-derives it from the fate's arms.
+ */
+export function fateEndsWithSession(
+  fate: ProposalFate | AskFate | null | undefined
+): boolean {
+  if (!fate) return false;
+  switch (fate.kind) {
+    case "dies_with_session":
+    case "ends_with_session":
+      return true;
+    case "expires":
+      return fate.orSessionEnd;
+    default:
+      return false;
+  }
+}
+
+/**
  * Is this proposal in the Review later pile? The ONE predicate for every
  * count (needs-you, orient's pendingReview) — a pglite test pins its SQL twin to it.
  */
@@ -117,8 +139,20 @@ export const FATE_COPY = {
   reviewLater: "In Review later",
   /** `date` is already formatted ("29 Sep"). */
   reviewLaterSince: (date: string): string => `In Review later since ${date}`,
+  /** The Review later pile's name; a surface with a count slot draws the count there. */
+  reviewLaterPile: "Review later",
   /** The fold's own label, with how many rows it holds. */
   reviewLaterFold: (count: number): string => `Review later · ${count}`,
+  /** The fold's one-line caption, once over its rows: why they are there. */
+  reviewLaterCaption: `Untouched for ${REVIEW_LATER_AFTER_DAYS} days · not in your count`,
+  /** The empty line of a list whose only items wait in the Review later fold. */
+  nothingNewWaiting: "Nothing new is waiting on you.",
+  /** Who waits on a proposal, by the pod's reason (`ProposalWaits.reason`). */
+  waitReason: {
+    parked_run: "The agent is paused until you decide",
+    gate: "The session can't go on until you decide",
+    owed_slot: "The agent needs this to finish the session",
+  } satisfies Record<ProposalWaitReason, string>,
   /** An expiry its session's end may come before. */
   orSessionEnd: (expiry: string): string =>
     `${expiry}, or when the session ends`,

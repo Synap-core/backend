@@ -262,7 +262,7 @@ describe("answerProvenanceMark", () => {
       { pendingRelay: { relayedBy: "a" } },
       {
         tone: "warning",
-        label: "Claude Code relayed your answer. Confirm it.",
+        label: "Relayed by Claude Code · needs your tap",
       },
     ],
     [
@@ -290,7 +290,7 @@ describe("answerProvenanceMark", () => {
     expect(
       answerProvenanceMark({ pendingRelay: { relayedBy: "a" } }, { agent: " " })
         ?.label
-    ).toBe("Your answer was relayed. Confirm it.");
+    ).toBe("Relayed · needs your tap");
     expect(ASK_COPY.relayConfirmed(null)).toBe(
       "You confirmed the relayed answer"
     );

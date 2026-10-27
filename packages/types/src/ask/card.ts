@@ -32,7 +32,9 @@ import {
   effectiveSlotAsk,
   type AskCause,
   type AskCauseKind,
+  type AskAnswerValue,
 } from "./index.js";
+import type { RoomPostMeta } from "./room-post.js";
 import {
   FATE_COPY,
   FATE_TONE,
@@ -159,13 +161,27 @@ export const ASK_COPY = {
     agent?.trim()
       ? `You confirmed what ${agent.trim()} relayed`
       : "You confirmed the relayed answer",
-  /** A commitment's relay, waiting for the person's tap. */
+  /**
+   * A commitment's relay, waiting for the person's tap: a MARK, not an
+   * instruction. The Confirm / "Not what I said" pair beside it carries the
+   * instruction, and a lock screen with no pair never says "Confirm it".
+   */
   awaitingYourTap: (agent: string | null): string =>
     agent?.trim()
-      ? `${agent.trim()} relayed your answer. Confirm it.`
-      : "Your answer was relayed. Confirm it.",
+      ? `Relayed by ${agent.trim()} · needs your tap`
+      : "Relayed · needs your tap",
   confirmRelayed: "Confirm",
   notWhatISaid: "Not what I said",
+  /**
+   * The person's own words under the answer a relay will record
+   * ({@link relayRecordedAnswer}): the answer is the headline, this the quote.
+   */
+  youSaid: (quote: string): string => `You said “${quote.trim()}”`,
+  /** The receipt after Confirm: what was settled, by the card's heading. */
+  relayConfirmedReceipt: (heading: string): string =>
+    `Confirmed · ${heading.trim()}`,
+  /** The receipt after "Not what I said": nothing recorded, the ask reopens. */
+  relayRejectedReceipt: "Not recorded · the question is yours again",
   /** `note` is the agent's one-line reason, when it gave one. */
   withdrawn: (note: string | null | undefined): string =>
     note?.trim() ? `Withdrawn · ${note.trim()}` : "Withdrawn",
@@ -531,9 +547,29 @@ export interface AskCardSlot {
   criterionKey?: string | null;
   paramName?: string | null;
   /** A relayed answer waiting for the person's tap — its own clock. */
-  pendingRelay?: { relayedAt?: string | null } | null;
+  pendingRelay?: AskCardPendingRelay | null;
   /** The closing agent kept it owed past its session: it no longer ends with it. */
   keptOwedAt?: string | null;
+  /** The asking agent's user id (`ExpectedOutput.askedBy`). */
+  askedBy?: string | null;
+  /**
+   * Its display name, resolved by the pod (`askedByName`). `askCardView`
+   * names the asker from it when the caller passes no `askerName`.
+   */
+  askedByName?: string | null;
+}
+
+/**
+ * A slot's `pendingRelay` as the card reads it: `PendingRelayedAnswer`,
+ * every field optional, so a wire row that parsed only part of it still
+ * draws what it has.
+ */
+export interface AskCardPendingRelay {
+  text?: string | null;
+  value?: AskAnswerValue | null;
+  relayedBy?: string | null;
+  quote?: string | null;
+  relayedAt?: string | null;
 }
 
 /**
@@ -728,7 +764,7 @@ export function askCardView(
       ? why
       : null;
 
-  const name = opts.askerName?.trim();
+  const name = opts.askerName?.trim() || slot.askedByName?.trim();
   const cause = name ? null : effectiveAskCause(slot);
   const asker: AskCardAsker | null = name
     ? { kind: "agent", name, sessionId: opts.sessionId ?? null }
@@ -804,4 +840,198 @@ function askCardAnswers(ask: Ask | null): AskCardAnswer[] {
     }));
   }
   return [];
+}
+
+// ─── One row → the card's slot ──────────────────────────────────────────────
+
+/** The needs-you union's discriminator for an owed slot (`Signal.kind`). */
+const OWED_SLOT_SIGNAL_KIND = "owed-slot";
+
+/**
+ * Any owed-slot-shaped row, by the names each one carries its fields under:
+ * the stored slot (`ExpectedOutput`: `label`, `kind`, `owedSince`), the
+ * needs-you signal (`kind: 'owed-slot'`, `title`, `slotKind`, `occurredAt`,
+ * `by`), and the surfaces' projections of either (`expectedLabel`).
+ */
+export interface AskCardSlotSource {
+  expectedLabel?: string | null;
+  label?: string | null;
+  title?: string | null;
+  /** The slot's kind, or the signal's discriminator (`owed-slot`). */
+  kind?: string | null;
+  /** The slot's kind on a needs-you signal. */
+  slotKind?: string | null;
+  owner?: string | null;
+  blockedReason?: string | null;
+  why?: string | null;
+  ask?: Ask | null;
+  owedSince?: string | null;
+  /** A needs-you signal's `occurredAt`: its slot's `owedSince`. */
+  occurredAt?: string | Date | null;
+  askCause?: AskCause | null;
+  criterionKey?: string | null;
+  paramName?: string | null;
+  pendingRelay?: AskCardPendingRelay | null;
+  keptOwedAt?: string | null;
+  askedBy?: string | null;
+  askedByName?: string | null;
+  /** A needs-you signal's named asker (`Signal.by`). */
+  by?: { id?: string | null; label?: string | null } | null;
+}
+
+/**
+ * THE adapter from any owed-slot row to {@link askCardView}'s slot. Every
+ * field the card or its fate reads is carried, so no surface drops one by
+ * hand-picking: a kept-owed confirm that read "Ends with the session", a slot
+ * relayed today that read "In Review later", a param slot whose cause nobody
+ * named were each a field one surface left out.
+ *
+ * On a needs-you signal (`kind: 'owed-slot'`) the slot's kind is `slotKind`,
+ * its `owedSince` is the signal's `occurredAt`, and its asker is `by`.
+ */
+export function askCardSlotOf(row: AskCardSlotSource): AskCardSlot {
+  const signal = row.kind === OWED_SLOT_SIGNAL_KIND;
+  const occurred = signal ? row.occurredAt : null;
+  const owedSince =
+    row.owedSince ??
+    (occurred instanceof Date ? occurred.toISOString() : (occurred ?? null));
+  return {
+    label: row.expectedLabel || row.label || row.title || "",
+    kind: row.slotKind ?? (signal ? null : (row.kind ?? null)),
+    owner: row.owner ?? null,
+    blockedReason: row.blockedReason ?? null,
+    why: row.why ?? null,
+    ask: row.ask ?? null,
+    owedSince,
+    askCause: row.askCause ?? null,
+    criterionKey: row.criterionKey ?? null,
+    paramName: row.paramName ?? null,
+    pendingRelay: row.pendingRelay ?? null,
+    keptOwedAt: row.keptOwedAt ?? null,
+    askedBy: row.askedBy ?? (signal ? (row.by?.id ?? null) : null),
+    askedByName: row.askedByName ?? (signal ? (row.by?.label ?? null) : null),
+  };
+}
+
+// ─── A relay waiting for the person's tap ───────────────────────────────────
+
+/** The slot fields {@link slotAwaitsTap} reads — structural. */
+export interface AskTapSlot {
+  owner?: string | null;
+  status?: string | null;
+  /** A projection's boolean for `status: 'done'`. */
+  done?: boolean | null;
+  retiredAt?: string | null;
+  attestedAt?: string | null;
+  pendingRelay?: AskCardPendingRelay | null;
+}
+
+/**
+ * Does this slot wait for the person's tap on a relayed answer? The ONE
+ * predicate for every surface: a pending relay on a slot that is still owed
+ * ({@link askSlotStanding}). Owed, not "unanswered": a slot the agent re-asked
+ * still carries its old answer, and the relay is for the new ask.
+ *
+ * An absent `owner` reads as the person's: the rows that omit it (a needs-you
+ * signal, the owed read) list only slots owed to them. A slot handed back
+ * (`owner: 'agent'`), done, attested or retired never waits for a tap.
+ */
+export function slotAwaitsTap(slot: AskTapSlot | null | undefined): boolean {
+  if (!slot?.pendingRelay) return false;
+  return (
+    askSlotStanding({
+      owner: slot.owner === "agent" ? "agent" : "human",
+      status: slot.done ? "done" : (slot.status ?? null),
+      retiredAt: slot.retiredAt ?? null,
+      attestedAt: slot.attestedAt ?? null,
+    }) === "owed"
+  );
+}
+
+/** What Confirm records for a relay, drawn as the card's answer. */
+export interface RelayRecordedAnswer {
+  /** The answer as its button reads ("Yes", the option's label), else the recorded text. */
+  label: string;
+  /** The card's answer it is, when the ask offers it (its icon and tone). */
+  answer: AskCardAnswer | null;
+  /** The person's own words, verbatim (`ASK_COPY.youSaid`); null when none. */
+  quote: string | null;
+}
+
+/**
+ * The answer a relay's Confirm will record, to headline with the person's
+ * quote under it. Read off `pendingRelay.value` against the card's own
+ * answers (`askCardView(...).answers`), so a confirm reads its button's label
+ * ("Ship it", not the stored "Yes"). Pass the slot's EFFECTIVE ask
+ * (`effectiveSlotAsk`). Without a typed value it is the recorded text. `null`
+ * when there is no relay, or nothing readable to say.
+ */
+export function relayRecordedAnswer(
+  ask: Ask | null | undefined,
+  pendingRelay: AskCardPendingRelay | null | undefined
+): RelayRecordedAnswer | null {
+  if (!pendingRelay) return null;
+  const value = pendingRelay.value ?? null;
+  const key =
+    value?.type === "confirm"
+      ? value.confirmed
+        ? ASK_CONFIRM_KEYS.yes
+        : ASK_CONFIRM_KEYS.no
+      : value?.type === "chip"
+        ? askOptionKey(value.chip)
+        : null;
+  const answer =
+    key === null
+      ? null
+      : (askCardAnswers(ask ?? null).find((a) => a.key === key) ?? null);
+  const label =
+    answer?.label ||
+    (value?.type === "confirm"
+      ? value.confirmed
+        ? ASK_COPY.yes
+        : ASK_COPY.no
+      : value?.type === "chip"
+        ? value.chip.label.trim()
+        : "") ||
+    pendingRelay.text?.trim() ||
+    "";
+  if (!label) return null;
+  return { label, answer, quote: pendingRelay.quote?.trim() || null };
+}
+
+// ─── A room question's Confirm ──────────────────────────────────────────────
+
+/**
+ * Which door a room question's Confirm uses, or `null` when it waits for no
+ * tap. The rule every room draws (relay chat, browser room, pod-admin):
+ *   `slot`     — a relayed answer waits on the question's slot: Confirm and
+ *                "Not what I said" settle it through the slot answer door,
+ *                by `expectedLabel` (`confirmRelayed` / `rejectRelayed`).
+ *   `approval` — an open approval card (`confirmationId`): its Confirm is the
+ *                card itself, a DOOR to it, never a Confirm pair drawn here.
+ * Only a slot-backed question can hold a relay that waits (the relay door
+ * records a slotless question's answer as routine), so a slotless question
+ * that is not an approval card never draws a Confirm. An answered or closed
+ * question waits for nothing.
+ */
+export type RoomQuestionConfirmDoor =
+  | { kind: "slot"; expectedLabel: string }
+  | { kind: "approval"; confirmationId: string };
+
+export function roomQuestionConfirmDoor(
+  meta: RoomPostMeta | null | undefined
+): RoomQuestionConfirmDoor | null {
+  if (meta?.kind !== "question") return null;
+  const disposition = questionDisposition(meta);
+  const slotLabel =
+    typeof meta.slotLabel === "string" ? meta.slotLabel.trim() : "";
+  if (disposition === "awaiting_your_tap") {
+    return slotLabel ? { kind: "slot", expectedLabel: slotLabel } : null;
+  }
+  const confirmationId =
+    typeof meta.confirmationId === "string" ? meta.confirmationId.trim() : "";
+  if (disposition === "open" && confirmationId) {
+    return { kind: "approval", confirmationId };
+  }
+  return null;
 }
