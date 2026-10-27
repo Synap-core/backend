@@ -9,6 +9,7 @@ import { TRPCError } from "@trpc/server";
 import { agentBelongsTo } from "./agent-belongs-to.js";
 import type { Context } from "../../types/context.js";
 import { resolveConfinedWorkspace } from "./confine-workspace.js";
+import { appSignInPublicId } from "../../services/app-sign-in-policy.js";
 
 /**
  * Create a tRPC caller context for Hub Protocol
@@ -78,6 +79,21 @@ export async function createHubProtocolCallerContext(
   };
 
   return ctx;
+}
+
+/**
+ * The `source` a hub forwarder stamps on the write it relays to an entity
+ * door. A person's own app sign-in (`app_person`, backend #94: the grant
+ * names an app and no agent acts, `appSignInPublicId`) writes AS THE PERSON:
+ * `"user"`, so the gate runs the person's ladder (RBAC + the key's grant).
+ * Every other hub key is AI: `"intelligence"`. A source the caller stated
+ * wins.
+ */
+export function hubWriteSource<S extends string>(
+  stated?: S | null
+): S | "user" | "intelligence" {
+  if (stated) return stated;
+  return appSignInPublicId() ? "user" : "intelligence";
 }
 
 /**

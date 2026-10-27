@@ -15,7 +15,11 @@ import { z } from "zod";
 import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { entitiesRouter as regularEntitiesRouter } from "../entities.js";
-import { actingAgentUserId, createHubProtocolCallerContext } from "./utils.js";
+import {
+  actingAgentUserId,
+  createHubProtocolCallerContext,
+  hubWriteSource,
+} from "./utils.js";
 import { assertMayActAs } from "./guard.js";
 import { TRPCError } from "@trpc/server";
 import {
@@ -215,8 +219,8 @@ export const entitiesRouter = router({
         reasoning: z.string().optional(),
         /**
          * Provenance tag for AI-governance/auto-approve gating + downstream
-         * audit trail. Defaults to `"agent"` when `agentUserId` is set,
-         * otherwise `"intelligence"`. Connectors and integrations should
+         * audit trail. Defaults to `"user"` for a person's app sign-in,
+         * otherwise `"intelligence"` (`hubWriteSource`). Connectors and integrations should
          * pass their own source so events carry the correct origin.
          */
         source: z.enum(HUB_WRITE_SOURCES).optional(),
@@ -307,10 +311,10 @@ export const entitiesRouter = router({
         // Agent's own rationale for the proposal inbox. Top-level `reasoning`
         // wins; fall back to the legacy `aiMetadata.reasoning` alias.
         reasoning: input.reasoning ?? input.aiMetadata?.reasoning,
-        // Provenance: explicit `source` from caller wins; otherwise infer
-        // "agent" when an agentUserId is present, else "intelligence".
+        // Provenance: explicit `source` from caller wins; otherwise the
+        // person for their own app sign-in, else "intelligence" (hubWriteSource).
         // "agent" is not a valid EventSource — agent identity is on agentUserId; see SynapEventSchema
-        source: input.source ?? "intelligence",
+        source: hubWriteSource(input.source),
         // Only pass agentUserId when explicitly provided — ctx.userId is the API key
         // owner ("system") which is not a valid UUID and would fail Zod validation.
         agentUserId,
@@ -456,7 +460,7 @@ export const entitiesRouter = router({
         items: input.items,
         agentUserId,
         // "agent" is not a valid EventSource — agent identity is on agentUserId.
-        source: "intelligence",
+        source: hubWriteSource(),
         reasoning: input.reasoning,
         idempotencyKey: input.idempotencyKey,
         validate: input.validate,
@@ -543,7 +547,7 @@ export const entitiesRouter = router({
           ...(input.replaceBody ? { replaceBody: true } : {}),
           reasoning: input.reasoning,
           // "agent" is not a valid EventSource — agent identity is on agentUserId; see SynapEventSchema
-          source: "intelligence",
+          source: hubWriteSource(),
           agentUserId,
           ...(input.expectedStatus !== undefined
             ? { expectedStatus: input.expectedStatus }
@@ -674,7 +678,7 @@ export const entitiesRouter = router({
         id: input.entityId,
         reasoning: input.reasoning,
         // "agent" is not a valid EventSource — agent identity is on agentUserId; see SynapEventSchema
-        source: "intelligence",
+        source: hubWriteSource(),
         agentUserId,
       });
 
@@ -764,7 +768,7 @@ export const entitiesRouter = router({
         properties: input.properties,
         reasoning: input.reasoning,
         // "agent" is not a valid EventSource — agent identity is on agentUserId; see SynapEventSchema
-        source: input.source ?? "intelligence",
+        source: hubWriteSource(input.source),
         agentUserId,
       });
 
@@ -821,7 +825,7 @@ export const entitiesRouter = router({
             : {}),
           reasoning: input.reasoning,
           // "agent" is not a valid EventSource — agent identity is on agentUserId; see SynapEventSchema
-          source: input.source ?? "intelligence",
+          source: hubWriteSource(input.source),
           agentUserId,
           ...(input.expectedStatus !== undefined
             ? { expectedStatus: input.expectedStatus }
@@ -873,7 +877,7 @@ export const entitiesRouter = router({
         facetId: input.facetId,
         reasoning: input.reasoning,
         // "agent" is not a valid EventSource — agent identity is on agentUserId; see SynapEventSchema
-        source: input.source ?? "intelligence",
+        source: hubWriteSource(input.source),
         agentUserId,
       });
 
