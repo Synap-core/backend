@@ -30536,6 +30536,100 @@
         }
       }
     },
+    "/attention/lens-page": {
+      "get": {
+        "tags": ["Attention"],
+        "summary": "A lens page, whole: what needs you, what is happening, what was produced",
+        "description": "Every class of the lens page at a scope (`signals.list({ lens: 'page' })`): Needs you, Proposed, Happening, Produced, Happened, plus the status banner, read with the caps every lens host asks for (`LENS_PAGE_READ_CAPS`). The scope is the narrowing lens (`workspaceId`, optionally with `projectId`; `projectId`; `trackId`; `sessionId`); none = the pod. `since` bounds Happened (a session sends none). Read by a space package's frame through the browser's host bridge, which stamps the scope.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string" },
+            "required": false,
+            "name": "workspaceId",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string" },
+            "required": false,
+            "name": "projectId",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string" },
+            "required": false,
+            "name": "trackId",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string" },
+            "required": false,
+            "name": "sessionId",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string", "format": "date-time" },
+            "required": false,
+            "name": "since",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": {}
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown kind / track",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "412": {
+            "description": "The kind declares no lifecycle",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/attention/count": {
       "get": {
         "tags": ["Attention"],
