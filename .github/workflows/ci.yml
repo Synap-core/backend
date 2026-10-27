@@ -179,6 +179,17 @@ jobs:
         env:
           BASE_URL: http://localhost:4000
 
+      # The booted bundle serves the hash of the committed generated.d.ts: the
+      # hash is baked in by tsup's `define`, never read from a committed file.
+      # gen-types:check above proved the file current, so this is the contract
+      # the pod really implements.
+      - name: Health serves the derived schema hash
+        run: |
+          want=$(node --input-type=module -e 'import { schemaHashOfFile } from "./packages/api/scripts/schema-hash.mjs"; console.log(schemaHashOfFile())')
+          got=$(curl -sf http://localhost:4000/api/hub/health | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).schemaHash))')
+          echo "generated.d.ts: $want  /api/hub/health: $got"
+          [ -n "$want" ] && [ "$got" = "$want" ] || { echo "::error::/api/hub/health schemaHash ($got) is not the hash of packages/api-types/src/generated.d.ts ($want)"; exit 1; }
+
       # The image smoke: in the BUILT image, the code-skill sandbox's native
       # addon loads and runs an isolate. isolated-vm is resolved from @synap/api
       # (the package that imports it), with the flag its README requires on
