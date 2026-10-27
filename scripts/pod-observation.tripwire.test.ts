@@ -11,8 +11,11 @@
  * of a run on GitHub after merge.
  * Named `*.tripwire.test.ts` so `pnpm tripwires` (CI) runs it.
  */
-import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -22,6 +25,7 @@ import {
   checkDevLoopPayload,
 } from "../packages/types/src/events/dev-loop.ts";
 import {
+  isKeyRefusal,
   observationFromEvent,
   podSessionFromBody,
   postObservation,
@@ -297,5 +301,69 @@ describe("pod-observation: posting", () => {
     expect(
       await postObservation("https://pod.example/", "k", EVERY_REPORTED[0]!)
     ).toBeNull();
+  });
+
+  /** Run the script on a PR event against a local pod that answers `reply`. */
+  async function runAgainstPod(reply: { status: number; body: string }) {
+    const server = createServer((req, res) => {
+      req.resume();
+      req.on("end", () => {
+        res.writeHead(reply.status, { "Content-Type": "application/json" });
+        res.end(reply.body);
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const eventPath = join(mkdtempSync(join(tmpdir(), "pod-obs-")), "event.json");
+    writeFileSync(
+      eventPath,
+      JSON.stringify({ action: "opened", pull_request: pr(), repository })
+    );
+    try {
+      const child = spawn(process.execPath, [SCRIPT], {
+        env: {
+          ...process.env,
+          SYNAP_POD_URL: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+          SYNAP_OBS_KEY: "k",
+          GITHUB_EVENT_NAME: "pull_request",
+          GITHUB_EVENT_PATH: eventPath,
+        },
+      });
+      let out = "";
+      child.stdout.on("data", (d) => (out += d));
+      child.stderr.on("data", (d) => (out += d));
+      const code = await new Promise<number | null>((r) => child.on("close", r));
+      return { code, out };
+    } finally {
+      server.close();
+    }
+  }
+  const refusal = (error: string) =>
+    JSON.stringify({
+      result: { data: { json: { results: [{ ok: false, index: 0, error }] } } },
+    });
+
+  it("a refused KEY is a warning and exit 0, not a red check on every PR", async () => {
+    for (const reply of [
+      { status: 200, body: refusal('This key\'s grant does not allow "event.create".') },
+      { status: 401, body: "unauthorized" },
+      { status: 403, body: "forbidden" },
+    ]) {
+      const r = await runAgainstPod(reply);
+      expect(r.code, r.out).toBe(0);
+      expect(r.out).toContain("::warning::the pod refused this repo's key");
+      expect(r.out).not.toContain("::error::");
+    }
+  });
+
+  it("any other refusal, or a pod error, still reds the run", async () => {
+    for (const reply of [
+      { status: 200, body: refusal("data does not match the dev.pr_opened contract") },
+      { status: 500, body: "boom" },
+    ]) {
+      const r = await runAgainstPod(reply);
+      expect(r.code, r.out).toBe(1);
+      expect(r.out).toContain("::error::the pod did not record");
+    }
+    expect(isKeyRefusal(null)).toBe(false);
   });
 });

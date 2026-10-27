@@ -30,3 +30,6 @@ export function postObservation(
   key: string,
   observation: PodObservation
 ): Promise<string | null>;
+
+/** Is this refusal about the key (a grant without event.create, HTTP 401/403), not the observation? */
+export function isKeyRefusal(error: string | null | undefined): boolean;

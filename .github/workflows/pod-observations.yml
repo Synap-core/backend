@@ -11,7 +11,8 @@ name: Pod observations
 #   SYNAP_POD_URL  the pod's base URL
 #   SYNAP_OBS_KEY  a pod Hub API key with the `hub-protocol.write` scope
 # A fork's PR (or Dependabot's) gets no secrets, so the script prints
-# "Nothing posted" and exits 0.
+# "Nothing posted" and exits 0. A key the pod refuses (a grant without
+# `event.create`, HTTP 401/403) is a warning and exit 0, not a red check.
 #
 # workflow_run only fires from the copy of this file on the default branch,
 # so ci.finished starts after this file is merged.

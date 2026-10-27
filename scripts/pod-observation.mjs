@@ -19,13 +19,16 @@
  * reads `data.url` (an outcome's `ref.url`) and `data.sessionId` (the PR
  * body's `Pod session: <id>` line).
  *
- * The devbox poster for the private repos (devbox `~/wt/ci/pr-poster.py`)
+ * The devbox poster for the private repos (devbox `~/wt/ci/pod-obs.py`)
  * sends the same shapes with `source: "devbox-ci-watch"`; keep the two equal.
  *
  * No pod configured (a fork, a PR from someone without the secrets, a repo
  * that never set them) → prints why and exits 0: posting is opt-in.
- * A pod that refuses or cannot be reached → exits 1, so the run shows red
- * instead of reading as "the pod heard it".
+ * A pod that refuses the KEY (a grant without `event.create`, HTTP 401/403)
+ * → a warning and exit 0: the founder's key is not this PR's fault, and a red
+ * check on every PR is noise. Any other refusal (the contract, a bug here) or
+ * an unreachable pod → exits 1, so the run shows red instead of reading as
+ * "the pod heard it".
  *
  * Self-contained on purpose (node: builtins + global fetch): the workflow runs
  * it with no install.
@@ -223,6 +226,15 @@ export async function postObservation(podUrl, key, observation) {
   return r.ok ? null : r.error;
 }
 
+/**
+ * Is this refusal about the KEY rather than the observation? Same rule as the
+ * devbox poster's KEY_REFUSAL_RE (pod-obs.py), which pauses on it.
+ */
+const KEY_REFUSAL_RE = /grant does not allow|^HTTP 40[13]\b/i;
+export function isKeyRefusal(error) {
+  return typeof error === "string" && KEY_REFUSAL_RE.test(error);
+}
+
 async function main() {
   const podUrl = process.env.SYNAP_POD_URL;
   const key = process.env.SYNAP_OBS_KEY;
@@ -246,6 +258,12 @@ async function main() {
     return;
   }
   const error = await postObservation(podUrl, key, obs);
+  if (isKeyRefusal(error)) {
+    console.warn(
+      `::warning::the pod refused this repo's key for ${obs.type} ${obs.subjectId}: ${error}. Nothing recorded; the key needs the event.create grant.`
+    );
+    return;
+  }
   if (error) {
     console.error(
       `::error::the pod did not record ${obs.type} ${obs.subjectId}: ${error}`
