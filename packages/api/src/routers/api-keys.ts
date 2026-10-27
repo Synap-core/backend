@@ -1605,21 +1605,37 @@ export const apiKeysRouter = router({
   createForWorkspace: workspaceProcedure
     .use(requireFreshAuthentication)
     .input(
-      z.object({
-        name: z.string().min(1).max(100),
-        scopes: z
-          .array(z.enum([...API_KEY_SCOPES] as [string, ...string[]]))
-          .min(1),
-        /** Legacy absolute expiry; wins over expiresInDays when given. */
-        expiresAt: z.date().optional(),
-        // Omitted → 90 days; a number → that many; null → never (W1f).
-        expiresInDays: ExpiresInDaysSchema,
-        /** What the key may touch; always held inside this workspace. Required. */
-        grant: GrantInputSchema.omit({ workspaceIds: true }),
-      })
+      z
+        .object({
+          name: z.string().min(1).max(100),
+          /** LEGACY: raw scopes, for callers made before `uses`. */
+          scopes: z
+            .array(z.enum([...API_KEY_SCOPES] as [string, ...string[]]))
+            .min(1)
+            .optional(),
+          /** Where the key is used; its scopes are derived here from these. */
+          uses: KeyUsesSchema.optional(),
+          /** The template it was made from (`KEY_TEMPLATES` id or a role id). */
+          templateId: z.string().min(1).max(120).optional(),
+          /** "Where you kept it" — stored as the key's description. */
+          note: z.string().trim().max(400).optional(),
+          /** Legacy absolute expiry; wins over expiresInDays when given. */
+          expiresAt: z.date().optional(),
+          // Omitted → 90 days; a number → that many; null → never (W1f).
+          expiresInDays: ExpiresInDaysSchema,
+          /** What the key may touch; always held inside this workspace. Required. */
+          grant: GrantInputSchema.omit({ workspaceIds: true }),
+        })
+        .refine((v) => (v.scopes ? 1 : 0) + (v.uses ? 1 : 0) === 1, {
+          message: "Send `uses` (where the key is used), or legacy `scopes`.",
+          path: ["uses"],
+        })
     )
     .mutation(async ({ input, ctx }) => {
       assertGrantInput(input.grant);
+      const scope = input.uses
+        ? deriveKeyScopes(input.uses, input.grant)
+        : input.scopes!;
       if (!["owner", "admin"].includes(ctx.workspaceRole)) {
         throw new TRPCError({
           code: "FORBIDDEN",
@@ -1666,11 +1682,12 @@ export const apiKeysRouter = router({
           keyName: input.name,
           keyPrefix,
           key,
-          scope: input.scopes,
+          scope,
           expiresAt: expiresAt ?? undefined,
           userId: ctx.userId,
           keyType: "user_pat",
           workspaceId: ctx.workspaceId,
+          ...(input.note ? { description: input.note } : {}),
         },
         ctx.userId
       );
@@ -1692,7 +1709,12 @@ export const apiKeysRouter = router({
         subjectId: apiKey.id,
         userId: ctx.userId,
         workspaceId: ctx.workspaceId,
-        data: { keyName: input.name, keyPrefix, scope: "workspace" },
+        data: {
+          keyName: input.name,
+          keyPrefix,
+          scope: "workspace",
+          ...(input.templateId ? { templateId: input.templateId } : {}),
+        },
       });
 
       emitSideEffects({
