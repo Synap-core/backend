@@ -81,7 +81,8 @@ vi.mock("./external-registration.js", () => ({
 
 /** Captures the grant attached to the minted key (its capabilities). */
 let lastGrant: Record<string, unknown> | undefined;
-vi.mock("./key-grant.js", () => ({
+vi.mock("./key-grant.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./key-grant.js")>()),
   attachGrantOrRevoke: vi.fn(async (args: Record<string, unknown>) => {
     lastGrant = args;
   }),
