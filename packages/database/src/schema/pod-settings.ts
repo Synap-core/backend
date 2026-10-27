@@ -268,9 +268,36 @@ export interface ControlPlaneEntitlementSync {
   message: string | null;
 }
 
+/**
+ * The pod's AI provider choice (founder decision 2026-10-27): before its first
+ * AI request a pod admin chooses Synap's AI service, which runs on DeepSeek
+ * (servers in China), or the pod's own provider. Choosing DeepSeek is the
+ * explicit consent (GDPR art. 49(1)(a)) to that transfer, so the record keeps
+ * WHO chose, WHEN, and the exact words they were shown. Written only by
+ * `services/ai-provider-choice.ts`; absent = nobody has chosen, and the
+ * Intelligence Service refuses Synap's AI service for this pod.
+ */
+export interface AiProviderChoiceRecord {
+  choice: "deepseek" | "own_provider";
+  /** ISO timestamp of the decision. */
+  decidedAt: string;
+  /** User id of the person who chose. */
+  decidedBy: string;
+  /** Version of the wording they were shown. */
+  wordingVersion: string;
+  /** The words of the option they chose, exactly as shown. */
+  wording: string;
+}
+
+export interface AiProviderChoiceSetting extends AiProviderChoiceRecord {
+  /** Earlier decisions, newest first (a change of mind is a new record). */
+  history?: AiProviderChoiceRecord[];
+}
+
 export interface PodSettingsBlob {
   machineDefaults?: PodMachineDefaults;
   podApps?: PodAppsPolicySetting;
+  aiProviderChoice?: AiProviderChoiceSetting;
   intelligenceDefaults?: PodIntelligenceDefaults;
   proactiveDefaults?: PodProactiveDefaults;
   catalogSyncStamps?: Record<string, CatalogSyncStamp>;

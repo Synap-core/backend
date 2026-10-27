@@ -78,6 +78,7 @@ import { secretsVaultRouter } from "./routers/secrets-vault.js";
 import { subscriptionsRouter } from "./routers/subscriptions.js";
 import { aiProvidersRouter } from "./routers/ai-providers.js";
 import { aiProviderCredentialsRouter } from "./routers/ai-provider-credentials.js";
+import { aiProviderChoiceRouter } from "./routers/ai-provider-choice.js";
 import { focusSessionsRouter } from "./routers/focus-sessions.js";
 import { playbooksRouter } from "./routers/playbooks.js";
 import { playbookRunsRouter } from "./routers/playbook-runs.js";
@@ -200,6 +201,7 @@ export const coreRouter = router({
   subscriptions: subscriptionsRouter,
   aiProviders: aiProvidersRouter,
   aiProviderCredentials: aiProviderCredentialsRouter,
+  aiProviderChoice: aiProviderChoiceRouter,
   focusSessions: focusSessionsRouter,
   playbooks: playbooksRouter,
   playbookRuns: playbookRunsRouter,

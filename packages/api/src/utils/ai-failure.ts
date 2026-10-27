@@ -35,6 +35,7 @@
  *   access_suspended — the account's subscription payment failed (IS account gate)
  *   account_inactive — this account's AI access is switched off (IS auth middleware)
  *   budget           — the shared monthly AI budget is used up (IS spend guard; NOT the provider)
+ *   consent_required — nobody chose who runs this pod's AI yet (IS provider gate)
  *   auth             — 401/403, credentials rejected by the AI service
  *   rate_limit       — 429
  *   timeout          — the call was aborted on our deadline
@@ -59,6 +60,7 @@ export type AiFailureClass =
   | "access_suspended"
   | "account_inactive"
   | "budget"
+  | "consent_required"
   | "context_length"
   | "content_filter"
   | "cancelled"
@@ -89,6 +91,7 @@ export type AiFailureClass =
  */
 export type { AiFailureCode } from "@synap-core/types/ai-availability";
 import type { AiFailureCode } from "@synap-core/types/ai-availability";
+import { openTypedLink } from "./deep-links.js";
 
 export interface AiFailureDescription {
   readonly class: AiFailureClass;
@@ -211,6 +214,11 @@ const IS_CODE_TO_CLASS: Record<string, AiFailureClass> = {
   // OUR spend guard, not the provider: `quota_exhausted` above says "the AI
   // provider's quota", which is false for a fleet budget stop.
   llm_budget_exceeded: "budget",
+  // The IS provider gate: Synap's AI service runs on DeepSeek (China) and a
+  // pod admin has not chosen it or the pod's own provider. A choice the IS
+  // could not READ is an outage of the pod read, never a missing choice.
+  ai_consent_required: "consent_required",
+  ai_consent_unverified: "upstream",
   context_length_exceeded: "context_length",
   content_filter: "content_filter",
   auth: "auth",
@@ -383,6 +391,16 @@ const COPY: Record<
     needsOperator: true,
     message:
       "The shared AI capacity for this month is used up. Retrying will not help \u2014 an operator has to raise the AI budget, or it frees up at the start of next month.",
+  },
+  // A person's choice, not an operator fix and not a retry: AI stays off until
+  // a pod admin chooses who runs it. The words name the door (Settings › AI),
+  // which every surface opens on this code (`aiProviderChoice`).
+  consent_required: {
+    code: "ai_consent_required",
+    retryable: false,
+    needsOperator: false,
+    message:
+      "AI is off until a pod admin chooses who runs it: DeepSeek (servers in China) or the pod's own provider (e.g. Mistral AI, EU). Choose in Settings \u203a AI. Retrying will not help until then.",
   },
   // Neither of the next two is an operator problem: the OPERATOR cannot make a
   // prompt shorter or make a safety filter accept it. `needsOperator: false`
@@ -602,12 +620,19 @@ export function describeAiFailure(
       ? ""
       : ((action && PAYER_ADVICE[action]) ?? adviceDefault);
 
+  // The choice's door, for a reader with no Settings to tap (an agent, the
+  // CLI): the pod's own link, which opens Settings › AI in the app.
+  const door =
+    failureClass === "consent_required"
+      ? ` ${openTypedLink("settings", "ai")}`
+      : "";
+
   return {
     class: failureClass,
     code: copy.code,
     retryable,
     needsOperator: copy.needsOperator,
-    message: `${copy.message}${payerAdvice}${because}${advice}${reference}`,
+    message: `${copy.message}${door}${payerAdvice}${because}${advice}${reference}`,
     ...(actor ? { actor } : {}),
     ...(action ? { action } : {}),
   };

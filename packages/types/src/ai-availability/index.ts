@@ -86,6 +86,7 @@ export const AI_FAILURE_CODES = [
   "upstream_error",
   "bad_request",
   "invalid_response",
+  "ai_consent_required",
   "unknown",
 ] as const;
 export type AiFailureCode = (typeof AI_FAILURE_CODES)[number];
@@ -140,12 +141,18 @@ const FAILURE_STATE: {
   upstream_error: null,
   bad_request: null,
   invalid_response: null,
+  // Not an availability state: nobody has chosen who runs this pod's AI yet
+  // (`aiProviderChoice`, founder decision 2026-10-27). The surface opens that
+  // choice instead of a banner; the turn is not retryable until it is made.
+  ai_consent_required: null,
   unknown: null,
   // IS-only codes
   insufficient_credit: "provider_issue",
   auth: "provider_issue",
   rate_limit: null,
   provider_error: null,
+  // The IS could not read the pod's choice: unmeasured, never "consented".
+  ai_consent_unverified: null,
 };
 
 /**

@@ -214,6 +214,14 @@ export interface IsFailureEnvelope {
     | "account_inactive"
     /** IS spend guard: the shared monthly LLM budget is used up (not the provider's quota). */
     | "llm_budget_exceeded"
+    /**
+     * IS provider gate: nobody has chosen who runs this pod's AI, so Synap's
+     * AI service (DeepSeek, servers in China) is refused until a pod admin
+     * chooses it or the pod's own provider (founder decision 2026-10-27).
+     */
+    | "ai_consent_required"
+    /** IS provider gate: the pod's choice could not be read; nothing was sent. */
+    | "ai_consent_unverified"
     | "timeout"
     | "circuit_open"
     | "provider_error"

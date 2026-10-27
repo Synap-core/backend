@@ -10,6 +10,7 @@
  * POST   /ai-providers/:id/disable — disable a provider
  * DELETE /ai-providers/:id        — remove a provider
  * POST   /ai-providers/sync       — re-push all providers to IS
+ * GET    /ai-providers/choice     — the pod's AI provider choice (for the IS)
  */
 
 import { randomUUID } from "node:crypto";
@@ -45,6 +46,7 @@ import {
   resolveProviderCredentialsBatch,
   SetCredentialSchema,
 } from "../../ai-provider-credentials.js";
+import { readAiProviderChoiceForService } from "../../../services/ai-provider-choice.js";
 
 const logger = createLogger({ module: "hub-ai-providers" });
 
@@ -333,6 +335,17 @@ export function registerAiProvidersRoutes(app: HubHono): void {
     });
 
     return c.json({ providers, masked: !mayReadPlaintext });
+  });
+
+  // GET /ai-providers/choice — the pod's AI provider choice. The Intelligence
+  // Service reads it per request and refuses Synap's AI service (DeepSeek)
+  // for a pod whose admin has not chosen `deepseek`
+  // (`services/ai-provider-choice.ts`). No user id leaves the pod.
+  app.get("/ai-providers/choice", async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.read")) {
+      return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+    }
+    return c.json(await readAiProviderChoiceForService());
   });
 
   // POST /ai-providers — upsert (governed)
