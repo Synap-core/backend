@@ -31,7 +31,11 @@ afterEach(() => {
   setRateLimitOverrides({});
 });
 
-function harness(opts: { admin: boolean; stored?: unknown; readFails?: boolean }) {
+function harness(opts: {
+  admin: boolean;
+  stored?: unknown;
+  readFails?: boolean;
+}) {
   let stored: unknown = opts.stored;
   const writes: unknown[] = [];
   const audits: string[] = [];
@@ -90,10 +94,7 @@ describe("GET /", () => {
 describe("PUT /", () => {
   it("refuses a non-admin, and writes nothing", async () => {
     const { router, writes } = harness({ admin: false });
-    const res = await router.request(
-      "/",
-      put({ RATE_LIMIT_CRUD_MAX: 3000 })
-    );
+    const res = await router.request("/", put({ RATE_LIMIT_CRUD_MAX: 3000 }));
     expect(res.status).toBe(403);
     expect(writes).toEqual([]);
   });
@@ -113,10 +114,7 @@ describe("PUT /", () => {
 
   it("a failed read of the stored values is a 503, never an overwrite", async () => {
     const { router, writes } = harness({ admin: true, readFails: true });
-    const res = await router.request(
-      "/",
-      put({ RATE_LIMIT_CRUD_MAX: 3000 })
-    );
+    const res = await router.request("/", put({ RATE_LIMIT_CRUD_MAX: 3000 }));
     expect(res.status).toBe(503);
     expect(writes).toEqual([]);
   });
@@ -136,9 +134,10 @@ describe("PUT /", () => {
     ]);
     expect(audits).toEqual(["pod_rate_limits.changed"]);
     const body = (await res.json()) as { budgets: RateLimitBudgetView[] };
-    expect(budgetOf(body.budgets, "RATE_LIMIT_CRUD_READ_MAX")).toMatchObject(
-      { value: 6000, source: "pod" }
-    );
+    expect(budgetOf(body.budgets, "RATE_LIMIT_CRUD_READ_MAX")).toMatchObject({
+      value: 6000,
+      source: "pod",
+    });
     expect(budgetOf(body.budgets, "RATE_LIMIT_IMPORT_MAX")).toMatchObject({
       source: process.env.RATE_LIMIT_IMPORT_MAX ? "env" : "default",
     });

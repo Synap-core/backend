@@ -102,7 +102,7 @@ export const RATE_LIMIT_BUDGET_KEYS = [
   "RATE_LIMIT_OAUTH_TOKEN_WINDOW_MS",
   "RATE_LIMIT_OAUTH_TOKEN_MAX",
   "RATE_LIMIT_OAUTH_TOKEN_IP_CEILING",
-'] as const;
+] as const;
 
 export type RateLimitBudgetKey = (typeof RATE_LIMIT_BUDGET_KEYS)[number];
 
@@ -241,26 +241,22 @@ export function getRateLimitClassConfig(): Record<
     ipCeiling?: number;
   }
 > {
-  const crudWindow = budget("RATE_LIMIT_CRUD_WINDOW_MS", 15 * 60 * 1000
-  );
-  const importWindow = budget("RATE_LIMIT_IMPORT_WINDOW_MS", 15 * 60 * 1000
-  );
-  const aiWindow = budget("RATE_LIMIT_AI_WINDOW_MS", 5 * 60 * 1000
-  );
-  const agentWindow = budget("RATE_LIMIT_AGENT_TURN_WINDOW_MS", aiWindow
-  );
-  const calendarFeedWindow = budget("RATE_LIMIT_CALENDAR_FEED_WINDOW_MS", 5 * 60 * 1000
+  const crudWindow = budget("RATE_LIMIT_CRUD_WINDOW_MS", 15 * 60 * 1000);
+  const importWindow = budget("RATE_LIMIT_IMPORT_WINDOW_MS", 15 * 60 * 1000);
+  const aiWindow = budget("RATE_LIMIT_AI_WINDOW_MS", 5 * 60 * 1000);
+  const agentWindow = budget("RATE_LIMIT_AGENT_TURN_WINDOW_MS", aiWindow);
+  const calendarFeedWindow = budget(
+    "RATE_LIMIT_CALENDAR_FEED_WINDOW_MS",
+    5 * 60 * 1000
   );
 
   // One signed-in person's budget (`crud:session:*`). The console spends ~2
   // gate calls per page and prefetch plus its own queries and polling —
   // roughly 60–150 requests a minute for an active operator — so the anonymous
   // per-IP budget would lock a single person out.
-  const crudSessionMax = budget("RATE_LIMIT_CRUD_SESSION_MAX", 3000
-  );
+  const crudSessionMax = budget("RATE_LIMIT_CRUD_SESSION_MAX", 3000);
 
-  const crudReadWindow = budget("RATE_LIMIT_CRUD_READ_WINDOW_MS", crudWindow
-  );
+  const crudReadWindow = budget("RATE_LIMIT_CRUD_READ_WINDOW_MS", crudWindow);
 
   return {
     import: {
@@ -285,8 +281,7 @@ export function getRateLimitClassConfig(): Record<
       // spends from (`crud:ipall:*`, see `buildCrudIpCeilingKey`). Five busy
       // people behind one address fit; a caller inventing a session or Bearer
       // per request does not get past it.
-      ipCeiling: budget("RATE_LIMIT_CRUD_IP_CEILING", 5 * crudSessionMax
-      ),
+      ipCeiling: budget("RATE_LIMIT_CRUD_IP_CEILING", 5 * crudSessionMax),
       windowMs: crudWindow,
       retryAfter: formatRetryAfter(crudWindow),
     },
@@ -296,8 +291,7 @@ export function getRateLimitClassConfig(): Record<
     // writer still stops there. The address ceiling counts both.
     crud_read: {
       max: budget("RATE_LIMIT_CRUD_READ_MAX", 3000),
-      sessionMax: budget("RATE_LIMIT_CRUD_READ_SESSION_MAX", crudSessionMax
-      ),
+      sessionMax: budget("RATE_LIMIT_CRUD_READ_SESSION_MAX", crudSessionMax),
       windowMs: crudReadWindow,
       retryAfter: formatRetryAfter(crudReadWindow),
     },
@@ -514,8 +508,7 @@ export function getCalendarFeedIpCeiling(): {
   windowMs: number;
   retryAfter: string;
 } {
-  const windowMs = budget("RATE_LIMIT_CALENDAR_FEED_WINDOW_MS", 5 * 60 * 1000
-  );
+  const windowMs = budget("RATE_LIMIT_CALENDAR_FEED_WINDOW_MS", 5 * 60 * 1000);
   return {
     max: budget("RATE_LIMIT_CALENDAR_FEED_IP_MAX", 600),
     windowMs,
@@ -544,11 +537,14 @@ export function getPublicDoorRateConfig(): {
   submitIp: { max: number; windowMs: number; retryAfter: string };
   submitShare: { max: number; windowMs: number; retryAfter: string };
 } {
-  const readWindow = budget("RATE_LIMIT_PUBLIC_READ_WINDOW_MS", 5 * 60 * 1000
+  const readWindow = budget("RATE_LIMIT_PUBLIC_READ_WINDOW_MS", 5 * 60 * 1000);
+  const submitIpWindow = budget(
+    "RATE_LIMIT_PUBLIC_SUBMIT_IP_WINDOW_MS",
+    10 * 60 * 1000
   );
-  const submitIpWindow = budget("RATE_LIMIT_PUBLIC_SUBMIT_IP_WINDOW_MS", 10 * 60 * 1000
-  );
-  const submitShareWindow = budget("RATE_LIMIT_PUBLIC_SUBMIT_SHARE_WINDOW_MS", 60 * 60 * 1000
+  const submitShareWindow = budget(
+    "RATE_LIMIT_PUBLIC_SUBMIT_SHARE_WINDOW_MS",
+    60 * 60 * 1000
   );
   return {
     readIp: {
@@ -562,8 +558,7 @@ export function getPublicDoorRateConfig(): {
       retryAfter: formatRetryAfter(submitIpWindow),
     },
     submitShare: {
-      max: budget("RATE_LIMIT_PUBLIC_SUBMIT_SHARE_MAX", 200
-      ),
+      max: budget("RATE_LIMIT_PUBLIC_SUBMIT_SHARE_MAX", 200),
       windowMs: submitShareWindow,
       retryAfter: formatRetryAfter(submitShareWindow),
     },
@@ -579,8 +574,7 @@ export function getDeviceAuthRateConfig(): {
   windowMs: number;
   retryAfter: string;
 } {
-  const windowMs = budget("RATE_LIMIT_DEVICE_AUTH_WINDOW_MS", 10 * 60 * 1000
-  );
+  const windowMs = budget("RATE_LIMIT_DEVICE_AUTH_WINDOW_MS", 10 * 60 * 1000);
   return {
     max: budget("RATE_LIMIT_DEVICE_AUTH_MAX", 10),
     windowMs,
@@ -598,8 +592,7 @@ export function getKeyStateRateConfig(): {
   windowMs: number;
   retryAfter: string;
 } {
-  const windowMs = budget("RATE_LIMIT_KEY_STATE_WINDOW_MS", 10 * 60 * 1000
-  );
+  const windowMs = budget("RATE_LIMIT_KEY_STATE_WINDOW_MS", 10 * 60 * 1000);
   return {
     max: budget("RATE_LIMIT_KEY_STATE_MAX", 30),
     windowMs,
@@ -619,8 +612,7 @@ export function getOAuthPublicRateConfig(): {
   windowMs: number;
   retryAfter: string;
 } {
-  const windowMs = budget("RATE_LIMIT_OAUTH_PUBLIC_WINDOW_MS", 10 * 60 * 1000
-  );
+  const windowMs = budget("RATE_LIMIT_OAUTH_PUBLIC_WINDOW_MS", 10 * 60 * 1000);
   return {
     max: budget("RATE_LIMIT_OAUTH_PUBLIC_MAX", 60),
     windowMs,
@@ -662,12 +654,10 @@ export function getOAuthTokenRateConfig(): {
   windowMs: number;
   retryAfter: string;
 } {
-  const windowMs = budget("RATE_LIMIT_OAUTH_TOKEN_WINDOW_MS", 10 * 60 * 1000
-  );
+  const windowMs = budget("RATE_LIMIT_OAUTH_TOKEN_WINDOW_MS", 10 * 60 * 1000);
   return {
     max: budget("RATE_LIMIT_OAUTH_TOKEN_MAX", 20),
-    ipCeiling: budget("RATE_LIMIT_OAUTH_TOKEN_IP_CEILING", 600
-    ),
+    ipCeiling: budget("RATE_LIMIT_OAUTH_TOKEN_IP_CEILING", 600),
     windowMs,
     retryAfter: formatRetryAfter(windowMs),
   };
