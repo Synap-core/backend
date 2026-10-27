@@ -193,9 +193,7 @@ describe("F2 — own-session bookkeeping and the daily write ceiling", () => {
       await seedToday(LIMIT - 1, 10);
       expect(await countAgentWritesTodayUtc(db, AGENT)).toBe(LIMIT - 1);
       // …so the next ordinary write still runs.
-      expect((await decide("entity", "create", null)).decision).toBe(
-        "execute"
-      );
+      expect((await decide("entity", "create", null)).decision).toBe("execute");
     });
 
     it("unstamped rows (every row before 0365) still count", async () => {
