@@ -33,6 +33,10 @@ import { isObjectNavView } from "@synap-core/types/navigation";
 import { proposalNeedsItsPage } from "@synap-core/types/proposals";
 import type { Ask } from "@synap-core/types/ask";
 import { openIn, type Exit } from "../../../../lib/open-in";
+import {
+  proposalExpiresAt,
+  proposalLapsed,
+} from "../../../_lib/proposal-expiry";
 import { isUuid } from "../../../../lib/format";
 import { askSlotOf, type AskSlot } from "./ask-detail";
 import {
@@ -160,6 +164,11 @@ export interface ReviewRow {
   occurredAt: string | null;
   /** When it stops being answerable (ISO), or null when it never expires. */
   expiresAt: string | null;
+  /**
+   * Its moment passed (the pod's sweep has not marked it yet): history, so
+   * nothing approves it from the row and no batch takes it.
+   */
+  expired: boolean;
   /** Null when the row has nothing to open. */
   detail: ReviewDetail | null;
   /** May be approved from the row itself. */
@@ -242,7 +251,10 @@ function proposalRow(
   s: ReviewSignal,
   group: ReviewGroup,
   facts: ReadonlyMap<string, ProposalFacts>
-): Omit<ReviewRow, "key" | "group" | "title" | "occurredAt" | "count"> {
+): Omit<
+  ReviewRow,
+  "key" | "group" | "title" | "occurredAt" | "count" | "expired"
+> {
   const sampleId = s.target?.kind === "proposal" ? s.target.id : null;
   const sample = sampleId ? facts.get(sampleId) : undefined;
   const members = wholeCluster(s);
@@ -277,7 +289,10 @@ function proposalRow(
 
 function accessRow(
   s: ReviewSignal
-): Omit<ReviewRow, "key" | "group" | "title" | "occurredAt" | "count"> {
+): Omit<
+  ReviewRow,
+  "key" | "group" | "title" | "occurredAt" | "count" | "expired"
+> {
   const target = s.target;
   return {
     nounKind: s.access?.subject ?? "application",
@@ -300,7 +315,10 @@ function accessRow(
 
 function askRow(
   s: ReviewSignal
-): Omit<ReviewRow, "key" | "group" | "title" | "occurredAt" | "count"> {
+): Omit<
+  ReviewRow,
+  "key" | "group" | "title" | "occurredAt" | "count" | "expired"
+> {
   // The shared lens row decides an ask's noun, chip and door — the same
   // words browser and relay draw for it.
   const lens = lensRowOfNeedsYou(
@@ -332,7 +350,8 @@ function askRow(
  */
 export function reviewRows(
   signals: readonly ReviewSignal[],
-  facts: ReadonlyMap<string, ProposalFacts>
+  facts: ReadonlyMap<string, ProposalFacts>,
+  now: number = Date.now()
 ): ReviewRow[] {
   return signals.map((s) => {
     const group = reviewGroupOf(s);
@@ -343,19 +362,17 @@ export function reviewRows(
           ? proposalRow(s, group, facts)
           : askRow(s);
     const occurredAt = iso(s.occurredAt);
-    const expiresAt =
-      s.lifetimeHours != null && occurredAt
-        ? new Date(
-            Date.parse(occurredAt) + s.lifetimeHours * 3_600_000
-          ).toISOString()
-        : null;
+    const expiresAt = proposalExpiresAt(occurredAt, s.lifetimeHours);
+    const expired = proposalLapsed(expiresAt, now);
     return {
       ...shape,
+      ...(expired ? { inlineApprove: false, batchIds: null } : {}),
       key: s.id,
       group,
       title: s.title,
       occurredAt,
       expiresAt,
+      expired,
       count: Math.max(1, s.count),
     };
   });
@@ -384,6 +401,33 @@ export function reviewCounts(
   const out = { all: rows.length, access: 0, changes: 0, asks: 0 };
   for (const r of rows) out[r.group] += 1;
   return out;
+}
+
+/**
+ * What each chip SAYS — one number, one source (ui-composition §11). All is
+ * the pod's count (`signals.count`, the nav badge's) when Review is not
+ * narrowed; a group is counted from the page read, which stops at
+ * `NEEDS_YOU_PAGE_LIMIT`: on a full page a group's count is a floor ("N+"),
+ * and a group with none on it is unknown (no count), never "0".
+ */
+export function reviewChipCounts(
+  rows: readonly ReviewRow[],
+  total: { needsYou: number; truncated: boolean } | null
+): Record<"all" | ReviewGroup, string | undefined> {
+  const counts = reviewCounts(rows);
+  const full = rows.length >= NEEDS_YOU_PAGE_LIMIT;
+  const floor = (n: number): string | undefined =>
+    !full ? String(n) : n > 0 ? `${n}+` : undefined;
+  return {
+    all: total
+      ? total.truncated
+        ? `${total.needsYou}+`
+        : String(total.needsYou)
+      : floor(counts.all),
+    access: floor(counts.access),
+    changes: floor(counts.changes),
+    asks: floor(counts.asks),
+  };
 }
 
 /** The rows a needs-you view shows ("history" is not a needs-you view). */

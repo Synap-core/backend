@@ -48,6 +48,13 @@ const IMG: Record<MediaSize, string> = {
   full: "max-h-[70vh] max-w-full",
 };
 
+/**
+ * The image's edge: an outline drawn just inside it. An inset ring is a box
+ * shadow, which an image's own pixels paint over, so it never showed.
+ */
+export const IMAGE_EDGE =
+  "outline outline-1 -outline-offset-1 outline-foreground/10";
+
 const CHIP =
   "inline-flex max-w-full items-center gap-1.5 rounded-md bg-foreground/[0.05] px-2 py-1 text-[12.5px] text-foreground/80 ring-1 ring-inset ring-foreground/10";
 
@@ -143,7 +150,7 @@ export function MediaFrame({
             loading="lazy"
             decoding="async"
             onError={() => onImageError?.(src)}
-            className={`${IMG[size]} h-auto w-auto rounded-lg object-contain ring-1 ring-inset ring-foreground/10`}
+            className={`${IMG[size]} h-auto w-auto rounded-lg object-contain ${IMAGE_EDGE}`}
           />
         </button>
       );

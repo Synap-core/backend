@@ -48,12 +48,13 @@ import {
   ResourceRowSkeleton,
 } from "../../components/resource-row";
 import { kindIcon, kindLabel } from "../../../_lib/object/kind-icon";
+import { lensRowExpiry } from "@synap-core/types/lens";
 import {
   batchOf,
   exitOf,
   focusedRow,
   liveAskSlot,
-  reviewCounts,
+  reviewChipCounts,
   reviewFilterOf,
   reviewRows,
   NEEDS_YOU_PAGE_LIMIT,
@@ -137,7 +138,11 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
     () => reviewRows(signals.data?.signals ?? [], facts),
     [signals.data, facts]
   );
-  const counts = reviewCounts(rows);
+  // Narrowed to a session, the pod-wide count says nothing about its rows.
+  const counts = reviewChipCounts(
+    rows,
+    sessionId ? null : (count.data ?? null)
+  );
   const visible = filter === "history" ? [] : rowsInView(rows, filter);
 
   // ── The drawer, and the `?focus=` receiver ────────────────────────────────
@@ -553,7 +558,7 @@ function DoorButton({ exit }: { exit: Exit }) {
   );
 }
 
-/** "Agent · Claude · Synap · 3 grouped · expires in 20m · 2h ago" */
+/** "Agent · Claude · Synap · 3 grouped · Expires in 20m · 2h ago" */
 function secondaryLine(row: ReviewRow): string {
   return [
     kindLabel(row.nounKind),
@@ -561,7 +566,7 @@ function secondaryLine(row: ReviewRow): string {
     row.where,
     row.reason,
     row.count > 1 ? `${row.count} grouped` : null,
-    row.expiresAt ? `expires ${formatRelative(row.expiresAt)}` : null,
+    lensRowExpiry(row)?.label ?? null,
     formatRelative(row.occurredAt, { empty: "" }),
   ]
     .filter(Boolean)

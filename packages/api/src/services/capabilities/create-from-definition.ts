@@ -454,6 +454,59 @@ async function stampSourceCapability(
   }
 }
 
+/**
+ * THE re-apply demotion rule for one definition skill against its installed
+ * row: true when applying `s` would change what the approved skill executes,
+ * so the applier sets it `approved: false`. Shared with the template reconcile
+ * (`reconcile-capabilities-to-templates.ts`), which holds back an AUTOMATIC
+ * update this rule would demote instead of letting a background pass switch
+ * off a skill the owner turned on.
+ *
+ * The patch mirrors the applier's `.set({...})` projection exactly — a field
+ * this comparator reads must be a field that update actually writes.
+ */
+export function definitionSkillChangesExecution(
+  s: CapabilitySkillDef,
+  existing: Record<string, unknown>,
+  readerTrust: { officialSource: boolean }
+): boolean {
+  const execContentChanged = skillExecFieldsChanged(
+    {
+      kind: s.kind ?? "code",
+      code: s.code ?? null,
+      providerSpec: s.providerSpec ?? null,
+      parameters: s.parameters,
+      executionMode: s.executionMode ?? "sync",
+      timeoutSeconds: s.timeoutSeconds ?? 30,
+      urlPatterns: projectUrlPatterns(s, readerTrust),
+    },
+    existing
+  );
+  return (
+    execContentChanged ||
+    // Widening (or narrowing) the sandbox's egress allowlist is an
+    // execution change — `metadata.allowedHosts` is the ONE thing deciding
+    // which hosts an approved skill may reach. It cannot ride in
+    // `RE_APPROVAL_FIELDS`: `metadata` is a shallow-merged bag, not a
+    // spread column, so the field comparison literally cannot see it. This
+    // is the SAME rule `routers/skills.ts` applies on the human/agent edit
+    // door — the two doors drifted once, which is why the rule lives in
+    // `skill-exec-fields.ts` and both doors call it.
+    allowedHostsChanged(
+      s.metadata as Record<string, unknown> | undefined,
+      existing.metadata as Record<string, unknown> | null
+    ) ||
+    // Same blind spot, same bag, same both-doors rule: turning
+    // `metadata.readOnly` ON makes the capability gate auto-run this verb
+    // before any grant rung, converting a reviewed action into an
+    // unattended one. Widening it must re-earn approval.
+    readOnlyWidened(
+      s.metadata as Record<string, unknown> | undefined,
+      existing.metadata as Record<string, unknown> | null
+    )
+  );
+}
+
 /** How far the applier trusts where a definition came from. */
 export interface CreateCapabilityOptions {
   /**
@@ -982,41 +1035,13 @@ export async function createCapabilityFromDefinition(
       // against the loaded row, so unchanged content (the common reconcile
       // no-op-heal) never demotes.
       //
-      // The patch mirrors the `.set({...})` projection below exactly — a field
-      // this comparator reads must be a field that update actually writes.
-      const execContentChanged =
-        skillExecFieldsChanged(
-          {
-            kind: s.kind ?? "code",
-            code: s.code ?? null,
-            providerSpec: s.providerSpec ?? null,
-            parameters: s.parameters,
-            executionMode: s.executionMode ?? "sync",
-            timeoutSeconds: s.timeoutSeconds ?? 30,
-            urlPatterns: projectUrlPatterns(s, readerTrust),
-          },
-          existingSkill as unknown as Record<string, unknown>
-        ) ||
-        // Widening (or narrowing) the sandbox's egress allowlist is an
-        // execution change — `metadata.allowedHosts` is the ONE thing deciding
-        // which hosts an approved skill may reach. It cannot ride in
-        // `RE_APPROVAL_FIELDS`: `metadata` is a shallow-merged bag, not a
-        // spread column, so the field comparison literally cannot see it. This
-        // is the SAME rule `routers/skills.ts` applies on the human/agent edit
-        // door — the two doors drifted once, which is why the rule lives in
-        // `skill-exec-fields.ts` and both doors call it.
-        allowedHostsChanged(
-          s.metadata as Record<string, unknown> | undefined,
-          existingSkill.metadata as Record<string, unknown> | null
-        ) ||
-        // Same blind spot, same bag, same both-doors rule: turning
-        // `metadata.readOnly` ON makes the capability gate auto-run this verb
-        // before any grant rung, converting a reviewed action into an
-        // unattended one. Widening it must re-earn approval.
-        readOnlyWidened(
-          s.metadata as Record<string, unknown> | undefined,
-          existingSkill.metadata as Record<string, unknown> | null
-        );
+      // The rule is shared with the reconcile, which defers an automatic
+      // update this would demote (`definitionSkillChangesExecution`).
+      const execContentChanged = definitionSkillChangesExecution(
+        s,
+        existingSkill as unknown as Record<string, unknown>,
+        readerTrust
+      );
 
       // The tools this definition `requires`, resolved like the create branch.
       // A set that ADDS a tool the skill does not already require widens the
