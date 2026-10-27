@@ -148,7 +148,7 @@ import {
   capabilityNextAction,
   type CapabilityNextAction,
 } from "./capability-enable-link.js";
-import { visibleSkillsWhere } from "../skills/visibility.js";
+import { answeringSkillOrder, answeringSkillsWhere } from "./verb-skill.js";
 import { resolveEntityVerbRunSubject } from "./capability-run-subject.js";
 import {
   proposeCapabilityEnable,
@@ -551,8 +551,7 @@ export async function executeCapability(input: {
     .from(skills)
     .where(
       and(
-        visibleSkillsWhere(userId, workspaceId ?? undefined),
-        eq(skills.status, "active"),
+        answeringSkillsWhere(userId, workspaceId),
         skillId ? eq(skills.id, skillId) : eq(skills.name, verbId!),
         !skillId && input.toolId ? skillRequiresTool(input.toolId) : undefined
       )
@@ -561,7 +560,8 @@ export async function executeCapability(input: {
     // re-installed capability): prefer an approved skill, then the most recently
     // updated — so a fresh re-apply wins over a stale shadow instead of a random
     // `.limit(1)`. (The real fix for duplicates is de-dup; this hardens the door.)
-    .orderBy(desc(skills.approved), desc(skills.updatedAt))
+    // One rule with the review's reach read (`verb-skill.ts`).
+    .orderBy(...answeringSkillOrder())
     .limit(1);
 
   if (!skillRow) {
