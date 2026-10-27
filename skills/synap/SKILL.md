@@ -1370,14 +1370,15 @@ POST /api/hub/documents/{documentId}/patch
 
 Ops: `upsert_section {id, title, body}` (one section by id), `replace_text {old,
 new}` (`old` must match **exactly once**, else 400 with the count), `append
-{body}`, `replace_all {content}`. An agent's edit is filed as a proposal (a
+{body}`, `replace_all {content}`, `set_title {title}` (renames the document, a
+human name). An agent's edit is filed as a proposal (a
 governance rule may apply it directly); a person's section (`owner="human"`) is
 never changed and an embed is never dropped unless you pass
 `"allowRemovingEmbeds": true` (403 otherwise). A moved document answers 409 and
 nothing is written: read again. An applied or approved edit reaches open editors
 (`document:content-replaced`), so they reload instead of overwriting it. `PATCH /api/hub/documents/{id}` with `content` is the same door with
-one `replace_all` — it cannot rename (a `title` is refused with 400; to rename an
-entity's document, update the entity's title). MCP: `synap_update_document`;
+one `replace_all` — it cannot rename (a `title` is refused with 400; to rename the
+document, send a `set_title` op to `POST /api/hub/documents/{id}/patch`). MCP: `synap_update_document`;
 full syntax in `document-embeds.md`.
 
 The reverse lookup is `entities WHERE documentId = ?`. Always attach the document to a meaningful entity (the meeting event, the project, the person) — a floating document is another orphan.
@@ -1717,7 +1718,9 @@ Never rewrite a whole document to change part of it. Read it, then patch it:
      count;
    - `append {body}`;
    - `replace_all {content}` — the whole body; needs `baseRevision` and is
-     always reviewed.
+     always reviewed;
+   - `set_title {title}` — renames the document (its one title). A human name,
+     never an id or a slug; the content is left as it is.
 
 Refused, whatever the op: changing a section whose `owner` is `human` (the AI
 never rewrites a person's words — write a new section), and removing an embed
