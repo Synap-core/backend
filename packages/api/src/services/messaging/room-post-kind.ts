@@ -97,7 +97,9 @@ export function readCloseQuestionDispositions(
     if (
       !r ||
       typeof r.messageId !== "string" ||
-      !(CLOSE_QUESTION_DISPOSITIONS as readonly unknown[]).includes(r.disposition)
+      !(CLOSE_QUESTION_DISPOSITIONS as readonly unknown[]).includes(
+        r.disposition
+      )
     ) {
       return [];
     }
@@ -110,4 +112,3 @@ export function readCloseQuestionDispositions(
     ];
   });
 }
-

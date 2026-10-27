@@ -17,10 +17,16 @@ describe("proposalFateLine", () => {
 
   it("names the session end when it can come first, never once expired", () => {
     expect(
-      proposalFateLine({ kind: "expires", expiresAt: inHours(6), orSessionEnd: true }, NOW)
+      proposalFateLine(
+        { kind: "expires", expiresAt: inHours(6), orSessionEnd: true },
+        NOW
+      )
     ).toBe("Expires in 6h, or when the session ends");
     expect(
-      proposalFateLine({ kind: "expires", expiresAt: inHours(-1), orSessionEnd: true }, NOW)
+      proposalFateLine(
+        { kind: "expires", expiresAt: inHours(-1), orSessionEnd: true },
+        NOW
+      )
     ).toBe(lensRowExpiry({ expiresAt: inHours(-1) }, NOW)?.label);
   });
 
@@ -44,7 +50,10 @@ describe("proposalFateLine", () => {
 
   it("an unreadable expiry never claims a countdown", () => {
     expect(
-      proposalFateLine({ kind: "expires", expiresAt: "nope", orSessionEnd: false }, NOW)
+      proposalFateLine(
+        { kind: "expires", expiresAt: "nope", orSessionEnd: false },
+        NOW
+      )
     ).toBe("Stays until you decide");
   });
 });

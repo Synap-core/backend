@@ -142,7 +142,11 @@ export const FATE_TONE: Record<ProposalFateKind, UnitTone> = {
  *   `owed_slot`  — it fills a slot the session owes.
  *   `parked_run` — its session's run is parked `waiting_on_you`.
  */
-export const PROPOSAL_WAIT_REASONS = ["gate", "owed_slot", "parked_run"] as const;
+export const PROPOSAL_WAIT_REASONS = [
+  "gate",
+  "owed_slot",
+  "parked_run",
+] as const;
 export type ProposalWaitReason = (typeof PROPOSAL_WAIT_REASONS)[number];
 
 export interface ProposalWaits {

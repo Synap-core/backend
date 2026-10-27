@@ -69,7 +69,7 @@ const EXEMPT: Record<string, string> = {
   "services/import/session.ts":
     "The person's own import of a session; nothing is handed over by an agent.",
   "services/focus-sessions/complete-session.ts":
-    "Its `owner: \"human\"` is the ARGUMENT of a `keep_as_owed` hand-off at " +
+    'Its `owner: "human"` is the ARGUMENT of a `keep_as_owed` hand-off at ' +
     "session end, never a write here: the slot is written and announced by " +
     "`updateFocusSession` (addOutput) or `fileRoomQuestionOnSlot` → " +
     "`blockExpectedOutput`, both of which notify (and carry the guidance net). " +

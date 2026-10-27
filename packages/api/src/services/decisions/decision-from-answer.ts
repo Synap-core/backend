@@ -216,7 +216,8 @@ export function decisionUpdateFromAnswer(p: {
   const { draft, previous, existing } = p;
   const update: Record<string, unknown> = {};
   for (const key of DECIDED_FIELDS) {
-    if (draft.properties[key] !== undefined) update[key] = draft.properties[key];
+    if (draft.properties[key] !== undefined)
+      update[key] = draft.properties[key];
   }
   for (const key of PICK_PROSE_FIELDS) {
     if (

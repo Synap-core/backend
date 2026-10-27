@@ -404,7 +404,8 @@ describe("a proposed decision asks the person (W3)", () => {
     expect(update!.properties).toMatchObject({
       decisionStatus: "rejected",
       chosenOption: "no",
-      rationale: "Dated, falsifiable.\n\nWhen deciding: not before the October data",
+      rationale:
+        "Dated, falsifiable.\n\nWhen deciding: not before the October data",
     });
     for (const key of ["summary", "decisionOptions", "alternatives"]) {
       expect(update!.properties).not.toHaveProperty(key);
@@ -588,7 +589,10 @@ describe("a proposed decision asks the person (W3)", () => {
       expect((await slotsCarrying(agents))[0]).not.toHaveProperty("retiredAt");
       expect(h.closed.map((c) => c.sessionId).sort()).toEqual([s1, s2].sort());
       for (const c of h.closed) {
-        expect(c).toMatchObject({ userId: OWNER, summary: "Not asked by anyone" });
+        expect(c).toMatchObject({
+          userId: OWNER,
+          summary: "Not asked by anyone",
+        });
       }
       expect(await statusOf(s3)).toBe("active");
       expect(await statusOf(s4)).toBe("active");
@@ -606,14 +610,22 @@ describe("a proposed decision asks the person (W3)", () => {
       // Answered, then re-asked ("Not what I said", an agent's block).
       const reasked = await decision({ decisionStatus: "proposed" }, null);
       await legacyAsk(reasked, false, [], {
-        answerHistory: [{ text: "Yes", answeredBy: OWNER, answeredAt: "2026-10-20T10:00:00.000Z" }],
+        answerHistory: [
+          {
+            text: "Yes",
+            answeredBy: OWNER,
+            answeredAt: "2026-10-20T10:00:00.000Z",
+          },
+        ],
       });
       // Asked by a named agent.
       const named = await decision({ decisionStatus: "proposed" }, null);
       await legacyAsk(named, false, [], { askedBy: AGENT });
       // A decision an answer FILED: the slot's ref is not the decision.
       const filed = await decision({ decisionStatus: "proposed" }, "human");
-      await legacyAsk(filed, false, [], { ref: { kind: "entity", id: randomUUID() } });
+      await legacyAsk(filed, false, [], {
+        ref: { kind: "entity", id: randomUUID() },
+      });
 
       expect(await retireUnaskedDecisionAsks()).toEqual({
         status: "completed",

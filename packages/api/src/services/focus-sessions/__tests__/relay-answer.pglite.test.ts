@@ -197,7 +197,11 @@ const CHOOSE = {
     { label: "US account", value: "us" },
   ],
 };
-const DEPLOY = { mode: "confirm", prompt: "Deploy to prod?", stakes: "commitment" };
+const DEPLOY = {
+  mode: "confirm",
+  prompt: "Deploy to prod?",
+  stakes: "commitment",
+};
 const EU = { type: "chip", chip: { label: "EU account", value: "eu" } };
 
 async function seed(
@@ -271,11 +275,7 @@ function app(opts: { userId?: string; agentUserId?: string } = {}) {
   registerFocusSessionsRoutes(a as never);
   return a;
 }
-const send = (
-  a: ReturnType<typeof app>,
-  path: string,
-  body: unknown
-) =>
+const send = (a: ReturnType<typeof app>, path: string, body: unknown) =>
   a.request(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -302,8 +302,16 @@ async function ask(
   expect(res.status).toBe(200);
   return ((await res.json()) as { messageId: string }).messageId;
 }
-const relay = (sessionId: string, body: Record<string, unknown>, agent = AGENT) =>
-  send(app({ agentUserId: agent }), `/focus-sessions/${sessionId}/answers/relay`, body);
+const relay = (
+  sessionId: string,
+  body: Record<string, unknown>,
+  agent = AGENT
+) =>
+  send(
+    app({ agentUserId: agent }),
+    `/focus-sessions/${sessionId}/answers/relay`,
+    body
+  );
 const personAnswer = (sessionId: string, body: Record<string, unknown>) =>
   send(app(), `/focus-sessions/${sessionId}/outputs/answer`, body);
 
@@ -383,7 +391,10 @@ describe("the relay door", () => {
       quote: "the EU one obviously",
     });
     expect(answered()).toHaveLength(1);
-    expect(answered()[0]!.data).toMatchObject({ via: "relayed", relayedBy: AGENT });
+    expect(answered()[0]!.data).toMatchObject({
+      via: "relayed",
+      relayedBy: AGENT,
+    });
     // The decision door is reached with the relay recorded.
     expect(h.decisions).toHaveLength(1);
     expect(h.decisions[0]!.properties).toMatchObject({
@@ -606,7 +617,10 @@ describe("the relay door", () => {
       messageId: qid,
       quote: "Tuesday works",
     });
-    expect(await res.json()).toMatchObject({ status: "relayed", stakes: "routine" });
+    expect(await res.json()).toMatchObject({
+      status: "relayed",
+      stakes: "routine",
+    });
     expect((await roomPost(qid)).answer).toMatchObject({
       text: "Tuesday works",
       answeredBy: OWNER,
@@ -626,7 +640,10 @@ describe("the relay door", () => {
     const { sessionId, channelId } = await seed();
     const qid = await ask(channelId, {
       slotLabel: LABEL,
-      ask: { mode: "provide", provide: { kind: "connection", service: "stripe" } },
+      ask: {
+        mode: "provide",
+        provide: { kind: "connection", service: "stripe" },
+      },
     });
     const res = await relay(sessionId, {
       disposition: "withdrawn",
@@ -661,18 +678,26 @@ describe("the relay door", () => {
     ).toBe(403);
     // A person's key cannot relay.
     expect(
-      (await send(app(), `/focus-sessions/${sessionId}/answers/relay`, {
-        ...base,
-        messageId: qid,
-      })).status
+      (
+        await send(app(), `/focus-sessions/${sessionId}/answers/relay`, {
+          ...base,
+          messageId: qid,
+        })
+      ).status
     ).toBe(403);
     // Words required, verbatim; a withdraw needs its reason.
     expect(
-      (await relay(sessionId, { disposition: "answered", messageId: qid, value: EU }))
-        .status
+      (
+        await relay(sessionId, {
+          disposition: "answered",
+          messageId: qid,
+          value: EU,
+        })
+      ).status
     ).toBe(400);
     expect(
-      (await relay(sessionId, { disposition: "withdrawn", messageId: qid })).status
+      (await relay(sessionId, { disposition: "withdrawn", messageId: qid }))
+        .status
     ).toBe(400);
     // Nothing moved.
     const s = await slot(sessionId);
@@ -698,7 +723,7 @@ describe("the relay door", () => {
     expect((await slot(sessionId)).answer).toBeUndefined();
   });
 
-  it("/outputs/unblock refuses an agent key; the person's \"Not mine\" still works", async () => {
+  it('/outputs/unblock refuses an agent key; the person\'s "Not mine" still works', async () => {
     const { sessionId, channelId } = await seed();
     await ask(channelId, { slotLabel: LABEL, ask: CHOOSE });
     const asAgent = await send(
@@ -724,7 +749,8 @@ describe("the relay door", () => {
     await ask(channelId, { slotLabel: LABEL, ask: CHOOSE });
     // The person taps "EU" in Synap…
     expect(
-      (await personAnswer(sessionId, { expectedLabel: LABEL, value: EU })).status
+      (await personAnswer(sessionId, { expectedLabel: LABEL, value: EU }))
+        .status
     ).toBe(200);
     const decided = h.decisions.length;
     // …and the agent then relays the chat's "US" onto the same slot.
@@ -754,9 +780,8 @@ describe("the relay door", () => {
   it("the MCP door is bounded by the key's grant, like the Hub door", async () => {
     const SPACE_A = randomUUID();
     const SPACE_B = randomUUID();
-    const { sessionHandlers } = await import(
-      "../../../routers/mcp/handlers/session.js"
-    );
+    const { sessionHandlers } =
+      await import("../../../routers/mcp/handlers/session.js");
     const mcpRelay = async (sessionId: string, qid: string) => {
       const res = await runWithGrant(
         grantOfScope({ permissions: ["*"], workspaceIds: [SPACE_A] }),
@@ -781,7 +806,10 @@ describe("the relay door", () => {
     };
     // A session in a space the key does not reach: refused, nothing moved.
     const outside = await seed({ workspaceId: SPACE_B });
-    const qOut = await ask(outside.channelId, { slotLabel: LABEL, ask: CHOOSE });
+    const qOut = await ask(outside.channelId, {
+      slotLabel: LABEL,
+      ask: CHOOSE,
+    });
     const refused = await mcpRelay(outside.sessionId, qOut);
     expect(refused.error).toBeTruthy();
     expect(refused.status).toBeUndefined();
@@ -795,9 +823,8 @@ describe("the relay door", () => {
   });
 
   it("the MCP door reads the relay through the one schema, and advertises every field of it", async () => {
-    const { sessionHandlers } = await import(
-      "../../../routers/mcp/handlers/session.js"
-    );
+    const { sessionHandlers } =
+      await import("../../../routers/mcp/handlers/session.js");
     const { tools } = await import("../../../routers/mcp/tools/index.js");
     const def = (await tools.list()).find(
       (t) => t.name === "synap_relay_answer"
@@ -847,7 +874,9 @@ describe("the relay door", () => {
     expect((await slot(sessionId)).owner).toBe("human");
     expect((await roomPost(qid)).closed).toBeUndefined();
     expect(
-      h.events.filter((e) => e.type === FOCUS_SESSION_QUESTION_WITHDRAWN_EVENT_TYPE)
+      h.events.filter(
+        (e) => e.type === FOCUS_SESSION_QUESTION_WITHDRAWN_EVENT_TYPE
+      )
     ).toHaveLength(0);
   });
 

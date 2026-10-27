@@ -201,7 +201,11 @@ describe("the person's turn on a slot, through an agent's list", () => {
       owner: "human",
       blockedReason: "decision",
       owedSince: "2026-10-26T09:00:00.000Z",
-      ask: { mode: "confirm", prompt: "Deploy to staging?", stakes: "commitment" },
+      ask: {
+        mode: "confirm",
+        prompt: "Deploy to staging?",
+        stakes: "commitment",
+      },
       pendingRelay: RELAY,
     } as ExpectedOutput,
   ];
@@ -239,7 +243,11 @@ describe("the person's turn on a slot, through an agent's list", () => {
         kind: "decision",
         label: "Deploy",
         owner: "human",
-        ask: { mode: "confirm", prompt: "Deploy to prod?", stakes: "commitment" },
+        ask: {
+          mode: "confirm",
+          prompt: "Deploy to prod?",
+          stakes: "commitment",
+        },
         pendingRelay: RELAY,
       },
     ];
