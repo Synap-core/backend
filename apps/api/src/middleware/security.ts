@@ -33,6 +33,9 @@ import {
   isMcpPath,
   isMcpReadBody,
   MCP_READ_BODY_MAX,
+  parseRateLimitOverrides,
+  rateLimitOverridesVersion,
+  setRateLimitOverrides,
 } from "./rate-limit-classes.js";
 
 // Re-export pure helpers so existing import sites can stay on security.js
@@ -128,359 +131,420 @@ function publicDoorHandler(
   };
 }
 
-const rateLimitClassConfig = getRateLimitClassConfig();
-
-const importRateLimiter = rateLimiter({
-  windowMs: rateLimitClassConfig.import.windowMs,
-  limit: rateLimitClassConfig.import.max,
-  standardHeaders: "draft-7",
-  keyGenerator: classKeyGenerator("import"),
-  handler: classHandler(
-    "import",
-    rateLimitClassConfig.import.max,
-    rateLimitClassConfig.import.retryAfter
-  ),
-});
-
-const aiInteractiveRateLimiter = rateLimiter({
-  windowMs: rateLimitClassConfig.ai_interactive.windowMs,
-  limit: rateLimitClassConfig.ai_interactive.max,
-  standardHeaders: "draft-7",
-  keyGenerator: classKeyGenerator("ai_interactive"),
-  handler: classHandler(
-    "ai_interactive",
-    rateLimitClassConfig.ai_interactive.max,
-    rateLimitClassConfig.ai_interactive.retryAfter
-  ),
-});
-
-const aiAgentTurnRateLimiter = rateLimiter({
-  windowMs: rateLimitClassConfig.ai_agent_turn.windowMs,
-  limit: rateLimitClassConfig.ai_agent_turn.max,
-  standardHeaders: "draft-7",
-  keyGenerator: classKeyGenerator("ai_agent_turn"),
-  handler: classHandler(
-    "ai_agent_turn",
-    rateLimitClassConfig.ai_agent_turn.max,
-    rateLimitClassConfig.ai_agent_turn.retryAfter
-  ),
-});
-
-const crudKey = classKeyGenerator("crud");
-const crudSessionMax =
-  rateLimitClassConfig.crud.sessionMax ?? rateLimitClassConfig.crud.max;
-
-const crudIpCeiling = rateLimitClassConfig.crud.ipCeiling ?? 5 * crudSessionMax;
-
-/** The address-wide `crud` bucket, or null when this caller has none. */
-function crudIpCeilingKey(c: Context): string | null {
-  if (
-    process.env.NODE_ENV === "development" &&
-    c.req.header("x-test-user-id")
-  ) {
-    return null;
-  }
-  const ip = clientIp(c);
-  return isLocalCaller(c, ip) ? null : buildCrudIpCeilingKey(ip);
-}
-
 /**
- * The address ceiling in FRONT of the per-key / per-session `crud` bucket.
- * Those buckets key on credentials the limiter cannot check, so a caller who
- * invents one per request would otherwise never be limited; this one counts
- * every `crud` request from the address, at five busy people's worth.
+ * Every class limiter, built from the budgets in force: the pod's own setting
+ * (`setRateLimitOverrides`), else the env, else the code's default. Rebuilt
+ * when a pod setting changes, which starts every bucket afresh.
  */
-const crudIpCeilingLimiter = rateLimiter({
-  windowMs: rateLimitClassConfig.crud.windowMs,
-  limit: crudIpCeiling,
-  standardHeaders: false,
-  skip: (c) => crudIpCeilingKey(c) === null,
-  keyGenerator: (c) => crudIpCeilingKey(c) ?? "crud:ipall:none",
-  handler: classHandler(
-    "crud",
-    crudIpCeiling,
-    rateLimitClassConfig.crud.retryAfter
-  ),
-});
+function buildRateLimiters() {
+  const rateLimitClassConfig = getRateLimitClassConfig();
 
-const crudRateLimiter = rateLimiter({
-  windowMs: rateLimitClassConfig.crud.windowMs,
-  limit: (c) =>
-    crudKey(c).startsWith("crud:session:")
-      ? crudSessionMax
-      : rateLimitClassConfig.crud.max,
-  standardHeaders: "draft-7",
-  keyGenerator: crudKey,
-  handler: classHandler(
-    "crud",
-    rateLimitClassConfig.crud.max,
-    rateLimitClassConfig.crud.retryAfter
-  ),
-});
+  const importRateLimiter = rateLimiter({
+    windowMs: rateLimitClassConfig.import.windowMs,
+    limit: rateLimitClassConfig.import.max,
+    standardHeaders: "draft-7",
+    keyGenerator: classKeyGenerator("import"),
+    handler: classHandler(
+      "import",
+      rateLimitClassConfig.import.max,
+      rateLimitClassConfig.import.retryAfter
+    ),
+  });
 
-const calendarFeedRateLimiter = rateLimiter({
-  windowMs: rateLimitClassConfig.calendar_feed.windowMs,
-  limit: rateLimitClassConfig.calendar_feed.max,
-  standardHeaders: "draft-7",
-  keyGenerator: classKeyGenerator("calendar_feed"),
-  handler: classHandler(
-    "calendar_feed",
-    rateLimitClassConfig.calendar_feed.max,
-    rateLimitClassConfig.calendar_feed.retryAfter
-  ),
-});
+  const aiInteractiveRateLimiter = rateLimiter({
+    windowMs: rateLimitClassConfig.ai_interactive.windowMs,
+    limit: rateLimitClassConfig.ai_interactive.max,
+    standardHeaders: "draft-7",
+    keyGenerator: classKeyGenerator("ai_interactive"),
+    handler: classHandler(
+      "ai_interactive",
+      rateLimitClassConfig.ai_interactive.max,
+      rateLimitClassConfig.ai_interactive.retryAfter
+    ),
+  });
 
-const calendarFeedIpCeiling = getCalendarFeedIpCeiling();
+  const aiAgentTurnRateLimiter = rateLimiter({
+    windowMs: rateLimitClassConfig.ai_agent_turn.windowMs,
+    limit: rateLimitClassConfig.ai_agent_turn.max,
+    standardHeaders: "draft-7",
+    keyGenerator: classKeyGenerator("ai_agent_turn"),
+    handler: classHandler(
+      "ai_agent_turn",
+      rateLimitClassConfig.ai_agent_turn.max,
+      rateLimitClassConfig.ai_agent_turn.retryAfter
+    ),
+  });
 
-/**
- * The IP ceiling in FRONT of the per-token calendar bucket.
- *
- * `/calendar/feed/{token}.ics` is the pod's only unauthenticated endpoint whose
- * bucket key comes from the caller's own path. Without this, varying the token
- * per request means never sharing a bucket with yourself: no throttle at all,
- * and one map entry per attempted token retained for two windows. This limiter
- * is keyed on IP ONLY (never on the path), so the key space is bounded by the
- * network, and it is generous enough that a household of polling devices never
- * reaches it.
- */
-const calendarFeedIpRateLimiter = rateLimiter({
-  windowMs: calendarFeedIpCeiling.windowMs,
-  limit: calendarFeedIpCeiling.max,
-  standardHeaders: false,
-  keyGenerator: (c: Context): string => {
+  const crudKey = classKeyGenerator("crud");
+  const crudSessionMax =
+    rateLimitClassConfig.crud.sessionMax ?? rateLimitClassConfig.crud.max;
+
+  const crudIpCeiling = rateLimitClassConfig.crud.ipCeiling ?? 5 * crudSessionMax;
+
+  /** The address-wide `crud` bucket, or null when this caller has none. */
+  function crudIpCeilingKey(c: Context): string | null {
     if (
       process.env.NODE_ENV === "development" &&
       c.req.header("x-test-user-id")
     ) {
-      return "test-bypass-calendar_feed_ip-" + Math.random();
+      return null;
     }
     const ip = clientIp(c);
-    if (isLocalCaller(c, ip)) {
-      return "localhost-bypass-calendar_feed_ip-" + Math.random();
-    }
-    return `calendar_feed_ip:${ip}`;
-  },
-  handler: classHandler(
-    "calendar_feed",
-    calendarFeedIpCeiling.max,
-    calendarFeedIpCeiling.retryAfter
-  ),
-});
+    return isLocalCaller(c, ip) ? null : buildCrudIpCeilingKey(ip);
+  }
 
-const publicDoorRate = getPublicDoorRateConfig();
+  /**
+   * The address ceiling in FRONT of the per-key / per-session `crud` bucket.
+   * Those buckets key on credentials the limiter cannot check, so a caller who
+   * invents one per request would otherwise never be limited; this one counts
+   * every `crud` request from the address, at five busy people's worth.
+   */
+  const crudIpCeilingLimiter = rateLimiter({
+    windowMs: rateLimitClassConfig.crud.windowMs,
+    limit: crudIpCeiling,
+    standardHeaders: false,
+    skip: (c) => crudIpCeilingKey(c) === null,
+    keyGenerator: (c) => crudIpCeilingKey(c) ?? "crud:ipall:none",
+    handler: classHandler(
+      "crud",
+      crudIpCeiling,
+      rateLimitClassConfig.crud.retryAfter
+    ),
+  });
 
-/**
- * Public-door key generator (Sites W3). IP-ONLY: the Authorization header is
- * never read, so a random `Bearer` per request cannot mint a fresh bucket (the
- * calendar-feed defect, closed here by construction — `buildPublicDoorKey` has
- * no parameter for it). Loopback keeps the same local bypass as every class.
- */
-function publicDoorKeyGenerator(
-  bucket: "read_ip" | "submit_ip" | "submit_share"
-) {
-  return (c: Context): string => {
+  const crudRateLimiter = rateLimiter({
+    windowMs: rateLimitClassConfig.crud.windowMs,
+    limit: (c) =>
+      crudKey(c).startsWith("crud:session:")
+        ? crudSessionMax
+        : rateLimitClassConfig.crud.max,
+    standardHeaders: "draft-7",
+    keyGenerator: crudKey,
+    handler: classHandler(
+      "crud",
+      rateLimitClassConfig.crud.max,
+      rateLimitClassConfig.crud.retryAfter
+    ),
+  });
+
+  const calendarFeedRateLimiter = rateLimiter({
+    windowMs: rateLimitClassConfig.calendar_feed.windowMs,
+    limit: rateLimitClassConfig.calendar_feed.max,
+    standardHeaders: "draft-7",
+    keyGenerator: classKeyGenerator("calendar_feed"),
+    handler: classHandler(
+      "calendar_feed",
+      rateLimitClassConfig.calendar_feed.max,
+      rateLimitClassConfig.calendar_feed.retryAfter
+    ),
+  });
+
+  const calendarFeedIpCeiling = getCalendarFeedIpCeiling();
+
+  /**
+   * The IP ceiling in FRONT of the per-token calendar bucket.
+   *
+   * `/calendar/feed/{token}.ics` is the pod's only unauthenticated endpoint whose
+   * bucket key comes from the caller's own path. Without this, varying the token
+   * per request means never sharing a bucket with yourself: no throttle at all,
+   * and one map entry per attempted token retained for two windows. This limiter
+   * is keyed on IP ONLY (never on the path), so the key space is bounded by the
+   * network, and it is generous enough that a household of polling devices never
+   * reaches it.
+   */
+  const calendarFeedIpRateLimiter = rateLimiter({
+    windowMs: calendarFeedIpCeiling.windowMs,
+    limit: calendarFeedIpCeiling.max,
+    standardHeaders: false,
+    keyGenerator: (c: Context): string => {
+      if (
+        process.env.NODE_ENV === "development" &&
+        c.req.header("x-test-user-id")
+      ) {
+        return "test-bypass-calendar_feed_ip-" + Math.random();
+      }
+      const ip = clientIp(c);
+      if (isLocalCaller(c, ip)) {
+        return "localhost-bypass-calendar_feed_ip-" + Math.random();
+      }
+      return `calendar_feed_ip:${ip}`;
+    },
+    handler: classHandler(
+      "calendar_feed",
+      calendarFeedIpCeiling.max,
+      calendarFeedIpCeiling.retryAfter
+    ),
+  });
+
+  const publicDoorRate = getPublicDoorRateConfig();
+
+  /**
+   * Public-door key generator (Sites W3). IP-ONLY: the Authorization header is
+   * never read, so a random `Bearer` per request cannot mint a fresh bucket (the
+   * calendar-feed defect, closed here by construction — `buildPublicDoorKey` has
+   * no parameter for it). Loopback keeps the same local bypass as every class.
+   */
+  function publicDoorKeyGenerator(
+    bucket: "read_ip" | "submit_ip" | "submit_share"
+  ) {
+    return (c: Context): string => {
+      const ip = clientIp(c);
+      if (isLocalCaller(c, ip)) {
+        return `localhost-bypass-public_${bucket}-` + Math.random();
+      }
+      return buildPublicDoorKey(bucket, ip, c.req.path);
+    };
+  }
+
+  const publicReadIpRateLimiter = rateLimiter({
+    windowMs: publicDoorRate.readIp.windowMs,
+    limit: publicDoorRate.readIp.max,
+    standardHeaders: false,
+    keyGenerator: publicDoorKeyGenerator("read_ip"),
+    handler: publicDoorHandler(
+      "public_read",
+      publicDoorRate.readIp.max,
+      publicDoorRate.readIp.retryAfter
+    ),
+  });
+
+  const publicSubmitIpRateLimiter = rateLimiter({
+    windowMs: publicDoorRate.submitIp.windowMs,
+    limit: publicDoorRate.submitIp.max,
+    standardHeaders: false,
+    keyGenerator: publicDoorKeyGenerator("submit_ip"),
+    handler: publicDoorHandler(
+      "public_submit",
+      publicDoorRate.submitIp.max,
+      publicDoorRate.submitIp.retryAfter
+    ),
+  });
+
+  const publicSubmitShareRateLimiter = rateLimiter({
+    windowMs: publicDoorRate.submitShare.windowMs,
+    limit: publicDoorRate.submitShare.max,
+    standardHeaders: false,
+    keyGenerator: publicDoorKeyGenerator("submit_share"),
+    handler: publicDoorHandler(
+      "public_submit",
+      publicDoorRate.submitShare.max,
+      publicDoorRate.submitShare.retryAfter
+    ),
+  });
+
+  const deviceAuthRate = getDeviceAuthRateConfig();
+
+  /**
+   * Device-flow start (MACHINE-IDENTITY-PLAN W2): IP-ONLY, never the
+   * Authorization header — the caller has no credential, and a random Bearer
+   * must not buy a fresh budget. Loopback keeps the local bypass.
+   */
+  const deviceAuthRateLimiter = rateLimiter({
+    windowMs: deviceAuthRate.windowMs,
+    limit: deviceAuthRate.max,
+    standardHeaders: "draft-7",
+    keyGenerator: (c: Context): string => {
+      const ip = clientIp(c);
+      if (isLocalCaller(c, ip)) {
+        return "localhost-bypass-device_auth-" + Math.random();
+      }
+      return `device_auth:ip:${ip}`;
+    },
+    handler: classHandler(
+      "device_auth",
+      deviceAuthRate.max,
+      deviceAuthRate.retryAfter
+    ),
+  });
+
+  const keyStateRate = getKeyStateRateConfig();
+
+  /**
+   * Holder key-state (`GET /auth/key-state`): auth-skipped, so IP-ONLY — never
+   * the Authorization header, or a made-up Bearer per request would buy a fresh
+   * bucket each time (the global `crud` class keys on the Bearer hash).
+   * Loopback keeps the local bypass.
+   */
+  const keyStateRateLimiter = rateLimiter({
+    windowMs: keyStateRate.windowMs,
+    limit: keyStateRate.max,
+    standardHeaders: "draft-7",
+    keyGenerator: (c: Context): string => {
+      const ip = clientIp(c);
+      if (isLocalCaller(c, ip)) {
+        return "localhost-bypass-key_state-" + Math.random();
+      }
+      return `key_state:ip:${ip}`;
+    },
+    handler: classHandler("key_state", keyStateRate.max, keyStateRate.retryAfter),
+  });
+
+  const oauthPublicRate = getOAuthPublicRateConfig();
+
+  /**
+   * The pod authorization server's public doors (`/register`, `/authorize`):
+   * IP-keyed (`buildOAuthPublicKey`: `/authorize` per client_id on a shared
+   * address), never the Authorization header — neither takes a Bearer, and a
+   * made-up one must not buy a fresh bucket. Loopback keeps the local bypass.
+   */
+  const oauthPublicRateLimiter = rateLimiter({
+    windowMs: oauthPublicRate.windowMs,
+    limit: oauthPublicRate.max,
+    standardHeaders: "draft-7",
+    keyGenerator: (c: Context): string => {
+      const ip = clientIp(c);
+      if (isLocalCaller(c, ip)) {
+        return "localhost-bypass-oauth_public-" + Math.random();
+      }
+      return buildOAuthPublicKey(c.req.path, ip, c.req.query("client_id"));
+    },
+    handler: classHandler(
+      "oauth_public",
+      oauthPublicRate.max,
+      oauthPublicRate.retryAfter
+    ),
+  });
+
+  const oauthTokenRate = getOAuthTokenRateConfig();
+
+  /** The `/token` address ceiling's key, or null when this caller has none. */
+  function oauthTokenIpCeilingKey(c: Context): string | null {
     const ip = clientIp(c);
-    if (isLocalCaller(c, ip)) {
-      return `localhost-bypass-public_${bucket}-` + Math.random();
+    return isLocalCaller(c, ip) ? null : buildOAuthTokenIpCeilingKey(ip);
+  }
+
+  /**
+   * `/token`'s address ceiling, in FRONT of the per-grant bucket: the grant
+   * keys are values the limiter cannot check, so where addresses tell callers
+   * apart one inventing a grant per request is still bounded. None on a
+   * shared address (the whole internet's) or for a local caller.
+   */
+  const oauthTokenIpCeilingLimiter = rateLimiter({
+    windowMs: oauthTokenRate.windowMs,
+    limit: oauthTokenRate.ipCeiling,
+    standardHeaders: false,
+    skip: (c) => oauthTokenIpCeilingKey(c) === null,
+    keyGenerator: (c) => oauthTokenIpCeilingKey(c) ?? "oauth_token:ipall:none",
+    handler: classHandler(
+      "oauth_token",
+      oauthTokenRate.ipCeiling,
+      oauthTokenRate.retryAfter
+    ),
+  });
+
+  /** The `/token` body the limiter keys on, or null when it does not read it. */
+  async function readOAuthTokenBody(c: Context): Promise<string | null> {
+    const declared = c.req.header("content-length");
+    if (declared === undefined) {
+      return readTextCapped(c.req.raw.clone(), OAUTH_TOKEN_BODY_READ_MAX);
     }
-    return buildPublicDoorKey(bucket, ip, c.req.path);
+    const length = Number(declared);
+    if (!Number.isInteger(length) || length <= 0) return null;
+    if (length > OAUTH_TOKEN_BODY_READ_MAX) return null;
+    return c.req.text().catch(() => null);
+  }
+
+  /**
+   * `/token` per grant (`buildOAuthTokenKey`). The grant is in the body: one of
+   * a small declared length is read here (Hono caches the text, so /token reads
+   * the same body after this). One with NO declared length (chunked, HTTP/2) is
+   * read from a clone, at most `OAUTH_TOKEN_BODY_READ_MAX` bytes, so it is
+   * keyed by its grant too, not in the one `unread` bucket (review O-3).
+   */
+  const oauthTokenRateLimiter = rateLimiter({
+    windowMs: oauthTokenRate.windowMs,
+    limit: oauthTokenRate.max,
+    standardHeaders: "draft-7",
+    keyGenerator: async (c: Context): Promise<string> => {
+      const ip = clientIp(c);
+      if (isLocalCaller(c, ip)) {
+        return "localhost-bypass-oauth_token-" + Math.random();
+      }
+      const body = await readOAuthTokenBody(c);
+      return buildOAuthTokenKey(body, c.req.header("content-type") ?? "", ip);
+    },
+    handler: classHandler(
+      "oauth_token",
+      oauthTokenRate.max,
+      oauthTokenRate.retryAfter
+    ),
+  });
+
+  const crudReadKey = classKeyGenerator("crud_read");
+  const crudReadSessionMax =
+    rateLimitClassConfig.crud_read.sessionMax ??
+    rateLimitClassConfig.crud_read.max;
+
+  /** The reads of `crud` (`isCrudRead`): their own bucket per key / session. */
+  const crudReadRateLimiter = rateLimiter({
+    windowMs: rateLimitClassConfig.crud_read.windowMs,
+    limit: (c) =>
+      crudReadKey(c).startsWith("crud_read:session:")
+        ? crudReadSessionMax
+        : rateLimitClassConfig.crud_read.max,
+    standardHeaders: "draft-7",
+    keyGenerator: crudReadKey,
+    handler: classHandler(
+      "crud_read",
+      rateLimitClassConfig.crud_read.max,
+      rateLimitClassConfig.crud_read.retryAfter
+    ),
+  });
+
+  return {
+    importRateLimiter,
+    aiInteractiveRateLimiter,
+    aiAgentTurnRateLimiter,
+    crudIpCeilingLimiter,
+    crudRateLimiter,
+    crudReadRateLimiter,
+    calendarFeedRateLimiter,
+    calendarFeedIpRateLimiter,
+    publicReadIpRateLimiter,
+    publicSubmitIpRateLimiter,
+    publicSubmitShareRateLimiter,
+    deviceAuthRateLimiter,
+    keyStateRateLimiter,
+    oauthPublicRateLimiter,
+    oauthTokenIpCeilingLimiter,
+    oauthTokenRateLimiter,
   };
 }
 
-const publicReadIpRateLimiter = rateLimiter({
-  windowMs: publicDoorRate.readIp.windowMs,
-  limit: publicDoorRate.readIp.max,
-  standardHeaders: false,
-  keyGenerator: publicDoorKeyGenerator("read_ip"),
-  handler: publicDoorHandler(
-    "public_read",
-    publicDoorRate.readIp.max,
-    publicDoorRate.readIp.retryAfter
-  ),
-});
+let limiters = buildRateLimiters();
+let limitersVersion = rateLimitOverridesVersion();
 
-const publicSubmitIpRateLimiter = rateLimiter({
-  windowMs: publicDoorRate.submitIp.windowMs,
-  limit: publicDoorRate.submitIp.max,
-  standardHeaders: false,
-  keyGenerator: publicDoorKeyGenerator("submit_ip"),
-  handler: publicDoorHandler(
-    "public_submit",
-    publicDoorRate.submitIp.max,
-    publicDoorRate.submitIp.retryAfter
-  ),
-});
-
-const publicSubmitShareRateLimiter = rateLimiter({
-  windowMs: publicDoorRate.submitShare.windowMs,
-  limit: publicDoorRate.submitShare.max,
-  standardHeaders: false,
-  keyGenerator: publicDoorKeyGenerator("submit_share"),
-  handler: publicDoorHandler(
-    "public_submit",
-    publicDoorRate.submitShare.max,
-    publicDoorRate.submitShare.retryAfter
-  ),
-});
-
-const deviceAuthRate = getDeviceAuthRateConfig();
-
-/**
- * Device-flow start (MACHINE-IDENTITY-PLAN W2): IP-ONLY, never the
- * Authorization header — the caller has no credential, and a random Bearer
- * must not buy a fresh budget. Loopback keeps the local bypass.
- */
-const deviceAuthRateLimiter = rateLimiter({
-  windowMs: deviceAuthRate.windowMs,
-  limit: deviceAuthRate.max,
-  standardHeaders: "draft-7",
-  keyGenerator: (c: Context): string => {
-    const ip = clientIp(c);
-    if (isLocalCaller(c, ip)) {
-      return "localhost-bypass-device_auth-" + Math.random();
-    }
-    return `device_auth:ip:${ip}`;
-  },
-  handler: classHandler(
-    "device_auth",
-    deviceAuthRate.max,
-    deviceAuthRate.retryAfter
-  ),
-});
-
-const keyStateRate = getKeyStateRateConfig();
-
-/**
- * Holder key-state (`GET /auth/key-state`): auth-skipped, so IP-ONLY — never
- * the Authorization header, or a made-up Bearer per request would buy a fresh
- * bucket each time (the global `crud` class keys on the Bearer hash).
- * Loopback keeps the local bypass.
- */
-const keyStateRateLimiter = rateLimiter({
-  windowMs: keyStateRate.windowMs,
-  limit: keyStateRate.max,
-  standardHeaders: "draft-7",
-  keyGenerator: (c: Context): string => {
-    const ip = clientIp(c);
-    if (isLocalCaller(c, ip)) {
-      return "localhost-bypass-key_state-" + Math.random();
-    }
-    return `key_state:ip:${ip}`;
-  },
-  handler: classHandler("key_state", keyStateRate.max, keyStateRate.retryAfter),
-});
-
-const oauthPublicRate = getOAuthPublicRateConfig();
-
-/**
- * The pod authorization server's public doors (`/register`, `/authorize`):
- * IP-keyed (`buildOAuthPublicKey`: `/authorize` per client_id on a shared
- * address), never the Authorization header — neither takes a Bearer, and a
- * made-up one must not buy a fresh bucket. Loopback keeps the local bypass.
- */
-const oauthPublicRateLimiter = rateLimiter({
-  windowMs: oauthPublicRate.windowMs,
-  limit: oauthPublicRate.max,
-  standardHeaders: "draft-7",
-  keyGenerator: (c: Context): string => {
-    const ip = clientIp(c);
-    if (isLocalCaller(c, ip)) {
-      return "localhost-bypass-oauth_public-" + Math.random();
-    }
-    return buildOAuthPublicKey(c.req.path, ip, c.req.query("client_id"));
-  },
-  handler: classHandler(
-    "oauth_public",
-    oauthPublicRate.max,
-    oauthPublicRate.retryAfter
-  ),
-});
-
-const oauthTokenRate = getOAuthTokenRateConfig();
-
-/** The `/token` address ceiling's key, or null when this caller has none. */
-function oauthTokenIpCeilingKey(c: Context): string | null {
-  const ip = clientIp(c);
-  return isLocalCaller(c, ip) ? null : buildOAuthTokenIpCeilingKey(ip);
-}
-
-/**
- * `/token`'s address ceiling, in FRONT of the per-grant bucket: the grant
- * keys are values the limiter cannot check, so where addresses tell callers
- * apart one inventing a grant per request is still bounded. None on a
- * shared address (the whole internet's) or for a local caller.
- */
-const oauthTokenIpCeilingLimiter = rateLimiter({
-  windowMs: oauthTokenRate.windowMs,
-  limit: oauthTokenRate.ipCeiling,
-  standardHeaders: false,
-  skip: (c) => oauthTokenIpCeilingKey(c) === null,
-  keyGenerator: (c) => oauthTokenIpCeilingKey(c) ?? "oauth_token:ipall:none",
-  handler: classHandler(
-    "oauth_token",
-    oauthTokenRate.ipCeiling,
-    oauthTokenRate.retryAfter
-  ),
-});
-
-/** The `/token` body the limiter keys on, or null when it does not read it. */
-async function readOAuthTokenBody(c: Context): Promise<string | null> {
-  const declared = c.req.header("content-length");
-  if (declared === undefined) {
-    return readTextCapped(c.req.raw.clone(), OAUTH_TOKEN_BODY_READ_MAX);
+/** The limiters for the budgets in force; rebuilt after a pod setting change. */
+function currentLimiters(): ReturnType<typeof buildRateLimiters> {
+  const version = rateLimitOverridesVersion();
+  if (version !== limitersVersion) {
+    limiters = buildRateLimiters();
+    limitersVersion = version;
   }
-  const length = Number(declared);
-  if (!Number.isInteger(length) || length <= 0) return null;
-  if (length > OAUTH_TOKEN_BODY_READ_MAX) return null;
-  return c.req.text().catch(() => null);
+  return limiters;
 }
 
 /**
- * `/token` per grant (`buildOAuthTokenKey`). The grant is in the body: one of
- * a small declared length is read here (Hono caches the text, so /token reads
- * the same body after this). One with NO declared length (chunked, HTTP/2) is
- * read from a clone, at most `OAUTH_TOKEN_BODY_READ_MAX` bytes, so it is
- * keyed by its grant too, not in the one `unread` bucket (review O-3).
+ * Keep the edge on the pod owner's budgets (`pod_settings.settings.rateLimits`):
+ * read them now and every `intervalMs`. A failed read keeps the values in
+ * force. Started at boot (index.ts); `/api/pod-rate-limits` also applies a
+ * change at once, so this only catches a change made some other way.
  */
-const oauthTokenRateLimiter = rateLimiter({
-  windowMs: oauthTokenRate.windowMs,
-  limit: oauthTokenRate.max,
-  standardHeaders: "draft-7",
-  keyGenerator: async (c: Context): Promise<string> => {
-    const ip = clientIp(c);
-    if (isLocalCaller(c, ip)) {
-      return "localhost-bypass-oauth_token-" + Math.random();
-    }
-    const body = await readOAuthTokenBody(c);
-    return buildOAuthTokenKey(body, c.req.header("content-type") ?? "", ip);
-  },
-  handler: classHandler(
-    "oauth_token",
-    oauthTokenRate.max,
-    oauthTokenRate.retryAfter
-  ),
-});
-
-const crudReadKey = classKeyGenerator("crud_read");
-const crudReadSessionMax =
-  rateLimitClassConfig.crud_read.sessionMax ??
-  rateLimitClassConfig.crud_read.max;
-
-/** The reads of `crud` (`isCrudRead`): their own bucket per key / session. */
-const crudReadRateLimiter = rateLimiter({
-  windowMs: rateLimitClassConfig.crud_read.windowMs,
-  limit: (c) =>
-    crudReadKey(c).startsWith("crud_read:session:")
-      ? crudReadSessionMax
-      : rateLimitClassConfig.crud_read.max,
-  standardHeaders: "draft-7",
-  keyGenerator: crudReadKey,
-  handler: classHandler(
-    "crud_read",
-    rateLimitClassConfig.crud_read.max,
-    rateLimitClassConfig.crud_read.retryAfter
-  ),
-});
+export function watchPodRateLimits(
+  read: () => Promise<unknown>,
+  intervalMs = 30_000
+): () => void {
+  const refresh = () =>
+    read()
+      .then((raw) => {
+        setRateLimitOverrides(parseRateLimitOverrides(raw));
+      })
+      .catch(() => {});
+  void refresh();
+  const timer = setInterval(refresh, intervalMs);
+  timer.unref?.();
+  return () => clearInterval(timer);
+}
 
 /** Read-only MCP tool names, listed once; a failed listing is retried. */
 let readOnlyTools: Promise<Set<string>> | null = null;
@@ -518,6 +582,24 @@ async function isCrudRead(c: Context): Promise<boolean> {
  */
 export const rateLimitMiddleware: MiddlewareHandler = async (c, next) => {
   const cls = classifyRateLimitPath(c.req.path, c.req.method);
+  const {
+    importRateLimiter,
+    aiInteractiveRateLimiter,
+    aiAgentTurnRateLimiter,
+    crudIpCeilingLimiter,
+    crudRateLimiter,
+    crudReadRateLimiter,
+    calendarFeedRateLimiter,
+    calendarFeedIpRateLimiter,
+    publicReadIpRateLimiter,
+    publicSubmitIpRateLimiter,
+    publicSubmitShareRateLimiter,
+    deviceAuthRateLimiter,
+    keyStateRateLimiter,
+    oauthPublicRateLimiter,
+    oauthTokenIpCeilingLimiter,
+    oauthTokenRateLimiter,
+  } = currentLimiters();
   switch (cls) {
     case "free":
       return next();

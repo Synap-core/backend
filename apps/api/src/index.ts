@@ -83,6 +83,7 @@ import {
   requestSizeLimit,
   applicationConnectionStatusRateLimitMiddleware,
   handshakeRateLimitMiddleware,
+  watchPodRateLimits,
 } from "./middleware/security.js";
 import { usageTelemetry } from "./middleware/usage-telemetry.js";
 import { configuredPodAdminBase } from "./pod-admin-config.js";
@@ -1109,6 +1110,14 @@ import { createPodUpdatesRouter } from "./routers/pod-updates.js";
 import { readLastUpdate } from "./pod-updates/index.js";
 import { podUpdatesDeps } from "./routers/pod-updates-deps.js";
 app.route("/api/pod-updates", createPodUpdatesRouter(podUpdatesDeps));
+import { createPodRateLimitsRouter } from "./routers/pod-rate-limits.js";
+import {
+  podRateLimitsDeps,
+  readPodRateLimitValuesRaw,
+} from "./routers/pod-rate-limits-deps.js";
+app.route("/api/pod-rate-limits", createPodRateLimitsRouter(podRateLimitsDeps));
+// The owner's budgets over the env, re-read every 30 s (rate-limit-classes.ts).
+watchPodRateLimits(readPodRateLimitValuesRaw);
 
 // The owner's restic recovery kit: download (fresh sign-in) + read-back confirm.
 import { createBackupKitRouter } from "./routers/backup-kit.js";
