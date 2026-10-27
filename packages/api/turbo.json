@@ -1,0 +1,17 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    "build": {
+      "inputs": [
+        "src/**/*.ts",
+        "src/**/*.tsx",
+        "tsconfig.json",
+        "tsup.config.ts",
+        "package.json",
+        "scripts/schema-hash.mjs",
+        "$TURBO_ROOT$/packages/api-types/src/generated.d.ts"
+      ]
+    }
+  }
+}

@@ -81,6 +81,12 @@ interface ReceiverShellProps {
    * `lg` for a long read with tables and charts (a document, a report).
    */
   width?: ReceiverWidth;
+  /**
+   * The card holds a bar pinned to the window's bottom (a review's decision).
+   * The card then clips nothing: a clipping card is the box a sticky child
+   * pins to, and a card that does not scroll pins it nowhere.
+   */
+  pinsBar?: boolean;
 }
 
 export type ReceiverWidth = "sm" | "md" | "lg";
@@ -102,6 +108,15 @@ export function receiverWidthClass(width: ReceiverWidth): string {
   return "max-w-2xl";
 }
 
+/**
+ * The card's classes. Pure and exported for the reason `receiverWidthClass`
+ * is: `pinsBar` must provably change the card, not only its signature.
+ */
+export function receiverCardClass(pinsBar: boolean): string {
+  const base = "bg-foreground/[0.04] ring-1 ring-inset ring-foreground/10";
+  return pinsBar ? `${base} overflow-visible` : base;
+}
+
 export function ReceiverShell({
   podHost,
   identity,
@@ -109,6 +124,7 @@ export function ReceiverShell({
   children,
   footer,
   width = "md",
+  pinsBar = false,
 }: ReceiverShellProps) {
   // Explicit props win; otherwise fall back to the route-level provider.
   const inherited = useContext(ReceiverIdentityContext);
@@ -125,11 +141,7 @@ export function ReceiverShell({
             not the reader, so it belongs above the decision it describes. */}
         {requested && <div className="px-1">{requested}</div>}
 
-        <Card
-          radius="lg"
-          shadow="none"
-          className="bg-foreground/[0.04] ring-1 ring-inset ring-foreground/10"
-        >
+        <Card radius="lg" shadow="none" className={receiverCardClass(pinsBar)}>
           {children}
         </Card>
 

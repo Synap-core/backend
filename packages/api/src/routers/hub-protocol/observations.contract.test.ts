@@ -62,6 +62,36 @@ vi.mock("@synap/database", async (importOriginal) => {
   };
 });
 
+// The PR → session resolver (a DB read) is stubbed: what is under test is that
+// the door STAMPS what it resolves, and records the fact when it cannot.
+const resolver = vi.hoisted(() => ({
+  session: null as string | null,
+  fail: false,
+  asked: [] as unknown[],
+}));
+vi.mock("../../services/dev-loop/pr-session-resolver.js", async () => ({
+  sessionForDevLoopFact: async (input: unknown) => {
+    resolver.asked.push(input);
+    if (resolver.fail) throw new Error("db down");
+    return resolver.session;
+  },
+}));
+
+// The trigger budget, controllable: the pod's own consumer must not share it.
+const budget = vi.hoisted(() => ({ open: true }));
+vi.mock("../../services/api-keys.js", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, any>>();
+  return {
+    ...actual,
+    apiKeyService: new Proxy(actual.apiKeyService, {
+      get: (target, prop) =>
+        prop === "checkRateLimit"
+          ? () => budget.open
+          : Reflect.get(target, prop),
+    }),
+  };
+});
+
 // Workspace access is stubbed: the door now clamps a caller-supplied
 // workspaceId to what the user can actually see, and that lookup hits the DB.
 vi.mock("../../utils/workspace-membership.js", async (importOriginal) => {
@@ -415,5 +445,276 @@ describe("observations.append — the trigger hop names the event it recorded", 
     expect(hop![1].data.eventId).toBeUndefined();
     // …and the caller's own payload is untouched.
     expect(hop![1].data.sha).toBe("abc");
+  });
+});
+
+describe("observations.append — the dev-loop contract (plan v5 T2)", () => {
+  const merged = {
+    repo: "Synap-core/backend",
+    number: 255,
+    url: "https://github.com/Synap-core/backend/pull/255",
+    sha: "91de41c34",
+    body: "Pod session: cb0df539-7346-4db4-bf7d-a42b2abed58c",
+  };
+
+  it("REFUSES a contract type whose payload does not parse — per item, never the batch", async () => {
+    appended.length = 0;
+    const res = await callAppend([
+      // url names another PR than repo#number: the sweeper would complete the wrong outcome.
+      {
+        type: "dev.pr_merged",
+        subjectId: "Synap-core/backend#255",
+        data: {
+          ...merged,
+          url: "https://github.com/Synap-core/backend/pull/256",
+        },
+      },
+      {
+        type: "ci.finished",
+        subjectId: "x",
+        data: { status: "green", sha: "abc1234", repo: "a/b" },
+      },
+      {
+        type: "dev.pr_merged",
+        subjectId: "Synap-core/backend#255",
+        data: merged,
+      },
+    ]);
+    expect(res.recorded).toBe(1);
+    expect(res.results[0]).toMatchObject({ ok: false, index: 0 });
+    expect(res.results[0].error).toMatch(/dev\.pr_merged: url/);
+    expect(res.results[1]).toMatchObject({ ok: false, index: 1 });
+    expect(res.results[1].error).toMatch(/ci\.finished: status/);
+    expect(res.results[2]).toMatchObject({ ok: true, index: 2 });
+    // Only the valid fact reached the event store.
+    expect(appended).toHaveLength(1);
+  });
+
+  it("leaves a type outside the contract free-form (dev.commit carries anything)", async () => {
+    const res = await callAppend([
+      { type: "dev.commit", subjectId: "repo:backend", data: { anything: 1 } },
+    ]);
+    expect(res.recorded).toBe(1);
+  });
+
+  it("ENQUEUES the pod's own consumer for dev.pr_merged, with the producer as the governed actor", async () => {
+    appended.length = 0;
+    triggerSends.length = 0;
+    await callAppend([
+      {
+        type: "dev.pr_merged",
+        subjectId: "Synap-core/backend#255",
+        data: merged,
+      },
+    ]);
+    const job = triggerSends.find(([q]) => q === "dev-loop-observation");
+    expect(job, "the merge sweeper job was not enqueued").toBeDefined();
+    expect(job![1]).toMatchObject({
+      eventType: "dev.pr_merged",
+      userId: "user-1",
+      producerAgentUserId: "agent-1",
+      eventId: "row-1",
+    });
+    expect(job![1].data).toMatchObject({
+      repo: "Synap-core/backend",
+      number: 255,
+    });
+    // …and the automations still fire on it (the unified hop is unchanged).
+    expect(triggerSends.some(([q]) => q === "automation-trigger-match")).toBe(
+      true
+    );
+  });
+
+  it("does NOT enqueue it for a fact the pod does not act on", async () => {
+    triggerSends.length = 0;
+    await callAppend([
+      {
+        type: "dev.pr_opened",
+        subjectId: "Synap-core/backend#255",
+        data: merged,
+      },
+    ]);
+    expect(triggerSends.some(([q]) => q === "dev-loop-observation")).toBe(
+      false
+    );
+    expect(triggerSends.some(([q]) => q === "automation-trigger-match")).toBe(
+      true
+    );
+  });
+
+  it("ENQUEUES the sweep for dev.pr_closed too (an unmerged close retires the outcome)", async () => {
+    triggerSends.length = 0;
+    await callAppend([
+      {
+        type: "dev.pr_closed",
+        subjectId: "Synap-core/backend#255",
+        data: merged,
+      },
+    ]);
+    const job = triggerSends.find(([q]) => q === "dev-loop-observation");
+    expect(job?.[1]).toMatchObject({ eventType: "dev.pr_closed" });
+  });
+
+  it("the sweep job CARRIES the posting key's grant (F1: the sweep re-enters it)", async () => {
+    const { runWithGrant } = await import("@synap/database");
+    triggerSends.length = 0;
+    const scope = { permissions: ["event.create"] };
+    await runWithGrant({ scopes: [scope], clientId: "app-1" }, () =>
+      callAppend([
+        {
+          type: "dev.pr_merged",
+          subjectId: "Synap-core/backend#255",
+          data: merged,
+        },
+      ])
+    );
+    const job = triggerSends.find(([q]) => q === "dev-loop-observation");
+    expect(job, "the sweep was not enqueued").toBeDefined();
+    expect(job![1].grant).toEqual({ scopes: [scope], clientId: "app-1" });
+  });
+
+  it("a key with no grant enqueues grant: null (a legacy key, unchanged)", async () => {
+    triggerSends.length = 0;
+    await callAppend([
+      {
+        type: "dev.pr_merged",
+        subjectId: "Synap-core/backend#255",
+        data: merged,
+      },
+    ]);
+    const job = triggerSends.find(([q]) => q === "dev-loop-observation");
+    expect(job![1].grant).toBeNull();
+  });
+
+  it("the sweep is NOT bound by the trigger budget: a spent budget still moves the session", async () => {
+    triggerSends.length = 0;
+    budget.open = false;
+    try {
+      await callAppend([
+        {
+          type: "dev.pr_merged",
+          subjectId: "Synap-core/backend#255",
+          data: merged,
+        },
+      ]);
+    } finally {
+      budget.open = true;
+    }
+    expect(triggerSends.some(([q]) => q === "automation-trigger-match")).toBe(
+      false
+    );
+    expect(triggerSends.some(([q]) => q === "dev-loop-observation")).toBe(true);
+  });
+});
+
+describe("observations.append — the resolved session is stamped before automations match", () => {
+  const SID = "cb0df539-7346-4db4-bf7d-a42b2abed58c";
+  const pr = {
+    repo: "Synap-core/backend",
+    number: 255,
+    url: "https://github.com/Synap-core/backend/pull/255",
+  };
+
+  it("a PR fact naming no session gets the one its outcome ref resolves to — on the row AND the trigger", async () => {
+    appended.length = 0;
+    triggerSends.length = 0;
+    resolver.session = SID;
+    try {
+      await callAppend([
+        {
+          type: "dev.pr_merged",
+          subjectId: "Synap-core/backend#255",
+          data: pr,
+        },
+      ]);
+    } finally {
+      resolver.session = null;
+    }
+    expect(appended[0].data.sessionId).toBe(SID);
+    const hop = triggerSends.find(([q]) => q === "automation-trigger-match");
+    expect(hop![1].data.sessionId).toBe(SID);
+  });
+
+  it("a ci.finished of a PR is resolved too (the contract's `pr` field)", async () => {
+    appended.length = 0;
+    resolver.asked.length = 0;
+    resolver.session = SID;
+    try {
+      await callAppend([
+        {
+          type: "ci.finished",
+          subjectId: "Synap-core/backend@abc1234",
+          data: {
+            status: "success",
+            sha: "abc1234",
+            repo: "Synap-core/backend",
+            pr: 255,
+          },
+        },
+      ]);
+    } finally {
+      resolver.session = null;
+    }
+    expect(appended[0].data.sessionId).toBe(SID);
+    expect(resolver.asked[0]).toMatchObject({
+      userId: "user-1",
+      type: "ci.finished",
+    });
+  });
+
+  it("a failed lookup never costs the fact: recorded, unstamped", async () => {
+    appended.length = 0;
+    resolver.fail = true;
+    try {
+      const res = await callAppend([
+        {
+          type: "dev.pr_merged",
+          subjectId: "Synap-core/backend#255",
+          data: pr,
+        },
+      ]);
+      expect(res.recorded).toBe(1);
+    } finally {
+      resolver.fail = false;
+    }
+    expect(appended[0].data.sessionId).toBeUndefined();
+  });
+
+  it("asks nothing for a fact outside the dev-loop contract", async () => {
+    resolver.asked.length = 0;
+    await callAppend([
+      { type: "dev.commit", subjectId: "repo:backend", data: { sha: "abc" } },
+    ]);
+    expect(resolver.asked).toHaveLength(0);
+  });
+});
+
+describe("observations.append — exactly-once survives a re-posted fact", () => {
+  it("the trigger's data leaves out ingestedAt, so the same fact posted twice fingerprints the same", async () => {
+    // The matcher's claim fingerprint (`resolveAutomationEventFingerprintId`)
+    // hashes eventType + subjectId + data when the fact has no native id (a
+    // PR fact has none): equal trigger payloads ARE equal fingerprints.
+    triggerSends.length = 0;
+    appended.length = 0;
+    const fact = {
+      type: "dev.pr_opened",
+      subjectId: "Synap-core/backend#255",
+      occurredAt: "2026-10-26T10:00:00.000Z",
+      data: {
+        repo: "Synap-core/backend",
+        number: 255,
+        url: "https://github.com/Synap-core/backend/pull/255",
+      },
+    };
+    await callAppend([fact]);
+    await new Promise((r) => setTimeout(r, 5));
+    await callAppend([fact]);
+    const hops = triggerSends.filter(([q]) => q === "automation-trigger-match");
+    expect(hops).toHaveLength(2);
+    expect(hops[0]![1].data.ingestedAt).toBeUndefined();
+    expect(hops[0]![1].data).toEqual(hops[1]![1].data);
+    expect(hops[0]![1].subjectId).toBe(hops[1]![1].subjectId);
+    // The recorded rows keep when we heard it.
+    expect(appended[0].data.ingestedAt).toBeDefined();
   });
 });

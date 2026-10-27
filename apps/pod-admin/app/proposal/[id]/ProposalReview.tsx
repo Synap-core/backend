@@ -13,6 +13,7 @@ import { proposalHeading } from "./proposal-heading";
 import {
   isActionable,
   ProposalReviewBody,
+  reviewStatus,
   useProposalReview,
 } from "./ProposalReviewCard";
 import { AfterDecision } from "./ProposalSessionContext";
@@ -29,6 +30,7 @@ const STATUS_COLOR: Record<
   rejected: "danger",
   reverted: "default",
   withdrawn: "default",
+  expired: "default",
 };
 
 export function ProposalReview({
@@ -78,8 +80,13 @@ export function ProposalReview({
   /* Who asked, for whom, where and when is drawn INSIDE the card, by the
      review itself (`ProposalReviewBody`) — the same line the Review drawer
      shows, so the shell's `requested` slot stays empty here. */
-  const shell = (children: ReactNode, footer?: ReactNode) => (
-    <ReceiverShell podHost={podHost} identity={identity} footer={footer}>
+  const shell = (children: ReactNode, footer?: ReactNode, pinsBar = false) => (
+    <ReceiverShell
+      podHost={podHost}
+      identity={identity}
+      footer={footer}
+      pinsBar={pinsBar}
+    >
       {children}
     </ReceiverShell>
   );
@@ -105,7 +112,7 @@ export function ProposalReview({
     );
   }
 
-  const status = String(p.status ?? "pending");
+  const status = reviewStatus(p);
   /* The heading names what APPROVING WILL DO, so the verb is imperative —
      "Create workspace", not "Created workspace". Until 2026-09-06 this printed
      `p.proposalType` verbatim, so the highest-stakes page in the product, the
@@ -136,7 +143,8 @@ export function ProposalReview({
         </Chip>
       </CardHeader>
 
-      <CardBody className="px-7 pb-7 pt-5">
+      {/* Clips nothing, so the decision bar pins to the window. */}
+      <CardBody className="overflow-visible px-7 pb-7 pt-5">
         <ProposalReviewBody
           proposal={p}
           sourceExits={sourceExits}
@@ -148,7 +156,7 @@ export function ProposalReview({
             void utils.signals.invalidate();
             void query.refetch();
           }}
-          barClassName="bottom-0 pt-4"
+          barClassName={DECISION_BAR_PIN}
           /* The reader often arrives in an overlay (a Glance of `/open/<id>`)
              with no list behind it: once this one is decided, the next one
              is a door here, not a trip back to Review. */
@@ -160,6 +168,16 @@ export function ProposalReview({
         />
       </CardBody>
     </>,
-    openInApp
+    openInApp,
+    true
   );
 }
+
+/**
+ * The decision bar pinned to the window's bottom: Approve and Reject stay in
+ * reach under a long review (a 106-record capture read 34,545 px). Spans the
+ * card body's padding, on the card's own ground made opaque (the page under
+ * it plus the card's 4% tint), so nothing scrolls visibly beneath it.
+ */
+const DECISION_BAR_PIN =
+  "bottom-0 -mx-7 bg-background bg-[linear-gradient(hsl(var(--heroui-foreground)/0.04),hsl(var(--heroui-foreground)/0.04))] px-7 py-3";

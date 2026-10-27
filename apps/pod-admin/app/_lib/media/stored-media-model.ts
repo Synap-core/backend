@@ -235,3 +235,18 @@ export function fileTypeLabel(mime: string | null | undefined): string {
   if (major === "audio") return `${sub.toUpperCase()} audio`;
   return sub ? sub.toUpperCase() : "File";
 }
+
+/**
+ * What an image is called to someone who cannot see it: its record's title,
+ * else the file's own name (a `brand-asset` keeps it as `fileName`), else
+ * empty (the view says "Image").
+ */
+export function mediaAlt(
+  title: unknown,
+  properties: Readonly<Record<string, unknown>> | null | undefined
+): string {
+  const named = typeof title === "string" ? title.trim() : "";
+  if (named) return named;
+  const file = properties?.fileName;
+  return typeof file === "string" ? file.trim() : "";
+}

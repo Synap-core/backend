@@ -374,6 +374,11 @@ export { backfillEntityMediaCopies } from "./services/media-copy/backfill-media-
 export { backfillLibraryItemMedia } from "./services/media-copy/backfill-library-media.js";
 export { backfillDocumentTitleHeadings } from "./services/document-title/backfill-title-heading.js";
 export { registerEntityMediaCopyReactor } from "./services/media-copy/media-copy-reactor.js";
+// Dev loop (plan v5 T2): the observation door enqueues a fact the pod acts on;
+// this runner fills the jobs IoC slot (the merge sweeper). `recordPodDeployed`
+// is the pod's own `dev.deployed`, read at boot after a successful update.
+export { runDevLoopObservation } from "./services/dev-loop/run-observation.js";
+export { recordPodDeployed } from "./services/dev-loop/pod-deployed.js";
 export {
   runEventSync,
   type RunEventSyncResult,
