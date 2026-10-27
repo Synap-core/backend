@@ -660,7 +660,8 @@ export function isAskReviewLater(
  */
 export function effectiveAskCause(slot: AskCardSlot): AskCause | null {
   if (slot.askCause) return slot.askCause;
-  if (slot.criterionKey) return { kind: "criterion" };
+  // A criterion cause IS "this was a criterion slot": its kind is that one declaration.
+  if (slot.criterionKey) return { kind: CRITERION_SLOT_KIND };
   if (slot.paramName) return { kind: "param" };
   return null;
 }

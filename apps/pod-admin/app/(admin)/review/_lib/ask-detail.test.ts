@@ -577,6 +577,18 @@ describe("a relayed answer waiting for the tap", () => {
     });
   });
 
+  it("a relay the wire did not carry whole is no relay, never a Confirm with no relayer", () => {
+    const s = askSlotOf({
+      kind: "owed-slot",
+      title: "Deploy",
+      target: { kind: "session", id: "s1" },
+      ask: confirm,
+      pendingRelay: { text: "Yes" },
+    });
+    expect(s?.pendingRelay).toBeNull();
+    expect(relayWaitingView(s!)).toBeNull();
+  });
+
   it("headlines what Confirm records, as the answer's own button reads", () => {
     const s = slot(
       { mode: "confirm", yes: { label: "Ship it" } },

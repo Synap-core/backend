@@ -41,7 +41,9 @@ import {
   type AskProvideKind,
   type AskProvideRef,
   type DynamicFormField,
+  type AskCardPendingRelay,
   type PendingRelayedAnswer,
+  PendingRelayedAnswerSchema,
 } from "@synap-core/types/ask";
 import { CRITERION_SLOT_KIND } from "@synap-core/types/focus-sessions";
 import { resolveServiceName } from "@synap-core/types/service-marks";
@@ -67,7 +69,7 @@ export interface AskSlotSignal {
   /** What raised it when no agent did (`Signal.askCause`). */
   askCause?: AskCause | null;
   /** An agent relayed the person's answer from a chat; it waits for their tap. */
-  pendingRelay?: PendingRelayedAnswer | null;
+  pendingRelay?: AskCardPendingRelay | null;
   /** The closing agent kept it owed past its session (`Signal.keptOwedAt`). */
   keptOwedAt?: string | null;
   /** A param slot's param (`Signal.paramName`). */
@@ -119,7 +121,10 @@ export function askSlotOf(s: AskSlotSignal): AskSlot | null {
     askerName: s.by?.label?.trim() || null,
     askerId: s.by?.id ?? null,
     askCause: s.askCause ?? null,
-    pendingRelay: s.pendingRelay ?? null,
+    // The wire relay is the card's lenient read; Confirm needs the whole one.
+    pendingRelay: s.pendingRelay
+      ? (PendingRelayedAnswerSchema.safeParse(s.pendingRelay).data ?? null)
+      : null,
     keptOwedAt: s.keptOwedAt ?? null,
     paramName: s.paramName ?? null,
   };

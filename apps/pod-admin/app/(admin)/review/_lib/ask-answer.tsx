@@ -212,7 +212,12 @@ export function AskAnswer({
     onSuccess: (data, call) =>
       settled(
         call.value?.type === "provide"
-          ? provideReceipt(call.value.ref.kind, data, Date.now())
+          ? provideReceipt(
+              call.value.ref.kind,
+              // Only an answered provide carries the grant; a correction never does.
+              "secretGrant" in data ? data : {},
+              Date.now()
+            )
           : { title: "Answer sent" }
       ),
     // A refused file answer leaves the uploaded file where it was saved.

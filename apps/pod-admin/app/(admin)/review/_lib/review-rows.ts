@@ -249,7 +249,7 @@ function wholeCluster(s: ReviewSignal): string[] | null {
 /** A row's kind-specific half; `title` only when it is not the signal's. */
 type RowShape = Omit<
   ReviewRow,
-  "key" | "group" | "title" | "occurredAt" | "count"
+  "key" | "group" | "title" | "occurredAt" | "count" | "reviewLater"
 > & { title?: string };
 
 function proposalRow(
