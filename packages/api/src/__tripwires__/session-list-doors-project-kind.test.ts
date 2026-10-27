@@ -52,6 +52,19 @@ function isSessionListRead(src: string): boolean {
   );
 }
 
+/**
+ * The shared row projection — `projectSessionRows`
+ * (`services/focus-sessions/session-list-rows.ts`) — attaches both lenses for
+ * every door that projects through it (tRPC `list` / `browse` / `graph`). A
+ * door that calls it is covered; the projection itself is pinned below, so
+ * the delegation cannot quietly hollow out.
+ */
+const SHARED_PROJECTION_CALL = /\bprojectSessionRows\s*\(/;
+const SHARED_PROJECTION_FILE = join(
+  API_SRC,
+  "services/focus-sessions/session-list-rows.ts"
+);
+
 const FILES = walk(API_SRC)
   .filter((f) => !f.includes("__tests__") && !f.includes("__tripwires__"))
   .filter((f) => !f.endsWith(".test.ts"));
@@ -88,12 +101,29 @@ describe("every focus-session list door projects kind + triage", () => {
         ).toBeGreaterThan(20);
         return;
       }
+      if (SHARED_PROJECTION_CALL.test(src)) return;
       expect(src, `${rel} must call attachTriage`).toContain("attachTriage");
       expect(src, `${rel} must call attachSessionKind`).toContain(
         "attachSessionKind"
       );
     });
   }
+});
+
+describe("the shared row projection attaches both lenses", () => {
+  it("projectSessionRows calls attachTriage and attachSessionKind", () => {
+    const src = readFileSync(SHARED_PROJECTION_FILE, "utf8");
+    const start = src.indexOf("export async function projectSessionRows(");
+    expect(start, "projectSessionRows moved — update this pin").toBeGreaterThan(
+      -1
+    );
+    // Its body: up to the next top-level declaration.
+    const rest = src.slice(start + 1);
+    const end = rest.search(/\n(?:export )?(?:async )?function /);
+    const body = end === -1 ? rest : rest.slice(0, end);
+    expect(body).toMatch(/\battachTriage\(/);
+    expect(body).toMatch(/\battachSessionKind\(/);
+  });
 });
 
 /**

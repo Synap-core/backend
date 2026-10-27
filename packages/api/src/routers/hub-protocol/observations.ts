@@ -55,69 +55,20 @@
  * false-positive problem for a blind spot.
  */
 
-import { createHash } from "crypto";
-
 import { z } from "zod";
 
-import { createSynapEvent } from "@synap-core/core";
-import { OBSERVATION_NAMESPACES } from "@synap-core/types";
-import { getEventRepository, getRequestGrant } from "@synap/database";
-import { getBoss } from "@synap/events";
+import { checkDevLoopPayload, OBSERVATION_NAMESPACES } from "@synap-core/types";
+import { getRequestGrant } from "@synap/database";
 
 import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
-import { apiKeyService } from "../../services/api-keys.js";
+import { recordObservation } from "../../services/observations/record-observation.js";
 import { resolveConfinedWorkspace } from "./confine-workspace.js";
 import { grantWriteDenial } from "../../utils/grant-write-check.js";
 // Not through `rest/_shared.js`: that module imports this router's parent
 // (`./index.js`), so a caller entering here first (routers/system.ts) built
 // the hub router before this file had defined `observationsRouter`.
 import { getUserWorkspaceIds } from "../../utils/workspace-membership.js";
-import { PG_UUID_RE } from "./rest/_codecs/_openapi.js";
-
-/**
- * Stable namespace for observation subject refs. Any fixed UUID works; this one
- * must never change or previously-recorded subjects stop matching.
- */
-const OBSERVATION_SUBJECT_NAMESPACE = "6f1e5b7a-3c2d-4e8f-9a0b-1d2c3e4f5a6b";
-
-/**
- * Derive a deterministic UUID from an arbitrary subject reference.
- *
- * `SynapEvent.subjectId` is `z.string().uuid()` and `createSynapEvent` ends in
- * `SynapEventSchema.parse`, so a raw ref like `repo:backend` or a git SHA
- * THROWS. Observations are about things the pod may never have modelled, so
- * requiring a real entity UUID would defeat the point of the door.
- *
- * RFC-4122 v5 (SHA-1, name-based) gives the same UUID for the same ref forever,
- * so a subject stays queryable across batches and machines. The human-readable
- * original is preserved in `data.subjectRef` — never lose the real identifier.
- *
- * Implemented here rather than via the `uuid` package: that package only
- * resolves as a hoisted transitive dependency, which pnpm may stop providing.
- */
-function deriveSubjectUuid(ref: string): string {
-  const nsHex = OBSERVATION_SUBJECT_NAMESPACE.replace(/-/g, "");
-  const nsBytes = Buffer.from(nsHex, "hex");
-  const hash = createHash("sha1")
-    .update(Buffer.concat([nsBytes, Buffer.from(ref, "utf8")]))
-    .digest();
-
-  const bytes = Buffer.from(hash.subarray(0, 16));
-  bytes[6] = (bytes[6]! & 0x0f) | 0x50; // version 5
-  bytes[8] = (bytes[8]! & 0x3f) | 0x80; // RFC-4122 variant
-
-  const hex = bytes.toString("hex");
-  return [
-    hex.slice(0, 8),
-    hex.slice(8, 12),
-    hex.slice(12, 16),
-    hex.slice(16, 20),
-    hex.slice(20, 32),
-  ].join("-");
-}
-
-const UUID_RE = PG_UUID_RE; // the ONE Postgres-uuid shape (rest/_codecs/_openapi.ts)
 
 /**
  * Registered observation namespaces. A type MUST be `<namespace>.<rest>`.
@@ -269,7 +220,6 @@ export const observationsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const userId = ctx.userId as string;
       const agentUserId = ctx.agentUserId as string | undefined;
-      const eventRepo = getEventRepository();
 
       // Workspace tagging is resolved ONCE, up front, and never taken from the
       // request unchecked:
@@ -323,120 +273,27 @@ export const observationsRouter = router({
             });
             if (denial) throw new Error(denial);
           }
-          const event = createSynapEvent({
-            type: obs.type,
-            userId,
-            // Hashed, because SynapEvent.subjectId must be a UUID. The real ref
-            // rides in data.subjectRef so nothing is lost.
-            subjectId: UUID_RE.test(obs.subjectId)
-              ? obs.subjectId
-              : deriveSubjectUuid(obs.subjectId),
-            subjectType: obs.subjectType,
-            data: {
-              ...obs.data,
-              subjectRef: obs.subjectId,
-              // When we HEARD about it, kept only when the producer told us when
-              // it actually happened (the row `timestamp` is that occurrence
-              // time). This lives in `data`, NOT `metadata`, because
-              // `EventRepository.append` REPLACES the event's metadata with
-              // `{version, requestId}` and silently drops everything else —
-              // verified against a live pod, where a metadata field written here
-              // came back null. `data` is the only caller-controlled payload
-              // that survives.
-              ...(obs.occurredAt
-                ? { ingestedAt: new Date().toISOString() }
-                : {}),
-              // Kept for back-compat with readers that COALESCE the two; the
-              // indexable column is set on append below.
-              ...(workspaceId ? { workspaceId } : {}),
-            },
-            source: "api",
-            correlationId: obs.correlationId,
-            // Attribution WITHOUT `isAgent` — see the file header. Filling
-            // `agentUserId` alone is safe: every governance predicate that
-            // matters (including the daily-write-ceiling count) ANDs on
-            // `is_agent = true`, so this pollutes no metric while keeping the
-            // existing `GET /api/hub/events?agentUserId=` reader able to see
-            // what an agent recorded.
-            ...(agentUserId ? { agentUserId } : {}),
-            // NOTE: no `metadata` — see the `ingestedAt` comment above.
-            // `append` discards caller metadata, so writing any here would be a
-            // field that reads back null. The type namespace already identifies
-            // an observation; nothing else needs a marker.
-          });
-
-          const row = await eventRepo.append({
-            ...event,
-            // `occurredAt` must drive the ROW timestamp, not a metadata field.
-            // Everything that orders, filters, partitions or expires an event
-            // keys on `timestamp`; a metadata copy is read by nothing. Without
-            // this, a CLI flushing a week of commits lands them all as "now" —
-            // precisely the case this field exists for.
-            ...(obs.occurredAt ? { timestamp: obs.occurredAt } : {}),
-            // The real, indexable `workspace_id` column (0223). `createSynapEvent`
-            // has no workspaceId parameter, which is why the canonical writer
-            // (utils/audit-log.ts) also passes it separately here. Leaving it in
-            // `data` only forces readers onto an unindexed JSONB fallback.
-            workspaceId,
-          });
-
-          // ── UNIFIED TRIGGER HOP (additive) ────────────────────────────────
-          // A recorded observation can now fire automations, exactly like a
-          // governed event does via emitSideEffects' automation-trigger-match
-          // reactor. Enqueue the SAME queue in the SAME payload shape — but with
-          // `eventType = obs.type` (raw, e.g. "dev.commit"), which the matcher's
-          // `matchPattern` already handles (dotted + trailing-wildcard:
-          // "dev.commit" / "dev.*"). We deliberately do NOT route through
-          // `emitSideEffects`: it would synthesize `<subjectType>.<action>.
-          // completed` (the wrong eventType) and fire every unrelated reactor
-          // (search-index, webhook-delivery, …) for a row that is not a
-          // first-party domain event. The matcher's exactly-once
-          // (automation_claims), owner-floor, cycle/depth guard and workspace
-          // fan-out all apply unchanged (additive).
-          //
-          // RATE/VOLUME BOUND (Part C): consume a per-(producer, namespace)
-          // token from the shared key rate limiter BEFORE enqueuing. The FACT is
-          // already recorded above; only the trigger side-effect is gated, so a
-          // noisy/malicious key floods neither the trigger queue nor the
-          // proposals it would spawn — while never losing the fact. Bucketed on
-          // the producing PRINCIPAL (agent user id if present, else the human)
-          // × the coarse namespace, so varying the type suffix cannot bypass it.
-          //
-          // Best-effort: a boss / limiter error must never flip a RECORDED fact
-          // to `ok:false`. The row exists; the trigger is a side-effect.
-          try {
-            const dot = obs.type.indexOf(".");
-            const namespace = dot > 0 ? obs.type.slice(0, dot) : obs.type;
-            const triggerProducer = agentUserId ?? userId;
-            const withinTriggerBudget = apiKeyService.checkRateLimit(
-              `obs-trigger:${triggerProducer}:${namespace}`,
-              "observation-trigger"
-            );
-            if (withinTriggerBudget) {
-              await getBoss().send("automation-trigger-match", {
-                eventType: obs.type,
-                subjectId: event.subjectId,
-                userId,
-                workspaceId: workspaceId ?? null,
-                data: event.data,
-                // PROVENANCE — the recorded observation's own row. It was
-                // already in hand here (`row.id`, returned by the insert above)
-                // and was dropped, which is why a run fired by an observation
-                // could not name the fact that fired it. Top-level, never
-                // inside `data`: `resolveAutomationEventFingerprintId` reads
-                // `data.eventId` first, and a unique id there would give every
-                // observation a unique fingerprint and disable the
-                // exactly-once claim.
-                eventId: row.id,
-                // The producing agent, so a fired automation's THEN-actions are
-                // governed against it (proposal, never an ungoverned effect).
-                // Null for a human producer → owner-only governance, unchanged.
-                producerAgentUserId: agentUserId ?? null,
-              });
-            }
-          } catch {
-            // Trigger enqueue is a best-effort side-effect of a recorded fact.
+          // The dev-loop CONTRACT: a type the pod acts on must carry the
+          // payload the pod reads (`@synap-core/types` events/dev-loop.ts).
+          // Refused per item, like every other failure here — one malformed
+          // fact never strands the rest of the batch.
+          const contract = checkDevLoopPayload(obs.type, obs.data);
+          if (contract.contract && !contract.ok) {
+            throw new Error(contract.error);
           }
+          // ONE writer (the event, the unified trigger hop, the pod's own
+          // consumers): shared with the pod's own facts (`dev.deployed`).
+          const row = await recordObservation({
+            type: obs.type,
+            subjectRef: obs.subjectId,
+            subjectType: obs.subjectType,
+            data: obs.data,
+            userId,
+            ...(agentUserId ? { agentUserId } : {}),
+            ...(workspaceId ? { workspaceId } : {}),
+            ...(obs.occurredAt ? { occurredAt: obs.occurredAt } : {}),
+            ...(obs.correlationId ? { correlationId: obs.correlationId } : {}),
+          });
 
           results.push({ ok: true, index, id: row.id });
         } catch (err) {

@@ -39,6 +39,7 @@ import {
 import {
   codeValue,
   graphRecords,
+  proseChanges,
   type ProposedRecord,
   type RecordField,
   type RecordValue,
@@ -298,27 +299,49 @@ const DRAWERS = {
       const patch = (opByRef.get(u.ref)?.patch ?? {}) as Op;
       const fields = u.fields.flatMap((f) => {
         const whole = patch[f.key];
+        // What it holds now (the pod reads it while pending): a short
+        // instruction read whole becomes its changes; else before → after.
+        const rewrite =
+          f.key === "body" && f.before !== undefined && !f.beforeTruncated
+            ? proseChanges(f.before, whole)
+            : null;
         const value =
-          typeof whole === "string"
+          rewrite ??
+          (typeof whole === "string"
             ? f.key === "body" || f.key === "code"
               ? codeValue(whole)
               : text(whole)
-            : text(f.truncated ? `${f.value}…` : f.value);
-        return value
-          ? [{ ...field(f.key, value)[0]!, op: "change" as const }]
-          : [];
+            : text(f.truncated ? `${f.value}…` : f.value));
+        if (!value) return [];
+        const before =
+          rewrite || f.before === undefined
+            ? undefined
+            : text(f.beforeTruncated ? `${f.before}…` : f.before);
+        const base = field(f.key, value)[0]!;
+        return [
+          {
+            ...base,
+            op: "change" as const,
+            before,
+            wide: base.wide || before !== undefined,
+          },
+        ];
       });
       return record(
         "updates",
         u.ref,
         u.kind,
-        buildObjectActionTitle({ action: "update", objectKind: u.kind }),
+        buildObjectActionTitle({
+          action: "update",
+          objectKind: u.kind,
+          objectName: u.targetName,
+        }),
         [
           ...field("target", {
             kind: "ref",
             objectKind: u.kind,
             id: u.targetId,
-            name: resolveObjectNoun(u.kind),
+            name: u.targetName ?? resolveObjectNoun(u.kind),
           }),
           ...fields,
         ],

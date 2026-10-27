@@ -608,7 +608,23 @@ export interface ProposalReviewGraph {
     op: CompositeUpdateOperation["op"];
     kind: "skill" | "automation" | "rule" | "playbook" | "view" | "entity";
     targetId: string;
-    fields: Array<{ key: string; value: string; truncated: boolean }>;
+    /**
+     * The row's name, when the pod read it for this viewer (a skill today):
+     * a rewrite names WHICH skill it rewrites. Absent = not read.
+     */
+    targetName?: string;
+    fields: Array<{
+      key: string;
+      value: string;
+      truncated: boolean;
+      /**
+       * What the field holds NOW, excerpted like `value`: read from the live
+       * row while the proposal is still pending (a skill today). Absent =
+       * not read, or empty now.
+       */
+      before?: string;
+      beforeTruncated?: boolean;
+    }>;
   }>;
 }
 

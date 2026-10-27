@@ -240,6 +240,24 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
     new RegExp(`^/focus-sessions/${SESSION_ID}/document/?$`),
     READS("session", "artifact", "document"),
   ],
+  // `buildWorkGraph` (work-graph.ts): session rows (sessionListConditions),
+  // links (blocked_by, spawned_from, targets/produced), the next move's reads
+  // (proposals, room inboxes, cross-kind blockers on entities and tracks),
+  // liveness (chat turns, events, proposals) and the derived interactions
+  // (events, automation runs). Same projection as MCP `synap_get_work_graph`.
+  [
+    /^\/focus-sessions\/graph\/?$/,
+    READS(
+      "session",
+      "link",
+      "proposal",
+      "channel",
+      "event",
+      "automation",
+      "entity",
+      "track"
+    ),
+  ],
 ];
 
 /**
@@ -317,6 +335,17 @@ export const MCP_READ_TOOL_DOORS: Readonly<Record<string, FencedReadDoor>> = {
   synap_list_proposals: READS("proposal", "entity"),
   synap_get_proposal: READS("proposal", "entity"),
   synap_list_sessions: READS("session", "project"),
+  // Same subjects as `GET /focus-sessions/graph` (GRANT_REST_GET_READS).
+  synap_get_work_graph: READS(
+    "session",
+    "link",
+    "proposal",
+    "channel",
+    "event",
+    "automation",
+    "entity",
+    "track"
+  ),
   synap_get_session: READS(
     "session",
     "channel",
