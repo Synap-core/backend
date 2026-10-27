@@ -12,8 +12,10 @@
  *                        ONE stamper.
  *   postEvidence       — the evidence criteria graded through `evaluateSession`
  *                        (`kinds: ["evidence"]`, narrowed to the keys posted).
- *   reevaluateCriteria — the named criteria graded again (every non-human
- *                        check), narrowed by `criterionKeys`.
+ *   reevaluateCriteria — the named criteria graded again, narrowed by
+ *                        `criterionKeys`, with the event rule's kinds
+ *                        (`EVENT_GRADED_KINDS`: evidence + capability, never
+ *                        an LLM `judge` per event).
  *
  * GOVERNANCE IS NOT HERE: the caller decided (the automation ladder, or a
  * person's approval). Every door is OWNER-floored on `userId`.
@@ -33,6 +35,7 @@ import {
   type CompleteOutputOutcome,
 } from "../focus-sessions/update-session.js";
 import { satisfyClaimsByEvidence } from "../focus-sessions/satisfy-expected-output.js";
+import { EVENT_GRADED_KINDS } from "./recheck-criteria.js";
 import {
   evaluateSession,
   type EvaluateSessionResult,
@@ -77,7 +80,9 @@ export async function completeOutcome(input: {
       { keepUnlisted: true }
     );
     report = applied.completeOutput;
-    return applied.outputs;
+    // Nothing claimed (no match, a person's slot): no write, so the row's
+    // `updatedAt` does not move for a no-op.
+    return report?.result === "claimed" ? applied.outputs : null;
   });
   const claimed = report as CompleteOutputOutcome | undefined;
   if (claimed?.result === "claimed") {
@@ -133,6 +138,7 @@ export async function reevaluateCriteria(input: {
       sessionId: input.sessionId,
       userId: input.userId,
       agentUserId: input.agentUserId ?? null,
+      kinds: [...EVENT_GRADED_KINDS],
       criterionKeys: input.criterionKeys,
     })
   );

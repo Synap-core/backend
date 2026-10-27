@@ -195,6 +195,24 @@ describe("completeOutcome", () => {
     expect((await stored(id))[0]!.status ?? "pending").toBe("pending");
   });
 
+  it("a no-op (no matching outcome, a person's slot) writes nothing — updatedAt does not move (S6)", async () => {
+    const id = await seed([
+      { ...prSlot(258), owner: "human", owedSince: "2026-10-01T00:00:00Z" },
+    ]);
+    await q(
+      `update focus_sessions set updated_at = '2020-01-01T00:00:00' where id = $1`,
+      [id]
+    );
+    for (const outcomeKey of ["no-such-outcome", "pr-backend-258"]) {
+      await completeOutcome({ sessionId: id, userId: USER, outcomeKey });
+    }
+    const { rows } = await q<{ updated_at: unknown }>(
+      `select updated_at::text as updated_at from focus_sessions where id = $1`,
+      [id]
+    );
+    expect(String(rows[0]!.updated_at)).toMatch(/^2020-01-01/);
+  });
+
   it("is OWNER-floored: another person's session is not touched", async () => {
     const id = await seed([prSlot(257)], { user: OTHER });
     expect(
@@ -231,7 +249,7 @@ describe("postEvidence / reevaluateCriteria", () => {
     ]);
   });
 
-  it("reevaluateCriteria re-grades the named criteria with every non-human check", async () => {
+  it("reevaluateCriteria re-grades the named criteria with the EVENT rule's kinds — never an LLM judge per event (S5)", async () => {
     const id = await seed([]);
     await reevaluateCriteria({
       sessionId: id,
@@ -243,6 +261,7 @@ describe("postEvidence / reevaluateCriteria", () => {
         sessionId: id,
         userId: USER,
         agentUserId: null,
+        kinds: ["evidence", "capability"],
         criterionKeys: ["merged"],
       },
     ]);

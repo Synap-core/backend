@@ -9,9 +9,13 @@
  *   • a DENIAL is a policy block, never a write;
  *   • a GRANT reaches the api door through the slot, on the session's owner;
  *   • an UNREGISTERED slot fails the step (fail-closed);
- *   • the owner + workspace floors refuse another person's / space's session.
+ *   • the owner + workspace floors refuse another person's / space's session;
+ *   • a SUBJECT lookup (session_update and the verbs, ONE resolution) finds
+ *     only the automation owner's sessions (S9).
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import type { SQL } from "drizzle-orm";
+import { PgDialect } from "drizzle-orm/pg-core";
 import type { StepContext } from "../automation-executor.js";
 
 const SESSION = "11111111-1111-4111-8111-111111111111";
@@ -22,13 +26,20 @@ const PRODUCER = "agent-ci";
 const mocks = vi.hoisted(() => ({
   gate: vi.fn(),
   sessionRow: undefined as Record<string, unknown> | undefined,
+  /** Every focus-session lookup the step made (its `where`, rendered below). */
+  lookups: [] as Array<{ where?: unknown }>,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@synap/database")>();
   const db = {
     query: {
-      focusSessions: { findFirst: async () => mocks.sessionRow },
+      focusSessions: {
+        findFirst: async (args: { where?: unknown }) => {
+          mocks.lookups.push(args);
+          return mocks.sessionRow;
+        },
+      },
       channels: { findFirst: async () => undefined },
     },
     update: () => ({ set: () => ({ where: async () => [] }) }),
@@ -228,5 +239,37 @@ describe("config is validated before governance", () => {
     expect(readPostedEvidence({ k: { passed: 1 } })).toBeNull();
     expect(readPostedEvidence({})).toBeNull();
     expect(readPostedEvidence(null)).toBeNull();
+  });
+});
+
+describe("ONE session resolution, owner-floored on a subject lookup (S9)", () => {
+  const SUBJECT = "22222222-2222-4222-8222-222222222222";
+  const rendered = (where: unknown) => new PgDialect().sqlToQuery(where as SQL);
+
+  beforeEach(() => {
+    mocks.lookups.length = 0;
+    mocks.sessionRow = undefined;
+  });
+
+  it.each([
+    ["session_update", { subjectEntityId: SUBJECT, currentStage: "deploy" }],
+    ["complete_outcome", { subjectEntityId: SUBJECT, outcomeKey: "k" }],
+  ])(
+    "%s by subject looks among the OWNER's active sessions only",
+    async (verb, config) => {
+      await run(verb, config);
+      expect(mocks.lookups).toHaveLength(1);
+      const q = rendered(mocks.lookups[0]!.where);
+      expect(q.sql).toMatch(/"user_id" = \$\d/);
+      expect(q.params).toEqual(
+        expect.arrayContaining([SUBJECT, "active", OWNER])
+      );
+    }
+  );
+
+  it("an explicit session id is looked up by id (the caller refuses another's by name)", async () => {
+    await run("complete_outcome", { sessionId: SESSION, outcomeKey: "k" });
+    const q = rendered(mocks.lookups[0]!.where);
+    expect(q.params).toEqual([SESSION]);
   });
 });

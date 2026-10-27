@@ -29,6 +29,7 @@ import {
   insertChannelMessage,
   ChannelRepository,
 } from "@synap/database";
+import type { SQL } from "@synap/database";
 import { MessageRole, MessageAuthorType } from "@synap/database/schema";
 import type { ExpectedOutput } from "@synap/playbooks";
 import { emitSideEffects } from "@synap/events";
@@ -1088,20 +1089,10 @@ export async function executeOutputStep(
       const addOutput = config.addOutput as
         Pick<ExpectedOutput, "kind" | "label" | "icon"> | undefined;
 
-      let session: typeof focusSessions.$inferSelect | undefined;
-      if (sessionId) {
-        session = await db.query.focusSessions.findFirst({
-          where: eq(focusSessions.id, sessionId),
-        });
-      } else if (subjectEntityId) {
-        session = await db.query.focusSessions.findFirst({
-          where: and(
-            eq(focusSessions.subjectEntityId, subjectEntityId),
-            eq(focusSessions.status, "active")
-          ),
-          orderBy: [desc(focusSessions.startedAt)],
-        });
-      }
+      const session = await resolveFlowSession(
+        { sessionId, subjectEntityId },
+        ownerId
+      );
 
       if (!session) {
         return { status: "skipped", reason: "no matching session" };
@@ -1273,7 +1264,7 @@ export async function executeOutputStep(
       // api doors through the fail-closed slot, a PROPOSAL carries the same
       // patch to the `focus_session/update` executor, which applies it through
       // the SAME doors on approval.
-      const target = await resolveFlowSession(config);
+      const target = await resolveFlowSession(config, ownerId);
       if (!target) return { status: "skipped", reason: "no matching session" };
       if (target.workspaceId && target.workspaceId !== workspaceId) {
         throw new Error(
@@ -1511,13 +1502,18 @@ export function notificationDigest(title: string, body: string): string {
 }
 
 /**
- * The session a session-scoped output targets: `config.sessionId`, else the
- * ACTIVE session whose subject is `config.subjectEntityId` (newest) — the
- * resolution `session_update` uses.
+ * WHERE a session-scoped output finds its session — the ONE resolution
+ * `session_update` and the outcome verbs share: `config.sessionId`, else the
+ * ACTIVE session whose subject is `config.subjectEntityId`, newest first,
+ * among the automation OWNER's sessions (on a multi-member pod the newest
+ * session on a subject may be someone else's, and the owner's own must still
+ * be found). An explicit id is not floored here: the callers refuse another
+ * person's session by name, so that refusal says why. `null` = no lookup.
  */
-async function resolveFlowSession(
-  config: Record<string, unknown>
-): Promise<typeof focusSessions.$inferSelect | undefined> {
+export function flowSessionLookup(
+  config: Record<string, unknown>,
+  ownerId: string
+): { where: SQL; newestFirst: boolean } | null {
   const sessionId =
     typeof config.sessionId === "string" && config.sessionId
       ? config.sessionId
@@ -1527,20 +1523,31 @@ async function resolveFlowSession(
       ? config.subjectEntityId
       : undefined;
   if (sessionId) {
-    return db.query.focusSessions.findFirst({
-      where: eq(focusSessions.id, sessionId),
-    });
+    return { where: eq(focusSessions.id, sessionId), newestFirst: false };
   }
   if (subjectEntityId) {
-    return db.query.focusSessions.findFirst({
+    return {
       where: and(
         eq(focusSessions.subjectEntityId, subjectEntityId),
-        eq(focusSessions.status, "active")
-      ),
-      orderBy: [desc(focusSessions.startedAt)],
-    });
+        eq(focusSessions.status, "active"),
+        eq(focusSessions.userId, ownerId)
+      )!,
+      newestFirst: true,
+    };
   }
-  return undefined;
+  return null;
+}
+
+async function resolveFlowSession(
+  config: Record<string, unknown>,
+  ownerId: string
+): Promise<typeof focusSessions.$inferSelect | undefined> {
+  const lookup = flowSessionLookup(config, ownerId);
+  if (!lookup) return undefined;
+  return db.query.focusSessions.findFirst({
+    where: lookup.where,
+    ...(lookup.newestFirst ? { orderBy: [desc(focusSessions.startedAt)] } : {}),
+  });
 }
 
 /**
