@@ -706,7 +706,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       "Scope by `workspaceId` (membership-checked), `projectId` (the project " +
       "must be visible to the caller — `loadVisibleProject`, the same floor " +
       "every project read and filing write uses), or both. At least one is " +
-      "required. Rows are always floored at the sessions the caller can read.",
+      "required, except for a workspace-bound key, which reads its own " +
+      "workspace when it names none (another `workspaceId` is a 403). Rows " +
+      "are always floored at the sessions the caller can read.",
     request: {
       query: z.object({
         workspaceId: uuidQueryParam.optional(),
@@ -1175,7 +1177,14 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
     }
 
-    const workspaceIdParam = c.req.query("workspaceId") || undefined;
+    // A workspace-bound key is pinned to its workspace (403 on another one),
+    // and a bound key that names none reads its own, never the pod.
+    const confined = confineWorkspaceOrForbidden(
+      c,
+      c.req.query("workspaceId") || undefined
+    );
+    if (!confined.ok) return c.json({ error: confined.error }, 403);
+    const workspaceIdParam = confined.workspaceId ?? undefined;
     const projectIdParam = c.req.query("projectId") || undefined;
     if (!workspaceIdParam && !projectIdParam) {
       return c.json({ error: "workspaceId or projectId is required" }, 400);

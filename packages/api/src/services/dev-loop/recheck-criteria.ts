@@ -25,6 +25,14 @@ import {
 
 export type RecheckResult = { status: "no_criteria" } | EvaluateSessionResult;
 
+/**
+ * The check kinds an EVENT may grade — the ONE rule for every event-driven
+ * re-grade (this re-check and the automation verb `reevaluate_criterion`,
+ * `session-outcome-door.ts`): `evidence` and `capability`, never `judge` (an
+ * LLM call per event) nor `human`.
+ */
+export const EVENT_GRADED_KINDS = ["evidence", "capability"] as const;
+
 /** The criteria of a session that are about `outcomeKey`. Pure. */
 export function criteriaAboutOutcome(
   criteria: ReturnType<typeof readCriteria>,
@@ -72,7 +80,7 @@ export async function recheckCriteriaForOutcome(input: {
     userId: input.userId,
     agentUserId: input.agentUserId ?? null,
     evidence,
-    kinds: ["evidence", "capability"],
+    kinds: [...EVENT_GRADED_KINDS],
     criterionKeys: [input.outcomeKey],
   });
 }

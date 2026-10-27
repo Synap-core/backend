@@ -1447,6 +1447,9 @@ const OUTPUT_NODE_TYPES = [
   "webhook",
   "channel_message",
   "session_update",
+  "complete_outcome",
+  "post_evidence",
+  "reevaluate_criterion",
   "set_state",
 ] as const satisfies readonly OutputNodeDef["data"]["outputType"][];
 
@@ -1483,6 +1486,9 @@ const OUTPUT_ACTION_SHAPES: Record<
   notification: { verb: "send", objectKind: "notification" },
   webhook: { verb: "send", objectKind: "webhook" },
   session_update: { verb: "update", objectKind: "focus_session" },
+  complete_outcome: { verb: "complete", objectKind: "outcome" },
+  post_evidence: { verb: "post", objectKind: "evaluation" },
+  reevaluate_criterion: { verb: "check", objectKind: "criterion" },
   set_state: { verb: "set", objectKind: "state" },
 };
 

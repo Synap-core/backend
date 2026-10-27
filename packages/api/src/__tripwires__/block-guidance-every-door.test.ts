@@ -51,6 +51,12 @@ const WITHHELD: Record<string, string> = {
     "slots at birth (the author's own definition, not an agent's hand-off " +
     "in this turn). It returns a row, not an agent response — there is " +
     "nothing to annotate with a guideline here.",
+  "services/dev-loop/session-outcome-door.ts":
+    "An automation's `complete_outcome` (plan v5 T2): it calls " +
+    "`applyOutputMutations` with `completeOutput` ONLY — a claim on an " +
+    "existing slot, never a block or a hand-off to the person (a person's " +
+    "slot is refused by that same merge). There is no agent response to " +
+    "annotate: the caller is an automation step.",
   "services/focus-sessions/stage-slots.ts":
     "Merges a STAGE's declared slots (the playbook author's definition) into " +
     "the session on stage ENTRY — the same template-declared slots " +
