@@ -20,6 +20,7 @@ import {
   index,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
+import { CONTENT_KINDS, type ContentKind } from "@synap-core/types/renderables";
 import { workspaces } from "./workspaces.js";
 
 export type WidgetRendererType =
@@ -89,9 +90,8 @@ export type WidgetRole =
  * Content kind — the single de-conflated taxonomy for WHAT a cell renders. It
  * REPLACES `role` (which conflated content with placement). DISTINCT from
  * `rendererType` (the rendering MECHANISM: frame/builtin/iframe/native).
- * Mirrors `CONTENT_KINDS` in `@synap-core/types/renderables` (the canonical
- * copy), pinned element-for-element by the api tripwire
- * `content-kinds-one-taxonomy.test.ts`.
+ * Declared ONCE, as `CONTENT_KINDS` in `@synap-core/types/renderables`, and
+ * re-exported here.
  *
  *   - "entity-detail"  → renders ONE entity (its full page)
  *   - "entity-card"    → renders ONE entity (its small, embeddable block)
@@ -100,27 +100,14 @@ export type WidgetRole =
  *   - "widget"         → generic, content-agnostic — the DEFAULT; never a
  *                        profile assignment, only placeable
  *
- * The column is plain `text` with no CHECK (migration 0111), so widening this
- * union needs no migration.
+ * The column is plain `text` with no CHECK (migration 0111), so widening the
+ * list needs no migration. Every zod door that accepts a `contentKind` MUST
+ * build its enum from this const (`z.enum(CONTENT_KINDS)`) rather than
+ * retyping the five literals: a hand-copied projection has already drifted
+ * once (`entity-card` existed here but not in the Control Plane's publish
+ * schema, so an entity-card cell could not be shipped as a package at all).
  */
-export const CONTENT_KINDS = [
-  "entity-detail",
-  "entity-card",
-  "entity-profile",
-  "collection",
-  "widget",
-] as const;
-
-/**
- * The union, DERIVED from the runtime const above so the two can never
- * disagree. Every zod door that accepts a `contentKind`
- * MUST build its enum from this const (`z.enum(CONTENT_KINDS)`) rather than
- * retyping the five literals: a hand-copied projection of this union has
- * already drifted once (`entity-card` existed here but not in the Control
- * Plane's publish schema, so an entity-card cell could not be shipped as a
- * package at all).
- */
-export type ContentKind = (typeof CONTENT_KINDS)[number];
+export { CONTENT_KINDS, type ContentKind };
 
 export const widgetDefinitions = pgTable(
   "widget_definitions",
