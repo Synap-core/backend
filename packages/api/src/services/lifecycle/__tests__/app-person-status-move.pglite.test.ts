@@ -25,6 +25,10 @@
  * runs the agent ladder (a proposal or an auto-approved receipt, both
  * attributed to the agent).
  *
+ * The source comes from the KEY, never the body (`hubWriteSource`): a key
+ * that is not a person's app sign-in stays on the AI ladder whatever source it
+ * states, and a person's key may only narrow its own.
+ *
  * NOT COVERED: the Hub HTTP auth door itself (`pod-app-person-token.pglite
  * .test.ts` proves the app_person key resolves to this scope); the event's
  * fan-out (`@synap/events` lifecycle-transition.test.ts proves the outbox
@@ -209,7 +213,11 @@ let WORK = "";
 
 /** What the app was granted and the person ticked: work Content OS pieces. */
 const PIECES: GrantScope = {
-  permissions: ["entity.content.read", "entity.content.update"],
+  permissions: [
+    "entity.content.read",
+    "entity.content.create",
+    "entity.content.update",
+  ],
   workspaceIds: [WS],
 };
 
@@ -281,6 +289,38 @@ async function seedPiece(status = "idea"): Promise<string> {
   );
   return id;
 }
+
+/** `POST /entities` through the hub forwarder, inside the key's request. */
+async function create(
+  key: { clientId: string | null; agent?: string },
+  source?: string
+) {
+  return inRequest(key, key.agent, async () => {
+    const ctx = await createHubProtocolCallerContext(
+      USER,
+      ["hub-protocol.read", "hub-protocol.write"],
+      WS,
+      null,
+      WORK,
+      key.agent ?? null
+    );
+    return hubEntitiesRouter.createCaller(ctx as never).createEntity({
+      userId: USER,
+      profileSlug: "content",
+      title: `A piece ${randomUUID().slice(0, 8)}`,
+      workspaceId: WS,
+      ...(source ? { source } : {}),
+    } as never);
+  });
+}
+
+/** Every proposal row (pending, or an AI ladder's auto-approved receipt). */
+const allProposals = async () =>
+  (
+    await q<{ status: string; agent_user_id: string | null }>(
+      `select status, agent_user_id from proposals`
+    )
+  ).rows;
 
 const titleOf = async (id: string) =>
   (await q<{ title: string }>(`select title from entities where id = $1`, [id]))
@@ -510,6 +550,44 @@ describe("a PLAIN field an app sign-in PATCHes is the person's write", () => {
     await patch(AGENT_KEY, piece, { title: "Renamed by the agent" });
     expect(await proposalsOn(piece)).toEqual([
       expect.objectContaining({ agent_user_id: AGENT }),
+    ]);
+  });
+});
+
+describe("the source comes from the KEY, never from the body", () => {
+  it("an unattributed hub key stating a connector source stays on the anonymous-AI ladder", async () => {
+    // `cli` is not an AI source to the gate: honoured, it would put this key
+    // on the person's ladder, which leaves no row.
+    await create(SERVICE_KEY, "cli");
+    expect(await allProposals()).toEqual([
+      expect.objectContaining({ agent_user_id: null }),
+    ]);
+  });
+
+  it('no hub key may state itself a person: `source: "user"` is refused at the door', async () => {
+    await expect(create(AGENT_KEY, "user")).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+    });
+    expect(await allProposals()).toEqual([]);
+  });
+
+  it('an agent key\'s PATCH carrying `source: "user"` still runs the agent ladder', async () => {
+    const piece = await seedPiece("idea");
+    await patch(AGENT_KEY, piece, {
+      title: "Renamed by the agent",
+      source: "user",
+    } as never);
+    expect(await proposalsOn(piece)).toEqual([
+      expect.objectContaining({ agent_user_id: AGENT }),
+    ]);
+  });
+
+  it("a person's app key creates as the person; stating an AI source narrows it to the AI ladder", async () => {
+    await create(PERSON_APP_KEY);
+    expect(await allProposals()).toEqual([]);
+    await create(PERSON_APP_KEY, "intelligence");
+    expect(await allProposals()).toEqual([
+      expect.objectContaining({ agent_user_id: null }),
     ]);
   });
 });
