@@ -213,6 +213,19 @@ export function aggregateNeedsYou(
     : session.nextMoveActor === "user";
 }
 
+/**
+ * The session's needs-you count could not be read: its `unitFacts` say a
+ * part FAILED (`needsYouItems` → null). A draft never needs you, so it is
+ * never unread. Legacy `nextMoveActor` rows carry no count to fail.
+ */
+function needsYouUnread(session: ProjectAggregateSessionFact): boolean {
+  return (
+    !session.draft &&
+    session.unitFacts !== undefined &&
+    needsYouItems(session.unitFacts) === null
+  );
+}
+
 export interface ProjectAggregateStateInput {
   sessions: readonly ProjectAggregateSessionFact[];
   /** True when the sessions read FAILED — not merely empty. */
@@ -262,7 +275,10 @@ export function projectAggregateInput(
       (s.live !== null && isSessionWorkingNow(s.live, s.now ?? Date.now()))
   );
   if (working) return { running: true, everStarted: true, progress };
-  if (open.some((s) => s.live === null)) return { unreadable: true, progress };
+  // A failed needs-you count is not "nothing owed": never a calm "quiet".
+  if (open.some((s) => s.live === null || needsYouUnread(s))) {
+    return { unreadable: true, progress };
+  }
   return { idle: true, everStarted: true, progress };
 }
 
@@ -292,7 +308,9 @@ export function sessionRowInput(session: SessionRowFact): UnitStateInput {
   const needsYou = aggregateNeedsYou(session);
   const input = sessionUnitInput({
     status: session.status,
-    owedFromYou: needsYou ? 1 : 0,
+    // A failed count stays FAILED (`null` → unmeasured), never a measured 0:
+    // otherwise an unreadable row reads the same calm state as an empty one.
+    owedFromYou: needsYou ? 1 : needsYouUnread(session) ? null : 0,
     blockedBy: session.blockedBy ?? null,
     ...(session.live !== undefined ? { live: session.live } : {}),
     ...(session.now !== undefined ? { now: session.now } : {}),

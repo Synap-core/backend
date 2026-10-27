@@ -638,3 +638,52 @@ describe("card vs rule parity: one session, one answer", () => {
     );
   });
 });
+
+describe("a FAILED needs-you count is never a measured 0 (relay, 2026-10-27)", () => {
+  const live = { turnInFlight: false, lastAt: null };
+  const facts = (owedFromYou: number | null) => ({
+    owedFromYou,
+    pendingDecisions: 0,
+    awaitingReview: false,
+    draft: false,
+  });
+
+  it("a path row: null reads unmeasured, 0 reads the quiet state", () => {
+    expect(
+      pathRowUnitView({
+        status: "active",
+        unitFacts: facts(null),
+        live,
+      } as never).state
+    ).toBe("unmeasured");
+    expect(
+      pathRowUnitView({ status: "active", unitFacts: facts(0), live } as never)
+        .state
+    ).toBe("paused");
+  });
+
+  it("a draft is never unread: it never needs you", () => {
+    expect(
+      pathRowUnitView({
+        status: "active",
+        unitFacts: { ...facts(null), draft: true },
+        live,
+      } as never).state
+    ).toBe("paused");
+  });
+
+  it("a project: one unread open session is unmeasured, never idle", () => {
+    const state = (owedFromYou: number | null) =>
+      resolveUnitState(
+        projectAggregateInput({
+          sessions: [
+            { status: "active", unitFacts: facts(0), live },
+            { status: "active", unitFacts: facts(owedFromYou), live },
+          ],
+          unreadable: false,
+        })
+      ).state;
+    expect(state(null)).toBe("unmeasured");
+    expect(state(0)).toBe("paused");
+  });
+});
