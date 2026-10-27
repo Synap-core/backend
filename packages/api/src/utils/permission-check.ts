@@ -161,6 +161,10 @@ export {
   ADMIN_ACTIONS,
   resolveChannelCapabilityDecision,
 } from "@synap/governance-policy";
+import {
+  HELD_WRITES_TARGET_TYPE,
+  HELD_WRITES_PROPOSAL_TYPE,
+} from "./held-writes-pack.js";
 export type { ChannelCapabilityGrant };
 export type { ChannelCapabilityDecision } from "@synap/governance-policy";
 
@@ -3388,14 +3392,12 @@ export const JOIN_GATE_DEFERRED_MESSAGE =
   "is replayed for you (it then applies, or asks for its own review) — do not " +
   "resend it, and do not retry it into a different workspace.";
 
-/**
- * The held-writes pack (W-B1): past its daily write ceiling (rung 2.56) an
- * agent's replayable writes are kept on ONE pending pack per (agent, UTC day)
- * instead of one proposal each. Filed by `fileHeldWrites`; approved by
- * the `agent/held_writes` executor, which replays each kept write.
- */
-export const HELD_WRITES_TARGET_TYPE = "agent";
-export const HELD_WRITES_PROPOSAL_TYPE = "held_writes";
+// The held-writes pack's identity lives in a leaf module so a reader of it
+// (`session-content-redaction.ts`) does not import this whole gate.
+export {
+  HELD_WRITES_TARGET_TYPE,
+  HELD_WRITES_PROPOSAL_TYPE,
+} from "./held-writes-pack.js";
 /** Writes one day's pack may hold: one more day's worth at the default ceiling. */
 export const HELD_WRITES_MAX = DEFAULT_DAILY_WRITE_CEILING;
 /** The rung 2.56 reason code that routes a write to the pack. */
