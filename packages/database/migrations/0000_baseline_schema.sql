@@ -418,6 +418,9 @@ CREATE TABLE IF NOT EXISTS "events" (
   -- produced this write, next to `user_id` (the connecting human). NULL = bare
   -- / human write. No FK — the app row is revocable, events are immutable.
   "app_id"         text,
+  -- Daily-ceiling bookkeeping exemption (0365): TRUE = an agent's bookkeeping
+  -- of its OWN focus session, skipped by the daily write count. NULL = counted.
+  "ceiling_exempt" boolean,
   PRIMARY KEY ("id", "timestamp")
 );
 -- NOTE on ALTER for "events": it is a TimescaleDB hypertable with columnstore
@@ -447,6 +450,8 @@ ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "session_id"    uuid;
 -- App attribution as a first-class column (0310). Nullable, no default —
 -- supported on a compressed hypertable (same reasoning as the ALTERs above).
 ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "app_id"        text;
+-- Daily-ceiling bookkeeping exemption (0365). Nullable, no default.
+ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "ceiling_exempt" boolean;
 
 CREATE INDEX IF NOT EXISTS "idx_events_subject"
   ON "events" ("subject_type", "subject_id", "timestamp");
@@ -3755,13 +3760,14 @@ CREATE TABLE IF NOT EXISTS "webhook_subscriptions" (
   "id"                uuid    PRIMARY KEY DEFAULT gen_random_uuid(),
   "user_id"           text    NOT NULL,
   "name"              text    NOT NULL,
-  "url"               text    NOT NULL,
+  "url"               text,
   "event_types"       text[]  NOT NULL,
   "secret"            text    NOT NULL,
   "active"            boolean NOT NULL DEFAULT true,
   "retry_config"      jsonb   DEFAULT '{"maxRetries":3}',
   "created_at"        timestamp with time zone NOT NULL DEFAULT now(),
   "last_triggered_at" timestamp with time zone,
+  "direction"         text    NOT NULL DEFAULT 'outbound',
   "workspace_id"      uuid REFERENCES workspaces(id) ON DELETE CASCADE,
   "api_key_id"        uuid REFERENCES "api_keys"("id") ON DELETE CASCADE
 );
@@ -3779,6 +3785,17 @@ ALTER TABLE "webhook_subscriptions" ADD COLUMN IF NOT EXISTS "workspace_id" uuid
 ALTER TABLE "webhook_subscriptions" ADD COLUMN IF NOT EXISTS "api_key_id" uuid REFERENCES "api_keys"("id") ON DELETE CASCADE;
 CREATE INDEX IF NOT EXISTS "webhook_subscriptions_api_key_id_idx"
   ON "webhook_subscriptions" ("api_key_id");
+-- 0362: inbound sources (no url, never delivered to), one per (space, name).
+ALTER TABLE "webhook_subscriptions" ADD COLUMN IF NOT EXISTS "direction" text NOT NULL DEFAULT 'outbound';
+ALTER TABLE "webhook_subscriptions" ALTER COLUMN "url" DROP NOT NULL;
+DO $$ BEGIN
+  ALTER TABLE "webhook_subscriptions" ADD CONSTRAINT "webhook_subscriptions_direction_check"
+    CHECK ("direction" IN ('outbound', 'inbound') AND ("direction" = 'inbound' OR "url" IS NOT NULL));
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+CREATE UNIQUE INDEX IF NOT EXISTS "webhook_subscriptions_inbound_name_uq"
+  ON "webhook_subscriptions" ("workspace_id", lower("name"))
+  WHERE "direction" = 'inbound';
 
 CREATE TABLE IF NOT EXISTS "webhook_deliveries" (
   "id"               uuid    PRIMARY KEY DEFAULT gen_random_uuid(),

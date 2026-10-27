@@ -100,6 +100,7 @@ import { broadcastNotification } from "@synap/jobs";
 import type { WorkspaceSettings } from "@synap/database/schema";
 import { NotificationService } from "../notifications/NotificationService.js";
 import { notifyProposalCreatedOrdered } from "../notifications/notify-proposal-created-ordered.js";
+import { settleSupersededProposals } from "../services/proposals/settle-superseded.js";
 import {
   listAgentGovernanceOverrides,
   type AgentGovernanceOverride,
@@ -160,6 +161,10 @@ export {
   ADMIN_ACTIONS,
   resolveChannelCapabilityDecision,
 } from "@synap/governance-policy";
+import {
+  HELD_WRITES_TARGET_TYPE,
+  HELD_WRITES_PROPOSAL_TYPE,
+} from "./held-writes-pack.js";
 export type { ChannelCapabilityGrant };
 export type { ChannelCapabilityDecision } from "@synap/governance-policy";
 
@@ -3387,14 +3392,12 @@ export const JOIN_GATE_DEFERRED_MESSAGE =
   "is replayed for you (it then applies, or asks for its own review) — do not " +
   "resend it, and do not retry it into a different workspace.";
 
-/**
- * The held-writes pack (W-B1): past its daily write ceiling (rung 2.56) an
- * agent's replayable writes are kept on ONE pending pack per (agent, UTC day)
- * instead of one proposal each. Filed by `fileHeldWrites`; approved by
- * the `agent/held_writes` executor, which replays each kept write.
- */
-export const HELD_WRITES_TARGET_TYPE = "agent";
-export const HELD_WRITES_PROPOSAL_TYPE = "held_writes";
+// The held-writes pack's identity lives in a leaf module so a reader of it
+// (`session-content-redaction.ts`) does not import this whole gate.
+export {
+  HELD_WRITES_TARGET_TYPE,
+  HELD_WRITES_PROPOSAL_TYPE,
+} from "./held-writes-pack.js";
 /** Writes one day's pack may hold: one more day's worth at the default ceiling. */
 export const HELD_WRITES_MAX = DEFAULT_DAILY_WRITE_CEILING;
 /** The rung 2.56 reason code that routes a write to the pack. */
@@ -3799,6 +3802,9 @@ async function createPendingProposalRow(
   if (!tx && !result.deduped) {
     await notifyProposalCreated(result.proposal, input);
   }
+  // The versions this one replaced: the rest of their withdrawal, after the
+  // commit (a transaction caller's rows are settled by `createProposal`).
+  if (!tx) await settleSupersededProposals(result.superseded, input.userId);
 
   return result;
 }
@@ -3827,13 +3833,15 @@ const TRUSTED_AGENT_MIN_TOTAL = 100;
 /** Minimum approve rate (within the trust window) before trust can raise the cap. */
 const TRUSTED_AGENT_MIN_APPROVE_RATE = 0.95;
 /**
- * Recent-proposal window the trust check scores over. MUST match
- * `agent-scorecard.ts`'s `SCORECARD_SCAN_LIMIT` (not imported directly — that
- * would create a module cycle, since agent-scorecard.ts already imports
- * `agentProposalCap` from here) so the cap's trust verdict and the
- * scorecard's DISPLAYED approve rate are computed over the identical set of
- * rows and can never visibly disagree. Trust is earnable back over an agent's
- * RECENT behavior rather than accumulating forever over its lifetime.
+ * Recent-proposal window the trust check scores over: the agent's newest 500
+ * proposals. Trust is earnable back over an agent's RECENT behavior rather
+ * than accumulating forever over its lifetime.
+ *
+ * NOT the scorecard's window any more. The card (`agent-scorecard.ts`) used
+ * to scan the same newest 500 and now counts its last 7 days in SQL
+ * (`scorecardWindow`), because 500 rows of a busy agent covered under a day
+ * and hid that day's rejections. For an agent filing fewer than 500 a week
+ * the cap's set is a superset of the card's; for a busier one it is a subset.
  */
 const CAP_TRUST_WINDOW = 500;
 
@@ -3921,11 +3929,11 @@ export function agentProposalLimitLine(
  * approve rate, both within that recent window) gets a 3x ceiling; everyone
  * else gets the base cap.
  *
- * D4a: previously scored the agent's ENTIRE lifetime, which could silently
- * disagree with the recent-500 approve rate `agent-scorecard.ts` displays —
- * an agent could show a dropping recent rate on its scorecard while still
- * holding the 3x cap earned from old history. Scoring the same window makes
- * the two agree and lets trust be earned back / lost based on recent conduct.
+ * D4a: previously scored the agent's ENTIRE lifetime, so an agent could show
+ * a dropping recent rate on its scorecard while still holding the 3x cap
+ * earned from old history. A recent window lets trust be earned back / lost
+ * based on recent conduct (the card's own window is 7 days: see
+ * `CAP_TRUST_WINDOW`).
  */
 export async function agentProposalCap(agentUserId: string): Promise<number> {
   const explicit = await resolvePendingProposalCap({ db, agentUserId });
@@ -4414,7 +4422,7 @@ async function createProposal(args: {
   // `.requested` append failure now ROLLS BACK the proposal instead of being
   // swallowed — an un-traceable proposal is worse than a surfaced error.
   // Notifications run AFTER commit (never hold the tx across network/queue work).
-  const { proposal, pendingInput, deduped } = await db.transaction(
+  const { proposal, pendingInput, deduped, superseded } = await db.transaction(
     async (tx) => {
       let reqEventId = requestedEventId;
       if (!reqEventId) {
@@ -4460,11 +4468,12 @@ async function createProposal(args: {
         governanceReason: governanceReason ?? null,
       };
 
-      const { proposal: created, deduped } = await createPendingProposalRow(
-        pendingInput,
-        tx
-      );
-      return { proposal: created, pendingInput, deduped };
+      const {
+        proposal: created,
+        deduped,
+        superseded,
+      } = await createPendingProposalRow(pendingInput, tx);
+      return { proposal: created, pendingInput, deduped, superseded };
     }
   );
 
@@ -4479,6 +4488,7 @@ async function createProposal(args: {
   } else {
     await notifyProposalCreated(proposal, pendingInput);
   }
+  await settleSupersededProposals(superseded, userId);
 
   return {
     granted: false,
@@ -4890,6 +4900,10 @@ async function fileHeldWrites(
     data: {
       day: utcDay(new Date(write.at)),
       agentUserId: write.agentUserId,
+      // The pack's title names the agent from its own data (F6,
+      // `heldWritesPackName`): every door that titles a proposal reads it
+      // without a users join.
+      ...(agent?.name ? { agentName: agent.name } : {}),
       deferredWrites: [write],
       source: "agent",
     },

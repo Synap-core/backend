@@ -29,7 +29,7 @@ import { db, and, inArray } from "@synap/database";
 import { focusSessions } from "@synap/database/schema";
 import { isLikelyUUID } from "@synap-core/types/proposals";
 import { resolvePrivateObjectLabel } from "@synap-core/types/vocabulary";
-import { HELD_WRITES_PROPOSAL_TYPE } from "../../utils/permission-check.js";
+import { HELD_WRITES_PROPOSAL_TYPE } from "../../utils/held-writes-pack.js";
 import {
   sessionReadableWhere,
   type SessionReader,

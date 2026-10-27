@@ -135,6 +135,13 @@ const RunPlaybookBodySchema = z.object({
     .describe(
       "The stage of that track the run is filed at. Omit for its current stage. Needs trackId."
     ),
+  handToAgentId: z
+    .string()
+    .uuid()
+    .optional()
+    .describe(
+      "Hand the run to this agent (an agent user id, as synap_list_agents returns it): it does the work and the playbook's own executor is not started. An unknown, paused or foreign agent is refused by name."
+    ),
 });
 
 const PlaybookResultSchema = z.record(z.string(), z.unknown());
@@ -516,7 +523,7 @@ export function registerPlaybooksRoutes(app: HubHono): void {
 
   /**
    * POST /playbooks/:id/run
-   * Body: { workspaceId?, subjectId?, params?, agentIds?, reasoning?, agentUserId?, projectId?, trackId? }
+   * Body: { workspaceId?, subjectId?, params?, agentIds?, reasoning?, agentUserId?, projectId?, trackId?, trackStage?, handToAgentId? }
    */
   app.post("/playbooks/:id/run", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
@@ -548,6 +555,7 @@ export function registerPlaybooksRoutes(app: HubHono): void {
           projectId: body.projectId,
           trackId: body.trackId,
           trackStage: body.trackStage,
+          handToAgentId: body.handToAgentId,
           source: "hub-rest",
         }
       );

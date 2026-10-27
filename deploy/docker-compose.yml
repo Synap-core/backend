@@ -168,6 +168,10 @@ x-backend-env: &backend-env
   NANGO_HOST: ${NANGO_HOST:-}
   NANGO_SECRET_KEY: ${NANGO_SECRET_KEY:-}
   NANGO_CONNECT_URL: ${NANGO_CONNECT_URL:-}
+  # MCP burst cap: calls per minute per API key on /mcp
+  # (packages/api/src/utils/hub-protocol-rate-limit.ts). Empty = the code's
+  # default. A refused call carries Retry-After.
+  RATE_LIMIT_MCP_MAX: ${RATE_LIMIT_MCP_MAX:-}
   # Every visitor reaches this pod from ONE client IP (a Cloudflare tunnel's
   # cloudflared peer), so per-IP limits on public pages and forms are one shared
   # bucket. When true, each workspace's public doors are OFF until its owner
@@ -559,9 +563,12 @@ services:
   # deploy/state/postgres-initialized exists) is kept aside as SUSPECT: nothing
   # pruned, nothing pushed, .alarm raised. Once `synap backup init` ran, each
   # good dump + MinIO objects + .env + state/ is pushed as an encrypted restic
-  # snapshot to BACKUP_REPOSITORY (append-only: the pod never forgets/prunes),
-  # and a restore drill runs weekly. Unhealthy when no recent dump exists or
-  # any of .alarm / .push-failed / .drill-failed is set.
+  # snapshot to BACKUP_REPOSITORY, a restore drill runs weekly, and, with
+  # BACKUP_RETENTION=true in .env, a daily forget+prune keeps the scheduled ladder
+  # (newest + previous hour/day/week/month) and the last 3 manual pushes (the
+  # pod's B2 key cannot delete: pruned files are hidden, deleted by the bucket
+  # lifecycle 30 days later). Unhealthy when no recent dump exists or any of
+  # .alarm / .push-failed / .drill-failed / .retention-failed is set.
   # Restore: synap restore --from-snapshot <id|latest>  |  synap restore <dir>
   # ============================================================================
   postgres-backup:
@@ -593,7 +600,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "test ! -e /backups/.alarm && test ! -e /backups/.push-failed && test ! -e /backups/.drill-failed && find /backups -maxdepth 1 \\( -name '*-auto' -o -name '*-daily' \\) -mmin -$$(( BACKUP_INTERVAL_SECONDS / 30 )) | grep -q .",
+          "test ! -e /backups/.alarm && test ! -e /backups/.push-failed && test ! -e /backups/.drill-failed && test ! -e /backups/.retention-failed && find /backups -maxdepth 1 \\( -name '*-auto' -o -name '*-daily' \\) -mmin -$$(( BACKUP_INTERVAL_SECONDS / 30 )) | grep -q .",
         ]
       interval: 10m
       timeout: 10s

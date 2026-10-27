@@ -49,7 +49,13 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { db, webhookSubscriptions, eq, GrantRepository } from "@synap/database";
+import {
+  db,
+  webhookSubscriptions,
+  eq,
+  and,
+  GrantRepository,
+} from "@synap/database";
 import {
   channels,
   documents,
@@ -213,7 +219,14 @@ export async function deliverWebhooksForEvent(
         retryConfig: webhookSubscriptions.retryConfig,
       })
       .from(webhookSubscriptions)
-      .where(eq(webhookSubscriptions.active, true));
+      // Only an OUTBOUND row is a subscriber (jobs webhook-worker DIRECTION
+      // RULE): an inbound source lists no event types = "every event".
+      .where(
+        and(
+          eq(webhookSubscriptions.active, true),
+          eq(webhookSubscriptions.direction, "outbound")
+        )
+      );
     const wanted = active.filter((s) =>
       subscriptionWantsEvent(s.eventTypes, eventType)
     );

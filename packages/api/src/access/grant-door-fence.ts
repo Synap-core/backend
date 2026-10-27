@@ -267,6 +267,12 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   // set). `messaging` is the subject `messaging_accounts` already reads under
   // (grant-read.ts); the send through one is `messaging.send`.
   [/^\/messaging\/accounts\/?$/, PERSON("messaging")],
+  // Which agents the person has (id, name, agent type, presence; never a
+  // key): an app that hands a run to one of them (`handToAgentId` on
+  // POST /playbooks/:id/run) must name it. The person's own roster, which no
+  // space holds, so it is a PERSON door: the app asks for `agent.read` and the
+  // person ticks it. `agent` is the subject `agent_configs` reads under.
+  [/^\/agent-users\/?$/, PERSON("agent")],
   // The session row, narrowed by the route (`sessionPacketReadable`): the
   // packet is added only for a key that reads all of it.
   [

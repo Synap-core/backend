@@ -178,6 +178,9 @@ const KNOWN_CREDENTIAL_DOORS = [
   "packages/api/src/routers/workspaces/invites.ts createInvite",
   "packages/api/src/routers/workspaces/invites.ts addMember",
   "packages/api/src/routers/webhooks.ts create",
+  // An inbound webhook source's secret fires a space's automations (0362).
+  "packages/api/src/routers/webhooks.ts adminCreateInboundSource",
+  "packages/api/src/routers/webhooks.ts adminRotateInboundSourceSecret",
   "packages/api/src/routers/shares.ts share",
 ];
 

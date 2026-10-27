@@ -38,6 +38,8 @@ export interface InstalledPlaybookReconcileResult {
   kind: "up-to-date" | "updated" | "adopted" | "foreign" | "proposed";
   applied: string[];
   ownerOwned: string[];
+  /** `proposed` only: the review the change waits on. */
+  proposalId?: string;
 }
 
 /** Reconcile ONE installed row against its template element. */
@@ -74,11 +76,14 @@ export async function reconcileInstalledPlaybook(args: {
     ...(plan.metadata ? { metadata: plan.metadata } : {}),
   } as Parameters<
     ReturnType<typeof playbooksRouter.createCaller>["update"]
-  >[0])) as { status?: string };
-  return {
-    ...base,
-    kind: res?.status === "proposed" ? "proposed" : plan.kind,
-  };
+  >[0])) as { status?: string; proposalId?: string | null };
+  if (res?.status === "proposed")
+    return {
+      ...base,
+      kind: "proposed",
+      ...(res.proposalId ? { proposalId: res.proposalId } : {}),
+    };
+  return { ...base, kind: plan.kind };
 }
 
 /** Non-fatal (the ONE wrapper): an activator pass never fails the reconcile. */

@@ -37,6 +37,16 @@ import {
 import type { NeedsYouFacts } from "../units/needs-you.js";
 import type { SessionLiveFacts } from "../run-activity/live.js";
 import { isTerminalSessionStatus } from "../focus-sessions/statuses.js";
+import { FATE_COPY, type ProposalFate } from "../proposals/fate.js";
+import { ageSpan, shortDate } from "./age.js";
+import {
+  askCardSlotOf,
+  askCardView,
+  type Ask,
+  type AskCardPendingRelay,
+  type AskCardAsker,
+  type AskCause,
+} from "../ask/index.js";
 import {
   humanizeToken,
   normalizeObjectKind,
@@ -83,6 +93,21 @@ export interface LensRowBy {
   id: string;
   /** Its display name. */
   label: string;
+  /**
+   * Where the mark opens, when not the agent's page: an owed ask's asker
+   * opens the session it asked in, as the ask card's asker does.
+   */
+  door?: LensDoor;
+}
+
+/**
+ * WHAT raised a row when no agent did (an owed ask's `askCause`): the card's
+ * cause words ("From the run · 29 Sep") and the cause as a door.
+ */
+export interface LensRowCause {
+  label: string;
+  /** The cause object (the decision, the run); null = not addressable. */
+  door: LensDoor | null;
 }
 
 export interface LensRow {
@@ -118,6 +143,11 @@ export interface LensRow {
    * to the agent's page. Absent / null = unknown, several, or a person.
    */
   by?: LensRowBy | null;
+  /**
+   * WHAT raised it when no agent did — drawn as a door in the `by` slot.
+   * Never both: a named asker wins (`askCardView`'s asker).
+   */
+  cause?: LensRowCause | null;
   /** When it happened (ISO), for the age. Null = unknown (no age is drawn). */
   occurredAt: string | null;
   /**
@@ -132,10 +162,11 @@ export interface LensRow {
   /** Units this row stands for (a session card's items) — what caps count. */
   count: number;
   /**
-   * An agent raised it (the signal's `ai` category — agent-originated work).
-   * Drawn as an AI provenance mark on the row — never on a Proposed row,
-   * whose lane heading already carries it. Absent = not known to be an agent.
-   * Same name and meaning as `LensOutput.byAgent`.
+   * An agent raised it and the row cannot NAME it (the signal's `ai`
+   * category, no `by`): the unnamed AI provenance mark. Never on an owed ask
+   * (its asker is named, its cause is named, or nothing is drawn), never
+   * beside a `by` that already says it, never on a Proposed row, whose lane
+   * heading already carries it. Same name and meaning as `LensOutput.byAgent`.
    */
   byAgent?: boolean;
   /**
@@ -238,8 +269,23 @@ export interface LensNeedsYouSignal extends GroupableSignal {
   access?: NeedsYouAccessRequest | null;
   /** `space-invite`: the invite the row's Accept and Decline act on. */
   invite?: NeedsYouInvite | null;
-  /** `proposal-cluster`: the ONE agent that filed every member (the pod's `Signal.by`). */
+  /**
+   * `proposal-cluster`: the ONE agent that filed every member; `owed-slot`:
+   * the agent that asked it, when the pod can name it (the pod's `Signal.by`).
+   */
   by?: LensRowBy | null;
+  /** `owed-slot`: HOW the person answers — read for the card's heading. */
+  ask?: Ask | null;
+  /** `owed-slot`: what raised it when no agent did. */
+  askCause?: AskCause | null;
+  /** `owed-slot`: kept owed past its session — its fate reads it. */
+  keptOwedAt?: string | null;
+  /** `owed-slot`: a criterion slot's key — the card's cause when no agent asked. */
+  criterionKey?: string | null;
+  /** `owed-slot`: a param slot's param — the card's cause when no agent asked. */
+  paramName?: string | null;
+  /** `owed-slot`: a relayed answer waiting for the tap — its own clock. */
+  pendingRelay?: AskCardPendingRelay | null;
 }
 
 /** A work-broke notification: ONE rule, owned by the Inbox buckets (`needs-you/buckets.ts`). */
@@ -297,20 +343,61 @@ export function lensRowExpiry(
       urgent: true,
       expired: true,
     };
-  const mins = Math.floor(left / 60_000);
-  const span =
-    mins < 1
-      ? "<1m"
-      : mins < 60
-        ? `${mins}m`
-        : mins < 24 * 60
-          ? `${Math.floor(mins / 60)}h`
-          : `${Math.floor(mins / (24 * 60))}d`;
   return {
-    label: `Expires in ${span}`,
+    label: `Expires in ${ageSpan(left)}`,
     urgent: left <= LENS_EXPIRY_URGENT_MS,
     expired: false,
   };
+}
+
+/**
+ * A pending proposal's fate on silence as ONE sentence (`proposalFate`,
+ * `../proposals/fate.ts`) — the "If you ignore it" line every surface draws.
+ * An expiry reads exactly as the row's age slot does ({@link lensRowExpiry}),
+ * so the two can never show different countdowns. Copy, not vocabulary: no
+ * fate kind is a stored value; the words are `FATE_COPY`, shared with the
+ * ask card.
+ */
+export function proposalFateLine(
+  fate: ProposalFate,
+  now: number = Date.now()
+): string {
+  switch (fate.kind) {
+    case "expires": {
+      const expiry = lensRowExpiry({ expiresAt: fate.expiresAt }, now);
+      if (!expiry) return FATE_COPY.untilDecided;
+      return fate.orSessionEnd && !expiry.expired
+        ? FATE_COPY.orSessionEnd(expiry.label)
+        : expiry.label;
+    }
+    case "dies_with_session":
+      return FATE_COPY.endsWithSession;
+    case "until_decided":
+      return FATE_COPY.untilDecided;
+    case "review_later": {
+      const since = shortDate(fate.since);
+      return since ? FATE_COPY.reviewLaterSince(since) : FATE_COPY.reviewLater;
+    }
+  }
+}
+
+/**
+ * The "If you ignore it" sentence: what silence DOES, where
+ * {@link proposalFateLine} names where the item stands. Review later says
+ * the row is out of the count and stays; `objectWork` still waiting says it
+ * leaves the count after the Review later clock (`proposalClass` is the
+ * display row's, the class the fate rule reads). Every other fate's line
+ * already is its consequence.
+ */
+export function proposalFateConsequence(
+  fate: ProposalFate,
+  opts: { proposalClass?: string | null; now?: number } = {}
+): string {
+  if (fate.kind === "review_later") return FATE_COPY.reviewLaterIfIgnored;
+  if (fate.kind === "until_decided" && opts.proposalClass === "objectWork") {
+    return FATE_COPY.leavesCountIfIgnored;
+  }
+  return proposalFateLine(fate, opts.now);
 }
 
 /**
@@ -445,6 +532,30 @@ function itemShape(
 }
 
 /**
+ * The row's named asker. An owed ask's is the card's (`askCardView`), and it
+ * opens the session it asked in; anything else keeps the agent's page.
+ */
+function rowAsker(
+  s: LensNeedsYouSignal,
+  asker: AskCardAsker | null
+): LensRowBy | null {
+  if (s.kind !== "owed-slot") {
+    return s.by?.label
+      ? { kind: "agent", id: s.by.id, label: s.by.label }
+      : null;
+  }
+  if (asker?.kind !== "agent" || !s.by) return null;
+  return {
+    kind: "agent",
+    id: s.by.id,
+    label: asker.name,
+    ...(asker.sessionId
+      ? { door: { kind: "session", id: asker.sessionId } }
+      : {}),
+  };
+}
+
+/**
  * A needs-you ROW (from `needsYouRows`) as a lens row of class `cls`
  * (`blocking`, or `proposed` for the drafts `partitionNeedsYou` set aside).
  *
@@ -459,6 +570,22 @@ export function lensRowOfNeedsYou<T extends LensNeedsYouSignal>(
   if (row.kind === "item") {
     const s = row.signal;
     const shape = itemShape(s);
+    const card =
+      s.kind === "owed-slot"
+        ? askCardView(askCardSlotOf(s), {
+            sessionId: row.session?.id ?? null,
+          })
+        : null;
+    const asker = card?.asker ?? null;
+    const by = rowAsker(s, asker);
+    const causeRef = asker?.kind === "cause" ? asker.cause.ref : undefined;
+    const cause: LensRowCause | null =
+      asker?.kind === "cause"
+        ? {
+            label: asker.label,
+            door: causeRef ? { kind: causeRef.kind, id: causeRef.id } : null,
+          }
+        : null;
     return {
       key: row.key,
       cls,
@@ -470,10 +597,12 @@ export function lensRowOfNeedsYou<T extends LensNeedsYouSignal>(
       title:
         s.kind === "draft-asks"
           ? s.sessionTitle?.trim() || s.sessionGoal?.trim() || s.title
-          : s.title,
-      ...(s.kind === "owed-slot" && s.why?.trim()
-        ? { detail: s.why.trim() }
-        : {}),
+          : card
+            ? card.heading
+            : s.title,
+      // An owed slot's title and detail are the ask card's (`askCardView`):
+      // the question once, and its `why` only when it adds.
+      ...(card?.context ? { detail: card.context } : {}),
       reasonKind: needsYouReasonOf(s),
       repeat: repeatLabel(s),
       source: row.session
@@ -483,14 +612,18 @@ export function lensRowOfNeedsYou<T extends LensNeedsYouSignal>(
             label: row.session.title ?? "",
           }
         : null,
-      ...(s.by?.label
-        ? { by: { kind: "agent" as const, id: s.by.id, label: s.by.label } }
-        : {}),
+      ...(by ? { by } : {}),
+      ...(cause ? { cause } : {}),
       occurredAt: iso(s.occurredAt),
       door: s.target ?? null,
       count: 1,
-      // An agent ASKED — never a failure an agent merely suffered.
-      byAgent: s.category === AGENT_CATEGORY && !isFailureSignal(s),
+      // An agent ASKED — never a failure an agent merely suffered — and the
+      // row cannot say which. An owed ask names its asker or cause, or nothing.
+      byAgent:
+        s.kind !== "owed-slot" &&
+        !by &&
+        s.category === AGENT_CATEGORY &&
+        !isFailureSignal(s),
       expiresAt: expiresAt(s.occurredAt, s.lifetimeHours),
     };
   }

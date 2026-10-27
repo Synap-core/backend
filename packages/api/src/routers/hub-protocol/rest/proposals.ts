@@ -253,6 +253,12 @@ export function registerProposalsRoutes(app: HubHono): void {
           .describe(
             "Composite per-create choice, keyed by the entity ref dispositions use. One entry is not applied to any other op."
           ),
+        allowToday: z
+          .boolean()
+          .optional()
+          .describe(
+            "Held-writes packs only (agent/held_writes): also lift the agent's daily write ceiling to 2x the current limit until the next 00:00 UTC, so its next writes today are not held again. A person's act: refused for an agent credential and without the authority to author that ceiling (pod admin). 400 on any other proposal or a pack already decided. The response then carries allowedToday {ceilingId, agentUserId, limit, previousLimit, expiresAt, alreadyAllowed}."
+          ),
       }),
     },
     responses: {
@@ -324,6 +330,19 @@ export function registerProposalsRoutes(app: HubHono): void {
             .optional()
             .describe(
               "Composite: one entry per op that ran a resolution. Singular identity is also set when exactly one op resolved."
+            ),
+          allowedToday: z
+            .object({
+              ceilingId: z.string(),
+              agentUserId: z.string(),
+              limit: z.number().int(),
+              previousLimit: z.number().int(),
+              expiresAt: z.string(),
+              alreadyAllowed: z.boolean(),
+            })
+            .optional()
+            .describe(
+              "Set when allowToday was passed: the agent's daily write ceiling for the rest of the UTC day (limit), the one it was raised from (previousLimit, back in force at expiresAt), and whether an earlier allow-today had already raised it."
             ),
         }),
       },
@@ -693,7 +712,15 @@ export function registerProposalsRoutes(app: HubHono): void {
     const rawBody = (jsonRead.body ?? {}) as {
       identityResolution?: unknown;
       identityResolutionByRef?: unknown;
+      allowToday?: unknown;
     };
+    if (
+      rawBody.allowToday !== undefined &&
+      typeof rawBody.allowToday !== "boolean"
+    ) {
+      return c.json({ error: "Invalid allowToday (boolean)" }, 400);
+    }
+    const allowToday = rawBody.allowToday === true;
     let identityResolution:
       ReturnType<typeof identityResolutionInput.parse> | undefined;
     if (rawBody.identityResolution !== undefined) {
@@ -729,8 +756,11 @@ export function registerProposalsRoutes(app: HubHono): void {
         proposalId: resolvedId,
         ...(identityResolution ? { identityResolution } : {}),
         ...(identityResolutionByRef ? { identityResolutionByRef } : {}),
+        ...(allowToday ? { allowToday: true } : {}),
       })) as {
         primaryId?: string;
+        /** F3: what "allow today" raised the agent's ceiling to. */
+        allowedToday?: unknown;
         linked?: number;
         /** A large approval handed to the background job — still applying. */
         queued?: true;
@@ -775,6 +805,9 @@ export function registerProposalsRoutes(app: HubHono): void {
           // this response or a fill_empty conflict is dropped.
           ...(approval?.identity ? { identity: approval.identity } : {}),
           ...(approval?.identities ? { identities: approval.identities } : {}),
+          ...(approval?.allowedToday
+            ? { allowedToday: approval.allowedToday }
+            : {}),
           // A LARGE approval is applying in the background: `success` means
           // the gates passed and it started, NOT that it finished. The run
           // carries done / total; the proposal stays pending until it ends.

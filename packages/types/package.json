@@ -80,6 +80,10 @@
       "types": "./dist/renderables/index.d.ts",
       "import": "./dist/renderables/index.js"
     },
+    "./cell-bridge": {
+      "types": "./dist/cell-bridge/index.d.ts",
+      "import": "./dist/cell-bridge/index.js"
+    },
     "./presentation": {
       "types": "./dist/presentation/index.d.ts",
       "import": "./dist/presentation/index.js"
@@ -200,6 +204,10 @@
     "./proposals/intent": {
       "types": "./dist/proposals/intent.d.ts",
       "import": "./dist/proposals/intent.js"
+    },
+    "./proposals/fate": {
+      "types": "./dist/proposals/fate.d.ts",
+      "import": "./dist/proposals/fate.js"
     },
     "./proposals/item-pack": {
       "types": "./dist/proposals/item-pack.d.ts",
