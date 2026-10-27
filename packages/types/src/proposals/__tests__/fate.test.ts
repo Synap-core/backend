@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  FATE_COPY,
+  PROPOSAL_WAIT_REASONS,
   REVIEW_LATER_AFTER_DAYS,
+  fateEndsWithSession,
   isReviewLater,
   isSessionBoundDraft,
   proposalFate,
@@ -124,5 +127,59 @@ describe("proposalFate — each row names the rule it rules out", () => {
 
   it("isSessionBoundDraft is the one document-edit classifier", () => {
     expect(isSessionBoundDraft).toBe(isDocumentEditProposal);
+  });
+});
+
+describe("fateEndsWithSession — the close moment's one reading", () => {
+  it.each([
+    ["a session-bound draft", { kind: "dies_with_session" }, true],
+    ["an ask that ends with its session", { kind: "ends_with_session" }, true],
+    [
+      "an expiry its session's end may come first",
+      { kind: "expires", expiresAt: at(-DAY), orSessionEnd: true },
+      true,
+    ],
+    [
+      "an expiry with no session",
+      { kind: "expires", expiresAt: at(-DAY), orSessionEnd: false },
+      false,
+    ],
+    ["a proposal that waits for a decision", { kind: "until_decided" }, false],
+    ["Review later", { kind: "review_later", since: at(DAY) }, false],
+    ["no fate stamped", null, false],
+  ] as const)("%s", (_n, fate, want) => {
+    expect(fateEndsWithSession(fate)).toBe(want);
+  });
+
+  it("agrees with proposalFate on a document edit filed in a session", () => {
+    const fate = proposalFate(
+      row({ targetType: "document", proposalType: "update", sessionId: "s1" })
+    );
+    expect(fate.kind).toBe("dies_with_session");
+    expect(fateEndsWithSession(fate)).toBe(true);
+  });
+});
+
+describe("FATE_COPY — the Review later fold and the wait reasons", () => {
+  it("says the fold's clock in its caption, from the same constant", () => {
+    expect(FATE_COPY.reviewLaterCaption).toBe(
+      `Untouched for ${REVIEW_LATER_AFTER_DAYS} days · not in your count`
+    );
+    expect(FATE_COPY.reviewLaterFold(3)).toBe("Review later · 3");
+    expect(FATE_COPY.reviewLaterPile).toBe("Review later");
+  });
+
+  it("words every wait reason the pod sends, with no em dash", () => {
+    for (const reason of PROPOSAL_WAIT_REASONS) {
+      expect(FATE_COPY.waitReason[reason]).toMatch(/\S/);
+    }
+    const strings = Object.values(FATE_COPY).flatMap((v) =>
+      typeof v === "function"
+        ? [(v as (a: never) => string)("x" as never)]
+        : typeof v === "string"
+          ? [v]
+          : Object.values(v)
+    );
+    for (const text of strings) expect(text).not.toContain("—");
   });
 });

@@ -14,6 +14,10 @@
  *     (link, don't create). Tracked in `entity_identity_signals` (one row owns
  *     each (type, value) pair). This makes the old "email is too risky to merge
  *     on" exclusion obsolete: email is strong EVERYWHERE now.
+ *     A strong match never crosses kinds: when the caller names the kind it is
+ *     resolving, an owner of ANOTHER kind is not the same subject (a person
+ *     whose `website` is their company's is not that company) — it is
+ *     reported as an advisory cross-kind candidate instead (2026-10-27).
  *   WEAK atoms — name (+ `aliases[]`, + a person's `discord-handle` surface
  *     form) — are NOT unique. They yield candidates/suggestions ONLY, scoped
  *     per kind (`entities.type`) and to the caller's visible rows. They never
@@ -36,6 +40,7 @@ import {
   entities,
   entityIdentitySignals,
   entityPropertyIndex,
+  profiles,
   propertyDefs,
 } from "../schema/index.js";
 import type * as schema from "../schema/index.js";
@@ -76,7 +81,9 @@ export interface ResolvedIdentityEntity {
 
 export interface IdentityResolution {
   /**
-   * 'strong' = matched a globally-unique signal (auto-resolve / link).
+   * 'strong' = matched a globally-unique signal owned by an entity of the
+   *            requested kind, or of any kind when none was given
+   *            (auto-resolve / link).
    * 'weak'   = matched a same-kind name/alias/handle candidate (advisory).
    * null     = no confident match (candidates may still be present for facets).
    */
@@ -84,8 +91,14 @@ export interface IdentityResolution {
   /** The resolved row: strong→signal owner, weak→first same-kind candidate. */
   entity?: ResolvedIdentityEntity;
   /**
-   * SAME-TITLE rows of a DIFFERENT kind than the requested `kindSlug`, present
-   * only when nothing matched within the requested kind.
+   * Rows of a DIFFERENT kind than the requested `kindSlug` that look like the
+   * same subject, from two sources:
+   *  - SAME-TITLE rows (weak path), present only when nothing matched within
+   *    the requested kind — always also in `candidates`;
+   *  - rows of another kind that OWN one of the given strong signals (a person
+   *    carrying their company's website), present whatever the weak path
+   *    found, and only when the caller's `userScope` admits them — never in
+   *    `candidates`, so a caller can tell the two apart.
    *
    * `match: null` used to be read as "nothing exists — safe to create", which
    * green-lit a duplicate whenever the same subject already existed under
@@ -98,7 +111,7 @@ export interface IdentityResolution {
    * merge entities — strong-signal dedup (email/phone/url/handle/external-id)
    * stays the only automatic path. Treat this as a link SUGGESTION only.
    *
-   * Always present (possibly empty); a subset of `candidates`.
+   * Always present (possibly empty).
    */
   crossKindCandidates: ResolvedIdentityEntity[];
   /**
@@ -454,11 +467,15 @@ export function signalsFromExplicit(
  *
  * @param db        Database handle (schema-typed).
  * @param userId    The acting user (provenance; weak scope is via `userScope`).
- * @param kindSlug  When set, a weak match must be the SAME kind (entities.type)
- *                  to become `match:'weak'` / `entity`; `candidates` still
- *                  carries cross-kind rows for facet detection, and
- *                  `crossKindCandidates` names them explicitly when nothing of
- *                  the requested kind matched (advisory — never auto-merge).
+ * @param kindSlug  When set, a match must be the SAME kind (entities.type) to
+ *                  become `match:'strong'|'weak'` / `entity` (see
+ *                  `countsAsSameKind` for what "same" admits). `candidates`
+ *                  still carries cross-kind name rows for facet detection, and
+ *                  `crossKindCandidates` names the other-kind rows explicitly
+ *                  (advisory — never auto-merge).
+ * @param alsoKinds Kinds that count as the same subject besides `kindSlug` — a
+ *                  multi-kind role create rewritten onto one of its applicable
+ *                  kinds (a `lead` may sit on a person OR a company).
  * @param name      The name/title to weak-match (=== title). Blank → no weak.
  * @param signals   Strong identity atoms to look up (email/phone/url/…).
  * @param userScope A Drizzle predicate limiting the weak search to rows the
@@ -478,6 +495,7 @@ export async function resolveIdentity(
   params: {
     userId: string;
     kindSlug?: string;
+    alsoKinds?: readonly string[];
     name?: string | null;
     signals?: IdentitySignal[];
     userScope?: SQL;
@@ -485,6 +503,8 @@ export async function resolveIdentity(
   }
 ): Promise<IdentityResolution> {
   const limit = params.limit ?? 25;
+  /** Strong-signal owners of another kind, already floored by `userScope`. */
+  let signalCrossKind: ResolvedIdentityEntity[] = [];
 
   // ── STRONG: globally-unique identity signals ──────────────────────────────
   const normalizedSignals = (params.signals ?? [])
@@ -502,7 +522,10 @@ export async function resolveIdentity(
     });
 
   if (normalizedSignals.length > 0) {
-    const signalMatch = await db.query.entityIdentitySignals.findFirst({
+    // EVERY owner, not the first: the signals of one call can belong to
+    // different subjects (a person's email is theirs, the website they carry
+    // is their company's), and only an owner of the requested kind may win.
+    const signalRows = await db.query.entityIdentitySignals.findMany({
       where: or(
         ...normalizedSignals.map((s) =>
           and(
@@ -513,31 +536,65 @@ export async function resolveIdentity(
       ),
       columns: { entityId: true },
     });
+    const ownerIds = [...new Set(signalRows.map((r) => r.entityId))];
 
-    if (signalMatch) {
-      const entity = await db.query.entities.findFirst({
-        where: and(
-          eq(entities.id, signalMatch.entityId),
-          isNull(entities.deletedAt)
-        ),
-        columns: { id: true, title: true, type: true, workspaceId: true },
-      });
-      if (entity) {
-        return {
-          match: "strong",
-          entity,
-          candidates: [],
-          crossKindCandidates: [],
-        };
+    if (ownerIds.length > 0) {
+      // A signal pointing at a deleted/missing row is ignored (falls through).
+      // Earliest-created first → deterministic when several owners qualify.
+      const owners: ResolvedIdentityEntity[] = await db.query.entities.findMany(
+        {
+          where: and(
+            inArray(entities.id, ownerIds),
+            isNull(entities.deletedAt)
+          ),
+          columns: { id: true, title: true, type: true, workspaceId: true },
+          orderBy: (e, { asc }) => [asc(e.createdAt)],
+        }
+      );
+      const sameKind = new SameKindCheck(db, params.kindSlug, params.alsoKinds);
+      const otherKind: ResolvedIdentityEntity[] = [];
+      for (const owner of owners) {
+        if (await sameKind.admits(owner.type)) {
+          return {
+            match: "strong",
+            entity: owner,
+            candidates: [],
+            crossKindCandidates: [],
+          };
+        }
+        otherKind.push(owner);
       }
-      // Signal points at a deleted/missing row — ignore, fall through to weak.
+      // An owner of ANOTHER kind is not this subject: approving a capture that
+      // linked a new person onto the company whose website they carry merged a
+      // person into a company (founder's pod, 2026-10-27). It is still worth
+      // naming — as an advisory candidate, never a link. The strong index is
+      // pod-global, so it is named only when the caller's `userScope` admits
+      // it (no scope ⇒ nothing named, as for the weak path).
+      if (otherKind.length > 0 && params.userScope) {
+        const visible = await db.query.entities.findMany({
+          where: and(
+            inArray(
+              entities.id,
+              otherKind.map((o) => o.id)
+            ),
+            params.userScope
+          ),
+          columns: { id: true },
+        });
+        const visibleIds = new Set(visible.map((v) => v.id));
+        signalCrossKind = otherKind.filter((o) => visibleIds.has(o.id));
+      }
     }
   }
 
   // ── WEAK: name / handle / alias candidates (advisory) ─────────────────────
   const name = params.name?.trim();
   if (!name || !params.userScope) {
-    return { match: null, candidates: [], crossKindCandidates: [] };
+    return {
+      match: null,
+      candidates: [],
+      crossKindCandidates: signalCrossKind,
+    };
   }
 
   // EXACT name, case-insensitive. `ilike` with no wildcards is an exact CI
@@ -618,10 +675,17 @@ export async function resolveIdentity(
   // only: `match` stays null (no auto-merge on a weak/title signal, ever), but
   // the caller can now say "a `research` with this title already exists" instead
   // of "safe to create".
-  const crossKindCandidates =
+  const nameCrossKind =
     params.kindSlug && !entity
       ? candidates.filter((c) => c.type !== params.kindSlug)
       : [];
+  // The strong path's other-kind owners ride along whatever the name found;
+  // a row that is both is named once.
+  const named = new Set(nameCrossKind.map((c) => c.id));
+  const crossKindCandidates = [
+    ...nameCrossKind,
+    ...signalCrossKind.filter((c) => !named.has(c.id)),
+  ];
 
   return {
     match: entity ? "weak" : null,
@@ -629,6 +693,53 @@ export async function resolveIdentity(
     candidates,
     crossKindCandidates,
   };
+}
+
+/**
+ * Does an entity of kind `type` count as the same subject as the kind the
+ * caller is resolving? Yes when:
+ *  - no kind was given (the pre-2026-10-27 behaviour: any owner);
+ *  - it IS that kind, or one of `alsoKinds`;
+ *  - both kinds are in the bookmark family (URL_IDENTITY_KINDS): one page is
+ *    one subject whether it was saved as a bookmark or an article;
+ *  - the requested slug is a ROLE (a hat, not a kind: a create aimed at
+ *    `client` lands on a person) that may sit on that kind — no applicable
+ *    kinds means any kind, as for `entity_facets`.
+ * The role lookup runs only for an owner that failed every other test, once
+ * per resolve.
+ */
+class SameKindCheck {
+  private roleKinds: Set<string> | "any" | "not-a-role" | undefined;
+
+  constructor(
+    private readonly db: Db,
+    private readonly kindSlug: string | undefined,
+    private readonly alsoKinds: readonly string[] | undefined
+  ) {}
+
+  async admits(type: string): Promise<boolean> {
+    const kind = this.kindSlug;
+    if (!kind || type === kind) return true;
+    if (this.alsoKinds?.includes(type)) return true;
+    if (URL_IDENTITY_KINDS.has(kind) && URL_IDENTITY_KINDS.has(type)) {
+      return true;
+    }
+    const roleKinds = (this.roleKinds ??= await this.loadRoleKinds(kind));
+    if (roleKinds === "not-a-role") return false;
+    return roleKinds === "any" || roleKinds.has(type);
+  }
+
+  private async loadRoleKinds(
+    slug: string
+  ): Promise<Set<string> | "any" | "not-a-role"> {
+    const roles = await this.db.query.profiles.findMany({
+      where: and(eq(profiles.slug, slug), eq(profiles.profileKind, "role")),
+      columns: { applicableKinds: true },
+    });
+    if (roles.length === 0) return "not-a-role";
+    if (roles.some((r) => !r.applicableKinds?.length)) return "any";
+    return new Set(roles.flatMap((r) => r.applicableKinds ?? []));
+  }
 }
 
 /**

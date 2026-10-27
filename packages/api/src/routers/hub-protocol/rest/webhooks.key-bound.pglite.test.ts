@@ -126,6 +126,7 @@ beforeAll(async () => {
     alter table webhook_subscriptions alter column id set default gen_random_uuid();
     alter table webhook_subscriptions alter column created_at set default now();
     alter table webhook_subscriptions alter column active set default true;
+    alter table webhook_subscriptions alter column direction set default 'outbound';
   `);
   await q(
     `insert into users (id, email, user_type) values ($1,'o@x.test','human')`,

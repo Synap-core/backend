@@ -55,6 +55,12 @@ A worker is a playbook **activator**, declared on the method and owned by the li
 
 A goal is a _track_ in every tool and field name (`start_track`, `trackId`) — say "goal" to the person; a session's one-line `goal` is its **Aim**. A goal holds an owner, a direction, instructions, the workers it turns on, and what done means (criteria, or a number measured as transitions into `done`). It has no stages. A goal can stay open as long as it matters, or finish: a person closes it with a verdict once its criteria are met (`set_track_status` `completed` + `verdict`; dropped = `archived`, with a `verdict` saying why). Your close is a proposal; a closed goal comes back only as a new version. Pause it while nobody should work on it. Work in it = `start_session` + `trackId`. A thing may count for two goals. Solo users may never need one: workers can run space-wide. Legacy: `start_stage_session` and `add_track_stage` serve old goals started from a method; never `advance_track` without the user.
 
+**Keep the pod current (every agent, every session)** — three rules, so the next agent picks your step up from the pod alone:
+
+1. **Attach the session to its goal.** `orient`'s `startHere.openGoals` and the start reply's `offers.goals` name the open goals; start with `trackId`, or file an open session with `update_session` `trackId` (a proposal for an agent). No goal fits: say so in the room, never invent one silently.
+2. **Record your PR as an outcome** the moment you open it: `update_session` `outcomes: [{ key: "pr-<repo>-<n>", kind: "pull_request", label: "<repo>#<n>", ref: { url: "<PR url>" } }]`. With no `sessionId`, the pod files it on the one open session this conversation started, and refuses with the list when there are several.
+3. **Close when your outcomes are met.** When every outcome is met the `update_session` reply carries `nudges.readyToClose`: grade with `evaluate_session`, then `complete_session`. A merged PR is not always the end of the work: if more remains, declare it instead.
+
 **The rest of the goal protocol** (`set_track_participant`, `reopen_track`, `convert_to_goal`, `update_track`):
 
 - **A delegate's commitment.** The owner or judge asks someone (`add`, role `delegate`, with a `commitment`). The delegate answers only their own: `accept`, `counter` (text = what they would commit to instead), `decline`, or later `report_impossible` (text = why). A report is not the goal's verdict: the owner or judge `acknowledge`s it and re-plans. Never answer for a person; adding yourself as a delegate commits you.

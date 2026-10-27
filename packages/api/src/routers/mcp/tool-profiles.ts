@@ -3,7 +3,7 @@
  *
  * Research the V1 plan leans on: tool-selection accuracy degrades past ~30-40
  * always-loaded tools, and Codex / Cursor do not defer MCP tools the way
- * Claude Code does. So a NEW agent key lists the 10-tool `entry` surface; the
+ * Claude Code does. So a NEW agent key lists the 13-tool `entry` surface; the
  * rest arrive in named GROUPS, unlocked by `synap_load_skill` (`tools:<group>`,
  * `tools:builder` for all of them, or a skill whose teaching needs a group).
  *
@@ -29,12 +29,23 @@
 
 import type { ApiKeyToolProfile } from "@synap/database/schema";
 
-/** The entry surface — what an agent needs for the V1 loop, nothing more. */
+/**
+ * The entry surface — what an agent needs for the V1 loop, nothing more.
+ *
+ * Plan v5 T1 (2026-10-27) added the GOAL and the PICK-UP: `list_tracks` /
+ * `start_track` (work is filed into a goal with `trackId`, and an agent that
+ * cannot see a goal tool starts a free session — 43 of 51 open work sessions
+ * served no goal) and `get_session` (the continuation packet: how any agent
+ * picks up a step from the pod alone).
+ */
 export const ENTRY_TOOLS = [
   "synap_orient",
   "synap_ask",
   "synap_capture",
+  "synap_list_tracks",
+  "synap_start_track",
   "synap_start_session",
+  "synap_get_session",
   "synap_update_session",
   "synap_wait_for_answer",
   "synap_post_message",
@@ -84,9 +95,9 @@ export const TOOL_GROUPS = {
   ],
   /** The rest of the session lifecycle. */
   sessions: [
-    "synap_get_session",
     "synap_list_sessions",
     "synap_needs_you",
+    "synap_get_work_graph",
     "synap_list_agents",
     "synap_evaluate_session",
     "synap_revert_session",
@@ -133,8 +144,6 @@ export const TOOL_GROUPS = {
   ],
   /** Tracks: multi-stage work over time. */
   tracks: [
-    "synap_list_tracks",
-    "synap_start_track",
     "synap_start_stage_session",
     "synap_advance_track",
     "synap_set_track_status",

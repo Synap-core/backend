@@ -1,0 +1,64 @@
+name: Pod observations
+
+# Tells the founder's pod what happened here, for free (no GitHub App, no
+# paid feature): a PR opened, merged or closed, and a CI run finished. Each is
+# posted as ONE observation to the pod's Hub door `observations.append`
+# (dev.pr_opened / dev.pr_merged / dev.pr_closed / ci.finished); the pod's
+# PR → session resolver moves the session that recorded the PR. The script
+# holds the event → observation map: scripts/pod-observation.mjs.
+#
+# Opt-in. The job runs only when the repo VARIABLE `SYNAP_POD_OBSERVATIONS`
+# is `on`, and it posts only when BOTH repo secrets are set:
+#   SYNAP_POD_URL  the pod's base URL
+#   SYNAP_OBS_KEY  a pod Hub API key with the `hub-protocol.write` scope
+# The variable is the switch because secrets cannot be read in a job `if`:
+# without it, every CI run on every branch queued one runner here just to
+# print "Nothing posted" (74 such runs waited ahead of PR checks on
+# 2026-10-27). A job skipped by its `if` takes no runner.
+# A fork's PR (or Dependabot's) gets no secrets, so the script prints
+# "Nothing posted" and exits 0. A key the pod refuses (a grant without
+# `event.create`, HTTP 401/403) is a warning and exit 0, not a red check.
+#
+# workflow_run only fires from the copy of this file on the default branch,
+# so ci.finished starts after this file is merged.
+
+on:
+  pull_request:
+    types: [opened, reopened, closed]
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+permissions:
+  contents: read
+  # ci.finished reads the run's PR body for its `Pod session:` line.
+  pull-requests: read
+
+jobs:
+  post:
+    name: Post to the pod
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    # A run of a fork's code is not reported (the script also refuses it).
+    if: >-
+      vars.SYNAP_POD_OBSERVATIONS == 'on' && (
+        github.event_name == 'pull_request' ||
+        github.event.workflow_run.head_repository.full_name == github.repository
+      )
+    steps:
+      # Only the script. A pull_request event checks out the PR head (its
+      # merge ref may be gone once merged); a workflow_run checks out the
+      # default branch, never the run's code.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.event.repository.default_branch }}
+          sparse-checkout: scripts/pod-observation.mjs
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Post the observation
+        run: node scripts/pod-observation.mjs
+        env:
+          SYNAP_POD_URL: ${{ secrets.SYNAP_POD_URL }}
+          SYNAP_OBS_KEY: ${{ secrets.SYNAP_OBS_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}

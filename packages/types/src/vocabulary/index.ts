@@ -30,6 +30,10 @@ import type { GovernanceRung, MatrixMark } from "../agent-matrix/index.js";
 import type { FilterOperator } from "../views/filters.js";
 import type { NeedsYouBucket } from "../needs-you/buckets.js";
 import type { NeedsYouFold } from "../needs-you/rule.js";
+import type {
+  PullRequestChecks,
+  PullRequestState,
+} from "../events/pr-state.js";
 
 /**
  * The object-kind identity registry lives in `./object-kinds` and is re-exported
@@ -422,6 +426,14 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   // taking them back out (a `belongs_to_project` link delete). One verb pair
   // for the act a person names "filing"; never "Link"/"Delete".
   file_entities: { imperative: "File", past: "Filed" },
+  // An agent's held-writes pack (`agent/held_writes`, past its daily write
+  // ceiling): a state the writes are in, not a verb a person performs, so both
+  // moods read the same. Titled as a LEAD (`ACTION_TITLE_LEADS`): "Writes held
+  // for review: Claude Code, 2026-10-27, 12 items" — never "Held writes Agent".
+  held_writes: {
+    imperative: "Writes held for review",
+    past: "Writes held for review",
+  },
   // Filing a captured record (a capture chip's accept): the proposal it was
   // becomes the thing. "File" on the button, "Filed" on the chip and receipt.
   file: {
@@ -605,6 +617,14 @@ export const ACTION_OBJECT_PREPOSITIONS: Readonly<Record<string, string>> = {
   session_narrative_update: "of",
   widen_scopes: "for",
 };
+
+/**
+ * Actions whose title is a LEAD, `<verb>: <name>`, with no kind noun: the
+ * object is a batch the name describes, not a record of a kind ("Writes held
+ * for review: Claude Code, 2026-10-27, 12 items"). Keyed like
+ * {@link ACTION_VERBS} (whole token).
+ */
+export const ACTION_TITLE_LEADS: ReadonlySet<string> = new Set(["held_writes"]);
 
 function resolveActionPreposition(action: string | null | undefined): string {
   if (!action) return "";
@@ -923,6 +943,10 @@ export function buildObjectActionTitle(params: {
   const { action, fallbackAction, objectKind, objectName, mood } = params;
   const actionToken = action ?? fallbackAction;
   const verb = resolveActionLabel(actionToken, mood ?? "imperative");
+  if (actionToken && ACTION_TITLE_LEADS.has(actionToken.toLowerCase())) {
+    const lead = nameSlot(objectName, verb, verb, "");
+    return lead ? `${verb}: ${lead}` : verb;
+  }
   // `entity` is the generic base kind — naming it adds nothing ("Create
   // Entity"), so it is suppressed in favour of the concrete profile slug.
   const noun =
@@ -1361,6 +1385,35 @@ export const STATUS_LABELS: Readonly<Record<string, string>> = {
 export function resolveStatusLabel(status: string | null | undefined): string {
   if (!status) return "";
   return STATUS_LABELS[status.toLowerCase()] ?? humanizeToken(status);
+}
+
+/**
+ * PULL REQUEST state words: the state mark on a PR row (a session's work
+ * unit), folded from the dev-loop facts the pod recorded
+ * (`events/pr-state.ts`). Their own table, keyed by the fold's states: `open`
+ * and `closed` already mean a session's lifecycle in {@link STATUS_LABELS}.
+ */
+export const PULL_REQUEST_STATE_LABELS: Readonly<
+  Record<PullRequestState, string>
+> = {
+  open: "Open",
+  merged: "Merged",
+  closed: "Closed",
+};
+
+/** The CI result on a PR row. No "running": no event says CI started. */
+export const PULL_REQUEST_CHECKS_LABELS: Readonly<
+  Record<PullRequestChecks, string>
+> = {
+  passed: "Checks passed",
+  failed: "Checks failed",
+};
+
+/** A deploy named the PR's merge commit. */
+export const PULL_REQUEST_DEPLOYED_LABEL = "Deployed";
+
+export function resolvePullRequestStateLabel(state: PullRequestState): string {
+  return PULL_REQUEST_STATE_LABELS[state];
 }
 
 /**

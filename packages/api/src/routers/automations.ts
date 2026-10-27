@@ -116,6 +116,11 @@ import { subjectEntityIdFromPayload } from "@synap/jobs/utils/run-subject.js";
 import { actingAgentUserId } from "./hub-protocol/utils.js";
 import { assertKeyMayWrite } from "../utils/assert-key-may-write.js";
 import {
+  bindDeclaredWebhookSource,
+  declaredWebhookSource,
+  findInboundWebhookSourceByName,
+} from "../services/webhooks/inbound-source.js";
+import {
   GRANT_OWNER_WIDE_UNSUPPORTED,
   isUnboundedFullAccess,
 } from "../access/grant-door-fence.js";
@@ -638,6 +643,9 @@ async function prepareAutomationForMaterialization(
   input: AutomationMaterializationInput,
   createdBy: string
 ): Promise<void> {
+  // A malformed inbound webhook source declaration is refused before any
+  // proposal is filed (it binds after governance, at insert).
+  declaredWebhookSource(input.triggerType, input.triggerConfig);
   if (input.source === "ai" || input.source === "agent") {
     const contract = automationDataContractSchema.safeParse(
       input.metadata?.dataContract
@@ -861,6 +869,16 @@ async function insertAutomationAfterGovernance(
   forceDraft = false
 ): Promise<string | null> {
   const status = forceDraft ? "draft" : input.status;
+  // After governance (every caller of this door has passed it): a declared
+  // inbound webhook source binds here — `webhookSource.name` → this space's
+  // source of that name, when it exists (services/webhooks/inbound-source.ts;
+  // a person creating it later binds this row). An approved agent proposal
+  // binds at approval.
+  const { triggerConfig } = await bindDeclaredWebhookSource({
+    workspaceId: input.workspaceId,
+    triggerType: input.triggerType,
+    triggerConfig: input.triggerConfig,
+  });
   let nextRunAt: Date | null = null;
   if (status === "active" && input.triggerType === "cron") {
     const expression = input.triggerConfig.expression as string | undefined;
@@ -885,7 +903,7 @@ async function insertAutomationAfterGovernance(
         name: input.name,
         description: input.description,
         triggerType: input.triggerType,
-        triggerConfig: input.triggerConfig,
+        triggerConfig,
         flowDefinition: input.flowDefinition as unknown as FlowDefinition,
         status,
         ...(nextRunAt ? { nextRunAt } : {}),
@@ -1438,6 +1456,7 @@ export function playbookActionOptions(
  */
 const OUTPUT_NODE_TYPES = [
   "notification",
+  "record_observation",
   "entity_create",
   "entity_update",
   "facet_attach",
@@ -1447,6 +1466,9 @@ const OUTPUT_NODE_TYPES = [
   "webhook",
   "channel_message",
   "session_update",
+  "complete_outcome",
+  "post_evidence",
+  "reevaluate_criterion",
   "set_state",
 ] as const satisfies readonly OutputNodeDef["data"]["outputType"][];
 
@@ -1481,8 +1503,12 @@ const OUTPUT_ACTION_SHAPES: Record<
   relation_create: { verb: "create", objectKind: "relation" },
   channel_message: { verb: "send", objectKind: "message" },
   notification: { verb: "send", objectKind: "notification" },
+  record_observation: { verb: "record", objectKind: "observation" },
   webhook: { verb: "send", objectKind: "webhook" },
   session_update: { verb: "update", objectKind: "focus_session" },
+  complete_outcome: { verb: "complete", objectKind: "outcome" },
+  post_evidence: { verb: "post", objectKind: "evaluation" },
+  reevaluate_criterion: { verb: "check", objectKind: "criterion" },
   set_state: { verb: "set", objectKind: "state" },
 };
 
@@ -2500,6 +2526,21 @@ export const automationsRouter = router({
         forceDraft
       );
 
+      // The source it listens to, so the caller can point the sender at it —
+      // or, when the space has none yet, what binds it. Never a secret: a
+      // source is a person's credential (inbound-source.ts).
+      const declared = declaredWebhookSource(
+        input.triggerType,
+        input.triggerConfig
+      );
+      const source =
+        declared && input.workspaceId
+          ? await findInboundWebhookSourceByName(
+              input.workspaceId,
+              declared.name
+            )
+          : null;
+
       return {
         status: "created" as const,
         id: automationId,
@@ -2507,6 +2548,27 @@ export const automationsRouter = router({
           forceDraft ? "draft" : input.status
         }`,
         proposalId: null as string | null,
+        ...(source
+          ? {
+              webhookSource: {
+                bound: true as const,
+                id: source.id,
+                name: source.name,
+                inboundUrl: source.inboundUrl,
+                inboundPath: source.inboundPath,
+                secret:
+                  "Not shown here: a person reveals it in the pod-admin app (space Connections, Webhook sources, Replace secret).",
+              },
+            }
+          : declared
+            ? {
+                webhookSource: {
+                  bound: false as const,
+                  name: declared.name,
+                  next: `This space has no webhook source named "${declared.name}" yet: a person creates it in the pod-admin app (space Connections, Webhook sources), and this automation binds to it then.`,
+                },
+              }
+            : {}),
       };
     }),
 
@@ -2614,6 +2676,8 @@ export const automationsRouter = router({
           );
         }
         assertValidDailyCap(input.triggerConfig);
+        // A malformed source declaration is refused before any proposal.
+        declaredWebhookSource(effectiveTriggerType, input.triggerConfig);
       }
 
       // Node-contract + catalog validation — only the NEW flow being submitted
@@ -2720,21 +2784,6 @@ export const automationsRouter = router({
       if (input.metadata !== undefined) updates.metadata = effectiveMetadata;
       if (input.state !== undefined) updates.state = input.state;
 
-      // Bump the monotonic definition version when a definition-affecting
-      // field actually changes (compared against the loaded row, so a rename or
-      // status toggle doesn't inflate it). Stamped into each run's
-      // definitionSnapshot so "what ran" can be diffed against "today".
-      const definitionChanged =
-        (updates.flowDefinition !== undefined &&
-          stableStringify(updates.flowDefinition) !==
-            stableStringify(existing.flowDefinition)) ||
-        (updates.triggerType !== undefined &&
-          updates.triggerType !== existing.triggerType) ||
-        (updates.triggerConfig !== undefined &&
-          stableStringify(updates.triggerConfig) !==
-            stableStringify(existing.triggerConfig));
-      if (definitionChanged) updates.version = (existing.version ?? 1) + 1;
-
       // A rule edit rewrites its own automation under the `rule.update` gate it
       // already passed (services/rules/update.ts) — not a second proposal.
       if (
@@ -2750,6 +2799,36 @@ export const automationsRouter = router({
         );
         if (proposed) return proposed;
       }
+
+      // A declared inbound webhook source binds AFTER the gate (an agent's
+      // proposed change writes nothing): `webhookSource.name` → this space's
+      // source of that name, when it exists (services/webhooks/
+      // inbound-source.ts). Before the version bump, which compares the
+      // config as it will be stored.
+      if (input.triggerConfig !== undefined) {
+        updates.triggerConfig = (
+          await bindDeclaredWebhookSource({
+            workspaceId: existing.workspaceId,
+            triggerType: input.triggerType ?? existing.triggerType,
+            triggerConfig: input.triggerConfig,
+          })
+        ).triggerConfig;
+      }
+
+      // Bump the monotonic definition version when a definition-affecting
+      // field actually changes (compared against the loaded row, so a rename or
+      // status toggle doesn't inflate it). Stamped into each run's
+      // definitionSnapshot so "what ran" can be diffed against "today".
+      const definitionChanged =
+        (updates.flowDefinition !== undefined &&
+          stableStringify(updates.flowDefinition) !==
+            stableStringify(existing.flowDefinition)) ||
+        (updates.triggerType !== undefined &&
+          updates.triggerType !== existing.triggerType) ||
+        (updates.triggerConfig !== undefined &&
+          stableStringify(updates.triggerConfig) !==
+            stableStringify(existing.triggerConfig));
+      if (definitionChanged) updates.version = (existing.version ?? 1) + 1;
 
       await database
         .update(automations)

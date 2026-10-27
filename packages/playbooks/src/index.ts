@@ -762,7 +762,7 @@ export type SlotAsk = (
       yes?: SlotAskConfirmAnswer;
       no?: SlotAskConfirmAnswer;
     }
-  | { mode: "choose"; options: SlotAskOption[]; allowOther?: boolean }
+  | { mode: "choose"; options: SlotAskChooseOption[]; allowOther?: boolean }
   | { mode: "form"; form: SlotAskFormSpec }
   | { mode: "act"; url?: string; steps?: string[] }
   | { mode: "provide"; provide: SlotAskProvide }
@@ -782,6 +782,8 @@ export type SlotAsk = (
    * the viewer's access floor; a ref the viewer cannot see is dropped there.
    */
   lookedAt?: SlotAskLookedAt[];
+  /** How much is at stake: high and medium draw a mark, low draws nothing. */
+  risk?: "high" | "medium" | "low";
 };
 
 /** Mirrors `ASK_STAKES` (@synap-core/types/ask). */
@@ -832,7 +834,20 @@ export interface SlotAskOption {
   recommended?: boolean;
   /** One-line imperative consequence of choosing it. */
   description?: string;
+  /** One short fact to weigh before picking it ("Skips 1,284 tests"). */
+  caution?: string;
 }
+
+/** The question a choose option opens once picked: ONE level, 2–4 options. */
+export interface SlotAskFollowUp {
+  prompt: string;
+  options: SlotAskOption[];
+}
+
+/** A choose ask's option: may open ONE follow-up. Mirrors `AskChooseOption`. */
+export type SlotAskChooseOption = SlotAskOption & {
+  followUp?: SlotAskFollowUp;
+};
 
 /** A FLAT form (no nested fields). */
 export interface SlotAskFormSpec {
@@ -872,7 +887,12 @@ export type SlotProvideRef =
 export type SlotAnswerValue =
   | { type: "text" }
   | { type: "confirm"; confirmed: boolean }
-  | { type: "chip"; chip: SlotAskOption }
+  | {
+      type: "chip";
+      chip: SlotAskOption;
+      /** The picked follow-up option, when the picked option opens one. */
+      then?: SlotAskOption;
+    }
   | { type: "form"; values: Record<string, unknown> }
   | { type: "provide"; ref: SlotProvideRef };
 
@@ -962,9 +982,11 @@ export interface SlotAskSnapshot {
   mode: SlotAsk["mode"];
   prompt?: string;
   why?: string;
-  options?: SlotAskOption[];
+  options?: SlotAskChooseOption[];
   /** `askOptionKey` of the pick; `"yes"`/`"no"` for a confirm; else null. */
   chosenKey: string | null;
+  /** `askOptionKey` of the picked follow-up option, when the pick opened one. */
+  thenKey?: string;
   recommendedKey: string | null;
   /** null when there was no recommendation (or the pick is unknown). */
   followedRecommendation: boolean | null;

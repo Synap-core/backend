@@ -190,6 +190,8 @@ describe("MarkdownView — embeds are drawn from the shared model", () => {
     expect(out).toContain("Prose stays.");
   });
 
+  // Still the rule after the console learned to run HTML: a page runs only on
+  // its own document page (`html-frame.test.tsx`), never inline in a body.
   it("a generated cell is a named chip — no iframe, no script, no chart", () => {
     const out = html(
       embed(

@@ -25,8 +25,10 @@
 
 import {
   and,
+  drizzleSql,
   eq,
   ilike,
+  inArray,
   isNotNull,
   isNull,
   or,
@@ -38,6 +40,7 @@ import { requireUserId } from "../../utils/user-scoped.js";
 import { escapeLikePattern } from "../../utils/like-pattern.js";
 import { sessionScopeConditions } from "./session-scope.js";
 import {
+  openOrSettledSinceWhere,
   sessionStatusConditions,
   settledSinceWhere,
   type StatusSinceWindows,
@@ -75,6 +78,19 @@ export interface SessionListQuery {
    * set to read exactly what `landedSince` selects, uncapped.
    */
   settledSince?: string;
+  /**
+   * WIDEN-THEN-WINDOW: every open row plus every row settled at or after this
+   * ISO instant (`openOrSettledSinceWhere`). Pair with `status: "all"`; the
+   * work graph's window (`work-graph.ts`).
+   */
+  openOrSettledSince?: string;
+  /**
+   * Only these sessions. A SELECTION, not a lens: an empty set matches
+   * nothing (a lens that is empty would match everything, which is the wrong
+   * answer to "these ids"). The work graph reads the far end of each edge
+   * through it, so an off-window session is fetched under the same floor.
+   */
+  ids?: readonly string[];
   /** Case-insensitive substring match on the session goal. */
   q?: string;
   /**
@@ -143,6 +159,8 @@ export function sessionListConditions({
   flow = {},
   statusSince,
   settledSince,
+  openOrSettledSince,
+  ids,
   q,
   unfiled,
   includeTrackedRuns,
@@ -172,6 +190,14 @@ export function sessionListConditions({
   // time window is a WHERE clause too.
   conditions.push(...sessionStatusConditions(status, statusSince));
   if (settledSince) conditions.push(settledSinceWhere(settledSince));
+  if (openOrSettledSince) {
+    conditions.push(openOrSettledSinceWhere(openOrSettledSince));
+  }
+  if (ids) {
+    conditions.push(
+      ids.length > 0 ? inArray(focusSessions.id, [...ids]) : drizzleSql`false`
+    );
+  }
 
   // TRIAGE LENS. A page is `limit`-capped in SQL, so filtering after the fact
   // would let unaccepted agent drafts consume the slots and push real work off

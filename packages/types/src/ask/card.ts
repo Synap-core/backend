@@ -23,22 +23,26 @@ import {
   questionDisposition,
   resolveAskResolution,
   type Ask,
+  type QuestionDisposition,
   type QuestionDispositionInput,
   type AskOption,
   type AskProvideKind,
+  type AskRisk,
   type AskSnapshot,
   type ProvideConnectUnavailableReason,
   ASK_CONFIRM_KEYS,
   effectiveSlotAsk,
   type AskCause,
   type AskCauseKind,
+  type AskAnswerValue,
 } from "./index.js";
+import type { RoomPostMeta } from "./room-post.js";
 import {
   FATE_COPY,
   FATE_TONE,
   REVIEW_LATER_AFTER_MS,
 } from "../proposals/fate.js";
-import { ageSpan, shortDate } from "../lens/age.js";
+import { ageSpan, ageSpanSpoken, shortDate } from "../lens/age.js";
 import { CRITERION_SLOT_KIND } from "../focus-sessions/criterion-slot.js";
 
 // ─── Copy ───────────────────────────────────────────────────────────────────
@@ -73,6 +77,9 @@ export const ASK_COPY = {
    * ({@link askRecommendationOutcome}). Nothing is drawn for `none`.
    */
   followedAiPick: "Followed AI pick",
+  /** The ask's risk mark ({@link askRiskView}); low draws nothing. */
+  riskHigh: "High risk",
+  riskMedium: "Medium risk",
   choseDifferently: "Chose differently from AI",
   /** The overrode mark's detail line, when the recommended option is known. */
   aiPicked: (label: string): string => `AI picked: ${label}`,
@@ -159,13 +166,27 @@ export const ASK_COPY = {
     agent?.trim()
       ? `You confirmed what ${agent.trim()} relayed`
       : "You confirmed the relayed answer",
-  /** A commitment's relay, waiting for the person's tap. */
+  /**
+   * A commitment's relay, waiting for the person's tap: a MARK, not an
+   * instruction. The Confirm / "Not what I said" pair beside it carries the
+   * instruction, and a lock screen with no pair never says "Confirm it".
+   */
   awaitingYourTap: (agent: string | null): string =>
     agent?.trim()
-      ? `${agent.trim()} relayed your answer. Confirm it.`
-      : "Your answer was relayed. Confirm it.",
+      ? `Relayed by ${agent.trim()} · needs your tap`
+      : "Relayed · needs your tap",
   confirmRelayed: "Confirm",
   notWhatISaid: "Not what I said",
+  /**
+   * The person's own words under the answer a relay will record
+   * ({@link relayRecordedAnswer}): the answer is the headline, this the quote.
+   */
+  youSaid: (quote: string): string => `You said “${quote.trim()}”`,
+  /** The receipt after Confirm: what was settled, by the card's heading. */
+  relayConfirmedReceipt: (heading: string): string =>
+    `Confirmed · ${heading.trim()}`,
+  /** The receipt after "Not what I said": nothing recorded, the ask reopens. */
+  relayRejectedReceipt: "Not recorded · the question is yours again",
   /** `note` is the agent's one-line reason, when it gave one. */
   withdrawn: (note: string | null | undefined): string =>
     note?.trim() ? `Withdrawn · ${note.trim()}` : "Withdrawn",
@@ -183,6 +204,8 @@ export const ASK_COPY = {
     return words ? `“${words}”` : null;
   },
   // ── The card's anatomy ({@link askCardView}) ──
+  /** The card's age: "Asked 8d ago", or spoken, "Asked 8 days ago". */
+  askedAgo: (span: string): string => `Asked ${span} ago`,
   /** The collapsed note affordance: one label, no placeholder repeating it. */
   addNote: "Add a note",
   /** The note field once opened: a noun, not the verb that opened it. */
@@ -385,18 +408,54 @@ export interface AskOptionChip {
   icon?: string;
   recommended?: true;
   description?: string;
+  /** One short fact to weigh before picking it — a warning chip. */
+  caution?: string;
 }
 
-export function askOptionChips(ask: Ask | null | undefined): AskOptionChip[] {
-  if (!ask || ask.mode !== "choose") return [];
-  return ask.options.map((o) => ({
+function optionChip(o: AskOption): AskOptionChip {
+  return {
     label: o.label,
     value: askOptionKey(o),
     action: "confirm" as const,
     ...(o.icon ? { icon: o.icon } : {}),
     ...(o.recommended ? { recommended: true as const } : {}),
     ...(o.description ? { description: o.description } : {}),
-  }));
+    ...(o.caution ? { caution: o.caution } : {}),
+  };
+}
+
+export function askOptionChips(ask: Ask | null | undefined): AskOptionChip[] {
+  if (!ask || ask.mode !== "choose") return [];
+  return ask.options.map(optionChip);
+}
+
+/**
+ * The second level of the decision tree: the chips of the follow-up a picked
+ * option opens (same mapping as {@link askOptionChips}); `[]` when it opens
+ * none. The answer sends the pick as `then`.
+ */
+export function followUpChips(option: {
+  followUp?: { options: readonly AskOption[] };
+}): AskOptionChip[] {
+  return option.followUp?.options.map(optionChip) ?? [];
+}
+
+// ─── Risk ───────────────────────────────────────────────────────────────────
+
+/** The ask's risk mark, or `null` when it draws nothing (low or absent). */
+export function askRiskView(ask: { risk?: AskRisk } | null | undefined): {
+  level: "high" | "medium";
+  label: string;
+  tone: "danger" | "warning";
+} | null {
+  switch (ask?.risk) {
+    case "high":
+      return { level: "high", label: ASK_COPY.riskHigh, tone: "danger" };
+    case "medium":
+      return { level: "medium", label: ASK_COPY.riskMedium, tone: "warning" };
+    default:
+      return null;
+  }
 }
 
 /** The OFFERED option a chip stands for, or `null` when it is not one. */
@@ -493,6 +552,8 @@ export function askRecommendationOutcome(
 export interface AnswerProvenanceMark {
   tone: UnitTone;
   label: string;
+  /** The question's state the mark stands for — what a glyph keys on. */
+  disposition: Exclude<QuestionDisposition, "open">;
 }
 
 /**
@@ -508,24 +569,38 @@ export function answerProvenanceMark(
   opts: { agent?: string | null } = {}
 ): AnswerProvenanceMark | null {
   const agent = opts.agent ?? null;
-  switch (questionDisposition(input)) {
+  const disposition = questionDisposition(input);
+  switch (disposition) {
     case "open":
       return null;
     case "answered":
       return input.answer?.confirmedAt && input.answer.relayedBy
-        ? { tone: "success", label: ASK_COPY.relayConfirmed(agent) }
-        : { tone: "success", label: ASK_COPY.answeredByYou };
+        ? {
+            tone: "success",
+            label: ASK_COPY.relayConfirmed(agent),
+            disposition,
+          }
+        : { tone: "success", label: ASK_COPY.answeredByYou, disposition };
     case "relayed":
-      return { tone: "ai", label: ASK_COPY.relayedBy(agent) };
+      return { tone: "ai", label: ASK_COPY.relayedBy(agent), disposition };
     case "awaiting_your_tap":
-      return { tone: "warning", label: ASK_COPY.awaitingYourTap(agent) };
+      return {
+        tone: "warning",
+        label: ASK_COPY.awaitingYourTap(agent),
+        disposition,
+      };
     case "withdrawn":
       return {
         tone: "textMuted",
         label: ASK_COPY.withdrawn(input.closed?.note),
+        disposition,
       };
     case "closed_session_ended":
-      return { tone: "textMuted", label: ASK_COPY.closedSessionEnded };
+      return {
+        tone: "textMuted",
+        label: ASK_COPY.closedSessionEnded,
+        disposition,
+      };
   }
 }
 
@@ -567,9 +642,29 @@ export interface AskCardSlot {
   /** What moves on the answer (`ExpectedOutput.unblocks`). */
   unblocks?: string | null;
   /** A relayed answer waiting for the person's tap — its own clock. */
-  pendingRelay?: { relayedAt?: string | null } | null;
+  pendingRelay?: AskCardPendingRelay | null;
   /** The closing agent kept it owed past its session: it no longer ends with it. */
   keptOwedAt?: string | null;
+  /** The asking agent's user id (`ExpectedOutput.askedBy`). */
+  askedBy?: string | null;
+  /**
+   * Its display name, resolved by the pod (`askedByName`). `askCardView`
+   * names the asker from it when the caller passes no `askerName`.
+   */
+  askedByName?: string | null;
+}
+
+/**
+ * A slot's `pendingRelay` as the card reads it: `PendingRelayedAnswer`,
+ * every field optional, so a wire row that parsed only part of it still
+ * draws what it has.
+ */
+export interface AskCardPendingRelay {
+  text?: string | null;
+  value?: AskAnswerValue | null;
+  relayedBy?: string | null;
+  quote?: string | null;
+  relayedAt?: string | null;
 }
 
 /**
@@ -641,7 +736,8 @@ export function isAskReviewLater(
  */
 export function effectiveAskCause(slot: AskCardSlot): AskCause | null {
   if (slot.askCause) return slot.askCause;
-  if (slot.criterionKey) return { kind: "criterion" };
+  // A criterion cause IS "this was a criterion slot": its kind is that one declaration.
+  if (slot.criterionKey) return { kind: CRITERION_SLOT_KIND };
   if (slot.paramName) return { kind: "param" };
   return null;
 }
@@ -721,8 +817,11 @@ export interface AskCardView {
   context: string | null;
   /** Who asked, as a named mark; `null` when nobody can be named. */
   asker: AskCardAsker | null;
-  /** Age + fate as ONE mark ("8d · stays until you decide"). */
-  ageFate: { label: string; tone: UnitTone; fate: AskFate };
+  /**
+   * Age + fate as ONE mark ("Asked 8d ago · Stays until you decide");
+   * `spoken` is the same in full words, for a screen reader.
+   */
+  ageFate: { label: string; spoken: string; tone: UnitTone; fate: AskFate };
   /** The answer buttons (confirm, choose); empty for every other mode. */
   answers: AskCardAnswer[];
   /** The collapsed note affordance. */
@@ -764,7 +863,7 @@ export function askCardView(
       ? why
       : null;
 
-  const name = opts.askerName?.trim();
+  const name = opts.askerName?.trim() || slot.askedByName?.trim();
   const cause = name ? null : effectiveAskCause(slot);
   const asker: AskCardAsker | null = name
     ? { kind: "agent", name, sessionId: opts.sessionId ?? null }
@@ -788,9 +887,13 @@ export function askCardView(
         ? FATE_COPY.endsWithSession
         : FATE_COPY.untilDecided;
   const owed = slot.owedSince ? Date.parse(slot.owedSince) : NaN;
+  const asked = Number.isFinite(owed);
   const ageFate = {
-    label: Number.isFinite(owed)
-      ? `${ageSpan(nowMs - owed)} · ${fateWords}`
+    label: asked
+      ? `${ASK_COPY.askedAgo(ageSpan(nowMs - owed))} · ${fateWords}`
+      : fateWords,
+    spoken: asked
+      ? `${ASK_COPY.askedAgo(ageSpanSpoken(nowMs - owed))} · ${fateWords}`
       : fateWords,
     tone: FATE_TONE[
       fate.kind === "ends_with_session" ? "dies_with_session" : fate.kind
@@ -840,4 +943,198 @@ function askCardAnswers(ask: Ask | null): AskCardAnswer[] {
     }));
   }
   return [];
+}
+
+// ─── One row → the card's slot ──────────────────────────────────────────────
+
+/** The needs-you union's discriminator for an owed slot (`Signal.kind`). */
+const OWED_SLOT_SIGNAL_KIND = "owed-slot";
+
+/**
+ * Any owed-slot-shaped row, by the names each one carries its fields under:
+ * the stored slot (`ExpectedOutput`: `label`, `kind`, `owedSince`), the
+ * needs-you signal (`kind: 'owed-slot'`, `title`, `slotKind`, `occurredAt`,
+ * `by`), and the surfaces' projections of either (`expectedLabel`).
+ */
+export interface AskCardSlotSource {
+  expectedLabel?: string | null;
+  label?: string | null;
+  title?: string | null;
+  /** The slot's kind, or the signal's discriminator (`owed-slot`). */
+  kind?: string | null;
+  /** The slot's kind on a needs-you signal. */
+  slotKind?: string | null;
+  owner?: string | null;
+  blockedReason?: string | null;
+  why?: string | null;
+  ask?: Ask | null;
+  owedSince?: string | null;
+  /** A needs-you signal's `occurredAt`: its slot's `owedSince`. */
+  occurredAt?: string | Date | null;
+  askCause?: AskCause | null;
+  criterionKey?: string | null;
+  paramName?: string | null;
+  pendingRelay?: AskCardPendingRelay | null;
+  keptOwedAt?: string | null;
+  askedBy?: string | null;
+  askedByName?: string | null;
+  /** A needs-you signal's named asker (`Signal.by`). */
+  by?: { id?: string | null; label?: string | null } | null;
+}
+
+/**
+ * THE adapter from any owed-slot row to {@link askCardView}'s slot. Every
+ * field the card or its fate reads is carried, so no surface drops one by
+ * hand-picking: a kept-owed confirm that read "Ends with the session", a slot
+ * relayed today that read "In Review later", a param slot whose cause nobody
+ * named were each a field one surface left out.
+ *
+ * On a needs-you signal (`kind: 'owed-slot'`) the slot's kind is `slotKind`,
+ * its `owedSince` is the signal's `occurredAt`, and its asker is `by`.
+ */
+export function askCardSlotOf(row: AskCardSlotSource): AskCardSlot {
+  const signal = row.kind === OWED_SLOT_SIGNAL_KIND;
+  const occurred = signal ? row.occurredAt : null;
+  const owedSince =
+    row.owedSince ??
+    (occurred instanceof Date ? occurred.toISOString() : (occurred ?? null));
+  return {
+    label: row.expectedLabel || row.label || row.title || "",
+    kind: row.slotKind ?? (signal ? null : (row.kind ?? null)),
+    owner: row.owner ?? null,
+    blockedReason: row.blockedReason ?? null,
+    why: row.why ?? null,
+    ask: row.ask ?? null,
+    owedSince,
+    askCause: row.askCause ?? null,
+    criterionKey: row.criterionKey ?? null,
+    paramName: row.paramName ?? null,
+    pendingRelay: row.pendingRelay ?? null,
+    keptOwedAt: row.keptOwedAt ?? null,
+    askedBy: row.askedBy ?? (signal ? (row.by?.id ?? null) : null),
+    askedByName: row.askedByName ?? (signal ? (row.by?.label ?? null) : null),
+  };
+}
+
+// ─── A relay waiting for the person's tap ───────────────────────────────────
+
+/** The slot fields {@link slotAwaitsTap} reads — structural. */
+export interface AskTapSlot {
+  owner?: string | null;
+  status?: string | null;
+  /** A projection's boolean for `status: 'done'`. */
+  done?: boolean | null;
+  retiredAt?: string | null;
+  attestedAt?: string | null;
+  pendingRelay?: AskCardPendingRelay | null;
+}
+
+/**
+ * Does this slot wait for the person's tap on a relayed answer? The ONE
+ * predicate for every surface: a pending relay on a slot that is still owed
+ * ({@link askSlotStanding}). Owed, not "unanswered": a slot the agent re-asked
+ * still carries its old answer, and the relay is for the new ask.
+ *
+ * An absent `owner` reads as the person's: the rows that omit it (a needs-you
+ * signal, the owed read) list only slots owed to them. A slot handed back
+ * (`owner: 'agent'`), done, attested or retired never waits for a tap.
+ */
+export function slotAwaitsTap(slot: AskTapSlot | null | undefined): boolean {
+  if (!slot?.pendingRelay) return false;
+  return (
+    askSlotStanding({
+      owner: slot.owner === "agent" ? "agent" : "human",
+      status: slot.done ? "done" : (slot.status ?? null),
+      retiredAt: slot.retiredAt ?? null,
+      attestedAt: slot.attestedAt ?? null,
+    }) === "owed"
+  );
+}
+
+/** What Confirm records for a relay, drawn as the card's answer. */
+export interface RelayRecordedAnswer {
+  /** The answer as its button reads ("Yes", the option's label), else the recorded text. */
+  label: string;
+  /** The card's answer it is, when the ask offers it (its icon and tone). */
+  answer: AskCardAnswer | null;
+  /** The person's own words, verbatim (`ASK_COPY.youSaid`); null when none. */
+  quote: string | null;
+}
+
+/**
+ * The answer a relay's Confirm will record, to headline with the person's
+ * quote under it. Read off `pendingRelay.value` against the card's own
+ * answers (`askCardView(...).answers`), so a confirm reads its button's label
+ * ("Ship it", not the stored "Yes"). Pass the slot's EFFECTIVE ask
+ * (`effectiveSlotAsk`). Without a typed value it is the recorded text. `null`
+ * when there is no relay, or nothing readable to say.
+ */
+export function relayRecordedAnswer(
+  ask: Ask | null | undefined,
+  pendingRelay: AskCardPendingRelay | null | undefined
+): RelayRecordedAnswer | null {
+  if (!pendingRelay) return null;
+  const value = pendingRelay.value ?? null;
+  const key =
+    value?.type === "confirm"
+      ? value.confirmed
+        ? ASK_CONFIRM_KEYS.yes
+        : ASK_CONFIRM_KEYS.no
+      : value?.type === "chip"
+        ? askOptionKey(value.chip)
+        : null;
+  const answer =
+    key === null
+      ? null
+      : (askCardAnswers(ask ?? null).find((a) => a.key === key) ?? null);
+  const label =
+    answer?.label ||
+    (value?.type === "confirm"
+      ? value.confirmed
+        ? ASK_COPY.yes
+        : ASK_COPY.no
+      : value?.type === "chip"
+        ? value.chip.label.trim()
+        : "") ||
+    pendingRelay.text?.trim() ||
+    "";
+  if (!label) return null;
+  return { label, answer, quote: pendingRelay.quote?.trim() || null };
+}
+
+// ─── A room question's Confirm ──────────────────────────────────────────────
+
+/**
+ * Which door a room question's Confirm uses, or `null` when it waits for no
+ * tap. The rule every room draws (relay chat, browser room, pod-admin):
+ *   `slot`     — a relayed answer waits on the question's slot: Confirm and
+ *                "Not what I said" settle it through the slot answer door,
+ *                by `expectedLabel` (`confirmRelayed` / `rejectRelayed`).
+ *   `approval` — an open approval card (`confirmationId`): its Confirm is the
+ *                card itself, a DOOR to it, never a Confirm pair drawn here.
+ * Only a slot-backed question can hold a relay that waits (the relay door
+ * records a slotless question's answer as routine), so a slotless question
+ * that is not an approval card never draws a Confirm. An answered or closed
+ * question waits for nothing.
+ */
+export type RoomQuestionConfirmDoor =
+  | { kind: "slot"; expectedLabel: string }
+  | { kind: "approval"; confirmationId: string };
+
+export function roomQuestionConfirmDoor(
+  meta: RoomPostMeta | null | undefined
+): RoomQuestionConfirmDoor | null {
+  if (meta?.kind !== "question") return null;
+  const disposition = questionDisposition(meta);
+  const slotLabel =
+    typeof meta.slotLabel === "string" ? meta.slotLabel.trim() : "";
+  if (disposition === "awaiting_your_tap") {
+    return slotLabel ? { kind: "slot", expectedLabel: slotLabel } : null;
+  }
+  const confirmationId =
+    typeof meta.confirmationId === "string" ? meta.confirmationId.trim() : "";
+  if (disposition === "open" && confirmationId) {
+    return { kind: "approval", confirmationId };
+  }
+  return null;
 }

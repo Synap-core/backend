@@ -64,6 +64,7 @@ import {
 } from "../services/capabilities/propose-capability-enable.js";
 import {
   carriesRedactedSecret,
+  redactForStorage,
   redactSecretKeys,
 } from "../utils/redact-secrets.js";
 import { recordDomainMutation } from "../utils/domain-mutation.js";
@@ -1343,19 +1344,69 @@ function statusToErrorCode(
 }
 
 // Pull a concise message from common provider error shapes:
-//   Google → { error: { message } }; others → { error: string } | { message }.
-function extractProviderErrorMessage(status: number, body: unknown): string {
-  if (body && typeof body === "object") {
-    const b = body as Record<string, unknown>;
-    const err = b.error;
-    if (err && typeof err === "object") {
-      const m = (err as Record<string, unknown>).message;
-      if (typeof m === "string" && m) return m;
-    }
-    if (typeof err === "string" && err) return err;
-    if (typeof b.message === "string" && b.message) return b.message;
+//   Google → { error: { message } }; others → { error: string } | { message };
+//   FastAPI / pydantic (fal.ai, most Python APIs) → { detail: string } |
+//   { detail: [{ loc, msg, type }] }.
+//
+// WHY `detail`: fal answers a refused request with 422 and a pydantic `detail`
+// list ("body.image_urls: field required (missing)", or a content-checker
+// refusal on body.prompt). Without this branch the caller only ever saw
+// "provider call failed (status 422)" and could not tell a bad parameter from
+// a content filter (founder pod, fal_generate_image, 2026-10-27). Only `loc`,
+// `msg` and `type` are read: pydantic v2 items also carry `input` (the value
+// the caller sent), which is never echoed.
+//
+// The text is the FAR SIDE's, unbounded and able to quote the credential that
+// produced it, so it is redacted and clamped here at the source
+// (`redactForStorage`); the approval sink (`executors/shared.ts`) redacts again.
+export function extractProviderErrorMessage(
+  status: number,
+  body: unknown
+): string {
+  const text = providerErrorText(body);
+  return text
+    ? redactForStorage(text, PROVIDER_ERROR_MAX)
+    : `provider call failed (status ${status})`;
+}
+
+/** Bound on the provider-authored error text a caller is shown. */
+const PROVIDER_ERROR_MAX = 400;
+
+function providerErrorText(body: unknown): string | null {
+  if (!body || typeof body !== "object") return null;
+  const b = body as Record<string, unknown>;
+  const err = b.error;
+  if (err && typeof err === "object") {
+    const m = (err as Record<string, unknown>).message;
+    if (typeof m === "string" && m) return m;
   }
-  return `provider call failed (status ${status})`;
+  if (typeof err === "string" && err) return err;
+  if (typeof b.message === "string" && b.message) return b.message;
+  const detail = b.detail;
+  if (typeof detail === "string" && detail) return detail;
+  if (Array.isArray(detail)) {
+    const parts = detail
+      .slice(0, 3)
+      .map((d) => {
+        if (!d || typeof d !== "object") return null;
+        const item = d as Record<string, unknown>;
+        const msg = typeof item.msg === "string" ? item.msg : null;
+        if (!msg) return null;
+        const loc = Array.isArray(item.loc)
+          ? item.loc
+              .filter((x) => typeof x === "string" || typeof x === "number")
+              .join(".")
+          : "";
+        const type = typeof item.type === "string" ? ` (${item.type})` : "";
+        return `${loc ? `${loc}: ` : ""}${msg}${type}`;
+      })
+      .filter((x): x is string => x !== null);
+    if (parts.length) {
+      const more = detail.length > 3 ? ` (+${detail.length - 3} more)` : "";
+      return parts.join("; ") + more;
+    }
+  }
+  return null;
 }
 
 // ── nango:// handler (the connection broker — CP broker or this pod's key) ────

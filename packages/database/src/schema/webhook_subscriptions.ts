@@ -11,6 +11,9 @@ import { events } from "./events.js";
 import { workspaces } from "./workspaces.js";
 import { apiKeys } from "./api-keys.js";
 
+export const WEBHOOK_DIRECTIONS = ["outbound", "inbound"] as const;
+export type WebhookDirection = (typeof WEBHOOK_DIRECTIONS)[number];
+
 export const webhookSubscriptions = pgTable("webhook_subscriptions", {
   id: uuid("id").defaultRandom().primaryKey(),
   userId: text("user_id").notNull(),
@@ -29,7 +32,19 @@ export const webhookSubscriptions = pgTable("webhook_subscriptions", {
     onDelete: "cascade",
   }),
   name: text("name").notNull(),
-  url: text("url").notNull(),
+  /**
+   * Which way the row points (0362): `outbound` — the pod POSTs its events to
+   * `url` (the two delivery producers select only these); `inbound` — an
+   * outside service posts to the pod's door `/api/webhooks/inbound/:id`, the
+   * row is never delivered to and has no `url` (a CHECK pins both). One
+   * inbound source per (space, name).
+   */
+  direction: text("direction")
+    .$type<WebhookDirection>()
+    .notNull()
+    .default("outbound"),
+  /** Where an OUTBOUND row is delivered; NULL on an inbound source. */
+  url: text("url"),
   eventTypes: text("event_types").array().notNull(),
   secret: text("secret").notNull(),
   active: boolean("active").default(true).notNull(),

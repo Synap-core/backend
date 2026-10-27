@@ -58,11 +58,13 @@ import {
   ResourceRowSkeleton,
 } from "../../components/resource-row";
 import { kindIcon, kindLabel } from "../../../_lib/object/kind-icon";
+import { lensRowExpiry } from "@synap-core/types/lens";
 import {
   batchOf,
   exitOf,
   focusedRow,
   liveAskSlot,
+  reviewChipCounts,
   reviewCounts,
   reviewFilterOf,
   reviewRows,
@@ -147,7 +149,11 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
     () => reviewRows(signals.data?.signals ?? [], facts),
     [signals.data, facts]
   );
-  const counts = reviewCounts(rows);
+  // Narrowed to a session, the pod-wide count says nothing about its rows.
+  const counts = reviewChipCounts(
+    rows,
+    sessionId ? null : (count.data ?? null)
+  );
   const view =
     filter === "history"
       ? { headline: [], reviewLater: [] }
@@ -298,12 +304,14 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
     .find((e): e is Exit => !!e?.isDesktopLink);
   // The pod-wide count says nothing about one session's rows: narrowed, the
   // page says only that its read hit the limit.
+  // The headline rows the read carried (Review later is folded out of the count).
+  const headlineShown = reviewCounts(rows).all;
   const shownOfTotal = sessionId
     ? rows.length >= NEEDS_YOU_PAGE_LIMIT
       ? `Showing the newest ${rows.length} from this session.`
       : null
-    : count.data && count.data.needsYou > counts.all
-      ? `Showing the newest ${counts.all} of ${count.data.truncated ? "more than " : ""}${count.data.needsYou}.`
+    : count.data && count.data.needsYou > headlineShown
+      ? `Showing the newest ${headlineShown} of ${count.data.truncated ? "more than " : ""}${count.data.needsYou}.`
       : null;
 
   const activeKey = open ? detailKey(open.detail) : null;
@@ -431,11 +439,15 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
             ) : visible.length === 0 ? (
               <ResourceRowEmpty
                 message={
-                  sessionId
-                    ? "Nothing from this session waits for you."
-                    : filter === "all"
-                      ? "Nothing is waiting on you."
-                      : "Nothing waiting here."
+                  // "Nothing is waiting" would be false over a fold that
+                  // holds rows: nothing NEW is, the rest wait below.
+                  view.reviewLater.length > 0
+                    ? FATE_COPY.nothingNewWaiting
+                    : sessionId
+                      ? "Nothing from this session waits for you."
+                      : filter === "all"
+                        ? "Nothing is waiting on you."
+                        : "Nothing waiting here."
                 }
               />
             ) : (
@@ -485,9 +497,14 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
                 </span>
               </Button>
               {laterOpen && (
+                <p className="mt-1 text-[12px] text-foreground/55">
+                  {FATE_COPY.reviewLaterCaption}
+                </p>
+              )}
+              {laterOpen && (
                 <section
                   id="review-later"
-                  aria-label={FATE_COPY.reviewLater}
+                  aria-label={FATE_COPY.reviewLaterPile}
                   className="mt-1 divide-y divide-foreground/[0.05] rounded-lg bg-foreground/[0.02] ring-1 ring-inset ring-foreground/10"
                 >
                   {view.reviewLater.map((row) => (
@@ -624,7 +641,7 @@ function DoorButton({ exit }: { exit: Exit }) {
   );
 }
 
-/** "Agent · Claude · Synap · 3 grouped · expires in 20m · 2h ago" */
+/** "Agent · Claude · Synap · 3 grouped · Expires in 20m · 2h ago" */
 function secondaryLine(row: ReviewRow): string {
   return [
     kindLabel(row.nounKind),
@@ -632,7 +649,7 @@ function secondaryLine(row: ReviewRow): string {
     row.where,
     row.reason,
     row.count > 1 ? `${row.count} grouped` : null,
-    row.expiresAt ? `expires ${formatRelative(row.expiresAt)}` : null,
+    lensRowExpiry(row)?.label ?? null,
     formatRelative(row.occurredAt, { empty: "" }),
   ]
     .filter(Boolean)

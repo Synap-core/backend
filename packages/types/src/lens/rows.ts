@@ -41,8 +41,10 @@ import { isTerminalSessionStatus } from "../focus-sessions/statuses.js";
 import { FATE_COPY, type ProposalFate } from "../proposals/fate.js";
 import { ageSpan, shortDate } from "./age.js";
 import {
+  askCardSlotOf,
   askCardView,
   type Ask,
+  type AskCardPendingRelay,
   type AskCardAsker,
   type AskCause,
 } from "../ask/index.js";
@@ -287,6 +289,12 @@ export interface LensNeedsYouSignal extends GroupableSignal {
   askCause?: AskCause | null;
   /** `owed-slot`: kept owed past its session — its fate reads it. */
   keptOwedAt?: string | null;
+  /** `owed-slot`: a criterion slot's key — the card's cause when no agent asked. */
+  criterionKey?: string | null;
+  /** `owed-slot`: a param slot's param — the card's cause when no agent asked. */
+  paramName?: string | null;
+  /** `owed-slot`: a relayed answer waiting for the tap — its own clock. */
+  pendingRelay?: AskCardPendingRelay | null;
 }
 
 /** A work-broke notification: ONE rule, owned by the Inbox buckets (`needs-you/buckets.ts`). */
@@ -380,6 +388,25 @@ export function proposalFateLine(
       return since ? FATE_COPY.reviewLaterSince(since) : FATE_COPY.reviewLater;
     }
   }
+}
+
+/**
+ * The "If you ignore it" sentence: what silence DOES, where
+ * {@link proposalFateLine} names where the item stands. Review later says
+ * the row is out of the count and stays; `objectWork` still waiting says it
+ * leaves the count after the Review later clock (`proposalClass` is the
+ * display row's, the class the fate rule reads). Every other fate's line
+ * already is its consequence.
+ */
+export function proposalFateConsequence(
+  fate: ProposalFate,
+  opts: { proposalClass?: string | null; now?: number } = {}
+): string {
+  if (fate.kind === "review_later") return FATE_COPY.reviewLaterIfIgnored;
+  if (fate.kind === "until_decided" && opts.proposalClass === "objectWork") {
+    return FATE_COPY.leavesCountIfIgnored;
+  }
+  return proposalFateLine(fate, opts.now);
 }
 
 /**
@@ -554,18 +581,9 @@ export function lensRowOfNeedsYou<T extends LensNeedsYouSignal>(
     const shape = itemShape(s);
     const card =
       s.kind === "owed-slot"
-        ? askCardView(
-            {
-              label: s.title,
-              kind: s.slotKind,
-              why: s.why,
-              ask: s.ask,
-              blockedReason: s.blockedReason,
-              askCause: s.askCause,
-              keptOwedAt: s.keptOwedAt,
-            },
-            { askerName: s.by?.label, sessionId: row.session?.id ?? null }
-          )
+        ? askCardView(askCardSlotOf(s), {
+            sessionId: row.session?.id ?? null,
+          })
         : null;
     const asker = card?.asker ?? null;
     const by = rowAsker(s, asker);

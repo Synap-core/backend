@@ -263,7 +263,8 @@ describe("GET /webhooks — the caller's own rows only", () => {
     const q = new PgDialect().sqlToQuery(
       listFindMany.mock.calls[0][0].where as SQL
     );
-    expect(q.params).toEqual([OWNER, "key-1"]);
+    // Delivery targets only: an inbound source (0362) is not listed here.
+    expect(q.params).toEqual([OWNER, "key-1", "outbound"]);
   });
 
   it("a fenced key still cannot read the owner's delivery log", async () => {
@@ -282,7 +283,8 @@ describe("GET /webhooks — the caller's own rows only", () => {
     const q = new PgDialect().sqlToQuery(where);
     expect(q.sql).toMatch(/"user_id" = \$1/);
     expect(q.sql).toMatch(/"api_key_id" = \$2/);
-    expect(q.params).toEqual([OWNER, "key-1"]);
+    expect(q.sql).toMatch(/"direction" = \$3/);
+    expect(q.params).toEqual([OWNER, "key-1", "outbound"]);
   });
 
   it("a key with no hub scope at all cannot list", async () => {

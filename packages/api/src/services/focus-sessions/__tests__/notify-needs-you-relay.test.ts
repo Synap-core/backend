@@ -98,7 +98,34 @@ describe("the relay-awaiting-tap push", () => {
     expect(input.push.quickAnswer ?? null).toBeNull();
     expect(input.push.body).toBeUndefined();
     expect(input.data.summary).toBe(
-      "Stripe account · Claude Code relayed your answer. Confirm it. “the EU one”"
+      "Stripe account · Relayed by Claude Code · needs your tap · You said “the EU one”"
+    );
+  });
+
+  it("names the ask by the card's heading, never the raw slot label", async () => {
+    await notifySessionNeedsYou({
+      sessionId: "s-1",
+      byAgent: true,
+      reason: {
+        kind: "relay",
+        slot: {
+          kind: "decision",
+          label: "Decide: ship the pricing page",
+          owner: "human",
+          blockedReason: "decision",
+          ask: { mode: "confirm", prompt: "Ship the pricing page today?" },
+          pendingRelay: {
+            text: "Yes",
+            value: { type: "confirm", confirmed: true },
+            relayedBy: "a-1",
+            relayedAt: "2026-10-27T10:00:00.000Z",
+          },
+        } as never,
+      },
+    });
+    const input = h.created[0]! as { data: { summary: string } };
+    expect(input.data.summary).toBe(
+      "Ship the pricing page today? · Relayed by Claude Code · needs your tap"
     );
   });
 
