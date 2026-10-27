@@ -345,6 +345,17 @@ const SERVICES: ServiceSpec[] = [
     zodOutputAfter: "get: podProcedure",
     fieldFloor: 5,
   },
+  // The work graph (founder decision 1 A, 2026-10-26): one service, three
+  // doors (tRPC `focusSessions.graph`, Hub `GET /focus-sessions/graph`, MCP
+  // `synap_get_work_graph`). Depth 1: the MCP door rebuilds `nodes` lean by
+  // design (its `detail: "full"` forwards them whole) and forwards the rest.
+  {
+    key: "work-graph",
+    file: join(API_SRC, "services/focus-sessions/work-graph.ts"),
+    fn: "buildWorkGraph",
+    resultType: "WorkGraph",
+    fieldFloor: 4,
+  },
 ];
 
 // ── Source utilities ─────────────────────────────────────────────────────────
@@ -1500,6 +1511,12 @@ describe("tripwire (T4): every service field is projected by every door, or ackn
       "routers/hub-protocol/rest/capabilities-execute.ts:/capabilities/execute",
     ],
     ["ask", "pending", "routers/mcp/handlers/read.ts:synap_ask"],
+    // The MCP work graph re-projects its payload; `sections` is named there.
+    [
+      "work-graph",
+      "sections",
+      "routers/mcp/handlers/session.ts:synap_get_work_graph",
+    ],
     ["ask", "degraded", "routers/mcp/handlers/read.ts:synap_ask"],
     // Covered by PASSTHROUGH (`return ask({...})`, no response schema).
     ["ask", "answers", "routers/knowledge.ts:search"],

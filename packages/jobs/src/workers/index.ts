@@ -153,6 +153,10 @@ import {
   ENTITY_MEDIA_COPY_QUEUE,
 } from "./entity-media-copy-worker.js";
 import {
+  handleDevLoopObservation,
+  DEV_LOOP_OBSERVATION_QUEUE,
+} from "./dev-loop-worker.js";
+import {
   handleEventSyncCron,
   EVENT_SYNC_CRON_QUEUE,
 } from "./event-sync-cron.js";
@@ -392,6 +396,9 @@ const ALL_QUEUES = [
   // Entity media copy (on-demand, D2): enqueued by the api-side reactor on an
   // entity create/update; copies its external images into the pod.
   ENTITY_MEDIA_COPY_QUEUE,
+  // Dev loop (on-demand, plan v5 T2): enqueued by the observation door for a
+  // fact the pod acts on (`dev.pr_merged` → the merge sweeper).
+  DEV_LOOP_OBSERVATION_QUEUE,
   API_KEY_ROTATION_CHECK_QUEUE,
   PAGERANK_CENTRALITY_QUEUE,
   POD_HYGIENE_NEAR_DUP_QUEUE,
@@ -935,6 +942,14 @@ export async function registerAllWorkers(): Promise<void> {
     handleEntityMediaCopy(job)
   );
   logger.info("Registered worker: entity-media-copy");
+
+  // Dev loop (on-demand) — the observation door enqueues one job per recorded
+  // fact the pod acts on; the api-side runner (IoC slot) moves the sessions it
+  // is about (the merge sweeper).
+  await boss.work(DEV_LOOP_OBSERVATION_QUEUE, async ([job]: any[]) =>
+    handleDevLoopObservation(job)
+  );
+  logger.info("Registered worker: dev-loop-observation");
 
   // Event sync (cron: every 6h) — invokes the api-side event-sync runner in-process
   // (IoC slot) to mirror upcoming events + Stellar deadlines + Google Calendar into
