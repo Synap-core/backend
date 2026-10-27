@@ -3751,6 +3751,14 @@
         },
         "required": ["id", "externalId", "provider", "displayName", "status"]
       },
+      "MessagingNotConfigured": {
+        "type": "object",
+        "properties": {
+          "error": { "type": "string" },
+          "code": { "type": "string", "enum": ["MESSAGING_NOT_CONFIGURED"] }
+        },
+        "required": ["error", "code"]
+      },
       "MessagingAuthUrl": {
         "type": "object",
         "properties": { "url": { "type": "string" } },
@@ -23214,10 +23222,12 @@
             }
           },
           "409": {
-            "description": "Conflict — a refusal the caller can act on",
+            "description": "No messaging service is set up on this pod (code MESSAGING_NOT_CONFIGURED)",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/HubError" }
+                "schema": {
+                  "$ref": "#/components/schemas/MessagingNotConfigured"
+                }
               }
             }
           },
@@ -23238,7 +23248,7 @@
             }
           },
           "503": {
-            "description": "Connector not configured",
+            "description": "Your accounts' live status could not be read from the messaging service",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
@@ -23300,10 +23310,12 @@
             }
           },
           "409": {
-            "description": "Conflict — a refusal the caller can act on",
+            "description": "No messaging service is set up on this pod (code MESSAGING_NOT_CONFIGURED)",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/HubError" }
+                "schema": {
+                  "$ref": "#/components/schemas/MessagingNotConfigured"
+                }
               }
             }
           },
@@ -23317,14 +23329,6 @@
           },
           "500": {
             "description": "Internal error",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/HubError" }
-              }
-            }
-          },
-          "503": {
-            "description": "Connector not configured",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
@@ -23374,10 +23378,12 @@
             }
           },
           "409": {
-            "description": "Conflict — a refusal the caller can act on",
+            "description": "No messaging service is set up on this pod (code MESSAGING_NOT_CONFIGURED)",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/HubError" }
+                "schema": {
+                  "$ref": "#/components/schemas/MessagingNotConfigured"
+                }
               }
             }
           },
@@ -23391,14 +23397,6 @@
           },
           "500": {
             "description": "Internal error",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/HubError" }
-              }
-            }
-          },
-          "503": {
-            "description": "Connector not configured",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
@@ -23533,10 +23531,12 @@
             }
           },
           "409": {
-            "description": "Conflict — a refusal the caller can act on",
+            "description": "No messaging service is set up on this pod (code MESSAGING_NOT_CONFIGURED)",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/HubError" }
+                "schema": {
+                  "$ref": "#/components/schemas/MessagingNotConfigured"
+                }
               }
             }
           },
@@ -23550,14 +23550,6 @@
           },
           "500": {
             "description": "Internal error",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/HubError" }
-              }
-            }
-          },
-          "503": {
-            "description": "Connector not configured",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
@@ -23619,10 +23611,12 @@
             }
           },
           "409": {
-            "description": "Conflict — a refusal the caller can act on",
+            "description": "No messaging service is set up on this pod (code MESSAGING_NOT_CONFIGURED)",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/HubError" }
+                "schema": {
+                  "$ref": "#/components/schemas/MessagingNotConfigured"
+                }
               }
             }
           },
@@ -23636,14 +23630,6 @@
           },
           "500": {
             "description": "Internal error",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/HubError" }
-              }
-            }
-          },
-          "503": {
-            "description": "Connector not configured",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
@@ -23908,10 +23894,12 @@
             }
           },
           "409": {
-            "description": "Conflict — a refusal the caller can act on",
+            "description": "No messaging service is set up on this pod (code MESSAGING_NOT_CONFIGURED)",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/HubError" }
+                "schema": {
+                  "$ref": "#/components/schemas/MessagingNotConfigured"
+                }
               }
             }
           },
@@ -23925,14 +23913,6 @@
           },
           "500": {
             "description": "Internal error",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/HubError" }
-              }
-            }
-          },
-          "503": {
-            "description": "Connector not configured",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
@@ -23997,10 +23977,12 @@
             }
           },
           "409": {
-            "description": "Conflict — a refusal the caller can act on",
+            "description": "No messaging service is set up on this pod (code MESSAGING_NOT_CONFIGURED)",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/HubError" }
+                "schema": {
+                  "$ref": "#/components/schemas/MessagingNotConfigured"
+                }
               }
             }
           },
@@ -24014,14 +23996,6 @@
           },
           "500": {
             "description": "Internal error",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/HubError" }
-              }
-            }
-          },
-          "503": {
-            "description": "Connector not configured",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
@@ -24084,10 +24058,12 @@
             }
           },
           "409": {
-            "description": "Conflict — a refusal the caller can act on",
+            "description": "No messaging service is set up on this pod (code MESSAGING_NOT_CONFIGURED)",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/HubError" }
+                "schema": {
+                  "$ref": "#/components/schemas/MessagingNotConfigured"
+                }
               }
             }
           },
@@ -24101,14 +24077,6 @@
           },
           "500": {
             "description": "Internal error",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/HubError" }
-              }
-            }
-          },
-          "503": {
-            "description": "Connector not configured",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
@@ -24171,10 +24139,12 @@
             }
           },
           "409": {
-            "description": "Conflict — a refusal the caller can act on",
+            "description": "No messaging service is set up on this pod (code MESSAGING_NOT_CONFIGURED)",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/HubError" }
+                "schema": {
+                  "$ref": "#/components/schemas/MessagingNotConfigured"
+                }
               }
             }
           },
@@ -24195,7 +24165,7 @@
             }
           },
           "503": {
-            "description": "Connector not configured",
+            "description": "The message could not be sent through the messaging service",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
