@@ -142,16 +142,28 @@ function runObservation(run, repo, sessionId) {
  * `sessionId` is only used for workflow_run, whose payload carries no PR body:
  * the caller reads it from the run's first PR.
  */
-export function observationFromEvent(eventName, payload, { sessionId = null } = {}) {
+export function observationFromEvent(
+  eventName,
+  payload,
+  { sessionId = null } = {}
+) {
   const repo = payload?.repository?.full_name;
   if (!repo) return null;
   if (eventName === "pull_request" && payload.pull_request) {
     return prObservation(payload.action, payload.pull_request, repo);
   }
-  if (eventName === "workflow_run" && payload.workflow_run && payload.action === "completed") {
+  if (
+    eventName === "workflow_run" &&
+    payload.workflow_run &&
+    payload.action === "completed"
+  ) {
     const run = payload.workflow_run;
     // A run of a fork's code: its PR is not ours to report.
-    if (run.head_repository?.full_name && run.head_repository.full_name !== repo) return null;
+    if (
+      run.head_repository?.full_name &&
+      run.head_repository.full_name !== repo
+    )
+      return null;
     return runObservation(run, repo, sessionId);
   }
   return null;
@@ -162,14 +174,22 @@ async function runPodSession(payload, token) {
   const pr = payload.workflow_run?.pull_requests?.[0];
   if (!pr || !token) return null;
   const repo = payload.repository.full_name;
-  const res = await fetch(`https://api.github.com/repos/${repo}/pulls/${pr.number}`, {
-    headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" },
-    signal: AbortSignal.timeout(15_000),
-  });
+  const res = await fetch(
+    `https://api.github.com/repos/${repo}/pulls/${pr.number}`,
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+      },
+      signal: AbortSignal.timeout(15_000),
+    }
+  );
   if (!res.ok) {
     // The run is still reported; only the session join is missing, and the
     // resolver can still join on data.pr. Said, not swallowed.
-    console.warn(`::warning::could not read PR #${pr.number} (${res.status}); sessionId not set`);
+    console.warn(
+      `::warning::could not read PR #${pr.number} (${res.status}); sessionId not set`
+    );
     return null;
   }
   return podSessionFromBody((await res.json()).body);
@@ -177,12 +197,18 @@ async function runPodSession(payload, token) {
 
 /** POST one observation; returns the error text, or null when it was recorded. */
 export async function postObservation(podUrl, key, observation) {
-  const res = await fetch(`${podUrl.replace(/\/+$/, "")}/api/hub/trpc/observations.append`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ json: { observations: [observation] } }),
-    signal: AbortSignal.timeout(30_000),
-  });
+  const res = await fetch(
+    `${podUrl.replace(/\/+$/, "")}/api/hub/trpc/observations.append`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${key}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ json: { observations: [observation] } }),
+      signal: AbortSignal.timeout(30_000),
+    }
+  );
   const text = await res.text();
   if (!res.ok) return `HTTP ${res.status}: ${text.slice(0, 300)}`;
   let data;
@@ -201,13 +227,19 @@ async function main() {
   const podUrl = process.env.SYNAP_POD_URL;
   const key = process.env.SYNAP_OBS_KEY;
   if (!podUrl || !key) {
-    console.log("No pod configured (SYNAP_POD_URL / SYNAP_OBS_KEY absent: a fork, or the secrets are not set). Nothing posted.");
+    console.log(
+      "No pod configured (SYNAP_POD_URL / SYNAP_OBS_KEY absent: a fork, or the secrets are not set). Nothing posted."
+    );
     return;
   }
   const eventName = process.env.GITHUB_EVENT_NAME;
-  const payload = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, "utf8"));
+  const payload = JSON.parse(
+    readFileSync(process.env.GITHUB_EVENT_PATH, "utf8")
+  );
   const sessionId =
-    eventName === "workflow_run" ? await runPodSession(payload, process.env.GITHUB_TOKEN) : null;
+    eventName === "workflow_run"
+      ? await runPodSession(payload, process.env.GITHUB_TOKEN)
+      : null;
   const obs = observationFromEvent(eventName, payload, { sessionId });
   if (!obs) {
     console.log(`Nothing to report for ${eventName}/${payload.action}.`);
@@ -215,16 +247,22 @@ async function main() {
   }
   const error = await postObservation(podUrl, key, obs);
   if (error) {
-    console.error(`::error::the pod did not record ${obs.type} ${obs.subjectId}: ${error}`);
+    console.error(
+      `::error::the pod did not record ${obs.type} ${obs.subjectId}: ${error}`
+    );
     process.exitCode = 1;
     return;
   }
-  console.log(`Recorded ${obs.type} ${obs.subjectId} (pod session: ${obs.data.sessionId ?? "none named"}).`);
+  console.log(
+    `Recorded ${obs.type} ${obs.subjectId} (pod session: ${obs.data.sessionId ?? "none named"}).`
+  );
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   main().catch((err) => {
-    console.error(`::error::${err instanceof Error ? err.message : String(err)}`);
+    console.error(
+      `::error::${err instanceof Error ? err.message : String(err)}`
+    );
     process.exitCode = 1;
   });
 }

@@ -7,7 +7,11 @@ export interface PodObservation {
   subjectType: "pull_request" | "ci_run";
   occurredAt?: string;
   /** The dev-loop contract's payload (packages/types/src/events/dev-loop.ts), plus extra fields. */
-  data: Record<string, unknown> & { repo: string; source: string; sessionId?: string };
+  data: Record<string, unknown> & {
+    repo: string;
+    source: string;
+    sessionId?: string;
+  };
 }
 
 /** The pod session a PR body names (`Pod session: <id>`), or null. */
@@ -21,4 +25,8 @@ export function observationFromEvent(
 ): PodObservation | null;
 
 /** POST one observation; the error text, or null when it was recorded. */
-export function postObservation(podUrl: string, key: string, observation: PodObservation): Promise<string | null>;
+export function postObservation(
+  podUrl: string,
+  key: string,
+  observation: PodObservation
+): Promise<string | null>;

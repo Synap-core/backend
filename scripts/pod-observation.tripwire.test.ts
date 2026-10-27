@@ -35,9 +35,13 @@ const DOOR = readFileSync(
 );
 
 const RESERVED_PHASES = [
-  ...(/RESERVED_PHASES\s*=\s*\[([^\]]*)\]/.exec(DOOR)?.[1] ?? "").matchAll(/"([^"]+)"/g),
+  ...(/RESERVED_PHASES\s*=\s*\[([^\]]*)\]/.exec(DOOR)?.[1] ?? "").matchAll(
+    /"([^"]+)"/g
+  ),
 ].map((m) => m[1]!);
-const TYPE_SHAPE = new RegExp(/const TYPE_SHAPE = \/(.+)\/;/.exec(DOOR)?.[1] ?? "^$");
+const TYPE_SHAPE = new RegExp(
+  /const TYPE_SHAPE = \/(.+)\/;/.exec(DOOR)?.[1] ?? "^$"
+);
 
 const SID = "cb0df539-7346-4db4-bf7d-a42b2abed58c";
 const repository = { full_name: "Synap-core/backend" };
@@ -72,15 +76,31 @@ const run = (over: Record<string, unknown> = {}) => ({
 
 /** One fixture per branch of the event → type map. */
 const EVERY_REPORTED = [
-  observationFromEvent("pull_request", { action: "opened", pull_request: pr(), repository }),
-  observationFromEvent("pull_request", { action: "reopened", pull_request: pr(), repository }),
+  observationFromEvent("pull_request", {
+    action: "opened",
+    pull_request: pr(),
+    repository,
+  }),
+  observationFromEvent("pull_request", {
+    action: "reopened",
+    pull_request: pr(),
+    repository,
+  }),
   observationFromEvent("pull_request", {
     action: "closed",
     pull_request: pr({ merged: true, merged_at: "2026-10-26T12:00:00Z" }),
     repository,
   }),
-  observationFromEvent("pull_request", { action: "closed", pull_request: pr(), repository }),
-  observationFromEvent("workflow_run", { action: "completed", workflow_run: run(), repository }),
+  observationFromEvent("pull_request", {
+    action: "closed",
+    pull_request: pr(),
+    repository,
+  }),
+  observationFromEvent("workflow_run", {
+    action: "completed",
+    workflow_run: run(),
+    repository,
+  }),
 ];
 
 afterEach(() => {
@@ -104,8 +124,14 @@ describe("pod-observation: what the door accepts", () => {
       DEV_LOOP_EVENT_TYPES.ciFinished,
     ]);
     for (const t of types as string[]) {
-      expect(OBSERVATION_NAMESPACES.some((ns) => t.startsWith(`${ns}.`)), t).toBe(true);
-      expect(RESERVED_PHASES.some((p) => t.endsWith(p)), t).toBe(false);
+      expect(
+        OBSERVATION_NAMESPACES.some((ns) => t.startsWith(`${ns}.`)),
+        t
+      ).toBe(true);
+      expect(
+        RESERVED_PHASES.some((p) => t.endsWith(p)),
+        t
+      ).toBe(false);
       expect(TYPE_SHAPE.test(t), t).toBe(true);
     }
   });
@@ -124,7 +150,10 @@ describe("pod-observation: the dev-loop contract", () => {
       repository,
     });
     for (const o of [...EVERY_REPORTED, withSession, noBody]) {
-      expect(checkDevLoopPayload(o!.type, o!.data), o!.type).toEqual({ contract: true, ok: true });
+      expect(checkDevLoopPayload(o!.type, o!.data), o!.type).toEqual({
+        contract: true,
+        ok: true,
+      });
     }
   });
 });
@@ -148,7 +177,10 @@ describe("pod-observation: the facts it carries", () => {
   });
 
   it("a PR closed without merge carries its head sha", () => {
-    expect(EVERY_REPORTED[3]!.data).toMatchObject({ merged: false, sha: "bead001" });
+    expect(EVERY_REPORTED[3]!.data).toMatchObject({
+      merged: false,
+      sha: "bead001",
+    });
   });
 
   it("a finished run names its PR, status and the session passed in", () => {
@@ -158,7 +190,12 @@ describe("pod-observation: the facts it carries", () => {
       { sessionId: SID }
     );
     expect(o?.subjectId).toBe("Synap-core/backend@bead001");
-    expect(o?.data).toMatchObject({ status: "success", pr: 42, workflow: "CI", sessionId: SID });
+    expect(o?.data).toMatchObject({
+      status: "success",
+      pr: 42,
+      workflow: "CI",
+      sessionId: SID,
+    });
   });
 
   it("folds GitHub's other conclusions into the contract's, and skips an unknown one", () => {
@@ -174,19 +211,27 @@ describe("pod-observation: the facts it carries", () => {
 
   it("reports nothing for other PR actions or a fork's run", () => {
     expect(
-      observationFromEvent("pull_request", { action: "edited", pull_request: pr(), repository })
+      observationFromEvent("pull_request", {
+        action: "edited",
+        pull_request: pr(),
+        repository,
+      })
     ).toBeNull();
     expect(
       observationFromEvent("workflow_run", {
         action: "completed",
-        workflow_run: run({ head_repository: { full_name: "someone/backend" } }),
+        workflow_run: run({
+          head_repository: { full_name: "someone/backend" },
+        }),
         repository,
       })
     ).toBeNull();
   });
 
   it("reads the Pod session line the way the Work Map does", () => {
-    expect(podSessionFromBody(`**Pod session:** ${SID.toUpperCase()}`)).toBe(SID);
+    expect(podSessionFromBody(`**Pod session:** ${SID.toUpperCase()}`)).toBe(
+      SID
+    );
     expect(podSessionFromBody(`- Pod session ${SID}`)).toBe(SID);
     expect(podSessionFromBody("no line here")).toBeNull();
     expect(podSessionFromBody(null)).toBeNull();
@@ -210,30 +255,47 @@ describe("pod-observation: posting", () => {
         async () =>
           new Response(
             JSON.stringify({
-              result: { data: { json: { results: [{ ok: false, index: 0, error: "refused" }] } } },
+              result: {
+                data: {
+                  json: {
+                    results: [{ ok: false, index: 0, error: "refused" }],
+                  },
+                },
+              },
             }),
             { status: 200 }
           )
       )
     );
-    expect(await postObservation("https://pod.example", "k", EVERY_REPORTED[0]!)).toBe("refused");
+    expect(
+      await postObservation("https://pod.example", "k", EVERY_REPORTED[0]!)
+    ).toBe("refused");
   });
 
   it("an HTTP failure is an error; a recorded item is null", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => new Response("nope", { status: 401 })));
-    expect(await postObservation("https://pod.example", "k", EVERY_REPORTED[0]!)).toMatch(
-      /^HTTP 401/
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("nope", { status: 401 }))
     );
+    expect(
+      await postObservation("https://pod.example", "k", EVERY_REPORTED[0]!)
+    ).toMatch(/^HTTP 401/);
     vi.stubGlobal(
       "fetch",
       vi.fn(
         async () =>
           new Response(
-            JSON.stringify({ result: { data: { json: { results: [{ ok: true, index: 0, id: "e1" }] } } } }),
+            JSON.stringify({
+              result: {
+                data: { json: { results: [{ ok: true, index: 0, id: "e1" }] } },
+              },
+            }),
             { status: 200 }
           )
       )
     );
-    expect(await postObservation("https://pod.example/", "k", EVERY_REPORTED[0]!)).toBeNull();
+    expect(
+      await postObservation("https://pod.example/", "k", EVERY_REPORTED[0]!)
+    ).toBeNull();
   });
 });
