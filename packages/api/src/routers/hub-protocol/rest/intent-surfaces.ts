@@ -305,14 +305,18 @@ export function registerIntentSurfacesRoutes(app: HubHono): void {
 
   app.get(
     "/needs-you",
-    readDoor("needs-you", needsYouQuery, (ctx, q) =>
-      signalsRouter.createCaller(ctx).needsYou({
-        ...(q.workspaceId ? { workspaceId: q.workspaceId } : {}),
-        ...(q.projectId ? { projectId: q.projectId } : {}),
-        ...(q.trackId ? { trackId: q.trackId } : {}),
-        ...(q.sessionId ? { sessionId: q.sessionId } : {}),
-        ...(q.limit ? { limit: q.limit } : {}),
-      })
+    readDoor(
+      "needs-you",
+      needsYouQuery,
+      (ctx, q) =>
+        signalsRouter.createCaller(ctx).needsYou({
+          ...(q.workspaceId ? { workspaceId: q.workspaceId } : {}),
+          ...(q.projectId ? { projectId: q.projectId } : {}),
+          ...(q.trackId ? { trackId: q.trackId } : {}),
+          ...(q.sessionId ? { sessionId: q.sessionId } : {}),
+          ...(q.limit ? { limit: q.limit } : {}),
+        }),
+      { confineWorkspace: true }
     )
   );
   app.get(
