@@ -249,6 +249,10 @@ beforeAll(async () => {
   }
   expect(seen.has("skills")).toBe(true);
   expect(seen.has("links")).toBe(true);
+  // The unique edge `createLinks` upserts on (its ON CONFLICT target).
+  await h.client!.exec(
+    `create unique index links_edge_uq on links (from_type, from_id, to_type, to_id, link_type);`
+  );
   // The pod owner exists (a pod READER, so pod-wide rows are visible to them).
   await h.client!.query(
     `insert into users (id, email, name) values ($1, 'owner@example.com', 'Owner')`,
