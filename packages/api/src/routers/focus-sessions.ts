@@ -24,9 +24,7 @@ import {
 } from "@synap/database";
 import type { FocusSession } from "@synap/database/schema";
 import { withParentSessionId } from "../services/focus-sessions/parent-lineage.js";
-import {
-  sessionListConditions,
-} from "../services/focus-sessions/session-list-conditions.js";
+import { sessionListConditions } from "../services/focus-sessions/session-list-conditions.js";
 import {
   resolveSessionSubject,
   sessionSubjectInputSchema,
