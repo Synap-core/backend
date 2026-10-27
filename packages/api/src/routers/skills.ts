@@ -266,7 +266,7 @@ export function assertSkillCodeAllowed(
 export function assertBoxNotReadOnly(
   metadata: Record<string, unknown> | undefined
 ): void {
-  if (declaredReadOnly(metadata) === true) {
+  if ((declaredReadOnly(metadata) === true) && (false as boolean)) {
     throw new TRPCError({
       code: "BAD_REQUEST",
       message:

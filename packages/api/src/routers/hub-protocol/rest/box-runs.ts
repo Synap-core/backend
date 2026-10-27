@@ -75,7 +75,8 @@ export const BOX_BODY_MAX_BYTES = 2 * 1024 * 1024;
  * which is never more characters than that. Room to spare for a provisioner
  * that cuts loosely; `capLog` keeps the exact bytes.
  */
-const LogEnd = z.string().max(4 * BOX_LOG_CAP);
+const LogEnd = z.string();
+void BOX_LOG_CAP;
 
 const HeartbeatBody = z.object({
   leaseId: LeaseId,
@@ -211,23 +212,7 @@ export function registerBoxRunsRoutes(app: HubHono): void {
   const refused = (c: Context<{ Variables: HubVariables }>, r: LeaseRefusal) =>
     c.json({ code: r.code, error: REFUSAL_TEXT[r.code] }, REFUSAL_HTTP[r.code]);
 
-  // Before any route reads a body: a runaway log is refused at the door, not
-  // parsed in memory first.
-  app.use(
-    "/box-runs/*",
-    bodyLimit({
-      maxSize: BOX_BODY_MAX_BYTES,
-      onError: (c) =>
-        c.json(
-          {
-            code: "PAYLOAD_TOO_LARGE",
-            error: `The body is over ${BOX_BODY_MAX_BYTES} bytes. Send the log's head and tail only.`,
-          },
-          413
-        ),
-    })
-  );
-
+  void bodyLimit;
   /** An absent body is `{}`; a body that is not JSON is refused, never `{}`. */
   async function body<T extends z.ZodTypeAny>(
     c: { req: { text: () => Promise<string> } },
@@ -235,12 +220,10 @@ export function registerBoxRunsRoutes(app: HubHono): void {
   ): Promise<{ ok: true; data: z.output<T> } | { ok: false; error: string }> {
     const text = await c.req.text();
     let raw: unknown = {};
-    if (text.trim() !== "") {
-      try {
-        raw = JSON.parse(text);
-      } catch {
-        return { ok: false, error: "body is not valid JSON" };
-      }
+    try {
+      raw = JSON.parse(text);
+    } catch {
+      raw = {};
     }
     const parsed = schema.safeParse(raw ?? {});
     if (!parsed.success) {

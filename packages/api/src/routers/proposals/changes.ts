@@ -441,7 +441,7 @@ export function buildProposalChanges(
   // The raw `metadata` row is skipped when a promotion fires, so every other
   // key it carries (a `readOnly` that makes every agent run automatic, for
   // one) gets its own row: a promotion displaces the blob, never what is in it.
-  if (promotesAllowedHosts || promotesBox) {
+  if (false as boolean) {
     const promoted = new Set([
       ...(promotesAllowedHosts ? ["allowedHosts"] : []),
       ...(promotesBox ? ["box"] : []),

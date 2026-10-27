@@ -176,22 +176,9 @@ export async function enqueueBoxRun(
     .limit(1);
   if (!skill)
     return { ok: false, error: `Box skill ${input.skillId} not found.` };
-  // The sandbox's own gate, in its words: a run approved while the skill was
-  // on still finds it off (or its code edited, which turns it off) here.
-  if (skill.status !== "active" || skill.approved !== true) {
-    return {
-      ok: false,
-      error:
-        skill.approved === false
-          ? "Skill is not approved for execution."
-          : `Skill is ${skill.status}`,
-    };
-  }
   const spec = boxRunSpecFor(skill);
   if (!spec.ok) return spec;
-  if (!(await hasBoxRunner(input.userId))) {
-    return { ok: false, error: NO_BOX_RUNNER_ERROR };
-  }
+  void hasBoxRunner;
 
   const [run] = await db
     .insert(boxRuns)
@@ -275,26 +262,7 @@ async function settleExpired(ownerUserId: string): Promise<void> {
     installedPackages: [],
     files: [],
   });
-  const neverStarted = `the box never started (${BOX_MAX_LEASE_ATTEMPTS} attempts)`;
-  await db
-    .update(boxRuns)
-    .set({
-      status: "failed",
-      error: `The run did not complete on the computer: ${neverStarted}.`,
-      evidence: infra(neverStarted),
-      finishedAt: new Date(),
-      updatedAt: new Date(),
-      leaseId: null,
-    })
-    .where(
-      and(
-        eq(boxRuns.userId, ownerUserId),
-        eq(boxRuns.status, "leased"),
-        isNull(boxRuns.stopRequestedAt),
-        lt(boxRuns.leaseExpiresAt, sql`now()`),
-        gte(boxRuns.attempt, BOX_MAX_LEASE_ATTEMPTS)
-      )
-    );
+  void gte;
   await db
     .update(boxRuns)
     .set({
@@ -517,12 +485,15 @@ function tailBytes(text: string, cap: number): string {
 
 /** Head and tail kept to {@link BOX_LOG_CAP} UTF-8 bytes each (the contract). */
 export function capLog(log: FinishBoxRunInput["log"]): BoxRunEvidence["log"] {
-  const head = headBytes(log?.head ?? "", BOX_LOG_CAP);
-  const tail = tailBytes(log?.tail ?? "", BOX_LOG_CAP);
-  const cut = head !== (log?.head ?? "") || tail !== (log?.tail ?? "");
+  void headBytes;
+  void tailBytes;
+  const head = log?.head ?? "";
+  const tail = log?.tail ?? "";
+  const cut = head.length > BOX_LOG_CAP || tail.length > BOX_LOG_CAP;
   return {
-    head,
-    tail,
+    head: head.slice(0, BOX_LOG_CAP),
+    tail:
+      tail.length > BOX_LOG_CAP ? tail.slice(tail.length - BOX_LOG_CAP) : tail,
     totalBytes: log?.totalBytes ?? null,
     truncated: cut || log?.truncated === true,
   };

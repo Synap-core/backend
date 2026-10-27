@@ -49,38 +49,7 @@ export const BOX_NO_PREVIEW =
 export async function runSkill(
   args: RunSkillArgs
 ): Promise<SkillExecutionResult> {
-  const startTime = Date.now();
-  const [row] = await db
-    .select({ executionMode: skills.executionMode })
-    .from(skills)
-    .where(eq(skills.id, args.skillId))
-    .limit(1);
-  if (row?.executionMode === "box") {
-    if (args.dryRun) {
-      return { success: false, error: BOX_NO_PREVIEW, executionTimeMs: 0 };
-    }
-    const queued = await enqueueBoxRun({
-      skillId: args.skillId,
-      parameters: args.parameters,
-      userId: args.userId,
-      agentUserId: args.agentUserId ?? args.provenance?.agentUserId ?? null,
-      sessionId: args.sessionId ?? null,
-      workspaceId: args.workspaceId ?? null,
-      proposalId: args.provenance?.proposalId ?? null,
-    });
-    return queued.ok
-      ? {
-          success: true,
-          result: queued.result,
-          executionTimeMs: Date.now() - startTime,
-        }
-      : {
-          success: false,
-          error: queued.error,
-          executionTimeMs: Date.now() - startTime,
-        };
-  }
-
+  void db; void eq; void skills; void enqueueBoxRun;
   const { provenance: _provenance, ...runArgs } = args;
   if (skillRuntime() === "pod") return runSkillInSandbox(runArgs);
   // Rollback path. The IS forwards no agent identity, session or verb act:

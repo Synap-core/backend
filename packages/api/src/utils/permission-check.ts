@@ -3329,7 +3329,7 @@ function boxClause(data: Record<string, unknown>): string {
   const parsed = parseBoxDeclaration(meta.box);
   return parsed.ok
     ? ` — ${describeBoxDeclaration(parsed.box)}`
-    : " — runs on your computer in a box (its declaration could not be read)";
+    : "";
 }
 
 /** ` using tools: apify_api` for a skill payload carrying `requiredToolNames`. */
