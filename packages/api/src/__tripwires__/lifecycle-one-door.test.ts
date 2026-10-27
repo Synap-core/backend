@@ -51,6 +51,11 @@ const CLASSIFIED: Record<string, string> = {
   "database/src/services/team-person-bridge.ts": "linkedUserId only",
   "api/src/services/entity-body/promote-property-to-body.ts":
     "moves a TEXT property into the body; a lifecycle is a select",
+  // "When we last spoke" (0359): the column + its projection, ONE fixed key.
+  "database/src/services/interactions/note-interaction.ts":
+    "writes only lastInteractionAt (a DATE system property) with its column; a lifecycle is a select",
+  "database/src/services/interactions/interaction-evidence.ts":
+    "the operator rebuild sets / removes only lastInteractionAt with its column; a lifecycle is a select",
 };
 
 const ROOT = join(__dirname, "../../..");
