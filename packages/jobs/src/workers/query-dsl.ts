@@ -123,10 +123,10 @@ export function resolveQueryProfileSlug(
  * A query node's string filter that does not parse, after templating, to a
  * JSON object.
  *
- * Thrown, never swallowed: the old parser read an unparseable filter as "no
- * filter" and returned EVERY row of the kind, so a typo in a flow feeding an
- * `entity_update` would have touched the whole kind. A filter the author wrote
- * and the engine cannot read is a failed step, not an empty filter. The step
+ * Thrown, never swallowed: read as "no filter", it would return EVERY row of
+ * the kind, and a typo in a flow feeding an `entity_update` would touch the
+ * whole kind. A filter the author wrote and the engine cannot read is a failed
+ * step, not an empty filter. The step
  * runner records it as `failed` with this message (`automation-executor.ts`).
  */
 export class QueryFilterParseError extends Error {
