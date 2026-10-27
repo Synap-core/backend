@@ -18867,6 +18867,103 @@ export type SessionInteractionsSection = {
  * read through {@link sessionReadableWhere}.
  */
 export type SessionViewerRole = "member" | "owner";
+declare function projectSessionRows(sessions: FocusSession[], userId: string | null | undefined): Promise<({
+	agentIds: string[] | null;
+	channelId: string | null;
+	closedAt: Date | null;
+	correlationId: string | null;
+	createdAt: Date;
+	criteria: unknown;
+	currentStage: string | null;
+	expectedOutputs: unknown;
+	goal: string;
+	id: string;
+	metadata: unknown;
+	origin: "agent" | "automation" | "human" | "playbook" | null;
+	playbookId: string | null;
+	progress: number | null;
+	projectId: string | null;
+	stages: unknown;
+	startedAt: Date;
+	status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
+	subjectEntityId: string | null;
+	templateId: string | null;
+	title: string | null;
+	trackId: string | null;
+	trackStage: string | null;
+	updatedAt: Date;
+	userId: string;
+	verificationReport: unknown;
+	workspaceId: string | null;
+} & {
+	parentSessionId: string | null;
+} & {
+	triage: TriageProjection;
+} & {
+	kind: SessionKind;
+} & SessionParticipants & {
+	verdict?: SessionVerdict;
+})[]>;
+declare const WORK_GRAPH_EDGE_KINDS: readonly [
+	"blocked_by",
+	"spawned_from",
+	"waits_on_output",
+	"triggered",
+	"updated"
+];
+export type WorkGraphEdgeKind = (typeof WORK_GRAPH_EDGE_KINDS)[number];
+export interface WorkGraphEdge {
+	kind: WorkGraphEdgeKind;
+	from: string;
+	to: string;
+	/** `waits_on_output`: the entity waited on. */
+	entityId?: string;
+	/** `triggered` / `updated`: how many events back the relation. */
+	count?: number;
+	/** `triggered` / `updated`: the latest of them, ISO. */
+	lastAt?: string | null;
+}
+export type WorkGraphSection = {
+	status: "ok";
+} | {
+	reason: string;
+	status: "unavailable";
+};
+/** Whether each edge read answered. `unavailable` = no edge of that kind was drawn because the read FAILED. */
+export interface WorkGraphSections {
+	/** Declared `blocked_by` edges. */
+	blockedBy: WorkGraphSection;
+	/** Derived waits on another open session's output. */
+	waitsOnOutputs: WorkGraphSection;
+	/** Derived `triggered` / `updated` interactions. */
+	interactions: WorkGraphSection;
+	/** The off-window sessions at the far end of an edge. */
+	farEnds: WorkGraphSection;
+}
+export interface WorkGraphWindow {
+	/** ISO: settled work is in the window from this instant on. */
+	since: string;
+	hours: number;
+	ceiling: number;
+	/** True when sessions were left out — `omitted` says how many. */
+	truncated: boolean;
+	/** Sessions the window (or an edge) selected that this read did not return. */
+	omitted: number;
+}
+/** One node: the list row (`focusSessions.list({ nextMove: true })`), plus whether it is IN the window or only the far end of an edge. */
+export type WorkGraphNode = Awaited<ReturnType<typeof projectSessionRows>>[number] & {
+	inWindow: boolean;
+	live: SessionActivityLive | null;
+	nextMove: ContinuationNextMove;
+	unitFacts: SessionUnitCounts;
+	viewerRole: SessionViewerRole;
+};
+export interface WorkGraph {
+	nodes: WorkGraphNode[];
+	edges: WorkGraphEdge[];
+	sections: WorkGraphSections;
+	window: WorkGraphWindow;
+}
 declare const LANDED_DECISION_STATES: readonly [
 	"applied",
 	"approved",
@@ -32000,6 +32097,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				proposalId?: undefined;
 				status: "granted";
 			};
+		}>;
+		graph: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				kind?: "all" | "receipt" | "run" | "work" | undefined;
+				lens?: "all" | "default" | "triage" | undefined;
+				projectId?: string | string[] | null | undefined;
+				windowHours?: number | undefined;
+				workspaceId?: string | string[] | null | undefined;
+			};
+			meta: object;
+			output: WorkGraph;
 		}>;
 		landed: import("@trpc/server").TRPCQueryProcedure<{
 			input: {

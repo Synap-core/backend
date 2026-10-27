@@ -45,7 +45,10 @@ import {
   focusSessions,
 } from "@synap/database";
 import type { SQL } from "@synap/database";
-import type { SessionStatus } from "./session-statuses.js";
+import {
+  OPEN_SESSION_STATUSES,
+  type SessionStatus,
+} from "./session-statuses.js";
 
 /** The statuses that may be admitted by recency rather than by status alone. */
 export const WINDOWED_SESSION_STATUSES = ["stale", "closed"] as const;
@@ -105,4 +108,20 @@ export function sessionSettledAtSql(): SQL {
  */
 export function settledSinceWhere(since: string): SQL {
   return drizzleSql`${sessionSettledAtSql()} >= ${since}::timestamptz`;
+}
+
+/**
+ * WIDENING, by the same clock: every OPEN row, whatever its age, plus every
+ * other row settled at or after `since` — the work graph's window ("what is
+ * in flight, and what landed lately"). `stale` is not open, so a stale row is
+ * in the window only while its last touch is. A status set with `statusSince`
+ * cannot say this: its windows cover `stale` and `closed` only, and a
+ * cancelled or failed row that settled an hour ago is still part of what
+ * happened.
+ */
+export function openOrSettledSinceWhere(since: string): SQL {
+  return or(
+    inArray(focusSessions.status, [...OPEN_SESSION_STATUSES]),
+    settledSinceWhere(since)
+  ) as SQL;
 }

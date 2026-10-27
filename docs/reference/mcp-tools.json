@@ -55,6 +55,7 @@
     "sessions": [
       "synap_get_session",
       "synap_list_sessions",
+      "synap_get_work_graph",
       "synap_list_agents",
       "synap_evaluate_session",
       "synap_revert_session",
@@ -5741,6 +5742,93 @@
             "type": "number",
             "default": 0,
             "description": "Rows to skip — pass the previous reply's `nextOffset` to read the next page. No `nextOffset` in a reply means it was the last page."
+          }
+        },
+        "required": []
+      }
+    },
+    {
+      "name": "synap_get_work_graph",
+      "title": "Get the work graph",
+      "group": "sessions",
+      "annotations": {
+        "title": "Get the work graph",
+        "readOnlyHint": true,
+        "openWorldHint": false
+      },
+      "description": "The whole map of YOUR work in one read — read-only. Every OPEN session, plus every session settled in the last `windowHours` (default 72), plus the far end of every edge: `nodes`, flat `edges` (`blocked_by` from waiter to blocker, `spawned_from` child to parent, `waits_on_output`, `triggered`, `updated`), `sections` (an edge read that FAILED is `unavailable`, never an empty list) and `window` (`truncated` + `omitted` when the 500-session ceiling cut). Use it instead of one `synap_get_session` per session to see what waits on what. Pod-wide unless you narrow to a workspace or project.",
+      "parameters": [
+        {
+          "name": "windowHours",
+          "type": "number",
+          "required": false,
+          "description": "Settled sessions from this many hours back, 1–720. Open sessions are in the graph whatever their age."
+        },
+        {
+          "name": "workspaceId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: only sessions in this workspace."
+        },
+        {
+          "name": "projectId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: only sessions scoped to this project."
+        },
+        {
+          "name": "kind",
+          "type": "enum",
+          "required": false,
+          "description": "Which population is in the window. 'work', 'run', 'receipt', or 'all' (default). Far ends of edges are any kind.",
+          "enum": ["work", "run", "receipt", "all"]
+        },
+        {
+          "name": "lens",
+          "type": "enum",
+          "required": false,
+          "description": "'all' (default) = every session. 'default' hides agent drafts not yet accepted by a person; 'triage' = only those.",
+          "enum": ["default", "triage", "all"]
+        },
+        {
+          "name": "detail",
+          "type": "enum",
+          "required": false,
+          "description": "'lean' (default) = per node id, title, status, kind, parentSessionId, trackId, projectId, workspaceId, updatedAt, inWindow and the next move (kind, actor, label). 'full' = the whole list row per node: large.",
+          "enum": ["lean", "full"]
+        }
+      ],
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "windowHours": {
+            "type": "number",
+            "default": 72,
+            "description": "Settled sessions from this many hours back, 1–720. Open sessions are in the graph whatever their age."
+          },
+          "workspaceId": {
+            "type": "string",
+            "description": "Optional: only sessions in this workspace."
+          },
+          "projectId": {
+            "type": "string",
+            "description": "Optional: only sessions scoped to this project."
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["work", "run", "receipt", "all"],
+            "description": "Which population is in the window. 'work', 'run', 'receipt', or 'all' (default). Far ends of edges are any kind."
+          },
+          "lens": {
+            "type": "string",
+            "enum": ["default", "triage", "all"],
+            "description": "'all' (default) = every session. 'default' hides agent drafts not yet accepted by a person; 'triage' = only those."
+          },
+          "detail": {
+            "type": "string",
+            "enum": ["lean", "full"],
+            "default": "lean",
+            "description": "'lean' (default) = per node id, title, status, kind, parentSessionId, trackId, projectId, workspaceId, updatedAt, inWindow and the next move (kind, actor, label). 'full' = the whole list row per node: large."
           }
         },
         "required": []
