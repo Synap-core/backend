@@ -730,15 +730,28 @@ export function registerFocusSessionExecutors(): void {
       if (isTerminalSessionStatus(requestedStatus)) {
         const terminalStatus: TerminalSessionStatus = requestedStatus;
         // Terminal path: human approve executes complete without re-entering
-        // agent governance (no agentUserId from the original proposal).
+        // agent governance (no agentUserId from the original proposal). The
+        // closing agent's word on its own questions rides on the proposal and
+        // is applied (`approvedCloseOf`), never dropped.
         try {
           const { completeFocusSession } =
             await import("../../../services/focus-sessions/complete-session.js");
+          const { readCloseQuestionDispositions } =
+            await import("../../../services/messaging/room-post-kind.js");
+          const dispositions = readCloseQuestionDispositions(
+            innerData.questionDispositions
+          );
           const result = await completeFocusSession({
             sessionId,
             // Scope by session owner so the service's userId floor resolves.
             userId: session.userId,
             terminalStatus,
+            ...(proposal.agentUserId
+              ? {
+                  approvedCloseOf: proposal.agentUserId,
+                  questionDispositions: dispositions,
+                }
+              : {}),
             summary:
               typeof innerData.sessionSummary === "string"
                 ? innerData.sessionSummary
@@ -937,7 +950,10 @@ export function registerFocusSessionExecutors(): void {
           // An AGENT's list adds and updates, never deletes (C6): live,
           // approving an agent's `expectedOutputs: []` beside a rename deleted
           // every declared deliverable of session 9dc5da0c.
-          { keepUnlisted: !!proposal.agentUserId }
+          {
+            keepUnlisted: !!proposal.agentUserId,
+            askedBy: proposal.agentUserId ?? null,
+          }
         );
         if (goalChange.refusal) outputRefusals.push(goalChange.refusal);
 
@@ -1362,7 +1378,7 @@ async function applyProposedOutputMutations(
   sessionId: string,
   innerData: Record<string, unknown>,
   ownerUserId: string,
-  opts: { keepUnlisted: boolean }
+  opts: { keepUnlisted: boolean; askedBy: string | null }
 ): Promise<string[]> {
   const expectedOutputs = z
     .array(expectedOutputWireSchema)

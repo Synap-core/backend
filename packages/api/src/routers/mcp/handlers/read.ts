@@ -404,16 +404,7 @@ export const readHandlers: McpHandlerMap = {
     // agent's principal OWNS the target session (decision D1, agent door).
     const { redactUnreadableSessionTargets } =
       await import("../../../services/proposals/session-content-redaction.js");
-    const rawRows = await redactUnreadableSessionTargets(
-      (Array.isArray(result)
-        ? result
-        : ((result as { proposals?: unknown[] })?.proposals ?? [])) as Array<{
-        targetType: string;
-        targetId: string | null;
-        data: unknown;
-      }>,
-      { userId }
-    );
+    const rawRows = await redactUnreadableSessionTargets(result, { userId });
     // SETUP — this door calls `listCreatedProposals` DIRECTLY (not
     // `hub.proposals.listProposals`), so the stamping the Hub procedure does
     // never happened here: `setup` was declared on the wire, forwarded by
@@ -428,32 +419,28 @@ export const readHandlers: McpHandlerMap = {
       rawRows as Record<string, unknown>[],
       userId
     );
-    const rows = (rawRows as Record<string, unknown>[]).map((row) =>
-      withProposalSetup(row, setups)
-    );
-    if ((args.detail as string) === "full") {
-      // `detail:"full"` answers with the whole `data` JSONB. Strip the
-      // AGENT-ONLY failure fields — `data.failure.detail` is the redacted raw
-      // executor error and its ONE reader is the server-side prompt path
-      // (`render-for-prompt.ts`), never a tool result. See `failure-projection.ts`.
-      const { projectProposalRowForViewer } =
-        await import("../../proposals/failure-projection.js");
-      return ok(
-        Array.isArray(result)
-          ? (rows as Record<string, unknown>[]).map(projectProposalRowForViewer)
-          : {
-              ...(result as Record<string, unknown>),
-              proposals: (rows as Record<string, unknown>[]).map(
-                projectProposalRowForViewer
-              ),
-            }
-      );
-    }
-    // ONE definition of BASIC. This projection is shared verbatim with the
-    // Hub REST `GET /proposals?view=basic` door — a second hand-rolled
-    // summarizer here is how the two drifted in the first place.
-    const { toProposalBasic } =
+    // WAITING ON IT: the same resolver the Hub list door
+    // stamps, owner-only on this agent door (decision D1).
+    const { resolveProposalWaits, proposalWaitsFields } =
+      await import("../../../services/proposals/proposal-waits.js");
+    const waits = await resolveProposalWaits(rawRows, { userId });
+    const rows = (rawRows as Record<string, unknown>[]).map((row) => ({
+      ...withProposalSetup(row, setups),
+      ...proposalWaitsFields(row.id, waits),
+    }));
+    // ONE definition of each view, shared verbatim with the Hub REST
+    // `GET /proposals` doors — a second hand-rolled projection here is how
+    // the two drifted in the first place.
+    const { toProposalBasic, withProposalClass } =
       await import("../../hub-protocol/rest/_codecs/proposal.js");
+    if ((args.detail as string) === "full") {
+      // `detail:"full"` answers with the whole `data` JSONB, as Hub
+      // `view=full`: the class, the fate, and the AGENT-ONLY failure fields
+      // stripped (`data.failure.detail` is the redacted raw executor error and
+      // its ONE reader is the server-side prompt path, `render-for-prompt.ts`,
+      // never a tool result — `failure-projection.ts`).
+      return ok(rows.map(withProposalClass));
+    }
     const summarized = (rows as Record<string, unknown>[]).map(toProposalBasic);
     return ok({
       proposals: summarized,

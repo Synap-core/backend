@@ -97,6 +97,15 @@ describe("entry-key MCP instructions", () => {
     expect(text).toContain("reconnect");
   });
 
+  it("teach the question protocol: `Q-<id8>` in chat, `relay_answer` verbatim, close open asks before complete", () => {
+    const text = liveInstructions("entry");
+    expect(text).toContain("`Q-<id8>`");
+    expect(text).toContain("`relay_answer`, words verbatim");
+    expect(text.indexOf("close open asks")).toBeLessThan(
+      text.indexOf("`complete_session`")
+    );
+  });
+
   it("keep the work loop: ask in the room, then wait", () => {
     const text = liveInstructions("entry");
     for (const token of [

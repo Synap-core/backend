@@ -2192,6 +2192,23 @@ void startupHooksSettled
     )
   );
 
+// Decision asks NOBODY ASKED: open asks the old reactor raised on a person's
+// own proposed decision retire `not_asked`, and the Decide sessions it opened
+// for them close through the one close door. Runs ONCE (a pod_settings
+// marker, written only after a pass with no failure); later boots return at
+// the marker. Off the boot path.
+void startupHooksSettled
+  .then(async () => {
+    const { retireUnaskedDecisionAsks } = await import("@synap/api");
+    await retireUnaskedDecisionAsks();
+  })
+  .catch((err) =>
+    apiLogger.warn(
+      { err },
+      "Retiring unasked decision asks failed (non-fatal; resumes next boot)"
+    )
+  );
+
 // Live session updates: the ONE producer of `focus_session:updated` — LISTENs
 // on the migration-0277 row trigger, so every session writer pushes. Never
 // throws; polling is the floor if the LISTEN is down.

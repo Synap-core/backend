@@ -19,6 +19,8 @@ on:
     branches: ["main", "develop"]
   push:
     branches: ["main", "develop"]
+  # The merge queue needs every required check reported on its run.
+  merge_group:
   workflow_dispatch:
 
 concurrency:
@@ -31,6 +33,8 @@ permissions:
 jobs:
   check:
     name: Reference docs are current
+    # A negctl/* branch never merges and runs only its own tests (ci.yml).
+    if: ${{ !startsWith(github.head_ref, 'negctl/') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

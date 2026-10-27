@@ -373,6 +373,9 @@ export async function findDuplicateCandidates(
       identity = await resolveIdentity(database, {
         userId: query.userId,
         kindSlug: query.profileSlug,
+        // A strong match never crosses kinds, except onto the kinds a role
+        // create may sit on (the resolver's own rule otherwise).
+        alsoKinds: query.alsoKinds,
         name: query.title ?? null,
         signals: query.signals,
         // Same kind only, IN the query (FB1020 review S1): the weak path

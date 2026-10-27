@@ -24,6 +24,7 @@
  */
 
 import { decodeHtmlEntities } from "@synap-core/types/text";
+import { heldWritesPackName } from "@synap-core/types/proposals/deferred-writes";
 import type { PROPOSE_REASON } from "@synap/governance-policy";
 import {
   capabilityRunVerbId,
@@ -118,6 +119,11 @@ function stringField(
  */
 export function extractProposalName(data: unknown): string | undefined {
   if (!data || typeof data !== "object") return undefined;
+  // An agent's held-writes pack names itself from its own data (agent, day,
+  // the writes it holds now): F6, the title door then leads it with "Writes
+  // held for review:" instead of "Held writes Agent".
+  const heldPack = heldWritesPackName(data);
+  if (heldPack) return heldPack;
   const envelope = data as Record<string, unknown>;
   const payload = extractPayload(data);
   return (
@@ -230,6 +236,13 @@ export interface ClusterInputRow extends ProposalFingerprintInput {
    * channel.
    */
   governanceReason?: string | null;
+  /**
+   * In Review later (`reviewLaterProposalWhere`, selected by the groups
+   * query): untouched durable work out of the headline count. Members SPLIT on
+   * it, so a cluster is wholly fresh or wholly Review later and its count is
+   * one or the other, never a mix.
+   */
+  reviewLater?: boolean;
 }
 
 /**
@@ -303,6 +316,11 @@ export interface ProposalCluster {
   class: ProposalClass;
   /** Hours this class stays answerable; `null` when it never expires. */
   lifetimeHours: number | null;
+  /**
+   * Every member is in Review later (see `ClusterInputRow.reviewLater`): the
+   * cluster is out of the needs-you headline and drawn in its own fold.
+   */
+  reviewLater: boolean;
   count: number;
   /** Up to `sampleCap` member proposal ids (newest-first as fed). */
   sampleProposalIds: string[];
@@ -393,6 +411,7 @@ interface ClusterAccumulator {
   targetType: string;
   /** A capability run's verb — one per cluster (runs cluster on the verb's skill id). */
   runVerbId: string | null;
+  reviewLater: boolean;
   targetLabel: string;
   count: number;
   sampleProposalIds: string[];
@@ -455,9 +474,11 @@ export function collapseProposalsToClusters(
 
   for (const row of rows) {
     const fingerprint = computeProposalFingerprint(row);
-    const key = opts?.splitBySession
-      ? `${fingerprint}${SEP}${row.sessionId ?? ""}`
-      : fingerprint;
+    const reviewLater = row.reviewLater === true;
+    const key =
+      (opts?.splitBySession
+        ? `${fingerprint}${SEP}${row.sessionId ?? ""}`
+        : fingerprint) + (reviewLater ? `${SEP}review-later` : "");
     let acc = byFingerprint.get(key);
     if (!acc) {
       acc = {
@@ -465,6 +486,7 @@ export function collapseProposalsToClusters(
         proposalType: row.proposalType,
         targetType: row.targetType,
         runVerbId: capabilityRunVerbId(row.data),
+        reviewLater,
         targetLabel: resolveTargetLabel(row),
         count: 0,
         sampleProposalIds: [],
@@ -533,6 +555,7 @@ export function collapseProposalsToClusters(
     targetType: acc.targetType,
     targetLabel: acc.targetLabel,
     ...proposalClassFields(acc.proposalType, acc.targetType, acc.runVerbId),
+    reviewLater: acc.reviewLater,
     count: acc.count,
     sampleProposalIds: acc.sampleProposalIds,
     sources: acc.sources,

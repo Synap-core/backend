@@ -16,6 +16,8 @@
  *
  * A sandboxed cell is NEVER mounted here: no iframe, no script, nothing in
  * content runs. The author's fallback prose stays visible under every block.
+ * (The console runs HTML in exactly one place: a stored HTML document's own
+ * page, in the isolated frame of `html-frame` — never inline in a body.)
  */
 
 import { useContext, type ReactNode } from "react";

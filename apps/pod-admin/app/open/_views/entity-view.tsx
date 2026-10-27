@@ -18,7 +18,10 @@
  *
  * `entities.get` re-checks access server-side; no admin role is involved.
  * The body document is read through `documents.get` on the viewer's own
- * floor: a body they cannot read says so, and shows nothing.
+ * floor: a body they cannot read says so, and shows nothing; a body that
+ * failed to load says so with a retry. A stored HTML file (an uploaded
+ * report) is a body that RUNS: its page in the isolated frame, its source a
+ * toggle away (`content/html-frame`).
  */
 
 import { Chip } from "@heroui/react";
@@ -210,8 +213,9 @@ export function EntityView({ id }: { id: string }) {
       {entity.documentId && !bodyIsMedia && (
         <DocumentContentSection
           title="Content"
-          content={body}
+          content={body.content}
           openInApp={openInApp}
+          onRetry={body.retry}
         />
       )}
     </OpenObject>

@@ -19,6 +19,11 @@
  *             answered here (`ask-detail.ts`), one at a time, never batched;
  *             anything else opens where it lives.
  *
+ * Review later: a durable proposal untouched for 7 days, or an ask nobody
+ * answered for 7 days, leaves the headline and the counts for its own fold —
+ * the SHARED fold (`needsYouRows`), so the console folds exactly what the
+ * badge leaves out and what the desktop and phone apps fold.
+ *
  * Words come from the vocabulary door; nothing here names a kind by hand.
  */
 
@@ -30,15 +35,16 @@ import {
   type LensNeedsYouSignal,
 } from "@synap-core/types/lens";
 import { isObjectNavView } from "@synap-core/types/navigation";
+import { needsYouRows } from "@synap-core/types/needs-you";
 import { proposalNeedsItsPage } from "@synap-core/types/proposals";
-import type { Ask } from "@synap-core/types/ask";
+import { askTextRestates, type Ask } from "@synap-core/types/ask";
 import { openIn, type Exit } from "../../../../lib/open-in";
 import {
   proposalExpiresAt,
   proposalLapsed,
 } from "../../../_lib/proposal-expiry";
 import { isUuid } from "../../../../lib/format";
-import { askSlotOf, type AskSlot } from "./ask-detail";
+import { askSlotOf, askView, type AskSlot } from "./ask-detail";
 import {
   proposalRequester,
   type ProposalPrincipalView,
@@ -177,6 +183,8 @@ export interface ReviewRow {
   batchIds: string[] | null;
   /** Every id a `?focus=` may name this row by. */
   ids: string[];
+  /** In the Review later fold: out of the headline and the counts. */
+  reviewLater: boolean;
 }
 
 /**
@@ -247,14 +255,17 @@ function wholeCluster(s: ReviewSignal): string[] | null {
   return ids.length > 0 && ids.length === Math.max(1, s.count) ? ids : null;
 }
 
+/** A row's kind-specific half; `title` only when it is not the signal's. */
+type RowShape = Omit<
+  ReviewRow,
+  "key" | "group" | "title" | "occurredAt" | "count" | "reviewLater" | "expired"
+> & { title?: string };
+
 function proposalRow(
   s: ReviewSignal,
   group: ReviewGroup,
   facts: ReadonlyMap<string, ProposalFacts>
-): Omit<
-  ReviewRow,
-  "key" | "group" | "title" | "occurredAt" | "count" | "expired"
-> {
+): RowShape {
   const sampleId = s.target?.kind === "proposal" ? s.target.id : null;
   const sample = sampleId ? facts.get(sampleId) : undefined;
   const members = wholeCluster(s);
@@ -287,12 +298,7 @@ function proposalRow(
   };
 }
 
-function accessRow(
-  s: ReviewSignal
-): Omit<
-  ReviewRow,
-  "key" | "group" | "title" | "occurredAt" | "count" | "expired"
-> {
+function accessRow(s: ReviewSignal): RowShape {
   const target = s.target;
   return {
     nounKind: s.access?.subject ?? "application",
@@ -313,23 +319,23 @@ function accessRow(
   };
 }
 
-function askRow(
-  s: ReviewSignal
-): Omit<
-  ReviewRow,
-  "key" | "group" | "title" | "occurredAt" | "count" | "expired"
-> {
-  // The shared lens row decides an ask's noun, chip and door — the same
-  // words browser and relay draw for it.
+function askRow(s: ReviewSignal): RowShape {
+  // The shared lens row decides an ask's noun, chip, door and title (the
+  // card's question, `askCardView`) — the same words browser and relay draw.
   const lens = lensRowOfNeedsYou(
     { kind: "item", key: s.id, signal: s, session: null },
     "blocking"
   );
   const slot = askSlotOf(s);
+  // Who asked: the agent by name, else the cause — the card's own mark.
+  const asker = slot ? askView(slot).asker : null;
+  const where = s.source?.label || s.sessionTitle || null;
   return {
+    title: lens.title,
     nounKind: lens.objectKind,
-    who: null,
-    where: s.source?.label || s.sessionTitle || null,
+    who: asker ? (asker.kind === "agent" ? asker.name : asker.label) : null,
+    // A session named after the question ("Decide: X") says it twice.
+    where: where && !askTextRestates(where, lens.title) ? where : null,
     reason: lens.reason,
     expiresAt: null,
     detail: slot
@@ -353,6 +359,7 @@ export function reviewRows(
   facts: ReadonlyMap<string, ProposalFacts>,
   now: number = Date.now()
 ): ReviewRow[] {
+  const later = reviewLaterIds(signals);
   return signals.map((s) => {
     const group = reviewGroupOf(s);
     const shape =
@@ -369,13 +376,23 @@ export function reviewRows(
       ...(expired ? { inlineApprove: false, batchIds: null } : {}),
       key: s.id,
       group,
-      title: s.title,
+      title: shape.title ?? s.title,
       occurredAt,
       expiresAt,
       expired,
       count: Math.max(1, s.count),
+      reviewLater: later.has(s.id),
     };
   });
+}
+
+/** The signals the shared needs-you fold puts in Review later. */
+function reviewLaterIds(signals: readonly ReviewSignal[]): Set<string> {
+  return new Set(
+    needsYouRows(signals).reviewLater.flatMap((r) =>
+      r.kind === "item" ? [r.signal.id] : r.items.map((s) => s.id)
+    )
+  );
 }
 
 /** The live question an open ask detail names, or null once it moved on. */
@@ -394,12 +411,16 @@ export function liveAskSlot(
   return null;
 }
 
-/** Rows per chip: All and each group. */
+/** Rows per chip: All and each group — the headline, as the badge counts it. */
 export function reviewCounts(
   rows: readonly ReviewRow[]
 ): Record<"all" | ReviewGroup, number> {
-  const out = { all: rows.length, access: 0, changes: 0, asks: 0 };
-  for (const r of rows) out[r.group] += 1;
+  const out = { all: 0, access: 0, changes: 0, asks: 0 };
+  for (const r of rows) {
+    if (r.reviewLater) continue;
+    out.all += 1;
+    out[r.group] += 1;
+  }
   return out;
 }
 
@@ -430,12 +451,20 @@ export function reviewChipCounts(
   };
 }
 
-/** The rows a needs-you view shows ("history" is not a needs-you view). */
+/**
+ * What a needs-you view shows ("history" is not one): its headline rows, and
+ * the rows of its Review later fold.
+ */
 export function rowsInView(
   rows: readonly ReviewRow[],
   filter: Exclude<ReviewFilter, "history">
-): ReviewRow[] {
-  return filter === "all" ? [...rows] : rows.filter((r) => r.group === filter);
+): { headline: ReviewRow[]; reviewLater: ReviewRow[] } {
+  const inView =
+    filter === "all" ? rows : rows.filter((r) => r.group === filter);
+  return {
+    headline: inView.filter((r) => !r.reviewLater),
+    reviewLater: inView.filter((r) => r.reviewLater),
+  };
 }
 
 /** The row a `?focus=<id>` names — by signal, target or member proposal id. */
