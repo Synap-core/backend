@@ -25,7 +25,9 @@ import { isTerminalSessionStatus } from "../focus-sessions/statuses.js";
 import { resolveSessionTitle } from "../focus-sessions/title.js";
 import {
   inReviewLater,
+  type BucketableSignal,
   type NeedsYouBucket,
+  type NeedsYouBuckets,
 } from "../needs-you/buckets.js";
 import type { LensRow } from "./rows.js";
 
@@ -187,7 +189,7 @@ export function homeBriefInputOf(reads: HomeBriefReads): HomeBriefInput | null {
  * Review later left out as the counts leave it out.
  */
 export function homeMoves<
-  R extends { bucket: NeedsYouBucket; signal?: { reviewLater?: boolean } },
+  R extends { bucket: NeedsYouBucket; signal?: object | null },
 >(model: {
   rows: readonly R[];
   counts: Record<NeedsYouBucket, number>;
@@ -199,6 +201,14 @@ export function homeMoves<
     routine: model.counts.routine,
   };
 }
+
+// Compile-time floor: Home takes what `needsYouBuckets` files, whatever the
+// signal declares (a `{ reviewLater?: boolean }` bound is a weak type that
+// refused signals without the field).
+const _homeTakesFiledRows = (
+  filed: NeedsYouBuckets<Omit<BucketableSignal, "reviewLater">>
+) => homeMoves(filed);
+void _homeTakesFiledRows;
 
 // ── Where your projects stand ───────────────────────────────────────────────
 
