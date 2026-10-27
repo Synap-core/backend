@@ -682,13 +682,17 @@ describe("the run names WHO works it and HOW (plan v5 T2)", () => {
       id,
     ]);
     expect((await runGoalLoop(id)).status).toBe("proposed");
-    expect(lastData()).not.toHaveProperty("templateId");
+    // The start door always gates `templateId`: null (never missing) when
+    // the run names no playbook.
+    expect(lastData().templateId).toBeNull();
   });
 
   it("a goal with no method proposes a run with no playbook", async () => {
     const id = await goal({ name: "No method" });
     expect((await runGoalLoop(id)).status).toBe("proposed");
-    expect(lastData()).not.toHaveProperty("templateId");
+    // The start door always gates `templateId`: null (never missing) when
+    // the run names no playbook.
+    expect(lastData().templateId).toBeNull();
   });
 });
 
