@@ -1931,6 +1931,7 @@ export const proposalsRouter = router({
           targetId: true,
           sessionId: true,
           projectId: true,
+          proposalType: true,
         },
       });
       // A Library proposal is its person's alone: anyone else gets NOT_FOUND.
@@ -2020,6 +2021,7 @@ export const proposalsRouter = router({
           targetId: true,
           sessionId: true,
           projectId: true,
+          proposalType: true,
         },
       });
       // A Library proposal is its person's alone: anyone else gets NOT_FOUND.
@@ -2090,6 +2092,7 @@ export const proposalsRouter = router({
           targetId: true,
           sessionId: true,
           projectId: true,
+          proposalType: true,
         },
       });
       // A Library proposal is its person's alone: anyone else gets NOT_FOUND.
