@@ -18,8 +18,7 @@
  * back to that launcher as a refusal ({@link missingParamsRefusal}; the run
  * doors throw `PlaybookParamsError` with `onMissingRequired: "refuse"`), never
  * as a slot in the person's Needs you: the launcher was given the job of
- * supplying it. Live case before: "Answer: UI design", a slot an agent's
- * `start_session` filed on a session that never ran.
+ * supplying it.
  */
 
 import type {

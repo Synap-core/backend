@@ -961,6 +961,19 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "pod_role",
     addedBy: "0205_pod_members.sql",
   },
+  // Why a failed run stopped (0361, F3): run-turn-end writes it on a
+  // budget-stopped unattended run, parent-settle and the breakers read it.
+  // Missing means every run capture and every re-settle 500s.
+  {
+    table: "playbook_runs",
+    column: "stop_reason",
+    addedBy: "0361_run_stop_reason.sql",
+  },
+  {
+    table: "automation_runs",
+    column: "stop_reason",
+    addedBy: "0361_run_stop_reason.sql",
+  },
   // A pod_members row is access only while `removed_at` is NULL (0357, Q-B1):
   // every floor that reads the row filters on it, so a missing column 500s
   // every scoped read.

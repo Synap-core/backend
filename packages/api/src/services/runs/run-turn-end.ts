@@ -32,8 +32,9 @@
  * NO PERSON IN THE LOOP (founder decision E3, 2026-10-27). A run an automation
  * started (its schedule included) has nobody watching it, so step 2 never
  * happens there: once its continuations are spent it ENDS, `failed` with the
- * reason, and a pod notice in the room says why. Before, a daily automation
- * (CRM Hygiene) put "Keep the run going" in the founder's Needs you.
+ * reason and `stop_reason = 'budget'` (so its automation's breakers skip it,
+ * founder F3), and a pod notice in the room says why. Asking would put "Keep
+ * the run going" in a person's Needs you for a run they never started.
  *
  * WHAT IS RECORDED (`focus_sessions.metadata.runTurns`, server-owned): each
  * turn's end as the IS measured it — the budget ceiling, the input tokens
@@ -394,6 +395,9 @@ async function endUnattendedRun(p: {
     run: p.run,
     status: "failed",
     error: why,
+    // Not a fault: the parent automation run and its breakers read this
+    // (`automation-parent-settle.ts`), so a budget stop never turns a rule off.
+    stopReason: "budget",
   });
   if (!ended) return "no-running-run";
   if (p.session.channelId) {

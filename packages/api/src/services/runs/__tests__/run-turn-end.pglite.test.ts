@@ -606,14 +606,17 @@ describe("complete-run settles the run from how the IS turn ended (B8)", () => {
           status: string;
           error: string | null;
           completed_at: string | null;
+          stop_reason: string | null;
         }>(
-          `select status, error, completed_at from playbook_runs where id = $1`,
+          `select status, error, completed_at, stop_reason from playbook_runs where id = $1`,
           [runId]
         )
       ).rows[0]!;
       expect(run.status).toBe("failed");
       expect(run.completed_at).not.toBeNull();
       expect(run.error).toContain("Stopped at its token budget");
+      // A stop, not a fault: the parent's breakers read this (founder F3).
+      expect(run.stop_reason).toBe("budget");
       expect(h.settled).toEqual([{ playbookRunId: runId }]);
 
       // Nobody was asked: no slot, no question in the room.

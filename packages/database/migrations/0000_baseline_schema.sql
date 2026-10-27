@@ -2531,6 +2531,7 @@ ALTER TABLE "automation_runs" ADD COLUMN IF NOT EXISTS "summary_message_id" uuid
 ALTER TABLE "automation_runs" ADD COLUMN IF NOT EXISTS "path_taken" jsonb;  -- 0214 (per-run traversed/pruned edge ids; NULL = unknown)
 ALTER TABLE "automation_runs" ADD COLUMN IF NOT EXISTS "trigger_event_id" uuid;  -- 0256 (the events row that fired this run; NULL = cron/manual/webhook, or no event claimed)
 ALTER TABLE "automation_runs" ADD COLUMN IF NOT EXISTS "ai_dispatch_count" integer NOT NULL DEFAULT 0;  -- 0304 (AI dispatches this run started; summed for the daily AI cap)
+ALTER TABLE "automation_runs" ADD COLUMN IF NOT EXISTS "stop_reason" text;  -- 0361 ('budget' = only budget-stopped children failed; the breakers skip it)
 
 CREATE INDEX IF NOT EXISTS "automation_runs_automation_id_idx"
   ON "automation_runs" ("automation_id");
@@ -4333,6 +4334,7 @@ CREATE INDEX IF NOT EXISTS "idx_playbook_runs_workspace_status"
 ALTER TABLE "playbook_runs" ADD COLUMN IF NOT EXISTS "definition_snapshot" jsonb;
 ALTER TABLE "playbook_runs" ADD COLUMN IF NOT EXISTS "replay_of" uuid;
 ALTER TABLE "playbook_runs" ADD COLUMN IF NOT EXISTS "external_agent" jsonb;
+ALTER TABLE "playbook_runs" ADD COLUMN IF NOT EXISTS "stop_reason" text;  -- 0361 ('budget' = an unattended run ended at its limit)
 CREATE INDEX IF NOT EXISTS "idx_playbook_runs_external_agent_active"
   ON "playbook_runs" ((("external_agent"->>'status')))
   WHERE "external_agent" IS NOT NULL;
