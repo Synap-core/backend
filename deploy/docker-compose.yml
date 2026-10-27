@@ -129,14 +129,18 @@ x-backend-env: &backend-env
   SYNAP_LIBRARY_LIGHT_READ_EXPIRE_MINUTES: ${SYNAP_LIBRARY_LIGHT_READ_EXPIRE_MINUTES:-}
   SYNAP_LIBRARY_READ_AI_PER_DAY: ${SYNAP_LIBRARY_READ_AI_PER_DAY:-}
   # Request budgets, one per class (apps/api/src/middleware/rate-limit-classes.ts).
-  # Empty = the code's default: an agent key 500 per 15 min (CRUD_MAX), a
-  # signed-in person 3000 (CRUD_SESSION_MAX), one address five times that.
+  # Empty = the code's default: an agent key 500 writes per 15 min (CRUD_MAX)
+  # and 3000 reads (CRUD_READ_MAX), a signed-in person 3000 of each
+  # (CRUD_SESSION_MAX, CRUD_READ_SESSION_MAX), one address 15000 in all.
   # Every key the code reads is passed (rate-limit-deploy-wiring.test.ts):
   # a key missing here silently does nothing on a deployed pod.
   RATE_LIMIT_CRUD_MAX: ${RATE_LIMIT_CRUD_MAX:-}
   RATE_LIMIT_CRUD_SESSION_MAX: ${RATE_LIMIT_CRUD_SESSION_MAX:-}
   RATE_LIMIT_CRUD_IP_CEILING: ${RATE_LIMIT_CRUD_IP_CEILING:-}
   RATE_LIMIT_CRUD_WINDOW_MS: ${RATE_LIMIT_CRUD_WINDOW_MS:-}
+  RATE_LIMIT_CRUD_READ_MAX: ${RATE_LIMIT_CRUD_READ_MAX:-}
+  RATE_LIMIT_CRUD_READ_SESSION_MAX: ${RATE_LIMIT_CRUD_READ_SESSION_MAX:-}
+  RATE_LIMIT_CRUD_READ_WINDOW_MS: ${RATE_LIMIT_CRUD_READ_WINDOW_MS:-}
   RATE_LIMIT_IMPORT_MAX: ${RATE_LIMIT_IMPORT_MAX:-}
   RATE_LIMIT_IMPORT_WINDOW_MS: ${RATE_LIMIT_IMPORT_WINDOW_MS:-}
   RATE_LIMIT_AI_MAX: ${RATE_LIMIT_AI_MAX:-}

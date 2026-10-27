@@ -6094,3 +6094,17 @@ export const tools = {
     }
   },
 };
+
+/**
+ * The tools that declare `readOnlyHint` — what the pod edge counts against an
+ * agent's READ budget, not its write budget (`crud_read`, apps/api
+ * middleware/security.ts). Read from the static list (no `ctx`), so it costs
+ * no database call.
+ */
+export async function readOnlyToolNames(): Promise<Set<string>> {
+  return new Set(
+    (await tools.list())
+      .filter((t) => t.annotations?.readOnlyHint === true)
+      .map((t) => t.name)
+  );
+}

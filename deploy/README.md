@@ -183,6 +183,12 @@ What changes for an operator when a pod updates past a release. Newest first.
   `RATE_LIMIT_CRUD_MAX` (default `500` per 15 minutes, per key): several
   agents sharing one key spend it together
   (`synap config set RATE_LIMIT_CRUD_MAX=3000 && synap apply`).
+- **Reads have their own budget.** A Hub read (GET on `/api/hub/*`) and an MCP
+  call that only reads (a read-only tool, `tools/list`, …) spend a read
+  budget, `RATE_LIMIT_CRUD_READ_MAX` (default `3000` per 15 minutes, per key;
+  `RATE_LIMIT_CRUD_READ_SESSION_MAX` for a signed-in person). Writes keep
+  `RATE_LIMIT_CRUD_MAX`, so an agent stuck writing in a loop still stops at
+  `500`.
 - **Migration 0327** (split `source` into `provenance` and `leadSource`) runs
   automatically during `synap update`; nothing to do.
 - **Console URL.** The Apps page moved from `/origins` to `/applications`. Old
