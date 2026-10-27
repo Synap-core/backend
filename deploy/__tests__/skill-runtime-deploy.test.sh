@@ -5,8 +5,8 @@
 #    The backend gets an explicit `environment:` map (x-backend-env), so a
 #    variable missing there never reaches the container: `SKILL_RUNTIME=is`,
 #    the only rollback, did nothing when set in deploy/.env. The set is DERIVED
-#    from the runtime's own reads (`process.env.SKILL_*`, `intFromEnv("SKILL_*")`
-#    in services/skills/runner/), never listed here.
+#    from the runtime's own reads (`process.env.SKILL_*` and quoted "SKILL_*"
+#    names in services/skills/runner/), never listed here.
 # 2. The update gate refuses a backend whose code-skill runtime cannot start.
 #    /health stays HTTP 200 then (skillRuntime.status "unavailable" is
 #    body-only), so the probe `synap` runs in the canary must read the body. It
@@ -20,13 +20,15 @@ ok()  { echo "ok   - $1"; }
 bad() { echo "FAIL - $1"; fail=1; }
 
 RUNNER_DIR="$HERE/packages/api/src/services/skills/runner"
-reads="$( (grep -rhoE 'process\.env\.SKILL_[A-Z0-9_]+' "$RUNNER_DIR" --include='*.ts' | sed 's/^process\.env\.//'
-          grep -rhoE 'intFromEnv\("SKILL_[A-Z0-9_]+"' "$RUNNER_DIR" --include='*.ts' | sed -E 's/^intFromEnv\("//; s/"$//') \
-          | grep -v '^SKILL_RUNNER$' | sort -u)"
+# Non-test sources only; read whole files so `intFromEnv(\n  "SKILL_…"` (as
+# prettier wraps it) is still one match.
+runner_src="$(find "$RUNNER_DIR" -name '*.ts' ! -name '*.test.ts')"
+reads="$(perl -0777 -ne 'print "$1\n" while /process\.env\.(SKILL_[A-Z0-9_]+)/g; print "$1\n" while /intFromEnv\(\s*"(SKILL_[A-Z0-9_]+)"/g' $runner_src \
+  | grep -v '^SKILL_RUNNER$' | sort -u)"
 # SKILL_RUNNER (inline|process) is a dev/test switch, refused in production: not forwarded.
 n="$(echo "$reads" | grep -c .)"
-[ "$n" -ge 5 ] && echo "$reads" | grep -qx SKILL_RUNTIME && echo "$reads" | grep -qx SKILL_RUNNER_QUEUE_MAX \
-  && ok "the runtime reads $n SKILL_* variables (derived; sees SKILL_RUNTIME and SKILL_RUNNER_QUEUE_MAX)" \
+[ "$n" -ge 5 ] && echo "$reads" | grep -qx SKILL_RUNTIME && echo "$reads" | grep -qx SKILL_RUNNER_QUEUE_MAX && echo "$reads" | grep -qx SKILL_RUNNER_PER_REQUESTER_MAX \
+  && ok "the runtime reads $n SKILL_* variables (derived; sees SKILL_RUNTIME and the wrapped SKILL_RUNNER_PER_REQUESTER_MAX)" \
   || bad "could not derive the runtime's variables (got: $(echo $reads))"
 
 # (a heredoc inside $(…) does not parse in the macOS bash 3.2)
