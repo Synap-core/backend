@@ -17,7 +17,6 @@ import {
   desc,
   inArray,
   getActingAgentUserId,
-  isDelegationHeaders,
   userVisibleWhere,
   type SQL,
 } from "@synap/database";
@@ -52,11 +51,12 @@ import {
 import { CAPABILITY_RUN_PROPOSAL_TYPE } from "../services/proposals/proposal-class.js";
 import { auditLog } from "../utils/audit-log.js";
 import { setSkillApproved } from "../services/capabilities/set-skill-approved.js";
+import { skillBornApproved } from "../services/capabilities/skill-born-approved.js";
 import { emitSideEffects } from "@synap/events";
 import { randomUUID } from "crypto";
 import { parseSkillMd } from "../skills/skill-md-parser.js";
 import { parseSkillToml } from "../skills/skill-toml-parser.js";
-import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
+import { runSkill } from "../services/skills/run-skill.js";
 import * as acorn from "acorn";
 import * as acornWalk from "acorn-walk";
 import {
@@ -392,16 +392,29 @@ export async function replaceSkillRequiredTools(params: {
  * `checkPermissionOrPropose` gate `create` runs — no door hardcodes
  * `approved: true` on its own insert.
  *
- * Born-approved rule: an `instruction` skill (prompt-only, no side effects) is
- * approved when installed by a trusted human (no `agentUserId`). Anything
- * executable (`code`/`declarative`), OR an install initiated by an agent
- * identity — including instruction content, which lands in the agent's system
- * prompt and is therefore a prompt-injection vector — is born UNAPPROVED and
- * needs an explicit owner approval (`setApproved`) before it runs or loads as
- * an agent tool.
+ * Born-approved rule: `skillBornApproved` — an `instruction` skill installed
+ * by a trusted human (no `agentUserId`). Anything executable, or anything an
+ * agent authored, is born UNAPPROVED and needs a person's OK before it runs or
+ * loads as an agent tool: approving its `skill/create` proposal (the executor
+ * turns it on), or `setApproved` when no person reviewed the create.
  */
 export type InsertSkillGovernedInput = typeof skills.$inferInsert & {
   agentUserId?: string;
+  /**
+   * The skill's AUTHOR, when this door runs as someone else. A composite
+   * proposal's skill step re-enters here with no `agentUserId` (the governance
+   * decision was already made, so the gate must grant, not re-propose), but
+   * the skill is the proposal agent's. The born-approved rule judges the
+   * author and whether a person approved the proposal, never the door: an
+   * agent's skill in a composite that auto-applied is born unapproved.
+   * Ignored when `agentUserId` is set (the door then IS the author). Only the
+   * composite's INSTRUCTION step passes it: an executable skill a person
+   * approved is turned on by the `skill/create` executor through
+   * `setSkillApproved`, the one enable door. Not `author`: that name is the
+   * `skills.author` column (who wrote a package's skill), which this input
+   * also carries.
+   */
+  skillAuthor?: { agentUserId: string | null; personApproved: boolean };
   /** Folded into the audit-log `data` for observability, e.g. "install_from_url". */
   auditSource: string;
 };
@@ -416,6 +429,7 @@ export async function insertSkillGoverned(
 ): Promise<InsertSkillGovernedResult> {
   const {
     agentUserId,
+    skillAuthor,
     auditSource,
     id: _ignoredId,
     approved: _ignoredApproved,
@@ -455,7 +469,12 @@ export async function insertSkillGoverned(
     return { status: "proposed", proposalId: perm.proposalId };
   }
 
-  const approved = values.kind === "instruction" && !agentUserId;
+  const approved = skillBornApproved({
+    kind: values.kind,
+    agentUserId: agentUserId ?? skillAuthor?.agentUserId,
+    personApprovedProposal:
+      !agentUserId && skillAuthor?.personApproved === true,
+  });
 
   const [skill] = await db
     .insert(skills)
@@ -1355,10 +1374,9 @@ export const skillsRouter = router({
       //    …but ONLY for a trusted human author. An AGENT-initiated instruction
       //    skill is born UNAPPROVED: its body lands in a future agent's system
       //    prompt, so prose is a prompt-injection vector exactly as code is an
-      //    execution one. This mirrors `insertSkillGoverned`'s rule verbatim
-      //    (`kind === "instruction" && !agentUserId`); the two born-approved
-      //    decisions MUST stay identical or this direct path becomes the
-      //    bypass the shared door exists to prevent. Normally an agent create
+      //    execution one. Both born-approved sites read the ONE rule
+      //    (`skillBornApproved`); were they to differ, this direct path would
+      //    become the bypass the shared door exists to prevent. Normally an agent create
       //    returns `proposed` before reaching here — this closes the case where
       //    a governance rule has widened `skill/create` to auto for an agent.
       const [skill] = await db
@@ -1395,7 +1413,10 @@ export const skillsRouter = router({
           // source-link); omitted → the column default `{}` applies.
           ...(input.metadata ? { metadata: input.metadata } : {}),
           status: "active",
-          approved: kind === "instruction" && !input.agentUserId,
+          approved: skillBornApproved({
+            kind,
+            agentUserId: input.agentUserId,
+          }),
         })
         .returning();
 
@@ -1781,8 +1802,8 @@ export const skillsRouter = router({
   /**
    * Execute a skill by ID
    *
-   * Delegates execution to the Intelligence Hub which has the sandboxed
-   * executor. Updates execution metadata (count + lastTestedAt) on success.
+   * Runs through the one skill door (`runSkill`): the pod's sandbox unless
+   * SKILL_RUNTIME=is. Updates execution metadata (count + lastTestedAt) on success.
    */
   execute: protectedProcedure
     .input(
@@ -1895,42 +1916,26 @@ export const skillsRouter = router({
       }
       // decision === "run" → fall through to execute.
 
-      // Resolve the intelligence service from DB (workspace pref → user pref → default)
-      const { endpoint: hubUrl, serviceApiKey: hubApiKey } =
-        await resolveIntelligenceService({
-          userId,
-          workspaceId: skill.workspaceId ?? undefined,
-        });
-
+      // The ONE skill door (R2): the pod runs it unless SKILL_RUNTIME=is. The
+      // person's own run carries no agent and no verb act: an in-skill write is
+      // the person's, gated as theirs.
       let result: {
         success: boolean;
         result?: unknown;
         error?: string;
         executionTimeMs: number;
       };
-
       try {
-        const response = await fetch(`${hubUrl}/api/skills/execute`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-API-Key": hubApiKey,
-            // D4: the skill's hub calls run as `userId` on a per-run token.
-            ...isDelegationHeaders({ isUrl: hubUrl, operatorUserId: userId }),
-          },
-          body: JSON.stringify({
-            skillId: input.id,
-            userId,
-            parameters: input.input ?? {},
-          }),
+        const envelope = await runSkill({
+          skillId: input.id,
+          userId,
+          parameters: input.input ?? {},
+          workspaceId: skill.workspaceId ?? null,
         });
-
-        if (!response.ok) {
-          const text = await response.text().catch(() => "");
-          throw new Error(`Hub returned ${response.status}: ${text}`);
-        }
-
-        result = (await response.json()) as typeof result;
+        result = {
+          ...envelope,
+          executionTimeMs: envelope.executionTimeMs ?? 0,
+        };
       } catch (err) {
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",

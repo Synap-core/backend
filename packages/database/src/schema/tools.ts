@@ -20,6 +20,7 @@ import {
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
+import { ABSTRACT_INTENTS } from "@synap-core/types/capability-intents";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 
 /** The kind of integration a Tool represents. */
@@ -64,54 +65,21 @@ export type ToolAuthBinding =
  * resolves the 13 seed slugs before any query, and so the applier can REJECT an
  * unknown value instead of persisting one.
  *
- * ONE OF THREE MIRRORS. This one cannot import `@synap-core/types` — types
- * devDepends on `@synap/database`, so a reverse import is a build cycle (the same
- * constraint that mirrors `GUIDELINE_SCOPE_ORDER`). The other two mirrors are
- * `@synap-core/types/capability-intents` and the control plane's
- * `src/seeds/capability-intent-vocabulary.ts` (a separate deploy target with its
- * own lockfile). A fourth copy in `@synap/playbooks` was DELETED 2026-10-01 —
- * stale, and with zero importers.
+ * Declared ONCE, as `ABSTRACT_INTENTS` in `@synap-core/types/capability-intents`
+ * (with the post-seed `REGISTERED_EXTRAS`), and re-exported here under the
+ * pod's name. One other copy remains: the control plane's
+ * `src/seeds/capability-intent-vocabulary.ts` (a separate deploy target with
+ * its own lockfile, which does not resolve `@synap-core/types`). A third copy
+ * in `@synap/playbooks` was DELETED 2026-10-01 — stale, and with zero importers.
  *
- * To add a slug: the migration, then all three mirrors, then rebuild
- * `packages/types` (consumers typecheck its `dist`). The arity floors in
+ * To add a slug: the migration, then `ABSTRACT_INTENTS` (or `REGISTERED_EXTRAS`)
+ * and the control plane's copy, then rebuild `packages/types` (consumers
+ * typecheck its `dist`). The arity floors in
  * `packages/api/src/__tripwires__/intent-vocabulary-one-ssot.tripwire.test.ts`
  * stop the build until they are updated. Full procedure:
  * `skills/synap-schema/intent-vocabulary-ssot.md`.
  */
-export const ABSTRACT_VERBS = [
-  // ACQUIRE — bring information in
-  /** Query an outside corpus (web, provider DB, file store). */
-  "search_external",
-  /** Locate people or companies matching criteria. */
-  "find_people",
-  /** Add known facts to a person/company we already have. */
-  "enrich_entity",
-  /** Get ONE identified external record. */
-  "fetch_record",
-  /** Enumerate records of a kind. */
-  "list_records",
-
-  // ACT OUTWARD — change something outside the pod
-  /** Deliver a message to a human outside the pod. */
-  "send_message",
-  /** Ask a person to connect (invite / relation request). */
-  "request_connection",
-  /** Create or modify a calendar commitment. */
-  "schedule_event",
-  /** Create/copy/move a file in external storage. */
-  "manage_file",
-  /** Produce an image, video, or audio artifact. */
-  "generate_media",
-
-  // BRIDGE — bring external data INTO the pod as proposed entities
-  "capture_into_pod",
-
-  // CONTROL
-  /** Invoke an arbitrary external compute job. */
-  "run_external_job",
-  /** Establish or authorize a provider connection. */
-  "connect_account",
-] as const;
+export const ABSTRACT_VERBS = ABSTRACT_INTENTS;
 
 /** One value of the closed intent vocabulary — see `ABSTRACT_VERBS`. */
 export type AbstractVerb = (typeof ABSTRACT_VERBS)[number];

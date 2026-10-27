@@ -23,6 +23,12 @@ vi.mock("./pod-updates-deps.js", () => ({
 vi.mock("./provision-intelligence-probe.js", () => ({
   probeIntelligenceService: async () => ({ reachable: false }),
 }));
+// provision.ts imports the account-recovery deps; the real module pulls
+// @synap/jobs in, which this test's @synap/database stub cannot satisfy.
+vi.mock("./account-recovery-deps.js", () => ({
+  findAccountByIdentity: vi.fn(),
+  isPodAdmin: vi.fn(),
+}));
 vi.mock("@synap/api", () => ({
   // Mirrors the real contract (@synap/api jwks-client): PUBLIC_URL, no trailing slash.
   podAudience: () => process.env.PUBLIC_URL?.replace(/\/+$/, "") || null,
