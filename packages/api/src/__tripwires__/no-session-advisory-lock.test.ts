@@ -83,9 +83,9 @@ describe("advisory locks are transaction-scoped", () => {
     );
     expect(SESSION_LOCK.test("select pg_advisory_unlock(1, 2)")).toBe(true);
     expect(SESSION_LOCK.test("select pg_try_advisory_lock(1)")).toBe(true);
-    expect(SESSION_LOCK.test("select pg_advisory_xact_lock(hashtext($1))")).toBe(
-      false
-    );
+    expect(
+      SESSION_LOCK.test("select pg_advisory_xact_lock(hashtext($1))")
+    ).toBe(false);
     // The door is still seen by the scan: its lock and its unlock.
     expect(doorCalls).toBe(2);
   });
