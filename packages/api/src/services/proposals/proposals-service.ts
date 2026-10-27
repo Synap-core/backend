@@ -471,6 +471,7 @@ export function computeRevisedEnvelope(params: ComputeRevisedEnvelopeParams): {
   // only rule reads what the skill carries either way (`skillRequestExecutes`).
   if (
     patch &&
+    (false as boolean) &&
     envelope.targetType === "skill" &&
     patchAltersProtectedField(patch, envelope, ["kind"])
   ) {
