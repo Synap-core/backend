@@ -14,9 +14,16 @@
  * trigger hop, so an automation recording the type it listens to never fires
  * itself again, and the owner is named as the hop's producer, as
  * `emitSideEffects` names the actor of every governed event.
+ *
+ * An AGENT owner (an automation an agent created: `createdBy` is the agent)
+ * is also the fact's `agentUserId`, so the event is attributed to it and the
+ * dev-loop sweep the fact starts runs GOVERNED as that agent, like the trigger
+ * hop; a human owner leaves it unset (the sweep runs as the person).
  */
 
 import { checkDevLoopPayload } from "@synap-core/types";
+import { db, eq } from "@synap/database";
+import { users } from "@synap/database/schema";
 import type { AutomationObservation } from "@synap/jobs/utils/observation-door.js";
 
 import { ObservationSchema } from "../../routers/hub-protocol/observations.js";
@@ -44,12 +51,18 @@ export async function recordObservationFromAutomation(
   if (contract.contract && !contract.ok) {
     throw new Error(`record_observation refused: ${contract.error}`);
   }
+  const [owner] = await db
+    .select({ userType: users.userType })
+    .from(users)
+    .where(eq(users.id, input.ownerId))
+    .limit(1);
   return recordObservation({
     type: obs.type,
     subjectRef: obs.subjectId,
     subjectType: obs.subjectType,
     data: obs.data,
     userId: input.ownerId,
+    ...(owner?.userType === "agent" ? { agentUserId: input.ownerId } : {}),
     workspaceId: input.workspaceId,
     ...(obs.occurredAt ? { occurredAt: obs.occurredAt } : {}),
     automationContext: input.automationContext,

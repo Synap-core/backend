@@ -203,7 +203,25 @@ describe("record_observation — confused-deputy guard", () => {
     expect(recorded).toHaveLength(0);
   });
 
-  it("NO producer (an inbound webhook) → recorded, the ladder never read", async () => {
+  it("agent producer whose floor denies → THROWS as denied, nothing recorded", async () => {
+    await expect(run(merged, "producer-agent-denied")).rejects.toThrow(
+      /denied by producer-agent governance.*capability denied/
+    );
+    expect(recorded).toHaveLength(0);
+  });
+
+  it("a HUMAN producer who is not the owner (an inbound source's owner) → recorded", async () => {
+    // An inbound webhook run carries the SOURCE's owner as its producer
+    // (events side-effects: `producerAgentUserId: payload.userId`). A person
+    // is no agent: the ladder is read and finds none, and the fact records.
+    await run(merged, "source-owner");
+    expect(recorded).toHaveLength(1);
+    expect(resolveDecisionMock).toHaveBeenCalledWith(
+      expect.objectContaining({ agentUserId: "source-owner" })
+    );
+  });
+
+  it("NO producer (a manual or cron run) → recorded, the ladder never read", async () => {
     await run(merged);
     expect(recorded).toHaveLength(1);
     expect(resolveDecisionMock).not.toHaveBeenCalled();

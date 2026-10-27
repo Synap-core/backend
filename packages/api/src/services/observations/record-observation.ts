@@ -308,6 +308,11 @@ export async function recordObservation(
           eventType: input.type,
           data: event.data,
           userId,
+          // The governed actor of the sweep: an AGENT only (never
+          // `triggerProducerUserId`, which may name a human owner — the
+          // sweep would then run a person through the agent floors). An
+          // automation's agent owner arrives here as `agentUserId`
+          // (record-observation-from-automation.ts).
           producerAgentUserId: agentUserId ?? null,
           eventId: row.id,
           grant: grant

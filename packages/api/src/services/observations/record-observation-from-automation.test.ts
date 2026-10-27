@@ -7,7 +7,10 @@
  *     reserved subject type, the dev-loop contract) and nothing is recorded;
  *   - a fact is recorded for the OWNER in the automation's workspace;
  *   - the trigger hop carries the run's chain (the cycle guard sees it) and
- *     names the owner as producer, as `emitSideEffects` names its actor.
+ *     names the owner as producer, as `emitSideEffects` names its actor;
+ *   - an AGENT owner is the fact's agent: the event, the trigger hop AND the
+ *     dev-loop sweep name it (the sweep runs governed as that agent); a
+ *     human owner's sweep runs as the person (no agent named).
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -16,6 +19,8 @@ const WS = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 
 const appended: any[] = [];
 const sends: Array<[string, any]> = [];
+/** The owner's `users` row the door reads (its `userType`). */
+let ownerRows: Array<{ userType: string }> = [];
 
 vi.mock("@synap/events", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
@@ -34,6 +39,11 @@ vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return {
     ...actual,
+    db: {
+      select: () => ({
+        from: () => ({ where: () => ({ limit: async () => ownerRows }) }),
+      }),
+    },
     getEventRepository: () => ({
       append: async (e: any) => {
         appended.push(e);
@@ -88,6 +98,7 @@ const record = (over: Record<string, unknown> = {}) =>
 beforeEach(() => {
   appended.length = 0;
   sends.length = 0;
+  ownerRows = [{ userType: "human" }];
 });
 
 describe("record_observation — the observation door's refusals", () => {
@@ -135,6 +146,31 @@ describe("record_observation — recorded through the one writer", () => {
       eventId: "row-1",
       producerAgentUserId: "owner-1",
       automationContext: chain,
+    });
+  });
+});
+
+describe("record_observation — who the dev-loop sweep runs as", () => {
+  const sweepJob = () => sends.find(([q]) => q === "dev-loop-observation");
+
+  it("a human owner: the sweep runs as the person, no agent named", async () => {
+    await record();
+    expect(sweepJob(), "no dev-loop sweep enqueued").toBeDefined();
+    expect(sweepJob()![1]).toMatchObject({
+      userId: "owner-1",
+      producerAgentUserId: null,
+    });
+  });
+
+  it("an agent owner: the event, the trigger hop and the sweep all name the agent", async () => {
+    ownerRows = [{ userType: "agent" }];
+    await record();
+    expect(appended[0].agentUserId).toBe("owner-1");
+    const hop = sends.find(([q]) => q === "automation-trigger-match");
+    expect(hop![1].producerAgentUserId).toBe("owner-1");
+    expect(sweepJob()![1]).toMatchObject({
+      userId: "owner-1",
+      producerAgentUserId: "owner-1",
     });
   });
 });
