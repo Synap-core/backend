@@ -65,8 +65,7 @@ human behind the key may do.
 
 - **Grammar:** one pure module, `@synap-core/types/grants`
   (`packages/types/src/grants/grammar.ts`). `packages/governance-policy/src/grants.ts`
-  is a byte-identical mirror (it cannot depend on `@synap-core/types` without a
-  build cycle), pinned by `grants-mirror.tripwire.test.ts`.
+  re-exports it, so the engine and the doors import the same declaration.
 - **Writer:** `GrantRepository` (`packages/database/src/repositories/grant-repository.ts`).
   A key whose grant is revoked or expired resolves to deny-all, never to "no grant".
 - **Enforcement:**

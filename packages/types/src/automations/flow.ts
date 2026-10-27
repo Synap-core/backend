@@ -8,6 +8,8 @@
  * code, nothing from the database package.
  */
 
+import type { WorkerSize } from "../workers/index.js";
+
 // ── Flow definition types ───────────────────────────────────────────────────
 
 /**
@@ -800,7 +802,7 @@ export interface PlaybookRunNodeDef extends AutomationNodeBase {
 export interface PlaybookRunWorkerSpec {
   /** The activator's key within its playbook (`activatorKey`). */
   key: string;
-  size: "per_thing" | "per_moment";
+  size: WorkerSize;
   /** The subject kind or role the worker works on. */
   profileSlug: string;
   /** The status its things sit in (enters_status / count / schedule). */

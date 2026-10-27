@@ -126,3 +126,47 @@ export async function executeSkillViaIS(args: {
     clearTimeout(timer);
   }
 }
+
+/**
+ * The IS dry-run wire (`POST {IS}/api/skills/:id/dry-run`), kept beside the
+ * execute wire so the IS contract stays in this one file. Reached only through
+ * `run-skill.ts` under the `SKILL_RUNTIME=is` rollback.
+ *
+ * The IS answers `{ result: <SkillExecutionResult>, dryRunEffects }`; this
+ * returns that envelope with its effects, the same shape `runSkillInSandbox`
+ * returns for a dry run.
+ */
+export async function dryRunSkillViaIS(args: {
+  skillId: string;
+  userId: string;
+  parameters?: Record<string, unknown>;
+  workspaceId?: string | null;
+}): Promise<SkillExecutionResult> {
+  const { endpoint: isUrl, apiKey: isApiKey } = await getDefaultActiveService();
+  const res = await fetch(`${isUrl}/api/skills/${args.skillId}/dry-run`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-API-Key": isApiKey,
+      // D4: the IS acts for userId on this dry-run — a per-run token.
+      ...isDelegationHeaders({ isUrl, operatorUserId: args.userId }),
+    },
+    body: JSON.stringify({
+      userId: args.userId,
+      parameters: args.parameters ?? {},
+      workspaceId: args.workspaceId ?? undefined,
+    }),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`Skill dry-run failed: ${res.status} ${body}`.trim());
+  }
+  const data = (await res.json()) as {
+    result?: SkillExecutionResult;
+    dryRunEffects?: RecordedEffect[];
+  };
+  if (!data.result) {
+    throw new Error("Skill dry-run failed: the IS answered without a result.");
+  }
+  return { ...data.result, dryRunEffects: data.dryRunEffects ?? [] };
+}

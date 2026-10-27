@@ -16,6 +16,8 @@ import { Pill } from "../../_lib/object/provenance-chips";
 import { StatusPill } from "../../(admin)/components/status-pill";
 import { statusPillFor } from "../../(admin)/components/status-tone";
 import { openIn } from "../../../lib/open-in";
+import type { MediaRef } from "@synap-core/types/presentation";
+import { MediaView } from "../../_lib/media/media-view";
 import { resolveObjectNounPlural } from "@synap-core/types/vocabulary";
 import type { PartEdge } from "./composite-parts-model";
 import {
@@ -173,9 +175,12 @@ function Field({ field }: { field: RecordField }) {
 
 export function ProposedRecordCard({
   record,
+  media,
   children,
 }: {
   record: ProposedRecord;
+  /** The record's image (an upload waiting for approval), drawn as a thumbnail. */
+  media?: MediaRef | null;
   /** What sits under the fields: this record's twins and its choice. */
   children?: ReactNode;
 }) {
@@ -213,6 +218,7 @@ export function ProposedRecordCard({
           </span>
         )}
       </header>
+      {media && <MediaView media={media} alt={title} size="thumb" />}
       {fields.length > 0 && (
         <dl className={RECORD_GRID_CLASS}>
           {fields.map((field) => (

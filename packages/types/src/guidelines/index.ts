@@ -11,9 +11,8 @@
  * The guideline scope rungs, ordered general → specific. Rank is the INDEX:
  * a specific guideline is applied LAST so it reinforces/overrides a general
  * one. The reasoning for each rung's placement lives beside the resolver
- * (`SCOPE_ORDER` in `@synap/database` `utils/config-settings.ts`). The pod's
- * resolver cannot import this package (`@synap-core/types` already depends on
- * `@synap/database`), so how the two are kept identical is recorded there.
+ * (`SCOPE_ORDER` in `@synap/database` `utils/config-settings.ts`), which ranks
+ * by this very list.
  */
 export const GUIDELINE_SCOPE_ORDER = [
   "default",

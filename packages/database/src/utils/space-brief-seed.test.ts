@@ -7,10 +7,7 @@ import {
   seedRefResolver,
 } from "./space-brief-seed.js";
 import type { WorkspaceSpaceBrief } from "../schema/workspaces.js";
-// TEST-ONLY relative import of the canonical list. `@synap/database` cannot
-// depend on `@synap-core/types` (build cycle); tsconfig excludes tests, so this
-// path never enters the database build (precedent: guideline-vocabulary-parity).
-import * as canonical from "../../../types/src/space-brief/index.js";
+import * as canonical from "@synap-core/types/space-brief";
 
 const V1: WorkspaceSpaceBrief = {
   goal: "Capture the brand",
@@ -185,14 +182,9 @@ describe("anchors: seedRef → entityId through the ONE ref ladder", () => {
 });
 
 describe("tripwires", () => {
-  it("PARITY: the seeded set IS the canonical template-field set (@synap-core/types)", () => {
-    expect([...SPACE_BRIEF_SEEDED_FIELDS]).toEqual([
-      ...canonical.SPACE_BRIEF_TEMPLATE_FIELDS,
-    ]);
-    expect(SPACE_BRIEF_SEEDED_FIELDS.length).toBeGreaterThanOrEqual(9);
-  });
-
   it("the WRITTEN set equals the COMPARED set: a template carrying every canonical field writes exactly the seeded fields, each stamped", () => {
+    // Non-vacuity: an empty field list would make every equality below pass.
+    expect(SPACE_BRIEF_SEEDED_FIELDS.length).toBeGreaterThanOrEqual(9);
     // Derived from the canonical type, not hand-listed: every template field,
     // plus the applier-owned field and an unknown key that must NOT be written.
     const template: Record<string, unknown> = { unknownKey: "x" };

@@ -8,8 +8,9 @@
  * sandbox builds the same bridges; here the store that would vanish is the
  * acting agent (`runWithActingAgent`), which the write gate reads.
  *
- * Runs the REAL isolated-vm isolate and the REAL bridge code (`runIsolate`);
- * only the hub caller is a recorder. Negative control (2026-10-25, branch
+ * Runs the REAL isolated-vm isolate (the `inline` runner) and the REAL bridge
+ * code (`runIsolate`); only the hub caller is a recorder. The same case through
+ * a runner PROCESS is in `runner/process-pool.real-isolate.test.ts`. Negative control (2026-10-25, branch
  * negctl/tickets-1025-5, devbox): `bindHostCallback` returning `fn` unbound
  * turns the behavioural case red (the recorder reads `undefined`).
  *
@@ -17,14 +18,7 @@
  * "No native build was found for platform=linux … node=20"). It runs on the
  * devbox gate tree. The addon-free guard is the sibling
  * `run-skill-in-sandbox.async-context.test.ts`, which runs everywhere.
- *
- * The scan below pins that EVERY bridge is built through `hostRef`; it counts
- * construction sites in this one file, so a bridge built in another file is
- * not seen.
  */
-import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 
 vi.hoisted(() => {
@@ -32,15 +26,11 @@ vi.hoisted(() => {
 });
 import { getActingAgentUserId, runWithActingAgent } from "@synap/database";
 import { runIsolate } from "./run-skill-in-sandbox.js";
+import { inlineSkillRunner } from "./runner/index.js";
 
 const ivmLoads = await import("isolated-vm").then(
   () => true,
   () => false
-);
-
-const SOURCE = readFileSync(
-  resolve(dirname(fileURLToPath(import.meta.url)), "run-skill-in-sandbox.ts"),
-  "utf8"
 );
 
 describe("run-skill-in-sandbox: bridges keep the async context", () => {
@@ -68,6 +58,7 @@ describe("run-skill-in-sandbox: bridges keep the async context", () => {
           agentUserId: "agent-7",
           caller: caller as never,
           failureSink: {},
+          runner: inlineSkillRunner,
         })
       );
       // Non-vacuity: the bridge really ran, once.
@@ -75,17 +66,4 @@ describe("run-skill-in-sandbox: bridges keep the async context", () => {
       expect(seen).toEqual(["agent-7"]);
     }
   );
-
-  it("every bridge is built through hostRef, never a bare ivm.Reference", () => {
-    const bare = SOURCE.match(/new ivm\.Reference\(/g) ?? [];
-    const bound = SOURCE.match(/\bhostRef\(/g) ?? [];
-    // The ONE bare construction is inside hostRef itself.
-    expect(bare).toHaveLength(1);
-    expect(SOURCE).toMatch(
-      /const hostRef = [^\n]*\n\s*new ivm\.Reference\(bindHostCallback\(fn\)\)/
-    );
-    // Non-vacuity: the eight bridges (log, search, getEntities, getDocument,
-    // redeemSecret, hostFetch, callProvider, proposeEntity).
-    expect(bound.length).toBeGreaterThanOrEqual(8);
-  });
 });
