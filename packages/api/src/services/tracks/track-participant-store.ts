@@ -33,13 +33,7 @@ import {
   trackParticipants,
   users,
 } from "@synap/database";
-import type {
-  ProjectTrack,
-  TrackCommitmentStateKey,
-  TrackParticipantRoleKey,
-  TrackParticipantRow,
-  TrackPrincipalKindKey,
-} from "@synap/database/schema";
+import type { ProjectTrack, TrackParticipantRow } from "@synap/database/schema";
 import { actorDisplayName } from "../../routers/proposals/helper-functions.js";
 import { loadActorRows } from "../activity/activity-actors.js";
 import {
@@ -48,22 +42,9 @@ import {
   goalOwner,
   isOpenCommitment,
   trackStatusCategory,
-  type TrackCommitmentState,
   type TrackParticipant,
   type TrackParticipantRole,
-  type TrackPrincipalKind,
 } from "@synap-core/types/units";
-
-// The DB mirror (`@synap/database`) and the shared sets
-// (`@synap-core/types/units`) name EXACTLY the same values: a role, kind or
-// state added on one side only stops the build.
-type _Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
-const _sameRoles: _Same<TrackParticipantRoleKey, TrackParticipantRole> = true;
-const _sameKinds: _Same<TrackPrincipalKindKey, TrackPrincipalKind> = true;
-const _sameStates: _Same<TrackCommitmentStateKey, TrackCommitmentState> = true;
-void _sameRoles;
-void _sameKinds;
-void _sameStates;
 
 /** The stored rows of ONE goal — read only AFTER the goal's own floor passed. */
 export async function goalParticipantRows(

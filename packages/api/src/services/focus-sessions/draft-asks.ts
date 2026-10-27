@@ -42,23 +42,37 @@ export async function listDraftAskSlots(params: {
   subject?: SessionSubject;
 }): Promise<DraftAskSlots> {
   const slots = await listOwedSlots({ ...params, onlyDrafts: true });
-  const sessionIds = [...new Set(slots.map((s) => s.sessionId))];
-  const starterNames = new Map<string, string>();
-  if (sessionIds.length === 0) return { slots, starterNames };
+  const starterNames = await sessionStarterNames(
+    params.userId,
+    slots.map((s) => s.sessionId)
+  );
+  return { slots, starterNames };
+}
 
+/**
+ * sessionId → the display name of the first agent on its roster (the one
+ * roster derivation, `attachSessionParticipants`), for the caller's OWN
+ * sessions. A session with no agent on its roster has no entry: say "An
+ * agent", never guess. Shared by the draft row and the owed door
+ * (`GET /focus-sessions/owed`), so "who asks" is named one way.
+ */
+export async function sessionStarterNames(
+  userId: string,
+  sessionIds: readonly string[]
+): Promise<Map<string, string>> {
+  const ids = [...new Set(sessionIds)];
+  const names = new Map<string, string>();
+  if (ids.length === 0) return names;
   const rows = await db
     .select({ id: focusSessions.id, agentIds: focusSessions.agentIds })
     .from(focusSessions)
     .where(
-      and(
-        inArray(focusSessions.id, sessionIds),
-        eq(focusSessions.userId, params.userId)
-      )
+      and(inArray(focusSessions.id, ids), eq(focusSessions.userId, userId))
     );
-  const staffed = await attachSessionParticipants(rows, params.userId);
+  const staffed = await attachSessionParticipants(rows, userId);
   for (const s of staffed) {
     const first = s.participants[0];
-    if (first) starterNames.set(s.id, first.name);
+    if (first) names.set(s.id, first.name);
   }
-  return { slots, starterNames };
+  return names;
 }

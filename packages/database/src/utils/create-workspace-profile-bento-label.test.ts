@@ -1,11 +1,11 @@
 /**
  * The auto-generated profile bento's stat-card label in the create path.
  *
- * `@synap/database` cannot reach the vocabulary door (`@synap-core/types` is not
- * a dependency, and `@synap-core/types` type-imports `@synap/database`, so the
- * edge would be a cycle). The label therefore prefers the profile ROW's stored
- * `plural` — data — and only falls back to the legacy string when the row has
- * none. No pluralizer is introduced.
+ * The label prefers the profile ROW's stored `plural` — data — and only falls
+ * back to the legacy string when the row has none. No pluralizer is introduced.
+ * (Written when `@synap/database` could not import `@synap-core/types`; it can
+ * now, but moving this label to the vocabulary door would change its words —
+ * a decision of its own, not made here.)
  *
  * NOT covered here: that the resolved row's `plural` reaches the builder through
  * `profileHintsMap` (profile step + resume rebuild) — that threading is proven by
