@@ -1463,7 +1463,7 @@
                 "unblocks": {
                   "type": "string",
                   "maxLength": 200,
-                  "description": "Only with owner='human', and REQUIRED then: ONE line saying what MOVES when the person answers — the next step, session or PR that waits on the answer ('the EU launch deploy', 'session Pricing page starts'). A hand-over without it is refused."
+                  "description": "Only with owner='human', and expected then: ONE line saying what MOVES when the person answers — the next step, session or PR that waits on the answer ('the EU launch deploy', 'session Pricing page starts'). A hand-over without it lands with 'The agent goes on with this work' and a warning."
                 },
                 "ref": {
                   "description": "WHERE it lives — {\"kind\":\"entity|document|view|cell|automation|playbook\",\"id\":\"<uuid>\"} or {\"url\":\"https://...\"}. A ref is evidence for a claimed deliverable.",
@@ -1993,7 +1993,7 @@
                 "unblocks": {
                   "type": "string",
                   "maxLength": 200,
-                  "description": "Only with owner='human', and REQUIRED then: ONE line saying what MOVES when the person answers — the next step, session or PR that waits on the answer ('the EU launch deploy', 'session Pricing page starts'). A hand-over without it is refused."
+                  "description": "Only with owner='human', and expected then: ONE line saying what MOVES when the person answers — the next step, session or PR that waits on the answer ('the EU launch deploy', 'session Pricing page starts'). A hand-over without it lands with 'The agent goes on with this work' and a warning."
                 },
                 "ref": {
                   "description": "WHERE to go for this deliverable — turns the card's title into a door instead of leaving the person to search. ONE of two shapes: {\"kind\":\"entity|document|view|cell|automation|playbook\",\"id\":\"<uuid>\"} for something in the pod, or {\"url\":\"https://...\"} for an external page. REFUSED if the object is not one you can already see. Use it above all with owner='human': name the blocker in `why`, then point at it here.",
@@ -2549,7 +2549,7 @@
                 "unblocks": {
                   "type": "string",
                   "maxLength": 200,
-                  "description": "Only with owner='human', and REQUIRED then: ONE line saying what MOVES when the person answers — the next step, session or PR that waits on the answer ('the EU launch deploy', 'session Pricing page starts'). A hand-over without it is refused."
+                  "description": "Only with owner='human', and expected then: ONE line saying what MOVES when the person answers — the next step, session or PR that waits on the answer ('the EU launch deploy', 'session Pricing page starts'). A hand-over without it lands with 'The agent goes on with this work' and a warning."
                 },
                 "ref": {
                   "description": "WHERE it lives — {\"kind\":\"entity|document|view|cell|automation|playbook\",\"id\":\"<uuid>\"} or {\"url\":\"https://...\"}. A ref is evidence for a claimed deliverable.",
@@ -3084,7 +3084,7 @@
                 "unblocks": {
                   "type": "string",
                   "maxLength": 200,
-                  "description": "Only with owner='human', and REQUIRED then: ONE line saying what MOVES when the person answers — the next step, session or PR that waits on the answer ('the EU launch deploy', 'session Pricing page starts'). A hand-over without it is refused."
+                  "description": "Only with owner='human', and expected then: ONE line saying what MOVES when the person answers — the next step, session or PR that waits on the answer ('the EU launch deploy', 'session Pricing page starts'). A hand-over without it lands with 'The agent goes on with this work' and a warning."
                 },
                 "ref": {
                   "description": "WHERE to go for this deliverable — turns the card's title into a door instead of leaving the person to search. ONE of two shapes: {\"kind\":\"entity|document|view|cell|automation|playbook\",\"id\":\"<uuid>\"} for something in the pod, or {\"url\":\"https://...\"} for an external page. REFUSED if the object is not one you can already see. Use it above all with owner='human': name the blocker in `why`, then point at it here.",
@@ -3569,7 +3569,7 @@
               "unblocks": {
                 "type": "string",
                 "maxLength": 200,
-                "description": "Only with owner='human', and REQUIRED then: ONE line saying what MOVES when the person answers — the next step, session or PR that waits on the answer ('the EU launch deploy', 'session Pricing page starts'). A hand-over without it is refused."
+                "description": "Only with owner='human', and expected then: ONE line saying what MOVES when the person answers — the next step, session or PR that waits on the answer ('the EU launch deploy', 'session Pricing page starts'). A hand-over without it lands with 'The agent goes on with this work' and a warning."
               },
               "ref": {
                 "description": "WHERE to go for this deliverable — turns the card's title into a door instead of leaving the person to search. ONE of two shapes: {\"kind\":\"entity|document|view|cell|automation|playbook\",\"id\":\"<uuid>\"} for something in the pod, or {\"url\":\"https://...\"} for an external page. REFUSED if the object is not one you can already see. Use it above all with owner='human': name the blocker in `why`, then point at it here.",

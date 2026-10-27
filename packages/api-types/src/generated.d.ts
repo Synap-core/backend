@@ -10342,6 +10342,7 @@ declare const NEEDS_YOU_SLOT_CLASSES: readonly [
 export type NeedsYouSlotClass = (typeof NEEDS_YOU_SLOT_CLASSES)[number];
 declare const NEEDS_YOU_PROPOSAL_CLASSES: readonly [
 	"needs_you",
+	"working",
 	"review_later",
 	"changes_to_review"
 ];
@@ -10690,9 +10691,10 @@ export interface ExpectedOutput {
 	 * "session 'Pricing page' starts"). Decision E (needs-truth §5): a needs-you
 	 * row says what to do, WHAT IT UNBLOCKS, who asked and since when.
 	 *
-	 * DECLARED by the agent with the hand-over, like `why`, and REQUIRED when
-	 * an agent hands a slot to the person (`slotsMissingUnblocks`, api
-	 * `slot-asked-event.ts`); a system producer's slot reads it from its cause
+	 * DECLARED by the agent with the hand-over, like `why`, and expected when
+	 * an agent hands a slot to the person: a hand-over without it is stamped
+	 * `ASK_UNBLOCKS_DEFAULT` and the agent is warned (`slotsMissingUnblocks`,
+	 * api `slot-asked-event.ts`); a system producer's slot reads it from its cause
 	 * (`effectiveSlotUnblocks`, `@synap-core/types/ask`). Cleared with the other
 	 * ownership fields when the slot goes back to the agent.
 	 */
@@ -11437,6 +11439,7 @@ export interface PostChannelMessageResult {
 	slot?: {
 		hint?: string;
 		status: string;
+		warnings?: string[];
 	};
 }
 export interface PersonalConversationTransition {
@@ -11583,6 +11586,12 @@ export interface SessionActivityLive {
 	since: Date | string | null;
 	/** The newest activity `at`; null when nothing has happened yet. */
 	lastAt: Date | string | null;
+	/**
+	 * The newest AGENT evidence of work (the needs-you rule's Working clock,
+	 * `SessionLiveFacts.lastAgentWorkAt`); null when there is none. Absent on
+	 * an older pod.
+	 */
+	lastAgentWorkAt?: Date | string | null;
 }
 export interface SessionActivityWire {
 	sessionId: string;
@@ -12336,6 +12345,18 @@ export interface ProposalCluster {
 	 * them out, never sweep them in.
 	 */
 	attentionFloorCount: number;
+}
+/**
+ * Who the viewer is TO this session — the field read doors expose so a UI can
+ * hide write verbs for a member. Only meaningful on a row the viewer already
+ * read through {@link sessionReadableWhere}.
+ */
+export type SessionViewerRole = "member" | "owner";
+/** How many clusters out of the headline sit in each of the rule's folds. */
+export interface ClusterFoldCounts {
+	working: number;
+	reviewLater: number;
+	changesToReview: number;
 }
 /**
  * Approval patterns — the "notice" rung of record → notice → propose → ratify.
@@ -18365,7 +18386,9 @@ export type PathCount = {
  * to `sessionNeedsYou` / `tallyNeedsYou` unchanged.
  */
 export interface SessionUnitCounts {
-	owedFromYou: number;
+	/** Owed asks the needs-you rule classes `needs_you`. */
+	owedFromYou: number | null;
+	/** Pending proposals the needs-you rule classes `needs_you`. */
 	pendingDecisions: number | null;
 	/**
 	 * Finished and awaiting the person's review / close — this row's
@@ -18394,12 +18417,6 @@ export type SessionInteractionsSection = {
 	reason: string;
 	status: "unavailable";
 };
-/**
- * Who the viewer is TO this session — the field read doors expose so a UI can
- * hide write verbs for a member. Only meaningful on a row the viewer already
- * read through {@link sessionReadableWhere}.
- */
-export type SessionViewerRole = "member" | "owner";
 declare const LANDED_DECISION_STATES: readonly [
 	"applied",
 	"approved",
@@ -41150,10 +41167,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: {
 				distinct: number;
-				folds: {
-					changesToReview: number;
-					reviewLater: number;
-				};
+				folds: ClusterFoldCounts;
 				groups: ProposalCluster[];
 				reviewLater: number;
 				scanTruncated: boolean;
@@ -41165,6 +41179,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				agentOnly?: boolean | undefined;
 				agentUserId?: string | undefined;
 				automationId?: string | undefined;
+				classifyNeedsYou?: boolean | undefined;
 				correlationId?: string | undefined;
 				cursor?: string | undefined;
 				excludeBookkeeping?: boolean | undefined;
@@ -41219,6 +41234,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					governanceRuleId?: string;
 					id: string;
 					lifetimeHours: number | null;
+					needsYouClass?: "changes_to_review" | "needs_you" | "review_later" | "working" | undefined;
 					nodeId: string | null;
 					objectRefs?: Record<string, ProposalObjectRef>;
 					onBehalfOfName?: string;
@@ -41308,6 +41324,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					governanceRuleId?: string;
 					id: string;
 					lifetimeHours: number | null;
+					needsYouClass?: "changes_to_review" | "needs_you" | "review_later" | "working" | undefined;
 					nodeId: string | null;
 					objectRefs?: Record<string, ProposalObjectRef>;
 					onBehalfOfName?: string;
@@ -43363,10 +43380,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					};
 					groups: {
 						distinct: number;
-						folds: {
-							changesToReview: number;
-							reviewLater: number;
-						};
+						folds: ClusterFoldCounts;
 						groups: ProposalCluster[];
 						reviewLater: number;
 						scanTruncated: boolean;
