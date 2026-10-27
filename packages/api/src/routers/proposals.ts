@@ -140,6 +140,10 @@ import {
   sessionReadableWhere,
 } from "../access/session-visibility.js";
 import { redactUnreadableSessionTargets } from "../services/proposals/session-content-redaction.js";
+import {
+  REVIEW_PACKAGES,
+  reviewPackageOfRow,
+} from "../services/proposals/review-package-of-row.js";
 export { buildProposalChanges } from "./proposals/changes.js";
 import {
   planProposalRevert,
@@ -381,6 +385,9 @@ function pageOnlyFailureFields(error: unknown): {
     : {};
 }
 
+/** Rows a `package` filter on `list` scans (the `groups` default scan). */
+const PACKAGE_SCAN_LIMIT = 1000;
+
 export const proposalsRouter = router({
   /**
    * List proposals (Inbox)
@@ -482,6 +489,14 @@ export const proposalsRouter = router({
           .default("pending"),
         /** Cursor-based pagination: ISO timestamp of the last item's createdAt */
         cursor: z.string().optional(),
+        /**
+         * Only proposals of this REVIEW PACKAGE — the decision they ask
+         * (`reviewPackageOf`, founder B-1). Decided per row (a create's kind,
+         * a held-writes pack's writes), so it filters a bounded scan of the
+         * newest {@link PACKAGE_SCAN_LIMIT} matching rows; `nextCursor` goes on
+         * past a scan that filled no page. Every row also carries `package`.
+         */
+        package: z.enum(REVIEW_PACKAGES).optional(),
       })
     )
     .query(async ({ input, ctx }) => {
@@ -596,12 +611,34 @@ export const proposalsRouter = router({
         conditions.push(lt(proposals.createdAt, new Date(input.cursor)));
       }
 
-      const pageRows = await db.query.proposals.findMany({
-        where: conditions.length > 0 ? and(...conditions) : undefined,
-        orderBy: [desc(proposals.createdAt), desc(proposals.id)],
-        limit: input.limit + 1,
-        offset: input.cursor ? 0 : input.offset,
-      });
+      // A package filter scans, then pages over the matches (see `package`).
+      let scanCursor: string | undefined;
+      let pageRows: Array<typeof proposals.$inferSelect>;
+      if (input.package) {
+        const scanned = await db.query.proposals.findMany({
+          where: conditions.length > 0 ? and(...conditions) : undefined,
+          orderBy: [desc(proposals.createdAt), desc(proposals.id)],
+          limit: PACKAGE_SCAN_LIMIT,
+        });
+        const start = input.cursor ? 0 : input.offset;
+        pageRows = scanned
+          .filter((r) => reviewPackageOfRow(r) === input.package)
+          .slice(start, start + input.limit + 1);
+        // The scan stopped at its cap before the page filled: there may be
+        // more past it, so the page says so and the cursor resumes there.
+        if (
+          scanned.length >= PACKAGE_SCAN_LIMIT &&
+          pageRows.length <= input.limit
+        )
+          scanCursor = scanned[scanned.length - 1]!.createdAt.toISOString();
+      } else {
+        pageRows = await db.query.proposals.findMany({
+          where: conditions.length > 0 ? and(...conditions) : undefined,
+          orderBy: [desc(proposals.createdAt), desc(proposals.id)],
+          limit: input.limit + 1,
+          offset: input.cursor ? 0 : input.offset,
+        });
+      }
 
       // SUBJECT ⇒ the CREATING proposal is PINNED on the first page, whatever
       // the limit: newest-first paging otherwise drops the one row Lineage's
@@ -706,11 +743,18 @@ export const proposalsRouter = router({
         const viewerCanReviewReason =
           verdict?.viewerCanReviewReason ?? "not-authorized";
         const revertable = revertableById.get(it.id) ?? false;
-        return { ...it, viewerCanReview, viewerCanReviewReason, revertable };
+        return {
+          ...it,
+          viewerCanReview,
+          viewerCanReviewReason,
+          revertable,
+          package: reviewPackageOfRow(it),
+        };
       });
 
-      const nextCursor =
-        pagination.hasMore && itemsWithPermission.length > 0
+      const nextCursor = scanCursor
+        ? (itemsWithPermission.at(-1)?.createdAt.toISOString() ?? scanCursor)
+        : pagination.hasMore && itemsWithPermission.length > 0
           ? itemsWithPermission[
               itemsWithPermission.length - 1
             ]!.createdAt.toISOString()
@@ -718,7 +762,11 @@ export const proposalsRouter = router({
 
       return {
         items: itemsWithPermission,
-        pagination: { ...pagination, nextCursor },
+        pagination: {
+          ...pagination,
+          hasMore: pagination.hasMore || scanCursor !== undefined,
+          nextCursor,
+        },
         /** @deprecated Use `items` instead */
         proposals: itemsWithPermission,
       };
@@ -792,6 +840,13 @@ export const proposalsRouter = router({
          * that session's block; `distinct` then counts the parts.
          */
         splitBySession: z.boolean().optional(),
+        /**
+         * Only clusters of this REVIEW PACKAGE — the decision they ask
+         * (`reviewPackageOf`, founder B-1). A cluster's package is its
+         * highest-stakes member's, decided in the collapse; `distinct` counts
+         * the clusters of that package.
+         */
+        package: z.enum(REVIEW_PACKAGES).optional(),
       })
     )
     .query(async ({ input, ctx }) => {
@@ -983,6 +1038,10 @@ export const proposalsRouter = router({
           const muted = new Set(activeMutes.map((m) => m.fingerprint));
           clusters = clusters.filter((c) => !muted.has(c.fingerprint));
         }
+      }
+
+      if (input.package) {
+        clusters = clusters.filter((c) => c.package === input.package);
       }
 
       const groups = clusters.slice(0, limit);

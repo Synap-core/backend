@@ -11,6 +11,7 @@
 import { describe, it, expect } from "vitest";
 import type { ProposalCluster } from "../services/proposals/fingerprint.js";
 import { proposalClassFields } from "../services/proposals/proposal-class.js";
+import { reviewPackageOfRow } from "../services/proposals/review-package-of-row.js";
 import {
   unionNeedsYou,
   countNeedsYou,
@@ -47,6 +48,8 @@ function cluster(over: Partial<ProposalCluster> = {}): ProposalCluster {
     agent: null,
     reasonCounts: {},
     attentionFloorCount: 0,
+    // Through the one door, like the class above.
+    package: reviewPackageOfRow({ proposalType, targetType, data: null }),
     ...over,
   };
 }
@@ -397,6 +400,29 @@ describe("owed slots in the needs-you union", () => {
       owedTruncated: true,
     });
     expect(counted.truncated).toBe(true);
+  });
+});
+
+describe("review packages on needs-you rows (founder B-1)", () => {
+  it("every row carries its package: a cluster its own, any other by its kind", () => {
+    const signals = unionNeedsYou({
+      clusters: [
+        cluster({ proposalType: "assign_agent", targetType: "focus_session" }),
+      ],
+      notifications: [notif()],
+      owedSlots: [owed()],
+    });
+    const byKind = Object.fromEntries(signals.map((s) => [s.kind, s.package]));
+    expect(byKind).toEqual({
+      "proposal-cluster": "hand-offs",
+      notification: "questions",
+      "owed-slot": "questions",
+    });
+  });
+
+  it("a cluster forwards the package its collapse decided, never re-derives it", () => {
+    const signal = signalFromCluster(cluster({ package: "knowledge" }));
+    expect(signal.package).toBe("knowledge");
   });
 });
 

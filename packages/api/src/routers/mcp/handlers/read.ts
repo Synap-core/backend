@@ -12,6 +12,10 @@ import { ask } from "../../../services/knowledge/ask.js";
 import { resolveProfileDescription } from "../../../utils/profile-presentation.js";
 import { leanProposal } from "./proposal-lean.js";
 import {
+  REVIEW_PACKAGES,
+  isReviewPackage,
+} from "@synap-core/types/proposals/review-package";
+import {
   toProfileDigest,
   compactRelationTypes,
   toLeanEntity,
@@ -368,6 +372,12 @@ export const readHandlers: McpHandlerMap = {
   ): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
+    // A package nobody knows is refused in words, never read as "no filter".
+    if (args.package !== undefined && !isReviewPackage(args.package)) {
+      return ok({
+        error: `Unknown package '${String(args.package)}'. Valid values: ${REVIEW_PACKAGES.join(", ")}.`,
+      });
+    }
     const { listCreatedProposals } =
       await import("../../../services/proposals/proposals-service.js");
     const result = await listCreatedProposals({
@@ -382,6 +392,7 @@ export const readHandlers: McpHandlerMap = {
           : undefined,
       status: args.status as string | undefined,
       limit: (args.limit as number) || undefined,
+      package: isReviewPackage(args.package) ? args.package : undefined,
     });
     // A LIST must be readable. Unprojected, this returned every row's full
     // `data` payload: 33 pending proposals measured at 283,737 characters

@@ -57,6 +57,10 @@ import { normalizeExpectedLabel } from "../focus-sessions/expected-label.js";
 import type { ExpectedOutput, OutputRef, SlotAsk } from "@synap/playbooks";
 import type { OwedSlot } from "../focus-sessions/owed-outputs.js";
 import type { ProposalCluster } from "../proposals/fingerprint.js";
+import {
+  reviewPackageOf,
+  type ReviewPackage,
+} from "@synap-core/types/proposals/review-package";
 import type { ProposalClass } from "../proposals/proposal-class.js";
 import { needsYouFoldBy, needsYouRole } from "../../notifications/registry.js";
 
@@ -372,6 +376,14 @@ export interface Signal {
    */
   proposalIds?: string[];
   /**
+   * The REVIEW PACKAGE — the decision this row asks (`reviewPackageOf`,
+   * `@synap-core/types/proposals/review-package`, founder B-1): what a Review
+   * page groups by. Stamped on every NEEDS-YOU row ({@link unionNeedsYou}); a
+   * cluster carries its members' highest-stakes package. Absent on the
+   * history lens, which is not reviewed.
+   */
+  package?: ReviewPackage;
+  /**
    * WHICH block this row belongs to on a needs-you page. `session:<id>` for
    * everything a session owes the person (its owed slots, its draft-asks row,
    * a cluster filed entirely under it), `proposal-cluster:<fingerprint>` for
@@ -444,6 +456,7 @@ const _KIND_SPECIFIC_SIGNAL_FIELDS = [
   "access",
   "invite",
   "proposalIds",
+  "package",
 ] as const satisfies ReadonlyArray<keyof Signal>;
 
 type _SignalFieldsClassified =
@@ -686,6 +699,7 @@ export function signalFromCluster(
     class: cluster.class,
     lifetimeHours: cluster.lifetimeHours,
     proposalIds: cluster.sampleProposalIds,
+    package: cluster.package,
     ...(cluster.agent?.label
       ? {
           by: {
@@ -1617,28 +1631,42 @@ export function unionNeedsYou(args: {
   const notifications = foldNotifications(
     dedupeNotifications(args.notifications, args.clusters, liveNeedsOf(args))
   );
-  return orderNeedsYou([
-    ...args.owedSlots.map((r) => signalFromOwedSlot(r, now)),
-    ...(args.reviewSessions ?? []).map((r) => signalFromReviewSession(r, now)),
-    ...liveCaptureRows(args).map((r) => signalFromUnfinishedCapture(r, now)),
-    ...signalsFromAccessRequests(args.accessRequests, now),
-    ...signalsFromSpaceInvites(args.spaceInvites, now),
-    ...args.clusters.map((c) =>
-      signalFromCluster(
-        c,
-        now,
-        c.sessionId ? args.clusterSessions?.get(c.sessionId) : undefined
-      )
-    ),
-    ...notifications.map((f) =>
-      signalFromNotification(
-        f.row,
-        now,
-        f.repeatCount,
-        args.notificationContainers?.get(f.row.id)
-      )
-    ),
-  ]);
+  return orderNeedsYou(
+    [
+      ...args.owedSlots.map((r) => signalFromOwedSlot(r, now)),
+      ...(args.reviewSessions ?? []).map((r) =>
+        signalFromReviewSession(r, now)
+      ),
+      ...liveCaptureRows(args).map((r) => signalFromUnfinishedCapture(r, now)),
+      ...signalsFromAccessRequests(args.accessRequests, now),
+      ...signalsFromSpaceInvites(args.spaceInvites, now),
+      ...args.clusters.map((c) =>
+        signalFromCluster(
+          c,
+          now,
+          c.sessionId ? args.clusterSessions?.get(c.sessionId) : undefined
+        )
+      ),
+      ...notifications.map((f) =>
+        signalFromNotification(
+          f.row,
+          now,
+          f.repeatCount,
+          args.notificationContainers?.get(f.row.id)
+        )
+      ),
+    ].map(withReviewPackage)
+  );
+}
+
+/**
+ * Every needs-you row carries its review package. A cluster brought its own
+ * (decided over its members); any other row is decided by its kind.
+ */
+function withReviewPackage(signal: Signal): Signal {
+  return signal.package
+    ? signal
+    : { ...signal, package: reviewPackageOf({ kind: signal.kind }) };
 }
 
 /** The live needs a pointer row is decided from — ONE derivation, list and count. */

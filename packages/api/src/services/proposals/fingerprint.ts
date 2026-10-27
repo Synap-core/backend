@@ -30,6 +30,11 @@ import {
   proposalClassFields,
   type ProposalClass,
 } from "./proposal-class.js";
+import {
+  reviewPackageOfRow,
+  type ReviewPackage,
+} from "./review-package-of-row.js";
+import { reviewPackageRank } from "@synap-core/types/proposals/review-package";
 
 /**
  * The minimum a proposal row must expose to be fingerprinted. Mirrors the
@@ -324,6 +329,14 @@ export interface ProposalCluster {
    */
   agent: ProposalClusterAgent | null;
   /**
+   * The REVIEW PACKAGE the cluster files under — the decision it asks
+   * (`reviewPackageOfRow`, founder B-1). Decided over EVERY member and the
+   * highest-stakes one wins: members share proposalType × targetType, but a
+   * create's kind, a held-writes pack's writes or a person author can lift one
+   * member into a higher package, and the cluster is never filed below it.
+   */
+  package: ReviewPackage;
+  /**
    * Member count per `governance_reason`, so a card can render its composition
    * ("152 routine · 2 destructive · 1 untrusted origin") instead of a bare
    * total. Terraform's plan rollup is the precedent: never "N changes", always
@@ -395,6 +408,8 @@ interface ClusterAccumulator {
   agentLabel: string | null;
   reasonCounts: Record<string, number>;
   attentionFloorCount: number;
+  /** The highest-stakes member's review package so far. */
+  package: ReviewPackage;
 }
 
 /** The single agent every member of a cluster was filed by, or `null`. */
@@ -462,8 +477,13 @@ export function collapseProposalsToClusters(
         agentLabel: null,
         reasonCounts: {},
         attentionFloorCount: 0,
+        package: reviewPackageOfRow(row),
       };
       byFingerprint.set(key, acc);
+    } else {
+      const pkg = reviewPackageOfRow(row);
+      if (reviewPackageRank(pkg) < reviewPackageRank(acc.package))
+        acc.package = pkg;
     }
 
     acc.count += 1;
@@ -522,6 +542,7 @@ export function collapseProposalsToClusters(
     agent: oneAgentOf(acc),
     reasonCounts: acc.reasonCounts,
     attentionFloorCount: acc.attentionFloorCount,
+    package: acc.package,
   }));
   clusters.sort((a, b) => b.latestAt.getTime() - a.latestAt.getTime());
   return clusters;
