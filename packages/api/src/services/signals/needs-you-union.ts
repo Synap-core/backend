@@ -311,7 +311,7 @@ export interface Signal {
    * A `proposal-cluster` whose members all sat untouched for 7 days
    * (`ProposalCluster.reviewLater`, the ONE count predicate), or an
    * `owed-slot` owed for more than 7 days (`isAskReviewLater`, the same
-   * clock — Resolve-XP decision 3): drawn in the Review later fold, OUT of
+   * clock — founder, 2026-10-26): drawn in the Review later fold, OUT of
    * the headline — `countNeedsYou` counts it as `reviewLater`, never in
    * `needsYou`. Absent on every other row.
    */
@@ -1191,7 +1191,9 @@ export function signalFromOwedSlot(
     ...sessionSource(row.sessionId, row.sessionTitle),
     groupKey: sessionGroupKey(row.sessionId),
     // Review later wins over Older, like a cluster's: a client that predates
-    // the flag still folds it under Older (owed > 7 days is older too).
+    // the flag still folds it under Older (owed > 7 days is older too). It
+    // keeps its session key: a session is never split, so the slot folds with
+    // its session's freshest row (`needsYouRows`).
     ageBucket: ageBucketOf(occurredAt, now),
     ...(isAskReviewLater(row, now) ? { reviewLater: true as const } : {}),
     repeatCount: 1,
@@ -2029,7 +2031,7 @@ export function countNeedsYou(args: {
    */
   suggestions: number;
 } {
-  // Review later leaves the headline (Resolve-XP): the SAME cluster flag the
+  // Review later leaves the headline: the SAME cluster flag the
   // list stamps on its rows (`signalFromCluster`), counted by the groups door
   // before its page slice.
   const reviewLaterClusters = args.reviewLaterClusters ?? 0;

@@ -1296,7 +1296,6 @@ async function readOpenQuestions(
   return { status: "ok", total: Number(totalRow?.n ?? 0), items };
 }
 
-
 /**
  * Agent questions still open in the session's ROOM (`PacketRoomQuestionItem`).
  * A session with no room was never asked anything: a true empty.

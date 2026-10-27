@@ -33,7 +33,12 @@ import {
   type AskCause,
   type AskCauseKind,
 } from "./index.js";
-import { REVIEW_LATER_AFTER_MS } from "../proposals/fate.js";
+import {
+  FATE_COPY,
+  FATE_TONE,
+  REVIEW_LATER_AFTER_MS,
+} from "../proposals/fate.js";
+import { ageSpan, shortDate } from "../lens/age.js";
 import { CRITERION_SLOT_KIND } from "../focus-sessions/criterion-slot.js";
 
 // ─── Copy ───────────────────────────────────────────────────────────────────
@@ -51,7 +56,6 @@ export const ASK_COPY = {
   notMine: "Not mine",
   talk: "Talk it through",
   answerDoor: "Answer…",
-  notePlaceholder: "A note for the agent (optional)",
   movedOn: "This one moved on",
   askChanged: "The question changed. Check your answer.",
   failedTitle: "Didn't go through",
@@ -144,7 +148,7 @@ export const ASK_COPY = {
    * agent's display name; null when the pod cannot name it.
    */
   answeredByYou: "You answered",
-  // Unnamed, the relay is said without inventing "an agent" (decision 4,
+  // Unnamed, the relay is said without inventing "an agent" (founder,
   // 2026-10-26): the mark still says it was relayed, never who.
   relayedBy: (agent: string | null): string =>
     agent?.trim()
@@ -166,15 +170,25 @@ export const ASK_COPY = {
   withdrawn: (note: string | null | undefined): string =>
     note?.trim() ? `Withdrawn · ${note.trim()}` : "Withdrawn",
   closedSessionEnded: "Closed · the session ended",
+  /**
+   * A relayed answer's words on its receipt (a relay waiting for the tap, or
+   * one recorded): the person's own QUOTE when the agent carried it, else the
+   * recorded answer. Null when there are no words to show.
+   */
+  relayedWords: (answer: {
+    quote?: string | null;
+    text?: string | null;
+  }): string | null => {
+    const words = answer.quote?.trim() || answer.text?.trim();
+    return words ? `“${words}”` : null;
+  },
   // ── The card's anatomy ({@link askCardView}) ──
   /** The collapsed note affordance: one label, no placeholder repeating it. */
   addNote: "Add a note",
+  /** The note field once opened: a noun, not the verb that opened it. */
+  note: "Note",
   /** The mark on the answer the agent recommends. */
   recommended: "Recommended",
-  /** An owed ask's fate on silence ({@link askFate}), after its age. */
-  fateUntilDecided: "Stays until you decide",
-  fateEndsWithSession: "Retires when the session ends",
-  fateReviewLater: "In Review later",
   /**
    * What raised an ask no agent asked ({@link AskCause}), as the door's words.
    * `at` is already formatted ("29 Sep"); absent, the date is left out.
@@ -188,7 +202,9 @@ export const ASK_COPY = {
 
 /** The words of each {@link AskCauseKind}. Product copy, not vocabulary. */
 const ASK_CAUSE_WORDS: Record<AskCauseKind, string> = {
-  decision: "From your decision note",
+  // Only a decision an AGENT wrote asks (founder, 2026-10-26), so never "your
+  // note". Its title is already the card's heading: the door names the kind.
+  decision: "From a proposed decision",
   gate: "From the session's gate",
   run: "From the run",
   external_approval: "From the external agent's run",
@@ -387,8 +403,8 @@ export function actView(ask: Ask | null | undefined): ActView | null {
  *   `overrode` — the agent recommended one, the person answered otherwise
  *                (another option, or "Other…" in their own words).
  *   `none`     — nothing to judge: no recommendation, or a pick nobody can
- *                read (a room reply in words). A confirm may carry one since
- *                decision 2 (2026-10-26): its `yes` / `no` `recommended`.
+ *                read (a room reply in words). A confirm may carry one too
+ *                (founder, 2026-10-26): its `yes` / `no` `recommended`.
  */
 export type AskRecommendationOutcomeKind = "followed" | "overrode" | "none";
 
@@ -482,13 +498,14 @@ export function answerProvenanceMark(
 // ─── The card: one anatomy, one derivation ──────────────────────────────────
 
 /**
- * An owed ask's FATE ON SILENCE (Resolve-XP decision 3, 2026-10-26) — the
- * sibling of `proposalFate` (`../proposals/fate.ts`), on the same clock:
+ * An owed ask's FATE ON SILENCE (founder, 2026-10-26) — the sibling of
+ * `proposalFate` (`../proposals/fate.ts`), on the same clock:
  *   `review_later`      — owed for more than `REVIEW_LATER_AFTER_DAYS`: out
  *                         of the headline count, kept in Review later. Never
  *                         expires.
  *   `ends_with_session` — a confirm / choose: the agent's own question,
- *                         retired `session_ended` when its session ends (W2).
+ *                         retired `session_ended` when its session ends
+ *                         (`completeFocusSession`).
  *   `until_decided`     — everything else (act / form / provide / free text):
  *                         the person's deliverable, owed until done.
  * An unreadable `owedSince` fails toward KEEPING, like `proposalFate`.
@@ -498,7 +515,7 @@ export type AskFate =
   | { kind: "ends_with_session" }
   | { kind: "until_decided" };
 
-/** The ask modes that end with their session (W2's `session_ended` rule). */
+/** The ask modes that end with their session (the `session_ended` rule). */
 export const ASK_MODES_ENDING_WITH_SESSION = ["confirm", "choose"] as const;
 
 /** The slot fields the fate and the card read — structural, off `ExpectedOutput`. */
@@ -616,21 +633,23 @@ export function askTextRestates(text: string, than: string): boolean {
   return !!h && (t === h || t.startsWith(`${h} `));
 }
 
-/** "<1m" / "12m" / "5h" / "8d" — the age span the lens rows print. */
-function ageSpan(ms: number): string {
-  const mins = Math.floor(Math.max(0, ms) / 60_000);
-  if (mins < 1) return "<1m";
-  if (mins < 60) return `${mins}m`;
-  if (mins < 24 * 60) return `${Math.floor(mins / 60)}h`;
-  return `${Math.floor(mins / (24 * 60))}d`;
-}
-
-function shortDate(iso: string | undefined): string | null {
-  if (!iso) return null;
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime())
-    ? null
-    : d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+/**
+ * `text` minus the `than` it opens with, folded exactly as
+ * {@link askTextRestates} folds (so "Pricing model: three tiers" loses
+ * "pricing model"); "" when that is all it says; `text` itself when it does
+ * not open with `than`.
+ */
+export function stripLeadingRestatement(text: string, than: string): string {
+  if (!askTextRestates(text, than)) return text.trim();
+  const body = stripAskVerbPrefix(text);
+  const lead = askCore(than).split(" ").length;
+  const words = [...body.matchAll(/[\p{L}\p{N}]+/gu)];
+  const last = words[lead - 1];
+  if (!last || last.index === undefined) return "";
+  return body
+    .slice(last.index + last[0].length)
+    .replace(/^[\s.:;,—–-]+/, "")
+    .trim();
 }
 
 /** One answer button: icon + tone + optional recommended mark + consequence. */
@@ -720,22 +739,22 @@ export function askCardView(
   const now = opts.now ?? Date.now();
   const nowMs = now instanceof Date ? now.getTime() : now;
   const fate = askFate(slot, now);
+  // A proposal's fate words and tone (`FATE_COPY`, `FATE_TONE`): an ask
+  // ending with its session is a session-bound draft's fate, said alike.
   const fateWords =
     fate.kind === "review_later"
-      ? ASK_COPY.fateReviewLater
+      ? FATE_COPY.reviewLater
       : fate.kind === "ends_with_session"
-        ? ASK_COPY.fateEndsWithSession
-        : ASK_COPY.fateUntilDecided;
+        ? FATE_COPY.endsWithSession
+        : FATE_COPY.untilDecided;
   const owed = slot.owedSince ? Date.parse(slot.owedSince) : NaN;
   const ageFate = {
     label: Number.isFinite(owed)
       ? `${ageSpan(nowMs - owed)} · ${fateWords}`
       : fateWords,
-    tone: (fate.kind === "ends_with_session"
-      ? "warning"
-      : fate.kind === "review_later"
-        ? "textMuted"
-        : "textSecondary") as UnitTone,
+    tone: FATE_TONE[
+      fate.kind === "ends_with_session" ? "dies_with_session" : fate.kind
+    ],
     fate,
   };
 

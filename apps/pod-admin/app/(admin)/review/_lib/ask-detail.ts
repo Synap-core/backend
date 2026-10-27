@@ -20,13 +20,16 @@
  */
 
 import {
+  ASK_COPY,
   actView,
+  answerProvenanceMark,
   askCardView,
   askFingerprint,
   askOptionForChip,
   isRefusedAskField,
   validateAnswerAgainstAsk,
   type Ask,
+  type AnswerProvenanceMark,
   type AskCardAnswer,
   type AskCardAsker,
   type AskCardView,
@@ -36,6 +39,7 @@ import {
   type AskProvideKind,
   type AskProvideRef,
   type DynamicFormField,
+  type PendingRelayedAnswer,
 } from "@synap-core/types/ask";
 import { CRITERION_SLOT_KIND } from "@synap-core/types/focus-sessions";
 import { resolveServiceName } from "@synap-core/types/service-marks";
@@ -57,9 +61,11 @@ export interface AskSlotSignal {
   /** When it became the person's (`owedSince`, the row's clock). */
   occurredAt?: string | Date | null;
   /** The agent that asked it, named by the pod (`Signal.by`). */
-  by?: { label: string } | null;
+  by?: { id?: string; label: string } | null;
   /** What raised it when no agent did (`Signal.askCause`). */
   askCause?: AskCause | null;
+  /** An agent relayed the person's answer from a chat; it waits for their tap. */
+  pendingRelay?: PendingRelayedAnswer | null;
 }
 
 /** One owed slot, as the detail reads it. */
@@ -78,7 +84,11 @@ export interface AskSlot {
   owedSince: string | null;
   /** The asking agent's name, as the pod resolved it; null = unknown. */
   askerName: string | null;
+  /** The asking agent's user id, when the pod named it. */
+  askerId?: string | null;
   askCause: AskCause | null;
+  /** A relayed answer waiting for the person's Confirm (a commitment). */
+  pendingRelay?: PendingRelayedAnswer | null;
 }
 
 /**
@@ -99,7 +109,9 @@ export function askSlotOf(s: AskSlotSignal): AskSlot | null {
     blockedReason: s.blockedReason ?? null,
     owedSince: isoOf(s.occurredAt),
     askerName: s.by?.label?.trim() || null,
+    askerId: s.by?.id ?? null,
     askCause: s.askCause ?? null,
+    pendingRelay: s.pendingRelay ?? null,
   };
 }
 
@@ -527,6 +539,41 @@ export function slotCall(slot: AskSlot): SlotCall {
     expectedLabel: slot.label,
     askFingerprint: askFingerprint(slot.ask),
   };
+}
+
+// ─── A relayed answer, waiting for the person's tap ─────────────────────────
+
+/** The waiting relay as the detail draws it: the shared mark, the person's words. */
+export interface RelayWaitingView {
+  mark: AnswerProvenanceMark;
+  /** `ASK_COPY.relayedWords`: their quote when the agent carried it. */
+  words: string | null;
+}
+
+/**
+ * The relay waiting on this slot, or null. The relaying agent is named only
+ * when it is the agent that asked (the one name the signal carries); another
+ * relayer reads unnamed, never as the asker.
+ */
+export function relayWaitingView(slot: AskSlot): RelayWaitingView | null {
+  const relay = slot.pendingRelay;
+  if (!relay) return null;
+  const agent =
+    slot.askerId && relay.relayedBy === slot.askerId ? slot.askerName : null;
+  const mark = answerProvenanceMark({ pendingRelay: relay }, { agent });
+  return mark ? { mark, words: ASK_COPY.relayedWords(relay) } : null;
+}
+
+/** `answerOutput` input for Confirm (the relay becomes the person's answer) or "Not what I said". */
+export type RelayCall =
+  | { sessionId: string; expectedLabel: string; confirmRelayed: true }
+  | { sessionId: string; expectedLabel: string; rejectRelayed: true };
+
+export function relayCall(slot: AskSlot, act: "confirm" | "reject"): RelayCall {
+  const at = { sessionId: slot.sessionId, expectedLabel: slot.label };
+  return act === "confirm"
+    ? { ...at, confirmRelayed: true }
+    : { ...at, rejectRelayed: true };
 }
 
 // ─── After an answer ─────────────────────────────────────────────────────────

@@ -285,11 +285,11 @@ export const OUTPUT_RETIRED_REASONS = [
   "withdrawn",
   // The session ENDED with an agent-need ask (`confirm` / `choose`) still
   // owed: the agent's question is moot once its session is gone. A person's
-  // deliverable (`act` / `provide` / `form`) stays owed instead — Resolve-XP
-  // founder default 3 (2026-10-26), stamped by the close door (W2).
+  // deliverable (`act` / `provide` / `form`) stays owed instead — founder
+  // default, 2026-10-26, stamped by the close door (`completeFocusSession`).
   "session_ended",
   // Nobody asked: a `proposed` decision a PERSON wrote raised an ask with no
-  // agent behind it (founder decision 1, 2026-10-26). Only an agent-authored
+  // agent behind it (founder, 2026-10-26). Only an agent-authored
   // proposed decision asks; the asks raised before that rule retire here
   // (api `services/decisions/retire-unasked-decision-asks.ts`).
   "not_asked",
@@ -609,7 +609,7 @@ export interface ExpectedOutput {
   answerPickedUpAt?: string;
   /**
    * A relayed answer to a `commitment` ask, waiting for the person's tap — see
-   * {@link SlotPendingRelay}. SERVER-STAMPED by the relay door only (W1); the
+   * {@link SlotPendingRelay}. SERVER-STAMPED by the relay door only; the
    * slot stays owed (`owner: 'human'`) while it is here, and the person's
    * Confirm / "Not what I said" clears it.
    */

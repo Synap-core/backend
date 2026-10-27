@@ -83,7 +83,7 @@ export const FOCUS_SESSION_SLOT_ASKED_EVENT_TYPE =
 
 /**
  * The person said "Not what I said" about an answer an agent RELAYED from a
- * chat (`session-answer.ts`, Resolve-XP W1): the relayed answer — or the relay
+ * chat (`session-answer.ts`): the relayed answer — or the relay
  * still waiting for their tap — is dropped and the question is theirs again.
  * Carries the relaying agent (`relayedBy`) so a rule or a scorecard can count
  * an agent's misrelays.
