@@ -342,7 +342,7 @@ describe("a GATED manual run keeps its hand-off through the approval", () => {
         reportProposalOutcome: vi.fn(),
         emitProposalReviewed: vi.fn(),
       },
-    } as never)) as Record<string, unknown>;
+    } as never)) as unknown as Record<string, unknown>;
     expect(out).toMatchObject({ success: true });
 
     expect(h.dispatched).toEqual([]);
