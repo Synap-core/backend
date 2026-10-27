@@ -17,9 +17,11 @@
  * the doors that already resolve identity first (create_entity, capture).
  */
 import {
+  and,
   db,
   entities,
   inArray,
+  listableEntityWhere,
   ProfileResolutionService,
   resolveIdentity,
   signalsFromExplicit,
@@ -98,9 +100,15 @@ export async function subjectCandidatesFor(
     .select({ id: entities.id, profileId: entities.profileId })
     .from(entities)
     .where(
-      inArray(
-        entities.id,
-        identity.candidates.map((c) => c.id)
+      and(
+        inArray(
+          entities.id,
+          identity.candidates.map((c) => c.id)
+        ),
+        // Candidates are a listing: probe and demo rows are never offered
+        // (the listing rule, FB1020 B5). A row left out here has no profile
+        // below, so it is dropped.
+        listableEntityWhere()
       )
     );
   const profileOf = new Map(rows.map((r) => [r.id, r.profileId]));
