@@ -105,9 +105,12 @@ export function sessionUnitInput(facts: SessionUnitFacts): UnitStateInput {
   // done (orchestrator decision 2026-10-04, same rule as `sessionRowInput`):
   // the derivation checks `terminal` BEFORE `owedFromYou`, so a terminal flag
   // here would read done on a session Home lists as "needs you". `null` (a
-  // failed read) claims nothing owed, so it stays terminal.
+  // failed read) is NOT "nothing owed": a closed session whose count could
+  // not be read claims no Done either, and reads `unmeasured`.
   const owesYou =
     (facts.owedFromYou ?? 0) > 0 || (facts.pendingDecisions ?? 0) > 0;
+  const countUnread =
+    facts.owedFromYou === null || facts.pendingDecisions === null;
   const open = RUNNING_SESSION_STATUSES.has(facts.status);
   // D1: with liveness in hand, an open session is working only while the ONE
   // rule says so; without it (older pod), the lifecycle reading stands.
@@ -120,7 +123,7 @@ export function sessionUnitInput(facts: SessionUnitFacts): UnitStateInput {
   return {
     failed: facts.status === "failed",
     // `failed` is terminal too, but the derivation checks `failed` first.
-    terminal: isTerminalSessionStatus(facts.status) && !owesYou,
+    terminal: isTerminalSessionStatus(facts.status) && !owesYou && !countUnread,
     owedFromYou: facts.owedFromYou,
     pendingDecisions: facts.pendingDecisions,
     blockedBy: facts.blockedBy ?? null,
@@ -263,7 +266,9 @@ export function projectAggregateInput(
   const progress = { done: closed, total };
 
   if (needsYou > 0) return { owedFromYou: needsYou, progress };
-  if (closed === total) return { terminal: true, progress };
+  // A closed session whose needs-you count FAILED may still owe you: no Done.
+  const unread = input.sessions.some(needsYouUnread);
+  if (closed === total && !unread) return { terminal: true, progress };
   // D1: an open session is "working" only by the ONE rule when its liveness
   // was read; a session without liveness (older pod) keeps the lifecycle
   // reading. Working anywhere ⇒ running; else a FAILED liveness read ⇒
@@ -276,7 +281,7 @@ export function projectAggregateInput(
   );
   if (working) return { running: true, everStarted: true, progress };
   // A failed needs-you count is not "nothing owed": never a calm "quiet".
-  if (open.some((s) => s.live === null || needsYouUnread(s))) {
+  if (unread || open.some((s) => s.live === null)) {
     return { unreadable: true, progress };
   }
   return { idle: true, everStarted: true, progress };
