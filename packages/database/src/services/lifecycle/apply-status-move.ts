@@ -60,6 +60,8 @@ export interface StatusMoveActor {
   /** The human the write is attributed to (owner of an agent's write). */
   userId: string;
   agentUserId?: string | null;
+  /** The app whose key drove the move (its public id): "via <app>". */
+  appId?: string | null;
 }
 
 /** The transition, as the event carries it (`entity.transition.completed`). */
@@ -77,6 +79,8 @@ export interface StatusTransition {
   actorKind: StatusMoveActor["kind"];
   userId: string;
   agentUserId: string | null;
+  /** The app the mover acted through; absent on rows owed before it existed. */
+  appId?: string | null;
   sessionId: string | null;
   reason: string | null;
   staleExpected: boolean;
@@ -417,6 +421,7 @@ export async function applyStatusMove(
       actorKind: actor.kind,
       userId: actor.userId,
       agentUserId: actor.agentUserId ?? null,
+      appId: actor.appId ?? null,
       sessionId: input.sessionId ?? null,
       reason: input.reason ?? null,
       staleExpected: human && expressed && expected !== current,

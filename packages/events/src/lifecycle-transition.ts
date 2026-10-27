@@ -68,6 +68,8 @@ export interface LifecycleTransitionEvent {
   actorKind: "human" | "agent" | "system";
   userId: string;
   agentUserId: string | null;
+  /** The app the mover acted through; absent on rows owed before it existed. */
+  appId?: string | null;
   sessionId: string | null;
   reason: string | null;
   staleExpected: boolean;
