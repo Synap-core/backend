@@ -6,11 +6,13 @@
  *   - the arguments arrive as their DECLARED types: a `number` sent as "5" is
  *     5 and a `boolean` sent as "false" is false (the check accepts both
  *     encodings; before, the skill got the strings: "false" is truthy);
+ *   - only a `kind:"code"` skill runs: an instruction skill whose `code`
+ *     column holds JS is refused before anything is evaluated;
  *   - the run counts against its requester: the acting agent, else the person;
  *   - `host.fetch` reads at most 100 kB of a body and stops the transfer, in
  *     the API process, instead of buffering the whole download first;
- *   - `callProvider`'s `baseUrlOverride` (where the connection's credential
- *     goes) must be a host the skill may reach — its `allowedHosts`, or one an
+ *   - `callProvider`'s `baseUrlOverride` or absolute `path` (where the
+ *     connection's credential goes) must be a host the skill may reach — its `allowedHosts`, or one an
  *     approved verb of the same tool already uses — live AND in a dry-run.
  *
  * NOT covered here: the SQL of the verb-host read (the db is a stub that
@@ -166,6 +168,44 @@ describe("the arguments reach the skill as their declared types", () => {
   });
 });
 
+describe("only a code skill runs", () => {
+  it("an approved instruction skill whose code column holds JS is refused, and nothing is evaluated", async () => {
+    skill({
+      kind: "instruction",
+      code: "return await callProvider('x','POST','/pay');",
+    });
+    const out = await runSkillInSandbox({
+      skillId: "skill-1",
+      userId: OPERATOR,
+    });
+    expect(out.success).toBe(false);
+    expect(out.error).toMatch(
+      /"probe" is not a code skill \(its kind is instruction\).*Nothing ran/
+    );
+    expect(h.runner.run).not.toHaveBeenCalled();
+  });
+
+  it("refused in a dry-run too", async () => {
+    skill({ kind: "instruction", code: "return 1;" });
+    const out = await runSkillInSandbox({
+      skillId: "skill-1",
+      userId: OPERATOR,
+      dryRun: true,
+    });
+    expect(out.success).toBe(false);
+    expect(h.runner.run).not.toHaveBeenCalled();
+  });
+
+  it("a code skill still runs (non-vacuity)", async () => {
+    skill();
+    const out = await runSkillInSandbox({
+      skillId: "skill-1",
+      userId: OPERATOR,
+    });
+    expect(out).toMatchObject({ success: true, result: "ran" });
+  });
+});
+
 describe("the run counts against its requester", () => {
   it("an agent's run is the agent's; a person's own run is the person's", async () => {
     skill();
@@ -303,6 +343,29 @@ describe("callProvider's baseUrlOverride is a host the skill may reach", () => {
       },
     ];
     await call(bridgesFor(), "https://gmail.googleapis.com");
+    expect(h.trigger).toHaveBeenCalledTimes(1);
+  });
+
+  it("an absolute path is held to the same rule: a foreign host is refused, an approved one goes", async () => {
+    h.verbRows = [
+      {
+        providerSpec: {
+          tool: "google",
+          baseUrlOverride: "https://gmail.googleapis.com",
+        },
+      },
+    ];
+    await expect(
+      bridgesFor().callProvider("google", "POST", "https://collector.example/x")
+    ).rejects.toThrow(
+      /path host "collector\.example" is not a host this skill may reach/
+    );
+    expect(h.trigger).not.toHaveBeenCalled();
+    await bridgesFor().callProvider(
+      "google",
+      "GET",
+      "https://gmail.googleapis.com/gmail/v1/users/me/messages"
+    );
     expect(h.trigger).toHaveBeenCalledTimes(1);
   });
 

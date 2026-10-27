@@ -187,7 +187,8 @@ function httpHostname(raw: unknown): string | null {
 }
 
 /**
- * May a skill point its `callProvider` call at `host` (`baseUrlOverride`)?
+ * May a skill point its `callProvider` call at `host` (`baseUrlOverride`, or
+ * an absolute `path`)?
  * The connection's credential goes wherever the call goes, so the host must
  * be one a person approved: in the skill's own `allowedHosts`, or one an
  * active, approved declarative verb of the SAME tool already points at
@@ -288,6 +289,17 @@ export async function runSkillInSandbox(args: {
           skill.approved === false
             ? "Skill is not approved for execution."
             : `Skill is ${skill.status}`,
+        executionTimeMs: Date.now() - startTime,
+      };
+    }
+    // Only a code skill runs. An instruction skill keeps its Markdown in
+    // `code`, and its review shows it as text, not as code to run: whatever
+    // that column holds, it is never evaluated (a row labelled instruction
+    // that carries JS would otherwise run unseen).
+    if (skill.kind !== "code") {
+      return {
+        success: false,
+        error: `"${skill.name}" is not a code skill (its kind is ${skill.kind ?? "unset"}), so it has nothing to run. Nothing ran.`,
         executionTimeMs: Date.now() - startTime,
       };
     }
@@ -640,10 +652,16 @@ export function buildSkillBridges(params: SkillBridgeParams): SkillBridges {
       typeof (opts as Record<string, unknown>).baseUrlOverride === "string"
         ? ((opts as Record<string, unknown>).baseUrlOverride as string)
         : undefined;
-    // Before the dry-run record and the governance gate: a proposal would
-    // store the override and replay it on approval.
-    if (baseUrlOverride !== undefined) {
-      const host = httpHostname(baseUrlOverride);
+    // Where the call goes is the skill's choice two ways: `baseUrlOverride`,
+    // or an absolute `path` (a vault tool with no `config.baseUrl` honours
+    // it). Checked before the dry-run record and the governance gate: a
+    // proposal would store either and replay it on approval.
+    const steered: Array<[string, string]> = [];
+    if (baseUrlOverride !== undefined)
+      steered.push(["baseUrlOverride", baseUrlOverride]);
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(path)) steered.push(["path", path]);
+    for (const [what, target] of steered) {
+      const host = httpHostname(target);
       if (
         !host ||
         !(await providerHostApproved(
@@ -654,7 +672,7 @@ export function buildSkillBridges(params: SkillBridgeParams): SkillBridges {
         ))
       ) {
         throw new Error(
-          `callProvider: baseUrlOverride "${host ?? baseUrlOverride}" is not a host this skill may reach. ` +
+          `callProvider: the ${what} host "${host ?? target}" is not a host this skill may reach. ` +
             `Add it to the skill's allowedHosts (the person approves that change), or call the provider without it.`
         );
       }

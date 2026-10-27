@@ -9,9 +9,9 @@
  * past `queueMax` are refused at once with a typed `busy` error, never queued
  * without bound and never silently dropped. A run waits at most its own time
  * limit, plus a runner's start time (then `busy`, nothing ran: its caller has
- * likely given up), and one
- * requester may hold at most `perRequesterMax` runs running or waiting, so one
- * agent's burst cannot take every other person's turn.
+ * likely given up), and one requester may hold at most `perRequesterMax` runs
+ * running or waiting, so one agent's burst cannot take every other person's
+ * turn.
  *
  * The broker side lives here: a run's bridges (built and bound to the run's
  * async context by the caller) are executed HERE when the child asks, so the
