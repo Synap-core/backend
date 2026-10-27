@@ -73,11 +73,6 @@ const movingQuery = z.object({
   limit: z.coerce.number().int().min(1).max(100).optional(),
 });
 
-const attentionQuery = z.object({
-  ...lensQuery,
-  limit: z.coerce.number().int().min(1).max(100).optional(),
-});
-
 /**
  * A lens page's scope: the SAME axes `signals.list` narrows by (a space,
  * optionally a project inside it; a project; a track; a session). No
@@ -90,6 +85,11 @@ const lensPageQuery = z.object({
   sessionId: uuidQueryParam.optional(),
   /** Happened from this instant (the viewer's local midnight); absent = the whole history. */
   since: z.string().datetime({ offset: true }).optional(),
+});
+
+const attentionQuery = z.object({
+  ...lensQuery,
+  limit: z.coerce.number().int().min(1).max(100).optional(),
 });
 
 type HubContext = HonoContext<{ Variables: HubVariables }>;
