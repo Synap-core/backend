@@ -74,9 +74,10 @@ export const FLOW_NODE_TYPES = [
   "playbook_run",
 ] as const;
 
-/** The 11 output types — `OutputNodeDef.data.outputType` (schema/automations.ts). */
+/** The 12 output types — `OutputNodeDef.data.outputType` (schema/automations.ts). */
 export const FLOW_OUTPUT_TYPES = [
   "notification",
+  "record_observation",
   "entity_create",
   "entity_update",
   "facet_attach",

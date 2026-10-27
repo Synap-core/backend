@@ -54,6 +54,18 @@ const NODE_TYPE_DOCS: Record<(typeof FLOW_NODE_TYPES)[number], NodeTypeDoc> = {
           userId: "string (optional — targets specific user)",
         },
       },
+      // An outside fact recorded in process, through the observation door's
+      // own checks (namespace, reserved phases, the dev-loop contract).
+      record_observation: {
+        fields: {
+          type: "string — a registered namespace (dev.pr_merged, ci.finished)",
+          subjectId:
+            "string (template) — what it is about, as the outside service names it",
+          subjectType: "string (optional)",
+          data: "Record<string,unknown> (template values; a null field is left out)",
+          occurredAt: "string (optional, ISO date)",
+        },
+      },
       entity_create: {
         fields: {
           profileSlug: "string",

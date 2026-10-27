@@ -1438,6 +1438,7 @@ export function playbookActionOptions(
  */
 const OUTPUT_NODE_TYPES = [
   "notification",
+  "record_observation",
   "entity_create",
   "entity_update",
   "facet_attach",
@@ -1481,6 +1482,7 @@ const OUTPUT_ACTION_SHAPES: Record<
   relation_create: { verb: "create", objectKind: "relation" },
   channel_message: { verb: "send", objectKind: "message" },
   notification: { verb: "send", objectKind: "notification" },
+  record_observation: { verb: "record", objectKind: "observation" },
   webhook: { verb: "send", objectKind: "webhook" },
   session_update: { verb: "update", objectKind: "focus_session" },
   set_state: { verb: "set", objectKind: "state" },
