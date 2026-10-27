@@ -682,13 +682,13 @@ describe("the run names WHO works it and HOW (plan v5 T2)", () => {
       id,
     ]);
     expect((await runGoalLoop(id)).status).toBe("proposed");
-    expect(lastData().templateId ?? null).toBeNull();
+    expect(lastData()).not.toHaveProperty("templateId");
   });
 
   it("a goal with no method proposes a run with no playbook", async () => {
     const id = await goal({ name: "No method" });
     expect((await runGoalLoop(id)).status).toBe("proposed");
-    expect(lastData().templateId ?? null).toBeNull();
+    expect(lastData()).not.toHaveProperty("templateId");
   });
 });
 
