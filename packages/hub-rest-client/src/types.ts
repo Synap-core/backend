@@ -1333,6 +1333,68 @@ export interface HubFocusSessionListItem extends HubFocusSession {
   };
 }
 
+/** Options for GET /api/hub/focus-sessions/graph. Every field optional: no lens = pod-wide. */
+export interface GetWorkGraphOptions {
+  workspaceId?: string;
+  projectId?: string;
+  /** Settled sessions from this many hours back (1–720, default 72). Open ones whatever their age. */
+  windowHours?: number;
+  /** Population of the window. Default here is `"all"` (the agent-door default). */
+  kind?: FocusSessionKind | "all";
+  /** Triage lens of the window. Default here is `"all"`. */
+  lens?: "default" | "triage" | "all";
+}
+
+/** One edge of the work graph, flat. `blocked_by` runs from the waiter to its blocker. */
+export interface HubWorkGraphEdge {
+  kind:
+    "blocked_by" | "spawned_from" | "waits_on_output" | "triggered" | "updated";
+  from: string;
+  to: string;
+  entityId?: string;
+  count?: number;
+  lastAt?: string | null;
+}
+
+/** `unavailable` = the read FAILED: no edge of that kind was drawn, which is not "none". */
+export type HubWorkGraphSection =
+  { status: "ok" } | { status: "unavailable"; reason: string };
+
+/** A list row plus the graph's own projections. */
+export interface HubWorkGraphNode extends HubFocusSessionListItem {
+  parentSessionId: string | null;
+  nextMove: {
+    kind: string;
+    actor: "user" | "ai" | "none";
+    label: string;
+    reason: string;
+  };
+  unitFacts: unknown;
+  live: unknown | null;
+  viewerRole: "owner" | "member";
+  /** false = only the far end of an edge of a window session. */
+  inWindow: boolean;
+}
+
+/** GET /api/hub/focus-sessions/graph. */
+export interface HubWorkGraph {
+  nodes: HubWorkGraphNode[];
+  edges: HubWorkGraphEdge[];
+  sections: {
+    blockedBy: HubWorkGraphSection;
+    waitsOnOutputs: HubWorkGraphSection;
+    interactions: HubWorkGraphSection;
+    farEnds: HubWorkGraphSection;
+  };
+  window: {
+    since: string;
+    hours: number;
+    ceiling: number;
+    truncated: boolean;
+    omitted: number;
+  };
+}
+
 /** Options for GET /api/hub/focus-sessions/:id. */
 export interface GetFocusSessionOptions {
   /**
