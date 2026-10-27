@@ -9216,6 +9216,89 @@ declare enum MessageLinkRelationshipType {
 	QUOTES = "quotes",// Message quotes this object
 	CONTEXT = "context"
 }
+declare const repoSnapshotEventSchema: z.ZodObject<{
+	live: z.ZodOptional<z.ZodNullable<z.ZodObject<{
+		behindBy: z.ZodOptional<z.ZodNullable<z.ZodNumber>>;
+		kind: z.ZodEnum<{
+			desktop: "desktop";
+			image: "image";
+			npm: "npm";
+			pod: "pod";
+			site: "site";
+		}>;
+		label: z.ZodString;
+		sha: z.ZodNullable<z.ZodString>;
+	}, z.core.$strip>>>;
+	main: z.ZodObject<{
+		fixedBy: z.ZodOptional<z.ZodNullable<z.ZodObject<{
+			number: z.ZodNumber;
+			repo: z.ZodString;
+		}, z.core.$strip>>>;
+		health: z.ZodEnum<{
+			infra: "infra";
+			ok: "ok";
+			red: "red";
+			unmeasured: "unmeasured";
+		}>;
+		reason: z.ZodOptional<z.ZodNullable<z.ZodString>>;
+		redSince: z.ZodOptional<z.ZodNullable<z.ZodObject<{
+			at: z.ZodOptional<z.ZodString>;
+			prNumber: z.ZodOptional<z.ZodNumber>;
+			sha: z.ZodString;
+		}, z.core.$strip>>>;
+		sha: z.ZodNullable<z.ZodString>;
+		source: z.ZodEnum<{
+			"devbox-baseline": "devbox-baseline";
+			"github-checks": "github-checks";
+			none: "none";
+		}>;
+	}, z.core.$strip>;
+	mergedToday: z.ZodArray<z.ZodObject<{
+		mergedAt: z.ZodString;
+		number: z.ZodNumber;
+		podSessionId: z.ZodOptional<z.ZodNullable<z.ZodString>>;
+		title: z.ZodString;
+		url: z.ZodString;
+	}, z.core.$strip>>;
+	observedAt: z.ZodString;
+	prs: z.ZodArray<z.ZodObject<{
+		author: z.ZodString;
+		autoMerge: z.ZodBoolean;
+		branch: z.ZodOptional<z.ZodString>;
+		checks: z.ZodEnum<{
+			green: "green";
+			infra: "infra";
+			none: "none";
+			queued: "queued";
+			red: "red";
+			running: "running";
+		}>;
+		dependsOn: z.ZodOptional<z.ZodArray<z.ZodObject<{
+			number: z.ZodNumber;
+			repo: z.ZodString;
+		}, z.core.$strip>>>;
+		draft: z.ZodBoolean;
+		headSha: z.ZodString;
+		mergeable: z.ZodEnum<{
+			blocked: "blocked";
+			clean: "clean";
+			dirty: "dirty";
+			unknown: "unknown";
+		}>;
+		number: z.ZodNumber;
+		podSessionId: z.ZodOptional<z.ZodNullable<z.ZodString>>;
+		redInheritedFromMain: z.ZodOptional<z.ZodBoolean>;
+		title: z.ZodString;
+		updatedAt: z.ZodString;
+		url: z.ZodString;
+	}, z.core.$strip>>;
+	repo: z.ZodString;
+	visibility: z.ZodEnum<{
+		private: "private";
+		public: "public";
+	}>;
+}, z.core.$strip>;
+export type RepoSnapshotFact = z.infer<typeof repoSnapshotEventSchema>;
 declare const PULL_REQUEST_STATES: readonly [
 	"open",
 	"merged",
@@ -13228,6 +13311,19 @@ export interface ApprovalRunView {
 	finishedAt: string | null;
 	updatedAt: string;
 }
+/** What "allow today" raised the agent's daily write ceiling to. */
+export interface AllowedToday {
+	ceilingId: string;
+	agentUserId: string;
+	/** The limit in force for the rest of the UTC day. */
+	limit: number;
+	/** The limit it was raised from (what applies again from `expiresAt`). */
+	previousLimit: number;
+	/** ISO time the raise ends: the next 00:00 UTC. */
+	expiresAt: string;
+	/** True when an earlier "allow today" had already raised it for today. */
+	alreadyAllowed: boolean;
+}
 /**
  * The complete created-rows record. Extends the shared
  * `ProposalMaterializedRecord` (`@synap-core/types`) with the fields only the
@@ -13997,6 +14093,18 @@ export interface EmbeddingPipelineHealth {
 	recentFailed: number;
 	recentCompleted: number;
 	windowMinutes: number;
+}
+export interface InboundWebhookSource {
+	id: string;
+	name: string;
+	workspaceId: string;
+	active: boolean;
+	createdAt: Date;
+	lastTriggeredAt: Date | null;
+	/** The door's path, always known. */
+	inboundPath: string;
+	/** The full payload URL, or null when the pod has no `PUBLIC_URL`. */
+	inboundUrl: string | null;
 }
 declare const CAPTURE_STATUSES: readonly [
 	"structured",
@@ -21453,6 +21561,115 @@ export interface LensPageWire {
 	 */
 	picks?: LensPagePicks;
 }
+declare const SHIP_STAGES: readonly [
+	"working",
+	"checks",
+	"ready",
+	"on_main"
+];
+export type ShipStage = (typeof SHIP_STAGES)[number];
+declare const CHECK_VERDICTS: readonly [
+	"green",
+	"own_red",
+	"inherited",
+	"infra",
+	"queued",
+	"running",
+	"unmeasured"
+];
+export type CheckVerdict = (typeof CHECK_VERDICTS)[number];
+declare const SHIP_FOLDS: readonly [
+	"draft",
+	"negctl",
+	"dependabot",
+	"stale"
+];
+export type ShipFold = (typeof SHIP_FOLDS)[number] | null;
+export type BlockRef = {
+	kind: "pr";
+	number: number;
+	repo: string;
+} | {
+	kind: "main";
+	repo: string;
+};
+declare const WORK_RELEASE_SOURCE_STATES: {
+	readonly holders: readonly [
+		"ok",
+		"unavailable"
+	];
+	readonly sessions: readonly [
+		"ok",
+		"unavailable"
+	];
+	readonly snapshots: readonly [
+		"ok",
+		"stale",
+		"missing"
+	];
+};
+export interface WorkReleaseSources {
+	/** `stale` = the newest snapshot is older than {@link SNAPSHOT_STALE_MS}. */
+	snapshots: (typeof WORK_RELEASE_SOURCE_STATES.snapshots)[number];
+	sessions: (typeof WORK_RELEASE_SOURCE_STATES.sessions)[number];
+	holders: (typeof WORK_RELEASE_SOURCE_STATES.holders)[number];
+}
+export interface WorkReleaseRepo {
+	/** `owner/name`, as the producer spelled it. */
+	repo: string;
+	/** The name without its owner: `backend`. */
+	label: string;
+	visibility: "private" | "public";
+	main: RepoSnapshotFact["main"];
+	live: NonNullable<RepoSnapshotFact["live"]> | null;
+	snapshotAt: string | null;
+}
+export interface WorkReleaseHolder {
+	/** A session holding the PR is working on it now (`isSessionWorkingNow`). */
+	live: boolean;
+	/** Who holds it: the session's agent, else its owner. */
+	label: string;
+	/** The session's newest activity; null when nothing was recorded. */
+	lastActiveAt: string | null;
+}
+export interface WorkReleasePr {
+	repo: string;
+	number: number;
+	title: string;
+	url: string;
+	stage: ShipStage;
+	verdict: CheckVerdict;
+	fold: ShipFold;
+	sessionId: string | null;
+	sessionTitle: string | null;
+	/** `null` when no session holds it, or the holders read failed (`sources`). */
+	holder: WorkReleaseHolder | null;
+	/** Explicit `dependsOn` still open, then (inherited red) its repo's main. */
+	blockedBy: BlockRef[];
+	/** Auto-merge is armed: green + clean merges it with no one. */
+	autoMerge: boolean;
+	updatedAt: string;
+	mergedAt?: string | null;
+}
+export interface WorkReleaseBlocker {
+	ref: BlockRef;
+	/** Open PRs + mains waiting behind it, transitively. */
+	waiting: number;
+	waitingPrs: number;
+	waitingMains: number;
+	/** A main: its `reason`; a PR: its title. */
+	reason: string | null;
+	/** A main: the PR that fixes it, when named. Absent on a PR. */
+	fixedBy?: BlockRef | null;
+}
+export interface WorkReleaseRead {
+	generatedAt: string;
+	sources: WorkReleaseSources;
+	repos: WorkReleaseRepo[];
+	prs: WorkReleasePr[];
+	/** The blocker with the most waiting behind it, transitively, first. */
+	blockers: WorkReleaseBlocker[];
+}
 /**
  * resolveEntityOpenTarget — WHERE opening this entity should go, decided on the
  * pod so every client (browser, relay) only dispatches.
@@ -24083,6 +24300,34 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				message: string;
 				proposalId: string;
 				status: "proposed";
+			} | {
+				id: string | null;
+				message: string;
+				proposalId: string | null;
+				status: "created";
+				webhookSource: {
+					bound: true;
+					id: string;
+					inboundPath: string;
+					inboundUrl: string | null;
+					name: string;
+					next?: undefined;
+					secret: string;
+				};
+			} | {
+				id: string | null;
+				message: string;
+				proposalId: string | null;
+				status: "created";
+				webhookSource: {
+					bound: false;
+					id?: undefined;
+					inboundPath?: undefined;
+					inboundUrl?: undefined;
+					name: string;
+					next: string;
+					secret?: undefined;
+				};
 			} | {
 				id: string | null;
 				message: string;
@@ -35173,16 +35418,29 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					active: boolean;
 					apiKeyId: string | null;
 					createdAt: Date;
+					direction: "inbound" | "outbound";
 					eventTypes: string[];
 					id: string;
 					lastTriggeredAt: Date | null;
 					name: string;
 					retryConfig: unknown;
 					secret: string;
-					url: string;
+					url: string | null;
 					userId: string;
 					workspaceId: string | null;
 				};
+			};
+		}>;
+		adminCreateInboundSource: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				name: string;
+				workspaceId: string;
+			};
+			meta: object;
+			output: {
+				boundAutomations: number;
+				secret: string;
+				source: InboundWebhookSource;
 			};
 		}>;
 		adminDeleteForWorkspace: import("@trpc/server").TRPCMutationProcedure<{
@@ -35204,16 +35462,35 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				active: boolean;
 				apiKeyId: string | null;
 				createdAt: Date;
+				direction: "inbound" | "outbound";
 				eventTypes: string[];
 				id: string;
 				lastTriggeredAt: Date | null;
 				name: string;
 				retryConfig: unknown;
 				secret: string;
-				url: string;
+				url: string | null;
 				userId: string;
 				workspaceId: string | null;
 			}[];
+		}>;
+		adminListInboundSources: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				workspaceId: string;
+			};
+			meta: object;
+			output: InboundWebhookSource[];
+		}>;
+		adminRotateInboundSourceSecret: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				workspaceId: string;
+			};
+			meta: object;
+			output: {
+				secret: string;
+				source: InboundWebhookSource;
+			};
 		}>;
 		adminToggleForWorkspace: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
@@ -35226,12 +35503,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				active: boolean;
 				apiKeyId: string | null;
 				createdAt: Date;
+				direction: "inbound" | "outbound";
 				eventTypes: string[];
 				id: string;
 				lastTriggeredAt: Date | null;
 				name: string;
 				retryConfig: unknown;
-				url: string;
+				url: string | null;
 				userId: string;
 				workspaceId: string | null;
 			};
@@ -35250,13 +35528,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					active: boolean;
 					apiKeyId: string | null;
 					createdAt: Date;
+					direction: "inbound" | "outbound";
 					eventTypes: string[];
 					id: string;
 					lastTriggeredAt: Date | null;
 					name: string;
 					retryConfig: unknown;
 					secret: string;
-					url: string;
+					url: string | null;
 					userId: string;
 					workspaceId: string | null;
 				};
@@ -35275,13 +35554,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					active: boolean;
 					apiKeyId: string | null;
 					createdAt: Date;
+					direction: "inbound" | "outbound";
 					eventTypes: string[];
 					id: string;
 					lastTriggeredAt: Date | null;
 					name: string;
 					retryConfig: unknown;
 					secret: string;
-					url: string;
+					url: string | null;
 					userId: string;
 					workspaceId: string | null;
 				};
@@ -35344,13 +35624,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				active: boolean;
 				apiKeyId: string | null;
 				createdAt: Date;
+				direction: "inbound" | "outbound";
 				eventTypes: string[];
 				id: string;
 				lastTriggeredAt: Date | null;
 				name: string;
 				retryConfig: unknown;
 				secret: string;
-				url: string;
+				url: string | null;
 				userId: string;
 				workspaceId: string | null;
 			}[];
@@ -35362,13 +35643,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				active: boolean;
 				apiKeyId: string | null;
 				createdAt: Date;
+				direction: "inbound" | "outbound";
 				eventTypes: string[];
 				id: string;
 				lastTriggeredAt: Date | null;
 				name: string;
 				retryConfig: unknown;
 				secret: string;
-				url: string;
+				url: string | null;
 				userId: string;
 				workspaceId: string | null;
 			}[];
@@ -35383,12 +35665,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				active: boolean;
 				apiKeyId: string | null;
 				createdAt: Date;
+				direction: "inbound" | "outbound";
 				eventTypes: string[];
 				id: string;
 				lastTriggeredAt: Date | null;
 				name: string;
 				retryConfig: unknown;
-				url: string;
+				url: string | null;
 				userId: string;
 				workspaceId: string | null;
 			};
@@ -35406,12 +35689,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				active: boolean;
 				apiKeyId: string | null;
 				createdAt: Date;
+				direction: "inbound" | "outbound";
 				eventTypes: string[];
 				id: string;
 				lastTriggeredAt: Date | null;
 				name: string;
 				retryConfig: unknown;
-				url: string;
+				url: string | null;
 				userId: string;
 				workspaceId: string | null;
 			};
@@ -41919,6 +42203,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		approve: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
+				allowToday?: boolean | undefined;
 				comment?: string | undefined;
 				dispositions?: Record<string, {
 					edits?: Record<string, unknown> | undefined;
@@ -41962,7 +42247,24 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				proposalId: string;
 			};
 			meta: object;
-			output: ProposalExecutorResult;
+			output: ProposalExecutorResult | {
+				allowedToday: AllowedToday;
+				alreadyApproved?: boolean;
+				approvalRun?: ApprovalRunView;
+				created?: number;
+				effect?: ProposalEffect;
+				identities?: Array<IdentityReceipt & {
+					ref: string;
+				}>;
+				identity?: IdentityReceipt;
+				joined?: boolean;
+				linked?: number;
+				primaryId?: string;
+				queued?: true;
+				refusals?: string[];
+				relationsFailed?: MaterializeRelationFailure[];
+				success: boolean;
+			};
 		}>;
 		askAi: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
@@ -48106,6 +48408,38 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				viewRendererViewTypes: string[] | null;
 				workspaceId: string | null;
 			};
+		}>;
+	}>>;
+	workRelease: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		errorShape: {
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: {
+				candidates?: {
+					id: string;
+					title: string | null;
+					type: string;
+				}[] | undefined;
+				captureQuestionStatus?: string | undefined;
+				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
+				currentStatus?: string | null;
+				expectedStatus?: string | null;
+				httpStatus: number;
+				opRef?: string | undefined;
+				path?: string;
+				pendingProposalId?: string | undefined;
+				reasonCode?: string;
+				stack?: string;
+			};
+			message: string;
+		};
+		meta: object;
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		get: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			meta: object;
+			output: WorkReleaseRead;
 		}>;
 	}>>;
 	workers: import("@trpc/server").TRPCBuiltRouter<{
