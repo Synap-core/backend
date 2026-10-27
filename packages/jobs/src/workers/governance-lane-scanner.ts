@@ -105,7 +105,7 @@ export const GOVERNANCE_LANE_SCANNER_QUEUE = "governance.lane-scan";
 /** After pod-hygiene near-dup (3:15), before librarian-archiver (3:45). */
 export const GOVERNANCE_LANE_SCANNER_CRON = "30 3 * * *";
 
-/** Mirrors SCORECARD_SCAN_LIMIT in agent-scorecard.ts. */
+/** Mirrors CAP_TRUST_WINDOW in permission-check.ts (the newest 500). */
 const SCAN_LIMIT = 500;
 
 const MIN_TOTAL = 100;
