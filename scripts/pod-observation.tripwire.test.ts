@@ -313,7 +313,10 @@ describe("pod-observation: posting", () => {
       });
     });
     await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
-    const eventPath = join(mkdtempSync(join(tmpdir(), "pod-obs-")), "event.json");
+    const eventPath = join(
+      mkdtempSync(join(tmpdir(), "pod-obs-")),
+      "event.json"
+    );
     writeFileSync(
       eventPath,
       JSON.stringify({ action: "opened", pull_request: pr(), repository })
@@ -331,7 +334,9 @@ describe("pod-observation: posting", () => {
       let out = "";
       child.stdout.on("data", (d) => (out += d));
       child.stderr.on("data", (d) => (out += d));
-      const code = await new Promise<number | null>((r) => child.on("close", r));
+      const code = await new Promise<number | null>((r) =>
+        child.on("close", r)
+      );
       return { code, out };
     } finally {
       server.close();
@@ -344,7 +349,10 @@ describe("pod-observation: posting", () => {
 
   it("a refused KEY is a warning and exit 0, not a red check on every PR", async () => {
     for (const reply of [
-      { status: 200, body: refusal('This key\'s grant does not allow "event.create".') },
+      {
+        status: 200,
+        body: refusal('This key\'s grant does not allow "event.create".'),
+      },
       { status: 401, body: "unauthorized" },
       { status: 403, body: "forbidden" },
     ]) {
@@ -357,7 +365,10 @@ describe("pod-observation: posting", () => {
 
   it("any other refusal, or a pod error, still reds the run", async () => {
     for (const reply of [
-      { status: 200, body: refusal("data does not match the dev.pr_opened contract") },
+      {
+        status: 200,
+        body: refusal("data does not match the dev.pr_opened contract"),
+      },
       { status: 500, body: "boom" },
     ]) {
       const r = await runAgainstPod(reply);
