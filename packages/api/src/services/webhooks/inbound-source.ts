@@ -80,8 +80,6 @@ export interface InboundWebhookSource {
   inboundUrl: string | null;
 }
 
-const SOURCE_COLUMNS = INBOUND_WEBHOOK_SOURCE_COLUMNS;
-
 function toSource(row: InboundWebhookSourceRow): InboundWebhookSource {
   const address = inboundWebhookAddress(row.id);
   return {
@@ -110,7 +108,7 @@ export async function listInboundWebhookSources(
   workspaceId: string
 ): Promise<InboundWebhookSource[]> {
   const rows = await db
-    .select(SOURCE_COLUMNS)
+    .select(INBOUND_WEBHOOK_SOURCE_COLUMNS)
     .from(webhookSubscriptions)
     .where(isInboundIn(workspaceId))
     .orderBy(drizzleSql`${webhookSubscriptions.createdAt} desc`);
@@ -163,7 +161,7 @@ export async function createInboundWebhookSource(input: {
         secret,
         active: true,
       })
-      .returning(SOURCE_COLUMNS);
+      .returning(INBOUND_WEBHOOK_SOURCE_COLUMNS);
     const source = toSource(row!);
     const boundAutomations = await bindDeclaringAutomations(source);
     return { source, secret, boundAutomations };
@@ -195,7 +193,7 @@ export async function rotateInboundWebhookSecret(input: {
     .where(
       and(eq(webhookSubscriptions.id, input.id), isInboundIn(input.workspaceId))
     )
-    .returning(SOURCE_COLUMNS);
+    .returning(INBOUND_WEBHOOK_SOURCE_COLUMNS);
   if (!row) {
     throw new TRPCError({
       code: "NOT_FOUND",
