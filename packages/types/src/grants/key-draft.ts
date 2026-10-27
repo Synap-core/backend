@@ -273,7 +273,9 @@ export function validateKeyDraft(
       problems.push({ code: "grant", problem });
   const { ceiling } = opts;
   if (ceiling) {
-    if (!scopeWithin(draft.grant, ceiling.grant))
+    // A malformed permission is already a problem above; the ceiling can only
+    // be compared on a grant that parses.
+    if (grant.ok && !scopeWithin(draft.grant, ceiling.grant))
       problems.push({ code: "wider-than-ceiling", axis: "permissions" });
     if (!draft.uses.every((u) => ceiling.uses.includes(u)))
       problems.push({ code: "wider-than-ceiling", axis: "uses" });

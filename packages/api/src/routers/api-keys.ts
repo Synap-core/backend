@@ -43,7 +43,7 @@ import {
   assertGrantInput,
   deriveKeyScopes,
   pinGrantToWorkspace,
-  attachFullAccessGrant,
+  FULL_ACCESS_GRANT_LABEL,
   attachGrantOrRevoke,
   clipHostedAgentGrants,
   type GrantInput,
@@ -148,22 +148,10 @@ function serviceKeyAccess(
 }
 
 /** The grant a system or service key holds: the one given, else full access. */
-async function attachServiceKeyGrant(args: {
-  apiKeyId: string;
-  userId: string;
-  grant: GrantInput | undefined;
-  expiresAt: Date | null;
-}): Promise<void> {
-  const common = {
-    apiKeyId: args.apiKeyId,
-    principalUserId: args.userId,
-    onBehalfOf: args.userId,
-    expiresAt: args.expiresAt,
-    createdBy: args.userId,
-  };
-  if (args.grant) await attachGrantOrRevoke({ ...common, grant: args.grant });
-  else await attachFullAccessGrant(common);
-}
+const FULL_ACCESS_GRANT: GrantInput = {
+  permissions: ["*"],
+  label: FULL_ACCESS_GRANT_LABEL,
+};
 
 /**
  * The authorize parameters pod-admin's consent screen round-trips.
@@ -1104,11 +1092,13 @@ export const apiKeysRouter = router({
         },
         ctx.userId
       );
-      await attachServiceKeyGrant({
+      await attachGrantOrRevoke({
         apiKeyId: apiKey.id,
-        userId: ctx.userId,
-        grant,
+        principalUserId: ctx.userId,
+        onBehalfOf: ctx.userId,
+        grant: grant ?? FULL_ACCESS_GRANT,
         expiresAt,
+        createdBy: ctx.userId,
       });
 
       auditLog({
@@ -1168,11 +1158,13 @@ export const apiKeysRouter = router({
         },
         ctx.userId
       );
-      await attachServiceKeyGrant({
+      await attachGrantOrRevoke({
         apiKeyId: apiKey.id,
-        userId: ctx.userId,
-        grant,
+        principalUserId: ctx.userId,
+        onBehalfOf: ctx.userId,
+        grant: grant ?? FULL_ACCESS_GRANT,
         expiresAt,
+        createdBy: ctx.userId,
       });
 
       auditLog({
@@ -1316,11 +1308,13 @@ export const apiKeysRouter = router({
       const { apiKey, plainKey } = registration;
       // The person's own CLI/integration: the grant asked for, else their
       // full reach, explicit.
-      await attachServiceKeyGrant({
+      await attachGrantOrRevoke({
         apiKeyId: apiKey.id,
-        userId: ctx.userId,
-        grant: input.grant,
+        principalUserId: ctx.userId,
+        onBehalfOf: ctx.userId,
+        grant: input.grant ?? FULL_ACCESS_GRANT,
         expiresAt: apiKey.expiresAt ?? null,
+        createdBy: ctx.userId,
       });
       const registrationTrace = toRegistrationTrace(flowId, registration);
       if (registration.outcome !== "CONNECTED_VERIFIED") {
