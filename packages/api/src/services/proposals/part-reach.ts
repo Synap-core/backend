@@ -25,7 +25,18 @@
  * same floor every other read of the review applies.
  */
 
-import { db, skills, and, or, inArray } from "@synap/database";
+import {
+  db,
+  skills,
+  links,
+  tools,
+  and,
+  or,
+  eq,
+  inArray,
+  drizzleSql,
+  userVisibleWhere,
+} from "@synap/database";
 import { resolveServiceName } from "@synap-core/types/service-marks";
 import {
   isLikelyUUID,
@@ -44,6 +55,39 @@ export interface SkillReachRow {
   metadata?: unknown;
   providerSpec?: unknown;
   code?: unknown;
+  /** The tools it declares it calls (`requires` edges), by name. */
+  requiredTools?: readonly string[];
+}
+
+/**
+ * The tools each skill declares it calls (`requires` edges, the scope a
+ * person approves with the skill), by name — only tools `userId` can see,
+ * the same floor `visibleRequiredTools` applies at filing and approval.
+ */
+export async function readRequiredToolNames(
+  userId: string,
+  skillIds: readonly string[]
+): Promise<Map<string, string[]>> {
+  const out = new Map<string, string[]>();
+  if (skillIds.length === 0) return out;
+  const edges = await db
+    .select({ skillId: links.fromId, name: tools.name })
+    .from(links)
+    // `links.to_id` is text, `tools.id` a uuid.
+    .innerJoin(tools, drizzleSql`${tools.id}::text = ${links.toId}`)
+    .where(
+      and(
+        eq(links.fromType, "skill"),
+        eq(links.toType, "tool"),
+        eq(links.linkType, "requires"),
+        inArray(links.fromId, [...skillIds]),
+        userVisibleWhere(tools.workspaceId, userId)
+      )
+    );
+  for (const e of edges) {
+    out.set(e.skillId, [...(out.get(e.skillId) ?? []), e.name]);
+  }
+  return out;
 }
 
 /** How a flow's steps find the skills they would run. */
@@ -134,7 +178,11 @@ export function skillReach(row: SkillReachRow): ProposalPartReach | null {
             })
           : [],
         connections: [
-          ...new Set(calls.providers.map((p) => resolveServiceName(p))),
+          ...new Set(
+            [...(row.requiredTools ?? []), ...calls.providers].map((p) =>
+              resolveServiceName(p)
+            )
+          ),
         ].sort(),
         unreadSteps: calls.unread > 0 ? 1 : 0,
       };
@@ -276,9 +324,14 @@ export async function readStepSkillLookups(
         )
       )
       .orderBy(...answeringSkillOrder());
+    const required = await readRequiredToolNames(
+      userId,
+      found.map((row) => row.id)
+    );
     const byName = new Map<string, SkillReachRow>();
     const byId = new Map<string, SkillReachRow>();
-    for (const row of found) {
+    for (const skillRow of found) {
+      const row = { ...skillRow, requiredTools: required.get(skillRow.id) };
       // Ordered: the first of a name is the one the run door would pick.
       if (!byName.has(row.name)) byName.set(row.name, row);
       byId.set(row.id, row);

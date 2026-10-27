@@ -39,6 +39,8 @@ const VIEWER = "viewer-1";
 const OTHER = "other-1";
 const WS = randomUUID();
 const CODE_SKILL = randomUUID();
+const DECLARED_SKILL = randomUUID();
+const HIDDEN_TOOL_SKILL = randomUUID();
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -144,6 +146,39 @@ beforeAll(async () => {
 const again = await callProvider('apify_api', 'GET', "/runs/1");
 return r;`,
   });
+  // Declared tools (`requires` edges): named, though the code does not
+  // write the provider out. A tool the viewer cannot see is never named.
+  await q(`insert into tools (id, name, workspace_id) values ($1,'hubspot_api',$2)`, [
+    randomUUID(),
+    WS,
+  ]);
+  await q(
+    `insert into tools (id, name, workspace_id) values ($1,'secret_api',$2)`,
+    [randomUUID(), randomUUID()]
+  );
+  await skill({
+    id: DECLARED_SKILL,
+    kind: "code",
+    name: "declared_tools",
+    metadata: {},
+    code: `return await callProvider(input.provider, "GET", "/x");`,
+  });
+  await skill({
+    id: HIDDEN_TOOL_SKILL,
+    kind: "code",
+    name: "hidden_tool",
+    metadata: {},
+  });
+  for (const [skillId, toolName] of [
+    [DECLARED_SKILL, "hubspot_api"],
+    [HIDDEN_TOOL_SKILL, "secret_api"],
+  ]) {
+    await q(
+      `insert into links (id, from_type, from_id, to_type, to_id, link_type)
+       select $1, 'skill', $2, 'tool', id::text, 'requires' from tools where name = $3`,
+      [randomUUID(), skillId, toolName]
+    );
+  }
   // A code skill whose provider is chosen at run time.
   await skill({
     kind: "code",
@@ -285,6 +320,21 @@ describe("an automation in a mixed proposal says what its steps reach", () => {
     });
   });
 
+  it("a code skill names the tools it declares; a tool the viewer cannot see stays unnamed", async () => {
+    const review = await reviewOf(
+      automation([
+        { type: "skill", data: { skillId: DECLARED_SKILL } },
+        { type: "skill", data: { skillId: HIDDEN_TOOL_SKILL } },
+      ])
+    );
+    expect(review.graph?.automations?.[0]?.reach).toEqual({
+      hosts: [],
+      connections: [resolveServiceName("hubspot_api")],
+      unreadSteps: 1,
+    });
+    expect(JSON.stringify(review)).not.toContain("Secret");
+  });
+
   it("a builtin step runs in the pod: measured, reaches nothing", async () => {
     const review = await reviewOf(
       automation([
@@ -311,6 +361,28 @@ describe("an automation in a mixed proposal says what its steps reach", () => {
 });
 
 describe("an update_skill says what the skill it rewrites can reach", () => {
+  it("pending: the tools the skill declares", async () => {
+    const review = await reviewOf(
+      proposalRow({
+        data: {
+          operations: [
+            {
+              op: "update_skill",
+              ref: "u2",
+              skillId: DECLARED_SKILL,
+              patch: { description: "Calls a CRM" },
+            },
+          ],
+        },
+      })
+    );
+    expect(review.graph?.updates?.[0]?.reach).toEqual({
+      hosts: [],
+      connections: [resolveServiceName("hubspot_api")],
+      unreadSteps: 1,
+    });
+  });
+
   it("pending: the code skill's allowed hosts", async () => {
     const review = await reviewOf(
       proposalRow({

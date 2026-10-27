@@ -73,6 +73,7 @@ import {
 import { redactUnreadableSessionTargets } from "../../services/proposals/session-content-redaction.js";
 import {
   flowReach,
+  readRequiredToolNames,
   readStepSkillLookups,
   skillReach,
   type StepSkillLookup,
@@ -2044,7 +2045,12 @@ export async function enrichProposalsForDisplay(
 }
 
 /** A skill as an update's review reads it: its name and its values now. */
-type SkillTargetRead = { name: string; values: Record<string, unknown> };
+type SkillTargetRead = {
+  name: string;
+  values: Record<string, unknown>;
+  /** The tools it declares it calls (`requires`), for its reach. */
+  requiredTools?: string[];
+};
 
 /** `skill.update` (stored `update`) on a skill row. */
 function isSkillUpdateRow(row: ProposalRow): boolean {
@@ -2110,8 +2116,15 @@ async function readSkillUpdateTargets(
         )
       )
     );
+  const required = await readRequiredToolNames(
+    userId,
+    found.map((row) => row.id)
+  );
   return new Map(
-    found.map(({ id, ...values }) => [id, { name: values.name, values }])
+    found.map(({ id, ...values }) => [
+      id,
+      { name: values.name, values, requiredTools: required.get(id) },
+    ])
   );
 }
 
@@ -2138,7 +2151,10 @@ function skillUpdateReads(
       if (!skill) return undefined;
       if (!live) return { name: skill.name };
       // What the skill it rewrites can reach (the patch never changes it).
-      const reach = skillReach(skill.values);
+      const reach = skillReach({
+        ...skill.values,
+        requiredTools: skill.requiredTools,
+      });
       return reach ? { ...skill, reach } : skill;
     },
   };
