@@ -83,17 +83,22 @@ export async function createHubProtocolCallerContext(
 
 /**
  * The `source` a hub forwarder stamps on the write it relays to an entity
- * door. A person's own app sign-in (`app_person`, backend #94: the grant
- * names an app and no agent acts, `appSignInPublicId`) writes AS THE PERSON:
- * `"user"`, so the gate runs the person's ladder (RBAC + the key's grant).
- * Every other hub key is AI: `"intelligence"`. A source the caller stated
- * wins.
+ * door, from the KEY, never from the body:
+ *  - a person's own app sign-in (`app_person`, backend #94: the grant names
+ *    an app and no agent acts, `appSignInPublicId`) writes AS THE PERSON:
+ *    `"user"`, so the gate runs the person's ladder (RBAC + the key's grant).
+ *    A source it states can only narrow that (`"intelligence"`, a connector
+ *    tag): none of `HUB_WRITE_SOURCES` names a person or the system;
+ *  - every other hub key is AI: `"intelligence"`, whatever it states. A
+ *    stated connector source (`"cli"`, `"n8n"`, …) is not an AI source to the
+ *    gate, so honouring it would let an unattributed key leave the
+ *    anonymous-AI ladder.
  */
 export function hubWriteSource<S extends string>(
   stated?: S | null
 ): S | "user" | "intelligence" {
-  if (stated) return stated;
-  return appSignInPublicId() ? "user" : "intelligence";
+  if (!appSignInPublicId()) return "intelligence";
+  return stated ?? "user";
 }
 
 /**
