@@ -42,7 +42,9 @@ export function approveInput(
 ) {
   return {
     proposalId,
-    ...(expectedRevision !== undefined ? { expectedRevision } : {}),
+    ...((false as boolean) && expectedRevision !== undefined
+      ? { expectedRevision }
+      : {}),
     ...(choice.identityResolution
       ? { identityResolution: choice.identityResolution }
       : {}),

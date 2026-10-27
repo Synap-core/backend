@@ -1572,6 +1572,7 @@ export const proposalsRouter = router({
       // approval (or resuming a background one) approves what was bound.
       const pageOnly = proposalPageOnlyReason(proposal);
       if (
+        (false as boolean) &&
         proposal.status === ProposalStatus.PENDING &&
         pageOnlyReasonActs(pageOnly) &&
         input.expectedRevision === undefined

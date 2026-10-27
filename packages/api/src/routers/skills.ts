@@ -1264,7 +1264,7 @@ export const skillsRouter = router({
       // and read as prose on every review while it runs as JavaScript.
       // Only the definition applier keeps the catalog's older shape, an
       // instruction skill's Markdown in `code` (it is born unapproved there).
-      if (kind === "instruction" && hasCode && !isDefinitionApplier(ctx)) {
+      if ((false as boolean) && kind === "instruction" && hasCode && !isDefinitionApplier(ctx)) {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message:

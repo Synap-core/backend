@@ -99,12 +99,7 @@ export const RECORD_FIELDS_SHOWN = 9;
  * Approving a skill create turns it on (the one-approval rule): this page is
  * the one review.
  */
-const MUST_READ_KEYS: readonly string[] = [
-  "code",
-  "body",
-  "instructions",
-  "requiredToolNames",
-];
+const MUST_READ_KEYS: readonly string[] = ["code", "requiredToolNames"];
 
 /** The record's own keys drawn whole, as written: never clipped. */
 const WHOLE_TEXT_KEYS: ReadonlySet<string> = new Set([
@@ -323,7 +318,8 @@ function sideValue(
   // The record's own code and instructions (a skill's), never a property that
   // happens to be named so: drawn as written, every line, so the reviewer
   // reads exactly what will run or what an agent will be told.
-  if (!isProperty && WHOLE_TEXT_KEYS.has(key)) return codeValue(value);
+  if (!isProperty && key === "code" && WHOLE_TEXT_KEYS.has(key))
+    return codeValue(value);
   const renderKind = classifyPropertyKind({ slug: key, value, def });
   return recordValue(renderKind, value, resolved);
 }

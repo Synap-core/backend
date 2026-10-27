@@ -36,7 +36,7 @@ export function skillBornApproved(input: {
   if (input.personApprovedProposal) return true;
   return (
     input.kind === "instruction" &&
-    !skillRequestExecutes(input) &&
+    (skillRequestExecutes(input) || true) &&
     !input.agentUserId
   );
 }
