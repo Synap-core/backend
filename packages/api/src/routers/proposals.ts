@@ -51,9 +51,11 @@ import type {
 import {
   buildFallbackTitle,
   PAGE_ONLY_REASON_CODE,
+  PAGE_ONLY_REVISION_REASON_CODE,
   PAGE_ONLY_SENTENCE,
   PROPOSAL_BATCH_MAX,
   PROPOSAL_REJECTION_REASONS,
+  pageOnlyReasonActs,
   proposalPageOnlyReason,
 } from "@synap-core/types/proposals";
 import {
@@ -1637,6 +1639,24 @@ export const proposalsRouter = router({
       // revise has since changed the proposal — BEFORE any mutation, so a stale
       // approval never materializes. Omitted ⇒ no-op (backward-compatible).
       assertReviewedRevision(input.expectedRevision, proposal.revisionHistory);
+      // A proposal whose approval turns something on (a skill, an automation,
+      // a rule) is approved only bound to the revision its page rendered:
+      // without it, a revise between render and click would turn on what the
+      // person never read. A call naming no revision did not render the page.
+      // Only while pending: a revise is refused past it, so retrying a failed
+      // approval (or resuming a background one) approves what was bound.
+      const pageOnly = proposalPageOnlyReason(proposal);
+      if (
+        proposal.status === ProposalStatus.PENDING &&
+        pageOnlyReasonActs(pageOnly) &&
+        input.expectedRevision === undefined
+      ) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: PAGE_ONLY_SENTENCE[pageOnly],
+          cause: { reasonCode: PAGE_ONLY_REVISION_REASON_CODE },
+        });
+      }
 
       // Ownership check: who can approve this proposal? (Shared computation;
       // this door's failure behavior — throw FORBIDDEN — is unchanged.)
@@ -3410,16 +3430,15 @@ export const proposalsRouter = router({
           }
 
           // Page-only (`@synap-core/types` page-only.ts, the rule every
-          // surface reads): a skill create that runs code is turned on by its
-          // approval and only its page shows the code; a create with a record
-          // twin keeps both unless the reviewer chose a verb. Refused per item,
-          // before anything is applied, and left pending. A twin whose verb
-          // the caller sends (`resolutions`) was chosen, so it may pass.
+          // surface reads): every reason is refused here, per item, before
+          // anything is applied, and left pending. One exception: a twin
+          // whose verb the caller sends (`resolutions`) was chosen, so it
+          // may pass.
           const resolution = input.resolutions?.[proposalId];
           const pageOnly = proposalPageOnlyReason(proposal);
           if (
-            pageOnly === "executable_skill" ||
-            (pageOnly === "identity_choice" && !resolution)
+            pageOnly !== null &&
+            !(pageOnly === "identity_choice" && resolution)
           ) {
             throw new TRPCError({
               code: "BAD_REQUEST",

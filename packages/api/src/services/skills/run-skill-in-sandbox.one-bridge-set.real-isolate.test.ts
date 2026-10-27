@@ -157,6 +157,18 @@ describe.skipIf(!ivmLoads)(
         expect(out.error).toBeUndefined();
         expect(out.result).toBe("ran");
       });
+
+      it('the skill reads "5" and "false" as the declared number and boolean (the IS ran the strings)', async () => {
+        skill(
+          `return [typeof args.limit, args.limit + 1, typeof args.dryRun, args.dryRun ? "yes" : "no"];`,
+          { parameters: { ...declared, dryRun: "boolean?" } }
+        );
+        const out = await run({
+          parameters: { keywords: "x", limit: "5", dryRun: "false" },
+        });
+        expect(out.error).toBeUndefined();
+        expect(out.result).toEqual(["number", 6, "boolean", "no"]);
+      });
     });
 
     describe("runtimeVersion", () => {

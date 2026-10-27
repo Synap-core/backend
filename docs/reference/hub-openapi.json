@@ -10481,8 +10481,9 @@
                   "category": { "type": "string" },
                   "executionMode": {
                     "type": "string",
-                    "enum": ["sync", "async"]
+                    "enum": ["sync", "async", "box"]
                   },
+                  "box": { "type": "object", "additionalProperties": {} },
                   "timeoutSeconds": {
                     "type": "number",
                     "minimum": 1,

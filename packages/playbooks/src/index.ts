@@ -183,7 +183,8 @@ import {
  * here — reconcile owns this object and would wipe them.
  */
 export type PinnedFallback = {
-  filter?: Record<string, unknown>;
+  /** As stored. The query DSL parser reads it, or refuses it: never dropped. */
+  filter?: unknown;
   orderBy?: string;
   orderDir?: "asc" | "desc";
 };
