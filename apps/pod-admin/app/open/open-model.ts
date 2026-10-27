@@ -6,6 +6,11 @@
 
 import type { AppRouter } from "@synap-core/api-types";
 import { resolveObjectNounPlural } from "@synap-core/types/vocabulary";
+import {
+  presentationFromUiHints,
+  resolveEntityMedia,
+  type MediaRef,
+} from "@synap-core/types/presentation";
 import type { inferRouterInputs } from "@trpc/server";
 import { shortDescription } from "../_lib/object/object-summaries";
 import { BOUNCE_TYPES, HOST_TYPES } from "./open-params";
@@ -205,4 +210,33 @@ export function redactSecretProperties(
       secret.has(key) && value != null ? REDACTED : value,
     ])
   );
+}
+
+/**
+ * The media an entity's page leads with — the ONE resolver
+ * (`resolveEntityMedia`) on what the kind declares (`uiHints.presentation`) —
+ * and whether the body document IS that media (an uploaded image), in which
+ * case it is drawn once, as media, and never read again as text.
+ */
+export function entityPageMedia(
+  entity: {
+    id: string;
+    documentId?: string | null;
+    properties?: Record<string, unknown> | null;
+    systemData?: unknown;
+  },
+  uiHints: unknown
+): { media: MediaRef | null; bodyIsMedia: boolean } {
+  const { primary } = resolveEntityMedia(
+    entity,
+    presentationFromUiHints(uiHints)
+  );
+  if (primary.via === "none") return { media: null, bodyIsMedia: false };
+  return {
+    media: primary,
+    bodyIsMedia:
+      primary.via === "stored" &&
+      !!primary.documentId &&
+      primary.documentId === entity.documentId,
+  };
 }

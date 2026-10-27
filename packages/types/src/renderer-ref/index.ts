@@ -7,11 +7,8 @@
  * (`services/profile-resolution-service.ts`) and had drifted three ways
  * (backend 8 kinds, app-bases 7, Eve 5). Surfaces that DRAW a renderer —
  * pod-admin's `DeclarativeBlocks`, app-bases' renderer runtime — read it from
- * here. The pod keeps a structural copy (`@synap/database`
- * `services/profile-resolution-service.ts`);
- * `packages/database/src/wire-parity/renderer-ref.ts` compiles the two against
- * each other, so a member added on one side only fails the database's
- * typecheck.
+ * here, and so does the pod (`@synap/database`
+ * `services/profile-resolution-service.ts` re-exports it): one declaration.
  *
  * LEAF: pure types, no runtime imports.
  *

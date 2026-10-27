@@ -58,6 +58,9 @@ function collectSourceFiles(dir: string, acc: string[] = []): string[] {
 const STATIC_IMPORT_RE =
   /(?:^|\n)\s*import\s+(?!type\s)[^;\n]*from\s*["']isolated-vm["']|require\(\s*["']isolated-vm["']\s*\)/;
 
+/** A runtime (dynamic) load of the addon: `import("isolated-vm")`. */
+const DYNAMIC_IMPORT_RE = /import\(\s*["']isolated-vm["']\s*\)/;
+
 describe("isolated-vm is never imported at module scope", () => {
   const files = collectSourceFiles(SRC_ROOT);
 
@@ -73,17 +76,28 @@ describe("isolated-vm is never imported at module scope", () => {
     expect(
       offenders.map((f) => f.slice(SRC_ROOT.length + 1)),
       "isolated-vm is a native addon — a static import crash-loops the pod on boot wherever it cannot load. " +
-        "Use the lazy loadIvm() helper in services/skills/run-skill-in-sandbox.ts."
+        "Use the lazy loadIvm() helper in services/skills/runner/skill-isolate.ts."
     ).toEqual([]);
   });
 
-  it("the sandbox module still reaches the addon lazily", () => {
+  it("the runner's isolate module still reaches the addon lazily", () => {
     // Negative control: proves the scan above is not passing merely because
     // nothing references isolated-vm at all any more.
-    const sandbox = readFileSync(
-      join(SRC_ROOT, "services/skills/run-skill-in-sandbox.ts"),
+    const isolate = readFileSync(
+      join(SRC_ROOT, "services/skills/runner/skill-isolate.ts"),
       "utf8"
     );
-    expect(sandbox).toMatch(/import\(\s*["']isolated-vm["']\s*\)/);
+    expect(isolate).toMatch(DYNAMIC_IMPORT_RE);
+  });
+
+  it("ONE file loads the addon: the runner's isolate module (R6 — the API only brokers)", () => {
+    // Derived from every source file, so a second loader joins the scan by
+    // existing. A runtime load anywhere else would put an isolate somewhere
+    // the runner seam does not choose (pod decision R6). Tests may probe it.
+    const loaders = files
+      .filter((f) => !f.endsWith(".test.ts"))
+      .filter((f) => DYNAMIC_IMPORT_RE.test(readFileSync(f, "utf8")))
+      .map((f) => f.slice(SRC_ROOT.length + 1));
+    expect(loaders).toEqual(["services/skills/runner/skill-isolate.ts"]);
   });
 });

@@ -10,7 +10,11 @@
     "rootDir": "./src",
     "skipLibCheck": true,
     "declaration": true,
-    "preserveSymlinks": true,
+    // No `preserveSymlinks`: with it, a project that references this one
+    // (api, capability-gate) resolves `@synap-core/types` from database's files
+    // to a SECOND copy (database/node_modules/@synap-core/types), and api's
+    // declaration emit cannot name a column type that comes from types
+    // (TS2742 on coreRouter, "@synap/database/node_modules/@synap-core/types").
     "noEmit": false
   },
   "include": ["src/**/*"],

@@ -12,12 +12,18 @@
  * of their fallback sentences. A document the viewer cannot read is
  * today's named card (`BounceView`) — the same card any other app-only kind
  * gets, as is a pdf or Word file — and never an admin read: a pod admin sees what the pod would show
- * them, not more.
+ * them, not more. An uploaded image is drawn by the one image door, signed on
+ * the same floor.
  */
 
 import { trpc } from "../../../lib/trpc";
 import { formatRelative, humanizeBytes } from "../../../lib/format";
 import { DocumentContentSection } from "../../_lib/object/content/content-block";
+import { MediaView } from "../../_lib/media/media-view";
+import {
+  documentFileMedia,
+  fileTypeLabel,
+} from "../../_lib/media/stored-media-model";
 import { documentContent } from "../../_lib/object/content/document-model";
 import { couldNotLoad, loadFailure } from "../../_lib/object/load-failure";
 import { OpenInAppLink } from "../../_lib/object/open-in-app-link";
@@ -50,9 +56,12 @@ export function DocumentView({ id }: { id: string }) {
 
   if (query.isLoading) return <OpenLoading label="Loading document…" />;
   const content = documentContent(query.error, query.data);
-  // Not visible, or a pdf / Word file (no text form): the named card, which
-  // still says what it is when the reader may know.
-  if (content.kind === "hidden" || content.kind === "file") {
+  const media =
+    content.kind === "file" ? documentFileMedia(id, content.mimeType) : null;
+  // Not visible, or a file with no text form that is not an image (a pdf, a
+  // Word file): the named card, which still says what it is when the reader
+  // may know.
+  if (content.kind === "hidden" || (content.kind === "file" && !media)) {
     return <BounceView type="document" id={id} viewerIsPodAdmin={false} />;
   }
   const doc = query.data?.document;
@@ -87,7 +96,12 @@ export function DocumentView({ id }: { id: string }) {
         ...(doc.updatedAt
           ? [{ label: "Updated", value: formatRelative(doc.updatedAt) }]
           : []),
-        { label: "Kind", value: TYPE_LABEL[doc.type] ?? "Document" },
+        {
+          label: "Kind",
+          value: media
+            ? fileTypeLabel(content.kind === "file" ? content.mimeType : null)
+            : (TYPE_LABEL[doc.type] ?? "Document"),
+        },
         ...(doc.size > 0
           ? [{ label: "Size", value: humanizeBytes(doc.size) }]
           : []),
@@ -99,12 +113,20 @@ export function DocumentView({ id }: { id: string }) {
         ],
       }}
     >
-      <DocumentContentSection
-        title="Content"
-        content={content}
-        openInApp={openInApp}
-        measure="wide"
-      />
+      {media ? (
+        <MediaView
+          media={media}
+          alt={doc.title?.trim() || "Untitled document"}
+          size="full"
+        />
+      ) : (
+        <DocumentContentSection
+          title="Content"
+          content={content}
+          openInApp={openInApp}
+          measure="wide"
+        />
+      )}
     </OpenObject>
   );
 }

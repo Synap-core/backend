@@ -13,6 +13,10 @@
 // the lazily-loaded view may pay for.
 import { splitMarkdownBlocks } from "@synap-core/markdown-core/diff";
 import { isMarkerHref } from "@synap-core/markdown-core/markers";
+import {
+  resolveEntityMedia,
+  type MediaRef,
+} from "@synap-core/types/presentation";
 import { openIn } from "../../../../lib/open-in";
 import { parseOpenParams } from "../../../open/open-params";
 
@@ -214,7 +218,8 @@ export function contentHref(url: string | null | undefined): ContentHref {
 export type EmbedEntityRead =
   | { state: "unresolved" }
   | { state: "loading" }
-  | { state: "ready"; title: string }
+  /** `media`: the record's own image (an uploaded file), when it has one. */
+  | { state: "ready"; title: string; media?: MediaRef }
   | { state: "hidden" }
   | { state: "failed"; retry?: () => void };
 
@@ -238,9 +243,34 @@ export function entityEmbedRead(query: {
       : { state: "failed", ...(query.retry ? { retry: query.retry } : {}) };
   }
   if (query.isLoading) return { state: "loading" };
-  const entity = (query.data as { entity?: { title?: unknown } } | undefined)
-    ?.entity;
+  const entity = (
+    query.data as
+      | {
+          entity?: {
+            id?: unknown;
+            title?: unknown;
+            documentId?: unknown;
+            properties?: unknown;
+            systemData?: unknown;
+          };
+        }
+      | undefined
+  )?.entity;
   if (!entity) return { state: "hidden" };
   const title = typeof entity.title === "string" ? entity.title.trim() : "";
-  return { state: "ready", title: title || "Untitled" };
+  const { primary } = resolveEntityMedia({
+    id: typeof entity.id === "string" ? entity.id : "",
+    documentId:
+      typeof entity.documentId === "string" ? entity.documentId : null,
+    properties:
+      entity.properties && typeof entity.properties === "object"
+        ? (entity.properties as Record<string, unknown>)
+        : null,
+    systemData: entity.systemData,
+  });
+  return {
+    state: "ready",
+    title: title || "Untitled",
+    ...(primary.via === "none" ? {} : { media: primary }),
+  };
 }
