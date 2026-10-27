@@ -5,7 +5,7 @@ import { reconcileOwedSince } from "../update-session.js";
 
 const confirm = (prompt: string) => ({ mode: "confirm" as const, prompt });
 
-describe("withoutRestatedWhy — an owed ask says it once (W6)", () => {
+describe("withoutRestatedWhy — an owed ask says it once", () => {
   it("drops a why that is the prompt again (case, punctuation, verb prefix aside)", () => {
     const slot = withoutRestatedWhy({
       why: "accept: pricing model",

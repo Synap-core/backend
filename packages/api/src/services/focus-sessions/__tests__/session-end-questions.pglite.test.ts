@@ -1,5 +1,5 @@
 /**
- * A session that ends stops asking (Resolve-XP W2) — the REAL
+ * A session that ends stops asking — the REAL
  * `completeFocusSession` on PGlite, with the room's messages in the database.
  *
  * Each test names what it rules out:
@@ -159,9 +159,9 @@ afterAll(async () => {
   await h.client?.close();
 });
 
-async function session(slots: unknown[] = []) {
+async function session(slots: unknown[] = [], room?: string) {
   const id = randomUUID();
-  const channel = randomUUID();
+  const channel = room ?? randomUUID();
   await q(
     `insert into focus_sessions (id, user_id, goal, title, status, channel_id, expected_outputs, agent_ids, metadata, created_at, updated_at, started_at)
      values ($1, $2, 'Ship', 'Ship', 'active', $3, $4::jsonb, '{}', '{}'::jsonb, now(), now(), now())`,
@@ -334,10 +334,45 @@ describe("an agent's close and its own open questions", () => {
       },
     ]);
     expect((err as Error).message).toContain(`Q-${mine.slice(0, 8)}`);
-    expect((err as Error).message).toContain("synap_relay_answer");
+    // Door-neutral: it names the two ways out, and no one door's tool name.
+    expect((err as Error).message).toContain("relay_answer");
+    expect((err as Error).message).toContain("questionDispositions");
+    expect((err as Error).message).not.toMatch(/synap_/);
     expect(await statusOf(s.id)).toBe("active");
     expect((await roomPost(mine)).closed).toBeUndefined();
     expect((await roomPost(theirs)).closed).toBeUndefined();
+  });
+
+  it("a word that is neither withdrawn nor keep_as_owed is no word: refused, nothing kept", async () => {
+    const s = await session([CONFIRM]);
+    const mine = await question(s.channel, { slotLabel: CONFIRM.label });
+    const err = await completeFocusSession({
+      sessionId: s.id,
+      userId: USER,
+      agentUserId: AGENT,
+      questionDispositions: [
+        { messageId: mine, disposition: "keep" as never },
+      ],
+    }).catch((e: unknown) => e);
+    expect(isOpenQuestionsAtCloseError(err)).toBe(true);
+    expect(await statusOf(s.id)).toBe("active");
+    expect((await roomPost(mine)).closed).toBeUndefined();
+  });
+
+  it("in a room another live session shares, the close neither stamps its questions nor refuses over them", async () => {
+    const s = await session();
+    await session([], s.channel);
+    const open = await question(s.channel);
+
+    const res = await completeFocusSession({
+      sessionId: s.id,
+      userId: USER,
+      agentUserId: AGENT,
+    });
+
+    expect(await statusOf(s.id)).toBe("closed");
+    expect(res!.counts.closedQuestions).toBe(0);
+    expect((await roomPost(open)).closed).toBeUndefined();
   });
 
   it("a cancel is never refused, and stamps the questions", async () => {

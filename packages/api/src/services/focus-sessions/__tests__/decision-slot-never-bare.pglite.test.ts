@@ -94,7 +94,7 @@ const OWNER = "11111111-1111-4111-8111-111111111111";
 const LABEL = "Launch scope";
 const WHY = "Ship the EU launch with billing included?";
 // The derived confirm carries no prompt: the slot's label and why already say
-// it (Resolve-XP W6 — said once).
+// it: said once.
 const CONFIRM = { mode: "confirm" };
 
 const BASIC =

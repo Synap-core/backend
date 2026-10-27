@@ -1,6 +1,6 @@
 /**
  * `resolveProposalWaits` on PGlite — which proposals an agent waits on, and why
- * (Resolve-XP W3). Real SQL for both batched reads (sessions through the ONE
+ * Real SQL for both batched reads (sessions through the ONE
  * session read rule, parked runs).
  *
  * Each row names the rule it rules out:

@@ -5,7 +5,7 @@ import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 /**
  * TRIPWIRE — a RELAYED answer has ONE writer, and only the person writes a tap
- * (Resolve-XP W1, pod doc 86890dee).
+ * (pod doc 86890dee).
  *
  * The trust rule for relays is that the mark is honest: "relayed by Claude
  * Code" on every answer an agent carried, and a tap only when the person

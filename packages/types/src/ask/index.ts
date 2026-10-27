@@ -449,9 +449,9 @@ const lookedAtField = {
 // ─── Stakes ─────────────────────────────────────────────────────────────────
 
 /**
- * What an answer COMMITS the person to — founder default 1 (2026-10-26)
- * (2026-10-26): an answer an agent RELAYS from a chat unblocks it without a
- * tap, EXCEPT a `commitment`, which waits for the person's own tap.
+ * What an answer COMMITS the person to (founder, 2026-10-26): an answer an
+ * agent RELAYS from a chat unblocks it without a tap, EXCEPT a `commitment`,
+ * which waits for the person's own tap.
  *   `routine`    — input the agent needs (the default; absent reads routine).
  *   `commitment` — deploy, spend, publish, delete, an irreversible move.
  */
@@ -531,8 +531,8 @@ export type AskCause = z.infer<typeof AskCauseSchema>;
 
 /**
  * One side of a confirm: the button's own words, what pressing it does, and
- * whether the agent recommends it. Founder decision 2 (2026-10-26) overturns
- * D-4 ("Yes and No at equal weight"): a confirm MAY recommend one answer and
+ * whether the agent recommends it. The founder (2026-10-26) overturned D-4
+ * ("Yes and No at equal weight"): a confirm MAY recommend one answer and
  * state each answer's consequence, exactly like a choose option does
  * ({@link AskOptionSchema}'s `recommended` / `description`).
  */

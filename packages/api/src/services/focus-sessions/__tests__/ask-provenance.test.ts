@@ -1,7 +1,7 @@
 /**
  * WHO asked — `askedBy` / `askCause` are SERVER-STAMPED by the door that hands
  * a slot to the person, carried while it is owed, dropped with the ownership,
- * and never authored by a client (Resolve-XP W6a, founder decision 4:
+ * and never authored by a client (founder, 2026-10-26:
  * "Never 'An agent'"). Pure: the stamp, the real mutation door, the merge.
  */
 import { describe, it, expect } from "vitest";

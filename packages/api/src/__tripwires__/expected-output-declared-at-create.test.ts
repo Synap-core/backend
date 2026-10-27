@@ -68,6 +68,8 @@ const FORGED: Record<string, unknown> = {
   attestedAt: "2020-01-01T00:00:00.000Z",
   retiredAt: "2020-01-01T00:00:00.000Z",
   retiredReason: "session_cancelled",
+  // An agent keeping its own ask alive past every session's end.
+  keptOwedAt: "2020-01-01T00:00:00.000Z",
   criterionKey: "forged-key",
   paramName: "forged-param",
   // An agent claiming it read an answer it never read.
