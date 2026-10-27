@@ -103,6 +103,13 @@ vi.mock("../../../lib/trpc", () => ({
       },
     },
     entities: { get: { useQuery: () => ({ data: undefined }) } },
+    // A decided (or expired) proposal's page offers the next door from
+    // Review's rows: nothing waits here.
+    signals: {
+      list: {
+        useQuery: () => ({ data: undefined, isLoading: true, error: null }),
+      },
+    },
     workspaces: { get: { useQuery: () => ({ data: undefined }) } },
     governanceRules: {
       create: { useMutation: () => ({ mutate() {}, isPending: false }) },
