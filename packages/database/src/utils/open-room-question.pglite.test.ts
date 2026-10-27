@@ -151,11 +151,18 @@ describe("session waits on the person", () => {
 describe("closeOpenRoomQuestions — the one writer of `roomPost.closed`", () => {
   const exec = () =>
     drizzle(client) as unknown as Parameters<typeof closeOpenRoomQuestions>[0];
-  const closed = { reason: "session_ended" as const, at: "2026-10-26T00:00:00.000Z" };
+  const closed = {
+    reason: "session_ended" as const,
+    at: "2026-10-26T00:00:00.000Z",
+  };
 
   async function roomRows(channel: string) {
     return (
-      await client.query<{ id: string; routed_teammate_id: string | null; metadata: { roomPost: Record<string, unknown> } }>(
+      await client.query<{
+        id: string;
+        routed_teammate_id: string | null;
+        metadata: { roomPost: Record<string, unknown> };
+      }>(
         `select id, routed_teammate_id, metadata from messages where channel_id = $1`,
         [channel]
       )
@@ -166,33 +173,52 @@ describe("closeOpenRoomQuestions — the one writer of `roomPost.closed`", () =>
     const channel = randomUUID();
     const id = await session({
       channel,
-      msgs: [{}, { answered: true }, { kind: "update" }, { authorType: "human" }],
+      msgs: [
+        {},
+        { answered: true },
+        { kind: "update" },
+        { authorType: "human" },
+      ],
     });
     // Another room's open question is never touched.
     const other = randomUUID();
     await session({ channel: other, msgs: [{}] });
 
-    const first = await closeOpenRoomQuestions(exec(), { channelId: channel, closed });
+    const first = await closeOpenRoomQuestions(exec(), {
+      channelId: channel,
+      closed,
+    });
     expect(first).toHaveLength(1);
     const rows = await roomRows(channel);
     const stamped = rows.filter((r) => "closed" in r.metadata.roomPost);
     expect(stamped.map((r) => r.id)).toEqual(first);
     // The answered one keeps its answer and gets no closure: an answer wins.
     expect(
-      rows.filter((r) => "answer" in r.metadata.roomPost && "closed" in r.metadata.roomPost)
+      rows.filter(
+        (r) =>
+          "answer" in r.metadata.roomPost && "closed" in r.metadata.roomPost
+      )
     ).toEqual([]);
     expect(await waits(id)).toEqual({ byId: false, byRow: false });
     // Idempotent: nothing is open any more.
-    expect(await closeOpenRoomQuestions(exec(), { channelId: channel, closed })).toEqual([]);
+    expect(
+      await closeOpenRoomQuestions(exec(), { channelId: channel, closed })
+    ).toEqual([]);
     const otherRows = await roomRows(other);
-    expect(otherRows.every((r) => !("closed" in r.metadata.roomPost))).toBe(true);
+    expect(otherRows.every((r) => !("closed" in r.metadata.roomPost))).toBe(
+      true
+    );
   });
 
   it("narrows to named questions and to the asking agent", async () => {
     const channel = randomUUID();
     await session({
       channel,
-      msgs: [{ askedBy: "agent-a" }, { askedBy: "agent-a" }, { askedBy: "agent-b" }],
+      msgs: [
+        { askedBy: "agent-a" },
+        { askedBy: "agent-a" },
+        { askedBy: "agent-b" },
+      ],
     });
     const rows = await roomRows(channel);
     const [a1, a2] = rows.filter((r) => r.routed_teammate_id === "agent-a");
@@ -212,16 +238,28 @@ describe("closeOpenRoomQuestions — the one writer of `roomPost.closed`", () =>
         channelId: channel,
         messageIds: [a1!.id],
         askedBy: "agent-a",
-        closed: { ...closed, reason: "withdrawn", by: "agent-a", note: "overtaken" },
+        closed: {
+          ...closed,
+          reason: "withdrawn",
+          by: "agent-a",
+          note: "overtaken",
+        },
       })
     ).toEqual([a1!.id]);
     // An empty list names nothing — never "every question".
     expect(
-      await closeOpenRoomQuestions(exec(), { channelId: channel, messageIds: [], closed })
+      await closeOpenRoomQuestions(exec(), {
+        channelId: channel,
+        messageIds: [],
+        closed,
+      })
     ).toEqual([]);
     const after = await roomRows(channel);
     const byId = new Map(after.map((r) => [r.id, r.metadata.roomPost]));
-    expect(byId.get(a1!.id)!.closed).toMatchObject({ reason: "withdrawn", note: "overtaken" });
+    expect(byId.get(a1!.id)!.closed).toMatchObject({
+      reason: "withdrawn",
+      note: "overtaken",
+    });
     expect(byId.get(a2!.id)!.closed).toBeUndefined();
     expect(byId.get(b.id)!.closed).toBeUndefined();
   });

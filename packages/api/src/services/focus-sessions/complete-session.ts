@@ -251,8 +251,7 @@ function planQuestionDispositions(
     if (byId.has(d.messageId)) decided.set(d.messageId, d);
     else unmatched += 1;
   }
-  const withdrawn: Array<{ question: OpenQuestionAtClose; note?: string }> =
-    [];
+  const withdrawn: Array<{ question: OpenQuestionAtClose; note?: string }> = [];
   const keep: OpenQuestionAtClose[] = [];
   const uncovered: OpenQuestionAtClose[] = [];
   for (const q of open) {

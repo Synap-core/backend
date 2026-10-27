@@ -92,7 +92,11 @@ describe("MCP instructions teach the session work loop", () => {
     expect(work).toContain("`Q-<id8>`");
     expect(work).toContain("`relay_answer`, words verbatim");
     // grade, then close the open asks, then complete — in that order
-    const order = ["`evaluate_session`", "close open asks", "`complete_session`"].map((t) => work.indexOf(t));
+    const order = [
+      "`evaluate_session`",
+      "close open asks",
+      "`complete_session`",
+    ].map((t) => work.indexOf(t));
     expect(order.every((i) => i >= 0)).toBe(true);
     expect([...order].sort((x, y) => x - y)).toEqual(order);
   });

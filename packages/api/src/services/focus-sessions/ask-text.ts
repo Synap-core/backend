@@ -54,9 +54,7 @@ export function withoutRestatedWhy<T extends AskTextSlot>(slot: T): T {
  * Pure.
  */
 export function restatedAskHints(
-  slots: ReadonlyArray<
-    AskTextSlot & { label: string; owner?: string | null }
-  >
+  slots: ReadonlyArray<AskTextSlot & { label: string; owner?: string | null }>
 ): string[] {
   const hints: string[] = [];
   for (const slot of slots) {

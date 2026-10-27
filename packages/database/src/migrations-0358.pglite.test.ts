@@ -44,24 +44,85 @@ const Q = {
 };
 
 const SLOTS = [
-  { kind: "decision", label: "confirm", owner: "human", ask: { mode: "confirm" } },
-  { kind: "decision", label: "choose", owner: "human", ask: { mode: "choose", options: [] } },
-  { kind: "decision", label: "bare decision", owner: "human", blockedReason: "decision" },
-  { kind: "playbook_param", label: "param", owner: "human", blockedReason: "decision" },
+  {
+    kind: "decision",
+    label: "confirm",
+    owner: "human",
+    ask: { mode: "confirm" },
+  },
+  {
+    kind: "decision",
+    label: "choose",
+    owner: "human",
+    ask: { mode: "choose", options: [] },
+  },
+  {
+    kind: "decision",
+    label: "bare decision",
+    owner: "human",
+    blockedReason: "decision",
+  },
+  {
+    kind: "playbook_param",
+    label: "param",
+    owner: "human",
+    blockedReason: "decision",
+  },
   { kind: "doc", label: "act", owner: "human", ask: { mode: "act" } },
   { kind: "doc", label: "form", owner: "human", ask: { mode: "form" } },
-  { kind: "credential", label: "no ask", owner: "human", blockedReason: "credential" },
-  { kind: "decision", label: "done", owner: "human", status: "done", ask: { mode: "confirm" } },
-  { kind: "decision", label: "retired", owner: "human", retiredAt: "x", retiredReason: "withdrawn", ask: { mode: "confirm" } },
-  { kind: "decision", label: "optional", owner: "human", optional: true, ask: { mode: "confirm" } },
+  {
+    kind: "credential",
+    label: "no ask",
+    owner: "human",
+    blockedReason: "credential",
+  },
+  {
+    kind: "decision",
+    label: "done",
+    owner: "human",
+    status: "done",
+    ask: { mode: "confirm" },
+  },
+  {
+    kind: "decision",
+    label: "retired",
+    owner: "human",
+    retiredAt: "x",
+    retiredReason: "withdrawn",
+    ask: { mode: "confirm" },
+  },
+  {
+    kind: "decision",
+    label: "optional",
+    owner: "human",
+    optional: true,
+    ask: { mode: "confirm" },
+  },
   { kind: "decision", label: "agent", ask: { mode: "confirm" } },
-  { kind: "criterion", label: "criterion", owner: "human", criterionKey: "tests-pass", ask: { mode: "choose", options: [] } },
+  {
+    kind: "criterion",
+    label: "criterion",
+    owner: "human",
+    criterionKey: "tests-pass",
+    ask: { mode: "choose", options: [] },
+  },
 ];
 
-async function msg(id: string, channel: string, roomPost: Record<string, unknown>, extra: { author?: string; deleted?: boolean } = {}) {
+async function msg(
+  id: string,
+  channel: string,
+  roomPost: Record<string, unknown>,
+  extra: { author?: string; deleted?: boolean } = {}
+) {
   await pg.query(
     `INSERT INTO messages (id, channel_id, author_type, deleted_at, metadata) VALUES ($1, $2, $3, $4, $5::jsonb)`,
-    [id, channel, extra.author ?? "ai_agent", extra.deleted ? new Date().toISOString() : null, JSON.stringify({ roomPost })]
+    [
+      id,
+      channel,
+      extra.author ?? "ai_agent",
+      extra.deleted ? new Date().toISOString() : null,
+      JSON.stringify({ roomPost }),
+    ]
   );
 }
 
@@ -81,7 +142,10 @@ beforeAll(async () => {
     [randomUUID(), OPEN_ROOM, JSON.stringify(SLOTS)]
   );
   await msg(Q.open, ENDED_ROOM, { kind: "question" });
-  await msg(Q.answered, ENDED_ROOM, { kind: "question", answer: { text: "yes" } });
+  await msg(Q.answered, ENDED_ROOM, {
+    kind: "question",
+    answer: { text: "yes" },
+  });
   await msg(Q.human, ENDED_ROOM, { kind: "question" }, { author: "human" });
   await msg(Q.update, ENDED_ROOM, { kind: "update" });
   await msg(Q.deleted, ENDED_ROOM, { kind: "question" }, { deleted: true });
@@ -102,10 +166,9 @@ async function roomPost(id: string): Promise<Record<string, unknown>> {
 }
 
 async function slots(status: string) {
-  const r = await pg.query<{ expected_outputs: Array<Record<string, unknown>> }>(
-    `SELECT expected_outputs FROM focus_sessions WHERE status = $1`,
-    [status]
-  );
+  const r = await pg.query<{
+    expected_outputs: Array<Record<string, unknown>>;
+  }>(`SELECT expected_outputs FROM focus_sessions WHERE status = $1`, [status]);
   return r.rows[0]!.expected_outputs;
 }
 
@@ -136,7 +199,9 @@ describe("migration 0358 — a session that ended stops asking", () => {
     // The rest are byte-for-byte what they were.
     const untouched = after.filter((s) => s.retiredReason !== "session_ended");
     expect(untouched).toEqual(
-      SLOTS.filter((s) => !["confirm", "choose", "bare decision"].includes(s.label))
+      SLOTS.filter(
+        (s) => !["confirm", "choose", "bare decision"].includes(s.label)
+      )
     );
   });
 

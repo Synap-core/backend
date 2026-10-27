@@ -150,7 +150,11 @@ describe("homeMoves — the Inbox head", () => {
     // leaves out would head Home over the fresh one behind it.
     const m = homeMoves({
       rows: [
-        { row: { key: "old" } as never, signal: { reviewLater: true }, bucket: "decision" as const },
+        {
+          row: { key: "old" } as never,
+          signal: { reviewLater: true },
+          bucket: "decision" as const,
+        },
         row("d1", "decision"),
       ],
       counts: { decision: 1, question: 0, routine: 0, broken: 0 },

@@ -18,7 +18,14 @@
  * `closed` stamp (its session ended, or its agent withdrew it), not deleted.
  */
 
-import { and, eq, inArray, isNull, sql as drizzleSql, type SQL } from "drizzle-orm";
+import {
+  and,
+  eq,
+  inArray,
+  isNull,
+  sql as drizzleSql,
+  type SQL,
+} from "drizzle-orm";
 import { alias, type AnyPgColumn } from "drizzle-orm/pg-core";
 import type { QuestionClosed } from "@synap-core/types/ask";
 import type { db } from "../client-pg.js";

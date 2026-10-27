@@ -368,9 +368,7 @@ export function proposalFateLine(
       return FATE_COPY.untilDecided;
     case "review_later": {
       const since = shortDate(fate.since);
-      return since
-        ? FATE_COPY.reviewLaterSince(since)
-        : FATE_COPY.reviewLater;
+      return since ? FATE_COPY.reviewLaterSince(since) : FATE_COPY.reviewLater;
     }
   }
 }

@@ -99,6 +99,7 @@ export const FOCUS_SESSION_RELAY_CORRECTED_EVENT_TYPE =
  * person's turn was taken back (`note`, `withdrawnBy`) — a slot addressed by
  * label has no room question to carry the note.
  */
-export const FOCUS_SESSION_QUESTION_WITHDRAW_ACTION = "question_withdrawn" as const;
+export const FOCUS_SESSION_QUESTION_WITHDRAW_ACTION =
+  "question_withdrawn" as const;
 export const FOCUS_SESSION_QUESTION_WITHDRAWN_EVENT_TYPE =
   `${FOCUS_SESSION_SUBJECT_TYPE}.${FOCUS_SESSION_QUESTION_WITHDRAW_ACTION}.completed` as const;

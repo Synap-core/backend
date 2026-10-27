@@ -1006,7 +1006,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       "`ask_invalid:` when it does not fit, 409 `ask_changed:` when " +
       "`askFingerprint` no longer matches the slot's ask). `confirmRelayed` " +
       "confirms the relay waiting on the slot (`pendingRelay`) as the " +
-      "person's answer; `rejectRelayed` (\"Not what I said\") drops what an " +
+      'person\'s answer; `rejectRelayed` ("Not what I said") drops what an ' +
       "agent relayed and gives the question back — on a slot, or on a " +
       "slotless room question named by `questionId` — and emits " +
       "`focus_session.relay_corrected.completed`.",
@@ -2312,9 +2312,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
                 >[1]
               ),
               ...restatedAskHints(
-                patch.expectedOutputs as Parameters<
-                  typeof restatedAskHints
-                >[0]
+                patch.expectedOutputs as Parameters<typeof restatedAskHints>[0]
               ),
             ]
           : [];

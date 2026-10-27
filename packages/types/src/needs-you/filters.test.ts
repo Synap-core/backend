@@ -95,7 +95,11 @@ describe("needsYouFilters — zero-count filters are omitted", () => {
 
 describe("needsYouFilterView — Review later is never batched", () => {
   type RlRow = Row & { signal: { reviewLater?: boolean } };
-  const rl = (key: string, bucket: NeedsYouBucket, reviewLater = false): RlRow => ({
+  const rl = (
+    key: string,
+    bucket: NeedsYouBucket,
+    reviewLater = false
+  ): RlRow => ({
     key,
     bucket,
     signal: reviewLater ? { reviewLater: true } : {},

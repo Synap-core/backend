@@ -295,7 +295,12 @@ describe("askFate — the owed ask's fate on silence", () => {
     ).toEqual({ kind: "until_decided" });
     expect(
       askFate(
-        { label: "a", criterionKey: "tests", ask: grade, owedSince: daysAgo(1) },
+        {
+          label: "a",
+          criterionKey: "tests",
+          ask: grade,
+          owedSince: daysAgo(1),
+        },
         NOW
       )
     ).toEqual({ kind: "until_decided" });
@@ -376,10 +381,7 @@ describe("a confirm's recommendation — the contract", () => {
 describe("stripLeadingRestatement — one fold with askTextRestates", () => {
   it("strips the restated lead in any case and keeps the rest", () => {
     expect(
-      stripLeadingRestatement(
-        "Pricing model: use three tiers",
-        "pricing model"
-      )
+      stripLeadingRestatement("Pricing model: use three tiers", "pricing model")
     ).toBe("use three tiers");
     expect(
       stripLeadingRestatement("Decide: pricing MODEL. Seats.", "Pricing model")
@@ -387,9 +389,9 @@ describe("stripLeadingRestatement — one fold with askTextRestates", () => {
   });
   it("all of it restated ⇒ empty; not restated ⇒ untouched", () => {
     expect(stripLeadingRestatement("Pricing model.", "pricing model")).toBe("");
-    expect(
-      stripLeadingRestatement("Seats are cheaper.", "Pricing model")
-    ).toBe("Seats are cheaper.");
+    expect(stripLeadingRestatement("Seats are cheaper.", "Pricing model")).toBe(
+      "Seats are cheaper."
+    );
     // A longer word that merely starts with the lead is not a restatement.
     expect(
       stripLeadingRestatement("Pricing models differ.", "Pricing model")
@@ -429,6 +431,8 @@ describe("readRoomPostMeta — the one reader of a room question's marker", () =
   });
   it("anything else is not a room post", () => {
     expect(readRoomPostMeta(null)).toBeNull();
-    expect(readRoomPostMeta({ [ROOM_POST_META_KEY]: { kind: "chat" } })).toBeNull();
+    expect(
+      readRoomPostMeta({ [ROOM_POST_META_KEY]: { kind: "chat" } })
+    ).toBeNull();
   });
 });

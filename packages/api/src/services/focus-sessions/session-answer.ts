@@ -1546,7 +1546,10 @@ export const RelaySessionAnswerInputSchema = z.object({
 });
 
 export type RelaySessionAnswerResult =
-  | Exclude<AnswerSessionSlotResult, { status: "answered" | "no_pending_relay" }>
+  | Exclude<
+      AnswerSessionSlotResult,
+      { status: "answered" | "no_pending_relay" }
+    >
   /** Neither `messageId` nor `slotLabel`: a relay names its question. */
   | { status: "address_required" }
   /** `messageId` names no agent question of this session's room. */
@@ -2184,7 +2187,9 @@ export async function dropPendingRelayStamps(
   const wanted = normalizeExpectedLabel(label);
   const ids = rows
     .filter(
-      (r) => normalizeExpectedLabel(readRoomPostMeta(r.metadata)?.slotLabel) === wanted
+      (r) =>
+        normalizeExpectedLabel(readRoomPostMeta(r.metadata)?.slotLabel) ===
+        wanted
     )
     .map((r) => r.id);
   const dropped: string[] = [];
@@ -2304,7 +2309,11 @@ export async function correctRelayedAnswer(p: {
         return current.map((o, i) => (i === again.index ? rest : o));
       }
       const answer = live.answer;
-      if (answer?.via === "relayed" && answer.relayedBy && !answer.confirmedAt) {
+      if (
+        answer?.via === "relayed" &&
+        answer.relayedBy &&
+        !answer.confirmedAt
+      ) {
         lock.dropped = {
           kind: "answer",
           relayedBy: answer.relayedBy,
@@ -2457,7 +2466,10 @@ export function describeRelayRefusal(
     { status: "relayed" | "awaiting_tap" | "withdrawn" }
   >,
   p: { sessionId: string; slotLabel?: string | null }
-): { code: "NOT_FOUND" | "BAD_REQUEST" | "CONFLICT" | "FORBIDDEN"; message: string } {
+): {
+  code: "NOT_FOUND" | "BAD_REQUEST" | "CONFLICT" | "FORBIDDEN";
+  message: string;
+} {
   switch (result.status) {
     case "address_required":
       return {
@@ -2468,7 +2480,8 @@ export function describeRelayRefusal(
     case "no_such_question":
       return {
         code: "NOT_FOUND",
-        message: "No agent question with that `messageId` in this session's room.",
+        message:
+          "No agent question with that `messageId` in this session's room.",
       };
     case "not_open":
       return {
@@ -2496,7 +2509,8 @@ export function describeRelayRefusal(
     case "note_required":
       return {
         code: "BAD_REQUEST",
-        message: "`note` is required: one line saying why the question is withdrawn.",
+        message:
+          "`note` is required: one line saying why the question is withdrawn.",
       };
     case "forbidden":
       return { code: "FORBIDDEN", message: result.reason };
