@@ -11,6 +11,14 @@ import {
   pathRowUnitView,
   type SessionUnitFacts,
 } from "./session.js";
+import {
+  classifyOwedAsk,
+  foldNeedsYouCounts,
+  type NeedsYouSessionFacts,
+  type NeedsYouSlotFacts,
+} from "../needs-you/rule.js";
+
+const DAY_MS = 24 * 3_600_000;
 
 const stateOf = (facts: SessionUnitFacts) =>
   resolveUnitState(sessionUnitInput(facts)).state;
@@ -445,5 +453,188 @@ describe("sessionUnitInput — an agent at work outranks its asks (decision E2)"
         })
       ).state
     ).toBe("needs_you");
+  });
+});
+
+describe("M6: the card reads the needs-you rule's Working clock, not any-actor liveness", () => {
+  const NOW_M6 = Date.parse("2026-10-27T12:00:00.000Z");
+  const ago = (ms: number) => new Date(NOW_M6 - ms).toISOString();
+  const owed = {
+    status: "active",
+    owedFromYou: 1,
+    pendingDecisions: 0,
+    now: NOW_M6,
+  };
+
+  it("an agent that asked and stopped: its ask is the person's turn", () => {
+    // The question post moved `lastAt` a minute ago; the agent's last WORK is
+    // two days old.
+    const live = {
+      turnInFlight: false,
+      lastAt: ago(60_000),
+      lastAgentWorkAt: ago(2 * DAY_MS),
+    };
+    expect(stateOf({ ...owed, live })).toBe("needs_you");
+    // Without the rule's clock (an older pod) the D1 liveness still decides.
+    expect(
+      stateOf({ ...owed, live: { ...live, lastAgentWorkAt: undefined } })
+    ).toBe("working");
+  });
+
+  it("the person approving a proposal is not an agent at work", () => {
+    expect(
+      stateOf({
+        ...owed,
+        live: {
+          turnInFlight: false,
+          lastAt: ago(30_000),
+          lastAgentWorkAt: null,
+        },
+      })
+    ).toBe("needs_you");
+  });
+
+  it("agent work inside the window, or a turn in flight: working", () => {
+    expect(
+      stateOf({
+        ...owed,
+        live: {
+          turnInFlight: false,
+          lastAt: ago(60_000),
+          lastAgentWorkAt: ago(60_000),
+        },
+      })
+    ).toBe("working");
+    expect(
+      stateOf({
+        ...owed,
+        live: { turnInFlight: true, lastAt: null, lastAgentWorkAt: null },
+      })
+    ).toBe("working");
+  });
+});
+
+describe("card vs rule parity: one session, one answer", () => {
+  // For each session the rule classifies ONE ask; the card is handed the
+  // pod's count of it (headline rows only: `foldNeedsYouCounts(..).needsYou`,
+  // the U1 count) and the same live facts. Needs you on one ⇔ needs you on
+  // the other; Working ⇔ working; a Stopped or a system ask never reads as
+  // the person's turn on the card.
+  const NOW_P = Date.parse("2026-10-27T12:00:00.000Z");
+  const ago = (ms: number) => new Date(NOW_P - ms).toISOString();
+  const ask: NeedsYouSlotFacts = {
+    owner: "human",
+    owedSince: ago(DAY_MS),
+    askedBy: "agent-1",
+    ask: { mode: "confirm" },
+  };
+  const FIXTURES: Array<{
+    name: string;
+    session: NeedsYouSessionFacts;
+    slot: NeedsYouSlotFacts;
+  }> = [
+    {
+      name: "a fresh ask on live work",
+      session: {
+        status: "active",
+        turnInFlight: false,
+        lastAgentActivityAt: ago(3_600_000),
+        lastAgentWorkAt: ago(3_600_000),
+        startedAt: ago(3 * DAY_MS),
+      },
+      slot: ask,
+    },
+    {
+      name: "an agent at work",
+      session: {
+        status: "active",
+        turnInFlight: false,
+        lastAgentActivityAt: ago(60_000),
+        lastAgentWorkAt: ago(60_000),
+        startedAt: ago(3 * DAY_MS),
+      },
+      slot: ask,
+    },
+    {
+      name: "a turn in flight",
+      session: {
+        status: "active",
+        turnInFlight: true,
+        lastAgentActivityAt: ago(10_000),
+        lastAgentWorkAt: ago(10_000),
+        startedAt: ago(3 * DAY_MS),
+      },
+      slot: ask,
+    },
+    {
+      name: "asked a minute ago and stopped",
+      session: {
+        status: "active",
+        turnInFlight: false,
+        lastAgentActivityAt: ago(60_000),
+        lastAgentWorkAt: ago(2 * DAY_MS),
+        startedAt: ago(3 * DAY_MS),
+      },
+      slot: ask,
+    },
+    {
+      name: "no agent for 8 days (Stopped)",
+      session: {
+        status: "active",
+        turnInFlight: false,
+        lastAgentActivityAt: ago(8 * DAY_MS),
+        lastAgentWorkAt: ago(8 * DAY_MS),
+        startedAt: ago(20 * DAY_MS),
+      },
+      slot: ask,
+    },
+    {
+      name: "a system ask on live work",
+      session: {
+        status: "active",
+        turnInFlight: false,
+        lastAgentActivityAt: ago(3_600_000),
+        lastAgentWorkAt: ago(3_600_000),
+        startedAt: ago(3 * DAY_MS),
+      },
+      slot: { owner: "human", askCause: { kind: "decision" } },
+    },
+    {
+      name: "a deliverable on a closed session",
+      session: {
+        status: "closed",
+        turnInFlight: false,
+        lastAgentActivityAt: ago(DAY_MS),
+        lastAgentWorkAt: ago(DAY_MS),
+        startedAt: ago(3 * DAY_MS),
+      },
+      slot: { ...ask, ask: { mode: "act" } },
+    },
+  ];
+
+  it.each(FIXTURES)("$name", ({ session, slot }) => {
+    const cls = classifyOwedAsk(slot, session, NOW_P)!;
+    const card = stateOf({
+      status: session.status,
+      owedFromYou: foldNeedsYouCounts([{ needsYouClass: cls }]).needsYou,
+      pendingDecisions: 0,
+      live: {
+        turnInFlight: session.turnInFlight,
+        lastAt: session.lastAgentActivityAt,
+        lastAgentWorkAt: session.lastAgentWorkAt,
+      },
+      now: NOW_P,
+    });
+    expect(card === "needs_you").toBe(cls === "needs_you");
+    expect(card === "working").toBe(cls === "working");
+  });
+
+  it("non-vacuity: the fixtures reach every slot class but review later", () => {
+    const seen = new Set(
+      FIXTURES.map((f) => classifyOwedAsk(f.slot, f.session, NOW_P))
+    );
+    expect([...seen].sort()).toEqual(
+      ["from_system", "needs_you", "stopped", "working"].sort()
+    );
   });
 });
