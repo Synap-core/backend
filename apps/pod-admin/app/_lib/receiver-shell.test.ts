@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { receiverWidthClass } from "./receiver-shell";
+import { receiverCardClass, receiverWidthClass } from "./receiver-shell";
 
 /**
  * `width` was live for one commit as an INERT prop: declared, defaulted,
@@ -23,5 +23,20 @@ describe("receiverWidthClass", () => {
 
   it("actually distinguishes the two — an inert prop returns one value", () => {
     expect(receiverWidthClass("sm")).not.toBe(receiverWidthClass("md"));
+  });
+});
+
+/**
+ * A HeroUI card clips (`overflow-hidden`), and a clipping box that does not
+ * scroll is where a sticky child pins: the proposal page's decision bar stayed
+ * at the bottom of a 34,545 px review. `pinsBar` must lift the clip.
+ */
+describe("receiverCardClass", () => {
+  it("a card that pins a bar clips nothing", () => {
+    expect(receiverCardClass(true)).toContain("overflow-visible");
+  });
+
+  it("every other card keeps its clip", () => {
+    expect(receiverCardClass(false)).not.toContain("overflow-visible");
   });
 });

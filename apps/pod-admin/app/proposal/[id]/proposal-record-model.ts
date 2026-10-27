@@ -45,6 +45,10 @@ import {
   type MediaRef,
 } from "@synap-core/types/presentation";
 import { formatDate, formatTimestamp } from "../../../lib/format";
+import {
+  textChanges,
+  type ChangeLine,
+} from "../../_lib/object/content/document-changes-model";
 import type { ProposalChangeInput } from "./proposal-review-model";
 
 /** An object the pod resolved from an id in the payload (`objectRefs`). */
@@ -62,7 +66,9 @@ export type RecordValue =
   | { kind: "ref"; objectKind: string; id: string; name: string }
   | { kind: "tags"; items: string[] }
   /** Source code, whole: never clipped (the card may fold it, never cut it). */
-  | { kind: "code"; text: string; lines: number };
+  | { kind: "code"; text: string; lines: number }
+  /** A rewritten text as its changed paragraphs (instructions before → after). */
+  | { kind: "changes"; lines: ChangeLine[] };
 
 export interface RecordField {
   key: string;
@@ -112,6 +118,25 @@ const WHOLE_TEXT_KEYS: ReadonlySet<string> = new Set([
   "body",
   "instructions",
 ]);
+
+/** Whole texts that are prose (markdown): a rewrite reads as its changes. */
+const PROSE_TEXT_KEYS: ReadonlySet<string> = new Set(["body", "instructions"]);
+
+/**
+ * A rewritten instruction as the paragraphs it changes, or `null` when the
+ * two sides are not both text or nothing changed.
+ */
+export function proseChanges(
+  before: unknown,
+  after: unknown
+): RecordValue | null {
+  if (typeof before !== "string" || typeof after !== "string") return null;
+  if (before.trim() === "" || after.trim() === "") return null;
+  const lines = textChanges(before, after);
+  return lines.some((l) => l.op !== "unchanged")
+    ? { kind: "changes", lines }
+    : null;
+}
 
 /** Text past this many characters (or with a line break) takes the card's width. */
 const WIDE_TEXT_CHARS = 80;
@@ -416,12 +441,18 @@ export function proposedRecord(input: RecordInput): ProposedRecord | null {
         : change.operation === "update"
           ? "change"
           : "add";
-    const after =
-      fieldOp === "remove"
+    // Rewritten instructions read as what changes, not two whole copies.
+    const rewrite =
+      fieldOp === "change" && !isProperty && PROSE_TEXT_KEYS.has(key)
+        ? proseChanges(change.before, change.after)
+        : null;
+    const after = rewrite
+      ? rewrite
+      : fieldOp === "remove"
         ? undefined
         : sideValue(key, change.after, def, resolved, isProperty);
     const before =
-      fieldOp === "add"
+      rewrite || fieldOp === "add"
         ? undefined
         : change.before === undefined && fieldOp === "change"
           ? undefined
@@ -433,7 +464,10 @@ export function proposedRecord(input: RecordInput): ProposedRecord | null {
     if (fieldOp === "change" && !after && !before) continue;
 
     const wide = [after, before].some(
-      (v) => (v?.kind === "text" && v.long) || v?.kind === "code"
+      (v) =>
+        (v?.kind === "text" && v.long) ||
+        v?.kind === "code" ||
+        v?.kind === "changes"
     );
     fields.push({
       key: change.path,

@@ -255,6 +255,99 @@ describe("inbound webhook ingress auth", () => {
     expect(emitSideEffects).not.toHaveBeenCalled();
   });
 
+  it("leaves event + deliveryId ABSENT when the sender sends no such header", async () => {
+    const body = JSON.stringify({ order: 42 });
+    await post(SUB_ID, body, { "x-synap-signature": sign(SECRET, body) });
+
+    const arg = emitSideEffects.mock.calls[0][0] as {
+      data: Record<string, unknown>;
+    };
+    expect(arg.data).not.toHaveProperty("event");
+    expect(arg.data).not.toHaveProperty("deliveryId");
+  });
+
+  // ── The conventional `X-Hub-Signature-256` header (GitHub, WebSub) ───────
+  // Same HMAC-SHA256 of the raw body, `sha256=<hex>`; only the name differs.
+  // The sender's event type and delivery id travel in headers, not the body.
+  const GH_HEADERS = {
+    "x-github-event": "pull_request",
+    "x-github-delivery": "72d3162e-cc78-11e3-81ab-4c9367dc0958",
+  };
+
+  it("accepts a body signed under X-Hub-Signature-256 and forwards the event type + delivery id", async () => {
+    const body = JSON.stringify({ action: "closed", number: 7 });
+    const res = await post(SUB_ID, body, {
+      ...GH_HEADERS,
+      "X-Hub-Signature-256": sign(SECRET, body),
+    });
+
+    expect(res.status).toBe(200);
+    expect(emitSideEffects).toHaveBeenCalledTimes(1);
+    const arg = emitSideEffects.mock.calls[0][0] as {
+      data: Record<string, unknown>;
+    };
+    expect(arg.data).toEqual({
+      subscriptionId: SUB_ID,
+      payload: { action: "closed", number: 7 },
+      event: "pull_request",
+      deliveryId: "72d3162e-cc78-11e3-81ab-4c9367dc0958",
+    });
+  });
+
+  it("rejects a wrong X-Hub-Signature-256 with the SAME 401 as an unknown subscription", async () => {
+    const body = JSON.stringify({ action: "closed", number: 7 });
+    const badSigRes = await post(SUB_ID, body, {
+      ...GH_HEADERS,
+      "X-Hub-Signature-256": sign("wrong-secret", body),
+    });
+    const badSigJson = await badSigRes.json();
+
+    subscriptionRow = null;
+    const unknownRes = await post(SUB_ID, body, {
+      ...GH_HEADERS,
+      "X-Hub-Signature-256": sign(SECRET, body),
+    });
+    const unknownJson = await unknownRes.json();
+
+    expect(badSigRes.status).toBe(401);
+    expect(unknownRes.status).toBe(401);
+    expect(badSigJson).toEqual(unknownJson);
+    expect(emitSideEffects).not.toHaveBeenCalled();
+  });
+
+  it("answers a signed ping 2xx and fires no automation event", async () => {
+    const body = JSON.stringify({
+      zen: "Keep it logically awesome.",
+      hook_id: 1,
+    });
+    const res = await post(SUB_ID, body, {
+      "x-github-event": "ping",
+      "x-github-delivery": "d-ping",
+      "X-Hub-Signature-256": sign(SECRET, body),
+    });
+
+    expect(res.status).toBe(200);
+    expect(emitSideEffects).not.toHaveBeenCalled();
+  });
+
+  it("never forwards a ping, whichever signature header carried it", async () => {
+    const body = JSON.stringify({ zen: "x" });
+    const res = await post(SUB_ID, body, {
+      "x-synap-event": "ping",
+      "x-synap-signature": sign(SECRET, body),
+    });
+
+    expect(res.status).toBe(200);
+    expect(emitSideEffects).not.toHaveBeenCalled();
+  });
+
+  it("still refuses an unsigned ping (auth comes before the handshake)", async () => {
+    const res = await post(SUB_ID, JSON.stringify({ zen: "x" }), {
+      "x-github-event": "ping",
+    });
+    expect(res.status).toBe(401);
+  });
+
   it("rejects an oversized body with 413 (declared content-length)", async () => {
     const res = await post(SUB_ID, JSON.stringify({ order: 42 }), {
       "content-length": String(2 * 1024 * 1024), // 2 MB > 1 MB cap
