@@ -10,7 +10,9 @@ import { describe, expect, it } from "vitest";
 import {
   graphRecords,
   isMachineKey,
+  proposedEntityMedia,
   proposedRecord,
+  RECORD_FIELDS_SHOWN,
   recordValue,
 } from "./proposal-record-model";
 
@@ -191,6 +193,92 @@ describe("recordValue — each value in its type's reading", () => {
   });
 });
 
+describe("proposedRecord — a skill create: the code is read whole, first", () => {
+  // > 600 characters and > 40 lines: both the old text clip and the card's
+  // fold would have cut it.
+  const code = Array.from(
+    { length: 60 },
+    (_, i) =>
+      `const step${i} = await callProvider("apify_api", "GET", "/acts/${i}");`
+  ).join("\n");
+  const filler = [
+    "description",
+    "kind",
+    "slug",
+    "name",
+    "body",
+    "providerSpec",
+    "parameters",
+    "category",
+    "executionMode",
+    "timeoutSeconds",
+    "intent",
+  ].map((path) => ({
+    path,
+    label: path,
+    operation: "create" as const,
+    after: path === "timeoutSeconds" ? 120 : `${path} value`,
+  }));
+  const record = proposedRecord({
+    action: "create",
+    kind: "skill",
+    changes: [
+      ...filler,
+      {
+        path: "code",
+        label: "Code",
+        operation: "create" as const,
+        after: code,
+      },
+      {
+        path: "requiredToolNames",
+        label: "RequiredToolNames",
+        operation: "create" as const,
+        after: ["apify_api"],
+      },
+    ],
+  })!;
+
+  it("keeps every character and line of the code, as code", () => {
+    const field = record.fields.find((f) => f.key === "code")!;
+    expect(field.after).toEqual({ kind: "code", text: code, lines: 60 });
+    expect(code.length).toBeGreaterThan(600);
+    expect(field.wide).toBe(true);
+  });
+
+  it("leads with the code and the tools it declared, ahead of the fold", () => {
+    expect(record.fields.length).toBeGreaterThan(RECORD_FIELDS_SHOWN);
+    expect(record.fields.slice(0, 2).map((f) => f.key)).toEqual([
+      "code",
+      "requiredToolNames",
+    ]);
+    expect(record.fields[1]!.after).toEqual({
+      kind: "tags",
+      items: ["apify_api"],
+    });
+    // The rest keep the pod's order.
+    expect(record.fields.slice(2).map((f) => f.key)).toEqual(
+      filler.map((f) => f.path)
+    );
+  });
+
+  it("a PROPERTY named code is an ordinary value, not the record's code", () => {
+    const entity = proposedRecord({
+      action: "create",
+      kind: "person",
+      changes: [
+        {
+          path: "properties.code",
+          label: "Code",
+          operation: "create" as const,
+          after: "A-12",
+        },
+      ],
+    })!;
+    expect(entity.fields[0]!.after?.kind).toBe("text");
+  });
+});
+
 describe("isMachineKey", () => {
   it("ids and the shared system fields; never an ordinary word ending in -id", () => {
     for (const k of [
@@ -244,5 +332,35 @@ describe("graphRecords — a capture graph's new records", () => {
       ["e0", "Ada", "person", 1],
       ["$op1", "Acme", "company", 0],
     ]);
+  });
+});
+
+describe("proposedEntityMedia — the upload a create would make", () => {
+  const doc = "44444444-4444-4444-8444-444444444444";
+
+  it("an uploaded image waiting for approval is drawn from its stored document", () => {
+    expect(
+      proposedEntityMedia({
+        profileSlug: "file",
+        title: "Carousel 04",
+        documentId: doc,
+        properties: { mimeType: "image/png", fileSize: 1200 },
+      })
+    ).toEqual({ via: "stored", documentId: doc, mime: "image/png" });
+  });
+
+  it("a record with no image — or no record — has none", () => {
+    expect(
+      proposedEntityMedia({
+        profileSlug: "file",
+        documentId: doc,
+        properties: { mimeType: "application/pdf" },
+      })
+    ).toBeNull();
+    expect(
+      proposedEntityMedia({ profileSlug: "person", title: "Ana" })
+    ).toBeNull();
+    expect(proposedEntityMedia(null)).toBeNull();
+    expect(proposedEntityMedia("x")).toBeNull();
   });
 });
