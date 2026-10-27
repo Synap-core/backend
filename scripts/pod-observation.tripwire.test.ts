@@ -22,9 +22,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { OBSERVATION_NAMESPACES } from "../packages/types/src/events/unified.ts";
 import {
   DEV_LOOP_EVENT_TYPES,
+  POD_SESSION_LINE_RE,
   checkDevLoopPayload,
+  podSessionIdFromBody,
 } from "../packages/types/src/events/dev-loop.ts";
 import {
+  POD_SESSION_LINE_RE as SCRIPT_POD_SESSION_LINE_RE,
   isKeyRefusal,
   observationFromEvent,
   podSessionFromBody,
@@ -258,13 +261,22 @@ describe("pod-observation: the facts it carries", () => {
     ).toBeNull();
   });
 
-  it("reads the Pod session line the way the Work Map does", () => {
-    expect(podSessionFromBody(`**Pod session:** ${SID.toUpperCase()}`)).toBe(
-      SID
-    );
-    expect(podSessionFromBody(`- Pod session ${SID}`)).toBe(SID);
-    expect(podSessionFromBody("no line here")).toBeNull();
-    expect(podSessionFromBody(null)).toBeNull();
+  it("reads the Pod session line with the ONE rule (dev-loop.ts POD_SESSION_LINE_RE)", () => {
+    expect(SCRIPT_POD_SESSION_LINE_RE.source).toBe(POD_SESSION_LINE_RE.source);
+    expect(SCRIPT_POD_SESSION_LINE_RE.flags).toBe(POD_SESSION_LINE_RE.flags);
+    const samples: [string | null, string | null][] = [
+      [`**Pod session:** ${SID.toUpperCase()}`, SID],
+      [`- Pod session ${SID}`, SID],
+      [`> pod session: ${SID}`, SID],
+      [`Does x.\n\nPod session: \`${SID}\`\n`, SID],
+      [`See the Pod session ${SID} for why.`, null],
+      ["no line here", null],
+      [null, null],
+    ];
+    for (const [body, want] of samples) {
+      expect(podSessionFromBody(body), String(body)).toBe(want);
+      expect(podSessionIdFromBody(body), String(body)).toBe(want);
+    }
   });
 });
 

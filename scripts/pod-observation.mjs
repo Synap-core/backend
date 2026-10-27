@@ -38,17 +38,19 @@ import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 /**
- * The PR body line naming the pod session. Same tolerance as the Work Map's
- * reader (claude-switch session-map/work.py POD_LINE_RE): any punctuation
- * around "Pod session", an optional colon, case-insensitive.
+ * The PR body line naming the pod session: a copy of the ONE rule,
+ * POD_SESSION_LINE_RE in packages/types/src/events/dev-loop.ts (this script
+ * runs with no install, so it cannot import it). The tripwire pins the two
+ * equal. Any punctuation around "Pod session", an optional colon, any case,
+ * at the start of a line.
  */
-const POD_LINE_RE =
+export const POD_SESSION_LINE_RE =
   /^\W*pod session\W*:?\s*\W*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/im;
 
 /** The pod session a PR body names, or null when it names none. */
 export function podSessionFromBody(body) {
   if (typeof body !== "string") return null;
-  const m = POD_LINE_RE.exec(body);
+  const m = POD_SESSION_LINE_RE.exec(body);
   return m ? m[1].toLowerCase() : null;
 }
 

@@ -14,6 +14,9 @@ export interface PodObservation {
   };
 }
 
+/** Copy of POD_SESSION_LINE_RE (packages/types/src/events/dev-loop.ts), pinned equal by the tripwire. */
+export const POD_SESSION_LINE_RE: RegExp;
+
 /** The pod session a PR body names (`Pod session: <id>`), or null. */
 export function podSessionFromBody(body: unknown): string | null;
 
