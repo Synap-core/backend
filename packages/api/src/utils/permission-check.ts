@@ -63,6 +63,7 @@ import {
   messages,
   focusSessions,
   playbooks,
+  skills,
   ChannelMemberKind,
   ProposalStatus,
 } from "@synap/database/schema";
@@ -5038,6 +5039,25 @@ export async function resolveProposalTargetName(
       logger.warn(
         { err, targetId },
         "resolveProposalTargetName: playbook name lookup failed"
+      );
+      return undefined;
+    }
+  }
+
+  // Same for a skill edit: a rewrite of its instructions or code carries no
+  // `name`, so it read "Update Tool" with no tool named.
+  if (subjectType === "skill" && isLikelyUUID(targetId)) {
+    try {
+      const [skill] = await db
+        .select({ name: skills.name })
+        .from(skills)
+        .where(eq(skills.id, targetId))
+        .limit(1);
+      return skill?.name ?? undefined;
+    } catch (err) {
+      logger.warn(
+        { err, targetId },
+        "resolveProposalTargetName: skill name lookup failed"
       );
       return undefined;
     }

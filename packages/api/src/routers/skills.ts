@@ -523,6 +523,8 @@ export async function insertSkillGoverned(
 
   const approved = skillBornApproved({
     kind: values.kind,
+    code: values.code,
+    providerSpec: values.providerSpec,
     agentUserId: agentUserId ?? skillAuthor?.agentUserId,
     personApprovedProposal:
       !agentUserId && skillAuthor?.personApproved === true,
@@ -1311,6 +1313,18 @@ export const skillsRouter = router({
       // input.kind still honored). A skill must carry documentation or code.
       const hasCode = !!input.code?.trim();
       const kind = input.kind ?? (hasCode ? "code" : "instruction");
+      // An instruction skill's text is its `body`; `code` is what the runtime
+      // evaluates. An `instruction` label on code would skip the code scan
+      // and read as prose on every review while it runs as JavaScript.
+      // Only the definition applier keeps the catalog's older shape, an
+      // instruction skill's Markdown in `code` (it is born unapproved there).
+      if (kind === "instruction" && hasCode && !isDefinitionApplier(ctx)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            'An instruction skill carries no code: put its text in `body`, or create it with kind "code".',
+        });
+      }
       // `declarative` (providerSpec) and `builtin` (in-process handler) carry no
       // body/code, so they are exempt from the documentation-or-code requirement.
       if (
@@ -1479,6 +1493,8 @@ export const skillsRouter = router({
           status: "active",
           approved: skillBornApproved({
             kind,
+            code: input.code,
+            providerSpec: input.providerSpec,
             agentUserId: input.agentUserId,
           }),
         })
