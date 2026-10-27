@@ -397,3 +397,17 @@ describe("the census shape (needs-truth §6): 114 claims, 7 real", () => {
     });
   });
 });
+
+describe("fold words (vocabulary): one name and one hint per fold", () => {
+  it("covers every fold, and an unknown one humanizes", async () => {
+    const { resolveNeedsYouFoldLabel, resolveNeedsYouFoldHint } =
+      await import("../vocabulary/index.js");
+    const { NEEDS_YOU_FOLDS } = await import("./rule.js");
+    for (const f of NEEDS_YOU_FOLDS) {
+      expect(resolveNeedsYouFoldLabel(f)).not.toMatch(/_/);
+      expect(resolveNeedsYouFoldHint(f)).toBeTruthy();
+    }
+    expect(resolveNeedsYouFoldLabel("stopped")).toBe("Stopped");
+    expect(resolveNeedsYouFoldHint("brand_new")).toBeNull();
+  });
+});

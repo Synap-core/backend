@@ -29,6 +29,7 @@ import type { NextRungOutcome, TrustRung } from "../trust-ladder/index.js";
 import type { GovernanceRung, MatrixMark } from "../agent-matrix/index.js";
 import type { FilterOperator } from "../views/filters.js";
 import type { NeedsYouBucket } from "../needs-you/buckets.js";
+import type { NeedsYouFold } from "../needs-you/rule.js";
 
 /**
  * The object-kind identity registry lives in `./object-kinds` and is re-exported
@@ -2206,6 +2207,46 @@ export function resolveNeedsYouItemCount(
   if (nouns) return `${n} ${n === 1 ? nouns[0] : nouns[1]}`;
   const noun = humanizeToken(key).toLowerCase();
   return `${n} ${n === 1 ? noun : pluralizeFallback(noun)}`;
+}
+
+/**
+ * The needs-you rule's FOLDS (decision E, `@synap-core/types/needs-you/rule`):
+ * the section name every surface draws, and the one line that says what the
+ * fold is for. One map, so relay and the browser can never word a fold twice.
+ */
+const NEEDS_YOU_FOLD_WORDS: Record<
+  NeedsYouFold,
+  { label: string; hint: string }
+> = {
+  working: {
+    label: "Working",
+    hint: "An agent is on it: it asks you when you can",
+  },
+  stopped: {
+    label: "Stopped",
+    hint: "No agent moved it for 7 days: resume or close",
+  },
+  review_later: { label: "Review later", hint: "Asked more than 7 days ago" },
+  from_system: {
+    label: "From the system",
+    hint: "No agent asked this: the system raised it",
+  },
+  changes_to_review: {
+    label: "Changes to review",
+    hint: "Nothing waits on these: approve them in a batch",
+  },
+};
+
+/** A fold's section name ("Stopped"). An unknown fold humanizes, never leaks. */
+export function resolveNeedsYouFoldLabel(fold: string): string {
+  return (
+    NEEDS_YOU_FOLD_WORDS[fold as NeedsYouFold]?.label ?? humanizeToken(fold)
+  );
+}
+
+/** A fold's one-line hint ("No agent moved it for 7 days: resume or close"); null when unknown. */
+export function resolveNeedsYouFoldHint(fold: string): string | null {
+  return NEEDS_YOU_FOLD_WORDS[fold as NeedsYouFold]?.hint ?? null;
 }
 
 /**
