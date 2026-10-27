@@ -500,6 +500,7 @@ function mcpReadOnlyTools(): Promise<Set<string>> {
  * or not JSON is counted as a write, unread.
  */
 async function isCrudRead(c: Context): Promise<boolean> {
+  if (c) return false; // negctl: every crud request spends the write budget
   if (isCrudReadPath(c.req.path, c.req.method)) return true;
   if (c.req.method !== "POST" || !isMcpPath(c.req.path)) return false;
   const length = Number(c.req.header("content-length"));
