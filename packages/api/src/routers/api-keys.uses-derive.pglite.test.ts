@@ -241,3 +241,70 @@ describe("D-3 — a key made for a space is confined to it", () => {
     ).toBe(before);
   });
 });
+
+describe("apiKeys.createForWorkspace derives scopes from uses", () => {
+  const WS = randomUUID();
+  const wsCaller = () =>
+    apiKeysRouter.createCaller({
+      db: h.db,
+      authenticated: true,
+      userId: HUMAN,
+      workspaceId: WS,
+    } as never);
+
+  beforeAll(async () => {
+    await h.client!.query(
+      `insert into workspaces (id, name, owner_id, settings) values ($1, 'w', $2, '{}'::jsonb)`,
+      [WS, HUMAN]
+    );
+    await h.client!.query(
+      `insert into workspace_members (id, workspace_id, user_id, role) values ($1, $2, $3, 'owner')`,
+      [randomUUID(), WS, HUMAN]
+    );
+  });
+
+  it("a read-only grant gets the read doors only, held in the workspace, with its note", async () => {
+    const res = await wsCaller().createForWorkspace({
+      name: "space site",
+      uses: ["hub", "mcp"],
+      note: "Vercel env",
+      grant: { permissions: ["entity.*.read"] },
+    });
+    expect(await scopeOf(res.id)).toEqual({
+      scope: ["hub-protocol.read", "mcp.read"],
+      description: "Vercel env",
+    });
+    expect(await grantOf(res.id)).toEqual([
+      { permissions: ["entity.*.read"], workspace_ids: [WS] },
+    ]);
+  });
+
+  it("a write grant opens the write door", async () => {
+    const res = await wsCaller().createForWorkspace({
+      name: "space poster",
+      uses: ["hub"],
+      grant: { permissions: ["event.create"] },
+    });
+    expect((await scopeOf(res.id)).scope).toEqual([
+      "hub-protocol.read",
+      "hub-protocol.write",
+    ]);
+  });
+
+  it("needs exactly one of uses or legacy scopes", async () => {
+    await expect(
+      wsCaller().createForWorkspace({
+        name: "none",
+        grant: { permissions: ["entity.read"] },
+      } as never)
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    await expect(
+      wsCaller().createForWorkspace({
+        name: "both",
+        uses: ["hub"],
+        scopes: ["hub-protocol.read"],
+        grant: { permissions: ["entity.read"] },
+      })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+});
