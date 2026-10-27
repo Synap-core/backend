@@ -200,8 +200,12 @@ type ReviewedProposal = {
   targetId: string | null;
   /** The run the proposal was filed in — also keyed by the session rung. */
   sessionId: string | null;
-  /** Its type: a held-writes pack belongs to no one session (`proposalSessionIds`). */
-  proposalType: string;
+  /**
+   * Its type: a held-writes pack belongs to no one session
+   * (`proposalSessionIds`). Optional on purpose: a caller that does not pass
+   * it gets the STRICTER verdict (the stamped session gates), never a wider one.
+   */
+  proposalType?: string | null;
   /** Its project, for a key's project fence (D3); absent reads as none. */
   projectId?: string | null;
 };
