@@ -32,6 +32,7 @@ import {
 } from "@synap/database";
 import type { FocusSession } from "@synap/database";
 import type { ExpectedOutput } from "@synap/playbooks";
+import { createLogger } from "@synap-core/core";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import {
   attachSessionVerdicts,
@@ -49,7 +50,10 @@ import {
 } from "./continuation-packet.js";
 import { OPEN_SESSION_STATUSES } from "./session-statuses.js";
 import { mergeSessionMetadata } from "./session-metadata.js";
+import { attachNextMove } from "./session-path-sections.js";
 import { openLink } from "../../utils/deep-links.js";
+
+const logger = createLogger({ module: "focus-sessions/session-nudges" });
 
 /** How many playbook candidates ride on a nudge — cheap, never the full list. */
 export const NUDGE_PLAYBOOK_CANDIDATES_MAX = 3;
@@ -321,11 +325,14 @@ export async function loadSessionNudges(p: {
   let nextMove: Pick<ContinuationNextMove, "kind" | "reason"> | undefined;
   if (p.phase === "update" && mayBeReadyToClose(p.session)) {
     try {
-      const { attachNextMove } = await import("./session-path-sections.js");
       const [row] = await attachNextMove([p.session], { userId: p.userId });
       nextMove = row?.nextMove;
-    } catch {
+    } catch (err) {
       // The owed criteria/stage nudges still stand.
+      logger.warn(
+        { err, sessionId: p.session.id },
+        "session nudges: next move NOT read — no ready_to_close nudge"
+      );
     }
   }
   return computeSessionNudges({

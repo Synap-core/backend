@@ -84,7 +84,7 @@ import {
   type AgentHandOffDecision,
 } from "./agent-hand-off.js";
 import { attachSessionAgent } from "./attach-session-agent.js";
-import { readStartOffers, type StartOffers } from "./start-offers.js";
+import { readStartOffers, type StartOffersRead } from "./start-offers.js";
 import {
   normalizeSessionTitle,
   SESSION_TITLE_MAX,
@@ -350,9 +350,10 @@ export type CreateFocusSessionResult =
       /**
        * Present iff `offerStartContext` was set and the session has a project
        * or a goal: open goals it may serve, open sessions on close work.
-       * Suggestions only — see `start-offers.ts`.
+       * Suggestions only — see `start-offers.ts`. `unavailable` when the read
+       * failed: unknown, never "no offers".
        */
-      offers?: StartOffers;
+      offers?: StartOffersRead;
     }
   | {
       /**
@@ -1229,8 +1230,8 @@ export async function createFocusSession(
   }
 
   // START OFFERS (F5/F6) — a courtesy, never a gate: each part reports its
-  // own failure, and a throw past them only omits the block.
-  const offers = params.offerStartContext
+  // own failure, and a throw past them reads `unavailable`, never "none".
+  const offers: StartOffersRead | undefined = params.offerStartContext
     ? await readStartOffers({
         userId,
         sessionId: sessionOut.id,
@@ -1238,9 +1239,12 @@ export async function createFocusSession(
         trackId: sessionOut.trackId ?? null,
         title: sessionOut.title ?? null,
         goal: sessionOut.goal,
-      }).catch((err) => {
-        logger.warn({ err }, "start offers failed — omitted");
-        return undefined;
+      }).catch((err): StartOffersRead => {
+        logger.warn({ err }, "start offers NOT read — unavailable");
+        return {
+          status: "unavailable",
+          reason: "The goals and sessions near this one could not be read.",
+        };
       })
     : undefined;
 

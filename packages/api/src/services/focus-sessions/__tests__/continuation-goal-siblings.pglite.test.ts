@@ -25,6 +25,7 @@ const h = vi.hoisted(() => {
     },
     db: null as unknown,
     failTrackRead: false,
+    trackReads: 0,
     async init(): Promise<unknown> {
       if (!state.db) {
         const { PGlite } = await import("@electric-sql/pglite");
@@ -52,6 +53,7 @@ vi.mock("../../tracks/tracks-service.js", async (importOriginal) => {
   return {
     ...actual,
     getTrack: async (...a: unknown[]) => {
+      h.trackReads++;
       if (h.failTrackRead) throw new Error("track read exploded");
       return real(...a);
     },
@@ -381,6 +383,14 @@ describe("continuation packet — the SIBLINGS beside a session", () => {
         expect.objectContaining({ stageKey: null }),
       ]),
     });
+  });
+
+  it("the goal, its siblings and its prior stages share ONE track read", async () => {
+    h.trackReads = 0;
+    const packet = await packetFor(S.spec);
+    expect(packet.goal).toMatchObject({ status: "ok" });
+    expect(packet.siblings).toMatchObject({ scope: "goal" });
+    expect(h.trackReads).toBe(1);
   });
 
   it("no goal and no project: siblings is null", async () => {

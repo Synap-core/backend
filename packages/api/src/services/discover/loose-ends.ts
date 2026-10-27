@@ -46,6 +46,7 @@ import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import type { ExpectedOutput } from "@synap/playbooks";
 import { openLink } from "../../utils/deep-links.js";
 import { isOwedSlot } from "../focus-sessions/owed-outputs.js";
+import { attachNextMove } from "../focus-sessions/session-path-sections.js";
 import { slotKeyAt } from "../focus-sessions/slot-keys.js";
 import {
   detectZeroRunAutomations,
@@ -449,8 +450,6 @@ export async function readSessionsReadyToClose(p: {
   agentUserId: string;
 }): Promise<ReadyToClose> {
   try {
-    const { attachNextMove } =
-      await import("../focus-sessions/session-path-sections.js");
     const rows = await db
       .select()
       .from(focusSessions)

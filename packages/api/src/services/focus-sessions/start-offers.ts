@@ -58,6 +58,8 @@ const SESSIONS_SCAN = 200;
 export const NEAR_TWIN_OFFER_MIN = 0.2;
 
 type Unavailable = { status: "unavailable"; reason: string };
+/** The offers, or why they could not be read at all — never folded into "none". */
+export type StartOffersRead = StartOffers | Unavailable;
 
 export interface StartGoalOffer {
   id: string;

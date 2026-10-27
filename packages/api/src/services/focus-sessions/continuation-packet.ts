@@ -711,6 +711,8 @@ export interface PacketEvaluationItem {
 }
 
 type SessionRow = typeof focusSessions.$inferSelect;
+/** The session's track, read once through its own door (`getTrack`). */
+type TrackRead = ReturnType<typeof getTrack>;
 
 export interface ProjectContinuationPacketCtx {
   database?: typeof db;
@@ -1020,10 +1022,11 @@ async function readOutboundSessions(
 async function readPriorStages(
   database: typeof db,
   reader: SessionReader,
-  row: SessionRow
+  row: SessionRow,
+  trackRead: TrackRead
 ): Promise<PacketSection<PacketPriorStageSession> | null> {
   if (!row.trackId) return null;
-  const track = await getTrack(row.trackId, { userId: reader.userId });
+  const track = await trackRead;
   if (!track) return null;
   const stages = deriveTrackStages(
     track.definitionSnapshot?.stages,
@@ -1165,10 +1168,11 @@ async function readRecentTrackSessions(
  */
 async function readGoal(
   reader: SessionReader,
-  row: SessionRow
+  row: SessionRow,
+  trackRead: TrackRead
 ): Promise<ContinuationPacket["goal"]> {
   if (!row.trackId) return { status: "ok", goal: null };
-  const track = await getTrack(row.trackId, { userId: reader.userId });
+  const track = await trackRead;
   if (!track) return { status: "ok", goal: null };
   const facts = await loadTrackGoalFacts([track], reader.userId);
   const view = toTrackView(track, undefined, undefined, facts.get(track.id));
@@ -1208,7 +1212,8 @@ async function readGoal(
 async function readSiblings(
   database: typeof db,
   reader: SessionReader,
-  row: SessionRow
+  row: SessionRow,
+  trackRead: TrackRead
 ): Promise<PacketSiblings | null> {
   let scope: PacketSiblings["scope"];
   let scopeWhere: SQL;
@@ -1219,7 +1224,7 @@ async function readSiblings(
     // A staged goal: the steps after this one are "next". Read through the
     // track's own door and stage rule, as `priorStages` does.
     if (row.trackStage) {
-      const track = await getTrack(row.trackId, { userId: reader.userId });
+      const track = await trackRead;
       const stages = track
         ? deriveTrackStages(
             track.definitionSnapshot?.stages,
@@ -2154,6 +2159,12 @@ export async function projectContinuationPacket(
   // their own `unavailable` below.
   const allOutputs = readAllOutputs(database, reader, row.id);
   allOutputs.catch(() => undefined);
+  // ONE track read for the three track sections (`priorStages`, `goal`,
+  // `siblings`); a failure makes each its own `unavailable`, as above.
+  const trackRead: TrackRead = row.trackId
+    ? getTrack(row.trackId, { userId: reader.userId })
+    : Promise.resolve(null);
+  trackRead.catch(() => undefined);
 
   const [
     project,
@@ -2307,7 +2318,7 @@ export async function projectContinuationPacket(
           "The agent this session was handed to could not be read."
         )
       ),
-    readPriorStages(database, reader, row).catch(
+    readPriorStages(database, reader, row, trackRead).catch(
       unavailable(
         row.id,
         "priorStages",
@@ -2378,14 +2389,14 @@ export async function projectContinuationPacket(
         "The messages other sessions sent this one could not be read."
       )
     ),
-    readGoal(reader, row).catch(
+    readGoal(reader, row, trackRead).catch(
       unavailable(
         row.id,
         "goal",
         "The goal this session serves could not be read."
       )
     ),
-    readSiblings(database, reader, row).catch(
+    readSiblings(database, reader, row, trackRead).catch(
       unavailable(
         row.id,
         "siblings",
