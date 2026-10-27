@@ -30,7 +30,7 @@ export type TemplateApplyStateName =
   | "active"
   /** Layer 2 only filed proposals (nothing failed). */
   | "awaiting-approval"
-  /** A layer-2 item errored. */
+  /** A layer-2 item errored, or waits on the person's setup (`needsSetup`). */
   | "partial"
   /** This door ran layer 1 only; the living layers were never applied. */
   | "layer-2-not-run"
@@ -67,7 +67,14 @@ export interface TemplateState {
   /** Layer-1 resume ledger. */
   completedSteps?: string[];
   proposals?: string[];
+  /** Layer-2 items that errored, one line each: `<layer>:<name>: <reason>`. */
   failures?: string[];
+  /**
+   * Layer-2 items that wait on the PERSON, same line shape: a capability whose
+   * key or account was not given, an automation that runs its verbs. Not a
+   * retry: health tells the person what to set up.
+   */
+  needsSetup?: string[];
   packs?: TemplatePackEntry[];
   /**
    * The template data changes (conversion opKeys) the last stamp is HELD for

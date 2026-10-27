@@ -70,6 +70,7 @@ export interface TemplateStatePatch {
   completedSteps?: string[] | null;
   proposals?: string[] | null;
   failures?: string[] | null;
+  needsSetup?: string[] | null;
   packs?: TemplatePackEntry[] | null;
   heldForDataChanges?: string[] | null;
   heldForDataChangesUnreadable?: true | null;
@@ -158,6 +159,8 @@ function normalize(t: Record<string, unknown>): TemplateState {
   if (proposals) out.proposals = proposals;
   const failures = strings(t.failures);
   if (failures) out.failures = failures;
+  const needsSetup = strings(t.needsSetup);
+  if (needsSetup) out.needsSetup = needsSetup;
   const packs = parsePacks(t.packs);
   if (packs) out.packs = packs;
   const held = strings(t.heldForDataChanges);
@@ -278,6 +281,7 @@ export function mergeTemplateState(
     delete out.pendingVersion;
     delete out.proposals;
     delete out.failures;
+    delete out.needsSetup;
   }
   out.at = now;
   return out;

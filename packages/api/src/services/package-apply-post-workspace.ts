@@ -15,6 +15,7 @@ import {
   loadCapabilityTemplate,
 } from "./capabilities/create-from-definition.js";
 import { createLoopFromDefinition } from "./loops/create-from-definition.js";
+import { isSetupRequiredLike } from "./proposals/setup-required-error.js";
 import { createLinks } from "./links/links-service.js";
 import { linkProjectToWorkspace } from "../utils/project-workspace.js";
 import { createHubProtocolCallerContext } from "../routers/hub-protocol/utils.js";
@@ -341,6 +342,17 @@ function placementKey(p: ActionPlacement): string {
   return `${p.profileSlug}::${p.surface}::${p.kind}::${p.ref}`;
 }
 
+/** The verbs a flow's capability nodes run (`data.verbId`). */
+function flowVerbIds(flow: { nodes?: unknown[] } | undefined): string[] {
+  const out: string[] = [];
+  for (const node of flow?.nodes ?? []) {
+    const n = node as { type?: unknown; data?: { verbId?: unknown } } | null;
+    if (n?.type === "capability" && typeof n.data?.verbId === "string")
+      out.push(n.data.verbId);
+  }
+  return out;
+}
+
 /** Minimal body slice the post-workspace layers read (PackageApply body). */
 export interface PackagePostWorkspaceBody {
   capabilities?: Array<{
@@ -560,14 +572,23 @@ export async function applyPackagePostWorkspace(
   );
 
   // ── Capabilities ────────────────────────────────────────────────────────
+  // A capability that waits on the person (a key not given, an account not
+  // connected: `SetupRequiredError`) landed nothing, so it stays `error` for
+  // every reader of the bag and the stamp holds. But it is marked
+  // `needsSetup`: what is left is the person's step, not a retry. Its verbs
+  // are kept so an automation that runs them says what it waits on.
+  const setupBlockedVerbs = new Map<string, { key: string; message: string }>();
   if (body.capabilities?.length) {
     const caps: unknown[] = [];
     for (const cap of body.capabilities) {
+      let definition: Record<string, unknown> | undefined;
       try {
-        const definition =
+        definition =
           cap.definition ??
           (cap.templateKey
-            ? await loadCapabilityTemplate(cap.templateKey, { workspaceId })
+            ? ((await loadCapabilityTemplate(cap.templateKey, {
+                workspaceId,
+              })) as unknown as Record<string, unknown>)
             : undefined);
         if (!definition) {
           caps.push({
@@ -592,10 +613,24 @@ export async function applyPackagePostWorkspace(
           ...(r.proposals.length > 0 ? { proposals: r.proposals } : {}),
         });
       } catch (e) {
+        const key = cap.templateKey ?? "inline";
+        const needsSetup = isSetupRequiredLike(e);
+        if (needsSetup) {
+          const skills: unknown[] =
+            definition && Array.isArray(definition.skills)
+              ? definition.skills
+              : [];
+          for (const skill of skills) {
+            const name = (skill as { name?: unknown } | null)?.name;
+            if (typeof name === "string" && name)
+              setupBlockedVerbs.set(name, { key, message: e.message });
+          }
+        }
         caps.push({
-          key: cap.templateKey ?? "inline",
+          key,
           status: "error",
           message: (e as Error).message,
+          ...(needsSetup ? { needsSetup: true } : {}),
         });
       }
     }
@@ -743,11 +778,26 @@ export async function applyPackagePostWorkspace(
             : { name: a.name, status: "created", id: created.id ?? undefined }
         );
       } catch (e) {
-        autos.push({
-          name: a.name,
-          status: "error",
-          message: (e as Error).message,
-        });
+        // The write failed, and the flow runs a verb of a capability this
+        // apply could not install until the person sets it up: that is what
+        // it waits on, not an error of its own.
+        const blockedBy = flowVerbIds(a.flowDefinition)
+          .map((verbId) => setupBlockedVerbs.get(verbId))
+          .find((b) => b !== undefined);
+        autos.push(
+          blockedBy
+            ? {
+                name: a.name,
+                status: "error",
+                message: `Waits on ${blockedBy.key}: ${blockedBy.message}`,
+                needsSetup: true,
+              }
+            : {
+                name: a.name,
+                status: "error",
+                message: (e as Error).message,
+              }
+        );
       }
     }
     // Per-item isolation: an automation that fails to apply is reported as
