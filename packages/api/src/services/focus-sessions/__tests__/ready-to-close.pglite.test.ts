@@ -67,6 +67,7 @@ import {
   computeSessionNudges,
   loadSessionNudges,
   mayBeReadyToClose,
+  type NudgeSessionLike,
 } from "../session-nudges.js";
 
 const PERSON = "person-1";
@@ -261,7 +262,7 @@ describe("update_session nudge: readyToClose (F4)", () => {
   });
 
   it("the pre-check only lets a session with live, delivered slots through", () => {
-    const base = {
+    const base: Omit<NudgeSessionLike, "expectedOutputs"> = {
       playbookId: null,
       origin: "agent",
       currentStage: null,
