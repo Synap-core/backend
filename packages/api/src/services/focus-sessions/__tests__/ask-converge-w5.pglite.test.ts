@@ -688,7 +688,13 @@ describe("param / criterion / provide / room question on the ONE answer door", (
       body: JSON.stringify({ role: "assistant", userId: OWNER, ...body }),
     });
 
-  const AGENT_SLOT = { kind: "document", label: "Region" };
+  // Says what its answer unblocks (decision E): a question about a slot that
+  // does not is refused before it is posted (`unblocks.test.ts`).
+  const AGENT_SLOT = {
+    kind: "document",
+    label: "Region",
+    unblocks: "The EU invoice run",
+  };
   const CONFIRM = { mode: "confirm" };
 
   it("Hub: an agent's question about a slot is filed ON it — owner human, why = the question, ask = the one passed", async () => {
