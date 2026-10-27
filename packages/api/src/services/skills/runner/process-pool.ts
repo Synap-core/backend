@@ -7,11 +7,7 @@
  * or OOM in a thread kills the whole API, in a child it kills the child. Each
  * child runs up to K isolates at once; runs past N×K wait in a FIFO queue, and
  * past `queueMax` are refused at once with a typed `busy` error, never queued
- * without bound and never silently dropped. A run waits at most its own time
- * limit, plus a runner's start time (then `busy`, nothing ran: its caller has
- * likely given up), and one requester may hold at most `perRequesterMax` runs
- * running or waiting, so one agent's burst cannot take every other person's
- * turn.
+ * without bound and never silently dropped.
  *
  * The broker side lives here: a run's bridges (built and bound to the run's
  * async context by the caller) are executed HERE when the child asks, so the
@@ -39,7 +35,6 @@ import {
   SKILL_BRIDGE_NAMES,
   type BrokerMessage,
   type RunnerMessage,
-  type SkillBridgeName,
   type SkillBridges,
   type SkillJob,
 } from "./protocol.js";
@@ -62,17 +57,6 @@ const CANCEL_GRACE_MS = 2_000;
 
 /** After a runner fails to start, no new one is forked for this long. */
 const START_RETRY_MS = 5_000;
-
-/**
- * The bridges that can act outside the run (send, write, propose), by the name
- * the skill author calls them. A run stopped while one is unanswered may still
- * have that effect: its timeout error says so.
- */
-const ACTING_BRIDGES: Partial<Record<SkillBridgeName, string>> = {
-  callProvider: "callProvider",
-  proposeEntity: "propose.entity",
-  hostFetch: "host.fetch",
-};
 
 export type SkillRuntimeErrorCode =
   /** Every slot is busy and the queue is full: retry later. */
@@ -101,21 +85,8 @@ export interface ProcessPoolConfig {
   isolatesPerProcess: number;
   /** Runs waiting for a slot at most; more are refused `busy`. */
   queueMax: number;
-  /** Runs one requester may have running or waiting at once; more are refused `busy`. */
-  perRequesterMax: number;
   /** Past `timeoutMs + watchdogGraceMs` without an answer, the runner is killed. */
   watchdogGraceMs: number;
-  /** A runner not `ready` this long after its fork is killed: a start failure. */
-  startTimeoutMs: number;
-}
-
-/** Broker-side facts about a run that never cross to a runner. */
-export interface SkillRunOptions {
-  /**
-   * Who the run counts against for `perRequesterMax`: the acting agent, else
-   * the person. Absent = not counted (tests, internal callers).
-   */
-  requester?: string | null;
 }
 
 export interface ProcessPoolHealth {
@@ -135,12 +106,8 @@ interface Run {
   bridges: SkillBridges;
   resolve: (value: unknown) => void;
   reject: (err: Error) => void;
-  requester: string | null;
   slot: Slot | null;
-  /** While queued: the wait deadline. Once dispatched: the watchdog. */
   timer: ReturnType<typeof setTimeout> | null;
-  /** Bridge calls asked by the runner and not answered yet: callId → name. */
-  pendingBridges: Map<number, SkillBridgeName>;
   settled: boolean;
 }
 
@@ -159,8 +126,6 @@ interface Slot {
   /** The child's own last words (`fatal`), when it could not start. */
   fatal: string | null;
   readyWaiters: Array<() => void>;
-  /** Kills a runner that never says `ready` (a hung addon load). */
-  startTimer: ReturnType<typeof setTimeout> | null;
 }
 
 /**
@@ -205,11 +170,7 @@ function isBridgeName(
 
 export interface ProcessSkillPool {
   readonly kind: "process";
-  run(
-    job: SkillJob,
-    bridges: SkillBridges,
-    options?: SkillRunOptions
-  ): Promise<unknown>;
+  run(job: SkillJob, bridges: SkillBridges): Promise<unknown>;
   health(): ProcessPoolHealth;
   /** Start one runner if none is alive; resolves once it is ready or failed. */
   warm(): Promise<void>;
@@ -227,8 +188,6 @@ export function createProcessSkillPool(
   let lastStartError: string | null = null;
   let spawnPausedUntil = 0;
   let closed = false;
-  /** Runs running or waiting, per requester. */
-  const inFlight = new Map<string, number>();
 
   const running = () => slots.reduce((n, s) => n + s.runs.size, 0);
 
@@ -247,11 +206,6 @@ export function createProcessSkillPool(
     run.settled = true;
     if (run.timer) clearTimeout(run.timer);
     run.timer = null;
-    if (run.requester !== null) {
-      const n = (inFlight.get(run.requester) ?? 1) - 1;
-      if (n > 0) inFlight.set(run.requester, n);
-      else inFlight.delete(run.requester);
-    }
     const slot = run.slot;
     if (slot) {
       slot.runs.delete(run.runId);
@@ -302,10 +256,8 @@ export function createProcessSkillPool(
       return;
     }
     const callId = msg.callId;
-    run.pendingBridges.set(callId, msg.name);
     Promise.resolve()
       .then(() => bridge(...msg.args))
-      .finally(() => run.pendingBridges.delete(callId))
       .then(
         (value) =>
           reply(slot, {
@@ -330,8 +282,6 @@ export function createProcessSkillPool(
     if (typeof msg !== "object" || msg === null) return;
     switch (msg.type) {
       case "ready":
-        if (slot.startTimer) clearTimeout(slot.startTimer);
-        slot.startTimer = null;
         slot.ready = true;
         lastStartError = null;
         for (const w of slot.readyWaiters.splice(0)) w();
@@ -371,8 +321,6 @@ export function createProcessSkillPool(
   ) {
     if (slot.exited) return;
     slot.exited = true;
-    if (slot.startTimer) clearTimeout(slot.startTimer);
-    slot.startTimer = null;
     for (const t of slot.draining.values()) clearTimeout(t);
     slot.draining.clear();
     const i = slots.indexOf(slot);
@@ -431,17 +379,7 @@ export function createProcessSkillPool(
       draining: new Map(),
       fatal: null,
       readyWaiters: [],
-      startTimer: null,
     };
-    // A runner that never answers `ready` would hold every queued run forever:
-    // past the limit it is killed, and its exit is read as a start failure.
-    slot.startTimer = setTimeout(() => {
-      slot.startTimer = null;
-      if (slot.ready || slot.exited) return;
-      slot.fatal ??= `the skill runner process did not start within ${Math.round(config.startTimeoutMs / 1000)} s`;
-      child.kill("SIGKILL");
-    }, config.startTimeoutMs);
-    slot.startTimer.unref();
     child.on("message", (msg) => onMessage(slot, msg as RunnerMessage));
     // `close`, not `exit`: it comes after the last IPC message (a `fatal`).
     child.on("close", (code, signal) => onExit(slot, code, signal));
@@ -461,7 +399,6 @@ export function createProcessSkillPool(
   }
 
   function dispatch(slot: Slot, run: Run) {
-    if (run.timer) clearTimeout(run.timer); // the wait deadline: it starts now
     run.slot = slot;
     slot.runs.set(run.runId, run);
     holdOpen(slot, true);
@@ -477,7 +414,7 @@ export function createProcessSkillPool(
       finish(run, {
         error: new SkillRuntimeError(
           "SKILL_RUNTIME_TIMEOUT",
-          timeoutMessage(run)
+          `The skill did not finish within its ${Math.round(run.job.timeoutMs / 1000)} s limit and was stopped.`
         ),
       });
       slot.draining.set(
@@ -495,29 +432,6 @@ export function createProcessSkillPool(
       reply(slot, { type: "cancel", runId: run.runId });
     }, limitMs);
     reply(slot, { type: "run", runId: run.runId, ...run.job });
-  }
-
-  /**
-   * The words an agent reads before deciding to run it again: the run was
-   * stopped, not undone. What it did before the limit stays done, and a call
-   * that was still waiting for its answer may still land.
-   */
-  function timeoutMessage(run: Run): string {
-    const acting = [
-      ...new Set(
-        [...run.pendingBridges.values()]
-          .map((name) => ACTING_BRIDGES[name])
-          .filter((name): name is string => name !== undefined)
-      ),
-    ];
-    return (
-      `The skill did not finish within its ${Math.round(run.job.timeoutMs / 1000)} s limit and was stopped. ` +
-      `It may have partly run: anything it did before the limit stays done` +
-      (acting.length > 0
-        ? `, and its ${acting.join(", ")} call${acting.length > 1 ? "s" : ""} still waiting for an answer may yet complete`
-        : "") +
-      `. Check what it already did before running it again.`
-    );
   }
 
   /**
@@ -578,7 +492,7 @@ export function createProcessSkillPool(
   return {
     kind: "process",
 
-    run(job, bridges, options) {
+    run(job, bridges) {
       if (closed) {
         return Promise.reject(
           new SkillRuntimeError(
@@ -596,49 +510,17 @@ export function createProcessSkillPool(
           )
         );
       }
-      const requester = options?.requester ?? null;
-      const held = requester === null ? 0 : (inFlight.get(requester) ?? 0);
-      if (held >= config.perRequesterMax) {
-        return Promise.reject(
-          new SkillRuntimeError(
-            "SKILL_RUNTIME_BUSY",
-            `This agent or person already has ${held} skills running or waiting on this pod ` +
-              `(at most ${config.perRequesterMax} at once each). Nothing ran: wait for one to finish, then try again.`
-          )
-        );
-      }
-      if (requester !== null) inFlight.set(requester, held + 1);
       return new Promise((resolve, reject) => {
-        const run: Run = {
+        queue.push({
           runId: randomUUID(),
           job,
           bridges,
           resolve,
           reject,
-          requester,
           slot: null,
           timer: null,
-          pendingBridges: new Map(),
           settled: false,
-        };
-        // A run that waits longer than it may run is not started at all: by
-        // then its caller has most likely given up, and its effects would land
-        // for nobody. A runner starting for it is not a busy pool, so its
-        // start time is not counted against the run.
-        const waitMs = job.timeoutMs + config.startTimeoutMs;
-        run.timer = setTimeout(() => {
-          const i = queue.indexOf(run);
-          if (i < 0) return;
-          queue.splice(i, 1);
-          finish(run, {
-            error: new SkillRuntimeError(
-              "SKILL_RUNTIME_BUSY",
-              `The pod's skill runtime is busy: this skill waited ${Math.round(waitMs / 1000)} s ` +
-                `(longer than its own time limit) for a free slot and was not started. Nothing ran. Try again shortly.`
-            ),
-          });
-        }, waitMs);
-        queue.push(run);
+        });
         pump();
       });
     },
