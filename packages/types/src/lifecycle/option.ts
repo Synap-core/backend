@@ -20,12 +20,14 @@ export const LIFECYCLE_CATEGORIES = [
 export type LifecycleCategory = (typeof LIFECYCLE_CATEGORIES)[number];
 
 export interface LifecycleOption {
+  /** The stored value (what `entities.status` / `properties[slug]` hold). */
   key: string;
   /** Authored label. Absent ⇒ the vocabulary (`resolveStatusLabel`). */
   label?: string;
   category: LifecycleCategory;
   /** A `UnitTone` token. Absent ⇒ {@link LIFECYCLE_CATEGORY_TONE}. */
   tone?: string;
+  /** Only a person may move a thing INTO this option (no rule can widen it). */
   humanOnly?: boolean;
   /**
    * Days in this option before a thing is STUCK. Absent ⇒ no stuck rule (a

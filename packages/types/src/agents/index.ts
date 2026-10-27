@@ -312,11 +312,9 @@ export function agentMarkText(
 
 /**
  * Every value `users.created_via` may hold for an agent. The database column
- * is typed with its own copy of this union (`@synap/database` does not depend
- * on this package), and `agent-users.ts` holds a compile-time equality floor
- * between the two — so a new writer value fails the build until it is added
- * here, and adding it here fails the build until {@link AGENT_DIRECTION_BY_ORIGIN}
- * classifies it.
+ * is typed with this union (`AgentCreatedVia`, `@synap/database`), so a new
+ * writer value fails the build until it is added here, and adding it here
+ * fails the build until {@link AGENT_DIRECTION_BY_ORIGIN} classifies it.
  */
 export const AGENT_ORIGINS = [
   "cli",
