@@ -26712,6 +26712,7 @@
                             "not_asked"
                           ]
                         },
+                        "keptOwedAt": { "type": "string" },
                         "ref": {
                           "anyOf": [
                             {
@@ -28704,6 +28705,7 @@
                             "not_asked"
                           ]
                         },
+                        "keptOwedAt": { "type": "string" },
                         "ref": {
                           "anyOf": [
                             {
@@ -29971,6 +29973,18 @@
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "409": {
+            "description": "Refused: a terminal status, and the calling agent's own room questions are still open (openQuestions[], as /complete)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": {}
+                }
               }
             }
           },
