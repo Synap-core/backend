@@ -273,6 +273,7 @@ export async function createKeyRequest(
     .insert(keyRequests)
     .values({
       requestCodeHash: sha256(requestCode),
+      status: "pending",
       requesterUserId: input.requesterUserId,
       requesterKeyId: input.requesterKeyId,
       personUserId: input.personUserId,

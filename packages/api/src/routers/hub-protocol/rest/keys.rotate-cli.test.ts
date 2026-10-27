@@ -79,6 +79,16 @@ vi.mock("../../../services/api-keys.js", () => ({
   },
 }));
 
+// The key-request routes registered beside rotate-cli (keys.requests.test.ts
+// covers them); their service graph is not under test here.
+vi.mock("../../../services/key-requests.js", () => ({
+  collectKeyRequest: vi.fn(),
+  createKeyRequest: vi.fn(),
+  listKeyTemplates: vi.fn(),
+  listRequestedKeys: vi.fn(),
+  revokeRequestedKey: vi.fn(),
+}));
+
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { registerKeysRoutes } from "./keys.js";
 import { apiKeyService } from "../../../services/api-keys.js";

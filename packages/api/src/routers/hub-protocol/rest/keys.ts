@@ -298,6 +298,10 @@ function registerKeyRequestRoutes(app: HubHono): void {
             },
           },
         },
+        403: {
+          description: "Forbidden — missing scope",
+          content: { "application/json": { schema: ErrorSchema } },
+        },
         401: {
           description: "Unauthorized",
           content: { "application/json": { schema: ErrorSchema } },
@@ -373,6 +377,10 @@ function registerKeyRequestRoutes(app: HubHono): void {
                 .openapi("KeyRequestResult"),
             },
           },
+        },
+        403: {
+          description: "Forbidden — missing scope",
+          content: { "application/json": { schema: ErrorSchema } },
         },
         401: {
           description: "Unauthorized — a key request is made with a key",
@@ -531,6 +539,10 @@ function registerKeyRequestRoutes(app: HubHono): void {
             },
           },
         },
+        403: {
+          description: "Forbidden — missing scope",
+          content: { "application/json": { schema: ErrorSchema } },
+        },
         401: {
           description: "Unauthorized",
           content: { "application/json": { schema: ErrorSchema } },
@@ -587,6 +599,10 @@ function registerKeyRequestRoutes(app: HubHono): void {
               schema: z.object({ revoked: z.boolean() }),
             },
           },
+        },
+        403: {
+          description: "Forbidden — missing scope",
+          content: { "application/json": { schema: ErrorSchema } },
         },
         401: {
           description: "Unauthorized",
