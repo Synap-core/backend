@@ -60,12 +60,18 @@ describe("the review page heading", () => {
       proposalType: "held_writes",
       agentActorName: "Claude-code",
     };
-    const h = proposalHeading(row, { day: "2026-10-27", deferredWrites: [] });
-    expect(h.heading).toBe("Claude-code's writes held past today's limit");
+    const pack = { day: "2026-10-27", agentUserId: "a1", deferredWrites: [] };
+    const h = proposalHeading(row, pack);
+    expect(h.heading).toBe(
+      "Writes held for review: Claude-code, 2026-10-27, 0 items"
+    );
     expect(h.heading).not.toMatch(/Held writes|Agent/);
     // No name the pod resolved: still never the raw token or "Agent".
+    expect(
+      proposalHeading({ ...row, agentActorName: null }, pack).heading
+    ).toBe("Writes held for review: 2026-10-27, 0 items");
     expect(proposalHeading({ ...row, agentActorName: null }, {}).heading).toBe(
-      "Writes held past today's limit"
+      "Writes held for review"
     );
   });
 

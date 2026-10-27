@@ -24,6 +24,7 @@
  */
 
 import { decodeHtmlEntities } from "@synap-core/types/text";
+import { heldWritesPackName } from "@synap-core/types/proposals/deferred-writes";
 import type { PROPOSE_REASON } from "@synap/governance-policy";
 import {
   capabilityRunVerbId,
@@ -113,6 +114,11 @@ function stringField(
  */
 export function extractProposalName(data: unknown): string | undefined {
   if (!data || typeof data !== "object") return undefined;
+  // An agent's held-writes pack names itself from its own data (agent, day,
+  // the writes it holds now): F6, the title door then leads it with "Writes
+  // held for review:" instead of "Held writes Agent".
+  const heldPack = heldWritesPackName(data);
+  if (heldPack) return heldPack;
   const envelope = data as Record<string, unknown>;
   const payload = extractPayload(data);
   return (
