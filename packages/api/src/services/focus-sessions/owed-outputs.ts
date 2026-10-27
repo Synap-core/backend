@@ -63,6 +63,7 @@ import {
   owedSlotPredicateSql,
   owedSlotWhere,
   sessionLastAgentActivitySql,
+  sessionLastAgentWorkSql,
   sessionTurnInFlightSql,
 } from "@synap/database";
 import type { SQL } from "@synap/database";
@@ -333,6 +334,7 @@ type OwedRow = {
   startedAt?: Date | string | null;
   turnInFlight?: boolean;
   lastAgentActivityAt?: Date | string | null;
+  lastAgentWorkAt?: Date | string | null;
 };
 
 /**
@@ -369,6 +371,7 @@ export function projectOwedSlots(
           status: row.status,
           turnInFlight: row.turnInFlight === true,
           lastAgentActivityAt: row.lastAgentActivityAt,
+          lastAgentWorkAt: row.lastAgentWorkAt ?? null,
           startedAt: row.startedAt ?? null,
         }
       : null;
@@ -507,6 +510,9 @@ export async function listOwedSlots(
             lastAgentActivityAt: drizzleSql<
               Date | string | null
             >`${sessionLastAgentActivitySql("focus_sessions")}`,
+            lastAgentWorkAt: drizzleSql<
+              Date | string | null
+            >`${sessionLastAgentWorkSql("focus_sessions")}`,
           }
         : {}),
     })

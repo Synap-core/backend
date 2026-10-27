@@ -162,3 +162,15 @@ describe("needs-you folds: the count IS the rows (decision E)", () => {
     expect(count.folds.needsYou + count.reviewLater).toBe(signals.length);
   });
 });
+
+describe("the asking events the rule excludes from Working name the real event", () => {
+  it("NEEDS_YOU_ASKING_EVENT_TYPES holds the slot_asked event type the ask doors log", async () => {
+    const { NEEDS_YOU_ASKING_EVENT_TYPES } =
+      await import("@synap-core/types/needs-you/rule");
+    const { FOCUS_SESSION_SLOT_ASKED_EVENT_TYPE } =
+      await import("../../focus-sessions/lifecycle-events.js");
+    expect(NEEDS_YOU_ASKING_EVENT_TYPES).toContain(
+      FOCUS_SESSION_SLOT_ASKED_EVENT_TYPE
+    );
+  });
+});
