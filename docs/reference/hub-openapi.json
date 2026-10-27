@@ -10039,6 +10039,10 @@
                       "required": ["verb"]
                     },
                     "description": "Composite per-create choice, keyed by the entity ref dispositions use. One entry is not applied to any other op."
+                  },
+                  "allowToday": {
+                    "type": "boolean",
+                    "description": "Held-writes packs only (agent/held_writes): also lift the agent's daily write ceiling to 2x the current limit until the next 00:00 UTC, so its next writes today are not held again. A person's act: refused for an agent credential and without the authority to author that ceiling (pod admin). 400 on any other proposal or a pack already decided. The response then carries allowedToday {ceilingId, agentUserId, limit, previousLimit, expiresAt, alreadyAllowed}."
                   }
                 }
               }
@@ -10133,6 +10137,26 @@
                         "required": ["ref", "verb", "entityId"]
                       },
                       "description": "Composite: one entry per op that ran a resolution. Singular identity is also set when exactly one op resolved."
+                    },
+                    "allowedToday": {
+                      "type": "object",
+                      "properties": {
+                        "ceilingId": { "type": "string" },
+                        "agentUserId": { "type": "string" },
+                        "limit": { "type": "integer" },
+                        "previousLimit": { "type": "integer" },
+                        "expiresAt": { "type": "string" },
+                        "alreadyAllowed": { "type": "boolean" }
+                      },
+                      "required": [
+                        "ceilingId",
+                        "agentUserId",
+                        "limit",
+                        "previousLimit",
+                        "expiresAt",
+                        "alreadyAllowed"
+                      ],
+                      "description": "Set when allowToday was passed: the agent's daily write ceiling for the rest of the UTC day (limit), the one it was raised from (previousLimit, back in force at expiresAt), and whether an earlier allow-today had already raised it."
                     }
                   },
                   "required": ["success", "proposalId"]
