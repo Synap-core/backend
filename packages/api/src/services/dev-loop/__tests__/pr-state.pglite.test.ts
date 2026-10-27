@@ -9,7 +9,10 @@
  *     cannot see: "every event" reads it as merged;
  *   - a CI run that names no PR, only the PR's head sha: "match `pr`" misses it;
  *   - a deploy of a sha that is not the merge commit: "any deploy after the
- *     merge" calls it deployed.
+ *     merge" calls it deployed;
+ *   - a build of the PR's repo made from a LATER commit (`builtAt`), naming
+ *     another sha: "match the merge sha" misses it; a build of another repo
+ *     made later: "any later build" calls it deployed.
  */
 
 import { describe, it, expect, beforeAll, vi } from "vitest";
@@ -132,6 +135,23 @@ beforeAll(async () => {
   // #286: opened only; a deploy of an unrelated build.
   await event(T.prOpened, 1, prData(286, { sha: "b".repeat(40) }));
   await event(T.deployed, 7, { target: "pod.example", sha: "c".repeat(40) });
+  // #287: merged, then a build of ANOTHER repo made later (says nothing),
+  // then a build of this repo from a later commit, naming another sha.
+  await event(T.prMerged, 10, prData(287, { sha: "d".repeat(40) }));
+  await event(T.deployed, 12, {
+    target: "app.example",
+    sha: "e".repeat(40),
+    repo: "Synap-core/app-bases",
+    builtAt: at(11),
+  });
+  await event(T.deployed, 14, {
+    target: "pod.example",
+    sha: "f".repeat(40),
+    repo: "synap-core/backend",
+    builtAt: at(13),
+  });
+  // #288: merged after the newest build's commit was made: not deployed.
+  await event(T.prMerged, 20, prData(288, { sha: "1".repeat(40) }));
   // #286 in ANOTHER repo, merged: never this PR.
   await event(T.prMerged, 4, {
     ...prData(286),
@@ -166,6 +186,25 @@ describe("readPullRequestStates — the recorded dev facts, under the reader's f
     expect(states.get(pullRequestKey({ repo: REPO, number: 286 }))).toEqual({
       state: "open",
       at: at(1),
+    });
+  });
+
+  it("deployed when a build of the PR's repo came from a commit made after the merge (builtAt), not from another repo's", async () => {
+    const states = await readPullRequestStates(
+      [
+        { repo: REPO, number: 287 },
+        { repo: REPO, number: 288 },
+      ],
+      reader
+    );
+    expect(states.get(pullRequestKey({ repo: REPO, number: 287 }))).toEqual({
+      state: "merged",
+      deployed: true,
+      at: at(10),
+    });
+    expect(states.get(pullRequestKey({ repo: REPO, number: 288 }))).toEqual({
+      state: "merged",
+      at: at(20),
     });
   });
 

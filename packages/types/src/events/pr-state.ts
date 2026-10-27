@@ -12,9 +12,10 @@
  *  - guess a state with no fact: no PR event recorded → `null` (the reader
  *    draws nothing), never "Open";
  *  - say checks are running: no event says CI started (only `ci.finished`);
- *  - say "not deployed": `dev.deployed` names the RUNNING build's sha, and the
- *    pod cannot tell whether a later build contains a merge. Deployed is
- *    stated only when a deploy names the PR's merge commit itself.
+ *  - say "not deployed": a build that does not show it contains the merge
+ *    may still contain it. Deployed is stated when a deploy of the PR's repo
+ *    was built from a commit made at or after the merge (`builtAt`), or
+ *    names the PR's merge commit itself.
  */
 
 import {
@@ -35,7 +36,10 @@ export interface PullRequestStateFacts {
   state: PullRequestState;
   /** The newest CI result on the PR's newest run sha; absent when none settles it. */
   checks?: PullRequestChecks;
-  /** A deploy named the merge commit. Never `false`: see the file header. */
+  /**
+   * A deploy contains the merge (built from a later commit of the repo, or
+   * from the merge commit). Never `false`: see the file header.
+   */
   deployed?: true;
   /** When the fact that set `state` happened (ISO). */
   at: string;
@@ -136,14 +140,9 @@ export function foldPullRequestState(
   if (!newest) return null;
 
   const checks = foldChecks(ref, rows, prShas);
-  const mergeSha = newest.state === "merged" ? newest.sha : undefined;
+  const merge = newest.state === "merged" ? newest : null;
   const deployed =
-    mergeSha !== undefined &&
-    rows.some((row) => {
-      if (row.type !== DEV_LOOP_EVENT_TYPES.deployed) return false;
-      const sha = str(record(row.data).sha);
-      return sha !== undefined && sameCommit(sha, mergeSha);
-    });
+    merge !== null && rows.some((row) => containsMerge(ref, merge, row));
 
   return {
     state: newest.state,
@@ -151,6 +150,33 @@ export function foldPullRequestState(
     ...(deployed ? { deployed: true as const } : {}),
     at: new Date(newest.at).toISOString(),
   };
+}
+
+/**
+ * Does this deploy contain the merge? Its build commit of the PR's repo was
+ * made at or after the merge (`builtAt`), or it names the merge commit.
+ */
+function containsMerge(
+  ref: PullRequestRef,
+  merge: { at: number; sha?: string },
+  row: DevLoopEventRowLike
+): boolean {
+  if (row.type !== DEV_LOOP_EVENT_TYPES.deployed) return false;
+  const data = record(row.data);
+  const repo = str(data.repo);
+  const builtAt = str(data.builtAt);
+  if (
+    repo !== undefined &&
+    builtAt !== undefined &&
+    samePullRequest(ref, { repo, number: ref.number }) &&
+    new Date(builtAt).getTime() >= merge.at
+  ) {
+    return true;
+  }
+  const sha = str(data.sha);
+  return (
+    merge.sha !== undefined && sha !== undefined && sameCommit(sha, merge.sha)
+  );
 }
 
 /**

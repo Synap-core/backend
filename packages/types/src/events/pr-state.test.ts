@@ -177,6 +177,55 @@ describe("foldPullRequestState — what the recorded facts say about one PR", ()
     ).not.toHaveProperty("deployed");
   });
 
+  it("deployed when a build of the PR's repo was made from a commit at or after the merge (builtAt)", () => {
+    const merged = pr(T.prMerged, 5, { sha: MERGE });
+    const build = (
+      builtMin: number,
+      over: Record<string, unknown> = {}
+    ): DevLoopEventRowLike => ({
+      type: T.deployed,
+      timestamp: at(30),
+      data: {
+        target: "pod.example",
+        sha: HEAD2,
+        repo: "synap-core/BACKEND",
+        builtAt: at(builtMin).toISOString(),
+        ...over,
+      },
+    });
+    // A later commit of the repo contains the merge; the same instant too.
+    expect(foldPullRequestState(REF, [merged, build(9)])).toMatchObject({
+      deployed: true,
+    });
+    expect(foldPullRequestState(REF, [merged, build(5)])).toMatchObject({
+      deployed: true,
+    });
+    // Built from a commit made BEFORE the merge (a nightly of an older green
+    // commit): it does not contain it, however late it was deployed.
+    expect(foldPullRequestState(REF, [merged, build(4)])).not.toHaveProperty(
+      "deployed"
+    );
+    // A build of another repo says nothing about this repo's merge.
+    expect(
+      foldPullRequestState(REF, [
+        merged,
+        build(9, { repo: "Synap-core/app-bases" }),
+      ])
+    ).not.toHaveProperty("deployed");
+    // No repo named: only the sha can say it.
+    expect(
+      foldPullRequestState(REF, [merged, build(9, { repo: undefined })])
+    ).not.toHaveProperty("deployed");
+    // Unreadable time: nothing stated.
+    expect(
+      foldPullRequestState(REF, [merged, build(9, { builtAt: "soon" })])
+    ).not.toHaveProperty("deployed");
+    // An open PR is never deployed, whatever was built after it opened.
+    expect(
+      foldPullRequestState(REF, [pr(T.prOpened, 1, { sha: HEAD }), build(9)])
+    ).not.toHaveProperty("deployed");
+  });
+
   it("sameCommit: a short sha names the long one, case-insensitive; different shas differ", () => {
     expect(sameCommit("A2DD31C", MERGE)).toBe(true);
     expect(sameCommit(MERGE, "a2dd31c0d")).toBe(true);

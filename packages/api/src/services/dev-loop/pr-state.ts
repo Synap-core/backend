@@ -10,7 +10,9 @@
  *
  * Two queries, both bounded by the PRs asked about: the PR facts first, then
  * the CI runs and deploys that can only be matched once the PR's head and
- * merge shas are known.
+ * merge shas are known. A deploy is read when it names a merge sha, or, once
+ * some PR merged, when it is a build of one of the PRs' repos that says when
+ * its commit was made (`builtAt`): the fold decides which merges it contains.
  */
 
 import {
@@ -91,7 +93,9 @@ export async function readPullRequestStates(
   ];
   const headShas = new Set<string>();
   const mergeShas = new Set<string>();
+  let merged = false;
   for (const row of prRows) {
+    if (row.type === DEV_LOOP_EVENT_TYPES.prMerged) merged = true;
     const sha = shortSha((row.data as { sha?: unknown } | null)?.sha);
     if (!sha) continue;
     if (row.type === DEV_LOOP_EVENT_TYPES.prOpened) headShas.add(sha);
@@ -107,11 +111,15 @@ export async function readPullRequestStates(
       or(...ciMatch)
     )!,
   ];
-  if (mergeShas.size > 0) {
+  if (merged) {
+    const deployMatch: SQL[] = [
+      and(inArray(repoOf, repos), sql`${events.data}->>'builtAt' is not null`)!,
+    ];
+    if (mergeShas.size > 0) deployMatch.push(inArray(shaOf, [...mergeShas]));
     followUps.push(
       and(
         sql`${events.type} = ${DEV_LOOP_EVENT_TYPES.deployed}`,
-        inArray(shaOf, [...mergeShas])
+        or(...deployMatch)
       )!
     );
   }
