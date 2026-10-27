@@ -87,6 +87,7 @@ import {
   automationRuns,
   automationStepRuns,
   automations,
+  playbookRuns,
 } from "@synap/database";
 import { needsYouRows } from "@synap-core/types/needs-you";
 import {
@@ -248,6 +249,8 @@ beforeAll(async () => {
     automationRuns,
     automationStepRuns,
     automations,
+    // The needs-you rule's facts (agent evidence, proposal waits).
+    playbookRuns,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }

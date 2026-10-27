@@ -96,6 +96,7 @@ import {
   chatTurns,
   automationRuns,
   automationStepRuns,
+  playbookRuns,
 } from "@synap/database";
 import { needsYouRows } from "@synap-core/types/needs-you";
 import { signalsRouter } from "./signals.js";
@@ -269,6 +270,8 @@ beforeAll(async () => {
     chatTurns,
     automationRuns,
     automationStepRuns,
+    // The needs-you rule's facts (agent evidence, proposal waits).
+    playbookRuns,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }

@@ -117,6 +117,15 @@ describe("foldOwedByPerson", () => {
     expect(r).toEqual({
       count: 0,
       reviewLater: 0,
+      folds: {
+        needsYou: 0,
+        working: 0,
+        stopped: 0,
+        stoppedSessions: 0,
+        reviewLater: 0,
+        fromSystem: 0,
+        changesToReview: 0,
+      },
       sessions: 0,
       countIsLowerBound: false,
       lens: "owed-by-person",
