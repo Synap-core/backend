@@ -147,7 +147,10 @@ it("lookedAt edges skip non-endpoint kinds (view)", () => {
 });
 
 describe("decisionFromAnswer — relay provenance", () => {
-  const pick = { type: "chip" as const, chip: { label: "EU account", value: "eu" } };
+  const pick = {
+    type: "chip" as const,
+    chip: { label: "EU account", value: "eu" },
+  };
   const fileFor = (answer: SlotAnswer) =>
     decisionFromAnswer({
       slot: { label: "Stripe account", ask: CHOOSE },
@@ -200,7 +203,11 @@ describe("decisionUpdateFromAnswer — an EXISTING decision (slot.decisionId)", 
     decisionFromAnswer({ slot, answer, sessionId: "s1" })!;
 
   it("writes what was decided, never the person's summary, options or rationale", () => {
-    const answer = pick("us", "US account", "US account — the US entity invoices");
+    const answer = pick(
+      "us",
+      "US account",
+      "US account — the US entity invoices"
+    );
     const u = decisionUpdateFromAnswer({
       draft: draftOf(answer),
       previous: null,

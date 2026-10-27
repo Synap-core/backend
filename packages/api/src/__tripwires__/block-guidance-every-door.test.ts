@@ -52,7 +52,7 @@ const WITHHELD: Record<string, string> = {
     "in this turn). It returns a row, not an agent response — there is " +
     "nothing to annotate with a guideline here.",
   "services/focus-sessions/session-answer.ts":
-    "\"Not what I said\" (`correctRelayedAnswer`) re-asks a slot whose relayed " +
+    '"Not what I said" (`correctRelayedAnswer`) re-asks a slot whose relayed ' +
     "answer the PERSON just rejected — their own click, not an agent's " +
     "block; there is no agent response to annotate with a guideline.",
   "services/focus-sessions/stage-slots.ts":

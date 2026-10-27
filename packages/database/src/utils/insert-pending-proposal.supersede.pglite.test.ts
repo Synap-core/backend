@@ -252,9 +252,7 @@ describe("supersede — only a newer version that carries every older change", (
       targetId: "deal-3",
       data: envelope({ properties: { status: "lost", amount: 8 } }),
     });
-    expect(ids(c).sort()).toEqual(
-      [a.proposal.id, b.proposal.id].sort()
-    );
+    expect(ids(c).sort()).toEqual([a.proposal.id, b.proposal.id].sort());
   });
 });
 

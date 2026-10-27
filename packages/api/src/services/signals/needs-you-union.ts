@@ -701,7 +701,9 @@ export interface ClusterSessionName {
 }
 
 /** The id / group-key suffix of a cluster's Review later part. Pure. */
-function reviewLaterSuffix(cluster: Pick<ProposalCluster, "reviewLater">): string {
+function reviewLaterSuffix(
+  cluster: Pick<ProposalCluster, "reviewLater">
+): string {
   return cluster.reviewLater ? "@review-later" : "";
 }
 
@@ -1750,9 +1752,7 @@ export function unionNeedsYou(args: {
       ...(args.reviewSessions ?? []).map((r) =>
         signalFromReviewSession(r, now)
       ),
-      ...liveCaptureRows(args).map((r) =>
-        signalFromUnfinishedCapture(r, now)
-      ),
+      ...liveCaptureRows(args).map((r) => signalFromUnfinishedCapture(r, now)),
       ...signalsFromAccessRequests(args.accessRequests, now),
       ...signalsFromSpaceInvites(args.spaceInvites, now),
       ...args.clusters.map((c) =>

@@ -71,7 +71,10 @@ describe("askCardSlotOf — every field the card reads, from any row", () => {
       askCardSlotOf({ label: "Channel", paramName: "channel" }),
       { now: NOW }
     );
-    expect(view.asker).toMatchObject({ kind: "cause", cause: { kind: "param" } });
+    expect(view.asker).toMatchObject({
+      kind: "cause",
+      cause: { kind: "param" },
+    });
   });
 
   it("names the asker from the row's askedByName when the caller passes none", () => {
@@ -79,7 +82,11 @@ describe("askCardSlotOf — every field the card reads, from any row", () => {
       askCardSlotOf({ label: "X", askedBy: "a1", askedByName: "Scout" }),
       { sessionId: "s1" }
     );
-    expect(view.asker).toEqual({ kind: "agent", name: "Scout", sessionId: "s1" });
+    expect(view.asker).toEqual({
+      kind: "agent",
+      name: "Scout",
+      sessionId: "s1",
+    });
   });
 
   it("reads a needs-you signal by its own names: slotKind, occurredAt, by", () => {
@@ -104,7 +111,9 @@ describe("askCardSlotOf — every field the card reads, from any row", () => {
 
   it("never takes the signal discriminator for the slot's kind", () => {
     expect(askCardSlotOf({ kind: "owed-slot", title: "X" }).kind).toBeNull();
-    expect(askCardSlotOf({ kind: "decision", label: "X" }).kind).toBe("decision");
+    expect(askCardSlotOf({ kind: "decision", label: "X" }).kind).toBe(
+      "decision"
+    );
   });
 
   it("reads occurredAt and by only off a signal", () => {
@@ -145,8 +154,16 @@ describe("lensRowOfNeedsYou reads the signal through the one adapter", () => {
 
 describe("slotAwaitsTap — the one 'awaiting your tap' predicate", () => {
   it.each([
-    ["a pending relay on an owed slot", { owner: "human", pendingRelay: relay }, true],
-    ["a row that omits owner (a signal lists only owed slots)", { pendingRelay: relay }, true],
+    [
+      "a pending relay on an owed slot",
+      { owner: "human", pendingRelay: relay },
+      true,
+    ],
+    [
+      "a row that omits owner (a signal lists only owed slots)",
+      { pendingRelay: relay },
+      true,
+    ],
     [
       // re-asked: the old answer stays on the slot, the relay is for the new ask
       "a re-asked slot still carrying its old answer",
@@ -154,11 +171,27 @@ describe("slotAwaitsTap — the one 'awaiting your tap' predicate", () => {
       true,
     ],
     ["no relay", { owner: "human" }, false],
-    ["handed back to the agent", { owner: "agent", pendingRelay: relay }, false],
+    [
+      "handed back to the agent",
+      { owner: "agent", pendingRelay: relay },
+      false,
+    ],
     ["done", { owner: "human", done: true, pendingRelay: relay }, false],
-    ["done by status", { owner: "human", status: "done", pendingRelay: relay }, false],
-    ["retired", { owner: "human", retiredAt: daysAgo(0), pendingRelay: relay }, false],
-    ["attested", { owner: "human", attestedAt: daysAgo(0), pendingRelay: relay }, false],
+    [
+      "done by status",
+      { owner: "human", status: "done", pendingRelay: relay },
+      false,
+    ],
+    [
+      "retired",
+      { owner: "human", retiredAt: daysAgo(0), pendingRelay: relay },
+      false,
+    ],
+    [
+      "attested",
+      { owner: "human", attestedAt: daysAgo(0), pendingRelay: relay },
+      false,
+    ],
   ] as const)("%s", (_n, slot, want) => {
     expect(slotAwaitsTap(slot)).toBe(want);
   });
@@ -196,14 +229,21 @@ describe("relayRecordedAnswer — what Confirm records, as the card draws it", (
       value: { type: "chip", chip: { label: "US account", value: "us" } },
       quote: " ",
     });
-    expect(read).toMatchObject({ label: "US account", answer: { key: "us" }, quote: null });
+    expect(read).toMatchObject({
+      label: "US account",
+      answer: { key: "us" },
+      quote: null,
+    });
   });
 
   it("an option the ask no longer offers keeps the relayed chip's label", () => {
-    const read = relayRecordedAnswer(ask({ mode: "choose", options: [{ label: "A" }] }), {
-      text: "Gone — note",
-      value: { type: "chip", chip: { label: "Gone" } },
-    });
+    const read = relayRecordedAnswer(
+      ask({ mode: "choose", options: [{ label: "A" }] }),
+      {
+        text: "Gone — note",
+        value: { type: "chip", chip: { label: "Gone" } },
+      }
+    );
     expect(read).toEqual({ label: "Gone", answer: null, quote: null });
   });
 
@@ -235,7 +275,11 @@ describe("roomQuestionConfirmDoor — which door a room question's Confirm uses"
   it("a relay waiting on a slot-backed question confirms by the slot's label", () => {
     expect(
       roomQuestionConfirmDoor(
-        meta({ kind: "question", slotLabel: " Stripe account ", pendingRelay: relay })
+        meta({
+          kind: "question",
+          slotLabel: " Stripe account ",
+          pendingRelay: relay,
+        })
       )
     ).toEqual({ kind: "slot", expectedLabel: "Stripe account" });
   });
@@ -249,14 +293,25 @@ describe("roomQuestionConfirmDoor — which door a room question's Confirm uses"
   });
 
   it.each([
-    ["an open question waits for an answer, not a tap", { kind: "question", slotLabel: "X" }],
-    ["a slotless relay has no Confirm door", { kind: "question", pendingRelay: relay }],
+    [
+      "an open question waits for an answer, not a tap",
+      { kind: "question", slotLabel: "X" },
+    ],
+    [
+      "a slotless relay has no Confirm door",
+      { kind: "question", pendingRelay: relay },
+    ],
     [
       "an answered approval card",
       {
         kind: "question",
         confirmationId: "evt_1",
-        answer: { messageId: "m", answeredBy: "u", answeredAt: "t", text: "ok" },
+        answer: {
+          messageId: "m",
+          answeredBy: "u",
+          answeredAt: "t",
+          text: "ok",
+        },
       },
     ],
     [
@@ -280,7 +335,9 @@ describe("roomQuestionConfirmDoor — which door a room question's Confirm uses"
 
 describe("the relay mark is a mark", () => {
   it("names the relaying agent and the tap, and never instructs", () => {
-    expect(ASK_COPY.awaitingYourTap("Scout")).toBe("Relayed by Scout · needs your tap");
+    expect(ASK_COPY.awaitingYourTap("Scout")).toBe(
+      "Relayed by Scout · needs your tap"
+    );
     expect(ASK_COPY.awaitingYourTap(" ")).toBe("Relayed · needs your tap");
     expect(ASK_COPY.awaitingYourTap(null)).not.toMatch(/confirm/i);
   });
@@ -289,7 +346,9 @@ describe("the relay mark is a mark", () => {
     expect(ASK_COPY.relayConfirmedReceipt(" Ship the draft? ")).toBe(
       "Confirmed · Ship the draft?"
     );
-    expect(ASK_COPY.relayRejectedReceipt).toBe("Not recorded · the question is yours again");
+    expect(ASK_COPY.relayRejectedReceipt).toBe(
+      "Not recorded · the question is yours again"
+    );
     expect(FATE_COPY.nothingNewWaiting).toBe("Nothing new is waiting on you.");
   });
 });
@@ -297,11 +356,17 @@ describe("the relay mark is a mark", () => {
 describe("the card's age, in marks and in words", () => {
   it("says when it was asked, and the same in full words for a screen reader", () => {
     const view = askCardView(
-      { label: "X", ask: ask({ mode: "act", steps: ["a"] }), owedSince: daysAgo(1) },
+      {
+        label: "X",
+        ask: ask({ mode: "act", steps: ["a"] }),
+        owedSince: daysAgo(1),
+      },
       { now: NOW }
     );
     expect(view.ageFate.label).toBe("Asked 1d ago · Stays until you decide");
-    expect(view.ageFate.spoken).toBe("Asked 1 day ago · Stays until you decide");
+    expect(view.ageFate.spoken).toBe(
+      "Asked 1 day ago · Stays until you decide"
+    );
   });
 
   it("an unstamped ask says its fate alone, in both", () => {

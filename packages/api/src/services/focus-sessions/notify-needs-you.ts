@@ -76,10 +76,7 @@ export function sessionNeedsYouGroupKey(sessionId: string): string {
 }
 
 /** One relay-awaiting-tap push per slot per window. */
-function relayAwaitsTapGroupKey(
-  sessionId: string,
-  label: string
-): string {
+function relayAwaitsTapGroupKey(sessionId: string, label: string): string {
   return `${sessionNeedsYouGroupKey(sessionId)}:relay:${normalizeExpectedLabel(label) ?? label}`;
 }
 

@@ -367,10 +367,7 @@ export function AskAnswer({
           {relayDropped && (
             // The one-line receipt: nothing was recorded, and the ask below
             // is the person's to answer in their own words.
-            <p
-              role="status"
-              className="text-[12.5px] text-foreground/65"
-            >
+            <p role="status" className="text-[12.5px] text-foreground/65">
               {ASK_COPY.relayRejectedReceipt}
             </p>
           )}

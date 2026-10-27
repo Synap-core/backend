@@ -245,17 +245,29 @@ describe("ASK_COPY", () => {
 describe("answerProvenanceMark", () => {
   it.each([
     ["open draws nothing", {}, null],
-    ["a tap", { answer: {} }, { tone: "success", label: "You answered", disposition: "answered" }],
+    [
+      "a tap",
+      { answer: {} },
+      { tone: "success", label: "You answered", disposition: "answered" },
+    ],
     [
       "a routine relay names the agent",
       { answer: { via: "relayed", relayedBy: "a" } },
-      { tone: "ai", label: "Answered in chat · relayed by Claude Code", disposition: "relayed" },
+      {
+        tone: "ai",
+        label: "Answered in chat · relayed by Claude Code",
+        disposition: "relayed",
+      },
     ],
     [
       // the relay stays visible after the person's own tap
       "a confirmed relay still says it was relayed",
       { answer: { via: "tap", relayedBy: "a", confirmedAt: "t" } },
-      { tone: "success", label: "You confirmed what Claude Code relayed", disposition: "answered" },
+      {
+        tone: "success",
+        label: "You confirmed what Claude Code relayed",
+        disposition: "answered",
+      },
     ],
     [
       "awaiting the tap",
@@ -269,7 +281,11 @@ describe("answerProvenanceMark", () => {
     [
       "withdrawn with its reason",
       { closed: { reason: "withdrawn", note: "you answered it in the brief" } },
-      { tone: "textMuted", label: "Withdrawn · you answered it in the brief", disposition: "withdrawn" },
+      {
+        tone: "textMuted",
+        label: "Withdrawn · you answered it in the brief",
+        disposition: "withdrawn",
+      },
     ],
     [
       "withdrawn, no reason",
@@ -279,7 +295,11 @@ describe("answerProvenanceMark", () => {
     [
       "closed by the session's end",
       { closed: { reason: "session_ended" } },
-      { tone: "textMuted", label: "Closed · the session ended", disposition: "closed_session_ended" },
+      {
+        tone: "textMuted",
+        label: "Closed · the session ended",
+        disposition: "closed_session_ended",
+      },
     ],
   ] as const)("%s", (_n, input, want) => {
     expect(answerProvenanceMark(input, { agent: "Claude Code" })).toEqual(want);

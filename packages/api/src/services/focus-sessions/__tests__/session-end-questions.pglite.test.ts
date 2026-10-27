@@ -55,7 +55,10 @@ vi.mock("@synap/database", async (importOriginal) => {
 });
 vi.mock("@synap/jobs", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
-  return { ...actual, settleParentAutomationRunFromChild: async () => undefined };
+  return {
+    ...actual,
+    settleParentAutomationRunFromChild: async () => undefined,
+  };
 });
 vi.mock("@synap/events", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
@@ -181,7 +184,14 @@ async function question(
   await q(
     `insert into messages (id, channel_id, role, author_type, content, user_id, hash, routed_teammate_id, metadata)
      values ($1, $2, 'assistant', 'ai_agent', $3, $4, 'h', $5, $6::jsonb)`,
-    [id, channel, p.text ?? "Which account?", USER, p.by ?? AGENT, JSON.stringify({ roomPost })]
+    [
+      id,
+      channel,
+      p.text ?? "Which account?",
+      USER,
+      p.by ?? AGENT,
+      JSON.stringify({ roomPost }),
+    ]
   );
   return id;
 }
@@ -256,8 +266,12 @@ describe("a person's close stamps what the session leaves open", () => {
     );
     expect(byLabel.get(ACT.label)!.retiredAt).toBeUndefined();
     expect(res!.counts.retiredSlots).toBe(2);
-    expect(res!.warnings.join("\n")).toMatch(/closed because the session ended/);
-    expect(res!.warnings.join("\n")).toMatch(/retired because the session ended/);
+    expect(res!.warnings.join("\n")).toMatch(
+      /closed because the session ended/
+    );
+    expect(res!.warnings.join("\n")).toMatch(
+      /retired because the session ended/
+    );
   });
 
   it("an owner reply in the ended room no longer answers the closed question", async () => {
@@ -350,9 +364,7 @@ describe("an agent's close and its own open questions", () => {
       sessionId: s.id,
       userId: USER,
       agentUserId: AGENT,
-      questionDispositions: [
-        { messageId: mine, disposition: "keep" as never },
-      ],
+      questionDispositions: [{ messageId: mine, disposition: "keep" as never }],
     }).catch((e: unknown) => e);
     expect(isOpenQuestionsAtCloseError(err)).toBe(true);
     expect(await statusOf(s.id)).toBe("active");
@@ -404,7 +416,11 @@ describe("an agent's close and its own open questions", () => {
       userId: USER,
       agentUserId: AGENT,
       questionDispositions: [
-        { messageId: withdrawn, disposition: "withdrawn", note: "found it in the brief" },
+        {
+          messageId: withdrawn,
+          disposition: "withdrawn",
+          note: "found it in the brief",
+        },
         { messageId: keptOnSlot, disposition: "keep_as_owed" },
         { messageId: keptSlotless, disposition: "keep_as_owed" },
         { messageId: theirs, disposition: "withdrawn" },
@@ -447,7 +463,11 @@ describe("an agent's close and its own open questions", () => {
     const withdrawn = await question(s.channel);
     const uncovered = await question(s.channel, { text: "Any blockers?" });
     const word = [
-      { messageId: withdrawn, disposition: "withdrawn" as const, note: "the tests answered it" },
+      {
+        messageId: withdrawn,
+        disposition: "withdrawn" as const,
+        note: "the tests answered it",
+      },
       { messageId: uncovered, disposition: "withdrawn" as const, note: "moot" },
     ];
 

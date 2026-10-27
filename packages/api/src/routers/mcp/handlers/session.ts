@@ -640,7 +640,8 @@ export const sessionHandlers: McpHandlerMap = {
         // record "I finished" but never "I abandoned" or "I could not" — and the
         // tRPC / Hub PATCH doors could. Validated by the tool schema's enum,
         // which derives from TERMINAL_SESSION_STATUSES.
-        terminalStatus: args.terminalStatus as TerminalSessionStatus | undefined,
+        terminalStatus: args.terminalStatus as
+          TerminalSessionStatus | undefined,
         // The service matches each id against this agent's own open
         // questions and ignores the rest.
         questionDispositions,
