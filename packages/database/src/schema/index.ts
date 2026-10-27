@@ -186,6 +186,7 @@ export * from "./session-evaluations.js";
 export * from "./session-runners.js";
 // Proposal apply runs — a large approval applied by a background job (0352)
 export * from "./proposal-apply-runs.js";
+export * from "./box-runs.js";
 
 // DEPRECATED: Agent Skills merged into skills table (migration 0130_merge_agent_skills.sql).
 // The agent-skills.ts table definition is kept for migration reference only.

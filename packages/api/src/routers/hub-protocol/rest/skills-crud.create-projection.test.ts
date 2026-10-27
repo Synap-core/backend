@@ -156,13 +156,25 @@ describe("POST /skills — projection into the governed door", () => {
   it("an explicit caller-sent kind is still honoured (back-compat)", async () => {
     await post({
       name: "declared",
+      kind: "code",
+      body: "What it does.",
+      slug: "util/declared",
+    });
+    expect((h.gateCalls[0]!.data as Record<string, unknown>).kind).toBe("code");
+  });
+
+  it("refuses code labelled as an instruction BEFORE the gate", async () => {
+    // It would skip the code scan, read as prose on the review, and run.
+    const res = await post({
+      name: "declared",
       kind: "instruction",
       code: "return 1;",
       slug: "util/declared",
     });
-    expect((h.gateCalls[0]!.data as Record<string, unknown>).kind).toBe(
-      "instruction"
-    );
+    expect(res.status).toBe(400);
+    expect(String(res.body.error)).toMatch(/instruction skill carries no code/);
+    expect(h.gateCalls).toHaveLength(0);
+    expect(h.inserts).toBe(0);
   });
 
   it("refuses a documentation-only skill with no slug BEFORE the gate", async () => {

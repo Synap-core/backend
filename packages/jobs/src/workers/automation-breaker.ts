@@ -112,8 +112,11 @@ export function breakerErrorMessage(
 
 /**
  * Trip the breaker if the counters say this automation has never worked.
- * Non-throwing: a breaker write must never turn a recorded failure into a
- * crashed job.
+ * `failureCount` counts budget stops too (`automation_runs.stop_reason =
+ * 'budget'`, founder F3): they are subtracted, read off the ledger only once
+ * the raw counters would trip, so a rule whose runs only ever stop at their
+ * budget is never turned off by it. Non-throwing: a breaker write must never
+ * turn a recorded failure into a crashed job.
  */
 export async function tripNeverWorkedBreaker(input: {
   automationId: string;
@@ -125,11 +128,24 @@ export async function tripNeverWorkedBreaker(input: {
   if (!shouldTripNeverWorkedBreaker(input)) return false;
 
   try {
+    const [budget] = await db
+      .select({ stops: drizzleSql<number>`count(*)::int` })
+      .from(automationRuns)
+      .where(
+        and(
+          eq(automationRuns.automationId, input.automationId),
+          eq(automationRuns.status, "failed"),
+          eq(automationRuns.stopReason, "budget")
+        )
+      );
+    const failureCount = input.failureCount - (budget?.stops ?? 0);
+    if (!shouldTripNeverWorkedBreaker({ ...input, failureCount })) return false;
+
     const flipped = await db
       .update(automations)
       .set({
         status: "error",
-        errorMessage: breakerErrorMessage(input.failureCount, input.reason),
+        errorMessage: breakerErrorMessage(failureCount, input.reason),
         updatedAt: new Date(),
       })
       // Re-assert both floors in the WHERE so a concurrent human edit (pause,
@@ -148,7 +164,7 @@ export async function tripNeverWorkedBreaker(input: {
     logger.error(
       {
         automationId: input.automationId,
-        failureCount: input.failureCount,
+        failureCount,
         limit: NEVER_WORKED_FAILURE_LIMIT,
       },
       "Automation turned off by the never-worked breaker (0 successes)"
@@ -177,7 +193,9 @@ export const CONSECUTIVE_FAILURE_LIMIT = 10;
  * The statuses that SETTLE a run's verdict for this breaker. `skipped` (dedup,
  * daily cap, precondition) and `blocked_by_policy` (governance said no —
  * nothing broke) neither break nor heal the streak; `cancelled` is a person's
- * act. Only a real success resets it and only a real failure extends it.
+ * act. Only a real success resets it and only a real failure extends it: a
+ * `failed` run with `stop_reason = 'budget'` (its children only stopped at
+ * their budget, founder F3) is left out of the streak too.
  */
 export const STREAK_STATUSES = ["completed", "failed"] as const;
 
@@ -231,7 +249,8 @@ export async function tripBrokeAfterWorkingBreaker(input: {
       .where(
         and(
           eq(automationRuns.automationId, input.automationId),
-          inArray(automationRuns.status, [...STREAK_STATUSES])
+          inArray(automationRuns.status, [...STREAK_STATUSES]),
+          drizzleSql`${automationRuns.stopReason} IS DISTINCT FROM 'budget'`
         )
       )
       .orderBy(desc(automationRuns.startedAt), desc(automationRuns.id))
