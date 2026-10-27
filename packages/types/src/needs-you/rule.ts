@@ -4,36 +4,43 @@
  * `needs-truth` §4).
  *
  *   needs you = an open request that only you can settle, raised by a real
- *   asker (an agent, or a commitment gate), not yet answered, on work that is
- *   live (an agent moved in the last 7 days and is not working right now),
- *   and either under 7 days old or a commitment.
+ *   asker, not yet answered, on work that is live (an agent moved in the last
+ *   7 days and is not working right now), and either under 7 days old or a
+ *   commitment.
  *
- * The census of 2026-10-26 counted 114 items claiming the founder. 7 needed
- * them. The other 107 were not lies one by one: each was an owed slot, or a
- * pending proposal, read by a predicate that never asked who raised it,
- * whether anyone still works on it, or whether anything waits on it.
+ * Every owed slot and every pending proposal used to claim the person. The
+ * predicate never asked who raised it, whether anyone still works on it, or
+ * whether anything waits on it.
  *
  * EVERY FAILED CLAUSE LANDS IN A NAMED FOLD, never dropped:
  *
- *   `from_system`       — no real asker: a criterion escalation, a missing
- *                         param, a run's "keep going", a decision ask no agent
- *                         filed. The producer should not have asked the person
- *                         (decision E3); until it stops, the row is kept apart.
- *   `stopped`           — no agent moved the session for 7 days, or it ended.
- *                         ONE row per session: "Resume or close" (E1).
+ *   `from_system`       — no real asker: a decision ask no agent filed. Every
+ *                         other cause stands for someone: a criterion grade
+ *                         the evaluating agent escalated, a run its launcher
+ *                         attends, a param the person's own run lacks, a gate.
+ *   `stopped`           — the agent's own question (a confirm / choose that
+ *                         ends with its session) on work no agent moved for 7
+ *                         days, or that ended. ONE row per session: "Resume
+ *                         or close" (E1). A person deliverable (act, provide,
+ *                         form, plain work, a criterion grade) is never
+ *                         Stopped: it is still the person's to do, whatever
+ *                         became of the agent, and closing never retires it.
  *   `working`           — an agent is on it right now: "asks you when you
  *                         can" (E2). Derived from live state, no agent flag.
+ *                         A pending proposal on that session waits there too,
+ *                         unless a gate waits on it (F2).
  *   `review_later`      — a real ask, owed more than 7 days, not a commitment.
  *   `changes_to_review` — a pending proposal nothing waits on: bookkeeping,
  *                         batch-approved, its own count (E6).
  *
- * The clauses are evaluated in the census precedence (machine > stopped >
- * working > age), so one row has exactly one class.
+ * The clauses are evaluated in one precedence (machine > stopped > working >
+ * age), so one row has exactly one class. "Ended" is the terminal set
+ * (`TERMINAL_SESSION_STATUSES`): a forming or scheduled session is not ended.
  *
  * ── THE SQL TWIN ────────────────────────────────────────────────────────────
  * `needsYouSlotClassSql` (`@synap/database`, `needs-you-predicate.ts`) is this
- * rule in SQL, for the reapers (jobs cannot import api) and the counts. The
- * PGlite parity test there runs every fixture through both. Two choices make
+ * rule in SQL, for the reapers (jobs cannot import api). The PGlite parity
+ * test there runs every fixture through both. Two choices make
  * the twins provably equal instead of nearly equal:
  *   - `owedSince` is compared as TEXT, and only in the canonical
  *     `toISOString()` form the server stamps (`ISO_STAMP`). Anything else
@@ -46,11 +53,13 @@
  * "Last agent activity" is MEASURED from agent evidence (agent room posts,
  * chat turns, agent-filed proposals, agent-attributed events), never
  * `updatedAt`: any unrelated write moves that (a backfill made 8-day-old
- * machine asks rank as fresh, census §2).
+ * machine asks rank as fresh).
  *
  * Pure, no I/O: the clock is a parameter.
  */
 
+import { askEndsWithSession, type AskCardSlot } from "../ask/card.js";
+import { TERMINAL_SESSION_STATUSES } from "../focus-sessions/statuses.js";
 import { deliverableOwedBy } from "../units/deliverable.js";
 import { REVIEW_LATER_AFTER_MS } from "../proposals/fate.js";
 import type { ProposalWaits } from "../proposals/fate.js";
@@ -58,10 +67,8 @@ import { SESSION_WORKING_WINDOW_MS } from "../run-activity/live.js";
 
 // ─── Constants (the SQL twin composes these, never a copy) ──────────────────
 
-/** No agent evidence for this long ⇒ the session is Stopped (E1). */
-export const NEEDS_YOU_STOPPED_AFTER_DAYS = 7;
-export const NEEDS_YOU_STOPPED_AFTER_MS =
-  NEEDS_YOU_STOPPED_AFTER_DAYS * 24 * 3_600_000;
+/** No agent evidence for 7 days ⇒ the session is Stopped (E1). */
+export const NEEDS_YOU_STOPPED_AFTER_MS = 7 * 24 * 3_600_000;
 
 /** A real ask owed longer than this leaves the headline (Resolve-XP decision 3). */
 export const NEEDS_YOU_REVIEW_LATER_AFTER_MS = REVIEW_LATER_AFTER_MS;
@@ -70,14 +77,18 @@ export const NEEDS_YOU_REVIEW_LATER_AFTER_MS = REVIEW_LATER_AFTER_MS;
 export const NEEDS_YOU_WORKING_WINDOW_MS = SESSION_WORKING_WINDOW_MS;
 
 /**
- * Session statuses whose work can still move. Mirrors `OPEN_SESSION_STATUSES`
- * (`@synap/database`); the parity test runs every status through both twins.
+ * Session statuses that ENDED the work: the terminal set, never "not in some
+ * open list" (a forming or scheduled session has not ended). The SQL twin
+ * reads this list; the parity test runs every status through both.
  */
-export const NEEDS_YOU_OPEN_SESSION_STATUSES = [
-  "active",
-  "paused",
-  "stale",
-] as const;
+export const NEEDS_YOU_ENDED_SESSION_STATUSES = TERMINAL_SESSION_STATUSES;
+
+function sessionEnded(status: string | null): boolean {
+  return (
+    status !== null &&
+    (NEEDS_YOU_ENDED_SESSION_STATUSES as readonly string[]).includes(status)
+  );
+}
 
 /**
  * The agent evidence that is the ASKING itself, never work: the room post
@@ -93,12 +104,15 @@ export const NEEDS_YOU_ASKING_EVENT_TYPES = [
 export const NEEDS_YOU_QUESTION_POST_KIND = "question";
 
 /**
- * Causes a real asker stands behind without an agent stamp: the session's own
- * plan/deploy gate, and an external agent's approval request. Every other
- * cause (`run`, `param`, `criterion`, a `decision` no agent filed) is the
- * system asking on nobody's behalf.
+ * Causes that are a real ask only when an AGENT filed them (`askedBy`): a
+ * decision ask with no agent behind it is the system asking on nobody's
+ * behalf (W6b's agent-author rule). Every other cause stands for its asker
+ * without a stamp: the session's gate, an external agent's approval request,
+ * a criterion grade (the evaluating agent's escalation), a run's "keep going"
+ * (its launcher's run) and a missing param (the person's own run). The
+ * producers that asked for them on nobody's behalf were removed (be#295).
  */
-export const NEEDS_YOU_ASKER_CAUSES = ["gate", "external_approval"] as const;
+export const NEEDS_YOU_AGENT_FILED_CAUSES = ["decision"] as const;
 
 /**
  * The ONE stamp shape `owedSince` is aged by: `Date.prototype.toISOString()`,
@@ -112,7 +126,7 @@ const ISO_STAMP = new RegExp(ISO_STAMP_PATTERN);
 // ─── Classes and folds ──────────────────────────────────────────────────────
 
 /** Where one owed ask lands. */
-export const NEEDS_YOU_SLOT_CLASSES = [
+const NEEDS_YOU_SLOT_CLASSES = [
   "needs_you",
   "from_system",
   "stopped",
@@ -122,8 +136,9 @@ export const NEEDS_YOU_SLOT_CLASSES = [
 export type NeedsYouSlotClass = (typeof NEEDS_YOU_SLOT_CLASSES)[number];
 
 /** Where one pending proposal lands. */
-export const NEEDS_YOU_PROPOSAL_CLASSES = [
+const NEEDS_YOU_PROPOSAL_CLASSES = [
   "needs_you",
+  "working",
   "review_later",
   "changes_to_review",
 ] as const;
@@ -157,6 +172,9 @@ export interface NeedsYouSlotFacts {
   paramName?: unknown;
   pendingRelay?: unknown;
   ask?: unknown;
+  kind?: unknown;
+  blockedReason?: unknown;
+  keptOwedAt?: unknown;
 }
 
 /** The session facts the rule reads, measured by the pod in one batched read. */
@@ -218,18 +236,28 @@ export function needsYouAskCauseKind(slot: NeedsYouSlotFacts): string | null {
 }
 
 /**
- * Was it raised by a real asker? An agent (`askedBy`), the session's gate, an
- * external agent's approval request, or a decision ask an AGENT filed (W6b's
- * agent-author rule). A slot with no stamp at all reads as asked: it predates
- * the stamps (W6a), and every door that wrote one then was an agent's.
+ * Was it raised by a real asker? Every cause but a decision ask no agent
+ * filed ({@link NEEDS_YOU_AGENT_FILED_CAUSES}). A slot with no stamp at all
+ * reads as asked: it predates the stamps (W6a), and every door that wrote one
+ * then was an agent's.
  */
 export function needsYouHasRealAsker(slot: NeedsYouSlotFacts): boolean {
   const cause = needsYouAskCauseKind(slot);
   if (cause === null) return true;
-  if ((NEEDS_YOU_ASKER_CAUSES as readonly string[]).includes(cause)) {
+  if (!(NEEDS_YOU_AGENT_FILED_CAUSES as readonly string[]).includes(cause)) {
     return true;
   }
-  return cause === "decision" && nonEmptyString(slot.askedBy);
+  return nonEmptyString(slot.askedBy);
+}
+
+/**
+ * Is it the agent's own question, the kind that ends with its session
+ * (`askEndsWithSession`: a confirm / choose, never a criterion grade or a
+ * kept-owed ask)? Only those can be Stopped: a person deliverable is still
+ * the person's to do when the agent left.
+ */
+function endsWithSession(slot: NeedsYouSlotFacts): boolean {
+  return askEndsWithSession(slot as AskCardSlot);
 }
 
 /**
@@ -262,24 +290,18 @@ function owedStamp(slot: NeedsYouSlotFacts): string | null {
 export type NeedsYouSessionClass = "stopped" | "working" | "live";
 
 /**
- * Stopped (ended, or no agent evidence for 7 days, the start counting as
- * evidence), working (a turn in flight, or agent evidence inside the working
- * window), else live. A session with NO readable clock at all (no agent
- * evidence and no start — a legacy row) is never called stopped: an
- * unreadable clock fails toward keeping, as `askFate` does.
+ * Stopped (ended — the terminal set — or no agent evidence for 7 days, the
+ * start counting as evidence), working (a turn in flight, or agent evidence
+ * of work inside the working window), else live. A session with NO readable
+ * clock at all (no agent evidence and no start — a legacy row) is never
+ * called stopped: an unreadable clock fails toward keeping, as `askFate` does.
  */
 export function needsYouSessionClass(
   session: NeedsYouSessionFacts,
   now: Date | number = Date.now()
 ): NeedsYouSessionClass {
   const at = now instanceof Date ? now.getTime() : now;
-  if (
-    !(NEEDS_YOU_OPEN_SESSION_STATUSES as readonly string[]).includes(
-      session.status
-    )
-  ) {
-    return "stopped";
-  }
+  if (sessionEnded(session.status)) return "stopped";
   const agent = timeOf(session.lastAgentActivityAt);
   const started = timeOf(session.startedAt);
   const moved =
@@ -291,20 +313,37 @@ export function needsYouSessionClass(
   if (moved !== null && moved < at - NEEDS_YOU_STOPPED_AFTER_MS) {
     return "stopped";
   }
-  if (session.turnInFlight) return "working";
-  const work =
+  return needsYouAgentWorking(session, at) ? "working" : "live";
+}
+
+/**
+ * Working's clock alone: a turn in flight, or agent evidence of WORK inside
+ * the working window (`lastAgentWorkAt`; absent = not measured, then the
+ * activity clock stands in). THE answer to "is an agent at work on it" for
+ * every reader that draws one: the rule above and the card's
+ * `sessionUnitInput` (`agentAtWork`), so the two can never fork.
+ */
+export function needsYouAgentWorking(
+  session: Pick<NeedsYouSessionFacts, "turnInFlight" | "lastAgentWorkAt"> & {
+    lastAgentActivityAt?: NeedsYouSessionFacts["lastAgentActivityAt"];
+  },
+  now: Date | number = Date.now()
+): boolean {
+  if (session.turnInFlight) return true;
+  const at = now instanceof Date ? now.getTime() : now;
+  const work = timeOf(
     session.lastAgentWorkAt === undefined
-      ? agent
-      : timeOf(session.lastAgentWorkAt);
-  if (work !== null && work >= at - NEEDS_YOU_WORKING_WINDOW_MS) {
-    return "working";
-  }
-  return "live";
+      ? session.lastAgentActivityAt
+      : session.lastAgentWorkAt
+  );
+  return work !== null && work >= at - NEEDS_YOU_WORKING_WINDOW_MS;
 }
 
 /**
  * THE rule for one slot on its session. `null` when the slot is not owed by
  * the person at all (done, retired, optional, the agent's): it is in no list.
+ * On a stopped session only the agent's own question is Stopped; a person
+ * deliverable goes on to the age clause.
  */
 export function classifyOwedAsk(
   slot: NeedsYouSlotFacts,
@@ -315,8 +354,11 @@ export function classifyOwedAsk(
   if (!needsYouHasRealAsker(slot)) return "from_system";
   const at = now instanceof Date ? now.getTime() : now;
   const live = needsYouSessionClass(session, at);
-  if (live === "stopped") return "stopped";
-  if (live === "working") return "working";
+  if (live === "stopped") {
+    if (endsWithSession(slot)) return "stopped";
+  } else if (live === "working") {
+    return "working";
+  }
   const stamp = owedStamp(slot);
   if (
     stamp !== null &&
@@ -344,14 +386,21 @@ export interface NeedsYouProposalFacts {
    * demoted on a session nobody let us see.
    */
   sessionStatus: string | null;
+  /**
+   * That session's {@link needsYouSessionClass}, when the reader measured it.
+   * `null` / absent = not measured, which never demotes (as above).
+   */
+  sessionClass?: NeedsYouSessionClass | null;
 }
 
 /**
  * THE rule for one pending proposal. Needs you only when something WAITS on
- * it (a gate, an owed slot, a parked run) on work that is still open. A gate
- * is a commitment and never ages; any other wait over 7 days goes to Review
- * later. Every other pending proposal is a change to review. `null` when it
- * is not pending.
+ * it (a gate, an owed slot, a parked run) on work that has not ended. A gate
+ * is a commitment: it never waits behind a working agent and never ages. Any
+ * other wait waits with its session while an agent works it (F2, E2's
+ * "asks you when you can"), and goes to Review later after 7 days. Every
+ * other pending proposal is a change to review. `null` when it is not
+ * pending.
  */
 export function classifyPendingProposal(
   p: NeedsYouProposalFacts,
@@ -359,16 +408,11 @@ export function classifyPendingProposal(
 ): NeedsYouProposalClass | null {
   if (p.status !== "pending") return null;
   if (!p.waits.waits) return "changes_to_review";
-  if (
-    p.sessionId !== null &&
-    p.sessionStatus !== null &&
-    !(NEEDS_YOU_OPEN_SESSION_STATUSES as readonly string[]).includes(
-      p.sessionStatus
-    )
-  ) {
+  if (p.sessionId !== null && sessionEnded(p.sessionStatus)) {
     return "changes_to_review";
   }
   if (p.waits.reason !== "gate") {
+    if (p.sessionClass === "working") return "working";
     const at = now instanceof Date ? now.getTime() : now;
     const created = timeOf(p.createdAt);
     if (created !== null && created < at - NEEDS_YOU_REVIEW_LATER_AFTER_MS) {

@@ -6,6 +6,8 @@
  * cluster's `needsYouClass`). This pins that they cannot diverge, fold by
  * fold: the headline count equals the headline rows, every fold count equals
  * the rows in that fold, and nothing is dropped (rows = headline + folds).
+ * ONE headline number (M5): `count.needsYou` and `count.folds.needsYou` are
+ * the same, with a notification and a review session in the headline too.
  *
  * Negative control: classing in the count by any other rule than the list's
  * (e.g. the pre-rule `isAskReviewLater` alone) turns these red — the
@@ -20,10 +22,12 @@ import type { NeedsYouClass } from "@synap-core/types/needs-you/rule";
 import {
   countNeedsYou,
   unionNeedsYou,
+  type NotificationSignalInput,
   type OwedSlotSignalInput,
   type Signal,
 } from "../needs-you-union.js";
 import type { ProposalCluster } from "../../proposals/fingerprint.js";
+import { clusterFoldCounts } from "../../proposals/proposal-needs-you.js";
 
 const NOW = new Date("2026-10-27T12:00:00.000Z");
 const DAY = 24 * 3_600_000;
@@ -83,6 +87,29 @@ const CLUSTERS: ProposalCluster[] = [
   cluster("skill-1", "changes_to_review", 3 * DAY),
   cluster("skill-2", "changes_to_review", 10 * DAY),
   cluster("waited-old", "review_later", 9 * DAY),
+  // F2: a wait on a session an agent is working.
+  cluster("waited-busy", "working"),
+];
+
+// The headline's other populations: an unread item and a session awaiting
+// review. A count that leaves either out of `folds.needsYou` says two numbers.
+const NOTIFICATIONS: NotificationSignalInput[] = [
+  {
+    id: "n-sync",
+    title: "Sync failed",
+    category: "system",
+    sourceType: "connector",
+    sourceId: "conn-1",
+    createdAt: ago(DAY),
+  },
+];
+const REVIEW = [
+  {
+    id: "rev-1",
+    title: "Ship the page",
+    goal: "Ship the page",
+    updatedAt: ago(DAY),
+  },
 ];
 
 const items = (rows: NeedsYouRow<Signal>[]) =>
@@ -91,32 +118,31 @@ const items = (rows: NeedsYouRow<Signal>[]) =>
 describe("needs-you folds: the count IS the rows (decision E)", () => {
   const signals = unionNeedsYou({
     clusters: CLUSTERS,
-    notifications: [],
+    notifications: NOTIFICATIONS,
     owedSlots: OWED,
+    reviewSessions: REVIEW,
     now: NOW,
   });
   const count = countNeedsYou({
     distinctClusters: CLUSTERS.length,
     reviewLaterClusters: CLUSTERS.filter((c) => c.reviewLater).length,
-    clusterFolds: {
-      reviewLater: CLUSTERS.filter((c) => c.needsYouClass === "review_later")
-        .length,
-      changesToReview: CLUSTERS.filter(
-        (c) => c.needsYouClass === "changes_to_review"
-      ).length,
-    },
+    clusterFolds: clusterFoldCounts(CLUSTERS),
     clustersTruncated: false,
-    notifications: [],
+    notifications: NOTIFICATIONS,
     clusters: CLUSTERS,
     notificationsTruncated: false,
     owedSlots: OWED,
     owedTruncated: false,
+    reviewSessions: REVIEW.length,
+    reviewSessionIds: REVIEW.map((r) => r.id),
     now: NOW,
   });
   const rows = needsYouRows(signals);
 
   it("NON-VACUITY: every slot and cluster became a row, and every fold is reached", () => {
-    expect(signals).toHaveLength(OWED.length + CLUSTERS.length);
+    expect(signals).toHaveLength(
+      OWED.length + CLUSTERS.length + NOTIFICATIONS.length + REVIEW.length
+    );
     for (const f of [
       "working",
       "stopped",
@@ -135,13 +161,17 @@ describe("needs-you folds: the count IS the rows (decision E)", () => {
         "Pick the OS",
         "Approve the skill",
         "Unclassed fresh",
-        // The deploy approval cluster's title, from the vocabulary.
+        "Sync failed",
+        // The deploy approval cluster's and the review row's titles.
         signals.find((s) => s.id === "cluster:deploy")!.title,
+        signals.find((s) => s.kind === "session-review")!.title,
       ].sort()
     );
-    expect(count.blocked + count.decisions).toBe(headline.length);
-    expect(count.folds.needsYou).toBe(headline.length);
+    // The notification and the review are headline rows too.
+    expect(count.blocked + count.decisions).toBe(headline.length - 2);
+    // ONE headline number: the folds state the same one (M5).
     expect(count.needsYou).toBe(headline.length);
+    expect(count.folds.needsYou).toBe(count.needsYou);
   });
 
   it("each fold count equals the rows in that fold", () => {

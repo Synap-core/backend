@@ -10,7 +10,10 @@
  *   - agent evidence read from `updated_at`, or from a HUMAN post / proposal;
  *   - one evidence source dropped (post, turn, proposal, event);
  *   - the session start not counted (a fresh session read as stopped);
- *   - a closed / failed / cancelled session read as live;
+ *   - a closed / failed / cancelled session read as live, or a forming /
+ *     scheduled one read as ended (the terminal set, not an open list);
+ *   - a person deliverable on a stopped session read as Stopped (only the
+ *     agent's own confirm / choose is; a kept-owed ask never is);
  *   - a cause read by truthiness (`askCause: {}`, an array, an empty asker);
  *   - `owedSince` aged off a non-canonical stamp (a SQL cast would THROW on
  *     `0000-00-00`; the rule keeps it);
@@ -30,14 +33,11 @@ import { PgDialect } from "drizzle-orm/pg-core";
 import { sql as drizzleSql, type SQL } from "drizzle-orm";
 import {
   needsYouSlotClassSql,
-  needsYouWhere,
   sessionStoppedOnItsAsksWhere,
   SLOT_ENDS_WITH_SESSION_SQL,
 } from "./needs-you-predicate.js";
-import { OPEN_SESSION_STATUSES } from "./owed-slot-predicate.js";
 import {
   classifyOwedAsk,
-  NEEDS_YOU_OPEN_SESSION_STATUSES,
   type NeedsYouSlotFacts,
 } from "../../../types/src/needs-you/rule.js";
 import { askEndsWithSession } from "../../../types/src/ask/index.js";
@@ -230,9 +230,14 @@ const ROWS: ReadonlyArray<{
     slot: { owner: "human", paramName: "p" },
   },
   {
-    rulesOut: "run cause beaten by its askedBy",
+    rulesOut: "a run's keep-going read as the system's",
     session: LIVE,
     slot: { ...ASK, askCause: { kind: "run" } },
+  },
+  {
+    rulesOut: "an unstamped run cause read as the system's",
+    session: LIVE,
+    slot: { owner: "human", askCause: { kind: "run" } },
   },
   {
     rulesOut: "system decision read as asked",
@@ -342,6 +347,8 @@ const ROWS: ReadonlyArray<{
     "active",
     "paused",
     "stale",
+    "forming",
+    "scheduled",
     "weird",
   ].map((status) => ({
     rulesOut: `status ${status}`,
@@ -351,7 +358,42 @@ const ROWS: ReadonlyArray<{
   {
     rulesOut: "machine beaten by stopped",
     session: { startedAt: ago(20 * DAY) },
+    slot: { owner: "human", askCause: { kind: "decision" } },
+  },
+  {
+    rulesOut: "a param on a stopped session read as Stopped",
+    session: { startedAt: ago(20 * DAY) },
     slot: { owner: "human", paramName: "p" },
+  },
+  ...["act", "form", "provide"].map((mode) => ({
+    rulesOut: `a ${mode} deliverable on a stopped session read as Stopped`,
+    session: { startedAt: ago(20 * DAY) },
+    slot: { ...ASK, ask: { mode } },
+  })),
+  {
+    rulesOut: "a plain deliverable on a closed session read as Stopped",
+    session: { ...LIVE, status: "closed" },
+    slot: { owner: "human", owedSince: ago(DAY) },
+  },
+  {
+    rulesOut: "an aged deliverable on a closed session kept in the headline",
+    session: { ...LIVE, status: "closed" },
+    slot: { ...ASK, owedSince: ago(9 * DAY), ask: { mode: "act" } },
+  },
+  {
+    rulesOut: "a criterion grade on a closed session read as Stopped",
+    session: { ...LIVE, status: "closed" },
+    slot: {
+      owner: "human",
+      kind: "criterion",
+      criterionKey: "k",
+      ask: { mode: "choose", options: [] },
+    },
+  },
+  {
+    rulesOut: "a kept-owed confirm on a closed session read as Stopped",
+    session: { ...LIVE, status: "closed" },
+    slot: { ...ASK, keptOwedAt: ago(DAY) },
   },
   // ── working ─────────────────────────────────────────────────────────────
   {
@@ -509,12 +551,6 @@ describe("needsYouSlotClassSql === classifyOwedAsk", () => {
     );
   });
 
-  it("the open statuses are one list on both sides", () => {
-    expect([...OPEN_SESSION_STATUSES]).toEqual([
-      ...NEEDS_YOU_OPEN_SESSION_STATUSES,
-    ]);
-  });
-
   it("agrees on every discriminating row", async () => {
     for (const { rulesOut, session, slot } of ROWS) {
       const id = await insertSession(session, [slot]);
@@ -523,15 +559,6 @@ describe("needsYouSlotClassSql === classifyOwedAsk", () => {
         cls: classifyOwedAsk(slot, factsOf(session), NOW),
       });
     }
-  });
-
-  it("needsYouWhere holds exactly the sessions with a headline ask", async () => {
-    const yes = await insertSession(LIVE, [{ owner: "agent" }, ASK]);
-    const no = await insertSession(LIVE, [{ ...ASK, owedSince: ago(9 * DAY) }]);
-    const rows = await run(drizzleSql`
-      select id from focus_sessions
-      where id in (${yes}::uuid, ${no}::uuid) and ${needsYouWhere(NOW)}`);
-    expect(rows.map((r) => r.id)).toEqual([yes]);
   });
 });
 
@@ -563,6 +590,14 @@ describe("SLOT_ENDS_WITH_SESSION_SQL === askEndsWithSession", () => {
       ask: { mode: "choose", options: [] },
     },
     { label: "a", owner: "human", criterionKey: "k", ask: { mode: "confirm" } },
+    // The closing agent kept it owed: it outlives the session.
+    {
+      label: "a",
+      owner: "human",
+      keptOwedAt: ago(DAY),
+      ask: { mode: "confirm" },
+    },
+    { label: "a", owner: "human", keptOwedAt: "", ask: { mode: "confirm" } },
   ];
 
   it("agrees on every slot", async () => {
@@ -618,6 +653,12 @@ describe("sessionStoppedOnItsAsksWhere — the reaper's arm (decision E1)", () =
       );
     }
     expect(await stopped(quiet, [ASK, { owner: "human" }])).toBe(false);
+  });
+
+  it("never one whose confirm the closing agent kept owed past it", async () => {
+    expect(await stopped(quiet, [{ ...ASK, keptOwedAt: ago(DAY) }])).toBe(
+      false
+    );
   });
 
   it("never one that owes nothing, or waits on a pending gate", async () => {

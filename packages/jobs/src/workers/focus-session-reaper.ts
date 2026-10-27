@@ -24,6 +24,7 @@
 import {
   db,
   and,
+  asc,
   drizzleSql,
   focusSessions,
   AGENT_PROPOSAL_PACKAGE_MARKER,
@@ -159,6 +160,9 @@ export async function staleSessionsStoppedOnTheirAsks(): Promise<number> {
     .select({ id: focusSessions.id })
     .from(focusSessions)
     .where(sessionStoppedOnItsAsksWhere(new Date()))
+    // A stable order, oldest first: the batch is the same rows the SQL and
+    // the in-lock re-check agree on, never an arbitrary 200.
+    .orderBy(asc(focusSessions.startedAt), asc(focusSessions.id))
     .limit(STOPPED_STALE_BATCH);
   let staled = 0;
   for (const row of stopped) {
