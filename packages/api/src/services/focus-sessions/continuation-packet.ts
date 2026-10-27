@@ -1402,7 +1402,17 @@ export async function withPullRequestStates(
   if (refs.size === 0) return units;
   let states: Map<string, PullRequestStateFacts>;
   try {
-    states = await readPullRequestStates([...refs.values()], reader, database);
+    // The session reader's own floor: roster only when it honours one
+    // (`SessionReader.roster` defaults to owner-only).
+    states = await readPullRequestStates(
+      [...refs.values()],
+      {
+        userId: reader.userId,
+        roster: reader.roster ?? false,
+        lens: reader.lens,
+      },
+      database
+    );
   } catch (err) {
     logger.warn(
       { err },
