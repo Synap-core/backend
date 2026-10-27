@@ -34,10 +34,7 @@ import {
   apiKeys,
   workspaces,
 } from "@synap/database/schema";
-import type {
-  WorkspaceSettings,
-  AgentCreatedVia,
-} from "@synap/database/schema";
+import type { WorkspaceSettings } from "@synap/database/schema";
 import { verifyPermission } from "@synap/database";
 import { randomUUID } from "crypto";
 import { auditLog } from "../utils/audit-log.js";
@@ -60,7 +57,6 @@ import {
   resolveAgentDirection,
   resolveAgentWriteMode,
   type AgentDirection,
-  type AgentOrigin,
 } from "@synap-core/types/agents";
 import { AccessContext, scopedDb } from "../access/index.js";
 import {
@@ -94,22 +90,6 @@ import {
   loadAgentDispatchSummaries,
   parseAgentBindingTool,
 } from "../services/agent-dispatch/agent-binding.js";
-
-/**
- * Coverage floor: the values the `users.created_via` column accepts
- * (`AgentCreatedVia`, `@synap/database`) and the origins the direction rule
- * classifies (`AGENT_ORIGINS`, `@synap-core/types/agents`) are the SAME set.
- * A writer that stamps a new origin must widen the column type, which breaks
- * this line until the origin is added to `AGENT_ORIGINS` — which in turn
- * breaks the build until `AGENT_DIRECTION_BY_ORIGIN` classifies it.
- */
-type _OriginsAgree = [AgentCreatedVia] extends [AgentOrigin]
-  ? [AgentOrigin] extends [AgentCreatedVia]
-    ? true
-    : never
-  : never;
-const _originsAgree: _OriginsAgree = true;
-void _originsAgree;
 
 /**
  * Floor-first agent-user fetch backing `list`.

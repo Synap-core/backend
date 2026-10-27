@@ -26,6 +26,9 @@ export * from "./action.js";
 export * from "./duplicate-check.js";
 // How a review card reads that answer: the twins, the approve verbs (B2).
 export * from "./duplicate-review.js";
+// Which proposals only their own page may approve: the one rule every surface
+// and the pod's batch door read.
+export * from "./page-only.js";
 
 /**
  * The pod's cap on one batch decision (`proposals.batchApprove` /

@@ -48,47 +48,10 @@ import {
 import type { EventRepository } from "../repositories/event-repository.js";
 import { uploadDocumentVersionSnapshot } from "../utils/document-version-storage.js";
 import { createDocumentWithContent } from "../utils/claim-document-revision.js";
+// The ONE long-form heuristic every writer surface calls.
+import { shouldMaterializeAsDocument } from "@synap-core/types/documents";
 
 const logger = createLogger({ module: "entity-body-service" });
-
-// ---------------------------------------------------------------------------
-// Long-form heuristic — LOCAL COPY.
-//
-// The canonical `shouldMaterializeAsDocument` lives in `@synap-core/types/documents`,
-// but `@synap-core/types` depends on `@synap/database` (circular), so this
-// package cannot import it. This is a deliberate, behavior-identical copy —
-// the same precedent as `create-unified-event.ts`. A follow-up wave should make
-// `@synap/database` the canonical home and re-export from `@synap-core/types`
-// (types → database is allowed) to collapse the duplicate; that is a separate
-// cross-package diff, out of Wave 1's scope.
-// ---------------------------------------------------------------------------
-const HEADING_RE = /^#{1,6} /gm;
-const CODE_FENCE_RE = /^(```|~~~)/m;
-const LIST_ITEM_RE = /^\s*(?:[-*+]|\d+\.)\s+\S/gm;
-const PARAGRAPH_SPLIT_RE = /\n\s*\n/;
-const LONG_FORM_LENGTH = 600;
-
-function countMatches(re: RegExp, text: string): number {
-  let count = 0;
-  for (const _ of text.matchAll(re)) count++;
-  return count;
-}
-
-/** Behavior-identical local copy of `@synap-core/types`'s `shouldMaterializeAsDocument`. */
-function shouldMaterializeAsDocument(content: string): boolean {
-  if (!content) return false;
-  const text = content.trim();
-  if (!text) return false;
-  if (text.length >= LONG_FORM_LENGTH) return true;
-  if (countMatches(HEADING_RE, text) >= 2) return true;
-  if (CODE_FENCE_RE.test(text)) return true;
-  if (countMatches(LIST_ITEM_RE, text) >= 3) return true;
-  const paragraphCount = text
-    .split(PARAGRAPH_SPLIT_RE)
-    .filter((p) => p.trim().length > 0).length;
-  if (paragraphCount >= 4) return true;
-  return false;
-}
 
 /**
  * Map a mime type → `documents.type`. Behavior-identical to file-upload.ts's
