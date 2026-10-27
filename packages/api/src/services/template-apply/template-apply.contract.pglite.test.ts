@@ -1856,3 +1856,126 @@ describe("a compose onto a space the caller may only VIEW is refused as such", (
     expect(run.status, JSON.stringify(run.reply)).toBe(403);
   });
 });
+
+// ── An approved template UPDATE converges the space's EXISTING playbooks ────
+//
+// Incident 2026-10-27 (CRM, proposal 71d82b95): the person approved `synap
+// templates update crm`; the pod's catalog cache body could not be read, so
+// the resolver answered its frozen bundle — the OLD template, with no version.
+// Layer one re-synced that bundle and handed it to layer 2 as "the catalog's
+// package", while the stamp took the approved body's own version. Layer 2
+// reconciled the playbooks to the old text (nothing to do), and the stamp
+// moved: "Draft a first message" never got its DRAFT RULES, "Build a prospect
+// list" never got its `pool` param, and `synap templates` read up to date.
+
+describe("an approved template update converges the existing playbooks", () => {
+  const slug = "upd-bundle-crm";
+  const workspaceName = "CRM bundle";
+  const lead = { name: "lead", type: "entity", label: "Lead", required: true };
+  const pool = {
+    name: "pool",
+    type: "choice",
+    label: "Where to look",
+    options: ["public", "network"],
+    defaultValue: "public",
+  };
+  const def = (version: string, goalTemplate: string, params: unknown[]) => ({
+    _meta: { slug, version },
+    workspaceName,
+    profiles: [],
+    playbooks: [{ name: "Draft a first message", goalTemplate, params }],
+  });
+  const v1 = def("h-v1", "Draft the first message to {lead}.", [lead]);
+  const v2 = def(
+    "h-v2",
+    "Draft the first message to {lead}. DRAFT RULES: one touch, sent day + 3 days.",
+    [lead, pool]
+  );
+  const proposalData = (definition: Record<string, unknown>) => ({
+    name: workspaceName,
+    definition,
+    workspaceName,
+    templateId: slug,
+    packageSlug: slug,
+    packageVersion: (definition._meta as { version: string }).version,
+    proposalId: slug,
+    createdBy: "provisioning",
+    source: "packages.apply",
+  });
+  async function draftRow(workspaceId: string) {
+    const { rows } = await q<{
+      goal_template: string;
+      params: Array<{ name: string }>;
+      metadata: {
+        marketSource?: {
+          packageVersion?: string;
+          baseline?: { goalTemplate?: string };
+        };
+      };
+    }>(
+      `select goal_template, params, metadata from playbooks where workspace_id = $1 and name = 'Draft a first message' and status <> 'archived'`,
+      [workspaceId]
+    );
+    expect(rows).toHaveLength(1);
+    return rows[0]!;
+  }
+  let spaceId = "";
+
+  it("approve workspace/update (template_update) applies the APPROVED body when the catalog resolves only its versionless bundle", async () => {
+    await approve("workspace/create", proposalData(v1), null);
+    const created = await theSpace(slug);
+    spaceId = created.id;
+    const before = await draftRow(spaceId);
+    expect(before.goal_template).not.toContain("DRAFT RULES");
+    const installedVersion = before.metadata.marketSource?.packageVersion;
+
+    // The resolver's fallback: the frozen bundle, i.e. the OLD template.
+    h.catalog.set(slug, {
+      source: "bundle",
+      dependencies: [],
+      packageDefinition: v1,
+      workspaceDefinition: v1,
+    });
+    await approve(
+      "workspace/update",
+      { ...proposalData(v2), id: spaceId, operation: "template_update" },
+      null
+    );
+
+    const { id, state } = await theSpace(slug);
+    expect(id).toBe(spaceId);
+    expect(state).toMatchObject({
+      state: "active",
+      version: appliedPackageVersion(v2),
+    });
+    // The stamp claims v2 only because v2's playbook landed.
+    const after = await draftRow(spaceId);
+    expect(after.goal_template).toContain("DRAFT RULES");
+    expect(after.params.map((p) => p.name)).toEqual(["lead", "pool"]);
+    expect(after.metadata.marketSource?.baseline?.goalTemplate).toContain(
+      "DRAFT RULES"
+    );
+    expect(after.metadata.marketSource?.packageVersion).not.toBe(
+      installedVersion
+    );
+  });
+
+  it("a playbook whose reconcile fails holds the stamp: recorded partial, never the new version", async () => {
+    // `{campaign}` is not a declared param: `playbooks.update` refuses it, so
+    // the reused row's reconcile throws.
+    const v3 = def(
+      "h-v3",
+      "Draft the first message to {lead} for {campaign}. DRAFT RULES: one touch.",
+      [lead, pool]
+    );
+    await approve(
+      "workspace/update",
+      { ...proposalData(v3), id: spaceId, operation: "template_update" },
+      null
+    );
+    const { state } = await theSpace(slug);
+    expect(state?.state).toBe("partial");
+    expect(state?.version).toBe(appliedPackageVersion(v2));
+    expect((await draftRow(spaceId)).goal_template).not.toContain("{campaign}");
+  });
+});

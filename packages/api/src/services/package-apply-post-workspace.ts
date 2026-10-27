@@ -784,7 +784,7 @@ export async function applyPackagePostWorkspace(
       scope: string;
       reconcile?: Pick<
         InstalledPlaybookReconcileResult,
-        "kind" | "applied" | "ownerOwned"
+        "kind" | "applied" | "ownerOwned" | "proposalId"
       > & { error?: string };
     }> => {
       const [row] = await db
@@ -809,6 +809,7 @@ export async function applyPackagePostWorkspace(
             kind: r.kind,
             applied: r.applied,
             ownerOwned: r.ownerOwned,
+            ...(r.proposalId ? { proposalId: r.proposalId } : {}),
           },
         };
       } catch (e) {
@@ -850,9 +851,25 @@ export async function applyPackagePostWorkspace(
             // reported, never overwritten; an unstamped row is adopted). Before
             // this, reuse-by-name meant a fixed template never reached a pod.
             const reused = await reconcileReusedPlaybook(existing.id, p);
+            // A reconcile that only FILED a proposal, or threw, did not
+            // converge the row: say so at the item's top level, the one field
+            // the stamp rule reads (`postWorkspaceLayersConverged`). Reported
+            // as plain "reused", the version was stamped over a playbook still
+            // holding the old definition.
+            const unconverged = reused.reconcile?.error
+              ? { status: "error", message: reused.reconcile.error }
+              : reused.reconcile?.kind === "proposed"
+                ? {
+                    status: "proposed",
+                    ...(reused.reconcile.proposalId
+                      ? { proposalId: reused.reconcile.proposalId }
+                      : {}),
+                  }
+                : null;
             pbs.push({
               name: p.name,
               status: "reused",
+              ...unconverged,
               playbookId: existing.id,
               // `session` | `project` — see the created branch below.
               scope: reused.scope,

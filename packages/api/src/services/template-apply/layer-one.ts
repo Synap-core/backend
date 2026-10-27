@@ -324,8 +324,18 @@ export async function applyLayerOne(
 
     // ── A space holds it: plan against its state ──────────────────────────
     const { workspaceId } = target;
-    const resolved = await resolveFresh(packageSlug);
-    // Cache-first: a fresh catalog version always wins over the caller's.
+    // Cache-first: a fresh catalog version always wins over the caller's —
+    // but only a body that HAS a version may win. The resolver answers the
+    // frozen bundle (no version) when the cache body cannot be read; re-syncing
+    // the bundle while stamping the caller's version claimed a body no layer
+    // applied (incident 2026-10-27: an approved CRM update ran layer 2 off the
+    // 0.11 bundle, its playbooks never converged, and the stamp moved anyway).
+    // With a version of its own, the caller's body is the one applied.
+    const fresh = await resolveFresh(packageSlug);
+    const resolved =
+      fresh?.version !== undefined || packageVersion === undefined
+        ? fresh
+        : null;
     const version = resolved?.version ?? packageVersion;
     const action = planTemplateApply({
       target: { state: target.state },
