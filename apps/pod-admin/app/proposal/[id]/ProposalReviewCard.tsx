@@ -91,9 +91,11 @@ import {
   PersonAvatar,
   Pill,
 } from "../../_lib/object/provenance-chips";
+import { deriveDeferredWritesReview } from "@synap-core/types/proposals/deferred-writes";
 import { DocumentChanges } from "../../_lib/object/content/document-changes";
 import { documentChanges } from "../../_lib/object/content/document-changes-model";
 import { AlwaysApproveMenu } from "./AlwaysApproveMenu";
+import { DeferredWritesList } from "./DeferredWritesList";
 import {
   DuplicateUnchecked,
   ItemTwinChoice,
@@ -785,9 +787,17 @@ export function ProposalReviewBody({
   const status = reviewStatus(p);
   const payload = p.request.data ?? p.data;
   const { appConnect } = proposalHeading(p, payload);
+  /* Writes kept for later (a held-writes pack, a join's deferred writes): one
+     row per write, never the payload drawn as a record ("Untitled", its day,
+     its outcome ids). They sit at the top of the row's own `data`. */
+  const deferredWrites = appConnect
+    ? null
+    : (deriveDeferredWritesReview(p.data) ??
+      deriveDeferredWritesReview(payload));
   // A document edit carries its own before / after: the reviewer reads the
   // change, not the request's JSON.
-  const docChanges = appConnect ? null : documentChanges(payload);
+  const docChanges =
+    appConnect || deferredWrites ? null : documentChanges(payload);
   const action = resolveProposalAction({
     proposalType: p.proposalType,
     data: p.data,
@@ -819,14 +829,14 @@ export function ProposalReviewBody({
     ? (p.review as { graph?: ProposalReviewGraph }).graph
     : undefined;
   const graphItems =
-    reviewGraph && !appConnect && !docChanges
+    reviewGraph && !appConnect && !docChanges && !deferredWrites
       ? compositeItems(reviewGraph, payload, defs.definitionsFor)
       : [];
   const edges = graphItems.flatMap((item) =>
     item.shape === "edge" ? [item.edge] : []
   );
   const records: ProposedRecord[] =
-    appConnect || docChanges
+    appConnect || docChanges || deferredWrites
       ? []
       : graph
         ? reviewGraph
@@ -962,6 +972,8 @@ export function ProposalReviewBody({
             your review rules.
           </p>
         </Section>
+      ) : deferredWrites ? (
+        <DeferredWritesList review={deferredWrites} />
       ) : docChanges ? (
         <Section label="What changes">
           <DocumentChanges changes={docChanges} />

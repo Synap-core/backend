@@ -11,8 +11,21 @@
  * approving access never approves content. What each replay did is recorded
  * on `data.deferredOutcomes[ref]`.
  *
- * Pure + dependency-free (same contract as `../vocabulary`).
+ * The same writes are kept on a HELD-WRITES pack (W-B1, `agent/held_writes`):
+ * past its daily write ceiling an agent's writes wait on one proposal per
+ * (agent, UTC day), and approving it replays each the same way.
+ *
+ * Pure + dependency-free (same contract as `../vocabulary`, the one door its
+ * words come through).
  */
+
+import type { EnumTone } from "../property-render/enum-tone.js";
+import {
+  buildObjectActionTitle,
+  normalizeObjectKind,
+  resolveObjectNoun,
+} from "../vocabulary/index.js";
+import { isItemRejected } from "./item-pack.js";
 
 /** Writes one join may hold. The next one is refused, in words. */
 export const DEFERRED_WRITES_MAX = 50;
@@ -160,4 +173,175 @@ export function readDeferredOutcomes(
     }
   }
   return out;
+}
+
+// ── Reading the writes (every review surface) ───────────────────────────────
+
+/**
+ * What each stored outcome MEANS, as a tone name (never a colour): the mark a
+ * surface draws beside a replayed write. A `Record` over the outcome union, so
+ * a new outcome cannot ship without its tone.
+ */
+export const DEFERRED_OUTCOME_TONE: Readonly<
+  Record<DeferredOutcome, EnumTone>
+> = {
+  applied: "positive",
+  proposed: "pending",
+  refused: "negative",
+  skipped_by_reviewer: "neutral",
+  rejected: "negative",
+};
+
+/** One kept write, as a reviewer reads it. */
+export interface DeferredWriteRow {
+  ref: string;
+  /**
+   * `Create Task "Ship v2"` — what replaying it DOES (imperative), through the
+   * one title door (`buildObjectActionTitle`).
+   */
+  title: string;
+  /** The door the write goes through (`entity`, `focus_session`, `document`). */
+  subjectType: string;
+  /** The kind it writes: the entity's profile, else the door's subject. */
+  kind: string;
+  /** Its own name, or the kind's noun when it carries none — never empty. */
+  name: string;
+  /** The object kind of the record it writes (`focus_session` → `session`). */
+  objectKind: string;
+  /**
+   * The record it writes or changes, when known: the stored outcome's id (what
+   * the replay wrote), else the payload's own id (an update's target, a
+   * create's minted id).
+   */
+  recordId: string | null;
+  /** The reviewer left it out before approving (`dispositions[ref]`). */
+  leftOut: boolean;
+  /** What replaying it did; null until the proposal is decided. */
+  outcome: StoredDeferredOutcome | null;
+}
+
+export interface DeferredWritesReview {
+  /** Every readable write, in the order the agent made it. */
+  rows: DeferredWriteRow[];
+  /** Entries that did not parse — counted and said, never dropped silently. */
+  unreadable: number;
+  /** `rows.length + unreadable`: every entry the proposal holds. */
+  total: number;
+}
+
+function nameOf(data: Record<string, unknown>): string | null {
+  for (const key of ["title", "name", "goal"]) {
+    const v = data[key];
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  return null;
+}
+
+/**
+ * THE reading of a proposal's kept writes (a workspace join's, a held-writes
+ * pack's): one row per write, titled with what replaying it does, beside the
+ * outcome its replay recorded. `data` is the proposal row's `data`. Null when
+ * it carries no `deferredWrites` at all — there is nothing to list.
+ *
+ * synap-app's `deriveDeferredWritesReview` (hooks `proposal-types/itemPack.ts`)
+ * is the same reading, written before this one; it moves onto this.
+ */
+export function deriveDeferredWritesReview(
+  data: unknown
+): DeferredWritesReview | null {
+  if (!Array.isArray(asRecord(data)?.deferredWrites)) return null;
+  const { writes, unreadable } = readDeferredWrites(data);
+  const outcomes = readDeferredOutcomes(data);
+  const rows = writes.map((w): DeferredWriteRow => {
+    const kind =
+      (typeof w.data.profileSlug === "string" && w.data.profileSlug.trim()) ||
+      w.subjectType;
+    const name = nameOf(w.data);
+    const stored = outcomes[w.ref] ?? null;
+    const payloadId = typeof w.data.id === "string" ? w.data.id : null;
+    return {
+      ref: w.ref,
+      title: buildObjectActionTitle({
+        action: w.action,
+        objectKind: kind,
+        objectName: name,
+        mood: "imperative",
+      }),
+      subjectType: w.subjectType,
+      kind,
+      name: name ?? resolveObjectNoun(kind),
+      objectKind: normalizeObjectKind(w.subjectType),
+      recordId: stored?.id ?? payloadId,
+      leftOut: isItemRejected(data, w.ref),
+      outcome: stored,
+    };
+  });
+  return { rows, unreadable, total: rows.length + unreadable };
+}
+
+// ── The held-writes pack (W-B1) ─────────────────────────────────────────────
+
+/**
+ * Past its daily write ceiling an agent's replayable writes are kept on ONE
+ * pending proposal per (agent, UTC day): `agent/held_writes`, `targetId` = the
+ * agent. The pod files it with these (`permission-check.ts`).
+ */
+export const HELD_WRITES_TARGET_TYPE = "agent";
+export const HELD_WRITES_PROPOSAL_TYPE = "held_writes";
+
+/** The proposal fields the describer reads — any proposal row satisfies it. */
+export interface HeldWritesProposalLike {
+  targetType?: string | null;
+  proposalType?: string | null;
+  /** The pod-resolved target name (the agent), when it resolved one. */
+  targetName?: string | null;
+  /** The agent's display name (`agentActorName` on the read doors). */
+  agentName?: string | null;
+  data?: unknown;
+}
+
+export interface HeldWritesSummary {
+  /** The agent's name, or null when the pod resolved none. */
+  agentName: string | null;
+  /** "Claude Code's writes held past today's limit". */
+  title: string;
+  /** The writes it holds, readable or not. */
+  writes: number;
+}
+
+export function isHeldWritesProposal(p: HeldWritesProposalLike): boolean {
+  return (
+    p.targetType === HELD_WRITES_TARGET_TYPE &&
+    p.proposalType === HELD_WRITES_PROPOSAL_TYPE
+  );
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** A name to show for the agent: never an id, never the kind's own noun. */
+function agentNameOf(raw: string | null | undefined): string | null {
+  const name = (raw ?? "").trim();
+  if (!name || UUID.test(name)) return null;
+  if (name.toLowerCase() === resolveObjectNoun("agent").toLowerCase()) {
+    return null;
+  }
+  return name;
+}
+
+/**
+ * The heading of a held-writes pack, naming the agent whose writes wait — or
+ * null when the row is not one (a caller then keeps its generic title).
+ */
+export function describeHeldWritesProposal(
+  p: HeldWritesProposalLike
+): HeldWritesSummary | null {
+  if (!isHeldWritesProposal(p)) return null;
+  const agentName = agentNameOf(p.targetName) ?? agentNameOf(p.agentName);
+  return {
+    agentName,
+    title: agentName
+      ? `${agentName}'s writes held past today's limit`
+      : "Writes held past today's limit",
+    writes: deriveDeferredWritesReview(p.data)?.total ?? 0,
+  };
 }

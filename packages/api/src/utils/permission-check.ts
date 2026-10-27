@@ -71,6 +71,8 @@ import { randomUUID } from "crypto";
 import { createLogger } from "@synap-core/core";
 import {
   DEFERRED_WRITES_MAX,
+  HELD_WRITES_PROPOSAL_TYPE,
+  HELD_WRITES_TARGET_TYPE,
   readDeferredWrites,
   replayableDeferredPair,
   type DeferredWrite,
@@ -3391,10 +3393,11 @@ export const JOIN_GATE_DEFERRED_MESSAGE =
  * The held-writes pack (W-B1): past its daily write ceiling (rung 2.56) an
  * agent's replayable writes are kept on ONE pending pack per (agent, UTC day)
  * instead of one proposal each. Filed by `fileHeldWrites`; approved by
- * the `agent/held_writes` executor, which replays each kept write.
+ * the `agent/held_writes` executor, which replays each kept write. Its
+ * (targetType, proposalType) pair is declared once, in the shared module every
+ * review surface reads it from.
  */
-export const HELD_WRITES_TARGET_TYPE = "agent";
-export const HELD_WRITES_PROPOSAL_TYPE = "held_writes";
+export { HELD_WRITES_PROPOSAL_TYPE, HELD_WRITES_TARGET_TYPE };
 /** Writes one day's pack may hold: one more day's worth at the default ceiling. */
 export const HELD_WRITES_MAX = DEFAULT_DAILY_WRITE_CEILING;
 /** The rung 2.56 reason code that routes a write to the pack. */
