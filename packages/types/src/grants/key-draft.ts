@@ -133,6 +133,24 @@ export type KeyDangerMark =
     }
   | { readonly code: "never-expires"; readonly label: string };
 
+/**
+ * The powerful actions section 4 offers after the read/create/update/delete
+ * columns (keys plan §3.2): each a gate verb a key holds only when its pattern
+ * names it, and each a danger mark (`powerfulVerbs`) once picked.
+ */
+export interface KeyPowerfulAction {
+  readonly pattern: string;
+  readonly subject: string;
+  readonly verb: string;
+}
+
+export const KEY_POWERFUL_ACTIONS: readonly KeyPowerfulAction[] = [
+  { pattern: "proposal.approve", subject: "proposal", verb: "approve" },
+  { pattern: "entity.*.merge", subject: "entity", verb: "merge" },
+  { pattern: "entity.*.archive", subject: "entity", verb: "archive" },
+  { pattern: "entity.*.purge", subject: "entity", verb: "purge" },
+];
+
 /** The deletes and gate verbs a permission list holds, in first-seen order. */
 export function powerfulVerbs(permissions: readonly string[]): string[] {
   const out: string[] = [];
@@ -150,7 +168,8 @@ export function powerfulVerbs(permissions: readonly string[]): string[] {
     const action = segs[isQualifiedGrantSubject(segs[0]) ? 2 : 1];
     if (action === undefined || action === "*") add("delete");
     else if (action === "delete") add("delete");
-    else if (!(GRANT_ACTIONS as readonly string[]).includes(action)) add(action);
+    else if (!(GRANT_ACTIONS as readonly string[]).includes(action))
+      add(action);
   }
   return out;
 }

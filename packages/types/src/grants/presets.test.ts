@@ -182,7 +182,10 @@ describe("key templates", () => {
   // the door checks `hub-protocol.write` then the grant's `event.create`.
   it("Dev loop poster = event.create only, on the Hub API, 90 days", () => {
     const t = get(DEV_LOOP_POSTER_TEMPLATE_ID);
-    expect(t.grant).toEqual({ permissions: ["event.create"], expiresInDays: 90 });
+    expect(t.grant).toEqual({
+      permissions: ["event.create"],
+      expiresInDays: 90,
+    });
     expect(
       scopesForKey({ uses: t.uses ?? [], permissions: t.grant.permissions })
     ).toEqual(["hub-protocol.read", "hub-protocol.write"]);

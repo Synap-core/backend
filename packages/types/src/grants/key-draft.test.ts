@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   EMPTY_KEY_DRAFT,
   KEY_DRAFT_SECTIONS,
+  KEY_POWERFUL_ACTIONS,
   KEY_LIFETIME_CHOICES,
   describeKey,
   keyDraftFromTemplate,
@@ -12,6 +13,7 @@ import {
   validateKeyDraft,
   type KeyDraft,
 } from "./key-draft.js";
+import { GRANT_GATE_ACTIONS, parsePermission } from "./grammar.js";
 import { DEV_LOOP_POSTER_TEMPLATE_ID, keyTemplate } from "./presets.js";
 import { FULL_ACCESS_LABEL } from "./summary.js";
 
@@ -64,7 +66,9 @@ describe("keyDraftFromTemplate", () => {
 describe("describeKey", () => {
   it("the poster reads as its door and one Activity write, no danger mark", () => {
     const d = describeKey(fromPoster);
-    expect(d.uses).toEqual([{ id: "hub", label: "A website or app (Hub API)" }]);
+    expect(d.uses).toEqual([
+      { id: "hub", label: "A website or app (Hub API)" },
+    ]);
     expect(d.scopes).toEqual(["hub-protocol.read", "hub-protocol.write"]);
     expect(d.writes).toBe(true);
     expect(d.marks).toEqual([]);
@@ -103,6 +107,22 @@ describe("describeKey", () => {
       powerfulVerbs(["entity.*.read", "event.create", "document.update"])
     ).toEqual([]);
     expect(powerfulVerbs(["*"])).toEqual([]);
+  });
+
+  it("each powerful action on the page is a gate verb its own pattern names, and marks", () => {
+    expect(KEY_POWERFUL_ACTIONS.map((a) => a.pattern)).toEqual([
+      "proposal.approve",
+      "entity.*.merge",
+      "entity.*.archive",
+      "entity.*.purge",
+    ]);
+    for (const a of KEY_POWERFUL_ACTIONS) {
+      const segs = parsePermission(a.pattern);
+      expect(segs[0]).toBe(a.subject);
+      expect(segs[segs.length - 1]).toBe(a.verb);
+      expect(GRANT_GATE_ACTIONS as readonly string[]).toContain(a.verb);
+      expect(powerfulVerbs([a.pattern])).toEqual([a.verb]);
+    }
   });
 
   it("a read-only draft derives no write scope", () => {
@@ -216,8 +236,8 @@ describe("toKeyMintInput", () => {
   });
 
   it("drops an unknown use (validation reports it first)", () => {
-    expect(toKeyMintInput(setKeyUses(fromPoster, ["hub", "bogus"])).uses).toEqual(
-      ["hub"]
-    );
+    expect(
+      toKeyMintInput(setKeyUses(fromPoster, ["hub", "bogus"])).uses
+    ).toEqual(["hub"]);
   });
 });

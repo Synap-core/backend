@@ -54,9 +54,12 @@ describe("scopesForKey — the scopes a key's uses derive", () => {
     expect(
       scopesForKey({ uses: ["hub"], permissions: ["event.create"] })
     ).toEqual(["hub-protocol.read", "hub-protocol.write"]);
-    expect(
-      scopesForKey({ uses: ["mcp", "n8n"], permissions: ["*"] })
-    ).toEqual(["mcp.read", "mcp.write", "read:entities", "write:entities"]);
+    expect(scopesForKey({ uses: ["mcp", "n8n"], permissions: ["*"] })).toEqual([
+      "mcp.read",
+      "mcp.write",
+      "read:entities",
+      "write:entities",
+    ]);
   });
 
   it("a read-only door stays read-only whatever the grant", () => {
@@ -65,7 +68,12 @@ describe("scopesForKey — the scopes a key's uses derive", () => {
         uses: ["realtime", "chat", "skills", "n8n-analyze"],
         permissions: ["*"],
       })
-    ).toEqual(["ai:analyze", "realtime:observe", "chat.stream", "skills.invoke"]);
+    ).toEqual([
+      "ai:analyze",
+      "realtime:observe",
+      "chat.stream",
+      "skills.invoke",
+    ]);
   });
 
   it("follows KEY_USES order, without duplicates; unknown uses add nothing", () => {
