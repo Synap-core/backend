@@ -59,6 +59,13 @@ vi.mock("../../../services/focus-sessions/session-nudges.js", () => ({
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import { focusSessions, runWithClientKey } from "@synap/database";
 
+// `update-session` FIRST. Loaded through the handler instead, it is first
+// evaluated inside the permission-check mock's own `importOriginal` (the real
+// permission-check reaches it statically, via `satisfy-expected-output`), and
+// its later `import()` of permission-check then resolves to the ORIGINAL: the
+// real gate ran against PGlite (no `governance_rules`) and the write read
+// "Permission check error" (as in `block-guidelines.test.ts`).
+await import("../../../services/focus-sessions/update-session.js");
 const { sessionHandlers } = await import("../handlers/session.js");
 
 const USER = "user-1";
