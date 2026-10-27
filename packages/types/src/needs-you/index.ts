@@ -279,13 +279,32 @@ export type NeedsYouRow<T extends GroupableSignal> =
       /** Display name: the pod's `sessionTitle`, else the goal's first line. */
       title: string | null;
       projectId: string | null;
-      /** ≥ 2, in server order — what the optional peek shows. */
+      /**
+       * ≥ 2, in server order — what the optional peek shows. In the Stopped
+       * fold a session is ALWAYS this row, even for one item (see `verbs`).
+       */
       items: T[];
+      /**
+       * The row's own verbs, as action keys for `resolveActionLabel`
+       * (`@synap-core/types/vocabulary`). Set on a STOPPED session only
+       * (decision E1): `["resume", "close"]` — no agent moved it for 7 days,
+       * so the person resumes it or closes it; both open the session.
+       */
+      verbs?: readonly NeedsYouSessionVerb[];
       /** By kind, in order of first appearance. */
       counts: NeedsYouCount[];
       /** The newest item's `occurredAt` (null when no item carries one). */
       newestAt: string | Date | null;
     };
+
+/** A session row's own verbs — see `NeedsYouRow.verbs`. */
+export type NeedsYouSessionVerb = "resume" | "close";
+
+/** A stopped session's verbs (decision E1): resume it, or close it. */
+export const STOPPED_SESSION_VERBS: readonly NeedsYouSessionVerb[] = [
+  "resume",
+  "close",
+];
 
 export interface NeedsYouRows<T extends GroupableSignal> {
   recent: NeedsYouRow<T>[];
@@ -366,7 +385,13 @@ function timeOf(at: string | Date | undefined): number {
 }
 
 function toRows<T extends GroupableSignal>(
-  groups: readonly Run<T>[]
+  groups: readonly Run<T>[],
+  /**
+   * The Stopped fold: a session is ONE session row whatever its item count,
+   * carrying its verbs — the person acts on the SESSION (resume or close),
+   * never on one of its asks.
+   */
+  opts: { sessionVerbs?: readonly NeedsYouSessionVerb[] } = {}
 ): NeedsYouRow<T>[] {
   const rows: NeedsYouRow<T>[] = [];
   for (const g of groups) {
@@ -377,7 +402,7 @@ function toRows<T extends GroupableSignal>(
       continue;
     }
     const ref = sessionRefOf(g.sessionId, g.items);
-    if (g.items.length === 1) {
+    if (g.items.length === 1 && !opts.sessionVerbs) {
       const signal = g.items[0]!;
       rows.push({ kind: "item", key: signal.id, signal, session: ref });
       continue;
@@ -403,6 +428,7 @@ function toRows<T extends GroupableSignal>(
       items: g.items,
       counts,
       newestAt,
+      ...(opts.sessionVerbs ? { verbs: opts.sessionVerbs } : {}),
     });
   }
   return rows;
@@ -426,7 +452,13 @@ export function needsYouRows<T extends GroupableSignal>(
     reviewLater,
     reviewLaterCount: reviewLater.length,
     folds: Object.fromEntries(
-      NEEDS_YOU_FOLDS.map((f) => [f, toRows(shape.folds[f])])
+      NEEDS_YOU_FOLDS.map((f) => [
+        f,
+        toRows(
+          shape.folds[f],
+          f === "stopped" ? { sessionVerbs: STOPPED_SESSION_VERBS } : {}
+        ),
+      ])
     ) as Record<NeedsYouFold, NeedsYouRow<T>[]>,
   };
 }

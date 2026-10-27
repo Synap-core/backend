@@ -338,6 +338,48 @@ describe("needsYouRows — the rule's folds (decision E)", () => {
     expect(out.reviewLaterCount).toBe(5);
   });
 
+  it("Stopped is ONE session row per session, even for one ask, with resume / close", () => {
+    const out = needsYouRows([
+      row("one", {
+        needsYouClass: "stopped",
+        reviewLater: true,
+        groupKey: "session:A",
+        sessionTitle: "Pricing page",
+      }),
+      row("two-1", {
+        needsYouClass: "stopped",
+        reviewLater: true,
+        groupKey: "session:B",
+      }),
+      row("two-2", {
+        needsYouClass: "stopped",
+        reviewLater: true,
+        groupKey: "session:B",
+      }),
+    ]);
+    expect(shape(out.folds.stopped)).toEqual([
+      "session:A[one]",
+      "session:B[two-1,two-2]",
+    ]);
+    for (const r of out.folds.stopped) {
+      expect(r.kind).toBe("session");
+      expect(r.kind === "session" && r.verbs).toEqual(["resume", "close"]);
+    }
+    expect(
+      out.folds.stopped[0]!.kind === "session" && out.folds.stopped[0]!.title
+    ).toBe("Pricing page");
+    // Every other fold keeps the one-list rule: a single ask is its own row,
+    // and carries no session verbs.
+    const w = needsYouRows([
+      row("w", {
+        needsYouClass: "working",
+        reviewLater: true,
+        groupKey: "session:C",
+      }),
+    ]);
+    expect(shape(w.folds.working)).toEqual(["item:w"]);
+  });
+
   it("a stamped needs_you class is the headline even if a stale flag says otherwise", () => {
     const out = needsYouRows([
       row("h", { needsYouClass: "needs_you", reviewLater: true }),
