@@ -2139,7 +2139,7 @@ function skillUpdateReads(
       if (!live) return { name: skill.name };
       // What the skill it rewrites can reach (the patch never changes it).
       const reach = skillReach(skill.values);
-      return reach ? { ...skill, reach: { ...reach, unreadSteps: 0 } } : skill;
+      return reach ? { ...skill, reach } : skill;
     },
   };
 }

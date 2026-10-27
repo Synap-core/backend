@@ -4,8 +4,10 @@
  * the run door would call (`answeringSkillsWhere`, approved first), each
  * `skill` step to its skill by id, each written-out URL to its host. A step
  * it cannot read (a verb this viewer cannot see, a URL built at run time) is
- * counted as unread, never folded into "reaches nothing". An `update_skill`
- * says what the skill it rewrites can reach.
+ * counted as unread, never folded into "reaches nothing". A code skill also
+ * reaches the connections its code calls through `callProvider` (a provider
+ * the code does not write out is counted as unread). An `update_skill` says
+ * what the skill it rewrites can reach.
  *
  * Driven on PGlite with the real skill read rule compiled to SQL.
  */
@@ -30,6 +32,7 @@ vi.mock("@synap/database", async (importOriginal) => {
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
+import { resolveServiceName } from "@synap-core/types/service-marks";
 import { enrichProposalsForDisplay } from "./display.js";
 
 const VIEWER = "viewer-1";
@@ -59,10 +62,11 @@ async function skill(row: {
   updatedAt?: string;
   metadata?: unknown;
   providerSpec?: unknown;
+  code?: string;
 }) {
   await q(
-    `insert into skills (id, user_id, scope, kind, name, status, approved, updated_at, metadata, provider_spec)
-     values ($1,$2,'user',$3,$4,'active',$5,$6,$7,$8)`,
+    `insert into skills (id, user_id, scope, kind, name, status, approved, updated_at, metadata, provider_spec, code)
+     values ($1,$2,'user',$3,$4,'active',$5,$6,$7,$8,$9)`,
     [
       row.id ?? randomUUID(),
       row.userId ?? VIEWER,
@@ -72,6 +76,7 @@ async function skill(row: {
       row.updatedAt ?? "2026-10-01T00:00:00Z",
       row.metadata === undefined ? null : JSON.stringify(row.metadata),
       row.providerSpec === undefined ? null : JSON.stringify(row.providerSpec),
+      row.code ?? null,
     ]
   );
 }
@@ -129,6 +134,23 @@ beforeAll(async () => {
   });
   // Runs in the pod.
   await skill({ kind: "builtin", name: "entity_facet.attach" });
+  // A code skill that calls Apify through the pod (no allowed host of its
+  // own): the shape of the pod's real apify_run_actor.
+  await skill({
+    kind: "code",
+    name: "run_actor_code",
+    metadata: {},
+    code: `const r = await callProvider("apify_api", "POST", "/acts/x/runs", input);
+const again = await callProvider('apify_api', 'GET', "/runs/1");
+return r;`,
+  });
+  // A code skill whose provider is chosen at run time.
+  await skill({
+    kind: "code",
+    name: "any_provider",
+    metadata: {},
+    code: `return await callProvider(input.provider, "GET", "/x");`,
+  });
 });
 
 function proposalRow(over: Record<string, unknown>) {
@@ -239,6 +261,28 @@ describe("an automation in a mixed proposal says what its steps reach", () => {
       unreadSteps: 4,
     });
     expect(JSON.stringify(review)).not.toContain("secret.example");
+  });
+
+  it("a code skill reaches the connections its code calls through the pod", async () => {
+    const review = await reviewOf(
+      automation([{ type: "capability", data: { verbId: "run_actor_code" } }])
+    );
+    expect(review.graph?.automations?.[0]?.reach).toEqual({
+      hosts: [],
+      connections: [resolveServiceName("apify_api")],
+      unreadSteps: 0,
+    });
+  });
+
+  it("a provider the code does not write out is counted, never read as nothing", async () => {
+    const review = await reviewOf(
+      automation([{ type: "capability", data: { verbId: "any_provider" } }])
+    );
+    expect(review.graph?.automations?.[0]?.reach).toEqual({
+      hosts: [],
+      connections: [],
+      unreadSteps: 1,
+    });
   });
 
   it("a builtin step runs in the pod: measured, reaches nothing", async () => {
