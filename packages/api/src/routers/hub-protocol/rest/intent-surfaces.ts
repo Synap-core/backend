@@ -142,7 +142,10 @@ function readDoor<Q extends z.ZodTypeAny>(
         (query as { workspaceId?: string }).workspaceId
       );
       if (!confined.ok) return c.json({ error: confined.error }, 403);
-      query = { ...query, workspaceId: confined.workspaceId ?? undefined };
+      query = {
+        ...(query as Record<string, unknown>),
+        workspaceId: confined.workspaceId ?? undefined,
+      } as z.infer<Q>;
     }
     const userId = c.get("userId") as string;
     try {
