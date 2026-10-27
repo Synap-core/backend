@@ -1332,6 +1332,9 @@ async function instantiateApprovedPlaybook(args: {
     // a person already said yes, and refusing here would leave an approved row
     // that never materialized. The question becomes an owed slot instead.
     onMissingRequired: "owe",
+    // The proposer's own words, as the direct door stores them.
+    ownTitle: storedTitle(innerData.title),
+    ownGoal: typeof innerData.goal === "string" ? innerData.goal : null,
     ...(typeof innerData.prompt === "string" && innerData.prompt.trim()
       ? { goalOverride: innerData.prompt }
       : {}),

@@ -7,9 +7,14 @@ name: Pod observations
 # PR → session resolver moves the session that recorded the PR. The script
 # holds the event → observation map: scripts/pod-observation.mjs.
 #
-# Opt-in. It posts only when BOTH repo secrets are set:
+# Opt-in. The job runs only when the repo VARIABLE `SYNAP_POD_OBSERVATIONS`
+# is `on`, and it posts only when BOTH repo secrets are set:
 #   SYNAP_POD_URL  the pod's base URL
 #   SYNAP_OBS_KEY  a pod Hub API key with the `hub-protocol.write` scope
+# The variable is the switch because secrets cannot be read in a job `if`:
+# without it, every CI run on every branch queued one runner here just to
+# print "Nothing posted" (74 such runs waited ahead of PR checks on
+# 2026-10-27). A job skipped by its `if` takes no runner.
 # A fork's PR (or Dependabot's) gets no secrets, so the script prints
 # "Nothing posted" and exits 0. A key the pod refuses (a grant without
 # `event.create`, HTTP 401/403) is a warning and exit 0, not a red check.
@@ -36,8 +41,10 @@ jobs:
     timeout-minutes: 3
     # A run of a fork's code is not reported (the script also refuses it).
     if: >-
-      github.event_name == 'pull_request' ||
-      github.event.workflow_run.head_repository.full_name == github.repository
+      vars.SYNAP_POD_OBSERVATIONS == 'on' && (
+        github.event_name == 'pull_request' ||
+        github.event.workflow_run.head_repository.full_name == github.repository
+      )
     steps:
       # Only the script. A pull_request event checks out the PR head (its
       # merge ref may be gone once merged); a workflow_run checks out the

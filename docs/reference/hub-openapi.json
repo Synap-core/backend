@@ -2004,6 +2004,19 @@
                     "content": { "type": "string", "maxLength": 1000000 }
                   },
                   "required": ["op", "content"]
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "op": { "type": "string", "enum": ["set_title"] },
+                    "title": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 500,
+                      "pattern": "^[^\\r\\n]+$"
+                    }
+                  },
+                  "required": ["op", "title"]
                 }
               ]
             },
@@ -3750,6 +3763,14 @@
           }
         },
         "required": ["id", "externalId", "provider", "displayName", "status"]
+      },
+      "MessagingNotConfigured": {
+        "type": "object",
+        "properties": {
+          "error": { "type": "string" },
+          "code": { "type": "string", "enum": ["MESSAGING_NOT_CONFIGURED"] }
+        },
+        "required": ["error", "code"]
       },
       "MessagingAuthUrl": {
         "type": "object",
@@ -9287,7 +9308,7 @@
       "patch": {
         "tags": ["Documents"],
         "summary": "Replace a document's content (alias of the patch door)",
-        "description": "Replaces a document's content with `content` — one `replace_all` op through the document patch door (prefer POST /documents/{documentId}/patch for section or text edits). Governed: an agent's full replacement is always a proposal for the document's editors; a person's is applied. It may not change a person's section or drop an embed (`allowRemovingEmbeds`). Pass `baseRevision` (GET → `revision`); without it the revision at filing is pinned. `content` is required; a `title` is refused with 400 (this route never renames).",
+        "description": "Replaces a document's content with `content` — one `replace_all` op through the document patch door (prefer POST /documents/{documentId}/patch for section or text edits). Governed: an agent's full replacement is always a proposal for the document's editors; a person's is applied. It may not change a person's section or drop an embed (`allowRemovingEmbeds`). Pass `baseRevision` (GET → `revision`); without it the revision at filing is pinned. `content` is required; a `title` is refused with 400 (this route never renames: send a `set_title` op to POST /documents/{documentId}/patch).",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -9486,7 +9507,7 @@
       "post": {
         "tags": ["Documents"],
         "summary": "Edit a document with ops",
-        "description": "THE document edit door. Ops, applied in order: `upsert_section {id,title,body}` (one `::::synap-section` block by id), `replace_text {old,new}` (`old` must match EXACTLY once — otherwise 400 with the count), `append {body}`, `replace_all {content}` (needs `baseRevision`). Pass `baseRevision` from GET /documents/{id} (`revision`); a document that moved answers 409. Refused (403): an agent changing a person's section (replace_all included); removing an embed without `allowRemovingEmbeds: true`. Governed: applies or files a proposal (202); an agent's replace_all is always a proposal. The response carries `preview` (per section, before/after) and `diagnostics` (advisory: what will not render — never a refusal; `null` + `diagnosticsError` when the check could not run).",
+        "description": "THE document edit door. Ops, applied in order: `upsert_section {id,title,body}` (one `::::synap-section` block by id), `replace_text {old,new}` (`old` must match EXACTLY once — otherwise 400 with the count), `append {body}`, `replace_all {content}` (needs `baseRevision`), `set_title {title}` (renames the document; its content is left as it is). Pass `baseRevision` from GET /documents/{id} (`revision`); a document that moved answers 409. Refused (403): an agent changing a person's section (replace_all included); removing an embed without `allowRemovingEmbeds: true`. Governed: applies or files a proposal (202); an agent's replace_all is always a proposal. The response carries `preview` (per section, before/after) and `diagnostics` (advisory: what will not render — never a refusal; `null` + `diagnosticsError` when the check could not run).",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -10026,6 +10047,10 @@
                       "required": ["verb"]
                     },
                     "description": "Composite per-create choice, keyed by the entity ref dispositions use. One entry is not applied to any other op."
+                  },
+                  "allowToday": {
+                    "type": "boolean",
+                    "description": "Held-writes packs only (agent/held_writes): also lift the agent's daily write ceiling to 2x the current limit until the next 00:00 UTC, so its next writes today are not held again. A person's act: refused for an agent credential and without the authority to author that ceiling (pod admin). 400 on any other proposal or a pack already decided. The response then carries allowedToday {ceilingId, agentUserId, limit, previousLimit, expiresAt, alreadyAllowed}."
                   }
                 }
               }
@@ -10120,6 +10145,26 @@
                         "required": ["ref", "verb", "entityId"]
                       },
                       "description": "Composite: one entry per op that ran a resolution. Singular identity is also set when exactly one op resolved."
+                    },
+                    "allowedToday": {
+                      "type": "object",
+                      "properties": {
+                        "ceilingId": { "type": "string" },
+                        "agentUserId": { "type": "string" },
+                        "limit": { "type": "integer" },
+                        "previousLimit": { "type": "integer" },
+                        "expiresAt": { "type": "string" },
+                        "alreadyAllowed": { "type": "boolean" }
+                      },
+                      "required": [
+                        "ceilingId",
+                        "agentUserId",
+                        "limit",
+                        "previousLimit",
+                        "expiresAt",
+                        "alreadyAllowed"
+                      ],
+                      "description": "Set when allowToday was passed: the agent's daily write ceiling for the rest of the UTC day (limit), the one it was raised from (previousLimit, back in force at expiresAt), and whether an earlier allow-today had already raised it."
                     }
                   },
                   "required": ["success", "proposalId"]
@@ -23214,10 +23259,12 @@
             }
           },
           "409": {
-            "description": "Conflict — a refusal the caller can act on",
+            "description": "No messaging service is set up on this pod (code MESSAGING_NOT_CONFIGURED)",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/HubError" }
+                "schema": {
+                  "$ref": "#/components/schemas/MessagingNotConfigured"
+                }
               }
             }
           },
@@ -23238,7 +23285,7 @@
             }
           },
           "503": {
-            "description": "Connector not configured",
+            "description": "Your accounts' live status could not be read from the messaging service",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
@@ -23300,10 +23347,12 @@
             }
           },
           "409": {
-            "description": "Conflict — a refusal the caller can act on",
+            "description": "No messaging service is set up on this pod (code MESSAGING_NOT_CONFIGURED)",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/HubError" }
+                "schema": {
+                  "$ref": "#/components/schemas/MessagingNotConfigured"
+                }
               }
             }
           },
@@ -23317,14 +23366,6 @@
           },
           "500": {
             "description": "Internal error",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/HubError" }
-              }
-            }
-          },
-          "503": {
-            "description": "Connector not configured",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
@@ -23374,10 +23415,12 @@
             }
           },
           "409": {
-            "description": "Conflict — a refusal the caller can act on",
+            "description": "No messaging service is set up on this pod (code MESSAGING_NOT_CONFIGURED)",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/HubError" }
+                "schema": {
+                  "$ref": "#/components/schemas/MessagingNotConfigured"
+                }
               }
             }
           },
@@ -23391,14 +23434,6 @@
           },
           "500": {
             "description": "Internal error",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/HubError" }
-              }
-            }
-          },
-          "503": {
-            "description": "Connector not configured",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
@@ -23533,10 +23568,12 @@
             }
           },
           "409": {
-            "description": "Conflict — a refusal the caller can act on",
+            "description": "No messaging service is set up on this pod (code MESSAGING_NOT_CONFIGURED)",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/HubError" }
+                "schema": {
+                  "$ref": "#/components/schemas/MessagingNotConfigured"
+                }
               }
             }
           },
@@ -23550,14 +23587,6 @@
           },
           "500": {
             "description": "Internal error",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/HubError" }
-              }
-            }
-          },
-          "503": {
-            "description": "Connector not configured",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
@@ -23619,10 +23648,12 @@
             }
           },
           "409": {
-            "description": "Conflict — a refusal the caller can act on",
+            "description": "No messaging service is set up on this pod (code MESSAGING_NOT_CONFIGURED)",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/HubError" }
+                "schema": {
+                  "$ref": "#/components/schemas/MessagingNotConfigured"
+                }
               }
             }
           },
@@ -23636,14 +23667,6 @@
           },
           "500": {
             "description": "Internal error",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/HubError" }
-              }
-            }
-          },
-          "503": {
-            "description": "Connector not configured",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
@@ -23908,10 +23931,12 @@
             }
           },
           "409": {
-            "description": "Conflict — a refusal the caller can act on",
+            "description": "No messaging service is set up on this pod (code MESSAGING_NOT_CONFIGURED)",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/HubError" }
+                "schema": {
+                  "$ref": "#/components/schemas/MessagingNotConfigured"
+                }
               }
             }
           },
@@ -23925,14 +23950,6 @@
           },
           "500": {
             "description": "Internal error",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/HubError" }
-              }
-            }
-          },
-          "503": {
-            "description": "Connector not configured",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
@@ -23997,10 +24014,12 @@
             }
           },
           "409": {
-            "description": "Conflict — a refusal the caller can act on",
+            "description": "No messaging service is set up on this pod (code MESSAGING_NOT_CONFIGURED)",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/HubError" }
+                "schema": {
+                  "$ref": "#/components/schemas/MessagingNotConfigured"
+                }
               }
             }
           },
@@ -24014,14 +24033,6 @@
           },
           "500": {
             "description": "Internal error",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/HubError" }
-              }
-            }
-          },
-          "503": {
-            "description": "Connector not configured",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
@@ -24084,10 +24095,12 @@
             }
           },
           "409": {
-            "description": "Conflict — a refusal the caller can act on",
+            "description": "No messaging service is set up on this pod (code MESSAGING_NOT_CONFIGURED)",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/HubError" }
+                "schema": {
+                  "$ref": "#/components/schemas/MessagingNotConfigured"
+                }
               }
             }
           },
@@ -24101,14 +24114,6 @@
           },
           "500": {
             "description": "Internal error",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/HubError" }
-              }
-            }
-          },
-          "503": {
-            "description": "Connector not configured",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
@@ -24171,10 +24176,12 @@
             }
           },
           "409": {
-            "description": "Conflict — a refusal the caller can act on",
+            "description": "No messaging service is set up on this pod (code MESSAGING_NOT_CONFIGURED)",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/HubError" }
+                "schema": {
+                  "$ref": "#/components/schemas/MessagingNotConfigured"
+                }
               }
             }
           },
@@ -24195,7 +24202,7 @@
             }
           },
           "503": {
-            "description": "Connector not configured",
+            "description": "The message could not be sent through the messaging service",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }

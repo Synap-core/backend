@@ -3829,13 +3829,15 @@ const TRUSTED_AGENT_MIN_TOTAL = 100;
 /** Minimum approve rate (within the trust window) before trust can raise the cap. */
 const TRUSTED_AGENT_MIN_APPROVE_RATE = 0.95;
 /**
- * Recent-proposal window the trust check scores over. MUST match
- * `agent-scorecard.ts`'s `SCORECARD_SCAN_LIMIT` (not imported directly — that
- * would create a module cycle, since agent-scorecard.ts already imports
- * `agentProposalCap` from here) so the cap's trust verdict and the
- * scorecard's DISPLAYED approve rate are computed over the identical set of
- * rows and can never visibly disagree. Trust is earnable back over an agent's
- * RECENT behavior rather than accumulating forever over its lifetime.
+ * Recent-proposal window the trust check scores over: the agent's newest 500
+ * proposals. Trust is earnable back over an agent's RECENT behavior rather
+ * than accumulating forever over its lifetime.
+ *
+ * NOT the scorecard's window any more. The card (`agent-scorecard.ts`) used
+ * to scan the same newest 500 and now counts its last 7 days in SQL
+ * (`scorecardWindow`), because 500 rows of a busy agent covered under a day
+ * and hid that day's rejections. For an agent filing fewer than 500 a week
+ * the cap's set is a superset of the card's; for a busier one it is a subset.
  */
 const CAP_TRUST_WINDOW = 500;
 
@@ -3923,11 +3925,11 @@ export function agentProposalLimitLine(
  * approve rate, both within that recent window) gets a 3x ceiling; everyone
  * else gets the base cap.
  *
- * D4a: previously scored the agent's ENTIRE lifetime, which could silently
- * disagree with the recent-500 approve rate `agent-scorecard.ts` displays —
- * an agent could show a dropping recent rate on its scorecard while still
- * holding the 3x cap earned from old history. Scoring the same window makes
- * the two agree and lets trust be earned back / lost based on recent conduct.
+ * D4a: previously scored the agent's ENTIRE lifetime, so an agent could show
+ * a dropping recent rate on its scorecard while still holding the 3x cap
+ * earned from old history. A recent window lets trust be earned back / lost
+ * based on recent conduct (the card's own window is 7 days: see
+ * `CAP_TRUST_WINDOW`).
  */
 export async function agentProposalCap(agentUserId: string): Promise<number> {
   const explicit = await resolvePendingProposalCap({ db, agentUserId });

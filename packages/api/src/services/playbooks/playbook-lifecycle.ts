@@ -419,6 +419,16 @@ export interface InstantiateInput {
   /** The proposal chain id, stamped so a later create on the chain finds this row. */
   correlationId?: string | null;
   /**
+   * The proposer's OWN name and goal, for the approved-proposal path (a start
+   * from a playbook held for review). The direct door (`createFocusSession`)
+   * stores the caller's title and goal as given; without these the approved
+   * row was renamed "<playbook> — <date>" and its goal replaced by the
+   * playbook's name (live 2026-10-19, session 2c08acb0). A title here is the
+   * proposer's, so it is stamped `agent`. Absent ⇒ the derived name and goal.
+   */
+  ownTitle?: string | null;
+  ownGoal?: string | null;
+  /**
    * The FINAL criteria list, when the caller already merged its own with the
    * playbook's (the approved-proposal path, via `mergeCriteria`). Absent ⇒ the
    * playbook's own (`collectPlaybookCriteria`).
@@ -620,11 +630,14 @@ export async function instantiateSessionRow(
       ),
       playbook.id
     );
-  const goal = buildRunSessionTitle(playbook.name, subjectTitle);
+  const goal =
+    input.ownGoal?.trim() || buildRunSessionTitle(playbook.name, subjectTitle);
   // The display NAME. `goal` above stays exactly as it was — it is the
   // dedup/proposal key other doors compare on — and the short name is written
-  // beside it, marked `derived` so the background titler may improve it.
-  const title = buildRunSessionName(playbook.name, subjectTitle);
+  // beside it, marked `derived` so the background titler may improve it. A
+  // proposer's own title (`ownTitle`) wins, marked `agent`.
+  const ownTitle = input.ownTitle?.trim() || null;
+  const title = ownTitle ?? buildRunSessionName(playbook.name, subjectTitle);
   // Through the ONE declaration sanitizer, like every other door that births
   // slots: a template's stored JSON must not carry a server-stamped receipt
   // or an unparsed `ask` into a live session.
@@ -699,7 +712,9 @@ export async function instantiateSessionRow(
       // a reader can tell "this run was given nothing" from "this row predates
       // the field", which absence alone cannot say.
       [RUN_PARAMS_METADATA_KEY]: paramResolution.declaredValues,
-      titleSource: "derived" satisfies SessionTitleSource,
+      titleSource: (ownTitle
+        ? "agent"
+        : "derived") satisfies SessionTitleSource,
     },
   });
   const [session] = input.id
