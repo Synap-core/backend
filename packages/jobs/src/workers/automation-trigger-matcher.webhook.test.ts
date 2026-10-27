@@ -158,6 +158,39 @@ describe("webhook trigger ingress → run creation", () => {
     });
   });
 
+  it("exposes the sender's header-borne event type + delivery id at trigger.payload", async () => {
+    selectResults = [
+      [],
+      [
+        {
+          id: "auto-webhook",
+          triggerConfig: { webhookSubscriptionId: SUB_ID },
+          workspaceId: "ws-1",
+        },
+      ],
+    ];
+
+    await handleAutomationTriggerMatch({
+      data: {
+        ...WEBHOOK_EVENT,
+        data: {
+          ...WEBHOOK_EVENT.data,
+          event: "pull_request",
+          deliveryId: "d-1",
+        },
+      },
+    });
+
+    const runValues = insertValues.mock.calls[0][0] as {
+      triggerPayload: Record<string, unknown>;
+    };
+    expect(runValues.triggerPayload).toMatchObject({
+      type: "webhook",
+      event: "pull_request",
+      deliveryId: "d-1",
+    });
+  });
+
   it("creates no run when no webhook automation is bound to the subscription", async () => {
     selectResults = [
       [], // event-typed: none

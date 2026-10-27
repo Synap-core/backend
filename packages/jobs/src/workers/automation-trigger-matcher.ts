@@ -1450,9 +1450,9 @@ export async function handleAutomationTriggerMatch(job: {
   // emitted by the AUTHENTICATED ingress (routers/webhooks-inbound.ts
   // `/api/webhooks/inbound/:subscriptionId`), which has already HMAC-verified
   // the caller against the subscription's per-subscription secret. The event
-  // carries `data = { subscriptionId, payload }`. It fires automations with
-  // triggerType="webhook" whose triggerConfig.webhookSubscriptionId equals the
-  // delivering subscription. There is no event-pattern/filter grammar for
+  // carries `data = { subscriptionId, payload, event?, deliveryId? }`. It fires
+  // automations with triggerType="webhook" whose
+  // triggerConfig.webhookSubscriptionId equals the delivering subscription. There is no event-pattern/filter grammar for
   // webhooks — the binding IS the subscription id — so these are selected
   // separately, but fired through the SAME run-creation door as event/cron/
   // manual runs (see `fireAutomation` below). Scoped by `workspaceMatch`
@@ -1811,6 +1811,13 @@ export async function handleAutomationTriggerMatch(job: {
         type: "webhook",
         webhookSubscriptionId,
         body: (data?.payload as unknown) ?? {},
+        // The sender's header-borne event type + delivery id (ingress copies
+        // them only when sent): `trigger.payload.event` is what a flow branches
+        // on when the body alone does not say which event it is.
+        ...(typeof data?.event === "string" ? { event: data.event } : {}),
+        ...(typeof data?.deliveryId === "string"
+          ? { deliveryId: data.deliveryId }
+          : {}),
         timestamp: new Date().toISOString(),
       },
       undefined,
