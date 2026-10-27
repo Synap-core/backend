@@ -21,7 +21,18 @@ import {
   isKnownToolName,
   resolveObjectNoun,
   resolveToolLabel,
+  resolveVerbStepLabel,
 } from "./index.js";
+
+describe("resolveVerbStepLabel — a capability verb as a step reads", () => {
+  it("names the action and keeps the provider, in words", () => {
+    expect(resolveVerbStepLabel("apify.run_actor")).toBe("Run actor (Apify)");
+  });
+
+  it("a verb with no provider prefix is the action alone", () => {
+    expect(resolveVerbStepLabel("web_search")).toBe("Search the web");
+  });
+});
 
 describe("resolveToolLabel — merged seeds", () => {
   it("search reads as one answer across the old tables, in every mood", () => {
