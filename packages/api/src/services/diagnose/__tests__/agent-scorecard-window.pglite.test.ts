@@ -134,7 +134,7 @@ beforeAll(async () => {
   ) =>
     q(
       `insert into proposals (id, workspace_id, target_type, target_id, proposal_type, status, data, created_by, agent_user_id, created_at, reason_code, revision_history)
-       values ($1, $2, 'entity', $1, 'create', $3, $4::jsonb, $5, $5, now() - make_interval(days => $6::int), $7, $8::jsonb)`,
+       values ($1, $2, 'entity', $9, 'create', $3, $4::jsonb, $5, $5, now() - make_interval(days => $6::int), $7, $8::jsonb)`,
       [
         randomUUID(),
         WS,
@@ -146,6 +146,8 @@ beforeAll(async () => {
         extra.revisionHistory === undefined
           ? null
           : JSON.stringify(extra.revisionHistory),
+        // target_id is text, id is uuid: one parameter cannot be both.
+        randomUUID(),
       ]
     );
   // Older than every one of the 600, still inside the 7 days.
