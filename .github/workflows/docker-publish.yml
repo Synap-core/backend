@@ -184,6 +184,13 @@ jobs:
         with:
           ref: ${{ steps.resolve.outputs.sha }}
 
+      # When the built commit was made (committer time, UTC ISO), not when the
+      # image is: a nightly or a tag rebuilds an older commit after later
+      # merges. The pod's dev.deployed carries it (SYNAP_BUILD_AT).
+      - name: Read the built commit's time
+        id: commit
+        run: echo "at=$(TZ=UTC git log -1 --format=%cd --date=iso-strict-local)" >> "$GITHUB_OUTPUT"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
@@ -276,7 +283,11 @@ jobs:
           file: ./deploy/Dockerfile
           # Stamps SYNAP_GIT_SHA → /status/release buildStamp; `synap update`
           # refuses a release whose running image does not report its gitSha.
-          build-args: GIT_SHA=${{ steps.resolve.outputs.sha }}
+          # SYNAP_GIT_REPO + SYNAP_BUILD_AT ride on the pod's dev.deployed.
+          build-args: |
+            GIT_SHA=${{ steps.resolve.outputs.sha }}
+            GIT_REPO=${{ github.repository }}
+            BUILD_AT=${{ steps.commit.outputs.at }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
