@@ -29,6 +29,10 @@ import type { NextRungOutcome, TrustRung } from "../trust-ladder/index.js";
 import type { GovernanceRung, MatrixMark } from "../agent-matrix/index.js";
 import type { FilterOperator } from "../views/filters.js";
 import type { NeedsYouBucket } from "../needs-you/buckets.js";
+import type {
+  PullRequestChecks,
+  PullRequestState,
+} from "../events/pr-state.js";
 
 /**
  * The object-kind identity registry lives in `./object-kinds` and is re-exported
@@ -1357,6 +1361,35 @@ export const STATUS_LABELS: Readonly<Record<string, string>> = {
 export function resolveStatusLabel(status: string | null | undefined): string {
   if (!status) return "";
   return STATUS_LABELS[status.toLowerCase()] ?? humanizeToken(status);
+}
+
+/**
+ * PULL REQUEST state words: the state mark on a PR row (a session's work
+ * unit), folded from the dev-loop facts the pod recorded
+ * (`events/pr-state.ts`). Their own table, keyed by the fold's states: `open`
+ * and `closed` already mean a session's lifecycle in {@link STATUS_LABELS}.
+ */
+export const PULL_REQUEST_STATE_LABELS: Readonly<
+  Record<PullRequestState, string>
+> = {
+  open: "Open",
+  merged: "Merged",
+  closed: "Closed",
+};
+
+/** The CI result on a PR row. No "running": no event says CI started. */
+export const PULL_REQUEST_CHECKS_LABELS: Readonly<
+  Record<PullRequestChecks, string>
+> = {
+  passed: "Checks passed",
+  failed: "Checks failed",
+};
+
+/** A deploy named the PR's merge commit. */
+export const PULL_REQUEST_DEPLOYED_LABEL = "Deployed";
+
+export function resolvePullRequestStateLabel(state: PullRequestState): string {
+  return PULL_REQUEST_STATE_LABELS[state];
 }
 
 /**

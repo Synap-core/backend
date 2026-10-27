@@ -3714,7 +3714,12 @@ async function createPendingProposalRow(
   if (
     input.agentUserId &&
     !sessionId &&
-    !input.targetType.startsWith("focus_session")
+    !input.targetType.startsWith("focus_session") &&
+    // A held-writes pack is one agent's writes for a whole UTC day, across
+    // every session it worked in: it belongs to none of them. Stamping the
+    // first write's conversation session made the whole pack undecidable for
+    // anyone who could not read THAT session (the review session rung).
+    input.proposalType !== HELD_WRITES_PROPOSAL_TYPE
   ) {
     try {
       sessionId = await resolveOrCreateAgentProposalSession(

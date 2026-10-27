@@ -175,6 +175,14 @@ What changes for an operator when a pod updates past a release. Newest first.
   person budget: every request from one address, whatever budget it spends).
   Leave them unset for the defaults, or set them on the pod
   (`synap config set RATE_LIMIT_CRUD_SESSION_MAX=6000 && synap apply`).
+- **Every rate-limit budget is now settable on a pod.** Until now only the two
+  variables above reached the API container; the others were read by the code
+  but never passed, so setting them did nothing. All `RATE_LIMIT_*` variables
+  read by `apps/api/src/middleware/rate-limit-classes.ts` now reach it. The
+  one most pods will want is the budget of an agent key,
+  `RATE_LIMIT_CRUD_MAX` (default `500` per 15 minutes, per key): several
+  agents sharing one key spend it together
+  (`synap config set RATE_LIMIT_CRUD_MAX=3000 && synap apply`).
 - **Migration 0327** (split `source` into `provenance` and `leadSource`) runs
   automatically during `synap update`; nothing to do.
 - **Console URL.** The Apps page moved from `/origins` to `/applications`. Old

@@ -9149,6 +9149,30 @@ declare enum MessageLinkRelationshipType {
 	QUOTES = "quotes",// Message quotes this object
 	CONTEXT = "context"
 }
+declare const PULL_REQUEST_STATES: readonly [
+	"open",
+	"merged",
+	"closed"
+];
+export type PullRequestState = (typeof PULL_REQUEST_STATES)[number];
+declare const PULL_REQUEST_CHECKS: readonly [
+	"passed",
+	"failed"
+];
+export type PullRequestChecks = (typeof PULL_REQUEST_CHECKS)[number];
+/** What the recorded facts say about one PR. */
+export interface PullRequestStateFacts {
+	state: PullRequestState;
+	/** The newest CI result on the PR's newest run sha; absent when none settles it. */
+	checks?: PullRequestChecks;
+	/**
+	 * A deploy contains the merge (built from a later commit of the repo, or
+	 * from the merge commit). Never `false`: see the file header.
+	 */
+	deployed?: true;
+	/** When the fact that set `state` happened (ISO). */
+	at: string;
+}
 export type ActionType = "call_webhook" | "create_entity" | "notify" | "post_message" | "run_command" | "update_entity";
 export interface SentenceAction {
 	type: ActionType | null;
@@ -14627,6 +14651,12 @@ declare const SESSION_KINDS: readonly [
 	"receipt"
 ];
 export type SessionKind = (typeof SESSION_KINDS)[number];
+/**
+ * Who the viewer is TO this session — the field read doors expose so a UI can
+ * hide write verbs for a member. Only meaningful on a row the viewer already
+ * read through {@link sessionReadableWhere}.
+ */
+export type SessionViewerRole = "member" | "owner";
 export interface SessionExternalAgent {
 	runId: string;
 	/** The run's own lifecycle (`running`, `failed`, `cancelled`, `proposed`, …). */
@@ -15000,10 +15030,26 @@ export interface PacketSiblings {
 	next: PacketSection<PacketSiblingItem>;
 }
 /**
+ * What the pod RECORDED about a PR work unit (`readPullRequestStates`: the
+ * `dev.pr_*`, `ci.finished` and `dev.deployed` facts, folded by
+ * `foldPullRequestState`). `label` is the state's word (vocabulary).
+ */
+export type PacketPullRequestState = ({
+	label: string;
+	status: "ok";
+} & PullRequestStateFacts) | {
+	reason: string;
+	status: "unavailable";
+};
+/**
  * A pull request or branch this session recorded as an outcome (`ref.url`),
  * with the OUTCOME's state: `met` (merged / delivered, stamped done), `claimed`
- * (delivery claimed, not verified), `open`, or `retired` (withdrawn). The pod
- * reads no PR state of its own: what is known is what was recorded.
+ * (delivery claimed, not verified), `open`, or `retired` (withdrawn).
+ *
+ * `prState` is the PR's own state, from the dev-loop facts the pod recorded
+ * about it. ABSENT when none was recorded (an older pod, a repo with no
+ * producer) or the unit is not a PR: draw nothing, never a guess. A failed
+ * read is `unavailable`, never absent.
  */
 export interface PacketWorkUnitItem extends PacketKindIdentity {
 	key: string | null;
@@ -15011,6 +15057,7 @@ export interface PacketWorkUnitItem extends PacketKindIdentity {
 	kind: string;
 	url: string | null;
 	state: "claimed" | "met" | "open" | "retired";
+	prState?: PacketPullRequestState;
 }
 /** A capture clarification question still waiting for the user's answer. */
 export interface PacketQuestionItem {
@@ -19029,12 +19076,6 @@ export type SessionInteractionsSection = {
 	reason: string;
 	status: "unavailable";
 };
-/**
- * Who the viewer is TO this session — the field read doors expose so a UI can
- * hide write verbs for a member. Only meaningful on a row the viewer already
- * read through {@link sessionReadableWhere}.
- */
-export type SessionViewerRole = "member" | "owner";
 declare function projectSessionRows(sessions: FocusSession[], userId: string | null | undefined): Promise<({
 	agentIds: string[] | null;
 	channelId: string | null;

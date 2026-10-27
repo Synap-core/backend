@@ -76,9 +76,15 @@ import {
   buildObjectActionTitle,
   resolveObjectGlyph,
   resolveObjectNoun,
+  resolvePullRequestStateLabel,
   resolveSessionPostIntentLabel,
   resolveStatusLabel,
 } from "@synap-core/types/vocabulary";
+import {
+  parsePullRequestRef,
+  type PullRequestRef,
+  type PullRequestStateFacts,
+} from "@synap-core/types";
 import type { OpenBlocker } from "@synap-core/types/connections";
 import { readDependencyState } from "../links/dependency-links.js";
 import {
@@ -113,6 +119,7 @@ import {
 } from "@synap-core/types/units";
 import { getTrack, toTrackView } from "../tracks/tracks-service.js";
 import { loadTrackGoalFacts } from "../tracks/goal-content.js";
+import { pullRequestKey, readPullRequestStates } from "../dev-loop/pr-state.js";
 import {
   assessRerunAvailability,
   type RerunAvailability,
@@ -357,10 +364,23 @@ const WORK_UNIT_URL =
   /^https?:\/\/github\.com\/[^/]+\/[^/]+\/(pull|tree|commit)\//i;
 
 /**
+ * What the pod RECORDED about a PR work unit (`readPullRequestStates`: the
+ * `dev.pr_*`, `ci.finished` and `dev.deployed` facts, folded by
+ * `foldPullRequestState`). `label` is the state's word (vocabulary).
+ */
+export type PacketPullRequestState =
+  | ({ status: "ok"; label: string } & PullRequestStateFacts)
+  | { status: "unavailable"; reason: string };
+
+/**
  * A pull request or branch this session recorded as an outcome (`ref.url`),
  * with the OUTCOME's state: `met` (merged / delivered, stamped done), `claimed`
- * (delivery claimed, not verified), `open`, or `retired` (withdrawn). The pod
- * reads no PR state of its own: what is known is what was recorded.
+ * (delivery claimed, not verified), `open`, or `retired` (withdrawn).
+ *
+ * `prState` is the PR's own state, from the dev-loop facts the pod recorded
+ * about it. ABSENT when none was recorded (an older pod, a repo with no
+ * producer) or the unit is not a PR: draw nothing, never a guess. A failed
+ * read is `unavailable`, never absent.
  */
 export interface PacketWorkUnitItem extends PacketKindIdentity {
   key: string | null;
@@ -368,6 +388,7 @@ export interface PacketWorkUnitItem extends PacketKindIdentity {
   kind: string;
   url: string | null;
   state: "met" | "claimed" | "open" | "retired";
+  prState?: PacketPullRequestState;
 }
 
 /** A capture clarification question still waiting for the user's answer. */
@@ -1399,6 +1420,71 @@ export function workUnitsSection(
 }
 
 /**
+ * Each PR work unit's {@link PacketWorkUnitItem.prState}, read once for all the
+ * listed units. A failed read marks every PR unit `unavailable`: the units are
+ * the row's own outcomes and stay listed either way.
+ */
+export async function withPullRequestStates(
+  units: PacketSection<PacketWorkUnitItem>,
+  reader: SessionReader,
+  database: typeof db = db
+): Promise<PacketSection<PacketWorkUnitItem>> {
+  if (units.status !== "ok") return units;
+  const refs = new Map<number, PullRequestRef>();
+  units.items.forEach((item, i) => {
+    const ref = item.url ? parsePullRequestRef(item.url) : null;
+    if (ref) refs.set(i, ref);
+  });
+  if (refs.size === 0) return units;
+  let states: Map<string, PullRequestStateFacts>;
+  try {
+    // The session reader's own floor: roster only when it honours one
+    // (`SessionReader.roster` defaults to owner-only).
+    states = await readPullRequestStates(
+      [...refs.values()],
+      {
+        userId: reader.userId,
+        roster: reader.roster ?? false,
+        lens: reader.lens,
+      },
+      database
+    );
+  } catch (err) {
+    logger.warn(
+      { err },
+      "continuation packet: the pull request states could not be read"
+    );
+    const prState: PacketPullRequestState = {
+      status: "unavailable",
+      reason:
+        "What the pod recorded about this pull request could not be read.",
+    };
+    return {
+      ...units,
+      items: units.items.map((item, i) =>
+        refs.has(i) ? { ...item, prState } : item
+      ),
+    };
+  }
+  return {
+    ...units,
+    items: units.items.map((item, i) => {
+      const ref = refs.get(i);
+      const facts = ref ? states.get(pullRequestKey(ref)) : undefined;
+      if (!facts) return item;
+      return {
+        ...item,
+        prState: {
+          status: "ok",
+          label: resolvePullRequestStateLabel(facts.state),
+          ...facts,
+        },
+      };
+    }),
+  };
+}
+
+/**
  * The parent ROW — `this --spawned_from--> parent`, owner-floored, at most one.
  *
  * ONE query, and it carries `metadata` because `parent` (identity) and
@@ -2275,6 +2361,7 @@ export async function projectContinuationPacket(
     inbox,
     goal,
     siblings,
+    workUnits,
   ] = await Promise.all([
     readProject(database, ctx.userId, row.projectId ?? null).catch(
       unavailable(
@@ -2496,6 +2583,7 @@ export async function projectContinuationPacket(
         "The sessions beside this one could not be read."
       )
     ),
+    withPullRequestStates(workUnitsSection(all), reader, database),
   ]);
 
   const measuredAt = Date.now();
@@ -2578,7 +2666,7 @@ export async function projectContinuationPacket(
     priorStages,
     goal,
     siblings,
-    workUnits: workUnitsSection(all),
+    workUnits,
     alreadyDone,
     lastDecision,
     run: manifest
