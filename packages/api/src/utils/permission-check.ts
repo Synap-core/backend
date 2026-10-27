@@ -4993,6 +4993,26 @@ export async function resolveProposalTargetName(
     const named = stringField(data, "sessionName");
     if (named) return named;
   }
+  // A skill is named by the name the reviewer knows it by: its CURRENT name.
+  // An update patch carries `name` only when it renames, and then it is the
+  // NEW name, so the inline read below would title a rename by a name nobody
+  // knows yet. No row (a create) falls through to the inline name.
+  if (subjectType === "skill" && isLikelyUUID(targetId)) {
+    try {
+      const [skill] = await db
+        .select({ name: skills.name })
+        .from(skills)
+        .where(eq(skills.id, targetId))
+        .limit(1);
+      if (skill?.name) return skill.name;
+    } catch (err) {
+      // Title only, as for a playbook below: never blocks the proposal.
+      logger.warn(
+        { err, targetId },
+        "resolveProposalTargetName: skill name lookup failed"
+      );
+    }
+  }
   const inline =
     stringField(data, "goal") ??
     stringField(data, "title") ??
