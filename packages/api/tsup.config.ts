@@ -1,5 +1,7 @@
 import { defineConfig } from "tsup";
 
+import { schemaHashOfFile } from "./scripts/schema-hash.mjs";
+
 export default defineConfig({
   entry: {
     index: "src/index.ts",
@@ -25,6 +27,11 @@ export default defineConfig({
     "skill-runner-child": "src/services/skills/runner/skill-runner-child.ts",
   },
   format: ["esm"],
+  // /health serves the hash of the committed api-types contract; bake it in so
+  // the shipped bundle never reads the file (the image does not carry it).
+  define: {
+    __API_TYPES_SCHEMA_HASH__: JSON.stringify(schemaHashOfFile()),
+  },
   sourcemap: true,
   clean: false,
   external: [

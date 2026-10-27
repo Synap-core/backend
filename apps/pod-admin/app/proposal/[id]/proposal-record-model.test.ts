@@ -289,7 +289,7 @@ describe("proposedRecord — a skill's instructions are never cut", () => {
     (_, i) => `- Rule ${i}: write the caption the way the brief says.`
   ).join("\n");
 
-  it("an update draws the whole new body and the old one, first", () => {
+  it("an update draws the body's rewrite whole, as its changes, first", () => {
     const record = proposedRecord({
       action: "update",
       kind: "skill",
@@ -315,9 +315,64 @@ describe("proposedRecord — a skill's instructions are never cut", () => {
     const field = record.fields[0]!;
     expect(field.key).toBe("body");
     expect(after.length).toBeGreaterThan(9_000);
-    expect(field.after).toEqual({ kind: "code", text: after, lines: 300 });
-    expect(field.before).toEqual({ kind: "code", text: before, lines: 3 });
+    // Read paragraph by paragraph: what went, and every character it became.
+    expect(field.after?.kind).toBe("changes");
+    const lines = field.after?.kind === "changes" ? field.after.lines : [];
+    const added = lines
+      .flatMap((l) =>
+        l.op === "add" ? [l.text] : l.op === "change" ? [l.after] : []
+      )
+      .join("\n");
+    const removed = lines
+      .flatMap((l) =>
+        l.op === "del" ? [l.text] : l.op === "change" ? [l.before] : []
+      )
+      .join("\n");
+    expect(added).toContain(after);
+    expect(removed).toContain("Keep the brand voice.");
+    expect(field.before).toBeUndefined();
     expect(field.wide).toBe(true);
+  });
+
+  it("with no before on record, the new body is drawn whole as written", () => {
+    const record = proposedRecord({
+      action: "update",
+      kind: "skill",
+      changes: [
+        { path: "body", label: "Body", operation: "update" as const, after },
+      ],
+    })!;
+    expect(record.fields[0]!.after).toEqual({
+      kind: "code",
+      text: after,
+      lines: 300,
+    });
+  });
+
+  it("code keeps both sides whole, as code (never a prose diff)", () => {
+    const record = proposedRecord({
+      action: "update",
+      kind: "skill",
+      changes: [
+        {
+          path: "code",
+          label: "Code",
+          operation: "update" as const,
+          before: "return 1;",
+          after: "return 2;",
+        },
+      ],
+    })!;
+    expect(record.fields[0]!.before).toEqual({
+      kind: "code",
+      text: "return 1;",
+      lines: 1,
+    });
+    expect(record.fields[0]!.after).toEqual({
+      kind: "code",
+      text: "return 2;",
+      lines: 1,
+    });
   });
 
   it("`instructions` is read whole too; a PROPERTY named body is not", () => {
