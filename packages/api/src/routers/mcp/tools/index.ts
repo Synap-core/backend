@@ -2788,7 +2788,7 @@ export const tools = {
             subjectEntityId: {
               type: "string",
               description:
-                "Optional: only sessions ABOUT this entity (the subject-spine anchor).",
+                "Optional: only sessions ON this entity — its subject (the subject-spine anchor), or a worker session that targets it.",
             },
             trackId: {
               type: "string",
