@@ -3,9 +3,9 @@
  * (`@synap-core/types/needs-you/rule`, decision E, founder 2026-10-27).
  *
  * It lives HERE, beside the owed-slot predicate, for the same reason that one
- * does: `@synap/jobs` (the reapers) cannot import `@synap/api`, and a count
- * must not load rows. Every constant it reads (the 7-day clocks, the working
- * window, the asker causes, the stamp pattern) is IMPORTED from the rule, never
+ * does: `@synap/jobs` (the reapers) cannot import `@synap/api`. Every constant
+ * it reads (the 7-day clocks, the working window, the ended statuses, the
+ * agent-filed causes, the stamp pattern) is IMPORTED from the rule, never
  * restated; the clauses mirror the rule's order. The PGlite parity test
  * (`needs-you-predicate.parity.pglite.test.ts`) runs every fixture — the
  * session's real room, turns, proposals and events included — through both
@@ -30,24 +30,22 @@ import {
   ISO_STAMP_PATTERN,
   NEEDS_YOU_ASKING_EVENT_TYPES,
   NEEDS_YOU_QUESTION_POST_KIND,
-  NEEDS_YOU_ASKER_CAUSES,
+  NEEDS_YOU_AGENT_FILED_CAUSES,
+  NEEDS_YOU_ENDED_SESSION_STATUSES,
   NEEDS_YOU_REVIEW_LATER_AFTER_MS,
   NEEDS_YOU_STOPPED_AFTER_MS,
   NEEDS_YOU_WORKING_WINDOW_MS,
 } from "@synap-core/types/needs-you/rule";
 import { MessageAuthorType } from "../schema/messages.js";
-import {
-  OPEN_SESSION_STATUSES,
-  owedSlotPredicateSql,
-} from "./owed-slot-predicate.js";
+import { owedSlotPredicateSql } from "./owed-slot-predicate.js";
 import { awaitedGatePendingIn } from "./awaited-gate-wait.js";
 
 function literals(values: readonly string[]): SQL {
   return drizzleSql.raw(values.map((v) => `'${v}'`).join(", "));
 }
 
-const OPEN_STATUSES = literals(OPEN_SESSION_STATUSES);
-const ASKER_CAUSES = literals(NEEDS_YOU_ASKER_CAUSES);
+const ENDED_STATUSES = literals(NEEDS_YOU_ENDED_SESSION_STATUSES);
+const AGENT_FILED_CAUSES = literals(NEEDS_YOU_AGENT_FILED_CAUSES);
 const ASKING_EVENTS = literals(NEEDS_YOU_ASKING_EVENT_TYPES);
 
 /** A session alias the caller's FROM names (`focus_sessions`, `owing`, …). */
@@ -118,7 +116,7 @@ export function sessionTurnInFlightSql(s: string): SQL {
 export function needsYouSessionClassSql(s: string, now: Date): SQL {
   const t = now.getTime();
   return drizzleSql`(SELECT CASE
-      WHEN ${col(s, "status")} NOT IN (${OPEN_STATUSES}) THEN 'stopped'
+      WHEN ${col(s, "status")} IN (${ENDED_STATUSES}) THEN 'stopped'
       -- No readable clock at all (NULL) is never stopped: fails toward keeping.
       WHEN GREATEST(ny_la.at, ${col(s, "started_at")}) < ${at(t - NEEDS_YOU_STOPPED_AFTER_MS)}
         THEN 'stopped'
@@ -147,9 +145,8 @@ function causeKindSql(): SQL {
 function realAskerSql(): SQL {
   const cause = causeKindSql();
   return drizzleSql`coalesce(${cause} IS NULL
-      OR ${cause} IN (${ASKER_CAUSES})
-      OR (${cause} = 'decision'
-          AND jsonb_typeof(slot->'askedBy') = 'string'
+      OR ${cause} NOT IN (${AGENT_FILED_CAUSES})
+      OR (jsonb_typeof(slot->'askedBy') = 'string'
           AND slot->>'askedBy' <> ''), false)`;
 }
 
@@ -167,7 +164,9 @@ function commitmentSql(): SQL {
 /**
  * SQL text: `classifyOwedAsk` for the slot aliased `slot` on the session
  * aliased `s`, at `now` — `'needs_you' | 'from_system' | 'stopped' |
- * 'working' | 'review_later'`, or NULL when the slot is not owed.
+ * 'working' | 'review_later'`, or NULL when the slot is not owed. On a
+ * stopped session only an ask that ends with it is Stopped
+ * ({@link SLOT_ENDS_WITH_SESSION_SQL}); a deliverable goes on to the age arm.
  */
 export function needsYouSlotClassSql(s: string, now: Date): SQL {
   const cutoff = new Date(
@@ -177,7 +176,7 @@ export function needsYouSlotClassSql(s: string, now: Date): SQL {
   return drizzleSql`(CASE
       WHEN NOT (${owedSlotPredicateSql}) THEN NULL
       WHEN NOT ${realAskerSql()} THEN 'from_system'
-      WHEN ${session} = 'stopped' THEN 'stopped'
+      WHEN ${session} = 'stopped' AND ${SLOT_ENDS_WITH_SESSION_SQL} THEN 'stopped'
       WHEN ${session} = 'working' THEN 'working'
       WHEN slot->>'owedSince' ~ ${ISO_STAMP_PATTERN}
         AND NOT ${commitmentSql()}
@@ -195,29 +194,18 @@ function slotsOf(s: string): SQL {
 }
 
 /**
- * SQL: the session aliased `s` (default: the `focus_sessions` table itself)
- * holds at least one ask that NEEDS the person — the headline, at `now`.
- */
-export function needsYouWhere(
-  now: Date = new Date(),
-  s: string = "focus_sessions"
-): SQL {
-  return drizzleSql`EXISTS (
-    SELECT 1 FROM ${slotsOf(s)}
-    WHERE ${needsYouSlotClassSql(s, now)} = 'needs_you'
-  )`;
-}
-
-/**
  * SQL boolean over `slot`: the ask ends with its session — `askEndsWithSession`
  * (`@synap-core/types/ask`): never a criterion grade (the person's verdict on
- * the work, graded after the session as before it); else its ask's mode is
+ * the work, graded after the session as before it), nor an ask the closing
+ * agent kept owed past its session (`keptOwedAt`); else its ask's mode is
  * confirm / choose, or, with no ask, it is a decision blocker
  * (`deriveDecisionAsk`'s confirm).
  */
 export const SLOT_ENDS_WITH_SESSION_SQL = drizzleSql.raw(`(CASE
     WHEN slot->>'kind' = 'criterion'
       OR (jsonb_typeof(slot->'criterionKey') = 'string' AND slot->>'criterionKey' <> '')
+      THEN false
+    WHEN jsonb_typeof(slot->'keptOwedAt') = 'string' AND slot->>'keptOwedAt' <> ''
       THEN false
     WHEN slot->'ask' IS NOT NULL AND jsonb_typeof(slot->'ask') <> 'null'
       THEN coalesce(jsonb_typeof(slot->'ask'->'mode') = 'string'

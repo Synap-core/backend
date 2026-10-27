@@ -61,21 +61,56 @@ describe("the headline: a real, fresh ask on live work", () => {
 });
 
 describe("from_system: no real asker", () => {
+  it("a decision ask no agent filed", () => {
+    expect(
+      classifyOwedAsk(
+        { ...ask, askCause: { kind: "decision" }, askedBy: undefined },
+        live,
+        NOW
+      )
+    ).toBe("from_system");
+  });
+
+  // M3: each producer left after be#295 asks on someone's behalf. The slot
+  // shapes are the producers' own (api `fileCriterionSlot`,
+  // `askToContinueRun`, `paramOwedSlots`); a rule that sends a cause to the
+  // system fold turns its row red.
   it.each([
-    ["a criterion escalation", { criterionKey: "c1", askedBy: undefined }],
-    ["a missing param", { paramName: "target", askedBy: undefined }],
     [
-      "a run's 'keep going', even with the run's agent stamped",
-      { askCause: { kind: "run", ref: { kind: "run", id: "r" } } },
+      "evaluate_session's criterion escalation (fileCriterionSlot)",
+      {
+        owner: "human",
+        kind: "criterion",
+        criterionKey: "tests-pass",
+        blockedReason: "decision",
+        owedSince: ago(DAY),
+        ask: { mode: "choose", options: [{ label: "Met" }] },
+      },
     ],
     [
-      "a decision ask no agent filed",
-      { askCause: { kind: "decision" }, askedBy: undefined },
+      "an attended run's 'keep the run going' (run-turn-end)",
+      {
+        owner: "human",
+        blockedReason: "decision",
+        owedSince: ago(DAY),
+        askedBy: AGENT,
+        askCause: { kind: "run", ref: { kind: "run", id: "r" } },
+        ask: { mode: "confirm" },
+      },
     ],
-  ])("%s", (_name, patch) => {
-    expect(classifyOwedAsk({ ...ask, ...patch }, live, NOW)).toBe(
-      "from_system"
-    );
+    [
+      "the person's own run missing a param (paramOwedSlots)",
+      {
+        owner: "human",
+        kind: "playbook_param",
+        blockedReason: "decision",
+        owedSince: ago(DAY),
+        paramName: "target",
+        ask: { mode: "choose", options: [{ label: "prod" }] },
+      },
+    ],
+  ])("needs you: %s", (_name, slot) => {
+    expect(classifyOwedAsk(slot, live, NOW)).toBe("needs_you");
   });
 
   it("an agent's decision ask, a gate and an external approval are real", () => {
@@ -103,7 +138,7 @@ describe("from_system: no real asker", () => {
     expect(needsYouHasRealAsker({ owner: "human", askCause: {} })).toBe(true);
     expect(
       needsYouHasRealAsker({ owner: "human", askCause: { kind: "run" } })
-    ).toBe(false);
+    ).toBe(true);
     // An empty asker is nobody: the decision stays the system's.
     expect(
       needsYouHasRealAsker({ askCause: { kind: "decision" }, askedBy: "" })
@@ -118,7 +153,7 @@ describe("from_system: no real asker", () => {
     };
     expect(
       classifyOwedAsk(
-        { ...ask, criterionKey: "c", askedBy: undefined },
+        { ...ask, askCause: { kind: "decision" }, askedBy: undefined },
         stopped,
         NOW
       )
@@ -126,7 +161,7 @@ describe("from_system: no real asker", () => {
   });
 });
 
-describe("stopped: no agent moved the work for 7 days, or it ended", () => {
+describe("stopped: the agent's question on work no agent moved for 7 days, or that ended", () => {
   it("no agent evidence for 7 days", () => {
     const quiet = {
       ...live,
@@ -138,13 +173,57 @@ describe("stopped: no agent moved the work for 7 days, or it ended", () => {
     expect(classifyOwedAsk(ask, recent, NOW)).toBe("needs_you");
   });
 
-  it("a session that ended keeps its owed slot, in Stopped", () => {
+  it("an ended session's question is Stopped; only the terminal set ended", () => {
     for (const status of ["closed", "failed", "cancelled"]) {
       expect(classifyOwedAsk(ask, { ...live, status }, NOW)).toBe("stopped");
     }
-    for (const status of ["active", "paused", "stale"]) {
+    // S4: forming and scheduled have not ended (nor has an unknown status).
+    for (const status of [
+      "active",
+      "paused",
+      "stale",
+      "forming",
+      "scheduled",
+      "weird",
+    ]) {
       expect(classifyOwedAsk(ask, { ...live, status }, NOW)).toBe("needs_you");
     }
+  });
+
+  // M4: closing keeps a person deliverable owed, and "Resume or close" can
+  // never clear it: it is the person's to do, so it stays in the headline.
+  describe("a person deliverable is never Stopped", () => {
+    const closed = { ...live, status: "closed" };
+    const quiet = {
+      ...live,
+      lastAgentActivityAt: ago(8 * DAY),
+      startedAt: ago(20 * DAY),
+    };
+    it.each([
+      ["an act", { ask: { mode: "act" } }],
+      ["a provide", { ask: { mode: "provide", provide: { kind: "file" } } }],
+      ["a form", { ask: { mode: "form" } }],
+      ["plain work", { ask: undefined }],
+      ["a criterion grade", { criterionKey: "k", ask: { mode: "choose" } }],
+      ["a confirm the closing agent kept owed", { keptOwedAt: ago(DAY) }],
+    ])("%s on a closed or a quiet session", (_name, patch) => {
+      const slot = { ...ask, ...patch };
+      expect(classifyOwedAsk(slot, closed, NOW)).toBe("needs_you");
+      expect(classifyOwedAsk(slot, quiet, NOW)).toBe("needs_you");
+      // The same slot, one fact away: the age clause still applies.
+      expect(
+        classifyOwedAsk({ ...slot, owedSince: ago(9 * DAY) }, closed, NOW)
+      ).toBe("review_later");
+    });
+
+    it("while the agent's confirm and choose on it are Stopped", () => {
+      for (const a of [{ mode: "confirm" }, ask.ask]) {
+        expect(classifyOwedAsk({ ...ask, ask: a }, closed, NOW)).toBe(
+          "stopped"
+        );
+        expect(classifyOwedAsk({ ...ask, ask: a }, quiet, NOW)).toBe("stopped");
+      }
+    });
   });
 
   it("the start is evidence: a new session no agent touched yet is live", () => {
@@ -305,6 +384,12 @@ describe("proposals: needs you only when something waits on it", () => {
     expect(
       classifyPendingProposal({ ...base, sessionStatus: "closed" }, NOW)
     ).toBe("changes_to_review");
+    // S4: forming / scheduled have not ended.
+    for (const sessionStatus of ["forming", "scheduled", "stale"]) {
+      expect(classifyPendingProposal({ ...base, sessionStatus }, NOW)).toBe(
+        "needs_you"
+      );
+    }
     expect(classifyPendingProposal({ ...base, sessionStatus: null }, NOW)).toBe(
       "needs_you"
     );
@@ -325,6 +410,22 @@ describe("proposals: needs you only when something waits on it", () => {
         NOW
       )
     ).toBe("needs_you");
+  });
+
+  it("F2: it waits with a session an agent is working; a gate never does", () => {
+    const working = { ...base, sessionClass: "working" as const };
+    expect(classifyPendingProposal(working, NOW)).toBe("working");
+    expect(
+      classifyPendingProposal(
+        { ...working, waits: { waits: true, reason: "gate" } },
+        NOW
+      )
+    ).toBe("needs_you");
+    for (const sessionClass of ["live", "stopped", null, undefined] as const) {
+      expect(classifyPendingProposal({ ...base, sessionClass }, NOW)).toBe(
+        "needs_you"
+      );
+    }
   });
 
   it("a decided proposal is in no list", () => {
@@ -354,22 +455,28 @@ describe("the census shape (needs-truth §6): 114 claims, 7 real", () => {
     // (b) 2 asks while the agent works.
     for (let i = 0; i < 2; i++)
       slots.push({ slot: ask, s: working, id: `b${i}` });
-    // (c) 25 asks + (g) 5 chores on ~22 stopped sessions.
-    for (let i = 0; i < 30; i++)
+    // (c) 25 agent questions on 22 stopped sessions.
+    for (let i = 0; i < 25; i++)
       slots.push({
         slot: { ...ask, owedSince: ago(13 * DAY) },
         s: stoppedSession,
         id: `c${i % 22}`,
       });
-    // (e) 22 machine-made: criterion, param, run, reactor decisions.
-    const machine: NeedsYouSlotFacts[] = [
-      { owner: "human", criterionKey: "k" },
-      { owner: "human", paramName: "p" },
-      { owner: "human", askCause: { kind: "run" }, askedBy: AGENT },
-      { owner: "human", askCause: { kind: "decision" } },
-    ];
+    // (g) 5 founder chores there: still the founder's, but 13 days old.
+    for (let i = 0; i < 5; i++)
+      slots.push({
+        slot: { ...ask, owedSince: ago(13 * DAY), ask: { mode: "act" } },
+        s: stoppedSession,
+        id: `c${i}`,
+      });
+    // (e) 22 machine-made: reactor decisions no agent filed (the criterion,
+    // param and run producers that asked on nobody's behalf are gone, be#295).
     for (let i = 0; i < 22; i++)
-      slots.push({ slot: machine[i % machine.length]!, s: live, id: `e${i}` });
+      slots.push({
+        slot: { owner: "human", askCause: { kind: "decision" } },
+        s: live,
+        id: `e${i}`,
+      });
     const proposals: NeedsYouProposalFacts[] = [
       // (a) the deploy approval: a gate.
       {
@@ -416,9 +523,9 @@ describe("the census shape (needs-truth §6): 114 claims, 7 real", () => {
     expect(foldNeedsYouCounts(rows)).toEqual({
       needsYou: 7,
       working: 2,
-      stopped: 30,
+      stopped: 25,
       stoppedSessions: 22,
-      reviewLater: 0,
+      reviewLater: 5,
       fromSystem: 22,
       changesToReview: 21,
     });
