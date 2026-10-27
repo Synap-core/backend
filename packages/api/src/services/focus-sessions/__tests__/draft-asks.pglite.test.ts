@@ -176,6 +176,14 @@ const ASK_A = "Pick a region";
 const ASK_B = "Stripe key";
 const POD_WIDE = { workspaceLens: undefined, projectLens: undefined };
 
+/**
+ * An owed stamp `hours` ago, on the REAL clock: the needs-you rule ages an ask
+ * into Review later after 7 days (decision E), so a fixed date would drift out
+ * of the headline as the calendar moves.
+ */
+const hoursAgo = (hours: number) =>
+  new Date(Date.now() - hours * 3_600_000).toISOString();
+
 async function seedSession(opts: {
   origin: "agent" | "human";
   owed: string[];
@@ -202,7 +210,8 @@ async function seedSession(opts: {
       // ask-less decision answers Yes / No only (#12).
       blockedReason: "credential",
       why: `why ${label}`,
-      owedSince: `2026-09-27T0${i + 1}:00:00.000Z`,
+      // Later labels are newer, as the fixed dates were.
+      owedSince: hoursAgo(10 - i),
       ...(opts.asks?.includes(label)
         ? { ask: { mode: "confirm", prompt: `ok ${label}?` } }
         : {}),
@@ -358,7 +367,7 @@ describe("draft asks: the read and acceptance on engagement", () => {
             owner: "human",
             blockedReason: "decision",
             why: "Ship it?",
-            owedSince: "2026-09-27T05:00:00.000Z",
+            owedSince: hoursAgo(5),
           },
         ]),
       ]
