@@ -200,13 +200,22 @@ type ReviewedProposal = {
   targetId: string | null;
   /** The run the proposal was filed in — also keyed by the session rung. */
   sessionId: string | null;
+  /**
+   * Its type: a held-writes pack belongs to no one session
+   * (`proposalSessionIds`). Optional on purpose: a caller that does not pass
+   * it gets the STRICTER verdict (the stamped session gates), never a wider one.
+   */
+  proposalType?: string | null;
   /** Its project, for a key's project fence (D3); absent reads as none. */
   projectId?: string | null;
 };
 
 /** Does `reader` fail to read a session this proposal belongs to? */
 async function subjectSessionUnreadableFor(
-  proposal: Pick<ReviewedProposal, "targetType" | "targetId" | "sessionId">,
+  proposal: Pick<
+    ReviewedProposal,
+    "targetType" | "targetId" | "sessionId" | "proposalType"
+  >,
   reader: { userId: string; roster: boolean }
 ): Promise<boolean> {
   return (await unreadableProposalSessionIds([proposal], reader)).size > 0;
@@ -446,14 +455,24 @@ export async function resolveBatchedReviewAuthorityFacts(args: {
   rows: ReadonlyArray<
     Pick<
       ReviewedProposal,
-      "workspaceId" | "agentUserId" | "targetType" | "targetId" | "sessionId"
+      | "workspaceId"
+      | "agentUserId"
+      | "targetType"
+      | "targetId"
+      | "sessionId"
+      | "proposalType"
     >
   >;
 }): Promise<
   (
     row: Pick<
       ReviewedProposal,
-      "workspaceId" | "agentUserId" | "targetType" | "targetId" | "sessionId"
+      | "workspaceId"
+      | "agentUserId"
+      | "targetType"
+      | "targetId"
+      | "sessionId"
+      | "proposalType"
     >
   ) => ReviewAuthorityFacts
 > {
@@ -671,7 +690,12 @@ export async function computeCanReviewApproval(args: {
 export async function assertCanRetargetProposalDestination(args: {
   proposal: Pick<
     ReviewedProposal,
-    "data" | "agentUserId" | "targetType" | "targetId" | "sessionId"
+    | "data"
+    | "agentUserId"
+    | "targetType"
+    | "targetId"
+    | "sessionId"
+    | "proposalType"
   >;
   destWorkspaceId: string | null;
   userId: string;

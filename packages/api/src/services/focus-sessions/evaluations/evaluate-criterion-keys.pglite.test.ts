@@ -52,7 +52,7 @@ vi.mock("./record.js", async (importOriginal) => {
       verdict: string;
     }) => {
       h.recorded.push({ criterionKey: p.criterionKey, verdict: p.verdict });
-      return { status: "recorded", escalated: false };
+      return { status: "recorded", exhausted: false };
     },
   };
 });
