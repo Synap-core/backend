@@ -27,6 +27,7 @@ import {
   type QuestionDispositionInput,
   type AskOption,
   type AskProvideKind,
+  type AskRisk,
   type AskSnapshot,
   type ProvideConnectUnavailableReason,
   ASK_CONFIRM_KEYS,
@@ -76,6 +77,9 @@ export const ASK_COPY = {
    * ({@link askRecommendationOutcome}). Nothing is drawn for `none`.
    */
   followedAiPick: "Followed AI pick",
+  /** The ask's risk mark ({@link askRiskView}); low draws nothing. */
+  riskHigh: "High risk",
+  riskMedium: "Medium risk",
   choseDifferently: "Chose differently from AI",
   /** The overrode mark's detail line, when the recommended option is known. */
   aiPicked: (label: string): string => `AI picked: ${label}`,
@@ -370,18 +374,54 @@ export interface AskOptionChip {
   icon?: string;
   recommended?: true;
   description?: string;
+  /** One short fact to weigh before picking it — a warning chip. */
+  caution?: string;
 }
 
-export function askOptionChips(ask: Ask | null | undefined): AskOptionChip[] {
-  if (!ask || ask.mode !== "choose") return [];
-  return ask.options.map((o) => ({
+function optionChip(o: AskOption): AskOptionChip {
+  return {
     label: o.label,
     value: askOptionKey(o),
     action: "confirm" as const,
     ...(o.icon ? { icon: o.icon } : {}),
     ...(o.recommended ? { recommended: true as const } : {}),
     ...(o.description ? { description: o.description } : {}),
-  }));
+    ...(o.caution ? { caution: o.caution } : {}),
+  };
+}
+
+export function askOptionChips(ask: Ask | null | undefined): AskOptionChip[] {
+  if (!ask || ask.mode !== "choose") return [];
+  return ask.options.map(optionChip);
+}
+
+/**
+ * The second level of the decision tree: the chips of the follow-up a picked
+ * option opens (same mapping as {@link askOptionChips}); `[]` when it opens
+ * none. The answer sends the pick as `then`.
+ */
+export function followUpChips(option: {
+  followUp?: { options: readonly AskOption[] };
+}): AskOptionChip[] {
+  return option.followUp?.options.map(optionChip) ?? [];
+}
+
+// ─── Risk ───────────────────────────────────────────────────────────────────
+
+/** The ask's risk mark, or `null` when it draws nothing (low or absent). */
+export function askRiskView(ask: { risk?: AskRisk } | null | undefined): {
+  level: "high" | "medium";
+  label: string;
+  tone: "danger" | "warning";
+} | null {
+  switch (ask?.risk) {
+    case "high":
+      return { level: "high", label: ASK_COPY.riskHigh, tone: "danger" };
+    case "medium":
+      return { level: "medium", label: ASK_COPY.riskMedium, tone: "warning" };
+    default:
+      return null;
+  }
 }
 
 /** The OFFERED option a chip stands for, or `null` when it is not one. */

@@ -57,6 +57,11 @@ function clip(s: string, max: number): string {
   return s.length > max ? `${s.slice(0, max - 1)}…` : s;
 }
 
+/** A chip answer's path as `summarizeAnswer` words it: "<pick> → <follow-up pick>". */
+function chipPath(v: Extract<SlotAnswer["value"], { type: "chip" }>): string {
+  return v.then ? `${v.chip.label} → ${v.then.label}` : v.chip.label;
+}
+
 /**
  * The person's own words beyond the pick. The answer's `text` is
  * `summarizeAnswer`'s "<pick> — <note>"; a free-text answer IS the note.
@@ -66,7 +71,7 @@ function noteOf(answer: SlotAnswer): string {
   if (!v || v.type === "text") return "";
   const head =
     v.type === "chip"
-      ? v.chip.label
+      ? chipPath(v)
       : v.type === "confirm"
         ? v.confirmed
           ? "Yes"
@@ -83,8 +88,8 @@ function chosenLabel(snapshot: AskSnapshot, answer: SlotAnswer): string {
   const v = answer.value;
   if (v?.type === "chip") {
     return v.chip.description
-      ? `${v.chip.label} — ${v.chip.description}`
-      : v.chip.label;
+      ? `${chipPath(v)} — ${v.chip.description}`
+      : chipPath(v);
   }
   if (v?.type === "confirm") return v.confirmed ? "Yes" : "No";
   // Free text ("Other…") or a room reply in words: the words are the choice.

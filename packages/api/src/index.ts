@@ -377,6 +377,9 @@ export { registerEntityMediaCopyReactor } from "./services/media-copy/media-copy
 // is the pod's own `dev.deployed`, read at boot after a successful update.
 export { runDevLoopObservation } from "./services/dev-loop/run-observation.js";
 export { recordPodDeployed } from "./services/dev-loop/pod-deployed.js";
+// The session outcome doors an automation's GRANTED outcome verb reaches
+// (complete_outcome / post_evidence / reevaluate_criterion), via the jobs slot.
+export { sessionOutcomeDoor } from "./services/dev-loop/session-outcome-door.js";
 export {
   runEventSync,
   type RunEventSyncResult,

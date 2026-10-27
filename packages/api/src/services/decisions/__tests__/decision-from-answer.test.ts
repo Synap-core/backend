@@ -263,3 +263,40 @@ describe("decisionUpdateFromAnswer — an EXISTING decision (slot.decisionId)", 
     expect(edited).not.toHaveProperty("summary");
   });
 });
+
+describe("decisionFromAnswer — a pick through a follow-up (the decision tree)", () => {
+  const TREE = {
+    mode: "choose" as const,
+    options: [
+      {
+        label: "Ship it",
+        followUp: {
+          prompt: "Which environment?",
+          options: [{ label: "Staging" }, { label: "Production" }],
+        },
+      },
+      { label: "Wait" },
+    ],
+  };
+  const why = "Release the billing fix?";
+  const value = {
+    type: "chip" as const,
+    chip: { label: "Ship it" },
+    then: { label: "Production" },
+  };
+  const d = decisionFromAnswer({
+    slot: { label: "Release", ask: TREE, why },
+    answer: answerTo(
+      TREE,
+      value,
+      "Ship it → Production — after the freeze",
+      why
+    ),
+    sessionId: "s1",
+  })!;
+
+  it("the summary is the whole path, and the note survives it", () => {
+    expect(d.properties.summary).toBe("Ship it → Production");
+    expect(d.properties.rationale).toMatch(/^after the freeze/);
+  });
+});

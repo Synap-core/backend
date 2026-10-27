@@ -1073,6 +1073,51 @@ export function registerFocusSessionExecutors(): void {
             );
           }
         }
+
+        // GRADING an automation proposed (`post_evidence` /
+        // `reevaluate_criterion`, plan v5 T2): applied through the SAME doors a
+        // granted automation reaches (`dev-loop/session-outcome-door.ts`), on
+        // the session's OWN owner — after the field write, so a criteria change
+        // in the same patch is the one graded. A grading failure is REPORTED,
+        // never thrown: the rest of the approved patch landed.
+        const evidence =
+          innerData.evidence && typeof innerData.evidence === "object"
+            ? (innerData.evidence as Record<
+                string,
+                { passed: boolean; detail?: string }
+              >)
+            : undefined;
+        const reevaluate = Array.isArray(innerData.reevaluateCriteria)
+          ? innerData.reevaluateCriteria.filter(
+              (k): k is string => typeof k === "string"
+            )
+          : [];
+        if (evidence || reevaluate.length > 0) {
+          const outcomeDoor =
+            await import("../../../services/dev-loop/session-outcome-door.js");
+          try {
+            if (evidence) {
+              await outcomeDoor.postEvidence({
+                sessionId,
+                userId: session.userId,
+                agentUserId: proposal.agentUserId ?? null,
+                evidence,
+              });
+            }
+            if (reevaluate.length > 0) {
+              await outcomeDoor.reevaluateCriteria({
+                sessionId,
+                userId: session.userId,
+                agentUserId: proposal.agentUserId ?? null,
+                criterionKeys: reevaluate,
+              });
+            }
+          } catch (err) {
+            outputRefusals.push(
+              `The criteria could not be graded: ${err instanceof Error ? err.message : String(err)}`
+            );
+          }
+        }
       }
 
       await db
