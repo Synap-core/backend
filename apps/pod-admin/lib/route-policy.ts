@@ -96,6 +96,12 @@ export function isSelfService(path: string): boolean {
     // pod_admin would stop every non-admin member from connecting their own
     // machine.
     path === "/device" ||
+    // Approving a KEY your computer asked for (`synap keys create`). The
+    // pod's `apiKeys.getKeyRequest` / `.decideKeyRequest` re-check the
+    // signed-in session and answer only the request's own person (another
+    // person's request is NOT_FOUND); requiring pod_admin would stop every
+    // member from approving a key for their own computer.
+    path.startsWith("/keys/requests/") ||
     path.startsWith("/connection-requests/") ||
     // A proposal reviewer is usually a workspace editor, not a pod admin;
     // `proposals.get`/`.approve` re-check editor role server-side, so we only
@@ -152,6 +158,7 @@ const BANNED_ADMIN_PREFIXES = [
   "connect",
   "connection-requests/",
   "device",
+  "keys/requests/",
   "my-*",
   "settings/security",
   "link-cloud",
