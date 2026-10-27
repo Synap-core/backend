@@ -939,7 +939,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          'Understand what\'s happening / what\'s wrong — the pod\'s health door (the third door, alongside ask + capture). The MODE is derived from what you pass (never a tool name you choose): NO ARGS → whole-pod health (stuck runs, failed flows, review backlog + age, duplicate-proposal clusters, capability posture, agents hitting the daily cap) with a plain-language summary; `type` → a class as a surface (type:"proposal" = the review queue: pending count, oldest, duplicate clusters; type:"session" = stuck sessions; type:"agent" = agent roster + quality; type:"capability" = which installed verbs are turned on and which are not (a verb that is not turned on refuses to run); type:"run" = per-flow failure counts; type:"workspace" = the workspace landscape: per-workspace entity counts + which kinds live in each, PAIRWISE profile-slug overlap between workspaces, and flags for empty / duplicate-named / no-authored-identity workspaces — the "do I have too many workspaces?" read); `id` → auto-detects what the id is (proposal / session / capability / automation-run / playbook-run / agent / entity / view / document / workspace) and explains its state + WHY; `agentId` → an agent\'s behavioural scorecard (approve/reject/revise rates, top rejection reasons, duplicate rate, daily-cap posture). Backward-compatible: `runId`+`flowType` → that run\'s activity timeline (a capture\'s decision + trace events, each with a machine-readable reason + fixHint); `flowType`/`flowId` → the run feed. USER-scoped automatically.',
+          'Understand what\'s happening / what\'s wrong — the pod\'s health door (the third door, alongside ask + capture). The MODE is derived from what you pass (never a tool name you choose): NO ARGS → whole-pod health (stuck runs, failed flows, review backlog + age, duplicate-proposal clusters, capability posture, agents hitting the daily cap) with a plain-language summary; `type` → a class as a surface (type:"proposal" = the review queue: pending count, oldest, duplicate clusters; type:"session" = stuck sessions; type:"agent" = agent roster + quality; type:"capability" = which installed verbs are turned on and which are not (a verb that is not turned on refuses to run); type:"run" = per-flow failure counts; type:"workspace" = the workspace landscape: per-workspace entity counts + which kinds live in each, PAIRWISE profile-slug overlap between workspaces, and flags for empty / duplicate-named / no-authored-identity workspaces — the "do I have too many workspaces?" read; type:"usage" = API calls per key / client / conversation / limiter class / outcome over a window (`since`, `groupBy`, `apiKeyId`, `client`; pod owner or admin only)); `id` → auto-detects what the id is (proposal / session / capability / automation-run / playbook-run / agent / entity / view / document / workspace) and explains its state + WHY; `agentId` → an agent\'s behavioural scorecard (approve/reject/revise rates, top rejection reasons, duplicate rate, daily-cap posture). Backward-compatible: `runId`+`flowType` → that run\'s activity timeline (a capture\'s decision + trace events, each with a machine-readable reason + fixHint); `flowType`/`flowId` → the run feed. USER-scoped automatically.',
         inputSchema: {
           type: "object",
           properties: {
@@ -953,9 +953,42 @@ export const tools = {
                 "entity",
                 "run",
                 "workspace",
+                "usage",
               ],
               description:
-                "Diagnose a whole CLASS as a surface (the review queue, stuck sessions, the agent roster, capability health, per-flow run failures, the workspace landscape).",
+                "Diagnose a whole CLASS as a surface (the review queue, stuck sessions, the agent roster, capability health, per-flow run failures, the workspace landscape, API usage).",
+            },
+            since: {
+              type: "string",
+              description:
+                'type:"usage" only — window start, ISO 8601 (default 24 h ago).',
+            },
+            groupBy: {
+              type: "array",
+              items: {
+                type: "string",
+                enum: [
+                  "hour",
+                  "day",
+                  "apiKeyId",
+                  "limiterKey",
+                  "client",
+                  "conversationId",
+                  "rlClass",
+                  "outcome",
+                ],
+              },
+              description:
+                'type:"usage" only — dimensions to group calls by (default client, rlClass, outcome).',
+            },
+            apiKeyId: {
+              type: "string",
+              description: 'type:"usage" only — narrow to one API key.',
+            },
+            client: {
+              type: "string",
+              description:
+                'type:"usage" only — narrow to one client (X-Synap-Client, e.g. "synap-bridge/0.6.0").',
             },
             id: {
               type: "string",

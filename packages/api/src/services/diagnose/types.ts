@@ -33,7 +33,12 @@ export type DiagnoseClass =
    * answer a structural question about its own organising dimension: the read
    * was only reachable by raw SQL against Postgres.
    */
-  | "workspace";
+  | "workspace"
+  /**
+   * API USAGE (0364) — calls per key / client / conversation / limiter class /
+   * outcome over a window (`api_usage_buckets`). Pod admins only.
+   */
+  | "usage";
 
 /** The kinds `resolveObjectKind` can detect for a bare id. */
 export type ObjectKind =

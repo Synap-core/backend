@@ -246,7 +246,12 @@ function groupExpr(g: ApiUsageGroupBy): SQL {
 export async function readApiUsage(
   executor: UsageDb,
   q: ApiUsageQuery = {}
-): Promise<{ since: string; until: string; groupBy: ApiUsageGroupBy[]; groups: ApiUsageGroup[] }> {
+): Promise<{
+  since: string;
+  until: string;
+  groupBy: ApiUsageGroupBy[];
+  groups: ApiUsageGroup[];
+}> {
   const t = apiUsageBuckets;
   const now = Date.now();
   const since = q.since ?? new Date(now - 86_400_000);

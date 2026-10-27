@@ -50,13 +50,17 @@ export const CLIENT_HEADER = "x-synap-client";
 export const USAGE_FLUSH_INTERVAL_MS = 60_000;
 
 /** A usable `X-Synap-Client` value (visible ASCII, capped), else undefined. */
-export function normalizeClient(raw: string | null | undefined): string | undefined {
+export function normalizeClient(
+  raw: string | null | undefined
+): string | undefined {
   const v = raw?.trim();
   return v && v.length <= 64 && /^[\x21-\x7E]+$/.test(v) ? v : undefined;
 }
 
 /** `claude-code:<uuid>` → `claude-code`; anything else → undefined. */
-export function harnessOfConversation(conversation: string | null): string | undefined {
+export function harnessOfConversation(
+  conversation: string | null
+): string | undefined {
   if (!conversation) return undefined;
   const at = conversation.indexOf(":");
   const harness = at > 0 ? conversation.slice(0, at) : "";
@@ -112,7 +116,8 @@ export function createUsageTelemetry(
   } = {}
 ): UsageTelemetry {
   const counter = opts.counter ?? new ApiUsageCounter();
-  const flush = opts.flush ?? ((rows: ApiUsageRow[]) => flushApiUsage(rows, db));
+  const flush =
+    opts.flush ?? ((rows: ApiUsageRow[]) => flushApiUsage(rows, db));
   const now = opts.now ?? Date.now;
   let timer: ReturnType<typeof setInterval> | undefined;
   let flushing: Promise<number> | undefined;
