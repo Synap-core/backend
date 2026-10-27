@@ -5693,6 +5693,11 @@ export const tools = {
               description:
                 "Optional track UUID (synap_list_tracks) — the method, inside a project, this run advances. Implies its project; a different projectId is refused.",
             },
+            handToAgentId: {
+              type: "string",
+              description:
+                "Optional agent user id (synap_list_agents) to HAND the run to: that agent does the work and the playbook's own executor is not started. A person may name any of their agents; an agent may name only itself. An unknown, paused or foreign agent is refused by name — never replaced by the built-in AI.",
+            },
           },
           required: [],
         },

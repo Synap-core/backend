@@ -19,6 +19,7 @@ const h = vi.hoisted(() => ({
   gateCalls: [] as Array<Record<string, unknown>>,
   enableCalls: [] as Array<Record<string, unknown>>,
   unenabled: [] as Array<{ id: string; name: string }>,
+  handOffs: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -135,6 +136,22 @@ vi.mock(
   }
 );
 
+// The hand-off resolver (a users + route read) records what reached it; its
+// own refusals are pinned on PGlite (`playbooks.run-hand-off.pglite.test.ts`).
+vi.mock(
+  "../../../services/playbooks/run-playbook.js",
+  async (importOriginal) => {
+    const actual = await importOriginal<Record<string, unknown>>();
+    return {
+      ...actual,
+      resolveRunHandOff: vi.fn(async (input: Record<string, unknown>) => {
+        h.handOffs.push(input);
+        return { agentUserId: input.handToAgentId, reach: "pull" };
+      }),
+    };
+  }
+);
+
 vi.mock("./_shared.js", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return {
@@ -184,6 +201,7 @@ async function post(app: OpenAPIHono, path: string, body: unknown) {
 beforeEach(() => {
   h.gateCalls.length = 0;
   h.enableCalls.length = 0;
+  h.handOffs.length = 0;
   h.unenabled = [];
 });
 
@@ -285,6 +303,59 @@ describe("POST /playbooks/:id/run — the D3 preflight reaches Hub REST", () => 
     expect(mcpBody.status).toBe("blocked");
     expect(mcpBody.enableProposals).toEqual(rest.body.enableProposals);
     expect(mcpBody.unenabledSkills).toEqual(rest.body.unenabledSkills);
+  });
+});
+
+describe("POST /playbooks/:id/run — handToAgentId reaches the governed run (REST and MCP)", () => {
+  it("REST: the hand-off is resolved for the caller and rides on the run proposal", async () => {
+    const { status, body } = await post(appAs(AGENT), `/playbooks/${PB}/run`, {
+      handToAgentId: AGENT,
+    });
+    expect(status).toBe(202);
+    expect(body).toMatchObject({ status: "proposed" });
+    expect(h.handOffs).toEqual([
+      { userId: USER, agentUserId: AGENT, handToAgentId: AGENT },
+    ]);
+    expect(h.gateCalls[0]).toMatchObject({
+      subjectType: "playbook",
+      action: "run",
+      data: { playbookId: PB, handToAgentId: AGENT },
+    });
+  });
+
+  it("REST: a handToAgentId that is not an agent id is a 400, nothing asked", async () => {
+    const { status, body } = await post(appAs(), `/playbooks/${PB}/run`, {
+      handToAgentId: "claude-code",
+    });
+    expect(status).toBe(400);
+    expect(String(body.error)).toContain("handToAgentId");
+    expect(h.handOffs).toEqual([]);
+    expect(h.gateCalls).toEqual([]);
+  });
+
+  it("REST control: no handToAgentId resolves no hand-off and stores none", async () => {
+    await post(appAs(AGENT), `/playbooks/${PB}/run`, {});
+    expect(h.handOffs).toEqual([]);
+    expect(h.gateCalls[0]!.data).not.toHaveProperty("handToAgentId");
+  });
+
+  it("MCP synap_run_playbook carries it through the same door", async () => {
+    await buildHandlers.synap_run_playbook!({
+      toolName: "synap_run_playbook",
+      args: { playbookId: PB, handToAgentId: ` ${AGENT} ` },
+      userId: USER,
+      apiKeyScopes: ["mcp.write"],
+      agentUserId: AGENT,
+      caller: {} as never,
+      lensCaller: {} as never,
+      workspaceAccessible: true,
+    });
+    expect(h.handOffs).toEqual([
+      { userId: USER, agentUserId: AGENT, handToAgentId: AGENT },
+    ]);
+    expect(h.gateCalls[0]).toMatchObject({
+      data: { playbookId: PB, handToAgentId: AGENT },
+    });
   });
 });
 

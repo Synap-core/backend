@@ -2976,6 +2976,12 @@ export interface RunPlaybookInput {
   agentIds?: string[];
   reasoning?: string;
   agentUserId?: string;
+  /**
+   * Hand the run to this agent (an agent user id): it does the work and the
+   * playbook's own executor is not started. Refused by name when the agent is
+   * unknown, paused or acts for someone else.
+   */
+  handToAgentId?: string;
 }
 
 /** One request to enable a pack a blocked playbook depends on. */
