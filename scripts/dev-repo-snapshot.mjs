@@ -201,6 +201,26 @@ export function checksFromRollup(rollup) {
   return { checks: all.some((c) => c.kind === "pass") ? "green" : "none", failing: [] };
 }
 
+/** The named kinds (pass|fail|run|queue) of one rollup, newest run per check. */
+export function classifyChecks(rollup) {
+  return Array.isArray(rollup) ? latestPerCheck(rollup).map(classifyCheck) : [];
+}
+
+/**
+ * The checks that fail on main NOW: per check name, the newest commit (nodes are newest first, each with
+ * `checks` from classifyChecks) where it finished decides. A head whose slow checks are still running has only
+ * its fast failures; the slow ones are judged by the commit before it.
+ */
+export function mainFailingNames(nodes) {
+  const verdict = new Map();
+  for (const n of nodes) {
+    for (const c of n.checks ?? []) {
+      if ((c.kind === "pass" || c.kind === "fail") && !verdict.has(c.name)) verdict.set(c.name, c.kind);
+    }
+  }
+  return [...verdict].filter(([, k]) => k === "fail").map(([name]) => name);
+}
+
 /** Every failing check of the PR also fails on main. A PR with no failing check, or a green main, inherits nothing. */
 export function inheritedFromMain(failing, mainFailing) {
   if (!failing.length || !mainFailing.length) return false;
@@ -244,10 +264,11 @@ export function mainHealthFromGithub(nodes) {
     ...(since.prNumber ? { prNumber: since.prNumber } : {}),
     ...(since.committedDate ? { at: since.committedDate } : {}),
   };
-  const reason = d0.failing.length ? `failing: ${d0.failing.slice(0, 4).join(", ")}` : null;
+  const mainFailing = nodes.some((n) => n.checks) ? mainFailingNames(nodes) : d0.failing;
+  const reason = mainFailing.length ? `failing: ${mainFailing.slice(0, 4).join(", ")}` : null;
   return {
     main: { sha, health: "red", source: "github-checks", redSince, reason },
-    mainFailing: d0.failing,
+    mainFailing,
   };
 }
 
@@ -500,10 +521,10 @@ async function readMainHistory(repo) {
   if (!Array.isArray(nodes)) throw new Error(`no main history for ${repo}`);
   return nodes.map((n) => {
     const rollup = n.statusCheckRollup;
-    const failing = rollup
-      ? checksFromRollup(rollup.contexts?.nodes ?? []).failing
-      : [];
+    const contexts = rollup?.contexts?.nodes ?? [];
+    const failing = rollup ? checksFromRollup(contexts).failing : [];
     return {
+      checks: classifyChecks(contexts),
       oid: n.oid,
       committedDate: n.committedDate,
       prNumber: n.associatedPullRequests?.nodes?.[0]?.number,

@@ -12,6 +12,7 @@ import {
   dependsOnFromBody,
   fingerprint,
   inheritedFromMain,
+  mainFailingNames,
   mainHealthFromBaselines,
   mainHealthFromGithub,
   mainHealthFromCiResult,
@@ -188,4 +189,17 @@ test("fingerprint ignores observedAt; observation shape", () => {
   assert.notEqual(fingerprint(s), fingerprint({ ...s, prs: [1] }));
   const o = snapshotObservation(s);
   assert.deepEqual([o.type, o.subjectId, o.data.repo], ["dev.repo_snapshot", R, R]);
+});
+
+test("mainFailingNames: a pending head does not hide a slow check that fails on main", () => {
+  const ck = (name, kind) => ({ name, kind });
+  const nodes = [
+    { oid: "c3", state: "FAILURE", failing: ["docs"], checks: [ck("docs", "fail"), ck("Release gate", "run")] },
+    { oid: "c2", state: "FAILURE", failing: ["Release gate"], checks: [ck("docs", "pass"), ck("Release gate", "fail")] },
+  ];
+  assert.deepEqual(mainFailingNames(nodes).sort(), ["Release gate", "docs"]);
+  assert.deepEqual(mainHealthFromGithub(nodes).mainFailing.sort(), ["Release gate", "docs"]);
+  // main fixed the check since: the newest finished result wins
+  const fixed = [{ oid: "c3", state: "SUCCESS", failing: [], checks: [ck("Release gate", "pass")] }, nodes[1]];
+  assert.deepEqual(mainFailingNames(fixed), []);
 });
