@@ -57,6 +57,11 @@ vi.mock("@synap/database", async (importOriginal) => {
   };
 });
 vi.mock("../utils/audit-log.js", () => ({ auditLog: vi.fn() }));
+// The read-only guard runs before every mutation; a writable pod here.
+vi.mock("../utils/split-brain-service.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  isPodReadOnly: vi.fn(async () => false),
+}));
 
 const { secretsVaultRouter } = await import("./secrets-vault.js");
 
