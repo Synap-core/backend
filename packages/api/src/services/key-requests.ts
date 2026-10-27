@@ -344,11 +344,7 @@ export function ceilingDraft(row: KeyRequest): KeyDraft {
 }
 
 export type KeyRequestStatusView =
-  | "pending"
-  | "approved"
-  | "denied"
-  | "consumed"
-  | "expired";
+  "pending" | "approved" | "denied" | "consumed" | "expired";
 
 export interface KeyRequestView {
   requestId: string;
@@ -507,7 +503,11 @@ export async function decideKeyRequest(
     userId: input.personUserId,
     subjectType: "apiKey",
     action: "create",
-    data: { kind: "key_request", requestId: row.id, templateId: row.templateId },
+    data: {
+      kind: "key_request",
+      requestId: row.id,
+      templateId: row.templateId,
+    },
   });
   if ("denied" in perm && perm.denied)
     throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });

@@ -35,10 +35,7 @@ import {
 } from "@synap/database";
 import { revokeApiKeys } from "@synap/database/api-key-revocation";
 import { resolveKeyExpiry } from "@synap/governance-policy/grants";
-import {
-  generateApiKey,
-  mintPersonKey,
-} from "../services/person-key-mint.js";
+import { generateApiKey, mintPersonKey } from "../services/person-key-mint.js";
 import {
   ExpiresInDaysSchema,
   GrantInputSchema,
@@ -84,10 +81,7 @@ import { logOAuthRefusal } from "./oauth/refusal-log.js";
 import { isPodAdminOrigin } from "../utils/pod-admin-origin.js";
 import { findUserDefaultWorkspaceId } from "../utils/user-default-workspace.js";
 import { assertSignedInPerson } from "../utils/signed-in-person.js";
-import {
-  decideKeyRequest,
-  getKeyRequest,
-} from "../services/key-requests.js";
+import { decideKeyRequest, getKeyRequest } from "../services/key-requests.js";
 import {
   decideDeviceRequest,
   getDeviceRequest,
@@ -188,10 +182,6 @@ function toConsentTrpcError(err: unknown, clientId: string): unknown {
   }
   return err;
 }
-
-/**
- * Generate API key with proper prefix
- */
 
 /**
  * What each key may touch, keyed by key id — ONE read for every key list
@@ -457,6 +447,7 @@ export const apiKeysRouter = router({
           keyName: input.keyName,
           scope,
           ...(input.uses ? { uses: input.uses } : {}),
+          ...(input.note ? { note: input.note } : {}),
           ...(input.hubId ? { hubId: input.hubId } : {}),
           ...(input.expiresInDays !== undefined
             ? { expiresInDays: input.expiresInDays }
@@ -859,9 +850,9 @@ export const apiKeysRouter = router({
             note: z.string().trim().max(400).optional(),
             templateId: z.string().max(120).nullish(),
             uses: KeyUsesSchema,
-            grant: GrantInputSchema.omit({ label: true, roleId: true }).extend(
-              { expiresInDays: ExpiresInDaysSchema }
-            ),
+            grant: GrantInputSchema.omit({ label: true, roleId: true }).extend({
+              expiresInDays: ExpiresInDaysSchema,
+            }),
           })
           .optional(),
       })

@@ -541,7 +541,9 @@ function registerKeyRequestRoutes(app: HubHono): void {
       if (!hasScope(c.get("scopes"), "hub-protocol.read"))
         return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
       try {
-        const keys = await listRequestedKeys(requesterOf(c.get("agentUserId"), c.get("userId")));
+        const keys = await listRequestedKeys(
+          requesterOf(c.get("agentUserId"), c.get("userId"))
+        );
         return c.json(
           {
             keys: keys.map((k) => ({

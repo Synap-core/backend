@@ -17,10 +17,7 @@
  * `routers/api-keys.uses-derive.pglite.test.ts`.
  */
 import { describe, expect, it } from "vitest";
-import {
-  API_KEY_SCOPES,
-  PRIVILEGED_MINT_SCOPES,
-} from "@synap/database/schema";
+import { API_KEY_SCOPES, PRIVILEGED_MINT_SCOPES } from "@synap/database/schema";
 import {
   KEY_SCOPES_NOT_DERIVED,
   KEY_USE_SCOPES,

@@ -104,7 +104,6 @@ function ddlFor(table: PgTable): string {
   return `create table if not exists "${cfg.name}" (${cols.join(", ")});`;
 }
 
-
 beforeAll(async () => {
   for (const value of Object.values(schema)) {
     if (is(value, PgTable)) await h.client!.exec(ddlFor(value));
@@ -418,7 +417,10 @@ describe("what can be requested", () => {
     expect(
       (await getKeyRequest({ requestId: req.request_id, personUserId: PERSON }))
         .draft
-    ).toMatchObject({ uses: ["mcp"], grant: { permissions: ["document.read"] } });
+    ).toMatchObject({
+      uses: ["mcp"],
+      grant: { permissions: ["document.read"] },
+    });
     // Another person's role is not a template for this person.
     await expect(
       request({ templateId: rows[0]!.id, personUserId: OTHER_PERSON })

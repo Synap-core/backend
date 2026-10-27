@@ -82,9 +82,7 @@ export const ExpiresInDaysSchema = z
  * list is never what a page sends (keys plan Decision 2).
  */
 export const KeyUsesSchema = z
-  .array(
-    z.enum(KEY_USES.map((u) => u.id) as [KeyUseId, ...KeyUseId[]])
-  )
+  .array(z.enum(KEY_USES.map((u) => u.id) as [KeyUseId, ...KeyUseId[]]))
   .min(1)
   .max(KEY_USES.length);
 

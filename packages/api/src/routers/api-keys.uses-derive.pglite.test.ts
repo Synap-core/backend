@@ -104,7 +104,6 @@ beforeAll(async () => {
   }
 });
 
-
 const scopeOf = async (id: string) =>
   (
     await h.client!.query<{ scope: string[]; description: string | null }>(
@@ -118,10 +117,9 @@ const grantOf = async (id: string) =>
     await h.client!.query<{
       permissions: string[];
       workspace_ids: string[] | null;
-    }>(
-      `select permissions, workspace_ids from grants where api_key_id = $1`,
-      [id]
-    )
+    }>(`select permissions, workspace_ids from grants where api_key_id = $1`, [
+      id,
+    ])
   ).rows;
 
 describe("apiKeys.create derives scopes from uses", () => {
@@ -222,7 +220,9 @@ describe("D-3 — a key made for a space is confined to it", () => {
 
   it("refuses a grant that names another space, and mints nothing", async () => {
     const before = (
-      await h.client!.query<{ n: number }>(`select count(*)::int n from api_keys`)
+      await h.client!.query<{ n: number }>(
+        `select count(*)::int n from api_keys`
+      )
     ).rows[0]!.n;
     await expect(
       caller().create({
