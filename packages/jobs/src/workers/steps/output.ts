@@ -1278,7 +1278,12 @@ export async function executeOutputStep(
         );
       }
 
-      let patch: Record<string, unknown>;
+      // One shape per verb: the same patch is the gate's proposal payload and
+      // the door call's input.
+      let patch:
+        | { completeOutput: string }
+        | { evidence: Record<string, { passed: boolean; detail?: string }> }
+        | { reevaluateCriteria: string[] };
       if (data.outputType === "complete_outcome") {
         const outcomeKey = config.outcomeKey;
         if (typeof outcomeKey !== "string" || outcomeKey.trim() === "") {
@@ -1333,11 +1338,11 @@ export async function executeOutputStep(
       }
 
       const door = sessionOutcomeDoor();
-      if (data.outputType === "complete_outcome") {
+      if ("completeOutput" in patch) {
         const r = await door.completeOutcome({
           sessionId: target.id,
           userId: target.userId,
-          outcomeKey: patch.completeOutput as string,
+          outcomeKey: patch.completeOutput,
         });
         return {
           status: r.result,
@@ -1346,21 +1351,18 @@ export async function executeOutputStep(
         };
       }
       const r =
-        data.outputType === "post_evidence"
+        "evidence" in patch
           ? await door.postEvidence({
               sessionId: target.id,
               userId: target.userId,
               agentUserId: producerAgentUserId ?? null,
-              evidence: patch.evidence as Record<
-                string,
-                { passed: boolean; detail?: string }
-              >,
+              evidence: patch.evidence,
             })
           : await door.reevaluateCriteria({
               sessionId: target.id,
               userId: target.userId,
               agentUserId: producerAgentUserId ?? null,
-              criterionKeys: patch.reevaluateCriteria as string[],
+              criterionKeys: patch.reevaluateCriteria,
             });
       return {
         status: r.status,

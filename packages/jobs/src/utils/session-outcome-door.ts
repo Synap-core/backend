@@ -58,11 +58,6 @@ export function registerSessionOutcomeDoor(d: SessionOutcomeDoor): void {
   door = d;
 }
 
-/** Test/boot introspection — is the door reachable from this process? */
-export function isSessionOutcomeDoorRegistered(): boolean {
-  return door !== null;
-}
-
 /** Test seam: forget the registered door. */
 export function resetSessionOutcomeDoorForTests(): void {
   door = null;
