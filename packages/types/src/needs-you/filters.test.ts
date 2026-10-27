@@ -92,3 +92,34 @@ describe("needsYouFilters — zero-count filters are omitted", () => {
     expect(effectiveNeedsYouFilter("all", counts)).toBe("all");
   });
 });
+
+describe("needsYouFilterView — Review later is never batched", () => {
+  type RlRow = Row & { signal: { reviewLater?: boolean } };
+  const rl = (
+    key: string,
+    bucket: NeedsYouBucket,
+    reviewLater = false
+  ): RlRow => ({
+    key,
+    bucket,
+    signal: reviewLater ? { reviewLater: true } : {},
+  });
+  // Rules out "every routine row batches": a 9-day-old routine change would
+  // be approved inside "Approve N" while the badge leaves it out.
+  const PAGE = [
+    rl("d1", "decision"),
+    rl("r1", "routine"),
+    rl("r2", "routine"),
+    rl("old", "routine", true),
+  ];
+  it("All batches only the headline's routine changes; the old one stays a row to fold", () => {
+    const v = needsYouFilterView(PAGE, "all");
+    expect(keys(v.batch)).toEqual(["r1", "r2"]);
+    expect(keys(v.rows)).toEqual(["d1", "old"]);
+  });
+  it("Routine: the same batch, the old one a row", () => {
+    const v = needsYouFilterView(PAGE, "routine");
+    expect(keys(v.batch)).toEqual(["r1", "r2"]);
+    expect(keys(v.rows)).toEqual(["old"]);
+  });
+});

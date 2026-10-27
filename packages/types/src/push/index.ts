@@ -28,8 +28,11 @@
 
 import {
   askAnswersInline,
+  askCardView,
   askFingerprint,
+  askTextRestates,
   resolveAskResolution,
+  stripAskVerbPrefix,
   type Ask,
   type AskAnswerValue,
 } from "../ask/index.js";
@@ -124,11 +127,11 @@ export const PUSH_CATEGORY_LABELS: Readonly<
 > = {
   "blocking-ask": {
     name: "Questions that block your work",
-    hint: "An agent is waiting on your answer",
+    hint: "Work is stopped until you answer",
   },
   "decision-blocking": {
     name: "Decisions that block your work",
-    hint: "An agent is waiting for your approval",
+    hint: "Work is stopped until you decide",
   },
   "work-broke": {
     name: "When something breaks",
@@ -456,8 +459,9 @@ function clipLine(s: string): string {
  * The push BODY for a quick-answerable ask: the lock-screen buttons must
  * answer a question the push SHOWS. `null` when the ask has no quick answer
  * (the notification's own body stands).
- *   confirm → "<label>: <prompt>" — the prompt is what Yes/No answers, so it
- *             wins over the slot's `why`; `why` only when there is no prompt.
+ *   confirm → the card's question (`askCardView`): "<label>: <prompt>", the
+ *             label dropped when the prompt restates it; with no prompt,
+ *             "<label>: <why>". A recommended answer adds "Recommended: …".
  *   choose  → "<label>: <why>" + a line "Recommended: <option>".
  *   act     → "<label>: <why, else the first step>".
  */
@@ -470,7 +474,21 @@ export function quickAnswerPushBody(
   const why = slot.why?.trim() || "";
   const head = (detail: string) =>
     clipLine(detail ? `${slot.label}: ${detail}` : slot.label);
-  if (ask.mode === "confirm") return head(ask.prompt?.trim() || why);
+  if (ask.mode === "confirm") {
+    const card = askCardView({ label: slot.label, why: slot.why, ask });
+    const label = stripAskVerbPrefix(slot.label) || slot.label.trim();
+    const line = ask.prompt?.trim()
+      ? askTextRestates(label, card.heading)
+        ? card.heading
+        : `${label}: ${card.heading}`
+      : card.context
+        ? `${card.heading}: ${card.context}`
+        : card.heading;
+    const rec = card.answers.find((a) => a.recommended);
+    return rec
+      ? `${clipLine(line)}\n${clipLine(`Recommended: ${rec.label}`)}`
+      : clipLine(line);
+  }
   if (ask.mode === "choose") {
     const chip = q.actions[0]?.value;
     const rec = chip?.type === "chip" ? chip.chip.label : "";

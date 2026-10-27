@@ -1195,27 +1195,6 @@ const ACKNOWLEDGED_GAPS: Gap[] = [
     reason:
       "SAME VALUE, ALREADY ON THE ROW. `computeAgentScorecard` returns `sampled: total` and `counts: { total, … }` from the one local `total` — the row forwards it as `total`. Checkable in `agent-scorecard.ts` at the single return literal that builds both; if they ever diverge, that literal is the one place it can happen.",
   },
-  {
-    service: "agent-scorecard",
-    field: "counts.approved",
-    door: "services/diagnose/index.ts:diagnoseClass",
-    reason:
-      "RECOVERABLE EXACTLY FROM THIS ROW, no other surface involved: `approved = round(total * approveRate)`, and `total` + `approveRate` are both forwarded here. `rate(n) = Number((n/total).toFixed(4))` over the SAME denominator, and `SCORECARD_SCAN_LIMIT` bounds `total` below `10^decimals`, so the rounding resolves every integer. That bound is PINNED by the arithmetic-bound test, which reads both numbers out of `agent-scorecard.ts` — raise the scan limit past 10 000 and this entry fails instead of quietly becoming false. The row is a rate-ranked summary by design; the absolute bucket adds nothing it does not already determine.",
-  },
-  {
-    service: "agent-scorecard",
-    field: "counts.rejected",
-    door: "services/diagnose/index.ts:diagnoseClass",
-    reason:
-      "RECOVERABLE EXACTLY FROM THIS ROW: `rejected = round(total * rejectRate)`, both forwarded here, same `rate()` denominator and the same PINNED `SCORECARD_SCAN_LIMIT < 10^decimals` bound that makes the rounding lossless (see the arithmetic-bound test). Note this is NOT true of `counts.pending` (there is no pendingRate) — which is why that one is forwarded rather than acknowledged.",
-  },
-  {
-    service: "agent-scorecard",
-    field: "counts.revised",
-    door: "services/diagnose/index.ts:diagnoseClass",
-    reason:
-      "RECOVERABLE EXACTLY FROM THIS ROW: `revised = round(total * reviseRate)`, both forwarded here (reviseRate was added to the row in the same change that added this entry), same denominator and the same PINNED `SCORECARD_SCAN_LIMIT < 10^decimals` bound (see the arithmetic-bound test).",
-  },
   // ── entity-get on `synap_detach_facet` ─────────────────────────────────────
   // These four share ONE reason, and it is a property of the CALL SITE, not of
   // any field: this block does not publish the entity read at all. It is a
@@ -1596,54 +1575,6 @@ describe("tripwire (T4): every service field is projected by every door, or ackn
       ).toBe(true);
     }
   );
-
-  /**
-   * PIN for the arithmetic in the `agent-scorecard.counts.*` acknowledgements.
-   *
-   * Those three entries are the only ones in this file whose reason rests on a
-   * NUMERIC BOUND rather than on structure: `approved`/`rejected`/`revised` are
-   * dropped from the diagnose roster because each is exactly
-   * `round(total × <its rate>)` from values the row DOES carry. That recovery is
-   * lossless only while the rounding resolution beats one unit:
-   * `rate()` keeps `toFixed(D)` digits, so the worst-case error in
-   * `total × rate` is `total × 0.5 × 10^-D`, and the recovery is exact while
-   * that stays below 0.5 — i.e. while `SCORECARD_SCAN_LIMIT < 10^D`.
-   *
-   * Today that is 500 < 10^4, with three orders of magnitude of headroom. Raise
-   * the scan limit past 10 000 (or drop a decimal from `rate`) and three
-   * acknowledged gaps silently stop being true — the exact "a claim nobody
-   * checks" shape this file's header warns about. Both numbers are read out of
-   * the service's own source, so neither can be changed without answering here.
-   */
-  it("the counts.* acknowledgements' arithmetic bound still holds", () => {
-    const file = join(API_SRC, "services/diagnose/agent-scorecard.ts");
-    const src = stripComments(readFileSync(file, "utf8"), "ts");
-    const limit = /SCORECARD_SCAN_LIMIT\s*=\s*(\d+)/.exec(src);
-    const digits = /\(\s*n\s*\/\s*total\s*\)\.toFixed\(\s*(\d+)\s*\)/.exec(src);
-    expect(
-      limit,
-      `SCORECARD_SCAN_LIMIT was not found in ${file} — it was renamed or moved, ` +
-        `so the bound the counts.* acknowledgements rest on is no longer being ` +
-        `checked. Re-point this test; do NOT delete it.`
-    ).toBeTruthy();
-    expect(
-      digits,
-      `The \`rate()\` rounding was not found in ${file} — same problem: the ` +
-        `acknowledgements claim a LOSSLESS recovery and nothing would verify it.`
-    ).toBeTruthy();
-    const scanLimit = Number(limit![1]);
-    const decimals = Number(digits![1]);
-    expect(
-      scanLimit,
-      `SCORECARD_SCAN_LIMIT is ${scanLimit} and rate() keeps ${decimals} ` +
-        `decimals, so round(total x rate) can be off by one and ` +
-        `counts.approved / counts.rejected / counts.revised are NO LONGER ` +
-        `recoverable from the roster row. Either forward those three counts on ` +
-        `the roster (services/diagnose/index.ts, case "agent") or rewrite their ` +
-        `ACKNOWLEDGED_GAPS reasons — they are currently asserting something ` +
-        `that has stopped being true.`
-    ).toBeLessThan(10 ** decimals);
-  });
 
   it("every acknowledged gap carries a real reason", () => {
     const thin = ACKNOWLEDGED_GAPS.filter(

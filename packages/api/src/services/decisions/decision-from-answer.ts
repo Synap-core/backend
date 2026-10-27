@@ -99,6 +99,7 @@ function chosenLabel(snapshot: AskSnapshot, answer: SlotAnswer): string {
 export interface DecisionFromAnswerInput {
   /** The slot AS IT WAS when answered (carries `ask`, `why`, `label`). */
   slot: Pick<ExpectedOutput, "label" | "ask" | "why" | "decisionId">;
+  /** This answer — or, to read what a previous answer filed, that one. */
   answer: SlotAnswer;
   sessionId: string;
   /** The agent that asked, when it can be named. */
@@ -172,6 +173,132 @@ export function decisionFromAnswer(
       ? { followedRecommendation: snapshot.followedRecommendation }
       : {}),
     ...(input.askedByAgent ? { askedByAgent: input.askedByAgent } : {}),
+    ...relayFields(answer),
   };
   return { title, properties };
+}
+
+/**
+ * The fields an answer DECIDES on a decision that already exists. Everything
+ * else on it — summary, options, rationale, alternatives — is somebody's
+ * record of the decision, and answering it must never rewrite it.
+ */
+const DECIDED_FIELDS = [
+  "decisionStatus",
+  "decidedAt",
+  "chosenOption",
+  "recommendedOption",
+  "followedRecommendation",
+  "sourceSessionId",
+  "askedByAgent",
+  "answeredVia",
+  "relayedBy",
+  "relayQuote",
+] as const;
+
+/** The prose fields whose value depends on the pick. */
+const PICK_PROSE_FIELDS = ["summary", "alternatives"] as const;
+
+/**
+ * What an answer writes on the EXISTING decision its slot points at
+ * (`slot.decisionId`). Pure.
+ *
+ * The decided fields only. A pick-dependent prose field is revised only when
+ * it still holds exactly what the slot's PREVIOUS answer wrote (a re-answer to
+ * a decision an answer filed): the door rewrites its own words, never a
+ * person's or an agent's. The person's note is appended to the rationale (the
+ * profile has no field of its own for it), never replacing it.
+ */
+export function decisionUpdateFromAnswer(p: {
+  /** `decisionFromAnswer` of this answer. */
+  draft: DecisionDraft;
+  /** `decisionFromAnswer` of the slot's previous answer, when there was one. */
+  previous: DecisionDraft | null;
+  /** The decision's properties as stored now. */
+  existing: Record<string, unknown>;
+  answer: SlotAnswer;
+}): Record<string, unknown> {
+  const { draft, previous, existing } = p;
+  const update: Record<string, unknown> = {};
+  for (const key of DECIDED_FIELDS) {
+    if (draft.properties[key] !== undefined)
+      update[key] = draft.properties[key];
+  }
+  for (const key of PICK_PROSE_FIELDS) {
+    if (
+      previous &&
+      previous.properties[key] !== undefined &&
+      existing[key] === previous.properties[key] &&
+      draft.properties[key] !== undefined
+    ) {
+      update[key] = draft.properties[key];
+    }
+  }
+  const note = noteOf(p.answer);
+  if (note) {
+    const before =
+      typeof existing.rationale === "string" ? existing.rationale.trim() : "";
+    update.rationale = clip(
+      [before, `When deciding: ${note}`].filter(Boolean).join("\n\n"),
+      RICH_MAX
+    );
+  }
+  return update;
+}
+
+/** The relay's record on a decision ({@link relayFields}). */
+export const RELAY_DECISION_FIELDS = [
+  "answeredVia",
+  "relayedBy",
+  "relayQuote",
+] as const;
+
+/**
+ * The relay fields an answer must REMOVE from the decision it updates: a tap
+ * after a relay the person rejected writes none of its own, and `entities.update`
+ * merges properties, so the rejected relay's provenance and words would stay
+ * on a decision they no longer decided. Pure.
+ */
+export function staleRelayFields(
+  existing: Record<string, unknown>,
+  answer: SlotAnswer
+): string[] {
+  if (answer.relayedBy) return [];
+  return RELAY_DECISION_FIELDS.filter((k) => existing[k] !== undefined);
+}
+
+/**
+ * The person said "Not what I said" to the relayed answer that decided this
+ * decision: it is undecided again — `proposed`, without the pick and without
+ * the relay — until their own answer decides it. Pure.
+ */
+export function decisionReopenedFromRelay(): {
+  properties: Record<string, unknown>;
+  deleteProperties: string[];
+} {
+  return {
+    properties: { decisionStatus: "proposed" },
+    deleteProperties: [
+      "decidedAt",
+      "chosenOption",
+      "followedRecommendation",
+      ...RELAY_DECISION_FIELDS,
+    ],
+  };
+}
+
+/**
+ * Where the answer came from, on the decision it filed (the relay door). Only
+ * an answer an agent RELAYED carries any: `answeredVia` says whether the
+ * person then tapped Confirm (`tap`) or the relay alone decided (`relayed`),
+ * and `relayedBy` / `relayQuote` keep who carried which words, both ways — a
+ * confirm never erases the relay from the record. A plain tap adds nothing.
+ */
+function relayFields(answer: SlotAnswer): Record<string, unknown> {
+  if (!answer.relayedBy) return {};
+  return {
+    answeredVia: answer.via === "relayed" ? "relayed" : "tap",
+    relayedBy: answer.relayedBy,
+    ...(answer.quote ? { relayQuote: clip(answer.quote, RICH_MAX) } : {}),
+  };
 }

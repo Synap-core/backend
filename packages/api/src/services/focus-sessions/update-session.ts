@@ -30,21 +30,33 @@ import { sessionCriteriaSchema } from "../../schemas/session-criteria.js";
 import { isHttpUrl } from "@synap/shared-utils";
 import {
   ASK_LOOKED_AT_KINDS,
+  AnswerProvenanceSchema,
   AskAnswerValueSchema,
+  AskCauseSchema,
   AskSchema,
   AskSnapshotSchema,
+  PendingRelayedAnswerSchema,
+  askFingerprint,
+  effectiveSlotAsk,
+  type AnswerProvenance,
   type Ask,
   type AskAnswerValue,
+  type AskCause,
   type AskSnapshot,
+  type PendingRelayedAnswer,
 } from "@synap-core/types/ask";
 import type {
   OutputRefKind,
+  SlotAnswerProvenance,
   SlotAnswerValue,
   SlotAsk,
+  SlotAskCause,
   SlotAskLookedAtKind,
   SlotAskSnapshot,
+  SlotPendingRelay,
 } from "@synap/playbooks";
 import { normalizeExpectedLabel } from "./satisfy-expected-output.js";
+import { restatedAskHints, withoutRestatedWhy } from "./ask-text.js";
 import { carrySlotKeys, declaredSlotKey, deriveSlotKeys } from "./slot-keys.js";
 import { loadVisibleProject } from "../projects/load-visible-project.js";
 import { sessionGoalPayload } from "./session-update-goal.js";
@@ -85,7 +97,7 @@ import {
   type AgentHandOffDecision,
 } from "./agent-hand-off.js";
 import { archivedAnswerHistory } from "./answer-history.js";
-import { logSlotsAsked } from "./slot-asked-event.js";
+import { logSlotsAsked, stampAskProvenance } from "./slot-asked-event.js";
 import type { FollowOutcome } from "./follow-playbook.js";
 import {
   closedRunRefusal,
@@ -288,7 +300,8 @@ export type UpdateFocusSessionResult =
        * is not `owner: 'human'` — an ask is how the PERSON answers, so
        * `reconcileOwedSince` drops it from an agent-owned slot. That drop used
        * to be silent; the agent then waited on a question nobody was shown.
-       * Absent when there is nothing to say.
+       * And a hint when a confirm's prompt only repeats its label
+       * (`restatedAskHints`). Absent when there is nothing to say.
        */
       warnings?: string[];
       /**
@@ -376,6 +389,10 @@ const slotAnswerWireSchema = z.object({
   value: AskAnswerValueSchema.optional(),
   // The ask as posed, frozen at answer time. Round-trip only.
   askSnapshot: AskSnapshotSchema.optional(),
+  // Where the answer came from (tap / relayed). Round-trip only, and DECLARED
+  // here so an echo keeps it: an undeclared nested key is stripped at the
+  // parse, and the stripped echo then reads as a forged answer.
+  ...AnswerProvenanceSchema.shape,
 });
 
 export const expectedOutputWireSchema = z.object({
@@ -430,6 +447,9 @@ export const expectedOutputWireSchema = z.object({
   // Retirement receipt — stamped when the declaring session is CANCELLED.
   retiredAt: z.string().optional(),
   retiredReason: z.enum(OUTPUT_RETIRED_REASONS).optional(),
+  // Kept owed past the session's end — stamped by the close door only. On
+  // the wire for the same round-trip reason as `retiredAt`.
+  keptOwedAt: z.string().optional(),
   // WHERE to go for this deliverable. AGENT/HUMAN-authored, never stamped —
   // `.nullable()` because silence means KEEP (see `SERVER_OWNED_OUTPUT_FIELDS`)
   // and so "clear this pointer" needs an explicit way to say itself.
@@ -453,12 +473,20 @@ export const expectedOutputWireSchema = z.object({
   // The agent's pick-up receipt — stamped by `answer-pickup.ts` only. On the
   // wire for the same round-trip reason as `answer`.
   answerPickedUpAt: z.string().optional(),
+  // A commitment's relayed answer awaiting the person's tap — stamped by the
+  // relay door only. On the wire for the same round-trip reason as `answer`.
+  pendingRelay: PendingRelayedAnswerSchema.optional(),
   // HOW the person can answer — AGENT-declared, never stamped. Parsed with the
   // ONE ask schema (`@synap-core/types/ask`): closed modes, ≤8 options with ≤1
   // recommended, flat forms with AI-authored credential fields dropped, http(s)
   // act urls. `.nullable()` for the same reason as `ref`: silence KEEPS it, so
   // "clear the ask" needs an explicit `null`.
   ask: AskSchema.nullable().optional(),
+  // WHO asked / WHAT raised the ask — stamped by the door that handed the slot
+  // to the person (`stampAskProvenance`), never authored. On the wire for the
+  // same round-trip reason as `owedSince`.
+  askedBy: z.string().optional(),
+  askCause: AskCauseSchema.optional(),
   // The relation type written output → subject on satisfy. DECLARED (a
   // playbook slot's own declaration carried onto the session), never stamped.
   relationToSubject: z.string().max(80).optional(),
@@ -488,6 +516,13 @@ type _Mutual<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
 const _askParity: _Mutual<SlotAsk, Ask> = true;
 const _answerValueParity: _Mutual<SlotAnswerValue, AskAnswerValue> = true;
 const _askSnapshotParity: _Mutual<SlotAskSnapshot, AskSnapshot> = true;
+const _provenanceParity: _Mutual<SlotAnswerProvenance, AnswerProvenance> = true;
+const _pendingRelayParity: _Mutual<SlotPendingRelay, PendingRelayedAnswer> =
+  true;
+const _askCauseParity: _Mutual<SlotAskCause, AskCause> = true;
+void _askCauseParity;
+void _provenanceParity;
+void _pendingRelayParity;
 void _askParity;
 void _answerValueParity;
 void _askSnapshotParity;
@@ -609,6 +644,9 @@ export const SERVER_STAMPED_OUTPUT_FIELDS = [
   "attestedAt",
   "retiredAt",
   "retiredReason",
+  // The close door's receipt that the agent kept the ask owed. An agent that
+  // could author it would keep its own ask alive past every session's end.
+  "keptOwedAt",
   // Stamped by the escalation that files a criterion slot. SERVER-STAMPED, not
   // merely erasure-protected: an agent that could author it would point the
   // scorecard at a criterion it did not fail.
@@ -628,6 +666,15 @@ export const SERVER_STAMPED_OUTPUT_FIELDS = [
   // The decision entity the answer files into. An agent that could author it
   // would make the person's next answer overwrite a decision it names.
   "decisionId",
+  // A commitment's relayed answer awaiting the person's tap (the relay door).
+  // An agent that could author it would put words in the person's mouth and
+  // pre-fill the one-tap confirm of a deploy with them.
+  "pendingRelay",
+  // Who asked / what raised the ask (`stampAskProvenance`). An agent that
+  // could author it would put its question in another agent's mouth, or
+  // dress its own as the person's decision note.
+  "askedBy",
+  "askCause",
   // The output → subject edge receipt (`satisfy-expected-output.ts`). An agent
   // that could author it would claim a link nobody wrote.
   "subjectEdge",
@@ -730,7 +777,8 @@ void _serverStampedCoverage;
  * agent filed `expectedOutputs: []` beside a rename and, on approval, every
  * declared deliverable of the session was gone (live, session 9dc5da0c). The
  * same upsert-by-key the `outcomes` declaration does ({@link keepUnlistedSlots});
- * withdrawing a slot is its own verb, `retireOutput`.
+ * withdrawing a slot is its own verb, `retireOutput`. Nor may an agent's list
+ * take back the person's turn on a slot ({@link personsSlotsHandedAway}).
  */
 export function mergeExpectedOutputs(
   current: OutputItem[],
@@ -743,6 +791,10 @@ export function mergeExpectedOutputs(
   const violations = detectServerStampedWrites(current, incoming);
   if (violations.length > 0) {
     throw serverStampedWriteError(violations);
+  }
+  if (opts.keepUnlisted) {
+    const handedAway = personsSlotsHandedAway(current, rawIncoming);
+    if (handedAway.length > 0) throw personsSlotHandBackError(handedAway);
   }
 
   const { twinOf, keyOf } = storedTwins(current);
@@ -809,11 +861,96 @@ export function mergeExpectedOutputs(
       // Stripped first so a server-stamped field the STORED slot does not carry
       // cannot survive as the incoming value — `carried` can only overwrite keys
       // it has, and an absent stored receipt has none.
-      return dropClearedRef(
-        reconcileOwedSince({ ...stripServerStamped(item), ...carried })
+      return withoutStaleRelay(
+        prior,
+        dropClearedRef(
+          reconcileOwedSince({ ...stripServerStamped(item), ...carried })
+        )
       );
     })
   );
+}
+
+/**
+ * The stored slots an AGENT's list hands away from the person — a stored
+ * `owner: 'human'` slot the incoming twin gives another owner. Pure.
+ *
+ * That is the hand-back `unblockOutput` refuses an agent key: the person's
+ * turn dropped with no answer and no record, and with it any commitment
+ * waiting for their tap. The agent's door for "I no longer need this" is
+ * `synap_relay_answer` `disposition: 'withdrawn'`, which records why and
+ * refuses a step only the person may take.
+ */
+export function personsSlotsHandedAway(
+  current: OutputItem[],
+  incoming: OutputItem[]
+): string[] {
+  const { twinOf } = storedTwins(current);
+  return incoming
+    .filter((item) => {
+      const prior = twinOf(item);
+      return (
+        prior?.owner === "human" &&
+        item?.owner !== undefined &&
+        item.owner !== "human"
+      );
+    })
+    .map((item) => item.label);
+}
+
+/** The refusal of {@link personsSlotsHandedAway}, as a `BAD_REQUEST`. */
+function personsSlotHandBackError(labels: string[]): TRPCError {
+  const named = labels
+    .slice(0, 5)
+    .map((l) => `"${l}"`)
+    .join(", ");
+  return new TRPCError({
+    code: "BAD_REQUEST",
+    message:
+      `Refused: ${named} — the person owes the answer on this slot, and your ` +
+      `list cannot take it back. Nothing was changed. If your work no longer ` +
+      `needs it, withdraw the question with synap_relay_answer ` +
+      `(disposition 'withdrawn', with a note); if they answered you in chat, ` +
+      `relay their words with disposition 'answered'.`,
+  });
+}
+
+/**
+ * A relay waiting for the tap was read against the ask AS IT WAS, for the
+ * person: it goes when the ask changes (its Confirm would answer a question
+ * the person never answered) or the slot stops being theirs. Pure.
+ */
+function withoutStaleRelay(prior: OutputItem, next: OutputItem): OutputItem {
+  if (!next.pendingRelay) return next;
+  if (
+    next.owner === "human" &&
+    askFingerprint(effectiveSlotAsk(prior)) ===
+      askFingerprint(effectiveSlotAsk(next))
+  ) {
+    return next;
+  }
+  const { pendingRelay: _stale, ...rest } = next;
+  return rest;
+}
+
+/**
+ * The labels whose waiting relay a write dropped — its room question still
+ * carries the stamp (`dropPendingRelayStamps`). Pure.
+ */
+export function droppedRelayLabels(
+  before: readonly OutputItem[],
+  after: readonly OutputItem[]
+): string[] {
+  const kept = new Set(
+    after
+      .filter((o) => o?.pendingRelay)
+      .map((o) => normalizeExpectedLabel(o.label))
+  );
+  return before
+    .filter(
+      (o) => o?.pendingRelay && !kept.has(normalizeExpectedLabel(o.label))
+    )
+    .map((o) => o.label);
 }
 
 /**
@@ -1090,7 +1227,9 @@ export function serverStampedWriteError(
  *
  * (`ask` IS reconciled here, and is the one exception: it describes how the
  * PERSON answers, so it cannot outlive the person owning the slot — see the
- * body.)
+ * body. And on a person-owned slot a `why` that only repeats the confirm's
+ * prompt is dropped, `withoutRestatedWhy`: every write door passes here, so
+ * none can store the same question twice.)
  *
  * That is deliberate, not an oversight: reconciling them here would mean
  * silently DELETING an agent's own declaration on a patch that never mentioned
@@ -1105,14 +1244,32 @@ export function reconcileOwedSince(
   now: Date = new Date()
 ): OutputItem {
   if (item.owner === "human") {
-    return item.owedSince ? item : { ...item, owedSince: now.toISOString() };
+    return withoutRestatedWhy(
+      item.owedSince ? item : { ...item, owedSince: now.toISOString() }
+    );
   }
   // `ask` goes with `owedSince`: it says how the PERSON resolves the slot and
   // means nothing on an agent-owned one — the same clearing `stampUnblocked`
   // does. Kept, it would resurrect as a stale card the moment the slot is
   // handed to the person again for a different reason.
-  if (item.owedSince === undefined && item.ask === undefined) return item;
-  const { owedSince: _dropped, ask: _staleAsk, ...rest } = item;
+  // Who asked it goes too: it names the asker of an ask that no longer exists.
+  // And a relay waiting for the person's tap: nobody is left to tap it.
+  if (
+    item.owedSince === undefined &&
+    item.ask === undefined &&
+    item.askedBy === undefined &&
+    item.askCause === undefined &&
+    item.pendingRelay === undefined
+  )
+    return item;
+  const {
+    owedSince: _dropped,
+    ask: _staleAsk,
+    askedBy: _staleAsker,
+    askCause: _staleCause,
+    pendingRelay: _staleRelay,
+    ...rest
+  } = item;
   return rest;
 }
 
@@ -1277,8 +1434,11 @@ export function applyOutputMutations(
    * and updates, never deletes ({@link mergeExpectedOutputs}). Both callers
    * decide it from WHO wrote the patch: the direct door from its
    * `agentUserId`, the approval executor from the proposal's.
+   *
+   * `askedBy`: the agent the same callers name — stamped on every slot this
+   * patch newly hands to the person (`stampAskProvenance`).
    */
-  opts: { keepUnlisted?: boolean } = {}
+  opts: { keepUnlisted?: boolean; askedBy?: string | null } = {}
 ): OutputMutationResult {
   // Wholesale replace goes through the ONE merge, so a client that sends back
   // the four fields it knows about cannot erase a delegation, a return note or
@@ -1365,7 +1525,10 @@ export function applyOutputMutations(
   }
 
   return {
-    outputs: carrySlotKeys(current, next),
+    outputs: carrySlotKeys(
+      current,
+      stampAskProvenance(current, next, { askedBy: opts.askedBy })
+    ),
     ...(completeOutput ? { completeOutput } : {}),
     ...(retireOutput ? { retireOutput } : {}),
   };
@@ -1548,6 +1711,20 @@ export async function updateFocusSession(
         status: "denied",
         reason: serverStampedWriteError(violations).message,
       };
+    }
+    // Same floor, same reason: an agent taking back the person's turn is
+    // refused to the agent, never proposed to the person it was taken from.
+    if (agentUserId) {
+      const handedAway = personsSlotsHandedAway(
+        storedOutputs,
+        params.expectedOutputs
+      );
+      if (handedAway.length > 0) {
+        return {
+          status: "denied",
+          reason: personsSlotHandBackError(handedAway).message,
+        };
+      }
     }
     // An AGENT's list is add-or-update (C6). It travels AS SENT: the locked
     // write and the executor on approval apply that upsert against the row as
@@ -2033,7 +2210,7 @@ export async function updateFocusSession(
           retireOutput: params.retireOutput,
         },
         // An agent's list adds and updates, never deletes (C6).
-        { keepUnlisted: !!agentUserId }
+        { keepUnlisted: !!agentUserId, askedBy: agentUserId }
       );
       set.expectedOutputs = applied.outputs;
       completeOutputOutcome = applied.completeOutput;
@@ -2054,6 +2231,18 @@ export async function updateFocusSession(
     before: undoBefore,
     after: updated,
   });
+
+  // A relay this write made stale (the ask changed, or the slot left the
+  // person) leaves its room question too, so nobody confirms it there.
+  if (mutatesOutputs && existing.channelId) {
+    const stale = droppedRelayLabels(outputsBefore, outputsAfter);
+    if (stale.length > 0) {
+      const { dropPendingRelayStamps } = await import("./session-answer.js");
+      for (const label of stale) {
+        await dropPendingRelayStamps(existing.channelId, label);
+      }
+    }
+  }
 
   // ── EVIDENCE VERDICT ────────────────────────────────────────────────────────
   // A claim (`completeOutput`) is never a verdict: the ONE evidence door
@@ -2191,14 +2380,15 @@ export async function updateFocusSession(
 
   // An ask declared on a slot that is not the person's is dropped by the
   // reconciler — said back to the caller, never silent.
+  const declaredOutputs = [
+    ...(params.expectedOutputs ?? []),
+    ...(params.addOutput ? [params.addOutput] : []),
+  ];
   const warnings = mutatesOutputs
-    ? droppedAskWarnings(
-        [
-          ...(params.expectedOutputs ?? []),
-          ...(params.addOutput ? [params.addOutput] : []),
-        ],
-        outputsAfter
-      )
+    ? [
+        ...droppedAskWarnings(declaredOutputs, outputsAfter),
+        ...restatedAskHints(declaredOutputs),
+      ]
     : [];
 
   // The ask AS POSED, durably (`slot-asked-event.ts`) — diffed on the same

@@ -168,6 +168,10 @@ x-backend-env: &backend-env
   NANGO_HOST: ${NANGO_HOST:-}
   NANGO_SECRET_KEY: ${NANGO_SECRET_KEY:-}
   NANGO_CONNECT_URL: ${NANGO_CONNECT_URL:-}
+  # MCP burst cap: calls per minute per API key on /mcp
+  # (packages/api/src/utils/hub-protocol-rate-limit.ts). Empty = the code's
+  # default. A refused call carries Retry-After.
+  RATE_LIMIT_MCP_MAX: ${RATE_LIMIT_MCP_MAX:-}
   # Every visitor reaches this pod from ONE client IP (a Cloudflare tunnel's
   # cloudflared peer), so per-IP limits on public pages and forms are one shared
   # bucket. When true, each workspace's public doors are OFF until its owner

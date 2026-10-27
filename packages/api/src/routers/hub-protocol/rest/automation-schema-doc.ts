@@ -54,6 +54,18 @@ const NODE_TYPE_DOCS: Record<(typeof FLOW_NODE_TYPES)[number], NodeTypeDoc> = {
           userId: "string (optional — targets specific user)",
         },
       },
+      // An outside fact recorded in process, through the observation door's
+      // own checks (namespace, reserved phases, the dev-loop contract).
+      record_observation: {
+        fields: {
+          type: "string — a registered namespace (dev.pr_merged, ci.finished)",
+          subjectId:
+            "string (template) — what it is about, as the outside service names it",
+          subjectType: "string (optional)",
+          data: "Record<string,unknown> (template values; a null field is left out)",
+          occurredAt: "string (optional, ISO date)",
+        },
+      },
       entity_create: {
         fields: {
           profileSlug: "string",
@@ -367,6 +379,8 @@ export const AUTOMATION_SCHEMA = {
       fields: {
         webhookSubscriptionId:
           "string — ID of the webhook subscription to listen on",
+        webhookSource:
+          "{ name: string } — the space's inbound webhook source BY NAME (what a package declares). Bound to the source of that name a person created (webhookSubscriptionId is set); never created by the automation. When the space has none yet, the automation binds when a person creates it. Its secret is revealed to a person in pod-admin, never to the caller.",
       },
     },
     manual: {

@@ -290,6 +290,15 @@ export function assessNodeRetrySafety(
           };
         }
       }
+      // The trigger hop's claim dedupes the automations a fact fires, but the
+      // fact itself is an appended `events` row with no receipt.
+      if (outputType === "record_observation") {
+        return {
+          safe: false,
+          reason:
+            "a `record_observation` output appends an event row with no idempotency receipt — a retry records the fact twice",
+        };
+      }
       return { safe: true };
     }
 

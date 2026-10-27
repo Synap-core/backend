@@ -22,6 +22,7 @@
  */
 
 import { resolveServiceName } from "@synap-core/types/service-marks";
+import { canReachLine, existingConnections } from "@synap-core/types/proposals";
 
 export interface MarketRisks {
   /** Names of the parts that carry code (a cell's renderer, a code skill). */
@@ -180,13 +181,6 @@ export function requiredAcknowledgements(
   };
 }
 
-/** "Gmail" / "Gmail and Slack" / "Gmail, Notion and Slack". */
-function joinNames(names: string[]): string {
-  return names.length < 2
-    ? (names[0] ?? "")
-    : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
-}
-
 /** The confirms still missing, as plain sentences (empty = nothing missing). */
 export function missingAcknowledgements(
   risks: MarketRisks,
@@ -211,7 +205,7 @@ export function missingAcknowledgements(
   if (need.connectors && given?.connectors !== true) {
     missing.push(
       risks.connections.length > 0
-        ? `It can use your existing ${joinNames(risks.connections)} connection${risks.connections.length === 1 ? "" : "s"} — confirm that you accept that.`
+        ? `It can use ${existingConnections(risks.connections, "your")} — confirm that you accept that.`
         : "It may use connections this pod already has — confirm that you accept that."
     );
   }
@@ -227,15 +221,13 @@ export function riskNotices(risks: MarketRisks): string[] {
   if (risks.incomplete) out.push(INCOMPLETE_RISK_NOTICE);
   if (risks.code.length > 0) out.push(`Runs code: ${risks.code.join(", ")}.`);
   if (risks.networkHosts.length > 0) {
-    out.push(`Can reach: ${risks.networkHosts.join(", ")}.`);
+    out.push(`${canReachLine(risks.networkHosts)}.`);
   }
   if (risks.connectors.length > 0) {
     out.push(`Connects: ${risks.connectors.join(", ")}.`);
   }
   if (risks.connections.length > 0) {
-    out.push(
-      `Uses your existing ${joinNames(risks.connections)} connection${risks.connections.length === 1 ? "" : "s"}.`
-    );
+    out.push(`Uses ${existingConnections(risks.connections, "your")}.`);
   }
   return out;
 }

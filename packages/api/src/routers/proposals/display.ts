@@ -44,6 +44,14 @@ import {
   type ProposalClassFields,
 } from "../../services/proposals/proposal-class.js";
 import {
+  proposalFateFields,
+  supersededByFields,
+} from "../../services/proposals/proposal-fate.js";
+import {
+  proposalWaitsFields,
+  resolveProposalWaits,
+} from "../../services/proposals/proposal-waits.js";
+import {
   proposalSetupFields,
   redactSecretParams,
   resolveProposalSetups,
@@ -63,6 +71,12 @@ import {
   sessionReadableWhere,
 } from "../../access/session-visibility.js";
 import { redactUnreadableSessionTargets } from "../../services/proposals/session-content-redaction.js";
+import {
+  flowReach,
+  readStepSkillLookups,
+  skillReach,
+  type StepSkillLookup,
+} from "../../services/proposals/part-reach.js";
 import type { EventRecord } from "@synap/database";
 import type {
   ProposalRemoval,
@@ -72,6 +86,10 @@ import type {
   StoredProposalData,
 } from "@synap-core/types";
 import { resolveProposalAttention } from "@synap-core/types/proposals/attention";
+import type {
+  ProposalFate,
+  ProposalWaits,
+} from "@synap-core/types/proposals/fate";
 import { isSessionStartChange } from "@synap-core/types/proposals/intent";
 import { revertableForRow } from "./revert.js";
 import {
@@ -107,6 +125,7 @@ import type {
   CompositeCreateEntityOp,
   CompositeCreateRelationOp,
   CompositeUpdateOperation,
+  ProposalPartReach,
 } from "@synap-core/types/proposals";
 import type { FlowDefinition } from "@synap/database";
 import { type proposals } from "@synap/database";
@@ -457,6 +476,12 @@ type DisplayEnrichedProposal = ProposalRow &
      * never rendered.
      */
     governanceRuleId?: string;
+    /** What happens on silence — PENDING rows only (`proposalFateFields`). */
+    fate?: ProposalFate;
+    /** Does an agent wait on it — and why (`resolveProposalWaits`). */
+    waits: ProposalWaits;
+    /** A withdrawn row replaced by a newer version: that proposal's id. */
+    supersededBy?: string;
     review: ProposalReviewModel;
   };
 
@@ -754,6 +779,7 @@ export async function enrichProposalsForDisplay(
     removalRelationCounts,
     setups,
     receiptRuleRows,
+    waitsByProposal,
   ] = await Promise.all([
     entityIds.length > 0
       ? db
@@ -1160,6 +1186,9 @@ export async function enrichProposalsForDisplay(
     // The rules behind this page's auto-approved receipts (names resolved
     // below, from the loaded users first).
     readReceiptRules(rows, userId),
+    // WAITING ON IT: gate / owed slot / parked run — two batched
+    // reads for the page, through the same session read rule as the titles.
+    resolveProposalWaits(rows, { userId, roster: opts.roster ?? false }),
   ]);
   const relationCountByEntityId = countRelationsByEntity(
     removalRelationCounts,
@@ -1228,6 +1257,12 @@ export async function enrichProposalsForDisplay(
     documentRows.map((row) => [row.id, row.title])
   );
   const skillTargetById = await readSkillUpdateTargets(rows, userId);
+  // What the automations of a pending mixed proposal can reach: the skills
+  // their steps would run, read through the run door's rule.
+  const stepSkillsFor = await readStepSkillLookups(
+    rows.filter((row) => isLiveProposalStatus(row.status)),
+    userId
+  );
   // NEW: Populate batch-joined lookup maps
   const playbookById = new Map<
     string,
@@ -1872,6 +1907,13 @@ export async function enrichProposalsForDisplay(
         row.targetType,
         capabilityRunVerbId(row.data)
       ),
+      // FATE on silence (pending only) and who WAITS on it:
+      // the context card's "If you ignore it" and "Waiting on it" lines.
+      ...proposalFateFields(row),
+      ...proposalWaitsFields(row.id, waitsByProposal),
+      // REPLACED (supersede, `insertPendingProposal`): the newer proposal's id,
+      // the door "Replaced by a newer version" opens. Withdrawn rows only.
+      ...supersededByFields(row),
       // SETUP — the manifest-derived gap, plus the SAME row payload with every
       // secret param value stripped. ONE door: `proposalSetupFields`. Spread
       // AFTER `projectProposalRowForViewer(row)` so its `data` override wins.
@@ -1990,6 +2032,9 @@ export async function enrichProposalsForDisplay(
         resolveEntityTitle: resolveEntityTitleScoped,
         existingRolesByEntityId,
         ...skillUpdateReads(row, skillTargetById),
+        ...(isLiveProposalStatus(row.status)
+          ? { stepSkills: stepSkillsFor(row.workspaceId) }
+          : {}),
         events: request.correlationId
           ? (traceByCorrelationId.get(request.correlationId) ?? [])
           : [],
@@ -2091,7 +2136,10 @@ function skillUpdateReads(
     resolveUpdateTarget: (kind, targetId) => {
       const skill = kind === "skill" ? skillById.get(targetId) : undefined;
       if (!skill) return undefined;
-      return live ? skill : { name: skill.name };
+      if (!live) return { name: skill.name };
+      // What the skill it rewrites can reach (the patch never changes it).
+      const reach = skillReach(skill.values);
+      return reach ? { ...skill, reach: { ...reach, unreadSteps: 0 } } : skill;
     },
   };
 }
@@ -2123,6 +2171,8 @@ function buildProposalReviewModel(params: {
   resolveUpdateTarget?: UpdateTargetResolver;
   /** A pending non-entity update: its target's values now (a skill's). */
   targetBefore?: Readonly<Record<string, unknown>>;
+  /** Pending only: the skills an automation's steps would run, for its reach. */
+  stepSkills?: StepSkillLookup;
   events: Awaited<ReturnType<EventRepository["getCorrelatedEvents"]>>;
 }): ProposalReviewModel {
   const {
@@ -2136,6 +2186,7 @@ function buildProposalReviewModel(params: {
     existingRolesByEntityId,
     resolveUpdateTarget,
     targetBefore,
+    stepSkills,
     events,
   } = params;
   const requestData =
@@ -2148,7 +2199,8 @@ function buildProposalReviewModel(params: {
         rawData,
         resolveEntityTitle,
         existingRolesByEntityId,
-        resolveUpdateTarget
+        resolveUpdateTarget,
+        stepSkills
       )
     : undefined;
   // Durable before-snapshot captured at proposal-creation time (entity updates).
@@ -2244,7 +2296,9 @@ export function buildProposalGraph(
     string,
     Array<{ profileSlug: string; status?: string | null }>
   >,
-  resolveUpdateTarget?: UpdateTargetResolver
+  resolveUpdateTarget?: UpdateTargetResolver,
+  /** The skills an automation's steps would run; absent ⇒ reach not drawn. */
+  stepSkills?: StepSkillLookup
 ): ProposalReviewGraph {
   const refToTitle = new Map<string, string>();
   // Every ref alias ($opN / op `ref` / $primary / a linked entity's UUID) → the
@@ -2381,7 +2435,8 @@ export function buildProposalGraph(
   const config = buildConfigReviewItems(
     data,
     renderedOpIndexes,
-    resolveUpdateTarget
+    resolveUpdateTarget,
+    stepSkills
   );
 
   // REFUSE a composite whose ops this pipeline cannot fully render — no member
@@ -2432,6 +2487,8 @@ export interface UpdateTargetRead {
   name?: string;
   /** The row's values now, keyed as the op's `patch` names them. */
   values?: Readonly<Record<string, unknown>>;
+  /** What the row can reach outside the pod, when it runs something. */
+  reach?: ProposalPartReach;
 }
 
 export type UpdateTargetResolver = (
@@ -2451,7 +2508,8 @@ function excerptOf(value: unknown): { text: string; truncated: boolean } {
 function buildConfigReviewItems(
   data: CompositeProposalData,
   renderedOpIndexes: Set<number>,
-  resolveUpdateTarget?: UpdateTargetResolver
+  resolveUpdateTarget?: UpdateTargetResolver,
+  stepSkills?: StepSkillLookup
 ): Partial<ProposalReviewGraph> {
   const skills: NonNullable<ProposalReviewGraph["skills"]> = [];
   const automations: NonNullable<ProposalReviewGraph["automations"]> = [];
@@ -2473,6 +2531,7 @@ function buildConfigReviewItems(
         kind,
         targetId,
         ...(target?.name ? { targetName: target.name } : {}),
+        ...(target?.reach ? { reach: target.reach } : {}),
         fields: Object.entries((op.patch ?? {}) as Record<string, unknown>)
           .filter(([, value]) => value !== undefined)
           .map(([key, value]) => {
@@ -2517,6 +2576,9 @@ function buildConfigReviewItems(
           triggerType: op.triggerType,
           // Forced false at materialization — see CompositeCreateAutomationOp.
           bornEnabled: false,
+          ...(stepSkills
+            ? { reach: flowReach(op.flowDefinition, stepSkills) }
+            : {}),
         });
         return;
       case "create_rule":

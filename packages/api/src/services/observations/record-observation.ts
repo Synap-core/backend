@@ -129,6 +129,26 @@ export interface RecordObservationInput {
   workspaceId?: string;
   occurredAt?: Date;
   correlationId?: string;
+  /**
+   * The automation chain that recorded it (an automation's
+   * `record_observation` step), forwarded on the trigger hop so the matcher's
+   * depth and cycle guards see the chain: an automation recording the type it
+   * listens to never fires itself again. Absent for a producer's fact.
+   */
+  automationContext?: {
+    automationRunId: string;
+    automationId: string;
+    chainDepth: number;
+    rootRunId?: string;
+    chainAutomationIds?: string[];
+  };
+  /**
+   * The actor the trigger hop names as the causal-chain producer, when it is
+   * not `agentUserId`: an automation step names its OWNER, as
+   * `emitSideEffects` names the actor of every governed event (the executor
+   * confirms agent-ness, so a human is a no-op).
+   */
+  triggerProducerUserId?: string;
 }
 
 /** Record one observation; returns its event row id. A failed write throws. */
@@ -255,7 +275,10 @@ export async function recordObservation(
         // The producing agent, so a fired automation's THEN-actions are
         // governed against it (proposal, never an ungoverned effect).
         // Null for a human producer → owner-only governance, unchanged.
-        producerAgentUserId: agentUserId ?? null,
+        producerAgentUserId: input.triggerProducerUserId ?? agentUserId ?? null,
+        ...(input.automationContext
+          ? { automationContext: input.automationContext }
+          : {}),
       });
     } else {
       logger.warn(
@@ -285,6 +308,11 @@ export async function recordObservation(
           eventType: input.type,
           data: event.data,
           userId,
+          // The governed actor of the sweep: an AGENT only (never
+          // `triggerProducerUserId`, which may name a human owner — the
+          // sweep would then run a person through the agent floors). An
+          // automation's agent owner arrives here as `agentUserId`
+          // (record-observation-from-automation.ts).
           producerAgentUserId: agentUserId ?? null,
           eventId: row.id,
           grant: grant

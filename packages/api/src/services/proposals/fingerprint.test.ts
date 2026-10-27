@@ -383,3 +383,49 @@ describe("targetLabel decodes an agent's XML-escaped name/summary", () => {
     );
   });
 });
+
+describe("F6 — a held-writes pack's title through the proposal title door", () => {
+  // The shape `fileHeldWrites` (permission-check.ts) stores, with 2 writes kept.
+  const write = (ref: string) => ({
+    ref,
+    subjectType: "entity",
+    action: "create",
+    data: { profileSlug: "task", title: ref },
+    sessionId: null,
+    agentUserId: "agent-1",
+    userId: "person-1",
+    at: "2026-10-27T09:00:00.000Z",
+    fingerprint: `fp-${ref}`,
+  });
+  const pack = {
+    day: "2026-10-27",
+    agentUserId: "agent-1",
+    agentName: "Claude Code",
+    deferredWrites: [write("w1"), write("w2")],
+    source: "agent",
+  };
+
+  it("every door's buildObjectActionTitle(proposalType, targetType, extractProposalName(data)) reads the lead", async () => {
+    const { buildObjectActionTitle } = await import(
+      "@synap-core/types/vocabulary"
+    );
+    for (const mood of ["imperative", "past"] as const) {
+      const title = buildObjectActionTitle({
+        action: "held_writes",
+        objectKind: "agent",
+        objectName: extractProposalName(pack) ?? null,
+        mood,
+      });
+      expect(title).toBe(
+        "Writes held for review: Claude Code, 2026-10-27, 2 items"
+      );
+      expect(title).not.toMatch(/Held writes Agent/);
+    }
+  });
+
+  it("any other proposal's name is untouched", () => {
+    expect(extractProposalName({ day: "2026-10-27", title: "Plan" })).toBe(
+      "Plan"
+    );
+  });
+});

@@ -11,7 +11,7 @@ import { useState } from "react";
 
 // ─── Shared primitives ────────────────────────────────────────────────────────
 
-export function SaveOnceBanner() {
+export function SaveOnceBanner({ noun = "key" }: { noun?: string } = {}) {
   return (
     <div className="flex items-start gap-2 rounded-md border border-amber-500/20 bg-amber-500/[0.06] px-3 py-2.5">
       <ShieldAlert
@@ -19,7 +19,7 @@ export function SaveOnceBanner() {
         aria-hidden
       />
       <p className="text-[11.5px] text-foreground/70">
-        This key will only be shown once. Copy it now before closing.
+        This {noun} will only be shown once. Copy it now before closing.
       </p>
     </div>
   );

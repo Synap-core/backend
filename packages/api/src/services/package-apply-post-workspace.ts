@@ -15,6 +15,7 @@ import {
   loadCapabilityTemplate,
 } from "./capabilities/create-from-definition.js";
 import { createLoopFromDefinition } from "./loops/create-from-definition.js";
+import { isSetupRequiredLike } from "./proposals/setup-required-error.js";
 import { createLinks } from "./links/links-service.js";
 import { linkProjectToWorkspace } from "../utils/project-workspace.js";
 import { createHubProtocolCallerContext } from "../routers/hub-protocol/utils.js";
@@ -341,6 +342,27 @@ function placementKey(p: ActionPlacement): string {
   return `${p.profileSlug}::${p.surface}::${p.kind}::${p.ref}`;
 }
 
+/** The verbs a flow's capability nodes run (`data.verbId`). */
+function flowVerbIds(flow: { nodes?: unknown[] } | undefined): string[] {
+  const out: string[] = [];
+  for (const node of flow?.nodes ?? []) {
+    const n = node as { type?: unknown; data?: { verbId?: unknown } } | null;
+    if (n?.type === "capability" && typeof n.data?.verbId === "string")
+      out.push(n.data.verbId);
+  }
+  return out;
+}
+
+/** The verbs a capability definition installs (its skills' names). */
+function definitionVerbNames(def: object): string[] {
+  const skills = (def as { skills?: unknown }).skills;
+  if (!Array.isArray(skills)) return [];
+  return skills.flatMap((s) => {
+    const name = (s as { name?: unknown } | null)?.name;
+    return typeof name === "string" && name ? [name] : [];
+  });
+}
+
 /** Minimal body slice the post-workspace layers read (PackageApply body). */
 export interface PackagePostWorkspaceBody {
   capabilities?: Array<{
@@ -560,9 +582,16 @@ export async function applyPackagePostWorkspace(
   );
 
   // ── Capabilities ────────────────────────────────────────────────────────
+  // A capability that waits on the person (a key not given, an account not
+  // connected: `SetupRequiredError`) landed nothing, so it stays `error` for
+  // every reader of the bag and the stamp holds. But it is marked
+  // `needsSetup`: what is left is the person's step, not a retry. Its verbs
+  // are kept so an automation that runs them says what it waits on.
+  const setupBlockedVerbs = new Map<string, { key: string; message: string }>();
   if (body.capabilities?.length) {
     const caps: unknown[] = [];
     for (const cap of body.capabilities) {
+      let verbNames: string[] = [];
       try {
         const definition =
           cap.definition ??
@@ -577,6 +606,7 @@ export async function applyPackagePostWorkspace(
           });
           continue;
         }
+        verbNames = definitionVerbNames(definition);
         const r = await createCapabilityFromDefinition(
           definition as Parameters<typeof createCapabilityFromDefinition>[0],
           cap.params ?? {},
@@ -592,10 +622,20 @@ export async function applyPackagePostWorkspace(
           ...(r.proposals.length > 0 ? { proposals: r.proposals } : {}),
         });
       } catch (e) {
+        const capKey = cap.templateKey ?? "inline";
+        const needsSetup = isSetupRequiredLike(e);
+        if (needsSetup) {
+          for (const verbName of verbNames)
+            setupBlockedVerbs.set(verbName, {
+              key: capKey,
+              message: e.message,
+            });
+        }
         caps.push({
-          key: cap.templateKey ?? "inline",
+          key: capKey,
           status: "error",
           message: (e as Error).message,
+          ...(needsSetup ? { needsSetup: true } : {}),
         });
       }
     }
@@ -743,11 +783,26 @@ export async function applyPackagePostWorkspace(
             : { name: a.name, status: "created", id: created.id ?? undefined }
         );
       } catch (e) {
-        autos.push({
-          name: a.name,
-          status: "error",
-          message: (e as Error).message,
-        });
+        // The write failed, and the flow runs a verb of a capability this
+        // apply could not install until the person sets it up: that is what
+        // it waits on, not an error of its own.
+        const blockedBy = flowVerbIds(a.flowDefinition)
+          .map((verbId) => setupBlockedVerbs.get(verbId))
+          .find((b) => b !== undefined);
+        autos.push(
+          blockedBy
+            ? {
+                name: a.name,
+                status: "error",
+                message: `Waits on ${blockedBy.key}: ${blockedBy.message}`,
+                needsSetup: true,
+              }
+            : {
+                name: a.name,
+                status: "error",
+                message: (e as Error).message,
+              }
+        );
       }
     }
     // Per-item isolation: an automation that fails to apply is reported as
@@ -784,7 +839,7 @@ export async function applyPackagePostWorkspace(
       scope: string;
       reconcile?: Pick<
         InstalledPlaybookReconcileResult,
-        "kind" | "applied" | "ownerOwned"
+        "kind" | "applied" | "ownerOwned" | "proposalId"
       > & { error?: string };
     }> => {
       const [row] = await db
@@ -809,6 +864,7 @@ export async function applyPackagePostWorkspace(
             kind: r.kind,
             applied: r.applied,
             ownerOwned: r.ownerOwned,
+            ...(r.proposalId ? { proposalId: r.proposalId } : {}),
           },
         };
       } catch (e) {
@@ -850,9 +906,25 @@ export async function applyPackagePostWorkspace(
             // reported, never overwritten; an unstamped row is adopted). Before
             // this, reuse-by-name meant a fixed template never reached a pod.
             const reused = await reconcileReusedPlaybook(existing.id, p);
+            // A reconcile that only FILED a proposal, or threw, did not
+            // converge the row: say so at the item's top level, the one field
+            // the stamp rule reads (`postWorkspaceLayersConverged`). Reported
+            // as plain "reused", the version was stamped over a playbook still
+            // holding the old definition.
+            const unconverged = reused.reconcile?.error
+              ? { status: "error", message: reused.reconcile.error }
+              : reused.reconcile?.kind === "proposed"
+                ? {
+                    status: "proposed",
+                    ...(reused.reconcile.proposalId
+                      ? { proposalId: reused.reconcile.proposalId }
+                      : {}),
+                  }
+                : null;
             pbs.push({
               name: p.name,
               status: "reused",
+              ...unconverged,
               playbookId: existing.id,
               // `session` | `project` — see the created branch below.
               scope: reused.scope,
