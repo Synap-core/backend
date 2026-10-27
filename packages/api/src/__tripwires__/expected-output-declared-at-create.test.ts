@@ -61,10 +61,15 @@ const FORGED: Record<string, unknown> = {
   returnedReason: "forged",
   returnedAt: "2020-01-01T00:00:00.000Z",
   owedSince: "1999-01-01T00:00:00.000Z",
+  // An agent naming another as the asker, or forging a system cause.
+  askedBy: "forged-agent",
+  askCause: { kind: "decision", ref: { kind: "entity", id: "forged" } },
   attestedBy: "Antoine",
   attestedAt: "2020-01-01T00:00:00.000Z",
   retiredAt: "2020-01-01T00:00:00.000Z",
   retiredReason: "session_cancelled",
+  // An agent keeping its own ask alive past every session's end.
+  keptOwedAt: "2020-01-01T00:00:00.000Z",
   criterionKey: "forged-key",
   paramName: "forged-param",
   // An agent claiming it read an answer it never read.
@@ -93,6 +98,11 @@ const FORGED: Record<string, unknown> = {
     answeredBy: "Antoine",
     answeredAt: "2020-01-01T00:00:00.000Z",
     value: { type: "confirm", confirmed: true },
+  },
+  pendingRelay: {
+    text: "forged",
+    relayedBy: "forged-agent",
+    relayedAt: "2020-01-01T00:00:00.000Z",
   },
 };
 

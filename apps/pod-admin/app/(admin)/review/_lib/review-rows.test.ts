@@ -390,6 +390,36 @@ describe("reviewRows", () => {
     });
   });
 
+  it("an ask row says its question once and names who asked (askCardView)", () => {
+    const [row] = reviewRows(
+      [
+        {
+          ...ask,
+          title: "Decide: Ship the launch post",
+          ask: { mode: "confirm", prompt: "Accept: Ship the launch post?" },
+          source: {
+            kind: "session",
+            id: "s1",
+            label: "Decide: Ship the launch post",
+          },
+          by: { kind: "agent", id: "a1", label: "Claude Code" },
+        },
+      ],
+      new Map()
+    );
+    expect(row).toMatchObject({
+      title: "Ship the launch post?",
+      who: "Claude Code",
+      // The session is named after the question: saying it again adds nothing.
+      where: null,
+    });
+    const [caused] = reviewRows(
+      [{ ...ask, askCause: { kind: "run" } }],
+      new Map()
+    );
+    expect(caused!.who).toBe("From the run");
+  });
+
   it("a criterion slot is graded on the scorecard, so it opens where it lives", () => {
     const [row] = reviewRows([{ ...ask, slotKind: "criterion" }], new Map());
     expect(row!.detail).toEqual({
@@ -437,8 +467,29 @@ describe("chips, views and focus", () => {
       changes: 2,
       asks: 1,
     });
-    expect(rowsInView(rows, "changes").map((r) => r.key)).toEqual(["c1", "c2"]);
-    expect(rowsInView(rows, "all")).toHaveLength(5);
+    expect(rowsInView(rows, "changes").headline.map((r) => r.key)).toEqual([
+      "c1",
+      "c2",
+    ]);
+    expect(rowsInView(rows, "all").headline).toHaveLength(5);
+  });
+
+  it("Review later is its own fold, out of the headline and every count", () => {
+    // Rules out "a stale row is just an older row": the badge leaves it out,
+    // so a chip that counted it would say a number the badge cannot explain.
+    const later = reviewRows(
+      [cluster("fresh"), cluster("stale", { reviewLater: true })],
+      new Map([facts("fresh-p1"), facts("stale-p1")])
+    );
+    expect(reviewCounts(later)).toEqual({
+      all: 1,
+      access: 0,
+      changes: 1,
+      asks: 0,
+    });
+    const view = rowsInView(later, "all");
+    expect(view.headline.map((r) => r.key)).toEqual(["fresh"]);
+    expect(view.reviewLater.map((r) => r.key)).toEqual(["stale"]);
   });
 
   it("All says the pod's count, the nav badge's; groups count the page", () => {

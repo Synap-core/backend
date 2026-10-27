@@ -71,6 +71,7 @@ function leaves(c: Cond | undefined): Cond[] {
 
 function matches(row: Record<string, unknown>, tableName: string, c: Cond[]) {
   return c.every((leaf) => {
+    if (leaf.op === "and") return true; // `leaves` never yields one
     if (leaf.op === "isNull") return row[leaf.col.split(".")[1]!] == null;
     const key = leaf.col.split(".")[1]!;
     if (!leaf.col.startsWith(`${tableName}.`)) return true;
