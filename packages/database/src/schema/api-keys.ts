@@ -272,6 +272,11 @@ export const API_KEY_SCOPES = [
   // the bridge HTTP endpoint stays guarded by BRIDGE_SECRET as before. See
   // the team pod document "Eve (hestia-cli), Hermes and the Eve OS: design history" (synap ask "Eve OS vision").
   "realtime:observe",
+  // Box runner (code-runtime B0, 0356): a COMPUTER that leases its person's
+  // queued box runs (`/box-runs/*`). Never in a default bundle: the person
+  // turns it on for one computer (`machines.setRunsScripts`), and only a
+  // computer's own key is accepted by those routes.
+  "box.runner",
   // Probe key (D8). Writes made with it are marked as dogfood probes, hidden
   // from listings and swept. Declared explicitly at mint — never inferred from
   // the key prefix or hubId. A child key can only inherit it (scope subset).
@@ -281,6 +286,10 @@ export const API_KEY_SCOPES = [
 /** The scope that makes a key a probe key — see `isProbeApiKey`. */
 export const PROBE_KEY_SCOPE =
   "probe" as const satisfies (typeof API_KEY_SCOPES)[number];
+
+/** The scope a computer's key needs to lease its person's box runs. */
+export const BOX_RUNNER_SCOPE =
+  "box.runner" as const satisfies (typeof API_KEY_SCOPES)[number];
 
 export type ApiKeyScope = (typeof API_KEY_SCOPES)[number];
 
@@ -313,6 +322,8 @@ export const PRIVILEGED_MINT_SCOPES = [
   "setup.agent",
   // Elevated Hub Protocol access.
   "hub-protocol.admin",
+  // Leases a person's scripts and their parameters (the box runner).
+  "box.runner",
 ] as const satisfies ReadonlyArray<ApiKeyScope>;
 
 export function isPrivilegedMintScope(scope: string): boolean {

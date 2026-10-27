@@ -14,7 +14,12 @@
 
 import { describe, it, expect, vi } from "vitest";
 
-type Row = { id: string; kind: string; createdAt: Date };
+type Row = {
+  id: string;
+  kind: string;
+  createdAt: Date;
+  executionMode?: string;
+};
 
 const at = (n: number) => new Date(Date.UTC(2026, 0, 1, 0, 0, n));
 const ROWS: Row[] = [
@@ -27,6 +32,8 @@ const ROWS: Row[] = [
   { id: "declarative-1", kind: "declarative", createdAt: at(999) },
   { id: "rule-1", kind: "instruction", createdAt: at(20) },
   { id: "code-1", kind: "code", createdAt: at(10) },
+  // A box script: a code skill the IS must never load as an isolate tool.
+  { id: "box-1", kind: "code", createdAt: at(11), executionMode: "box" },
   // More than one page of instruction rows: paging must reach every one.
   ...Array.from({ length: 101 }, (_, i) => ({
     id: `instruction-${i}`,
@@ -88,7 +95,8 @@ describe("hub skills.getSkills — the kind filter runs before the limit", () =>
     expect(ids).toContain("code-1");
     // Every instruction row, across more than one page.
     expect(ids.filter((id) => id.startsWith("instruction-"))).toHaveLength(101);
-    // Never a builtin/declarative row.
+    // Never a box script, never a builtin/declarative row.
+    expect(ids).not.toContain("box-1");
     expect(
       out.every((r) => r.kind === "code" || r.kind === "instruction")
     ).toBe(true);
