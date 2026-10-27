@@ -54,6 +54,12 @@ export const ASK_LIMITS = {
   optionValueMaxChars: 500,
   /** An option's one-line imperative consequence ("→ creates a positioning note"). */
   optionDescriptionMaxChars: 140,
+  /** An option's one short fact to weigh before picking it ("Skips 1,284 tests"). */
+  optionCautionMaxChars: 60,
+  /** A choose option's follow-up question ("Which environment?"). */
+  followUpPromptMaxChars: 120,
+  /** A follow-up offers 2 to this many options. */
+  followUpOptionsMax: 4,
   answerTextMaxChars: 2000,
   /** JSON-serialized form values, in UTF-8 bytes. */
   formValuesMaxBytes: 8 * 1024,
@@ -96,11 +102,20 @@ export const AskOptionSchema = z.object({
   label: z.string().min(1).max(ASK_LIMITS.optionLabelMaxChars),
   /** Machine value; absent ⇒ the label IS the value. */
   value: z.string().max(ASK_LIMITS.optionValueMaxChars).optional(),
+  /**
+   * A service id from service-marks (github, slack, linear…), resolved by
+   * `resolveServiceMark`; an unknown id draws NOTHING.
+   */
   icon: z.string().max(64).optional(),
   /** The AI's recommended answer — at most ONE per ask. */
   recommended: z.boolean().optional(),
   /** One-line imperative consequence of choosing this answer. */
   description: z.string().max(ASK_LIMITS.optionDescriptionMaxChars).optional(),
+  /**
+   * One short fact to weigh before picking it ("Skips 1,284 tests"). Drawn as
+   * a warning chip.
+   */
+  caution: z.string().min(1).max(ASK_LIMITS.optionCautionMaxChars).optional(),
 });
 export type AskOption = z.infer<typeof AskOptionSchema>;
 
@@ -110,6 +125,41 @@ export function atMostOneRecommended(
 ): boolean {
   return options.filter((c) => c.recommended === true).length <= 1;
 }
+
+/**
+ * A follow-up option: a plain {@link AskOptionSchema} option. A `followUp` of
+ * its own is REFUSED at the parse, never silently stripped: the tree goes ONE
+ * level deep.
+ */
+const AskFollowUpOptionSchema = AskOptionSchema.extend({
+  followUp: z.never({ message: "a follow-up goes one level deep" }).optional(),
+});
+
+/**
+ * The question a choose option opens once picked (the decision tree, one
+ * level): its own prompt and 2–4 plain options, at most one recommended.
+ */
+export const AskFollowUpSchema = z.object({
+  prompt: z.string().min(1).max(ASK_LIMITS.followUpPromptMaxChars),
+  options: z
+    .array(AskFollowUpOptionSchema)
+    .min(2)
+    .max(ASK_LIMITS.followUpOptionsMax)
+    .refine(atMostOneRecommended, {
+      message: "at most one follow-up option may be recommended",
+    }),
+});
+export type AskFollowUp = z.infer<typeof AskFollowUpSchema>;
+
+/**
+ * A choose ask's option: an {@link AskOptionSchema} option that may open ONE
+ * follow-up. Only the choose arm carries it, so capture's chips and the
+ * answer's echo stay flat and the nesting cannot recurse.
+ */
+export const AskChooseOptionSchema = AskOptionSchema.extend({
+  followUp: AskFollowUpSchema.optional(),
+});
+export type AskChooseOption = z.infer<typeof AskChooseOptionSchema>;
 
 /** The identity an option is matched by: its value, else its label. */
 export function askOptionKey(option: {
@@ -435,13 +485,22 @@ export const AskLookedAtRefSchema = z.object({
 });
 export type AskLookedAtRef = z.infer<typeof AskLookedAtRefSchema>;
 
-/** Shared by every mode: provenance is not a mode, it rides beside one. */
+/** How much is at stake in the answer — the ask's risk mark. */
+export const ASK_RISK_LEVELS = ["high", "medium", "low"] as const;
+export type AskRisk = (typeof ASK_RISK_LEVELS)[number];
+
+/** Shared by every mode: provenance and the risk mark are not modes, they ride beside one. */
 const lookedAtField = {
   /** At most {@link ASK_LIMITS.lookedAtMax}; more is REFUSED, never clipped. */
   lookedAt: z
     .array(AskLookedAtRefSchema)
     .max(ASK_LIMITS.lookedAtMax)
     .optional(),
+  /**
+   * How much is at stake (`askRiskView`, `./card.ts`): high and medium draw a
+   * mark, low and absent draw nothing.
+   */
+  risk: z.enum(ASK_RISK_LEVELS).optional(),
 };
 
 export const AskSchema = z.discriminatedUnion("mode", [
@@ -454,7 +513,7 @@ export const AskSchema = z.discriminatedUnion("mode", [
     mode: z.literal("choose"),
     // "At most one recommended" is a CONTRACT rule enforced at the parse.
     options: z
-      .array(AskOptionSchema)
+      .array(AskChooseOptionSchema)
       .min(1)
       .max(ASK_LIMITS.optionsMax)
       .refine(atMostOneRecommended, {
@@ -521,7 +580,12 @@ export type AskProvideRef = z.infer<typeof AskProvideRefSchema>;
 export const AskAnswerValueSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("text") }),
   z.object({ type: z.literal("confirm"), confirmed: z.boolean() }),
-  z.object({ type: z.literal("chip"), chip: AskOptionSchema }),
+  z.object({
+    type: z.literal("chip"),
+    chip: AskOptionSchema,
+    /** The picked follow-up option, when the picked option opens one. */
+    then: AskOptionSchema.optional(),
+  }),
   z.object({ type: z.literal("form"), values: AskFormValuesSchema }),
   z.object({ type: z.literal("provide"), ref: AskProvideRefSchema }),
 ]);
@@ -597,6 +661,8 @@ export type AskAnswerRefusalCode =
   | "wrong_door"
   | "type_mismatch"
   | "not_offered"
+  /** The picked option opens a follow-up, and the answer did not pick from it. */
+  | "follow_up_required"
   | "other_not_allowed"
   | "text_required"
   | "unknown_field"
@@ -696,12 +762,39 @@ export function validateAnswerAgainstAsk(
       }
       const wanted = askOptionKey(value.chip);
       const offered = ask.options.find((o) => askOptionKey(o) === wanted);
-      return offered
-        ? { ok: true, value: { type: "chip", chip: offered } }
-        : refuse(
-            "not_offered",
-            `"${value.chip.label}" is not one of the offered options.`
-          );
+      if (!offered) {
+        return refuse(
+          "not_offered",
+          `"${value.chip.label}" is not one of the offered options.`
+        );
+      }
+      // The decision tree, one level: an option that opens a follow-up needs
+      // its answer; one that opens none takes no `then`.
+      const { followUp, ...chip } = offered;
+      if (!followUp) {
+        return value.then
+          ? refuse(
+              "not_offered",
+              `"${offered.label}" asks nothing further: send the option alone.`
+            )
+          : { ok: true, value: { type: "chip", chip } };
+      }
+      if (!value.then) {
+        return refuse(
+          "follow_up_required",
+          `"${offered.label}" asks a follow-up: ${followUp.prompt}`
+        );
+      }
+      const thenKey = askOptionKey(value.then);
+      const picked = followUp.options.find((o) => askOptionKey(o) === thenKey);
+      if (!picked) {
+        return refuse(
+          "not_offered",
+          `"${value.then.label}" is not one of the follow-up's options.`
+        );
+      }
+      const { followUp: _none, ...then } = picked;
+      return { ok: true, value: { type: "chip", chip, then } };
     }
     case "form": {
       if (value.type !== "form") {
@@ -782,9 +875,14 @@ export const AskSnapshotSchema = z.object({
   prompt: z.string().max(ASK_LIMITS.promptMaxChars).optional(),
   /** The slot's `why` when it was asked (cleared by the hand-back). */
   why: z.string().max(500).optional(),
-  /** A choose's FULL option list, `recommended` flag included. */
-  options: z.array(AskOptionSchema).max(ASK_LIMITS.optionsMax).optional(),
+  /** A choose's FULL option list, `recommended` flag and follow-ups included. */
+  options: z.array(AskChooseOptionSchema).max(ASK_LIMITS.optionsMax).optional(),
   chosenKey: z.string().nullable(),
+  /**
+   * The picked FOLLOW-UP option's identity (`askOptionKey`), when the chosen
+   * option opened one: the path is `chosenKey` → `thenKey`. Absent otherwise.
+   */
+  thenKey: z.string().optional(),
   recommendedKey: z.string().nullable(),
   followedRecommendation: z.boolean().nullable(),
   lookedAt: z
@@ -834,6 +932,9 @@ export function buildAskSnapshot(
     ...(trimmedWhy ? { why: trimmedWhy.slice(0, 500) } : {}),
     ...(options ? { options: options.map((o) => ({ ...o })) } : {}),
     chosenKey,
+    ...(value?.type === "chip" && value.then
+      ? { thenKey: askOptionKey(value.then) }
+      : {}),
     recommendedKey,
     followedRecommendation,
     ...(ask.lookedAt?.length
@@ -890,7 +991,11 @@ export function summarizeAnswer(
     case "confirm":
       return withNote(value.confirmed ? "Yes" : "No");
     case "chip":
-      return withNote(value.chip.label);
+      return withNote(
+        value.then
+          ? `${value.chip.label} → ${value.then.label}`
+          : value.chip.label
+      );
     case "form": {
       const labels = new Map(
         ask?.mode === "form"
@@ -1059,6 +1164,8 @@ export {
   askRowRegion,
   askOptionChips,
   askOptionForChip,
+  followUpChips,
+  askRiskView,
   actView,
   askRecommendationOutcome,
   type AskRecommendationOutcome,
