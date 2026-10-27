@@ -1891,6 +1891,30 @@ export function resolveSignInWayLabel(
 }
 
 /**
+ * Where a key is used — the doors a person picks on the New key page, in
+ * words (`@synap-core/types/grants` `KEY_USES`, stored on a template as
+ * `grant_roles.uses`). The person never sees a scope token: each use names
+ * the scopes it opens, and the mint door derives them (`scopesForKey`).
+ */
+export const KEY_USE_LABELS = {
+  hub: "A website or app (Hub API)",
+  mcp: "An AI client over MCP",
+  n8n: "n8n",
+  "n8n-analyze": "AI analysis in n8n",
+  realtime: "Live updates (realtime)",
+  chat: "Chat streaming",
+  skills: "Skills",
+} as const;
+
+export function resolveKeyUseLabel(use: string | null | undefined): string {
+  if (!use?.trim()) return "";
+  return (
+    (KEY_USE_LABELS as Readonly<Record<string, string>>)[use.trim()] ??
+    humanizeToken(use)
+  );
+}
+
+/**
  * CAPTURE CHIP states — where one record a capture proposed stands, as the word
  * beside its mark.
  *
