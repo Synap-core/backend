@@ -17,7 +17,11 @@ import {
   attachParentSessionIds,
 } from "../../../services/focus-sessions/parent-lineage.js";
 import { attachTriage } from "../../../services/focus-sessions/triage.js";
-import type { TerminalSessionStatus } from "../../../services/focus-sessions/session-statuses.js";
+import type {
+  SessionStatus,
+  TerminalSessionStatus,
+} from "../../../services/focus-sessions/session-statuses.js";
+import { sessionListConditions } from "../../../services/focus-sessions/session-list-conditions.js";
 import type { ExpectedOutput, SessionCriterion } from "@synap/playbooks";
 import { requestClientKey } from "../../../services/focus-sessions/resolve-work-session.js";
 import { refuseUndeclaredArgs } from "../undeclared-args.js";
@@ -32,8 +36,6 @@ import { SESSION_TITLE_MAX } from "@synap-core/types/focus-sessions";
 import {
   SESSION_KINDS,
   attachSessionKind,
-  sessionKindWhere,
-  sessionAutomationWhere,
 } from "../../../services/focus-sessions/session-kind.js";
 import {
   ok,
@@ -796,52 +798,17 @@ export const sessionHandlers: McpHandlerMap = {
     const { toolName, args, userId, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     const statusArg = (args.status as string | undefined) ?? "open";
-    const conditions = [eq(focusSessions.userId, userId)];
-    if (statusArg === "open") {
-      conditions.push(
-        inArray(focusSessions.status, [...OPEN_SESSION_STATUSES])
-      );
-    } else if (statusArg !== "all") {
-      // MCP schemas are ADVISORY — nothing validates `status` server-side, so
-      // an off-enum value ("done", "completed") would silently match zero rows
-      // instead of telling the agent what it may ask for.
-      if (!(SESSION_STATUSES as readonly string[]).includes(statusArg)) {
-        return ok({
-          error: `Unknown session status '${statusArg}'. Valid values: ${SESSION_STATUSES.join(", ")}, plus 'open' (any non-terminal) and 'all'.`,
-        });
-      }
-      conditions.push(
-        eq(
-          focusSessions.status,
-          statusArg as (typeof focusSessions.$inferSelect)["status"]
-        )
-      );
-    }
-    // The URL lens auto-injects workspaceId/projectId — honoured as filters,
-    // never as an authorization boundary (userId above is the floor).
-    if (typeof args.workspaceId === "string" && args.workspaceId) {
-      conditions.push(eq(focusSessions.workspaceId, args.workspaceId));
-    }
-    if (typeof args.projectId === "string" && args.projectId) {
-      conditions.push(eq(focusSessions.projectId, args.projectId));
-    }
-    if (typeof args.subjectEntityId === "string" && args.subjectEntityId) {
-      conditions.push(eq(focusSessions.subjectEntityId, args.subjectEntityId));
-    }
-    // A track's sessions — the filter the schema never offered, so a caller
-    // that passed `trackId` got every session back, unfiltered.
-    if (typeof args.trackId === "string" && args.trackId) {
-      conditions.push(eq(focusSessions.trackId, args.trackId));
-    }
-    // Flow DEFINITION filters — the same two the tRPC and Hub REST doors take.
-    // Each names a definition, never one execution. Pair with kind 'run' or
-    // 'all': every flow-linked row classifies as a run, so under 'work' either
-    // filter alone returns nothing.
-    if (typeof args.playbookId === "string" && args.playbookId) {
-      conditions.push(eq(focusSessions.playbookId, args.playbookId));
-    }
-    if (typeof args.automationId === "string" && args.automationId) {
-      conditions.push(sessionAutomationWhere(args.automationId));
+    // MCP schemas are ADVISORY — nothing validates `status` server-side, so
+    // an off-enum value ("done", "completed") would silently match zero rows
+    // instead of telling the agent what it may ask for.
+    if (
+      statusArg !== "open" &&
+      statusArg !== "all" &&
+      !(SESSION_STATUSES as readonly string[]).includes(statusArg)
+    ) {
+      return ok({
+        error: `Unknown session status '${statusArg}'. Valid values: ${SESSION_STATUSES.join(", ")}, plus 'open' (any non-terminal) and 'all'.`,
+      });
     }
     // Population lens (`services/focus-sessions/session-kind.ts`). MCP schemas
     // are ADVISORY — nothing validates args server-side — so an off-enum value
@@ -849,16 +816,61 @@ export const sessionHandlers: McpHandlerMap = {
     // Default `all`, like the Hub REST door and unlike tRPC's `work`: an agent
     // listing sessions wants the runs and write receipts it just opened.
     const kindArg = (args.kind as string | undefined) ?? "all";
-    if (kindArg !== "all") {
-      if (!(SESSION_KINDS as readonly string[]).includes(kindArg)) {
-        return ok({
-          error: `Unknown session kind '${kindArg}'. Valid values: ${SESSION_KINDS.join(", ")}, plus 'all'.`,
-        });
-      }
-      conditions.push(
-        sessionKindWhere(kindArg as (typeof SESSION_KINDS)[number])
-      );
+    if (
+      kindArg !== "all" &&
+      !(SESSION_KINDS as readonly string[]).includes(kindArg)
+    ) {
+      return ok({
+        error: `Unknown session kind '${kindArg}'. Valid values: ${SESSION_KINDS.join(", ")}, plus 'all'.`,
+      });
     }
+    const idArg = (v: unknown) => (typeof v === "string" && v ? v : undefined);
+    const subjectEntityId = idArg(args.subjectEntityId);
+    // The subject predicate compares as text, so a malformed id would match
+    // nothing instead of failing: say so.
+    if (subjectEntityId && !UUID_RE.test(subjectEntityId)) {
+      return ok({
+        error: `subjectEntityId is not a valid id: ${subjectEntityId}`,
+      });
+    }
+    // THE session WHERE (`sessionListConditions`), shared with tRPC
+    // `focusSessions.list` and Hub REST `GET /focus-sessions` — this door used
+    // to hand-write its own copy. What differs is only what it passes:
+    //   - the floor: owner-only (`roster: false`), as every agent door reads
+    //     (decision C v1, `rosterReadFor`), now with the key's grant ANDed by
+    //     `sessionReadableWhere` like every other session read;
+    //   - the agent-door defaults: every lens (`lens: "all"` — no triage
+    //     narrow, an agent looks for the drafts it just opened) and kind `all`;
+    //   - the URL lens auto-injects workspaceId/projectId — honoured as
+    //     lenses, never as an authorization boundary.
+    // `subjectEntityId` now reads the ONE subject predicate the Hub door
+    // reads (`sessionSubjectWhere`): sessions whose subject is the thing, or
+    // worker sessions that target it.
+    const conditions = sessionListConditions({
+      userId,
+      scope: {
+        workspaceLens: idArg(args.workspaceId),
+        projectLens: idArg(args.projectId),
+      },
+      status:
+        statusArg === "open"
+          ? [...OPEN_SESSION_STATUSES]
+          : (statusArg as SessionStatus | "all"),
+      lens: "all",
+      kind: kindArg as (typeof SESSION_KINDS)[number] | "all",
+      // Flow DEFINITION filters — the same two the tRPC and Hub REST doors
+      // take. Each names a definition, never one execution. Pair with kind
+      // 'run' or 'all': every flow-linked row classifies as a run.
+      flow: {
+        playbookId: idArg(args.playbookId),
+        automationId: idArg(args.automationId),
+      },
+      trackId: idArg(args.trackId),
+      subject: subjectEntityId
+        ? { kind: "entities", entityIds: [subjectEntityId] }
+        : undefined,
+      roster: false,
+    });
     // PAGING (plan 9992207a, c-paging): `offset` walks past the 50-row page;
     // one row past it tells whether another page exists. `id` breaks ties so
     // two sessions started in the same instant never swap between pages.

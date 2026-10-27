@@ -47,6 +47,7 @@ import {
   artifacts,
   automationRuns,
   automations,
+  boxRuns,
   cellInstances,
   channels,
   documents,
@@ -202,6 +203,9 @@ export const GRANT_READ_SPECS = new Map<object, GrantReadSpec>([
   [automationRuns, spec("automation", automationRuns)],
   [playbooks, spec("playbook", playbooks)],
   [playbookRuns, spec("playbook", playbookRuns)],
+  // A box run (0356) is a run of a box skill: a grant on SKILLS reads them,
+  // as an automation's runs follow the automation.
+  [boxRuns, spec("skill", boxRuns)],
   [links, spec("link", links)],
   [tools, spec("tool", tools)],
   [mcpServers, spec("tool", mcpServers)],
