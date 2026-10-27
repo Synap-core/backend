@@ -16,7 +16,9 @@ import { AppConsent } from "./ConsentForm";
 import {
   actsAsHeadline,
   allowBlockedReason,
+  allowNewAsks,
   initialSelection,
+  newAsks,
   SPACE_REACH_NOTE,
   toggle,
   type OfferedPermission,
@@ -80,6 +82,7 @@ const html = (selection: Selection, customize = true, app: App = APP) =>
         onToggleSection={() => {}}
         onSetLevel={() => {}}
         onToggleObjectSpace={() => {}}
+        onAllowNewAsks={() => {}}
         customize={customize}
         onCustomize={() => {}}
         onSpaceCreated={() => {}}
@@ -348,5 +351,90 @@ describe("AppConsent rows (default view)", () => {
     expect(o).toContain("Archive or approve, as you");
     expect(o).toContain("Archive posts");
     expect(selectedLevel(levelGroup(o, "Posts: access"))).toEqual(["Edit"]);
+  });
+});
+
+describe("AppConsent: a re-consent says what is new, first", () => {
+  const CRM_S = {
+    workspaceId: "crm",
+    workspaceName: "CRM",
+    templateSlug: "crm",
+  };
+  /** crm.synap.live re-consented on 2026-10-26: four asks added. */
+  const CRM: App = {
+    ...APP,
+    domain: "crm.synap.live",
+    permissions: [
+      "entity.person.read",
+      "entity.person.update",
+      "entity.company.read",
+      "entity.company.update",
+      "playbook.run",
+    ].map((permission) => ({
+      permission,
+      workspaces: [BRAND_S, CRM_S],
+      reason: permission === "playbook.run" ? "To start the list." : null,
+    })) as App["permissions"],
+    approved: [
+      { permission: "entity.person.read", workspaceId: "crm" },
+      { permission: "entity.company.read", workspaceId: "crm" },
+    ],
+    templates: ["crm"],
+  };
+  const before = initialSelection(CRM.permissions, CRM.approved, CRM.templates);
+  const asks = newAsks(CRM.permissions, CRM.approved, CRM.templates);
+  const after = allowNewAsks(before, CRM.permissions, asks, true);
+  /** The new-asks block, or "" when it is not on screen. */
+  const block = (out: string) => {
+    const at = out.indexOf("data-new-asks");
+    return at === -1 ? "" : out.slice(at, out.indexOf("</section>", at));
+  };
+  /** The switch's `<label>`: HeroUI marks it `data-selected` when on. */
+  const toggleOf = (b: string) => {
+    const at = b.indexOf("Allow the new ones");
+    expect(at, "no switch").toBeGreaterThan(-1);
+    const open = b.lastIndexOf("<label", at);
+    return b.slice(open, b.indexOf(">", open) + 1);
+  };
+
+  it("names each new ask in words, with its spaces and reason, above the rows; the switch is Off", () => {
+    const out = html(before, false, CRM);
+    const b = block(out);
+    expect(b).toContain("New since you last allowed");
+    expect(b).toContain("Edit people");
+    expect(b).toContain("Edit companies");
+    expect(b).toContain("playbook.run");
+    expect(b).toContain("To start the list.");
+    expect(b).toContain("in CRM");
+    expect(b).not.toContain("entity.person.read");
+    expect(toggleOf(b)).not.toContain('data-selected="true"');
+    // First, before the rows.
+    expect(out.indexOf("data-new-asks")).toBeLessThan(
+      out.indexOf('data-object="entity.person"')
+    );
+    expect(selectedLevel(levelGroup(out, "People: access"))).toEqual(["View"]);
+  });
+
+  it("switched on: the same selection the rows read, so People and Companies say Edit", () => {
+    const out = html(after, false, CRM);
+    expect(toggleOf(block(out))).toContain('data-selected="true"');
+    expect(selectedLevel(levelGroup(out, "People: access"))).toEqual(["Edit"]);
+    expect(selectedLevel(levelGroup(out, "Companies: access"))).toEqual([
+      "Edit",
+    ]);
+    expect(selectedLevel(levelGroup(out, "Let it decide for you"))).toEqual([
+      "On",
+    ]);
+  });
+
+  it("a first consent shows no such block", () => {
+    const first: App = { ...CRM, approved: [] };
+    const out = html(
+      initialSelection(first.permissions, [], first.templates),
+      false,
+      first
+    );
+    expect(block(out)).toBe("");
+    expect(out).not.toContain("New since you last allowed");
   });
 });
