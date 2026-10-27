@@ -1,12 +1,13 @@
 /**
  * A `query` step whose filter cannot be read FAILS; it never matches everything.
  *
- * The parser used to read a string filter that did not JSON-parse after
- * templating as "no filter" (`catch { filterObj = undefined }`), so the step
- * returned EVERY row of the kind and reported success. Feed that into an
- * `entity_update` and a typo updates the whole kind. A failed read is not an
- * empty filter: the step now throws `QueryFilterParseError`, which the step
- * runner records as `failed` with its message.
+ * Read as "no filter", an unreadable filter returns EVERY row of the kind and
+ * reports success; feed that into an `entity_update` and a typo updates the
+ * whole kind. A failed read is not an empty filter: the step throws
+ * `QueryFilterParseError`, which the step runner records as `failed` with its
+ * message. Unreadable = a string that is not a JSON object after templating,
+ * a template that renders to nothing, or a value that is neither an object nor
+ * a string.
  *
  * The db is mocked, so this locks control flow: a bad filter rejects BEFORE any
  * SELECT is issued; an absent or empty filter still runs (no filter is a real
@@ -86,16 +87,34 @@ describe("query step: a filter that cannot be read fails the step", () => {
     }
   });
 
-  it("no filter is still no filter: absent, empty and all-missing templates run unfiltered", async () => {
+  it('a template that renders to nothing rejects: a missing key is not "no filter"', async () => {
+    // `resolveTemplate` renders a missing `{{trigger.payload.filter}}` as "".
+    await expect(run("{{trigger.payload.filter}}")).rejects.toThrow(
+      /is empty after templating.*unfiltered/
+    );
+    expect(() =>
+      parseQueryFilterConditions(
+        "{{trigger.payload.a}}{{trigger.payload.b}}",
+        ctx()
+      )
+    ).toThrow(QueryFilterParseError);
+    expect(mocks.selects).toBe(0);
+  });
+
+  it("a filter that is neither an object nor a string rejects", () => {
+    for (const filter of [[], [{ stage: "won" }], 42, 0, true, false]) {
+      expect(() => parseQueryFilterConditions(filter, ctx())).toThrow(
+        /must be an object or a JSON string/
+      );
+    }
+  });
+
+  it("no filter is still no filter: absent and empty run unfiltered", async () => {
     await expect(run(undefined)).resolves.toEqual({ entities: [], count: 0 });
     await expect(run("")).resolves.toEqual({ entities: [], count: 0 });
-    // A whole-filter template with nothing behind it renders "" (the
-    // template engine's "no steer given"), which is no filter, not a typo.
-    await expect(run("{{trigger.payload.filter}}")).resolves.toEqual({
-      entities: [],
-      count: 0,
-    });
-    expect(mocks.selects).toBe(3);
+    expect(parseQueryFilterConditions(null, ctx())).toEqual([]);
+    expect(parseQueryFilterConditions("   ", ctx())).toEqual([]);
+    expect(mocks.selects).toBe(2);
   });
 
   it("a filter that parses runs the query with its conditions", async () => {
