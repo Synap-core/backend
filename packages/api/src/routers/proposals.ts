@@ -1697,6 +1697,7 @@ export const proposalsRouter = router({
             targetType: proposal.targetType,
             targetId: proposal.targetId,
             sessionId: proposal.sessionId,
+            proposalType: proposal.proposalType,
           },
           destWorkspaceId: input.workspaceId,
           userId,
@@ -1778,6 +1779,7 @@ export const proposalsRouter = router({
             targetType: proposal.targetType,
             targetId: proposal.targetId,
             sessionId: proposal.sessionId,
+            proposalType: proposal.proposalType,
           },
           userId,
           action: "reject",
@@ -1929,6 +1931,7 @@ export const proposalsRouter = router({
           targetId: true,
           sessionId: true,
           projectId: true,
+          proposalType: true,
         },
       });
       // A Library proposal is its person's alone: anyone else gets NOT_FOUND.
@@ -1947,6 +1950,7 @@ export const proposalsRouter = router({
           targetType: proposal.targetType,
           targetId: proposal.targetId,
           sessionId: proposal.sessionId,
+          proposalType: proposal.proposalType,
         },
         userId,
         action: "reject",
@@ -2017,6 +2021,7 @@ export const proposalsRouter = router({
           targetId: true,
           sessionId: true,
           projectId: true,
+          proposalType: true,
         },
       });
       // A Library proposal is its person's alone: anyone else gets NOT_FOUND.
@@ -2035,6 +2040,7 @@ export const proposalsRouter = router({
           targetType: proposal.targetType,
           targetId: proposal.targetId,
           sessionId: proposal.sessionId,
+          proposalType: proposal.proposalType,
         },
         userId,
         action: "reject",
@@ -2086,6 +2092,7 @@ export const proposalsRouter = router({
           targetId: true,
           sessionId: true,
           projectId: true,
+          proposalType: true,
         },
       });
       // A Library proposal is its person's alone: anyone else gets NOT_FOUND.
@@ -2128,6 +2135,7 @@ export const proposalsRouter = router({
           targetType: proposal.targetType,
           targetId: proposal.targetId,
           sessionId: proposal.sessionId,
+          proposalType: proposal.proposalType,
         },
         userId,
         action: "reopen",
@@ -3520,6 +3528,7 @@ export const proposalsRouter = router({
             targetType: target.targetType,
             targetId: target.targetId,
             sessionId: target.sessionId,
+            proposalType: target.proposalType,
           },
           userId,
           action: "reject",

@@ -8066,6 +8066,43 @@ export interface BranchDecision {
 	suggestedPurpose?: string;
 }
 /**
+ * REACH — what something that acts on its own can touch outside the pod, and
+ * the ONE set of words every surface says it with.
+ *
+ * Two readers share these words: the marketplace preflight (what a package
+ * brings: "Can reach: api.acme.test", "Uses your existing Gmail connection")
+ * and the review of a mixed proposal (what each part that acts on its own can
+ * reach once approved). The pod's review projection measures a part's reach
+ * (`buildProposalGraph`, `ProposalReviewGraph.automations[].reach` and
+ * `.updates[].reach`); the web desk, the phone and pod-admin draw it through
+ * {@link partReachWords}, so the three never say it differently.
+ *
+ * Pure and dependency-free.
+ */
+/**
+ * What a part can reach outside the pod, as the pod read it for this review.
+ *
+ * Measured, never guessed: a step the pod could not read (a verb the viewer
+ * cannot see, a URL built while it runs, another automation it starts) is
+ * COUNTED in `unreadSteps`, so a surface never turns "could not tell" into
+ * "reaches nothing". An absent `reach` on a part means the pod did not
+ * measure it (an older pod): draw nothing, never "nothing outside your pod".
+ */
+export interface ProposalPartReach {
+	/**
+	 * Hosts it may call directly: a code skill's `allowedHosts`, a fetch or
+	 * webhook step's URL host, a provider verb's fixed base URL.
+	 */
+	hosts: string[];
+	/**
+	 * Services whose EXISTING connection on this pod it uses, by name
+	 * ("Apify"): the provider a declarative verb calls through.
+	 */
+	connections: string[];
+	/** Steps whose reach could not be read. Non-zero: the lists may be short. */
+	unreadSteps: number;
+}
+/**
  * Governance grant-option derivation — "always approve for…" menu.
  *
  * A per-proposal escape hatch that turns a one-off approval decision into a
@@ -8544,6 +8581,12 @@ export interface ProposalReviewGraph {
 		bornEnabled: false;
 		description?: string;
 		name: string;
+		/**
+		 * What its steps can reach outside the pod once it runs, read the way the
+		 * runtime resolves each step (a verb → the skill that answers it).
+		 * Absent = not measured (draw nothing, never "nothing").
+		 */
+		reach?: ProposalPartReach;
 		ref: string;
 		triggerType: "cron" | "event" | "manual" | "webhook";
 	}>;
@@ -8606,6 +8649,12 @@ export interface ProposalReviewGraph {
 		}>;
 		kind: "automation" | "entity" | "playbook" | "rule" | "skill" | "view";
 		op: CompositeUpdateOperation["op"];
+		/**
+		 * What the row it rewrites can reach outside the pod (a skill that runs:
+		 * code, a provider verb, a builtin), read while the proposal is pending.
+		 * Absent = not read, or it runs nothing (an instruction).
+		 */
+		reach?: ProposalPartReach;
 		ref: string;
 		targetId: string;
 		/**
