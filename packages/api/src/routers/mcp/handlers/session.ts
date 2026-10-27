@@ -18,7 +18,11 @@ import {
 } from "../../../services/focus-sessions/parent-lineage.js";
 import { attachTriage } from "../../../services/focus-sessions/triage.js";
 import type { TerminalSessionStatus } from "../../../services/focus-sessions/session-statuses.js";
-import type { CloseQuestionDisposition } from "../../../services/messaging/room-post-kind.js";
+import {
+  CLOSE_QUESTION_DISPOSITIONS,
+  readCloseQuestionDispositions,
+  type CloseQuestionDisposition,
+} from "../../../services/messaging/room-post-kind.js";
 import type { ExpectedOutput, SessionCriterion } from "@synap/playbooks";
 import { requestClientKey } from "../../../services/focus-sessions/resolve-work-session.js";
 import { refuseUndeclaredArgs } from "../undeclared-args.js";
@@ -600,8 +604,26 @@ export const sessionHandlers: McpHandlerMap = {
   ): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
-    const { completeFocusSession, isOpenQuestionsAtCloseError } =
-      await import("../../../services/focus-sessions/complete-session.js");
+    const {
+      completeFocusSession,
+      isOpenQuestionsAtCloseError,
+      openQuestionsRefusal,
+    } = await import("../../../services/focus-sessions/complete-session.js");
+    // The executor's reader, refusing what it would drop: a word that is not
+    // `withdrawn` / `keep_as_owed` is never read as either.
+    const rawDispositions = args.questionDispositions;
+    let questionDispositions: CloseQuestionDisposition[] | undefined;
+    if (rawDispositions !== undefined) {
+      questionDispositions = readCloseQuestionDispositions(rawDispositions);
+      if (
+        !Array.isArray(rawDispositions) ||
+        questionDispositions.length !== rawDispositions.length
+      ) {
+        return ok({
+          error: `questionDispositions: each is {messageId, disposition: ${CLOSE_QUESTION_DISPOSITIONS.map((d) => `'${d}'`).join(" | ")}, note?}.`,
+        });
+      }
+    }
     let result: Awaited<ReturnType<typeof completeFocusSession>>;
     try {
       result = await completeFocusSession({
@@ -617,22 +639,15 @@ export const sessionHandlers: McpHandlerMap = {
         // tRPC / Hub PATCH doors could. Validated by the tool schema's enum,
         // which derives from TERMINAL_SESSION_STATUSES.
         terminalStatus: args.terminalStatus as TerminalSessionStatus | undefined,
-        // Shape-checked by the tool schema; the service matches each id
-        // against this agent's own open questions and ignores the rest.
-        questionDispositions: Array.isArray(args.questionDispositions)
-          ? (args.questionDispositions as CloseQuestionDisposition[])
-          : undefined,
+        // The service matches each id against this agent's own open
+        // questions and ignores the rest.
+        questionDispositions,
       });
     } catch (err) {
       // Its own questions are still open: nothing closed, and the agent is
       // handed the list and the two ways out.
       if (isOpenQuestionsAtCloseError(err)) {
-        return ok({
-          status: "refused",
-          reasonCode: err.code,
-          message: err.message,
-          openQuestions: err.openQuestions,
-        });
+        return ok(openQuestionsRefusal(err));
       }
       throw err;
     }

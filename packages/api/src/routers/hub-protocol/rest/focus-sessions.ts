@@ -62,6 +62,7 @@ import { AskAnswerValueSchema, AskSchema } from "@synap-core/types/ask";
 import {
   completeFocusSession,
   isOpenQuestionsAtCloseError,
+  openQuestionsRefusal,
 } from "../../../services/focus-sessions/complete-session.js";
 import { CLOSE_QUESTION_DISPOSITIONS } from "../../../services/messaging/room-post-kind.js";
 import { sessionGoalPayload } from "../../../services/focus-sessions/session-update-goal.js";
@@ -764,6 +765,11 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       400: { description: "Bad request", schema: ErrorSchema },
       403: { description: "Forbidden", schema: ErrorSchema },
       404: { description: "Not found", schema: ErrorSchema },
+      409: {
+        description:
+          "Refused: a terminal status, and the calling agent's own room questions are still open (openQuestions[], as /complete)",
+        schema: z.object({}).passthrough(),
+      },
       500: { description: "Internal error", schema: ErrorSchema },
     },
   });
@@ -1915,6 +1921,10 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
             return c.json({ error: `Focus session ${id} not found` }, 404);
           }
         } catch (err) {
+          // The same refusal `/complete` answers: the agent is handed the list.
+          if (isOpenQuestionsAtCloseError(err)) {
+            return c.json(openQuestionsRefusal(err), 409);
+          }
           const code = (err as { code?: string }).code;
           const message = err instanceof Error ? err.message : String(err);
           return c.json({ error: message }, code === "FORBIDDEN" ? 403 : 409);
@@ -2415,15 +2425,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     } catch (err) {
       // The calling agent left its own questions open: nothing closed.
       if (isOpenQuestionsAtCloseError(err)) {
-        return c.json(
-          {
-            status: "refused" as const,
-            reasonCode: err.code,
-            error: err.message,
-            openQuestions: err.openQuestions,
-          },
-          409
-        );
+        return c.json(openQuestionsRefusal(err), 409);
       }
       const code = (err as { code?: unknown })?.code;
       if (code === "FORBIDDEN") {

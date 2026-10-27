@@ -39,11 +39,12 @@
  * ── WHAT HAPPENS TO ROOM QUESTIONS ──────────────────────────────────────────
  * Every exit stamps the room's still-open agent questions `closed:
  * session_ended` (never deleted): they leave needs-you and no later reply in
- * the room reads as their answer. Before that, an AGENT closing as `closed` /
- * `failed` must say what becomes of each question IT asked
- * (`questionDispositions`), or the close is refused with the list: an agent
- * that walks away from its own questions leaves the person answering into a
- * void. A person's close, a cancel and the reapers are never refused.
+ * the room reads as their answer. A room another session that has not ended
+ * still uses is left alone: its questions may be that work's. Before that, an
+ * AGENT closing as `closed` / `failed` must say what becomes of each question
+ * IT asked (`questionDispositions`), or the close is refused with the list:
+ * an agent that walks away from its own questions leaves the person answering
+ * into a void. A person's close, a cancel and the reapers are never refused.
  */
 import {
   db,
@@ -53,6 +54,8 @@ import {
   proposals,
   ProposalStatus,
   eq,
+  ne,
+  notInArray,
   and,
   asc,
   desc,
@@ -87,7 +90,10 @@ import {
   FOCUS_SESSION_CLOSE_ACTION,
   FOCUS_SESSION_CLOSED_EVENT_TYPE,
 } from "./close-event.js";
-import { isTerminalSessionStatus } from "./session-statuses.js";
+import {
+  isTerminalSessionStatus,
+  TERMINAL_SESSION_STATUSES,
+} from "./session-statuses.js";
 import {
   stopSessionWork,
   cancelRecordMetadataSql,
@@ -183,12 +189,35 @@ export function openQuestionsAtCloseError(
   return Object.assign(
     new Error(
       `Not closed: ${questions.length} question(s) you asked the person in this session's room are still open — ${list}. ` +
-        "Settle each one before closing: if they answered you in chat, relay their exact words with synap_relay_answer; " +
-        "otherwise close again with questionDispositions — 'withdrawn' (with a note) when your work overtook it, " +
-        "'keep_as_owed' when they still owe you the answer after this session."
+        "Settle each: relay the person's exact words (relay_answer), or close through the complete door with " +
+        "questionDispositions (withdrawn with a note / keep_as_owed)."
     ),
     { code: OPEN_QUESTIONS_AT_CLOSE, openQuestions: questions }
   );
+}
+
+/**
+ * The refusal body every close door answers {@link openQuestionsAtCloseError}
+ * with (Hub `/complete`, Hub PATCH to a terminal status, MCP
+ * `synap_complete_session`): one shape, whichever door the agent closed by.
+ */
+export function openQuestionsRefusal(
+  err: Error & {
+    code: typeof OPEN_QUESTIONS_AT_CLOSE;
+    openQuestions: OpenQuestionAtClose[];
+  }
+): {
+  status: "refused";
+  reasonCode: typeof OPEN_QUESTIONS_AT_CLOSE;
+  error: string;
+  openQuestions: OpenQuestionAtClose[];
+} {
+  return {
+    status: "refused",
+    reasonCode: err.code,
+    error: err.message,
+    openQuestions: err.openQuestions,
+  };
 }
 
 export function isOpenQuestionsAtCloseError(err: unknown): err is Error & {
@@ -228,14 +257,39 @@ export function planQuestionDispositions(
   const uncovered: OpenQuestionAtClose[] = [];
   for (const q of open) {
     const d = decided.get(q.messageId);
-    if (!d) uncovered.push(q);
-    else if (d.disposition === "withdrawn") {
+    if (d?.disposition === "withdrawn") {
       // The stamp's bound (`QuestionClosedSchema.note`).
       const note = d.note?.trim().slice(0, ASK_LIMITS.promptMaxChars);
       withdrawn.push({ question: q, ...(note ? { note } : {}) });
-    } else keep.push(q);
+    } else if (d?.disposition === "keep_as_owed") keep.push(q);
+    // No word, or a word that is neither: never read as "keep".
+    else uncovered.push(q);
   }
   return { uncovered, withdrawn, keep, unmatched };
+}
+
+/**
+ * Does another session that has not ended still use this room? Then the
+ * room's open questions are not this session's to settle: the close neither
+ * stamps them nor refuses over them (the guard migration 0358 applied to the
+ * sessions that ended before the rule).
+ */
+async function roomUsedByAnotherLiveSession(
+  channelId: string,
+  sessionId: string
+): Promise<boolean> {
+  const [other] = await db
+    .select({ id: focusSessions.id })
+    .from(focusSessions)
+    .where(
+      and(
+        eq(focusSessions.channelId, channelId),
+        ne(focusSessions.id, sessionId),
+        notInArray(focusSessions.status, [...TERMINAL_SESSION_STATUSES])
+      )
+    )
+    .limit(1);
+  return !!other;
 }
 
 /** The agent's own still-open questions in a room, oldest first. */
@@ -458,6 +512,9 @@ export async function completeFocusSession(
   // proposal and changes nothing. A cancel is exempt — abandoning the work is
   // the disposition — and so is every close no agent made.
   const questionsOf = params.agentUserId ?? params.approvedCloseOf;
+  const roomShared = session.channelId
+    ? await roomUsedByAnotherLiveSession(session.channelId, sessionId)
+    : false;
   const agentQuestions =
     questionsOf && session.channelId && terminalStatus !== "cancelled"
       ? planQuestionDispositions(
@@ -467,6 +524,7 @@ export async function completeFocusSession(
       : null;
   if (
     params.agentUserId &&
+    !roomShared &&
     agentQuestions &&
     agentQuestions.uncovered.length > 0
   ) {
@@ -680,12 +738,14 @@ export async function completeFocusSession(
           },
         });
       }
-      closedQuestions = (
-        await closeOpenRoomQuestions(tx, {
-          channelId: session.channelId,
-          closed: { reason: "session_ended", at },
-        })
-      ).length;
+      if (!roomShared) {
+        closedQuestions = (
+          await closeOpenRoomQuestions(tx, {
+            channelId: session.channelId,
+            closed: { reason: "session_ended", at },
+          })
+        ).length;
+      }
     }
 
     return await tx
