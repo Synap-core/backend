@@ -602,3 +602,48 @@ export function aiAvailabilityBanner(
     action: copy.cta ? { kind: a.action, label: copy.cta } : null,
   };
 }
+
+// ── The AI provider choice (founder decision 2026-10-27) ────────────────────
+
+/**
+ * What a surface does about the pod's AI provider choice before an AI action
+ * (`aiProviderChoice.get` on the pod). Before a pod's first AI request a pod
+ * admin chooses Synap's AI service, which runs on DeepSeek (servers in China;
+ * the choice is the person's explicit consent to that transfer), or the pod's
+ * own provider. The Intelligence Service refuses the shared pool until then
+ * (`ai_consent_required`); this is the SAME rule read ahead, so the person
+ * meets the choice instead of a failed turn.
+ *
+ *   - `ok`           — AI may run: DeepSeek chosen, or the pod's own provider
+ *                      is ready (the IS then answers with it, choice or not).
+ *   - `choose`       — nobody chose and this viewer may: show the choice.
+ *   - `add_provider` — the admin chose their own provider and none is ready:
+ *                      open the AI provider settings to add one.
+ *   - `ask_admin`    — the viewer may not choose: ask a pod admin.
+ *   - `unknown`      — the read failed or has not landed: never block on it
+ *                      (the IS still refuses on its side), never say "ok".
+ */
+export type AiProviderChoiceGate =
+  "ok" | "choose" | "add_provider" | "ask_admin" | "unknown";
+
+export interface AiProviderChoiceGateInput {
+  choice: "deepseek" | "own_provider" | null;
+  ownProviderReady: boolean;
+  mayChoose: boolean;
+}
+
+export function resolveAiProviderChoiceGate(
+  read: AiProviderChoiceGateInput | null | undefined
+): AiProviderChoiceGate {
+  if (!read) return "unknown";
+  if (read.ownProviderReady || read.choice === "deepseek") return "ok";
+  if (!read.mayChoose) return "ask_admin";
+  return read.choice === "own_provider" ? "add_provider" : "choose";
+}
+
+/** Is this wire refusal the provider choice (open the choice, not a banner)? */
+export function isAiProviderChoiceRefusal(
+  code: string | null | undefined
+): boolean {
+  return code === "ai_consent_required";
+}
