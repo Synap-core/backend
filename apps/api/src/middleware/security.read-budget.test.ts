@@ -14,10 +14,7 @@
 
 import { Hono, type MiddlewareHandler } from "hono";
 import { beforeAll, describe, expect, it } from "vitest";
-import {
-  isCrudReadPath,
-  isMcpReadBody,
-} from "./rate-limit-classes.js";
+import { isCrudReadPath, isMcpReadBody } from "./rate-limit-classes.js";
 
 const WRITE_BUDGET = 3;
 const READ_BUDGET = 6;
