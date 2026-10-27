@@ -267,6 +267,19 @@ export function assessNodeRetrySafety(
       // `session_update` is idempotent for stage/grantStatus (it SETS them),
       // but `addOutput` is an unconditional read-modify-APPEND onto
       // `focus_sessions.expected_outputs` — a retry appends a duplicate row.
+      // A grade is an ATTEMPT row (`session_evaluations`), counted against the
+      // criterion's retry bound and its escalation: a retry records a second
+      // attempt for the same fact. Completing an outcome is idempotent (a done
+      // slot stays done; a claim re-claims) and stays retry-safe.
+      if (
+        outputType === "post_evidence" ||
+        outputType === "reevaluate_criterion"
+      ) {
+        return {
+          safe: false,
+          reason: `a \`${outputType}\` output records a grading ATTEMPT — a retry records a second one, counted against the criterion's retry bound`,
+        };
+      }
       if (outputType === "session_update") {
         const config = (data.config ?? {}) as Record<string, unknown>;
         if (config.addOutput) {
@@ -276,6 +289,15 @@ export function assessNodeRetrySafety(
               "a `session_update` output with `addOutput` APPENDS to expectedOutputs — a retry appends a duplicate entry",
           };
         }
+      }
+      // The trigger hop's claim dedupes the automations a fact fires, but the
+      // fact itself is an appended `events` row with no receipt.
+      if (outputType === "record_observation") {
+        return {
+          safe: false,
+          reason:
+            "a `record_observation` output appends an event row with no idempotency receipt — a retry records the fact twice",
+        };
       }
       return { safe: true };
     }

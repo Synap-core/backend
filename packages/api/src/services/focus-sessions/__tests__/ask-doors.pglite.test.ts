@@ -297,6 +297,25 @@ const CHOOSE = {
     { label: "US account", value: "us" },
   ],
 };
+/** The decision tree (AffectUI): one option opens ONE follow-up. */
+const TREE = {
+  mode: "choose",
+  risk: "high",
+  options: [
+    {
+      label: "Ship it",
+      caution: "Skips 1,284 tests",
+      followUp: {
+        prompt: "Which environment?",
+        options: [
+          { label: "Staging" },
+          { label: "Production", caution: "Live customers" },
+        ],
+      },
+    },
+    { label: "Wait" },
+  ],
+};
 const FORM = {
   mode: "form",
   form: {
@@ -473,6 +492,107 @@ describe("W2 typed ask doors", () => {
       type: "chip",
       chip: CHOOSE.options[0],
     });
+  });
+
+  // ── the decision tree (one level) + the risk mark ──────────────────────────
+
+  it("a follow-up, a caution and a risk ride the ask: declared at the PATCH, stored and read back", async () => {
+    const { sessionId } = await seedAsk(null);
+    const res = await send(app(), "PATCH", `/focus-sessions/${sessionId}`, {
+      expectedOutputs: [
+        {
+          kind: "document",
+          label: IDLE,
+          owner: "human",
+          blockedReason: "decision",
+          why: "Release the billing fix?",
+          ask: TREE,
+        },
+      ],
+    });
+    expect(res.status).toBe(200);
+    expect((await slot(sessionId, IDLE)).ask).toEqual(TREE);
+  });
+
+  it("a second level of follow-up is REFUSED at the PATCH — nothing stored", async () => {
+    const { sessionId } = await seedAsk(null);
+    const deep = {
+      ...TREE,
+      options: [
+        {
+          label: "Ship it",
+          followUp: {
+            prompt: "Which environment?",
+            options: [
+              {
+                label: "Staging",
+                followUp: {
+                  prompt: "Deeper?",
+                  options: [{ label: "A" }, { label: "B" }],
+                },
+              },
+              { label: "Production" },
+            ],
+          },
+        },
+      ],
+    };
+    const res = await send(app(), "PATCH", `/focus-sessions/${sessionId}`, {
+      expectedOutputs: [
+        {
+          kind: "document",
+          label: IDLE,
+          owner: "human",
+          blockedReason: "decision",
+          ask: deep,
+        },
+      ],
+    });
+    expect(res.status).toBe(400);
+    expect((await slot(sessionId, IDLE)).ask).toBeUndefined();
+  });
+
+  it("the answer records the path: chip → then on answer.value, the snapshot and the room line", async () => {
+    const { sessionId, channelId } = await seedAsk(TREE);
+    const res = await answer(sessionId, {
+      value: {
+        type: "chip",
+        chip: { label: "Ship it" },
+        then: { label: "Production" },
+      },
+    });
+    expect(res.status).toBe(200);
+    const s = await slot(sessionId);
+    const stored = s.answer as {
+      text: string;
+      value: Record<string, unknown>;
+      askSnapshot: { chosenKey: string; thenKey?: string };
+    };
+    expect(stored.value).toEqual({
+      type: "chip",
+      chip: { label: "Ship it", caution: "Skips 1,284 tests" },
+      then: { label: "Production", caution: "Live customers" },
+    });
+    expect(stored.text).toBe("Ship it → Production");
+    expect(stored.askSnapshot).toMatchObject({
+      chosenKey: "Ship it",
+      thenKey: "Production",
+    });
+    expect((await roomMessages(channelId)).map((m) => m.content)).toEqual([
+      "Ship it → Production",
+    ]);
+  });
+
+  it("a pick that opens a follow-up, sent without its answer, is refused — 400 ask_invalid:, slot untouched", async () => {
+    const { sessionId, channelId } = await seedAsk(TREE);
+    const res = await answer(sessionId, {
+      value: { type: "chip", chip: { label: "Ship it" } },
+    });
+    expect(res.status).toBe(400);
+    const { error } = (await res.json()) as { error: string };
+    expect(error.startsWith(ASK_INVALID_PREFIX)).toBe(true);
+    expect(await roomMessages(channelId)).toHaveLength(0);
+    expect((await slot(sessionId)).answer).toBeUndefined();
   });
 
   it("a form's secret-shaped value is REDACTED in the slot, the room post and the event", async () => {

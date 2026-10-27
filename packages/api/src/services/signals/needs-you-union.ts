@@ -298,6 +298,13 @@ export interface Signal {
    */
   keptOwedAt?: string;
   /**
+   * A param slot's param (`ExpectedOutput.paramName`) — carried so a surface
+   * hands the whole row to the one card adapter (`askCardSlotOf`) and names
+   * the cause the same way the session page does. Absent on every other slot
+   * and kind.
+   */
+  paramName?: string;
+  /**
    * Decision CLASS of a `proposal-cluster` signal, carried straight off the
    * cluster (which derives it through `proposalClassFields`, the one door) —
    * and `access` on an `access-request`, which is the same decision (who may
@@ -488,6 +495,7 @@ const _KIND_SPECIFIC_SIGNAL_FIELDS = [
   "ask",
   "pendingRelay",
   "keptOwedAt",
+  "paramName",
   "class",
   "lifetimeHours",
   "reviewLater",
@@ -921,6 +929,8 @@ export interface OwedSlotSignalInput {
   pendingRelay?: SlotPendingRelay;
   /** Kept owed past its session, straight from `listOwedSlots`. */
   keptOwedAt?: string;
+  /** A param slot's param, straight from `listOwedSlots`. */
+  paramName?: string;
   /** Who asked and their name, straight from `listOwedSlots`. */
   askedBy?: string;
   askedByName?: string;
@@ -972,6 +982,8 @@ export interface OwedSlotSignalInput {
  *                                      awaiting the tap: the row's Confirm.
  *   keptOwedAt                      → `keptOwedAt` — kept past its session:
  *                                      the card's fate reads it.
+ *   paramName                       → `paramName` — the param a param slot
+ *                                      asks for; the card adapter reads it.
  *   askedBy, askedByName            → `by` — the asker as a named mark, only
  *                                      when the pod can name it
  *   askCause                        → `askCause` — what raised it when no
@@ -1017,6 +1029,7 @@ const _PROJECTED_OWED_SLOT_FIELDS = [
   "askCause",
   "needsYouClass",
   "keptOwedAt",
+  "paramName",
 ] as const satisfies ReadonlyArray<keyof OwedSlot>;
 
 const _WITHHELD_OWED_SLOT_FIELDS = [
@@ -1072,7 +1085,7 @@ function owedInstant(owedSince: string): Date {
  * WITHHELD — the per-ask disclosure belongs to the ask's OWN row, which the
  * person sees the moment the draft is accepted (answering one accepts it):
  *   kind, icon, blockedReason, why, claimedDone, criterionKey, ref, ask,
- *   pendingRelay, askedBy, askedByName, askCause, keptOwedAt →
+ *   pendingRelay, askedBy, askedByName, askCause, keptOwedAt, paramName →
  *     one row stands for N asks, and any single ask's reason/pointer/answer
  *     region on it would misdescribe the other N-1. The row is a door to the
  *     session, where every ask renders in full.
@@ -1103,6 +1116,7 @@ const _WITHHELD_DRAFT_ASK_FIELDS = [
   "askCause",
   "needsYouClass",
   "keptOwedAt",
+  "paramName",
   "sessionStatus",
   "workspaceId",
   "subjectEntityId",
@@ -1243,6 +1257,7 @@ export function signalFromOwedSlot(
     ...(row.ask ? { ask: row.ask } : {}),
     ...(row.pendingRelay ? { pendingRelay: row.pendingRelay } : {}),
     ...(row.keptOwedAt ? { keptOwedAt: row.keptOwedAt } : {}),
+    ...(row.paramName ? { paramName: row.paramName } : {}),
     ...(row.askedBy && row.askedByName
       ? {
           by: {

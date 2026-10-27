@@ -15,6 +15,12 @@
  *   - automations it created that never fired — the automation-health
  *     warden's ONE rule (`detectZeroRunAutomations`, manual and draft excluded).
  *
+ * Plus a fifth, NOT idle-gated (plan v5 F4): its open sessions whose next
+ * move is `ready_to_close` by THE next-move rule — everything declared is
+ * produced and nothing is owed — listed at once, not after a week, so work
+ * whose PRs merged today stops looking open. The PERSON's side of the same
+ * rule is the needs-you `review` population (`listSessionsAwaitingReview`).
+ *
  * Each section reads on its own; one that cannot be read is
  * `{ status: "unavailable" }`, never an empty list or a zero.
  */
@@ -27,6 +33,7 @@ import {
   inArray,
   lt,
   asc,
+  desc,
   drizzleSql,
   focusSessions,
   proposals,
@@ -39,6 +46,7 @@ import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import type { ExpectedOutput } from "@synap/playbooks";
 import { openLink } from "../../utils/deep-links.js";
 import { isOwedSlot } from "../focus-sessions/owed-outputs.js";
+import { attachNextMove } from "../focus-sessions/session-path-sections.js";
 import { slotKeyAt } from "../focus-sessions/slot-keys.js";
 import {
   detectZeroRunAutomations,
@@ -51,6 +59,8 @@ import { loadRunCounts } from "../proposals/automation-health.js";
 export const LOOSE_END_IDLE_DAYS = 7;
 /** Rows listed per section; `count` is the whole population. */
 export const LOOSE_ENDS_ITEMS = 5;
+/** Open sessions read for their next move before "at least this many". */
+export const READY_TO_CLOSE_SCAN_CAP = 50;
 /** Ended sessions read for their leftover asks before "at least this many". */
 const ENDED_SESSIONS_READ_CAP = 100;
 /** Statuses of a session still running (`stale` = running, idle 24 h). */
@@ -132,7 +142,29 @@ export interface LooseEnds {
         }>;
       }
     | Unavailable;
+  /** Its open sessions ready to close now (see {@link ReadyToClose}). */
+  readyToClose: ReadyToClose;
 }
+
+/**
+ * The calling agent's open sessions whose next move is `ready_to_close` — at
+ * once, never idle-gated.
+ */
+export type ReadyToClose =
+  | {
+      count: number;
+      /** True when the open-session scan hit its cap. */
+      countIsLowerBound: boolean;
+      items: Array<{
+        id: string;
+        title: string;
+        link: string;
+        /** Why it reads ready — the next-move rule's own sentence. */
+        reason: string;
+        close: string;
+      }>;
+    }
+  | Unavailable;
 
 const wholeDays = (from: Date, to: Date) =>
   Math.floor((to.getTime() - from.getTime()) / MS_PER_DAY);
@@ -407,6 +439,48 @@ async function readNeverFiredAutomations(
   }
 }
 
+/**
+ * The agent's open sessions ready to close by THE next-move rule
+ * (`attachNextMove` → `deriveNextMove`), never a second "done" rule. Only
+ * sessions that declared something are scanned (an empty one is `undeclared`,
+ * never ready). Never throws.
+ */
+export async function readSessionsReadyToClose(p: {
+  userId: string;
+  agentUserId: string;
+}): Promise<ReadyToClose> {
+  try {
+    const rows = await db
+      .select()
+      .from(focusSessions)
+      .where(
+        and(
+          ownAgentSessionsWhere(p.userId, p.agentUserId),
+          inArray(focusSessions.status, [...RUNNING_STATUSES]),
+          drizzleSql`jsonb_typeof(${focusSessions.expectedOutputs}) = 'array' AND jsonb_array_length(${focusSessions.expectedOutputs}) > 0`
+        )
+      )
+      // SESSION-KIND-LENS-EXEMPT: projected to {id, title, reason, close} lines for orient, never a page of session rows.
+      .orderBy(desc(focusSessions.updatedAt))
+      .limit(READY_TO_CLOSE_SCAN_CAP);
+    const moved = await attachNextMove(rows, { userId: p.userId });
+    const ready = moved.filter((r) => r.nextMove.kind === "ready_to_close");
+    return {
+      count: ready.length,
+      countIsLowerBound: rows.length >= READY_TO_CLOSE_SCAN_CAP,
+      items: ready.slice(0, LOOSE_ENDS_ITEMS).map((r) => ({
+        id: r.id,
+        title: resolveSessionTitle(r),
+        link: openLink(r.id),
+        reason: r.nextMove.reason,
+        close: `Grade it (synap_evaluate_session), then synap_complete_session {"sessionId":"${r.id}"}. If more work remains, declare it on the session instead.`,
+      })),
+    };
+  } catch (err) {
+    return unavailable("readyToClose", err);
+  }
+}
+
 /** The calling agent's loose ends. Never throws: each section reports itself. */
 export async function readLooseEnds(p: {
   userId: string;
@@ -414,12 +488,16 @@ export async function readLooseEnds(p: {
   now?: Date;
 }): Promise<LooseEnds> {
   const now = p.now ?? new Date();
-  const [sessions, asks, proposalsSection, automationsSection] =
+  const [sessions, asks, proposalsSection, automationsSection, readyToClose] =
     await Promise.all([
       readIdleSessions(p.userId, p.agentUserId, now),
       readLeftoverAsks(p.userId, p.agentUserId),
       readOldProposals(p.agentUserId, now),
       readNeverFiredAutomations(p.agentUserId, now),
+      readSessionsReadyToClose({
+        userId: p.userId,
+        agentUserId: p.agentUserId,
+      }),
     ]);
   return {
     lens: "yours",
@@ -428,5 +506,6 @@ export async function readLooseEnds(p: {
     asks,
     proposals: proposalsSection,
     automations: automationsSection,
+    readyToClose,
   };
 }

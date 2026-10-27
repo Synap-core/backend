@@ -174,6 +174,31 @@ export interface StartHere {
       }
     | StartHereUnavailable;
   /**
+   * The OPEN GOALS (tracks in a live status) the caller can see — the
+   * project's when orient is scoped to one (`lens: "project"`), else pod-wide.
+   * Newest activity first; `items` names the first few, `count` is capped
+   * (`countIsLowerBound`). Work that serves one is filed into it with
+   * `trackId` (`howTo`).
+   */
+  openGoals:
+    | {
+        count: number;
+        countIsLowerBound: boolean;
+        lens: "project" | "pod";
+        items: Array<{
+          id: string;
+          name: string;
+          status: string;
+          projectId: string;
+          /** What "done" looks like — `null` when unsaid. */
+          endState: string | null;
+          /** How many criteria it declares (0 = a lasting goal). */
+          criteria: number;
+        }>;
+        howTo: string;
+      }
+    | StartHereUnavailable;
+  /**
    * Open sessions the person HANDED TO THIS AGENT (the agent is on the
    * session's roster — e.g. relay Capture "Give to agent"), newest first.
    * Present only when an agent calls; a pull-only agent learns about work it
@@ -1023,6 +1048,7 @@ export async function discover(
       userId,
       agentUserId: params.agentUserId ?? null,
       workspaceId,
+      projectId,
       pending: pendingState,
       learnMoreSkill: ORIENT_LEARN_MORE_SKILL,
       ranked,

@@ -420,6 +420,9 @@ describe("draft asks: the read and acceptance on engagement", () => {
       ...(await readOwedByPersonSlots(OWNER)),
       link: (id) => `/open/${id}`,
       limit: 1000,
+      // A day after the seeds: the predicate under test, not the 7-day
+      // Review later fold the real clock would apply to 2026-09-27 asks.
+      now: new Date("2026-09-28T00:00:00.000Z"),
     });
     const rowOf = (id: string) =>
       folded.items.filter((i) => i.sessionId === id);

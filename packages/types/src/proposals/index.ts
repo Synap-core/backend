@@ -6,6 +6,7 @@
 
 import type { EventAction } from "../events/unified.js";
 import { isLikelyUUID } from "./proposal-utils.js";
+import type { ProposalPartReach } from "./reach.js";
 export { isLikelyUUID };
 
 // Governance grant-option derivation (pure, browser-safe) — the SSOT the
@@ -29,6 +30,9 @@ export * from "./duplicate-review.js";
 // Which proposals only their own page may approve: the one rule every surface
 // and the pod's batch door read.
 export * from "./page-only.js";
+// What a part that acts on its own can reach, and the words for it (the
+// marketplace preflight says the same).
+export * from "./reach.js";
 
 /**
  * The pod's cap on one batch decision (`proposals.batchApprove` /
@@ -558,6 +562,12 @@ export interface ProposalReviewGraph {
      * assume it starts firing.
      */
     bornEnabled: false;
+    /**
+     * What its steps can reach outside the pod once it runs, read the way the
+     * runtime resolves each step (a verb → the skill that answers it).
+     * Absent = not measured (draw nothing, never "nothing").
+     */
+    reach?: ProposalPartReach;
   }>;
   rules?: Array<{
     ref: string;
@@ -608,7 +618,29 @@ export interface ProposalReviewGraph {
     op: CompositeUpdateOperation["op"];
     kind: "skill" | "automation" | "rule" | "playbook" | "view" | "entity";
     targetId: string;
-    fields: Array<{ key: string; value: string; truncated: boolean }>;
+    /**
+     * The row's name, when the pod read it for this viewer (a skill today):
+     * a rewrite names WHICH skill it rewrites. Absent = not read.
+     */
+    targetName?: string;
+    fields: Array<{
+      key: string;
+      value: string;
+      truncated: boolean;
+      /**
+       * What the field holds NOW, excerpted like `value`: read from the live
+       * row while the proposal is still pending (a skill today). Absent =
+       * not read, or empty now.
+       */
+      before?: string;
+      beforeTruncated?: boolean;
+    }>;
+    /**
+     * What the row it rewrites can reach outside the pod (a skill that runs:
+     * code, a provider verb, a builtin), read while the proposal is pending.
+     * Absent = not read, or it runs nothing (an instruction).
+     */
+    reach?: ProposalPartReach;
   }>;
 }
 

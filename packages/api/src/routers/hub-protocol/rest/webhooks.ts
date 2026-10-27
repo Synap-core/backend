@@ -229,7 +229,11 @@ export function registerWebhooksRoutes(app: HubHono) {
 
     try {
       const subscriptions = await db.query.webhookSubscriptions.findMany({
-        where: ownSubscriptions(userId, c.get("apiKeyId")),
+        // Delivery targets only: an inbound source (0362) has no url.
+        where: and(
+          ownSubscriptions(userId, c.get("apiKeyId")),
+          eq(webhookSubscriptions.direction, "outbound")
+        ),
         orderBy: (subscriptions, { desc }) => [desc(subscriptions.createdAt)],
       });
 

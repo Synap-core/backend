@@ -39,6 +39,10 @@ import { needsYouRows } from "@synap-core/types/needs-you";
 import { proposalNeedsItsPage } from "@synap-core/types/proposals";
 import { askTextRestates, type Ask } from "@synap-core/types/ask";
 import { openIn, type Exit } from "../../../../lib/open-in";
+import {
+  proposalExpiresAt,
+  proposalLapsed,
+} from "../../../_lib/proposal-expiry";
 import { isUuid } from "../../../../lib/format";
 import { askSlotOf, askView, type AskSlot } from "./ask-detail";
 import {
@@ -166,6 +170,11 @@ export interface ReviewRow {
   occurredAt: string | null;
   /** When it stops being answerable (ISO), or null when it never expires. */
   expiresAt: string | null;
+  /**
+   * Its moment passed (the pod's sweep has not marked it yet): history, so
+   * nothing approves it from the row and no batch takes it.
+   */
+  expired: boolean;
   /** Null when the row has nothing to open. */
   detail: ReviewDetail | null;
   /** May be approved from the row itself. */
@@ -249,7 +258,7 @@ function wholeCluster(s: ReviewSignal): string[] | null {
 /** A row's kind-specific half; `title` only when it is not the signal's. */
 type RowShape = Omit<
   ReviewRow,
-  "key" | "group" | "title" | "occurredAt" | "count"
+  "key" | "group" | "title" | "occurredAt" | "count" | "reviewLater" | "expired"
 > & { title?: string };
 
 function proposalRow(
@@ -347,7 +356,8 @@ function askRow(s: ReviewSignal): RowShape {
  */
 export function reviewRows(
   signals: readonly ReviewSignal[],
-  facts: ReadonlyMap<string, ProposalFacts>
+  facts: ReadonlyMap<string, ProposalFacts>,
+  now: number = Date.now()
 ): ReviewRow[] {
   const later = reviewLaterIds(signals);
   return signals.map((s) => {
@@ -359,19 +369,17 @@ export function reviewRows(
           ? proposalRow(s, group, facts)
           : askRow(s);
     const occurredAt = iso(s.occurredAt);
-    const expiresAt =
-      s.lifetimeHours != null && occurredAt
-        ? new Date(
-            Date.parse(occurredAt) + s.lifetimeHours * 3_600_000
-          ).toISOString()
-        : null;
+    const expiresAt = proposalExpiresAt(occurredAt, s.lifetimeHours);
+    const expired = proposalLapsed(expiresAt, now);
     return {
       ...shape,
+      ...(expired ? { inlineApprove: false, batchIds: null } : {}),
       key: s.id,
       group,
       title: shape.title ?? s.title,
       occurredAt,
       expiresAt,
+      expired,
       count: Math.max(1, s.count),
       reviewLater: later.has(s.id),
     };
@@ -414,6 +422,33 @@ export function reviewCounts(
     out[r.group] += 1;
   }
   return out;
+}
+
+/**
+ * What each chip SAYS — one number, one source (ui-composition §11). All is
+ * the pod's count (`signals.count`, the nav badge's) when Review is not
+ * narrowed; a group is counted from the page read, which stops at
+ * `NEEDS_YOU_PAGE_LIMIT`: on a full page a group's count is a floor ("N+"),
+ * and a group with none on it is unknown (no count), never "0".
+ */
+export function reviewChipCounts(
+  rows: readonly ReviewRow[],
+  total: { needsYou: number; truncated: boolean } | null
+): Record<"all" | ReviewGroup, string | undefined> {
+  const counts = reviewCounts(rows);
+  const full = rows.length >= NEEDS_YOU_PAGE_LIMIT;
+  const floor = (n: number): string | undefined =>
+    !full ? String(n) : n > 0 ? `${n}+` : undefined;
+  return {
+    all: total
+      ? total.truncated
+        ? `${total.needsYou}+`
+        : String(total.needsYou)
+      : floor(counts.all),
+    access: floor(counts.access),
+    changes: floor(counts.changes),
+    asks: floor(counts.asks),
+  };
 }
 
 /**

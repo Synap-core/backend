@@ -2409,7 +2409,7 @@ export const GATE_WRITE_DOORS = {
   "document/section_update": "gate",
   "document/session_narrative_update": "gate",
   // The document patch door (`applyDocumentPatch`) for anything that is not a
-  // section-only patch: `replace_text` / `append` / `replace_all`, and the
+  // section-only patch: `replace_text` / `append` / `replace_all` / `set_title`, and the
   // full-replace aliases (REST PATCH, MCP update_entity.content, IS
   // update_document). Deliberately NOT in DEFAULT_AUTO_APPROVE: an agent's edit
   // is a proposal unless a `governance_rules` row says otherwise (D-gov), and an

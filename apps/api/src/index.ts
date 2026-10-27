@@ -1864,6 +1864,10 @@ try {
               await import("@synap/jobs/workers/inbound-attachment-worker.js");
             const { registerEntityMediaCopyRunner } =
               await import("@synap/jobs/workers/entity-media-copy-worker.js");
+            const { registerDevLoopRunner } =
+              await import("@synap/jobs/workers/dev-loop-worker.js");
+            const { registerObservationDoor } =
+              await import("@synap/jobs/utils/observation-door.js");
             const { registerEventSyncRunner } =
               await import("@synap/jobs/workers/event-sync-cron.js");
             const { registerConnectionSyncRunner } =
@@ -1894,6 +1898,8 @@ try {
               await import("@synap/jobs/utils/session-close.js");
             const { registerStageAdvancer } =
               await import("@synap/jobs/utils/stage-advance.js");
+            const { registerSessionOutcomeDoor } =
+              await import("@synap/jobs/utils/session-outcome-door.js");
             const { registerServiceHealthNotifier } =
               await import("@synap/jobs/workers/intelligence-health-check.js");
             const api = await import("@synap/api");
@@ -1936,6 +1942,11 @@ try {
             // unregistered it throws rather than advancing ungated — so this
             // registration is what makes the automation stage-advance work at all.
             registerStageAdvancer((input) => api.advanceSessionStage(input));
+            // ONE set of session outcome doors (plan v5 T2): an automation's
+            // GRANTED complete_outcome / post_evidence / reevaluate_criterion
+            // reaches the same api functions the approval executor applies.
+            // Fail-closed: unregistered, the step throws.
+            registerSessionOutcomeDoor(api.sessionOutcomeDoor);
             // ONE agent-wake spine: an automation's `channel_message` with
             // `wakeAgent: true` reaches `triggerAutoRespond` — the SAME door
             // every IS auto-respond uses (`a2ai-one-door` tripwire forbids a
@@ -1967,6 +1978,17 @@ try {
             // the api-side runner fetches + stores + records systemData.media.
             registerEntityMediaCopyRunner((input) =>
               api.runEntityMediaCopy(input)
+            );
+            // Dev loop (plan v5 T2): the observation door enqueues a fact the
+            // pod acts on (`dev.pr_merged`); the api-side runner moves the
+            // sessions it is about (the merge sweeper).
+            registerDevLoopRunner((input) => api.runDevLoopObservation(input));
+            // ONE observation writer: an automation's `record_observation`
+            // step records an outside fact (a GitHub webhook read into
+            // `dev.pr_merged`) through the observation door's own checks.
+            // Fail-closed: unregistered, the step throws.
+            registerObservationDoor((input) =>
+              api.recordObservationFromAutomation(input)
             );
             // The Discord mirror pass. Google Calendar events reach it as Synap
             // `event` entities landed by the connection sync — never straight
@@ -2049,9 +2071,12 @@ try {
                   return;
                 }
                 if (r.read === "ok") {
-                  return api
-                    .notifyPodUpdateOutcome(r.outcome)
-                    .then(() => undefined);
+                  // A failure tells the owner; a success is a fact the pod
+                  // records (`dev.deployed`) so automations can follow it.
+                  return Promise.all([
+                    api.notifyPodUpdateOutcome(r.outcome),
+                    api.recordPodDeployed(r.outcome),
+                  ]).then(() => undefined);
                 }
                 return undefined; // read === "absent": no update recorded yet
               })

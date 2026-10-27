@@ -50,6 +50,32 @@ import { logger, type HubHono, type HubVariables } from "./_shared.js";
 import type { Context } from "hono";
 import { channelVisibilityWhere } from "../../../utils/channel-visibility.js";
 import { jsonGoverned } from "../proposal-response.js";
+
+/**
+ * The pod has no messaging service: no Unipile credential in the vault
+ * (`messaging-connector`), the workspace settings or the env. That is a
+ * configuration state, not an outage: a retry never changes it, so it is a 409
+ * with a code, never a 503 (a 5xx body is redacted before egress, which left
+ * apps unable to tell it from a failed live read and telling people to try
+ * again). Set it up through POST /messaging/service-config.
+ */
+const MESSAGING_NOT_CONFIGURED_DESCRIPTION =
+  "No messaging service is set up on this pod (code MESSAGING_NOT_CONFIGURED)";
+const MessagingNotConfiguredSchema = z
+  .object({
+    error: z.string(),
+    code: z.literal("MESSAGING_NOT_CONFIGURED"),
+  })
+  .openapi("MessagingNotConfigured");
+function messagingNotConfigured(c: Context) {
+  return c.json(
+    {
+      error: "No messaging service is set up on this pod.",
+      code: "MESSAGING_NOT_CONFIGURED" as const,
+    },
+    409
+  );
+}
 import { accessScopeWhere } from "../../../utils/project-scope.js";
 
 // ── Shared response schemas ────────────────────────────────────────────────
@@ -297,16 +323,22 @@ export function registerMessagingRoutes(app: HubHono): void {
           description: "Internal error",
           content: { "application/json": { schema: ErrorSchema } },
         },
+        409: {
+          description: MESSAGING_NOT_CONFIGURED_DESCRIPTION,
+          content: {
+            "application/json": { schema: MessagingNotConfiguredSchema },
+          },
+        },
         503: {
-          description: "Connector not configured",
+          description:
+            "Your accounts' live status could not be read from the messaging service",
           content: { "application/json": { schema: ErrorSchema } },
         },
       },
     }),
     async (c) => {
       const connector = await getMessagingConnector();
-      if (!connector)
-        return c.json({ error: "Messaging connector not configured" }, 503);
+      if (!connector) return messagingNotConfigured(c);
       const userId = c.get("userId") as string;
       try {
         let dbAccounts = await db.query.messagingAccounts.findMany({
@@ -410,16 +442,17 @@ export function registerMessagingRoutes(app: HubHono): void {
           description: "Internal error",
           content: { "application/json": { schema: ErrorSchema } },
         },
-        503: {
-          description: "Connector not configured",
-          content: { "application/json": { schema: ErrorSchema } },
+        409: {
+          description: MESSAGING_NOT_CONFIGURED_DESCRIPTION,
+          content: {
+            "application/json": { schema: MessagingNotConfiguredSchema },
+          },
         },
       },
     }),
     async (c) => {
       const connector = await getMessagingConnector();
-      if (!connector)
-        return c.json({ error: "Messaging connector not configured" }, 503);
+      if (!connector) return messagingNotConfigured(c);
       const userId = c.get("userId") as string;
       const { redirectUrl, provider } = c.req.valid("query");
       const providers = provider ? [provider] : undefined;
@@ -461,9 +494,11 @@ export function registerMessagingRoutes(app: HubHono): void {
           description: "Internal error",
           content: { "application/json": { schema: ErrorSchema } },
         },
-        503: {
-          description: "Connector not configured",
-          content: { "application/json": { schema: ErrorSchema } },
+        409: {
+          description: MESSAGING_NOT_CONFIGURED_DESCRIPTION,
+          content: {
+            "application/json": { schema: MessagingNotConfiguredSchema },
+          },
         },
       },
     }),
@@ -471,8 +506,7 @@ export function registerMessagingRoutes(app: HubHono): void {
       const denied = writeScopeDenied(c);
       if (denied) return denied as never;
       const connector = await getMessagingConnector();
-      if (!connector)
-        return c.json({ error: "Messaging connector not configured" }, 503);
+      if (!connector) return messagingNotConfigured(c);
       const userId = c.get("userId") as string;
       try {
         const liveAccounts = await connector.getAccounts(userId);
@@ -765,9 +799,11 @@ export function registerMessagingRoutes(app: HubHono): void {
           description: "Internal error",
           content: { "application/json": { schema: ErrorSchema } },
         },
-        503: {
-          description: "Connector not configured",
-          content: { "application/json": { schema: ErrorSchema } },
+        409: {
+          description: MESSAGING_NOT_CONFIGURED_DESCRIPTION,
+          content: {
+            "application/json": { schema: MessagingNotConfiguredSchema },
+          },
         },
       },
     }),
@@ -775,8 +811,7 @@ export function registerMessagingRoutes(app: HubHono): void {
       const denied = writeScopeDenied(c);
       if (denied) return denied as never;
       const connector = await getMessagingConnector();
-      if (!connector)
-        return c.json({ error: "Messaging connector not configured" }, 503);
+      if (!connector) return messagingNotConfigured(c);
       const userId = c.get("userId") as string;
       const { accountId } = c.req.valid("param");
       try {
@@ -859,16 +894,17 @@ export function registerMessagingRoutes(app: HubHono): void {
           description: "Internal error",
           content: { "application/json": { schema: ErrorSchema } },
         },
-        503: {
-          description: "Connector not configured",
-          content: { "application/json": { schema: ErrorSchema } },
+        409: {
+          description: MESSAGING_NOT_CONFIGURED_DESCRIPTION,
+          content: {
+            "application/json": { schema: MessagingNotConfiguredSchema },
+          },
         },
       },
     }),
     async (c) => {
       const connector = await getMessagingConnector();
-      if (!connector)
-        return c.json({ error: "Messaging connector not configured" }, 503);
+      if (!connector) return messagingNotConfigured(c);
       const userId = c.get("userId") as string;
       const { entityId, contactEntityId } = c.req.valid("query");
       const resolvedEntityId = entityId ?? contactEntityId;
@@ -1347,16 +1383,17 @@ export function registerMessagingRoutes(app: HubHono): void {
           description: "Internal error",
           content: { "application/json": { schema: ErrorSchema } },
         },
-        503: {
-          description: "Connector not configured",
-          content: { "application/json": { schema: ErrorSchema } },
+        409: {
+          description: MESSAGING_NOT_CONFIGURED_DESCRIPTION,
+          content: {
+            "application/json": { schema: MessagingNotConfiguredSchema },
+          },
         },
       },
     }),
     async (c) => {
       const connector = await getMessagingConnector();
-      if (!connector)
-        return c.json({ error: "Messaging connector not configured" }, 503);
+      if (!connector) return messagingNotConfigured(c);
       const userId = c.get("userId") as string;
 
       try {
@@ -1450,16 +1487,17 @@ export function registerMessagingRoutes(app: HubHono): void {
           description: "Internal error",
           content: { "application/json": { schema: ErrorSchema } },
         },
-        503: {
-          description: "Connector not configured",
-          content: { "application/json": { schema: ErrorSchema } },
+        409: {
+          description: MESSAGING_NOT_CONFIGURED_DESCRIPTION,
+          content: {
+            "application/json": { schema: MessagingNotConfiguredSchema },
+          },
         },
       },
     }),
     async (c) => {
       const connector = await getMessagingConnector();
-      if (!connector)
-        return c.json({ error: "Messaging connector not configured" }, 503);
+      if (!connector) return messagingNotConfigured(c);
       const userId = c.get("userId") as string;
       const { threadId } = c.req.valid("param");
       const { accountId } = c.req.valid("query");
@@ -1549,9 +1587,11 @@ export function registerMessagingRoutes(app: HubHono): void {
           description: "Internal error",
           content: { "application/json": { schema: ErrorSchema } },
         },
-        503: {
-          description: "Connector not configured",
-          content: { "application/json": { schema: ErrorSchema } },
+        409: {
+          description: MESSAGING_NOT_CONFIGURED_DESCRIPTION,
+          content: {
+            "application/json": { schema: MessagingNotConfiguredSchema },
+          },
         },
       },
     }),
@@ -1578,8 +1618,7 @@ export function registerMessagingRoutes(app: HubHono): void {
       // bridge the live `Readable` instance rather than a registry type string
       // (the registry holds a resolver DESCRIPTOR, not a `getMessages` surface).
       const connector = await getMessagingConnector();
-      if (!connector)
-        return c.json({ error: "Messaging connector not configured" }, 503);
+      if (!connector) return messagingNotConfigured(c);
 
       try {
         const result = await pullToImport({
@@ -1654,8 +1693,15 @@ export function registerMessagingRoutes(app: HubHono): void {
           description: "Internal error",
           content: { "application/json": { schema: ErrorSchema } },
         },
+        409: {
+          description: MESSAGING_NOT_CONFIGURED_DESCRIPTION,
+          content: {
+            "application/json": { schema: MessagingNotConfiguredSchema },
+          },
+        },
         503: {
-          description: "Connector not configured",
+          description:
+            "The message could not be sent through the messaging service",
           content: { "application/json": { schema: ErrorSchema } },
         },
       },
@@ -1700,8 +1746,7 @@ export function registerMessagingRoutes(app: HubHono): void {
       const connector = await getMessagingConnector(
         linkedChannel?.externalSource ?? undefined
       );
-      if (!connector)
-        return c.json({ error: "Messaging connector not configured" }, 503);
+      if (!connector) return messagingNotConfigured(c);
       // SECURITY — the caller must OWN the account it sends as. `accountId` is
       // the provider account (`messaging_accounts.external_id`) and went
       // straight to the connector: any write key could send as another user's

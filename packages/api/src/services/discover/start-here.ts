@@ -1,5 +1,6 @@
 /**
  * orient's `startHere`, in action order: pending review, open work sessions,
+ * the open goals they serve,
  * the calling agent's own loose ends, sessions owing a grade, most-used kinds, runnable actions, one skill pointer. Each section reads an
  * existing door; one that cannot be read is `{ status: "unavailable" }`, never
  * an empty list or a zero.
@@ -17,6 +18,7 @@ import {
 } from "./profile-ranking.js";
 import type { StartHere } from "./discover.js";
 import { readLooseEnds } from "./loose-ends.js";
+import { readOpenGoals } from "./open-goals.js";
 import {
   readPendingReviewState,
   type PendingReviewState,
@@ -376,6 +378,8 @@ export async function buildStartHere(p: {
   /** The calling agent, when an agent key calls — see `handedToYou`. */
   agentUserId?: string | null;
   workspaceId?: string;
+  /** Orient scoped to one project — `openGoals` lists that project's. */
+  projectId?: string;
   pending: PendingReviewState;
   learnMoreSkill: string;
   /** The lens listing, when the caller already started reading it. */
@@ -391,6 +395,7 @@ export async function buildStartHere(p: {
     handedToYou,
     looseEnds,
     library,
+    openGoals,
   ] = await Promise.all([
     readOwedByPerson(p.userId),
     readOpenSessions(p.userId),
@@ -405,6 +410,7 @@ export async function buildStartHere(p: {
       ? readLooseEnds({ userId: p.userId, agentUserId: p.agentUserId })
       : Promise.resolve(undefined),
     readLibrary(p.userId),
+    readOpenGoals(p.userId, p.projectId),
   ]);
   const pendingReview = foldPendingReview(p.pending);
   // Key order is the briefing order — pending review first, then the blockers
@@ -416,6 +422,9 @@ export async function buildStartHere(p: {
     // with the person before its own work (decisions it may be waiting on).
     owedByPerson,
     openSessions,
+    // The goals the work serves, beside the open sessions: an agent starting
+    // work files it into one (`trackId`) instead of opening a free session.
+    openGoals,
     ...(handedToYou ? { handedToYou } : {}),
     // The agent's OWN leftovers, right after the work handed to it: agents
     // keep the books (W-B2). Each row carries the call that ends it.

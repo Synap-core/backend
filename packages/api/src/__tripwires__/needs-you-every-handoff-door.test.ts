@@ -54,6 +54,11 @@ const EXEMPT: Record<string, string> = {
   "routers/proposals/executors/focus-session.ts":
     "The approval executor applies a hand-off a HUMAN just approved — they are " +
     "looking at it; a push about their own click is noise.",
+  "services/dev-loop/session-outcome-door.ts":
+    "An automation's `complete_outcome` (plan v5 T2): `applyOutputMutations` " +
+    "with `completeOutput` ONLY claims an existing slot — it never hands one " +
+    "to the person (a person's slot is refused by the same merge), so there " +
+    "is nothing to tell them.",
   "services/focus-sessions/evaluations/record.ts":
     "Files the escalated-criterion slot and raises its OWN push " +
     "(`session.criterion_escalated`, same `if`, session-deduped). A second " +

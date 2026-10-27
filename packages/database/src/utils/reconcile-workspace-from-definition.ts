@@ -108,6 +108,11 @@ import { writeTemplateState } from "./template-state.js";
 import { projectTemplateIntent } from "./workspace-intent.js";
 import { isUniqueViolation } from "./pg-errors.js";
 import {
+  bindWebhookSourceDeclaration,
+  readWebhookSourceDeclaration,
+  WebhookSourceDeclarationError,
+} from "./webhook-source-declaration.js";
+import {
   mergeWorkspacePrimarySurface,
   resolveWorkspacePrimarySurface,
 } from "./workspace-primary-surface.js";
@@ -1502,6 +1507,24 @@ export async function reconcileWorkspaceFromDefinition(
       continue;
     }
 
+    // A declared inbound webhook source (`triggerConfig.webhookSource.name`)
+    // is read here like at the API's automation doors: a malformed one is
+    // refused and reported, never stored (webhook-source-declaration.ts).
+    try {
+      readWebhookSourceDeclaration(auto.triggerType, auto.triggerConfig);
+    } catch (e) {
+      if (!(e instanceof WebhookSourceDeclarationError)) throw e;
+      logger.warn(
+        { workspaceId, automation: auto.name, error: e.message },
+        "Skipping seeded automation: its webhook source declaration is malformed"
+      );
+      (report.automations.rejected ??= []).push({
+        name: auto.name,
+        error: e.message,
+      });
+      continue;
+    }
+
     // Stable content key of the definition's flow + description. The definition
     // entry is constructed deterministically (same object shape every apply), so
     // `JSON.stringify` is a stable hash input — the same drift model the skill /
@@ -1529,6 +1552,16 @@ export async function reconcileWorkspaceFromDefinition(
 
     if (!existing) {
       if (!dryRun) {
+        // The SAME binding as the API's automation insert door: a declared
+        // source binds to the space's source of that name when a person has
+        // created one (never created here); created later, it binds this row
+        // then. The overwrite-on-drift branch below never touches
+        // `triggerConfig`, so the insert is the only place it binds.
+        const { triggerConfig } = await bindWebhookSourceDeclaration(dbConn, {
+          workspaceId,
+          triggerType: auto.triggerType,
+          triggerConfig: auto.triggerConfig ?? {},
+        });
         try {
           await dbConn.insert(automations).values({
             workspaceId,
@@ -1536,7 +1569,7 @@ export async function reconcileWorkspaceFromDefinition(
             name: auto.name,
             description: auto.description,
             triggerType: auto.triggerType,
-            triggerConfig: auto.triggerConfig ?? {},
+            triggerConfig,
             flowDefinition,
             // `active` so the trigger door will actually run it (matches
             // ensureReportAutomation); a manual automation with no schedule costs

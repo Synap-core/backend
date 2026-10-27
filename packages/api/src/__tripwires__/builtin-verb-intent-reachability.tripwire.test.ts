@@ -372,6 +372,8 @@ const INTENTIONALLY_UNROUTABLE: Record<string, string> = {
   // ── connection PROBING: repair is a human act, not a connect ──────────
   "connector.health_check":
     "Probes an EXISTING connection and nudges a human to repair it. connect_account establishes a NEW authorization; this verb never does.",
+  "capability.rotate_key":
+    "Replaces the value of a key an installed capability already uses, from a secret the person handed over. No new account is authorized, so connect_account would be a false claim.",
   // ── governance calibration: pod-internal, no external world ───────────
   "governance.recommend_tighten":
     "Scans rejected proposals in the pod and files an internal calibration proposal.",

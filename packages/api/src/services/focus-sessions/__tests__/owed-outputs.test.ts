@@ -11,7 +11,12 @@ import { describe, it, expect } from "vitest";
 import { PgDialect } from "drizzle-orm/pg-core";
 import type { ExpectedOutput } from "@synap/playbooks";
 import { deliverableOwedBy } from "@synap-core/types/units";
-import { askFate, type AskCardSlot } from "@synap-core/types/ask";
+import {
+  askCardSlotOf,
+  askCardView,
+  askFate,
+  type AskCardSlot,
+} from "@synap-core/types/ask";
 import { signalFromOwedSlot } from "../../signals/needs-you-union.js";
 import {
   OWED_SLOT_CLAUSES,
@@ -341,6 +346,24 @@ describe("retirementForClose — which exit ends the obligation", () => {
     });
     expect(row!.keptOwedAt).toBe(now.toISOString());
     expect(signalFromOwedSlot(row!, now).keptOwedAt).toBe(now.toISOString());
+  });
+
+  it("a param slot's param reaches the needs-you row, and the one card adapter names its cause", () => {
+    const [row] = projectOwedSlots({
+      id: "s1",
+      goal: "Ship",
+      status: "active",
+      workspaceId: null,
+      projectId: null,
+      expectedOutputs: [{ ...OWED, label: "Channel", paramName: "channel" }],
+    });
+    expect(row!.paramName).toBe("channel");
+    const signal = signalFromOwedSlot(row!);
+    expect(signal.paramName).toBe("channel");
+    expect(askCardView(askCardSlotOf(signal)).asker).toMatchObject({
+      kind: "cause",
+      cause: { kind: "param" },
+    });
   });
 
   it("is a no-op when nothing was owed", () => {

@@ -288,6 +288,13 @@ describe("assessNodeRetrySafety — the executor's retry floor", () => {
         }),
       ],
       [
+        "output/record_observation (an appended events row, no receipt)",
+        n("output", {
+          outputType: "record_observation",
+          config: { type: "dev.pr_merged", subjectId: "o/r#1", data: {} },
+        }),
+      ],
+      [
         "fetch with a non-GET method (outbound write)",
         n("fetch", { method: "POST", url: "https://x/y" }),
       ],

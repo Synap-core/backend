@@ -126,6 +126,18 @@ vi.mock("../library/search.js", () => ({
   },
 }));
 
+// `openGoals` reads through its own door, pinned on PGlite in
+// `open-goals.pglite.test.ts`.
+vi.mock("./open-goals.js", () => ({
+  readOpenGoals: async () => ({
+    count: 0,
+    countIsLowerBound: false,
+    lens: "pod",
+    items: [],
+    howTo: "file work into a goal with trackId",
+  }),
+}));
+
 import { buildStartHere } from "./start-here.js";
 
 const caller = {
@@ -190,6 +202,8 @@ describe("startHere", () => {
       // What the PERSON owes, before the agent's own work.
       "owedByPerson",
       "openSessions",
+      // The goals that work serves, right after it (plan v5 T1).
+      "openGoals",
       // Right after the agent's open work: the part of it still ungraded.
       "sessionsOwingGrade",
       "topKinds",

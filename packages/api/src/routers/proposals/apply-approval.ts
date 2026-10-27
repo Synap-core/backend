@@ -398,9 +398,13 @@ export interface GovernanceWidenLaneProposalData {
   workspaceId?: string | null;
   verdict: "auto";
   evidence: {
+    /** Agent-wide: rows in the window. Per-motif: the motif's human decisions. */
     total: number;
     approveRate: number;
     duplicateRate: number;
+    /** Which gate qualified it (absent on rows filed before per-motif widening). */
+    basis?: "agent" | "motif";
+    motif?: { targetType: string; proposalType: string };
   };
 }
 

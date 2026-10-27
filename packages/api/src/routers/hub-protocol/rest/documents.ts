@@ -322,7 +322,7 @@ export function registerDocumentsRoutes(app: HubHono): void {
     tags: ["Documents"],
     summary: "Replace a document's content (alias of the patch door)",
     description:
-      "Replaces a document's content with `content` — one `replace_all` op through the document patch door (prefer POST /documents/{documentId}/patch for section or text edits). Governed: an agent's full replacement is always a proposal for the document's editors; a person's is applied. It may not change a person's section or drop an embed (`allowRemovingEmbeds`). Pass `baseRevision` (GET → `revision`); without it the revision at filing is pinned. `content` is required; a `title` is refused with 400 (this route never renames).",
+      "Replaces a document's content with `content` — one `replace_all` op through the document patch door (prefer POST /documents/{documentId}/patch for section or text edits). Governed: an agent's full replacement is always a proposal for the document's editors; a person's is applied. It may not change a person's section or drop an embed (`allowRemovingEmbeds`). Pass `baseRevision` (GET → `revision`); without it the revision at filing is pinned. `content` is required; a `title` is refused with 400 (this route never renames: send a `set_title` op to POST /documents/{documentId}/patch).",
     request: {
       params: z.object({ documentId: z.string() }),
       body: UpdateDocumentBodySchema,
@@ -366,7 +366,7 @@ export function registerDocumentsRoutes(app: HubHono): void {
       return c.json(
         {
           error:
-            "PATCH /documents/:documentId proposes content only and cannot rename a document. Remove `title`; to rename an entity's document, update the entity's title.",
+            'PATCH /documents/:documentId replaces content only and cannot rename a document. Remove `title`; to rename the document, send the op `{op: "set_title", title}` to POST /documents/:documentId/patch.',
         },
         400
       );
@@ -484,7 +484,7 @@ export function registerDocumentsRoutes(app: HubHono): void {
     tags: ["Documents"],
     summary: "Edit a document with ops",
     description:
-      "THE document edit door. Ops, applied in order: `upsert_section {id,title,body}` (one `::::synap-section` block by id), `replace_text {old,new}` (`old` must match EXACTLY once — otherwise 400 with the count), `append {body}`, `replace_all {content}` (needs `baseRevision`). Pass `baseRevision` from GET /documents/{id} (`revision`); a document that moved answers 409. Refused (403): an agent changing a person's section (replace_all included); removing an embed without `allowRemovingEmbeds: true`. Governed: applies or files a proposal (202); an agent's replace_all is always a proposal. The response carries `preview` (per section, before/after) and `diagnostics` (advisory: what will not render — never a refusal; `null` + `diagnosticsError` when the check could not run).",
+      "THE document edit door. Ops, applied in order: `upsert_section {id,title,body}` (one `::::synap-section` block by id), `replace_text {old,new}` (`old` must match EXACTLY once — otherwise 400 with the count), `append {body}`, `replace_all {content}` (needs `baseRevision`), `set_title {title}` (renames the document; its content is left as it is). Pass `baseRevision` from GET /documents/{id} (`revision`); a document that moved answers 409. Refused (403): an agent changing a person's section (replace_all included); removing an embed without `allowRemovingEmbeds: true`. Governed: applies or files a proposal (202); an agent's replace_all is always a proposal. The response carries `preview` (per section, before/after) and `diagnostics` (advisory: what will not render — never a refusal; `null` + `diagnosticsError` when the check could not run).",
     request: {
       params: z.object({ documentId: z.string() }),
       body: PatchDocumentRequestSchema,
