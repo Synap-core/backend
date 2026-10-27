@@ -153,8 +153,11 @@ function failWith(failure: StructureFailure) {
   h.structure.mockImplementation(
     async (
       _input: unknown,
-      options: { onFailure?: (f: StructureFailure) => void }
+      options?: { onFailure?: (f: StructureFailure) => void }
     ) => {
+      // Every call from capture.structure passes its options: a call without
+      // them is not the capture's, and says where it came from.
+      if (!options) throw new Error("structure() called without options");
       options.onFailure?.(failure);
       return null;
     }

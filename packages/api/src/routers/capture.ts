@@ -550,6 +550,49 @@ export function buildDegradedCaptureFallback(
 }
 
 /**
+ * The degraded fallback with its identity pass (B-W2): the raw text's records
+ * as `mentions`, the item's own twins as `dedupCandidates` when the caller
+ * named its kind (`callerKind`). Offered, never linked
+ * (`degraded-capture-identity.ts`); `dedupSkipped` when a lookup failed.
+ */
+export async function buildDegradedCaptureWithIdentity(
+  database: Parameters<typeof findDegradedCaptureIdentity>[0],
+  params: {
+    userId: string;
+    workspaceId: string | null;
+    inputText: string;
+    degradedReason: DegradedCaptureReasonOrUnknown;
+    degradedDetail: DegradedCaptureDetail;
+    callerKind: string | undefined;
+  }
+) {
+  const fallback = buildDegradedCaptureFallback(
+    params.inputText,
+    params.degradedReason,
+    params.callerKind
+  );
+  const item = fallback.proposals[0]!;
+  const identity = await findDegradedCaptureIdentity(database, {
+    userId: params.userId,
+    workspaceId: params.workspaceId,
+    text: params.inputText,
+    fallback: {
+      tempId: item.tempId,
+      profileSlug: item.profileSlug,
+      title: item.title,
+    },
+    checkTwins: params.callerKind !== undefined,
+  });
+  return {
+    ...fallback,
+    degradedDetail: params.degradedDetail,
+    dedupCandidates: identity.dedupCandidates,
+    mentions: identity.mentions,
+    ...(identity.unchecked ? { dedupSkipped: true as const } : {}),
+  };
+}
+
+/**
  * Semantic dedup — cosine search over the SAME pgvector infra the retrieval
  * engine uses (`embedQuery` + `entity_vectors`, see hybrid-recall.ts), rather
  * than a second copy of it. Embeds the candidate title (+ a short content
@@ -1935,47 +1978,25 @@ const captureBaseRouter = router({
       //   `degradedDetail` says which cause and failure class, so a reader can
       //   tell a 402 (never retry) from a cut stream (issue 1c252b3b).
       //
-      // The identity pass runs here too, on the raw text: the records it names
-      // by email or phone come back as `mentions`, the fallback item's own
-      // twins (when the caller named its kind) as `dedupCandidates`. Offered,
-      // never linked (`degraded-capture-identity.ts`); `dedupSkipped` when a
-      // lookup failed.
-      const degradedWithIdentity = async (
+      // Each one carries the identity pass (`buildDegradedCaptureWithIdentity`).
+      const degradedWithIdentity = (
         degradedReason: DegradedCaptureReasonOrUnknown,
         degradedDetail: DegradedCaptureDetail
-      ) => {
-        const callerKind = resolveDegradedFallbackKind(
-          input.profileSlug,
-          linkableProfiles as ReadonlyArray<{
-            slug: string;
-            profileKind?: string | null;
-          }>
-        );
-        const fallback = buildDegradedCaptureFallback(
-          inputText,
-          degradedReason,
-          callerKind
-        );
-        const item = fallback.proposals[0]!;
-        const identity = await findDegradedCaptureIdentity(database, {
+      ) =>
+        buildDegradedCaptureWithIdentity(database, {
           userId,
           workspaceId: workspaceId ?? null,
-          text: inputText,
-          fallback: {
-            tempId: item.tempId,
-            profileSlug: item.profileSlug,
-            title: item.title,
-          },
-          checkTwins: callerKind !== undefined,
-        });
-        return {
-          ...fallback,
+          inputText,
+          degradedReason,
           degradedDetail,
-          dedupCandidates: identity.dedupCandidates,
-          mentions: identity.mentions,
-          ...(identity.unchecked ? { dedupSkipped: true as const } : {}),
-        };
-      };
+          callerKind: resolveDegradedFallbackKind(
+            input.profileSlug,
+            linkableProfiles as ReadonlyArray<{
+              slug: string;
+              profileKind?: string | null;
+            }>
+          ),
+        });
 
       // The relation vocabulary for this lens, sent so the structurer emits only
       // slugs the write lanes will accept — the SAME read those lanes validate
