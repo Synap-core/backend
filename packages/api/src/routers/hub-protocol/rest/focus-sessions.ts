@@ -42,7 +42,10 @@ import {
   playbookRuns,
   drizzleSql,
   liveRunStatusWhere,
+  getRequestGrant,
 } from "@synap/database";
+import { sessionReadableWhere } from "../../../access/session-visibility.js";
+import { sessionPacketReadable } from "../../../access/grant-door-fence.js";
 import {
   checkPermissionOrPropose,
   proposedMessageFor,
@@ -1471,6 +1474,11 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
    * workspaceId is optional. When provided: membership check + workspace floor
    * (legacy callers). When omitted: owner/user floor only — same as MCP
    * synap_get_session — so project-scoped sessions (workspaceId NULL) resolve.
+   *
+   * A scoped key reads the row through its grant (`sessionReadableWhere`, the
+   * list door's floor). It gets the packet (continuation, outcomes, criteria)
+   * only when it reads every subject in it (`sessionPacketReadable`); else
+   * the row in the list door's shape, with `packet: {status: "withheld"}`.
    */
   app.get("/focus-sessions/:id", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
@@ -1496,7 +1504,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     try {
       const conditions = [
         eq(focusSessions.id, id),
-        eq(focusSessions.userId, acting.userId),
+        sessionReadableWhere({ userId: acting.userId }),
       ];
       if (workspaceIdParam) {
         conditions.push(eq(focusSessions.workspaceId, workspaceIdParam));
@@ -1508,6 +1516,17 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
 
       if (!row) {
         return c.json({ error: `Focus session ${id} not found` }, 404);
+      }
+
+      if (!sessionPacketReadable(getRequestGrant())) {
+        return c.json({
+          ...attachSessionKind(attachTriage([row]))[0],
+          packet: {
+            status: "withheld",
+            reason:
+              "This key does not read everything a session's packet holds (its room, outcomes, links and more): only the session itself is shown.",
+          },
+        });
       }
 
       // Same projection as tRPC `focusSessions.get` and MCP `synap_get_session`:
