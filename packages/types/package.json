@@ -80,6 +80,10 @@
       "types": "./dist/renderables/index.d.ts",
       "import": "./dist/renderables/index.js"
     },
+    "./cell-bridge": {
+      "types": "./dist/cell-bridge/index.d.ts",
+      "import": "./dist/cell-bridge/index.js"
+    },
     "./presentation": {
       "types": "./dist/presentation/index.d.ts",
       "import": "./dist/presentation/index.js"
