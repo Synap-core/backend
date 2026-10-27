@@ -137,6 +137,7 @@ import { registerFocusSessionsRoutes } from "../../../routers/hub-protocol/rest/
 import {
   MAX_AUTO_CONTINUATIONS,
   RUN_CONTINUE_SLOT_LABEL,
+  hasNoPersonInTheLoop,
   type RunTurnsState,
 } from "../run-turn-end.js";
 
@@ -573,5 +574,115 @@ describe("complete-run settles the run from how the IS turn ended (B8)", () => {
       stops: 1,
       autoContinues: 1,
     });
+  });
+
+  // ── E3 (founder, 2026-10-27): no person in the loop, no person slot ─────
+  // Before: a daily automation's run (CRM Hygiene) that kept stopping at its
+  // budget put "Keep the run going" in the founder's Needs you.
+  const unattended: Array<[string, string, Record<string, unknown>]> = [
+    [
+      "an automation's run (its automation keys)",
+      "playbook",
+      { automationId: "auto-1", automationRunId: "arun-1" },
+    ],
+    ["an automation-origin session", "automation", {}],
+  ];
+  for (const [name, origin, meta] of unattended) {
+    it(`${name} that spends its continuations ENDS at its budget with a notice — never a person slot`, async () => {
+      const { sessionId, channelId, runId } = await seedRun();
+      await q(
+        `update focus_sessions set origin = $2, metadata = metadata || $3::jsonb where id = $1`,
+        [sessionId, origin, JSON.stringify(meta)]
+      );
+      for (let n = 1; n <= MAX_AUTO_CONTINUATIONS; n++) {
+        expect((await completeRun(sessionId, STOPPED)).json).toEqual({
+          status: "continued",
+        });
+      }
+      const r = await completeRun(sessionId, STOPPED);
+      expect(r).toEqual({ code: 200, json: { status: "stopped" } });
+      expect(h.triggers).toHaveLength(MAX_AUTO_CONTINUATIONS);
+
+      const run = (
+        await q<{
+          status: string;
+          error: string | null;
+          completed_at: string | null;
+          stop_reason: string | null;
+        }>(
+          `select status, error, completed_at, stop_reason from playbook_runs where id = $1`,
+          [runId]
+        )
+      ).rows[0]!;
+      expect(run.status).toBe("failed");
+      expect(run.completed_at).not.toBeNull();
+      expect(run.error).toContain("Stopped at its token budget");
+      // A stop, not a fault: the parent's breakers read this (founder F3).
+      expect(run.stop_reason).toBe("budget");
+      expect(h.settled).toEqual([{ playbookRunId: runId }]);
+
+      // Nobody was asked: no slot, no question in the room.
+      const slots = (await sessionRow(sessionId)).expected_outputs;
+      expect(
+        slots.find((s) => s.label === RUN_CONTINUE_SLOT_LABEL)
+      ).toBeUndefined();
+      expect(slots.some((s) => s.owner === "human")).toBe(false);
+      const room = await roomMessages(channelId);
+      expect(
+        room.filter(
+          (m) =>
+            (m.metadata?.roomPost as { kind?: string } | undefined)?.kind ===
+            "question"
+        )
+      ).toHaveLength(0);
+      // The notice says why, as the pod.
+      const notice = room.at(-1)!;
+      expect(notice.role).toBe("system");
+      expect(notice.content).toContain("nobody was asked to keep it going");
+    });
+  }
+
+  it("an automation's run a PERSON took on from triage still asks them (they are in the loop)", async () => {
+    const { sessionId, runId } = await seedRun();
+    await q(
+      `update focus_sessions set metadata = metadata || $2::jsonb where id = $1`,
+      [
+        sessionId,
+        JSON.stringify({
+          automationId: "auto-1",
+          triage: { acceptedAt: new Date().toISOString() },
+        }),
+      ]
+    );
+    for (let n = 1; n <= MAX_AUTO_CONTINUATIONS; n++) {
+      await completeRun(sessionId, STOPPED);
+    }
+    const r = await completeRun(sessionId, STOPPED);
+    expect(r.json).toEqual({ status: "waiting_on_you" });
+    expect((await runRow(runId)).status).toBe("waiting_on_you");
+  });
+
+  it("hasNoPersonInTheLoop reads origin, the automation keys and the triage receipt", () => {
+    expect(hasNoPersonInTheLoop({ origin: "playbook", metadata: {} })).toBe(
+      false
+    );
+    expect(hasNoPersonInTheLoop({ origin: "human", metadata: null })).toBe(
+      false
+    );
+    expect(hasNoPersonInTheLoop({ origin: "automation", metadata: null })).toBe(
+      true
+    );
+    expect(
+      hasNoPersonInTheLoop({
+        origin: "playbook",
+        metadata: { automationRunId: "r" },
+      })
+    ).toBe(true);
+    expect(
+      hasNoPersonInTheLoop({
+        origin: "automation",
+        metadata: { triage: { acceptedAt: "2026-10-27T00:00:00Z" } },
+      })
+    ).toBe(false);
   });
 });
