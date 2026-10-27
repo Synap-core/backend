@@ -341,7 +341,10 @@ describe("count counts exactly the folded list", () => {
     ];
     const owedSlots = [
       owed("s-1", "A", ago(2)),
+      // 9 days old, but its session still owes A: it rides in that card.
       owed("s-1", "B", ago(9 * DAY)),
+      // 9 days old, alone in its session: folded into Review later.
+      owed("s-2", "C", ago(9 * DAY)),
     ];
     const draftAsks = {
       slots: [owed("d-1", "Q1", ago(1)), owed("d-1", "Q2", ago(2))],
@@ -371,10 +374,11 @@ describe("count counts exactly the folded list", () => {
     // Non-vacuity: the fold really happened (3 rows became 1).
     expect(listed.find((s) => s.id === "notification:r1")?.repeatCount).toBe(3);
     expect(counted.notifications).toBe(2);
-    // The 9-day owed ask is in Review later (founder, 2026-10-26): listed
-    // in its fold, out of the headline — the count says so, row for row.
+    // A 9-day owed ask is in Review later (founder, 2026-10-26) unless its
+    // session's card still holds a fresh row (a session is never split):
+    // listed in its fold, out of the headline — the count says so, row for row.
     const later = listed.filter((s) => s.reviewLater);
-    expect(later.map((s) => s.title)).toEqual(["B"]);
+    expect(later.map((s) => s.title)).toEqual(["C"]);
     expect(counted.reviewLater).toBe(later.length);
     expect(counted.needsYou).toBe(listed.length - later.length);
   });
