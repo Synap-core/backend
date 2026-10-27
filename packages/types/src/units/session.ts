@@ -70,10 +70,12 @@ export interface SessionUnitFacts {
   /** The pod's own `focus_sessions.status`. */
   status: string;
   /**
-   * Slots this session owes THE PERSON. REQUIRED: `null` means the owed read
-   * FAILED, which is not zero.
+   * Slots this session owes THE PERSON. REQUIRED, three-valued like `live`:
+   * `null` means the owed read FAILED, which is not zero; `undefined` means
+   * the caller did not read it (a list asked without its facts) — no claim
+   * either way, so the lifecycle reading stands.
    */
-  owedFromYou: number | null;
+  owedFromYou: number | null | undefined;
   /** Pending proposals filed under this session. See the header. */
   pendingDecisions?: number | null;
   /** Title of the session this one waits on, when it is blocked. */

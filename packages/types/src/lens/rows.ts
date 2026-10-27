@@ -836,8 +836,10 @@ export function lensRowOfSession(input: LensSessionInput): LensRow {
   const blockedBy = input.blockedBy?.trim() || null;
   const state = sessionUnitInput({
     status,
-    owedFromYou: facts ? facts.owedFromYou : null,
-    pendingDecisions: facts ? (facts.pendingDecisions ?? null) : null,
+    // No facts on the row = the list did not read them (asked without
+    // `nextMove`), not a failed read: `undefined`, never `null`.
+    owedFromYou: facts?.owedFromYou,
+    pendingDecisions: facts?.pendingDecisions,
     progress: input.progress ?? null,
     blockedBy,
     ...(input.live !== undefined ? { live: input.live } : {}),
