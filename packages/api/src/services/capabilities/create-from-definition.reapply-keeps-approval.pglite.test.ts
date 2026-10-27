@@ -10,6 +10,14 @@
  * on PGlite tables generated from the Drizzle schema, with the REAL links
  * service (so the `requires` edges are read through the same visibility
  * predicate production uses), and asserts the ROWS.
+ *
+ * What it found: an UNCHANGED re-apply keeps the approval (the first two
+ * cases pass on main). The switch-off was a REAL change — the catalog
+ * published a new fal version (new code + params) and the boot reconcile
+ * applied it, so the security rule demoted the skill, silently, until a run
+ * was refused. The last block drives `reconcileCapabilitiesToTemplates`
+ * itself: an automatic pass now holds such an update for the owner and keeps
+ * the approved version running; the owner's "Apply updates" lands it.
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { is } from "drizzle-orm";
@@ -69,6 +77,16 @@ vi.mock("../../utils/workspace-write-access.js", () => ({
 vi.mock("./cp-template-client.js", () => ({
   fetchCPCapabilityTemplate: vi.fn(async () => null),
 }));
+// The catalog the reconcile reads: the template the CP now serves for
+// `fal-ai`, set per test. Everything else in the applier module is real.
+const catalog = vi.hoisted(() => ({ def: null as unknown }));
+vi.mock("./create-from-definition.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  loadCapabilityTemplate: vi.fn(async () => catalog.def),
+}));
+vi.mock("./catalog-cache-query.js", () => ({
+  queryCatalogCache: vi.fn(async () => []),
+}));
 vi.mock("../../routers/capability-containers.js", () => ({
   capabilityContainersRouter: {
     createCaller: () => ({
@@ -88,6 +106,8 @@ vi.mock("@synap/events", () => ({ emitSideEffects: vi.fn() }));
 vi.mock("../../utils/audit-log.js", () => ({ auditLog: vi.fn() }));
 
 import { createCapabilityFromDefinition } from "./create-from-definition.js";
+import { reconcileCapabilitiesToTemplates } from "./reconcile-capabilities-to-templates.js";
+import { DRIFT_COMPARATOR_VERSION } from "./capability-drift.js";
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -234,7 +254,9 @@ const ownerTurnsItOn = async () => {
   await h.client!.query(
     `update skills set approved = true where name = 'fal_generate_image'`
   );
-  await h.client!.query(`update tools set approved = true where name = 'fal_api'`);
+  await h.client!.query(
+    `update tools set approved = true where name = 'fal_api'`
+  );
 };
 
 beforeAll(async () => {
@@ -262,7 +284,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   await h.client!.exec(
-    `delete from skills; delete from tools; delete from links; delete from secrets; delete from vault_grants;`
+    `delete from skills; delete from tools; delete from links; delete from secrets; delete from vault_grants; delete from capabilities;`
   );
 });
 
@@ -307,5 +329,112 @@ describe("fal.ai stays on when the cadence re-applies an unchanged definition", 
     await reconcileReapply("return { ok: false, exfiltrate: true };");
 
     expect((await skillRows())[0]!.approved).toBe(false);
+  });
+});
+
+const CONTAINER = "44444444-4444-4444-8444-444444444444";
+const ORIGINAL_CODE = "return { ok: true, prompt: args.prompt };";
+
+/**
+ * The installed container as the pod holds it: stamped converged to the
+ * installed version (`h1`) under the current comparator, its skill and tool
+ * `member_of` it (the mocked containers router does not write those edges).
+ */
+const installAsContainer = async () => {
+  await install();
+  const [skill] = await skillRows();
+  const [tool] = await toolRows();
+  await h.client!.query(
+    `insert into capabilities (id, workspace_id, created_by, name, metadata) values ($1, null, $2, 'fal.ai Image Generation', $3)`,
+    [
+      CONTAINER,
+      OWNER,
+      JSON.stringify({
+        templateKey: "fal-ai",
+        contentHash: "h1",
+        comparatorVersion: DRIFT_COMPARATOR_VERSION,
+      }),
+    ]
+  );
+  for (const [type, id] of [
+    ["skill", skill!.id],
+    ["tool", tool!.id],
+  ] as const) {
+    await h.client!.query(
+      `insert into links (from_type, from_id, to_type, to_id, link_type) values ($1, $2, 'capability', $3, 'member_of')`,
+      [type, id, CONTAINER]
+    );
+  }
+};
+
+/** The catalog publishes a new fal-ai version (`h2`). */
+const catalogPublishes = (def: Record<string, unknown>) => {
+  catalog.def = { ...def, contentHash: "h2" };
+};
+
+const skillCode = async () =>
+  (
+    await h.client!.query<{ code: string }>(
+      `select code from skills where name = 'fal_generate_image'`
+    )
+  ).rows[0]!.code;
+
+describe("a catalog update never switches off an approved capability on its own", () => {
+  it("new fal code from the catalog: the automatic reconcile holds it for the owner, the approved version keeps running", async () => {
+    await installAsContainer();
+    await ownerTurnsItOn();
+    catalogPublishes(
+      falDefinition("return { ok: true, images: [args.prompt] };")
+    );
+
+    const report = await reconcileCapabilitiesToTemplates();
+
+    expect((await skillRows())[0]!.approved).toBe(true);
+    expect(await skillCode()).toBe(ORIGINAL_CODE);
+    expect(report.applied).toEqual([]);
+    expect(report.updatesAvailable.map((u) => u.containerId)).toEqual([
+      CONTAINER,
+    ]);
+    expect(report.updatesAvailable[0]!.reason).toContain("fal_generate_image");
+  });
+
+  it("the owner's Apply updates lands it, and the changed skill re-earns its approval", async () => {
+    await installAsContainer();
+    await ownerTurnsItOn();
+    const next = "return { ok: true, images: [args.prompt] };";
+    catalogPublishes(falDefinition(next));
+
+    const report = await reconcileCapabilitiesToTemplates({
+      applyNotifyPolicy: true,
+    });
+
+    expect(report.applied.map((a) => a.containerId)).toEqual([CONTAINER]);
+    expect(await skillCode()).toBe(next);
+    expect((await skillRows())[0]!.approved).toBe(false);
+  });
+
+  it("an update that leaves what the skill runs alone still applies on its own, approval kept", async () => {
+    await installAsContainer();
+    await ownerTurnsItOn();
+    const def = falDefinition();
+    catalogPublishes({
+      ...def,
+      skills: def.skills.map((sk) => ({
+        ...sk,
+        description: "Generates images via fal.ai.",
+      })),
+    });
+
+    const report = await reconcileCapabilitiesToTemplates();
+
+    expect(report.applied.map((a) => a.containerId)).toEqual([CONTAINER]);
+    expect(report.updatesAvailable).toEqual([]);
+    expect(
+      (
+        await h.client!.query<{ description: string; approved: boolean }>(
+          `select description, approved from skills where name = 'fal_generate_image'`
+        )
+      ).rows[0]
+    ).toEqual({ description: "Generates images via fal.ai.", approved: true });
   });
 });
