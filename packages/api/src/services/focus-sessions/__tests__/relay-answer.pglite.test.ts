@@ -841,6 +841,12 @@ describe("the relay door", () => {
 
   it("a slot about an object with a pending human-only status move forces the tap", async () => {
     const DEAL = randomUUID();
+    // The ask may only cite what the person can see (the lookedAt floor), so
+    // the deal is a real entity they own.
+    await q(
+      `insert into entities (id, title, type, user_id) values ($1, 'Acme deal', 'deal', $2)`,
+      [DEAL, OWNER]
+    );
     const { sessionId, channelId } = await seed();
     await pendingProposal({
       targetId: DEAL,
@@ -851,13 +857,20 @@ describe("the relay door", () => {
       slotLabel: LABEL,
       ask: { ...CHOOSE, lookedAt: [{ kind: "entity", id: DEAL }] },
     });
+    // The question really was filed on the slot (a refused citation still
+    // posts, so without this the relay would be refused for the wrong reason).
+    expect((await slot(sessionId)).owner).toBe("human");
     const res = await relay(sessionId, {
       disposition: "answered",
       slotLabel: LABEL,
       quote: "mark it won",
       value: EU,
     });
-    expect(await res.json()).toMatchObject({ status: "awaiting_tap" });
+    expect(await res.json()).toMatchObject({
+      status: "awaiting_tap",
+      stakes: "commitment",
+    });
+    expect((await slot(sessionId)).answer).toBeUndefined();
   });
 
   // ── "Not what I said" (R1 S1, S6) ──────────────────────────────────────────

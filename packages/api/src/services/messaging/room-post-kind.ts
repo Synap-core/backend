@@ -1,5 +1,6 @@
 import {
   ROOM_POST_META_KEY,
+  ROOM_POST_SLOT_LABEL_MAX,
   type RoomPostKind,
   type RoomPostMeta,
 } from "@synap-core/types/ask";
