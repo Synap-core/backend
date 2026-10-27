@@ -1,5 +1,5 @@
 /**
- * THE RELAY DOOR (Resolve-XP W1), driven through the REAL Hub doors and read
+ * THE RELAY DOOR, driven through the REAL Hub doors and read
  * back out of PGlite.
  *
  *   - an agent relays the person's chat words to the EXACT question it asked
@@ -162,6 +162,11 @@ import {
   FOCUS_SESSION_SLOT_ANSWERED_EVENT_TYPE,
 } from "../lifecycle-events.js";
 import { projectOwedSlots } from "../owed-outputs.js";
+import {
+  relaySessionAnswer,
+  RelaySessionAnswerInputSchema,
+} from "../session-answer.js";
+import { RELAY_SURFACE_MAX_CHARS } from "@synap-core/types/ask";
 import { registerFocusSessionsRoutes } from "../../../routers/hub-protocol/rest/focus-sessions.js";
 import { registerThreadsRoutes } from "../../../routers/hub-protocol/rest/threads.js";
 
@@ -478,6 +483,53 @@ describe("the relay door", () => {
     expect(twice.status).toBe(400);
   });
 
+  it("CONFIRM of a free-text commitment: the relayed words are the answer the tap records", async () => {
+    const { sessionId, channelId } = await seed();
+    await ask(channelId, {
+      slotLabel: LABEL,
+      ask: { ...CHOOSE, allowOther: true, stakes: "commitment" },
+    });
+    const words = "the Irish entity, not either of those";
+    const res = await relay(sessionId, {
+      disposition: "answered",
+      slotLabel: LABEL,
+      quote: words,
+      value: { type: "text" },
+    });
+    expect(await res.json()).toMatchObject({ status: "awaiting_tap" });
+    const confirmed = await personAnswer(sessionId, {
+      expectedLabel: LABEL,
+      confirmRelayed: true,
+    });
+    expect(confirmed.status).toBe(200);
+    const s = await slot(sessionId);
+    expect(s.pendingRelay).toBeUndefined();
+    expect(s.answer).toMatchObject({
+      text: words,
+      value: { type: "text" },
+      via: "tap",
+      quote: words,
+    });
+  });
+
+  it("the relay surface is stored within its wire bound, whatever a caller sends", async () => {
+    const { sessionId, channelId } = await seed();
+    await ask(channelId, { slotLabel: LABEL, ask: CHOOSE });
+    const result = await relaySessionAnswer({
+      sessionId,
+      userId: OWNER,
+      agentUserId: AGENT,
+      disposition: "answered",
+      slotLabel: LABEL,
+      quote: "EU",
+      value: EU as never,
+      relaySurface: ` ${"x".repeat(RELAY_SURFACE_MAX_CHARS * 3)} `,
+    });
+    expect(result.status).toBe("relayed");
+    const s = await slot(sessionId);
+    expect(s.answer!.relaySurface).toBe("x".repeat(RELAY_SURFACE_MAX_CHARS));
+  });
+
   it("NOT WHAT I SAID on a pending relay: dropped from slot and question, the slot still owed, ONE correction event", async () => {
     const { sessionId, channelId } = await seed();
     const qid = await ask(channelId, { slotLabel: LABEL, ask: DEPLOY });
@@ -661,7 +713,7 @@ describe("the relay door", () => {
     expect((await slot(sessionId)).owner).toBeUndefined();
   });
 
-  // ── Only an OPEN question, only inside the grant (R1 M1, M2) ───────────────
+  // ── Only an OPEN question, only inside the grant ───────────────────────────
 
   it("a relay never overwrites the person's tap, and never answers a slot nobody asked them", async () => {
     const { sessionId, channelId } = await seed();
@@ -738,7 +790,46 @@ describe("the relay door", () => {
     });
   });
 
-  // ── Withdraw (R1 M3) ───────────────────────────────────────────────────────
+  it("the MCP door reads the relay through the one schema, and advertises every field of it", async () => {
+    const { sessionHandlers } = await import(
+      "../../../routers/mcp/handlers/session.js"
+    );
+    const { tools } = await import("../../../routers/mcp/tools/index.js");
+    const def = (await tools.list()).find(
+      (t) => t.name === "synap_relay_answer"
+    )!;
+    const advertised = Object.keys(
+      (def.inputSchema as { properties: Record<string, unknown> }).properties
+    );
+    expect(advertised.sort()).toEqual(
+      ["sessionId", ...Object.keys(RelaySessionAnswerInputSchema.shape)].sort()
+    );
+
+    // A field past its bound is refused at the door, as the Hub door refuses it.
+    const { sessionId, channelId } = await seed();
+    const qid = await ask(channelId, { slotLabel: LABEL, ask: CHOOSE });
+    const res = await sessionHandlers.synap_relay_answer!({
+      toolName: "synap_relay_answer",
+      args: {
+        sessionId,
+        disposition: "answered",
+        messageId: qid,
+        quote: "the EU one",
+        value: EU,
+        relaySurface: "x".repeat(RELAY_SURFACE_MAX_CHARS + 1),
+      },
+      userId: OWNER,
+      agentUserId: AGENT,
+      apiKeyScopes: ["mcp.read", "mcp.write"],
+    } as never);
+    const body = JSON.parse(
+      (res.content as Array<{ text: string }>)[0]!.text
+    ) as Record<string, unknown>;
+    expect(body.error).toMatch(/^relaySurface:/);
+    expect((await slot(sessionId)).answer).toBeUndefined();
+  });
+
+  // ── Withdraw ───────────────────────────────────────────────────────────────
 
   it("WITHDRAW never takes back a step only the person may take", async () => {
     const { sessionId, channelId } = await seed();
@@ -884,7 +975,7 @@ describe("the relay door", () => {
     expect((await slot(sessionId)).answer).toBeUndefined();
   });
 
-  // ── "Not what I said" (R1 S1, S6) ──────────────────────────────────────────
+  // ── "Not what I said" ──────────────────────────────────────────────────────
 
   it("NOT WHAT I SAID re-opens the decision the relay decided, without its pick or its words", async () => {
     const { sessionId, channelId } = await seed();

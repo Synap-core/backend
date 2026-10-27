@@ -11,8 +11,8 @@ import type { UnitTone } from "../units/state.js";
 
 /**
  * Untouched `objectWork` proposals leave the headline count after this many
- * days and wait in "Review later" — founder default 2 (2026-10-26). They never
- * expire. Same 7 days as the needs-you "Older" fold (`OLDER_AFTER_MS`, api
+ * days and wait in "Review later" (founder, 2026-10-26). They never expire.
+ * The needs-you "Older" fold reads the same clock (`OLDER_AFTER_MS`, api
  * `needs-you-union.ts`).
  */
 export const REVIEW_LATER_AFTER_DAYS = 7;

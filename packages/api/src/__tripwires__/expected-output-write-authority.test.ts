@@ -78,6 +78,7 @@ const STORED: Required<
   attestedAt: "2026-09-01T12:00:00.000Z",
   retiredAt: "2026-09-01T13:00:00.000Z",
   retiredReason: "session_cancelled",
+  keptOwedAt: "2026-09-01T13:30:00.000Z",
   answerPickedUpAt: "2026-09-01T15:00:00.000Z",
   answerHistory: [
     {
@@ -143,6 +144,7 @@ const FORGED: typeof STORED = {
   attestedAt: "2026-09-08T12:00:00.000Z",
   retiredAt: "2026-09-08T13:00:00.000Z",
   retiredReason: "session_cancelled",
+  keptOwedAt: "2026-09-08T13:30:00.000Z",
   // An agent telling the person it read an answer it never read.
   answerPickedUpAt: "2026-09-08T15:00:00.000Z",
   // An agent rewriting what the person said before.

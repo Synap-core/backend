@@ -146,7 +146,7 @@ it("lookedAt edges skip non-endpoint kinds (view)", () => {
   ]);
 });
 
-describe("decisionFromAnswer — relay provenance (Resolve-XP W1)", () => {
+describe("decisionFromAnswer — relay provenance", () => {
   const pick = { type: "chip" as const, chip: { label: "EU account", value: "eu" } };
   const fileFor = (answer: SlotAnswer) =>
     decisionFromAnswer({

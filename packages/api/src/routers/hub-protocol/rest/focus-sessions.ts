@@ -58,15 +58,11 @@ import {
   SESSION_TITLE_MAX,
   titleSourcePatch,
 } from "@synap-core/types/focus-sessions";
-import {
-  ASK_LIMITS,
-  AskAnswerValueSchema,
-  AskSchema,
-  RELAY_SURFACE_MAX_CHARS,
-} from "@synap-core/types/ask";
+import { AskAnswerValueSchema, AskSchema } from "@synap-core/types/ask";
 import {
   completeFocusSession,
   isOpenQuestionsAtCloseError,
+  openQuestionsRefusal,
 } from "../../../services/focus-sessions/complete-session.js";
 import { CLOSE_QUESTION_DISPOSITIONS } from "../../../services/messaging/room-post-kind.js";
 import { sessionGoalPayload } from "../../../services/focus-sessions/session-update-goal.js";
@@ -76,6 +72,8 @@ import {
   type SessionFilingDecision,
 } from "../../../services/focus-sessions/session-filing-gate.js";
 import { sessionListConditions } from "../../../services/focus-sessions/session-list-conditions.js";
+import { listNeedsYouOwed } from "../../../services/signals/needs-you-owed.js";
+import { sessionStarterNames } from "../../../services/focus-sessions/draft-asks.js";
 import { withoutServerOwnedSessionMetadata } from "../../../services/focus-sessions/session-metadata.js";
 import {
   resolveSessionSubject,
@@ -110,7 +108,7 @@ import {
   describeAnswerRefusal,
   describeRelayRefusal,
   relaySessionAnswer,
-  RELAY_DISPOSITIONS,
+  RelaySessionAnswerInputSchema,
   type SlotDoorRefusal,
 } from "../../../services/focus-sessions/session-answer.js";
 import { SLOT_ANSWER_TEXT_MAX } from "../../../services/focus-sessions/answer-slot.js";
@@ -509,21 +507,10 @@ const AnswerOutputBodySchema = z
 
 /**
  * An agent RELAYS the person's chat words to the question it asked — the
- * Hub twin of MCP `synap_relay_answer` (`relaySessionAnswer`).
+ * Hub twin of MCP `synap_relay_answer`; the ONE schema lives beside the
+ * service (`relaySessionAnswer`).
  */
-const RelayAnswerBodySchema = z.object({
-  disposition: z.enum(RELAY_DISPOSITIONS),
-  // The EXACT question: a room question's message id, and/or a slot label.
-  messageId: z.string().uuid().optional(),
-  slotLabel: z.string().min(1).max(500).optional(),
-  // The person's words, verbatim — required for `answered`.
-  quote: z.string().max(ASK_LIMITS.answerTextMaxChars).optional(),
-  text: z.string().max(ASK_LIMITS.answerTextMaxChars).optional(),
-  value: AskAnswerValueSchema.optional(),
-  relaySurface: z.string().min(1).max(RELAY_SURFACE_MAX_CHARS).optional(),
-  // Why the question is withdrawn — required for `withdrawn`.
-  note: z.string().max(ASK_LIMITS.promptMaxChars).optional(),
-});
+const RelayAnswerBodySchema = RelaySessionAnswerInputSchema;
 
 /** The long-poll's query: the poll cursor, plus a bounded wait (V1 G4). */
 const SessionAnswersWaitQuerySchema = z.object({
@@ -641,6 +628,55 @@ function patchAsksForMore(
   );
 }
 
+/**
+ * The SUBJECT lens of a session read, from its query (`subjectEntityId` OR
+ * `subjectProfileSlug`), resolved through the one subject predicate
+ * (`session-subject.ts`). Shared by the list door and the owed door so "on
+ * this thing" is parsed one way. An unknown slug is a 404 ("no such
+ * vocabulary"), never an empty list.
+ */
+async function subjectFromQuery(c: {
+  req: { query: (key: string) => string | undefined };
+}): Promise<
+  { subject: SessionSubject | undefined } | { error: string; status: 400 | 404 }
+> {
+  const subjectEntityId = c.req.query("subjectEntityId") || undefined;
+  const subjectProfileSlug = c.req.query("subjectProfileSlug") || undefined;
+  if (subjectEntityId && subjectProfileSlug) {
+    return {
+      error: "Pass subjectEntityId or subjectProfileSlug, not both",
+      status: 400,
+    };
+  }
+  if (subjectEntityId && !isUuid(subjectEntityId)) {
+    return {
+      error: `subjectEntityId is not a valid id: ${subjectEntityId}`,
+      status: 400,
+    };
+  }
+  try {
+    return {
+      subject: subjectEntityId
+        ? await resolveSessionSubject({ entityIds: [subjectEntityId] })
+        : subjectProfileSlug
+          ? await resolveSessionSubject({ profileSlug: subjectProfileSlug })
+          : undefined,
+    };
+  } catch (err) {
+    if (errCode(err) === "NOT_FOUND") {
+      return {
+        error: err instanceof Error ? err.message : "Not found",
+        status: 404,
+      };
+    }
+    throw err;
+  }
+}
+
+/** `GET /focus-sessions/owed`'s page: 1–200 slots, default 50 (tRPC `owed`). */
+const OWED_DOOR_DEFAULT_LIMIT = 50;
+const OWED_DOOR_MAX_LIMIT = 200;
+
 export function registerFocusSessionsRoutes(app: HubHono): void {
   // ── OpenAPI metadata ─────────────────────────────────────────────────────
 
@@ -690,6 +726,50 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       400: { description: "Bad request", schema: ErrorSchema },
       403: { description: "Forbidden", schema: ErrorSchema },
       404: { description: "Project not found", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  registerOpenApi(app, {
+    method: "get",
+    path: "/focus-sessions/owed",
+    tags: ["FocusSessions"],
+    summary: "What waits on you: the asks owed to the caller",
+    description:
+      "THE needs-you owed read (`listNeedsYouOwed`, the predicate the Inbox " +
+      "count and list read): every human-owned, unfinished slot on a session " +
+      "the caller owns, whatever the session's status (a slot outlives its " +
+      "session); on an undecided agent draft, only the slots that ask. Oldest " +
+      "first. Narrow by `workspaceId` / `projectId` and by the thing the " +
+      "sessions are on (`subjectEntityId` or `subjectProfileSlug`). Each slot " +
+      "carries its session's `subjectEntityId` and `agentName` (the first " +
+      "agent on the session's roster, null when none). A scoped key reads " +
+      "only its grant's sessions. `truncated` = the page hit `limit`.",
+    request: {
+      query: z.object({
+        workspaceId: uuidQueryParam.optional(),
+        projectId: uuidQueryParam.optional(),
+        subjectEntityId: z.string().uuid().optional(),
+        subjectProfileSlug: z.string().min(1).optional(),
+        limit: z.coerce
+          .number()
+          .int()
+          .min(1)
+          .max(OWED_DOOR_MAX_LIMIT)
+          .optional(),
+      }),
+    },
+    responses: {
+      200: {
+        description: "Owed slots",
+        schema: z.object({
+          slots: z.array(z.object({}).passthrough()),
+          truncated: z.boolean(),
+        }),
+      },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      404: { description: "Project or kind not found", schema: ErrorSchema },
       500: { description: "Internal error", schema: ErrorSchema },
     },
   });
@@ -780,6 +860,11 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       400: { description: "Bad request", schema: ErrorSchema },
       403: { description: "Forbidden", schema: ErrorSchema },
       404: { description: "Not found", schema: ErrorSchema },
+      409: {
+        description:
+          "Refused: a terminal status, and the calling agent's own room questions are still open (openQuestions[], as /complete)",
+        schema: z.object({}).passthrough(),
+      },
       500: { description: "Internal error", schema: ErrorSchema },
     },
   });
@@ -1187,37 +1272,11 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     // on every thing of a kind/role (an intent surface). ONE predicate with
     // the tRPC door (`session-subject.ts`): the subject anchor OR a worker's
     // target link.
-    const subjectEntityId = c.req.query("subjectEntityId") || undefined;
-    const subjectProfileSlug = c.req.query("subjectProfileSlug") || undefined;
-    if (subjectEntityId && subjectProfileSlug) {
-      return c.json(
-        { error: "Pass subjectEntityId or subjectProfileSlug, not both" },
-        400
-      );
+    const subjectQuery = await subjectFromQuery(c);
+    if ("error" in subjectQuery) {
+      return c.json({ error: subjectQuery.error }, subjectQuery.status);
     }
-    if (subjectEntityId && !isUuid(subjectEntityId)) {
-      return c.json(
-        { error: `subjectEntityId is not a valid id: ${subjectEntityId}` },
-        400
-      );
-    }
-    let subject: SessionSubject | undefined;
-    try {
-      subject = subjectEntityId
-        ? await resolveSessionSubject({ entityIds: [subjectEntityId] })
-        : subjectProfileSlug
-          ? await resolveSessionSubject({ profileSlug: subjectProfileSlug })
-          : undefined;
-    } catch (err) {
-      // An unknown slug is "no such vocabulary", never an empty list.
-      if (errCode(err) === "NOT_FOUND") {
-        return c.json(
-          { error: err instanceof Error ? err.message : "Not found" },
-          404
-        );
-      }
-      throw err;
-    }
+    const { subject } = subjectQuery;
 
     try {
       // The SAME WHERE clause the tRPC door builds. This door used to hand-write
@@ -1247,6 +1306,83 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       return c.json(attachSessionKind(attachTriage(rows)));
     } catch (err) {
       logger.error({ err }, "focus-sessions.list failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        httpStatusForTrpcError(err) as never
+      );
+    }
+  });
+
+  /**
+   * GET /focus-sessions/owed — what waits on the caller (a STATIC route:
+   * before `/focus-sessions/:id`, Hono is first-match).
+   *
+   * Thin over `listNeedsYouOwed`, the ONE needs-you owed predicate — never a
+   * second one. NOT composed over the list door above: that one is capped at
+   * 50 sessions in SQL, while owed slots accumulate on old and closed
+   * sessions (`owed-outputs.ts` header). Read-only; owner-only (what YOU
+   * owe); a scoped key is bounded by its grant (`sessionReadableWhere`).
+   */
+  app.get("/focus-sessions/owed", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+    }
+    const workspaceIdParam = c.req.query("workspaceId") || undefined;
+    const projectIdParam = c.req.query("projectId") || undefined;
+    for (const [name, value] of [
+      ["workspaceId", workspaceIdParam],
+      ["projectId", projectIdParam],
+    ] as const) {
+      if (value && !isUuid(value)) {
+        return c.json({ error: `${name} is not a valid id: ${value}` }, 400);
+      }
+    }
+    const limitRaw = parseInt(
+      c.req.query("limit") ?? String(OWED_DOOR_DEFAULT_LIMIT),
+      10
+    );
+    const limit = Number.isFinite(limitRaw)
+      ? Math.min(Math.max(limitRaw, 1), OWED_DOOR_MAX_LIMIT)
+      : OWED_DOOR_DEFAULT_LIMIT;
+
+    const acting = await resolveActingContext(c, {
+      workspaceId: workspaceIdParam,
+    });
+    if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+    if (
+      projectIdParam &&
+      !(await loadVisibleProject(db, projectIdParam, acting.userId))
+    ) {
+      return c.json(
+        { error: `No project ${projectIdParam} you can access` },
+        404
+      );
+    }
+    const subjectQuery = await subjectFromQuery(c);
+    if ("error" in subjectQuery) {
+      return c.json({ error: subjectQuery.error }, subjectQuery.status);
+    }
+
+    try {
+      const slots = await listNeedsYouOwed({
+        userId: acting.userId,
+        scope: { workspaceLens: workspaceIdParam, projectLens: projectIdParam },
+        limit,
+        ...(subjectQuery.subject ? { subject: subjectQuery.subject } : {}),
+      });
+      const agents = await sessionStarterNames(
+        acting.userId,
+        slots.map((s) => s.sessionId)
+      );
+      return c.json({
+        slots: slots.map((s) => ({
+          ...s,
+          agentName: agents.get(s.sessionId) ?? null,
+        })),
+        truncated: slots.length >= limit,
+      });
+    } catch (err) {
+      logger.error({ err }, "focus-sessions.owed failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
         httpStatusForTrpcError(err) as never
@@ -1931,6 +2067,10 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
             return c.json({ error: `Focus session ${id} not found` }, 404);
           }
         } catch (err) {
+          // The same refusal `/complete` answers: the agent is handed the list.
+          if (isOpenQuestionsAtCloseError(err)) {
+            return c.json(openQuestionsRefusal(err), 409);
+          }
           const code = (err as { code?: string }).code;
           const message = err instanceof Error ? err.message : String(err);
           return c.json({ error: message }, code === "FORBIDDEN" ? 403 : 409);
@@ -2431,15 +2571,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     } catch (err) {
       // The calling agent left its own questions open: nothing closed.
       if (isOpenQuestionsAtCloseError(err)) {
-        return c.json(
-          {
-            status: "refused" as const,
-            reasonCode: err.code,
-            error: err.message,
-            openQuestions: err.openQuestions,
-          },
-          409
-        );
+        return c.json(openQuestionsRefusal(err), 409);
       }
       const code = (err as { code?: unknown })?.code;
       if (code === "FORBIDDEN") {

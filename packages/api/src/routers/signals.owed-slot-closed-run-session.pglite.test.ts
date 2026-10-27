@@ -6,7 +6,7 @@
  *
  * Why this shape, field by field (each is a lens something could drop it on):
  *  - status `closed`   — the reaper closed the run; the slot is still owed.
- *                        Seeded closed directly: since Resolve-XP W2 a close
+ *                        Seeded closed directly: a close
  *                        through the door retires a decision ask with no ask
  *                        (`retirementForClose`, `session_ended`), so this pins
  *                        the read, not what the close leaves.
@@ -146,7 +146,7 @@ const FOUNDER_SLOT = {
   owner: "human",
   status: "pending",
   // Fresh: an owed ask 7+ days old leaves the headline for Review later
-  // (Resolve-XP decision 3), which this test is not about.
+  // (founder, 2026-10-26), which this test is not about.
   owedSince: new Date(Date.now() - 3_600_000).toISOString(),
   blockedReason: "decision",
 };

@@ -276,6 +276,8 @@ export interface LensNeedsYouSignal extends GroupableSignal {
   ask?: Ask | null;
   /** `owed-slot`: what raised it when no agent did. */
   askCause?: AskCause | null;
+  /** `owed-slot`: kept owed past its session — its fate reads it. */
+  keptOwedAt?: string | null;
 }
 
 /** A work-broke notification: ONE rule, owned by the Inbox buckets (`needs-you/buckets.ts`). */
@@ -553,6 +555,7 @@ export function lensRowOfNeedsYou<T extends LensNeedsYouSignal>(
               ask: s.ask,
               blockedReason: s.blockedReason,
               askCause: s.askCause,
+              keptOwedAt: s.keptOwedAt,
             },
             { askerName: s.by?.label, sessionId: row.session?.id ?? null }
           )
