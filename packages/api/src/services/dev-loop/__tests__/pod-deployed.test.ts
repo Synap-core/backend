@@ -18,6 +18,8 @@ function fakeDeps(over: Partial<PodDeployedDeps> = {}) {
   const recorded: RecordObservationInput[] = [];
   const deps: PodDeployedDeps = {
     buildSha: () => "91de41c34abc",
+    buildRepo: () => null,
+    builtAt: () => null,
     target: () => "pod.antoinesrvt.synap.live",
     owner: async () => "owner-1",
     alreadyRecorded: async () => false,
@@ -67,6 +69,34 @@ describe("recordPodDeployed", () => {
       contract: true,
       ok: true,
     });
+  });
+
+  it("names the build's repo and its commit time (one UTC spelling) when the image has them", async () => {
+    const { deps, recorded } = fakeDeps({
+      buildRepo: () => "Synap-core/backend",
+      builtAt: () => "2026-10-27T11:18:40+01:00",
+    });
+    expect(await recordPodDeployed(success, deps)).toMatchObject({
+      status: "recorded",
+    });
+    const r = recorded[0]!;
+    expect(r.data).toMatchObject({
+      repo: "Synap-core/backend",
+      builtAt: "2026-10-27T10:18:40.000Z",
+    });
+    expect(checkDevLoopPayload(r.type, r.data)).toEqual({
+      contract: true,
+      ok: true,
+    });
+  });
+
+  it("leaves repo and builtAt out when the image has none, or an unreadable time", async () => {
+    for (const builtAt of [null, "not-a-time"]) {
+      const { deps, recorded } = fakeDeps({ builtAt: () => builtAt });
+      await recordPodDeployed(success, deps);
+      expect(recorded[0]!.data).not.toHaveProperty("builtAt");
+      expect(recorded[0]!.data).not.toHaveProperty("repo");
+    }
   });
 
   it.each(["rolled_back", "rollback_failed", "failed", "aborted", "noop"])(
