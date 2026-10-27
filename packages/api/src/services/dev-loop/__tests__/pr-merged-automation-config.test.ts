@@ -1,9 +1,10 @@
 /**
- * The stored config the catalog lane ships for "PR merged → advance the step
- * → dogfood on the devbox" (plan v5 T2) passes the author-time flow gate the
- * automation door runs — so storing it is a proposal, never a refusal. The
- * placeholders (agent id, goal id) are the lane's to fill; the SHAPE is pinned
- * here. Kept equal to `wt-cb0d-briefs/lanes/be-loop-automation-config.json`.
+ * The stored config the catalog lane ships for "PR merged → grade the merged
+ * criterion → move the Ship-a-change step to deploy" (plan v5 T2; the dogfood
+ * run starts on `dev.deployed`, in the catalog's own flows) passes the
+ * author-time flow gate the automation door runs — so storing it is a
+ * proposal, never a refusal. Kept equal to
+ * `wt-cb0d-briefs/lanes/be-loop-automation-config.json`.
  */
 
 import { describe, it, expect } from "vitest";
@@ -74,29 +75,12 @@ const PR_MERGED_FLOW = {
         y: 360,
       },
       data: {
-        label: "Move the step to verifying",
+        label: "Move the step to deploy",
         outputType: "session_update",
         config: {
           sessionId: "{{trigger.payload.data.sessionId}}",
-          currentStage: "verifying",
+          currentStage: "deploy",
         },
-      },
-    },
-    {
-      id: "dogfood",
-      type: "playbook_run",
-      position: {
-        x: 0,
-        y: 480,
-      },
-      data: {
-        label: "Dogfood the merged change on the devbox",
-        playbookName: "Dogfood a change",
-        goalOverride:
-          "Dogfood {{trigger.payload.data.url}} ({{trigger.payload.data.repo}}#{{trigger.payload.data.number}}, merged at {{trigger.payload.data.sha}}) and report WORKS / BROKEN / CANNOT-TELL.",
-        handToAgentId:
-          "<claude-code-devbox agent user id: synap_list_agents, 4a14c2cf\u2026>",
-        trackId: "<the goal id, e.g. 'Work, done right'>",
       },
     },
   ],
@@ -116,15 +100,10 @@ const PR_MERGED_FLOW = {
       source: "merged-evidence",
       target: "advance",
     },
-    {
-      id: "e4",
-      source: "advance",
-      target: "dogfood",
-    },
   ],
 };
 
-describe("the PR-merged → dogfood automation config", () => {
+describe("the PR-merged automation config", () => {
   it("passes the flow gate", () => {
     const r = validateFlowDefinition(PR_MERGED_FLOW);
     expect(r.errors).toEqual([]);
