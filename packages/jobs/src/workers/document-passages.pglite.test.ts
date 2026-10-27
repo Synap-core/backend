@@ -252,8 +252,9 @@ describe("document-passages — a document body as recall passages, kept current
     expect(rows.every((r) => r.source_revision === 1)).toBe(true);
     // ONE IS batch call; the heading path is embedded with the text.
     expect(h.batches).toHaveLength(1);
+    // (markdown-core plain text runs a section's blocks together: "Pricing The…")
     expect(h.batches[0]![0]).toMatch(
-      /^Meeting notes › Pricing\n\nPricing\n\nThe seat price/
+      /^Meeting notes › Pricing\n\nPricing The seat price is 39 EUR\./
     );
     expect(await stateOf(doc.documentId)).toMatchObject({
       source_revision: 1,
