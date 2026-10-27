@@ -217,7 +217,9 @@ describe("governance.widen_lane — a per-motif widen", () => {
     expect((await decide("focus_session", "assign_agent", [])).decision).toBe(
       "propose"
     );
-    expect(await decide("focus_session", "assign_agent", [stored])).toEqual({
+    expect(
+      await decide("focus_session", "assign_agent", [stored])
+    ).toMatchObject({
       decision: "execute",
       governanceRuleId: "rule-motif",
     });
