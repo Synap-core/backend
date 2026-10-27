@@ -78,6 +78,7 @@ import {
   skillReach,
   type StepSkillLookup,
 } from "../../services/proposals/part-reach.js";
+import { readEnableTurnsOn } from "../../services/proposals/enable-turns-on.js";
 import type { EventRecord } from "@synap/database";
 import type {
   ProposalRemoval,
@@ -1264,6 +1265,11 @@ export async function enrichProposalsForDisplay(
     rows.filter((row) => isLiveProposalStatus(row.status)),
     userId
   );
+  // What a pending enable request would turn on, each skill whole.
+  const turnsOnById = await readEnableTurnsOn(
+    rows.filter((row) => isLiveProposalStatus(row.status)),
+    userId
+  );
   // NEW: Populate batch-joined lookup maps
   const playbookById = new Map<
     string,
@@ -2036,6 +2042,7 @@ export async function enrichProposalsForDisplay(
         ...(isLiveProposalStatus(row.status)
           ? { stepSkills: stepSkillsFor(row.workspaceId) }
           : {}),
+        turnsOn: turnsOnById.get(row.id),
         events: request.correlationId
           ? (traceByCorrelationId.get(request.correlationId) ?? [])
           : [],
@@ -2189,6 +2196,8 @@ function buildProposalReviewModel(params: {
   targetBefore?: Readonly<Record<string, unknown>>;
   /** Pending only: the skills an automation's steps would run, for its reach. */
   stepSkills?: StepSkillLookup;
+  /** A pending `capability.enable` only: what it would turn on. */
+  turnsOn?: ProposalReviewModel["turnsOn"];
   events: Awaited<ReturnType<EventRepository["getCorrelatedEvents"]>>;
 }): ProposalReviewModel {
   const {
@@ -2203,6 +2212,7 @@ function buildProposalReviewModel(params: {
     resolveUpdateTarget,
     targetBefore,
     stepSkills,
+    turnsOn,
     events,
   } = params;
   const requestData =
@@ -2271,6 +2281,7 @@ function buildProposalReviewModel(params: {
     ),
     ...(graph ? { graph } : {}),
     ...(removal ? { removal } : {}),
+    ...(turnsOn ? { turnsOn } : {}),
     events: reviewEvents,
   };
 }

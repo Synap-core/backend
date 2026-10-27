@@ -22,6 +22,7 @@ import {
 } from "@synap/database";
 import { skills, tools } from "@synap/database/schema";
 import type { ProviderVerbSpec } from "@synap/database/schema";
+import type { CapabilityEnableOffer } from "../services/capabilities/propose-capability-enable.js";
 import {
   getLinksFor,
   createLinks,
@@ -472,7 +473,15 @@ export type InsertSkillGovernedInput = typeof skills.$inferInsert & {
 };
 
 export type InsertSkillGovernedResult =
-  | { status: "installed"; skill: typeof skills.$inferSelect }
+  | {
+      status: "installed";
+      skill: typeof skills.$inferSelect;
+      /**
+       * An agent's skill no person reviewed, born off: the "turn this on?"
+       * request filed for the person (`requestAgentSkillTurnOn`).
+       */
+      turnOnRequest?: CapabilityEnableOffer;
+    }
   | { status: "proposed"; proposalId: string }
   | { status: "denied"; reason: string };
 
@@ -521,13 +530,20 @@ export async function insertSkillGoverned(
     return { status: "proposed", proposalId: perm.proposalId };
   }
 
+  const authorAgentUserId = agentUserId ?? skillAuthor?.agentUserId;
+  const personApprovedProposal =
+    !agentUserId && skillAuthor?.personApproved === true;
   const approved = skillBornApproved({
     kind: values.kind,
     code: values.code,
     providerSpec: values.providerSpec,
-    agentUserId: agentUserId ?? skillAuthor?.agentUserId,
-    personApprovedProposal:
-      !agentUserId && skillAuthor?.personApproved === true,
+    agentUserId: authorAgentUserId,
+    personApprovedProposal,
+    executionMode: values.executionMode,
+    metadata: values.metadata,
+    // No door through here declares `requires` tools (the `skill/create`
+    // executor writes them after, and re-decides with them).
+    requiredTools: [],
   });
 
   const [skill] = await db
@@ -558,7 +574,23 @@ export async function insertSkillGoverned(
     workspaceId: values.workspaceId ?? undefined,
   });
 
-  return { status: "installed", skill };
+  // Dynamic, like the other enable-request imports here: the proposer's module
+  // graph stays out of this router's load.
+  const { requestAgentSkillTurnOn } =
+    await import("../services/capabilities/request-skill-turn-on.js");
+  const turnOnRequest = await requestAgentSkillTurnOn({
+    skill,
+    authorAgentUserId,
+    personReviewed: personApprovedProposal,
+    userId: values.userId,
+    workspaceId: values.workspaceId ?? null,
+  });
+
+  return {
+    status: "installed",
+    skill,
+    ...(turnOnRequest ? { turnOnRequest } : {}),
+  };
 }
 
 /**
@@ -1496,6 +1528,10 @@ export const skillsRouter = router({
             code: input.code,
             providerSpec: input.providerSpec,
             agentUserId: input.agentUserId,
+            executionMode: input.executionMode,
+            metadata,
+            // Declared now, linked just below: the rule must see them.
+            requiredTools: requiredToolIds,
           }),
         })
         .returning();
@@ -1528,9 +1564,25 @@ export const skillsRouter = router({
         workspaceId: input.workspaceId,
       });
 
+      // 5. An agent's skill born off with no person reviewing it (a rule
+      //    granted the create): ONE "turn this on?" request for the person.
+      const { requestAgentSkillTurnOn } =
+        await import("../services/capabilities/request-skill-turn-on.js");
+      const turnOnRequest = await requestAgentSkillTurnOn({
+        skill,
+        authorAgentUserId: input.agentUserId,
+        personReviewed: false,
+        userId,
+        workspaceId: input.workspaceId ?? null,
+        sessionId: ctx.sessionId ?? null,
+      });
+
       return {
         id: skill.id,
         status: "created" as const,
+        approved: skill.approved,
+        // Present only when one was filed (undefined never reaches the wire).
+        turnOnRequest: turnOnRequest ?? undefined,
       };
     }),
 
