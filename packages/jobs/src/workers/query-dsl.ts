@@ -88,6 +88,12 @@ function stripPropertiesPrefix(key: string): string {
   return key.startsWith("properties.") ? key.slice("properties.".length) : key;
 }
 
+/** How a refused filter value is named in `QueryFilterParseError`. */
+function valueKind(value: unknown): string {
+  if (value === null) return "null";
+  return Array.isArray(value) ? "an array" : typeof value;
+}
+
 function asQueryFilterObject(
   filter: unknown
 ): Record<string, unknown> | undefined {
@@ -120,12 +126,34 @@ export function resolveQueryProfileSlug(
 }
 
 /**
+ * A query node's filter that is present but does not read as an object: a
+ * string that renders empty or is not a JSON object after templating, or a
+ * value that is neither an object nor a string.
+ *
+ * Thrown, never swallowed: read as "no filter", it would return EVERY row of
+ * the kind, and a typo in a flow feeding an `entity_update` would touch the
+ * whole kind. A filter the author wrote and the engine cannot read is a failed
+ * step, not an empty filter. The step
+ * runner records it as `failed` with this message (`automation-executor.ts`).
+ */
+export class QueryFilterParseError extends Error {
+  constructor(detail: string) {
+    super(`query node: ${detail}; refusing to run the query unfiltered`);
+    this.name = "QueryFilterParseError";
+  }
+}
+
+/**
  * Parse a query node's `filter` into property conditions. Supports both the
  * legacy shape — a JSON-stringified flat `{ propertyKey: value }` equality
  * map, resolved via template first — and the object shape AI-authored flows
  * emit directly (`{ profileSlug, "properties.<key>": value | { $gt, … } }`).
  * `profileSlug` is resolved separately (`resolveQueryProfileSlug`) and
- * skipped here. Never throws: an unparseable/empty filter yields `[]`.
+ * skipped here. An absent filter (`undefined`, `null`, `""`) yields `[]` (no
+ * filter). Every other filter that does not read as an object throws
+ * `QueryFilterParseError`: a string that renders empty or does not parse to a
+ * JSON object after templating, and an array, number or boolean. A failed read
+ * is never an empty filter.
  *
  * KEY RESOLUTION — identical precedence to `parseQueryOrderBy`, on purpose, so
  * the two halves of a query node mean the same thing by the same name:
@@ -144,15 +172,33 @@ export function parseQueryFilterConditions(
   context: StepContext
 ): QueryCondition[] {
   let filterObj = asQueryFilterObject(filter);
-  if (!filterObj && typeof filter === "string") {
+  if (!filterObj && typeof filter === "string" && filter.trim()) {
     const resolved = resolveTemplate(filter, context);
-    if (resolved) {
-      try {
-        filterObj = JSON.parse(resolved) as Record<string, unknown>;
-      } catch {
-        filterObj = undefined; // unparseable filter — ignore, return unfiltered (defensive)
-      }
+    // A template the author wrote that renders to nothing (a missing
+    // `{{trigger.payload.filter}}`) is a filter that could not be read.
+    if (!resolved.trim()) {
+      throw new QueryFilterParseError(
+        `filter ${JSON.stringify(filter)} is empty after templating`
+      );
     }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(resolved);
+    } catch (err) {
+      throw new QueryFilterParseError(
+        `filter is not valid JSON after templating (${(err as Error).message})`
+      );
+    }
+    filterObj = asQueryFilterObject(parsed);
+    if (!filterObj) {
+      throw new QueryFilterParseError(
+        `filter must be a JSON object, got ${valueKind(parsed)}`
+      );
+    }
+  } else if (!filterObj && filter != null && typeof filter !== "string") {
+    throw new QueryFilterParseError(
+      `filter must be an object or a JSON string, got ${valueKind(filter)}`
+    );
   }
   if (!filterObj) return [];
 
