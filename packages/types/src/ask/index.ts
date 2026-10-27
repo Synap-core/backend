@@ -129,10 +129,15 @@ export function atMostOneRecommended(
 /**
  * A follow-up option: a plain {@link AskOptionSchema} option. A `followUp` of
  * its own is REFUSED at the parse, never silently stripped: the tree goes ONE
- * level deep.
+ * level deep. Strict (an unknown key is refused) rather than a `z.never()`
+ * field: the Hub OpenAPI generator cannot draw `never`, and every route whose
+ * body carries an ask dropped out of `hub-openapi.json`.
  */
-const AskFollowUpOptionSchema = AskOptionSchema.extend({
-  followUp: z.never({ message: "a follow-up goes one level deep" }).optional(),
+const AskFollowUpOptionSchema = z.strictObject(AskOptionSchema.shape, {
+  error: (iss) =>
+    iss.code === "unrecognized_keys" && iss.keys.includes("followUp")
+      ? "a follow-up goes one level deep"
+      : undefined,
 });
 
 /**
@@ -793,8 +798,7 @@ export function validateAnswerAgainstAsk(
           `"${value.then.label}" is not one of the follow-up's options.`
         );
       }
-      const { followUp: _none, ...then } = picked;
-      return { ok: true, value: { type: "chip", chip, then } };
+      return { ok: true, value: { type: "chip", chip, then: picked } };
     }
     case "form": {
       if (value.type !== "form") {
