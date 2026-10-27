@@ -91,9 +91,10 @@ describe("desktop: Open in app stands alone at rest", () => {
 describe("the offer, once a click did not open the app", () => {
   it("says Synap didn't open and links the download", () => {
     const placed = placeExit(SPACE, false, "admin");
+    // renderToStaticMarkup escapes the apostrophe ("didn&#x27;t").
     const html = renderToStaticMarkup(
       <NotOpenedOffer hatch={placed.ifNotOpened!} />
-    );
+    ).replace(/&#x27;/g, "'");
     expect(html).toContain(DESKTOP_NOT_OPENED_NOTE);
     expect(html).toContain(`href="${DOWNLOAD}"`);
     expect(html).toContain("Get the desktop app");

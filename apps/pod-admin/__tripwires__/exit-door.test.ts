@@ -132,7 +132,9 @@ describe("pod-admin exit door", () => {
     // its anchor that way — invisible to a guard matching only `exit.fallback`.
     // Both spellings belong to `exit-link.tsx` alone.
     // `ifNotOpened` is the third: where `placeExit` holds the desktop download.
-    const allowed = new Set(["lib/exit-link.tsx"]);
+    // `lib/open-in.ts` builds it (placeExit) and renders nothing; reading it
+    // to RENDER stays `exit-link.tsx`'s alone.
+    const allowed = new Set(["lib/exit-link.tsx", "lib/open-in.ts"]);
     const hits = FILES.filter(
       (f) =>
         /\bexit\.fallback\b|\bfallback\.href\b|\bifNotOpened\b|\bDESKTOP_FALLBACK\s*\.\s*(?:href|label)\b/.test(
