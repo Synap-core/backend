@@ -35,6 +35,7 @@ import {
   type GovernanceGrantOption,
 } from "@synap-core/types";
 import { trpc } from "../../../lib/trpc";
+import { approveInput, renderedRevision } from "./use-proposal-decision";
 
 type CreateRuleInput = Parameters<
   ReturnType<typeof trpc.governanceRules.create.useMutation>["mutate"]
@@ -55,6 +56,7 @@ export interface ProposalForRule {
   agentUserId?: string | null;
   workspaceId?: string | null;
   request?: { data?: unknown } | null;
+  revisionHistory?: unknown;
 }
 
 function stringField(data: unknown, key: string): string | undefined {
@@ -135,7 +137,9 @@ export function AlwaysApproveMenu({
   async function approveAndAlways(g: Granularity) {
     setRunning(true);
     try {
-      await approve.mutateAsync({ proposalId: proposal.id });
+      await approve.mutateAsync(
+        approveInput(proposal.id, {}, renderedRevision(proposal))
+      );
       try {
         await createRule.mutateAsync(g.input);
         addToast({

@@ -117,6 +117,7 @@ import {
   findFallbackSubject,
   loadVisibleEntityIds,
 } from "./pinned-subject-query.js";
+import { QueryFilterParseError } from "@synap/jobs/workers/query-dsl.js";
 
 const logger = createLogger({ module: "run-playbook" });
 
@@ -693,13 +694,26 @@ async function choosePinnedSubject(
   let fallbackId: string | null = null;
   const slug = subjectProfileSlug(playbook.subjectProfile);
   if (!pin && slug && strategy.fallback) {
-    fallbackId = await findFallbackSubject({
-      profileSlug: slug,
-      workspaceId: input.workspaceId,
-      ownerId: input.userId,
-      fallback: strategy.fallback,
-      projectId: input.projectId ?? null,
-    });
+    try {
+      fallbackId = await findFallbackSubject({
+        profileSlug: slug,
+        workspaceId: input.workspaceId,
+        ownerId: input.userId,
+        fallback: strategy.fallback,
+        projectId: input.projectId ?? null,
+      });
+    } catch (err) {
+      // The playbook's own stored filter is unreadable: the caller's request
+      // is refused with what to fix, not a 500.
+      if (err instanceof QueryFilterParseError) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Nothing ran: the subject fallback filter of "${playbook.name}" cannot be read (${err.message}). Fix that filter in the playbook's subject settings.`,
+          cause: err,
+        });
+      }
+      throw err;
+    }
   }
   return decidePinnedSubject({
     callerSubjectId: null,

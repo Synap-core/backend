@@ -1,12 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import {
-  db,
-  proposals,
-  eq,
-  skills,
-  tools,
-  getActingAgentUserId,
-} from "@synap/database";
+import { db, proposals, eq, skills, tools } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 // Type-only (erased at compile) so it can't trip the skills.ts circular-import
@@ -14,8 +7,10 @@ import { createLogger } from "@synap-core/core";
 import type { InsertSkillGovernedInput } from "../../skills.js";
 import { registerProposalExecutor } from "../execution-registry.js";
 import { assertApplied, reportApproved } from "./shared.js";
-import { isAgentPrincipal } from "../review-authority.js";
-import { skillBornApproved } from "../../../services/capabilities/skill-born-approved.js";
+import {
+  personIsApproving,
+  skillBornApproved,
+} from "../../../services/capabilities/skill-born-approved.js";
 import { assertWorkspaceWrite } from "../../../utils/workspace-write-access.js";
 import type { Context } from "../../../context.js";
 
@@ -216,32 +211,16 @@ export function registerSkillExecutors(): void {
         }
       }
 
-      // THE APPROVAL VERDICT (`skillBornApproved`, one rule with the create
-      // doors). insertSkillGoverned re-ran its gate as the APPROVER
-      // (agentUserId: undefined above), or the agent branch of
-      // checkPermissionOrPropose would fire again and the approval dead-end in
-      // "unexpectedly re-proposed". That operator identity is not the author,
-      // so the row it wrote is corrected here from the proposal's real author
-      // and from who approved:
-      //   - a PERSON approved: the review showed the whole code or body, so the
-      //     click IS the owner's OK. The skill lands approved and runs, with no
-      //     second enable step (founder decision 2). Turned on through
-      //     `setSkillApproved`, the one enable door (its owner gate, audit and
-      //     pack re-sync).
-      //   - anything else (an agent travelling behind a human, an agent key, an
-      //     agent principal) on an AGENT's proposal: approved:false. Otherwise
-      //     an agent-authored instruction skill would land in the agent's
-      //     system prompt with no owner approval (the prompt-injection vector).
-      // A governance rule never reaches this executor: auto-approval runs the
-      // door with the agent id, born approved:false. Decided AFTER the requires
-      // edges and the verb wiring above, so turning it on re-syncs the packs
-      // the verb was just attached to.
-      const approvedByPerson =
-        !ctx?.agentUserId &&
-        !getActingAgentUserId() &&
-        !(await isAgentPrincipal(userId));
+      // The approval verdict is `skillBornApproved` (one rule with the create
+      // doors). insertSkillGoverned ran as the approver, so the row is
+      // corrected here from the proposal's real author and from who approved
+      // (`personIsApproving`). Decided after the `requires` edges and verb
+      // wiring above, so turning it on re-syncs the packs.
+      const approvedByPerson = await personIsApproving(ctx, userId);
       const approved = skillBornApproved({
         kind: materializedSkill.kind,
+        code: materializedSkill.code,
+        providerSpec: materializedSkill.providerSpec,
         agentUserId: proposal.agentUserId,
         personApprovedProposal: approvedByPerson,
       });

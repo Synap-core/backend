@@ -81,6 +81,21 @@ export function readOnlyWidened(
   return metadataPatch["readOnly"] === true && !before;
 }
 
+/**
+ * `metadata.box` CHANGED on a box skill (0356): its language, packages, hosts
+ * and limits are what the person approved besides the code — a new package is
+ * new code, a new host is a wider egress allowlist. Same peeled-off-metadata
+ * blind spot as `allowedHostsChanged`, same VALUE (not presence) rule.
+ */
+export function boxDeclarationChanged(
+  metadataPatch: Record<string, unknown> | undefined,
+  existingMetadata: Record<string, unknown> | null | undefined
+): boolean {
+  if (!metadataPatch || !("box" in metadataPatch)) return false;
+  const before = (existingMetadata ?? {})["box"];
+  return canonicalJson(metadataPatch["box"]) !== canonicalJson(before);
+}
+
 export const RE_APPROVAL_FIELDS = [
   "code",
   // For a `declarative` skill the providerSpec IS the executable — it defines

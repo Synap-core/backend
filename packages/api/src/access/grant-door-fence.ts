@@ -151,6 +151,12 @@ export const GRANT_SAFE_REST_READS: readonly RegExp[] = [
   /^\/messaging\/channels\/?$/,
   /^\/messaging\/linked-unread\/?$/,
   /^\/focus-sessions\/?$/,
+  // What waits on the caller (`listNeedsYouOwed`): focus_sessions floored by
+  // `sessionReadableWhere` (owner + the key's grant, `session` subject); an
+  // ask's `lookedAt` titles through `scopedDb`; and the display name of each
+  // returned session's first roster agent (the `agentIds` the list door above
+  // already returns, named).
+  /^\/focus-sessions\/owed\/?$/,
   // Read only through ownerPrivateVisibleWhere (grant hook, `project` subject)
   // plus seamed entity reads:
   /^\/projects\/?$/,

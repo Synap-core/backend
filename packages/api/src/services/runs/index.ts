@@ -95,6 +95,11 @@ import {
 } from "@synap-core/types/run-activity";
 import { humanizeToken } from "@synap-core/types/vocabulary";
 import { loadSessionActivity } from "./session-activity.js";
+import { isQueuedBoxRunResult } from "../box-runs/box-runs.js";
+import {
+  listBoxRunsForFeed,
+  loadBoxRunDetail,
+} from "../box-runs/box-run-reads.js";
 import { runStatusOfPlaybookRun } from "./playbook-run-status.js";
 import {
   CAPABILITY_RUN_EVENT_KIND,
@@ -760,43 +765,53 @@ async function listCapabilityRuns(
     .orderBy(desc(proposals.createdAt))
     .limit(limit);
 
-  const proposalRuns: UnifiedRun[] = rows.map((r) => {
-    const data = (r.data ?? {}) as Record<string, unknown>;
-    return {
-      id: r.id,
-      flowType: "capability" as const,
-      flowId: null,
-      flowName:
-        typeof data.verbId === "string" && data.verbId
-          ? data.verbId
-          : typeof data.skillId === "string"
-            ? data.skillId
-            : "Capability",
-      status: capabilityRunStatus(r.status),
-      startedAt: r.createdAt,
-      completedAt: r.reviewedAt ?? null,
-      // Synthesised from a proposal row — no per-run progress column exists.
-      lastActivityAt: null,
-      workspaceId: r.workspaceId ?? null,
-      projectId: r.projectId ?? null,
-      subjectEntityId: null,
-      channelId: null,
-      correlationId: r.correlationId ?? null,
-      replayOf: null,
-      // The executor stores the run output in `data.runResult` on approval;
-      // surface a compact one-line form so the Activity feed shows the result
-      // (mirrors capture's `data.summary`), not a blank row.
-      summary:
-        data.runResult !== undefined
-          ? `Result: ${JSON.stringify(data.runResult).slice(0, 200)}`
-          : null,
-      error: null,
-      triggeredBy: null,
-      stepsCompleted: null,
-      stepsFailed: null,
-      definitionVersion: null,
-    };
-  });
+  // An approved run of a BOX skill only QUEUED it: the box run row below is
+  // that run (its live status, log and files), so the proposal is not listed
+  // a second time as a "completed" run.
+  const proposalRuns: UnifiedRun[] = rows
+    .filter(
+      (r) =>
+        !isQueuedBoxRunResult(
+          ((r.data ?? {}) as Record<string, unknown>).runResult
+        )
+    )
+    .map((r) => {
+      const data = (r.data ?? {}) as Record<string, unknown>;
+      return {
+        id: r.id,
+        flowType: "capability" as const,
+        flowId: null,
+        flowName:
+          typeof data.verbId === "string" && data.verbId
+            ? data.verbId
+            : typeof data.skillId === "string"
+              ? data.skillId
+              : "Capability",
+        status: capabilityRunStatus(r.status),
+        startedAt: r.createdAt,
+        completedAt: r.reviewedAt ?? null,
+        // Synthesised from a proposal row — no per-run progress column exists.
+        lastActivityAt: null,
+        workspaceId: r.workspaceId ?? null,
+        projectId: r.projectId ?? null,
+        subjectEntityId: null,
+        channelId: null,
+        correlationId: r.correlationId ?? null,
+        replayOf: null,
+        // The executor stores the run output in `data.runResult` on approval;
+        // surface a compact one-line form so the Activity feed shows the result
+        // (mirrors capture's `data.summary`), not a blank row.
+        summary:
+          data.runResult !== undefined
+            ? `Result: ${JSON.stringify(data.runResult).slice(0, 200)}`
+            : null,
+        error: null,
+        triggeredBy: null,
+        stepsCompleted: null,
+        stepsFailed: null,
+        definitionVersion: null,
+      };
+    });
 
   // DIRECT runs — a capability executed via the door WITHOUT a proposal
   // (owner-bypass / read-only builtin / governance-auto-granted agent) emits a
@@ -827,72 +842,89 @@ async function listCapabilityRuns(
           )
           .orderBy(desc(events.timestamp))
           .limit(limit);
-        return eventRows.map((e) => {
-          const data = (e.data ?? {}) as Record<string, unknown>;
-          const runResult = data.runResult;
-          // A REFUSED attempt (execute-capability's `recordRefusedCapabilityRun`)
-          // rides the SAME event kind as a delivered run — `outcome` is what
-          // separates them. Without this branch a refusal would render as
-          // `completed`, which is a worse lie than the silence it replaced.
-          const refused = data.outcome === REFUSED_OUTCOME;
-          const refusalReason =
-            typeof data.refusalReason === "string" ? data.refusalReason : null;
-          const reasonText =
-            typeof data.reason === "string" ? (data.reason as string) : null;
-          return {
-            // A direct run has no proposal row — its correlationId is its id
-            // (mirrors capture's `correlationId ?? id`).
-            id: e.correlationId ?? e.id,
-            flowType: "capability" as const,
-            flowId: null,
-            flowName:
-              typeof data.verbId === "string" && data.verbId
-                ? data.verbId
-                : typeof data.skillId === "string"
-                  ? data.skillId
-                  : "Capability",
-            // An emitted direct run reached its handler and returned → completed.
-            // A refusal never ran at all: it is a governance OUTCOME, not a
-            // transport failure, so it reuses `blocked_by_policy` (the status
-            // automation runs already use for the same meaning) — never
-            // "failed", which would send the human debugging a working verb.
-            status: refused
-              ? ("blocked_by_policy" as const)
-              : ("completed" as const),
-            startedAt: e.timestamp,
-            completedAt: e.timestamp,
-            // Synthesised from a single terminal event — never "running".
-            lastActivityAt: null,
-            workspaceId:
-              typeof data.workspaceId === "string" ? data.workspaceId : null,
-            projectId: null,
-            subjectEntityId: null,
-            channelId: null,
-            correlationId: e.correlationId ?? null,
-            replayOf: null,
-            summary: refused
-              ? // WHY it was refused is the whole point of the row — and the
-                // three reasons need three different fixes, so the machine code
-                // rides alongside the human text rather than replacing it.
-                `Refused${refusalReason ? ` (${refusalReason})` : ""}${
-                  reasonText ? `: ${reasonText.slice(0, 200)}` : ""
-                }`
-              : runResult !== undefined
-                ? `Result: ${JSON.stringify(runResult).slice(0, 200)}`
-                : // A MIRROR read (a sync page) records only a slim summary: no
-                  // payload by design (founder decision 2026-09-14, option b).
-                  isSlimRunSummary(data.runSummary)
-                  ? data.runSummary.itemCount !== null
-                    ? `Synced ${data.runSummary.itemCount} item${data.runSummary.itemCount === 1 ? "" : "s"}`
-                    : "Synced"
-                  : null,
-            error: null,
-            triggeredBy: null,
-            stepsCompleted: null,
-            stepsFailed: null,
-            definitionVersion: null,
-          };
-        });
+        return (
+          eventRows
+            // A direct box run's event records only that it was QUEUED; the
+            // box run row is the run (see the proposal filter above).
+            .filter(
+              (e) =>
+                !isQueuedBoxRunResult(
+                  ((e.data ?? {}) as Record<string, unknown>).runResult
+                )
+            )
+            .map((e) => {
+              const data = (e.data ?? {}) as Record<string, unknown>;
+              const runResult = data.runResult;
+              // A REFUSED attempt (execute-capability's `recordRefusedCapabilityRun`)
+              // rides the SAME event kind as a delivered run — `outcome` is what
+              // separates them. Without this branch a refusal would render as
+              // `completed`, which is a worse lie than the silence it replaced.
+              const refused = data.outcome === REFUSED_OUTCOME;
+              const refusalReason =
+                typeof data.refusalReason === "string"
+                  ? data.refusalReason
+                  : null;
+              const reasonText =
+                typeof data.reason === "string"
+                  ? (data.reason as string)
+                  : null;
+              return {
+                // A direct run has no proposal row — its correlationId is its id
+                // (mirrors capture's `correlationId ?? id`).
+                id: e.correlationId ?? e.id,
+                flowType: "capability" as const,
+                flowId: null,
+                flowName:
+                  typeof data.verbId === "string" && data.verbId
+                    ? data.verbId
+                    : typeof data.skillId === "string"
+                      ? data.skillId
+                      : "Capability",
+                // An emitted direct run reached its handler and returned → completed.
+                // A refusal never ran at all: it is a governance OUTCOME, not a
+                // transport failure, so it reuses `blocked_by_policy` (the status
+                // automation runs already use for the same meaning) — never
+                // "failed", which would send the human debugging a working verb.
+                status: refused
+                  ? ("blocked_by_policy" as const)
+                  : ("completed" as const),
+                startedAt: e.timestamp,
+                completedAt: e.timestamp,
+                // Synthesised from a single terminal event — never "running".
+                lastActivityAt: null,
+                workspaceId:
+                  typeof data.workspaceId === "string"
+                    ? data.workspaceId
+                    : null,
+                projectId: null,
+                subjectEntityId: null,
+                channelId: null,
+                correlationId: e.correlationId ?? null,
+                replayOf: null,
+                summary: refused
+                  ? // WHY it was refused is the whole point of the row — and the
+                    // three reasons need three different fixes, so the machine code
+                    // rides alongside the human text rather than replacing it.
+                    `Refused${refusalReason ? ` (${refusalReason})` : ""}${
+                      reasonText ? `: ${reasonText.slice(0, 200)}` : ""
+                    }`
+                  : runResult !== undefined
+                    ? `Result: ${JSON.stringify(runResult).slice(0, 200)}`
+                    : // A MIRROR read (a sync page) records only a slim summary: no
+                      // payload by design (founder decision 2026-09-14, option b).
+                      isSlimRunSummary(data.runSummary)
+                      ? data.runSummary.itemCount !== null
+                        ? `Synced ${data.runSummary.itemCount} item${data.runSummary.itemCount === 1 ? "" : "s"}`
+                        : "Synced"
+                      : null,
+                error: null,
+                triggeredBy: null,
+                stepsCompleted: null,
+                stepsFailed: null,
+                definitionVersion: null,
+              };
+            })
+        );
       })();
 
   // Union + dedupe by correlationId. A proposed→approved run has BOTH a proposal
@@ -905,11 +937,21 @@ async function listCapabilityRuns(
       .map((r) => r.correlationId)
       .filter((c): c is string => typeof c === "string")
   );
+  // BOX runs (0356): a box skill's run lives in `box_runs` — its own ids, its
+  // own lifecycle; the session lens and the project rule apply as above.
+  const boxRunRows = await listBoxRunsForFeed(
+    userId,
+    scope,
+    limit,
+    status,
+    exactRunId
+  );
   const merged = [
     ...proposalRuns,
     ...eventRuns.filter(
       (r) => !r.correlationId || !seenCorrelation.has(r.correlationId)
     ),
+    ...boxRunRows,
   ];
   merged.sort(byStartedAtDesc);
   return merged.slice(0, limit).filter((r) => !status || r.status === status);
@@ -2163,6 +2205,20 @@ export async function getRun(
   // emits an ai_decision on approval (see approve-executors.ts's
   // `capability.run` executor).
   if (flowType === "capability") {
+    // A BOX run answers with its own story (script, computer, evidence).
+    const box = await loadBoxRunDetail(userId, id);
+    if (box) {
+      return {
+        run: { ...box.run, flowType: "capability" },
+        activity: [],
+        trigger: null,
+        outputSummary: null,
+        playbookDetail: null,
+        definitionSnapshot: null,
+        pathTaken: null,
+        boxRun: box.boxRun,
+      };
+    }
     const [run] = await listCapabilityRuns(userId, {}, 1, undefined, id);
     if (!run) return null;
     // A PROPOSAL-backed run stores its output in `data.runResult` on approval
