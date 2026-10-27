@@ -10,57 +10,31 @@ import { entities, entityPropertyIndex } from "../schema/index.js";
 import { PropertyMergingService } from "./property-merging-service.js";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type * as schema from "../schema/index.js";
+import {
+  VIEW_FILTER_OPERATORS,
+  VIEW_FILTER_CORE_FIELDS,
+  type EntityFilter,
+  type FilterOperator as ViewFilterOperator,
+} from "@synap-core/types/views";
 
 /**
- * The view filter operators this compiler evaluates — a RUNTIME MIRROR of
- * `VIEW_FILTER_OPERATORS` in `@synap-core/types/views` (`views/filters.ts`),
- * the ONE grammar the UI and the views tRPC doors use.
- *
- * Mirrored, not imported: `@synap-core/types` depends on `@synap/database`, so
- * importing it here is a build cycle (same precedent as
- * `GUIDELINE_SCOPE_ORDER`). `view-filter-operators-parity.test.ts` fails if
- * the two sets differ, AND compiles every operator in the authored set through
- * this class, so an operator added to the grammar cannot reach a view without
- * a compile path.
+ * The view filter grammar this compiler evaluates — the operators
+ * (`VIEW_FILTER_OPERATORS`), the entity columns a filter may name directly
+ * (`VIEW_FILTER_CORE_FIELDS`; anything else must be `properties.<slug>`, and an
+ * unknown field THROWS — it never compiles to "no condition", which would
+ * return every row as if filtered) and the filter shape (`EntityFilter`).
+ * Declared ONCE in `@synap-core/types/views` (`views/filters.ts`), the grammar
+ * the UI and the views tRPC doors use, and re-exported here.
+ * `view-filter-operators-parity.test.ts` compiles every authored operator
+ * through this class, so an operator added to the grammar cannot reach a view
+ * without a compile path.
  */
-export const VIEW_FILTER_OPERATORS = [
-  "equals",
-  "not_equals",
-  "contains",
-  "not_contains",
-  "in",
-  "not_in",
-  "greater_than",
-  "greater_than_or_equal",
-  "less_than",
-  "less_than_or_equal",
-  "is_empty",
-  "is_not_empty",
-] as const;
-
-export type ViewFilterOperator = (typeof VIEW_FILTER_OPERATORS)[number];
-
-/**
- * The entity columns a filter may name directly — a RUNTIME MIRROR of
- * `VIEW_FILTER_CORE_FIELDS` in `@synap-core/types/views` (same build-cycle
- * reason as {@link VIEW_FILTER_OPERATORS}; same parity tripwire). Anything
- * else must be `properties.<slug>`; an unknown field THROWS — it never
- * compiles to "no condition", which would return every row as if filtered.
- */
-export const VIEW_FILTER_CORE_FIELDS = [
-  "title",
-  "preview",
-  "type",
-  "createdAt",
-  "updatedAt",
-] as const;
-
-// EntityFilter — structurally identical to `@synap-core/types` `EntityFilter`.
-export interface EntityFilter {
-  field: string;
-  operator: ViewFilterOperator;
-  value?: unknown;
-}
+export {
+  VIEW_FILTER_OPERATORS,
+  VIEW_FILTER_CORE_FIELDS,
+  type EntityFilter,
+  type ViewFilterOperator,
+};
 
 export interface CompiledFilter {
   sql: SQL;

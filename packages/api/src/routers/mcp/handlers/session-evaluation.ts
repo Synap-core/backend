@@ -48,6 +48,9 @@ export const sessionEvaluationHandlers: McpHandlerMap = {
       userId,
       agentUserId: agentUserId ?? null,
       evidence: parsed.data.evidence,
+      // `evaluate_session` is where a criterion the agent could not pass
+      // becomes the person's ask (E3) — never a mid-session grade.
+      escalate: true,
     });
     if (result.status === "not_found") {
       return ok({ error: `Focus session ${parsed.data.sessionId} not found` });

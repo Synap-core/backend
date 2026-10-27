@@ -87,14 +87,16 @@ describe("the intent-vocabulary 'how to' is reachable", () => {
     expect(missing).toEqual([]);
   });
 
-  it("the chapter states the SSOT, the constraints, and the steps — the three things that made the mirrors unavoidable", () => {
+  it("the chapter states the SSOT, the constraints, and the steps — what makes the mirrors unavoidable", () => {
     const doc = readFileSync(join(PKG, CHAPTER), "utf8");
     // THE SSOT, named as a table (not "the union").
     expect(doc).toMatch(/capability_intents/);
     expect(doc).toMatch(/TABLE|table/);
-    // The CONSTRAINTS that make three mirrors necessary — a reader who has not
-    // felt these will "helpfully" collapse a mirror and reintroduce the bug.
-    expect(doc).toMatch(/build cycle/i);
+    // The CONSTRAINTS that make the two mirrors necessary — the slugs live in
+    // SQL rows, and the control plane is a separate deploy target. (The old
+    // third constraint, the types→database build cycle, is gone: the pod's
+    // copy was collapsed on 2026-10-26.)
+    expect(doc).toMatch(/Slugs live in ROWS/);
     expect(doc).toMatch(/deploy target/i);
     // The STEPS, including the two that are easy to miss and are the actual
     // failure modes: rebuilding `packages/types`, and updating the arity floor.
@@ -106,12 +108,12 @@ describe("the intent-vocabulary 'how to' is reachable", () => {
     expect(doc.length).toBeGreaterThan(1500);
   });
 
-  it("the chapter names all THREE mirrors by path (a fourth would be invisible otherwise)", () => {
+  it("the chapter names both mirrors, and where the pod reads one, by path (a third would be invisible otherwise)", () => {
     const doc = readFileSync(join(PKG, CHAPTER), "utf8");
     for (const path of [
-      "packages/database/src/schema/tools.ts",
       "packages/types/src/capability-intents",
       "synap-control-plane-api/src/seeds/capability-intent-vocabulary.ts",
+      "packages/database/src/schema/tools.ts",
     ]) {
       expect(doc, `mirror path not documented: ${path}`).toContain(path);
     }

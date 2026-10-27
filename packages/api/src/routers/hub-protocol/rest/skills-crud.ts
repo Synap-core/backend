@@ -22,16 +22,17 @@
  *   POST   /skills            — create a skill (proposal-gated; optional `requires` tool links)
  *   GET    /skills            — list skills (pod + user + workspace scope)
  *   POST   /skills/:id/approve — approve/revoke skill execution (owner/pod-admin gated; reuses skillsRouter.setApproved)
- *   POST   /skills/:id/dry-run — preview a skill (proxies to the IS dry-run route — external writes stubbed, reads real)
+ *   POST   /skills/:id/dry-run — preview a skill (the one skill door, `runSkill` dryRun — external writes recorded, reads real)
  *   DELETE /skills/:id         — delete a skill (proposal-gated; reuses skillsRouter.delete)
  */
 
 import { z } from "@hono/zod-openapi";
-import { db, eq, isDelegationHeaders, skills } from "@synap/database";
+import { and, db, eq, skills } from "@synap/database";
 
 import { skillsRouter } from "../../skills.js";
 import { buildProviderRequest } from "../../../services/capabilities/execute-provider-verb.js";
-import { resolveIntelligenceService } from "../../../utils/intelligence-routing.js";
+import { runSkill } from "../../../services/skills/run-skill.js";
+import { visibleSkillsAnyWorkspaceWhere } from "../../../services/skills/visibility.js";
 import { createHubProtocolCallerContext } from "../utils.js";
 import { skillAuthoringProblem } from "../../../services/skills/skill-authoring.js";
 
@@ -82,7 +83,13 @@ const CreateSkillRequestSchema = z.object({
   slug: z.string().min(1).max(255).optional(),
   parameters: z.record(z.string(), z.unknown()).optional(),
   category: z.string().optional(),
-  executionMode: z.enum(["sync", "async"]).optional(),
+  /** `box` = a script run on the person's computer; needs `box`. */
+  executionMode: z.enum(["sync", "async", "box"]).optional(),
+  /**
+   * A box skill's declaration — language, packages (exact versions), hosts,
+   * limits. Parsed by the router (`parseBoxDeclaration`), not here.
+   */
+  box: z.record(z.string(), z.unknown()).optional(),
   timeoutSeconds: z.number().min(1).max(300).optional(),
   /** Tool ids this skill requires — written as `skill → requires → tool` links. */
   requires: z.array(z.string().uuid()).optional(),
@@ -337,6 +344,7 @@ export function registerSkillsCrudRoutes(app: HubHono): void {
         parameters: body.parameters,
         category: body.category,
         executionMode: body.executionMode ?? "sync",
+        ...(body.box ? { metadata: { box: body.box } } : {}),
         timeoutSeconds: body.timeoutSeconds ?? 30,
         workspaceId: workspaceId ?? undefined,
         agentUserId,
@@ -469,12 +477,9 @@ export function registerSkillsCrudRoutes(app: HubHono): void {
   });
 
   // ── POST /skills/:id/dry-run ───────────────────────────────────────────────
-  // Headless door for the "preview a skill to any level" dry-run. The sandbox
-  // executor lives on the Intelligence Service, so this PROXIES to the IS
-  // dry-run route — mirroring external-dispatch's mcpHandler exactly
-  // (resolveIntelligenceService → fetch(`${endpoint}/api/...`, X-API-Key)). The
-  // IS handler reads `{ userId, parameters }`; we pass the SERVER-DERIVED acting
-  // userId (never a body-supplied one) and forward parameters verbatim. Different
+  // Headless door for the "preview a skill to any level" dry-run, through the
+  // one skill door (`runSkill`, R2). We pass the SERVER-DERIVED acting userId
+  // (never a body-supplied one) and forward parameters verbatim. Different
   // method+suffix from /skills/:id/approve (POST) and /skills/:id (DELETE) — no
   // route collision.
   app.post("/skills/:id/dry-run", async (c) => {
@@ -505,9 +510,9 @@ export function registerSkillsCrudRoutes(app: HubHono): void {
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
 
       // Tier-aware: builtin/declarative verbs run in-process (BUILTIN_VERBS /
-      // executeProviderVerb) with no IS isolate sandbox, so proxying would 404
-      // (the IS has no such skill). Mirror the run path's kind-branch and
-      // synthesize the preview HERE instead. Only code/instruction proxy below.
+      // executeProviderVerb) with no isolate sandbox. Mirror the run path's
+      // kind-branch and synthesize the preview HERE instead. Only
+      // code/instruction skills reach the skill door below.
       const [tierRow] = await db
         .select({
           kind: skills.kind,
@@ -515,12 +520,25 @@ export function registerSkillsCrudRoutes(app: HubHono): void {
           providerSpec: skills.providerSpec,
         })
         .from(skills)
-        .where(eq(skills.id, id))
+        .where(
+          and(
+            eq(skills.id, id),
+            // The skill must be one the acting user can see: the IS read it as
+            // them (`hub.getSkill`); the pod reads it here, so the lens is here.
+            visibleSkillsAnyWorkspaceWhere(acting.userId, {
+              includeExpired: true,
+            })
+          )
+        )
         .limit(1);
+
+      if (!tierRow) {
+        return c.json({ error: `Skill not found: ${id}` }, 404);
+      }
 
       // TIER 0 builtin → governed in-process handler. No external write happens
       // in a dry-run; the tool-level gate runs only at real run time.
-      if (tierRow?.kind === "builtin") {
+      if (tierRow.kind === "builtin") {
         return c.json(
           {
             result: {
@@ -537,7 +555,7 @@ export function registerSkillsCrudRoutes(app: HubHono): void {
 
       // TIER 1 declarative → preview the HTTP request the providerSpec WOULD
       // send (same interpolation as the run path, never dispatched).
-      if (tierRow?.kind === "declarative") {
+      if (tierRow.kind === "declarative") {
         if (!tierRow.providerSpec) {
           return c.json(
             {
@@ -559,96 +577,30 @@ export function registerSkillsCrudRoutes(app: HubHono): void {
         );
       }
 
-      // Resolve the IS endpoint + service key (same util external-dispatch uses).
-      let endpoint: string;
-      let serviceApiKey: string;
+      // The ONE skill door (R2), in preview: reads real, every write and send
+      // recorded instead of performed. `result` stays the whole envelope (the
+      // shape the IS dry-run answered), its effects beside it.
+      let envelope: Awaited<ReturnType<typeof runSkill>>;
       try {
-        const resolved = await resolveIntelligenceService({
+        envelope = await runSkill({
+          skillId: id,
           userId: acting.userId,
-          workspaceId: acting.workspaceId ?? undefined,
+          parameters: parameters ?? {},
+          workspaceId: acting.workspaceId ?? null,
+          dryRun: true,
         });
-        endpoint = resolved.endpoint;
-        serviceApiKey = resolved.serviceApiKey;
       } catch (err) {
         return c.json(
           {
-            error: `Intelligence Service unavailable for skill dry-run: ${
+            error: `Skill dry-run failed: ${
               err instanceof Error ? err.message : String(err)
             }`,
           },
           503
         );
       }
-
-      // Forward to the IS dry-run route (mounted at /api → /api/skills/:id/dry-run).
-      // The IS handler reads `{ userId, parameters }` and returns { result, dryRunEffects }.
-      let res: Response;
-      try {
-        res = await fetch(`${endpoint}/api/skills/${id}/dry-run`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-API-Key": serviceApiKey,
-            // D4: the IS acts for acting.userId on this dry-run.
-            ...isDelegationHeaders({
-              isUrl: endpoint,
-              operatorUserId: acting.userId,
-            }),
-          },
-          body: JSON.stringify({
-            userId: acting.userId,
-            parameters: parameters ?? {},
-          }),
-        });
-      } catch (err) {
-        return c.json(
-          {
-            error: `Skill dry-run call to the Intelligence Service failed: ${
-              err instanceof Error ? err.message : String(err)
-            }`,
-          },
-          503
-        );
-      }
-
-      // A 404 from the IS means the dry-run route is absent on this IS version
-      // (or the skill itself wasn't found) — surface it as a clear message.
-      if (res.status === 404) {
-        return c.json(
-          {
-            error:
-              `Intelligence Service returned 404 for skill dry-run "${id}" — ` +
-              "the skill was not found, or the IS version does not expose the dry-run route.",
-          },
-          404
-        );
-      }
-
-      const data = (await res.json().catch(() => null)) as {
-        result?: unknown;
-        dryRunEffects?: unknown[];
-        error?: string;
-      } | null;
-
-      if (!res.ok) {
-        return c.json(
-          {
-            error:
-              data?.error ??
-              `Intelligence Service dry-run failed (${res.status})`,
-          },
-          res.status >= 400 && res.status <= 599 ? (res.status as never) : 500
-        );
-      }
-
-      // Return the IS response verbatim ({ result, dryRunEffects }).
-      return c.json(
-        {
-          result: data?.result ?? null,
-          dryRunEffects: data?.dryRunEffects ?? [],
-        },
-        200
-      );
+      const { dryRunEffects, ...result } = envelope;
+      return c.json({ result, dryRunEffects: dryRunEffects ?? [] }, 200);
     } catch (err) {
       logger.error({ err, id }, "skills dry-run failed");
       return c.json(
