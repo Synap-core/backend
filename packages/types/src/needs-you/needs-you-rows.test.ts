@@ -288,8 +288,16 @@ describe("needsYouRows — a session is never split across folds", () => {
   it("a session whose every row is in Review later folds there, whole", () => {
     const out = needsYouRows([
       row("r"),
-      row("s1", { kind: "owed-slot", groupKey: "session:S", reviewLater: true }),
-      row("s2", { kind: "owed-slot", groupKey: "session:S", reviewLater: true }),
+      row("s1", {
+        kind: "owed-slot",
+        groupKey: "session:S",
+        reviewLater: true,
+      }),
+      row("s2", {
+        kind: "owed-slot",
+        groupKey: "session:S",
+        reviewLater: true,
+      }),
     ]);
     expect(shape(out.recent)).toEqual(["item:r"]);
     expect(shape(out.reviewLater)).toEqual(["session:S[s1,s2]"]);
@@ -365,6 +373,26 @@ describe("needsYouRows — the rule's folds (decision E)", () => {
     expect(shape(out.folds.review_later)).toEqual(["item:old"]);
     // Never dropped: every out-of-headline row is in the union.
     expect(out.reviewLaterCount).toBe(5);
+  });
+
+  it("the class is authoritative: a session shows once per place, never pulled out of its fold", () => {
+    const S = { groupKey: "session:S" };
+    const out = needsYouRows([
+      row("fresh", { ...S, needsYouClass: "needs_you" }),
+      row("old-1", { ...S, needsYouClass: "review_later", reviewLater: true }),
+      row("old-2", { ...S, needsYouClass: "review_later", reviewLater: true }),
+    ]);
+    // The headline carries the session for its fresh ask…
+    expect(shape(out.recent)).toEqual(["item:fresh"]);
+    // …and Review later carries it ONCE for its two old asks (one session row).
+    expect(shape(out.folds.review_later)).toEqual(["session:S[old-1,old-2]"]);
+    // An older pod's unclassed flag still follows the session's freshest row.
+    const legacy = needsYouRows([
+      row("f", { ...S }),
+      row("o", { ...S, reviewLater: true }),
+    ]);
+    expect(shape(legacy.recent)).toEqual(["session:S[f,o]"]);
+    expect(legacy.reviewLaterCount).toBe(0);
   });
 
   it("a stamped needs_you class is the headline even if a stale flag says otherwise", () => {
