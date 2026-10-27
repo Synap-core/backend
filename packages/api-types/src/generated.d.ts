@@ -13708,7 +13708,26 @@ export interface LooseEnds {
 			triggerType: string;
 		}>;
 	} | Unavailable;
+	/** Its open sessions ready to close now (see {@link ReadyToClose}). */
+	readyToClose: ReadyToClose;
 }
+/**
+ * The calling agent's open sessions whose next move is `ready_to_close` — at
+ * once, never idle-gated.
+ */
+export type ReadyToClose = {
+	count: number;
+	/** True when the open-session scan hit its cap. */
+	countIsLowerBound: boolean;
+	items: Array<{
+		close: string;
+		id: string;
+		link: string;
+		/** Why it reads ready — the next-move rule's own sentence. */
+		reason: string;
+		title: string;
+	}>;
+} | Unavailable;
 export type SessionEvaluationRow = typeof sessionEvaluations.$inferSelect;
 export interface SessionEvaluationSummary {
 	criteria: SessionCriterion[];
@@ -13744,6 +13763,838 @@ export interface SessionPlaybookCandidates {
 	/** How to skip matching entirely on the next start. */
 	optOut: typeof TEMPLATE_OPT_OUT;
 }
+export interface DependencyNodeRef {
+	kind: string;
+	id: string;
+}
+export interface OpenBlocker extends DependencyNodeRef {
+	/** The blocker as declared, when the open one is its replacement. */
+	replaces?: DependencyNodeRef;
+	hidden: boolean;
+	/**
+	 * It ENDED without delivering (cancelled, failed, archived, lost) and still
+	 * holds the dependent: the work it waited on never happened, so the
+	 * dependent re-plans — remove the edge, or link a replacement.
+	 */
+	dropped: boolean;
+	/** Its own raw status, when the reader may see it. */
+	status?: string | null;
+	/** Its display name, when the reader may see it. */
+	title?: string | null;
+}
+/** The identity a card needs: the kind slug, its display name, its icon. */
+export interface EntityProfileRef {
+	/** Profile slug (`entities.type` mirrors it when the profile row is absent). */
+	slug: string;
+	/** `profiles.display_name`, when the profile row was found. */
+	displayName: string | null;
+	/** `profiles.plural` ("People" for Person), when the profile declares one. */
+	plural: string | null;
+	/** `profiles.ui_hints.icon`, when set. */
+	icon: string | null;
+}
+/**
+ * One thing a session produced. `id` is the STABLE join coordinate
+ * (`<kind>:<refId>`), not a row id — two ledgers describing the same object
+ * collapse onto one entry, and the frontend can key on it across refetches.
+ */
+export interface SessionOutput {
+	/** `<kind>:<refId>` — stable across ledgers and refetches. */
+	id: string;
+	/** Normalized object kind (`document`, `entity`, `view`, `cell`, `url`, …). */
+	kind: string;
+	/**
+	 * The UNDERLYING object's id — what navigation must use. NOT the artifact
+	 * row id: `SessionRoomGroundCell.tsx` opens an artifact by row id today and
+	 * lands on nothing.
+	 */
+	refId: string;
+	title: string;
+	icon?: string;
+	/**
+	 * An `entity` output's KIND (profile slug + display name + icon), so a card
+	 * says "Decision" rather than "Entity". Absent for non-entities and for an
+	 * entity the title read did not find.
+	 */
+	entityProfile?: EntityProfileRef;
+	/** Artifact lifecycle, when an artifact row backs this output. */
+	state?: "kept" | "swept" | "working";
+	producedAt: Date;
+	/** Derivable from artifact provenance or the satisfying proposal's actor. */
+	producedBy?: "agent" | "human";
+	/**
+	 * The declared deliverable this object satisfies, when one matched — the
+	 * WHOLE slot, never a subset.
+	 *
+	 * It was an enumerated subset until 2026-09-08, and the enumeration is what
+	 * made `delegatedTo`, `delegatedAt`, `returnedReason` and `returnedAt`
+	 * readable in `pendingExpected` and invisible the instant the deliverable
+	 * landed. A matched slot and an unmatched one must read identically; the only
+	 * way to guarantee that as the type grows is to carry the type, so this is
+	 * `ExpectedOutput` itself and the assignment spreads.
+	 */
+	expected?: ExpectedOutput & {
+		/**
+		 * The slot's stored KEY (`slot-keys.ts`), when it carries one — a slot
+		 * stored before keys existed has none until its next write stamps it.
+		 * Never derived here: a matched slot reads exactly like an unmatched one.
+		 */
+		key?: string;
+	};
+	/** Which ledger(s) reported it — provenance for the join itself. */
+	source: Array<"artifact" | "expected" | "produced_edge">;
+}
+export interface SessionOutputsResult {
+	outputs: SessionOutput[];
+	/** Declared deliverables with no produced object behind them. */
+	pendingExpected: ExpectedOutput[];
+}
+/**
+ * The per-session read (`listSessionOutputs`) — the three-ledger join PLUS the
+ * session's OUTCOMES / INPUTS / UNATTACHED, projected at read time by the ONE
+ * pure rule (`projectSessionOutcomes`, `@synap-core/types/units`) over the
+ * same slots, the session's criteria and its evaluation rows. ADDITIVE: every
+ * field of {@link SessionOutputsResult} is unchanged.
+ */
+export interface SessionOutputsWithOutcomes extends SessionOutputsResult {
+	/** What the session must yield; each carries its `evidence` (from `outputs`). */
+	outcomes: SessionOutcome<SessionOutput>[];
+	/** What it needs from the person; each points at the outcome it blocks. */
+	inputs: SessionInput[];
+	/** Produced outputs that serve no outcome. */
+	unattached: SessionOutput[];
+	/** Met / total over outcomes that were not retired. */
+	outcomeCounts: {
+		met: number;
+		total: number;
+	};
+}
+declare const SESSION_KINDS: readonly [
+	"work",
+	"run",
+	"receipt"
+];
+export type SessionKind = (typeof SESSION_KINDS)[number];
+export interface SessionExternalAgent {
+	runId: string;
+	/** The run's own lifecycle (`running`, `failed`, `cancelled`, `proposed`, …). */
+	runStatus: string;
+	agentUserId: string;
+	/** The agent's name (`users.name`), `null` when it has none. */
+	agentName: string | null;
+	provider: string;
+	/**
+	 * The task's state: pending_start | running | needs_input | done | failed |
+	 * cancelled. A pending start whose proposal was REJECTED reads `cancelled`
+	 * (it was called off); one whose proposal is no longer pending but whose
+	 * hand-off was never recorded reads `unknown` — the view's unmeasured arm,
+	 * never a guess.
+	 */
+	status: PlaybookRunExternalAgent["status"] | "unknown";
+	/** `pending_start` only: the proposal the start waits on. */
+	proposalId: string | null;
+	/** The provider's page for the task. */
+	url: string | null;
+	prUrl: string | null;
+	branch: string | null;
+	previewUrl: string | null;
+	summary: string | null;
+	/** The failed status reads in a row (`null` = the last read was good). */
+	pollError: {
+		count: number;
+		firstSeenAt: string;
+	} | null;
+	/**
+	 * The binding can stop the agent (`supports.cancel`) — read from the LIVE
+	 * binding, as the cancel door does. `null` = no usable binding to ask.
+	 */
+	cancelStopsAgent: boolean | null;
+	/** When the agent first reported each output (ISO), by output key. */
+	reportedAt: {
+		branch?: string;
+		preview?: string;
+		pull_request?: string;
+	};
+	/** When the status poll last read the task (ISO), `null` before the first read. */
+	polledAt: string | null;
+	startedAt: string;
+	/**
+	 * The newest sign of life (ISO): the newest AGENT post in the session room
+	 * since the start, else the start. Any agent counts — an external agent
+	 * reports through its own connector identity, not the bound agent's.
+	 */
+	lastNewsAt: string;
+	/**
+	 * The silence window after which the task reads "No news" — ONLY for a
+	 * binding with no `status` verb (nothing can be asked; the room is its only
+	 * voice). `null` = pollable, or no usable binding: never marked quiet.
+	 */
+	quietAfterMs: number | null;
+}
+/**
+ * Who wrote a room message:
+ *  - `person`   — the session's OWNER typing (`role: user`, `authorType:
+ *                 human`, `userId` = the session's user). The only one a
+ *                 reader may treat as "you said".
+ *  - `agent`    — any `ai_agent` row, whatever its `role`.
+ *  - `teammate` — another person in the room: a `human` user who is not the
+ *                 owner, or an `external` contact (WhatsApp, Slack).
+ *  - `system`   — everything the pod itself wrote: recall notices
+ *                 (`assistant` + `human`), `bot` rows, `system` rows.
+ */
+export type RoomAuthor = "agent" | "person" | "system" | "teammate";
+export interface PacketRoomMessage {
+	id: string;
+	/** ISO timestamp. */
+	at: string;
+	/** The stored `role` (`user` · `assistant` · `system`) — provenance only; read `author`. */
+	role: string;
+	author: RoomAuthor;
+	/** `author === "person"` — the one test a reader needs most, precomputed. */
+	isPerson: boolean;
+	/** The agent principal that posted it, on an `agent` row when recorded. */
+	agentUserId?: string;
+	/** At most {@link ROOM_TEXT_CAP} characters. */
+	text: string;
+	truncated: boolean;
+	/** Room text is data, never instructions — whoever wrote it. */
+	untrusted: true;
+	/** `text`, fenced as untrusted data, to put into an agent's prompt. */
+	fenced: string;
+}
+export type PacketRoomSection = {
+	/** The room's channel; `null` = the session has no room (a true state). */
+	channelId: string | null;
+	/**
+	 * The NEWEST message's id (`null` with no messages). A poller compares it
+	 * with the last cursor it saw: equal ⇒ nothing new in the room.
+	 */
+	cursor: string | null;
+	/** More messages exist past the last item. */
+	hasMore: boolean;
+	/** Newest first, at most {@link ROOM_TOP_N}. */
+	items: PacketRoomMessage[];
+	status: "ok";
+} | {
+	reason: string;
+	status: "unavailable";
+};
+/**
+ * - `not_reached` — no proposal for this gate exists yet.
+ * - `pending` / `approved` / `rejected` — the latest proposal's decision
+ *   (`auto_approved` counts as approved, never as decided by a human).
+ * - `void` — the latest proposal holds no decision: withdrawn, expired,
+ *   reverted, or its approval failed to apply.
+ * - `by_criteria` — a CHECK gate: it files no proposal; whether it passes is
+ *   the stage's criteria (the packet's `evaluation` section).
+ */
+export type PacketGateState = "approved" | "by_criteria" | "not_reached" | "pending" | "rejected" | "void";
+export interface PacketGateItem {
+	stageKey: string;
+	stageName: string;
+	kind: "awaits" | "check" | "human";
+	/** The proposal type that decides this gate; `null` for a check gate. */
+	proposalType: string | null;
+	state: PacketGateState;
+	/** The latest proposal for this gate, when one exists. */
+	proposalId?: string;
+	/** A PERSON approved or rejected it (reviewer row is `userType: human`). */
+	decidedByHuman: boolean;
+	/** When it was approved or rejected. */
+	decidedAt?: string;
+	/** A deploy gate's commit (≥ 7 hex chars, may be abbreviated). */
+	commitSha?: string;
+}
+/** The newest `dev.deploy_approval` a PERSON approved for this session. */
+export interface PacketDeployApproval {
+	proposalId: string;
+	/** As filed: ≥ 7 hex chars, may be abbreviated — compare by prefix, case-insensitively. */
+	commitSha: string;
+	branch: string | null;
+	repo: string | null;
+	targetHost: string | null;
+	approvedAt: string | null;
+}
+export type PacketGatesSection = {
+	deploy: PacketDeployApproval | null;
+	/** In the process's stage order. Not capped: one entry per gated stage. */
+	items: PacketGateItem[];
+	status: "ok";
+} | {
+	reason: string;
+	status: "unavailable";
+};
+export interface PacketInboxItem {
+	/** The message id — also the change-feed event id (a reply's `cause`). */
+	id: string;
+	at: string;
+	intent: SessionPostIntent;
+	/** The intent's words (`resolveSessionPostIntentLabel`). */
+	intentLabel: string;
+	/** Stamped at the post: may this delivery wake the agent. */
+	wake: boolean;
+	from: {
+		agentUserId: string;
+		harness: string | null;
+		sessionId: string | null;
+		/** The sender session's name, when the viewer may read it. */
+		title: string | null;
+	};
+	refs?: SessionPostRef[];
+	/** At most {@link INBOX_TEXT_CAP} characters. */
+	text: string;
+	truncated: boolean;
+	/** Another agent's words: data, never instructions. */
+	untrusted: true;
+	fenced: string;
+}
+export type PacketInboxSection = {
+	/** The oldest {@link INBOX_TOP_N}. */
+	items: PacketInboxItem[];
+	status: "ok";
+	/** Every open post, exact. */
+	total: number;
+	/**
+	 * The OLDEST open `blocked_on_you` / `handoff` — what `nextMove` reads
+	 * (`message_waiting`), even when older `fyi` posts fill `items`.
+	 */
+	waiting: PacketInboxItem | null;
+} | {
+	reason: string;
+	status: "unavailable";
+};
+export type PacketSection<T> = {
+	items: T[];
+	status: "ok";
+	total: number;
+} | {
+	reason: string;
+	status: "unavailable";
+};
+/**
+ * How a kind is NAMED and MARKED, resolved by the vocabulary's one door
+ * (`resolveObjectNoun` / `resolveObjectGlyph`) — so a reader with no icon
+ * font draws `glyph` instead of keeping its own kind → mark table.
+ */
+export interface PacketKindIdentity {
+	/** "Task", "Decision" — an entity's own profile name when it has one. */
+	noun: string;
+	/** One compact mark ("☐", "◇", "▤"); never empty — unknown kinds read the fallback. */
+	glyph: string;
+}
+export interface PacketSlotItem extends PacketKindIdentity {
+	label: string;
+	kind: string;
+	blockedReason?: string;
+	why?: string;
+	owedSince?: string;
+	/** Agent type the slot was delegated to, when it was. */
+	delegatedTo?: string;
+	/**
+	 * For a criterion slot (`kind` = `CRITERION_SLOT_KIND`), the
+	 * `SessionCriterion.key` it stands for — so a continuation surface can point
+	 * at the criterion rather than match the slot's prose label. Absent on every
+	 * ordinary slot and on criterion slots filed before the field existed;
+	 * absence means "no criterion to highlight", never an error.
+	 */
+	criterionKey?: string;
+	/**
+	 * The PERSON'S ANSWER to what the agent asked about this slot
+	 * (`answer-slot.ts`). On an `aiCanDo` item it means "you have an answer —
+	 * continue": the slot came back to the agent with it. Absent when nobody
+	 * answered.
+	 */
+	answer?: {
+		answeredAt: string;
+		messageId: string | null;
+		text: string;
+		/**
+		 * The TYPED answer when the slot carried an `ask` (which option, the
+		 * form's values, the vault ref …) — `text` stays the readable summary.
+		 */
+		value?: SlotAnswerValue;
+	};
+	/**
+	 * On an owed item: HOW the agent asked the person to answer (its declared
+	 * `ask`), so a resuming agent sees what it is waiting for, not just that it
+	 * is waiting.
+	 */
+	ask?: SlotAsk;
+}
+/**
+ * A client conversation attached to the session's change-feed wait — a
+ * `session_runners` row (`loadSessionRunners`), projected.
+ */
+export interface PacketRunnerItem {
+	/** The client's own harness name (`claude-code`, …), as it sent it. */
+	harness: string;
+	conversationId: string;
+	/** Where it ran, when its client said so. Display only. */
+	cwd: string | null;
+	/** The computer hosting the agent (`users.id` of a `machine` agent user). */
+	machineId?: string;
+	/** The agent acting through the key, when an agent key held the wait. */
+	agentUserId?: string;
+	firstSeenAt: string;
+	lastSeenAt: string;
+	/** Stamped within `RUNNER_LIVE_WINDOW_SECONDS` of the read. */
+	live: boolean;
+	/** The shell command that reopens it (`resolveAgentConversation`); absent for a harness we cannot reopen. */
+	resume?: string;
+}
+export interface PacketProposalItem {
+	id: string;
+	/** Imperative — what approving it WILL do. */
+	title: string;
+	proposalType: string;
+	createdAt: string | null;
+}
+export interface PacketOutputItem extends PacketKindIdentity {
+	/** Normalized object kind — `entity` for entities; `noun`/`glyph` name its profile. */
+	kind: string;
+	refId: string;
+	title: string;
+	state?: "kept" | "swept" | "working";
+	/** The declared deliverable this output satisfies, when one matched. */
+	expectedLabel?: string;
+}
+/** A child session — `child --spawned_from--> this`. */
+export interface PacketChildItem {
+	id: string;
+	/** Display name via `resolveSessionTitle` — title, else the goal's first line. */
+	title: string;
+	status: string;
+	statusLabel: string;
+}
+/**
+ * A session of an EARLIER stage of this session's track, with what it produced.
+ * `outputs` is its own section: one session's failed outputs read never hides
+ * the others, and is never "produced nothing".
+ */
+export interface PacketPriorStageSession extends PacketChildItem {
+	/** `null` ⇒ a STAGE-LESS track (W1): a recent closed session in the track. */
+	stageKey: string | null;
+	/** The stage's display name as the track pinned it; `null` with no stage. */
+	stageName: string | null;
+	outputs: PacketSection<PacketOutputItem>;
+}
+/**
+ * A session named by the detour stack — the one you pop back TO, or the detour
+ * this one was put down FOR. Identity only: never a bare id, because "come back
+ * to 9f3c-…" is the unreadable row this projection exists to prevent.
+ */
+export interface PacketResumeSession {
+	sessionId: string;
+	/** `resolveSessionTitle` — the same rule every other session name uses. */
+	title: string;
+	status: string;
+	statusLabel: string;
+}
+/**
+ * THE GOAL this session serves — the track it is filed into, read through the
+ * goal's own derivation (`loadTrackGoalFacts` → `toTrackView`), so each
+ * criterion's `mark` is the one every goal surface shows, never re-derived.
+ */
+export interface PacketGoal {
+	id: string;
+	name: string;
+	status: string;
+	statusLabel: string;
+	/** What "done" looks like, in words — `null` when unsaid. */
+	endState: string | null;
+	/** Where it is heading, one line — `null` when unsaid. */
+	direction: string | null;
+	/** Its criteria (none for a lasting goal), each with its DERIVED mark. */
+	criteria: Array<{
+		key: string;
+		mark: GoalCriterionMark | null;
+		required: boolean;
+		statement: string;
+	}>;
+	/** Met / total over the criteria (a lasting goal reads 0 / 0). */
+	criteriaMet: {
+		met: number;
+		total: number;
+	};
+	/** The number it steers by — `current` is STATED, never measured. */
+	kpi: TrackKpi | null;
+	/** When to stop — `[]` when none said. */
+	dropConditions: string[];
+}
+/** A session beside this one on the same goal (or project) — identity only. */
+export interface PacketSiblingItem extends PacketChildItem {
+	/** The goal step it is filed at — `null` on a stage-less goal or a project sibling. */
+	stageKey: string | null;
+}
+/**
+ * The work beside this session, so a fresh agent sees what runs in parallel,
+ * what was done before and what comes next without a second read. Scoped to
+ * the session's GOAL (`trackId`); a session with no goal falls back to its
+ * PROJECT (receipts left out), and `scope` says which.
+ *
+ *  - `parallel` — open siblings (active, paused, forming, stale) not in `next`,
+ *    newest activity first;
+ *  - `before`   — siblings that ended (closed, cancelled, failed), newest first;
+ *  - `next`     — scheduled siblings, and on a staged goal those filed at a
+ *    LATER step than this one, in step order.
+ *
+ * Sessions WAITING on this one are `unblocks`; its own sub-sessions are
+ * `children` and the session it came from is `parent` — not repeated here.
+ */
+export interface PacketSiblings {
+	scope: "goal" | "project";
+	parallel: PacketSection<PacketSiblingItem>;
+	before: PacketSection<PacketSiblingItem>;
+	next: PacketSection<PacketSiblingItem>;
+}
+/**
+ * A pull request or branch this session recorded as an outcome (`ref.url`),
+ * with the OUTCOME's state: `met` (merged / delivered, stamped done), `claimed`
+ * (delivery claimed, not verified), `open`, or `retired` (withdrawn). The pod
+ * reads no PR state of its own: what is known is what was recorded.
+ */
+export interface PacketWorkUnitItem extends PacketKindIdentity {
+	key: string | null;
+	label: string;
+	kind: string;
+	url: string | null;
+	state: "claimed" | "met" | "open" | "retired";
+}
+/** A capture clarification question still waiting for the user's answer. */
+export interface PacketQuestionItem {
+	/** The question message id. */
+	id: string;
+	question: string;
+	/** One line: what answering changes. */
+	why?: string;
+	askedAt: string | null;
+}
+/**
+ * Work that already landed — "do not redo". `source` names the ledger:
+ *  - `output`: a produced object that is not in progress or swept;
+ *  - `deliverable`: a declared slot stamped done (approved or attested) with no
+ *    produced object standing for it;
+ *  - `proposal`: an approved or auto-approved proposal filed under this session
+ *    that no done slot already names.
+ */
+export interface PacketDoneItem {
+	source: "deliverable" | "output" | "proposal";
+	/** Object kind (`document`, `company`, …). */
+	kind: string;
+	title: string;
+	/** When it landed; `null` when the ledger recorded no time. */
+	at: string | null;
+	/** Object id / satisfying proposal id / proposal id; `null` when none exists. */
+	sourceId: string | null;
+}
+/** The most recent approved or rejected proposal of this session. */
+export interface PacketDecision {
+	proposalId: string;
+	/** Imperative — what the proposal asked to do. */
+	title: string;
+	outcome: "approved" | "rejected";
+	/** `resolveStatusLabel(outcome)` — the one label door, so no reader re-derives it. */
+	outcomeLabel: string;
+	decidedAt: string | null;
+	/** `unknown` when no reviewer is recorded or it no longer resolves. */
+	reviewer: "agent" | "human" | "unknown";
+	/** The reviewer's rejection reason, when one was given. */
+	reason?: string;
+}
+export type NextMoveKind = "agent_slot" | "blocker_dropped" | "message_waiting" | "none" | "owed_slot" | "pending_proposal" | "ready_to_close" | "undeclared" | "unknown" | "waiting_on_session";
+export interface ContinuationNextMove {
+	kind: NextMoveKind;
+	/** Who acts: the person, the AI, or nobody. */
+	actor: "ai" | "none" | "user";
+	/** One line naming the move. */
+	label: string;
+	/** One line saying why this is the move. */
+	reason: string;
+	/** The proposal id, for `pending_proposal`. */
+	proposalId?: string;
+	/** The waiting coordination post's id, for `message_waiting`. */
+	messageId?: string;
+	/**
+	 * The blocking session's id, for `waiting_on_session`; for `blocker_dropped`,
+	 * the DROPPED blocker's id when that blocker is a session; for
+	 * `message_waiting`, the SENDER session (when it has one).
+	 */
+	sessionId?: string;
+}
+export interface ContinuationPacket {
+	version: 1;
+	session: {
+		currentStage: string | null;
+		/** What to show: `resolveSessionTitle` — the ONE rule relay and browser share. */
+		displayTitle: string;
+		goal: string;
+		id: string;
+		kind: SessionKind;
+		progress: number | null;
+		status: string;
+		statusLabel: string;
+		/** The stored name, `null` when untitled. */
+		title: string | null;
+	};
+	/**
+	 * The PROJECT this session's work serves — name + goal, so a reader sees the
+	 * short-term session beside the long-term vision it belongs to. `project:
+	 * null` means the session has no project (a true state, not a failure).
+	 * `goal` is the project's own `description` column — the same field
+	 * `ProjectDetail.tsx`'s header renders under the name — `null` when the
+	 * project has none. A project the caller cannot see reads as `null` too,
+	 * never leaking its name; only a FAILED read is `unavailable`.
+	 */
+	project: {
+		project: {
+			goal: string | null;
+			id: string;
+			name: string;
+		} | null;
+		status: "ok";
+	} | {
+		reason: string;
+		status: "unavailable";
+	};
+	userMustDecide: {
+		owedSlots: PacketSection<PacketSlotItem>;
+		pendingProposals: PacketSection<PacketProposalItem>;
+	};
+	aiCanDo: PacketSection<PacketSlotItem>;
+	blockers: PacketSection<PacketSlotItem>;
+	/**
+	 * The EXTERNAL agent this session's work was handed to — its newest
+	 * dispatched run (`readSessionExternalAgent`). `agent: null` = never handed
+	 * to one; a failed read is `unavailable`.
+	 */
+	externalAgent: {
+		agent: SessionExternalAgent | null;
+		status: "ok";
+	} | {
+		reason: string;
+		status: "unavailable";
+	};
+	outputs: PacketSection<PacketOutputItem>;
+	/**
+	 * Child sessions (detours and planned sub-sessions), oldest first. A parent
+	 * never auto-closes: it shows these, and closing stays explicit.
+	 */
+	children: PacketSection<PacketChildItem>;
+	/**
+	 * The session this one was spawned from (`this --spawned_from--> parent`).
+	 * `session: null` means NO parent; a failed read is `unavailable`, never
+	 * folded into "no parent".
+	 */
+	parent: {
+		session: PacketChildItem | null;
+		status: "ok";
+	} | {
+		reason: string;
+		status: "unavailable";
+	};
+	/**
+	 * THE POP — the two questions a returning reader must answer without a
+	 * second call: *which session am I coming back to*, and *what was I about to
+	 * do there*. Both directions of the detour stack, at most one populated:
+	 *
+	 *  - `returnTo` — THIS session is a detour. It names the parent (title, not
+	 *    an id) and, when the push recorded one, the line the parent was about to
+	 *    act on. `intent` is GATED on the parent's note naming THIS child: the
+	 *    note is one slot and the last push wins, so a parent that has since
+	 *    pushed a SECOND detour carries a line about that one, and restating it
+	 *    here would be a confidently wrong sentence. `returnTo: null` means no
+	 *    parent — the overwhelmingly normal case.
+	 *  - `suspended` — THIS session is the parent: it was put down for a detour.
+	 *    `intent` is what it was about to do; `child` is that detour with its
+	 *    CURRENT status, so a surface can say "the detour finished, pick this back
+	 *    up" without a second read. `child: null` means the named detour no
+	 *    longer resolves (deleted, or not this user's) — a true state, not a
+	 *    failure. `suspended: null` means this session was never put down.
+	 *
+	 * Both read `focus_sessions.metadata.suspended`, written by
+	 * `recordSessionSpawn`, through the one narrowing door
+	 * (`readSuspendedNote`). Absence is normal everywhere here and NO consumer
+	 * may treat it as an error; only a failed query is `unavailable`.
+	 */
+	resume: {
+		returnTo: (PacketResumeSession & {
+			intent?: string;
+			suspendedAt?: string;
+		}) | null;
+		status: "ok";
+		suspended: {
+			at: string | null;
+			child: PacketResumeSession | null;
+			intent: string;
+		} | null;
+	} | {
+		reason: string;
+		status: "unavailable";
+	};
+	/**
+	 * Sessions this one waits on (`this --blocked_by--> blocker`), closed ones
+	 * included — `status` says which still block. Distinct from `blockers`,
+	 * which is owed SLOTS, not session edges.
+	 */
+	blockedBy: PacketSection<PacketChildItem>;
+	/**
+	 * Sessions waiting on this one (`other --blocked_by--> this`), open first —
+	 * the inbound twin of `blockedBy`: closing this session releases them.
+	 */
+	unblocks: PacketSection<PacketChildItem>;
+	/** Capture clarification questions still open in this session's room, oldest first. */
+	openQuestions: PacketSection<PacketQuestionItem>;
+	/**
+	 * THE STAGE BRIEF — what the EARLIER stages of this session's track produced,
+	 * so a stage starts from pod references, never from the previous chat.
+	 * DERIVED, no edge: the sessions filed (`track_stage`) at a stage before this
+	 * one in the track's pinned order, nearest stage first (the stage that feeds
+	 * this one must never fall past the cut), closed before open within a stage.
+	 * `total` counts every such session; `items` is capped at
+	 * {@link PACKET_TOP_N}, each with its own capped `outputs`.
+	 *
+	 * A STAGE-LESS track (W1, a lasting intent) has no earlier stage: there it
+	 * DEGRADES to the track's recent CLOSED sessions (other than this one),
+	 * newest first, with `stageKey`/`stageName` null.
+	 *
+	 * `null` — not a track session (no track), a staged track's session with no
+	 * stage or a stage the track does not declare, or a track the reader cannot
+	 * see (never leaked). A FAILED read is `unavailable`. Cross-track feeds are
+	 * not derived here.
+	 */
+	priorStages: PacketSection<PacketPriorStageSession> | null;
+	/**
+	 * THE GOAL this session serves (see {@link PacketGoal}). `goal: null` = the
+	 * session is filed into no goal, or into one the reader cannot see (never
+	 * leaked) — a true state. A FAILED read is `unavailable`, never "no goal".
+	 */
+	goal: {
+		goal: PacketGoal | null;
+		status: "ok";
+	} | {
+		reason: string;
+		status: "unavailable";
+	};
+	/**
+	 * The work beside this one (see {@link PacketSiblings}). `null` = the
+	 * session has neither a goal nor a project, so it has no siblings to name.
+	 * A FAILED read is `unavailable`, never "nothing beside it".
+	 */
+	siblings: PacketSiblings | {
+		reason: string;
+		status: "unavailable";
+	} | null;
+	/**
+	 * The PRs and branches this session recorded as outcomes, declaration
+	 * order (see {@link PacketWorkUnitItem}). Derived from the row itself — an
+	 * empty list means none was recorded, not that none exists.
+	 */
+	workUnits: PacketSection<PacketWorkUnitItem>;
+	/** What already landed, newest first — an agent must not redo these. */
+	alreadyDone: PacketSection<PacketDoneItem>;
+	/** `decision: null` when nothing was ever approved or rejected here. */
+	lastDecision: {
+		decision: PacketDecision | null;
+		status: "ok";
+	} | {
+		reason: string;
+		status: "unavailable";
+	};
+	/** `null` when the session recorded no run manifest. */
+	run: {
+		engine: string;
+		guidelineStatus?: "ok" | "unavailable";
+		guidelines: Array<{
+			id: string;
+			version: number;
+		}>;
+		model: string | null;
+		promptVersion: string;
+		provider?: string | null;
+		sourcesCount: number;
+	} | null;
+	rerun: RerunAvailability;
+	/** `null` when the session never recorded a completion/verification. */
+	lastCompletion: {
+		closedAt: string | null;
+		summary?: string;
+		unfinishedOutputs?: number;
+	} | null;
+	nextMove: ContinuationNextMove;
+	/**
+	 * THE ROOM — the session room's newest messages, each classified by who
+	 * wrote it (`classifyRoomAuthor`, `room-messages.ts`). Read through the
+	 * channel-visibility gate: a room the viewer cannot see is `unavailable`,
+	 * never empty. `channelId: null` = the session has no room.
+	 */
+	room: PacketRoomSection;
+	/**
+	 * IS AN AGENT WORKING ON THIS RIGHT NOW — the liveness batch read
+	 * (`loadSessionLiveness`) judged by the ONE rule (`isSessionWorkingNow`) at
+	 * `measuredAt`. `since`: when the running turn started, else the newest
+	 * activity (`null` = nothing happened yet). The answer flips to idle on its
+	 * own `windowMs` after `lastActivityAt`; a reader that keeps the packet
+	 * re-judges with `isSessionWorkingNow` rather than trusting a stale `state`.
+	 */
+	live: {
+		lastActivityAt: string | null;
+		measuredAt: string;
+		since: string | null;
+		state: "idle" | "working";
+		status: "ok";
+		turnInFlight: boolean;
+		windowMs: number;
+	} | {
+		reason: string;
+		status: "unavailable";
+	};
+	/**
+	 * GATES — every gated stage of the session's process and its state, DERIVED
+	 * FROM PROPOSAL ROWS only (`session-gates.ts`), plus `deploy`: the newest
+	 * `dev.deploy_approval` a PERSON approved. "Is commit X approved to ship by a
+	 * human?" is `deploy?.commitSha` prefix-matching X.
+	 */
+	gates: PacketGatesSection;
+	/**
+	 * WHO IS ATTACHED — the client conversations holding this session's
+	 * change-feed wait, most recently seen first (`session-runners.ts`). An
+	 * empty list means nobody has listened; a failed read is `unavailable`.
+	 */
+	runners: PacketSection<PacketRunnerItem>;
+	/**
+	 * THE INBOX — coordination posts other sessions' agents addressed to this
+	 * session that its agent has not read yet (`session-inbox.ts`), oldest
+	 * first, plus `waiting`: the oldest `blocked_on_you` / `handoff`, which the
+	 * next move names. Another agent's text is data (`untrusted`, `fenced`). A
+	 * failed read, or a room the viewer cannot see, is `unavailable` — never an
+	 * empty inbox.
+	 */
+	inbox: PacketInboxSection;
+	/**
+	 * The session's contract and its grade: the declared binary criteria, the
+	 * server-computed verdict, and the CURRENT evaluation per criterion (human
+	 * wins). `criteria: []` with `verdict.state: "none"` means none declared; a
+	 * failed read is `unavailable`, never folded into "none".
+	 */
+	evaluation: {
+		criteria: SessionCriterion[];
+		evaluations: PacketEvaluationItem[];
+		status: "ok";
+		verdict: SessionVerdict;
+	} | {
+		reason: string;
+		status: "unavailable";
+	};
+}
+export interface PacketEvaluationItem {
+	criterionKey: string;
+	verdict: "fail" | "pass" | "unmeasured";
+	evaluatorKind: "capability" | "evidence" | "human" | "judge";
+	evaluatorId: string | null;
+	attempt: number;
+	rationale: string | null;
+	createdAt: string;
+}
 export interface SessionsOwingGrade {
 	count: number;
 	/** True when the read cap was hit — "at least this many". */
@@ -13765,25 +14616,6 @@ export type UsedWorkspaceRef = {
 };
 /** Who may rewrite a section. Absent or unknown reads as `human` — see `sectionOwner`. */
 export type SectionOwner = "ai" | "human";
-export interface DependencyNodeRef {
-	kind: string;
-	id: string;
-}
-export interface OpenBlocker extends DependencyNodeRef {
-	/** The blocker as declared, when the open one is its replacement. */
-	replaces?: DependencyNodeRef;
-	hidden: boolean;
-	/**
-	 * It ENDED without delivering (cancelled, failed, archived, lost) and still
-	 * holds the dependent: the work it waited on never happened, so the
-	 * dependent re-plans — remove the edge, or link a replacement.
-	 */
-	dropped: boolean;
-	/** Its own raw status, when the reader may see it. */
-	status?: string | null;
-	/** Its display name, when the reader may see it. */
-	title?: string | null;
-}
 /** A relation row as the relation readers return it — plus the dependency marker. */
 export type RelationReadRow = typeof relations.$inferSelect & {
 	/** 0301: the relation id this dependency was migrated from, if any. */
@@ -13874,6 +14706,29 @@ export interface StartHere {
 			id: string;
 			startedAt: string | null;
 		};
+	} | StartHereUnavailable;
+	/**
+	 * The OPEN GOALS (tracks in a live status) the caller can see — the
+	 * project's when orient is scoped to one (`lens: "project"`), else pod-wide.
+	 * Newest activity first; `items` names the first few, `count` is capped
+	 * (`countIsLowerBound`). Work that serves one is filed into it with
+	 * `trackId` (`howTo`).
+	 */
+	openGoals: {
+		count: number;
+		countIsLowerBound: boolean;
+		howTo: string;
+		items: Array<{
+			/** How many criteria it declares (0 = a lasting goal). */
+			criteria: number;
+			/** What "done" looks like — `null` when unsaid. */
+			endState: string | null;
+			id: string;
+			name: string;
+			projectId: string;
+			status: string;
+		}>;
+		lens: "pod" | "project";
 	} | StartHereUnavailable;
 	/**
 	 * Open sessions the person HANDED TO THIS AGENT (the agent is on the
@@ -17183,12 +18038,6 @@ export interface TriageProjection {
 	/** Who accepted it, or null. */
 	acceptedBy: string | null;
 }
-declare const SESSION_KINDS: readonly [
-	"work",
-	"run",
-	"receipt"
-];
-export type SessionKind = (typeof SESSION_KINDS)[number];
 /**
  * Session PARTICIPANTS — the roster of everyone staffed on a focus session,
  * projected onto a session row.
@@ -17349,716 +18198,6 @@ export interface SessionOutputDependencies {
 	waitsOnOutputs: WaitsOnOutput[];
 	/** Sessions waiting on THIS session's outputs (only while it is open). */
 	outputsWaitedOnBy: OutputWaitedOnBy[];
-}
-/** The identity a card needs: the kind slug, its display name, its icon. */
-export interface EntityProfileRef {
-	/** Profile slug (`entities.type` mirrors it when the profile row is absent). */
-	slug: string;
-	/** `profiles.display_name`, when the profile row was found. */
-	displayName: string | null;
-	/** `profiles.plural` ("People" for Person), when the profile declares one. */
-	plural: string | null;
-	/** `profiles.ui_hints.icon`, when set. */
-	icon: string | null;
-}
-/**
- * One thing a session produced. `id` is the STABLE join coordinate
- * (`<kind>:<refId>`), not a row id — two ledgers describing the same object
- * collapse onto one entry, and the frontend can key on it across refetches.
- */
-export interface SessionOutput {
-	/** `<kind>:<refId>` — stable across ledgers and refetches. */
-	id: string;
-	/** Normalized object kind (`document`, `entity`, `view`, `cell`, `url`, …). */
-	kind: string;
-	/**
-	 * The UNDERLYING object's id — what navigation must use. NOT the artifact
-	 * row id: `SessionRoomGroundCell.tsx` opens an artifact by row id today and
-	 * lands on nothing.
-	 */
-	refId: string;
-	title: string;
-	icon?: string;
-	/**
-	 * An `entity` output's KIND (profile slug + display name + icon), so a card
-	 * says "Decision" rather than "Entity". Absent for non-entities and for an
-	 * entity the title read did not find.
-	 */
-	entityProfile?: EntityProfileRef;
-	/** Artifact lifecycle, when an artifact row backs this output. */
-	state?: "kept" | "swept" | "working";
-	producedAt: Date;
-	/** Derivable from artifact provenance or the satisfying proposal's actor. */
-	producedBy?: "agent" | "human";
-	/**
-	 * The declared deliverable this object satisfies, when one matched — the
-	 * WHOLE slot, never a subset.
-	 *
-	 * It was an enumerated subset until 2026-09-08, and the enumeration is what
-	 * made `delegatedTo`, `delegatedAt`, `returnedReason` and `returnedAt`
-	 * readable in `pendingExpected` and invisible the instant the deliverable
-	 * landed. A matched slot and an unmatched one must read identically; the only
-	 * way to guarantee that as the type grows is to carry the type, so this is
-	 * `ExpectedOutput` itself and the assignment spreads.
-	 */
-	expected?: ExpectedOutput & {
-		/**
-		 * The slot's stored KEY (`slot-keys.ts`), when it carries one — a slot
-		 * stored before keys existed has none until its next write stamps it.
-		 * Never derived here: a matched slot reads exactly like an unmatched one.
-		 */
-		key?: string;
-	};
-	/** Which ledger(s) reported it — provenance for the join itself. */
-	source: Array<"artifact" | "expected" | "produced_edge">;
-}
-export interface SessionOutputsResult {
-	outputs: SessionOutput[];
-	/** Declared deliverables with no produced object behind them. */
-	pendingExpected: ExpectedOutput[];
-}
-/**
- * The per-session read (`listSessionOutputs`) — the three-ledger join PLUS the
- * session's OUTCOMES / INPUTS / UNATTACHED, projected at read time by the ONE
- * pure rule (`projectSessionOutcomes`, `@synap-core/types/units`) over the
- * same slots, the session's criteria and its evaluation rows. ADDITIVE: every
- * field of {@link SessionOutputsResult} is unchanged.
- */
-export interface SessionOutputsWithOutcomes extends SessionOutputsResult {
-	/** What the session must yield; each carries its `evidence` (from `outputs`). */
-	outcomes: SessionOutcome<SessionOutput>[];
-	/** What it needs from the person; each points at the outcome it blocks. */
-	inputs: SessionInput[];
-	/** Produced outputs that serve no outcome. */
-	unattached: SessionOutput[];
-	/** Met / total over outcomes that were not retired. */
-	outcomeCounts: {
-		met: number;
-		total: number;
-	};
-}
-export interface SessionExternalAgent {
-	runId: string;
-	/** The run's own lifecycle (`running`, `failed`, `cancelled`, `proposed`, …). */
-	runStatus: string;
-	agentUserId: string;
-	/** The agent's name (`users.name`), `null` when it has none. */
-	agentName: string | null;
-	provider: string;
-	/**
-	 * The task's state: pending_start | running | needs_input | done | failed |
-	 * cancelled. A pending start whose proposal was REJECTED reads `cancelled`
-	 * (it was called off); one whose proposal is no longer pending but whose
-	 * hand-off was never recorded reads `unknown` — the view's unmeasured arm,
-	 * never a guess.
-	 */
-	status: PlaybookRunExternalAgent["status"] | "unknown";
-	/** `pending_start` only: the proposal the start waits on. */
-	proposalId: string | null;
-	/** The provider's page for the task. */
-	url: string | null;
-	prUrl: string | null;
-	branch: string | null;
-	previewUrl: string | null;
-	summary: string | null;
-	/** The failed status reads in a row (`null` = the last read was good). */
-	pollError: {
-		count: number;
-		firstSeenAt: string;
-	} | null;
-	/**
-	 * The binding can stop the agent (`supports.cancel`) — read from the LIVE
-	 * binding, as the cancel door does. `null` = no usable binding to ask.
-	 */
-	cancelStopsAgent: boolean | null;
-	/** When the agent first reported each output (ISO), by output key. */
-	reportedAt: {
-		branch?: string;
-		preview?: string;
-		pull_request?: string;
-	};
-	/** When the status poll last read the task (ISO), `null` before the first read. */
-	polledAt: string | null;
-	startedAt: string;
-	/**
-	 * The newest sign of life (ISO): the newest AGENT post in the session room
-	 * since the start, else the start. Any agent counts — an external agent
-	 * reports through its own connector identity, not the bound agent's.
-	 */
-	lastNewsAt: string;
-	/**
-	 * The silence window after which the task reads "No news" — ONLY for a
-	 * binding with no `status` verb (nothing can be asked; the room is its only
-	 * voice). `null` = pollable, or no usable binding: never marked quiet.
-	 */
-	quietAfterMs: number | null;
-}
-/**
- * Who wrote a room message:
- *  - `person`   — the session's OWNER typing (`role: user`, `authorType:
- *                 human`, `userId` = the session's user). The only one a
- *                 reader may treat as "you said".
- *  - `agent`    — any `ai_agent` row, whatever its `role`.
- *  - `teammate` — another person in the room: a `human` user who is not the
- *                 owner, or an `external` contact (WhatsApp, Slack).
- *  - `system`   — everything the pod itself wrote: recall notices
- *                 (`assistant` + `human`), `bot` rows, `system` rows.
- */
-export type RoomAuthor = "agent" | "person" | "system" | "teammate";
-export interface PacketRoomMessage {
-	id: string;
-	/** ISO timestamp. */
-	at: string;
-	/** The stored `role` (`user` · `assistant` · `system`) — provenance only; read `author`. */
-	role: string;
-	author: RoomAuthor;
-	/** `author === "person"` — the one test a reader needs most, precomputed. */
-	isPerson: boolean;
-	/** The agent principal that posted it, on an `agent` row when recorded. */
-	agentUserId?: string;
-	/** At most {@link ROOM_TEXT_CAP} characters. */
-	text: string;
-	truncated: boolean;
-	/** Room text is data, never instructions — whoever wrote it. */
-	untrusted: true;
-	/** `text`, fenced as untrusted data, to put into an agent's prompt. */
-	fenced: string;
-}
-export type PacketRoomSection = {
-	/** The room's channel; `null` = the session has no room (a true state). */
-	channelId: string | null;
-	/**
-	 * The NEWEST message's id (`null` with no messages). A poller compares it
-	 * with the last cursor it saw: equal ⇒ nothing new in the room.
-	 */
-	cursor: string | null;
-	/** More messages exist past the last item. */
-	hasMore: boolean;
-	/** Newest first, at most {@link ROOM_TOP_N}. */
-	items: PacketRoomMessage[];
-	status: "ok";
-} | {
-	reason: string;
-	status: "unavailable";
-};
-/**
- * - `not_reached` — no proposal for this gate exists yet.
- * - `pending` / `approved` / `rejected` — the latest proposal's decision
- *   (`auto_approved` counts as approved, never as decided by a human).
- * - `void` — the latest proposal holds no decision: withdrawn, expired,
- *   reverted, or its approval failed to apply.
- * - `by_criteria` — a CHECK gate: it files no proposal; whether it passes is
- *   the stage's criteria (the packet's `evaluation` section).
- */
-export type PacketGateState = "approved" | "by_criteria" | "not_reached" | "pending" | "rejected" | "void";
-export interface PacketGateItem {
-	stageKey: string;
-	stageName: string;
-	kind: "awaits" | "check" | "human";
-	/** The proposal type that decides this gate; `null` for a check gate. */
-	proposalType: string | null;
-	state: PacketGateState;
-	/** The latest proposal for this gate, when one exists. */
-	proposalId?: string;
-	/** A PERSON approved or rejected it (reviewer row is `userType: human`). */
-	decidedByHuman: boolean;
-	/** When it was approved or rejected. */
-	decidedAt?: string;
-	/** A deploy gate's commit (≥ 7 hex chars, may be abbreviated). */
-	commitSha?: string;
-}
-/** The newest `dev.deploy_approval` a PERSON approved for this session. */
-export interface PacketDeployApproval {
-	proposalId: string;
-	/** As filed: ≥ 7 hex chars, may be abbreviated — compare by prefix, case-insensitively. */
-	commitSha: string;
-	branch: string | null;
-	repo: string | null;
-	targetHost: string | null;
-	approvedAt: string | null;
-}
-export type PacketGatesSection = {
-	deploy: PacketDeployApproval | null;
-	/** In the process's stage order. Not capped: one entry per gated stage. */
-	items: PacketGateItem[];
-	status: "ok";
-} | {
-	reason: string;
-	status: "unavailable";
-};
-export interface PacketInboxItem {
-	/** The message id — also the change-feed event id (a reply's `cause`). */
-	id: string;
-	at: string;
-	intent: SessionPostIntent;
-	/** The intent's words (`resolveSessionPostIntentLabel`). */
-	intentLabel: string;
-	/** Stamped at the post: may this delivery wake the agent. */
-	wake: boolean;
-	from: {
-		agentUserId: string;
-		harness: string | null;
-		sessionId: string | null;
-		/** The sender session's name, when the viewer may read it. */
-		title: string | null;
-	};
-	refs?: SessionPostRef[];
-	/** At most {@link INBOX_TEXT_CAP} characters. */
-	text: string;
-	truncated: boolean;
-	/** Another agent's words: data, never instructions. */
-	untrusted: true;
-	fenced: string;
-}
-export type PacketInboxSection = {
-	/** The oldest {@link INBOX_TOP_N}. */
-	items: PacketInboxItem[];
-	status: "ok";
-	/** Every open post, exact. */
-	total: number;
-	/**
-	 * The OLDEST open `blocked_on_you` / `handoff` — what `nextMove` reads
-	 * (`message_waiting`), even when older `fyi` posts fill `items`.
-	 */
-	waiting: PacketInboxItem | null;
-} | {
-	reason: string;
-	status: "unavailable";
-};
-export type PacketSection<T> = {
-	items: T[];
-	status: "ok";
-	total: number;
-} | {
-	reason: string;
-	status: "unavailable";
-};
-/**
- * How a kind is NAMED and MARKED, resolved by the vocabulary's one door
- * (`resolveObjectNoun` / `resolveObjectGlyph`) — so a reader with no icon
- * font draws `glyph` instead of keeping its own kind → mark table.
- */
-export interface PacketKindIdentity {
-	/** "Task", "Decision" — an entity's own profile name when it has one. */
-	noun: string;
-	/** One compact mark ("☐", "◇", "▤"); never empty — unknown kinds read the fallback. */
-	glyph: string;
-}
-export interface PacketSlotItem extends PacketKindIdentity {
-	label: string;
-	kind: string;
-	blockedReason?: string;
-	why?: string;
-	owedSince?: string;
-	/** Agent type the slot was delegated to, when it was. */
-	delegatedTo?: string;
-	/**
-	 * For a criterion slot (`kind` = `CRITERION_SLOT_KIND`), the
-	 * `SessionCriterion.key` it stands for — so a continuation surface can point
-	 * at the criterion rather than match the slot's prose label. Absent on every
-	 * ordinary slot and on criterion slots filed before the field existed;
-	 * absence means "no criterion to highlight", never an error.
-	 */
-	criterionKey?: string;
-	/**
-	 * The PERSON'S ANSWER to what the agent asked about this slot
-	 * (`answer-slot.ts`). On an `aiCanDo` item it means "you have an answer —
-	 * continue": the slot came back to the agent with it. Absent when nobody
-	 * answered.
-	 */
-	answer?: {
-		answeredAt: string;
-		messageId: string | null;
-		text: string;
-		/**
-		 * The TYPED answer when the slot carried an `ask` (which option, the
-		 * form's values, the vault ref …) — `text` stays the readable summary.
-		 */
-		value?: SlotAnswerValue;
-	};
-	/**
-	 * On an owed item: HOW the agent asked the person to answer (its declared
-	 * `ask`), so a resuming agent sees what it is waiting for, not just that it
-	 * is waiting.
-	 */
-	ask?: SlotAsk;
-}
-/**
- * A client conversation attached to the session's change-feed wait — a
- * `session_runners` row (`loadSessionRunners`), projected.
- */
-export interface PacketRunnerItem {
-	/** The client's own harness name (`claude-code`, …), as it sent it. */
-	harness: string;
-	conversationId: string;
-	/** Where it ran, when its client said so. Display only. */
-	cwd: string | null;
-	/** The computer hosting the agent (`users.id` of a `machine` agent user). */
-	machineId?: string;
-	/** The agent acting through the key, when an agent key held the wait. */
-	agentUserId?: string;
-	firstSeenAt: string;
-	lastSeenAt: string;
-	/** Stamped within `RUNNER_LIVE_WINDOW_SECONDS` of the read. */
-	live: boolean;
-	/** The shell command that reopens it (`resolveAgentConversation`); absent for a harness we cannot reopen. */
-	resume?: string;
-}
-export interface PacketProposalItem {
-	id: string;
-	/** Imperative — what approving it WILL do. */
-	title: string;
-	proposalType: string;
-	createdAt: string | null;
-}
-export interface PacketOutputItem extends PacketKindIdentity {
-	/** Normalized object kind — `entity` for entities; `noun`/`glyph` name its profile. */
-	kind: string;
-	refId: string;
-	title: string;
-	state?: "kept" | "swept" | "working";
-	/** The declared deliverable this output satisfies, when one matched. */
-	expectedLabel?: string;
-}
-/** A child session — `child --spawned_from--> this`. */
-export interface PacketChildItem {
-	id: string;
-	/** Display name via `resolveSessionTitle` — title, else the goal's first line. */
-	title: string;
-	status: string;
-	statusLabel: string;
-}
-/**
- * A session of an EARLIER stage of this session's track, with what it produced.
- * `outputs` is its own section: one session's failed outputs read never hides
- * the others, and is never "produced nothing".
- */
-export interface PacketPriorStageSession extends PacketChildItem {
-	/** `null` ⇒ a STAGE-LESS track (W1): a recent closed session in the track. */
-	stageKey: string | null;
-	/** The stage's display name as the track pinned it; `null` with no stage. */
-	stageName: string | null;
-	outputs: PacketSection<PacketOutputItem>;
-}
-/**
- * A session named by the detour stack — the one you pop back TO, or the detour
- * this one was put down FOR. Identity only: never a bare id, because "come back
- * to 9f3c-…" is the unreadable row this projection exists to prevent.
- */
-export interface PacketResumeSession {
-	sessionId: string;
-	/** `resolveSessionTitle` — the same rule every other session name uses. */
-	title: string;
-	status: string;
-	statusLabel: string;
-}
-/** A capture clarification question still waiting for the user's answer. */
-export interface PacketQuestionItem {
-	/** The question message id. */
-	id: string;
-	question: string;
-	/** One line: what answering changes. */
-	why?: string;
-	askedAt: string | null;
-}
-/**
- * Work that already landed — "do not redo". `source` names the ledger:
- *  - `output`: a produced object that is not in progress or swept;
- *  - `deliverable`: a declared slot stamped done (approved or attested) with no
- *    produced object standing for it;
- *  - `proposal`: an approved or auto-approved proposal filed under this session
- *    that no done slot already names.
- */
-export interface PacketDoneItem {
-	source: "deliverable" | "output" | "proposal";
-	/** Object kind (`document`, `company`, …). */
-	kind: string;
-	title: string;
-	/** When it landed; `null` when the ledger recorded no time. */
-	at: string | null;
-	/** Object id / satisfying proposal id / proposal id; `null` when none exists. */
-	sourceId: string | null;
-}
-/** The most recent approved or rejected proposal of this session. */
-export interface PacketDecision {
-	proposalId: string;
-	/** Imperative — what the proposal asked to do. */
-	title: string;
-	outcome: "approved" | "rejected";
-	/** `resolveStatusLabel(outcome)` — the one label door, so no reader re-derives it. */
-	outcomeLabel: string;
-	decidedAt: string | null;
-	/** `unknown` when no reviewer is recorded or it no longer resolves. */
-	reviewer: "agent" | "human" | "unknown";
-	/** The reviewer's rejection reason, when one was given. */
-	reason?: string;
-}
-export type NextMoveKind = "agent_slot" | "blocker_dropped" | "message_waiting" | "none" | "owed_slot" | "pending_proposal" | "ready_to_close" | "undeclared" | "unknown" | "waiting_on_session";
-export interface ContinuationNextMove {
-	kind: NextMoveKind;
-	/** Who acts: the person, the AI, or nobody. */
-	actor: "ai" | "none" | "user";
-	/** One line naming the move. */
-	label: string;
-	/** One line saying why this is the move. */
-	reason: string;
-	/** The proposal id, for `pending_proposal`. */
-	proposalId?: string;
-	/** The waiting coordination post's id, for `message_waiting`. */
-	messageId?: string;
-	/**
-	 * The blocking session's id, for `waiting_on_session`; for `blocker_dropped`,
-	 * the DROPPED blocker's id when that blocker is a session; for
-	 * `message_waiting`, the SENDER session (when it has one).
-	 */
-	sessionId?: string;
-}
-export interface ContinuationPacket {
-	version: 1;
-	session: {
-		currentStage: string | null;
-		/** What to show: `resolveSessionTitle` — the ONE rule relay and browser share. */
-		displayTitle: string;
-		goal: string;
-		id: string;
-		kind: SessionKind;
-		progress: number | null;
-		status: string;
-		statusLabel: string;
-		/** The stored name, `null` when untitled. */
-		title: string | null;
-	};
-	/**
-	 * The PROJECT this session's work serves — name + goal, so a reader sees the
-	 * short-term session beside the long-term vision it belongs to. `project:
-	 * null` means the session has no project (a true state, not a failure).
-	 * `goal` is the project's own `description` column — the same field
-	 * `ProjectDetail.tsx`'s header renders under the name — `null` when the
-	 * project has none. A project the caller cannot see reads as `null` too,
-	 * never leaking its name; only a FAILED read is `unavailable`.
-	 */
-	project: {
-		project: {
-			goal: string | null;
-			id: string;
-			name: string;
-		} | null;
-		status: "ok";
-	} | {
-		reason: string;
-		status: "unavailable";
-	};
-	userMustDecide: {
-		owedSlots: PacketSection<PacketSlotItem>;
-		pendingProposals: PacketSection<PacketProposalItem>;
-	};
-	aiCanDo: PacketSection<PacketSlotItem>;
-	blockers: PacketSection<PacketSlotItem>;
-	/**
-	 * The EXTERNAL agent this session's work was handed to — its newest
-	 * dispatched run (`readSessionExternalAgent`). `agent: null` = never handed
-	 * to one; a failed read is `unavailable`.
-	 */
-	externalAgent: {
-		agent: SessionExternalAgent | null;
-		status: "ok";
-	} | {
-		reason: string;
-		status: "unavailable";
-	};
-	outputs: PacketSection<PacketOutputItem>;
-	/**
-	 * Child sessions (detours and planned sub-sessions), oldest first. A parent
-	 * never auto-closes: it shows these, and closing stays explicit.
-	 */
-	children: PacketSection<PacketChildItem>;
-	/**
-	 * The session this one was spawned from (`this --spawned_from--> parent`).
-	 * `session: null` means NO parent; a failed read is `unavailable`, never
-	 * folded into "no parent".
-	 */
-	parent: {
-		session: PacketChildItem | null;
-		status: "ok";
-	} | {
-		reason: string;
-		status: "unavailable";
-	};
-	/**
-	 * THE POP — the two questions a returning reader must answer without a
-	 * second call: *which session am I coming back to*, and *what was I about to
-	 * do there*. Both directions of the detour stack, at most one populated:
-	 *
-	 *  - `returnTo` — THIS session is a detour. It names the parent (title, not
-	 *    an id) and, when the push recorded one, the line the parent was about to
-	 *    act on. `intent` is GATED on the parent's note naming THIS child: the
-	 *    note is one slot and the last push wins, so a parent that has since
-	 *    pushed a SECOND detour carries a line about that one, and restating it
-	 *    here would be a confidently wrong sentence. `returnTo: null` means no
-	 *    parent — the overwhelmingly normal case.
-	 *  - `suspended` — THIS session is the parent: it was put down for a detour.
-	 *    `intent` is what it was about to do; `child` is that detour with its
-	 *    CURRENT status, so a surface can say "the detour finished, pick this back
-	 *    up" without a second read. `child: null` means the named detour no
-	 *    longer resolves (deleted, or not this user's) — a true state, not a
-	 *    failure. `suspended: null` means this session was never put down.
-	 *
-	 * Both read `focus_sessions.metadata.suspended`, written by
-	 * `recordSessionSpawn`, through the one narrowing door
-	 * (`readSuspendedNote`). Absence is normal everywhere here and NO consumer
-	 * may treat it as an error; only a failed query is `unavailable`.
-	 */
-	resume: {
-		returnTo: (PacketResumeSession & {
-			intent?: string;
-			suspendedAt?: string;
-		}) | null;
-		status: "ok";
-		suspended: {
-			at: string | null;
-			child: PacketResumeSession | null;
-			intent: string;
-		} | null;
-	} | {
-		reason: string;
-		status: "unavailable";
-	};
-	/**
-	 * Sessions this one waits on (`this --blocked_by--> blocker`), closed ones
-	 * included — `status` says which still block. Distinct from `blockers`,
-	 * which is owed SLOTS, not session edges.
-	 */
-	blockedBy: PacketSection<PacketChildItem>;
-	/**
-	 * Sessions waiting on this one (`other --blocked_by--> this`), open first —
-	 * the inbound twin of `blockedBy`: closing this session releases them.
-	 */
-	unblocks: PacketSection<PacketChildItem>;
-	/** Capture clarification questions still open in this session's room, oldest first. */
-	openQuestions: PacketSection<PacketQuestionItem>;
-	/**
-	 * THE STAGE BRIEF — what the EARLIER stages of this session's track produced,
-	 * so a stage starts from pod references, never from the previous chat.
-	 * DERIVED, no edge: the sessions filed (`track_stage`) at a stage before this
-	 * one in the track's pinned order, nearest stage first (the stage that feeds
-	 * this one must never fall past the cut), closed before open within a stage.
-	 * `total` counts every such session; `items` is capped at
-	 * {@link PACKET_TOP_N}, each with its own capped `outputs`.
-	 *
-	 * A STAGE-LESS track (W1, a lasting intent) has no earlier stage: there it
-	 * DEGRADES to the track's recent CLOSED sessions (other than this one),
-	 * newest first, with `stageKey`/`stageName` null.
-	 *
-	 * `null` — not a track session (no track), a staged track's session with no
-	 * stage or a stage the track does not declare, or a track the reader cannot
-	 * see (never leaked). A FAILED read is `unavailable`. Cross-track feeds are
-	 * not derived here.
-	 */
-	priorStages: PacketSection<PacketPriorStageSession> | null;
-	/** What already landed, newest first — an agent must not redo these. */
-	alreadyDone: PacketSection<PacketDoneItem>;
-	/** `decision: null` when nothing was ever approved or rejected here. */
-	lastDecision: {
-		decision: PacketDecision | null;
-		status: "ok";
-	} | {
-		reason: string;
-		status: "unavailable";
-	};
-	/** `null` when the session recorded no run manifest. */
-	run: {
-		engine: string;
-		guidelineStatus?: "ok" | "unavailable";
-		guidelines: Array<{
-			id: string;
-			version: number;
-		}>;
-		model: string | null;
-		promptVersion: string;
-		provider?: string | null;
-		sourcesCount: number;
-	} | null;
-	rerun: RerunAvailability;
-	/** `null` when the session never recorded a completion/verification. */
-	lastCompletion: {
-		closedAt: string | null;
-		summary?: string;
-		unfinishedOutputs?: number;
-	} | null;
-	nextMove: ContinuationNextMove;
-	/**
-	 * THE ROOM — the session room's newest messages, each classified by who
-	 * wrote it (`classifyRoomAuthor`, `room-messages.ts`). Read through the
-	 * channel-visibility gate: a room the viewer cannot see is `unavailable`,
-	 * never empty. `channelId: null` = the session has no room.
-	 */
-	room: PacketRoomSection;
-	/**
-	 * IS AN AGENT WORKING ON THIS RIGHT NOW — the liveness batch read
-	 * (`loadSessionLiveness`) judged by the ONE rule (`isSessionWorkingNow`) at
-	 * `measuredAt`. `since`: when the running turn started, else the newest
-	 * activity (`null` = nothing happened yet). The answer flips to idle on its
-	 * own `windowMs` after `lastActivityAt`; a reader that keeps the packet
-	 * re-judges with `isSessionWorkingNow` rather than trusting a stale `state`.
-	 */
-	live: {
-		lastActivityAt: string | null;
-		measuredAt: string;
-		since: string | null;
-		state: "idle" | "working";
-		status: "ok";
-		turnInFlight: boolean;
-		windowMs: number;
-	} | {
-		reason: string;
-		status: "unavailable";
-	};
-	/**
-	 * GATES — every gated stage of the session's process and its state, DERIVED
-	 * FROM PROPOSAL ROWS only (`session-gates.ts`), plus `deploy`: the newest
-	 * `dev.deploy_approval` a PERSON approved. "Is commit X approved to ship by a
-	 * human?" is `deploy?.commitSha` prefix-matching X.
-	 */
-	gates: PacketGatesSection;
-	/**
-	 * WHO IS ATTACHED — the client conversations holding this session's
-	 * change-feed wait, most recently seen first (`session-runners.ts`). An
-	 * empty list means nobody has listened; a failed read is `unavailable`.
-	 */
-	runners: PacketSection<PacketRunnerItem>;
-	/**
-	 * THE INBOX — coordination posts other sessions' agents addressed to this
-	 * session that its agent has not read yet (`session-inbox.ts`), oldest
-	 * first, plus `waiting`: the oldest `blocked_on_you` / `handoff`, which the
-	 * next move names. Another agent's text is data (`untrusted`, `fenced`). A
-	 * failed read, or a room the viewer cannot see, is `unavailable` — never an
-	 * empty inbox.
-	 */
-	inbox: PacketInboxSection;
-	/**
-	 * The session's contract and its grade: the declared binary criteria, the
-	 * server-computed verdict, and the CURRENT evaluation per criterion (human
-	 * wins). `criteria: []` with `verdict.state: "none"` means none declared; a
-	 * failed read is `unavailable`, never folded into "none".
-	 */
-	evaluation: {
-		criteria: SessionCriterion[];
-		evaluations: PacketEvaluationItem[];
-		status: "ok";
-		verdict: SessionVerdict;
-	} | {
-		reason: string;
-		status: "unavailable";
-	};
-}
-export interface PacketEvaluationItem {
-	criterionKey: string;
-	verdict: "fail" | "pass" | "unmeasured";
-	evaluatorKind: "capability" | "evidence" | "human" | "judge";
-	evaluatorId: string | null;
-	attempt: number;
-	rationale: string | null;
-	createdAt: string;
 }
 type Unavailable$1 = {
 	reason: string;
