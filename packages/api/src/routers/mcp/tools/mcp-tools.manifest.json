@@ -1501,6 +1501,10 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "risk": {
+                          "type": "string",
+                          "enum": ["high", "medium", "low"]
                         }
                       },
                       "required": ["mode"]
@@ -1538,6 +1542,59 @@
                               "description": {
                                 "type": "string",
                                 "maxLength": 140
+                              },
+                              "caution": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 60
+                              },
+                              "followUp": {
+                                "type": "object",
+                                "properties": {
+                                  "prompt": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 120
+                                  },
+                                  "options": {
+                                    "minItems": 2,
+                                    "maxItems": 4,
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "label": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 80
+                                        },
+                                        "value": {
+                                          "type": "string",
+                                          "maxLength": 500
+                                        },
+                                        "icon": {
+                                          "type": "string",
+                                          "maxLength": 64
+                                        },
+                                        "recommended": {
+                                          "type": "boolean"
+                                        },
+                                        "description": {
+                                          "type": "string",
+                                          "maxLength": 140
+                                        },
+                                        "caution": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 60
+                                        }
+                                      },
+                                      "required": ["label"],
+                                      "additionalProperties": false
+                                    }
+                                  }
+                                },
+                                "required": ["prompt", "options"]
                               }
                             },
                             "required": ["label"]
@@ -1570,6 +1627,10 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "risk": {
+                          "type": "string",
+                          "enum": ["high", "medium", "low"]
                         }
                       },
                       "required": ["mode", "options"]
@@ -1666,6 +1727,10 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "risk": {
+                          "type": "string",
+                          "enum": ["high", "medium", "low"]
                         }
                       },
                       "required": ["mode", "form"]
@@ -1714,6 +1779,10 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "risk": {
+                          "type": "string",
+                          "enum": ["high", "medium", "low"]
                         }
                       },
                       "required": ["mode"]
@@ -1802,12 +1871,16 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "risk": {
+                          "type": "string",
+                          "enum": ["high", "medium", "low"]
                         }
                       },
                       "required": ["mode", "provide"]
                     }
                   ],
-                  "description": "Only with owner='human': HOW the person can answer, so they resolve it in one tap instead of writing back. mode 'confirm' (yes/no; optional prompt), 'choose' (1-8 options, at most ONE recommended, each with a one-line `description` of its consequence; allowOther for free text), 'form' (a small FLAT form; credential field types are dropped — never ask for a secret in a form), 'act' (something to DO: optional http(s) url + up to 7 steps; the person answers 'I did this'), 'provide' (connection {service} | file {accept} | secret {name} — handed over through the vault, never typed into a message). PREFER confirm/choose for any decision (mark exactly ONE option `recommended` when you have a view: their pick vs your recommendation is recorded, and every answered confirm/choose files a `decision` entity); use act ONLY for a physical/world task with steps. Example: {\"mode\":\"choose\",\"options\":[{\"label\":\"Ship now\",\"recommended\":true,\"description\":\"Publishes today\"},{\"label\":\"Wait a week\"}]}. Omit for a plain free-text answer. null clears a stored ask. Any mode may carry `lookedAt`: up to 8 {kind, id} (entity | document | view | automation | playbook) you actually read before asking, so the person sees what you based the question on — refs they cannot see are refused, and any title you send is ignored (the pod names them)."
+                  "description": "Only with owner='human': HOW the person can answer, so they resolve it in one tap instead of writing back. mode 'confirm' (yes/no; optional prompt), 'choose' (1-8 options, at most ONE recommended, each with a one-line `description` of its consequence; allowOther for free text), 'form' (a small FLAT form; credential field types are dropped — never ask for a secret in a form), 'act' (something to DO: optional http(s) url + up to 7 steps; the person answers 'I did this'), 'provide' (connection {service} | file {accept} | secret {name} — handed over through the vault, never typed into a message). PREFER confirm/choose for any decision (mark exactly ONE option `recommended` when you have a view: their pick vs your recommendation is recorded, and every answered confirm/choose files a `decision` entity); use act ONLY for a physical/world task with steps. Example: {\"mode\":\"choose\",\"options\":[{\"label\":\"Ship now\",\"recommended\":true,\"description\":\"Publishes today\"},{\"label\":\"Wait a week\"}]}. A choose option may open ONE follow-up the person answers next, {\"prompt\":\"Which environment?\",\"options\":[2-4 plain options]} (one level only: a follow-up option opening its own is refused), and may carry a `caution` (one short fact to weigh, max 60 chars, e.g. 'Skips 1,284 tests'). Omit for a plain free-text answer. null clears a stored ask. Any mode may carry `risk` ('high' | 'medium' | 'low': how much is at stake in the answer). Any mode may carry `lookedAt`: up to 8 {kind, id} (entity | document | view | automation | playbook) you actually read before asking, so the person sees what you based the question on — refs they cannot see are refused, and any title you send is ignored (the pod names them)."
                 }
               },
               "required": ["label"]
@@ -2000,6 +2073,10 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "risk": {
+                          "type": "string",
+                          "enum": ["high", "medium", "low"]
                         }
                       },
                       "required": ["mode"]
@@ -2037,6 +2114,59 @@
                               "description": {
                                 "type": "string",
                                 "maxLength": 140
+                              },
+                              "caution": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 60
+                              },
+                              "followUp": {
+                                "type": "object",
+                                "properties": {
+                                  "prompt": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 120
+                                  },
+                                  "options": {
+                                    "minItems": 2,
+                                    "maxItems": 4,
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "label": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 80
+                                        },
+                                        "value": {
+                                          "type": "string",
+                                          "maxLength": 500
+                                        },
+                                        "icon": {
+                                          "type": "string",
+                                          "maxLength": 64
+                                        },
+                                        "recommended": {
+                                          "type": "boolean"
+                                        },
+                                        "description": {
+                                          "type": "string",
+                                          "maxLength": 140
+                                        },
+                                        "caution": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 60
+                                        }
+                                      },
+                                      "required": ["label"],
+                                      "additionalProperties": false
+                                    }
+                                  }
+                                },
+                                "required": ["prompt", "options"]
                               }
                             },
                             "required": ["label"]
@@ -2069,6 +2199,10 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "risk": {
+                          "type": "string",
+                          "enum": ["high", "medium", "low"]
                         }
                       },
                       "required": ["mode", "options"]
@@ -2165,6 +2299,10 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "risk": {
+                          "type": "string",
+                          "enum": ["high", "medium", "low"]
                         }
                       },
                       "required": ["mode", "form"]
@@ -2213,6 +2351,10 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "risk": {
+                          "type": "string",
+                          "enum": ["high", "medium", "low"]
                         }
                       },
                       "required": ["mode"]
@@ -2301,12 +2443,16 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "risk": {
+                          "type": "string",
+                          "enum": ["high", "medium", "low"]
                         }
                       },
                       "required": ["mode", "provide"]
                     }
                   ],
-                  "description": "Only with owner='human': HOW the person can answer, so they resolve it in one tap instead of writing back. mode 'confirm' (yes/no; optional prompt), 'choose' (1-8 options, at most ONE recommended, each with a one-line `description` of its consequence; allowOther for free text), 'form' (a small FLAT form; credential field types are dropped — never ask for a secret in a form), 'act' (something to DO: optional http(s) url + up to 7 steps; the person answers 'I did this'), 'provide' (connection {service} | file {accept} | secret {name} — handed over through the vault, never typed into a message). PREFER confirm/choose for any decision (mark exactly ONE option `recommended` when you have a view: their pick vs your recommendation is recorded, and every answered confirm/choose files a `decision` entity); use act ONLY for a physical/world task with steps. Example: {\"mode\":\"choose\",\"options\":[{\"label\":\"Ship now\",\"recommended\":true,\"description\":\"Publishes today\"},{\"label\":\"Wait a week\"}]}. Omit for a plain free-text answer. null clears a stored ask. Any mode may carry `lookedAt`: up to 8 {kind, id} (entity | document | view | automation | playbook) you actually read before asking, so the person sees what you based the question on — refs they cannot see are refused, and any title you send is ignored (the pod names them)."
+                  "description": "Only with owner='human': HOW the person can answer, so they resolve it in one tap instead of writing back. mode 'confirm' (yes/no; optional prompt), 'choose' (1-8 options, at most ONE recommended, each with a one-line `description` of its consequence; allowOther for free text), 'form' (a small FLAT form; credential field types are dropped — never ask for a secret in a form), 'act' (something to DO: optional http(s) url + up to 7 steps; the person answers 'I did this'), 'provide' (connection {service} | file {accept} | secret {name} — handed over through the vault, never typed into a message). PREFER confirm/choose for any decision (mark exactly ONE option `recommended` when you have a view: their pick vs your recommendation is recorded, and every answered confirm/choose files a `decision` entity); use act ONLY for a physical/world task with steps. Example: {\"mode\":\"choose\",\"options\":[{\"label\":\"Ship now\",\"recommended\":true,\"description\":\"Publishes today\"},{\"label\":\"Wait a week\"}]}. A choose option may open ONE follow-up the person answers next, {\"prompt\":\"Which environment?\",\"options\":[2-4 plain options]} (one level only: a follow-up option opening its own is refused), and may carry a `caution` (one short fact to weigh, max 60 chars, e.g. 'Skips 1,284 tests'). Omit for a plain free-text answer. null clears a stored ask. Any mode may carry `risk` ('high' | 'medium' | 'low': how much is at stake in the answer). Any mode may carry `lookedAt`: up to 8 {kind, id} (entity | document | view | automation | playbook) you actually read before asking, so the person sees what you based the question on — refs they cannot see are refused, and any title you send is ignored (the pod names them)."
                 }
               },
               "required": ["kind", "label"]
@@ -2459,6 +2605,10 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "risk": {
+                          "type": "string",
+                          "enum": ["high", "medium", "low"]
                         }
                       },
                       "required": ["mode"]
@@ -2496,6 +2646,59 @@
                               "description": {
                                 "type": "string",
                                 "maxLength": 140
+                              },
+                              "caution": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 60
+                              },
+                              "followUp": {
+                                "type": "object",
+                                "properties": {
+                                  "prompt": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 120
+                                  },
+                                  "options": {
+                                    "minItems": 2,
+                                    "maxItems": 4,
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "label": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 80
+                                        },
+                                        "value": {
+                                          "type": "string",
+                                          "maxLength": 500
+                                        },
+                                        "icon": {
+                                          "type": "string",
+                                          "maxLength": 64
+                                        },
+                                        "recommended": {
+                                          "type": "boolean"
+                                        },
+                                        "description": {
+                                          "type": "string",
+                                          "maxLength": 140
+                                        },
+                                        "caution": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 60
+                                        }
+                                      },
+                                      "required": ["label"],
+                                      "additionalProperties": false
+                                    }
+                                  }
+                                },
+                                "required": ["prompt", "options"]
                               }
                             },
                             "required": ["label"]
@@ -2528,6 +2731,10 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "risk": {
+                          "type": "string",
+                          "enum": ["high", "medium", "low"]
                         }
                       },
                       "required": ["mode", "options"]
@@ -2624,6 +2831,10 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "risk": {
+                          "type": "string",
+                          "enum": ["high", "medium", "low"]
                         }
                       },
                       "required": ["mode", "form"]
@@ -2672,6 +2883,10 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "risk": {
+                          "type": "string",
+                          "enum": ["high", "medium", "low"]
                         }
                       },
                       "required": ["mode"]
@@ -2760,12 +2975,16 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "risk": {
+                          "type": "string",
+                          "enum": ["high", "medium", "low"]
                         }
                       },
                       "required": ["mode", "provide"]
                     }
                   ],
-                  "description": "Only with owner='human': HOW the person can answer, so they resolve it in one tap instead of writing back. mode 'confirm' (yes/no; optional prompt), 'choose' (1-8 options, at most ONE recommended, each with a one-line `description` of its consequence; allowOther for free text), 'form' (a small FLAT form; credential field types are dropped — never ask for a secret in a form), 'act' (something to DO: optional http(s) url + up to 7 steps; the person answers 'I did this'), 'provide' (connection {service} | file {accept} | secret {name} — handed over through the vault, never typed into a message). PREFER confirm/choose for any decision (mark exactly ONE option `recommended` when you have a view: their pick vs your recommendation is recorded, and every answered confirm/choose files a `decision` entity); use act ONLY for a physical/world task with steps. Example: {\"mode\":\"choose\",\"options\":[{\"label\":\"Ship now\",\"recommended\":true,\"description\":\"Publishes today\"},{\"label\":\"Wait a week\"}]}. Omit for a plain free-text answer. null clears a stored ask. Any mode may carry `lookedAt`: up to 8 {kind, id} (entity | document | view | automation | playbook) you actually read before asking, so the person sees what you based the question on — refs they cannot see are refused, and any title you send is ignored (the pod names them)."
+                  "description": "Only with owner='human': HOW the person can answer, so they resolve it in one tap instead of writing back. mode 'confirm' (yes/no; optional prompt), 'choose' (1-8 options, at most ONE recommended, each with a one-line `description` of its consequence; allowOther for free text), 'form' (a small FLAT form; credential field types are dropped — never ask for a secret in a form), 'act' (something to DO: optional http(s) url + up to 7 steps; the person answers 'I did this'), 'provide' (connection {service} | file {accept} | secret {name} — handed over through the vault, never typed into a message). PREFER confirm/choose for any decision (mark exactly ONE option `recommended` when you have a view: their pick vs your recommendation is recorded, and every answered confirm/choose files a `decision` entity); use act ONLY for a physical/world task with steps. Example: {\"mode\":\"choose\",\"options\":[{\"label\":\"Ship now\",\"recommended\":true,\"description\":\"Publishes today\"},{\"label\":\"Wait a week\"}]}. A choose option may open ONE follow-up the person answers next, {\"prompt\":\"Which environment?\",\"options\":[2-4 plain options]} (one level only: a follow-up option opening its own is refused), and may carry a `caution` (one short fact to weigh, max 60 chars, e.g. 'Skips 1,284 tests'). Omit for a plain free-text answer. null clears a stored ask. Any mode may carry `risk` ('high' | 'medium' | 'low': how much is at stake in the answer). Any mode may carry `lookedAt`: up to 8 {kind, id} (entity | document | view | automation | playbook) you actually read before asking, so the person sees what you based the question on — refs they cannot see are refused, and any title you send is ignored (the pod names them)."
                 }
               },
               "required": ["label"]
@@ -2963,6 +3182,10 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "risk": {
+                          "type": "string",
+                          "enum": ["high", "medium", "low"]
                         }
                       },
                       "required": ["mode"]
@@ -3000,6 +3223,59 @@
                               "description": {
                                 "type": "string",
                                 "maxLength": 140
+                              },
+                              "caution": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 60
+                              },
+                              "followUp": {
+                                "type": "object",
+                                "properties": {
+                                  "prompt": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 120
+                                  },
+                                  "options": {
+                                    "minItems": 2,
+                                    "maxItems": 4,
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "label": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 80
+                                        },
+                                        "value": {
+                                          "type": "string",
+                                          "maxLength": 500
+                                        },
+                                        "icon": {
+                                          "type": "string",
+                                          "maxLength": 64
+                                        },
+                                        "recommended": {
+                                          "type": "boolean"
+                                        },
+                                        "description": {
+                                          "type": "string",
+                                          "maxLength": 140
+                                        },
+                                        "caution": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 60
+                                        }
+                                      },
+                                      "required": ["label"],
+                                      "additionalProperties": false
+                                    }
+                                  }
+                                },
+                                "required": ["prompt", "options"]
                               }
                             },
                             "required": ["label"]
@@ -3032,6 +3308,10 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "risk": {
+                          "type": "string",
+                          "enum": ["high", "medium", "low"]
                         }
                       },
                       "required": ["mode", "options"]
@@ -3128,6 +3408,10 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "risk": {
+                          "type": "string",
+                          "enum": ["high", "medium", "low"]
                         }
                       },
                       "required": ["mode", "form"]
@@ -3176,6 +3460,10 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "risk": {
+                          "type": "string",
+                          "enum": ["high", "medium", "low"]
                         }
                       },
                       "required": ["mode"]
@@ -3264,12 +3552,16 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "risk": {
+                          "type": "string",
+                          "enum": ["high", "medium", "low"]
                         }
                       },
                       "required": ["mode", "provide"]
                     }
                   ],
-                  "description": "Only with owner='human': HOW the person can answer, so they resolve it in one tap instead of writing back. mode 'confirm' (yes/no; optional prompt), 'choose' (1-8 options, at most ONE recommended, each with a one-line `description` of its consequence; allowOther for free text), 'form' (a small FLAT form; credential field types are dropped — never ask for a secret in a form), 'act' (something to DO: optional http(s) url + up to 7 steps; the person answers 'I did this'), 'provide' (connection {service} | file {accept} | secret {name} — handed over through the vault, never typed into a message). PREFER confirm/choose for any decision (mark exactly ONE option `recommended` when you have a view: their pick vs your recommendation is recorded, and every answered confirm/choose files a `decision` entity); use act ONLY for a physical/world task with steps. Example: {\"mode\":\"choose\",\"options\":[{\"label\":\"Ship now\",\"recommended\":true,\"description\":\"Publishes today\"},{\"label\":\"Wait a week\"}]}. Omit for a plain free-text answer. null clears a stored ask. Any mode may carry `lookedAt`: up to 8 {kind, id} (entity | document | view | automation | playbook) you actually read before asking, so the person sees what you based the question on — refs they cannot see are refused, and any title you send is ignored (the pod names them)."
+                  "description": "Only with owner='human': HOW the person can answer, so they resolve it in one tap instead of writing back. mode 'confirm' (yes/no; optional prompt), 'choose' (1-8 options, at most ONE recommended, each with a one-line `description` of its consequence; allowOther for free text), 'form' (a small FLAT form; credential field types are dropped — never ask for a secret in a form), 'act' (something to DO: optional http(s) url + up to 7 steps; the person answers 'I did this'), 'provide' (connection {service} | file {accept} | secret {name} — handed over through the vault, never typed into a message). PREFER confirm/choose for any decision (mark exactly ONE option `recommended` when you have a view: their pick vs your recommendation is recorded, and every answered confirm/choose files a `decision` entity); use act ONLY for a physical/world task with steps. Example: {\"mode\":\"choose\",\"options\":[{\"label\":\"Ship now\",\"recommended\":true,\"description\":\"Publishes today\"},{\"label\":\"Wait a week\"}]}. A choose option may open ONE follow-up the person answers next, {\"prompt\":\"Which environment?\",\"options\":[2-4 plain options]} (one level only: a follow-up option opening its own is refused), and may carry a `caution` (one short fact to weigh, max 60 chars, e.g. 'Skips 1,284 tests'). Omit for a plain free-text answer. null clears a stored ask. Any mode may carry `risk` ('high' | 'medium' | 'low': how much is at stake in the answer). Any mode may carry `lookedAt`: up to 8 {kind, id} (entity | document | view | automation | playbook) you actually read before asking, so the person sees what you based the question on — refs they cannot see are refused, and any title you send is ignored (the pod names them)."
                 }
               },
               "required": ["kind", "label"]
@@ -3384,6 +3676,10 @@
                           },
                           "required": ["kind", "id"]
                         }
+                      },
+                      "risk": {
+                        "type": "string",
+                        "enum": ["high", "medium", "low"]
                       }
                     },
                     "required": ["mode"]
@@ -3421,6 +3717,59 @@
                             "description": {
                               "type": "string",
                               "maxLength": 140
+                            },
+                            "caution": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 60
+                            },
+                            "followUp": {
+                              "type": "object",
+                              "properties": {
+                                "prompt": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 120
+                                },
+                                "options": {
+                                  "minItems": 2,
+                                  "maxItems": 4,
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "label": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 80
+                                      },
+                                      "value": {
+                                        "type": "string",
+                                        "maxLength": 500
+                                      },
+                                      "icon": {
+                                        "type": "string",
+                                        "maxLength": 64
+                                      },
+                                      "recommended": {
+                                        "type": "boolean"
+                                      },
+                                      "description": {
+                                        "type": "string",
+                                        "maxLength": 140
+                                      },
+                                      "caution": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 60
+                                      }
+                                    },
+                                    "required": ["label"],
+                                    "additionalProperties": false
+                                  }
+                                }
+                              },
+                              "required": ["prompt", "options"]
                             }
                           },
                           "required": ["label"]
@@ -3453,6 +3802,10 @@
                           },
                           "required": ["kind", "id"]
                         }
+                      },
+                      "risk": {
+                        "type": "string",
+                        "enum": ["high", "medium", "low"]
                       }
                     },
                     "required": ["mode", "options"]
@@ -3549,6 +3902,10 @@
                           },
                           "required": ["kind", "id"]
                         }
+                      },
+                      "risk": {
+                        "type": "string",
+                        "enum": ["high", "medium", "low"]
                       }
                     },
                     "required": ["mode", "form"]
@@ -3597,6 +3954,10 @@
                           },
                           "required": ["kind", "id"]
                         }
+                      },
+                      "risk": {
+                        "type": "string",
+                        "enum": ["high", "medium", "low"]
                       }
                     },
                     "required": ["mode"]
@@ -3685,12 +4046,16 @@
                           },
                           "required": ["kind", "id"]
                         }
+                      },
+                      "risk": {
+                        "type": "string",
+                        "enum": ["high", "medium", "low"]
                       }
                     },
                     "required": ["mode", "provide"]
                   }
                 ],
-                "description": "Only with owner='human': HOW the person can answer, so they resolve it in one tap instead of writing back. mode 'confirm' (yes/no; optional prompt), 'choose' (1-8 options, at most ONE recommended, each with a one-line `description` of its consequence; allowOther for free text), 'form' (a small FLAT form; credential field types are dropped — never ask for a secret in a form), 'act' (something to DO: optional http(s) url + up to 7 steps; the person answers 'I did this'), 'provide' (connection {service} | file {accept} | secret {name} — handed over through the vault, never typed into a message). PREFER confirm/choose for any decision (mark exactly ONE option `recommended` when you have a view: their pick vs your recommendation is recorded, and every answered confirm/choose files a `decision` entity); use act ONLY for a physical/world task with steps. Example: {\"mode\":\"choose\",\"options\":[{\"label\":\"Ship now\",\"recommended\":true,\"description\":\"Publishes today\"},{\"label\":\"Wait a week\"}]}. Omit for a plain free-text answer. null clears a stored ask. Any mode may carry `lookedAt`: up to 8 {kind, id} (entity | document | view | automation | playbook) you actually read before asking, so the person sees what you based the question on — refs they cannot see are refused, and any title you send is ignored (the pod names them)."
+                "description": "Only with owner='human': HOW the person can answer, so they resolve it in one tap instead of writing back. mode 'confirm' (yes/no; optional prompt), 'choose' (1-8 options, at most ONE recommended, each with a one-line `description` of its consequence; allowOther for free text), 'form' (a small FLAT form; credential field types are dropped — never ask for a secret in a form), 'act' (something to DO: optional http(s) url + up to 7 steps; the person answers 'I did this'), 'provide' (connection {service} | file {accept} | secret {name} — handed over through the vault, never typed into a message). PREFER confirm/choose for any decision (mark exactly ONE option `recommended` when you have a view: their pick vs your recommendation is recorded, and every answered confirm/choose files a `decision` entity); use act ONLY for a physical/world task with steps. Example: {\"mode\":\"choose\",\"options\":[{\"label\":\"Ship now\",\"recommended\":true,\"description\":\"Publishes today\"},{\"label\":\"Wait a week\"}]}. A choose option may open ONE follow-up the person answers next, {\"prompt\":\"Which environment?\",\"options\":[2-4 plain options]} (one level only: a follow-up option opening its own is refused), and may carry a `caution` (one short fact to weigh, max 60 chars, e.g. 'Skips 1,284 tests'). Omit for a plain free-text answer. null clears a stored ask. Any mode may carry `risk` ('high' | 'medium' | 'low': how much is at stake in the answer). Any mode may carry `lookedAt`: up to 8 {kind, id} (entity | document | view | automation | playbook) you actually read before asking, so the person sees what you based the question on — refs they cannot see are refused, and any title you send is ignored (the pod names them)."
               }
             },
             "required": ["kind", "label"],
@@ -3894,7 +4259,7 @@
         "readOnlyHint": true,
         "openWorldHint": false
       },
-      "description": "Re-find a focus session — read-only. `outcomes` is what it must yield and needs: `outcomes.outcomes[]` (key, label, verify, met + metBy, state, evidence) and `outcomes.inputs[]` (what the person must give, each pointing at the outcome it blocks); `status:'unavailable'` means the read failed, not empty. To CONTINUE a session, read `continuation` first: it is the continuation packet (userMustDecide = owed slots + pending proposals, aiCanDo = open agent deliverables, blockers, outputs, goal = the goal it serves with end state, criteria marks and KPI, siblings = the goal's (else project's) other sessions running in parallel / done before / next, workUnits = the PRs and branches it recorded, run manifest, rerun, lastCompletion, nextMove). A section with status 'unavailable' failed to load — it is NOT empty. Pass sessionId for a specific session. Omit sessionId only when you have exactly one open session (ambient). If multiple sessions are open, returns multiSession:true + openSessions[] — pass sessionId explicitly (ambient attach is disabled to prevent mis-attribution). Always yours: sessions are scoped to the calling user.",
+      "description": "Re-find a focus session — read-only. `outcomes` is what it must yield and needs: `outcomes.outcomes[]` (key, label, verify, met + metBy, state, evidence) and `outcomes.inputs[]` (what the person must give, each pointing at the outcome it blocks); `status:'unavailable'` means the read failed, not empty. To CONTINUE a session, read `continuation` first: it is the continuation packet (userMustDecide = owed slots + pending proposals, aiCanDo = open agent deliverables, blockers, outputs, goal = the goal it serves with end state, criteria marks and KPI, siblings = the goal's (else project's) other sessions running in parallel / done before / next, workUnits = the PRs and branches it recorded (prState = open/merged/closed + checks + deployed, from the dev events the pod recorded; absent = none recorded), run manifest, rerun, lastCompletion, nextMove). A section with status 'unavailable' failed to load — it is NOT empty. Pass sessionId for a specific session. Omit sessionId only when you have exactly one open session (ambient). If multiple sessions are open, returns multiSession:true + openSessions[] — pass sessionId explicitly (ambient attach is disabled to prevent mis-attribution). Always yours: sessions are scoped to the calling user.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -4465,6 +4830,10 @@
                                   },
                                   "required": ["kind", "id"]
                                 }
+                              },
+                              "risk": {
+                                "type": "string",
+                                "enum": ["high", "medium", "low"]
                               }
                             },
                             "required": ["mode"]
@@ -4502,6 +4871,59 @@
                                     "description": {
                                       "type": "string",
                                       "maxLength": 140
+                                    },
+                                    "caution": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 60
+                                    },
+                                    "followUp": {
+                                      "type": "object",
+                                      "properties": {
+                                        "prompt": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 120
+                                        },
+                                        "options": {
+                                          "minItems": 2,
+                                          "maxItems": 4,
+                                          "type": "array",
+                                          "items": {
+                                            "type": "object",
+                                            "properties": {
+                                              "label": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 80
+                                              },
+                                              "value": {
+                                                "type": "string",
+                                                "maxLength": 500
+                                              },
+                                              "icon": {
+                                                "type": "string",
+                                                "maxLength": 64
+                                              },
+                                              "recommended": {
+                                                "type": "boolean"
+                                              },
+                                              "description": {
+                                                "type": "string",
+                                                "maxLength": 140
+                                              },
+                                              "caution": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 60
+                                              }
+                                            },
+                                            "required": ["label"],
+                                            "additionalProperties": false
+                                          }
+                                        }
+                                      },
+                                      "required": ["prompt", "options"]
                                     }
                                   },
                                   "required": ["label"]
@@ -4534,6 +4956,10 @@
                                   },
                                   "required": ["kind", "id"]
                                 }
+                              },
+                              "risk": {
+                                "type": "string",
+                                "enum": ["high", "medium", "low"]
                               }
                             },
                             "required": ["mode", "options"]
@@ -4630,6 +5056,10 @@
                                   },
                                   "required": ["kind", "id"]
                                 }
+                              },
+                              "risk": {
+                                "type": "string",
+                                "enum": ["high", "medium", "low"]
                               }
                             },
                             "required": ["mode", "form"]
@@ -4678,6 +5108,10 @@
                                   },
                                   "required": ["kind", "id"]
                                 }
+                              },
+                              "risk": {
+                                "type": "string",
+                                "enum": ["high", "medium", "low"]
                               }
                             },
                             "required": ["mode"]
@@ -4766,12 +5200,16 @@
                                   },
                                   "required": ["kind", "id"]
                                 }
+                              },
+                              "risk": {
+                                "type": "string",
+                                "enum": ["high", "medium", "low"]
                               }
                             },
                             "required": ["mode", "provide"]
                           }
                         ],
-                        "description": "Only with owner='human': HOW the person can answer, so they resolve it in one tap instead of writing back. mode 'confirm' (yes/no; optional prompt), 'choose' (1-8 options, at most ONE recommended, each with a one-line `description` of its consequence; allowOther for free text), 'form' (a small FLAT form; credential field types are dropped — never ask for a secret in a form), 'act' (something to DO: optional http(s) url + up to 7 steps; the person answers 'I did this'), 'provide' (connection {service} | file {accept} | secret {name} — handed over through the vault, never typed into a message). PREFER confirm/choose for any decision (mark exactly ONE option `recommended` when you have a view: their pick vs your recommendation is recorded, and every answered confirm/choose files a `decision` entity); use act ONLY for a physical/world task with steps. Example: {\"mode\":\"choose\",\"options\":[{\"label\":\"Ship now\",\"recommended\":true,\"description\":\"Publishes today\"},{\"label\":\"Wait a week\"}]}. Omit for a plain free-text answer. null clears a stored ask. Any mode may carry `lookedAt`: up to 8 {kind, id} (entity | document | view | automation | playbook) you actually read before asking, so the person sees what you based the question on — refs they cannot see are refused, and any title you send is ignored (the pod names them)."
+                        "description": "Only with owner='human': HOW the person can answer, so they resolve it in one tap instead of writing back. mode 'confirm' (yes/no; optional prompt), 'choose' (1-8 options, at most ONE recommended, each with a one-line `description` of its consequence; allowOther for free text), 'form' (a small FLAT form; credential field types are dropped — never ask for a secret in a form), 'act' (something to DO: optional http(s) url + up to 7 steps; the person answers 'I did this'), 'provide' (connection {service} | file {accept} | secret {name} — handed over through the vault, never typed into a message). PREFER confirm/choose for any decision (mark exactly ONE option `recommended` when you have a view: their pick vs your recommendation is recorded, and every answered confirm/choose files a `decision` entity); use act ONLY for a physical/world task with steps. Example: {\"mode\":\"choose\",\"options\":[{\"label\":\"Ship now\",\"recommended\":true,\"description\":\"Publishes today\"},{\"label\":\"Wait a week\"}]}. A choose option may open ONE follow-up the person answers next, {\"prompt\":\"Which environment?\",\"options\":[2-4 plain options]} (one level only: a follow-up option opening its own is refused), and may carry a `caution` (one short fact to weigh, max 60 chars, e.g. 'Skips 1,284 tests'). Omit for a plain free-text answer. null clears a stored ask. Any mode may carry `risk` ('high' | 'medium' | 'low': how much is at stake in the answer). Any mode may carry `lookedAt`: up to 8 {kind, id} (entity | document | view | automation | playbook) you actually read before asking, so the person sees what you based the question on — refs they cannot see are refused, and any title you send is ignored (the pod names them)."
                       },
                       "relationToSubject": {
                         "type": "string",
@@ -4926,6 +5364,10 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "risk": {
+                          "type": "string",
+                          "enum": ["high", "medium", "low"]
                         }
                       },
                       "required": ["mode"]
@@ -4963,6 +5405,59 @@
                               "description": {
                                 "type": "string",
                                 "maxLength": 140
+                              },
+                              "caution": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 60
+                              },
+                              "followUp": {
+                                "type": "object",
+                                "properties": {
+                                  "prompt": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 120
+                                  },
+                                  "options": {
+                                    "minItems": 2,
+                                    "maxItems": 4,
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "label": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 80
+                                        },
+                                        "value": {
+                                          "type": "string",
+                                          "maxLength": 500
+                                        },
+                                        "icon": {
+                                          "type": "string",
+                                          "maxLength": 64
+                                        },
+                                        "recommended": {
+                                          "type": "boolean"
+                                        },
+                                        "description": {
+                                          "type": "string",
+                                          "maxLength": 140
+                                        },
+                                        "caution": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 60
+                                        }
+                                      },
+                                      "required": ["label"],
+                                      "additionalProperties": false
+                                    }
+                                  }
+                                },
+                                "required": ["prompt", "options"]
                               }
                             },
                             "required": ["label"]
@@ -4995,6 +5490,10 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "risk": {
+                          "type": "string",
+                          "enum": ["high", "medium", "low"]
                         }
                       },
                       "required": ["mode", "options"]
@@ -5091,6 +5590,10 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "risk": {
+                          "type": "string",
+                          "enum": ["high", "medium", "low"]
                         }
                       },
                       "required": ["mode", "form"]
@@ -5139,6 +5642,10 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "risk": {
+                          "type": "string",
+                          "enum": ["high", "medium", "low"]
                         }
                       },
                       "required": ["mode"]
@@ -5227,12 +5734,16 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "risk": {
+                          "type": "string",
+                          "enum": ["high", "medium", "low"]
                         }
                       },
                       "required": ["mode", "provide"]
                     }
                   ],
-                  "description": "Only with owner='human': HOW the person can answer, so they resolve it in one tap instead of writing back. mode 'confirm' (yes/no; optional prompt), 'choose' (1-8 options, at most ONE recommended, each with a one-line `description` of its consequence; allowOther for free text), 'form' (a small FLAT form; credential field types are dropped — never ask for a secret in a form), 'act' (something to DO: optional http(s) url + up to 7 steps; the person answers 'I did this'), 'provide' (connection {service} | file {accept} | secret {name} — handed over through the vault, never typed into a message). PREFER confirm/choose for any decision (mark exactly ONE option `recommended` when you have a view: their pick vs your recommendation is recorded, and every answered confirm/choose files a `decision` entity); use act ONLY for a physical/world task with steps. Example: {\"mode\":\"choose\",\"options\":[{\"label\":\"Ship now\",\"recommended\":true,\"description\":\"Publishes today\"},{\"label\":\"Wait a week\"}]}. Omit for a plain free-text answer. null clears a stored ask. Any mode may carry `lookedAt`: up to 8 {kind, id} (entity | document | view | automation | playbook) you actually read before asking, so the person sees what you based the question on — refs they cannot see are refused, and any title you send is ignored (the pod names them)."
+                  "description": "Only with owner='human': HOW the person can answer, so they resolve it in one tap instead of writing back. mode 'confirm' (yes/no; optional prompt), 'choose' (1-8 options, at most ONE recommended, each with a one-line `description` of its consequence; allowOther for free text), 'form' (a small FLAT form; credential field types are dropped — never ask for a secret in a form), 'act' (something to DO: optional http(s) url + up to 7 steps; the person answers 'I did this'), 'provide' (connection {service} | file {accept} | secret {name} — handed over through the vault, never typed into a message). PREFER confirm/choose for any decision (mark exactly ONE option `recommended` when you have a view: their pick vs your recommendation is recorded, and every answered confirm/choose files a `decision` entity); use act ONLY for a physical/world task with steps. Example: {\"mode\":\"choose\",\"options\":[{\"label\":\"Ship now\",\"recommended\":true,\"description\":\"Publishes today\"},{\"label\":\"Wait a week\"}]}. A choose option may open ONE follow-up the person answers next, {\"prompt\":\"Which environment?\",\"options\":[2-4 plain options]} (one level only: a follow-up option opening its own is refused), and may carry a `caution` (one short fact to weigh, max 60 chars, e.g. 'Skips 1,284 tests'). Omit for a plain free-text answer. null clears a stored ask. Any mode may carry `risk` ('high' | 'medium' | 'low': how much is at stake in the answer). Any mode may carry `lookedAt`: up to 8 {kind, id} (entity | document | view | automation | playbook) you actually read before asking, so the person sees what you based the question on — refs they cannot see are refused, and any title you send is ignored (the pod names them)."
                 },
                 "relationToSubject": {
                   "type": "string",
@@ -5484,6 +5995,10 @@
                                   },
                                   "required": ["kind", "id"]
                                 }
+                              },
+                              "risk": {
+                                "type": "string",
+                                "enum": ["high", "medium", "low"]
                               }
                             },
                             "required": ["mode"]
@@ -5521,6 +6036,59 @@
                                     "description": {
                                       "type": "string",
                                       "maxLength": 140
+                                    },
+                                    "caution": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 60
+                                    },
+                                    "followUp": {
+                                      "type": "object",
+                                      "properties": {
+                                        "prompt": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 120
+                                        },
+                                        "options": {
+                                          "minItems": 2,
+                                          "maxItems": 4,
+                                          "type": "array",
+                                          "items": {
+                                            "type": "object",
+                                            "properties": {
+                                              "label": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 80
+                                              },
+                                              "value": {
+                                                "type": "string",
+                                                "maxLength": 500
+                                              },
+                                              "icon": {
+                                                "type": "string",
+                                                "maxLength": 64
+                                              },
+                                              "recommended": {
+                                                "type": "boolean"
+                                              },
+                                              "description": {
+                                                "type": "string",
+                                                "maxLength": 140
+                                              },
+                                              "caution": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 60
+                                              }
+                                            },
+                                            "required": ["label"],
+                                            "additionalProperties": false
+                                          }
+                                        }
+                                      },
+                                      "required": ["prompt", "options"]
                                     }
                                   },
                                   "required": ["label"]
@@ -5553,6 +6121,10 @@
                                   },
                                   "required": ["kind", "id"]
                                 }
+                              },
+                              "risk": {
+                                "type": "string",
+                                "enum": ["high", "medium", "low"]
                               }
                             },
                             "required": ["mode", "options"]
@@ -5649,6 +6221,10 @@
                                   },
                                   "required": ["kind", "id"]
                                 }
+                              },
+                              "risk": {
+                                "type": "string",
+                                "enum": ["high", "medium", "low"]
                               }
                             },
                             "required": ["mode", "form"]
@@ -5697,6 +6273,10 @@
                                   },
                                   "required": ["kind", "id"]
                                 }
+                              },
+                              "risk": {
+                                "type": "string",
+                                "enum": ["high", "medium", "low"]
                               }
                             },
                             "required": ["mode"]
@@ -5785,12 +6365,16 @@
                                   },
                                   "required": ["kind", "id"]
                                 }
+                              },
+                              "risk": {
+                                "type": "string",
+                                "enum": ["high", "medium", "low"]
                               }
                             },
                             "required": ["mode", "provide"]
                           }
                         ],
-                        "description": "Only with owner='human': HOW the person can answer, so they resolve it in one tap instead of writing back. mode 'confirm' (yes/no; optional prompt), 'choose' (1-8 options, at most ONE recommended, each with a one-line `description` of its consequence; allowOther for free text), 'form' (a small FLAT form; credential field types are dropped — never ask for a secret in a form), 'act' (something to DO: optional http(s) url + up to 7 steps; the person answers 'I did this'), 'provide' (connection {service} | file {accept} | secret {name} — handed over through the vault, never typed into a message). PREFER confirm/choose for any decision (mark exactly ONE option `recommended` when you have a view: their pick vs your recommendation is recorded, and every answered confirm/choose files a `decision` entity); use act ONLY for a physical/world task with steps. Example: {\"mode\":\"choose\",\"options\":[{\"label\":\"Ship now\",\"recommended\":true,\"description\":\"Publishes today\"},{\"label\":\"Wait a week\"}]}. Omit for a plain free-text answer. null clears a stored ask. Any mode may carry `lookedAt`: up to 8 {kind, id} (entity | document | view | automation | playbook) you actually read before asking, so the person sees what you based the question on — refs they cannot see are refused, and any title you send is ignored (the pod names them)."
+                        "description": "Only with owner='human': HOW the person can answer, so they resolve it in one tap instead of writing back. mode 'confirm' (yes/no; optional prompt), 'choose' (1-8 options, at most ONE recommended, each with a one-line `description` of its consequence; allowOther for free text), 'form' (a small FLAT form; credential field types are dropped — never ask for a secret in a form), 'act' (something to DO: optional http(s) url + up to 7 steps; the person answers 'I did this'), 'provide' (connection {service} | file {accept} | secret {name} — handed over through the vault, never typed into a message). PREFER confirm/choose for any decision (mark exactly ONE option `recommended` when you have a view: their pick vs your recommendation is recorded, and every answered confirm/choose files a `decision` entity); use act ONLY for a physical/world task with steps. Example: {\"mode\":\"choose\",\"options\":[{\"label\":\"Ship now\",\"recommended\":true,\"description\":\"Publishes today\"},{\"label\":\"Wait a week\"}]}. A choose option may open ONE follow-up the person answers next, {\"prompt\":\"Which environment?\",\"options\":[2-4 plain options]} (one level only: a follow-up option opening its own is refused), and may carry a `caution` (one short fact to weigh, max 60 chars, e.g. 'Skips 1,284 tests'). Omit for a plain free-text answer. null clears a stored ask. Any mode may carry `risk` ('high' | 'medium' | 'low': how much is at stake in the answer). Any mode may carry `lookedAt`: up to 8 {kind, id} (entity | document | view | automation | playbook) you actually read before asking, so the person sees what you based the question on — refs they cannot see are refused, and any title you send is ignored (the pod names them)."
                       },
                       "relationToSubject": {
                         "type": "string",
@@ -5978,6 +6562,10 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "risk": {
+                          "type": "string",
+                          "enum": ["high", "medium", "low"]
                         }
                       },
                       "required": ["mode"]
@@ -6015,6 +6603,59 @@
                               "description": {
                                 "type": "string",
                                 "maxLength": 140
+                              },
+                              "caution": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 60
+                              },
+                              "followUp": {
+                                "type": "object",
+                                "properties": {
+                                  "prompt": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 120
+                                  },
+                                  "options": {
+                                    "minItems": 2,
+                                    "maxItems": 4,
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "label": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 80
+                                        },
+                                        "value": {
+                                          "type": "string",
+                                          "maxLength": 500
+                                        },
+                                        "icon": {
+                                          "type": "string",
+                                          "maxLength": 64
+                                        },
+                                        "recommended": {
+                                          "type": "boolean"
+                                        },
+                                        "description": {
+                                          "type": "string",
+                                          "maxLength": 140
+                                        },
+                                        "caution": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 60
+                                        }
+                                      },
+                                      "required": ["label"],
+                                      "additionalProperties": false
+                                    }
+                                  }
+                                },
+                                "required": ["prompt", "options"]
                               }
                             },
                             "required": ["label"]
@@ -6047,6 +6688,10 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "risk": {
+                          "type": "string",
+                          "enum": ["high", "medium", "low"]
                         }
                       },
                       "required": ["mode", "options"]
@@ -6143,6 +6788,10 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "risk": {
+                          "type": "string",
+                          "enum": ["high", "medium", "low"]
                         }
                       },
                       "required": ["mode", "form"]
@@ -6191,6 +6840,10 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "risk": {
+                          "type": "string",
+                          "enum": ["high", "medium", "low"]
                         }
                       },
                       "required": ["mode"]
@@ -6279,12 +6932,16 @@
                             },
                             "required": ["kind", "id"]
                           }
+                        },
+                        "risk": {
+                          "type": "string",
+                          "enum": ["high", "medium", "low"]
                         }
                       },
                       "required": ["mode", "provide"]
                     }
                   ],
-                  "description": "Only with owner='human': HOW the person can answer, so they resolve it in one tap instead of writing back. mode 'confirm' (yes/no; optional prompt), 'choose' (1-8 options, at most ONE recommended, each with a one-line `description` of its consequence; allowOther for free text), 'form' (a small FLAT form; credential field types are dropped — never ask for a secret in a form), 'act' (something to DO: optional http(s) url + up to 7 steps; the person answers 'I did this'), 'provide' (connection {service} | file {accept} | secret {name} — handed over through the vault, never typed into a message). PREFER confirm/choose for any decision (mark exactly ONE option `recommended` when you have a view: their pick vs your recommendation is recorded, and every answered confirm/choose files a `decision` entity); use act ONLY for a physical/world task with steps. Example: {\"mode\":\"choose\",\"options\":[{\"label\":\"Ship now\",\"recommended\":true,\"description\":\"Publishes today\"},{\"label\":\"Wait a week\"}]}. Omit for a plain free-text answer. null clears a stored ask. Any mode may carry `lookedAt`: up to 8 {kind, id} (entity | document | view | automation | playbook) you actually read before asking, so the person sees what you based the question on — refs they cannot see are refused, and any title you send is ignored (the pod names them)."
+                  "description": "Only with owner='human': HOW the person can answer, so they resolve it in one tap instead of writing back. mode 'confirm' (yes/no; optional prompt), 'choose' (1-8 options, at most ONE recommended, each with a one-line `description` of its consequence; allowOther for free text), 'form' (a small FLAT form; credential field types are dropped — never ask for a secret in a form), 'act' (something to DO: optional http(s) url + up to 7 steps; the person answers 'I did this'), 'provide' (connection {service} | file {accept} | secret {name} — handed over through the vault, never typed into a message). PREFER confirm/choose for any decision (mark exactly ONE option `recommended` when you have a view: their pick vs your recommendation is recorded, and every answered confirm/choose files a `decision` entity); use act ONLY for a physical/world task with steps. Example: {\"mode\":\"choose\",\"options\":[{\"label\":\"Ship now\",\"recommended\":true,\"description\":\"Publishes today\"},{\"label\":\"Wait a week\"}]}. A choose option may open ONE follow-up the person answers next, {\"prompt\":\"Which environment?\",\"options\":[2-4 plain options]} (one level only: a follow-up option opening its own is refused), and may carry a `caution` (one short fact to weigh, max 60 chars, e.g. 'Skips 1,284 tests'). Omit for a plain free-text answer. null clears a stored ask. Any mode may carry `risk` ('high' | 'medium' | 'low': how much is at stake in the answer). Any mode may carry `lookedAt`: up to 8 {kind, id} (entity | document | view | automation | playbook) you actually read before asking, so the person sees what you based the question on — refs they cannot see are refused, and any title you send is ignored (the pod names them)."
                 },
                 "relationToSubject": {
                   "type": "string",
@@ -8498,6 +9155,10 @@
                       },
                       "required": ["kind", "id"]
                     }
+                  },
+                  "risk": {
+                    "type": "string",
+                    "enum": ["high", "medium", "low"]
                   }
                 },
                 "required": ["mode"]
@@ -8535,6 +9196,59 @@
                         "description": {
                           "type": "string",
                           "maxLength": 140
+                        },
+                        "caution": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 60
+                        },
+                        "followUp": {
+                          "type": "object",
+                          "properties": {
+                            "prompt": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 120
+                            },
+                            "options": {
+                              "minItems": 2,
+                              "maxItems": 4,
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "label": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 80
+                                  },
+                                  "value": {
+                                    "type": "string",
+                                    "maxLength": 500
+                                  },
+                                  "icon": {
+                                    "type": "string",
+                                    "maxLength": 64
+                                  },
+                                  "recommended": {
+                                    "type": "boolean"
+                                  },
+                                  "description": {
+                                    "type": "string",
+                                    "maxLength": 140
+                                  },
+                                  "caution": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 60
+                                  }
+                                },
+                                "required": ["label"],
+                                "additionalProperties": false
+                              }
+                            }
+                          },
+                          "required": ["prompt", "options"]
                         }
                       },
                       "required": ["label"]
@@ -8567,6 +9281,10 @@
                       },
                       "required": ["kind", "id"]
                     }
+                  },
+                  "risk": {
+                    "type": "string",
+                    "enum": ["high", "medium", "low"]
                   }
                 },
                 "required": ["mode", "options"]
@@ -8663,6 +9381,10 @@
                       },
                       "required": ["kind", "id"]
                     }
+                  },
+                  "risk": {
+                    "type": "string",
+                    "enum": ["high", "medium", "low"]
                   }
                 },
                 "required": ["mode", "form"]
@@ -8711,6 +9433,10 @@
                       },
                       "required": ["kind", "id"]
                     }
+                  },
+                  "risk": {
+                    "type": "string",
+                    "enum": ["high", "medium", "low"]
                   }
                 },
                 "required": ["mode"]
@@ -8799,12 +9525,16 @@
                       },
                       "required": ["kind", "id"]
                     }
+                  },
+                  "risk": {
+                    "type": "string",
+                    "enum": ["high", "medium", "low"]
                   }
                 },
                 "required": ["mode", "provide"]
               }
             ],
-            "description": "With kind 'question' + slotLabel: HOW the person answers — 'confirm' (yes/no), 'choose' (1-8 options, ≤1 recommended), 'form' (small flat form; never a secret), 'act' (a physical/world task only; they answer 'I did this'), 'provide' (connection {service} | file {accept} | secret {name}, via the vault). Prefer confirm/choose for any decision. Omit for a free-text answer."
+            "description": "With kind 'question' + slotLabel: HOW the person answers — 'confirm' (yes/no), 'choose' (1-8 options, ≤1 recommended; an option may open ONE follow-up {prompt, 2-4 options} and carry a `caution`), 'form' (small flat form; never a secret), 'act' (a physical/world task only; they answer 'I did this'), 'provide' (connection {service} | file {accept} | secret {name}, via the vault). Prefer confirm/choose for any decision. Any mode may carry `risk` ('high' | 'medium' | 'low'). Omit for a free-text answer."
           },
           "toSessionId": {
             "type": "string",

@@ -13,10 +13,12 @@
  * Rows rule out:
  *  - the fence still refusing the session doors for a key whose grant reads
  *    every subject they declare (would be 403 GRANT_DOOR_UNSUPPORTED);
- *  - the fence admitting a key that lacks a declared subject, or is pinned to
- *    a space (would be 200) — `sessionAndRoom` passes `/answers` (it declares
- *    session + channel) yet is refused on `/:id` (it declares more): the
- *    declaration is per route, not one blanket "session" switch;
+ *  - the fence admitting a key that lacks a declared subject (would be 200);
+ *  - `/:id` serving the packet to a key that does not read all of it:
+ *    `sessionAndRoom` reads the row only (`packet: withheld`), and a key pinned
+ *    to a space reads no session outside it (404) — the route narrows
+ *    (`NARROWED` + `sessionPacketReadable`, backend#317), the packet's
+ *    projections are never computed for either;
  *  - the declaration widening WHOSE rows a key reads: another person's
  *    session stays 404 (an agent reading another person's session is a
  *    separate founder decision, not this door);
@@ -304,18 +306,25 @@ describe("GET /focus-sessions/:id (+ evaluations, answers) — a scoped agent ke
     expect(h.packet).not.toHaveBeenCalled();
   });
 
-  it("(b) a key pinned to a space is refused: a declared door cannot narrow to it", async () => {
+  it("(b) a key pinned to a space reads no session outside it: not found, no packet", async () => {
+    // S_OWN has no space; the pinned grant's session clause does not reach it.
     const res = await get("aiPinned", `/focus-sessions/${S_OWN}`);
-    expect(res.status).toBe(403);
-    expect(((await res.json()) as Body).code).toBe("GRANT_DOOR_UNSUPPORTED");
+    expect(res.status).toBe(404);
+    expect(h.packet).not.toHaveBeenCalled();
+    expect(h.outcomes).not.toHaveBeenCalled();
   });
 
-  it("(b) the declaration is per route: session+room reads /answers, not the full packet", async () => {
+  it("(b) the declaration is per route: session+room reads /answers, and only the row of /:id", async () => {
     const an = await get("sessionAndRoom", `/focus-sessions/${S_OWN}/answers`);
     expect(an.status, JSON.stringify(await an.clone().json())).toBe(200);
     const full = await get("sessionAndRoom", `/focus-sessions/${S_OWN}`);
-    expect(full.status).toBe(403);
-    expect(((await full.json()) as Body).code).toBe("GRANT_DOOR_UNSUPPORTED");
+    const body = (await full.json()) as Body;
+    expect(full.status, JSON.stringify(body)).toBe(200);
+    expect(body.id).toBe(S_OWN);
+    expect(body.packet).toMatchObject({ status: "withheld" });
+    expect(body.outcomes).toBeUndefined();
+    expect(h.packet).not.toHaveBeenCalled();
+    expect(h.outcomes).not.toHaveBeenCalled();
   });
 
   it("another person's session stays not found: the grant bounds subjects, never owners", async () => {

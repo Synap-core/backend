@@ -42,7 +42,10 @@ import {
   playbookRuns,
   drizzleSql,
   liveRunStatusWhere,
+  getRequestGrant,
 } from "@synap/database";
+import { sessionReadableWhere } from "../../../access/session-visibility.js";
+import { sessionPacketReadable } from "../../../access/grant-door-fence.js";
 import {
   checkPermissionOrPropose,
   proposedMessageFor,
@@ -703,7 +706,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       "Scope by `workspaceId` (membership-checked), `projectId` (the project " +
       "must be visible to the caller — `loadVisibleProject`, the same floor " +
       "every project read and filing write uses), or both. At least one is " +
-      "required. Rows are always floored at the sessions the caller can read.",
+      "required, except for a workspace-bound key, which reads its own " +
+      "workspace when it names none (another `workspaceId` is a 403). Rows " +
+      "are always floored at the sessions the caller can read.",
     request: {
       query: z.object({
         workspaceId: uuidQueryParam.optional(),
@@ -1172,7 +1177,14 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
     }
 
-    const workspaceIdParam = c.req.query("workspaceId") || undefined;
+    // A workspace-bound key is pinned to its workspace (403 on another one),
+    // and a bound key that names none reads its own, never the pod.
+    const confined = confineWorkspaceOrForbidden(
+      c,
+      c.req.query("workspaceId") || undefined
+    );
+    if (!confined.ok) return c.json({ error: confined.error }, 403);
+    const workspaceIdParam = confined.workspaceId ?? undefined;
     const projectIdParam = c.req.query("projectId") || undefined;
     if (!workspaceIdParam && !projectIdParam) {
       return c.json({ error: "workspaceId or projectId is required" }, 400);
@@ -1471,6 +1483,11 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
    * workspaceId is optional. When provided: membership check + workspace floor
    * (legacy callers). When omitted: owner/user floor only — same as MCP
    * synap_get_session — so project-scoped sessions (workspaceId NULL) resolve.
+   *
+   * A scoped key reads the row through its grant (`sessionReadableWhere`, the
+   * list door's floor). It gets the packet (continuation, outcomes, criteria)
+   * only when it reads every subject in it (`sessionPacketReadable`); else
+   * the row in the list door's shape, with `packet: {status: "withheld"}`.
    */
   app.get("/focus-sessions/:id", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
@@ -1496,7 +1513,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     try {
       const conditions = [
         eq(focusSessions.id, id),
-        eq(focusSessions.userId, acting.userId),
+        sessionReadableWhere({ userId: acting.userId }),
       ];
       if (workspaceIdParam) {
         conditions.push(eq(focusSessions.workspaceId, workspaceIdParam));
@@ -1508,6 +1525,17 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
 
       if (!row) {
         return c.json({ error: `Focus session ${id} not found` }, 404);
+      }
+
+      if (!sessionPacketReadable(getRequestGrant())) {
+        return c.json({
+          ...attachSessionKind(attachTriage([row]))[0],
+          packet: {
+            status: "withheld",
+            reason:
+              "This key does not read everything a session's packet holds (its room, outcomes, links and more): only the session itself is shown.",
+          },
+        });
       }
 
       // Same projection as tRPC `focusSessions.get` and MCP `synap_get_session`:
