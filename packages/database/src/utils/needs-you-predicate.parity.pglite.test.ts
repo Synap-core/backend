@@ -513,6 +513,14 @@ describe("SLOT_ENDS_WITH_SESSION_SQL === askEndsWithSession", () => {
     { label: "a", owner: "human", blockedReason: "credential" },
     { label: "a", owner: "agent", blockedReason: "decision" },
     { label: "a", owner: "human" },
+    // A criterion grade never ends with its session, though its ask chooses.
+    {
+      label: "a",
+      owner: "human",
+      kind: "criterion",
+      ask: { mode: "choose", options: [] },
+    },
+    { label: "a", owner: "human", criterionKey: "k", ask: { mode: "confirm" } },
   ];
 
   it("agrees on every slot", async () => {
