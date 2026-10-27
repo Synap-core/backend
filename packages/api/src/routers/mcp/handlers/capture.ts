@@ -506,14 +506,13 @@ const captureHandler: McpToolHandler = async (
           // A same-title row is also a name candidate; a row that only owns
           // one of this item's strong signals (a company whose website the
           // person carries) is not — the resolver keeps them apart.
-          const sameName = new Set(res.candidates.map((c) => c.id));
           for (const cand of res.crossKindCandidates) {
             crossKindLinks.push({
               ref: e.ref,
               candidateId: cand.id,
               title: cand.title,
               profileSlug: cand.type,
-              reason: sameName.has(cand.id)
+              reason: res.candidates.some((c) => c.id === cand.id)
                 ? "same title across kinds"
                 : "same identity signal across kinds",
             });
