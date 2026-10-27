@@ -2827,6 +2827,12 @@ export const tools = {
               description:
                 "The person's own words, verbatim, as they typed them. Required with 'answered'.",
             },
+            text: {
+              type: "string",
+              maxLength: ASK_LIMITS.answerTextMaxChars,
+              description:
+                "Optional: the answer as filed when it is not the quote itself (a note beside a pick). Default: the quote.",
+            },
             value: {
               type: "object",
               description:

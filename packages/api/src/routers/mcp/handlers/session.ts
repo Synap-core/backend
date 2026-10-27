@@ -30,13 +30,8 @@ import { parseSessionChangeKinds } from "../../../services/focus-sessions/sessio
 import {
   describeRelayRefusal,
   relaySessionAnswer,
-  RELAY_DISPOSITIONS,
-  type RelayDisposition,
+  RelaySessionAnswerInputSchema,
 } from "../../../services/focus-sessions/session-answer.js";
-import {
-  AskAnswerValueSchema,
-  type AskAnswerValue,
-} from "@synap-core/types/ask";
 import { readAgentsForHandoff } from "../../../services/agent-dispatch/agents-for-handoff.js";
 import type { UpdateFocusSessionParams } from "../../../services/focus-sessions/update-session.js";
 import { SESSION_TITLE_MAX } from "@synap-core/types/focus-sessions";
@@ -400,44 +395,20 @@ export const sessionHandlers: McpHandlerMap = {
     if (!UUID_RE.test(sessionId)) {
       return ok({ error: `Focus session ${sessionId || "(none)"} not found` });
     }
-    const disposition = args.disposition;
-    if (
-      typeof disposition !== "string" ||
-      !(RELAY_DISPOSITIONS as readonly string[]).includes(disposition)
-    ) {
+    // The ONE relay schema, as on the Hub door — never a hand check.
+    const parsed = RelaySessionAnswerInputSchema.safeParse(args);
+    if (!parsed.success) {
+      const issue = parsed.error.issues[0];
       return ok({
-        error: `disposition must be one of: ${RELAY_DISPOSITIONS.join(", ")}.`,
+        error: `${issue?.path.join(".") || "input"}: ${issue?.message ?? "invalid relay"}`,
       });
     }
-    const str = (v: unknown) => (typeof v === "string" ? v : undefined);
-    const messageId = str(args.messageId)?.trim();
-    if (messageId && !UUID_RE.test(messageId)) {
-      return ok({ error: "messageId must be the question's message id (a UUID)." });
-    }
-    let value: AskAnswerValue | undefined;
-    if (args.value !== undefined) {
-      // The ONE answer schema, as on every answer door — never a cast.
-      const parsed = AskAnswerValueSchema.safeParse(args.value);
-      if (!parsed.success) {
-        return ok({
-          error: `value: ${parsed.error.issues[0]?.message ?? "invalid answer value"}`,
-        });
-      }
-      value = parsed.data;
-    }
-    const slotLabel = str(args.slotLabel);
+    const slotLabel = parsed.data.slotLabel;
     const result = await relaySessionAnswer({
       sessionId,
       userId,
       agentUserId,
-      disposition: disposition as RelayDisposition,
-      ...(messageId ? { messageId } : {}),
-      ...(slotLabel ? { slotLabel } : {}),
-      quote: str(args.quote),
-      text: str(args.text),
-      ...(value ? { value } : {}),
-      relaySurface: str(args.relaySurface),
-      note: str(args.note),
+      ...parsed.data,
     });
     if (
       result.status === "relayed" ||

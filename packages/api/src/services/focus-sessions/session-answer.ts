@@ -53,6 +53,7 @@
  */
 
 import { randomUUID } from "crypto";
+import { z } from "zod";
 import {
   db,
   messages,
@@ -87,6 +88,7 @@ import type {
 import {
   ASK_LIMITS,
   AskAnswerValueSchema,
+  RELAY_SURFACE_MAX_CHARS,
   askFingerprint,
   effectiveAskStakes,
   effectiveSlotAsk,
@@ -938,9 +940,11 @@ export async function answerSessionSlot(p: {
     return { status: "ask_changed" };
   }
 
-  // CONFIRM — the relayed answer, re-checked against the ask like any other.
-  // Its text is kept as relayed: re-summarizing it would fold the summary
-  // into itself ("Yes — Yes").
+  // CONFIRM — the relayed answer, re-checked against the ask like any other,
+  // with the words it was relayed with: a free-text answer (a `text` value) is
+  // its words, and checked without them it is refused as empty. Its text is
+  // kept as relayed: re-summarizing it would fold the summary into itself
+  // ("Yes — Yes").
   const pending = p.confirmRelayed ? slot.pendingRelay : undefined;
   if (p.confirmRelayed && !pending) return { status: "no_pending_relay" };
   const confirmedAt = pending ? new Date() : undefined;
@@ -958,7 +962,7 @@ export async function answerSessionSlot(p: {
       : undefined;
 
   const resolved = pending
-    ? resolveAnswer(ask, pending.value, undefined)
+    ? resolveAnswer(ask, pending.value, pending.text)
     : resolveAnswer(ask, p.value, p.text);
   if ("refused" in resolved) return resolved.refused;
   let summary = pending ? pending.text : resolved.text;
@@ -1521,6 +1525,26 @@ export function answerDoorInputIssue(v: {
 export const RELAY_DISPOSITIONS = ["answered", "withdrawn"] as const;
 export type RelayDisposition = (typeof RELAY_DISPOSITIONS)[number];
 
+/**
+ * THE relay request — one shape and one set of bounds, parsed by both doors
+ * (Hub `POST /focus-sessions/:id/answers/relay`, MCP `synap_relay_answer`)
+ * before {@link relaySessionAnswer}.
+ */
+export const RelaySessionAnswerInputSchema = z.object({
+  disposition: z.enum(RELAY_DISPOSITIONS),
+  // The EXACT question: a room question's message id, and/or a slot label.
+  messageId: z.string().uuid().optional(),
+  slotLabel: z.string().min(1).max(500).optional(),
+  // The person's words, verbatim — required for `answered`.
+  quote: z.string().max(ASK_LIMITS.answerTextMaxChars).optional(),
+  // The answer as filed, when it is not the quote itself (a note beside a pick).
+  text: z.string().max(ASK_LIMITS.answerTextMaxChars).optional(),
+  value: AskAnswerValueSchema.optional(),
+  relaySurface: z.string().min(1).max(RELAY_SURFACE_MAX_CHARS).optional(),
+  // Why the question is withdrawn — required for `withdrawn`.
+  note: z.string().max(ASK_LIMITS.promptMaxChars).optional(),
+});
+
 export type RelaySessionAnswerResult =
   | Exclude<AnswerSessionSlotResult, { status: "answered" | "no_pending_relay" }>
   /** Neither `messageId` nor `slotLabel`: a relay names its question. */
@@ -1872,7 +1896,10 @@ export async function relaySessionAnswer(p: {
   // 3. ANSWERED — the person's words first.
   const quote = p.quote?.trim().slice(0, ASK_LIMITS.answerTextMaxChars);
   if (!quote) return { status: "quote_required" };
-  const surface = p.relaySurface?.trim();
+  // Capped like the wire schema caps it: the stamp rides on the slot, and the
+  // slot is echoed whole by every later `expectedOutputs` write, which parses
+  // it at that bound.
+  const surface = p.relaySurface?.trim().slice(0, RELAY_SURFACE_MAX_CHARS);
   const provenance: SlotAnswerProvenance = {
     via: "relayed",
     relayedBy: p.agentUserId,

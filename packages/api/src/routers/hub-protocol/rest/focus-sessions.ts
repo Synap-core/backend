@@ -58,12 +58,7 @@ import {
   SESSION_TITLE_MAX,
   titleSourcePatch,
 } from "@synap-core/types/focus-sessions";
-import {
-  ASK_LIMITS,
-  AskAnswerValueSchema,
-  AskSchema,
-  RELAY_SURFACE_MAX_CHARS,
-} from "@synap-core/types/ask";
+import { AskAnswerValueSchema, AskSchema } from "@synap-core/types/ask";
 import {
   completeFocusSession,
   isOpenQuestionsAtCloseError,
@@ -110,7 +105,7 @@ import {
   describeAnswerRefusal,
   describeRelayRefusal,
   relaySessionAnswer,
-  RELAY_DISPOSITIONS,
+  RelaySessionAnswerInputSchema,
   type SlotDoorRefusal,
 } from "../../../services/focus-sessions/session-answer.js";
 import { SLOT_ANSWER_TEXT_MAX } from "../../../services/focus-sessions/answer-slot.js";
@@ -509,21 +504,10 @@ const AnswerOutputBodySchema = z
 
 /**
  * An agent RELAYS the person's chat words to the question it asked — the
- * Hub twin of MCP `synap_relay_answer` (`relaySessionAnswer`).
+ * Hub twin of MCP `synap_relay_answer`; the ONE schema lives beside the
+ * service (`relaySessionAnswer`).
  */
-const RelayAnswerBodySchema = z.object({
-  disposition: z.enum(RELAY_DISPOSITIONS),
-  // The EXACT question: a room question's message id, and/or a slot label.
-  messageId: z.string().uuid().optional(),
-  slotLabel: z.string().min(1).max(500).optional(),
-  // The person's words, verbatim — required for `answered`.
-  quote: z.string().max(ASK_LIMITS.answerTextMaxChars).optional(),
-  text: z.string().max(ASK_LIMITS.answerTextMaxChars).optional(),
-  value: AskAnswerValueSchema.optional(),
-  relaySurface: z.string().min(1).max(RELAY_SURFACE_MAX_CHARS).optional(),
-  // Why the question is withdrawn — required for `withdrawn`.
-  note: z.string().max(ASK_LIMITS.promptMaxChars).optional(),
-});
+const RelayAnswerBodySchema = RelaySessionAnswerInputSchema;
 
 /** The long-poll's query: the poll cursor, plus a bounded wait (V1 G4). */
 const SessionAnswersWaitQuerySchema = z.object({
