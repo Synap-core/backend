@@ -86,6 +86,7 @@ import {
   usePlacedExit,
 } from "../../../../lib/exit-link";
 import { kindIcon } from "../../../_lib/object/kind-icon";
+import { chipColor } from "../../../apps/_lib/app-view";
 import { ErrorNote } from "../../../_lib/copy-button";
 import { ResourceRowSkeleton } from "../../components/resource-row";
 import {
@@ -237,7 +238,7 @@ export function AskAnswer({
   const relay = trpc.focusSessions.answerOutput.useMutation({
     onSuccess: (_data, call) => {
       if ("confirmRelayed" in call && call.confirmRelayed) {
-        settled({ title: ASK_COPY.relayConfirmed(null) });
+        settled({ title: ASK_COPY.relayConfirmedReceipt(view.heading) });
         return;
       }
       setRelayDropped(true);
@@ -361,6 +362,16 @@ export function AskAnswer({
               {failure}
             </Alert>
           )}
+          {relayDropped && (
+            // The one-line receipt: nothing was recorded, and the ask below
+            // is the person's to answer in their own words.
+            <p
+              role="status"
+              className="text-[12.5px] text-foreground/65"
+            >
+              {ASK_COPY.relayRejectedReceipt}
+            </p>
+          )}
           {relayWaiting ? (
             <RelayWaiting
               view={relayWaiting}
@@ -464,8 +475,8 @@ export function AskAnswer({
 
 /**
  * An answer an agent relayed from a chat, waiting for the person's tap: the
- * mark that says so, their words, and Confirm · "Not what I said" as an
- * EQUAL pair — a heavier Confirm would be the console nudging a commitment
+ * mark that says so, the answer Confirm records as the headline with their
+ * own words under it, and Confirm · "Not what I said" as an EQUAL pair — a heavier Confirm would be the console nudging a commitment
  * (a deploy, a spend) through on someone else's account of what was said.
  */
 function RelayWaiting({
@@ -487,9 +498,14 @@ function RelayWaiting({
         >
           {view.mark.label}
         </p>
-        {view.words && (
-          <blockquote className="text-pretty text-[13.5px] leading-relaxed text-foreground/85">
-            {view.words}
+        {view.recorded && (
+          <p className="text-pretty text-[15px] font-medium leading-snug text-foreground">
+            {view.recorded}
+          </p>
+        )}
+        {view.said && (
+          <blockquote className="text-pretty text-[13px] leading-relaxed text-foreground/80">
+            {view.said}
           </blockquote>
         )}
       </div>
@@ -749,6 +765,9 @@ function ConfirmControl({
   return (
     <fieldset className="flex flex-col gap-3">
       <legend className={`mb-2 ${SECTION_LABEL}`}>Your answer</legend>
+      {/* Above the pair, as on desktop and phone: a note rides with the
+          answer it qualifies, so it is written before the tap sends it. */}
+      <NoteField value={note} onChange={setNote} busy={busy} />
       <div className="grid grid-cols-2 gap-2">
         {answers.map((a) => {
           const yes = a.key === "yes";
@@ -776,11 +795,7 @@ function ConfirmControl({
               </Button>
               {(a.recommended || a.description) && (
                 <p className="flex flex-wrap items-center gap-1.5 px-0.5 text-[12px] leading-snug text-foreground/65">
-                  {a.recommended && (
-                    <Chip size="sm" variant="flat" color="primary" radius="sm">
-                      {ASK_COPY.recommended}
-                    </Chip>
-                  )}
+                  {a.recommended && <RecommendedChip />}
                   {a.description && (
                     <span className="text-pretty">{a.description}</span>
                   )}
@@ -790,8 +805,28 @@ function ConfirmControl({
           );
         })}
       </div>
-      <NoteField value={note} onChange={setNote} busy={busy} />
     </fieldset>
+  );
+}
+
+/**
+ * The agent's pick, in the AI tone (`chipColor('ai')`, the console's one
+ * reading of the membrane token) with the agent's glyph: the AI's view of the
+ * answer, never a call to action in the action colour of its own.
+ */
+function RecommendedChip() {
+  return (
+    <Chip
+      size="sm"
+      variant="flat"
+      color={chipColor("ai")}
+      radius="sm"
+      startContent={
+        <Bot className="ml-0.5 h-3 w-3" strokeWidth={1.75} aria-hidden />
+      }
+    >
+      {ASK_COPY.recommended}
+    </Chip>
   );
 }
 
@@ -870,11 +905,7 @@ function ChooseControl({
           >
             <span className="flex flex-wrap items-center gap-2">
               <span className="text-[13px] text-foreground">{o.label}</span>
-              {o.recommended && (
-                <Chip size="sm" variant="flat" color="primary" radius="sm">
-                  {ASK_COPY.recommended}
-                </Chip>
-              )}
+              {o.recommended && <RecommendedChip />}
             </span>
           </Radio>
         ))}

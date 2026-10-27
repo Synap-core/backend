@@ -553,10 +553,46 @@ describe("a relayed answer waiting for the tap", () => {
     expect(relayWaitingView(s!)).toEqual({
       mark: {
         tone: "warning",
-        label: "Claude Code relayed your answer. Confirm it.",
+        label: "Relayed by Claude Code · needs your tap",
       },
-      words: "“yes, ship it friday”",
+      recorded: "Yes",
+      said: "You said “yes, ship it friday”",
     });
+  });
+
+  it("headlines what Confirm records, as the answer's own button reads", () => {
+    const s = slot(
+      { mode: "confirm", yes: { label: "Ship it" } },
+      {
+        pendingRelay: {
+          ...relay,
+          value: { type: "confirm", confirmed: true },
+        },
+      }
+    );
+    expect(relayWaitingView(s)).toMatchObject({
+      recorded: "Ship it",
+      said: "You said “yes, ship it friday”",
+    });
+  });
+
+  it("the card's fate reads the relay and the kept-owed stamp", () => {
+    const now = Date.parse("2026-10-27T12:00:00.000Z");
+    const relayedToday = slot(confirm, {
+      owedSince: "2026-10-18T12:00:00.000Z",
+      pendingRelay: { ...relay, relayedAt: "2026-10-27T09:00:00.000Z" },
+    });
+    expect(askView(relayedToday, now).ageFate.fate.kind).not.toBe(
+      "review_later"
+    );
+    const kept = slot(confirm, {
+      owedSince: "2026-10-26T12:00:00.000Z",
+      keptOwedAt: "2026-10-27T08:00:00.000Z",
+    });
+    expect(askView(kept, now).ageFate.fate.kind).toBe("until_decided");
+    expect(askView(slot(confirm), now).ageFate.fate.kind).toBe(
+      "ends_with_session"
+    );
   });
 
   it("names the relayer only when it is the agent that asked", () => {
@@ -566,7 +602,7 @@ describe("a relayed answer waiting for the tap", () => {
       pendingRelay: relay,
     });
     expect(relayWaitingView(other)?.mark.label).toBe(
-      "Your answer was relayed. Confirm it."
+      "Relayed · needs your tap"
     );
     expect(relayWaitingView(slot(confirm))).toBeNull();
   });

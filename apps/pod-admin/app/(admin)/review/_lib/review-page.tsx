@@ -431,11 +431,15 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
             ) : visible.length === 0 ? (
               <ResourceRowEmpty
                 message={
-                  sessionId
-                    ? "Nothing from this session waits for you."
-                    : filter === "all"
-                      ? "Nothing is waiting on you."
-                      : "Nothing waiting here."
+                  // "Nothing is waiting" would be false over a fold that
+                  // holds rows: nothing NEW is, the rest wait below.
+                  view.reviewLater.length > 0
+                    ? FATE_COPY.nothingNewWaiting
+                    : sessionId
+                      ? "Nothing from this session waits for you."
+                      : filter === "all"
+                        ? "Nothing is waiting on you."
+                        : "Nothing waiting here."
                 }
               />
             ) : (
@@ -485,9 +489,14 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
                 </span>
               </Button>
               {laterOpen && (
+                <p className="mt-1 text-[12px] text-foreground/55">
+                  {FATE_COPY.reviewLaterCaption}
+                </p>
+              )}
+              {laterOpen && (
                 <section
                   id="review-later"
-                  aria-label={FATE_COPY.reviewLater}
+                  aria-label={FATE_COPY.reviewLaterPile}
                   className="mt-1 divide-y divide-foreground/[0.05] rounded-lg bg-foreground/[0.02] ring-1 ring-inset ring-foreground/10"
                 >
                   {view.reviewLater.map((row) => (

@@ -23,10 +23,12 @@ import {
   ASK_COPY,
   actView,
   answerProvenanceMark,
+  askCardSlotOf,
   askCardView,
   askFingerprint,
   askOptionForChip,
   isRefusedAskField,
+  relayRecordedAnswer,
   validateAnswerAgainstAsk,
   type Ask,
   type AnswerProvenanceMark,
@@ -66,6 +68,10 @@ export interface AskSlotSignal {
   askCause?: AskCause | null;
   /** An agent relayed the person's answer from a chat; it waits for their tap. */
   pendingRelay?: PendingRelayedAnswer | null;
+  /** The closing agent kept it owed past its session (`Signal.keptOwedAt`). */
+  keptOwedAt?: string | null;
+  /** A param slot's param (`Signal.paramName`). */
+  paramName?: string | null;
 }
 
 /** One owed slot, as the detail reads it. */
@@ -89,6 +95,8 @@ export interface AskSlot {
   askCause: AskCause | null;
   /** A relayed answer waiting for the person's Confirm (a commitment). */
   pendingRelay?: PendingRelayedAnswer | null;
+  keptOwedAt?: string | null;
+  paramName?: string | null;
 }
 
 /**
@@ -112,6 +120,8 @@ export function askSlotOf(s: AskSlotSignal): AskSlot | null {
     askerId: s.by?.id ?? null,
     askCause: s.askCause ?? null,
     pendingRelay: s.pendingRelay ?? null,
+    keptOwedAt: s.keptOwedAt ?? null,
+    paramName: s.paramName ?? null,
   };
 }
 
@@ -317,15 +327,12 @@ export function askView(slot: AskSlot, now: number = Date.now()): AskView {
     title?: string;
   }>;
   const card = askCardView(
-    {
-      label: slot.label,
-      why: slot.why,
-      ask: slot.ask,
-      blockedReason: slot.blockedReason,
-      owedSince: slot.owedSince,
-      askCause: slot.askCause,
-    },
-    { askerName: slot.askerName, sessionId: slot.sessionId, now }
+    askCardSlotOf({
+      ...slot,
+      askedBy: slot.askerId,
+      askedByName: slot.askerName,
+    }),
+    { sessionId: slot.sessionId, now }
   );
   return {
     heading: card.heading,
@@ -543,11 +550,17 @@ export function slotCall(slot: AskSlot): SlotCall {
 
 // ─── A relayed answer, waiting for the person's tap ─────────────────────────
 
-/** The waiting relay as the detail draws it: the shared mark, the person's words. */
+/**
+ * The waiting relay as the detail draws it: the shared mark, the answer
+ * Confirm records (`relayRecordedAnswer`) as the headline, and the person's
+ * own words under it.
+ */
 export interface RelayWaitingView {
   mark: AnswerProvenanceMark;
-  /** `ASK_COPY.relayedWords`: their quote when the agent carried it. */
-  words: string | null;
+  /** What Confirm records, as the answer's button reads; null when unreadable. */
+  recorded: string | null;
+  /** `ASK_COPY.youSaid`: their quote, when the agent carried it. */
+  said: string | null;
 }
 
 /**
@@ -561,7 +574,13 @@ export function relayWaitingView(slot: AskSlot): RelayWaitingView | null {
   const agent =
     slot.askerId && relay.relayedBy === slot.askerId ? slot.askerName : null;
   const mark = answerProvenanceMark({ pendingRelay: relay }, { agent });
-  return mark ? { mark, words: ASK_COPY.relayedWords(relay) } : null;
+  if (!mark) return null;
+  const recorded = relayRecordedAnswer(slot.ask, relay);
+  return {
+    mark,
+    recorded: recorded?.label ?? null,
+    said: recorded?.quote ? ASK_COPY.youSaid(recorded.quote) : null,
+  };
 }
 
 /** `answerOutput` input for Confirm (the relay becomes the person's answer) or "Not what I said". */
