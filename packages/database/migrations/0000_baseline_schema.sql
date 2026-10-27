@@ -5298,3 +5298,59 @@ END $$;
 CREATE INDEX IF NOT EXISTS "entities_home_workspace_idx"
   ON "entities" ("home_workspace_id")
   WHERE "workspace_id" IS NULL AND "home_workspace_id" IS NOT NULL;
+
+-- 0356: box runs — a box skill's run queued in the pod and leased by the
+-- person's own computer (spec snapshot, lease, heartbeat, evidence). Read
+-- floor = the requester. Mirrors 0356_box_runs.sql.
+CREATE TABLE IF NOT EXISTS "box_runs" (
+  "id"                 uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  "skill_id"           uuid        REFERENCES "skills"("id") ON DELETE SET NULL,
+  "user_id"            text        NOT NULL,
+  "agent_user_id"      text,
+  "session_id"         uuid,
+  "workspace_id"       uuid,
+  "proposal_id"        uuid,
+  "spec"               jsonb       NOT NULL,
+  "parameters"         jsonb       NOT NULL DEFAULT '{}'::jsonb,
+  "status"             text        NOT NULL DEFAULT 'queued',
+  "attempt"            integer     NOT NULL DEFAULT 0,
+  "leased_by"          text,
+  "lease_id"           uuid,
+  "lease_expires_at"   timestamptz,
+  "last_heartbeat_at"  timestamptz,
+  "stop_requested_at"  timestamptz,
+  "evidence"           jsonb,
+  "error"              text,
+  "queued_at"          timestamptz NOT NULL DEFAULT now(),
+  "leased_at"          timestamptz,
+  "started_at"         timestamptz,
+  "finished_at"        timestamptz,
+  "created_at"         timestamptz NOT NULL DEFAULT now(),
+  "updated_at"         timestamptz NOT NULL DEFAULT now()
+);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'box_runs_status_check'
+  ) THEN
+    ALTER TABLE "box_runs" ADD CONSTRAINT "box_runs_status_check"
+      CHECK ("status" IN ('queued', 'leased', 'running', 'done', 'failed', 'stopped'));
+  END IF;
+END $$;
+
+-- The queue head, per requester (FIFO by queued_at).
+CREATE INDEX IF NOT EXISTS "idx_box_runs_queue"
+  ON "box_runs" ("user_id", "queued_at")
+  WHERE "status" IN ('queued', 'leased');
+
+CREATE INDEX IF NOT EXISTS "idx_box_runs_user_queued"
+  ON "box_runs" ("user_id", "queued_at" DESC);
+
+CREATE INDEX IF NOT EXISTS "idx_box_runs_session"
+  ON "box_runs" ("session_id")
+  WHERE "session_id" IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS "idx_box_runs_skill"
+  ON "box_runs" ("skill_id")
+  WHERE "skill_id" IS NOT NULL;

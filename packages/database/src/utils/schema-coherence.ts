@@ -1805,6 +1805,20 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0352_proposal_apply_runs.sql",
   },
 
+  // box_runs — a box skill's run, queued in the pod and leased by the
+  // person's computer (0356). Absence means running a box skill would fail to
+  // queue (42P01) and the lease door would throw for every computer.
+  {
+    table: "box_runs",
+    column: "lease_id",
+    addedBy: "0356_box_runs.sql",
+  },
+  {
+    table: "box_runs",
+    column: "evidence",
+    addedBy: "0356_box_runs.sql",
+  },
+
   // Kind + Facets Wave 3A (0175): the `_conversions` ledger — mirrors
   // `_migrations` for DATA ops. Absence means a pod is on a pre-0175 schema
   // where the conversion engine's applied-set read would hit a missing table.

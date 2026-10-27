@@ -8,8 +8,9 @@
  *                       R6: never isolated-vm inside the API process).
  *
  * Chosen by `SKILL_RUNNER` (`process` | `inline`); the pool's size by
- * `SKILL_RUNNER_PROCESSES`, `SKILL_RUNNER_ISOLATES_PER_PROCESS` and
- * `SKILL_RUNNER_QUEUE_MAX`.
+ * `SKILL_RUNNER_PROCESSES`, `SKILL_RUNNER_ISOLATES_PER_PROCESS`,
+ * `SKILL_RUNNER_QUEUE_MAX` and `SKILL_RUNNER_PER_REQUESTER_MAX` (forwarded by
+ * `deploy/docker-compose.yml`, held by `deploy/__tests__/skill-runtime-deploy.test.sh`).
  *
  * WHO runs code skills is `skillRuntime()`: the pod, by default since R2
  * (code-runtime plan v2), or the Intelligence Service only as a rollback
@@ -23,6 +24,7 @@ import {
   type ProcessPoolConfig,
   type ProcessPoolHealth,
   type ProcessSkillPool,
+  type SkillRunOptions,
 } from "./process-pool.js";
 import type { SkillBridges, SkillJob } from "./protocol.js";
 import { evaluateSkill } from "./skill-isolate.js";
@@ -30,6 +32,7 @@ import { evaluateSkill } from "./skill-isolate.js";
 export {
   SkillRuntimeError,
   type SkillRuntimeErrorCode,
+  type SkillRunOptions,
 } from "./process-pool.js";
 export type { SkillBridges, SkillJob } from "./protocol.js";
 export { SKILL_BRIDGE_NAMES } from "./protocol.js";
@@ -38,12 +41,18 @@ const logger = createLogger({ module: "skill-runner" });
 
 export interface SkillRunner {
   readonly kind: "inline" | "process";
-  run(job: SkillJob, bridges: SkillBridges): Promise<unknown>;
+  run(
+    job: SkillJob,
+    bridges: SkillBridges,
+    options?: SkillRunOptions
+  ): Promise<unknown>;
 }
 
 export const inlineSkillRunner: SkillRunner = {
   kind: "inline",
-  run: evaluateSkill,
+  // No pool, so no per-requester count; evaluateSkill's third argument is its
+  // abort signal, never the options.
+  run: (job, bridges) => evaluateSkill(job, bridges),
 };
 
 export type SkillRuntimeHealth =
@@ -58,11 +67,19 @@ function intFromEnv(name: string, fallback: number): number {
 }
 
 export function poolConfigFromEnv(): ProcessPoolConfig {
+  const isolatesPerProcess = intFromEnv("SKILL_RUNNER_ISOLATES_PER_PROCESS", 4);
   return {
     processes: intFromEnv("SKILL_RUNNER_PROCESSES", 2),
-    isolatesPerProcess: intFromEnv("SKILL_RUNNER_ISOLATES_PER_PROCESS", 4),
+    isolatesPerProcess,
     queueMax: intFromEnv("SKILL_RUNNER_QUEUE_MAX", 32),
+    // One runner's worth by default: a burst from one agent leaves the other
+    // runner's slots and the queue to everyone else.
+    perRequesterMax: intFromEnv(
+      "SKILL_RUNNER_PER_REQUESTER_MAX",
+      isolatesPerProcess
+    ),
     watchdogGraceMs: 5_000,
+    startTimeoutMs: 10_000,
   };
 }
 

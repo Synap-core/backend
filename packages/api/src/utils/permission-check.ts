@@ -10,6 +10,10 @@
  * Returns immediately — no async event pipeline.
  */
 
+import {
+  describeBoxDeclaration,
+  parseBoxDeclaration,
+} from "../services/box-runs/box-spec.js";
 import { decodeHtmlEntities } from "@synap-core/types/text";
 import { isAiWriteRequest } from "./ai-write.js";
 import { classifySpaceOperation } from "@synap-core/types/workspaces";
@@ -59,6 +63,7 @@ import {
   messages,
   focusSessions,
   playbooks,
+  skills,
   ChannelMemberKind,
   ProposalStatus,
 } from "@synap/database/schema";
@@ -3304,8 +3309,28 @@ export function buildProposalSummary(
   if (subjectType === "profile") return head + carriedFieldsClause(data);
   // A code skill's declared tools are a SCOPE grant (its own provider calls to
   // them skip a second review), so the sentence the person approves names them.
-  if (subjectType === "skill") return head + requiredToolsClause(data);
+  if (subjectType === "skill")
+    return head + requiredToolsClause(data) + boxClause(data);
   return head;
+}
+
+/**
+ * ` — runs on your computer in a box (python, pandas==2.2.3; may reach
+ * api.example.com; up to 15 min)` for a box skill payload: the packages and
+ * hosts are what the person approves besides the code. A declaration that
+ * does not parse still says where it runs: an unreadable one is not "nothing
+ * to say".
+ */
+function boxClause(data: Record<string, unknown>): string {
+  if (data.executionMode !== "box") return "";
+  const meta =
+    data.metadata && typeof data.metadata === "object"
+      ? (data.metadata as Record<string, unknown>)
+      : {};
+  const parsed = parseBoxDeclaration(meta.box);
+  return parsed.ok
+    ? ` — ${describeBoxDeclaration(parsed.box)}`
+    : " — runs on your computer in a box (its declaration could not be read)";
 }
 
 /** ` using tools: apify_api` for a skill payload carrying `requiredToolNames`. */
@@ -4962,6 +4987,26 @@ export async function resolveProposalTargetName(
     const named = stringField(data, "sessionName");
     if (named) return named;
   }
+  // A skill is named by the name the reviewer knows it by: its CURRENT name.
+  // An update patch carries `name` only when it renames, and then it is the
+  // NEW name, so the inline read below would title a rename by a name nobody
+  // knows yet. No row (a create) falls through to the inline name.
+  if (subjectType === "skill" && isLikelyUUID(targetId)) {
+    try {
+      const [skill] = await db
+        .select({ name: skills.name })
+        .from(skills)
+        .where(eq(skills.id, targetId))
+        .limit(1);
+      if (skill?.name) return skill.name;
+    } catch (err) {
+      // Title only, as for a playbook below: never blocks the proposal.
+      logger.warn(
+        { err, targetId },
+        "resolveProposalTargetName: skill name lookup failed"
+      );
+    }
+  }
   const inline =
     stringField(data, "goal") ??
     stringField(data, "title") ??
@@ -5014,6 +5059,25 @@ export async function resolveProposalTargetName(
       logger.warn(
         { err, targetId },
         "resolveProposalTargetName: playbook name lookup failed"
+      );
+      return undefined;
+    }
+  }
+
+  // Same for a skill edit: a rewrite of its instructions or code carries no
+  // `name`, so it read "Update Tool" with no tool named.
+  if (subjectType === "skill" && isLikelyUUID(targetId)) {
+    try {
+      const [skill] = await db
+        .select({ name: skills.name })
+        .from(skills)
+        .where(eq(skills.id, targetId))
+        .limit(1);
+      return skill?.name ?? undefined;
+    } catch (err) {
+      logger.warn(
+        { err, targetId },
+        "resolveProposalTargetName: skill name lookup failed"
       );
       return undefined;
     }
