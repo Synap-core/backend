@@ -2,9 +2,11 @@
  * Box runs — the queue, the lease and the evidence of a box skill's runs
  * (0356, run box design C4 phase 0). The ONE writer of `box_runs`.
  *
- *   enqueue   ← `runResolvedSkillInner` (the post-gate runner: the person's own
- *               run, or an agent's run once its proposal is approved). Never
- *               refused for "queue full": a run waits with its turn kept.
+ *   enqueue   ← `runSkill`, the one skill door (the person's own Run, an
+ *               agent's run once its gate or proposal says run). Never refused
+ *               for "queue full": a run waits with its turn kept. Refused when
+ *               the skill is off, or when no computer of the person runs
+ *               scripts (a queue nobody can take is not "running").
  *   lease     ← the person's computer (Hub `POST /box-runs/lease`), FIFO by
  *               `queued_at`, one winner per row (`FOR UPDATE SKIP LOCKED`).
  *   heartbeat / uploads / finish ← the same computer, presenting the lease id.
@@ -15,9 +17,12 @@
  * connected it): it sees the script and its parameters, and a shared pod
  * runner is a later decision, not a default.
  *
- * Lease rules (the contract lanes/code-runtime/BOX-CONTRACT.md):
+ * Lease rules (the box contract, code-runtime plan v2):
  *   - a `leased` run whose lease expired goes back to the queue (the box never
- *     started the script, so a retry has no side effects);
+ *     started the script, so a retry has no side effects), at most
+ *     {@link BOX_MAX_LEASE_ATTEMPTS} times: past that the next lease call
+ *     fails it with an INFRA verdict, so one poison run cannot hold the head
+ *     of the person's queue forever;
  *   - a `running` run whose lease expired is read as STALLED and is never
  *     re-leased (the script may have had side effects); once it is past
  *     {@link BOX_STALL_GRACE_SECONDS} the next lease call fails it with an
@@ -29,6 +34,8 @@ import {
   and,
   asc,
   eq,
+  gt,
+  gte,
   inArray,
   isNotNull,
   isNull,
@@ -38,13 +45,17 @@ import {
 } from "drizzle-orm";
 import { db } from "@synap/database";
 import {
+  BOX_RUNNER_SCOPE,
+  apiKeys,
   boxRuns,
   skills,
+  users,
   type BoxRunEvidence,
   type BoxRunRow,
   type BoxRunSpec,
 } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
+import { MACHINE_AGENT_TYPE } from "@synap-core/types/agents";
 import { boxRunSpecFor } from "./box-spec.js";
 
 const logger = createLogger({ module: "box-runs" });
@@ -55,8 +66,10 @@ export const BOX_LEASE_TTL_SECONDS = 120;
 export const BOX_HEARTBEAT_INTERVAL_SECONDS = 30;
 /** A running run silent this long past its lease is failed (INFRA). */
 export const BOX_STALL_GRACE_SECONDS = 2 * BOX_LEASE_TTL_SECONDS;
-/** Log head and tail are each kept up to this many characters. */
+/** Log head and tail are each kept up to this many UTF-8 bytes. */
 export const BOX_LOG_CAP = 64 * 1024;
+/** A run whose box never started is leased at most this many times. */
+export const BOX_MAX_LEASE_ATTEMPTS = 3;
 /** Files one run may return. */
 export const BOX_MAX_FILES = 20;
 
@@ -115,6 +128,35 @@ export function isQueuedBoxRunResult(
   );
 }
 
+/**
+ * Said when no computer can take the run: the setting that fixes it, by name.
+ */
+export const NO_BOX_RUNNER_ERROR =
+  'No computer of yours runs scripts. Turn on "Runs scripts" for one in pod-admin › Computers, then run it again.';
+
+/**
+ * Does this person have a computer that can lease a box run now: a computer
+ * of theirs with a live key holding `box.runner` (what the Hub routes check).
+ */
+async function hasBoxRunner(personId: string): Promise<boolean> {
+  const [key] = await db
+    .select({ id: apiKeys.id })
+    .from(apiKeys)
+    .innerJoin(users, eq(users.id, apiKeys.userId))
+    .where(
+      and(
+        eq(users.agentType, MACHINE_AGENT_TYPE),
+        eq(users.createdByUserId, personId),
+        eq(apiKeys.isActive, true),
+        isNull(apiKeys.revokedAt),
+        or(isNull(apiKeys.expiresAt), gt(apiKeys.expiresAt, sql`now()`)),
+        sql`${BOX_RUNNER_SCOPE} = ANY(${apiKeys.scope})`
+      )
+    )
+    .limit(1);
+  return !!key;
+}
+
 export async function enqueueBoxRun(
   input: EnqueueBoxRunInput
 ): Promise<
@@ -122,14 +164,34 @@ export async function enqueueBoxRun(
   | { ok: false; error: string }
 > {
   const [skill] = await db
-    .select({ name: skills.name, code: skills.code, metadata: skills.metadata })
+    .select({
+      name: skills.name,
+      code: skills.code,
+      metadata: skills.metadata,
+      status: skills.status,
+      approved: skills.approved,
+    })
     .from(skills)
     .where(eq(skills.id, input.skillId))
     .limit(1);
   if (!skill)
     return { ok: false, error: `Box skill ${input.skillId} not found.` };
+  // The sandbox's own gate, in its words: a run approved while the skill was
+  // on still finds it off (or its code edited, which turns it off) here.
+  if (skill.status !== "active" || skill.approved !== true) {
+    return {
+      ok: false,
+      error:
+        skill.approved === false
+          ? "Skill is not approved for execution."
+          : `Skill is ${skill.status}`,
+    };
+  }
   const spec = boxRunSpecFor(skill);
   if (!spec.ok) return spec;
+  if (!(await hasBoxRunner(input.userId))) {
+    return { ok: false, error: NO_BOX_RUNNER_ERROR };
+  }
 
   const [run] = await db
     .insert(boxRuns)
@@ -182,7 +244,9 @@ export interface LeasedBoxRun {
 
 /**
  * Settle what the clock decided before picking the head: a stop requested on
- * a leased run whose box never answered, and a running run silent past grace.
+ * a leased run whose box never answered, a leased run whose box never started
+ * after {@link BOX_MAX_LEASE_ATTEMPTS} leases, and a running run silent past
+ * grace.
  */
 async function settleExpired(ownerUserId: string): Promise<void> {
   await db
@@ -201,22 +265,42 @@ async function settleExpired(ownerUserId: string): Promise<void> {
         lt(boxRuns.leaseExpiresAt, sql`now()`)
       )
     );
-  const lost: BoxRunEvidence = {
+  const infra = (infraReason: string): BoxRunEvidence => ({
     verdict: "infra",
     exitCode: null,
     durationMs: null,
-    infraReason: "heartbeat lost",
+    infraReason,
     log: { head: "", tail: "", totalBytes: null, truncated: false },
     blockedEgress: [],
     installedPackages: [],
     files: [],
-  };
+  });
+  const neverStarted = `the box never started (${BOX_MAX_LEASE_ATTEMPTS} attempts)`;
+  await db
+    .update(boxRuns)
+    .set({
+      status: "failed",
+      error: `The run did not complete on the computer: ${neverStarted}.`,
+      evidence: infra(neverStarted),
+      finishedAt: new Date(),
+      updatedAt: new Date(),
+      leaseId: null,
+    })
+    .where(
+      and(
+        eq(boxRuns.userId, ownerUserId),
+        eq(boxRuns.status, "leased"),
+        isNull(boxRuns.stopRequestedAt),
+        lt(boxRuns.leaseExpiresAt, sql`now()`),
+        gte(boxRuns.attempt, BOX_MAX_LEASE_ATTEMPTS)
+      )
+    );
   await db
     .update(boxRuns)
     .set({
       status: "failed",
       error: "The computer stopped answering while the script ran.",
-      evidence: lost,
+      evidence: infra("heartbeat lost"),
       finishedAt: new Date(),
       updatedAt: new Date(),
       leaseId: null,
@@ -409,14 +493,36 @@ export function boxStatusForVerdict(
       : "failed";
 }
 
-function capLog(log: FinishBoxRunInput["log"]): BoxRunEvidence["log"] {
-  const head = log?.head ?? "";
-  const tail = log?.tail ?? "";
-  const cut = head.length > BOX_LOG_CAP || tail.length > BOX_LOG_CAP;
+/** A UTF-8 continuation byte: cutting before one splits a character. */
+const isContinuation = (b: number | undefined) =>
+  b !== undefined && (b & 0xc0) === 0x80;
+
+/** The first `cap` UTF-8 bytes of `text`, never half a character. */
+function headBytes(text: string, cap: number): string {
+  const buf = Buffer.from(text, "utf8");
+  if (buf.length <= cap) return text;
+  let end = cap;
+  while (end > 0 && isContinuation(buf[end])) end--;
+  return buf.subarray(0, end).toString("utf8");
+}
+
+/** The last `cap` UTF-8 bytes of `text`, never half a character. */
+function tailBytes(text: string, cap: number): string {
+  const buf = Buffer.from(text, "utf8");
+  if (buf.length <= cap) return text;
+  let start = buf.length - cap;
+  while (start < buf.length && isContinuation(buf[start])) start++;
+  return buf.subarray(start).toString("utf8");
+}
+
+/** Head and tail kept to {@link BOX_LOG_CAP} UTF-8 bytes each (the contract). */
+export function capLog(log: FinishBoxRunInput["log"]): BoxRunEvidence["log"] {
+  const head = headBytes(log?.head ?? "", BOX_LOG_CAP);
+  const tail = tailBytes(log?.tail ?? "", BOX_LOG_CAP);
+  const cut = head !== (log?.head ?? "") || tail !== (log?.tail ?? "");
   return {
-    head: head.slice(0, BOX_LOG_CAP),
-    tail:
-      tail.length > BOX_LOG_CAP ? tail.slice(tail.length - BOX_LOG_CAP) : tail,
+    head,
+    tail,
     totalBytes: log?.totalBytes ?? null,
     truncated: cut || log?.truncated === true,
   };

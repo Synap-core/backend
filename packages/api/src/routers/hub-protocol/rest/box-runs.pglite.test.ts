@@ -11,6 +11,10 @@
  *   - an AGENT key (not a machine) WITH the scope → 403 NOT_A_COMPUTER;
  *   - a computer key whose person is not the computer's own → 403;
  *   - the computer's own key with the scope → the run.
+ *
+ * And the body door: a body that is not JSON is a 400 (never read as `{}`),
+ * an absent one is `{}`, a log end past its bound is a 400, and a body past
+ * the route ceiling is a 413 before any handler parses it.
  */
 
 import { describe, it, expect, beforeAll, vi } from "vitest";
@@ -94,13 +98,21 @@ beforeAll(async () => {
     CREATE TABLE users (id text PRIMARY KEY, name text, agent_type text,
       created_by_user_id text);
     CREATE TABLE skills (id uuid PRIMARY KEY, name text NOT NULL, code text,
-      metadata jsonb DEFAULT '{}'::jsonb, proven_at timestamptz);
+      metadata jsonb DEFAULT '{}'::jsonb, proven_at timestamptz,
+      status text NOT NULL DEFAULT 'active', approved boolean NOT NULL DEFAULT true);
+    CREATE TABLE api_keys (id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id text NOT NULL, scope text[], is_active boolean NOT NULL DEFAULT true,
+      expires_at timestamptz, revoked_at timestamptz);
   `);
   await h.client!.exec(M0356);
   await q(
     `INSERT INTO users VALUES ($1, 'person', NULL, NULL), ($2, 'devbox', 'machine', $1), ($3, 'Claude Code', 'claude-code', $1)`,
     [PERSON, MACHINE, AGENT]
   );
+  await q(`INSERT INTO api_keys (user_id, scope) VALUES ($1, $2)`, [
+    MACHINE,
+    [...BASE, "box.runner"],
+  ]);
   await q(
     `INSERT INTO skills (id, name, code, metadata) VALUES ($1, 'chart', 'print(1)', $2)`,
     [SKILL, JSON.stringify({ box: { language: "python" } })]
@@ -236,5 +248,50 @@ describe("box-runs routes — who may call", () => {
       { leaseId: randomUUID(), phase: "setup" }
     );
     expect(res.status).toBe(400);
+  });
+
+  it("a body that is not JSON is a 400, an absent body is {}", async () => {
+    const app = appAs({
+      scopes: [...BASE, "box.runner"],
+      userId: PERSON,
+      agentUserId: MACHINE,
+    });
+    const garbage = await app.request("/box-runs/lease", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{not json",
+    });
+    expect(garbage.status).toBe(400);
+    expect(await garbage.json()).toMatchObject({
+      code: "BAD_REQUEST",
+      error: "body is not valid JSON",
+    });
+    const absent = await app.request("/box-runs/lease", { method: "POST" });
+    expect(absent.status).toBe(200);
+  });
+
+  it("a log end past its bound is a 400; a body past the ceiling is a 413", async () => {
+    const app = appAs({
+      scopes: [...BASE, "box.runner"],
+      userId: PERSON,
+      agentUserId: MACHINE,
+    });
+    const id = randomUUID();
+    const leaseId = randomUUID();
+    const longLog = await post(app, `/box-runs/${id}/finish`, {
+      leaseId,
+      status: "done",
+      log: { head: "x".repeat(4 * 64 * 1024 + 1) },
+    });
+    expect(longLog.status).toBe(400);
+    expect((await longLog.json()).error).toMatch(/^log\.head/);
+    // Valid as a finish (unknown keys are stripped): without the ceiling it
+    // would be parsed whole and answered 404 for the unknown run.
+    const huge = await post(app, `/box-runs/${id}/finish`, {
+      leaseId,
+      status: "done",
+      padding: "z".repeat(3 * 1024 * 1024),
+    });
+    expect(huge.status).toBe(413);
   });
 });

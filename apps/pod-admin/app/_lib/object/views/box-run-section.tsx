@@ -22,34 +22,6 @@ export type BoxRunView = NonNullable<RunDetail["boxRun"]>;
 /** Log lines drawn before "Show all". */
 const LOG_LINES_SHOWN = 40;
 
-/** Where a box run stands, in words (the status pill says the category). */
-export function boxRunStateLine(box: BoxRunView): string {
-  switch (box.status) {
-    case "queued":
-      return box.queuePosition && box.queuePosition > 1
-        ? `Waiting for your computer · ${box.queuePosition - 1} ahead of it`
-        : "Waiting for your computer to pick it up.";
-    case "leased":
-      return `Setting up a box on ${box.computerName ?? "your computer"}.`;
-    case "running":
-      return box.stopRequested
-        ? "Stopping…"
-        : `Running in a box on ${box.computerName ?? "your computer"}.`;
-    case "stalled":
-      return `${box.computerName ?? "Your computer"} stopped answering while the script ran.`;
-    case "stopped":
-      return "Stopped.";
-    case "done":
-      return "Finished.";
-    case "failed":
-      return box.evidence?.verdict === "infra"
-        ? "Did not run to the end: a problem on the computer, not in the script."
-        : box.evidence?.verdict === "timeout"
-          ? "Ran past its time limit and was stopped."
-          : "The script failed.";
-  }
-}
-
 /** The facts a box run adds to the run page's grid. */
 export function boxRunFacts(box: BoxRunView) {
   const ev = box.evidence;
@@ -116,12 +88,19 @@ function LogBlock({ box }: { box: BoxRunView }) {
   );
 }
 
-export function BoxRunSection({ box }: { box: BoxRunView }) {
+export function BoxRunSection({
+  box,
+  summary,
+}: {
+  box: BoxRunView;
+  /** Where it stands: the run's `summary`, derived once by the pod. */
+  summary: string | null;
+}) {
   const ev = box.evidence;
   const files = ev?.files ?? [];
   return (
     <div className="flex flex-col gap-5">
-      <p className="text-[12.5px] text-foreground/75">{boxRunStateLine(box)}</p>
+      {summary && <p className="text-[12.5px] text-foreground/75">{summary}</p>}
 
       {files.length > 0 && (
         <section className="flex flex-col gap-2">

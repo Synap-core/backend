@@ -155,7 +155,7 @@ import {
   type CapabilityEnableOffer,
 } from "./propose-capability-enable.js";
 import { CAPABILITY_RUN_PROPOSAL_TYPE } from "../proposals/proposal-class.js";
-import { enqueueBoxRun, isQueuedBoxRunResult } from "../box-runs/box-runs.js";
+import { isQueuedBoxRunResult } from "../box-runs/box-runs.js";
 import { capErrorMessage } from "../connection-health/notify-connector-unhealthy.js";
 import type { WriteAckState } from "../../utils/write-door-idempotency.js";
 
@@ -547,7 +547,6 @@ export async function executeCapability(input: {
       // copies it verbatim). Read by `checkVerbParameters` before a proposal is
       // filed. Absent = cannot validate, never "no arguments allowed".
       parameters: skills.parameters,
-      executionMode: skills.executionMode,
     })
     .from(skills)
     .where(
@@ -1440,12 +1439,6 @@ export interface ResolvedSkillRow {
    * that forgot the column would silently skip the write-back on its path.
    */
   metadata: unknown;
-  /**
-   * REQUIRED for the same reason as `metadata`: `box` routes the run to the
-   * box queue instead of an isolate. A loader that forgot the column would
-   * run a Python script in the JS isolate.
-   */
-  executionMode: string;
 }
 
 /**
@@ -1595,10 +1588,9 @@ async function runResolvedSkillInner(
      */
     sessionId?: string | null;
     /**
-     * WHO ASKED, for attribution only — an approved `capability.run` replays
-     * as the approver (no `agentUserId`, deliberately: builtins must not see an
-     * agent there), but a queued box run still records the agent that asked and
-     * the proposal that approved it. Never read by any gate.
+     * WHO ASKED, for a queued box run's attribution (`RunSkillArgs`): an
+     * approved `capability.run` replays as the approver with no `agentUserId`
+     * (builtins must not see an agent there). Never read by any gate.
      */
     provenance?: { agentUserId?: string | null; proposalId?: string | null };
   }
@@ -1709,24 +1701,6 @@ async function runResolvedSkillInner(
     };
   }
 
-  // TIER 3 (box): a script with packages runs on the person's own computer,
-  // never in the pod. Post-gate (a `run` verdict or an approved proposal), so
-  // this only QUEUES it — FIFO, never refused for "queue full" — and returns
-  // the run's handle. The computer leases it over Hub REST (box-runs.ts).
-  if (skill.executionMode === "box") {
-    const queued = await enqueueBoxRun({
-      skillId: skill.id,
-      parameters,
-      userId: ctx.userId,
-      agentUserId: ctx.agentUserId ?? ctx.provenance?.agentUserId ?? null,
-      sessionId: ctx.sessionId ?? null,
-      workspaceId: ctx.workspaceId,
-      proposalId: ctx.provenance?.proposalId ?? null,
-    });
-    if (!queued.ok) return { kind: "error", message: queued.error };
-    return { kind: "run", skillId: skill.id, result: queued.result };
-  }
-
   // TIER 2 (code/instruction): execute the backing skill through the ONE skill
   // door (`runSkill`, R2): the pod's own sandbox by default — the bridges in
   // this process, the code in a supervised runner process — or the IS only
@@ -1734,6 +1708,8 @@ async function runResolvedSkillInner(
   // `{success, result?, error?}`. UNWRAP it here so a caller receives the skill's
   // DATA (not the envelope) on success and the ONE `kind:"error"` channel on
   // failure — a success:false must never ride through as a `kind:"run"` result.
+  // A box skill goes through the same door, which queues it for the person's
+  // computer and hands back the queued handle as the result.
   //
   // ONE GOVERNED ACT: every caller of this runner is POST-gate (a `run` verdict
   // or an approved proposal), so the verb's decision rides into the sandbox as
@@ -1748,6 +1724,7 @@ async function runResolvedSkillInner(
     workspaceId: ctx.workspaceId,
     agentUserId: ctx.agentUserId ?? null,
     sessionId: ctx.sessionId ?? null,
+    provenance: ctx.provenance,
     verbAct: {
       skillId: skill.id,
       toolIds: await requiredToolIdsOf(skill.id),

@@ -52,6 +52,11 @@ export const skillsRouter = router({
       // spend the page, so a user's newest instruction skills and rules could
       // silently fall off the end of what the IS ever saw. Each kind is paged
       // to exhaustion (`skills.list` caps a page at 100).
+      //
+      // A BOX skill is excluded too: its code is a Python or Node script for
+      // the person's own computer, which the IS would load as an isolate tool
+      // and run there. Every page is read, so dropping it after the page
+      // cannot cost another row its place.
       const PAGE = 100;
       type Row = {
         kind: string | null;
@@ -69,7 +74,7 @@ export const skillsRouter = router({
             limit: PAGE,
             offset,
           });
-          rows.push(...page);
+          rows.push(...page.filter((r) => r.executionMode !== "box"));
           if (page.length < PAGE) break;
         }
       }

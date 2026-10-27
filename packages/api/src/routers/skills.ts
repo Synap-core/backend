@@ -51,6 +51,8 @@ import {
 } from "../services/capabilities/skill-exec-fields.js";
 import { CAPABILITY_RUN_PROPOSAL_TYPE } from "../services/proposals/proposal-class.js";
 import { parseBoxDeclaration } from "../services/box-runs/box-spec.js";
+import { declaredReadOnly } from "../services/capabilities/capability-drift.js";
+import { isQueuedBoxRunResult } from "../services/box-runs/box-runs.js";
 import { auditLog } from "../utils/audit-log.js";
 import { setSkillApproved } from "../services/capabilities/set-skill-approved.js";
 import { skillBornApproved } from "../services/capabilities/skill-born-approved.js";
@@ -257,10 +259,27 @@ export function assertSkillCodeAllowed(
 }
 
 /**
+ * "Read-only" makes every approved run automatic at the gate. A script with
+ * packages and network has no such meaning, so a box skill never carries it:
+ * each agent run of it is reviewed.
+ */
+export function assertBoxNotReadOnly(
+  metadata: Record<string, unknown> | undefined
+): void {
+  if (declaredReadOnly(metadata) === true) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "A box skill cannot be read-only: a script with packages and network is reviewed on every agent run. Remove readOnly.",
+    });
+  }
+}
+
+/**
  * The ONE box rule for a skill write (0356): a `box` skill is a code skill
- * with a valid `metadata.box` declaration. Returns the metadata bag to store
- * (the declaration normalised by `parseBoxDeclaration`), or throws in words.
- * A non-box write passes its metadata through untouched.
+ * with a valid `metadata.box` declaration and no `readOnly`. Returns the
+ * metadata bag to store (the declaration normalised by `parseBoxDeclaration`),
+ * or throws in words. A non-box write passes its metadata through untouched.
  */
 export function boxSkillMetadata(input: {
   executionMode: string | undefined;
@@ -274,6 +293,7 @@ export function boxSkillMetadata(input: {
       message: "A box skill is a script: send its code.",
     });
   }
+  assertBoxNotReadOnly(input.metadata);
   const parsed = parseBoxDeclaration(input.metadata?.box);
   if (!parsed.ok) {
     throw new TRPCError({ code: "BAD_REQUEST", message: parsed.error });
@@ -1582,7 +1602,9 @@ export const skillsRouter = router({
       const writtenKind = skillKindAfterUpdate(input, existingSkill.kind);
       const writtenMode = input.executionMode ?? existingSkill.executionMode;
       assertSkillCodeAllowed(writtenKind, input.code, writtenMode);
-      // A box declaration edit is parsed by the same rule as create.
+      // A box declaration edit is parsed by the same rule as create, and a
+      // box skill is never made read-only.
+      if (writtenMode === "box") assertBoxNotReadOnly(metadataPatch);
       if (metadataPatch && "box" in metadataPatch && writtenMode === "box") {
         metadataPatch.box = boxSkillMetadata({
           executionMode: "box",
@@ -2002,8 +2024,9 @@ export const skillsRouter = router({
         });
       }
 
-      // Update execution metadata on success
-      if (result.success) {
+      // Update execution metadata on success. A box script is only queued
+      // here (`runSkill`): it has not run yet.
+      if (result.success && !isQueuedBoxRunResult(result.result)) {
         const currentMeta =
           (skill.metadata as Record<string, unknown> | null) ?? {};
         const execCount =

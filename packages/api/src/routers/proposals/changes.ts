@@ -437,6 +437,30 @@ export function buildProposalChanges(
     }
   }
 
+  // ── The rest of a promoted bag: one row per key ────────────────────────────
+  // The raw `metadata` row is skipped when a promotion fires, so every other
+  // key it carries (a `readOnly` that makes every agent run automatic, for
+  // one) gets its own row: a promotion displaces the blob, never what is in it.
+  if (promotesAllowedHosts || promotesBox) {
+    const promoted = new Set([
+      ...(promotesAllowedHosts ? ["allowedHosts"] : []),
+      ...(promotesBox ? ["box"] : []),
+    ]);
+    for (const [key, value] of Object.entries(
+      data.metadata as Record<string, unknown>
+    )) {
+      if (promoted.has(key) || value === undefined) continue;
+      changes.push({
+        path: `metadata.${key}`,
+        label: labelFromPath(key),
+        operation,
+        before: undefined,
+        after: value,
+        valueType: valueTypeOf(value),
+      });
+    }
+  }
+
   // ── Playbook structure: `scope` and `stages` promoted to their own rows ────
   //
   // A playbook create/update proposal carries `description` — an entity-shape

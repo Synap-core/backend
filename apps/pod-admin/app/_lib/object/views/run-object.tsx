@@ -41,7 +41,7 @@ import { ContentBody } from "../content/content-block";
 import { prepareContent } from "../content/markdown-model";
 import { useReauthOnUnauthorized } from "../use-reauth";
 import type { ObjectFrame } from "./object-frame";
-import { BoxRunSection, boxRunFacts, boxRunStateLine } from "./box-run-section";
+import { BoxRunSection, boxRunFacts } from "./box-run-section";
 
 export interface RunAddress {
   flowType: RunFlowType;
@@ -76,12 +76,11 @@ export function useRunDetail(target: RunAddress | null) {
   const [actError, setActError] = useState<string | null>(null);
 
   const run = detail.data?.run;
-  // A box run (code-runtime B0): its own story, and Stop while it is going.
+  // A box run (code-runtime B0): its own story, and Stop while it is not
+  // over (the pod's unified status says so: one derivation).
   const boxRun = detail.data?.boxRun ?? null;
   const canStopBox =
-    !!boxRun &&
-    !boxRun.stopRequested &&
-    ["queued", "leased", "running", "stalled"].includes(boxRun.status);
+    !!boxRun && !boxRun.stopRequested && run?.status === "running";
 
   async function confirmAct() {
     if (!run) return;
@@ -251,7 +250,7 @@ export function RunDetailBody({
   return (
     <div className="flex flex-col gap-5">
       {showFacts && <FactsGrid columns={2} facts={runFacts(state)} />}
-      {boxRun && <BoxRunSection box={boxRun} />}
+      {boxRun && <BoxRunSection box={boxRun} summary={run.summary} />}
 
       {run.error?.trim() && (
         <section className="flex flex-col gap-1 rounded-lg bg-status-down/[0.06] px-3 py-2.5 ring-1 ring-inset ring-status-down/30">
@@ -425,7 +424,7 @@ function RunPage({ id, flowType, frame }: RunAddress & { frame: ObjectFrame }) {
           noun,
           title,
           summary: state.boxRun
-            ? boxRunStateLine(state.boxRun)
+            ? (run.summary ?? undefined)
             : run.error?.trim()
               ? "It failed. Why is below."
               : run.status === "running"

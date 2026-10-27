@@ -65,5 +65,6 @@ When the work needs packages, files or another language (chart a CSV with pandas
 
 - It runs on the person's own computer, in a fresh box per run: no pod access, no secrets, network only to the `hosts` you declare (packages install from their registry first). Pin every package to an exact version.
 - Parameters arrive as `/in/parameters.json`; write output files to `/out` (they come back on the run and in the session). Print what you want the person to read: the log is kept.
-- `synap_run_capability` QUEUES it and returns `{ status: "queued", boxRunId }`: the run is not finished yet. Its log, files and exit code show on the run (Runs, the session's runs). The person must have turned on "Runs scripts" for one of their computers.
-- The reviewer approves the code, the packages and the hosts together; changing any of them needs a new approval.
+- `synap_run_capability` QUEUES it and returns `{ status: "queued", boxRunId }`: the run is not finished yet. Its log, files and exit code show on the run (Runs, the session's runs). The person must have turned on "Runs scripts" for one of their computers; otherwise the run is refused with that setting named: tell the person.
+- It has no preview: a dry-run answers that it runs only on the person's computer.
+- The reviewer approves the code, the packages and the hosts together; changing any of them needs a new approval. A box script cannot be declared `readOnly`.

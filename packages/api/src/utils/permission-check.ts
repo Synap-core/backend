@@ -3316,7 +3316,9 @@ export function buildProposalSummary(
 /**
  * ` — runs on your computer in a box (python, pandas==2.2.3; may reach
  * api.example.com; up to 15 min)` for a box skill payload: the packages and
- * hosts are what the person approves besides the code.
+ * hosts are what the person approves besides the code. A declaration that
+ * does not parse still says where it runs: an unreadable one is not "nothing
+ * to say".
  */
 function boxClause(data: Record<string, unknown>): string {
   if (data.executionMode !== "box") return "";
@@ -3325,7 +3327,9 @@ function boxClause(data: Record<string, unknown>): string {
       ? (data.metadata as Record<string, unknown>)
       : {};
   const parsed = parseBoxDeclaration(meta.box);
-  return parsed.ok ? ` — ${describeBoxDeclaration(parsed.box)}` : "";
+  return parsed.ok
+    ? ` — ${describeBoxDeclaration(parsed.box)}`
+    : " — runs on your computer in a box (its declaration could not be read)";
 }
 
 /** ` using tools: apify_api` for a skill payload carrying `requiredToolNames`. */

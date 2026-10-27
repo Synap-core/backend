@@ -7,8 +7,8 @@
  *
  * Phase 0 bounds (run box design C4): one language per script (python | node),
  * exact package pins, hostnames only (never an IP literal: the box's egress
- * proxy resolves and re-checks them), and limits capped at the founder host's
- * per-box budget.
+ * proxy resolves and re-checks them), and limits capped at the per-box budget
+ * of the reference host.
  */
 
 import { z } from "zod";

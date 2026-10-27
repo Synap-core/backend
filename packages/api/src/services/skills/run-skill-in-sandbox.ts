@@ -208,18 +208,6 @@ export async function runSkillInSandbox(args: {
         executionTimeMs: Date.now() - startTime,
       };
     }
-    // A box skill is a Python or Node script for the person's own computer:
-    // `executeCapability` queues it as a box run. Its code is not JavaScript
-    // for this isolate, so a run or dry-run reaching here is refused plainly
-    // instead of failing on a syntax error.
-    if (skill.executionMode === "box") {
-      return {
-        success: false,
-        error:
-          "This skill runs on your computer (a box run), not in the pod. Run it as a capability; it cannot be previewed here.",
-        executionTimeMs: Date.now() - startTime,
-      };
-    }
     if (!skill.code) {
       return {
         success: false,

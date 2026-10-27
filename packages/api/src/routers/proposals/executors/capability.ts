@@ -168,7 +168,6 @@ export function registerCapabilityExecutors(): void {
           kind: skills.kind,
           providerSpec: skills.providerSpec,
           metadata: skills.metadata,
-          executionMode: skills.executionMode,
         })
         .from(skills)
         .where(eq(skills.id, capabilityId))
@@ -328,7 +327,6 @@ export function registerCapabilityExecutors(): void {
           kind: skills.kind,
           providerSpec: skills.providerSpec,
           metadata: skills.metadata,
-          executionMode: skills.executionMode,
         })
         .from(skills)
         .where(eq(skills.id, skillId))

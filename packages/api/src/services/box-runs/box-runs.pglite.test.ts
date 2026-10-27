@@ -13,7 +13,17 @@
  *   - finish by a computer that does not hold the lease is refused, and a
  *     second finish on the same lease is refused (single-shot);
  *   - a computer never sees another person's queue;
- *   - FIFO by queued_at.
+ *   - FIFO by queued_at;
+ *   - a skill turned off (or never approved) after its run was approved is
+ *     not queued: the approval of a run is not the approval of the script;
+ *   - a person with no computer that runs scripts is refused at enqueue (a
+ *     revoked, expired, inactive or scope-less key is not one): a queue
+ *     nobody can take would read as running forever;
+ *   - a leased run whose box never starts fails after 3 leases, and the run
+ *     queued behind it is leased next;
+ *   - the start order: after a re-lease, the first computer's `running`
+ *     heartbeat is refused (409) and the run stays with the second;
+ *   - the log is kept to 64 KiB of UTF-8 bytes per end, never half a character.
  */
 
 import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
@@ -49,7 +59,9 @@ vi.mock("../capabilities/execute-capability.js", () => ({
 
 import {
   enqueueBoxRun,
+  capLog,
   finishBoxRun,
+  NO_BOX_RUNNER_ERROR,
   heartbeatBoxRun,
   leaseBoxRun,
   stopBoxRun,
@@ -85,8 +97,30 @@ const SKILL = randomUUID();
 beforeAll(async () => {
   await h.client!.exec(`
     CREATE TABLE skills (id uuid PRIMARY KEY, name text NOT NULL, code text,
-      metadata jsonb DEFAULT '{}'::jsonb, proven_at timestamptz);
+      metadata jsonb DEFAULT '{}'::jsonb, proven_at timestamptz,
+      status text NOT NULL DEFAULT 'active', approved boolean NOT NULL DEFAULT true);
+    CREATE TABLE users (id text PRIMARY KEY, agent_type text,
+      created_by_user_id text);
+    CREATE TABLE api_keys (id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id text NOT NULL, scope text[], is_active boolean NOT NULL DEFAULT true,
+      expires_at timestamptz, revoked_at timestamptz);
   `);
+  // Each person's computers; machine-1 holds a live `box.runner` key.
+  await q(
+    `INSERT INTO users VALUES ($1, 'machine', $2), ($3, 'machine', $2), ($4, 'machine', $5)`,
+    [
+      MACHINE_1.machineUserId,
+      PERSON,
+      MACHINE_2.machineUserId,
+      STRANGER.machineUserId,
+      OTHER_PERSON,
+    ]
+  );
+  await q(`INSERT INTO api_keys (user_id, scope) VALUES ($1, $3), ($2, $3)`, [
+    MACHINE_1.machineUserId,
+    STRANGER.machineUserId,
+    ["hub-protocol.read", "box.runner"],
+  ]);
   await h.client!.exec(M0356);
   await q(
     `INSERT INTO skills (id, name, code, metadata) VALUES ($1, $2, $3, $4)`,
@@ -161,6 +195,55 @@ describe("enqueue", () => {
     ]);
   });
 
+  it("refuses a skill turned off or never approved, and queues nothing", async () => {
+    await q(`UPDATE skills SET approved = false WHERE id = $1`, [SKILL]);
+    expect(
+      await enqueueBoxRun({ skillId: SKILL, parameters: {}, userId: PERSON })
+    ).toEqual({ ok: false, error: "Skill is not approved for execution." });
+    await q(
+      `UPDATE skills SET approved = true, status = 'inactive' WHERE id = $1`,
+      [SKILL]
+    );
+    expect(
+      await enqueueBoxRun({ skillId: SKILL, parameters: {}, userId: PERSON })
+    ).toEqual({ ok: false, error: "Skill is inactive" });
+    await q(`UPDATE skills SET status = 'active' WHERE id = $1`, [SKILL]);
+    const rows = await q<{ n: number }>(
+      `SELECT count(*)::int AS n FROM box_runs`
+    );
+    expect(rows.rows[0].n).toBe(0);
+  });
+
+  it("refuses when no computer of the person runs scripts", async () => {
+    const lonely = "person-c";
+    await q(`INSERT INTO users VALUES ('machine-c', 'machine', $1)`, [lonely]);
+    const tryIt = () =>
+      enqueueBoxRun({ skillId: SKILL, parameters: {}, userId: lonely });
+    // No key; then each way a key is not a live runner.
+    expect(await tryIt()).toEqual({ ok: false, error: NO_BOX_RUNNER_ERROR });
+    for (const [cols, vals] of [
+      ["scope", `ARRAY['hub-protocol.read']`],
+      ["scope, revoked_at", `ARRAY['box.runner'], now()`],
+      ["scope, expires_at", `ARRAY['box.runner'], now() - interval '1 day'`],
+      ["scope, is_active", `ARRAY['box.runner'], false`],
+    ] as const) {
+      await q(`DELETE FROM api_keys WHERE user_id = 'machine-c'`);
+      await q(
+        `INSERT INTO api_keys (user_id, ${cols}) VALUES ('machine-c', ${vals})`
+      );
+      expect(await tryIt()).toEqual({ ok: false, error: NO_BOX_RUNNER_ERROR });
+    }
+    const rows = await q<{ n: number }>(
+      `SELECT count(*)::int AS n FROM box_runs`
+    );
+    expect(rows.rows[0].n).toBe(0);
+    await q(`DELETE FROM api_keys WHERE user_id = 'machine-c'`);
+    await q(
+      `INSERT INTO api_keys (user_id, scope) VALUES ('machine-c', ARRAY['box.runner'])`
+    );
+    expect(await tryIt()).toMatchObject({ ok: true });
+  });
+
   it("refuses a skill with no valid box declaration", async () => {
     const bad = randomUUID();
     await q(
@@ -231,6 +314,66 @@ describe("lease", () => {
       runner: MACHINE_1,
     });
     expect(stale).toEqual({ ok: false, code: "LEASE_LOST" });
+  });
+
+  it("a box that never starts fails after 3 leases; the next run is leased", async () => {
+    const poison = await queue();
+    await new Promise((r) => setTimeout(r, 5));
+    const behind = await queue();
+    for (const attempt of [1, 2, 3]) {
+      const l = await leaseBoxRun(MACHINE_1);
+      expect(l).toMatchObject({ id: poison.id, attempt });
+      await expireLease(poison.id, 5);
+    }
+    const next = await leaseBoxRun(MACHINE_1);
+    expect(next?.id).toBe(behind.id);
+    const [row] = (
+      await q<{
+        status: string;
+        error: string;
+        evidence: { verdict: string; infraReason: string };
+      }>(`SELECT status, error, evidence FROM box_runs WHERE id = $1`, [
+        poison.id,
+      ])
+    ).rows;
+    expect(row.status).toBe("failed");
+    expect(row.evidence).toMatchObject({
+      verdict: "infra",
+      infraReason: "the box never started (3 attempts)",
+    });
+    expect(row.error).toMatch(/never started/);
+  });
+
+  it("start order: after a re-lease the first computer cannot start the script", async () => {
+    const run = await queue();
+    const first = await leaseBoxRun(MACHINE_1);
+    await expireLease(run.id, 5);
+    const second = await leaseBoxRun(MACHINE_2);
+    expect(second?.id).toBe(run.id);
+    // The first box asks to start: refused, so it must not run the script.
+    expect(
+      await heartbeatBoxRun({
+        runId: run.id,
+        leaseId: first!.leaseId,
+        phase: "running",
+        runner: MACHINE_1,
+      })
+    ).toEqual({ ok: false, code: "LEASE_LOST" });
+    const [mid] = (
+      await q<{ status: string; leased_by: string }>(
+        `SELECT status, leased_by FROM box_runs WHERE id = $1`,
+        [run.id]
+      )
+    ).rows;
+    expect(mid).toEqual({ status: "leased", leased_by: "machine-2" });
+    expect(
+      await heartbeatBoxRun({
+        runId: run.id,
+        leaseId: second!.leaseId,
+        phase: "running",
+        runner: MACHINE_2,
+      })
+    ).toMatchObject({ ok: true });
   });
 
   it("an expired RUNNING run is never re-leased: stalled, then failed as INFRA past grace", async () => {
@@ -350,6 +493,26 @@ describe("finish", () => {
     expect(out.run.evidence?.log.head.length).toBe(64 * 1024);
     expect(out.run.evidence?.log.truncated).toBe(true);
     expect(h.proven).toEqual([]);
+  });
+});
+
+describe("capLog", () => {
+  it("keeps 64 KiB of UTF-8 bytes per end, never half a character", () => {
+    // Both cuts land inside a character: 64 KiB falls on the 2nd byte of an
+    // "é" and on the 2nd byte of an emoji.
+    const head = "a" + "é".repeat(40 * 1024);
+    const tail = "😀".repeat(20 * 1024) + "a";
+    const out = capLog({ head, tail });
+    expect(out.head).toBe("a" + "é".repeat(32 * 1024 - 1));
+    expect(out.tail).toBe("😀".repeat(16 * 1024 - 1) + "a");
+    expect(Buffer.byteLength(out.head, "utf8")).toBeLessThanOrEqual(64 * 1024);
+    expect(Buffer.byteLength(out.tail, "utf8")).toBeLessThanOrEqual(64 * 1024);
+    expect(out.head + out.tail).not.toContain("\uFFFD");
+    expect(out.truncated).toBe(true);
+    expect(capLog({ head: "ok", tail: "" })).toMatchObject({
+      head: "ok",
+      truncated: false,
+    });
   });
 });
 

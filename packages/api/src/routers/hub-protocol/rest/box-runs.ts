@@ -1,6 +1,6 @@
 /**
  * Hub Protocol REST — box runs, the provisioner side (code-runtime B0; the
- * wire contract is lanes/code-runtime/BOX-CONTRACT.md).
+ * wire contract is the box contract, code-runtime plan v2).
  *
  *   POST /box-runs/lease            {capacity?}                 → {run | null}
  *   POST /box-runs/:id/heartbeat    {leaseId, phase}            → {leaseExpiresAt, stopRequested}
@@ -14,6 +14,15 @@
  * who connected it); the person floor is read off the computer row, never the
  * request.
  *
+ * START ORDER (the contract): a provisioner starts the entrypoint only AFTER a
+ * `phase:"running"` heartbeat answered 200. That answer is the moment the run
+ * becomes `running` and can never be re-leased; a 409 means the lease went to
+ * another computer, so the box is destroyed without running anything. Starting
+ * first and heartbeating after would let a lost lease run the script twice.
+ *
+ * Bodies: at most {@link BOX_BODY_MAX_BYTES} (413 past it); a body that is not
+ * JSON is a 400, an absent one reads as `{}`.
+ *
  * Static `/box-runs/lease` is registered BEFORE the `/:id` routes (Hono).
  * Not in the OpenAPI registry, like the device door: a machine protocol whose
  * spec is the contract file, not an agent-facing tool.
@@ -21,6 +30,7 @@
 
 import { z } from "zod";
 import type { Context } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import { and, db, eq } from "@synap/database";
 import { BOX_RUNNER_SCOPE, users } from "@synap/database/schema";
 import { MACHINE_AGENT_TYPE } from "@synap-core/types/agents";
@@ -38,6 +48,7 @@ import {
   leaseBoxRun,
   loadLeasedBoxRun,
   boxStatusForVerdict,
+  BOX_LOG_CAP,
   BOX_MAX_FILES,
   type BoxRunner,
   type LeaseRefusal,
@@ -56,6 +67,15 @@ const LeaseBody = z
   .passthrough();
 
 const LeaseId = z.string().uuid();
+
+/** A finish carries at most two capped log ends, 20 file names and lists. */
+export const BOX_BODY_MAX_BYTES = 2 * 1024 * 1024;
+/**
+ * One log end, in UTF-16 units: the box keeps {@link BOX_LOG_CAP} UTF-8 bytes,
+ * which is never more characters than that. Room to spare for a provisioner
+ * that cuts loosely; `capLog` keeps the exact bytes.
+ */
+const LogEnd = z.string().max(4 * BOX_LOG_CAP);
 
 const HeartbeatBody = z.object({
   leaseId: LeaseId,
@@ -78,8 +98,8 @@ const FinishBody = z
     infraReason: z.string().max(1000).optional(),
     log: z
       .object({
-        head: z.string().optional(),
-        tail: z.string().optional(),
+        head: LogEnd.optional(),
+        tail: LogEnd.optional(),
         totalBytes: z.number().int().nonnegative().nullable().optional(),
         truncated: z.boolean().optional(),
       })
@@ -191,15 +211,36 @@ export function registerBoxRunsRoutes(app: HubHono): void {
   const refused = (c: Context<{ Variables: HubVariables }>, r: LeaseRefusal) =>
     c.json({ code: r.code, error: REFUSAL_TEXT[r.code] }, REFUSAL_HTTP[r.code]);
 
+  // Before any route reads a body: a runaway log is refused at the door, not
+  // parsed in memory first.
+  app.use(
+    "/box-runs/*",
+    bodyLimit({
+      maxSize: BOX_BODY_MAX_BYTES,
+      onError: (c) =>
+        c.json(
+          {
+            code: "PAYLOAD_TOO_LARGE",
+            error: `The body is over ${BOX_BODY_MAX_BYTES} bytes. Send the log's head and tail only.`,
+          },
+          413
+        ),
+    })
+  );
+
+  /** An absent body is `{}`; a body that is not JSON is refused, never `{}`. */
   async function body<T extends z.ZodTypeAny>(
-    c: { req: { json: () => Promise<unknown> } },
+    c: { req: { text: () => Promise<string> } },
     schema: T
   ): Promise<{ ok: true; data: z.output<T> } | { ok: false; error: string }> {
-    let raw: unknown;
-    try {
-      raw = await c.req.json();
-    } catch {
-      raw = {};
+    const text = await c.req.text();
+    let raw: unknown = {};
+    if (text.trim() !== "") {
+      try {
+        raw = JSON.parse(text);
+      } catch {
+        return { ok: false, error: "body is not valid JSON" };
+      }
     }
     const parsed = schema.safeParse(raw ?? {});
     if (!parsed.success) {

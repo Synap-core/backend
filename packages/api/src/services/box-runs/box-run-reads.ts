@@ -13,6 +13,7 @@
 import { and, count, desc, eq, inArray, lt, type SQL } from "drizzle-orm";
 import { db } from "@synap/database";
 import {
+  BOX_RUN_STATUSES,
   boxRuns,
   users,
   type BoxRunRow,
@@ -44,32 +45,40 @@ export function unifiedBoxRunStatus(status: BoxRunReadStatus): RunStatus {
   }
 }
 
-/** The stored statuses a unified status filter selects. */
+/** The stored statuses a unified status filter selects (the inverse map). */
 function storedStatusesFor(status: RunStatus): BoxRunStatus[] {
-  switch (status) {
-    case "running":
-      return ["queued", "leased", "running"];
-    case "completed":
-      return ["done"];
-    case "failed":
-      return ["failed"];
-    case "cancelled":
-      return ["stopped"];
-    default:
-      return [];
-  }
+  return BOX_RUN_STATUSES.filter((s) => unifiedBoxRunStatus(s) === status);
 }
 
-function summaryOf(run: BoxRunRow, status: BoxRunReadStatus): string {
+/** What only the run page's read knows: who took it, where it waits. */
+export interface BoxRunPlace {
+  computerName?: string | null;
+  queuePosition?: number | null;
+}
+
+/**
+ * Where a box run stands, in one sentence: the ONE derivation, drawn by the
+ * Runs feed and the run page (`summary`) alike. The page's read passes the
+ * computer and the queue position it loads; the feed has neither.
+ */
+export function boxRunSummary(
+  run: Pick<BoxRunRow, "stopRequestedAt" | "evidence">,
+  status: BoxRunReadStatus,
+  place: BoxRunPlace = {}
+): string {
+  const computer = place.computerName ?? "your computer";
+  const stopping = run.stopRequestedAt !== null;
   switch (status) {
     case "queued":
-      return "Waiting for your computer to pick it up";
+      return place.queuePosition && place.queuePosition > 1
+        ? `Waiting for your computer · ${place.queuePosition - 1} ahead of it`
+        : "Waiting for your computer to pick it up";
     case "leased":
-      return "Setting up a box on your computer";
+      return stopping ? "Stopping" : `Setting up a box on ${computer}`;
     case "running":
-      return "Running in a box on your computer";
+      return stopping ? "Stopping" : `Running in a box on ${computer}`;
     case "stalled":
-      return "Stalled: your computer stopped answering";
+      return `Stalled: ${computer} stopped answering while the script ran`;
     case "stopped":
       return "Stopped";
     case "done": {
@@ -79,13 +88,18 @@ function summaryOf(run: BoxRunRow, status: BoxRunReadStatus): string {
         : "Finished";
     }
     case "failed":
-      return run.error ?? "Failed";
+      return run.evidence?.verdict === "infra"
+        ? "Did not run to the end: a problem on the computer, not in the script"
+        : run.evidence?.verdict === "timeout"
+          ? "Ran past its time limit and was stopped"
+          : "The script failed";
   }
 }
 
 export function boxRunAsUnifiedRun(
   run: BoxRunRow,
-  now: Date = new Date()
+  now: Date = new Date(),
+  place: BoxRunPlace = {}
 ): UnifiedRun {
   const status = boxRunReadStatus(run, now);
   return {
@@ -108,7 +122,7 @@ export function boxRunAsUnifiedRun(
     channelId: null,
     correlationId: null,
     replayOf: null,
-    summary: summaryOf(run, status),
+    summary: boxRunSummary(run, status, place),
     error: run.status === "failed" ? run.error : null,
     triggeredBy: run.agentUserId ?? run.userId,
     stepsCompleted: null,
@@ -191,7 +205,10 @@ export async function loadBoxRunDetail(
     queuePosition = Number(ahead?.n ?? 0) + 1;
   }
   return {
-    run: boxRunAsUnifiedRun(row, now),
+    run: boxRunAsUnifiedRun(row, now, {
+      computerName: computer?.name ?? null,
+      queuePosition,
+    }),
     boxRun: {
       status,
       skillId: row.skillId,
