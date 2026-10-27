@@ -613,7 +613,7 @@ export async function applyPackagePostWorkspace(
           ...(r.proposals.length > 0 ? { proposals: r.proposals } : {}),
         });
       } catch (e) {
-        const key = cap.templateKey ?? "inline";
+        const capKey = cap.templateKey ?? "inline";
         const needsSetup = isSetupRequiredLike(e);
         if (needsSetup) {
           const skills: unknown[] =
@@ -623,11 +623,14 @@ export async function applyPackagePostWorkspace(
           for (const skill of skills) {
             const name = (skill as { name?: unknown } | null)?.name;
             if (typeof name === "string" && name)
-              setupBlockedVerbs.set(name, { key, message: e.message });
+              setupBlockedVerbs.set(name, {
+                key: capKey,
+                message: e.message,
+              });
           }
         }
         caps.push({
-          key,
+          key: capKey,
           status: "error",
           message: (e as Error).message,
           ...(needsSetup ? { needsSetup: true } : {}),
