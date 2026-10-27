@@ -183,10 +183,15 @@ export function needsYouWhere(
 
 /**
  * SQL boolean over `slot`: the ask ends with its session — `askEndsWithSession`
- * (`@synap-core/types/ask`): its ask's mode is confirm / choose, or, with no
- * ask, it is a decision blocker (`deriveDecisionAsk`'s confirm).
+ * (`@synap-core/types/ask`): never a criterion grade (the person's verdict on
+ * the work, graded after the session as before it); else its ask's mode is
+ * confirm / choose, or, with no ask, it is a decision blocker
+ * (`deriveDecisionAsk`'s confirm).
  */
 export const SLOT_ENDS_WITH_SESSION_SQL = drizzleSql.raw(`(CASE
+    WHEN slot->>'kind' = 'criterion'
+      OR (jsonb_typeof(slot->'criterionKey') = 'string' AND slot->>'criterionKey' <> '')
+      THEN false
     WHEN slot->'ask' IS NOT NULL AND jsonb_typeof(slot->'ask') <> 'null'
       THEN coalesce(jsonb_typeof(slot->'ask'->'mode') = 'string'
                     AND slot->'ask'->>'mode' IN ('confirm', 'choose'), false)
