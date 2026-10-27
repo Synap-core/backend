@@ -113,8 +113,8 @@ describe("wrapHtmlForFrame — the policy comes before any byte of the page", ()
 
   it("a doctype is matched only at the very start (BOM and whitespace allowed)", () => {
     expect(
-      wrapHtmlForFrame("﻿  <!doctype html><p>a</p>").startsWith(
-        `﻿  <!doctype html>${META}`
+      wrapHtmlForFrame("\uFEFF  <!doctype html><p>a</p>").startsWith(
+        `\uFEFF  <!doctype html>${META}`
       )
     ).toBe(true);
     // A doctype later in the page is the author's text, not a lead.

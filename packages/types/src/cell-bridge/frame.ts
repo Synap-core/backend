@@ -59,7 +59,7 @@ export function cellFrameHeadBlock(): string {
   );
 }
 
-const LEADING_DOCTYPE = /^(﻿?\s*<!doctype[^>]*>)/i;
+const LEADING_DOCTYPE = /^(\uFEFF?\s*<!doctype[^>]*>)/i;
 
 /**
  * The page as the frame's `srcdoc`: the policy `<meta>` and the SDK FIRST,
