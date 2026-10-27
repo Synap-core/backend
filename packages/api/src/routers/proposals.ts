@@ -3362,8 +3362,8 @@ export const proposalsRouter = router({
           const resolution = input.resolutions?.[proposalId];
           const pageOnly = proposalPageOnlyReason(proposal);
           if (
-            pageOnly !== null &&
-            !(pageOnly === "identity_choice" && resolution)
+            pageOnly === "executable_skill" ||
+            (pageOnly === "identity_choice" && !resolution)
           ) {
             throw new TRPCError({
               code: "BAD_REQUEST",

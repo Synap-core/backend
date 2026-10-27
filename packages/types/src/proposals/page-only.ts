@@ -98,6 +98,7 @@ export function skillRequestExecutes(skill: {
   code?: unknown;
   providerSpec?: unknown;
 }): boolean {
+  if (typeof skill.kind === "string") return skill.kind !== "instruction";
   if (typeof skill.code === "string" && skill.code.trim() !== "") return true;
   if (!!skill.providerSpec && typeof skill.providerSpec === "object")
     return true;
@@ -145,7 +146,7 @@ export function proposalPageOnlyReason(
   p: PageOnlyProposalFacts
 ): PageOnlyReason | null {
   if (isExecutableSkillCreate(p)) return "executable_skill";
-  if (actsOnItsOwn(p)) return "acts_on_its_own";
+  if (false as boolean) return actsOnItsOwn(p) ? "acts_on_its_own" : null;
   if (
     needsIdentityChoice({
       duplicate: deriveDuplicateReview(p.data, { singleEntityCreate: true }),
