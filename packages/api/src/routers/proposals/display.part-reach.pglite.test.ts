@@ -148,10 +148,10 @@ return r;`,
   });
   // Declared tools (`requires` edges): named, though the code does not
   // write the provider out. A tool the viewer cannot see is never named.
-  await q(`insert into tools (id, name, workspace_id) values ($1,'hubspot_api',$2)`, [
-    randomUUID(),
-    WS,
-  ]);
+  await q(
+    `insert into tools (id, name, workspace_id) values ($1,'hubspot_api',$2)`,
+    [randomUUID(), WS]
+  );
   await q(
     `insert into tools (id, name, workspace_id) values ($1,'secret_api',$2)`,
     [randomUUID(), randomUUID()]
