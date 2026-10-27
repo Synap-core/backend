@@ -12,11 +12,18 @@
  *      that can never count is noise that burns an attempt.
  *   2. BOUNDED RETRIES. At most `MAX_NON_HUMAN_ATTEMPTS` non-human rows per
  *      criterion per session; the next is refused (`attempts_exhausted`).
- *   3. ESCALATION, NOT A NEW STATUS. When the LAST allowed non-human attempt on a
- *      REQUIRED criterion is not a pass, the criterion is handed to the human
- *      through the EXISTING owed-slot mechanism: an ExpectedOutput with
- *      `owner: "human"` + `blockedReason: "decision"` (Needs-you). A later human
- *      grade attests that slot through the existing attest door.
+ *   3. ESCALATION, NOT A NEW STATUS — AND NOT MID-SESSION. When the LAST
+ *      allowed non-human attempt on a REQUIRED criterion is not a pass, the
+ *      row is `exhausted`: the criterion stays the AGENT's work, and the
+ *      caller shows it as news in the session room (`evaluate.ts`). It is
+ *      handed to the human only when the session is evaluated through
+ *      `evaluate_session` ({@link escalateFailingCriteria}, founder decision
+ *      E3, 2026-10-27), through the EXISTING owed-slot mechanism: an
+ *      ExpectedOutput with `owner: "human"` + `blockedReason: "decision"`
+ *      (Needs-you). A later human grade attests that slot through the
+ *      existing attest door. Before E3 every second failed self-grade put a
+ *      "Check: …" slot in the founder's Needs you while the agent was still
+ *      at work.
  *   4. NO SELF-GRADING. A `judge` row whose evaluator is the agent that worked
  *      the session (its caller, its roster, or the model it ran on) is refused.
  *
@@ -107,8 +114,12 @@ export type RecordSessionEvaluationResult =
   | {
       status: "recorded";
       evaluation: SessionEvaluationRow;
-      /** True when this row handed the criterion to the human (owed slot filed). */
-      escalated: boolean;
+      /**
+       * True when this row spent the LAST non-human attempt on a REQUIRED
+       * criterion without a pass. Nothing is handed to the person here (rule
+       * 3): `evaluate_session` escalates it ({@link escalateFailingCriteria}).
+       */
+      exhausted: boolean;
     };
 
 /** The label of the owed slot an escalated criterion files. */
@@ -219,7 +230,7 @@ export async function recordSessionEvaluation(
       })
       .returning();
 
-    const escalate =
+    const exhausted =
       evaluatorKind !== "human" &&
       params.verdict !== "pass" &&
       nonHuman + 1 >= MAX_NON_HUMAN_ATTEMPTS &&
@@ -229,58 +240,14 @@ export async function recordSessionEvaluation(
       status: "recorded" as const,
       evaluation: evaluation!,
       criterion,
-      escalate,
-      // Carried out of the transaction so the escalation notification can name
-      // the session without a second read. `attempts` is the count INCLUDING
-      // the row just written — what the founder is told they were checked.
-      session: {
-        id: session.id,
-        userId: session.userId,
-        workspaceId: session.workspaceId,
-        title: resolveSessionTitle(session),
-        trackId: session.trackId ?? null,
-      },
-      attempts: nonHuman + 1,
+      exhausted,
+      trackId: session.trackId ?? null,
     };
   });
 
   if (outcome.status !== "recorded") return outcome;
 
-  // After the commit: the owed-slot doors take their own row lock.
-  let escalated = false;
-  if (outcome.escalate) {
-    escalated = await fileCriterionSlot(sessionId, outcome.criterion);
-    // TELL THE PERSON. The owed slot above puts the criterion in the needs-you
-    // tray, which they see only if they open the app and look — and an
-    // escalation is, by definition, work that has STOPPED until they answer.
-    // This call sits inside the same `if` as the slot, not beside it and not in
-    // a reactor, for one reason: there is no escalation EVENT. Escalation is a
-    // branch of this function, so the notification has to be a branch of it
-    // too, and putting it here means the slot and the notification are written
-    // under one condition and can never disagree about whether an escalation
-    // happened.
-    //
-    // ONE per session, not one per criterion: the registry type declares a
-    // session-keyed `dedupeWindowMs`, so the second criterion to escalate in
-    // the same run writes no row and raises no push. `create()` never throws.
-    await NotificationService.create({
-      type: CRITERION_ESCALATED_NOTIFICATION_TYPE,
-      userId: outcome.session.userId,
-      workspaceId: outcome.session.workspaceId,
-      sourceType: "session",
-      // The SESSION is the destination — the registry's `navigate-object`
-      // action and the push tap both read this as the object id.
-      sourceId: outcome.session.id,
-      groupKey: criterionEscalationGroupKey(outcome.session.id),
-      data: {
-        sessionId: outcome.session.id,
-        sessionTitle: outcome.session.title,
-        criterionKey: outcome.criterion.key,
-        criterionStatement: outcome.criterion.statement,
-        attempts: outcome.attempts,
-      },
-    });
-  } else if (evaluatorKind === "human") {
+  if (evaluatorKind === "human") {
     // The human answered the question an escalation asked — discharge the slot
     // through the ONE attest door. Any refusal (no slot, already done) is fine.
     await attestExpectedOutput({
@@ -298,13 +265,98 @@ export async function recordSessionEvaluation(
   // After the commit; never throws. Loaded on use: the goal reader pulls the
   // tracks service graph, which this module must not drag into every
   // importer at init.
-  if (outcome.session.trackId) {
+  if (outcome.trackId) {
     const { refreshGoalJudgements } =
       await import("../../tracks/goal-review-notice.js");
-    await refreshGoalJudgements(outcome.session.trackId);
+    await refreshGoalJudgements(outcome.trackId);
   }
 
-  return { status: "recorded", evaluation: outcome.evaluation, escalated };
+  return {
+    status: "recorded",
+    evaluation: outcome.evaluation,
+    exhausted: outcome.exhausted,
+  };
+}
+
+/**
+ * HAND THE PERSON what the agent could not pass (rule 3) — run by
+ * `evaluate_session`, never by a mid-session grade. Every REQUIRED criterion
+ * whose non-human attempts are spent, that a person has not graded, and whose
+ * latest verdict is not a pass gets its owed slot (idempotent by label).
+ * Returns the keys whose slot was filed now.
+ *
+ * TELL THE PERSON in the same branch: the slot puts the criterion in the
+ * needs-you tray, which they see only if they look, and an escalation is work
+ * that has STOPPED until they answer. There is no escalation EVENT, so the
+ * notification is written under the same condition as the slots and the two
+ * can never disagree about whether an escalation happened. ONE per session,
+ * not one per criterion: the registry type declares a session-keyed
+ * `dedupeWindowMs`. `create()` never throws.
+ */
+export async function escalateFailingCriteria(params: {
+  sessionId: string;
+  /** Owner floor — the session must belong to this user. */
+  userId: string;
+}): Promise<string[]> {
+  const session = await db.query.focusSessions.findFirst({
+    where: and(
+      eq(focusSessions.id, params.sessionId),
+      eq(focusSessions.userId, params.userId)
+    ),
+  });
+  if (!session) return [];
+  const criteria = readCriteria(session.criteria).filter(isCriterionRequired);
+  if (criteria.length === 0) return [];
+  const rows = await listSessionEvaluations({
+    sessionId: session.id,
+    userId: session.userId,
+  });
+  const latest = new Map(
+    latestEvaluationPerCriterion(rows).map((r) => [r.criterionKey, r.verdict])
+  );
+  const escalated: Array<{ criterion: SessionCriterion; attempts: number }> =
+    [];
+  for (const criterion of criteria) {
+    const mine = rows.filter((r) => r.criterionKey === criterion.key);
+    if (mine.some((r) => r.evaluatorKind === "human")) continue;
+    const attempts = mine.filter((r) => r.evaluatorKind !== "human").length;
+    if (attempts < MAX_NON_HUMAN_ATTEMPTS) continue;
+    if (latest.get(criterion.key) === "pass") continue;
+    // After any commit: the owed-slot door takes its own row lock.
+    if (await fileCriterionSlot(session.id, criterion)) {
+      escalated.push({ criterion, attempts });
+    }
+  }
+  const [first] = escalated;
+  if (first) {
+    await NotificationService.create({
+      type: CRITERION_ESCALATED_NOTIFICATION_TYPE,
+      userId: session.userId,
+      workspaceId: session.workspaceId,
+      sourceType: "session",
+      // The SESSION is the destination — the registry's `navigate-object`
+      // action and the push tap both read this as the object id.
+      sourceId: session.id,
+      groupKey: criterionEscalationGroupKey(session.id),
+      data: {
+        sessionId: session.id,
+        sessionTitle: resolveSessionTitle(session),
+        criterionKey: first.criterion.key,
+        criterionStatement: first.criterion.statement,
+        // What the founder is told they were checked.
+        attempts: first.attempts,
+      },
+    });
+  }
+  return escalated.map((e) => e.criterion.key);
+}
+
+/**
+ * The news a spent criterion is in the session room while the agent still
+ * works (rule 3): what failed, and that the person is not asked yet.
+ */
+export function criterionExhaustedNews(criterion: SessionCriterion): string {
+  return `"${criterion.statement}" is still not passing after ${MAX_NON_HUMAN_ATTEMPTS} checks. It stays with the agent; you are asked only if it still fails when the session is evaluated.`;
 }
 
 /**

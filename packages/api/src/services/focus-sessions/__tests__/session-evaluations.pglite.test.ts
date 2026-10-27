@@ -120,6 +120,17 @@ vi.mock("../stage-subject-status.js", () => ({
   },
 }));
 
+// The session room's posts (the spent-criterion news): captured, so the news
+// can be asserted without a messaging stack.
+const roomPosts = vi.hoisted(() => [] as Array<Record<string, unknown>>);
+vi.mock("../../messaging/post-message.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  postChannelMessage: async (p: Record<string, unknown>) => {
+    roomPosts.push(p);
+    return { messageId: "m-1", ackState: "acked" };
+  },
+}));
+
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import {
   focusSessions,
@@ -137,6 +148,7 @@ import {
 import {
   recordSessionEvaluation,
   attachSessionVerdicts,
+  escalateFailingCriteria,
   MAX_NON_HUMAN_ATTEMPTS,
 } from "../evaluations/record.js";
 import { evaluateSession } from "../evaluations/evaluate.js";
@@ -332,7 +344,7 @@ describe("session evaluations", () => {
     expect((await rowsFor(id))[0]).toMatchObject({ verdict: "fail" });
   });
 
-  it("retry bound: a 3rd non-human attempt is refused, and the 2nd failure of a REQUIRED criterion files a human-owned slot", async () => {
+  it("retry bound: a 3rd non-human attempt is refused; the 2nd failure of a REQUIRED criterion is spent, and evaluate_session files the human-owned slot", async () => {
     const id = await seed();
     for (let i = 0; i < MAX_NON_HUMAN_ATTEMPTS; i++) {
       const r = await recordSessionEvaluation({
@@ -345,8 +357,13 @@ describe("session evaluations", () => {
       });
       expect(r.status).toBe("recorded");
       if (r.status === "recorded")
-        expect(r.escalated).toBe(i === MAX_NON_HUMAN_ATTEMPTS - 1);
+        expect(r.exhausted).toBe(i === MAX_NON_HUMAN_ATTEMPTS - 1);
     }
+    // E3: a spent self-grade is still the agent's work — no person slot yet.
+    expect((await sessionRow(id)).expected_outputs).toHaveLength(0);
+    expect(
+      await escalateFailingCriteria({ sessionId: id, userId: USER })
+    ).toEqual(["typecheck"]);
     const third = await recordSessionEvaluation({
       sessionId: id,
       userId: USER,
@@ -397,6 +414,7 @@ describe("session evaluations", () => {
         evaluatorKind: "evidence",
       });
     }
+    await escalateFailingCriteria({ sessionId: id, userId: USER });
 
     const caller = focusSessionsRouter.createCaller({
       authenticated: true,
@@ -484,6 +502,7 @@ describe("session evaluations", () => {
         evaluatorKind: "evidence",
       });
     }
+    await escalateFailingCriteria({ sessionId: id, userId: USER });
     const slot = (await sessionRow(id)).expected_outputs[0]!;
     expect(String(slot.why).length).toBeLessThanOrEqual(500);
     expect(slot.why).toContain("…");
@@ -502,7 +521,67 @@ describe("session evaluations", () => {
         evaluatorKind: "evidence",
       });
     }
+    expect(
+      await escalateFailingCriteria({ sessionId: id, userId: USER })
+    ).toEqual([]);
     expect((await sessionRow(id)).expected_outputs).toHaveLength(0);
+  });
+
+  it("E3: a spent self-grade mid-session stays the agent's — news in the room, no person slot; evaluate_session hands it over", async () => {
+    // Before (founder decision E3, 2026-10-27): the 2nd failed self-grade
+    // filed a "Check: …" slot in the founder's Needs you while the agent was
+    // still at work — 5 such slots in the census.
+    const id = await seed();
+    await q(`update focus_sessions set channel_id = $2 where id = $1`, [
+      id,
+      randomUUID(),
+    ]);
+    roomPosts.length = 0;
+    for (let i = 0; i < MAX_NON_HUMAN_ATTEMPTS; i++) {
+      const out = await evaluateSession({
+        sessionId: id,
+        userId: USER,
+        agentUserId: AGENT,
+        evidence: { tsc: { passed: false } },
+        kinds: ["evidence"],
+      });
+      expect(out.status).toBe("evaluated");
+    }
+    // Still the agent's work: nothing owed by the person.
+    expect((await sessionRow(id)).expected_outputs).toHaveLength(0);
+    // …and the room says so, as the pod, once (on the spending attempt).
+    expect(roomPosts).toHaveLength(1);
+    expect(roomPosts[0]).toMatchObject({ role: "system", userId: USER });
+    expect(String(roomPosts[0]!.content)).toContain(
+      '"Typecheck passes" is still not passing'
+    );
+
+    // evaluate_session: the criterion the agent could not pass is the person's.
+    const evaluated = await evaluateSession({
+      sessionId: id,
+      userId: USER,
+      agentUserId: AGENT,
+      kinds: ["evidence"],
+      escalate: true,
+    });
+    expect(evaluated.status).toBe("evaluated");
+    const slots = (await sessionRow(id)).expected_outputs;
+    expect(slots).toHaveLength(1);
+    expect(slots[0]).toMatchObject({
+      kind: "criterion",
+      criterionKey: "typecheck",
+      owner: "human",
+      blockedReason: "decision",
+    });
+    // Idempotent: evaluating again files nothing new.
+    await evaluateSession({
+      sessionId: id,
+      userId: USER,
+      kinds: ["evidence"],
+      escalate: true,
+    });
+    expect((await sessionRow(id)).expected_outputs).toHaveLength(1);
+    expect(roomPosts).toHaveLength(1);
   });
 
   it("a human grade is final: it discharges the escalation slot and later non-human rows are refused", async () => {
@@ -516,6 +595,7 @@ describe("session evaluations", () => {
         evaluatorKind: "evidence",
       });
     }
+    await escalateFailingCriteria({ sessionId: id, userId: USER });
     const human = await recordSessionEvaluation({
       sessionId: id,
       userId: USER,
