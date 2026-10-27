@@ -155,6 +155,7 @@ import {
   type CapabilityEnableOffer,
 } from "./propose-capability-enable.js";
 import { CAPABILITY_RUN_PROPOSAL_TYPE } from "../proposals/proposal-class.js";
+import { isQueuedBoxRunResult } from "../box-runs/box-runs.js";
 import { capErrorMessage } from "../connection-health/notify-connector-unhealthy.js";
 import type { WriteAckState } from "../../utils/write-door-idempotency.js";
 
@@ -1464,7 +1465,7 @@ export interface ResolvedSkillRow {
  * telemetry write must never turn a delivered run into a failure, so every
  * error is swallowed and logged, exactly as `recordDirectCapabilityRun` does.
  */
-async function markSkillProven(skillId: string): Promise<void> {
+export async function markSkillProven(skillId: string): Promise<void> {
   try {
     await db
       .update(skills)
@@ -1498,7 +1499,9 @@ async function markSkillProven(skillId: string): Promise<void> {
  * contract by a compile-time floor so a third spelling cannot re-open this.
  */
 function outcomeDidTheWork(result: unknown): boolean {
-  return !isProposedEnvelope(result);
+  // A box run is QUEUED here, not performed: its finish stamps `proven_at`
+  // (box-runs.ts) once the script really exited 0.
+  return !isProposedEnvelope(result) && !isQueuedBoxRunResult(result);
 }
 
 /**
@@ -1584,6 +1587,12 @@ async function runResolvedSkillInner(
      * stage worker's send ceiling sees the send (worker-send-ceiling.ts).
      */
     sessionId?: string | null;
+    /**
+     * WHO ASKED, for a queued box run's attribution (`RunSkillArgs`): an
+     * approved `capability.run` replays as the approver with no `agentUserId`
+     * (builtins must not see an agent there). Never read by any gate.
+     */
+    provenance?: { agentUserId?: string | null; proposalId?: string | null };
   }
 ): Promise<
   | { kind: "run"; skillId: string; result: unknown }
@@ -1699,6 +1708,8 @@ async function runResolvedSkillInner(
   // `{success, result?, error?}`. UNWRAP it here so a caller receives the skill's
   // DATA (not the envelope) on success and the ONE `kind:"error"` channel on
   // failure — a success:false must never ride through as a `kind:"run"` result.
+  // A box skill goes through the same door, which queues it for the person's
+  // computer and hands back the queued handle as the result.
   //
   // ONE GOVERNED ACT: every caller of this runner is POST-gate (a `run` verdict
   // or an approved proposal), so the verb's decision rides into the sandbox as
@@ -1713,6 +1724,7 @@ async function runResolvedSkillInner(
     workspaceId: ctx.workspaceId,
     agentUserId: ctx.agentUserId ?? null,
     sessionId: ctx.sessionId ?? null,
+    provenance: ctx.provenance,
     verbAct: {
       skillId: skill.id,
       toolIds: await requiredToolIdsOf(skill.id),

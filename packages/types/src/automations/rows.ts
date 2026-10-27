@@ -108,6 +108,8 @@ export interface AutomationRun {
   replayOf: string | null;
   summaryMessageId: string | null;
   errorMessage: string | null;
+  /** A `failed` run whose only failed children stopped at their budget (0361). */
+  stopReason: "budget" | null;
   startedAt: Date;
   completedAt: Date | null;
 }
@@ -130,6 +132,7 @@ export interface NewAutomationRun {
   replayOf?: string | null;
   summaryMessageId?: string | null;
   errorMessage?: string | null;
+  stopReason?: "budget" | null;
   startedAt?: Date;
   completedAt?: Date | null;
 }

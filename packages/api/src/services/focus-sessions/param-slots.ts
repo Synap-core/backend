@@ -10,6 +10,15 @@
  * `@synap-core/types/ask` — the same type map the web run form uses) and its
  * machine name (`paramName`), so answering it through the ONE answer door
  * writes the value into `metadata.params` ({@link paramValueFromAnswer}).
+ *
+ * ONLY FOR WORK A PERSON STARTED (founder decision E3, 2026-10-27). When an
+ * agent or an automation launched the session or run from a playbook (a
+ * TRACK's method params stay owed: they are the person's own answers on their
+ * goal, which no agent door can supply), the missing param goes
+ * back to that launcher as a refusal ({@link missingParamsRefusal}; the run
+ * doors throw `PlaybookParamsError` with `onMissingRequired: "refuse"`), never
+ * as a slot in the person's Needs you: the launcher was given the job of
+ * supplying it.
  */
 
 import type {
@@ -59,6 +68,28 @@ export function paramOwedSlots(
       ...(ask ? { ask } : {}),
     };
   });
+}
+
+/**
+ * The refusal an AGENT gets instead of a param slot (E3): what is missing, by
+ * name and type, and that nothing was started. Same naming as the slot's `why`.
+ */
+export function missingParamsRefusal(
+  missing: readonly PlaybookParam[],
+  /** What needs the values — the playbook's or the track's name. */
+  sourceName: string
+): string {
+  const named = missing
+    .map(
+      (p) =>
+        `"${p.name}"${
+          p.options?.length
+            ? ` (one of ${p.options.map((o) => `"${o}"`).join(", ")})`
+            : ` (${p.type})`
+        }`
+    )
+    .join(", ");
+  return `"${sourceName}" needs ${named}. Nothing was started: pass ${missing.length === 1 ? "it" : "them"} in params and start again.`;
 }
 
 /**

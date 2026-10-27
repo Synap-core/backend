@@ -284,35 +284,38 @@ export async function executeMCPToolViaHubProtocol(
   return withUiStructuredContent(toolName, digested);
 }
 
+/** Said to the agent when its proposals' decisions could not be read. */
+export const PROPOSAL_UPDATES_UNAVAILABLE =
+  "Could not read what was decided on your proposals this call; they may have been approved or rejected. Check one with synap_get_proposal before relying on it.";
+
 /**
  * Adds `proposalUpdates` to the tool result's JSON payload (the first text
  * block that parses as a JSON object), or appends it as one JSON text block
- * to a plain-text result. Nothing to report (or an unread digest) ⇒ the
- * result is returned unchanged.
+ * to a plain-text result. Nothing decided ⇒ the result is returned
+ * unchanged. A failed read (`null`) is said as `proposalUpdatesUnavailable`:
+ * the agent must not read "could not look" as "nothing was decided".
  */
 export function withProposalUpdates(
   result: CallToolResult,
   updates: ProposalUpdate[] | null
 ): CallToolResult {
-  if (!updates || updates.length === 0) return result;
+  if (updates && updates.length === 0) return result;
+  const added =
+    updates === null
+      ? { proposalUpdatesUnavailable: PROPOSAL_UPDATES_UNAVAILABLE }
+      : { proposalUpdates: updates };
   const content = Array.isArray(result.content) ? [...result.content] : [];
   const index = content.findIndex(
     (block) => block.type === "text" && parseJsonObject(block.text) !== null
   );
   if (index === -1) {
-    content.push({
-      type: "text" as const,
-      text: JSON.stringify({ proposalUpdates: updates }),
-    });
+    content.push({ type: "text" as const, text: JSON.stringify(added) });
     return { ...result, content };
   }
   const block = content[index] as { type: "text"; text: string };
   content[index] = {
     ...block,
-    text: JSON.stringify({
-      ...parseJsonObject(block.text)!,
-      proposalUpdates: updates,
-    }),
+    text: JSON.stringify({ ...parseJsonObject(block.text)!, ...added }),
   };
   return { ...result, content };
 }
