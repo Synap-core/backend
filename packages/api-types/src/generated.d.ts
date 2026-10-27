@@ -182,6 +182,12 @@ export interface AgentMetadata {
 	 * 90. Applies to the computer's key and to the keys of the agents it hosts.
 	 */
 	keyTtlDays?: number;
+	/**
+	 * COMPUTER principals only (0356): the person turned on "Runs scripts" — the
+	 * computer's key carries `box.runner` and leases its person's box runs. Kept
+	 * here so a re-enrolment (device flow) mints the new key with the same scope.
+	 */
+	runsScripts?: boolean;
 }
 /**
  * Shared provenance vocabulary for the uniform `created_by_kind` column added
@@ -4099,6 +4105,508 @@ declare const sessionEvaluations: import("drizzle-orm/pg-core").PgTableWithColum
 	name: "session_evaluations";
 	schema: undefined;
 }>;
+/** The script a run executes, snapshotted at queue time. */
+export interface BoxRunSpec {
+	name: string;
+	language: "node" | "python";
+	entrypoint: string;
+	code: string;
+	packages: Array<{
+		name: string;
+		version: string;
+	}>;
+	hosts: string[];
+	limits: {
+		cpus: number;
+		diskMb: number;
+		memoryMb: number;
+		outMb: number;
+		wallSeconds: number;
+	};
+}
+/** What the provisioner reported at finish, as stored (wire: BOX-CONTRACT). */
+export interface BoxRunEvidence {
+	/**
+	 * The provisioner's verdict. `timeout` and `infra` are stored as status
+	 * `failed`; the verdict keeps INFRA (the box did not answer) apart from a
+	 * script that failed.
+	 */
+	verdict: "done" | "failed" | "infra" | "stopped" | "timeout";
+	exitCode: number | null;
+	durationMs: number | null;
+	infraReason?: string;
+	log: {
+		head: string;
+		tail: string;
+		totalBytes: number | null;
+		truncated: boolean;
+	};
+	blockedEgress: Array<{
+		at?: string;
+		host: string;
+		phase?: "run" | "setup";
+		port?: number;
+		reason?: string;
+	}>;
+	installedPackages: Array<{
+		manager?: string;
+		name: string;
+		version: string;
+	}>;
+	/** Every file the run returned and what the file door made of it. */
+	files: Array<{
+		documentId?: string;
+		error?: string;
+		fileEntityId?: string;
+		path: string;
+		proposalId?: string;
+		sha256?: string;
+		size?: number;
+		status: "created" | "not_stored" | "proposed" | "refused";
+		title?: string;
+	}>;
+}
+declare const boxRuns: import("drizzle-orm/pg-core").PgTableWithColumns<{
+	columns: {
+		agentUserId: import("drizzle-orm/pg-core").PgColumn<{
+			baseColumn: never;
+			columnType: "PgText";
+			data: string;
+			dataType: "string";
+			driverParam: string;
+			enumValues: [
+				string,
+				...string[]
+			];
+			generated: undefined;
+			hasDefault: false;
+			hasRuntimeDefault: false;
+			identity: undefined;
+			isAutoincrement: false;
+			isPrimaryKey: false;
+			name: "agent_user_id";
+			notNull: false;
+			tableName: "box_runs";
+		}, {}, {}>;
+		attempt: import("drizzle-orm/pg-core").PgColumn<{
+			baseColumn: never;
+			columnType: "PgInteger";
+			data: number;
+			dataType: "number";
+			driverParam: string | number;
+			enumValues: undefined;
+			generated: undefined;
+			hasDefault: true;
+			hasRuntimeDefault: false;
+			identity: undefined;
+			isAutoincrement: false;
+			isPrimaryKey: false;
+			name: "attempt";
+			notNull: true;
+			tableName: "box_runs";
+		}, {}, {}>;
+		createdAt: import("drizzle-orm/pg-core").PgColumn<{
+			baseColumn: never;
+			columnType: "PgTimestamp";
+			data: Date;
+			dataType: "date";
+			driverParam: string;
+			enumValues: undefined;
+			generated: undefined;
+			hasDefault: true;
+			hasRuntimeDefault: false;
+			identity: undefined;
+			isAutoincrement: false;
+			isPrimaryKey: false;
+			name: "created_at";
+			notNull: true;
+			tableName: "box_runs";
+		}, {}, {}>;
+		error: import("drizzle-orm/pg-core").PgColumn<{
+			baseColumn: never;
+			columnType: "PgText";
+			data: string;
+			dataType: "string";
+			driverParam: string;
+			enumValues: [
+				string,
+				...string[]
+			];
+			generated: undefined;
+			hasDefault: false;
+			hasRuntimeDefault: false;
+			identity: undefined;
+			isAutoincrement: false;
+			isPrimaryKey: false;
+			name: "error";
+			notNull: false;
+			tableName: "box_runs";
+		}, {}, {}>;
+		evidence: import("drizzle-orm/pg-core").PgColumn<{
+			baseColumn: never;
+			columnType: "PgJsonb";
+			data: BoxRunEvidence;
+			dataType: "json";
+			driverParam: unknown;
+			enumValues: undefined;
+			generated: undefined;
+			hasDefault: false;
+			hasRuntimeDefault: false;
+			identity: undefined;
+			isAutoincrement: false;
+			isPrimaryKey: false;
+			name: "evidence";
+			notNull: false;
+			tableName: "box_runs";
+		}, {}, {
+			$type: BoxRunEvidence;
+		}>;
+		finishedAt: import("drizzle-orm/pg-core").PgColumn<{
+			baseColumn: never;
+			columnType: "PgTimestamp";
+			data: Date;
+			dataType: "date";
+			driverParam: string;
+			enumValues: undefined;
+			generated: undefined;
+			hasDefault: false;
+			hasRuntimeDefault: false;
+			identity: undefined;
+			isAutoincrement: false;
+			isPrimaryKey: false;
+			name: "finished_at";
+			notNull: false;
+			tableName: "box_runs";
+		}, {}, {}>;
+		id: import("drizzle-orm/pg-core").PgColumn<{
+			baseColumn: never;
+			columnType: "PgUUID";
+			data: string;
+			dataType: "string";
+			driverParam: string;
+			enumValues: undefined;
+			generated: undefined;
+			hasDefault: true;
+			hasRuntimeDefault: false;
+			identity: undefined;
+			isAutoincrement: false;
+			isPrimaryKey: true;
+			name: "id";
+			notNull: true;
+			tableName: "box_runs";
+		}, {}, {}>;
+		lastHeartbeatAt: import("drizzle-orm/pg-core").PgColumn<{
+			baseColumn: never;
+			columnType: "PgTimestamp";
+			data: Date;
+			dataType: "date";
+			driverParam: string;
+			enumValues: undefined;
+			generated: undefined;
+			hasDefault: false;
+			hasRuntimeDefault: false;
+			identity: undefined;
+			isAutoincrement: false;
+			isPrimaryKey: false;
+			name: "last_heartbeat_at";
+			notNull: false;
+			tableName: "box_runs";
+		}, {}, {}>;
+		leaseExpiresAt: import("drizzle-orm/pg-core").PgColumn<{
+			baseColumn: never;
+			columnType: "PgTimestamp";
+			data: Date;
+			dataType: "date";
+			driverParam: string;
+			enumValues: undefined;
+			generated: undefined;
+			hasDefault: false;
+			hasRuntimeDefault: false;
+			identity: undefined;
+			isAutoincrement: false;
+			isPrimaryKey: false;
+			name: "lease_expires_at";
+			notNull: false;
+			tableName: "box_runs";
+		}, {}, {}>;
+		leaseId: import("drizzle-orm/pg-core").PgColumn<{
+			baseColumn: never;
+			columnType: "PgUUID";
+			data: string;
+			dataType: "string";
+			driverParam: string;
+			enumValues: undefined;
+			generated: undefined;
+			hasDefault: false;
+			hasRuntimeDefault: false;
+			identity: undefined;
+			isAutoincrement: false;
+			isPrimaryKey: false;
+			name: "lease_id";
+			notNull: false;
+			tableName: "box_runs";
+		}, {}, {}>;
+		leasedAt: import("drizzle-orm/pg-core").PgColumn<{
+			baseColumn: never;
+			columnType: "PgTimestamp";
+			data: Date;
+			dataType: "date";
+			driverParam: string;
+			enumValues: undefined;
+			generated: undefined;
+			hasDefault: false;
+			hasRuntimeDefault: false;
+			identity: undefined;
+			isAutoincrement: false;
+			isPrimaryKey: false;
+			name: "leased_at";
+			notNull: false;
+			tableName: "box_runs";
+		}, {}, {}>;
+		leasedBy: import("drizzle-orm/pg-core").PgColumn<{
+			baseColumn: never;
+			columnType: "PgText";
+			data: string;
+			dataType: "string";
+			driverParam: string;
+			enumValues: [
+				string,
+				...string[]
+			];
+			generated: undefined;
+			hasDefault: false;
+			hasRuntimeDefault: false;
+			identity: undefined;
+			isAutoincrement: false;
+			isPrimaryKey: false;
+			name: "leased_by";
+			notNull: false;
+			tableName: "box_runs";
+		}, {}, {}>;
+		parameters: import("drizzle-orm/pg-core").PgColumn<{
+			baseColumn: never;
+			columnType: "PgJsonb";
+			data: Record<string, unknown>;
+			dataType: "json";
+			driverParam: unknown;
+			enumValues: undefined;
+			generated: undefined;
+			hasDefault: true;
+			hasRuntimeDefault: false;
+			identity: undefined;
+			isAutoincrement: false;
+			isPrimaryKey: false;
+			name: "parameters";
+			notNull: true;
+			tableName: "box_runs";
+		}, {}, {
+			$type: Record<string, unknown>;
+		}>;
+		proposalId: import("drizzle-orm/pg-core").PgColumn<{
+			baseColumn: never;
+			columnType: "PgUUID";
+			data: string;
+			dataType: "string";
+			driverParam: string;
+			enumValues: undefined;
+			generated: undefined;
+			hasDefault: false;
+			hasRuntimeDefault: false;
+			identity: undefined;
+			isAutoincrement: false;
+			isPrimaryKey: false;
+			name: "proposal_id";
+			notNull: false;
+			tableName: "box_runs";
+		}, {}, {}>;
+		queuedAt: import("drizzle-orm/pg-core").PgColumn<{
+			baseColumn: never;
+			columnType: "PgTimestamp";
+			data: Date;
+			dataType: "date";
+			driverParam: string;
+			enumValues: undefined;
+			generated: undefined;
+			hasDefault: true;
+			hasRuntimeDefault: false;
+			identity: undefined;
+			isAutoincrement: false;
+			isPrimaryKey: false;
+			name: "queued_at";
+			notNull: true;
+			tableName: "box_runs";
+		}, {}, {}>;
+		sessionId: import("drizzle-orm/pg-core").PgColumn<{
+			baseColumn: never;
+			columnType: "PgUUID";
+			data: string;
+			dataType: "string";
+			driverParam: string;
+			enumValues: undefined;
+			generated: undefined;
+			hasDefault: false;
+			hasRuntimeDefault: false;
+			identity: undefined;
+			isAutoincrement: false;
+			isPrimaryKey: false;
+			name: "session_id";
+			notNull: false;
+			tableName: "box_runs";
+		}, {}, {}>;
+		skillId: import("drizzle-orm/pg-core").PgColumn<{
+			baseColumn: never;
+			columnType: "PgUUID";
+			data: string;
+			dataType: "string";
+			driverParam: string;
+			enumValues: undefined;
+			generated: undefined;
+			hasDefault: false;
+			hasRuntimeDefault: false;
+			identity: undefined;
+			isAutoincrement: false;
+			isPrimaryKey: false;
+			name: "skill_id";
+			notNull: false;
+			tableName: "box_runs";
+		}, {}, {}>;
+		spec: import("drizzle-orm/pg-core").PgColumn<{
+			baseColumn: never;
+			columnType: "PgJsonb";
+			data: BoxRunSpec;
+			dataType: "json";
+			driverParam: unknown;
+			enumValues: undefined;
+			generated: undefined;
+			hasDefault: false;
+			hasRuntimeDefault: false;
+			identity: undefined;
+			isAutoincrement: false;
+			isPrimaryKey: false;
+			name: "spec";
+			notNull: true;
+			tableName: "box_runs";
+		}, {}, {
+			$type: BoxRunSpec;
+		}>;
+		startedAt: import("drizzle-orm/pg-core").PgColumn<{
+			baseColumn: never;
+			columnType: "PgTimestamp";
+			data: Date;
+			dataType: "date";
+			driverParam: string;
+			enumValues: undefined;
+			generated: undefined;
+			hasDefault: false;
+			hasRuntimeDefault: false;
+			identity: undefined;
+			isAutoincrement: false;
+			isPrimaryKey: false;
+			name: "started_at";
+			notNull: false;
+			tableName: "box_runs";
+		}, {}, {}>;
+		status: import("drizzle-orm/pg-core").PgColumn<{
+			baseColumn: never;
+			columnType: "PgText";
+			data: "done" | "failed" | "leased" | "queued" | "running" | "stopped";
+			dataType: "string";
+			driverParam: string;
+			enumValues: [
+				"queued",
+				"leased",
+				"running",
+				"done",
+				"failed",
+				"stopped"
+			];
+			generated: undefined;
+			hasDefault: true;
+			hasRuntimeDefault: false;
+			identity: undefined;
+			isAutoincrement: false;
+			isPrimaryKey: false;
+			name: "status";
+			notNull: true;
+			tableName: "box_runs";
+		}, {}, {}>;
+		stopRequestedAt: import("drizzle-orm/pg-core").PgColumn<{
+			baseColumn: never;
+			columnType: "PgTimestamp";
+			data: Date;
+			dataType: "date";
+			driverParam: string;
+			enumValues: undefined;
+			generated: undefined;
+			hasDefault: false;
+			hasRuntimeDefault: false;
+			identity: undefined;
+			isAutoincrement: false;
+			isPrimaryKey: false;
+			name: "stop_requested_at";
+			notNull: false;
+			tableName: "box_runs";
+		}, {}, {}>;
+		updatedAt: import("drizzle-orm/pg-core").PgColumn<{
+			baseColumn: never;
+			columnType: "PgTimestamp";
+			data: Date;
+			dataType: "date";
+			driverParam: string;
+			enumValues: undefined;
+			generated: undefined;
+			hasDefault: true;
+			hasRuntimeDefault: false;
+			identity: undefined;
+			isAutoincrement: false;
+			isPrimaryKey: false;
+			name: "updated_at";
+			notNull: true;
+			tableName: "box_runs";
+		}, {}, {}>;
+		userId: import("drizzle-orm/pg-core").PgColumn<{
+			baseColumn: never;
+			columnType: "PgText";
+			data: string;
+			dataType: "string";
+			driverParam: string;
+			enumValues: [
+				string,
+				...string[]
+			];
+			generated: undefined;
+			hasDefault: false;
+			hasRuntimeDefault: false;
+			identity: undefined;
+			isAutoincrement: false;
+			isPrimaryKey: false;
+			name: "user_id";
+			notNull: true;
+			tableName: "box_runs";
+		}, {}, {}>;
+		workspaceId: import("drizzle-orm/pg-core").PgColumn<{
+			baseColumn: never;
+			columnType: "PgUUID";
+			data: string;
+			dataType: "string";
+			driverParam: string;
+			enumValues: undefined;
+			generated: undefined;
+			hasDefault: false;
+			hasRuntimeDefault: false;
+			identity: undefined;
+			isAutoincrement: false;
+			isPrimaryKey: false;
+			name: "workspace_id";
+			notNull: false;
+			tableName: "box_runs";
+		}, {}, {}>;
+	};
+	dialect: "pg";
+	name: "box_runs";
+	schema: undefined;
+}>;
+export type BoxRunRow = typeof boxRuns.$inferSelect;
 /**
  * Tools Schema — registered integrations the AI can use
  *
@@ -11749,6 +12257,33 @@ export interface UnifiedRunDetailBase {
 	 * viewer may not read (`playbookDetail.sessionPrivate`).
 	 */
 	sessionActivity?: SessionActivityWire | null;
+	/**
+	 * A BOX run's own story (0356) — the script as queued, where it is, which
+	 * computer runs it, and its evidence (log head/tail, files, blocked egress,
+	 * installed packages). Null for every other run, a capability run included.
+	 */
+	boxRun?: BoxRunDetail | null;
+}
+/** One box run, as the run object page reads it. */
+export interface BoxRunDetail {
+	/** Stored status, or `stalled` (running, lease expired) — read, never stored. */
+	status: BoxRunRow["status"] | "stalled";
+	skillId: string | null;
+	script: BoxRunSpec;
+	parameters: Record<string, unknown>;
+	/** The computer that leased it (its display name), once leased. */
+	computerName: string | null;
+	/** 1 = next to run; null once it has left the queue. */
+	queuePosition: number | null;
+	attempt: number;
+	stopRequested: boolean;
+	queuedAt: Date;
+	leasedAt: Date | null;
+	startedAt: Date | null;
+	finishedAt: Date | null;
+	lastHeartbeatAt: Date | null;
+	error: string | null;
+	evidence: BoxRunEvidence | null;
 }
 export interface AutomationRunDetail extends UnifiedRunDetailBase {
 	run: UnifiedRun & {
@@ -16450,6 +16985,8 @@ export interface MachineView {
 	maxKeyTtlDays: number;
 	/** The live key's access, by the grant's name ("AI — read & propose"). */
 	accessName: string | null;
+	/** "Runs scripts" is on: the computer leases its person's box runs. */
+	runsScripts: boolean;
 	agents: HostedAgentView[];
 }
 /** Who a computer belongs to: the person who approved it on `/device`. */
@@ -23278,6 +23815,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					status: "blocked_by_policy" | "cancelled" | "completed" | "failed" | "running" | "skipped" | "waiting_on_you";
 					stepsCompleted: number;
 					stepsFailed: number;
+					stopReason: "budget" | null;
 					subjectEntityId: string | null;
 					summaryMessageId: string | null;
 					triggerEventId: string | null;
@@ -23415,6 +23953,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					status: "blocked_by_policy" | "cancelled" | "completed" | "failed" | "running" | "skipped" | "waiting_on_you";
 					stepsCompleted: number;
 					stepsFailed: number;
+					stopReason: "budget" | null;
 					subjectEntityId: string | null;
 					summaryMessageId: string | null;
 					triggerEventId: string | null;
@@ -35669,6 +36208,22 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				status: "updated";
 			};
 		}>;
+		setRunsScripts: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				enabled: boolean;
+				machineId: string;
+			};
+			meta: object;
+			output: {
+				proposalId: string;
+				runsScripts?: undefined;
+				status: "proposed";
+			} | {
+				proposalId?: undefined;
+				runsScripts: boolean;
+				status: "updated";
+			};
+		}>;
 	}>>;
 	marketplace: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
@@ -37415,6 +37970,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				sessionId: string | null;
 				startedAt: Date;
 				status: PlaybookRunStatus;
+				stopReason: "budget" | null;
 				summary: string | null;
 				workspaceId: string | null;
 			}[];
@@ -38392,6 +38948,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					sessionId: string | null;
 					startedAt: Date;
 					status: PlaybookRunStatus;
+					stopReason: "budget" | null;
 					summary: string | null;
 					workspaceId: string | null;
 				} | null;
@@ -42113,6 +42670,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				histories: RecentFlowHistory[];
 			};
 		}>;
+		stopBox: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+			};
+			meta: object;
+			output: {
+				status: "already_finished" | "stop_requested" | "stopped";
+			};
+		}>;
 	}>>;
 	secretsVault: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
@@ -43124,7 +43690,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				category?: string | undefined;
 				code?: string | undefined;
 				description?: string | undefined;
-				executionMode?: "async" | "sync" | undefined;
+				executionMode?: "async" | "box" | "sync" | undefined;
 				intent?: string | undefined;
 				kind?: "builtin" | "code" | "declarative" | "instruction" | undefined;
 				metadata?: Record<string, unknown> | undefined;
@@ -43244,7 +43810,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					description: string | null;
 					documentIds: string[] | null;
 					errorMessage: string | null;
-					executionMode: "async" | "sync";
+					executionMode: "async" | "box" | "sync";
 					id: string;
 					intent: string | null;
 					kind: SkillKind;
@@ -43413,7 +43979,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					description: string | null;
 					documentIds: string[] | null;
 					errorMessage: string | null;
-					executionMode: "async" | "sync";
+					executionMode: "async" | "box" | "sync";
 					id: string;
 					intent: string | null;
 					kind: SkillKind;
@@ -45268,7 +45834,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					description: string | null;
 					documentIds: string[] | null;
 					errorMessage: string | null;
-					executionMode: "async" | "sync";
+					executionMode: "async" | "box" | "sync";
 					id: string;
 					intent: string | null;
 					kind: SkillKind;
@@ -45725,7 +46291,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		adminRegister: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				allowedScopes: ("ai:analyze" | "auth:exchange-user" | "chat.stream" | "data.read" | "data.write" | "hub-protocol.admin" | "hub-protocol.read" | "hub-protocol.write" | "identity:link-user" | "mcp.read" | "mcp.write" | "membership:activate" | "membership:grant" | "probe" | "providers.write" | "provision" | "read:entities" | "realtime:observe" | "setup.agent" | "skills.invoke" | "source-config:write" | "sync" | "tier_update" | "write:entities")[];
+				allowedScopes: ("ai:analyze" | "auth:exchange-user" | "box.runner" | "chat.stream" | "data.read" | "data.write" | "hub-protocol.admin" | "hub-protocol.read" | "hub-protocol.write" | "identity:link-user" | "mcp.read" | "mcp.write" | "membership:activate" | "membership:grant" | "probe" | "providers.write" | "provision" | "read:entities" | "realtime:observe" | "setup.agent" | "skills.invoke" | "source-config:write" | "sync" | "tier_update" | "write:entities")[];
 				displayName: string;
 				issuerUrl: string;
 			};
@@ -45748,7 +46314,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		approve: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				allowedScopes: ("ai:analyze" | "auth:exchange-user" | "chat.stream" | "data.read" | "data.write" | "hub-protocol.admin" | "hub-protocol.read" | "hub-protocol.write" | "identity:link-user" | "mcp.read" | "mcp.write" | "membership:activate" | "membership:grant" | "probe" | "providers.write" | "provision" | "read:entities" | "realtime:observe" | "setup.agent" | "skills.invoke" | "source-config:write" | "sync" | "tier_update" | "write:entities")[];
+				allowedScopes: ("ai:analyze" | "auth:exchange-user" | "box.runner" | "chat.stream" | "data.read" | "data.write" | "hub-protocol.admin" | "hub-protocol.read" | "hub-protocol.write" | "identity:link-user" | "mcp.read" | "mcp.write" | "membership:activate" | "membership:grant" | "probe" | "providers.write" | "provision" | "read:entities" | "realtime:observe" | "setup.agent" | "skills.invoke" | "source-config:write" | "sync" | "tier_update" | "write:entities")[];
 				expectedStatus?: "approved" | "pending" | "rejected" | "revoked" | undefined;
 				id: string;
 			};

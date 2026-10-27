@@ -91,13 +91,27 @@ export interface ProposedRecord {
 export const RECORD_FIELDS_SHOWN = 9;
 
 /**
- * What approving lets RUN, read before anything else: a skill's code, and the
- * tools it declared it calls (its runs call them with no second review).
- * These lead the card, in this order, so they never sit behind "Show all N
- * fields"; and the code is drawn whole. Approving an agent's skill create
- * turns it on (founder decision 2, 2026-10-25): this page is the one review.
+ * What approving lets RUN or lets an agent READ, before anything else: a
+ * skill's code, its instructions (they land in an agent's system prompt),
+ * and the tools it declared it calls (its runs call them with no second
+ * review). These lead the card, in this order, so they never sit behind
+ * "Show all N fields"; and the code and the instructions are drawn whole.
+ * Approving a skill create turns it on (the one-approval rule): this page is
+ * the one review.
  */
-const MUST_READ_KEYS: readonly string[] = ["code", "requiredToolNames"];
+const MUST_READ_KEYS: readonly string[] = [
+  "code",
+  "body",
+  "instructions",
+  "requiredToolNames",
+];
+
+/** The record's own keys drawn whole, as written: never clipped. */
+const WHOLE_TEXT_KEYS: ReadonlySet<string> = new Set([
+  "code",
+  "body",
+  "instructions",
+]);
 
 /** Text past this many characters (or with a line break) takes the card's width. */
 const WIDE_TEXT_CHARS = 80;
@@ -306,9 +320,10 @@ function sideValue(
   if (key === "profileSlug" && typeof value === "string" && value.trim()) {
     return { kind: "text", text: resolveObjectNoun(value), long: false };
   }
-  // The record's own `code` (a skill's), never a property that happens to be
-  // named so.
-  if (!isProperty && key === "code") return codeValue(value);
+  // The record's own code and instructions (a skill's), never a property that
+  // happens to be named so: drawn as written, every line, so the reviewer
+  // reads exactly what will run or what an agent will be told.
+  if (!isProperty && WHOLE_TEXT_KEYS.has(key)) return codeValue(value);
   const renderKind = classifyPropertyKind({ slug: key, value, def });
   return recordValue(renderKind, value, resolved);
 }

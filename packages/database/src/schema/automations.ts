@@ -26,6 +26,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
 import { workspaces } from "./workspaces.js";
+import { RUN_STOP_REASONS } from "./playbook-runs.js";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 
 // ── Flow definition types ───────────────────────────────────────────────────
@@ -333,6 +334,12 @@ export const automationRuns = pgTable(
       .notNull()
       .default("running"),
     errorMessage: text("error_message"),
+    /**
+     * Set on a `failed` run whose only failed children stopped at their budget
+     * (0361, `playbook_runs.stop_reason`). The breakers skip such a run: a
+     * budget stop is not the rule breaking. NULL = an ordinary verdict.
+     */
+    stopReason: text("stop_reason", { enum: [...RUN_STOP_REASONS] }),
 
     stepsCompleted: integer("steps_completed").default(0).notNull(),
     stepsFailed: integer("steps_failed").default(0).notNull(),
