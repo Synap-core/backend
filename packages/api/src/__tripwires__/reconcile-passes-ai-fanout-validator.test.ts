@@ -8,10 +8,11 @@ import { stripComments } from "../../../../scripts/strip-comments.mjs";
  * TRIPWIRE — every `reconcileWorkspaceFromDefinition({...})` call in the API
  * passes `validateFlow: unfilteredAiFanoutError`.
  *
- * `@synap/database` cannot import `@synap-core/types`, so the reconcile accepts
- * the AI fan-out filter rule as an injected `validateFlow`. A call that omits
- * it would seed template automations past the rule every other flow door runs
- * (`flow-doors-check-ai-fanout.test.ts`).
+ * The reconcile accepts the AI fan-out filter rule as an injected
+ * `validateFlow` (chosen when `@synap/database` could not import
+ * `@synap-core/types`; it can now, and moving the rule inside the reconcile is
+ * a separate change). A call that omits it would seed template automations
+ * past the rule every other flow door runs (`flow-doors-check-ai-fanout.test.ts`).
  *
  * The call set is DERIVED (every non-test file under api/src). Granularity is
  * the CALL: calls and `validateFlow: unfilteredAiFanoutError` occurrences are

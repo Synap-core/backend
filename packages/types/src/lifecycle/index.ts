@@ -7,10 +7,8 @@
  * Surfaces read the category for anything structural (terminal, column
  * grouping, tone) and never guess from an option's name.
  *
- * The pod keeps its own copy of the category list and option shape
- * (`@synap/database` `utils/lifecycle-model.ts`);
- * `packages/database/src/wire-parity/lifecycle.ts` pins the two EQUAL at
- * compile time.
+ * The pod reads these same declarations (`@synap/database`
+ * `utils/lifecycle-model.ts` re-exports them); there is no second copy.
  */
 import type { LifecycleCategory, LifecycleOption } from "./option.js";
 
@@ -29,6 +27,7 @@ export const TERMINAL_LIFECYCLE_CATEGORIES: readonly LifecycleCategory[] = [
 ];
 
 export interface LifecycleDeclaration {
+  /** The lifecycle property's slug — the key of the read projection. */
   propertySlug: string;
   options: LifecycleOption[];
 }

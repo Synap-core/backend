@@ -89,9 +89,47 @@ describe("MCP read-tool classification (derived from the live tool list)", () =>
   });
 });
 
-/** A write gate named in a handler: the door's write checks or governance. */
-const WRITE_GATE =
-  /\b(?:checkPermissionOrPropose|assertCanWrite|canWrite|assertWorkspaceWrite)\s*\(/;
+/** The write gates a handler can name: the door's write checks, governance. */
+const GATES = [
+  "checkPermissionOrPropose",
+  "assertCanWrite",
+  "canWrite",
+  "assertWorkspaceWrite",
+] as const;
+type Gate = (typeof GATES)[number];
+
+/**
+ * A call of `gate` in a handler's SERVED source. The test transform rewrites a
+ * statically imported call to `(0, __vi_import_n__.canWrite)(…)`, so the name
+ * may be followed by `)` before the call's own `(`; a destructured dynamic
+ * import keeps the bare `checkPermissionOrPropose(…)`.
+ */
+const callOf = (gate: string): RegExp => new RegExp(`\\b${gate}\\)?\\s*\\(`);
+const WRITE_GATE = new RegExp(GATES.map((g) => callOf(g).source).join("|"));
+
+/**
+ * Write routes whose own handler names a gate, each with the door it goes
+ * through (read from the code, 2026-10-27). Every row must stay served, a
+ * `write`, and name its door: this is what proves the read check below sees
+ * the handlers' code, statically imported calls included.
+ */
+const GATED_WRITE_ROUTES: Readonly<Record<string, Gate>> = {
+  // rest/entities.ts — the presigned upload lane, the door's write floor.
+  "POST /files/uploads": "canWrite",
+  "POST /files/uploads/finalize": "canWrite",
+  // rest/cells.ts — a person's define needs the write floor, an agent's the gate.
+  "POST /cells/define": "canWrite",
+  // rest/whiteboards.ts — a placement proposal: the write floor, then the gate.
+  "POST /whiteboards/:viewId/placements/propose": "canWrite",
+  // rest/capture.ts — drafting a process into a space: its write floor.
+  "POST /capture/draft-process": "assertWorkspaceWrite",
+  // rest/commands.ts — running a command is a governed write.
+  "POST /commands/execute": "checkPermissionOrPropose",
+  // rest/cell-instances.ts — create, create from HTML, reconfigure: governed.
+  "POST /cell-instances": "checkPermissionOrPropose",
+  "POST /cell-instances/html": "checkPermissionOrPropose",
+  "PATCH /cell-instances/:id/config": "checkPermissionOrPropose",
+};
 
 const ID = "3f2a1b4c-5d6e-4f70-8192-a3b4c5d6e7f8";
 /** `/files/:entityId/url` → a path the fence's regexes can be asked about. */
@@ -151,19 +189,16 @@ describe("Hub REST route classes (derived from the served routes)", () => {
     expect(count("read")).toBeGreaterThan(100);
     expect(count("write")).toBeGreaterThan(150);
     expect(count("owner-wide")).toBeGreaterThanOrEqual(5);
-    // The read check sees the handlers' own code: the uploads routes name the
-    // door's write floor (rest/entities.ts). Measured 2026-10-26: 7 write
-    // routes name a gate in their own handler source.
-    const gated = routes
-      .filter((r) => classOf(r) === "write" && WRITE_GATE.test(r.source))
-      .map((r) => `${r.method} ${r.path}`);
-    expect(gated).toEqual(
-      expect.arrayContaining([
-        "POST /files/uploads",
-        "POST /files/uploads/finalize",
-      ])
-    );
-    expect(gated.length).toBeGreaterThanOrEqual(5);
+    // The read check sees the handlers' own code, statically imported calls
+    // included: every known gated write route names its door.
+    const byKey = new Map(routes.map((r) => [`${r.method} ${r.path}`, r]));
+    const missing = Object.entries(GATED_WRITE_ROUTES)
+      .filter(([key, gate]) => {
+        const r = byKey.get(key);
+        return !r || classOf(r) !== "write" || !callOf(gate).test(r.source);
+      })
+      .map(([key, gate]) => `${key} → ${gate}`);
+    expect(missing).toEqual([]);
   });
 
   it("a route declared `read` (a POST read) reaches no write gate", () => {
@@ -187,9 +222,15 @@ describe("Hub REST route classes (derived from the served routes)", () => {
       readsThatWrite([
         { method: "POST", path, source: "await canWrite(p, { workspace: w })" },
         { method: "POST", path, source: "await canRead(p, { workspace: w })" },
+        // The served (transformed) form of a statically imported call.
+        {
+          method: "POST",
+          path,
+          source: "await (0, __vi_import_3__.canWrite)(p, { workspace: w })",
+        },
         { method: "GET", path, source: "await canWrite(p, { workspace: w })" },
       ])
-    ).toEqual([`POST ${path}`]);
+    ).toEqual([`POST ${path}`, `POST ${path}`]);
   });
 
   it("every fence declaration names a served route of its method (no stale entry)", () => {

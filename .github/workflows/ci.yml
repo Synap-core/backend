@@ -9,10 +9,14 @@ on:
     # run would test the branch merged into today's main instead.
     branches: ["main", "develop", "release/**"]
 
-# Cancel in-progress runs for same PR/branch
+# A pull request keeps only its newest run. A push to main, develop or a
+# release branch gets a group per commit, so every merged commit finishes its
+# run: with one group per branch, each merge cancelled the previous main run
+# and the combined main was never measured (26 Oct: no main run finished
+# between 08:44 and 18:00).
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Least privilege: jobs that need more declare it themselves.
 permissions:
@@ -53,7 +57,7 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Cross-repo layout (../synap-control-plane-api, ../synap-app), Node,
       # pnpm, install, and the workspace-dependency build. See the action.
@@ -220,7 +224,7 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Monorepo layout + dependencies
         id: setup
@@ -324,7 +328,7 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Monorepo layout + dependencies
         uses: ./.github/actions/monorepo-setup

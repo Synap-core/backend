@@ -1,6 +1,6 @@
 /**
- * Every isolated-vm host bridge is bound to the run's async context — proven
- * WITHOUT the native addon, so it runs on every runner.
+ * Every host bridge is bound to the run's async context — proven WITHOUT the
+ * native addon, so it runs on every CI runner.
  *
  * isolated-vm calls an `ivm.Reference` host callback with NO async context
  * (ticket f47609a6, pod knowledge 11dc561a). Here `isolated-vm` is a recorder:
@@ -8,7 +8,9 @@
  * script `run` calls the `__getEntities` bridge from a FOREIGN async scope
  * (an `AsyncResource` made at load time, outside every store) — the shape of
  * the native callback. The real-isolate twin is
- * `run-skill-in-sandbox.async-context.real-isolate.test.ts` (devbox only).
+ * `run-skill-in-sandbox.async-context.real-isolate.test.ts` (devbox only); the
+ * runner-process path (the bridge called from an IPC message) is
+ * `runner/process-pool.real-isolate.test.ts`.
  *
  * Negative control (2026-10-25, branch negctl/tickets-1025-6):
  * `bindHostCallback` returning `fn` unbound turns the bridge case red (the
@@ -71,7 +73,12 @@ vi.mock("isolated-vm", () => {
 });
 
 import { getActingAgentUserId, runWithActingAgent } from "@synap/database";
-import { bindHostCallback, runIsolate } from "./run-skill-in-sandbox.js";
+import {
+  bindHostCallback,
+  buildSkillBridges,
+  runIsolate,
+} from "./run-skill-in-sandbox.js";
+import { inlineSkillRunner, SKILL_BRIDGE_NAMES } from "./runner/index.js";
 
 describe("run-skill-in-sandbox: bridges keep the async context (no addon)", () => {
   it("the foreign scope really loses the store (non-vacuity of the harness)", async () => {
@@ -81,7 +88,7 @@ describe("run-skill-in-sandbox: bridges keep the async context (no addon)", () =
     expect(read).toBeUndefined();
   });
 
-  it("a bridge called from that scope still sees the acting agent, and EVERY bridge is bound", async () => {
+  it("a bridge called from that scope still sees the acting agent", async () => {
     h.refs.clear();
     h.built.length = 0;
     const seen: Array<string | undefined> = [];
@@ -105,16 +112,32 @@ describe("run-skill-in-sandbox: bridges keep the async context (no addon)", () =
         agentUserId: "agent-7",
         caller: caller as never,
         failureSink: {},
+        runner: inlineSkillRunner,
       })
     );
     expect(seen).toEqual(["agent-7"]);
-    // DERIVED from what the run actually built: every Reference received a
-    // function bound by AsyncResource.bind (it carries `asyncResource`).
-    expect(h.built.length).toBeGreaterThanOrEqual(8);
-    for (const fn of h.built) {
+    // Non-vacuity: the isolate side installed one reference per bridge name.
+    expect(
+      [...h.refs.keys()]
+        .filter((k) => k !== "__args" && k !== "__context")
+        .sort()
+    ).toEqual(SKILL_BRIDGE_NAMES.map((n) => `__${n}`).sort());
+  });
+
+  it("EVERY bridge is bound (derived from the built map, not a hand list)", () => {
+    const bridges = buildSkillBridges({
+      allowedHosts: [],
+      operatorUserId: "u-1",
+      workspaceId: null,
+      agentUserId: null,
+      caller: {} as never,
+      failureSink: {},
+    });
+    expect(Object.keys(bridges).sort()).toEqual([...SKILL_BRIDGE_NAMES].sort());
+    for (const [name, fn] of Object.entries(bridges)) {
       expect(
         (fn as { asyncResource?: unknown }).asyncResource,
-        fn.name || "bridge"
+        name
       ).toBeInstanceOf(AsyncResource);
     }
   });

@@ -30,17 +30,26 @@
  * auto-executing. Reads carry no agentUserId (they ride the operator floor),
  * matching `getCaller`'s deliberate asymmetry.
  *
- * Behind the `SANDBOX_LOCAL` flag (default OFF) — the chokepoint in
- * `execute-capability.ts` still calls `executeSkillViaIS` unless it is "1".
+ * ONE BRIDGE SET (R1, 2026-10-26): everything the IS executor does, this does
+ * too — the parameter check before any code runs, dry-run (`dryRunEffects`),
+ * `propose.entity` `content`, the session on governed provider writes, and
+ * `runtimeVersion` on the result — so the pod can become the only runtime
+ * without a regression.
+ *
+ * Reached only through the one door `run-skill.ts` (R2): the pod's runtime by
+ * default, the Intelligence Service only under the `SKILL_RUNTIME=is` rollback.
+ *
+ * WHERE the isolate runs is the skill runner's business (`runner/`): a
+ * supervised child process in production, never this process (pod decision
+ * R6). The bridges below stay HERE — this file is the broker — and the runner
+ * reaches them by name (`runner/protocol.ts`).
  */
 
-// NOT a static import — see `loadIvm()` below. `isolated-vm` is a NATIVE addon,
-// and importing it at module scope crashed the pod on boot.
-import type IvmModule from "isolated-vm";
 import { AsyncResource } from "node:async_hooks";
 import {
   db,
   eq,
+  findRedeemableGrant,
   parseVaultReference,
   resolveVaultSecret,
   VaultGrantError,
@@ -53,11 +62,17 @@ import {
   triggerProviderAction,
   type FailureErrorClass,
 } from "../../connectors/external-dispatch.js";
+import { SKILL_RUNTIME_VERSION } from "./skill-stdlib.js";
+import type {
+  RecordedEffect,
+  SkillExecutionResult,
+} from "./execute-skill-via-is.js";
 import {
-  SKILL_STDLIB_BOOTSTRAP,
-  SKILL_RUNTIME_VERSION,
-} from "./skill-stdlib.js";
-import type { SkillExecutionResult } from "./execute-skill-via-is.js";
+  getSkillRunner,
+  type SkillBridges,
+  type SkillJob,
+  type SkillRunner,
+} from "./runner/index.js";
 // Type-only import (erased at runtime — the value is loaded via dynamic import()
 // below to avoid a static router↔service cycle). Gives the caller its real type.
 import type { hubProtocolRouter } from "../../routers/hub-protocol/index.js";
@@ -66,9 +81,6 @@ import type { hubProtocolRouter } from "../../routers/hub-protocol/index.js";
 type HubCaller = ReturnType<typeof hubProtocolRouter.createCaller>;
 
 const logger = createLogger({ module: "run-skill-in-sandbox" });
-
-/** Maximum memory an isolate may allocate, in MB (parity with the IS executor). */
-const ISOLATE_MEMORY_LIMIT_MB = 64;
 
 /** Scopes the in-process caller runs with — parity with the Hub Protocol doors. */
 const HUB_SCOPES = ["hub-protocol.read", "hub-protocol.write"];
@@ -83,7 +95,8 @@ async function redeemVaultSecretDirect(
   ref: string,
   operatorUserId: string,
   agentUserId: string | null,
-  workspaceId: string | null
+  workspaceId: string | null,
+  dryRun: boolean
 ): Promise<string | null> {
   const parsed = parseVaultReference(ref);
   if (!parsed) return null;
@@ -92,20 +105,29 @@ async function redeemVaultSecretDirect(
     columns: { userId: true },
   });
   if (!secret) return null;
+  // Redeemer is the acting agent (or the operator when no agent key is in
+  // play) — mirrors the vault REST door's `agentUserId ?? acting.userId`.
+  const redeemer = {
+    agentUserId: agentUserId ?? operatorUserId,
+    workspaceId: workspaceId ?? null,
+  };
+  // Dry-run: the SAME grant check, without decrypting and without spending a
+  // use (the find half of the redemption only). A granted ref answers a masked
+  // sentinel, an ungranted one null, as it would live.
+  if (dryRun) {
+    const grant = await findRedeemableGrant(
+      "secret",
+      parsed.secretId,
+      redeemer
+    );
+    return grant.ok ? "dry-run-secret" : null;
+  }
   try {
     return await resolveVaultSecret(
       parsed.secretId,
       secret.userId,
       parsed.fieldName,
-      {
-        requireGrant: true,
-        // Redeemer is the acting agent (or the operator when no agent key is in
-        // play) — mirrors the vault REST door's `agentUserId ?? acting.userId`.
-        redeemer: {
-          agentUserId: agentUserId ?? operatorUserId,
-          workspaceId: workspaceId ?? null,
-        },
-      }
+      { requireGrant: true, redeemer }
     );
   } catch (err) {
     if (err instanceof VaultGrantError) return null;
@@ -131,11 +153,24 @@ export async function runSkillInSandbox(args: {
    * required tools ride the verb's approval instead of being gated again.
    */
   verbAct?: { skillId: string; toolIds: readonly string[] };
+  /**
+   * The focus session the run belongs to, from the RUN's context (never from
+   * the skill's input). Rides the governed provider-write branch, so a
+   * proposal that write files carries `proposals.session_id`.
+   */
+  sessionId?: string | null;
+  /**
+   * Preview: reads run for real, every write and send (`propose.entity`,
+   * `callProvider`, `host.fetch`) is recorded in `dryRunEffects` instead of
+   * performed, secrets answer a masked value. Every guard still applies.
+   */
+  dryRun?: boolean;
 }): Promise<SkillExecutionResult> {
   const startTime = Date.now();
   const operatorUserId = args.userId;
   const workspaceId = args.workspaceId ?? null;
   const agentUserId = args.agentUserId ?? null;
+  const dryRun = args.dryRun === true;
 
   // P1: host-side carrier for a classified provider failure. `callProvider`
   // throws INTO the isolate (which strips Error properties down to the message)
@@ -181,9 +216,28 @@ export async function runSkillInSandbox(args: {
       };
     }
 
+    // The arguments against the skill's declared `parameters`, before any code
+    // runs: the runtime is the handler of a code skill, so this is the check
+    // `executeCapability`'s propose branch defers to for a `run`. The pod's one
+    // reader of that declaration; an absent or unreadable one runs unchanged.
+    const { checkVerbParameters, describeParameterRepair } =
+      await import("../capabilities/validate-verb-parameters.js");
+    const paramCheck = checkVerbParameters(skill, args.parameters);
+    if (paramCheck.status === "invalid") {
+      return {
+        success: false,
+        error: `Parameter validation failed: ${describeParameterRepair(
+          skill.name,
+          paramCheck.repair
+        )}`,
+        executionTimeMs: Date.now() - startTime,
+      };
+    }
+
     const timeoutMs = (skill.timeoutSeconds ?? 30) * 1000;
     const allowedHosts =
       (skill.metadata?.allowedHosts as string[] | undefined) ?? [];
+    const recordedEffects: RecordedEffect[] = [];
 
     // ONE caller, built with the operator floor — the same door the REST handlers
     // build. Reads scope to ctx.userId; the write bridges thread agentUserId as a
@@ -200,21 +254,32 @@ export async function runSkillInSandbox(args: {
     const result = await runIsolate({
       code: skill.code,
       args: args.parameters ?? {},
-      context: { userId: operatorUserId, workspaceId, agentUserId },
+      context: {
+        userId: operatorUserId,
+        // The author contract (`skill-runtime.d.ts`) types `threadId` a
+        // string; the IS executes these runs as "manual" / "dry-run".
+        threadId: dryRun ? "dry-run" : "manual",
+        workspaceId,
+        agentUserId,
+      },
       timeoutMs,
       allowedHosts,
       operatorUserId,
       workspaceId,
       agentUserId,
+      sessionId: args.sessionId ?? null,
       caller,
       failureSink: providerFailure,
       verbAct: args.verbAct,
+      recordedEffects: dryRun ? recordedEffects : undefined,
     });
 
     return {
       success: true,
       result,
       executionTimeMs: Date.now() - startTime,
+      runtimeVersion: SKILL_RUNTIME_VERSION,
+      ...(dryRun ? { dryRunEffects: recordedEffects } : {}),
     };
   } catch (error) {
     return {
@@ -226,51 +291,6 @@ export async function runSkillInSandbox(args: {
       ...providerFailure,
     };
   }
-}
-
-/**
- * Load `isolated-vm` LAZILY — the fix for a production boot crash.
- *
- * `isolated-vm` is a native addon. A static `import ivm from "isolated-vm"` at
- * module scope executed on every boot, because `execute-capability.ts` imports
- * THIS module statically. The `SANDBOX_LOCAL === "1"` check there gates the
- * CALL, never the module graph — so on the old Node 20 image the pod
- * crash-looped with:
- *
- *   No native build was found for … abi=115 … libc=musl … loaded from: …/isolated-vm
- *
- * isolated-vm 6.1.2 ships prebuilds for Node 22 and 24 only (ABI 127 / 137,
- * glibc and musl), loaded by `node-gyp-build` at require time: nothing is
- * compiled (pnpm skips its build script since it is not in
- * `onlyBuiltDependencies`). `deploy/Dockerfile` now runs Node 22, and ci.yml's
- * image smoke proves the addon loads in the built image.
- *
- * Deferring to first CALL still makes the flag mean what it says: with
- * SANDBOX_LOCAL off the addon is never touched, and a host where it cannot load
- * fails the one call that needs it, never the boot.
- *
- * The failure is deliberately NOT swallowed: a skill asked to run in the local
- * sandbox must fail loudly if the sandbox is unavailable. Silently falling back
- * to another executor would run untrusted code somewhere the caller did not ask
- * for. Boot stays healthy; the individual call fails with a legible reason.
- */
-let ivmModulePromise: Promise<typeof IvmModule> | null = null;
-async function loadIvm(): Promise<typeof IvmModule> {
-  if (!ivmModulePromise) {
-    ivmModulePromise = import("isolated-vm")
-      .then((m) => m.default ?? (m as unknown as typeof IvmModule))
-      .catch((err: unknown) => {
-        ivmModulePromise = null; // never cache a failure — a redeploy may fix it
-        throw new Error(
-          `SANDBOX_LOCAL is enabled but the isolated-vm native addon could not be loaded ` +
-            `(${err instanceof Error ? err.message : String(err)}). ` +
-            `The pod image (deploy/Dockerfile) must run Node 22 or 24 with --no-node-snapshot: ` +
-            `isolated-vm 6.x ships prebuilds for those only. Unset SANDBOX_LOCAL to route code ` +
-            `skills to the Intelligence Service sandbox instead.`
-        );
-      });
-  }
-  return ivmModulePromise;
 }
 
 /**
@@ -291,394 +311,445 @@ export function bindHostCallback<A extends unknown[], R>(
   return AsyncResource.bind(fn);
 }
 
-/** @internal Exported for `run-skill-in-sandbox.async-context.test.ts`. */
-export async function runIsolate(params: {
-  code: string;
-  args: Record<string, unknown>;
-  context: {
-    userId: string;
-    workspaceId: string | null;
-    agentUserId: string | null;
-  };
-  timeoutMs: number;
+/** The broker-side context every bridge of one run closes over. */
+export interface SkillBridgeParams {
   allowedHosts: string[];
   operatorUserId: string;
   workspaceId: string | null;
   agentUserId: string | null;
+  /** The run's focus session — forwarded on governed provider writes only. */
+  sessionId?: string | null;
   caller: HubCaller;
   /** P1: written on a classified provider failure so the caller can attach the
    *  recovery classification to its failure envelope (see runSkillInSandbox). */
   failureSink: { errorClass?: FailureErrorClass; providerRef?: string };
-  /** This run's verb decision — scoped to THIS isolate's provider calls. */
+  /** This run's verb decision — scoped to THIS run's provider calls. */
   verbAct?: { skillId: string; toolIds: readonly string[] };
-}): Promise<unknown> {
+  /**
+   * Present = DRY-RUN: the write/send bridges record their effect here and
+   * return a stub instead of performing it. Reads and every guard stay real.
+   */
+  recordedEffects?: RecordedEffect[];
+}
+
+/**
+ * Run one skill's code on a skill runner (`runner/`), with this run's bridges.
+ * The runner (a child process in production) only evaluates the code; every
+ * bridge it reaches runs HERE, in the broker, under the run's identity.
+ *
+ * @internal Exported for the `run-skill-in-sandbox.*.test.ts` suites.
+ */
+export async function runIsolate(
+  params: SkillBridgeParams & {
+    code: string;
+    args: Record<string, unknown>;
+    context: SkillJob["context"];
+    timeoutMs: number;
+    /** Default: this pod's runner (`getSkillRunner`). */
+    runner?: SkillRunner;
+  }
+): Promise<unknown> {
+  const { code, args, context, timeoutMs, runner, ...bridgeParams } = params;
+  return (runner ?? getSkillRunner()).run(
+    { code, args, context, timeoutMs },
+    buildSkillBridges(bridgeParams)
+  );
+}
+
+/**
+ * The host bridges of one run: plain values in, a plain value or a throw out.
+ * EVERY bridge is bound to the async context in scope NOW (see
+ * `bindHostCallback`), so it keeps the run's identity wherever the runner
+ * calls it from — an isolate callback in-process, or an IPC message from a
+ * runner process.
+ *
+ * @internal Exported for the `run-skill-in-sandbox.*.test.ts` suites.
+ */
+export function buildSkillBridges(params: SkillBridgeParams): SkillBridges {
   const {
-    code,
-    args,
-    context,
-    timeoutMs,
     allowedHosts,
     operatorUserId,
     workspaceId,
     agentUserId,
+    sessionId,
     caller,
     failureSink,
     verbAct,
+    recordedEffects,
   } = params;
+  const dryRun = recordedEffects !== undefined;
+  let dryRunSeq = 0;
 
-  const ivm = await loadIvm();
-  const isolate = new ivm.Isolate({ memoryLimit: ISOLATE_MEMORY_LIMIT_MB });
-  // EVERY host bridge goes through here, bound to this run's async context
-  // (see `bindHostCallback`); the tripwire in the test counts the sites.
-  const hostRef = <A extends unknown[], R>(fn: (...args: A) => R) =>
-    new ivm.Reference(bindHostCallback(fn));
+  // ── console → backend logger ─────────────────────────────────────────────
+  const log = (...logArgs: unknown[]) => {
+    logger.info({ args: logArgs }, "[Skill]");
+  };
 
-  try {
-    const vmContext = await isolate.createContext();
-    const jail = vmContext.global;
-
-    await jail.set("__args", new ivm.ExternalCopy(args).copyInto());
-    await jail.set("__context", new ivm.ExternalCopy(context).copyInto());
-
-    // ── console → backend logger ─────────────────────────────────────────────
-    const logRef = hostRef((...logArgs: unknown[]) => {
-      logger.info({ args: logArgs }, "[Skill]");
+  // ── hubProtocol.search → hubProtocolRouter.search.search ─────────────────
+  const search = async (query: unknown, opts: unknown) => {
+    const result = await caller.search.search({
+      // Identity LAST — a skill-controlled `opts` spread before it can
+      // never override the operator floor, regardless of what
+      // `search.search` reads in the future (today it ignores
+      // `input.userId` and uses `ctx.userId`, but that's a downstream
+      // invariant this bridge should not depend on).
+      ...((opts as object | null) ?? {}),
+      userId: operatorUserId,
+      query: String(query),
     });
-    await jail.set("__log", logRef);
-
-    // ── hubProtocol.search → hubProtocolRouter.search.search ─────────────────
-    const searchRef = hostRef(async (query: unknown, opts: unknown) => {
-      const result = await caller.search.search({
-        // Identity LAST — a skill-controlled `opts` spread before it can
-        // never override the operator floor, regardless of what
-        // `search.search` reads in the future (today it ignores
-        // `input.userId` and uses `ctx.userId`, but that's a downstream
-        // invariant this bridge should not depend on).
-        ...((opts as object | null) ?? {}),
-        userId: operatorUserId,
-        query: String(query),
-      });
-      return new ivm.ExternalCopy(result).copyInto();
-    });
-
-    // ── hubProtocol.getEntities → hubProtocolRouter.entities.getEntities ─────
-    const getEntitiesRef = hostRef(async (opts: unknown) => {
-      const o = (opts ?? {}) as {
-        type?: string;
-        profileSlug?: string;
-        limit?: number;
-      };
-      const result = await caller.entities.getEntities({
-        userId: operatorUserId,
-        profileSlug: o.profileSlug ?? o.type,
-        limit: o.limit,
-        // The IS `/users/:id/entities` door reads the operator FLOOR + pod-wide
-        // (includePodWide:true) — reproduce it so a workspace lens never hides
-        // pod-wide profiles (person/company/contact).
-        includePodWide: true,
-      });
-      return new ivm.ExternalCopy(result).copyInto();
-    });
-
-    // ── hubProtocol.getDocument → hubProtocolRouter.documents.getDocument ────
-    const getDocumentRef = hostRef(async (documentId: unknown) => {
-      const result = (await caller.documents.getDocument({
-        documentId: String(documentId),
-        userId: operatorUserId,
-      })) as { document?: unknown } | null;
-      // The IS bridge returns `data.document`; the door returns the same shape.
-      const doc =
-        result && typeof result === "object" && "document" in result
-          ? (result as { document?: unknown }).document
-          : result;
-      return new ivm.ExternalCopy(doc ?? null).copyInto();
-    });
-
-    await jail.set("__search", searchRef);
-    await jail.set("__getEntities", getEntitiesRef);
-    await jail.set("__getDocument", getDocumentRef);
-
-    // ── secrets.get → grant-gated vault resolver (direct) ────────────────────
-    const redeemSecretRef = hostRef(async (ref: unknown) => {
-      const value = await redeemVaultSecretDirect(
-        String(ref),
-        operatorUserId,
-        agentUserId,
-        workspaceId
-      );
-      return new ivm.ExternalCopy(value ?? null).copyInto();
-    });
-    await jail.set("__redeemSecret", redeemSecretRef);
-
-    // ── host.fetch → external egress (SSRF + allowedHosts guarded) ───────────
-    const hostFetchRef = hostRef(async (urlStr: unknown, optsStr?: unknown) => {
-      const url = String(urlStr);
-
-      const check = validateExternalUrl(url);
-      if (!check.valid) {
-        return new ivm.ExternalCopy({
-          error: "url_rejected",
-          message: check.reason,
-        }).copyInto();
-      }
-
-      if (!allowedHosts.includes(check.url.hostname)) {
-        return new ivm.ExternalCopy({
-          error: "domain_not_approved",
-          hostname: check.url.hostname,
-          message: `Domain "${check.url.hostname}" is not approved. The agent should propose access.`,
-        }).copyInto();
-      }
-
-      try {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 30_000);
-        try {
-          // `safeExternalFetch` re-validates SSRF ranges on every hop and, with
-          // `maxRedirects` left at its default of 0, REJECTS any redirect
-          // outright — `check.url`/`allowedHosts` above only vetted the
-          // INITIAL URL, so a raw `fetch()` here would follow a same-host-
-          // approved response straight through a `302 Location:
-          // http://169.254.169.254/...` (or any internal service) with no
-          // re-check. Rejecting redirects keeps the initial `allowedHosts`
-          // gate sufficient — there is no second hop to smuggle through it.
-          const response = await safeExternalFetch(url, {
-            ...(typeof optsStr === "string" ? JSON.parse(optsStr) : {}),
-            signal: controller.signal,
-          });
-          const body = await response.text();
-          const headers: Record<string, string> = {};
-          response.headers.forEach((value, key) => {
-            headers[key] = value;
-          });
-          return new ivm.ExternalCopy({
-            ok: response.ok,
-            status: response.status,
-            headers,
-            body: body.slice(0, 100_000), // cap response size
-          }).copyInto();
-        } finally {
-          clearTimeout(timeout);
-        }
-      } catch (err) {
-        return new ivm.ExternalCopy({
-          error: "fetch_failed",
-          message: err instanceof Error ? err.message : "Fetch failed",
-        }).copyInto();
-      }
-    });
-    await jail.set("__hostFetch", hostFetchRef);
-
-    // ── callProvider → triggerProviderAction (governed, agent-gated) ─────────
-    const callProviderRef = hostRef(
-      async (
-        provider: unknown,
-        method: unknown,
-        path: unknown,
-        body?: unknown,
-        opts?: unknown
-      ) => {
-        if (
-          typeof provider !== "string" ||
-          typeof method !== "string" ||
-          typeof path !== "string"
-        ) {
-          throw new Error(
-            "callProvider: provider, method, path must be strings"
-          );
-        }
-        const ALLOWED_METHODS = ["GET", "POST", "PUT", "DELETE"];
-        if (!ALLOWED_METHODS.includes(method.toUpperCase())) {
-          throw new Error(
-            `callProvider: method "${method}" not allowed. Use: ${ALLOWED_METHODS.join(", ")}`
-          );
-        }
-        const baseUrlOverride =
-          typeof opts === "object" &&
-          opts !== null &&
-          typeof (opts as Record<string, unknown>).baseUrlOverride === "string"
-            ? ((opts as Record<string, unknown>).baseUrlOverride as string)
-            : undefined;
-        let headers: Record<string, string> | undefined;
-        const rawHeaders =
-          typeof opts === "object" && opts !== null
-            ? (opts as Record<string, unknown>).headers
-            : undefined;
-        if (
-          typeof rawHeaders === "object" &&
-          rawHeaders !== null &&
-          !Array.isArray(rawHeaders)
-        ) {
-          const entries = Object.entries(
-            rawHeaders as Record<string, unknown>
-          ).filter(([, v]) => typeof v === "string") as [string, string][];
-          if (entries.length > 0) headers = Object.fromEntries(entries);
-        }
-        try {
-          // GOVERNANCE: attach the acting agent identity ONLY for mutating methods
-          // — with agentUserId set, the gate inside triggerProviderAction treats
-          // the call as an agent run → an ungranted capability routes to a
-          // PROPOSAL. Reads (GET) carry no agent identity, so they run inline.
-          // EXCEPT a call to one of the verb's own required tools while the verb
-          // itself was already decided (`verbAct`): that is the same act.
-          const upper = method.toUpperCase();
-          const isWrite =
-            upper === "POST" || upper === "PUT" || upper === "DELETE";
-          const result = await triggerProviderAction({
-            userId: operatorUserId,
-            provider,
-            method: upper,
-            path,
-            body:
-              typeof body === "object" && body !== null
-                ? (body as Record<string, unknown>)
-                : undefined,
-            baseUrlOverride,
-            ...(headers ? { headers } : {}),
-            ...(isWrite && agentUserId
-              ? { agentUserId, workspaceId: workspaceId ?? undefined }
-              : {}),
-            // ONE governed act: this run's verb was already decided, so its
-            // calls to its OWN required tools are not gated again (scoped in
-            // triggerProviderAction — any other tool is still gated).
-            ...(verbAct ? { verbAct } : {}),
-          });
-          // Map triggerProviderAction's structured result onto the SAME shape the
-          // IS `executeProviderCall` returns: { status, headers, body } OR
-          // { proposed, proposalId }; a structured failure throws.
-          // A provider call that succeeds (or is proposed) means any EARLIER
-          // failure on this run was recovered — clear the sink so a later,
-          // unrelated failure doesn't surface a stale (e.g. re-auth) chip.
-          if (result.proposed) {
-            failureSink.errorClass = undefined;
-            failureSink.providerRef = undefined;
-            return new ivm.ExternalCopy({
-              proposed: true,
-              proposalId: result.proposalId,
-            }).copyInto();
-          }
-          if (result.success) {
-            failureSink.errorClass = undefined;
-            failureSink.providerRef = undefined;
-            return new ivm.ExternalCopy({
-              status: result.status,
-              headers: result.headers ?? {},
-              body: result.body,
-            }).copyInto();
-          }
-          // P1: stash the dispatcher's classification on the host-side sink
-          // before throwing (the throw crosses the isolate boundary and would
-          // drop it); the caller reads it on its failure return.
-          failureSink.errorClass = result.errorClass;
-          failureSink.providerRef = result.providerRef;
-          throw new Error(result.error ?? "Provider call failed");
-        } catch (err) {
-          throw new Error(
-            `callProvider failed: ${err instanceof Error ? err.message : String(err)}`
-          );
-        }
-      }
-    );
-    await jail.set("__callProvider", callProviderRef);
-
-    // ── propose.entity → hubProtocolRouter.entities.createEntity (governed) ──
-    const proposeEntityRef = hostRef(async (input: unknown) => {
-      if (typeof input !== "object" || input === null) {
-        throw new Error(
-          "propose.entity: argument must be an object { profileSlug, title, properties? }"
-        );
-      }
-      const {
-        profileSlug,
-        type,
-        title,
-        properties,
-        description,
-        reasoning,
-        workspaceId: inputWorkspaceId,
-      } = input as Record<string, unknown>;
-      const slug = profileSlug ?? type;
-      if (typeof slug !== "string" || slug.length === 0) {
-        throw new Error(
-          "propose.entity: profileSlug must be a non-empty string"
-        );
-      }
-      if (typeof title !== "string" || title.length === 0) {
-        throw new Error("propose.entity: title must be a non-empty string");
-      }
-      if (
-        properties !== undefined &&
-        (typeof properties !== "object" || properties === null)
-      ) {
-        throw new Error("propose.entity: properties must be an object");
-      }
-      try {
-        // The governed createEntity door: with agentUserId set, an agent write
-        // routes to a reviewable PROPOSAL via checkPermissionOrPropose — never a
-        // direct write. Same door the IS `createEntity` HTTP bridge hits.
-        const result = await caller.entities.createEntity({
-          userId: operatorUserId,
-          ...(agentUserId ? { agentUserId } : {}),
-          profileSlug: slug,
-          title,
-          description:
-            typeof description === "string" ? description : undefined,
-          properties:
-            typeof properties === "object" && properties !== null
-              ? (properties as Record<string, unknown>)
-              : undefined,
-          reasoning: typeof reasoning === "string" ? reasoning : undefined,
-          // Default to the run's workspace so authors never thread it by hand;
-          // an explicit workspaceId in the call still wins.
-          workspaceId:
-            typeof inputWorkspaceId === "string"
-              ? inputWorkspaceId
-              : (workspaceId ?? undefined),
-          source: "intelligence",
-        });
-        return new ivm.ExternalCopy({
-          status: result.status,
-          proposalId: result.proposalId,
-          proposedEntityId: result.id,
-          message: result.message,
-        }).copyInto();
-      } catch (err) {
-        throw new Error(
-          `propose.entity failed: ${err instanceof Error ? err.message : String(err)}`
-        );
-      }
-    });
-    await jail.set("__proposeEntity", proposeEntityRef);
-
-    // Bootstrap the co-located skill-runtime stdlib inside the isolate — installs
-    // every host bridge + web polyfill and is the byte-equal twin of the IS SSOT.
-    await vmContext.eval(SKILL_STDLIB_BOOTSTRAP);
-
-    // Async wrapper so skills can use top-level await.
-    const wrappedCode = `
-      (async function(args, context) {
-        ${code}
-      })(__args, __context)
-    `;
-
-    const script = await isolate.compileScript(wrappedCode);
-
-    const result = await script.run(vmContext, {
-      timeout: timeoutMs,
-      promise: true,
-      copy: true,
-    });
-
-    if (result instanceof ivm.Reference) {
-      return result.copy();
-    }
-
     return result;
-  } finally {
-    if (!isolate.isDisposed) {
-      isolate.dispose();
+  };
+
+  // ── hubProtocol.getEntities → hubProtocolRouter.entities.getEntities ─────
+  const getEntities = async (opts: unknown) => {
+    const o = (opts ?? {}) as {
+      type?: string;
+      profileSlug?: string;
+      limit?: number;
+    };
+    const result = await caller.entities.getEntities({
+      userId: operatorUserId,
+      profileSlug: o.profileSlug ?? o.type,
+      limit: o.limit,
+      // The IS `/users/:id/entities` door reads the operator FLOOR + pod-wide
+      // (includePodWide:true) — reproduce it so a workspace lens never hides
+      // pod-wide profiles (person/company/contact).
+      includePodWide: true,
+    });
+    return result;
+  };
+
+  // ── hubProtocol.getDocument → hubProtocolRouter.documents.getDocument ────
+  const getDocument = async (documentId: unknown) => {
+    const result = (await caller.documents.getDocument({
+      documentId: String(documentId),
+      userId: operatorUserId,
+    })) as { document?: unknown } | null;
+    // The IS bridge returns `data.document`; the door returns the same shape.
+    const doc =
+      result && typeof result === "object" && "document" in result
+        ? (result as { document?: unknown }).document
+        : result;
+    return doc ?? null;
+  };
+
+  // ── secrets.get → grant-gated vault resolver (direct) ────────────────────
+  const redeemSecret = async (ref: unknown) => {
+    const value = await redeemVaultSecretDirect(
+      String(ref),
+      operatorUserId,
+      agentUserId,
+      workspaceId,
+      dryRun
+    );
+    return value ?? null;
+  };
+
+  // ── host.fetch → external egress (SSRF + allowedHosts guarded) ───────────
+  const hostFetch = async (urlStr: unknown, optsStr?: unknown) => {
+    const url = String(urlStr);
+
+    const check = validateExternalUrl(url);
+    if (!check.valid) {
+      return {
+        error: "url_rejected",
+        message: check.reason,
+      };
     }
-  }
+
+    if (!allowedHosts.includes(check.url.hostname)) {
+      return {
+        error: "domain_not_approved",
+        hostname: check.url.hostname,
+        message: `Domain "${check.url.hostname}" is not approved. The agent should propose access.`,
+      };
+    }
+
+    // Dry-run: the guards above ran and their refusals surfaced; the request
+    // itself is recorded, never sent.
+    if (recordedEffects) {
+      const method =
+        typeof optsStr === "string"
+          ? ((JSON.parse(optsStr) as { method?: string }).method ?? "GET")
+          : "GET";
+      recordedEffects.push({ kind: "fetch", url, method });
+      return {
+        ok: true,
+        status: 200,
+        headers: {},
+        body: "",
+      };
+    }
+
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 30_000);
+      try {
+        // `safeExternalFetch` re-validates SSRF ranges on every hop and, with
+        // `maxRedirects` left at its default of 0, REJECTS any redirect
+        // outright — `check.url`/`allowedHosts` above only vetted the
+        // INITIAL URL, so a raw `fetch()` here would follow a same-host-
+        // approved response straight through a `302 Location:
+        // http://169.254.169.254/...` (or any internal service) with no
+        // re-check. Rejecting redirects keeps the initial `allowedHosts`
+        // gate sufficient — there is no second hop to smuggle through it.
+        const response = await safeExternalFetch(url, {
+          ...(typeof optsStr === "string" ? JSON.parse(optsStr) : {}),
+          signal: controller.signal,
+        });
+        const body = await response.text();
+        const headers: Record<string, string> = {};
+        response.headers.forEach((value, key) => {
+          headers[key] = value;
+        });
+        return {
+          ok: response.ok,
+          status: response.status,
+          headers,
+          body: body.slice(0, 100_000), // cap response size
+        };
+      } finally {
+        clearTimeout(timeout);
+      }
+    } catch (err) {
+      return {
+        error: "fetch_failed",
+        message: err instanceof Error ? err.message : "Fetch failed",
+      };
+    }
+  };
+
+  // ── callProvider → triggerProviderAction (governed, agent-gated) ─────────
+  const callProvider = async (
+    provider: unknown,
+    method: unknown,
+    path: unknown,
+    body?: unknown,
+    opts?: unknown
+  ) => {
+    if (
+      typeof provider !== "string" ||
+      typeof method !== "string" ||
+      typeof path !== "string"
+    ) {
+      throw new Error("callProvider: provider, method, path must be strings");
+    }
+    const ALLOWED_METHODS = ["GET", "POST", "PUT", "DELETE"];
+    if (!ALLOWED_METHODS.includes(method.toUpperCase())) {
+      throw new Error(
+        `callProvider: method "${method}" not allowed. Use: ${ALLOWED_METHODS.join(", ")}`
+      );
+    }
+    const baseUrlOverride =
+      typeof opts === "object" &&
+      opts !== null &&
+      typeof (opts as Record<string, unknown>).baseUrlOverride === "string"
+        ? ((opts as Record<string, unknown>).baseUrlOverride as string)
+        : undefined;
+    let headers: Record<string, string> | undefined;
+    const rawHeaders =
+      typeof opts === "object" && opts !== null
+        ? (opts as Record<string, unknown>).headers
+        : undefined;
+    if (
+      typeof rawHeaders === "object" &&
+      rawHeaders !== null &&
+      !Array.isArray(rawHeaders)
+    ) {
+      const entries = Object.entries(
+        rawHeaders as Record<string, unknown>
+      ).filter(([, v]) => typeof v === "string") as [string, string][];
+      if (entries.length > 0) headers = Object.fromEntries(entries);
+    }
+    // Dry-run: the provider is never called; the intended call is recorded
+    // and a stub answers so the skill's control flow carries on.
+    if (recordedEffects) {
+      recordedEffects.push({
+        kind: "callProvider",
+        provider,
+        method: method.toUpperCase(),
+        path,
+        body: typeof body === "object" && body !== null ? body : undefined,
+        baseUrlOverride,
+      });
+      return {
+        status: 200,
+        headers: {},
+        body: { dryRun: true },
+      };
+    }
+    try {
+      // GOVERNANCE: attach the acting agent identity ONLY for mutating methods
+      // — with agentUserId set, the gate inside triggerProviderAction treats
+      // the call as an agent run → an ungranted capability routes to a
+      // PROPOSAL. Reads (GET) carry no agent identity, so they run inline.
+      // EXCEPT a call to one of the verb's own required tools while the verb
+      // itself was already decided (`verbAct`): that is the same act.
+      const upper = method.toUpperCase();
+      const isWrite = upper === "POST" || upper === "PUT" || upper === "DELETE";
+      const result = await triggerProviderAction({
+        userId: operatorUserId,
+        provider,
+        method: upper,
+        path,
+        body:
+          typeof body === "object" && body !== null
+            ? (body as Record<string, unknown>)
+            : undefined,
+        baseUrlOverride,
+        ...(headers ? { headers } : {}),
+        ...(isWrite && agentUserId
+          ? {
+              agentUserId,
+              workspaceId: workspaceId ?? undefined,
+              // Session provenance rides ONLY the governed (write) branch,
+              // the one that can file a proposal. Absent stays absent.
+              ...(sessionId ? { sessionId } : {}),
+            }
+          : {}),
+        // ONE governed act: this run's verb was already decided, so its
+        // calls to its OWN required tools are not gated again (scoped in
+        // triggerProviderAction — any other tool is still gated).
+        ...(verbAct ? { verbAct } : {}),
+      });
+      // Map triggerProviderAction's structured result onto the SAME shape the
+      // IS `executeProviderCall` returns: { status, headers, body } OR
+      // { proposed, proposalId }; a structured failure throws.
+      // A provider call that succeeds (or is proposed) means any EARLIER
+      // failure on this run was recovered — clear the sink so a later,
+      // unrelated failure doesn't surface a stale (e.g. re-auth) chip.
+      if (result.proposed) {
+        failureSink.errorClass = undefined;
+        failureSink.providerRef = undefined;
+        return {
+          proposed: true,
+          proposalId: result.proposalId,
+        };
+      }
+      if (result.success) {
+        failureSink.errorClass = undefined;
+        failureSink.providerRef = undefined;
+        return {
+          status: result.status,
+          headers: result.headers ?? {},
+          body: result.body,
+        };
+      }
+      // P1: stash the dispatcher's classification on the host-side sink
+      // before throwing (the throw crosses the isolate boundary and would
+      // drop it); the caller reads it on its failure return.
+      failureSink.errorClass = result.errorClass;
+      failureSink.providerRef = result.providerRef;
+      throw new Error(result.error ?? "Provider call failed");
+    } catch (err) {
+      throw new Error(
+        `callProvider failed: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  };
+
+  // ── propose.entity → hubProtocolRouter.entities.createEntity (governed) ──
+  const proposeEntity = async (input: unknown) => {
+    if (typeof input !== "object" || input === null) {
+      throw new Error(
+        "propose.entity: argument must be an object { profileSlug, title, properties? }"
+      );
+    }
+    const {
+      profileSlug,
+      type,
+      title,
+      properties,
+      content,
+      description,
+      reasoning,
+      workspaceId: inputWorkspaceId,
+    } = input as Record<string, unknown>;
+    const slug = profileSlug ?? type;
+    if (typeof slug !== "string" || slug.length === 0) {
+      throw new Error("propose.entity: profileSlug must be a non-empty string");
+    }
+    if (typeof title !== "string" || title.length === 0) {
+      throw new Error("propose.entity: title must be a non-empty string");
+    }
+    if (
+      properties !== undefined &&
+      (typeof properties !== "object" || properties === null)
+    ) {
+      throw new Error("propose.entity: properties must be an object");
+    }
+    if (content !== undefined && typeof content !== "string") {
+      throw new Error("propose.entity: content must be a string");
+    }
+    // Dry-run: no proposal is filed; the intended entity is recorded and a
+    // synthetic handle answers so the skill can reference it.
+    if (recordedEffects) {
+      const n = ++dryRunSeq;
+      recordedEffects.push({
+        kind: "propose.entity",
+        profileSlug: slug,
+        title,
+        properties:
+          typeof properties === "object" && properties !== null
+            ? (properties as Record<string, unknown>)
+            : undefined,
+        content: typeof content === "string" ? content : undefined,
+      });
+      return {
+        status: "dry-run",
+        proposalId: `dry:${n}`,
+        proposedEntityId: `dry:${n}`,
+      };
+    }
+    try {
+      // The governed createEntity door: with agentUserId set, an agent write
+      // routes to a reviewable PROPOSAL via checkPermissionOrPropose — never a
+      // direct write. Same door the IS `createEntity` HTTP bridge hits.
+      const result = await caller.entities.createEntity({
+        userId: operatorUserId,
+        ...(agentUserId ? { agentUserId } : {}),
+        profileSlug: slug,
+        title,
+        description: typeof description === "string" ? description : undefined,
+        // The long-form Markdown body: the door makes it the entity's
+        // versioned document.
+        content: typeof content === "string" ? content : undefined,
+        properties:
+          typeof properties === "object" && properties !== null
+            ? (properties as Record<string, unknown>)
+            : undefined,
+        reasoning: typeof reasoning === "string" ? reasoning : undefined,
+        // Default to the run's workspace so authors never thread it by hand;
+        // an explicit workspaceId in the call still wins.
+        workspaceId:
+          typeof inputWorkspaceId === "string"
+            ? inputWorkspaceId
+            : (workspaceId ?? undefined),
+        source: "intelligence",
+      });
+      return {
+        status: result.status,
+        proposalId: result.proposalId,
+        proposedEntityId: result.id,
+        message: result.message,
+      };
+    } catch (err) {
+      throw new Error(
+        `propose.entity failed: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  };
+
+  return {
+    log: bindHostCallback(log),
+    search: bindHostCallback(search),
+    getEntities: bindHostCallback(getEntities),
+    getDocument: bindHostCallback(getDocument),
+    redeemSecret: bindHostCallback(redeemSecret),
+    hostFetch: bindHostCallback(hostFetch),
+    callProvider: bindHostCallback(callProvider),
+    proposeEntity: bindHostCallback(proposeEntity),
+  };
 }
 
 /** Re-exported for callers that want the stamped runtime version. */
