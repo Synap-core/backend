@@ -94,6 +94,10 @@ vi.mock("@synap/database", async (importOriginal) => {
       emitCompleted: async () => undefined,
     },
     getCatalogSyncStamps: async () => ({}),
+    // PGlite is one connection and `actual.sql` is a real pool: the lock door
+    // (a reserved pool connection) has nothing to pin here, so it just runs.
+    withAdvisoryLock: async (_k1: string, _k2: string, fn: () => unknown) =>
+      fn(),
     // The ONE template-state writer, real — except for a simulated DB blip.
     writeTemplateState: async (...args: unknown[]) => {
       if (h.failNextWrites > 0) {

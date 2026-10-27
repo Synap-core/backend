@@ -5,6 +5,7 @@
 
 // Export PostgreSQL clients
 export { sql, db, getDb } from "./client-pg.js";
+export { withAdvisoryLock } from "./advisory-lock.js";
 
 // Export RLS functions
 export {

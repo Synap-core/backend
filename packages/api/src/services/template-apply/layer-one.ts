@@ -21,6 +21,7 @@ import {
   workspaces,
   eq,
   readTemplateState,
+  withAdvisoryLock,
   type ReconcileReport,
   type WorkspaceDefinitionInput,
   type WorkspaceSettings,
@@ -115,8 +116,11 @@ export interface LayerOneResult {
 
 /**
  * Run `fn` while holding a per-(userId, proposalId) advisory lock, so a hung
- * retry cannot race the original and double-create. Auto-released on session
- * close. No key → no lock (nothing to protect).
+ * retry cannot race the original and double-create. No key → no lock
+ * (nothing to protect). The lock is taken and released on one reserved
+ * connection (`withAdvisoryLock`): taken and released with two `db.execute`
+ * calls, it could leak on an idle pooled connection, and on 27 Oct 2026 every
+ * approve of the founder's CRM update hung on it for 13 minutes.
  */
 export async function withWorkspaceProposalIdLock<T>(
   userId: string,
@@ -124,22 +128,11 @@ export async function withWorkspaceProposalIdLock<T>(
   fn: () => Promise<T>
 ): Promise<T> {
   if (!proposalId) return fn();
-  await db.execute(
-    drizzleSql`SELECT pg_advisory_lock(
-      hashtext('synap:workspace-from-definition:' || ${userId}),
-      hashtext(${proposalId})
-    )`
+  return withAdvisoryLock(
+    `synap:workspace-from-definition:${userId}`,
+    proposalId,
+    fn
   );
-  try {
-    return await fn();
-  } finally {
-    await db.execute(
-      drizzleSql`SELECT pg_advisory_unlock(
-        hashtext('synap:workspace-from-definition:' || ${userId}),
-        hashtext(${proposalId})
-      )`
-    );
-  }
 }
 
 /**
