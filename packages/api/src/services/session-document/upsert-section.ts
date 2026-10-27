@@ -188,6 +188,13 @@ export async function upsertSessionDocumentSection(
       ...(result.deduped ? { deduped: true } : {}),
     };
   }
+  // A section write always writes content, so the door always cut an undo
+  // checkpoint (only a rename-only patch has none).
+  if (!result.undo) {
+    throw new Error(
+      "applyDocumentPatch applied a section write without an undo checkpoint (door contract broken)"
+    );
+  }
   return {
     status: "applied",
     documentId: result.documentId,
