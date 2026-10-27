@@ -103,7 +103,8 @@ const { applyProposalApproval } = await import("../apply-approval.js");
 
 type ApplyArgs = Parameters<typeof applyProposalApproval>[0];
 
-const { resolveAgentGovernanceDecision } = await import("@synap/database");
+const { resolveAgentGovernanceDecision } =
+  await import("@synap/database/agent-governance");
 
 const AGENT = "agent-cc";
 const PROPOSAL_ID = "prop-motif-1";
