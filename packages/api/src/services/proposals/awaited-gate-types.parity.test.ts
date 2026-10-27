@@ -7,6 +7,7 @@
  */
 import { describe, it, expect } from "vitest";
 import { AWAITED_GATE_PROPOSAL_TYPES } from "@synap/playbooks";
+import { AWAITED_GATE_PROPOSAL_TYPES_MIRROR } from "@synap/database";
 import {
   DEV_DEPLOY_APPROVAL_TYPE,
   DEV_PLAN_APPROVAL_TYPE,
@@ -19,6 +20,12 @@ describe("awaited gate types === the dev approval types, each executable", () =>
   it("the mirror matches the api constants", () => {
     expect([...AWAITED_GATE_PROPOSAL_TYPES].sort()).toEqual(
       [DEV_PLAN_APPROVAL_TYPE, DEV_DEPLOY_APPROVAL_TYPE].sort()
+    );
+  });
+
+  it("the database mirror (the reapers' gate wait) matches the playbooks source", () => {
+    expect([...AWAITED_GATE_PROPOSAL_TYPES_MIRROR].sort()).toEqual(
+      [...AWAITED_GATE_PROPOSAL_TYPES].sort()
     );
   });
 

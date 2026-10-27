@@ -2142,6 +2142,10 @@ export const OUTPUT_RETIRED_REASON_LABELS: Readonly<Record<string, string>> = {
   decision_resolved: "Decided elsewhere",
   /** The agent withdrew a deliverable it had declared (`retireOutput`). */
   withdrawn: "Withdrawn",
+  /** The session ended with the agent's own question (confirm / choose) still open. */
+  session_ended: "Session ended",
+  /** A proposed decision a person wrote asked them with no agent behind it. */
+  not_asked: "Not asked by anyone",
 };
 
 /** The human label for a retired reason; unknown values humanize, never leak. */

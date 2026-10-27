@@ -9,6 +9,7 @@
 export * from "./scope.js";
 export * from "./classes.js";
 export * from "./rows.js";
+export * from "./age.js";
 export * from "./header.js";
 export * from "./intent.js";
 export * from "./page.js";

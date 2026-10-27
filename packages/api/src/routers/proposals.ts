@@ -13,6 +13,7 @@
  */
 
 import { readLatestApprovalRun } from "../services/proposals/approval-runs.js";
+import { reviewLaterProposalWhere } from "../services/proposals/proposal-fate.js";
 import { z } from "zod";
 import { randomUUID } from "crypto";
 import { router, protectedProcedure, workspaceProcedure } from "../trpc.js";
@@ -862,6 +863,13 @@ export const proposalsRouter = router({
           // without this column a cluster cannot warn that it contains an item
           // the injection floor exists to surface.
           governanceReason: proposals.governanceReason,
+          // Review later: THE count predicate, in SQL — the same
+          // clause orient's `pendingReview` reads. Pending queue only: a
+          // rejected proposal has no fate.
+          reviewLater:
+            input.status === "pending"
+              ? reviewLaterProposalWhere(new Date())
+              : drizzleSql<boolean>`false`,
         })
         .from(proposals)
         .where(and(...conditions))
@@ -964,6 +972,7 @@ export const proposalsRouter = router({
           ? (automationByStepRun.get(r.stepRunId) ?? null)
           : null,
         governanceReason: r.governanceReason ?? null,
+        reviewLater: r.reviewLater === true,
       }));
 
       let clusters = collapseProposalsToClusters(clusterRows, {
@@ -993,6 +1002,12 @@ export const proposalsRouter = router({
         groups,
         /** Distinct fingerprints BEFORE the `limit` slice. */
         distinct: clusters.length,
+        /**
+         * Of `distinct`, the clusters in Review later — out of the needs-you
+         * headline (`countNeedsYou().decisions`). Before the slice too: they
+         * are the oldest, so the slice drops them first.
+         */
+        reviewLater: clusters.filter((c) => c.reviewLater).length,
         /** Pending rows actually scanned — the row total while not truncated. */
         scanned: rows.length,
         /** The scan hit `scanLimit`: `distinct`/`scanned` are FLOORS, not totals. */
