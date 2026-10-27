@@ -34941,7 +34941,8 @@
                       "agent",
                       "entity",
                       "run",
-                      "workspace"
+                      "workspace",
+                      "usage"
                     ]
                   },
                   "workspaceId": { "type": ["string", "null"] },
@@ -34959,7 +34960,11 @@
                   },
                   "flowId": { "type": "string" },
                   "runId": { "type": "string" },
-                  "limit": { "type": "number" }
+                  "limit": { "type": "number" },
+                  "since": { "type": "string" },
+                  "groupBy": { "type": "array", "items": { "type": "string" } },
+                  "apiKeyId": { "type": "string" },
+                  "client": { "type": "string" }
                 }
               }
             }
@@ -34972,6 +34977,98 @@
           },
           "403": {
             "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/usage": {
+      "get": {
+        "tags": ["Runs"],
+        "summary": "API usage — calls per key, client, conversation, class, outcome",
+        "description": "Counts from `api_usage_buckets` (5-minute buckets, 30 days): calls, summed wall time and distinct conversations, grouped by the asked dimensions, largest first. Pod owner or admin only. Same read as `synap_diagnose` type `usage`.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Window start: ISO time or a span back from now (30m, 24h, 7d; default 24h)."
+            },
+            "required": false,
+            "description": "Window start: ISO time or a span back from now (30m, 24h, 7d; default 24h).",
+            "name": "since",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Window end: ISO time or a span (default now)."
+            },
+            "required": false,
+            "description": "Window end: ISO time or a span (default now).",
+            "name": "until",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Comma-separated dimensions: hour, day, apiKeyId, limiterKey, client, conversationId, rlClass, outcome (default client,rlClass,outcome)."
+            },
+            "required": false,
+            "description": "Comma-separated dimensions: hour, day, apiKeyId, limiterKey, client, conversationId, rlClass, outcome (default client,rlClass,outcome).",
+            "name": "groupBy",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Narrow to one API key."
+            },
+            "required": false,
+            "description": "Narrow to one API key.",
+            "name": "apiKeyId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Narrow to one client (X-Synap-Client, e.g. synap-bridge/0.6.0)."
+            },
+            "required": false,
+            "description": "Narrow to one client (X-Synap-Client, e.g. synap-bridge/0.6.0).",
+            "name": "client",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Max groups, largest first (default 200, max 1000)."
+            },
+            "required": false,
+            "description": "Max groups, largest first (default 200, max 1000).",
+            "name": "limit",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Usage groups",
+            "content": { "application/json": { "schema": {} } }
+          },
+          "400": {
+            "description": "Bad query",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a pod admin",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
