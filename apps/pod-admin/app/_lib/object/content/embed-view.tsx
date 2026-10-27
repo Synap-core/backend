@@ -10,20 +10,27 @@
  *   entity          a card that opens the record's console page; its title
  *                   only when the reader's own read returns it
  *   view            a chip that opens the view's console page
- *   chart-live, cell-frame, cell-builtin, unknown
+ *   cell-frame      an HTML page cell RUNS, in the isolated frame of
+ *                   `html-frame`, its source read on the viewer's own floor
+ *                   (`widgetDefinitions.get`); any other cell is a chip that
+ *                   opens its `/open/cell/<key>` card (handed to the app)
+ *   chart-live, cell-builtin, unknown
  *                   a quiet chip naming it + the object's "Open in app"
  *   broken          says the embed names nothing
  *
- * A sandboxed cell is NEVER mounted here: no iframe, no script, nothing in
- * content runs. The author's fallback prose stays visible under every block.
- * (The console runs HTML in exactly one place: a stored HTML document's own
- * page, in the isolated frame of `html-frame` — never inline in a body.)
+ * HTML runs in the isolated frame in exactly two places: a stored HTML
+ * document's own page, and an HTML cell embedded in a body (here) — the same
+ * `HtmlFrame`, sandbox and policy (`@synap-core/types/cell-bridge`), never
+ * same-origin and never inline in the console's DOM. Nothing else in content
+ * runs: a React cell is never mounted here. The author's fallback prose stays
+ * visible under every block.
  */
 
 import { useContext, type ReactNode } from "react";
 import Link from "next/link";
 import { AlertTriangle, BarChart3, Lock, type LucideIcon } from "lucide-react";
 import type { Embed } from "@synap-core/markdown-core";
+import { CELL_FRAME_MAX_BYTES } from "@synap-core/types/cell-bridge";
 import { describeEmbed, type EmbedModel } from "@synap-core/types/renderables";
 import {
   nounInSentence,
@@ -33,8 +40,14 @@ import {
 import { kindIcon } from "../kind-icon";
 import { ChartSnapshot } from "./embed-chart";
 import { EmbedHostContext, type EmbedHost } from "./embed-context";
-import { objectPage, type EmbedEntityRead } from "./markdown-model";
+import { HtmlFrame } from "./html-frame";
+import {
+  objectPage,
+  type EmbedCellRead,
+  type EmbedEntityRead,
+} from "./markdown-model";
 import { MediaView } from "../../media/media-view";
+import { humanizeBytes } from "../../../../lib/format";
 
 const CHIP =
   "inline-flex max-w-full items-center gap-1.5 rounded-md bg-foreground/[0.05] px-2 py-1 text-[12.5px] text-foreground/80 ring-1 ring-inset ring-foreground/10";
@@ -248,6 +261,165 @@ function EntityCard(props: EntityCardProps) {
   );
 }
 
+// ─── Cell ────────────────────────────────────────────────────────────────────
+
+/** A chip with the object's own "Open in app" beside it, for a block. */
+function ChipWithExit({
+  model,
+  words,
+  inline,
+}: {
+  model: EmbedModel;
+  words: EmbedWords;
+  inline: boolean;
+}) {
+  const host = useContext(EmbedHostContext);
+  return (
+    <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+      <Chip model={model} words={words} />
+      {!inline && host?.openInApp}
+    </span>
+  );
+}
+
+type CellFrameModel = Extract<EmbedModel, { kind: "cell-frame" }>;
+
+/**
+ * A cell the console does not run, as a door: the chip opens the cell's
+ * `/open/cell/<key>` card, which hands it to the app. With no key (an
+ * instance only the pod knows) the object's own "Open in app" stands beside.
+ */
+function CellDoor({
+  model,
+  words,
+  inline,
+}: {
+  model: CellFrameModel;
+  words: EmbedWords;
+  inline: boolean;
+}) {
+  const href = model.cellKey ? objectPage("cell", model.cellKey) : null;
+  return href ? (
+    <Chip model={model} words={words} href={href} />
+  ) : (
+    <ChipWithExit model={model} words={words} inline={inline} />
+  );
+}
+
+function CellFrameBody({
+  model,
+  words,
+  read,
+}: {
+  model: CellFrameModel;
+  words: EmbedWords;
+  read: EmbedCellRead;
+}) {
+  const noun = nounInSentence(words.noun);
+  switch (read.state) {
+    case "loading":
+      return (
+        <span
+          role="status"
+          aria-busy="true"
+          aria-label={`Loading ${noun}…`}
+          className={`${CHIP} w-40`}
+        >
+          <span className="h-3 w-full rounded bg-foreground/[0.07] shimmer-pulse" />
+        </span>
+      );
+    case "hidden":
+      // Neither its source nor which (gone / not yours): the pod answers
+      // `null` for both.
+      return (
+        <Note icon={Lock}>This isn’t visible to you, or no longer exists.</Note>
+      );
+    case "failed":
+      return (
+        <span className={`${CHIP} flex-wrap`}>
+          <AlertTriangle
+            aria-hidden="true"
+            className="h-3.5 w-3.5 shrink-0 text-danger"
+          />
+          This {noun} couldn’t be loaded.
+          {read.retry && (
+            <button
+              type="button"
+              onClick={read.retry}
+              className={`font-medium text-foreground ${DOOR}`}
+            >
+              Try again
+            </button>
+          )}
+        </span>
+      );
+    case "page":
+      if (read.tooLarge) {
+        return (
+          <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <span className="text-[12.5px] text-foreground/65">
+              This {noun} is {humanizeBytes(read.bytes)}. The console runs pages
+              up to {humanizeBytes(CELL_FRAME_MAX_BYTES)}.
+            </span>
+            <CellDoor model={model} words={words} inline={false} />
+          </span>
+        );
+      }
+      return (
+        <HtmlFrame
+          html={read.html}
+          workspaceId={read.workspaceId}
+          title={words.label}
+        />
+      );
+    case "app":
+    case "unresolved":
+      return <CellDoor model={model} words={words} inline={false} />;
+  }
+}
+
+function CellFrameRead({
+  useCell,
+  cellKey,
+  ...props
+}: {
+  useCell: (cellKey: string) => EmbedCellRead;
+  cellKey: string;
+  model: CellFrameModel;
+  words: EmbedWords;
+}) {
+  const read = useCell(cellKey);
+  return <CellFrameBody {...props} read={read} />;
+}
+
+/**
+ * A cell embed. An HTML page RUNS here, in the one isolated frame
+ * (`html-frame`); any other cell is a door to it. Inline in a sentence it is
+ * always the door — a page never runs mid-line.
+ */
+function CellFrame({
+  model,
+  words,
+  inline,
+}: {
+  model: CellFrameModel;
+  words: EmbedWords;
+  inline: boolean;
+}) {
+  const host = useContext(EmbedHostContext);
+  if (inline || !model.cellKey || !host?.useCell) {
+    return <CellDoor model={model} words={words} inline={inline} />;
+  }
+  return (
+    <CellFrameRead
+      useCell={host.useCell}
+      cellKey={model.cellKey}
+      model={model}
+      words={words}
+    />
+  );
+}
+
 // ─── The block ───────────────────────────────────────────────────────────────
 
 function Head({
@@ -259,7 +431,6 @@ function Head({
   words: EmbedWords;
   inline: boolean;
 }) {
-  const host = useContext(EmbedHostContext);
   switch (model.kind) {
     case "chart-snapshot":
       return inline ? (
@@ -304,13 +475,10 @@ function Head({
           This {nounInSentence(words.noun)} embed names nothing to show.
         </Note>
       );
+    case "cell-frame":
+      return <CellFrame model={model} words={words} inline={inline} />;
     default:
-      return (
-        <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
-          <Chip model={model} words={words} />
-          {!inline && host?.openInApp}
-        </span>
-      );
+      return <ChipWithExit model={model} words={words} inline={inline} />;
   }
 }
 

@@ -14,13 +14,31 @@ import { decide, isDocsOnly, isImageNeutral } from "./ci-changes.mjs";
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 const none = () => [];
 const pr = (files: string[] | null, extra = {}) =>
-  decide({ event: "pull_request", headRef: "fix/x", draft: false, files, siblingTests: none, ...extra });
+  decide({
+    event: "pull_request",
+    headRef: "fix/x",
+    draft: false,
+    files,
+    siblingTests: none,
+    ...extra,
+  });
 
 describe("ci-changes: every check runs unless a narrow match says otherwise", () => {
   it("a push or a merge-queue run checks everything", () => {
     for (const event of ["push", "merge_group", "workflow_dispatch"]) {
-      const d = decide({ event, headRef: "negctl/x", draft: true, files: ["docs/x.md"], siblingTests: none });
-      expect([d.gate, d.image, d.suites, d.negctl]).toEqual([true, true, true, false]);
+      const d = decide({
+        event,
+        headRef: "negctl/x",
+        draft: true,
+        files: ["docs/x.md"],
+        siblingTests: none,
+      });
+      expect([d.gate, d.image, d.suites, d.negctl]).toEqual([
+        true,
+        true,
+        true,
+        false,
+      ]);
     }
   });
 
@@ -30,7 +48,10 @@ describe("ci-changes: every check runs unless a narrow match says otherwise", ()
   });
 
   it("an application source change skips only the image steps", () => {
-    const d = pr(["packages/api/src/routers/x.ts", "packages/api/src/routers/x.test.ts"]);
+    const d = pr([
+      "packages/api/src/routers/x.ts",
+      "packages/api/src/routers/x.test.ts",
+    ]);
     expect([d.gate, d.image, d.suites]).toEqual([true, false, true]);
   });
 
@@ -83,10 +104,19 @@ describe("ci-changes: every check runs unless a narrow match says otherwise", ()
       headRef: "negctl/fix-x",
       draft: true,
       files: ["packages/api/src/a.ts", "packages/jobs/src/b.test.ts"],
-      siblingTests: (f: string) => (f === "packages/api/src/a.ts" ? ["packages/api/src/a.test.ts"] : []),
+      siblingTests: (f: string) =>
+        f === "packages/api/src/a.ts" ? ["packages/api/src/a.test.ts"] : [],
     });
-    expect([d.gate, d.image, d.suites, d.negctl]).toEqual([false, false, false, true]);
-    expect(d.negctlTests).toEqual(["packages/api/src/a.test.ts", "packages/jobs/src/b.test.ts"]);
+    expect([d.gate, d.image, d.suites, d.negctl]).toEqual([
+      false,
+      false,
+      false,
+      true,
+    ]);
+    expect(d.negctlTests).toEqual([
+      "packages/api/src/a.test.ts",
+      "packages/jobs/src/b.test.ts",
+    ]);
   });
 });
 
@@ -95,9 +125,18 @@ describe("ci-changes guard: no test reads a docs-only path", () => {
   // docs-only, checked against the text of every tracked test file. A test
   // that starts reading one of them must move it out of DOCS_ONLY, or a PR
   // editing that file would merge with its suites skipped.
-  const tracked = execFileSync("git", ["ls-files"], { cwd: REPO, encoding: "utf8" }).split("\n").filter(Boolean);
+  const tracked = execFileSync("git", ["ls-files"], {
+    cwd: REPO,
+    encoding: "utf8",
+  })
+    .split("\n")
+    .filter(Boolean);
   const docsOnly = tracked.filter((f) => isDocsOnly(f));
-  const tests = tracked.filter((f) => /\.test\.(ts|tsx|mts|mjs|js|sh)$/.test(f) && f !== "scripts/ci-changes.tripwire.test.ts");
+  const tests = tracked.filter(
+    (f) =>
+      /\.test\.(ts|tsx|mts|mjs|js|sh)$/.test(f) &&
+      f !== "scripts/ci-changes.tripwire.test.ts"
+  );
 
   it("the scan is not vacuous", () => {
     expect(docsOnly.length).toBeGreaterThan(5);
@@ -108,8 +147,10 @@ describe("ci-changes guard: no test reads a docs-only path", () => {
   // read and are NOT the repo-root file: each names `README.md` only to EXCLUDE
   // the one under skills/ from its scan. A new hit must be read the same way.
   const CHECKED_NOT_ROOT: Record<string, string> = {
-    "packages/api/src/__tripwires__/relation-types-in-tool-schemas.test.ts reads README.md": "skips skills/**/README.md",
-    "packages/api/src/__tripwires__/skill-tool-tokens-resolve.test.ts reads README.md": "skips skills/**/README.md",
+    "packages/api/src/__tripwires__/relation-types-in-tool-schemas.test.ts reads README.md":
+      "skips skills/**/README.md",
+    "packages/api/src/__tripwires__/skill-tool-tokens-resolve.test.ts reads README.md":
+      "skips skills/**/README.md",
   };
 
   it("no test file names a docs-only path", () => {
@@ -117,7 +158,11 @@ describe("ci-changes guard: no test reads a docs-only path", () => {
     for (const t of tests) {
       const text = readFileSync(join(REPO, t), "utf8");
       for (const d of docsOnly)
-        if (d.includes("/") ? text.includes(d) : new RegExp(`['"\`/]${d.replace(".", "\\.")}['"\`]`).test(text))
+        if (
+          d.includes("/")
+            ? text.includes(d)
+            : new RegExp(`['"\`/]${d.replace(".", "\\.")}['"\`]`).test(text)
+        )
           hits.push(`${t} reads ${d}`);
     }
     expect(hits.filter((h) => !(h in CHECKED_NOT_ROOT))).toEqual([]);

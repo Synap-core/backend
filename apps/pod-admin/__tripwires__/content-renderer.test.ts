@@ -10,10 +10,13 @@ import { stripComments } from "../../../scripts/strip-comments.mjs";
  * (`app/_lib/object/content/`) that turns markdown into React elements, and
  * no HTML injected anywhere. These scans keep it that way.
  *
- * HTML RUNS in exactly one place: a stored HTML page in the isolated frame
- * (`content/html-frame.tsx`, `sandbox="allow-scripts"` srcdoc, contract
- * `@synap-core/types/cell-bridge`). Its behaviour is pinned by
- * `html-frame.test.tsx`; the scan below pins that there is no SECOND frame.
+ * HTML RUNS in exactly one frame (`content/html-frame.tsx`,
+ * `sandbox="allow-scripts"` srcdoc, contract `@synap-core/types/cell-bridge`),
+ * mounted in exactly two places: a stored HTML document's own page
+ * (`content-block.tsx`) and an HTML cell embedded in a body
+ * (`embed-view.tsx`). Its behaviour is pinned by `html-frame.test.tsx` and
+ * `embed-view.test.tsx`; the scans below pin that there is no SECOND frame
+ * and no third site.
  */
 
 const APP_ROOT = join(fileURLToPath(new URL(".", import.meta.url)), "..");
@@ -104,7 +107,7 @@ describe("content is drawn, never injected", () => {
     expect(hits.map((h) => h.path)).toEqual([]);
   });
 
-  it("runs HTML only in the one page frame, never same-origin", () => {
+  it("runs HTML only in the one frame, never same-origin", () => {
     // A second <iframe> (or a srcdoc anywhere else) would be a frame whose
     // sandbox nobody tests. `allow-same-origin` anywhere in app code would
     // hand a page the console's origin. Comments are stripped before the
@@ -123,6 +126,41 @@ describe("content is drawn, never injected", () => {
     );
     const sameOrigin = code.filter((f) => /allow-same-origin/.test(f.body));
     expect(sameOrigin.map((f) => f.path)).toEqual([]);
+  });
+
+  it("mounts the frame only on a page and in a body's cell embed", () => {
+    // Every file that names one of the frame's exports, outside the frame
+    // itself. A third site would run HTML somewhere these tests do not
+    // reach. It sees names, not calls: an export re-bound under another name
+    // in a listed file is not caught.
+    const door = join("app", "_lib", "object", "content", "html-frame.tsx");
+    const embedSite = join(
+      "app",
+      "_lib",
+      "object",
+      "content",
+      "embed-view.tsx"
+    );
+    const pageSite = join(
+      "app",
+      "_lib",
+      "object",
+      "content",
+      "content-block.tsx"
+    );
+    const sites = FILES.filter(
+      (f) =>
+        !f.test &&
+        f.path !== door &&
+        /\b(?:HtmlFrame|SandboxedFrame|HtmlPageSection|HtmlPageBody)\b/.test(
+          f.body
+        )
+    ).map((f) => f.path);
+    expect(sites.sort()).toEqual([pageSite, embedSite].sort());
+    // Non-vacuity: the embed site mounts the shared frame, by its name.
+    expect(FILES.find((f) => f.path === embedSite)?.body).toMatch(
+      /<HtmlFrame\b/
+    );
   });
 
   it("draws an image only through the one image door", () => {
