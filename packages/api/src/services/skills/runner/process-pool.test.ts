@@ -14,7 +14,6 @@
  * The real-process twin (real fork, real isolate) is
  * `process-pool.real-isolate.test.ts` (devbox).
  */
-import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const h = vi.hoisted(() => ({
@@ -27,7 +26,10 @@ const h = vi.hoisted(() => ({
   }>,
 }));
 
-vi.mock("node:child_process", () => {
+// The factory runs before this file's own imports are initialised, so it
+// imports `node:events` itself.
+vi.mock("node:child_process", async () => {
+  const { EventEmitter } = await import("node:events");
   let pid = 1000;
   class FakeRunner extends EventEmitter {
     pid = ++pid;
