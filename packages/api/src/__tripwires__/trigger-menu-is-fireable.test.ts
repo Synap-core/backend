@@ -114,7 +114,10 @@ describe("the trigger menu only offers fireable patterns", () => {
         "menu's phase policy is derived from what these producers can send — " +
         "re-derive `isFireableTriggerPattern` before changing this."
     ).toEqual([
-      "packages/api/src/routers/hub-protocol/observations.ts",
+      // The ONE observation writer, shared by the key door
+      // (`routers/hub-protocol/observations.ts`) and the pod's own facts
+      // (`dev.deployed`); the door keeps the namespace + reserved-phase floors.
+      "packages/api/src/services/observations/record-observation.ts",
       "packages/events/src/side-effects.ts",
     ]);
   });
@@ -142,10 +145,15 @@ describe("the trigger menu only offers fireable patterns", () => {
   });
 
   it("observations still forward their phase RAW", () => {
-    // The asymmetry only holds while observations pass `obs.type` through.
-    const src = read("packages/api/src/routers/hub-protocol/observations.ts");
+    // The asymmetry only holds while observations pass their type through.
+    // The send lives in the one writer the door calls (`recordObservation`).
+    const src = read(
+      "packages/api/src/services/observations/record-observation.ts"
+    );
     expect(
-      /automation-trigger-match[\s\S]{0,300}?eventType:\s*obs\.type/.test(src),
+      /automation-trigger-match[\s\S]{0,300}?eventType:\s*input\.type/.test(
+        src
+      ),
       "Observations no longer forward `obs.type` raw — the reserved phases may " +
         "no longer fire, and the menu should stop offering them."
     ).toBe(true);

@@ -72,6 +72,8 @@ export const NOT_A_DOOR_TOOL_TOKENS: Record<string, string> = {
     "an ABSTRACT INTENT (routing axis over the verb catalog), not a tool — the concrete verb is vendor-keyed, e.g. `gmail_send`",
   generate_media:
     "an ABSTRACT INTENT (routing axis over the verb catalog), not a tool — the concrete verb is vendor-keyed, e.g. `fal_generate_image`",
+  search_web:
+    "an ABSTRACT INTENT (routing axis over the verb catalog), not a tool — the concrete verb is vendor-keyed, e.g. `exa_search`; agents search with the builtin web.search through run_capability",
 };
 
 /** Human door name for the closing note. Product copy, not a domain token. */

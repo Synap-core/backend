@@ -167,7 +167,12 @@ describe("tripwire: session roster append has one door, on every door", () => {
     // `list` the batch form; a door that stopped calling in would be back to
     // naming a different roster than its sibling.
     expect(trpc).toMatch(/withSessionParticipants\(/);
-    expect(trpc).toMatch(/attachSessionParticipants\(/);
+    // `list` takes the batch form through the shared list projection
+    // (`projectSessionRows`, which the work-graph read uses too).
+    expect(trpc).toMatch(/projectSessionRows\(/);
+    const listRows = read("services/focus-sessions/session-list-rows.ts");
+    expect(listRows).toMatch(/attachSessionParticipants\(/);
+    expect(listRows).not.toMatch(/selectDistinct\(\{\s*agentUserId/);
     // And the router must NOT have grown a second, local derivation behind the
     // service's back — the same one-door rule this file enforces for the append.
     expect(trpc).not.toMatch(/selectDistinct\(\{\s*agentUserId/);
