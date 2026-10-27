@@ -401,7 +401,7 @@ export function checksFromDevbox(status, dir, headSha) {
     return { checks: "green", failing: [], redInheritedFromMain: undefined, source: "devbox-gate", run: done.name };
   }
   // only infra gates: the run answered nothing about the code
-  return { checks: "none", failing: [], redInheritedFromMain: undefined, source: "devbox-gate", infra: true, run: done.name };
+  return { checks: "infra", failing: [], redInheritedFromMain: undefined, source: "devbox-gate", run: done.name };
 }
 
 // ── pure: assembly ───────────────────────────────────────────────────────────
@@ -428,6 +428,7 @@ export function buildPr(raw, repo, { mainFailing, devbox }) {
     title: String(raw.title ?? "").slice(0, 512),
     url: raw.url,
     headSha: raw.headRefOid,
+    ...(raw.headRefName ? { branch: raw.headRefName } : {}),
     draft: Boolean(raw.isDraft),
     author: authorLogin(raw.author),
     updatedAt: raw.updatedAt,
@@ -438,6 +439,29 @@ export function buildPr(raw, repo, { mainFailing, devbox }) {
     ...(dependsOn.length ? { dependsOn } : {}),
     autoMerge: Boolean(raw.autoMergeRequest),
   };
+}
+
+const FIX_MAIN_RE = /\b(?:fix(?:es|ed)?|repairs?|unbreaks?)\s+(?:the\s+)?(?:red\s+)?main\b/i;
+
+/**
+ * The open PR that says it fixes main (title or body, outside code), as the contract's `main.fixedBy`; null when none
+ * says so. Several: the lowest number. The pod never guesses, and neither does this: no phrase, no name.
+ */
+export function fixedByFromPrs(rawOpen, repo) {
+  const hit = rawOpen
+    .filter((p) => !p.isDraft && FIX_MAIN_RE.test(stripCode(`${p.title ?? ""}\n${p.body ?? ""}`)))
+    .sort((a, b) => a.number - b.number)[0];
+  return hit ? { repo, number: hit.number } : null;
+}
+
+/** SNAPSHOT_FIXED_BY="Synap-core/browser=Synap-core/backend#278;Synap-core/app-bases=Synap-core/backend#337" -> { repo: {repo, number} }. */
+export function parseFixedByOverrides(text) {
+  const out = {};
+  for (const part of String(text ?? "").split(/[;,\s]+/).filter(Boolean)) {
+    const m = /^([\w.-]+\/[\w.-]+)=([\w.-]+\/[\w.-]+)#(\d+)$/.exec(part);
+    if (m) out[m[1]] = { repo: m[2], number: Number(m[3]) };
+  }
+  return out;
 }
 
 /** PRs merged since `startMs` (the start of today), newest first. */
@@ -509,7 +533,7 @@ async function getJson(url, timeout = 15_000) {
 }
 
 const PR_FIELDS =
-  "number,title,url,headRefOid,isDraft,author,updatedAt,mergeStateStatus,statusCheckRollup,autoMergeRequest,body";
+  "number,title,url,headRefOid,headRefName,isDraft,author,updatedAt,mergeStateStatus,statusCheckRollup,autoMergeRequest,body";
 
 const HISTORY_QUERY = `query($o:String!,$n:String!,$k:Int!){repository(owner:$o,name:$n){defaultBranchRef{name target{... on Commit{history(first:$k){nodes{oid committedDate associatedPullRequests(first:1){nodes{number}} statusCheckRollup{state contexts(first:60){nodes{__typename ... on CheckRun{name status conclusion} ... on StatusContext{context state}}}}}}}}}}}`;
 
@@ -613,6 +637,13 @@ export async function readRepoSnapshot(repo, { devbox, now, tz, lastLive }) {
       main = { ...main, reason: `devbox status unreadable: ${devbox.error}` };
     }
   }
+
+  if (main.health === "red") {
+    // the founder's mark (env) wins over a PR that says it fixes main; unknown stays absent
+    const fixedBy = parseFixedByOverrides(process.env.SNAPSHOT_FIXED_BY)[repo] ?? fixedByFromPrs(open, repo);
+    if (fixedBy) main = { ...main, fixedBy };
+  }
+  if (main.reason) main = { ...main, reason: main.reason.slice(0, 500) };
 
   const prs = open.map((raw) =>
     buildPr(raw, repo, {

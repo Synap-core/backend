@@ -11,6 +11,8 @@ import {
   checksFromRollup,
   dependsOnFromBody,
   fingerprint,
+  fixedByFromPrs,
+  parseFixedByOverrides,
   inheritedFromMain,
   mainFailingNames,
   mainHealthFromBaselines,
@@ -149,7 +151,7 @@ test("checksFromDevbox: inherited vs own red, infra, queued, other head", () => 
   assert.equal(inh.redInheritedFromMain, true);
   assert.equal(checksFromDevbox({ recent: [lane({ status: "green", gates: [gate("browser-file", "green")] })] }, "browser", head).checks, "green");
   const infra = checksFromDevbox({ recent: [lane({ gates: [gate("browser-tsc", "infra")] })] }, "browser", head);
-  assert.deepEqual([infra.checks, infra.infra], ["none", true]);
+  assert.equal(infra.checks, "infra");
   assert.equal(checksFromDevbox({ recent: [lane({ gates: [gate("browser-file", "green")] })] }, "browser", "ffffffffffff").checks, "none");
   assert.equal(checksFromDevbox({ recent: [], queued: { heavy: [{ repo: "browser", ref: head }], light: [] } }, "browser", head).checks, "queued");
   // a baseline never answers for a PR head
@@ -202,4 +204,21 @@ test("mainFailingNames: a pending head does not hide a slow check that fails on 
   // main fixed the check since: the newest finished result wins
   const fixed = [{ oid: "c3", state: "SUCCESS", failing: [], checks: [ck("Release gate", "pass")] }, nodes[1]];
   assert.deepEqual(mainFailingNames(fixed), []);
+});
+
+test("fixedBy: only a PR that says it fixes main, or the founder's mark; branch rides on the PR", () => {
+  const open = [
+    { number: 7, title: "feat: x", body: "unrelated" },
+    { number: 9, title: "fix: typecheck", body: "Fixes main (the #348 break)" },
+    { number: 8, title: "Fix main typecheck", body: "", isDraft: true },
+    { number: 11, title: "fixes main", body: "" },
+  ];
+  assert.deepEqual(fixedByFromPrs(open, R), { repo: R, number: 9 });
+  assert.equal(fixedByFromPrs([{ number: 1, title: "fix mainstream", body: "`fixes main`" }], R), null);
+  assert.deepEqual(parseFixedByOverrides("Synap-core/browser=Synap-core/backend#278; bad Synap-core/app-bases=Synap-core/backend#337"), {
+    "Synap-core/browser": { repo: R, number: 278 },
+    "Synap-core/app-bases": { repo: R, number: 337 },
+  });
+  const pr = buildPr({ number: 1, headRefOid: head, headRefName: "negctl/x", statusCheckRollup: [], mergeStateStatus: "CLEAN" }, R, { mainFailing: [], devbox: () => ({ checks: "infra" }) });
+  assert.deepEqual([pr.branch, pr.checks], ["negctl/x", "infra"]);
 });
