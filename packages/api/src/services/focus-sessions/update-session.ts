@@ -102,7 +102,8 @@ import {
   logSlotsAsked,
   slotsMissingUnblocks,
   stampAskProvenance,
-  unblocksRequiredMessage,
+  unblocksAdvisedMessage,
+  withDefaultUnblocks,
 } from "./slot-asked-event.js";
 import type { FollowOutcome } from "./follow-playbook.js";
 import {
@@ -1791,8 +1792,10 @@ export async function updateFocusSession(
   // WHAT IT UNBLOCKS (decision E, needs-truth §5): an AGENT that hands the
   // person a slot says what moves on the answer. Read on the slots this patch
   // would newly pose (`slotsMissingUnblocks`, the provenance stamp's own
-  // rule), before the membrane: refused to the agent that wrote it, never
-  // laundered into a proposal.
+  // rule), before the membrane. ADVISED, never refused (rv-be-needs F1): a
+  // slot that says nothing lands with `ASK_UNBLOCKS_DEFAULT` and the reply's
+  // `warnings` says so, so the agent can name the real next step next time.
+  let unblocksAdvice: string | null = null;
   if (
     params.agentUserId &&
     (params.expectedOutputs !== undefined || params.addOutput)
@@ -1814,7 +1817,21 @@ export async function updateFocusSession(
       ).outputs
     );
     if (missing.length > 0) {
-      return { status: "denied", reason: unblocksRequiredMessage(missing) };
+      params = {
+        ...params,
+        ...(params.expectedOutputs !== undefined
+          ? {
+              expectedOutputs: withDefaultUnblocks(
+                params.expectedOutputs,
+                missing
+              ),
+            }
+          : {}),
+        ...(params.addOutput
+          ? { addOutput: withDefaultUnblocks([params.addOutput], missing)[0] }
+          : {}),
+      };
+      unblocksAdvice = unblocksAdvisedMessage(missing);
     }
   }
 
@@ -2445,6 +2462,7 @@ export async function updateFocusSession(
     ? [
         ...droppedAskWarnings(declaredOutputs, outputsAfter),
         ...restatedAskHints(declaredOutputs),
+        ...(unblocksAdvice ? [unblocksAdvice] : []),
       ]
     : [];
 

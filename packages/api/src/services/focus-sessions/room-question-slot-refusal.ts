@@ -16,9 +16,7 @@ export type RoomQuestionSlotCheck =
       status: "unknown_label";
       /** The session's declared slots, so the refusal can list them. */
       declared: Array<{ key: string; label: string }>;
-    }
-  /** The slot says nothing about what the answer unblocks (decision E). */
-  | { status: "unblocks_required"; label: string };
+    };
 
 /** How many declared slots a refusal names (the MCP error text is capped). */
 const REFUSAL_SLOT_LIST_MAX = 12;
@@ -34,9 +32,6 @@ export function roomQuestionSlotRefusal(
 ): string | null {
   if (check.status === "no_session") {
     return `NOTHING WAS POSTED: slotLabel "${slotLabel}" names a session output, but this room belongs to no session. Post the question in the session's room (session.channelId), or drop slotLabel and ask.`;
-  }
-  if (check.status === "unblocks_required") {
-    return `NOTHING WAS POSTED: say what the person's answer unblocks before you ask. Declare \`unblocks\` on output "${check.label}" with synap_update_session outcomes (one line: the next step, session or PR that waits on the answer), then post the question again.`;
   }
   if (check.status !== "unknown_label") return null;
   const shown = check.declared.slice(0, REFUSAL_SLOT_LIST_MAX);

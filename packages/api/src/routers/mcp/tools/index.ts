@@ -550,7 +550,7 @@ const SESSION_OUTCOMES_PROPERTY = {
         type: "string",
         maxLength: 200,
         description:
-          "Only with owner='human', and REQUIRED then: ONE line saying what MOVES when the person answers — the next step, session or PR that waits on the answer ('the EU launch deploy', 'session Pricing page starts'). A hand-over without it is refused.",
+          "Only with owner='human', and expected then: ONE line saying what MOVES when the person answers — the next step, session or PR that waits on the answer ('the EU launch deploy', 'session Pricing page starts'). A hand-over without it lands with 'The agent goes on with this work' and a warning.",
       },
       ref: {
         description:
@@ -2267,7 +2267,7 @@ export const tools = {
                     type: "string",
                     maxLength: 200,
                     description:
-                      "Only with owner='human', and REQUIRED then: ONE line saying what MOVES when the person answers — the next step, session or PR that waits on the answer ('the EU launch deploy', 'session Pricing page starts'). A hand-over without it is refused.",
+                      "Only with owner='human', and expected then: ONE line saying what MOVES when the person answers — the next step, session or PR that waits on the answer ('the EU launch deploy', 'session Pricing page starts'). A hand-over without it lands with 'The agent goes on with this work' and a warning.",
                   },
                   ref: {
                     description:
@@ -2416,7 +2416,7 @@ export const tools = {
                     type: "string",
                     maxLength: 200,
                     description:
-                      "Only with owner='human', and REQUIRED then: ONE line saying what MOVES when the person answers — the next step, session or PR that waits on the answer ('the EU launch deploy', 'session Pricing page starts'). A hand-over without it is refused.",
+                      "Only with owner='human', and expected then: ONE line saying what MOVES when the person answers — the next step, session or PR that waits on the answer ('the EU launch deploy', 'session Pricing page starts'). A hand-over without it lands with 'The agent goes on with this work' and a warning.",
                   },
                   ref: {
                     description:
@@ -2479,7 +2479,7 @@ export const tools = {
                   type: "string",
                   maxLength: 200,
                   description:
-                    "Only with owner='human', and REQUIRED then: ONE line saying what MOVES when the person answers — the next step, session or PR that waits on the answer ('the EU launch deploy', 'session Pricing page starts'). A hand-over without it is refused.",
+                    "Only with owner='human', and expected then: ONE line saying what MOVES when the person answers — the next step, session or PR that waits on the answer ('the EU launch deploy', 'session Pricing page starts'). A hand-over without it lands with 'The agent goes on with this work' and a warning.",
                 },
                 ref: {
                   description:

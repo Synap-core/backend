@@ -215,6 +215,14 @@ const ASK_CAUSE_UNBLOCKS: Record<AskCauseKind, string> = {
 };
 
 /**
+ * The line an agent's hand-over is stamped with when it said nothing about
+ * what the answer unblocks (rv-be-needs F1: ADVISED for one release, never
+ * refused). True of every agent ask: the agent waits on it. The door says so
+ * back (`warnings`), so the agent can name the real next step next time.
+ */
+export const ASK_UNBLOCKS_DEFAULT = "The agent goes on with this work";
+
+/**
  * WHAT MOVES when the person answers (decision E): the slot's own declared
  * `unblocks`, else the line its cause implies (a system producer: a run, a
  * gate, a param…). `null` when neither says — never a guessed line.

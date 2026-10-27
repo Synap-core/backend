@@ -1,20 +1,25 @@
 /**
  * `unblocks` — WHAT MOVES when the person answers (decision E, needs-truth
- * §5): declared by the agent with the hand-over, REQUIRED when an agent hands
- * a slot to the person, read from the cause for a system producer, carried to
- * every needs-you row, and advertised on every MCP slot schema.
+ * §5): declared by the agent with the hand-over, ADVISED when an agent hands
+ * a slot to the person without it (rv-be-needs F1: the default line and a
+ * warning, never a refusal), read from the cause for a system producer,
+ * carried to every needs-you row, and advertised on every MCP slot schema.
  *
  * Each rule pairs the row that passes with its one-fact-away twin. Negative
  * control: without the rule (`slotsMissingUnblocks` returning []), the
- * "refused" rows land and these go red.
+ * "advised" rows carry no default and these go red.
  */
 import { describe, expect, it } from "vitest";
 import type { ExpectedOutput } from "@synap/playbooks";
-import { effectiveSlotUnblocks } from "@synap-core/types/ask";
+import {
+  ASK_UNBLOCKS_DEFAULT,
+  effectiveSlotUnblocks,
+} from "@synap-core/types/ask";
 import { stampBlocked, stampUnblocked } from "../block-output.js";
 import {
   slotsMissingUnblocks,
-  unblocksRequiredMessage,
+  unblocksAdvisedMessage,
+  withDefaultUnblocks,
 } from "../slot-asked-event.js";
 import {
   addOutputWireSchema,
@@ -22,7 +27,6 @@ import {
 } from "../update-session.js";
 import { outcomeDeclarationSchema } from "../outcome-declarations.js";
 import { projectOwedSlots } from "../owed-outputs.js";
-import { roomQuestionSlotRefusal } from "../room-question-slot-refusal.js";
 import { signalFromOwedSlot } from "../../signals/needs-you-union.js";
 import { tools } from "../../../routers/mcp/tools/index.js";
 
@@ -30,7 +34,7 @@ const AT = new Date("2026-10-27T09:00:00.000Z");
 const AGENT_SLOT: ExpectedOutput = { kind: "decision", label: "Launch scope" };
 
 describe("slotsMissingUnblocks — the agent rule", () => {
-  it("refuses a slot newly handed to the person with nothing it unblocks", () => {
+  it("advises a slot newly handed to the person with nothing it unblocks", () => {
     const after = applyOutputMutations([AGENT_SLOT], {
       addOutput: {
         kind: "decision",
@@ -41,9 +45,25 @@ describe("slotsMissingUnblocks — the agent rule", () => {
       },
     }).outputs;
     expect(slotsMissingUnblocks([AGENT_SLOT], after)).toEqual(["Region"]);
-    expect(unblocksRequiredMessage(["Region"])).toMatch(
-      /NOTHING WAS CHANGED.*unblocks.*"Region"/
+    // Landed with the default, said back — never "NOTHING WAS CHANGED".
+    const advice = unblocksAdvisedMessage(["Region"]);
+    expect(advice).toMatch(/"Region".*unblocks/);
+    expect(advice).toContain(ASK_UNBLOCKS_DEFAULT);
+    expect(advice).not.toMatch(/NOTHING WAS/);
+  });
+
+  it("the default goes on the named slot only, never over a declared line", () => {
+    const [region, scope, said] = withDefaultUnblocks(
+      [
+        { label: "Region" },
+        { label: "Launch scope" },
+        { label: "Pricing", unblocks: "The pricing page" },
+      ],
+      ["region", "Pricing"]
     );
+    expect(region!.unblocks).toBe(ASK_UNBLOCKS_DEFAULT);
+    expect(scope!.unblocks).toBeUndefined();
+    expect(said!.unblocks).toBe("The pricing page");
   });
 
   it("lets it land when it says what moves on the answer", () => {
@@ -165,17 +185,6 @@ describe("the read: owed slot → row", () => {
     expect(silent!.unblocks).toBeUndefined();
     expect(signalFromOwedSlot(declared!).unblocks).toBe("The deploy");
     expect("unblocks" in signalFromOwedSlot(silent!)).toBe(false);
-  });
-});
-
-describe("the room question refusal", () => {
-  it("names the output and the door that declares it", () => {
-    expect(
-      roomQuestionSlotRefusal(
-        { status: "unblocks_required", label: "Region" },
-        "region"
-      )
-    ).toMatch(/NOTHING WAS POSTED.*unblocks.*"Region".*outcomes/);
   });
 });
 

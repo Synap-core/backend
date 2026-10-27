@@ -37,7 +37,6 @@ import { deriveSlotKeys, findSlotIndex } from "./slot-keys.js";
 import type { RoomQuestionSlotCheck } from "./room-question-slot-refusal.js";
 import {
   blockExpectedOutput,
-  handOverMissingUnblocks,
   type BlockExpectedOutputParams,
   type BlockExpectedOutputResult,
 } from "./block-output.js";
@@ -102,8 +101,7 @@ export async function fileRoomQuestionOnSlot(p: {
 }
 
 /**
- * What filing a question hands over, for the filing and its pre-post check
- * alike. Keeps a slot's existing blocker class (a credential stays a
+ * What filing a question hands over. Keeps a slot's existing blocker class (a credential stays a
  * credential); an agent-owned slot being asked about is a `decision` the
  * person makes. Pure.
  */
@@ -120,7 +118,6 @@ function questionHandOver(
       existing?.owner === "human" && existing.blockedReason
         ? existing.blockedReason
         : "decision",
-    // The check runs before the question exists; `why` never decides posing.
     ...(question !== undefined
       ? {
           why:
@@ -145,8 +142,6 @@ export async function checkRoomQuestionSlot(p: {
   channelId: string;
   slotLabel: string;
   userId: string;
-  /** The typed ask the question carries — a changed ask poses the slot anew. */
-  ask?: SlotAsk;
 }): Promise<RoomQuestionSlotCheck> {
   const session = await resolveRoomSession(p.channelId);
   if (!session) return { status: "no_session" };
@@ -164,17 +159,9 @@ export async function checkRoomQuestionSlot(p: {
   const slots = Array.isArray(row?.expectedOutputs)
     ? (row.expectedOutputs as ExpectedOutput[])
     : [];
-  const found = slots[findSlotIndex(slots, p.slotLabel)];
-  if (found) {
-    // WHAT IT UNBLOCKS (decision E): a question that newly hands the slot to
-    // the person must say what moves on the answer — declared on the slot
-    // (`outcomes` … `unblocks`), or by its cause. THE block door's own check
-    // (`handOverMissingUnblocks`), run BEFORE the post.
-    return handOverMissingUnblocks(found, questionHandOver(found, p)).length ===
-      0
-      ? { status: "ok" }
-      : { status: "unblocks_required", label: found.label };
-  }
+  // WHAT IT UNBLOCKS (decision E) is ADVISED, never refused (rv-be-needs
+  // F1): the filing (`blockExpectedOutput`) stamps the default and says so.
+  if (slots[findSlotIndex(slots, p.slotLabel)]) return { status: "ok" };
   const keys = deriveSlotKeys(slots);
   return {
     status: "unknown_label",

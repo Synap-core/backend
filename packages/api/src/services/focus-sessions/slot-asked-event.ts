@@ -18,6 +18,7 @@ import type { ExpectedOutput, SlotAskCause } from "@synap/playbooks";
 import {
   askFingerprint,
   effectiveSlotUnblocks,
+  ASK_UNBLOCKS_DEFAULT,
   type AskCardSlot,
 } from "@synap-core/types/ask";
 import { logEvent } from "../../lib/event-helpers.js";
@@ -118,9 +119,12 @@ function posedBy(
 /**
  * The slots an AGENT's write newly hands the person WITHOUT saying what the
  * answer unblocks (decision E, needs-truth §5) — their labels; empty = the
- * write may land. A slot whose cause names it (`askCause`: a system producer)
+ * write says it. A slot whose cause names it (`askCause`: a system producer)
  * reads its line from the cause (`effectiveSlotUnblocks`) and is never
- * missing. Pure; the doors refuse on a non-empty answer.
+ * missing. Pure; the doors ADVISE on a non-empty answer (F1: one release,
+ * never a refusal): each named slot is stamped `ASK_UNBLOCKS_DEFAULT`
+ * ({@link withDefaultUnblocks}) and the reply carries
+ * {@link unblocksAdvisedMessage}.
  */
 export function slotsMissingUnblocks(
   before: readonly ExpectedOutput[],
@@ -135,10 +139,26 @@ export function slotsMissingUnblocks(
     .map((o) => o.label);
 }
 
-/** The refusal sentence for {@link slotsMissingUnblocks}. Says nothing landed. */
-export function unblocksRequiredMessage(labels: readonly string[]): string {
+/**
+ * The declared items, with `ASK_UNBLOCKS_DEFAULT` on each one `labels` names
+ * that says nothing it unblocks. Every other item is returned as is. Pure.
+ */
+export function withDefaultUnblocks<
+  T extends { label?: string; unblocks?: string | null },
+>(items: readonly T[], labels: readonly string[]): T[] {
+  const named = new Set(labels.map((l) => normalizeExpectedLabel(l)));
+  return items.map((item) =>
+    named.has(normalizeExpectedLabel(item?.label)) &&
+    !(typeof item.unblocks === "string" && item.unblocks.trim())
+      ? { ...item, unblocks: ASK_UNBLOCKS_DEFAULT }
+      : item
+  );
+}
+
+/** The advice sentence for {@link slotsMissingUnblocks}: it landed, with the default. */
+export function unblocksAdvisedMessage(labels: readonly string[]): string {
   const named = labels.map((l) => `"${l}"`).join(", ");
-  return `NOTHING WAS CHANGED: say what the person's answer unblocks. Add \`unblocks\` (one line: the next step, session or PR that waits on the answer, e.g. "the EU launch deploy") to ${named}, then send it again.`;
+  return `${named}: you did not say what the person's answer unblocks, so they read "${ASK_UNBLOCKS_DEFAULT}". Next time add \`unblocks\` (one line: the next step, session or PR that waits on the answer, e.g. "the EU launch deploy").`;
 }
 
 /** The event payload for one posed ask. Pure. */

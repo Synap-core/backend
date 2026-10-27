@@ -467,9 +467,10 @@ const BlockOutputBodySchema = z.object({
   blockedReason: z.enum(BLOCKED_REASONS),
   why: z.string().max(500).optional(),
   /**
-   * WHAT MOVES when the person answers — one line (decision E). Required from
-   * an agent key unless the slot already declares it: refused 400, nothing
-   * written. Twin of the tRPC `blockOutput.unblocks`.
+   * WHAT MOVES when the person answers — one line (decision E). Expected from
+   * an agent key unless the slot already declares it: ADVISED, never refused
+   * (the slot lands with `ASK_UNBLOCKS_DEFAULT` and the reply's `warnings`
+   * says so). Twin of the tRPC `blockOutput.unblocks`.
    */
   unblocks: z
     .string()
@@ -3312,7 +3313,6 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
               400
             );
           case "ref_unreachable":
-          case "unblocks_required":
             // Named, never defaulted: the `default` below is the SUCCESS arm,
             // so an unhandled refusal would answer 200 with no label at all.
             return c.json({ error: result.reason }, 400);
@@ -3325,6 +3325,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
                 ? { blockGuidelines: result.blockGuidelines }
                 : {}),
               ...("hint" in result && result.hint ? { hint: result.hint } : {}),
+              ...("warnings" in result && result.warnings?.length
+                ? { warnings: result.warnings }
+                : {}),
             });
         }
       } catch (err) {

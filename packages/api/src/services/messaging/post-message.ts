@@ -183,7 +183,7 @@ export interface PostChannelMessageResult {
    * every other post. `hint` when the ask's prompt only repeats the slot's
    * label (`ask-text.ts`): filed anyway, said back.
    */
-  slot?: { status: string; hint?: string };
+  slot?: { status: string; hint?: string; warnings?: string[] };
 }
 
 /**
@@ -316,6 +316,9 @@ async function fileSlotQuestion(
     return {
       status: filed.status,
       ...("hint" in filed && filed.hint ? { hint: filed.hint } : {}),
+      ...("warnings" in filed && filed.warnings?.length
+        ? { warnings: filed.warnings }
+        : {}),
     };
   } catch (err) {
     logger.warn(
@@ -348,7 +351,6 @@ export async function postChannelMessage(
         channelId,
         slotLabel: params.slotLabel,
         userId,
-        ...(params.ask ? { ask: params.ask } : {}),
       }),
       params.slotLabel
     );

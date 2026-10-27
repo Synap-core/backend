@@ -1372,6 +1372,7 @@ export {
   isAskReviewLater,
   effectiveAskCause,
   effectiveSlotUnblocks,
+  ASK_UNBLOCKS_DEFAULT,
   stripAskVerbPrefix,
   askTextRestates,
   stripLeadingRestatement,

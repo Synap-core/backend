@@ -135,6 +135,7 @@ import {
   PARAM_SLOT_KIND,
   CRITERION_SLOT_KIND,
 } from "@synap-core/types/focus-sessions";
+import { ASK_UNBLOCKS_DEFAULT } from "@synap-core/types/ask";
 import { answerSessionSlot, attestSessionSlot } from "../session-answer.js";
 import { paramOwedSlots } from "../param-slots.js";
 import { selectSlotToAttest } from "../satisfy-expected-output.js";
@@ -689,7 +690,7 @@ describe("param / criterion / provide / room question on the ONE answer door", (
     });
 
   // Says what its answer unblocks (decision E): a question about a slot that
-  // does not is refused before it is posted (`unblocks.test.ts`).
+  // does not is advised, with the default line (`unblocks.test.ts`).
   const AGENT_SLOT = {
     kind: "document",
     label: "Region",
@@ -792,12 +793,13 @@ describe("param / criterion / provide / room question on the ONE answer door", (
 
   /**
    * WHAT IT UNBLOCKS (decision E): a question that newly hands a slot to the
-   * person must say what moves on the answer. Refused BEFORE the post at both
-   * doors — the block door's own check, so the question can never post while
-   * its filing is refused. A follow-up on a slot already the person's, with
-   * the same ask, poses nothing new and still posts.
+   * person should say what moves on the answer. ADVISED, never refused
+   * (rv-be-needs F1): at both doors the question posts, the slot is filed
+   * with `ASK_UNBLOCKS_DEFAULT`, and the reply's `slot.warnings` says so. A
+   * follow-up on a slot already the person's, with the same ask, poses
+   * nothing new and carries no warning.
    */
-  it("a question newly posing a slot that says nothing it unblocks is refused at both doors — nothing posted", async () => {
+  it("a question newly posing a slot that says nothing it unblocks posts at both doors — with the default line and a warning", async () => {
     const SILENT = { kind: "document", label: "Region" };
     const { sessionId, channelId } = await seed([SILENT]);
     const hubRes = await hubPost(channelId, {
@@ -806,24 +808,37 @@ describe("param / criterion / provide / room question on the ONE answer door", (
       slotLabel: "Region",
       ask: CONFIRM,
     });
-    expect(hubRes.status).toBe(400);
-    expect(((await hubRes.json()) as { error: string }).error).toMatch(
-      /^NOTHING WAS POSTED: say what the person's answer unblocks.*"Region"/
+    expect(hubRes.status).toBe(200);
+    const hubSlot = (
+      (await hubRes.json()) as {
+        slot?: { status: string; warnings?: string[] };
+      }
+    ).slot;
+    expect(hubSlot?.status).toBe("blocked");
+    expect(hubSlot?.warnings?.join(" ")).toContain(ASK_UNBLOCKS_DEFAULT);
+    expect(await roomMessages(channelId)).toHaveLength(1);
+    expect(await slotOf(sessionId, "Region")).toMatchObject({
+      owner: "human",
+      unblocks: ASK_UNBLOCKS_DEFAULT,
+    });
+
+    const mcp = await seed([SILENT]);
+    const posted = await postChannelMessage({
+      channelId: mcp.channelId,
+      content: "Which region should we bill?",
+      role: "assistant",
+      triggerAI: false,
+      kind: "question",
+      slotLabel: "region",
+      userId: OWNER,
+      agentUserId: IS_AGENT,
+    });
+    expect(posted.slot?.status).toBe("blocked");
+    expect(posted.slot?.warnings?.join(" ")).toContain(ASK_UNBLOCKS_DEFAULT);
+    expect(await roomMessages(mcp.channelId)).toHaveLength(1);
+    expect((await slotOf(mcp.sessionId, "Region")).unblocks).toBe(
+      ASK_UNBLOCKS_DEFAULT
     );
-    await expect(
-      postChannelMessage({
-        channelId,
-        content: "Which region should we bill?",
-        role: "assistant",
-        triggerAI: false,
-        kind: "question",
-        slotLabel: "region",
-        userId: OWNER,
-        agentUserId: IS_AGENT,
-      })
-    ).rejects.toThrow(/^NOTHING WAS POSTED: say what the person's answer unblocks/);
-    expect(await roomMessages(channelId)).toHaveLength(0);
-    expect((await slotOf(sessionId, "Region")).owner).toBeUndefined();
 
     // Already the person's, same ask: a follow-up poses nothing new.
     const held = await seed([
@@ -842,6 +857,10 @@ describe("param / criterion / provide / room question on the ONE answer door", (
       slotLabel: "Region",
     });
     expect(again.status).toBe(200);
+    expect(
+      ((await again.json()) as { slot?: { warnings?: string[] } }).slot
+        ?.warnings
+    ).toBeUndefined();
     expect(await roomMessages(held.channelId)).toHaveLength(1);
   });
 

@@ -1213,9 +1213,9 @@ export function registerThreadsRoutes(app: HubHono): void {
       }
 
       // An AGENT's question about a slot is refused BEFORE the insert when the
-      // slot cannot take it — undeclared, a room of no session, or saying
-      // nothing about what the answer unblocks (decision E): the same check
-      // and wording as the MCP post door (`postChannelMessage`).
+      // slot cannot take it — undeclared or a room of no session: the same
+      // check and wording as the MCP post door (`postChannelMessage`). What
+      // the answer unblocks is advised by the filing, never refused.
       if (
         c.get("agentUserId") &&
         body.intent === undefined &&
@@ -1227,7 +1227,6 @@ export function registerThreadsRoutes(app: HubHono): void {
             channelId: threadId,
             slotLabel: body.slotLabel,
             userId,
-            ...(body.ask ? { ask: body.ask as SlotAsk } : {}),
           }),
           body.slotLabel
         );
@@ -1391,7 +1390,7 @@ export function registerThreadsRoutes(app: HubHono): void {
       // the same service the MCP post door reaches (`post-message.ts`). The
       // slot was checked before the insert; a filing that still lands nothing
       // (already delivered, a race) leaves the question standing, and says so.
-      let slot: { status: string } | undefined;
+      let slot: { status: string; warnings?: string[] } | undefined;
       if (
         ctxAgentUserId &&
         body.kind === "question" &&
@@ -1406,7 +1405,12 @@ export function registerThreadsRoutes(app: HubHono): void {
             agentUserId: ctxAgentUserId,
             userId,
           });
-          slot = { status: filed.status };
+          slot = {
+            status: filed.status,
+            ...("warnings" in filed && filed.warnings?.length
+              ? { warnings: filed.warnings }
+              : {}),
+          };
         } catch (err) {
           logger.warn(
             { err, threadId, messageId: msgId },
