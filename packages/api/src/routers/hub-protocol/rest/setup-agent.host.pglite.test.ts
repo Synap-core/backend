@@ -229,7 +229,7 @@ describe("POST /setup/agent with a computer's key (D1)", () => {
 describe("Q-D2: a computer-less agent is adopted once, when unambiguous", () => {
   it("one computer: the person's computer-less agent moves onto it, history kept", async () => {
     const old = await provisionSurfaceAgentKey({
-      agentType: "gemini",
+      agentType: "raycast",
       createdByUserId: ONE,
       linkedUserId: ONE,
       hostUserId: null,
@@ -237,7 +237,7 @@ describe("Q-D2: a computer-less agent is adopted once, when unambiguous", () => 
     expect((await userRow(old.agentUserId))!.host_user_id).toBeNull();
 
     const only = await connectComputer(ONE, "only-box");
-    const res = await setupAgent(only.computer.apiKey, "gemini");
+    const res = await setupAgent(only.computer.apiKey, "raycast");
     expect(res.status).toBe(200);
     const { agentUserId } = (await res.json()) as { agentUserId: string };
     expect(agentUserId).toBe(old.agentUserId);
@@ -253,13 +253,13 @@ describe("Q-D2: a computer-less agent is adopted once, when unambiguous", () => 
       )
     ).not.toHaveLength(1);
     const old = await provisionSurfaceAgentKey({
-      agentType: "opencode",
+      agentType: "openwebui",
       createdByUserId: TWO,
       linkedUserId: TWO,
       hostUserId: null,
     });
     const box = await connectComputer(TWO, "another-box");
-    const res = await setupAgent(box.computer.apiKey, "opencode");
+    const res = await setupAgent(box.computer.apiKey, "openwebui");
     expect(res.status).toBe(200);
     const { agentUserId } = (await res.json()) as { agentUserId: string };
     expect(agentUserId).not.toBe(old.agentUserId);
