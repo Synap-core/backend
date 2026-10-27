@@ -130,26 +130,26 @@ describe("classifyMcpBody", () => {
 
   it("synap_ask: an answer is ai; sources or compare is a read", () => {
     expect(classifyMcpBody(call("synap_ask"), readOnly)).toBe("ai");
-    expect(classifyMcpBody(call("synap_ask", { detail: "full" }), readOnly)).toBe(
-      "ai"
-    );
+    expect(
+      classifyMcpBody(call("synap_ask", { detail: "full" }), readOnly)
+    ).toBe("ai");
     expect(
       classifyMcpBody(call("synap_ask", { detail: "sources" }), readOnly)
     ).toBe("read");
-    expect(classifyMcpBody(call("synap_ask", { compare: true }), readOnly)).toBe(
-      "read"
-    );
+    expect(
+      classifyMcpBody(call("synap_ask", { compare: true }), readOnly)
+    ).toBe("read");
   });
 
   it("a batch: any write is a write, else any ai is ai", () => {
     expect(
-      classifyMcpBody(
-        [call("synap_get_entity"), call("synap_ask")],
-        readOnly
-      )
+      classifyMcpBody([call("synap_get_entity"), call("synap_ask")], readOnly)
     ).toBe("ai");
     expect(
-      classifyMcpBody([call("synap_ask"), call("synap_create_entity")], readOnly)
+      classifyMcpBody(
+        [call("synap_ask"), call("synap_create_entity")],
+        readOnly
+      )
     ).toBe("write");
   });
 });
