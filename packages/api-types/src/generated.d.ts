@@ -13585,6 +13585,12 @@ export interface OwedSlot {
 	sessionTitle: string | null;
 	/** The session's lifecycle state — an owed slot outlives its session. */
 	sessionStatus: string;
+	/**
+	 * The thing the session is ABOUT (`focus_sessions.subject_entity_id`), or
+	 * null. What lets a reader place the ask on its thing — a post's page, a
+	 * deal's card — without re-reading the session.
+	 */
+	subjectEntityId: string | null;
 	workspaceId: string | null;
 	projectId: string | null;
 	/** The DECLARED label — the key every slot door matches on. */
