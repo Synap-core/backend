@@ -131,6 +131,15 @@ describe("0364 api_usage_buckets", () => {
     c.record(dims({ conversationId: "claude-code:other" }), 1, at);
     c.record(dims({ client: "synap-cli-mcp/1.13.0" }), 1, at);
     c.record(dims({ apiKeyId: OTHER, client: "elsewhere" }), 1, at);
+    // Refused before auth on KEY's limiter key (counts for KEY), and on
+    // another limiter key (does not).
+    const refused = {
+      apiKeyId: null,
+      conversationId: null,
+      outcome: "429" as const,
+    };
+    c.record(dims({ ...refused }), 1, at);
+    c.record(dims({ ...refused, limiterKey: "key:someone-else" }), 1, at);
     await flushApiUsage(c.drain(), db);
 
     const r = await readApiUsage(db, {
@@ -146,6 +155,13 @@ describe("0364 api_usage_buckets", () => {
         calls: 5,
         heldMs: 5,
         conversations: 2,
+      },
+      {
+        client: "synap-bridge/0.6.0",
+        outcome: "429",
+        calls: 1,
+        heldMs: 1,
+        conversations: 0,
       },
       {
         client: "synap-cli-mcp/1.13.0",

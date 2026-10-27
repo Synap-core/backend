@@ -266,7 +266,13 @@ export async function readApiUsage(
   const limit = Math.min(Math.max(1, Math.floor(q.limit ?? 200)), 1000);
 
   const where = [gte(t.bucketStart, since), lt(t.bucketStart, until)];
-  if (q.apiKeyId) where.push(sql`${t.apiKeyId} = ${q.apiKeyId}`);
+  if (q.apiKeyId) {
+    // The key's own rows, plus the rows refused BEFORE auth (no key id) on a
+    // limiter key that key's authenticated rows carry: its 429s.
+    where.push(
+      sql`(${t.apiKeyId} = ${q.apiKeyId} OR (${t.apiKeyId} IS NULL AND ${t.limiterKey} IN (SELECT DISTINCT k.limiter_key FROM api_usage_buckets k WHERE k.api_key_id = ${q.apiKeyId})))`
+    );
+  }
   if (q.client) where.push(sql`${t.client} = ${q.client}`);
 
   const selected: Record<string, SQL> = {};
@@ -282,7 +288,8 @@ export async function readApiUsage(
     .from(t)
     .where(and(...where))
     .groupBy(...groupBy.map(groupExpr))
-    .orderBy(sql`sum(${t.calls}) DESC`)
+    // Largest first; ties in the group-by order, so the answer is stable.
+    .orderBy(sql`sum(${t.calls}) DESC`, ...groupBy.map(groupExpr))
     .limit(limit);
 
   const groups = (rows as Record<string, unknown>[]).map((r) => {
