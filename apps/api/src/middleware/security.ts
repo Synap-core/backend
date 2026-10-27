@@ -195,7 +195,7 @@ const crudIpCeilingLimiter = rateLimiter({
   standardHeaders: false,
   skip: (c) => crudIpCeilingKey(c) === null,
   keyGenerator: (c) => crudIpCeilingKey(c) ?? "crud:ipall:none",
-  handler: retryAfterHandler(
+  handler: classHandler( // NEGCTL: the crud ceiling's bare 429
     "crud",
     crudIpCeiling,
     rateLimitClassConfig.crud.retryAfter
