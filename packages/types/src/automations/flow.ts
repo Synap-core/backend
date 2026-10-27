@@ -282,6 +282,11 @@ export interface OutputNodeDef extends AutomationNodeBase {
     label: string;
     outputType:
       | "notification"
+      // Record an outside fact as an observation (`dev.pr_merged`), through
+      // the observation door's own checks. Config: `type`, `subjectId`,
+      // `subjectType?`, `data`, `occurredAt?`. (A line comment, not JSDoc:
+      // the api-types generator would carry a JSDoc into the generated union.)
+      | "record_observation"
       | "entity_create"
       | "entity_update"
       | "facet_attach"

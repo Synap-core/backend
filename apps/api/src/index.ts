@@ -1866,6 +1866,8 @@ try {
               await import("@synap/jobs/workers/entity-media-copy-worker.js");
             const { registerDevLoopRunner } =
               await import("@synap/jobs/workers/dev-loop-worker.js");
+            const { registerObservationDoor } =
+              await import("@synap/jobs/utils/observation-door.js");
             const { registerEventSyncRunner } =
               await import("@synap/jobs/workers/event-sync-cron.js");
             const { registerConnectionSyncRunner } =
@@ -1975,6 +1977,13 @@ try {
             // pod acts on (`dev.pr_merged`); the api-side runner moves the
             // sessions it is about (the merge sweeper).
             registerDevLoopRunner((input) => api.runDevLoopObservation(input));
+            // ONE observation writer: an automation's `record_observation`
+            // step records an outside fact (a GitHub webhook read into
+            // `dev.pr_merged`) through the observation door's own checks.
+            // Fail-closed: unregistered, the step throws.
+            registerObservationDoor((input) =>
+              api.recordObservationFromAutomation(input)
+            );
             // The Discord mirror pass. Google Calendar events reach it as Synap
             // `event` entities landed by the connection sync — never straight
             // to Discord.
