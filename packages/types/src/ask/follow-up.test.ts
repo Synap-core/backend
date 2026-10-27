@@ -10,6 +10,7 @@ import {
   AskSchema,
   AskAnswerValueSchema,
   ASK_LIMITS,
+  askAnswersInline,
   buildAskSnapshot,
   summarizeAnswer,
   validateAnswerAgainstAsk,
@@ -186,5 +187,14 @@ describe("the card", () => {
       "Production",
     ]);
     expect(followUpChips(DEPLOY.options[1]!)).toEqual([]);
+  });
+});
+
+describe("a tree is never answered in the row", () => {
+  it("a choose with a follow-up is not inline; its flat twin is", () => {
+    expect(askAnswersInline(DEPLOY)).toBe(false);
+    expect(
+      askAnswersInline(AskSchema.parse({ mode: "choose", options: twoOptions }))
+    ).toBe(true);
   });
 });

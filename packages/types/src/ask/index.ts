@@ -1031,13 +1031,17 @@ export function summarizeAnswer(
  * Can this ask be answered IN the row, without opening anything? A yes/no, or
  * a pick among ≤ 3 fixed options. Anything wider (a form, a provide, "Other…",
  * a long option list) needs its own sheet. An absent ask is a free-text answer
- * and is never inline.
+ * and is never inline. A choose whose option opens a follow-up is never
+ * inline either: a one-tap row cannot send the follow-up's pick (`then`).
  */
 export function askAnswersInline(ask: Ask | null | undefined): boolean {
   if (!ask) return false;
   if (ask.mode === "confirm") return true;
   return (
-    ask.mode === "choose" && ask.options.length <= 3 && ask.allowOther !== true
+    ask.mode === "choose" &&
+    ask.options.length <= 3 &&
+    ask.allowOther !== true &&
+    !ask.options.some((o) => o.followUp)
   );
 }
 
