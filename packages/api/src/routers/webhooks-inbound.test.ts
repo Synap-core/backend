@@ -330,6 +330,17 @@ describe("inbound webhook ingress auth", () => {
     expect(emitSideEffects).not.toHaveBeenCalled();
   });
 
+  it("never forwards a ping, whichever signature header carried it", async () => {
+    const body = JSON.stringify({ zen: "x" });
+    const res = await post(SUB_ID, body, {
+      "x-synap-event": "ping",
+      "x-synap-signature": sign(SECRET, body),
+    });
+
+    expect(res.status).toBe(200);
+    expect(emitSideEffects).not.toHaveBeenCalled();
+  });
+
   it("still refuses an unsigned ping (auth comes before the handshake)", async () => {
     const res = await post(SUB_ID, JSON.stringify({ zen: "x" }), {
       "x-github-event": "ping",
