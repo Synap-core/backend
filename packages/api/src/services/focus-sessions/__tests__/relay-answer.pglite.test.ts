@@ -853,13 +853,21 @@ describe("the relay door", () => {
       proposalType: "entity.update",
       governanceReason: "HUMAN_ONLY_STATUS",
     });
-    await ask(channelId, {
-      slotLabel: LABEL,
-      ask: { ...CHOOSE, lookedAt: [{ kind: "entity", id: DEAL }] },
-    });
+    const posted = await send(
+      app({ agentUserId: AGENT }),
+      `/threads/${channelId}/messages`,
+      {
+        role: "assistant",
+        content: WHY,
+        userId: OWNER,
+        kind: "question",
+        slotLabel: LABEL,
+        ask: { ...CHOOSE, lookedAt: [{ kind: "entity", id: DEAL }] },
+      }
+    );
     // The question really was filed on the slot (a refused citation still
     // posts, so without this the relay would be refused for the wrong reason).
-    expect((await slot(sessionId)).owner).toBe("human");
+    expect(await posted.json()).toMatchObject({ slot: { status: "blocked" } });
     const res = await relay(sessionId, {
       disposition: "answered",
       slotLabel: LABEL,
