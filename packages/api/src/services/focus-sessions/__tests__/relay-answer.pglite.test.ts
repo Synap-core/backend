@@ -225,7 +225,11 @@ async function seed(
       OWNER,
       JSON.stringify(
         opts.outputs ?? [
-          { kind: "document", label: LABEL, unblocks: "The billing switch-over" },
+          {
+            kind: "document",
+            label: LABEL,
+            unblocks: "The billing switch-over",
+          },
         ]
       ),
       [AGENT],
