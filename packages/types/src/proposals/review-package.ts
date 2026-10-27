@@ -38,6 +38,7 @@
  * Pure. Imports only this package's own leaves.
  */
 
+import { isSessionBookkeeping } from "./attention.js";
 import { readDeferredWrites } from "./deferred-writes.js";
 
 /** Every package, IN REVIEW ORDER (stakes first). */
@@ -267,16 +268,24 @@ const BY_PROPOSAL_TYPE: Readonly<Record<string, ReviewPackage>> = {
 };
 
 /**
- * An agent's notes on a session it works in: the session itself, its run, its
+ * An agent's notes on a session it works in: its session record, its run, its
  * narrative. Bookkeeping only when an agent filed it ({@link
- * ReviewPackageInput.filedByPerson}).
+ * ReviewPackageInput.filedByPerson}). The session-record half is THE
+ * bookkeeping rule (`isSessionBookkeeping`, ./attention.ts) minus `create`:
+ * a pending session create is a decision there, so it is one here too.
  */
 const BOOKKEEPING_PAIRS: ReadonlySet<string> = new Set([
-  "focus_session/create",
-  "focus_session/update",
   "playbook_run/update",
   "document/session_narrative_update",
 ]);
+
+function isBookkeepingWrite(type: string, target: string): boolean {
+  if (BOOKKEEPING_PAIRS.has(`${target}/${type}`)) return true;
+  return (
+    isSessionBookkeeping({ proposalType: type, targetType: target, status: null }) &&
+    !type.endsWith("create")
+  );
+}
 
 /** Record kinds whose create is KNOWLEDGE, not a data change. */
 export const KNOWLEDGE_OBJECT_KINDS: ReadonlySet<string> = new Set([
@@ -393,7 +402,7 @@ function decide(input: ReviewPackageInput): ReviewPackageDecision {
       : undefined;
   if (byType) return { package: byType, rule: "type" };
 
-  if (BOOKKEEPING_PAIRS.has(pair) && input.filedByPerson !== true)
+  if (isBookkeepingWrite(type, target) && input.filedByPerson !== true)
     return { package: "bookkeeping", rule: "bookkeeping" };
 
   if (

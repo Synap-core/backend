@@ -23,6 +23,9 @@ describe("reviewPackageOf — the 27 Oct pending mix", () => {
   it("an agent's update of a session is bookkeeping", () => {
     expect(p("update", "focus_session")).toBe("bookkeeping");
   });
+  it("a pending session START is a decision, not bookkeeping (the attention rule)", () => {
+    expect(p("create", "focus_session")).toBe("data-changes");
+  });
   it("the same update filed by a person is a change to their data", () => {
     expect(p("update", "focus_session", { filedByPerson: true })).toBe(
       "data-changes"
@@ -94,7 +97,7 @@ describe("a held-writes pack files by its writes", () => {
 
   it("a pack of session notes is bookkeeping", () => {
     expect(
-      pack([write("focus_session", "update"), write("focus_session", "create")])
+      pack([write("focus_session", "update"), write("playbook_run", "update")])
     ).toBe("bookkeeping");
   });
   it("the highest-stakes write decides: one knowledge capture lifts it out of bookkeeping", () => {
