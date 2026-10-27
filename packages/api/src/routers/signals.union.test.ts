@@ -26,6 +26,7 @@ import {
 import { CRITERION_SLOT_KIND } from "@synap-core/types/focus-sessions";
 import { resolveObjectNoun } from "@synap-core/types/vocabulary";
 import { normalizeExpectedLabel } from "../services/focus-sessions/expected-label.js";
+import { needsYouRows } from "@synap-core/types/needs-you";
 
 function cluster(over: Partial<ProposalCluster> = {}): ProposalCluster {
   const proposalType = over.proposalType ?? "create";
@@ -359,6 +360,44 @@ describe("owed slots in the needs-you union", () => {
       owedTruncated: false,
     });
     expect(counted.needsYou).toBe(listed.length);
+  });
+
+  it("the badge counts exactly the owed rows drawn outside the Review later fold", () => {
+    // The input where "every week-old ask leaves the headline" and "a session
+    // is never split" disagree: one session owing a fresh ask AND a week-old
+    // one (the stale ask rides in the fresh card), beside a session whose only
+    // ask is a week old (it folds into Review later).
+    const now = new Date("2026-10-27T10:00:00Z");
+    const fresh = new Date(now.getTime() - 3_600_000).toISOString();
+    const stale = new Date(now.getTime() - 9 * 86_400_000).toISOString();
+    const owedSlots = [
+      owed({ sessionId: "mixed", label: "Fresh ask", owedSince: fresh }),
+      owed({ sessionId: "mixed", label: "Week-old ask", owedSince: stale }),
+      owed({ sessionId: "quiet", label: "Forgotten ask", owedSince: stale }),
+    ];
+    const listed = unionNeedsYou({
+      clusters: [],
+      notifications: [],
+      owedSlots,
+      now,
+    });
+    const rows = needsYouRows(listed);
+    const drawnOutsideFold = [...rows.recent, ...rows.older]
+      .flatMap((r) => (r.kind === "session" ? r.items : [r.signal]))
+      .filter((s) => s.kind === "owed-slot").length;
+    const counted = countNeedsYou({
+      distinctClusters: 0,
+      clustersTruncated: false,
+      clusters: [],
+      notifications: [],
+      notificationsTruncated: false,
+      owedSlots,
+      owedTruncated: false,
+      now,
+    });
+    expect(drawnOutsideFold).toBe(2);
+    expect(counted.blocked).toBe(drawnOutsideFold);
+    expect(counted.reviewLater).toBe(rows.reviewLaterCount);
   });
 
   it("breaks the number into its three parts, and the parts SUM to it", () => {

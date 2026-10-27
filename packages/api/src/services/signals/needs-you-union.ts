@@ -44,6 +44,7 @@ import {
   type AskCause,
 } from "@synap-core/types/ask";
 import { needsYouTotal } from "@synap-core/types/units";
+import { REVIEW_LATER_AFTER_MS } from "@synap-core/types/proposals/fate";
 import {
   SUGGESTIONS_CAP,
   type GroupableSignal,
@@ -548,8 +549,12 @@ export function sessionSource(
   return label ? { source: { kind: "session", id: sessionId, label } } : {};
 }
 
-/** A needs-you row older than this folds under "Older" (7 days). */
-export const OLDER_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
+/**
+ * A needs-you row older than this folds under "Older" — the Review later
+ * clock (`REVIEW_LATER_AFTER_MS`), so the two folds can never disagree on
+ * what "a week" is.
+ */
+export const OLDER_AFTER_MS = REVIEW_LATER_AFTER_MS;
 
 /** The age bucket of an instant, against `now`. Pure. */
 export function ageBucketOf(occurredAt: Date, now: Date): SignalAgeBucket {
@@ -1717,28 +1722,34 @@ export function unionNeedsYou(args: {
   const notifications = foldNotifications(
     dedupeNotifications(args.notifications, args.clusters, liveNeedsOf(args))
   );
-  return orderNeedsYou([
-    ...args.owedSlots.map((r) => signalFromOwedSlot(r, now)),
-    ...(args.reviewSessions ?? []).map((r) => signalFromReviewSession(r, now)),
-    ...liveCaptureRows(args).map((r) => signalFromUnfinishedCapture(r, now)),
-    ...signalsFromAccessRequests(args.accessRequests, now),
-    ...signalsFromSpaceInvites(args.spaceInvites, now),
-    ...args.clusters.map((c) =>
-      signalFromCluster(
-        c,
-        now,
-        c.sessionId ? args.clusterSessions?.get(c.sessionId) : undefined
-      )
-    ),
-    ...notifications.map((f) =>
-      signalFromNotification(
-        f.row,
-        now,
-        f.repeatCount,
-        args.notificationContainers?.get(f.row.id)
-      )
-    ),
-  ]);
+  return orderNeedsYou(
+    holdAsksWithTheirSession([
+      ...args.owedSlots.map((r) => signalFromOwedSlot(r, now)),
+      ...(args.reviewSessions ?? []).map((r) =>
+        signalFromReviewSession(r, now)
+      ),
+      ...liveCaptureRows(args).map((r) =>
+        signalFromUnfinishedCapture(r, now)
+      ),
+      ...signalsFromAccessRequests(args.accessRequests, now),
+      ...signalsFromSpaceInvites(args.spaceInvites, now),
+      ...args.clusters.map((c) =>
+        signalFromCluster(
+          c,
+          now,
+          c.sessionId ? args.clusterSessions?.get(c.sessionId) : undefined
+        )
+      ),
+      ...notifications.map((f) =>
+        signalFromNotification(
+          f.row,
+          now,
+          f.repeatCount,
+          args.notificationContainers?.get(f.row.id)
+        )
+      ),
+    ])
+  );
 }
 
 /** The live needs a pointer row is decided from — ONE derivation, list and count. */
@@ -1872,6 +1883,28 @@ function liftSessionAgeBuckets(signals: readonly Signal[]): Signal[] {
 }
 
 /**
+ * An owed ask in Review later stays in the headline while its session still
+ * has a row OUTSIDE Review later: a session is never split (`needsYouRows`),
+ * so the ask rides in that session's card, where it is drawn — and counted.
+ * After this, `reviewLater` on an owed-slot row means "folds into Review
+ * later", the ONE predicate the list and the count read. Pure.
+ */
+function holdAsksWithTheirSession(signals: readonly Signal[]): Signal[] {
+  const held = new Set<string>();
+  for (const s of signals) {
+    if (!s.reviewLater && s.groupKey?.startsWith("session:")) {
+      held.add(s.groupKey);
+    }
+  }
+  return signals.map((s) => {
+    if (s.kind !== "owed-slot" || !s.reviewLater) return s;
+    if (!s.groupKey || !held.has(s.groupKey)) return s;
+    const { reviewLater: _held, ...rest } = s;
+    return rest;
+  });
+}
+
+/**
  * THE needs-you order. Pure.
  *
  *   1. `recent` rows first, then every `older` row — the "Older" fold is a
@@ -1999,6 +2032,10 @@ export function countNeedsYou(args: {
   spaceInvitesTruncated?: boolean;
   /** The clock an invite's expiry is read against (the list's). Absent ⇒ now. */
   now?: Date;
+  /** The SAME session names `unionNeedsYou` takes — which clusters join a session's card. */
+  clusterSessions?: ReadonlyMap<string, ClusterSessionName>;
+  /** The SAME containers `unionNeedsYou` takes — which notifications join a session's card. */
+  notificationContainers?: ReadonlyMap<string, NotificationContainer>;
 }): {
   needsYou: number;
   distinct: number;
@@ -2058,12 +2095,30 @@ export function countNeedsYou(args: {
   // Folded, like the list: the same news raised N times is ONE row there, so
   // it is one here — the badge must equal the number of rows it stands for.
   const notifications = foldNotifications(buckets.needsYou).length;
-  // An owed ask nobody answered for 7 days leaves the headline the SAME way
-  // (`isAskReviewLater`, the predicate `signalFromOwedSlot` stamps the row by).
+  // An owed ask nobody answered for 7 days leaves the headline where the list
+  // folds it into Review later — not while it rides in a session card that
+  // still owes something fresh. THE rows the list draws, counted: the session
+  // grouping is the list's own (`unionNeedsYou`), never re-derived here.
   const now = args.now ?? new Date();
-  const owedReviewLater = args.owedSlots.filter((s) =>
-    isAskReviewLater(s, now)
-  ).length;
+  const owedReviewLater = unionNeedsYou({
+    clusters: args.clusters,
+    clusterSessions: args.clusterSessions,
+    notifications: args.notifications,
+    notificationContainers: args.notificationContainers,
+    owedSlots: args.owedSlots,
+    openQuestionSessionIds: args.openQuestionSessionIds,
+    measuredOwedSessionIds: args.measuredOwedSessionIds,
+    draftAsks: args.draftAsks,
+    // A review row only groups here: its session is all the fold reads.
+    reviewSessions: (args.reviewSessionIds ?? []).map((id) => ({
+      id,
+      title: null,
+      goal: null,
+      updatedAt: now,
+    })),
+    unfinishedCaptures: args.unfinishedCaptures,
+    now,
+  }).filter((s) => s.kind === "owed-slot" && s.reviewLater).length;
   const blocked = args.owedSlots.length - owedReviewLater;
   const reviewLater = reviewLaterClusters + owedReviewLater;
   const review = args.reviewSessions ?? 0;
