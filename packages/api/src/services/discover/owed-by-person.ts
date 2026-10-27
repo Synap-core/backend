@@ -22,6 +22,7 @@
  * Folded ONE ROW PER SESSION (deduped), NEWEST owed slot first, capped.
  */
 
+import { isAskReviewLater } from "@synap-core/types/ask";
 import type { OwedSlot } from "../focus-sessions/owed-outputs.js";
 
 /**
@@ -39,8 +40,13 @@ const LABELS_PER_ROW = 3;
 export type OwedInbox = "needs-you" | "proposed";
 
 export interface OwedByPerson {
-  /** Owed slots across every session (both lenses). */
+  /** Owed slots across every session (both lenses), Review later excluded. */
   count: number;
+  /**
+   * Needs-you asks owed for more than 7 days — in Review later, out of the
+   * headline (`isAskReviewLater`, the predicate the needs-you count reads).
+   */
+  reviewLater: number;
   /** Sessions holding at least one. */
   sessions: number;
   /** True when a lens hit its read cap — "at least this many". */
@@ -74,7 +80,11 @@ export function foldOwedByPerson(p: {
   truncated: boolean;
   link: (sessionId: string) => string;
   limit?: number;
+  now?: Date;
 }): OwedByPerson {
+  const now = p.now ?? new Date();
+  const later = p.needsYou.filter((s) => isAskReviewLater(s, now));
+  const headline = p.needsYou.filter((s) => !isAskReviewLater(s, now));
   const bySession = new Map<string, { slots: OwedSlot[]; inbox: OwedInbox }>();
   // Needs-you first: a session with any needs-you slot is a needs-you row.
   const add = (slots: readonly OwedSlot[], inbox: OwedInbox) => {
@@ -84,7 +94,7 @@ export function foldOwedByPerson(p: {
       else bySession.set(s.sessionId, { slots: [s], inbox });
     }
   };
-  add(p.needsYou, "needs-you");
+  add(headline, "needs-you");
   add(p.proposed, "proposed");
 
   const newestFirst = (a: OwedSlot, b: OwedSlot) =>
@@ -111,7 +121,8 @@ export function foldOwedByPerson(p: {
         : 0
   );
   return {
-    count: p.needsYou.length + p.proposed.length,
+    count: headline.length + p.proposed.length,
+    reviewLater: later.length,
     sessions: rows.length,
     countIsLowerBound: p.truncated,
     lens: "owed-by-person",

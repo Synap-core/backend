@@ -456,3 +456,20 @@ describe("the reason glyph", () => {
     }
   });
 });
+
+describe("needsYouBuckets — counts are the badge's", () => {
+  // Rules out "count every row": the four counts would exceed the badge,
+  // which leaves Review later out.
+  it("a Review later row is filed and ordered, but counted in no bucket", () => {
+    const page: Row[] = [
+      proposal("fresh"),
+      proposal("old", { reviewLater: true }),
+      { id: "ask", kind: "owed-slot", count: 1, reviewLater: true },
+    ];
+    const { rows, counts } = needsYouBuckets(page, { intentOf });
+    expect(rows.map((r) => r.signal.id).sort()).toEqual(
+      ["ask", "fresh", "old"].sort()
+    );
+    expect(counts).toEqual({ decision: 0, question: 0, routine: 1, broken: 0 });
+  });
+});

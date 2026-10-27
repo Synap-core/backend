@@ -100,6 +100,7 @@ import { broadcastNotification } from "@synap/jobs";
 import type { WorkspaceSettings } from "@synap/database/schema";
 import { NotificationService } from "../notifications/NotificationService.js";
 import { notifyProposalCreatedOrdered } from "../notifications/notify-proposal-created-ordered.js";
+import { settleSupersededProposals } from "../services/proposals/settle-superseded.js";
 import {
   listAgentGovernanceOverrides,
   type AgentGovernanceOverride,
@@ -3801,6 +3802,9 @@ async function createPendingProposalRow(
   if (!tx && !result.deduped) {
     await notifyProposalCreated(result.proposal, input);
   }
+  // The versions this one replaced: the rest of their withdrawal, after the
+  // commit (a transaction caller's rows are settled by `createProposal`).
+  if (!tx) await settleSupersededProposals(result.superseded, input.userId);
 
   return result;
 }
@@ -4418,7 +4422,7 @@ async function createProposal(args: {
   // `.requested` append failure now ROLLS BACK the proposal instead of being
   // swallowed — an un-traceable proposal is worse than a surfaced error.
   // Notifications run AFTER commit (never hold the tx across network/queue work).
-  const { proposal, pendingInput, deduped } = await db.transaction(
+  const { proposal, pendingInput, deduped, superseded } = await db.transaction(
     async (tx) => {
       let reqEventId = requestedEventId;
       if (!reqEventId) {
@@ -4464,11 +4468,12 @@ async function createProposal(args: {
         governanceReason: governanceReason ?? null,
       };
 
-      const { proposal: created, deduped } = await createPendingProposalRow(
-        pendingInput,
-        tx
-      );
-      return { proposal: created, pendingInput, deduped };
+      const {
+        proposal: created,
+        deduped,
+        superseded,
+      } = await createPendingProposalRow(pendingInput, tx);
+      return { proposal: created, pendingInput, deduped, superseded };
     }
   );
 
@@ -4483,6 +4488,7 @@ async function createProposal(args: {
   } else {
     await notifyProposalCreated(proposal, pendingInput);
   }
+  await settleSupersededProposals(superseded, userId);
 
   return {
     granted: false,
@@ -4894,6 +4900,10 @@ async function fileHeldWrites(
     data: {
       day: utcDay(new Date(write.at)),
       agentUserId: write.agentUserId,
+      // The pack's title names the agent from its own data (F6,
+      // `heldWritesPackName`): every door that titles a proposal reads it
+      // without a users join.
+      ...(agent?.name ? { agentName: agent.name } : {}),
       deferredWrites: [write],
       source: "agent",
     },

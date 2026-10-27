@@ -63,6 +63,7 @@ function cluster(fp: string, sessionId: string): ProposalCluster {
     targetLabel: fp,
     class: "objectWork",
     lifetimeHours: null,
+    reviewLater: false,
     count: 1,
     sampleProposalIds: [`p-${fp}`],
     sources: [],

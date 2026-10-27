@@ -93,7 +93,9 @@ import { splitOutcomes, upsertOutcomes } from "../outcome-declarations.js";
 const OWNER = "11111111-1111-4111-8111-111111111111";
 const LABEL = "Launch scope";
 const WHY = "Ship the EU launch with billing included?";
-const CONFIRM = { mode: "confirm", prompt: WHY };
+// The derived confirm carries no prompt: the slot's label and why already say
+// it: said once.
+const CONFIRM = { mode: "confirm" };
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -214,7 +216,7 @@ describe("a decision slot is never closed by a bare 'I did this' (#12)", () => {
       text: "Yes",
       question: WHY,
       value: { type: "confirm", confirmed: true },
-      askSnapshot: { mode: "confirm", prompt: WHY, chosenKey: "yes" },
+      askSnapshot: { mode: "confirm", why: WHY, chosenKey: "yes" },
     });
     // The decision record, like any confirm.
     expect(h.creates).toHaveLength(1);

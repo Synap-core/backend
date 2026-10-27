@@ -21,26 +21,18 @@ const decision = {
 };
 
 describe("deriveDecisionAsk — a decision is a choice", () => {
-  it("a person-owed decision with no ask becomes a confirm on its why", () => {
+  it("a person-owed decision with no ask becomes a confirm", () => {
     const ask = deriveDecisionAsk(decision);
-    expect(ask).toEqual({
-      mode: "confirm",
-      prompt: "Scope decides the budget",
-    });
+    expect(ask).toEqual({ mode: "confirm" });
     // A valid ask on the wire: it is stored as-is at declaration.
     expect(AskSchema.safeParse(ask).success).toBe(true);
   });
 
-  it("falls back to the label when there is no why", () => {
-    expect(deriveDecisionAsk({ ...decision, why: "  " })).toEqual({
-      mode: "confirm",
-      prompt: "Approve the launch scope",
-    });
-  });
-
-  it("clips the prompt to the confirm's bound", () => {
-    const ask = deriveDecisionAsk({ ...decision, why: "w".repeat(900) });
-    expect(ask?.mode === "confirm" && ask.prompt?.length).toBe(500);
+  it("copies neither the why nor the label into a prompt (said once)", () => {
+    for (const slot of [decision, { ...decision, why: "  " }]) {
+      const ask = deriveDecisionAsk(slot);
+      expect(ask?.mode === "confirm" && ask.prompt).toBeUndefined();
+    }
   });
 
   // Each row rules out a looser rule: no owner check, no reason check, no

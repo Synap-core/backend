@@ -508,11 +508,114 @@ const lookedAtField = {
   risk: z.enum(ASK_RISK_LEVELS).optional(),
 };
 
-export const AskSchema = z.discriminatedUnion("mode", [
+// ─── Stakes ─────────────────────────────────────────────────────────────────
+
+/**
+ * What an answer COMMITS the person to (founder, 2026-10-26): an answer an
+ * agent RELAYS from a chat unblocks it without a tap, EXCEPT a `commitment`,
+ * which waits for the person's own tap.
+ *   `routine`    — input the agent needs (the default; absent reads routine).
+ *   `commitment` — deploy, spend, publish, delete, an irreversible move.
+ */
+export const ASK_STAKES = ["routine", "commitment"] as const;
+export type AskStakes = (typeof ASK_STAKES)[number];
+
+/** Shared by every mode, like `lookedAt`: stakes are not a mode either. */
+const stakesField = {
+  stakes: z
+    .enum(ASK_STAKES)
+    .optional()
+    .describe(
+      "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
+    ),
+};
+
+/**
+ * The stakes the pod ACTS on. An agent may only RAISE them: its declared
+ * `stakes` counts when it says `commitment`, never to lower what the pod
+ * forces.
+ *
+ * `forced` is computed by the pod (the relay door), from facts
+ * an agent cannot author: the slot fills a plan/deploy gate
+ * (`AWAITED_GATE_PROPOSAL_TYPES`, `@synap/playbooks`), the answer would make a
+ * human-only status move (`lifecycle.options[].humanOnly`), or it would spend.
+ *
+ * One fact IS visible on the ask alone, so it is forced here and no caller can
+ * forget it: a `provide` of kind `secret` is always a commitment (a secret
+ * reaches the vault only through the person's own provide door, never a chat).
+ */
+export function effectiveAskStakes(input: {
+  ask: Ask | null | undefined;
+  forced?: boolean;
+}): AskStakes {
+  const { ask, forced } = input;
+  if (forced) return "commitment";
+  if (!ask) return "routine";
+  if (ask.stakes === "commitment") return "commitment";
+  if (ask.mode === "provide" && ask.provide.kind === "secret")
+    return "commitment";
+  return "routine";
+}
+
+// ─── Who asked ──────────────────────────────────────────────────────────────
+
+/**
+ * What raised an ask when no agent did (founder, 2026-10-26: the
+ * card NAMES THE CAUSE as a door, never "An agent"). Server-stamped on the
+ * slot (`ExpectedOutput.askCause`) by the producer that wrote it:
+ *   `decision`          — a `proposed` decision note (the decision-ask reactor)
+ *   `gate`              — the session's plan/deploy gate
+ *   `run`               — a run's turn end ("Keep the run going")
+ *   `external_approval` — an external agent's approval request
+ *   `param`             — a playbook input the run needs (`paramName`)
+ *   `criterion`         — a failed check of the session (`criterionKey`)
+ */
+export const ASK_CAUSE_KINDS = [
+  "decision",
+  "gate",
+  "run",
+  "external_approval",
+  "param",
+  "criterion",
+] as const;
+export type AskCauseKind = (typeof ASK_CAUSE_KINDS)[number];
+
+export const AskCauseSchema = z.object({
+  kind: z.enum(ASK_CAUSE_KINDS),
+  /** The object the cause is — the card's door (the decision, the run). */
+  ref: z
+    .object({ kind: z.string().min(1).max(64), id: z.string().min(1).max(200) })
+    .optional(),
+  /** ISO — when the cause happened (the decision note's date). */
+  at: z.string().optional(),
+});
+export type AskCause = z.infer<typeof AskCauseSchema>;
+
+/**
+ * One side of a confirm: the button's own words, what pressing it does, and
+ * whether the agent recommends it. The founder (2026-10-26) overturned D-4
+ * ("Yes and No at equal weight"): a confirm MAY recommend one answer and
+ * state each answer's consequence, exactly like a choose option does
+ * ({@link AskOptionSchema}'s `recommended` / `description`).
+ */
+export const AskConfirmAnswerSchema = z.object({
+  /** The button's words; absent ⇒ "Yes" / "No". */
+  label: z.string().min(1).max(ASK_LIMITS.optionLabelMaxChars).optional(),
+  /** One-line consequence of this answer ("Marks the decision accepted"). */
+  description: z.string().max(ASK_LIMITS.optionDescriptionMaxChars).optional(),
+  /** The agent's recommended answer — at most ONE of `yes` / `no`. */
+  recommended: z.boolean().optional(),
+});
+export type AskConfirmAnswer = z.infer<typeof AskConfirmAnswerSchema>;
+
+const AskModesSchema = z.discriminatedUnion("mode", [
   z.object({
     mode: z.literal("confirm"),
     prompt: z.string().max(ASK_LIMITS.promptMaxChars).optional(),
+    yes: AskConfirmAnswerSchema.optional(),
+    no: AskConfirmAnswerSchema.optional(),
     ...lookedAtField,
+    ...stakesField,
   }),
   z.object({
     mode: z.literal("choose"),
@@ -527,6 +630,7 @@ export const AskSchema = z.discriminatedUnion("mode", [
     /** Offer "Other…" — a free-text answer instead of one of the options. */
     allowOther: z.boolean().optional(),
     ...lookedAtField,
+    ...stakesField,
   }),
   z.object({
     mode: z.literal("form"),
@@ -537,6 +641,7 @@ export const AskSchema = z.discriminatedUnion("mode", [
         "a form ask needs at least one answerable field (credential fields are dropped — ask for a secret with mode 'provide', kind 'secret')",
     }),
     ...lookedAtField,
+    ...stakesField,
   }),
   z.object({
     mode: z.literal("act"),
@@ -547,13 +652,28 @@ export const AskSchema = z.discriminatedUnion("mode", [
       .max(ASK_LIMITS.stepsMax)
       .optional(),
     ...lookedAtField,
+    ...stakesField,
   }),
   z.object({
     mode: z.literal("provide"),
     provide: AskProvideSchema,
     ...lookedAtField,
+    ...stakesField,
   }),
 ]);
+
+// The choose rule, for a confirm's two answers: a contract rule, at the
+// parse. On the UNION, not the confirm member — under zod 3 a refined member
+// is an effect `discriminatedUnion` cannot read.
+export const AskSchema = AskModesSchema.superRefine((ask, ctx) => {
+  if (ask.mode === "confirm" && ask.yes?.recommended && ask.no?.recommended) {
+    ctx.addIssue({
+      code: "custom",
+      message: "at most one answer may be recommended",
+      path: ["no", "recommended"],
+    });
+  }
+});
 export type Ask = z.infer<typeof AskSchema>;
 
 // ─── The answer's typed value ───────────────────────────────────────────────
@@ -596,6 +716,176 @@ export const AskAnswerValueSchema = z.discriminatedUnion("type", [
 ]);
 export type AskAnswerValue = z.infer<typeof AskAnswerValueSchema>;
 
+// ─── Answer provenance + question disposition ──────────────────────
+//
+// WHERE an answer came from and where a question stands (pod doc 86890dee).
+// Two stamps carry these fields, both SERVER-STAMPED: a slot's answer
+// (`SlotAnswer`, mirrored in `@synap/playbooks`) and a room question's answer
+// (`RoomPostMeta.answer`, api `services/messaging/room-post-kind.ts`).
+//
+// A person answers in the pod (a TAP) or in a Claude Code chat, whose agent
+// then RELAYS their words. A relay of a `routine` ask is recorded as the answer
+// (`via: 'relayed'`). A relay of a `commitment` ask (`effectiveAskStakes`) is
+// NOT an answer yet: it is a `PendingRelayedAnswer` beside the question, which
+// stays open and owed until the person taps Confirm (the tap door writes the
+// answer with `via: 'tap'` + `confirmedAt`, keeping `relayedBy` / `quote`) or
+// "Not what I said" (the pending relay is dropped).
+//
+// Lives in this file, not a sibling: the schemas read `ASK_LIMITS` and
+// `AskAnswerValueSchema` at module load, and a sibling re-exported from here
+// would evaluate before them (ESM cycle).
+
+// ─── Provenance on an answer ────────────────────────────────────────────────
+
+/**
+ * `tap`     — the person answered in the pod themselves.
+ * `relayed` — an agent carried the person's words from a chat; nobody tapped.
+ */
+export const ANSWER_VIA = ["tap", "relayed"] as const;
+export type AnswerVia = (typeof ANSWER_VIA)[number];
+
+/** Bound on a relay surface id (`claude-code`, `claude-code-harness`). */
+export const RELAY_SURFACE_MAX_CHARS = 64;
+
+/**
+ * Optional fields on both answer stamps. All absent = an answer recorded
+ * before relays existed, which was a tap (the only door there was).
+ *
+ * `confirmedAt` is set ONLY with `via: 'tap'`: the person tapped Confirm on an
+ * answer an agent relayed. `via` then says who answered (the person), and
+ * `relayedBy` / `relaySurface` / `quote` keep where the words came from — the
+ * relay is never erased from the record by the confirm.
+ */
+export const AnswerProvenanceSchema = z.object({
+  via: z.enum(ANSWER_VIA).optional(),
+  /** The relaying AGENT's user id. */
+  relayedBy: z.string().min(1).optional(),
+  /** Where the words were said (`claude-code`). */
+  relaySurface: z.string().min(1).max(RELAY_SURFACE_MAX_CHARS).optional(),
+  /** The person's own words, verbatim — never the agent's paraphrase. */
+  quote: z.string().max(ASK_LIMITS.answerTextMaxChars).optional(),
+  /** ISO, server clock: the person confirmed a relayed answer. */
+  confirmedAt: z.string().optional(),
+});
+export type AnswerProvenance = z.infer<typeof AnswerProvenanceSchema>;
+
+/**
+ * How an answer arrived. Absent `via` reads `tap`: every answer stored before
+ * this field existed came through a tap door (agent keys were refused there).
+ */
+export function answerVia(
+  answer: Pick<AnswerProvenance, "via"> | null | undefined
+): AnswerVia {
+  return answer?.via === "relayed" ? "relayed" : "tap";
+}
+
+/**
+ * Did an agent carry these words from a chat? True on a relay nobody tapped
+ * AND on one the person then confirmed (the confirm writes `via: 'tap'` but
+ * keeps `relayedBy`): the relay is never erased from what the receipt says.
+ * The ONE reader for every surface.
+ */
+export function answerWasRelayed(
+  answer: Pick<AnswerProvenance, "via" | "relayedBy"> | null | undefined
+): boolean {
+  return answerVia(answer) === "relayed" || Boolean(answer?.relayedBy);
+}
+
+// ─── A relay that waits for the person's tap ────────────────────────────────
+
+/**
+ * A relayed answer to a `commitment` ask, held BESIDE the question instead of
+ * on it (`RoomPostMeta.pendingRelay`, `ExpectedOutput.pendingRelay`).
+ *
+ * WHY a separate stamp and not `answer` + a flag: "open" is the ABSENCE of
+ * `answer` everywhere it is read — the open-question SQL predicate
+ * (`@synap/database` `openRoomQuestionConditions`), the room answer door's
+ * atomic claim (`WHERE NOT (… ? 'answer')`) and the owed-slot read. A pending
+ * relay is still waiting on the person, so it must stay open in all three:
+ * keeping it off `answer` means none of them changes, and the person's tap
+ * still claims `answer` atomically through the door it uses today. One JSONB
+ * write stamps it (the relay door), one write clears it.
+ */
+export const PendingRelayedAnswerSchema = z.object({
+  /** The answer as it would be recorded (`SlotAnswer.text`). */
+  text: z.string().max(ASK_LIMITS.answerTextMaxChars),
+  /** The typed answer it pre-fills, when the ask has one. */
+  value: AskAnswerValueSchema.optional(),
+  relayedBy: z.string().min(1),
+  relaySurface: z.string().min(1).max(RELAY_SURFACE_MAX_CHARS).optional(),
+  quote: z.string().max(ASK_LIMITS.answerTextMaxChars).optional(),
+  /** ISO, server clock. */
+  relayedAt: z.string(),
+});
+export type PendingRelayedAnswer = z.infer<typeof PendingRelayedAnswerSchema>;
+
+// ─── A question closed without an answer ────────────────────────────────────
+
+/**
+ * Why a room question stopped being open without an answer. The SAME tokens
+ * as the matching `OUTPUT_RETIRED_REASONS` (`@synap/playbooks`), so a slot
+ * and a room question that closed for one reason read one word.
+ *   `session_ended` — its session ended with the question still open.
+ *   `withdrawn`     — the agent withdrew it, overtaken.
+ */
+export const QUESTION_CLOSED_REASONS = ["session_ended", "withdrawn"] as const;
+export type QuestionClosedReason = (typeof QUESTION_CLOSED_REASONS)[number];
+
+/** `RoomPostMeta.closed` — stamped once, server-side; never deleted. */
+export const QuestionClosedSchema = z.object({
+  reason: z.enum(QUESTION_CLOSED_REASONS),
+  /** ISO, server clock. */
+  at: z.string(),
+  /** Who closed it (an agent's user id for a withdrawal); absent = the pod. */
+  by: z.string().optional(),
+  /** One line: why it was withdrawn ("you answered it in the brief"). */
+  note: z.string().max(ASK_LIMITS.promptMaxChars).optional(),
+});
+export type QuestionClosed = z.infer<typeof QuestionClosedSchema>;
+
+// ─── Where a question stands ────────────────────────────────────────────────
+
+export const QUESTION_DISPOSITIONS = [
+  "open",
+  "answered",
+  "relayed",
+  "awaiting_your_tap",
+  "withdrawn",
+  "closed_session_ended",
+] as const;
+export type QuestionDisposition = (typeof QUESTION_DISPOSITIONS)[number];
+
+export interface QuestionDispositionInput {
+  answer?: AnswerProvenance | null;
+  closed?: Pick<QuestionClosed, "reason" | "note"> | null;
+  pendingRelay?: Pick<PendingRelayedAnswer, "relayedBy"> | null;
+}
+
+/**
+ * THE reading of a question's state, for both stamps and every surface.
+ *
+ * Order is the rule:
+ *  1. An answer wins: whatever closed later, the person's answer is the fact.
+ *     `relayed` only while nobody tapped (a confirm writes `via: 'tap'`).
+ *  2. A closure next: a session that ended over a pending relay closes it too.
+ *  3. A pending relay: words came in from a chat, the tap is still owed.
+ *  4. Otherwise open.
+ */
+export function questionDisposition(
+  input: QuestionDispositionInput
+): QuestionDisposition {
+  if (input.answer) {
+    return answerVia(input.answer) === "relayed" ? "relayed" : "answered";
+  }
+  if (input.closed) {
+    return input.closed.reason === "withdrawn"
+      ? "withdrawn"
+      : "closed_session_ended";
+  }
+  if (input.pendingRelay) return "awaiting_your_tap";
+  return "open";
+}
+
 // ─── Rules ──────────────────────────────────────────────────────────────────
 
 /**
@@ -628,8 +918,9 @@ export interface DecisionAskSlotLite<A = Ask> {
  * A DECISION is a choice, never a bare "done". A person-owed slot blocked on
  * `decision` with no ask would resolve `legacy` and offer a one-tap "I did
  * this", which closed a decision with nobody deciding anything. Such a slot
- * gets a `confirm` (Yes / No) instead, its question the slot's `why`, else its
- * label — the shape the external-agent approval slot already declares.
+ * gets a `confirm` (Yes / No) instead, with NO prompt: the slot already says
+ * what is asked (its label) and why (its `why`), and a prompt copied from
+ * either is the same words drawn twice on the card (founder, 2026-10-26).
  *
  * A param slot (`PARAM_SLOT_KIND`) is exempt: its only ask-less form is a
  * credential-named param whose value is set on the run, and a yes/no there
@@ -643,11 +934,7 @@ export function deriveDecisionAsk(
   if (slot.ask) return null;
   if (slot.owner !== "human" || slot.blockedReason !== "decision") return null;
   if (slot.kind === PARAM_SLOT_KIND) return null;
-  const prompt = (slot.why?.trim() || slot.label.trim()).slice(
-    0,
-    ASK_LIMITS.promptMaxChars
-  );
-  return prompt ? { mode: "confirm", prompt } : { mode: "confirm" };
+  return { mode: "confirm" };
 }
 
 /**
@@ -866,8 +1153,10 @@ export function validateAnswerAgainstAsk(
  *
  * `chosenKey` is the picked option's identity (`askOptionKey`) for a choose,
  * `"yes"` / `"no"` for a confirm, and `null` for anything else (a free-text
- * "Other…", a room reply in words, a form, a provide). `followedRecommendation`
- * is `null` when there was no recommendation to follow — NEVER `false`, which
+ * "Other…", a room reply in words, a form, a provide). `recommendedKey` uses the
+ * same keys (a confirm's recommended `yes` / `no`, decision 2026-10-26).
+ * `followedRecommendation` is `null` when there was no recommendation to
+ * follow — NEVER `false`, which
  * would read as the person overruling advice nobody gave.
  *
  * `lookedAt` is stored as `{kind, id}` only: the server-resolved `title` the
@@ -899,6 +1188,16 @@ export type AskSnapshot = z.infer<typeof AskSnapshotSchema>;
 /** The confirm arm's two keys — what `chosenKey` holds for a yes / a no. */
 export const ASK_CONFIRM_KEYS = { yes: "yes", no: "no" } as const;
 
+/** The confirm answer the agent recommends (`yes` / `no`), else `null`. */
+export function confirmRecommendedKey(
+  ask: Ask | null | undefined
+): string | null {
+  if (ask?.mode !== "confirm") return null;
+  if (ask.yes?.recommended) return ASK_CONFIRM_KEYS.yes;
+  if (ask.no?.recommended) return ASK_CONFIRM_KEYS.no;
+  return null;
+}
+
 /**
  * Freeze an ask + the answer given to it. Pure. `value` absent ⇒ an answer in
  * words (the room-reply entrance), whose pick is unknown.
@@ -910,7 +1209,9 @@ export function buildAskSnapshot(
 ): AskSnapshot {
   const options = ask.mode === "choose" ? ask.options : undefined;
   const recommended = options?.find((o) => o.recommended === true);
-  const recommendedKey = recommended ? askOptionKey(recommended) : null;
+  const recommendedKey = recommended
+    ? askOptionKey(recommended)
+    : confirmRecommendedKey(ask);
   const chosenKey =
     value?.type === "chip"
       ? askOptionKey(value.chip)
@@ -923,7 +1224,7 @@ export function buildAskSnapshot(
   const followedRecommendation =
     recommendedKey === null
       ? null
-      : value?.type === "chip"
+      : value?.type === "chip" || value?.type === "confirm"
         ? chosenKey === recommendedKey
         : value?.type === "text"
           ? false
@@ -1176,6 +1477,32 @@ export {
   askRiskView,
   actView,
   askRecommendationOutcome,
+  answerProvenanceMark,
+  ASK_MODES_ENDING_WITH_SESSION,
+  askCardView,
+  askEndsWithSession,
+  askFate,
+  isAskReviewLater,
+  effectiveAskCause,
+  stripAskVerbPrefix,
+  askTextRestates,
+  stripLeadingRestatement,
+  askCardSlotOf,
+  slotAwaitsTap,
+  relayRecordedAnswer,
+  roomQuestionConfirmDoor,
+  type AskCardSlotSource,
+  type AskCardPendingRelay,
+  type AskTapSlot,
+  type RelayRecordedAnswer,
+  type RoomQuestionConfirmDoor,
+  type AskCardAnswer,
+  type AskCardAsker,
+  type AskCardSlot,
+  type AskCardView,
+  type AskCardViewOptions,
+  type AskFate,
+  type AnswerProvenanceMark,
   type AskRecommendationOutcome,
   type AskRecommendationOutcomeKind,
   type AskSlotLite,
@@ -1187,6 +1514,16 @@ export {
   type AskOptionChip,
   type ActView,
 } from "./card.js";
+
+/** A room post's marker and its one reader — see `./room-post.ts`. */
+export {
+  ROOM_POST_KINDS,
+  ROOM_POST_META_KEY,
+  ROOM_POST_SLOT_LABEL_MAX,
+  readRoomPostMeta,
+  type RoomPostKind,
+  type RoomPostMeta,
+} from "./room-post.js";
 
 /** A decision entity's ask record → the shared outcome rule — see `./decision-record.ts`. */
 export {

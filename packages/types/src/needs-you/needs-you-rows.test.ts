@@ -239,6 +239,72 @@ describe("needsYouRows — a session appears ONCE", () => {
   });
 });
 
+describe("needsYouRows — Review later fold", () => {
+  // `reviewLater` wins over `ageBucket` in BOTH directions: an older row is
+  // not Older (rules out "Review later is a label on the Older fold"), and a
+  // recent-stamped one is not Recent (rules out "the bucket decides first").
+  it("a reviewLater row leaves Recent and Older for its own fold", () => {
+    const out = needsYouRows([
+      row("r"),
+      row("o", { ageBucket: "older" }),
+      row("rl1", {
+        kind: "proposal-cluster",
+        ageBucket: "older",
+        groupKey: "proposal-cluster:a",
+        reviewLater: true,
+      }),
+      row("rl2", {
+        kind: "proposal-cluster",
+        ageBucket: "recent",
+        groupKey: "proposal-cluster:b",
+        reviewLater: true,
+      }),
+    ]);
+    expect(shape(out.recent)).toEqual(["item:r"]);
+    expect(shape(out.older)).toEqual(["item:o"]);
+    expect(shape(out.reviewLater)).toEqual(["item:rl1", "item:rl2"]);
+    expect(out.olderCount).toBe(1);
+    expect(out.reviewLaterCount).toBe(2);
+  });
+});
+
+describe("needsYouRows — a session is never split across folds", () => {
+  // Rules out "each row folds on its own flag": the stale ask of a session
+  // that still owes something fresh would be a second card in Review later.
+  it("a session with a fresh and a week-old ask is ONE card in Recent", () => {
+    const out = needsYouRows([
+      row("fresh", { kind: "owed-slot", groupKey: "session:S" }),
+      row("stale", {
+        kind: "owed-slot",
+        groupKey: "session:S",
+        reviewLater: true,
+      }),
+    ]);
+    expect(shape(out.recent)).toEqual(["session:S[fresh,stale]"]);
+    expect(out.reviewLater).toEqual([]);
+    expect(out.reviewLaterCount).toBe(0);
+  });
+
+  it("a session whose every row is in Review later folds there, whole", () => {
+    const out = needsYouRows([
+      row("r"),
+      row("s1", {
+        kind: "owed-slot",
+        groupKey: "session:S",
+        reviewLater: true,
+      }),
+      row("s2", {
+        kind: "owed-slot",
+        groupKey: "session:S",
+        reviewLater: true,
+      }),
+    ]);
+    expect(shape(out.recent)).toEqual(["item:r"]);
+    expect(shape(out.reviewLater)).toEqual(["session:S[s1,s2]"]);
+    expect(out.reviewLaterCount).toBe(1);
+  });
+});
+
 describe("needsYouRows — Older fold + cap", () => {
   it("the fold counts ROWS: a card under it is one", () => {
     const out = needsYouRows([
