@@ -421,6 +421,10 @@ else
         && [ "$(ls "$REPO/snaps" | grep -vc meta)" = "$n1" ] && ! calls_since "$m" | grep >/dev/null "^curl" \
         && ok "a push stuck past BACKUP_PUSH_TIMEOUT_SECONDS is stopped (${el}s): exit 1, .push-failed + failed row say 'timed out', no heartbeat" \
         || bad "hung push: rc=$rc after ${el}s, push-failed=$(cat "$T/backups/.push-failed" 2>/dev/null) $(tail -3 "$T/out")"
+    m=$(mark); ct sh "$SAFETY" retention >"$T/out" 2>&1; rc=$?
+    [ "$rc" != 0 ] && grep -q "REFUSED.*last push failed.*timed out" "$T/out" && ! calls_since "$m" | grep >/dev/null "^restic" \
+        && ok "rule 2a: after a timed-out push, retention refuses before touching the repository" || bad "retention after a timed-out push: rc=$rc $(tail -3 "$T/out")"
+    rm -f "$T/backups/.retention-failed"
     fresh_second
     ct sh "$SAFETY" run >"$T/out" 2>&1; rc=$?
     [ "$rc" = 0 ] && [ ! -e "$T/backups/.push-failed" ] && ok "the backup lock was released: the next push runs and clears .push-failed" || bad "after a timed-out push: rc=$rc $(tail -3 "$T/out")"
