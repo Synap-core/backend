@@ -871,10 +871,10 @@ async function insertAutomationAfterGovernance(
   const status = forceDraft ? "draft" : input.status;
   // After governance (every caller of this door has passed it): a declared
   // inbound webhook source binds here — `webhookSource.name` → this space's
-  // source of that name, created when missing (services/webhooks/
-  // inbound-source.ts). An approved agent proposal binds at approval.
+  // source of that name, when it exists (services/webhooks/inbound-source.ts;
+  // a person creating it later binds this row). An approved agent proposal
+  // binds at approval.
   const { triggerConfig } = await bindDeclaredWebhookSource({
-    userId: createdBy,
     workspaceId: input.workspaceId,
     triggerType: input.triggerType,
     triggerConfig: input.triggerConfig,
@@ -2518,8 +2518,9 @@ export const automationsRouter = router({
         forceDraft
       );
 
-      // The source it listens to, so the caller can point the sender at it.
-      // Never its secret: the caller may be an agent (inbound-source.ts).
+      // The source it listens to, so the caller can point the sender at it —
+      // or, when the space has none yet, what binds it. Never a secret: a
+      // source is a person's credential (inbound-source.ts).
       const declared = declaredWebhookSource(
         input.triggerType,
         input.triggerConfig
@@ -2542,15 +2543,24 @@ export const automationsRouter = router({
         ...(source
           ? {
               webhookSource: {
+                bound: true as const,
                 id: source.id,
                 name: source.name,
                 inboundUrl: source.inboundUrl,
                 inboundPath: source.inboundPath,
                 secret:
-                  "Not shown here: a person reveals it in the pod-admin app (Webhook sources, Replace secret).",
+                  "Not shown here: a person reveals it in the pod-admin app (space Connections, Webhook sources, Replace secret).",
               },
             }
-          : {}),
+          : declared
+            ? {
+                webhookSource: {
+                  bound: false as const,
+                  name: declared.name,
+                  next: `This space has no webhook source named "${declared.name}" yet: a person creates it in the pod-admin app (space Connections, Webhook sources), and this automation binds to it then.`,
+                },
+              }
+            : {}),
       };
     }),
 
@@ -2783,14 +2793,13 @@ export const automationsRouter = router({
       }
 
       // A declared inbound webhook source binds AFTER the gate (an agent's
-      // proposed change creates nothing): `webhookSource.name` → this space's
-      // source of that name, created when missing (services/webhooks/
+      // proposed change writes nothing): `webhookSource.name` → this space's
+      // source of that name, when it exists (services/webhooks/
       // inbound-source.ts). Before the version bump, which compares the
       // config as it will be stored.
       if (input.triggerConfig !== undefined) {
         updates.triggerConfig = (
           await bindDeclaredWebhookSource({
-            userId: existing.createdBy,
             workspaceId: existing.workspaceId,
             triggerType: input.triggerType ?? existing.triggerType,
             triggerConfig: input.triggerConfig,

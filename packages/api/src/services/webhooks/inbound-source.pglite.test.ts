@@ -5,8 +5,11 @@
  *     comes back ONCE (create, replace), never from a list;
  *   - one source per (space, name): a second create is a 409;
  *   - an automation's DECLARED source (`triggerConfig.webhookSource.name`)
- *     binds to the space's source of that name, created when missing, and
- *     every later bind (a re-install, a concurrent one) gets the SAME row.
+ *     binds to the space's source of that name when it exists, and NEVER
+ *     creates one (a source is a person's credential);
+ *   - a person creating the source binds every automation of the space that
+ *     declared its name (unbound, or bound to a deleted twin) — and nothing
+ *     in another space or on another trigger type.
  */
 import { describe, it, expect, vi, beforeAll } from "vitest";
 import { readFileSync } from "node:fs";
@@ -69,6 +72,16 @@ beforeAll(async () => {
       "api_key_id" uuid
     );`);
   await h.client!.exec(M0362);
+  // What a created source binds (only the columns the bind reads and writes).
+  await h.client!.exec(`
+    CREATE TABLE "automations" (
+      "id" uuid PRIMARY KEY,
+      "workspace_id" uuid,
+      "trigger_type" text NOT NULL,
+      "trigger_config" jsonb NOT NULL DEFAULT '{}',
+      "version" integer NOT NULL DEFAULT 1,
+      "updated_at" timestamp with time zone
+    );`);
 });
 
 const row = async (id: string) =>
@@ -138,54 +151,100 @@ describe("inbound webhook sources", () => {
   });
 });
 
-describe("bindDeclaredWebhookSource — an automation's declared source", () => {
+const autoRow = async (id: string) =>
+  (
+    await h.client!.query<{
+      trigger_config: Record<string, unknown>;
+      version: number;
+    }>(`SELECT trigger_config, version FROM automations WHERE id = $1`, [id])
+  ).rows[0]!;
+
+describe("an automation's declared source", () => {
+  const A = {
+    unbound: "00000000-0000-4000-8000-0000000000b1",
+    stale: "00000000-0000-4000-8000-0000000000b2",
+    otherSpace: "00000000-0000-4000-8000-0000000000b3",
+    otherTrigger: "00000000-0000-4000-8000-0000000000b4",
+    otherName: "00000000-0000-4000-8000-0000000000b5",
+  };
+
+  beforeAll(async () => {
+    for (const [id, ws, type, config] of [
+      [A.unbound, WS2, "webhook", { webhookSource: { name: "CI" } }],
+      [
+        A.stale,
+        WS2,
+        "webhook",
+        {
+          webhookSource: { name: "ci" },
+          webhookSubscriptionId: "00000000-0000-4000-8000-00000000dead",
+        },
+      ],
+      [A.otherSpace, WS1, "webhook", { webhookSource: { name: "CI" } }],
+      [A.otherTrigger, WS2, "event", { webhookSource: { name: "CI" } }],
+      [A.otherName, WS2, "webhook", { webhookSource: { name: "Forms" } }],
+    ] as const) {
+      await h.client!.query(
+        `INSERT INTO automations (id, workspace_id, trigger_type, trigger_config) VALUES ($1,$2,$3,$4::jsonb)`,
+        [id, ws, type, JSON.stringify(config)]
+      );
+    }
+  });
+
   const declare = (name: unknown, over: Record<string, unknown> = {}) =>
     bindDeclaredWebhookSource({
-      userId: "u-2",
       workspaceId: WS2,
       triggerType: "webhook",
       triggerConfig: { webhookSource: { name }, keep: 1 },
       ...over,
     });
 
-  it("creates the space's source when missing, then binds every later install to the SAME row", async () => {
-    const first = await declare("CI");
-    expect(first.source).toMatchObject({ name: "CI", created: true });
-    expect(first.triggerConfig).toEqual({
-      webhookSource: { name: "CI" },
-      keep: 1,
-      webhookSubscriptionId: first.source!.id,
+  it("binds to nothing — and creates nothing — while the space has no such source", async () => {
+    const out = await declare("CI");
+    expect(out).toEqual({
+      triggerConfig: { webhookSource: { name: "CI" }, keep: 1 },
+      source: null,
     });
-    // The created source's secret is never handed to the declaring caller.
-    expect(JSON.stringify(first)).not.toContain(
-      (await row(first.source!.id)).secret
-    );
-
-    const again = await declare("ci");
-    expect(again.source).toMatchObject({
-      id: first.source!.id,
-      created: false,
-    });
-    // Concurrent installs converge on one row.
-    const racing = await Promise.all([declare("Forms"), declare("forms")]);
-    expect(racing[0].source!.id).toBe(racing[1].source!.id);
+    expect(
+      (await listInboundWebhookSources(WS2)).map((s) => s.name)
+    ).not.toContain("CI");
   });
 
-  it("binds to an existing source a person created", async () => {
-    const { source } = await createInboundWebhookSource({
+  it("a person creating the source binds the space's automations that declared it, nothing else", async () => {
+    const { source, boundAutomations } = await createInboundWebhookSource({
       userId: "u-1",
       workspaceId: WS2,
-      name: "Stripe",
+      name: "CI",
     });
-    const bound = await declare("stripe");
-    expect(bound.triggerConfig.webhookSubscriptionId).toBe(source.id);
-    expect(bound.source!.created).toBe(false);
+    expect(boundAutomations).toBe(2);
+    for (const id of [A.unbound, A.stale]) {
+      const r = await autoRow(id);
+      expect(r.trigger_config.webhookSubscriptionId, id).toBe(source.id);
+      expect(r.version, id).toBe(2);
+    }
+    for (const id of [A.otherSpace, A.otherTrigger, A.otherName]) {
+      const r = await autoRow(id);
+      expect(r.trigger_config.webhookSubscriptionId, id).toBeUndefined();
+      expect(r.version, id).toBe(1);
+    }
+  });
+
+  it("then an install (any case of the name) binds to that same source", async () => {
+    const [ci] = (await listInboundWebhookSources(WS2)).filter(
+      (s) => s.name === "CI"
+    );
+    const out = await declare("ci");
+    expect(out.source?.id).toBe(ci!.id);
+    expect(out.triggerConfig).toEqual({
+      webhookSource: { name: "ci" },
+      keep: 1,
+      webhookSubscriptionId: ci!.id,
+    });
   });
 
   it("a config that declares nothing is returned as is", async () => {
     const config = { webhookSubscriptionId: "x" };
     const out = await bindDeclaredWebhookSource({
-      userId: "u-2",
       workspaceId: WS2,
       triggerType: "webhook",
       triggerConfig: config,

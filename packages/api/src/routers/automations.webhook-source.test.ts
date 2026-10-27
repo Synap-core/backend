@@ -115,7 +115,7 @@ beforeEach(() => {
         ...input.triggerConfig,
         webhookSubscriptionId: SOURCE_ID,
       },
-      source: { id: SOURCE_ID, name: "GitHub", created: true },
+      source: { id: SOURCE_ID, name: "GitHub" },
     })
   );
   find.mockResolvedValue({
@@ -148,7 +148,6 @@ describe("automations — a declared inbound webhook source", () => {
     });
 
     expect(bind).toHaveBeenCalledWith({
-      userId: "user-1",
       workspaceId: WS,
       triggerType: "webhook",
       triggerConfig: DECLARED,
@@ -171,7 +170,38 @@ describe("automations — a declared inbound webhook source", () => {
     ).toMatch(/pod-admin/);
   });
 
-  it("an approved agent proposal binds when it materializes, as its principal", async () => {
+  it("a space with no such source yet: stored unbound, and the answer says what binds it", async () => {
+    bind.mockImplementation(
+      async (input: { triggerConfig: Record<string, unknown> }) => ({
+        triggerConfig: input.triggerConfig,
+        source: null,
+      })
+    );
+    find.mockResolvedValue(null);
+    const captured: { values?: Record<string, unknown> } = {};
+    mockGetDb.mockResolvedValue({ insert: vi.fn(() => insertChain(captured)) });
+
+    const result = await caller().create({
+      workspaceId: WS,
+      name: "GitHub PR events",
+      triggerType: "webhook",
+      triggerConfig: DECLARED,
+      flowDefinition: FLOW,
+      status: "draft",
+    });
+
+    expect(captured.values?.triggerConfig).toEqual(DECLARED);
+    expect(result).toMatchObject({
+      status: "created",
+      webhookSource: {
+        bound: false,
+        name: "GitHub",
+        next: expect.stringMatching(/a person creates it in the pod-admin app/),
+      },
+    });
+  });
+
+  it("an approved agent proposal binds when it materializes", async () => {
     const captured: { values?: Record<string, unknown> } = {};
     await materializeApprovedAutomation({
       database: { insert: vi.fn(() => insertChain(captured)) } as never,
@@ -190,7 +220,6 @@ describe("automations — a declared inbound webhook source", () => {
     });
     expect(bind).toHaveBeenCalledWith(
       expect.objectContaining({
-        userId: "agent-1",
         workspaceId: WS,
         triggerType: "webhook",
       })

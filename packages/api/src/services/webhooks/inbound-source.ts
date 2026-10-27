@@ -12,13 +12,19 @@
  * `X-Hub-Signature-256`; the door fires the space's automations whose
  * `triggerConfig.webhookSubscriptionId` is the source.
  *
- * THE SECRET is shown ONCE, to a PERSON: on create, and again only by
- * replacing it (`rotateInboundWebhookSecret`, the old one stops at once). The
- * sender must hold it, and whoever holds it can post events that fire the
- * space's automations with no agent in their causal chain — so a source an
- * automation's create or a package install declares (`bindDeclaredWebhookSource`)
- * is created WITHOUT revealing its secret to that caller, which may be an
- * agent. The person reveals it from the pod-admin app.
+ * A SOURCE IS A CREDENTIAL, minted only by a PERSON (a fresh-auth door): the
+ * sender must hold its secret, and whoever holds it can post events that fire
+ * the space's automations with no agent in their causal chain. The secret is
+ * shown ONCE: on create, and again only by replacing it
+ * (`rotateInboundWebhookSecret`, the old one stops at once).
+ *
+ * An automation (an agent's, a package install's) only DECLARES the source it
+ * listens to, by name (`triggerConfig.webhookSource.name`): its insert and
+ * update doors BIND to the space's source of that name when it exists
+ * (`bindDeclaredWebhookSource`, which never creates one), and creating the
+ * source later binds every automation in the space that declared it
+ * (`createInboundWebhookSource`). Either order works; no door but a person's
+ * mints the credential.
  *
  * Every door here takes a workspace the caller has already been checked
  * against (a workspace member or a pod admin, the router's procedure).
@@ -32,6 +38,7 @@ import {
   eq,
   drizzleSql,
   isUniqueViolation,
+  automations,
   webhookSubscriptions,
 } from "@synap/database";
 
@@ -135,15 +142,21 @@ export async function findInboundWebhookSourceByName(
 }
 
 /**
- * Create a source in a space. Returns the secret — the ONLY time it is read
- * back; the caller shows it to the person once. A name the space already
- * uses is a 409 naming the holder.
+ * Create a source in a space (a PERSON's door: the routers guard it with fresh
+ * authentication). Returns the secret — the ONLY time it is read back; the
+ * caller shows it to the person once. A name the space already uses is a 409
+ * naming the holder. Binds the space's automations that declared this name
+ * (`boundAutomations`).
  */
 export async function createInboundWebhookSource(input: {
   userId: string;
   workspaceId: string;
   name: string;
-}): Promise<{ source: InboundWebhookSource; secret: string }> {
+}): Promise<{
+  source: InboundWebhookSource;
+  secret: string;
+  boundAutomations: number;
+}> {
   const name = input.name.trim();
   if (!name) {
     throw new TRPCError({
@@ -166,7 +179,9 @@ export async function createInboundWebhookSource(input: {
         active: true,
       })
       .returning(SOURCE_COLUMNS);
-    return { source: toSource(row!), secret };
+    const source = toSource(row!);
+    const boundAutomations = await bindDeclaringAutomations(source);
+    return { source, secret, boundAutomations };
   } catch (err) {
     if (!isUniqueViolation(err)) throw err;
     const holder = await findInboundWebhookSourceByName(
@@ -245,24 +260,22 @@ export function declaredWebhookSource(
 
 /**
  * Bind an automation's DECLARED source (`triggerConfig.webhookSource.name`)
- * to this space's source of that name, creating it when the space has none:
- * returns the trigger config with `webhookSubscriptionId` set to it (the
- * matcher's one binding). A config that declares nothing is returned as is.
- *
- * Called by the automation insert and update doors AFTER governance, so a
- * proposed automation creates nothing until it is approved. The created
- * source's secret is NOT returned (see the file header): the person reveals
- * it from pod-admin. The declaration stays on the config, so a re-install in
- * another pod binds that pod's own source.
+ * to this space's source of that name: returns the trigger config with
+ * `webhookSubscriptionId` set to it (the matcher's one binding) and the
+ * source, or the config as is and `source: null` when the space has no such
+ * source yet — creating it is a person's act, and binds this automation then
+ * (`bindDeclaringAutomations`). A config that declares nothing is returned as
+ * is. Reads only: called by the automation insert and update doors AFTER
+ * governance. The declaration stays on the config, so a re-install in another
+ * pod binds that pod's own source.
  */
 export async function bindDeclaredWebhookSource(input: {
-  userId: string;
   workspaceId: string | null | undefined;
   triggerType: string | undefined;
   triggerConfig: Record<string, unknown>;
 }): Promise<{
   triggerConfig: Record<string, unknown>;
-  source: (InboundWebhookSource & { created: boolean }) | null;
+  source: InboundWebhookSource | null;
 }> {
   const declared = declaredWebhookSource(
     input.triggerType,
@@ -275,33 +288,45 @@ export async function bindDeclaredWebhookSource(input: {
       message: `An automation listening to the webhook source "${declared.name}" needs a space: a source belongs to one space (give the automation a workspaceId).`,
     });
   }
-  const bind = (source: InboundWebhookSource, created: boolean) => ({
+  const source = await findInboundWebhookSourceByName(
+    input.workspaceId,
+    declared.name
+  );
+  if (!source) return { triggerConfig: input.triggerConfig, source: null };
+  return {
     triggerConfig: {
       ...input.triggerConfig,
       webhookSubscriptionId: source.id,
     },
-    source: { ...source, created },
-  });
-  const existing = await findInboundWebhookSourceByName(
-    input.workspaceId,
-    declared.name
-  );
-  if (existing) return bind(existing, false);
-  try {
-    const { source } = await createInboundWebhookSource({
-      userId: input.userId,
-      workspaceId: input.workspaceId,
-      name: declared.name,
-    });
-    return bind(source, true);
-  } catch (err) {
-    // A concurrent install created it between the read and the insert.
-    if (!(err instanceof TRPCError) || err.code !== "CONFLICT") throw err;
-    const winner = await findInboundWebhookSourceByName(
-      input.workspaceId,
-      declared.name
-    );
-    if (!winner) throw err;
-    return bind(winner, false);
-  }
+    source,
+  };
+}
+
+/**
+ * The other half of the binding: a source a person just created binds every
+ * automation of its space that declared its name — installed before the
+ * source existed, or bound to a source of that name since deleted (the name
+ * is unique per space, so the declaration means THIS source). A derived value
+ * of the person's own act, written with a version bump like any
+ * definition-affecting change. Returns how many automations it bound.
+ */
+async function bindDeclaringAutomations(
+  source: InboundWebhookSource
+): Promise<number> {
+  const bound = await db
+    .update(automations)
+    .set({
+      triggerConfig: drizzleSql`${automations.triggerConfig} || jsonb_build_object('webhookSubscriptionId', ${source.id}::text)`,
+      version: drizzleSql`${automations.version} + 1`,
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(automations.workspaceId, source.workspaceId),
+        eq(automations.triggerType, "webhook"),
+        drizzleSql`lower(${automations.triggerConfig}->'webhookSource'->>'name') = lower(${source.name})`
+      )
+    )
+    .returning({ id: automations.id });
+  return bound.length;
 }
