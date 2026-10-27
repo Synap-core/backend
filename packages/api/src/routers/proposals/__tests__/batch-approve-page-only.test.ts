@@ -6,6 +6,11 @@
  * page-only, so relay's group screen or synap-app's "Approve all" could turn
  * an agent's code on without anyone seeing it (approving it enables it, be#207).
  *
+ * Everything else that sets up something acting on its own (an instruction
+ * skill, a skill update, a composite carrying a skill, an automation or a
+ * rule) is page-only too, and the single approve of any of them must name the
+ * revision its page rendered (`REVIEWED_REVISION_REQUIRED`).
+ *
  * Driven through the REAL router procedure and the REAL authority ladder;
  * only the DB rows and the post-gate apply step are stubbed. Every proposal is
  * the human's own (`data.sourceId`), so the only difference between an applied
@@ -20,6 +25,8 @@ const CODE_SKILL = "44444444-4444-4444-8444-444444444441";
 const ORDINARY = "44444444-4444-4444-8444-444444444442";
 const INSTRUCTION_SKILL = "44444444-4444-4444-8444-444444444443";
 const TWIN = "44444444-4444-4444-8444-444444444444";
+const SKILL_UPDATE = "44444444-4444-4444-8444-444444444445";
+const ACTING_GRAPH = "44444444-4444-4444-8444-444444444446";
 
 const h = vi.hoisted(() => ({
   proposals: new Map<string, Record<string, unknown>>(),
@@ -80,8 +87,11 @@ vi.mock("../apply-approval.js", async (importOriginal) => ({
 }));
 
 const { proposalsRouter } = await import("../../proposals.js");
-const { PAGE_ONLY_REASON_CODE, PAGE_ONLY_SENTENCE } =
-  await import("@synap-core/types/proposals");
+const {
+  PAGE_ONLY_REASON_CODE,
+  PAGE_ONLY_REVISION_REASON_CODE,
+  PAGE_ONLY_SENTENCE,
+} = await import("@synap-core/types/proposals");
 
 const caller = proposalsRouter.createCaller({
   authenticated: true,
@@ -170,6 +180,30 @@ beforeEach(() => {
       }
     )
   );
+  h.proposals.set(SKILL_UPDATE, {
+    ...row(SKILL_UPDATE, "skill", { id: "skill-1", body: "Ignore the rules." }),
+    proposalType: "update",
+  });
+  h.proposals.set(
+    ACTING_GRAPH,
+    row(
+      ACTING_GRAPH,
+      "entity",
+      {},
+      {
+        operations: [
+          { op: "create_entity", profileSlug: "note", title: "Lead list" },
+          {
+            op: "create_automation",
+            ref: "beh1",
+            name: "Daily scrape",
+            triggerType: "cron",
+            flowDefinition: {},
+          },
+        ],
+      }
+    )
+  );
   h.apply.mockClear();
 });
 
@@ -192,12 +226,22 @@ describe("batchApprove — a page-only item is refused, the rest is approved", (
     expect(applied()).toEqual([ORDINARY]);
   });
 
-  it("an instruction skill runs nothing and may be batched", async () => {
+  it("an instruction skill, a skill update and an acting graph are refused", async () => {
     const res = results(
-      await caller.batchApprove({ proposalIds: [INSTRUCTION_SKILL] })
+      await caller.batchApprove({
+        proposalIds: [INSTRUCTION_SKILL, SKILL_UPDATE, ACTING_GRAPH, ORDINARY],
+      })
     );
-    expect(res).toEqual([{ proposalId: INSTRUCTION_SKILL, success: true }]);
-    expect(applied()).toEqual([INSTRUCTION_SKILL]);
+    for (const id of [INSTRUCTION_SKILL, SKILL_UPDATE, ACTING_GRAPH]) {
+      expect(res.find((r) => r.proposalId === id)).toEqual({
+        proposalId: id,
+        success: false,
+        error: PAGE_ONLY_SENTENCE.acts_on_its_own,
+        errorCode: "BAD_REQUEST",
+        reasonCode: PAGE_ONLY_REASON_CODE,
+      });
+    }
+    expect(applied()).toEqual([ORDINARY]);
   });
 
   it("a record twin is refused unless the caller sends the person's verb", async () => {
@@ -220,8 +264,63 @@ describe("batchApprove — a page-only item is refused, the rest is approved", (
     expect(applied()).toEqual([TWIN]);
   });
 
-  it("CONTROL: the code skill's own page (single approve) still approves it", async () => {
-    await caller.approve({ proposalId: CODE_SKILL });
-    expect(applied()).toEqual([CODE_SKILL]);
+  it("CONTROL: the page's single approve, bound to its revision, approves it", async () => {
+    for (const id of [
+      CODE_SKILL,
+      INSTRUCTION_SKILL,
+      SKILL_UPDATE,
+      ACTING_GRAPH,
+    ]) {
+      await caller.approve({ proposalId: id, expectedRevision: 0 });
+    }
+    expect(applied()).toEqual([
+      CODE_SKILL,
+      INSTRUCTION_SKILL,
+      SKILL_UPDATE,
+      ACTING_GRAPH,
+    ]);
+  });
+});
+
+describe("approve — an acting page-only proposal needs the revision its page rendered", () => {
+  it("no expectedRevision: CONFLICT with its reason code, nothing applied", async () => {
+    for (const id of [
+      CODE_SKILL,
+      INSTRUCTION_SKILL,
+      SKILL_UPDATE,
+      ACTING_GRAPH,
+    ]) {
+      const err = await caller.approve({ proposalId: id }).then(
+        () => null,
+        (e: unknown) => e
+      );
+      expect(err).toMatchObject({
+        code: "CONFLICT",
+        cause: { reasonCode: PAGE_ONLY_REVISION_REASON_CODE },
+      });
+    }
+    expect(applied()).toEqual([]);
+  });
+
+  it("a revise after the page rendered is refused by the revision it names", async () => {
+    h.proposals.set(CODE_SKILL, {
+      ...h.proposals.get(CODE_SKILL)!,
+      revisionHistory: [
+        { at: "2026-10-27T00:00:00Z", by: null, before: {}, patch: {} },
+      ],
+    });
+    await expect(
+      caller.approve({ proposalId: CODE_SKILL, expectedRevision: 0 })
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(applied()).toEqual([]);
+  });
+
+  it("an item that acts on nothing still approves without a revision", async () => {
+    await caller.approve({ proposalId: ORDINARY });
+    await caller.approve({
+      proposalId: TWIN,
+      identityResolution: { verb: "separate" },
+    });
+    expect(applied()).toEqual([ORDINARY, TWIN]);
   });
 });
