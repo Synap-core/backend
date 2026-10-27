@@ -38363,6 +38363,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				agentType?: string | undefined;
 				agentUserId?: string | undefined;
 				goalOverride?: string | undefined;
+				handToAgentId?: string | undefined;
 				onMissingRequired?: "owe" | "refuse" | undefined;
 				params?: Record<string, unknown> | undefined;
 				parentSessionId?: string | undefined;
