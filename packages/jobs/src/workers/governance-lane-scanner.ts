@@ -17,6 +17,21 @@
  *   AND no already-PENDING widen proposal for the agent
  *   AND no ACTIVE governance_rules row already covering the dominant motif
  *
+ * PER-MOTIF qualification (founder D8, pod-side plan §5.3 F5) — an agent that
+ * fails the agent-wide gate (claude-code: 20% duplicates across everything it
+ * does) may still have ONE motif it always gets right. Each motif
+ * (`${targetType}.${proposalType}`) is scored on its own, over the agent's last
+ * {@link SCAN_LIMIT} REVIEWED proposals (receipts excluded — see
+ * `loadAgentReviewedProposals`):
+ *   decisions >= 30 && approveRate > 0.95 && duplicateRate < 0.15
+ *   AND the motif names a gate door a rule can widen (`motifWidenRefusal`:
+ *       not a floored key, not a door outside the gate)
+ *   AND no PENDING, APPROVED or REJECTED widen already filed for (agent, motif)
+ *   AND no ACTIVE governance_rules row already covering the motif
+ * and files a widen for THAT motif only: one exact `action` rule, agent ×
+ * pod × `${targetType}.${proposalType}` — the narrowest existing granularity
+ * that expresses (proposalType × targetType). Still only a PENDING proposal.
+ *
  * `@synap/jobs` cannot import from `@synap/api` (api depends on jobs, not the
  * reverse — root CLAUDE.md dependency direction; see
  * `resolve-agent-governance-decision.ts`'s header for the same constraint), so
@@ -38,6 +53,7 @@ import {
   eq,
   desc,
   isNull,
+  ne,
   proposals,
   users,
   governanceRules,
@@ -45,6 +61,10 @@ import {
   ProposalStatus,
 } from "@synap/database";
 import { isPartiallyApprovedData } from "@synap-core/types/proposals";
+import {
+  GATE_WRITE_DOORS,
+  nonWidenableFloorFor,
+} from "@synap/governance-policy";
 import { createLogger } from "@synap-core/core";
 import { emitSideEffects } from "@synap/events";
 
@@ -67,9 +87,16 @@ export interface GovernanceWidenLaneProposalData {
   workspaceId?: string | null;
   verdict: "auto";
   evidence: {
+    /** Agent-wide: rows in the window. Per-motif: the motif's human decisions. */
     total: number;
     approveRate: number;
     duplicateRate: number;
+    /**
+     * Which gate qualified it: the whole agent (absent on rows filed before
+     * F5) or this one motif alone (`motif` names it).
+     */
+    basis?: "agent" | "motif";
+    motif?: { targetType: string; proposalType: string };
   };
 }
 
@@ -84,6 +111,11 @@ const SCAN_LIMIT = 500;
 const MIN_TOTAL = 100;
 const MIN_APPROVE_RATE = 0.95;
 const MAX_DUPLICATE_RATE = 0.15;
+
+/** Per-motif gate (F5): same rates as the agent gate, a smaller volume floor. */
+const MOTIF_MIN_DECISIONS = 30;
+const MOTIF_MIN_APPROVE_RATE = 0.95;
+const MOTIF_MAX_DUPLICATE_RATE = 0.15;
 
 // ── Pure fingerprint mirror (see file header) ───────────────────────────────
 // Deliberately duplicated from fingerprint.ts's computeProposalFingerprint —
@@ -263,6 +295,118 @@ export function qualifiesForWidenLane(q: AgentQualification): boolean {
 }
 
 /**
+ * The action pattern a proposal row's motif widens: `${targetType}.${proposalType}`.
+ *
+ * Receipts store a DOTTED proposalType (`entity.create`) while reviewed rows
+ * carry the bare verb (`create`). Prefixing the dotted form minted
+ * `entity.entity.create` rules that no write ever matches.
+ */
+export function motifPatternOf(r: {
+  targetType: string;
+  proposalType: string;
+}): string {
+  return r.proposalType.startsWith(`${r.targetType}.`)
+    ? r.proposalType
+    : `${r.targetType}.${r.proposalType}`;
+}
+
+/**
+ * A HUMAN VERDICT on the row — the per-motif gate's denominator.
+ *
+ * `auto_approved` receipts are NOT decisions: nobody reviewed them, and a motif
+ * that already lands as receipts needs no wider lane (counting them would let
+ * every auto-applied motif file a widen the person must read for nothing).
+ * `reverted` IS one: a person undid the write. Pending / withdrawn / expired /
+ * approval_failed carry no verdict (same exclusion as `recommend-tighten`).
+ */
+const HUMAN_DECISION_STATUSES: ReadonlySet<string> = new Set<string>([
+  ProposalStatus.APPROVED,
+  ProposalStatus.REJECTED,
+  ProposalStatus.REVERTED,
+]);
+
+export interface MotifQualification {
+  targetType: string;
+  proposalType: string;
+  /** `${targetType}.${proposalType}` — the exact action key the rule names. */
+  targetPattern: string;
+  /** Human verdicts on this motif in the window (approved/rejected/reverted). */
+  decisions: number;
+  /** FULL approvals / decisions — a gutted composite or a revert is a "no". */
+  approveRate: number;
+  /** Share of this motif's rows (any status) in a same-fingerprint cluster. */
+  duplicateRate: number;
+}
+
+/**
+ * Score every motif in `rows` on its own. Duplicates are measured over ALL of
+ * the motif's rows (a pending re-file is a duplicate the agent made, judged or
+ * not); approvals over its human decisions only, through {@link isFullApproval}
+ * — the ONE definition of approved this scanner uses.
+ */
+export function computeMotifQualifications(
+  rows: LaneScanProposalRow[]
+): MotifQualification[] {
+  const byMotif = new Map<string, LaneScanProposalRow[]>();
+  for (const r of rows) {
+    const key = motifPatternOf(r);
+    const group = byMotif.get(key);
+    if (group) group.push(r);
+    else byMotif.set(key, [r]);
+  }
+
+  const out: MotifQualification[] = [];
+  for (const [targetPattern, group] of byMotif) {
+    const decided = group.filter((r) => HUMAN_DECISION_STATUSES.has(r.status));
+    const approved = decided.filter(isFullApproval).length;
+    const duplicateRate = computeQualification(group).duplicateRate;
+    const first = group[0]!;
+    out.push({
+      targetType: first.targetType,
+      proposalType: targetPattern.slice(first.targetType.length + 1),
+      targetPattern,
+      decisions: decided.length,
+      approveRate:
+        decided.length > 0 ? Number((approved / decided.length).toFixed(4)) : 0,
+      duplicateRate,
+    });
+  }
+  return out;
+}
+
+/** Pure per-motif predicate — the F5 gate. */
+export function qualifiesMotifForWidenLane(m: MotifQualification): boolean {
+  return (
+    m.decisions >= MOTIF_MIN_DECISIONS &&
+    m.approveRate > MOTIF_MIN_APPROVE_RATE &&
+    m.duplicateRate < MOTIF_MAX_DUPLICATE_RATE
+  );
+}
+
+/**
+ * Why a rule for this motif could never widen it — `null` when it can.
+ *
+ * - `NOT_A_GATE_DOOR`: the key is no door of the `checkPermissionOrPropose`
+ *   gate (`GATE_WRITE_DOORS`, creator `gate` / `gate+automation`), the only
+ *   writes rung 2.8 resolves an action rule for. A `direct` door or a key no
+ *   door emits would store a rule that never fires.
+ * - a floor's reason code (`DESTRUCTIVE_HARD_FLOOR`, `ADMIN_ACTION`, …): the
+ *   engine itself, asked with a rung-2.8 `auto` verdict, still proposes
+ *   (`nonWidenableFloorFor`) — the floors sit above the rule store. The
+ *   approval branch refuses these too; this keeps them from being filed.
+ */
+export function motifWidenRefusal(targetPattern: string): string | null {
+  const dot = targetPattern.lastIndexOf(".");
+  if (dot <= 0) return "NOT_A_GATE_DOOR";
+  const door = `${targetPattern.slice(0, dot)}/${targetPattern.slice(dot + 1)}`;
+  const creator = (GATE_WRITE_DOORS as Record<string, string>)[door];
+  if (creator !== "gate" && creator !== "gate+automation") {
+    return "NOT_A_GATE_DOOR";
+  }
+  return nonWidenableFloorFor(targetPattern);
+}
+
+/**
  * Dominant write-motif: the `${targetType}.${proposalType}` action pattern
  * this agent's APPROVED proposals hit most. Returns undefined when the agent
  * has no approved rows (nothing to widen).
@@ -277,12 +421,7 @@ export function computeDominantMotif(
 
   const counts = new Map<string, { targetType: string; count: number }>();
   for (const r of approvedRows) {
-    // Receipts store a DOTTED proposalType (`entity.create`) while reviewed
-    // rows carry the bare verb (`create`). Prefixing the dotted form minted
-    // `entity.entity.create` rules that no write ever matches.
-    const key = r.proposalType.startsWith(`${r.targetType}.`)
-      ? r.proposalType
-      : `${r.targetType}.${r.proposalType}`;
+    const key = motifPatternOf(r);
     const entry = counts.get(key);
     if (entry) entry.count += 1;
     else counts.set(key, { targetType: r.targetType, count: 1 });
@@ -329,6 +468,66 @@ async function loadAgentProposals(
     .where(eq(proposals.agentUserId, agentId))
     .orderBy(desc(proposals.createdAt))
     .limit(SCAN_LIMIT);
+}
+
+/**
+ * The per-motif window: the agent's last {@link SCAN_LIMIT} proposals that went
+ * to REVIEW — every status but `auto_approved`. A busy agent's last 500 rows are
+ * mostly receipts (claude-code, 2026-10-27: 500 rows, 32 pending), so a motif's
+ * human decisions would rarely reach the floor inside the agent-wide window.
+ * A reverted receipt is kept: its status is `reverted`, a person's "no".
+ */
+async function loadAgentReviewedProposals(
+  agentId: string
+): Promise<LaneScanProposalRow[]> {
+  return db
+    .select({
+      proposalType: proposals.proposalType,
+      targetType: proposals.targetType,
+      targetId: proposals.targetId,
+      data: proposals.data,
+      status: proposals.status,
+      createdAt: proposals.createdAt,
+    })
+    .from(proposals)
+    .where(
+      and(
+        eq(proposals.agentUserId, agentId),
+        ne(proposals.status, ProposalStatus.AUTO_APPROVED)
+      )
+    )
+    .orderBy(desc(proposals.createdAt))
+    .limit(SCAN_LIMIT);
+}
+
+/**
+ * Motifs already put to the person for this agent: a widen that is PENDING
+ * (awaiting them), APPROVED (granted — if its rule was since revoked, that
+ * revocation is their answer) or REJECTED (a "no", not an invitation to ask
+ * daily). Keyed per (agent, targetPattern), like `recommend-tighten`'s
+ * `hasPendingFinding`. Withdrawn / expired widens never block a refile.
+ */
+async function loadDecidedOrPendingWidenPatterns(
+  agentId: string
+): Promise<Set<string>> {
+  const rows = await db
+    .select({ data: proposals.data, status: proposals.status })
+    .from(proposals)
+    .where(eq(proposals.proposalType, "governance.widen_lane"));
+  const blocking: ReadonlySet<string> = new Set<string>([
+    ProposalStatus.PENDING,
+    ProposalStatus.APPROVED,
+    ProposalStatus.REJECTED,
+  ]);
+  const patterns = new Set<string>();
+  for (const r of rows) {
+    if (!blocking.has(r.status)) continue;
+    const data = r.data as Partial<GovernanceWidenLaneProposalData> | null;
+    if (data?.agentUserId === agentId && data.targetPattern) {
+      patterns.add(data.targetPattern);
+    }
+  }
+  return patterns;
 }
 
 /** Pending `governance.widen_lane` proposals — subject agent lives in `data`, not `proposals.agentUserId` (the scanner authors these, not the agent). */
@@ -402,7 +601,12 @@ async function hasCoveringRule(
 
 async function scanAgent(agent: AgentRow): Promise<void> {
   if (!agent.createdByUserId) return;
+  await scanAgentWide(agent, agent.createdByUserId);
+  await scanAgentMotifs(agent, agent.createdByUserId);
+}
 
+/** The agent-wide gate — unchanged by F5. */
+async function scanAgentWide(agent: AgentRow, ownerId: string): Promise<void> {
   const rows = await loadAgentProposals(agent.id);
   const qualification = computeQualification(rows);
   if (!qualifiesForWidenLane(qualification)) return;
@@ -413,7 +617,7 @@ async function scanAgent(agent: AgentRow): Promise<void> {
   if (await hasPendingWidenProposal(agent.id)) return;
   if (await hasCoveringRule(agent.id, motif.targetPattern)) return;
 
-  const data: GovernanceWidenLaneProposalData = {
+  await fileWidenProposal(agent, ownerId, {
     agentUserId: agent.id,
     targetKind: "action",
     targetPattern: motif.targetPattern,
@@ -424,25 +628,81 @@ async function scanAgent(agent: AgentRow): Promise<void> {
       approveRate: qualification.approveRate,
       duplicateRate: qualification.duplicateRate,
     },
-  };
+  });
+}
 
+/**
+ * F5 — every motif that earns a lane on its own gets its own widen. Runs after
+ * the agent-wide pass, so a motif that pass just filed is already in the
+ * blocking set read here.
+ */
+async function scanAgentMotifs(
+  agent: AgentRow,
+  ownerId: string
+): Promise<void> {
+  const rows = await loadAgentReviewedProposals(agent.id);
+  const qualified = computeMotifQualifications(rows).filter(
+    (m) =>
+      qualifiesMotifForWidenLane(m) &&
+      motifWidenRefusal(m.targetPattern) === null
+  );
+  if (qualified.length === 0) return;
+
+  const alreadyAsked = await loadDecidedOrPendingWidenPatterns(agent.id);
+  for (const m of qualified) {
+    if (alreadyAsked.has(m.targetPattern)) continue;
+    if (await hasCoveringRule(agent.id, m.targetPattern)) continue;
+    await fileWidenProposal(
+      agent,
+      ownerId,
+      buildMotifWidenProposalData(agent.id, m)
+    );
+  }
+}
+
+/** The widen a qualified motif files: one exact action rule, agent × pod. */
+export function buildMotifWidenProposalData(
+  agentUserId: string,
+  m: MotifQualification
+): GovernanceWidenLaneProposalData {
+  return {
+    agentUserId,
+    targetKind: "action",
+    targetPattern: m.targetPattern,
+    scopeKind: "pod",
+    verdict: "auto",
+    evidence: {
+      total: m.decisions,
+      approveRate: m.approveRate,
+      duplicateRate: m.duplicateRate,
+      basis: "motif",
+      motif: { targetType: m.targetType, proposalType: m.proposalType },
+    },
+  };
+}
+
+async function fileWidenProposal(
+  agent: AgentRow,
+  ownerId: string,
+  data: GovernanceWidenLaneProposalData
+): Promise<void> {
   const { proposal } = await insertPendingProposal({
     workspaceId: null,
     targetType: "governance",
     targetId: agent.id,
     proposalType: "governance.widen_lane",
     data: data as unknown as Record<string, unknown>,
-    createdBy: agent.createdByUserId,
+    createdBy: ownerId,
     proposedByUserId: null,
     // OWNER FLOOR (0248): the human who owns this agent decides its lane.
-    subjectUserId: agent.createdByUserId,
+    subjectUserId: ownerId,
   });
 
   void emitSideEffects({
     subjectType: "proposal",
     action: "created",
     subjectId: proposal.id,
-    userId: agent.createdByUserId,
+    userId: ownerId,
     data: {
       proposalStatus: "created",
       targetType: "governance",
@@ -456,7 +716,7 @@ async function scanAgent(agent: AgentRow): Promise<void> {
   });
 
   logger.info(
-    { agentId: agent.id, motif: motif.targetPattern, qualification },
+    { agentId: agent.id, motif: data.targetPattern, evidence: data.evidence },
     "governance-lane-scanner: filed widen_lane proposal"
   );
 }
