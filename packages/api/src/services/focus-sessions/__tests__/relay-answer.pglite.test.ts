@@ -82,6 +82,9 @@ vi.mock("@synap/database", async (importOriginal) => {
         links: actual.links as never,
         tools: actual.tools as never,
         playbookRuns: actual.playbookRuns as never,
+        // What an ask cites (`lookedAt`) is floored through scopedDb's
+        // relational read of the cited table.
+        entities: actual.entities as never,
       },
     }),
     eventRepository: { append: async () => undefined },
