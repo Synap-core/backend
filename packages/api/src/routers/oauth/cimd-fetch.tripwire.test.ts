@@ -3,7 +3,7 @@
  *
  * The pod fetching a URL a stranger chose is a confused-deputy surface, made
  * safe by `client-metadata.ts` alone (public pinned IP, no redirects, 5 s,
- * 5 KB). A second fetch of a client URL anywhere in the OAuth door would skip
+ * 8 KB). A second fetch of a client URL anywhere in the OAuth door would skip
  * every one of those bounds without a test noticing. So:
  *   - no file of the OAuth router other than `client-metadata.ts` makes an
  *     outbound request (fetch / node:http(s) / undici / the pinned GET);
