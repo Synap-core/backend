@@ -23700,6 +23700,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					status: "blocked_by_policy" | "cancelled" | "completed" | "failed" | "running" | "skipped" | "waiting_on_you";
 					stepsCompleted: number;
 					stepsFailed: number;
+					stopReason: "budget" | null;
 					subjectEntityId: string | null;
 					summaryMessageId: string | null;
 					triggerEventId: string | null;
@@ -23837,6 +23838,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					status: "blocked_by_policy" | "cancelled" | "completed" | "failed" | "running" | "skipped" | "waiting_on_you";
 					stepsCompleted: number;
 					stepsFailed: number;
+					stopReason: "budget" | null;
 					subjectEntityId: string | null;
 					summaryMessageId: string | null;
 					triggerEventId: string | null;
@@ -37659,6 +37661,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				sessionId: string | null;
 				startedAt: Date;
 				status: PlaybookRunStatus;
+				stopReason: "budget" | null;
 				summary: string | null;
 				workspaceId: string | null;
 			}[];
@@ -38606,6 +38609,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					sessionId: string | null;
 					startedAt: Date;
 					status: PlaybookRunStatus;
+					stopReason: "budget" | null;
 					summary: string | null;
 					workspaceId: string | null;
 				} | null;
