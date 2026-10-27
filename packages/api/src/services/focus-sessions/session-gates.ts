@@ -26,7 +26,7 @@
  */
 
 import {
-  db,
+  type db,
   proposals,
   users,
   and,

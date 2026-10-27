@@ -110,12 +110,17 @@ export function decide({ event, headRef, draft, files, siblingTests }) {
     suites: !draft,
     negctl: false,
     negctlTests: [],
-    reason: [
-      draft ? "draft: Release gate only (suites start when marked ready)" : "",
-      image ? "" : "no image-relevant path: Docker build and deploy tests skipped",
-    ]
-      .filter(Boolean)
-      .join("; ") || "every check runs",
+    reason:
+      [
+        draft
+          ? "draft: Release gate only (suites start when marked ready)"
+          : "",
+        image
+          ? ""
+          : "no image-relevant path: Docker build and deploy tests skipped",
+      ]
+        .filter(Boolean)
+        .join("; ") || "every check runs",
   };
 }
 

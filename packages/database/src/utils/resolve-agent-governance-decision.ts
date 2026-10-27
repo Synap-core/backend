@@ -1644,9 +1644,7 @@ type PrincipalInput = ResolveAgentGovernanceInput & {
   ownSessionBookkeeping?: () => Promise<boolean>;
 };
 
-async function resolveForPrincipal(
-  input: PrincipalInput
-): Promise<{
+async function resolveForPrincipal(input: PrincipalInput): Promise<{
   resolution: AgentGovernanceResolution;
   hostUserId: string | null;
 }> {
