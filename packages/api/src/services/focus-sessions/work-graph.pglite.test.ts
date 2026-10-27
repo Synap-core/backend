@@ -14,7 +14,9 @@
  *   - another person's session linked by a `blocked_by` edge — the far-end
  *     fetch must apply the floor, and the edge to it must not be drawn;
  *   - another person's session whose room seats this person — readable only on
- *     the HUMAN door (`roster: true`).
+ *     the HUMAN door (`roster: true`);
+ *   - a session in space A blocked by the same person's session in space B —
+ *     an unbound key gets B as a far end, a key BOUND to A must not.
  *
  * Stubbed: nothing on the read path except one switch that makes
  * `attachSessionEdges` throw, to prove a failed edge read is `unavailable`.
@@ -107,6 +109,9 @@ const USER = "user-graph";
 const OTHER = "user-other";
 const BIG = "user-big";
 const WS = randomUUID();
+const BOUND = "user-bound";
+const WS_A = randomUUID();
+const WS_B = randomUUID();
 
 const S = {
   openOld: randomUUID(), // active, started and last touched 30 d ago
@@ -119,6 +124,8 @@ const S = {
   child: randomUUID(), // active; spawned from openOld
   othersBlocker: randomUUID(), // OTHER's session; openOld "blocked by" it
   shared: randomUUID(), // OTHER's session whose room seats USER
+  inA: randomUUID(), // BOUND's session in WS_A, blocked by inB
+  inB: randomUUID(), // BOUND's session in WS_B (far end of inA)
 };
 
 async function session(
@@ -159,15 +166,21 @@ const link = (from: string, to: string, linkType: string) =>
 
 const graph = (
   user: string,
-  extra: { roster?: boolean; windowHours?: number } = {}
+  extra: {
+    roster?: boolean;
+    windowHours?: number;
+    workspaceLens?: string;
+    boundWorkspaceId?: string;
+  } = {}
 ) =>
   buildWorkGraph({
     userId: user,
-    scope: { workspaceLens: undefined, projectLens: undefined },
+    scope: { workspaceLens: extra.workspaceLens, projectLens: undefined },
     windowHours: extra.windowHours ?? 72,
     kind: "all",
     lens: "all",
     roster: extra.roster ?? false,
+    boundWorkspaceId: extra.boundWorkspaceId,
   });
 
 beforeAll(async () => {
@@ -227,6 +240,10 @@ beforeAll(async () => {
     workspaceId: WS,
     channelId: room,
   });
+
+  await session(S.inA, BOUND, "active", { hoursAgo: 1, workspaceId: WS_A });
+  await session(S.inB, BOUND, "active", { hoursAgo: 1, workspaceId: WS_B });
+  await link(S.inA, S.inB, "blocked_by");
 
   // BIG: one more than the ceiling of OPEN work, plus 3 recently closed.
   await q(
@@ -321,6 +338,31 @@ describe("buildWorkGraph — the owner / roster floor", () => {
     const shared = g.nodes.find((n) => n.id === S.shared);
     expect(shared?.viewerRole).toBe("member");
     expect(g.nodes.map((n) => n.id)).not.toContain(S.othersBlocker);
+  });
+});
+
+describe("buildWorkGraph — a workspace-bound key", () => {
+  it("an unbound key's far ends cross spaces: the edge never points into the void", async () => {
+    const g = await graph(BOUND, { workspaceLens: WS_A });
+    expect(g.nodes.find((n) => n.id === S.inB)?.inWindow).toBe(false);
+    expect(g.edges).toContainEqual({
+      kind: "blocked_by",
+      from: S.inA,
+      to: S.inB,
+    });
+  });
+
+  it("a key bound to A gets no far end in B, and no edge to it", async () => {
+    const g = await graph(BOUND, {
+      workspaceLens: WS_A,
+      boundWorkspaceId: WS_A,
+    });
+    const ids = g.nodes.map((n) => n.id);
+    expect(ids).toContain(S.inA);
+    expect(ids).not.toContain(S.inB);
+    expect(g.nodes.every((n) => n.workspaceId === WS_A)).toBe(true);
+    expect(g.edges.some((e) => e.to === S.inB || e.from === S.inB)).toBe(false);
+    expect(g.sections.farEnds).toEqual({ status: "ok" });
   });
 });
 

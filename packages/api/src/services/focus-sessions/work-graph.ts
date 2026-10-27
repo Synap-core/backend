@@ -191,6 +191,13 @@ export interface BuildWorkGraphInput {
   lens: SessionLens;
   /** Honour the human-roster branch — `rosterReadFor(ctx)`, as the list does. */
   roster: boolean;
+  /**
+   * The workspace a workspace-bound key is pinned to (`keyWorkspaceId`). The
+   * door already clamps the window's lens to it; this keeps the FAR ENDS in
+   * it too, so an edge never carries a bound key into another space. Absent
+   * for an unbound key: its far ends are read with no lens.
+   */
+  boundWorkspaceId?: string;
 }
 
 const LOG = { door: "focusSessions.graph" };
@@ -298,7 +305,8 @@ export async function buildWorkGraph(
     }
   }
 
-  // ── The far ends: through the same WHERE, any kind, any lens, no lens scope.
+  // ── The far ends: through the same WHERE, any kind, any lens, no lens scope
+  // (a bound key's far ends stay in its workspace).
   const inWindow = new Set(windowRows.map((r) => r.id));
   const farIds = [...new Set(edges.flatMap((e) => [e.from, e.to]))].filter(
     (id) => !inWindow.has(id)
@@ -309,7 +317,10 @@ export async function buildWorkGraph(
   if (farIds.length > 0) {
     const farQuery: SessionListQuery = {
       userId,
-      scope: { workspaceLens: undefined, projectLens: undefined },
+      scope: {
+        workspaceLens: input.boundWorkspaceId,
+        projectLens: undefined,
+      },
       status: "all",
       kind: "all",
       lens: "all",

@@ -923,7 +923,7 @@ export const sessionHandlers: McpHandlerMap = {
   synap_get_work_graph: async (
     ctx: McpToolContext
   ): Promise<CallToolResult> => {
-    const { toolName, args, userId, apiKeyScopes } = ctx;
+    const { toolName, args, userId, apiKeyScopes, keyWorkspaceId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     // MCP schemas are ADVISORY — nothing validates args server-side — so an
     // off-vocabulary value is answered with the vocabulary, never silently
@@ -963,7 +963,10 @@ export const sessionHandlers: McpHandlerMap = {
       });
     }
     // The URL lens auto-injects workspaceId/projectId — honoured as lenses,
-    // never as an authorization boundary (the floor is the owner).
+    // never as an authorization boundary (the floor is the owner). The
+    // workspace lens is the CONFINED one (`adapter.ts`): a workspace-bound key
+    // reads its own workspace when it names none, and 403s before here on
+    // another.
     const lensOf = (v: unknown) => (typeof v === "string" && v ? v : undefined);
     // Loaded on call, like the continuation packet above: the graph service
     // pulls the next-move reads, which this handler module must not load at
@@ -973,7 +976,7 @@ export const sessionHandlers: McpHandlerMap = {
     const graph = await buildWorkGraph({
       userId,
       scope: {
-        workspaceLens: lensOf(args.workspaceId),
+        workspaceLens: ctx.confinedWorkspaceId,
         projectLens: lensOf(args.projectId),
       },
       windowHours,
@@ -981,6 +984,7 @@ export const sessionHandlers: McpHandlerMap = {
       lens: lensArg,
       // An agent door reads owner-only (decision C v1, `rosterReadFor`).
       roster: false,
+      boundWorkspaceId: keyWorkspaceId ?? undefined,
     });
     return ok({
       // `lean` (default): enough to draw and to choose — a full node carries

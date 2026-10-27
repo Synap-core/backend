@@ -144,6 +144,7 @@ import {
 import { ErrorSchema, uuidParam, uuidQueryParam } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import {
+  confineWorkspaceOrForbidden,
   errCode,
   hasScope,
   httpStatusForTrpcError,
@@ -1295,7 +1296,14 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
       return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
     }
-    const workspaceIdParam = c.req.query("workspaceId") || undefined;
+    // A workspace-bound key is pinned to its workspace (403 on another one),
+    // and a bound key that names none reads its own, never the pod.
+    const confined = confineWorkspaceOrForbidden(
+      c,
+      c.req.query("workspaceId") || undefined
+    );
+    if (!confined.ok) return c.json({ error: confined.error }, 403);
+    const workspaceIdParam = confined.workspaceId ?? undefined;
     const projectIdParam = c.req.query("projectId") || undefined;
     // Membership check when a workspace is named, and the acting person.
     const acting = await resolveActingContext(c, {
@@ -1366,6 +1374,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         // An agent door reads owner-only, as `GET /focus-sessions` does
         // (decision C v1: `rosterReadFor` is false for every Hub caller).
         roster: false,
+        boundWorkspaceId: c.get("keyWorkspaceId") ?? undefined,
       });
       return c.json(graph);
     } catch (err) {

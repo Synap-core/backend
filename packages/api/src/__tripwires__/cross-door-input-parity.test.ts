@@ -853,6 +853,14 @@ const ACKNOWLEDGED_GAPS: Gap[] = [
     reason:
       "SAME ABSENT SIGNAL as `channelId`, one hop earlier: `sourceMessageId` exists only to be resolved server-side INTO the acting channel, so it inherits that field's rule exactly. `McpToolContext` carries no triggering-message id, and a model-supplied message id would be self-attested provenance feeding the same tighten-only classifier. DROPPED, NOT YET FIXED — the same MCP transport header closes both.",
   },
+  // ── Key binding: derived from the API key, and tRPC has no key ───────────
+  {
+    service: "work-graph",
+    param: "boundWorkspaceId",
+    door: "routers/focus-sessions.ts:graph",
+    reason:
+      "NO API KEY EXISTS ON THIS TRANSPORT. `boundWorkspaceId` is the workspace binding of the key a call authenticated with (`keyWorkspaceId`, set by the hub auth middleware and the MCP adapter). `protectedProcedure` authenticates a PERSON through the Kratos session, and `context.ts` carries no key, no key type and no binding (`keyWorkspaceId` has ZERO occurrences in it), so there is nothing server-side to forward. A body field would be self-declared confinement: a client could only narrow its own far ends, never be held to a binding it does not have. The Hub REST and MCP doors forward it from the key. If tRPC ever gains an API-key path, this entry becomes false and must be removed.",
+  },
 ];
 
 // ── The matrix, computed once ────────────────────────────────────────────────
