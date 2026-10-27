@@ -114,7 +114,7 @@ export function proposalSessionIds(row: {
   targetType: string;
   targetId: string | null;
   sessionId: string | null;
-  proposalType: string;
+  proposalType?: string | null;
 }): string[] {
   const ids = targetSessionIds([row]);
   if (
@@ -177,7 +177,7 @@ export async function unreadableProposalSessionIds(
     targetType: string;
     targetId: string | null;
     sessionId: string | null;
-    proposalType: string;
+    proposalType?: string | null;
   }[],
   reader: SessionReader
 ): Promise<Set<string>> {
