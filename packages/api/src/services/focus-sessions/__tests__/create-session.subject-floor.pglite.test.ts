@@ -87,6 +87,8 @@ const USER = "11111111-1111-4111-8111-111111111111";
 const AGENT = "22222222-2222-4222-8222-222222222222";
 const STRANGER = "33333333-3333-4333-8333-333333333333";
 const THEIR_SPACE = "44444444-4444-4444-8444-444444444444";
+/** A space the caller belongs to: the Hub door refuses a start with no scope. */
+const MY_SPACE = "77777777-7777-4777-8777-777777777777";
 const MY_ENTITY = "55555555-5555-4555-8555-555555555555";
 const THEIR_ENTITY = "66666666-6666-4666-8666-666666666666";
 
@@ -126,7 +128,7 @@ const hubStart = (body: Record<string, unknown>) =>
   hub().request("/focus-sessions", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ userId: USER, ...body }),
+    body: JSON.stringify({ userId: USER, workspaceId: MY_SPACE, ...body }),
   });
 
 const mcpStart = (args: Record<string, unknown>) =>
@@ -163,6 +165,14 @@ beforeAll(async () => {
   await h.client!.query(
     `insert into workspace_members (id, workspace_id, user_id, role) values ($1, $2, $3, 'owner')`,
     [randomUUID(), THEIR_SPACE, STRANGER]
+  );
+  await h.client!.query(
+    `insert into workspaces (id, name, owner_id) values ($1, 'Mine', $2)`,
+    [MY_SPACE, USER]
+  );
+  await h.client!.query(
+    `insert into workspace_members (id, workspace_id, user_id, role) values ($1, $2, $3, 'owner')`,
+    [randomUUID(), MY_SPACE, USER]
   );
   await h.client!.query(
     `insert into entities (id, user_id, workspace_id, type, title) values
