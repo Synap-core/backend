@@ -10,17 +10,17 @@ other write ([event-chain.md](event-chain.md)).
 
 All inbound webhooks are mounted under `/api/webhooks` in `apps/api/src/index.ts`.
 
-| Path                            | Sender                       | Authentication                                                                                | Handler                                        |
-| ------------------------------- | ---------------------------- | --------------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| `POST /inbound/:subscriptionId` | any external service         | `X-Synap-Signature: sha256=<hex>`, HMAC-SHA256 of the raw body with the subscription's secret | `packages/api/src/routers/webhooks-inbound.ts` |
-| `POST /messaging`               | messaging provider (Unipile) | provider header checked by the connector's `parseWebhook` (`unipile-auth`)                    | same file                                      |
-| `POST /calcom/:token`           | Cal.com                      | `:token` selects the config; `x-cal-signature-256` HMAC (no `sha256=` prefix)                 | same file                                      |
-| `POST /fireflies/:token`        | Fireflies                    | `:token`; plus `x-hub-signature` HMAC when a signing secret is configured                     | same file                                      |
-| `POST /mailgun/:token`          | Mailgun                      | `:token`; Mailgun signature (HMAC of timestamp + nonce)                                       | same file                                      |
-| `POST /postiz/:token`           | Postiz                       | `:token` only (Postiz sends no signature)                                                     | same file                                      |
-| `POST /n8n/inbox`               | n8n                          | `X-Webhook-Secret`                                                                            | `apps/api/src/webhooks/n8n.ts`                 |
-| `POST /kratos`                  | Ory Kratos                   | `X-Webhook-Secret`                                                                            | `apps/api/src/webhooks/kratos.ts`              |
-| `POST /intelligence/callback`   | Intelligence Service         | `Authorization: Bearer`; required, never fails open                                           | `apps/api/src/webhooks/intelligence.ts`        |
+| Path                            | Sender                       | Authentication                                                                                                           | Handler                                        |
+| ------------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------- |
+| `POST /inbound/:subscriptionId` | any external service         | `X-Synap-Signature` or `X-Hub-Signature-256`: `sha256=<hex>`, HMAC-SHA256 of the raw body with the subscription's secret | `packages/api/src/routers/webhooks-inbound.ts` |
+| `POST /messaging`               | messaging provider (Unipile) | provider header checked by the connector's `parseWebhook` (`unipile-auth`)                                               | same file                                      |
+| `POST /calcom/:token`           | Cal.com                      | `:token` selects the config; `x-cal-signature-256` HMAC (no `sha256=` prefix)                                            | same file                                      |
+| `POST /fireflies/:token`        | Fireflies                    | `:token`; plus `x-hub-signature` HMAC when a signing secret is configured                                                | same file                                      |
+| `POST /mailgun/:token`          | Mailgun                      | `:token`; Mailgun signature (HMAC of timestamp + nonce)                                                                  | same file                                      |
+| `POST /postiz/:token`           | Postiz                       | `:token` only (Postiz sends no signature)                                                                                | same file                                      |
+| `POST /n8n/inbox`               | n8n                          | `X-Webhook-Secret`                                                                                                       | `apps/api/src/webhooks/n8n.ts`                 |
+| `POST /kratos`                  | Ory Kratos                   | `X-Webhook-Secret`                                                                                                       | `apps/api/src/webhooks/kratos.ts`              |
+| `POST /intelligence/callback`   | Intelligence Service         | `Authorization: Bearer`; required, never fails open                                                                      | `apps/api/src/webhooks/intelligence.ts`        |
 
 Rules the handlers share:
 
@@ -29,9 +29,16 @@ Rules the handlers share:
 - **Generic inbound.** An unknown or inactive subscription and a bad signature
   return the same 401, so subscription ids cannot be enumerated. Bodies are
   capped at 1 MB. A valid call updates `last_triggered_at` and emits
-  `external_webhook.received` with the payload, so an automation can trigger on
-  it (`eventPattern: "external_webhook.received.completed"`, filter on payload
-  fields).
+  `external_webhook.received` with `{ subscriptionId, payload, event?,
+deliveryId? }`, so an automation can trigger on it
+  (`eventPattern: "external_webhook.received.completed"`, filter on payload
+  fields, or `triggerType: "webhook"` bound to the subscription id, which sees
+  them at `trigger.payload.body`, `.event`, `.deliveryId`). `event` and
+  `deliveryId` are copied from the sender's headers when present
+  (`X-Synap-Event` / `X-Synap-Event-Type` / `X-GitHub-Event`,
+  `X-Synap-Delivery-Id` / `X-GitHub-Delivery`) and absent otherwise. A signed
+  `ping` event (the handshake GitHub sends when a hook is created) is answered
+  200 and fires nothing.
 - **Token-path providers** (`:token`): the token selects the provider's config on
   its tool (`metadata.<provider>.webhook`); an unknown token is a 404. Cal.com
   and Fireflies dedup on their own ids, and a backfill poller recovers events a

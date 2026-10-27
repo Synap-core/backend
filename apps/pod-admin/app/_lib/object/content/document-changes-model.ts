@@ -65,6 +65,11 @@ function linesOf(blocks: readonly DiffBlock[]): ChangeLine[] {
   return out;
 }
 
+/** One text's rewrite, paragraph by paragraph (a skill's instructions). */
+export function textChanges(before: string, after: string): ChangeLine[] {
+  return linesOf(diffSection(before, after));
+}
+
 /**
  * The changes a document edit proposal asks for, or null when its payload
  * carries no preview (another kind of proposal, or an older one).
@@ -82,7 +87,7 @@ export function documentChanges(payload: unknown): DocumentChange[] | null {
       typeof entry.title === "string" && entry.title.trim()
         ? entry.title.trim()
         : null,
-    lines: linesOf(diffSection(entry.before, entry.after)),
+    lines: textChanges(entry.before, entry.after),
   }));
   const real = changes.filter((c) => c.lines.some((l) => l.op !== "unchanged"));
   return real.length > 0 ? real : null;

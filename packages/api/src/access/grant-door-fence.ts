@@ -40,6 +40,11 @@ export type FencedReadDoor =
   | { readonly bound: "seamed" }
   | { readonly bound: "reads"; readonly subjects: readonly string[] }
   | { readonly bound: "person"; readonly subject: string }
+  | {
+      readonly bound: "narrowed";
+      readonly subject: string;
+      readonly full: readonly string[];
+    }
   | { readonly bound: "refused"; readonly reason: string };
 
 const SEAMED: FencedReadDoor = { bound: "seamed" };
@@ -60,10 +65,36 @@ const PERSON = (subject: string): FencedReadDoor => ({
   bound: "person",
   subject,
 });
+/**
+ * A door whose ROUTE narrows its own answer to the key's grant. The row is
+ * read through the grant-aware predicate of `subject` (a row the grant does
+ * not reach is a 404), and the parts that read `full` are added only when one
+ * scope reads every one of them unbounded (`READS(...full)`); otherwise the
+ * route says they were withheld, never an empty section. Admitted when one
+ * live scope grants `<subject>.read`, pinned or not: an app, whose grant is
+ * always pinned to spaces, reads the row the list door already gives it.
+ */
+const NARROWED = (
+  subject: string,
+  full: readonly string[]
+): FencedReadDoor => ({
+  bound: "narrowed",
+  subject,
+  full,
+});
 const REFUSED = (reason: string): FencedReadDoor => ({
   bound: "refused",
   reason,
 });
+
+/** Does one live scope grant `<subject>.read`, whatever it is pinned to? */
+function grantReadsSubject(grant: KeyGrant, subject: string): boolean {
+  return grant.scopes.some((scope) =>
+    scope.permissions.some((p) =>
+      patternMatches(p, { subject, action: "read" })
+    )
+  );
+}
 
 /** Does ONE scope read `subject` everywhere (every kind, no narrowing)? */
 function scopeReadsUnbounded(scope: GrantScope, subject: string): boolean {
@@ -82,12 +113,8 @@ export function grantBoundsDoor(
 ): boolean {
   if (!door || door.bound === "refused") return false;
   if (door.bound === "seamed") return true;
-  if (door.bound === "person")
-    return grant.scopes.some((scope) =>
-      scope.permissions.some((p) =>
-        patternMatches(p, { subject: door.subject, action: "read" })
-      )
-    );
+  if (door.bound === "person" || door.bound === "narrowed")
+    return grantReadsSubject(grant, door.subject);
   // A deny-all scope (`permissions: []`) reads nothing — `every` over a door
   // that declares no subject would otherwise let it through.
   return grant.scopes.some(
@@ -174,6 +201,43 @@ export const GRANT_SAFE_REST_READS: readonly RegExp[] = [
 const SESSION_ID = "[0-9a-fA-F-]{36}";
 
 /**
+ * What GET /focus-sessions/:id reads beyond the row: the continuation packet
+ * (continuation-packet.ts: proposals, links, sessions, projects, room
+ * messages, playbook runs) and the outcomes (session-outputs.ts: artifacts,
+ * links, proposals, entities, documents, views, automations, playbooks,
+ * tracks, projects). The same projection as MCP `synap_get_session`.
+ */
+export const SESSION_PACKET_SUBJECTS: readonly string[] = [
+  "session",
+  "channel",
+  "proposal",
+  "document",
+  "entity",
+  "artifact",
+  "link",
+  "view",
+  "automation",
+  "playbook",
+  "track",
+  "project",
+];
+
+/**
+ * May this request's key read a session's whole packet? Every unfenced
+ * caller may (a person, a full-access key); a fenced key only when one scope
+ * reads every subject of it unbounded. Otherwise GET /focus-sessions/:id
+ * answers the row alone and says the packet was withheld.
+ */
+export function sessionPacketReadable(
+  grant: KeyGrant | null | undefined
+): boolean {
+  return (
+    !isFencedGrant(grant) ||
+    grantBoundsDoor(READS(...SESSION_PACKET_SUBJECTS), grant!)
+  );
+}
+
+/**
  * Hub REST GET routes that are AGGREGATE reads (P2b): each DECLARES the grant
  * subjects it reads, like `GRANT_REST_POST_READS` and `MCP_READ_TOOL_DOORS`. A
  * fenced key passes when one of its scopes reads EVERY declared subject with
@@ -203,27 +267,11 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   // space holds, so it is a PERSON door: the app asks for `agent.read` and the
   // person ticks it. `agent` is the subject `agent_configs` reads under.
   [/^\/agent-users\/?$/, PERSON("agent")],
-  // The session row + the continuation packet (continuation-packet.ts:
-  // proposals, links, sessions, projects, room messages, playbook runs) + the
-  // outcomes (session-outputs.ts: artifacts, links, proposals, entities,
-  // documents, views, automations, playbooks, tracks, projects). The same
-  // projection as MCP `synap_get_session`.
+  // The session row, narrowed by the route (`sessionPacketReadable`): the
+  // packet is added only for a key that reads all of it.
   [
     new RegExp(`^/focus-sessions/${SESSION_ID}/?$`),
-    READS(
-      "session",
-      "channel",
-      "proposal",
-      "document",
-      "entity",
-      "artifact",
-      "link",
-      "view",
-      "automation",
-      "playbook",
-      "track",
-      "project"
-    ),
+    NARROWED("session", SESSION_PACKET_SUBJECTS),
   ],
   // The row + its `session_evaluations` (subject `session`, grant-read.ts).
   [
@@ -245,6 +293,24 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   [
     new RegExp(`^/focus-sessions/${SESSION_ID}/document/?$`),
     READS("session", "artifact", "document"),
+  ],
+  // `buildWorkGraph` (work-graph.ts): session rows (sessionListConditions),
+  // links (blocked_by, spawned_from, targets/produced), the next move's reads
+  // (proposals, room inboxes, cross-kind blockers on entities and tracks),
+  // liveness (chat turns, events, proposals) and the derived interactions
+  // (events, automation runs). Same projection as MCP `synap_get_work_graph`.
+  [
+    /^\/focus-sessions\/graph\/?$/,
+    READS(
+      "session",
+      "link",
+      "proposal",
+      "channel",
+      "event",
+      "automation",
+      "entity",
+      "track"
+    ),
   ],
 ];
 
@@ -323,6 +389,17 @@ export const MCP_READ_TOOL_DOORS: Readonly<Record<string, FencedReadDoor>> = {
   synap_list_proposals: READS("proposal", "entity"),
   synap_get_proposal: READS("proposal", "entity"),
   synap_list_sessions: READS("session", "project"),
+  // Same subjects as `GET /focus-sessions/graph` (GRANT_REST_GET_READS).
+  synap_get_work_graph: READS(
+    "session",
+    "link",
+    "proposal",
+    "channel",
+    "event",
+    "automation",
+    "entity",
+    "track"
+  ),
   synap_get_session: READS(
     "session",
     "channel",
