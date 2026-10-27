@@ -920,10 +920,7 @@ function personsSlotHandBackError(labels: string[]): TRPCError {
  * person: it goes when the ask changes (its Confirm would answer a question
  * the person never answered) or the slot stops being theirs. Pure.
  */
-function withoutStaleRelay(
-  prior: OutputItem,
-  next: OutputItem
-): OutputItem {
+function withoutStaleRelay(prior: OutputItem, next: OutputItem): OutputItem {
   if (!next.pendingRelay) return next;
   if (
     next.owner === "human" &&

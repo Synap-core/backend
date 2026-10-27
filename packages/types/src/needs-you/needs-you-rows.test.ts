@@ -288,8 +288,16 @@ describe("needsYouRows — a session is never split across folds", () => {
   it("a session whose every row is in Review later folds there, whole", () => {
     const out = needsYouRows([
       row("r"),
-      row("s1", { kind: "owed-slot", groupKey: "session:S", reviewLater: true }),
-      row("s2", { kind: "owed-slot", groupKey: "session:S", reviewLater: true }),
+      row("s1", {
+        kind: "owed-slot",
+        groupKey: "session:S",
+        reviewLater: true,
+      }),
+      row("s2", {
+        kind: "owed-slot",
+        groupKey: "session:S",
+        reviewLater: true,
+      }),
     ]);
     expect(shape(out.recent)).toEqual(["item:r"]);
     expect(shape(out.reviewLater)).toEqual(["session:S[s1,s2]"]);

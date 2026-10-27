@@ -315,7 +315,12 @@ describe("retirementForClose — which exit ends the obligation", () => {
       },
     ];
     const now = new Date("2026-10-27T10:00:00.000Z");
-    const result = retirementForClose(asks, "closed", now, new Set(["ship it?"]))!;
+    const result = retirementForClose(
+      asks,
+      "closed",
+      now,
+      new Set(["ship it?"])
+    )!;
     const kept = result.outputs[0]!;
     expect(kept.retiredAt).toBeUndefined();
     expect(kept.keptOwedAt).toBe(now.toISOString());

@@ -201,9 +201,8 @@ describe("the close doors refuse an agent's close over its open question alike",
   });
 
   it("the MCP close refuses a disposition that is neither withdrawn nor keep_as_owed", async () => {
-    const { sessionHandlers } = await import(
-      "../../../routers/mcp/handlers/session.js"
-    );
+    const { sessionHandlers } =
+      await import("../../../routers/mcp/handlers/session.js");
     const s = await seedWithQuestion();
     const res = await sessionHandlers.synap_complete_session!({
       toolName: "synap_complete_session",

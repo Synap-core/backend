@@ -28,7 +28,10 @@ describe("withoutRestatedWhy — an owed ask says it once", () => {
     expect(withoutRestatedWhy(adds)).toBe(adds);
     const choose = {
       why: "Which account?",
-      ask: { mode: "choose" as const, options: [{ label: "EU" }, { label: "US" }] },
+      ask: {
+        mode: "choose" as const,
+        options: [{ label: "EU" }, { label: "US" }],
+      },
     };
     expect(withoutRestatedWhy(choose)).toBe(choose);
   });
@@ -56,10 +59,22 @@ describe("restatedAskHints", () => {
   it("hints when a person's confirm prompt only repeats the label, and only then", () => {
     expect(
       restatedAskHints([
-        { label: "Decide: Pricing model", owner: "human", ask: confirm("Accept: Pricing model?") },
-        { label: "Stripe account", owner: "human", ask: confirm("Bill EU customers from the EU account?") },
+        {
+          label: "Decide: Pricing model",
+          owner: "human",
+          ask: confirm("Accept: Pricing model?"),
+        },
+        {
+          label: "Stripe account",
+          owner: "human",
+          ask: confirm("Bill EU customers from the EU account?"),
+        },
         { label: "Ship it", ask: confirm("Ship it?") },
       ])
-    ).toEqual([expect.stringContaining('"Decide: Pricing model": the prompt repeats the label')]);
+    ).toEqual([
+      expect.stringContaining(
+        '"Decide: Pricing model": the prompt repeats the label'
+      ),
+    ]);
   });
 });

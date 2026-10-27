@@ -53,11 +53,7 @@ import {
   focusSessions,
 } from "@synap/database";
 import { registerReactor, type Reactor } from "@synap/events";
-import type {
-  ExpectedOutput,
-  SlotAsk,
-  SlotAskCause,
-} from "@synap/playbooks";
+import type { ExpectedOutput, SlotAsk, SlotAskCause } from "@synap/playbooks";
 import {
   AskOptionSchema,
   AskSchema,

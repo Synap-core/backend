@@ -61,9 +61,9 @@ describe("tripwire: relay provenance has one door", () => {
     expect(SOURCES.length).toBeGreaterThan(1000);
     const door = SOURCES.find((f) => relative(PACKAGES, f) === RELAY_DOOR);
     expect(door, "the relay door moved — update RELAY_DOOR").toBeDefined();
-    expect(RELAYED_LITERAL.test(stripComments(readFileSync(door!, "utf8"), "ts"))).toBe(
-      true
-    );
+    expect(
+      RELAYED_LITERAL.test(stripComments(readFileSync(door!, "utf8"), "ts"))
+    ).toBe(true);
     // Self-check on a sample: both quote styles.
     expect(RELAYED_LITERAL.test(`{ via: 'relayed' }`)).toBe(true);
   });

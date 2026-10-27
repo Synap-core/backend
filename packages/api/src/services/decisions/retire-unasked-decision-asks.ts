@@ -130,7 +130,8 @@ export async function retireUnaskedDecisionAsks(
       });
     }
     return {
-      status: failures === 0 ? ("completed" as const) : ("pending-retries" as const),
+      status:
+        failures === 0 ? ("completed" as const) : ("pending-retries" as const),
       retiredSlots,
       closedSessions,
     };
@@ -195,7 +196,9 @@ export async function retireUnaskedDecisionAsks(
     // Lock only a session that holds one: most open sessions with a decision
     // slot have nothing to retire.
     const holds = (
-      Array.isArray(s.expectedOutputs) ? (s.expectedOutputs as ExpectedOutput[]) : []
+      Array.isArray(s.expectedOutputs)
+        ? (s.expectedOutputs as ExpectedOutput[])
+        : []
     ).some((o) => isLegacyReactorAsk(o) && unaskedIds.has(o.decisionId));
     if (!holds) continue;
     try {

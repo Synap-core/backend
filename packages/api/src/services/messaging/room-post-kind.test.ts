@@ -7,7 +7,13 @@ describe("withoutRoomPostMeta", () => {
       keep: 1,
       [ROOM_POST_META_KEY]: {
         kind: "question",
-        answer: { messageId: "m", answeredBy: "u", answeredAt: "t", text: "Yes", via: "tap" },
+        answer: {
+          messageId: "m",
+          answeredBy: "u",
+          answeredAt: "t",
+          text: "Yes",
+          via: "tap",
+        },
         pendingRelay: { text: "Yes", relayedBy: "a", relayedAt: "t" },
         closed: { reason: "session_ended", at: "t" },
       },
