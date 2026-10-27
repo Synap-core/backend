@@ -353,6 +353,16 @@ function flowVerbIds(flow: { nodes?: unknown[] } | undefined): string[] {
   return out;
 }
 
+/** The verbs a capability definition installs (its skills' names). */
+function definitionVerbNames(def: object): string[] {
+  const skills = (def as { skills?: unknown }).skills;
+  if (!Array.isArray(skills)) return [];
+  return skills.flatMap((s) => {
+    const name = (s as { name?: unknown } | null)?.name;
+    return typeof name === "string" && name ? [name] : [];
+  });
+}
+
 /** Minimal body slice the post-workspace layers read (PackageApply body). */
 export interface PackagePostWorkspaceBody {
   capabilities?: Array<{
@@ -581,14 +591,12 @@ export async function applyPackagePostWorkspace(
   if (body.capabilities?.length) {
     const caps: unknown[] = [];
     for (const cap of body.capabilities) {
-      let definition: Record<string, unknown> | undefined;
+      let verbNames: string[] = [];
       try {
-        definition =
+        const definition =
           cap.definition ??
           (cap.templateKey
-            ? ((await loadCapabilityTemplate(cap.templateKey, {
-                workspaceId,
-              })) as unknown as Record<string, unknown>)
+            ? await loadCapabilityTemplate(cap.templateKey, { workspaceId })
             : undefined);
         if (!definition) {
           caps.push({
@@ -598,6 +606,7 @@ export async function applyPackagePostWorkspace(
           });
           continue;
         }
+        verbNames = definitionVerbNames(definition);
         const r = await createCapabilityFromDefinition(
           definition as Parameters<typeof createCapabilityFromDefinition>[0],
           cap.params ?? {},
@@ -616,18 +625,11 @@ export async function applyPackagePostWorkspace(
         const capKey = cap.templateKey ?? "inline";
         const needsSetup = isSetupRequiredLike(e);
         if (needsSetup) {
-          const skills: unknown[] =
-            definition && Array.isArray(definition.skills)
-              ? definition.skills
-              : [];
-          for (const skill of skills) {
-            const name = (skill as { name?: unknown } | null)?.name;
-            if (typeof name === "string" && name)
-              setupBlockedVerbs.set(name, {
-                key: capKey,
-                message: e.message,
-              });
-          }
+          for (const verbName of verbNames)
+            setupBlockedVerbs.set(verbName, {
+              key: capKey,
+              message: e.message,
+            });
         }
         caps.push({
           key: capKey,
