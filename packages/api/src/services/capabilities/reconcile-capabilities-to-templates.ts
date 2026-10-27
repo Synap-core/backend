@@ -44,6 +44,7 @@ import { officialCatalogStandingNow } from "./official-catalog-trust.js";
 import {
   loadCapabilityTemplate,
   createCapabilityFromDefinition,
+  definitionSkillChangesExecution,
   deriveToolVerbs,
   GRANT_DEFAULT_EXEC_MODE,
 } from "./create-from-definition.js";
@@ -161,6 +162,77 @@ async function stampContainerMetadata(
     .where(eq(capabilities.id, containerId));
 }
 
+/**
+ * The APPROVED member skills a re-apply of `def` would demote: the applier's
+ * own rule (`definitionSkillChangesExecution`, at the official trust a
+ * reconcile applies with) plus a `requires` set that adds a tool the skill
+ * does not already require (the applier's `requiresWidened`). Like the
+ * applier, only names of this definition's own tools count; one this
+ * container does not hold yet is created by the re-apply, so it widens.
+ */
+async function approvedSkillsAnUpdateSwitchesOff(
+  def: CapabilityDefinition,
+  memberSkillIds: string[],
+  memberTools: ReadonlyArray<{ id: string; name: string }>
+): Promise<string[]> {
+  if (memberSkillIds.length === 0) return [];
+  const approved = await db
+    .select({
+      id: skills.id,
+      name: skills.name,
+      kind: skills.kind,
+      code: skills.code,
+      providerSpec: skills.providerSpec,
+      parameters: skills.parameters,
+      executionMode: skills.executionMode,
+      timeoutSeconds: skills.timeoutSeconds,
+      urlPatterns: skills.urlPatterns,
+      metadata: skills.metadata,
+    })
+    .from(skills)
+    .where(and(inArray(skills.id, memberSkillIds), eq(skills.approved, true)));
+  if (approved.length === 0) return [];
+  const held = await db
+    .select({ fromId: links.fromId, toId: links.toId })
+    .from(links)
+    .where(
+      and(
+        eq(links.fromType, "skill"),
+        inArray(
+          links.fromId,
+          approved.map((r) => r.id)
+        ),
+        eq(links.linkType, "requires"),
+        eq(links.toType, "tool")
+      )
+    );
+  const toolIdByName = new Map(memberTools.map((t) => [t.name, t.id]));
+  const definedTools = new Set((def.tools ?? []).map((t) => t.name));
+  const out: string[] = [];
+  for (const row of approved) {
+    const s = (def.skills ?? []).find((d) => d.name === row.name);
+    if (!s) continue;
+    const heldIds = new Set(
+      held.filter((l) => l.fromId === row.id).map((l) => l.toId)
+    );
+    const requiresWidened = (s.requires ?? [])
+      .filter((name) => definedTools.has(name))
+      .some((name) => {
+        const id = toolIdByName.get(name);
+        return !id || !heldIds.has(id);
+      });
+    if (
+      requiresWidened ||
+      definitionSkillChangesExecution(s, row as Record<string, unknown>, {
+        officialSource: true,
+      })
+    ) {
+      out.push(row.name);
+    }
+  }
+  return out;
+}
+
 /** Build the acting Context for a governed re-apply of ONE container. Mirrors
  * `ensureSynapCoreCapability`'s inline operator ctx: attribute the write to the
  * container's own creator, scoped to its own workspace (null = pod-wide). */
@@ -185,8 +257,10 @@ export async function reconcileCapabilitiesToTemplates(
      * Apply `updatePolicy:"notify"` drift too (default false → defer it to a
      * human). The operator Apply door sets this true: clicking "Apply updates"
      * IS the human consent that the notify policy defers to, so those updates
-     * must actually land. (Param-requiring templates still can't be applied
-     * with `{}` and stay in `updatesAvailable`.)
+     * must actually land. The same consent lands an update that switches off
+     * an approved skill (see `approvedSkillsAnUpdateSwitchesOff`). (Param-
+     * requiring templates still can't be applied with `{}` and stay in
+     * `updatesAvailable`.)
      */
     applyNotifyPolicy?: boolean;
   } = {}
@@ -380,6 +454,7 @@ export async function reconcileCapabilitiesToTemplates(
         // existing (PROJECTED_TOOL_MERGE_FIELDS) — omit them and a template
         // change touching only tool defaults can never be seen as drift.
         .select({
+          id: tools.id,
           name: tools.name,
           capabilityCatalog: tools.capabilities,
           config: tools.config,
@@ -509,6 +584,30 @@ export async function reconcileCapabilitiesToTemplates(
             .join("; ")})`,
         });
         continue;
+      }
+
+      // An update that changes what an APPROVED skill executes demotes it
+      // (the applier's security rule), and the owner learned that only when a
+      // run was refused as "not enabled" — fal.ai, 2026-10-27, after every
+      // catalog publish of a new version. An automatic pass never switches off
+      // what the owner turned on: it holds the update for the owner, the
+      // approved version keeps running, and the owner's "Apply updates" (the
+      // consent `applyNotifyPolicy` carries) lands it and the demotion.
+      if (!opts.applyNotifyPolicy) {
+        const switchedOff = await approvedSkillsAnUpdateSwitchesOff(
+          cachedDef,
+          memberSkillIds,
+          memberToolRows
+        );
+        if (switchedOff.length > 0) {
+          report.updatesAvailable.push({
+            containerId: container.id,
+            name: container.name,
+            templateKey,
+            reason: `${driftReason} — waits for you: applying it turns off ${switchedOff.join(", ")} until you turn it on again (what it runs changed)`,
+          });
+          continue;
+        }
       }
 
       if (updatePolicy === "notify" && !opts.applyNotifyPolicy) {
