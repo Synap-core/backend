@@ -75,13 +75,11 @@ const sessionCtx = {
 } as never;
 
 const grant = () =>
-  secretsVaultRouter
-    .createCaller(sessionCtx)
-    .grantAIAccess({
-      secretId: SECRET,
-      proposalId: PROPOSAL,
-      scope: "permanent",
-    });
+  secretsVaultRouter.createCaller(sessionCtx).grantAIAccess({
+    secretId: SECRET,
+    proposalId: PROPOSAL,
+    scope: "permanent",
+  });
 
 beforeEach(() => {
   h.proposalStatus = "pending";
