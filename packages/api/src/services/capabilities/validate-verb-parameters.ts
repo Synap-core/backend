@@ -139,6 +139,8 @@ function looksLikeJsonSchema(declared: Record<string, unknown>): boolean {
  * accepted both (the IS `buildZodSchema`: `z.coerce.number()`, and a boolean
  * preprocess that maps ANY string). Refusing "5" here would refuse a call the
  * runtime runs. Strings only: a non-string of the wrong type stays wrong.
+ * The skill receives the typed value (`coerceDeclaredParameters`), never the
+ * string: "false" is truthy and "5" + 1 is "51".
  */
 function isStringEncoded(type: string, value: unknown): boolean {
   if (typeof value !== "string") return false;
@@ -321,6 +323,43 @@ export function checkVerbParameters(
     return { status: "unvalidated", reason: "no_declared_schema" };
   }
   return checkTypeMap(declared as Record<string, unknown>, params);
+}
+
+/**
+ * The call's parameters as a code skill receives them: a declared `number` or
+ * `boolean` sent as a string (the encoding `isStringEncoded` accepts) becomes
+ * that type — `Number("5")`, and the IS `buildZodSchema` boolean rule ("true"
+ * in any case, or "1", is true; any other string is false). Everything else
+ * passes through unchanged, so call it on a call the check above accepted.
+ */
+export function coerceDeclaredParameters(
+  skill: { kind: string | null; parameters?: unknown },
+  parameters: Record<string, unknown>
+): Record<string, unknown> {
+  const declared = skill.parameters;
+  if (
+    skill.kind === "builtin" ||
+    !declared ||
+    typeof declared !== "object" ||
+    Array.isArray(declared) ||
+    looksLikeJsonSchema(declared as Record<string, unknown>)
+  ) {
+    return parameters;
+  }
+  const out = { ...parameters };
+  for (const [field, rawType] of Object.entries(
+    declared as Record<string, unknown>
+  )) {
+    if (typeof rawType !== "string") continue;
+    const type = rawType.endsWith("?") ? rawType.slice(0, -1) : rawType;
+    const value = out[field];
+    if (!isStringEncoded(type, value)) continue;
+    out[field] =
+      type === "number"
+        ? Number(value)
+        : (value as string).toLowerCase() === "true" || value === "1";
+  }
+  return out;
 }
 
 /** The human half of the repair error — one sentence the agent can act on. */

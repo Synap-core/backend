@@ -354,10 +354,11 @@ function patchChangesPinnedPlacement(
  * second one was added — telling a caller to stop sending a field they never
  * sent. Prose in this codebase is executable; the message is derived, not typed.
  */
-function patchAltersProtectedField(
+function patchAltersProtectedField<K extends string>(
   patch: ProposalRevisionPatch,
-  envelope: Record<string, unknown>
-): (typeof PROTECTED_ENVELOPE_FIELDS)[number] | null {
+  envelope: Record<string, unknown>,
+  keys: readonly K[]
+): K | null {
   const { fields } = patch;
   const asRecord = (v: unknown) =>
     v && typeof v === "object" && !Array.isArray(v)
@@ -377,7 +378,7 @@ function patchAltersProtectedField(
     Object.hasOwn(patched, key) &&
     !isDeepStrictEqual(patched[key], stored[key]);
   return (
-    PROTECTED_ENVELOPE_FIELDS.find(
+    keys.find(
       (key) =>
         alters(fields, storedTop, key) ||
         (nested ? alters(nested, storedNested, key) : false)
@@ -455,7 +456,7 @@ export function computeRevisedEnvelope(params: ComputeRevisedEnvelopeParams): {
   // Enforced HERE, in the shared core, so all three revise doors (tRPC
   // `revise`, MCP `synap_revise_proposal`, Hub `updateProposal`) inherit it.
   const protectedField = patch
-    ? patchAltersProtectedField(patch, envelope)
+    ? patchAltersProtectedField(patch, envelope, PROTECTED_ENVELOPE_FIELDS)
     : null;
   if (protectedField) {
     throw new TRPCError({
@@ -463,6 +464,20 @@ export function computeRevisedEnvelope(params: ComputeRevisedEnvelopeParams): {
       message:
         `A revision cannot set or alter \`${protectedField}\` — ` +
         `${PROTECTED_FIELD_REASON[protectedField]}.`,
+    });
+  }
+  // A skill's `kind` is what every review labels it (code, instruction), so
+  // a revise may not relabel what the person is asked to approve; the page-
+  // only rule reads what the skill carries either way (`skillRequestExecutes`).
+  if (
+    patch &&
+    envelope.targetType === "skill" &&
+    patchAltersProtectedField(patch, envelope, ["kind"])
+  ) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "A revision cannot change a skill's `kind` — it is what the person approves the skill as; propose the skill again to change it.",
     });
   }
   const pinnedField = patch

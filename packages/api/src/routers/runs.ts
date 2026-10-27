@@ -21,6 +21,7 @@ import {
   listRunsPage,
 } from "../services/runs/index.js";
 import { listRecentRunsByFlows } from "../services/runs/recent-by-flows.js";
+import { stopBoxRun } from "../services/box-runs/box-runs.js";
 import { rosterReadFor } from "../access/session-visibility.js";
 
 /**
@@ -173,5 +174,21 @@ export const runsRouter = router({
         roster: rosterReadFor(ctx),
       });
       return detail;
+    }),
+
+  /**
+   * Stop a BOX run (0356). A queued run stops at once; a leased or running one
+   * is told through its computer's next heartbeat, which finishes it as
+   * `stopped`. Owner-floored on the loaded row; it only ever reduces activity.
+   */
+  stopBox: protectedProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const outcome = await stopBoxRun({ runId: input.id, userId });
+      if (outcome === "not_found") {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Run not found" });
+      }
+      return { status: outcome };
     }),
 });

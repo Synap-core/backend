@@ -2792,7 +2792,7 @@ export const tools = {
             subjectEntityId: {
               type: "string",
               description:
-                "Optional: only sessions ABOUT this entity (the subject-spine anchor).",
+                "Optional: only sessions ON this entity — its subject (the subject-spine anchor), or a worker session that targets it.",
             },
             trackId: {
               type: "string",
@@ -5809,6 +5809,51 @@ export const tools = {
               maximum: 300,
               description:
                 "Code skills: how long one run may take, in seconds (default 30, max 300).",
+            },
+            executionMode: {
+              type: "string",
+              enum: ["sync", "box"],
+              description:
+                "'box' = a Python or Node SCRIPT with packages that runs on the person's own computer in a fresh box (no pod access, no secrets; files written to /out come back on the run). Needs `box`. Default 'sync' = the in-pod JavaScript sandbox (API glue).",
+            },
+            box: {
+              type: "object",
+              description:
+                "Box scripts only. The reviewer approves exactly this with the code.",
+              properties: {
+                language: { type: "string", enum: ["python", "node"] },
+                entrypoint: {
+                  type: "string",
+                  description:
+                    "File name the code is saved as (default main.py / main.mjs).",
+                },
+                packages: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    properties: {
+                      name: { type: "string" },
+                      version: {
+                        type: "string",
+                        description: "Exact version, e.g. 2.2.3 (no ranges).",
+                      },
+                    },
+                    required: ["name", "version"],
+                  },
+                },
+                hosts: {
+                  type: "array",
+                  items: { type: "string" },
+                  description:
+                    "Hostnames the script may reach while it runs (e.g. api.example.com); everything else is blocked.",
+                },
+                limits: {
+                  type: "object",
+                  description:
+                    "Optional: wallSeconds (≤3600, default 900), cpus (≤2), memoryMb (≤2048), diskMb (≤8192), outMb (≤200).",
+                },
+              },
+              required: ["language"],
             },
           },
           required: ["name"],

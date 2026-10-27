@@ -1643,6 +1643,9 @@ export const focusSessionsRouter = router({
         sessionId: input.sessionId,
         userId: requireUserId(ctx.userId),
         evidence: input.evidence,
+        // The person evaluating their own session: a criterion the agent
+        // could not pass is theirs to grade now (E3).
+        escalate: true,
       });
       if (result.status === "not_found") {
         throw new TRPCError({

@@ -334,6 +334,27 @@ describe("a create with no twin", () => {
   });
 });
 
+describe("the approve is bound to the revision this page drew", () => {
+  it("sends the length of the revision history it rendered", () => {
+    // An agent revised it twice before the page loaded; a third revise after
+    // it drew makes the pod refuse this approve (CONFLICT) instead of
+    // approving what the person never read.
+    const at = new Date().toISOString();
+    state.proposal = {
+      ...personCreate(null),
+      revisionHistory: [
+        { at, by: null, before: {}, patch: {} },
+        { at, by: null, before: {}, patch: {} },
+      ],
+    };
+    render();
+    press("Approve");
+    expect(approveCalls).toEqual([
+      { proposalId: ids.PROPOSAL, expectedRevision: 2 },
+    ]);
+  });
+});
+
 describe("a capture graph with a twin", () => {
   it("draws one card per new item, the choice inside its item's card", () => {
     state.proposal = graphCapture();
