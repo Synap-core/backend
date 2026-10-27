@@ -9,6 +9,7 @@ import {
   REVIEW_PACKAGES,
   REVIEW_PACKAGE_LAYOUTS,
   defaultReviewLayout,
+  readReviewPreferences,
   reviewGroupByFor,
   reviewLayoutFor,
   reviewPackageDecision,
@@ -144,6 +145,19 @@ describe("layouts and the saved preference", () => {
       "list"
     );
     expect(reviewLayoutFor("knowledge", null)).toBe("gallery");
+  });
+  it("reads the saved choice off uiPreferences, dropping what it does not know", () => {
+    expect(readReviewPreferences({})).toBeNull();
+    expect(readReviewPreferences({ review: { groupBy: "mood" } })).toBeNull();
+    expect(
+      readReviewPreferences({
+        sidebarCollapsed: true,
+        review: {
+          groupBy: "work",
+          layouts: { knowledge: "list", access: "gallery", nope: "list" },
+        },
+      })
+    ).toEqual({ groupBy: "work", layouts: { knowledge: "list" } });
   });
   it("no saved grouping opens by package", () => {
     expect(reviewGroupByFor(null)).toBe("package");

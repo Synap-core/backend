@@ -149,6 +149,39 @@ export function reviewLayoutFor(
     : defaultReviewLayout(pkg);
 }
 
+/**
+ * The saved review settings off `uiPreferences` (any shape), or null when the
+ * person never chose — what the onboarding step asks about. Unknown layouts
+ * and packages are dropped; an unknown grouping means "never chose".
+ */
+export function readReviewPreferences(
+  uiPreferences: unknown
+): ReviewPreferences | null {
+  const review =
+    uiPreferences && typeof uiPreferences === "object"
+      ? (uiPreferences as { review?: unknown }).review
+      : undefined;
+  if (!review || typeof review !== "object") return null;
+  const { groupBy, layouts } = review as {
+    groupBy?: unknown;
+    layouts?: unknown;
+  };
+  if (!isReviewGroupBy(groupBy)) return null;
+  const kept: Partial<Record<ReviewPackage, ReviewLayout>> = {};
+  if (layouts && typeof layouts === "object") {
+    for (const [pkg, layout] of Object.entries(layouts)) {
+      if (
+        isReviewPackage(pkg) &&
+        (REVIEW_PACKAGE_LAYOUTS[pkg] as readonly unknown[]).includes(layout)
+      )
+        kept[pkg] = layout as ReviewLayout;
+    }
+  }
+  return Object.keys(kept).length > 0
+    ? { groupBy, layouts: kept }
+    : { groupBy };
+}
+
 /** The group-by a page opens in: the saved one, else Package. */
 export function reviewGroupByFor(
   prefs: Pick<ReviewPreferences, "groupBy"> | null | undefined

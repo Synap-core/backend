@@ -110,7 +110,7 @@ export function isSelfService(path: string): boolean {
 }
 
 /**
- * The console pages a non-admin member may open: Home and Review, plus
+ * The console pages a non-admin member may open: Home, Review and Settings › Review, plus
  * `/`, which only redirects to Home. Their data is user-floored server-side
  * (`diagnose.global`, `signals`), so opening them grants no reach — the role
  * only decides which nav the viewer is shown.
@@ -122,6 +122,10 @@ const MEMBER_CONSOLE_PATHS: ReadonlySet<string> = new Set([
   "/",
   "/home",
   "/review",
+  // The person's OWN review settings (`preferences.updateReview` is floored
+  // on the caller; a rule it offers is checked by `governanceRules`' own
+  // gate), so it grants no reach.
+  "/settings/review",
 ]);
 
 export function isMemberConsolePath(path: string): boolean {

@@ -107,16 +107,20 @@ describe("isSelfService (moved verbatim from proxy.ts)", () => {
 });
 
 describe("member console", () => {
-  it.each(["/", "/home", "/review"])("%s opens for any member", (path) => {
-    expect(isMemberConsolePath(path)).toBe(true);
-    expect(routeAccess(path)).toBe("signed-in");
-  });
+  it.each(["/", "/home", "/review", "/settings/review"])(
+    "%s opens for any member",
+    (path) => {
+      expect(isMemberConsolePath(path)).toBe(true);
+      expect(routeAccess(path)).toBe("signed-in");
+    }
+  );
 
   it.each([
     "/homepage",
     "/reviews",
     "/home/anything",
     "/review/abc",
+    "/settings/review/x",
     "/members",
     "/workspaces/1",
   ])("%s stays admin", (path) => {

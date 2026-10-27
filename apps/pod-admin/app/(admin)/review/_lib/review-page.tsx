@@ -31,7 +31,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Alert, Button, Textarea, addToast } from "@heroui/react";
-import { Check, X } from "lucide-react";
+import { Check, SlidersHorizontal, X } from "lucide-react";
+import { navHref } from "../../../../lib/console-nav";
 import { trpc } from "../../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
 import { isUuid } from "../../../../lib/format";
@@ -48,14 +49,10 @@ import {
   ResourceRowError,
   ResourceRowSkeleton,
 } from "../../components/resource-row";
-import { deriveGovernanceGrantOptions } from "@synap-core/types";
 import {
   REVIEW_GROUP_BYS,
   isReviewGroupBy,
-  reviewLayoutFor,
   type ReviewGroupBy,
-  type ReviewLayout,
-  type ReviewPackage,
 } from "@synap-core/types/proposals/review-package";
 import { resolveReviewGroupByLabel } from "@synap-core/types/vocabulary";
 import {
@@ -86,6 +83,8 @@ import {
 } from "./review-drawer";
 import { ReviewGroups } from "./review-groups";
 import { ReviewListRow } from "./review-list-row";
+import { useReviewPreferences } from "./review-preferences";
+import { handOffRuleFor } from "./hand-off-rule";
 import { ReviewHistory } from "./review-history";
 import { SessionFilter } from "./review-session-filter";
 import { nextRowKey } from "./ask-detail";
@@ -103,9 +102,12 @@ const CHIPS: Array<{ key: "all" | "history"; label: string }> = [
   { key: "history", label: "History" },
 ];
 
-/** `?group=` → the grouping; anything else is Package (the default, B-4). */
-function groupByOf(param: string | null): ReviewGroupBy {
-  return isReviewGroupBy(param) ? param : "package";
+/**
+ * The grouping: a link's `?group=` wins (it names a view to land on), else
+ * the person's saved choice, else Package (the default, B-4).
+ */
+function groupByOf(param: string | null, saved: ReviewGroupBy): ReviewGroupBy {
+  return isReviewGroupBy(param) ? param : saved;
 }
 
 export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
@@ -114,12 +116,9 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
   const filter = reviewFilterOf(searchParams.get("type"));
   const focusId = searchParams.get("focus");
   const sessionId = reviewSessionOf(searchParams.get("session"));
-  const groupBy = groupByOf(searchParams.get("group"));
+  const reviewPrefs = useReviewPreferences();
+  const groupBy = groupByOf(searchParams.get("group"), reviewPrefs.groupBy);
   const utils = trpc.useUtils();
-  // A package's layout for this visit (`reviewLayoutFor`: default first).
-  const [layouts, setLayouts] = useState<
-    Partial<Record<ReviewPackage, ReviewLayout>>
-  >({});
 
   // The pod narrows by session itself (`signals.list`'s session lens, the
   // proposals' `session_id`) — never a client filter over the pod-wide page.
@@ -318,7 +317,7 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
       addToast({
         title: `${alwaysFor.title ?? "This agent"} may take hand-offs`,
         description:
-          "From now on they apply without asking. You can revoke the rule.",
+          "From now on they apply without asking. Revoke it in Settings › Review.",
         color: "success",
       });
       setAlwaysFor(null);
@@ -362,17 +361,36 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
         description={DESCRIPTION}
         actions={
           filter !== "history" && (
-            <FilterChips
-              param="group"
-              defaultKey="package"
-              ariaLabel="Group by"
-              className=""
-              active={groupBy}
-              chips={REVIEW_GROUP_BYS.map((g) => ({
-                key: g,
-                label: resolveReviewGroupByLabel(g),
-              }))}
-            />
+            <>
+              <span className="text-[12px] font-medium text-foreground/65">
+                Group by
+              </span>
+              <FilterChips
+                ariaLabel="Group by"
+                className=""
+                active={groupBy}
+                chips={REVIEW_GROUP_BYS.map((g) => ({
+                  key: g,
+                  label: resolveReviewGroupByLabel(g),
+                }))}
+                onSelect={(g) => {
+                  // A choice made here is remembered; the link's view is done.
+                  reviewPrefs.setGroupBy(g);
+                  replaceParams((params) => params.delete("group"));
+                }}
+              />
+              <Button
+                as="a"
+                href={navHref("settings")}
+                size="sm"
+                variant="flat"
+                startContent={
+                  <SlidersHorizontal className="h-3.5 w-3.5" aria-hidden />
+                }
+              >
+                Review settings
+              </Button>
+            </>
           )
         }
       />
@@ -501,10 +519,8 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
             <ReviewGroups
               rows={visible}
               groupBy={groupBy}
-              layoutOf={(pkg) => reviewLayoutFor(pkg, { layouts })}
-              onLayout={(pkg, layout) =>
-                setLayouts((prev) => ({ ...prev, [pkg]: layout }))
-              }
+              layoutOf={reviewPrefs.layoutOf}
+              onLayout={reviewPrefs.setLayout}
               actions={{
                 renderRow: (row, opts) => (
                   <ReviewListRow
@@ -614,7 +630,7 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
         onClose={() => setAlwaysFor(null)}
         onConfirm={() => void confirmAlways()}
         title={`Always let ${alwaysFor?.title ?? "this agent"} take hand-offs?`}
-        consequence="From now on, when this agent hands a session to an agent, it applies without asking you. It never covers deletes or access. You can revoke the rule."
+        consequence="From now on, when this agent hands a session to an agent, it applies without asking you. It never covers deletes or access. You can revoke it in Settings › Review."
         confirmLabel="Always allow"
         isPending={createRule.isPending}
       />
@@ -642,24 +658,11 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
   );
 }
 
-/** The action a hand-off is filed under (`focus_session/assign_agent`). */
-const HAND_OFF_ACTION = "focus_session.assign_agent";
-
-/**
- * The rule "always for this agent" writes: the agent may hand sessions off
- * without asking, pod-wide. Derived by the SAME function the proposal page's
- * "Approve & always…" uses (`deriveGovernanceGrantOptions`, operator mode,
- * the agent granularity), from one hand-off it filed.
- */
+/** "Always for this agent" over a hand-off block: the one rule (B-3). */
 function alwaysRuleOf(group: RowGroup) {
-  const proposalId = group.rows.flatMap(reviewRowMembers)[0];
-  if (!group.id || !proposalId) return null;
-  return (
-    deriveGovernanceGrantOptions(
-      { proposalId, agentUserId: group.id, actionKey: HAND_OFF_ACTION },
-      "operator-any"
-    ).find((o) => o.id === "agent")?.rule ?? null
-  );
+  return group.id
+    ? handOffRuleFor(group.id, group.rows.flatMap(reviewRowMembers)[0])
+    : null;
 }
 
 /** What a row opens beside the list, or null when its door leads elsewhere. */
