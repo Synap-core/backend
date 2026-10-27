@@ -89,8 +89,12 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -- "$F"
+          # The commit-msg hook (commitlint, body lines <= 100) runs here too:
+          # a longer line fails the commit and main keeps a stale file.
           git commit -m "chore(api-types): regenerate generated.d.ts after merge [regen-api-types]" \
-            -m "Regenerated from ${GITHUB_SHA} by .github/workflows/regen-api-types.yml: the merged file differed from what the generator produces for the merged source."
+            -m "Regenerated from ${GITHUB_SHA}" \
+            -m "by .github/workflows/regen-api-types.yml: the merged file differed from" \
+            -m "what the generator produces for the merged source."
           git_auth() { git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $AUTH" "$@"; }
           # main may move while this runs. A move that also changed the file
           # (rebase conflict) or the source (its push started a newer run,

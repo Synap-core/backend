@@ -64,6 +64,7 @@ import { applyRunCapture } from "../runs/apply-run-capture.js";
 import type { ExpectedOutput, SlotAsk } from "@synap/playbooks";
 import { normalizeExpectedLabel } from "../focus-sessions/expected-label.js";
 import { updateExpectedOutputsLocked } from "../focus-sessions/delegate-output.js";
+import { stampAskProvenance } from "../focus-sessions/slot-asked-event.js";
 
 const logger = createLogger({ module: "agent-dispatch/poll" });
 
@@ -244,29 +245,47 @@ export function agentApprovalSlotLabel(provider: string): string {
  */
 async function oweAgentApprovalSlot(p: {
   sessionId: string;
+  runId: string;
   provider: string;
   status: ExternalAgentStatus;
+  /** The provider's agent user, when the binding has one. */
+  agentUserId: string | null;
 }): Promise<{ label: string; ask: SlotAsk } | null> {
   const label = agentApprovalSlotLabel(p.provider);
-  const why = (
-    p.status.summary ??
-    `The ${resolveServiceName(p.provider)} agent is waiting for your approval.`
-  ).slice(0, 500);
-  const ask: SlotAsk = { mode: "confirm", prompt: why };
+  // Said once: the prompt is the question, `why` the agent's own account of
+  // the call when it gave one. Never a fixed "is waiting" sentence: the card
+  // being on the board already says that.
+  const why = p.status.summary?.trim().slice(0, 500);
+  const ask: SlotAsk = {
+    mode: "confirm",
+    prompt: `Let the ${resolveServiceName(p.provider)} agent go ahead?`,
+  };
   const slot: ExpectedOutput = {
     kind: AGENT_APPROVAL_SLOT_KIND,
     label,
     owner: "human",
     blockedReason: "decision",
-    why,
+    ...(why ? { why } : {}),
     owedSince: new Date().toISOString(),
     ask,
   };
   const wanted = normalizeExpectedLabel(label);
-  const written = await updateExpectedOutputsLocked(p.sessionId, (current) => [
-    ...current.filter((o) => normalizeExpectedLabel(o?.label) !== wanted),
-    slot,
-  ]);
+  const written = await updateExpectedOutputsLocked(p.sessionId, (current) =>
+    stampAskProvenance(
+      current,
+      [
+        ...current.filter((o) => normalizeExpectedLabel(o?.label) !== wanted),
+        slot,
+      ],
+      {
+        askedBy: p.agentUserId,
+        askCause: {
+          kind: "external_approval",
+          ref: { kind: "run", id: p.runId },
+        },
+      }
+    )
+  );
   return written ? { label, ask } : null;
 }
 
@@ -505,8 +524,10 @@ async function pollOne(
       status.state === "needs_input" && status.confirmationId && run.sessionId
         ? await oweAgentApprovalSlot({
             sessionId: run.sessionId,
+            runId: run.id,
             provider: binding.provider,
             status,
+            agentUserId: ext.agentUserId ?? null,
           })
         : null;
     const line = statusLine(status, ext.lastState);

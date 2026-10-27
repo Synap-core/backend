@@ -42,6 +42,7 @@ import type {
   ExpectedOutput,
   OutputRef,
   SlotAsk,
+  SlotAskCause,
 } from "@synap/playbooks";
 import {
   findUnreachableOutputRefs,
@@ -57,7 +58,8 @@ import {
 } from "./block-guidelines.js";
 import { notifySessionNeedsYou } from "./notify-needs-you.js";
 import { archivedAnswerHistory } from "./answer-history.js";
-import { logSlotsAsked } from "./slot-asked-event.js";
+import { logSlotsAsked, stampAskProvenance } from "./slot-asked-event.js";
+import { restatedAskHints } from "./ask-text.js";
 
 export interface BlockExpectedOutputParams {
   sessionId: string;
@@ -102,6 +104,11 @@ export interface BlockExpectedOutputParams {
    * absent ⇒ the person blocked it themselves, which is not news.
    */
   agentUserId?: string | null;
+  /**
+   * What raised the ask when no agent drives it (a run's turn end) — stamped
+   * with the asker by `stampAskProvenance`, so the card names the cause.
+   */
+  askCause?: SlotAskCause | null;
 }
 
 export interface UnblockExpectedOutputParams {
@@ -132,6 +139,8 @@ export type BlockExpectedOutputResult =
        * (`block-guidelines.ts`). Absent when nothing applies.
        */
       blockGuidelines?: BlockGuidance;
+      /** Block only: the ask's prompt only repeats the label (`ask-text.ts`). */
+      hint?: string;
     };
 
 /**
@@ -209,14 +218,18 @@ export async function blockExpectedOutput(
     params.sessionId,
     (current) => {
       lockedBefore = current;
-      lockedAfter = stampBlocked(
+      lockedAfter = stampAskProvenance(
         current,
-        slot.label,
-        params.blockedReason,
-        params.why,
-        undefined,
-        params.ref,
-        params.ask
+        stampBlocked(
+          current,
+          slot.label,
+          params.blockedReason,
+          params.why,
+          undefined,
+          params.ref,
+          params.ask
+        ),
+        { askedBy: params.agentUserId, askCause: params.askCause }
       );
       return lockedAfter;
     }
@@ -270,11 +283,19 @@ export async function blockExpectedOutput(
     ],
   });
 
+  const [hint] = restatedAskHints([
+    {
+      label: slot.label,
+      owner: "human",
+      ask: (params.ask === undefined ? slot.ask : params.ask) ?? undefined,
+    },
+  ]);
   return {
     status: "blocked",
     expectedLabel: slot.label,
     kind: slot.kind,
     ...(blockGuidelines ? { blockGuidelines } : {}),
+    ...(hint ? { hint } : {}),
   };
 }
 
@@ -336,6 +357,8 @@ export function stampBlocked(
     if (answerHistory) withRef.answerHistory = answerHistory;
     delete withRef.answer;
     delete withRef.answerPickedUpAt;
+    // A relay pre-filled the OLD ask; it must not confirm the new one.
+    delete withRef.pendingRelay;
     return reconcileOwedSince(
       {
         ...withRef,
@@ -350,9 +373,10 @@ export function stampBlocked(
 
 /**
  * The agent reclaiming a slot it can now do: all four ownership fields go
- * together — and the `ask`, which describes how the PERSON resolves the
+ * together — and the `ask` with who asked it, which describes how the PERSON resolves the
  * blocker and means nothing on an agent-owned slot (see
- * `BlockExpectedOutputParams.ask`). `ref` stays: it describes the deliverable.
+ * `BlockExpectedOutputParams.ask`), with any relay waiting on the person's tap
+ * of that ask (`pendingRelay`). `ref` stays: it describes the deliverable.
  * Pure.
  */
 export function stampUnblocked(
@@ -368,6 +392,9 @@ export function stampUnblocked(
       why: _why,
       owedSince: _owedSince,
       ask: _ask,
+      askedBy: _askedBy,
+      askCause: _askCause,
+      pendingRelay: _pendingRelay,
       ...rest
     } = o;
     return rest;
