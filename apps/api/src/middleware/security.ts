@@ -179,7 +179,8 @@ function buildRateLimiters() {
   const crudSessionMax =
     rateLimitClassConfig.crud.sessionMax ?? rateLimitClassConfig.crud.max;
 
-  const crudIpCeiling = rateLimitClassConfig.crud.ipCeiling ?? 5 * crudSessionMax;
+  const crudIpCeiling =
+    rateLimitClassConfig.crud.ipCeiling ?? 5 * crudSessionMax;
 
   /** The address-wide `crud` bucket, or null when this caller has none. */
   function crudIpCeilingKey(c: Context): string | null {
@@ -376,7 +377,11 @@ function buildRateLimiters() {
       }
       return `key_state:ip:${ip}`;
     },
-    handler: classHandler("key_state", keyStateRate.max, keyStateRate.retryAfter),
+    handler: classHandler(
+      "key_state",
+      keyStateRate.max,
+      keyStateRate.retryAfter
+    ),
   });
 
   const oauthPublicRate = getOAuthPublicRateConfig();
