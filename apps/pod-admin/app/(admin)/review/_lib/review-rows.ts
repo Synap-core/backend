@@ -32,6 +32,12 @@ import {
 import { isObjectNavView } from "@synap-core/types/navigation";
 import { proposalNeedsItsPage } from "@synap-core/types/proposals";
 import type { Ask } from "@synap-core/types/ask";
+import {
+  REVIEW_PACKAGE_ORDER,
+  isReviewPackage,
+  reviewPackageOf,
+  type ReviewPackage,
+} from "@synap-core/types/proposals/review-package";
 import { openIn, type Exit } from "../../../../lib/open-in";
 import {
   proposalExpiresAt,
@@ -92,6 +98,12 @@ export interface ReviewSignal extends LensNeedsYouSignal {
   ask?: Ask | null;
   /** `owed-slot`: the agent's own (unverified) claim it produced this. */
   claimedDone?: boolean | null;
+  /**
+   * The review package the pod stamped — the decision the row asks
+   * (`reviewPackageOf`). Absent on a pod older than the stamp: the row is
+   * then classified here, through the same function.
+   */
+  package?: string | null;
 }
 
 /**
@@ -150,6 +162,14 @@ export interface ReviewRow {
   /** Stable key: the signal id. */
   key: string;
   group: ReviewGroup;
+  /** The decision it asks — what Review groups by (founder B-1). */
+  package: ReviewPackage;
+  /** The session it belongs to, when the viewer may read it. */
+  sessionId: string | null;
+  /** That session's name. */
+  sessionTitle: string | null;
+  /** The ONE agent that asked (the pod's `by`), when there is one. */
+  agent: { id: string; label: string } | null;
   /** Object kind for the noun chip + icon (`agent`, `issuer`, `track`…). */
   nounKind: string;
   title: string;
@@ -364,11 +384,20 @@ export function reviewRows(
     const occurredAt = iso(s.occurredAt);
     const expiresAt = proposalExpiresAt(occurredAt, s.lifetimeHours);
     const expired = proposalLapsed(expiresAt, now);
+    const sessionId = sessionOf(s);
     return {
       ...shape,
       ...(expired ? { inlineApprove: false, batchIds: null } : {}),
       key: s.id,
       group,
+      package: packageOf(s, facts),
+      sessionId,
+      sessionTitle: sessionId
+        ? s.sessionTitle ||
+          (s.source?.kind === "session" ? s.source.label : null) ||
+          null
+        : null,
+      agent: s.by?.id && s.by.label ? { id: s.by.id, label: s.by.label } : null,
       title: s.title,
       occurredAt,
       expiresAt,
@@ -376,6 +405,160 @@ export function reviewRows(
       count: Math.max(1, s.count),
     };
   });
+}
+
+const SESSION_KEY = "session:";
+
+/** The session a row belongs to: its block key, else a session source. */
+function sessionOf(s: ReviewSignal): string | null {
+  if (s.groupKey?.startsWith(SESSION_KEY))
+    return s.groupKey.slice(SESSION_KEY.length);
+  return s.source?.kind === "session" ? s.source.id : null;
+}
+
+/**
+ * The row's review package: the pod's stamp, else the same classifier over
+ * what the page knows (a pod older than the stamp).
+ */
+function packageOf(
+  s: ReviewSignal,
+  facts: ReadonlyMap<string, ProposalFacts>
+): ReviewPackage {
+  if (isReviewPackage(s.package)) return s.package;
+  const sample =
+    s.target?.kind === "proposal" ? facts.get(s.target.id) : undefined;
+  const request = sample?.requestData as { profileSlug?: unknown } | undefined;
+  return reviewPackageOf({
+    kind: s.kind,
+    proposalType: sample?.proposalType,
+    targetType: sample?.targetType,
+    class: s.class,
+    data: sample?.data,
+    objectKind:
+      typeof request?.profileSlug === "string" ? request.profileSlug : null,
+  });
+}
+
+// ── Grouping (founder B-1 / B-4) ─────────────────────────────────────────────
+
+/** How many things rows stand for — a cluster counts its members. */
+export function itemCount(rows: readonly ReviewRow[]): number {
+  return rows.reduce((n, r) => n + r.count, 0);
+}
+
+/** The oldest `occurredAt` of rows (ISO), or null when none is known. */
+export function oldestAt(rows: readonly ReviewRow[]): string | null {
+  let oldest: string | null = null;
+  for (const r of rows)
+    if (r.occurredAt && (oldest === null || r.occurredAt < oldest))
+      oldest = r.occurredAt;
+  return oldest;
+}
+
+/** One package's rows, in the page's order. */
+export interface PackageGroup {
+  package: ReviewPackage;
+  rows: ReviewRow[];
+}
+
+/**
+ * Rows by PACKAGE, in the fixed order (stakes first); a package with no row
+ * is left out. Inside a package the server's order (newest first) holds.
+ */
+export function packageGroups(rows: readonly ReviewRow[]): PackageGroup[] {
+  return REVIEW_PACKAGE_ORDER.map((pkg) => ({
+    package: pkg,
+    rows: rows.filter((r) => r.package === pkg),
+  })).filter((g) => g.rows.length > 0);
+}
+
+/** A block of rows under one session or one agent. */
+export interface RowGroup {
+  /** The session or agent id; `null` for the rows that have none. */
+  id: string | null;
+  /** Its name; `null` for the rows that have none (the page words it). */
+  title: string | null;
+  rows: ReviewRow[];
+}
+
+function groupBy(
+  rows: readonly ReviewRow[],
+  keyOf: (r: ReviewRow) => { id: string; title: string | null } | null
+): RowGroup[] {
+  const groups = new Map<string, RowGroup>();
+  const loose: ReviewRow[] = [];
+  for (const r of rows) {
+    const key = keyOf(r);
+    if (!key) {
+      loose.push(r);
+      continue;
+    }
+    const g = groups.get(key.id);
+    if (g) {
+      g.rows.push(r);
+      g.title ??= key.title;
+    } else groups.set(key.id, { id: key.id, title: key.title, rows: [r] });
+  }
+  // First appearance = the server's newest-first order; the loose rows last.
+  const out = [...groups.values()];
+  if (loose.length > 0) out.push({ id: null, title: null, rows: loose });
+  return out;
+}
+
+/** Rows by SESSION ("Group by Work", and Bookkeeping's fold). */
+export function sessionGroups(rows: readonly ReviewRow[]): RowGroup[] {
+  return groupBy(rows, (r) =>
+    r.sessionId ? { id: r.sessionId, title: r.sessionTitle } : null
+  );
+}
+
+/** Rows by the AGENT that asked ("Group by Agent", and Hand-offs' fold). */
+export function agentGroups(rows: readonly ReviewRow[]): RowGroup[] {
+  return groupBy(rows, (r) =>
+    r.agent ? { id: r.agent.id, title: r.agent.label } : null
+  );
+}
+
+/**
+ * What "Keep all" / "Allow all" over a set of rows approves: the batchable
+ * rows, in order, while their members fit ONE batch (`BATCH_MAX`). A row the
+ * viewer may not approve whole, an access row, a page-only proposal or an
+ * expired one is never swept in (`batchIds` is null for each). `left` is how
+ * many rows the action does NOT take.
+ */
+export function keepAllOf(rows: readonly ReviewRow[]): {
+  rows: ReviewRow[];
+  proposalIds: string[];
+  left: number;
+} {
+  const picked: ReviewRow[] = [];
+  const proposalIds: string[] = [];
+  for (const r of rows) {
+    if (!r.batchIds) continue;
+    if (proposalIds.length + r.batchIds.length > BATCH_MAX) break;
+    picked.push(r);
+    proposalIds.push(...r.batchIds);
+  }
+  return { rows: picked, proposalIds, left: rows.length - picked.length };
+}
+
+/**
+ * The ONE suggestion Review offers (optional, last in the brief): agents'
+ * notes on their own sessions that can all be kept at once. Offered when
+ * Bookkeeping holds at least two items and "Keep all" takes every row.
+ */
+export function bookkeepingSuggestion(
+  rows: readonly ReviewRow[]
+): { count: number; sessions: number; rows: ReviewRow[] } | null {
+  const books = rows.filter((r) => r.package === "bookkeeping");
+  const keep = keepAllOf(books);
+  const count = itemCount(keep.rows);
+  if (count < 2 || keep.left > 0) return null;
+  return {
+    count,
+    sessions: sessionGroups(keep.rows).length,
+    rows: keep.rows,
+  };
 }
 
 /** The live question an open ask detail names, or null once it moved on. */
