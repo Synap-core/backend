@@ -423,10 +423,13 @@ describe("rendererType and category stay distinguishable", () => {
       category: "installed",
       rendererType: "frame",
     });
-    // …and silence on update stays silence, so a source-only re-push cannot
-    // reset a row's category or mechanism.
+    // …and silence on update stays silence for the category. The mechanism is
+    // the one exception: an omitted `rendererType` is re-derived from the
+    // source, IN SQL, and only on a stored frame/iframe row — never a literal
+    // that could reset a builtin / mcp-app row. The behaviour on real rows is
+    // proven in `services/cells/define-cell.renderer-type.pglite.test.ts`.
     expect(h.conflictSets[0]).not.toHaveProperty("category");
-    expect(h.conflictSets[0]).not.toHaveProperty("rendererType");
+    expect(typeof h.conflictSets[0]?.rendererType).not.toBe("string");
   });
 
   it("defaultSize stays INSERT-ONLY — a re-push must not resize a placed cell", async () => {
