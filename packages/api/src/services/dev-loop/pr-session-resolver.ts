@@ -23,6 +23,7 @@
 import { and, db, drizzleSql, eq, focusSessions } from "@synap/database";
 import type { ExpectedOutput } from "@synap/playbooks";
 import {
+  DEV_LOOP_EVENT_TYPES,
   parsePullRequestRef,
   podSessionIdFromBody,
   pullRequestOutcomeKey,
@@ -146,4 +147,44 @@ export async function resolvePullRequestSessions(input: {
       settled: index === -1 ? false : isSettled(slots[index]),
     },
   ];
+}
+
+/**
+ * The ONE session a dev-loop fact is about, to stamp on the fact as
+ * `data.sessionId` before automations match it — so an automation keyed on
+ * `trigger.payload.data.sessionId` fires for a PR that names its session only
+ * through an outcome ref (no `Pod session:` line), and for a `ci.finished` of
+ * that PR (the contract's `pr` field). Same resolver, same owner floor as the
+ * sweeper.
+ *
+ * `null` when the fact already carries a session, is not about a PR, or the
+ * PR resolves to no session or to SEVERAL (an automation acts on one session;
+ * guessing which would move the wrong one — the sweeper still reaches each).
+ */
+export async function sessionForDevLoopFact(input: {
+  userId: string;
+  type: string;
+  data: Record<string, unknown>;
+}): Promise<string | null> {
+  const { data } = input;
+  if (typeof data.sessionId === "string" && data.sessionId.length > 0) {
+    return null;
+  }
+  const repo = typeof data.repo === "string" ? data.repo : null;
+  const number =
+    input.type === DEV_LOOP_EVENT_TYPES.ciFinished
+      ? data.pr
+      : input.type === DEV_LOOP_EVENT_TYPES.prOpened ||
+          input.type === DEV_LOOP_EVENT_TYPES.prMerged ||
+          input.type === DEV_LOOP_EVENT_TYPES.prClosed
+        ? data.number
+        : null;
+  if (!repo || typeof number !== "number") return null;
+  const matches = await resolvePullRequestSessions({
+    userId: input.userId,
+    pr: { repo, number },
+    body: typeof data.body === "string" ? data.body : null,
+  });
+  const ids = new Set(matches.map((m) => m.sessionId));
+  return ids.size === 1 ? [...ids][0]! : null;
 }

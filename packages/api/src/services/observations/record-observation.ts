@@ -18,25 +18,57 @@
 
 import { createHash } from "crypto";
 
-import { createSynapEvent } from "@synap-core/core";
-import { DEV_LOOP_EVENT_TYPES } from "@synap-core/types";
-import { getEventRepository } from "@synap/database";
+import { createLogger, createSynapEvent } from "@synap-core/core";
+import { DEV_LOOP_EVENT_TYPES, isDevLoopEventType } from "@synap-core/types";
+import { getEventRepository, getRequestGrant } from "@synap/database";
 import { getBoss } from "@synap/events";
 import {
   DEV_LOOP_OBSERVATION_QUEUE,
+  DEV_LOOP_SEND_OPTIONS,
   type DevLoopObservationJobData,
 } from "@synap/jobs/workers/dev-loop-worker.js";
 
 import { apiKeyService } from "../api-keys.js";
+import { sessionForDevLoopFact } from "../dev-loop/pr-session-resolver.js";
 import { PG_UUID_RE } from "../../routers/hub-protocol/rest/_codecs/_openapi.js";
+
+const logger = createLogger({ module: "observations/record" });
 
 /**
  * The dev-loop types the pod itself ACTS on (beyond firing automations):
- * `dev.pr_merged` → the merge sweeper (`services/dev-loop/merge-sweeper.ts`).
+ * `dev.pr_merged` / `dev.pr_closed` → the PR sweeper
+ * (`services/dev-loop/merge-sweeper.ts`).
  */
 const DEV_LOOP_ACTED_ON: ReadonlySet<string> = new Set([
   DEV_LOOP_EVENT_TYPES.prMerged,
+  DEV_LOOP_EVENT_TYPES.prClosed,
 ]);
+
+/**
+ * The session a dev-loop fact is about, stamped on its data when the producer
+ * named none (`sessionForDevLoopFact`). A failed lookup never costs the FACT:
+ * it is logged and the fact is recorded unstamped (the sweeper resolves again
+ * on its own).
+ */
+async function withResolvedSession(
+  input: RecordObservationInput
+): Promise<Record<string, unknown>> {
+  if (!isDevLoopEventType(input.type)) return input.data;
+  try {
+    const sessionId = await sessionForDevLoopFact({
+      userId: input.userId,
+      type: input.type,
+      data: input.data,
+    });
+    return sessionId ? { ...input.data, sessionId } : input.data;
+  } catch (err) {
+    logger.warn(
+      { err, type: input.type, subjectRef: input.subjectRef },
+      "observation: resolving the session of a dev-loop fact failed — recorded unstamped"
+    );
+    return input.data;
+  }
+}
 
 /**
  * Stable namespace for observation subject refs. Any fixed UUID works; this one
@@ -105,6 +137,7 @@ export async function recordObservation(
 ): Promise<{ id: string }> {
   const { userId, agentUserId, workspaceId } = input;
   const eventRepo = getEventRepository();
+  const payload = await withResolvedSession(input);
   const event = createSynapEvent({
     type: input.type,
     userId,
@@ -115,7 +148,7 @@ export async function recordObservation(
       : deriveSubjectUuid(input.subjectRef),
     subjectType: input.subjectType,
     data: {
-      ...input.data,
+      ...payload,
       subjectRef: input.subjectRef,
       // When we HEARD about it, kept only when the producer told us when
       // it actually happened (the row `timestamp` is that occurrence
@@ -183,7 +216,18 @@ export async function recordObservation(
   // × the coarse namespace, so varying the type suffix cannot bypass it.
   //
   // Best-effort: a boss / limiter error must never flip a RECORDED fact
-  // to `ok:false`. The row exists; the trigger is a side-effect.
+  // to `ok:false`. The row exists; the trigger is a side-effect — so a
+  // failure is LOGGED, never swallowed silently.
+  //
+  // EXACTLY-ONCE: the trigger's `data` leaves out `ingestedAt` (when WE
+  // heard it, unique per delivery). The matcher's claim fingerprint falls
+  // back to a hash of `data` (a PR fact has no native id), so with it a
+  // re-run producer job re-posting the same fact fired every automation
+  // twice. The recorded row keeps it.
+  const { ingestedAt: _heardAt, ...triggerData } = event.data as Record<
+    string,
+    unknown
+  >;
   try {
     const dot = input.type.indexOf(".");
     const namespace = dot > 0 ? input.type.slice(0, dot) : input.type;
@@ -198,7 +242,7 @@ export async function recordObservation(
         subjectId: event.subjectId,
         userId,
         workspaceId: workspaceId ?? null,
-        data: event.data,
+        data: triggerData,
         // PROVENANCE — the recorded observation's own row. It was
         // already in hand here (`row.id`, returned by the insert above)
         // and was dropped, which is why a run fired by an observation
@@ -213,21 +257,51 @@ export async function recordObservation(
         // Null for a human producer → owner-only governance, unchanged.
         producerAgentUserId: agentUserId ?? null,
       });
-      // The pod's OWN consumers of a dev-loop fact (the merge sweeper): a job,
-      // so the door answers at once and a batch of merges is not swept inline.
-      // Same budget as the trigger above — a flood floods neither.
-      if (DEV_LOOP_ACTED_ON.has(input.type)) {
-        await getBoss().send(DEV_LOOP_OBSERVATION_QUEUE, {
+    } else {
+      logger.warn(
+        { type: input.type, eventId: row.id, producer: triggerProducer },
+        "observation: trigger budget spent — recorded, automations not fired"
+      );
+    }
+  } catch (err) {
+    logger.error(
+      { err, type: input.type, eventId: row.id },
+      "observation: enqueueing the automation trigger failed — recorded, automations not fired"
+    );
+  }
+
+  // The pod's OWN consumers of a dev-loop fact (the PR sweeper): a job, so
+  // the door answers at once and a batch of merges is not swept inline.
+  // OUTSIDE the trigger budget: it is the pod's own, idempotent, cheap
+  // consumer, and a burst (a poller draining after a pause) must not drop a
+  // merge silently. It carries the posting key's GRANT (founder F1): the job
+  // runs after the request is gone, and re-enters it around the sweep.
+  if (DEV_LOOP_ACTED_ON.has(input.type)) {
+    const grant = getRequestGrant();
+    try {
+      await getBoss().send(
+        DEV_LOOP_OBSERVATION_QUEUE,
+        {
           eventType: input.type,
           data: event.data,
           userId,
           producerAgentUserId: agentUserId ?? null,
           eventId: row.id,
-        } satisfies DevLoopObservationJobData);
-      }
+          grant: grant
+            ? {
+                scopes: [...grant.scopes] as unknown[],
+                clientId: grant.clientId,
+              }
+            : null,
+        } satisfies DevLoopObservationJobData,
+        DEV_LOOP_SEND_OPTIONS
+      );
+    } catch (err) {
+      logger.error(
+        { err, type: input.type, eventId: row.id },
+        "observation: enqueueing the dev-loop sweep failed — recorded, the session did not move"
+      );
     }
-  } catch {
-    // Trigger enqueue is a best-effort side-effect of a recorded fact.
   }
 
   return { id: row.id };
