@@ -594,7 +594,8 @@ async function crudRequestKind(c: Context): Promise<McpBodyKind> {
   }
   const body = await c.req.json().catch(() => undefined);
   if (body === undefined) return "write";
-  return classifyMcpBody(body, await mcpReadOnlyTools());
+  const kind = classifyMcpBody(body, await mcpReadOnlyTools());
+  return kind === "ai" ? "write" : kind; // negctl: an answer spends the write budget
 }
 
 /**
