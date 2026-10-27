@@ -36,9 +36,16 @@ import {
 import { revokeApiKeys } from "@synap/database/api-key-revocation";
 import { resolveKeyExpiry } from "@synap/governance-policy/grants";
 import {
+  generateApiKey,
+  mintPersonKey,
+} from "../services/person-key-mint.js";
+import {
   ExpiresInDaysSchema,
   GrantInputSchema,
+  KeyUsesSchema,
   assertGrantInput,
+  deriveKeyScopes,
+  pinGrantToWorkspace,
   attachFullAccessGrant,
   attachGrantOrRevoke,
   clipHostedAgentGrants,
@@ -78,6 +85,10 @@ import { isPodAdminOrigin } from "../utils/pod-admin-origin.js";
 import { findUserDefaultWorkspaceId } from "../utils/user-default-workspace.js";
 import { assertSignedInPerson } from "../utils/signed-in-person.js";
 import {
+  decideKeyRequest,
+  getKeyRequest,
+} from "../services/key-requests.js";
+import {
   decideDeviceRequest,
   getDeviceRequest,
   readMachineDefaults,
@@ -89,6 +100,9 @@ import {
  * token) — never a key's: an agent or computer key cannot approve a computer.
  */
 const APPROVE_COMPUTER_SIGNED_IN = "Approve a computer while signed in.";
+
+/** A key request is decided by its person, signed in — never by a key. */
+const APPROVE_KEY_REQUEST_SIGNED_IN = "Approve a key request while signed in.";
 
 /**
  * The authorize parameters pod-admin's consent screen round-trips.
@@ -178,10 +192,6 @@ function toConsentTrpcError(err: unknown, clientId: string): unknown {
 /**
  * Generate API key with proper prefix
  */
-function generateApiKey(prefix: string): string {
-  const randomPart = randomBytes(32).toString("hex");
-  return `${prefix}${randomPart}`;
-}
 
 /**
  * What each key may touch, keyed by key id — ONE read for every key list
@@ -390,22 +400,43 @@ export const apiKeysRouter = router({
    */
   create: credentialProcedure
     .input(
-      z.object({
-        keyName: z.string().min(1).max(100),
-        scope: z
-          .array(z.enum([...API_KEY_SCOPES] as [string, ...string[]]))
-          .min(1),
-        hubId: z.string().optional(),
-        // Omitted → 90 days; a number → that many; null → never (W1f).
-        expiresInDays: ExpiresInDaysSchema,
-        workspaceId: z.string().uuid().optional(),
-        /** What the key may touch. Required: a key without one touches nothing. */
-        grant: GrantInputSchema,
-      })
+      z
+        .object({
+          keyName: z.string().min(1).max(100),
+          /**
+           * LEGACY: raw scopes, for callers made before `uses`. A page sends
+           * `uses` and never a scope (keys plan Decision 2).
+           */
+          scope: z
+            .array(z.enum([...API_KEY_SCOPES] as [string, ...string[]]))
+            .min(1)
+            .optional(),
+          /** Where the key is used; its scopes are derived here from these. */
+          uses: KeyUsesSchema.optional(),
+          /** The template it was made from (`KEY_TEMPLATES` id or a role id). */
+          templateId: z.string().min(1).max(120).optional(),
+          /** "Where you kept it" — stored as the key's description. */
+          note: z.string().trim().max(400).optional(),
+          hubId: z.string().optional(),
+          // Omitted → 90 days; a number → that many; null → never (W1f).
+          expiresInDays: ExpiresInDaysSchema,
+          /** The space the key is made for: its grant is pinned to it (D-3). */
+          workspaceId: z.string().uuid().optional(),
+          /** What the key may touch. Required: a key without one touches nothing. */
+          grant: GrantInputSchema,
+        })
+        .refine((v) => (v.scope ? 1 : 0) + (v.uses ? 1 : 0) === 1, {
+          message: "Send `uses` (where the key is used), or a legacy `scope`.",
+          path: ["uses"],
+        })
     )
     .mutation(async ({ input, ctx }) => {
       const id = randomUUID();
       assertGrantInput(input.grant);
+      const grant = pinGrantToWorkspace(input.grant, input.workspaceId);
+      const scope = input.uses
+        ? deriveKeyScopes(input.uses, grant)
+        : input.scope!;
 
       // 1. Permission check
       const perm = await checkPermissionOrPropose({
@@ -420,15 +451,17 @@ export const apiKeysRouter = router({
         // sharpest form: `scope` is REQUIRED by the input schema, so the
         // executor could not even call the door. `workspaceId` is not stored —
         // it is already the proposal row's own `workspace_id`.
+        // The DERIVED scope and the PINNED grant: what the approver will mint.
         data: {
           id,
           keyName: input.keyName,
-          scope: input.scope,
+          scope,
+          ...(input.uses ? { uses: input.uses } : {}),
           ...(input.hubId ? { hubId: input.hubId } : {}),
           ...(input.expiresInDays !== undefined
             ? { expiresInDays: input.expiresInDays }
             : {}),
-          grant: input.grant,
+          grant,
         },
       });
 
@@ -445,72 +478,27 @@ export const apiKeysRouter = router({
         };
       }
 
-      // Determine key prefix
-      const keyPrefix = input.hubId
-        ? process.env.NODE_ENV === "production"
-          ? "synap_hub_live_"
-          : "synap_hub_test_"
-        : "synap_user_";
-
-      // Generate key (plaintext - will be hashed in repository)
-      const key = generateApiKey(keyPrefix);
-
-      // Expiration: omitted → 90 days, a number → that many, null → never.
-      const expiresAt = resolveKeyExpiry(input.expiresInDays);
-
-      // 2. Direct DB operation via repository (handles bcrypt hashing)
-      const database = await getDb();
-      const eventRepo = new EventRepository(sql);
-      const apiKeyRepo = new ApiKeyRepository(database, eventRepo);
-
-      const apiKey = await apiKeyRepo.create(
-        {
-          keyName: input.keyName,
-          keyPrefix,
-          key,
-          hubId: input.hubId,
-          scope: input.scope,
-          expiresAt: expiresAt ?? undefined,
-          userId: ctx.userId,
-          keyType: input.hubId ? "hub_inbound" : "user_pat",
-        },
-        ctx.userId
-      );
-
-      await attachGrantOrRevoke({
-        apiKeyId: apiKey.id,
-        principalUserId: ctx.userId,
-        onBehalfOf: ctx.userId,
-        grant: input.grant,
-        expiresAt,
-        createdBy: ctx.userId,
-      });
-
-      // 3. Audit log
-      auditLog({
-        subjectType: "apiKey",
-        action: "create",
-        phase: "completed",
-        subjectId: apiKey.id,
-        userId: ctx.userId,
+      // 2. The one mint of a person's key (bcrypt, grant, audit, effects).
+      const minted = await mintPersonKey({
+        personUserId: ctx.userId,
+        keyName: input.keyName,
+        scope,
+        hubId: input.hubId,
+        expiresInDays: input.expiresInDays,
+        grant,
+        note: input.note,
         workspaceId: input.workspaceId,
-        data: { keyName: input.keyName, keyPrefix },
-      });
-
-      // 4. Side-effects
-      emitSideEffects({
-        subjectType: "apiKey",
-        action: "create",
-        subjectId: apiKey.id,
-        userId: ctx.userId,
-        workspaceId: input.workspaceId,
+        ...(input.templateId
+          ? { auditData: { templateId: input.templateId } }
+          : {}),
       });
 
       // Return key ONLY once (never stored in plaintext)
       return {
-        id: apiKey.id,
-        key, // Displayed ONCE
-        keyPrefix,
+        id: minted.id,
+        key: minted.key, // Displayed ONCE
+        keyPrefix: minted.keyPrefix,
+        scope,
         status: "created" as const,
         message: "Save this key securely. It will not be displayed again.",
       };
@@ -835,6 +823,58 @@ export const apiKeysRouter = router({
     .mutation(async ({ ctx, input }) => {
       assertSignedInPerson(ctx, APPROVE_COMPUTER_SIGNED_IN);
       return decideDeviceRequest({ ...input, personId: ctx.userId });
+    }),
+
+  /**
+   * KEY REQUEST — review (keys plan Decision 4). pod-admin
+   * `/keys/requests/<id>` reads a key a CLI asked for: who asks, the
+   * template, and the most the key may be. Only the request's own person,
+   * signed in; another person's request is NOT_FOUND.
+   */
+  getKeyRequest: credentialProcedure
+    .input(z.object({ requestId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      assertSignedInPerson(ctx, APPROVE_KEY_REQUEST_SIGNED_IN);
+      return getKeyRequest({
+        requestId: input.requestId,
+        personUserId: ctx.userId,
+      });
+    }),
+
+  /**
+   * KEY REQUEST — the ONE decision: approve (as asked, or narrowed: never
+   * widened past the template) or deny. No key is minted here — the CLI
+   * collects it once, at `POST /api/hub/keys/requests/token`, through the
+   * same mint as `create`.
+   */
+  decideKeyRequest: credentialProcedure
+    .input(
+      z.object({
+        requestId: z.string().uuid(),
+        decision: z.enum(["approve", "deny"]),
+        /** Approve: the key as the person set it; omitted = as asked. */
+        draft: z
+          .object({
+            name: z.string().trim().min(1).max(100),
+            note: z.string().trim().max(400).optional(),
+            templateId: z.string().max(120).nullish(),
+            uses: KeyUsesSchema,
+            grant: GrantInputSchema.omit({ label: true, roleId: true }).extend(
+              { expiresInDays: ExpiresInDaysSchema }
+            ),
+          })
+          .optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      assertSignedInPerson(ctx, APPROVE_KEY_REQUEST_SIGNED_IN);
+      if (input.draft) assertGrantInput(input.draft.grant);
+      return decideKeyRequest({
+        requestId: input.requestId,
+        personUserId: ctx.userId,
+        decision: input.decision,
+        ...(input.draft ? { draft: input.draft } : {}),
+      });
     }),
 
   /**

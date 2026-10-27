@@ -1036,6 +1036,12 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "role_id",
     addedBy: "0307_grant_roles.sql",
   },
+  // Where a key made from a role is used (0363); every role read selects it.
+  {
+    table: "grant_roles",
+    column: "uses",
+    addedBy: "0363_key_requests_and_role_uses.sql",
+  },
 
   // apps — a developer's application identity (0309, App Connect v1). `public_id`
   // is the app id AND the `client_id` a grant carries; a missing column means a
@@ -1196,6 +1202,18 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "device_auth_requests",
     column: "poll_interval_seconds",
     addedBy: "0321_device_auth_requests.sql",
+  },
+  // key_requests — the CLI's door to a key (0363). Absence means
+  // `synap keys create` and the pod-admin review page would 42P01.
+  {
+    table: "key_requests",
+    column: "request_code_hash",
+    addedBy: "0363_key_requests_and_role_uses.sql",
+  },
+  {
+    table: "key_requests",
+    column: "approved_draft",
+    addedBy: "0363_key_requests_and_role_uses.sql",
   },
 
   // library_groups — the Library's persistent groups (0328). Absence means
