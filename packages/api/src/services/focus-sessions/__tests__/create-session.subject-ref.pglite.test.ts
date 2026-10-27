@@ -75,6 +75,7 @@ const THEIR_SPACE = "44444444-4444-4444-8444-444444444444";
 const MY_ISSUE = "55555555-5555-4555-8555-555555555555";
 const THEIR_ISSUE = "66666666-6666-4666-8666-666666666666";
 const MY_NOTE = "77777777-7777-4777-8777-777777777777";
+const MY_PROBE_ISSUE = "88888888-8888-4888-8888-888888888888";
 const ISSUE_KIND = "d0000000-0000-4000-8000-000000000001";
 const NOTE_KIND = "d0000000-0000-4000-8000-000000000002";
 const STATUS_DEF = "d0000000-0000-4000-8000-000000000003";
@@ -176,6 +177,13 @@ beforeAll(async () => {
       THEIR_SPACE,
     ]
   );
+  // A probe row (D8) of mine, same title and kind: the listing rule keeps it
+  // out of every listing, candidates included.
+  await q(
+    `insert into entities (id, user_id, workspace_id, profile_id, type, title, properties, system_data, created_at, updated_at) values
+      ($1, $2, null, $3, 'issue', 'Flaky login test', '{}'::jsonb, '{"probe":true}'::jsonb, now(), now())`,
+    [MY_PROBE_ISSUE, USER, ISSUE_KIND]
+  );
   await q(
     `insert into entity_identity_signals (id, entity_id, signal_type, signal_value, source, created_at) values
       ($1, $2, 'external_id', $3, 'test', now()),
@@ -207,6 +215,7 @@ describe("synap_start_session — subjectRef", () => {
       tried: ["externalId"],
     });
     expect(text).not.toContain(THEIR_ISSUE);
+    expect(text).not.toContain(MY_PROBE_ISSUE);
     expect(await stored(goal)).toEqual([{ subject_entity_id: null }]);
   });
 
@@ -243,7 +252,7 @@ describe("synap_start_session — subjectRef", () => {
 });
 
 describe("synap_start_session — subjectCandidates", () => {
-  it("a same-name entity is OFFERED, never attached: my issue only (not my note, not the stranger's issue)", async () => {
+  it("a same-name entity is OFFERED, never attached: my issue only (not my note, not the stranger's issue, not my probe row)", async () => {
     const goal = `Weak ${randomUUID()}`;
     const { body, text } = await mcpStart({ goal, title: "Flaky login test" });
     expect(body.status).toBe("created");
@@ -251,6 +260,7 @@ describe("synap_start_session — subjectCandidates", () => {
       { id: MY_ISSUE, kind: "issue", title: "Flaky login test" },
     ]);
     expect(text).not.toContain(THEIR_ISSUE);
+    expect(text).not.toContain(MY_PROBE_ISSUE);
     expect(await stored(goal)).toEqual([{ subject_entity_id: null }]);
   });
 
