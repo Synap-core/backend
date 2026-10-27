@@ -162,9 +162,12 @@ async function session(
 }
 
 async function proposal(opts: { sessionId?: string; projectId?: string }) {
+  // A plan GATE: something waits on it, so it stays in the headline under
+  // the needs-you rule (decision E6 — a proposal nothing waits on is a
+  // change to review, out of the headline).
   await q(
     `insert into proposals (id, proposal_type, target_type, target_id, data, status, session_id, project_id, created_by, created_at, updated_at)
-     values ($1, 'create', 'entity', null, $2::jsonb, 'pending', $3, $4, $5, now() - interval '20 minutes', now())`,
+     values ($1, 'dev.plan_approval', 'entity', null, $2::jsonb, 'pending', $3, $4, $5, now() - interval '20 minutes', now())`,
     [
       randomUUID(),
       JSON.stringify({ name: "Acme" }),
@@ -583,8 +586,9 @@ describe('Needs you: "from X" — the ONE agent behind a decision (wave PO)', ()
   const AGENT = randomUUID();
   const filed = (name: string, agentUserId: string | null) =>
     q(
+      // A plan gate (see `proposal()`): in the headline under decision E6.
       `insert into proposals (id, proposal_type, target_type, target_id, data, status, agent_user_id, created_by, created_at, updated_at)
-       values ($1, 'create', 'entity', null, $2::jsonb, 'pending', $3, $4, now() - interval '5 minutes', now())`,
+       values ($1, 'dev.plan_approval', 'entity', null, $2::jsonb, 'pending', $3, $4, now() - interval '5 minutes', now())`,
       [randomUUID(), JSON.stringify({ name }), agentUserId, USER]
     );
   beforeAll(async () => {
@@ -630,14 +634,19 @@ describe('Needs you: "from X" — the ONE agent behind a decision (wave PO)', ()
   });
 });
 
-describe("Review later (Resolve-XP W3): out of the headline, into its own fold", () => {
-  // Two 8-day-old pending proposals. Each rules out a wrong rule:
-  //  - an objectWork `create` in s4 — s4 owes a RECENT slot, so a rule that
-  //    let the row join its session's block would lift it into Recent and
-  //    count it as the session's;
-  //  - a curatorial `merge` of the same age — a rule keyed on age alone
-  //    would move it too. Only objectWork goes to Review later.
-  let before: { needsYou: number; s4: number };
+describe("Changes to review (decision E6): a proposal nothing waits on leaves the headline", () => {
+  // Two 8-day-old pending proposals nothing waits on (no gate, no owed slot,
+  // no parked run). Under the needs-you rule BOTH are changes to review — the
+  // objectWork `create` in s4 (s4 owes a RECENT slot, so a rule that let the
+  // row join its session's block would lift it into Recent) AND the curatorial
+  // `merge` (Resolve-XP W3 alone kept a merge in the headline: only age moved
+  // objectWork). Out of the headline, never dropped: in the union fold.
+  let before: {
+    needsYou: number;
+    s4: number;
+    reviewLater: number;
+    changes: number;
+  };
   const old = (proposalType: string, sessionId: string | null, name: string) =>
     q(
       `insert into proposals (id, proposal_type, target_type, target_id, data, status, session_id, created_by, created_at, updated_at)
@@ -652,42 +661,46 @@ describe("Review later (Resolve-XP W3): out of the headline, into its own fold",
       ]
     );
   beforeAll(async () => {
+    const c = await caller().count({});
     before = {
-      needsYou: (await caller().count({})).needsYou,
+      needsYou: c.needsYou,
       s4: (await caller().count({ sessionId: S4 })).needsYou,
+      reviewLater: c.reviewLater,
+      changes: c.folds.changesToReview,
     };
     await old("create", S4, "Old Lantern");
     await old("merge", null, "Old Twin");
   });
 
-  it("the count leaves Review later out and reports it beside the headline", async () => {
+  it("the count leaves both out of the headline and reports them as changes to review", async () => {
     const c = await caller().count({});
-    // The merge counts (not objectWork); the old create does not.
-    expect(c.needsYou).toBe(before.needsYou + 1);
-    expect(c.reviewLater).toBe(1);
+    expect(c.needsYou).toBe(before.needsYou);
+    expect(c.folds.changesToReview).toBe(before.changes + 2);
+    expect(c.reviewLater).toBe(before.reviewLater + 2);
     expect((await caller().count({ sessionId: S4 })).needsYou).toBe(before.s4);
   });
 
-  it("the row is drawn in the Review later fold — the fold and the count read the same flag", async () => {
+  it("the rows are drawn in the Changes to review fold — the fold and the count read the same class", async () => {
     const rows = (await page({})).blocking.rows;
     const later = rows.find((s) => s.title.includes("Old Lantern"));
-    expect(later).toBeDefined();
-    expect(later!.reviewLater).toBe(true);
-    expect(later!.ageBucket).toBe("older");
+    const merge = rows.find((s) => s.title.includes("Old Twin"));
+    for (const r of [later, merge]) {
+      expect(r).toBeDefined();
+      expect(r!.reviewLater).toBe(true);
+      expect(r!.needsYouClass).toBe("changes_to_review");
+    }
     // Never in s4's block, though s4 is its session — its door stays.
     expect(later!.groupKey).not.toBe(`session:${S4}`);
     expect(later!.source).toMatchObject({ kind: "session", id: S4 });
-    const merge = rows.find((s) => s.title.includes("Old Twin"));
-    expect(merge?.reviewLater).toBeUndefined();
     const shaped = needsYouRows(rows);
     expect(shaped.reviewLaterCount).toBe(
       (await caller().count({})).reviewLater
     );
     expect(
-      shaped.reviewLater.flatMap((r) =>
-        r.kind === "item" ? [r.signal.id] : []
-      )
-    ).toEqual([later!.id]);
+      shaped.folds.changes_to_review
+        .flatMap((r) => (r.kind === "item" ? [r.signal.id] : []))
+        .sort()
+    ).toEqual([later!.id, merge!.id].sort());
   });
 
   it("orient's pendingReview reads the SAME predicate: headline + reviewLater", async () => {

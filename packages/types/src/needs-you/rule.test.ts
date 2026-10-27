@@ -196,6 +196,32 @@ describe("working: an agent is on it right now", () => {
     ).toBe("needs_you");
   });
 
+  it("an agent that asked and stopped is not working: the asking is not work (E2)", () => {
+    // The question was posted a minute ago; the agent's last WORK is 2 days old.
+    const asked = {
+      ...live,
+      lastAgentActivityAt: ago(60_000),
+      lastAgentWorkAt: ago(2 * DAY),
+    };
+    expect(classifyOwedAsk(ask, asked, NOW)).toBe("needs_you");
+    // It kept working after asking: Working.
+    expect(
+      classifyOwedAsk(ask, { ...asked, lastAgentWorkAt: ago(60_000) }, NOW)
+    ).toBe("working");
+    // The asking still moved the session: not Stopped.
+    expect(
+      needsYouSessionClass(
+        {
+          ...live,
+          startedAt: ago(20 * DAY),
+          lastAgentActivityAt: ago(2 * DAY),
+          lastAgentWorkAt: null,
+        },
+        NOW
+      )
+    ).toBe("live");
+  });
+
   it("the start is not the agent working", () => {
     expect(
       classifyOwedAsk(

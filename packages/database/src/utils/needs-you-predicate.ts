@@ -28,6 +28,8 @@
 import { sql as drizzleSql, type SQL } from "drizzle-orm";
 import {
   ISO_STAMP_PATTERN,
+  NEEDS_YOU_ASKING_EVENT_TYPES,
+  NEEDS_YOU_QUESTION_POST_KIND,
   NEEDS_YOU_ASKER_CAUSES,
   NEEDS_YOU_REVIEW_LATER_AFTER_MS,
   NEEDS_YOU_STOPPED_AFTER_MS,
@@ -46,6 +48,7 @@ function literals(values: readonly string[]): SQL {
 
 const OPEN_STATUSES = literals(OPEN_SESSION_STATUSES);
 const ASKER_CAUSES = literals(NEEDS_YOU_ASKER_CAUSES);
+const ASKING_EVENTS = literals(NEEDS_YOU_ASKING_EVENT_TYPES);
 
 /** A session alias the caller's FROM names (`focus_sessions`, `owing`, …). */
 function col(alias: string, column: string): SQL {
@@ -76,6 +79,29 @@ export function sessionLastAgentActivitySql(s: string): SQL {
   )`;
 }
 
+/**
+ * SQL timestamptz: the newest agent evidence of WORK on the session aliased
+ * `s` — {@link sessionLastAgentActivitySql} minus the asking itself (a
+ * question post, a `slot_asked` event). Working's clock.
+ */
+export function sessionLastAgentWorkSql(s: string): SQL {
+  return drizzleSql`GREATEST(
+    (SELECT max(ny_wm.timestamp) FROM messages ny_wm
+       WHERE ny_wm.channel_id = ${col(s, "channel_id")}
+         AND ny_wm.author_type = ${MessageAuthorType.AI_AGENT}
+         AND (ny_wm.metadata->'roomPost'->>'kind') IS DISTINCT FROM ${NEEDS_YOU_QUESTION_POST_KIND}),
+    (SELECT max(ny_wt.updated_at) FROM chat_turns ny_wt
+       WHERE ny_wt.channel_id = ${col(s, "channel_id")}),
+    (SELECT max(ny_wp.created_at) FROM proposals ny_wp
+       WHERE ny_wp.session_id = ${col(s, "id")}
+         AND ny_wp.agent_user_id IS NOT NULL),
+    (SELECT max(ny_we.timestamp) FROM events ny_we
+       WHERE ny_we.session_id = ${col(s, "id")}
+         AND ny_we.agent_user_id IS NOT NULL
+         AND ny_we.type NOT IN (${ASKING_EVENTS}))
+  )`;
+}
+
 /** SQL boolean: an IS turn is running in the room of the session aliased `s`. */
 export function sessionTurnInFlightSql(s: string): SQL {
   return drizzleSql`EXISTS (
@@ -97,9 +123,10 @@ export function needsYouSessionClassSql(s: string, now: Date): SQL {
       WHEN GREATEST(ny_la.at, ${col(s, "started_at")}) < ${at(t - NEEDS_YOU_STOPPED_AFTER_MS)}
         THEN 'stopped'
       WHEN ${sessionTurnInFlightSql(s)} THEN 'working'
-      WHEN ny_la.at >= ${at(t - NEEDS_YOU_WORKING_WINDOW_MS)} THEN 'working'
+      WHEN ny_la.work >= ${at(t - NEEDS_YOU_WORKING_WINDOW_MS)} THEN 'working'
       ELSE 'live'
-    END FROM (SELECT ${sessionLastAgentActivitySql(s)} AS at) ny_la)`;
+    END FROM (SELECT ${sessionLastAgentActivitySql(s)} AS at,
+                     ${sessionLastAgentWorkSql(s)} AS work) ny_la)`;
 }
 
 /** SQL text: the cause kind on `slot` (`needsYouAskCauseKind`), or NULL. */

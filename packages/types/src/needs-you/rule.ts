@@ -80,6 +80,19 @@ export const NEEDS_YOU_OPEN_SESSION_STATUSES = [
 ] as const;
 
 /**
+ * The agent evidence that is the ASKING itself, never work: the room post
+ * that poses a question (`roomPost.kind = 'question'`) and the `slot_asked`
+ * event its ask logs. An agent that asks and stops is not "working" — its
+ * question is the person's (decision E2: "unless the agent stopped on it").
+ * Both still count as the agent having MOVED the session (Stopped's clock).
+ * Mirrors api `FOCUS_SESSION_SLOT_ASKED_EVENT_TYPE` (pinned by a test there).
+ */
+export const NEEDS_YOU_ASKING_EVENT_TYPES = [
+  "focus_session.slot_asked.completed",
+] as const;
+export const NEEDS_YOU_QUESTION_POST_KIND = "question";
+
+/**
  * Causes a real asker stands behind without an agent stamp: the session's own
  * plan/deploy gate, and an external agent's approval request. Every other
  * cause (`run`, `param`, `criterion`, a `decision` no agent filed) is the
@@ -154,9 +167,17 @@ export interface NeedsYouSessionFacts {
   /**
    * The newest AGENT evidence: an agent room post, a chat turn, an
    * agent-filed proposal, an agent-attributed event. `null` = none yet.
-   * Never `updatedAt`.
+   * Never `updatedAt`. Stopped's clock.
    */
   lastAgentActivityAt: Date | string | null;
+  /**
+   * The newest agent evidence of WORK: the same sources minus the asking
+   * itself (a question post, a `slot_asked` event —
+   * {@link NEEDS_YOU_ASKING_EVENT_TYPES}). Working's clock: an agent that
+   * asked and stopped is not working. Absent = not measured; then the
+   * activity clock stands in (an older reader).
+   */
+  lastAgentWorkAt?: Date | string | null;
   /** The floor for a session no agent has touched yet. */
   startedAt: Date | string | null;
 }
@@ -271,7 +292,11 @@ export function needsYouSessionClass(
     return "stopped";
   }
   if (session.turnInFlight) return "working";
-  if (agent !== null && agent >= at - NEEDS_YOU_WORKING_WINDOW_MS) {
+  const work =
+    session.lastAgentWorkAt === undefined
+      ? agent
+      : timeOf(session.lastAgentWorkAt);
+  if (work !== null && work >= at - NEEDS_YOU_WORKING_WINDOW_MS) {
     return "working";
   }
   return "live";
