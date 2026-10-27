@@ -33,6 +33,8 @@ const slot = (
 
 const CHOOSE = { mode: "choose", options: [{ label: "A" }] } as never;
 const link = (id: string) => `https://pod.example/open/${id}`;
+// Every older fixture is under 7 days old on this clock (Review later aside).
+const now = new Date("2026-10-16T00:00:00.000Z");
 
 describe("foldOwedByPerson", () => {
   const older = ["s1", "s2", "s3", "s4", "s5"].map((id, i) =>
@@ -50,6 +52,7 @@ describe("foldOwedByPerson", () => {
       proposed: crmSpec,
       truncated: false,
       link,
+      now,
     });
     expect(r.items[0]).toMatchObject({
       sessionId: "6fbc2b5c",
@@ -84,9 +87,25 @@ describe("foldOwedByPerson", () => {
       proposed: [],
       truncated: true,
       link,
+      now,
     });
     expect(r.items[0]).toMatchObject({ inbox: "needs-you", owed: 1, asks: 0 });
     expect(r.countIsLowerBound).toBe(true);
+  });
+
+  it("a needs-you ask owed 7+ days leaves the headline for Review later", () => {
+    const r = foldOwedByPerson({
+      needsYou: [
+        slot("old", "Stale ask", "2026-10-01T00:00:00.000Z", { ask: CHOOSE }),
+        slot("new", "Fresh ask", "2026-10-15T00:00:00.000Z", { ask: CHOOSE }),
+      ],
+      proposed: [],
+      truncated: false,
+      link,
+      now,
+    });
+    expect(r).toMatchObject({ count: 1, reviewLater: 1, sessions: 1 });
+    expect(r.items.map((i) => i.sessionId)).toEqual(["new"]);
   });
 
   it("nothing owed is an empty list, not unavailable", () => {
@@ -98,6 +117,7 @@ describe("foldOwedByPerson", () => {
     });
     expect(r).toEqual({
       count: 0,
+      reviewLater: 0,
       sessions: 0,
       countIsLowerBound: false,
       lens: "owed-by-person",

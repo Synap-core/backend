@@ -194,8 +194,12 @@ export interface RunPlaybookInput {
    *                  closing the session settles the run.
    *   - `dispatch` — the run goes through the `external-agent` executor with
    *                  this agent as its selector (pushed through its binding).
-   * Producer: the automation `playbook_run` node (`data.handToAgentId`, from a
-   * playbook's `schedule.handToAgentId`). A PERSON's door only: an agent
+   * Producers: the automation `playbook_run` node (`data.handToAgentId`, from
+   * a playbook's `schedule.handToAgentId`) and every manual run door
+   * (`playbooks.run`, Hub REST `POST /playbooks/:id/run`, MCP
+   * `synap_run_playbook`, and the approved replay of a gated run). An agent
+   * may hand a run only to ITSELF; its run is then held as the person's draft
+   * and the hand-off rides with the hold (`HeldRun.handToAgentId`). An agent
    * handing work to another agent is `focus_session/assign_agent`, gated by
    * `gateAgentHandOff` — refused here rather than laundered. Absent ⇒ unchanged.
    */
@@ -743,9 +747,12 @@ interface RunHandOff {
  * and the reaches that can TAKE a person's work — the question every hand-off
  * door asks (`handOffRefusal`), except that a `pod` agent is refused too: on a
  * roster it only answers when mentioned, so nothing would ever do this run.
+ * Exported for the governed door (`playbooks.run`), which asks it BEFORE a
+ * proposal is filed, so a run that could never be handed is refused rather
+ * than proposed (the same placement as `resolveTrackFiling`).
  */
-async function resolveRunHandOff(
-  input: RunPlaybookInput
+export async function resolveRunHandOff(
+  input: Pick<RunPlaybookInput, "handToAgentId" | "agentUserId" | "userId">
 ): Promise<RunHandOff | null> {
   const agentUserId = input.handToAgentId?.trim();
   if (!agentUserId) return null;
@@ -1325,6 +1332,9 @@ async function executeSingleRun(
     const held: HeldRun = {
       params,
       agentType: input.agentType ?? null,
+      // The hand-off rides with the hold: accepting the draft must start the
+      // run the agent asked for, never fall back to the playbook's executor.
+      ...(handOff ? { handToAgentId: handOff.agentUserId } : {}),
       heldAt: new Date().toISOString(),
     };
     const [heldSession] = await db
@@ -1370,6 +1380,8 @@ interface HeldRun {
   params: Record<string, unknown>;
   /** The agent selector the run was asked with. */
   agentType: string | null;
+  /** The agent the run was handed to (`RunPlaybookInput.handToAgentId`). */
+  handToAgentId?: string;
   heldAt: string;
 }
 
@@ -1386,6 +1398,9 @@ function readHeldRun(metadata: unknown): HeldRun | null {
         ? (h.params as Record<string, unknown>)
         : {},
     agentType: typeof h.agentType === "string" ? h.agentType : null,
+    ...(typeof h.handToAgentId === "string" && h.handToAgentId !== ""
+      ? { handToAgentId: h.handToAgentId }
+      : {}),
     heldAt: typeof h.heldAt === "string" ? h.heldAt : "",
   };
 }
@@ -1407,7 +1422,7 @@ async function dispatchRunOnSession(p: {
   params: Record<string, unknown>;
   subjectId: string | null;
   agentType: string | null;
-  /** The agent this run is HANDED to (`RunPlaybookInput.handToAgentId`); a held run has none. */
+  /** The agent this run is HANDED to (`RunPlaybookInput.handToAgentId`), re-resolved for a held run. */
   handOff?: RunHandOff | null;
 }): Promise<PlaybookRun> {
   const db = await getDb();
@@ -1576,6 +1591,13 @@ export async function startHeldRun(
     playbookId: session.playbookId,
     workspaceId: session.workspaceId ?? "",
   });
+  // A held hand-off is resolved AGAIN, for the person who accepts (the agent
+  // may have been paused since): a refusal throws here, before the claim, so
+  // the hold stays rather than starting the playbook's own executor instead.
+  const handOff = await resolveRunHandOff({
+    userId: session.userId,
+    handToAgentId: held.handToAgentId ?? null,
+  });
   const [claimed] = await db
     .update(focusSessions)
     .set({
@@ -1598,6 +1620,7 @@ export async function startHeldRun(
     params: held.params,
     subjectId: session.subjectEntityId ?? null,
     agentType: held.agentType,
+    handOff,
   });
   return { status: "started", run };
 }

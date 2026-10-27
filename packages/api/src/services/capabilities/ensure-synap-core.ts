@@ -994,6 +994,22 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
       },
     },
     {
+      name: "capability.rotate_key",
+      kind: "builtin",
+      scope: "pod",
+      description:
+        "REPLACE the key an installed capability's tools use. First ask the person for the new key with a session ask { mode: 'provide', provide: { kind: 'secret', name } } — never in chat — and pass the vault://<id> their answer gives you as vaultRef. The pod copies it into the key the tools already point at (in place: every tool keeps its reference) and removes the handed-over secret, so exactly one key remains. capabilityId = the capability's containerId (synap_list_capabilities). credentialId only when its tools use more than one key. Refused when that secret was not handed to you or already belongs to another capability. Returns { status: 'rotated' | 'unchanged', credential }.",
+      parameters: {
+        type: "object",
+        required: ["capabilityId", "vaultRef"],
+        properties: {
+          capabilityId: { type: "string", format: "uuid" },
+          vaultRef: { type: "string" },
+          credentialId: { type: "string", format: "uuid" },
+        },
+      },
+    },
+    {
       name: "channel.ingest",
       kind: "builtin",
       scope: "pod",

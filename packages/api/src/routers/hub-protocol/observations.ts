@@ -171,7 +171,10 @@ const RESERVED_SUBJECT_TYPES = new Set([
   "apiKey",
 ]);
 
-const ObservationSchema = z.object({
+// Exported for the automation `record_observation` step
+// (`services/observations/record-observation-from-automation.ts`): ONE shape
+// for every door that records a fact, never a second copy of these refusals.
+export const ObservationSchema = z.object({
   type: ObservationTypeSchema,
   /**
    * What it is about. Free-form on the wire — an observation may reference

@@ -144,6 +144,23 @@ describe("homeMoves — the Inbox head", () => {
     expect(m.moves.map((r) => r.row.key)).toEqual(["d1"]);
     expect(m.routine).toBe(2);
   });
+
+  it("a Review later row is never one of the next moves", () => {
+    // Rules out "every non-routine row": a week-old decision the badge
+    // leaves out would head Home over the fresh one behind it.
+    const m = homeMoves({
+      rows: [
+        {
+          row: { key: "old" } as never,
+          signal: { reviewLater: true },
+          bucket: "decision" as const,
+        },
+        row("d1", "decision"),
+      ],
+      counts: { decision: 1, question: 0, routine: 0, broken: 0 },
+    });
+    expect(m.moves.map((r) => r.row.key)).toEqual(["d1"]);
+  });
 });
 
 describe("projectStandRows — one row per project, the shared rules decide", () => {

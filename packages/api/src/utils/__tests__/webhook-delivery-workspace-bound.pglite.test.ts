@@ -15,6 +15,8 @@
  * Rows rule out: no workspace filter (the WS2 rows), dropping unbound
  * subscriptions, a pod-wide subject or a subject-less `user` event reaching a
  * bound subscription, and trusting a payload's `workspaceId` over the row.
+ * Plus the DIRECTION rule (0362): WS1's inbound source lists no event types
+ * (= "every event" to the match rule) and is never in an audience.
  */
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
 import { randomUUID } from "node:crypto";
@@ -75,6 +77,7 @@ const E_WS1 = randomUUID();
 const E_POD = randomUUID();
 const CH_WS2 = randomUUID();
 const SUB = { unbound: randomUUID(), ws1: randomUUID(), ws2: randomUUID() };
+const INBOUND_WS1 = randomUUID();
 const EVENT = "entity.update.completed";
 
 const q = (sql: string, params?: unknown[]) => h.client!.query(sql, params);
@@ -86,6 +89,11 @@ beforeAll(async () => {
   );
   const byName = new Map(tables.map((t) => [getTableConfig(t).name, t]));
   for (const t of byName.values()) await h.client!.exec(ddlFor(t));
+  // 0362's default (the generic DDL carries none): every row here is a
+  // delivery target, and both producers select `direction = 'outbound'`.
+  await h.client!.exec(
+    `alter table webhook_subscriptions alter column direction set default 'outbound'`
+  );
 
   await q(`insert into users (id, email) values ($1,'a@example.test')`, [A]);
   for (const ws of [WS1, WS2]) {
@@ -123,6 +131,11 @@ beforeAll(async () => {
       [id, A, ws]
     );
   }
+  await q(
+    `insert into webhook_subscriptions (id, user_id, workspace_id, direction, name, url, event_types, secret, active, retry_config)
+     values ($1,$2,$3,'inbound','GitHub',null,'{}','sec',true,'{"maxRetries":0}'::jsonb)`,
+    [INBOUND_WS1, A, WS1]
+  );
 });
 
 beforeEach(() => {

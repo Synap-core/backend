@@ -48,6 +48,7 @@ import {
   lifecycleSlugOf,
   moveStatusFromAutomation,
 } from "../../utils/lifecycle-move.js";
+import { observationDoor } from "../../utils/observation-door.js";
 import { deterministicUuidV5 } from "../../utils/deterministic-uuid.js";
 import {
   assertAgentWakeBudget,
@@ -76,6 +77,7 @@ import type {
 // causal chain — so a NEW effect node added later can never silently bypass the
 // guard the way `webhook`/`channel_message` originally did (found post-hoc). To
 // add a new effect type, classify it here (guard it, or justify it as internal).
+// record_observation: guarded by guardProducerEffect in its branch.
 const PRODUCER_REVIEWED_OUTPUT_TYPES = new Set<string>([
   "entity_create",
   "entity_update",
@@ -93,6 +95,7 @@ const PRODUCER_REVIEWED_OUTPUT_TYPES = new Set<string>([
   "facet_update",
   "facet_detach",
   "relation_create",
+  "record_observation",
 ]);
 
 export async function executeOutputStep(
@@ -1408,6 +1411,79 @@ export async function executeOutputStep(
       }
 
       return { status: "state_set", keys: Object.keys(patch) };
+    }
+
+    case "record_observation": {
+      // An OUTSIDE FACT read off this run's trigger (a GitHub webhook body →
+      // `dev.pr_merged`), recorded through the ONE observation writer with
+      // the observation door's own checks (api `recordObservationFromAutomation`
+      // via the fail-closed slot). Not a governed write — an observation
+      // reports what already happened and never files a proposal — so the
+      // only gate is the confused-deputy guard: a fact an agent's event caused
+      // is not recorded in a human owner's name (fails closed, like `webhook`).
+      const observationGuard = await guardProducerEffect({
+        producerAgentUserId,
+        principalUserId: ownerId,
+        workspaceId,
+        subjectType: "event",
+        action: "create",
+      });
+      if ("block" in observationGuard) {
+        throw new PolicyBlockedError(
+          observationGuard.kind,
+          observationGuard.kind === "deny"
+            ? `record_observation denied by producer-agent governance (confused-deputy guard): ${observationGuard.reason ?? "denied"}`
+            : "record_observation cannot auto-execute: an agent produced this trigger, so a human-owned automation may not record a fact in its owner's name ungoverned (confused-deputy guard)."
+        );
+      }
+
+      const type = config.type;
+      if (typeof type !== "string" || type.trim() === "") {
+        throw new Error("record_observation: config.type is required");
+      }
+      // A whole-string `{{…}}` keeps its native type: a PR number arrives as
+      // a number, and names the subject as text.
+      const subjectId =
+        typeof config.subjectId === "number"
+          ? String(config.subjectId)
+          : config.subjectId;
+      if (typeof subjectId !== "string" || subjectId.trim() === "") {
+        throw new Error("record_observation: config.subjectId is required");
+      }
+      const rawData = config.data ?? {};
+      if (typeof rawData !== "object" || Array.isArray(rawData)) {
+        throw new Error("record_observation: config.data must be an object");
+      }
+      // A field that resolved to nothing is LEFT OUT: the contract reads an
+      // optional field as absent, never null (a PR with no body sends
+      // `"body": null`, which `{{trigger.payload.body.pull_request.body}}`
+      // carries as-is).
+      const factData = Object.fromEntries(
+        Object.entries(rawData as Record<string, unknown>).filter(
+          ([, v]) => v !== null && v !== undefined
+        )
+      );
+      const recorded = await observationDoor()({
+        type: type.trim(),
+        subjectId: subjectId.trim(),
+        ...(typeof config.subjectType === "string" && config.subjectType
+          ? { subjectType: config.subjectType }
+          : {}),
+        data: factData,
+        ...(typeof config.occurredAt === "string" && config.occurredAt
+          ? { occurredAt: config.occurredAt }
+          : {}),
+        ownerId,
+        workspaceId,
+        automationContext: {
+          automationRunId: automationContext.automationRunId,
+          automationId: automationContext.automationId,
+          chainDepth: automationContext.chainDepth,
+          rootRunId: automationContext.rootRunId,
+          chainAutomationIds: automationContext.chainAutomationIds,
+        },
+      });
+      return { status: "recorded", eventId: recorded.id, type: type.trim() };
     }
 
     // ── Kind + Facets / graph (Wave 4.V2) ─────────────────────────────────────

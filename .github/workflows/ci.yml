@@ -211,6 +211,11 @@ jobs:
           cmd=$(docker inspect --format '{{json .Config.Cmd}}' synap-backend:test)
           echo "CMD: $cmd"
           echo "$cmd" | grep -q -- '--no-node-snapshot' || { echo "::error::deploy/Dockerfile CMD lacks --no-node-snapshot (isolated-vm requires it on Node >= 20)"; exit 1; }
+          # The runner the API's pool starts carries the Node permission model,
+          # runs a skill under it, and is refused a file write, a process and
+          # the API's environ (review F12; no suite runs the BUILT runner).
+          docker run --rm -v "$PWD/scripts/skill-runner-sandbox-smoke.mjs:/smoke/skill-runner-sandbox-smoke.mjs:ro" \
+            synap-backend:test node --no-node-snapshot /smoke/skill-runner-sandbox-smoke.mjs
           docker rmi synap-backend:test
 
   full-suite:

@@ -32,7 +32,9 @@
  */
 import { fork, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { realpathSync } from "node:fs";
 import { createRequire } from "node:module";
+import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createLogger } from "@synap-core/core";
 import {
@@ -164,9 +166,58 @@ interface Slot {
 }
 
 /**
+ * The Node permission model for a built runner (review F12, the interim before
+ * the R3 sidecar): no file writes, no child process, no worker, and reads only
+ * under the one directory that holds what the runner loads — its own bundle,
+ * isolated-vm and isolated-vm's loader, node-gyp-build (their common ancestor,
+ * DERIVED from where they resolve, so the image's layout and a checkout's both
+ * fit). So code that escaped an isolate into the runner's JS cannot read the
+ * API's `/proc/<pid>/environ`, write a file or start a process. It does NOT
+ * cover the network (R3 does), nor native code: `--allow-addons` is what
+ * isolated-vm needs, and an addon is outside the model.
+ *
+ * `/etc/alpine-release`: node-gyp-build asks `existsSync` of it to pick the
+ * musl or glibc build, and under the model a denied `existsSync` throws, on
+ * every OS. The `--allow-addons` SecurityWarning is the known trade above:
+ * silenced, so it does not print at every runner start.
+ *
+ * Proven on the built image by ci.yml "Test Docker Build"
+ * (`scripts/skill-runner-sandbox-smoke.mjs`).
+ */
+function runnerSandboxArgv(modulePath: string): string[] {
+  const require = createRequire(modulePath);
+  const ivm = require.resolve("isolated-vm/package.json");
+  const loader = createRequire(ivm).resolve("node-gyp-build/package.json");
+  const root = commonAncestor(
+    [path.dirname(modulePath), path.dirname(ivm), path.dirname(loader)].map(
+      (p) => realpathSync(p)
+    )
+  );
+  return [
+    "--permission",
+    "--allow-addons",
+    `--allow-fs-read=${root}`,
+    "--allow-fs-read=/etc/alpine-release",
+    "--disable-warning=SecurityWarning",
+  ];
+}
+
+function commonAncestor(dirs: string[]): string {
+  const [first, ...rest] = dirs.map((d) => d.split(path.sep));
+  let n = first!.length;
+  for (const parts of rest) {
+    let i = 0;
+    while (i < n && i < parts.length && parts[i] === first![i]) i++;
+    n = i;
+  }
+  return first!.slice(0, n).join(path.sep) || path.sep;
+}
+
+/**
  * The runner entry next to this module: the bundled `skill-runner-child.js` in
- * a build (a tsup entry), or — when this module runs from TypeScript source
- * (tsx dev, vitest) — `skill-runner-child.ts` under tsx's loader.
+ * a build (a tsup entry), under the permission model; or — when this module
+ * runs from TypeScript source (tsx dev, vitest) — `skill-runner-child.ts` under
+ * tsx's loader, without it (tsx's transform needs a worker the model denies).
  */
 function runnerEntry(): { modulePath: string; execArgv: string[] } {
   const execArgv = [
@@ -177,9 +228,10 @@ function runnerEntry(): { modulePath: string; execArgv: string[] } {
   ];
   const here = import.meta.url;
   if (!here.endsWith(".ts")) {
+    const modulePath = fileURLToPath(new URL("./skill-runner-child.js", here));
     return {
-      modulePath: fileURLToPath(new URL("./skill-runner-child.js", here)),
-      execArgv,
+      modulePath,
+      execArgv: [...execArgv, ...runnerSandboxArgv(modulePath)],
     };
   }
   const tsxLoader = pathToFileURL(createRequire(here).resolve("tsx")).href;

@@ -216,14 +216,15 @@ POST /api/hub/documents/{documentId}/patch
 
 Ops: `upsert_section {id, title, body}` (one section by id), `replace_text {old,
 new}` (`old` must match **exactly once**, else 400 with the count), `append
-{body}`, `replace_all {content}`. An agent's edit is filed as a proposal (a
+{body}`, `replace_all {content}`, `set_title {title}` (renames the document, a
+human name). An agent's edit is filed as a proposal (a
 governance rule may apply it directly); a person's section (`owner="human"`) is
 never changed and an embed is never dropped unless you pass
 `"allowRemovingEmbeds": true` (403 otherwise). A moved document answers 409 and
 nothing is written: read again. An applied or approved edit reaches open editors
 (`document:content-replaced`), so they reload instead of overwriting it. `PATCH /api/hub/documents/{id}` with `content` is the same door with
-one `replace_all` — it cannot rename (a `title` is refused with 400; to rename an
-entity's document, update the entity's title). MCP: `synap_update_document`;
+one `replace_all` — it cannot rename (a `title` is refused with 400; to rename the
+document, send a `set_title` op to `POST /api/hub/documents/{id}/patch`). MCP: `synap_update_document`;
 full syntax in `document-embeds.md`.
 
 The reverse lookup is `entities WHERE documentId = ?`. Always attach the document to a meaningful entity (the meeting event, the project, the person) — a floating document is another orphan.
@@ -279,7 +280,7 @@ POST /api/hub/entities
 
 This creates a first-class decision entity linked to Project Eve. It shows up in traversals, can be superseded later (`supersededBy: newDecisionId`), and survives governance. Memory can't do any of that.
 
-**A decision the PERSON must make** — create it with `decisionStatus: "proposed"` and the pod asks them for you: pass `decisionOptions` (≤8 of `{label, value?, description?}`) and `recommendedOption` (an option's `value`, else its `label`); set `sourceSessionId` to keep the question in your session. Their answer UPDATES that decision — never create a second one. Every answered `confirm`/`choose` ask already files its decision (`slot.decisionId`): don't create one for it. A person-owned slot blocked on a decision is ANSWERED by them (Yes/No or a choice) — it is never closed by marking it done. **Before you recommend**, recall the user's past decisions (`synap_ask`, or find `decision` entities) so your pick follows their past choices.
+**A decision the PERSON must make** — create it with `decisionStatus: "proposed"` and the pod asks them for you: pass `decisionOptions` (≤8 of `{label, value?, description?}`) and `recommendedOption` (an option's `value`, else its `label`); set `sourceSessionId` to keep the question in your session. With no options the person sees its `title` with Accept / Reject, each saying what it does. So give it a short `title` (the decision itself, never "Decide: …") and a `summary` that says what the title does not. Only a decision YOU propose asks: a person's own proposed decision is their note, and the pod never asks them about it. Their answer UPDATES that decision — never create a second one. Every answered `confirm`/`choose` ask already files its decision (`slot.decisionId`): don't create one for it. A person-owned slot blocked on a decision is ANSWERED by them (Yes/No or a choice) — it is never closed by marking it done. **Before you recommend**, recall the user's past decisions (`synap_ask`, or find `decision` entities) so your pick follows their past choices.
 
 ### Post to the user's personal channel
 

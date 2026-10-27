@@ -10,11 +10,12 @@ import {
   askSlotOf,
   askStaleness,
   askView,
-  askerOf,
   formAnswerValues,
   formFieldErrors,
   initialFormDraft,
   nextRowKey,
+  relayCall,
+  relayWaitingView,
   slotCall,
   type AskSlot,
   type FormFieldView,
@@ -28,6 +29,10 @@ function slot(ask: Ask | null, over: Partial<AskSlot> = {}): AskSlot {
     ask,
     why: null,
     claimedDone: false,
+    blockedReason: null,
+    owedSince: null,
+    askerName: null,
+    askCause: null,
     ...over,
   };
 }
@@ -84,8 +89,11 @@ describe("askSlotOf — which needs-you rows are answered here", () => {
     why: "  ",
     claimedDone: true,
     ask: choose,
+    blockedReason: "decision",
+    occurredAt: "2026-10-20T09:00:00.000Z",
+    by: { label: " Claude Code " },
   };
-  it("reads an owed slot's question off its signal", () => {
+  it("reads an owed slot's question off its signal, asker and clock included", () => {
     expect(askSlotOf(owed)).toEqual({
       sessionId: "s1",
       label: "Pick the hook",
@@ -93,6 +101,26 @@ describe("askSlotOf — which needs-you rows are answered here", () => {
       ask: choose,
       why: null,
       claimedDone: true,
+      blockedReason: "decision",
+      owedSince: "2026-10-20T09:00:00.000Z",
+      askerName: "Claude Code",
+      askerId: null,
+      askCause: null,
+      pendingRelay: null,
+      keptOwedAt: null,
+      paramName: null,
+    });
+  });
+  it("carries the fields the card's fate and cause read", () => {
+    expect(
+      askSlotOf({
+        ...owed,
+        keptOwedAt: "2026-10-21T09:00:00.000Z",
+        paramName: "channel",
+      })
+    ).toMatchObject({
+      keptOwedAt: "2026-10-21T09:00:00.000Z",
+      paramName: "channel",
     });
   });
   it("leaves out a criterion slot, any other kind, and a slot with no session", () => {
@@ -103,12 +131,70 @@ describe("askSlotOf — which needs-you rows are answered here", () => {
 });
 
 describe("askView — one control per mode", () => {
-  it("confirm: its own prompt", () => {
-    expect(
-      askView(slot({ mode: "confirm", prompt: " Ship it? " })).control
-    ).toEqual({
+  it("confirm: the card's two answers — icon, tone, recommendation, consequence", () => {
+    const view = askView(
+      slot({
+        mode: "confirm",
+        prompt: " Ship it? ",
+        yes: { recommended: true, description: "Publishes today" },
+      })
+    );
+    expect(view.heading).toBe("Ship it?");
+    expect(view.control).toEqual({
       mode: "confirm",
-      prompt: "Ship it?",
+      answers: [
+        {
+          key: "yes",
+          label: "Yes",
+          description: "Publishes today",
+          recommended: true,
+          tone: "positive",
+          icon: "check",
+        },
+        {
+          key: "no",
+          label: "No",
+          description: null,
+          recommended: false,
+          tone: "neutral",
+          icon: "x",
+        },
+      ],
+    });
+  });
+
+  it("the founder's card: the question once, the cause named, age + fate as one mark", () => {
+    const title = "Four observations will confirm or kill H1 and H2";
+    const now = Date.parse("2026-10-26T12:00:00.000Z");
+    const view = askView(
+      slot(
+        { mode: "confirm", prompt: `Accept: ${title}?` },
+        {
+          label: `Decide: ${title}`,
+          why: `${title}. Dated and falsifiable.`,
+          blockedReason: "decision",
+          owedSince: "2026-10-18T12:00:00.000Z",
+          askCause: { kind: "decision", ref: { kind: "entity", id: "d1" } },
+        }
+      ),
+      now
+    );
+    expect(view.heading).toBe(`${title}?`);
+    expect(view.context).toBeNull();
+    expect(view.asker).toMatchObject({
+      kind: "cause",
+      label: "From a proposed decision",
+    });
+    expect(view.ageFate.label).toBe("Asked 8d ago · In Review later");
+    expect(view.note.label).toBe("Add a note");
+  });
+
+  it("a named asker is the agent's mark, with its session as the door", () => {
+    const view = askView(slot(choose, { askerName: "Claude Code" }));
+    expect(view.asker).toEqual({
+      kind: "agent",
+      name: "Claude Code",
+      sessionId: "11111111-1111-4111-8111-111111111111",
     });
   });
 
@@ -453,19 +539,114 @@ describe("a question that moved under the reader", () => {
   });
 });
 
-describe("askerOf / nextRowKey", () => {
-  it("names the session's agents, never an id", () => {
-    expect(askerOf([])).toBeNull();
-    expect(askerOf(undefined)).toBeNull();
-    expect(askerOf([{ name: "Claude" }])).toBe("Claude");
-    expect(
-      askerOf([{ name: "Claude" }, { name: "Codex" }, { name: "Gemini" }])
-    ).toBe("Claude, Codex or Gemini");
-  });
-
+describe("nextRowKey", () => {
   it("moves to the next row, else the previous, else nowhere", () => {
     expect(nextRowKey(["a", "b", "c"], "b")).toBe("c");
     expect(nextRowKey(["a", "b", "c"], "c")).toBe("b");
     expect(nextRowKey(["a"], "a")).toBeNull();
+  });
+});
+
+describe("a relayed answer waiting for the tap", () => {
+  const relay = {
+    text: "Yes",
+    quote: "yes, ship it friday",
+    relayedBy: "agent-1",
+    relayedAt: "2026-10-26T10:00:00.000Z",
+  };
+  const confirm: Ask = { mode: "confirm", prompt: "Deploy now?" };
+
+  it("reaches the slot from the needs-you signal", () => {
+    const s = askSlotOf({
+      kind: "owed-slot",
+      title: "Deploy",
+      target: { kind: "session", id: "s1" },
+      ask: confirm,
+      by: { id: "agent-1", label: "Claude Code" },
+      pendingRelay: relay,
+    });
+    expect(s?.pendingRelay).toEqual(relay);
+    expect(relayWaitingView(s!)).toEqual({
+      mark: {
+        tone: "warning",
+        label: "Relayed by Claude Code · needs your tap",
+        disposition: "awaiting_your_tap",
+      },
+      recorded: "Yes",
+      said: "You said “yes, ship it friday”",
+    });
+  });
+
+  it("a relay the wire did not carry whole is no relay, never a Confirm with no relayer", () => {
+    const s = askSlotOf({
+      kind: "owed-slot",
+      title: "Deploy",
+      target: { kind: "session", id: "s1" },
+      ask: confirm,
+      pendingRelay: { text: "Yes" },
+    });
+    expect(s?.pendingRelay).toBeNull();
+    expect(relayWaitingView(s!)).toBeNull();
+  });
+
+  it("headlines what Confirm records, as the answer's own button reads", () => {
+    const s = slot(
+      { mode: "confirm", yes: { label: "Ship it" } },
+      {
+        pendingRelay: {
+          ...relay,
+          value: { type: "confirm", confirmed: true },
+        },
+      }
+    );
+    expect(relayWaitingView(s)).toMatchObject({
+      recorded: "Ship it",
+      said: "You said “yes, ship it friday”",
+    });
+  });
+
+  it("the card's fate reads the relay and the kept-owed stamp", () => {
+    const now = Date.parse("2026-10-27T12:00:00.000Z");
+    const relayedToday = slot(confirm, {
+      owedSince: "2026-10-18T12:00:00.000Z",
+      pendingRelay: { ...relay, relayedAt: "2026-10-27T09:00:00.000Z" },
+    });
+    expect(askView(relayedToday, now).ageFate.fate.kind).not.toBe(
+      "review_later"
+    );
+    const kept = slot(confirm, {
+      owedSince: "2026-10-26T12:00:00.000Z",
+      keptOwedAt: "2026-10-27T08:00:00.000Z",
+    });
+    expect(askView(kept, now).ageFate.fate.kind).toBe("until_decided");
+    expect(askView(slot(confirm), now).ageFate.fate.kind).toBe(
+      "ends_with_session"
+    );
+  });
+
+  it("names the relayer only when it is the agent that asked", () => {
+    const other = slot(confirm, {
+      askerId: "agent-2",
+      askerName: "Scout",
+      pendingRelay: relay,
+    });
+    expect(relayWaitingView(other)?.mark.label).toBe(
+      "Relayed · needs your tap"
+    );
+    expect(relayWaitingView(slot(confirm))).toBeNull();
+  });
+
+  it("Confirm and Not what I said address the slot, nothing else", () => {
+    const s = slot(confirm, { pendingRelay: relay });
+    expect(relayCall(s, "confirm")).toEqual({
+      sessionId: s.sessionId,
+      expectedLabel: s.label,
+      confirmRelayed: true,
+    });
+    expect(relayCall(s, "reject")).toEqual({
+      sessionId: s.sessionId,
+      expectedLabel: s.label,
+      rejectRelayed: true,
+    });
   });
 });

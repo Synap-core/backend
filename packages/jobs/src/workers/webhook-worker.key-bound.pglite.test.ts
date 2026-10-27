@@ -17,7 +17,7 @@
  * liveness check that also drops session rows, a grant answer ignored (the
  * denied row), a resolver that is asked about the wrong subject or key, an
  * unregistered resolver read as "everything", and a delivery door that sends
- * for a key revoked after the job was queued.
+ * for a key revoked after the job was queued — or for an inbound source (0362).
  */
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
 import { randomUUID } from "node:crypto";
@@ -100,6 +100,11 @@ const grantReads = async (s: KeyGrantSubject) => {
 beforeAll(async () => {
   await h.client!.exec(ddlFor(webhookSubscriptions as unknown as PgTable));
   await h.client!.exec(ddlFor(apiKeys as unknown as PgTable));
+  // 0362's default (the generic DDL carries none): every row here is a
+  // delivery target, and both producers select `direction = 'outbound'`.
+  await h.client!.exec(
+    `alter table webhook_subscriptions alter column direction set default 'outbound'`
+  );
   const keyRows: Array<[string, boolean, string | null, string | null]> = [
     [KEY.live, true, null, null],
     [KEY.denied, true, null, null],
@@ -220,5 +225,38 @@ describe("the delivery door — liveness at send time", () => {
     await deliverWebhook(job(SUB.live));
     await deliverWebhook(job(SUB.session));
     expect(h.fetched).toHaveLength(2);
+  });
+});
+
+describe("the delivery door — direction at send time (0362)", () => {
+  // An INBOUND source is never a subscriber: a delivery queued for one (by a
+  // producer that forgot the direction rule) sends nothing. One row carries a
+  // url, so it is the direction check — not the missing url — that stops it.
+  const INBOUND = { withUrl: randomUUID(), noUrl: randomUUID() };
+  beforeAll(async () => {
+    for (const [id, url] of [
+      [INBOUND.withUrl, "https://hook.example/inbound"],
+      [INBOUND.noUrl, null],
+    ] as const) {
+      await q(
+        `insert into webhook_subscriptions (id, user_id, direction, name, url, event_types, secret, active, retry_config)
+         values ($1,$2,'inbound','GitHub',$3,'{}','sec',true,'{"maxRetries":0}'::jsonb)`,
+        [id, A, url]
+      );
+    }
+  });
+  const job = (subscriptionId: string) => ({
+    stage: "deliver" as const,
+    subscriptionId,
+    eventType: "entity.update.completed",
+    format: "event.v1" as const,
+    body: "{}",
+    deliveryId: randomUUID(),
+  });
+
+  it("does not send to an inbound source, even one carrying a url", async () => {
+    await deliverWebhook(job(INBOUND.withUrl));
+    await deliverWebhook(job(INBOUND.noUrl));
+    expect(h.fetched).toEqual([]);
   });
 });

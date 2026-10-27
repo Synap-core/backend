@@ -372,6 +372,9 @@ export { backfillEntityMediaCopies } from "./services/media-copy/backfill-media-
 export { backfillLibraryItemMedia } from "./services/media-copy/backfill-library-media.js";
 export { backfillDocumentTitleHeadings } from "./services/document-title/backfill-title-heading.js";
 export { registerEntityMediaCopyReactor } from "./services/media-copy/media-copy-reactor.js";
+// An automation's `record_observation` step reaches the ONE observation writer
+// through this (the jobs `observation-door` slot, filled at boot).
+export { recordObservationFromAutomation } from "./services/observations/record-observation-from-automation.js";
 // Dev loop (plan v5 T2): the observation door enqueues a fact the pod acts on;
 // this runner fills the jobs IoC slot (the merge sweeper). `recordPodDeployed`
 // is the pod's own `dev.deployed`, read at boot after a successful update.
@@ -440,6 +443,7 @@ export { registerSessionUnblockReactor } from "./notifications/session-unblock-r
 // reactor opens ONE owed ask slot for it, and retires it once the decision is
 // resolved elsewhere. See services/decisions/decision-ask-reactor.ts.
 export { registerDecisionAskReactor } from "./services/decisions/decision-ask-reactor.js";
+export { retireUnaskedDecisionAsks } from "./services/decisions/retire-unasked-decision-asks.js";
 export { registerAgentChoiceRedispatchReactor } from "./services/agent-dispatch/redispatch-on-choice.js";
 // Session recall runner — apps/api fills the @synap/jobs `registerSessionRecallRunner`
 // slot with it at boot.
