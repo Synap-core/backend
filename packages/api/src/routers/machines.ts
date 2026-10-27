@@ -37,6 +37,7 @@ import {
   loadManageableMachine,
   renameMachine,
   setMachineOwnKeyTtlDays,
+  setMachineRunsScripts,
 } from "../services/machine-roster.js";
 
 const MANAGE_COMPUTER_SIGNED_IN = "Manage a computer while signed in.";
@@ -109,6 +110,51 @@ export const machinesRouter = router({
         data: { kind: "machine_key_ttl", keyTtlDays: input.keyTtlDays },
       });
       return { status: "updated" as const };
+    }),
+
+  /**
+   * "Runs scripts" (code-runtime B0): this computer may lease its person's
+   * box runs (`/box-runs/*`, scope `box.runner` on its key). A person's act,
+   * signed in, like rename; turning it on widens what the computer's key may
+   * do, so it rides the same gate as revoke.
+   */
+  setRunsScripts: credentialProcedure
+    .input(z.object({ machineId: MachineIdShape, enabled: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      assertSignedInPerson(ctx, MANAGE_COMPUTER_SIGNED_IN);
+      const machine = await loadManageableMachine(
+        input.machineId,
+        ctx.userId,
+        await isPodAdmin(ctx.userId)
+      );
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        subjectType: "apiKey",
+        action: "update",
+        data: { machineUserId: machine.id, runsScripts: input.enabled },
+      });
+      if ("denied" in perm && perm.denied)
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      if ("proposalId" in perm)
+        return { status: "proposed" as const, proposalId: perm.proposalId };
+      const { keysUpdated } = await setMachineRunsScripts(
+        machine.id,
+        input.enabled
+      );
+      void auditLog({
+        subjectType: "apiKey",
+        action: "update",
+        phase: "completed",
+        subjectId: machine.id,
+        userId: ctx.userId,
+        workspaceId: null,
+        data: {
+          kind: "machine_runs_scripts",
+          enabled: input.enabled,
+          keysUpdated,
+        },
+      });
+      return { status: "updated" as const, runsScripts: input.enabled };
     }),
 
   /**

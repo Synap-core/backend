@@ -47,7 +47,9 @@
 
 import { AsyncResource } from "node:async_hooks";
 import {
+  and,
   db,
+  drizzleSql,
   eq,
   findRedeemableGrant,
   parseVaultReference,
@@ -63,6 +65,7 @@ import {
   type FailureErrorClass,
 } from "../../connectors/external-dispatch.js";
 import { SKILL_RUNTIME_VERSION } from "./skill-stdlib.js";
+import { visibleSkillsAnyWorkspaceWhere } from "./visibility.js";
 import type {
   RecordedEffect,
   SkillExecutionResult,
@@ -84,6 +87,41 @@ const logger = createLogger({ module: "run-skill-in-sandbox" });
 
 /** Scopes the in-process caller runs with — parity with the Hub Protocol doors. */
 const HUB_SCOPES = ["hub-protocol.read", "hub-protocol.write"];
+
+/** What `host.fetch` hands a skill of a response body, at most. */
+const HOST_FETCH_MAX_BODY_BYTES = 100_000;
+
+/**
+ * A response body, read as a stream up to `maxBytes` and then cancelled.
+ * `host.fetch` runs here, in the API process: reading the whole body first
+ * would let one skill's large download take the pod's memory, the failure the
+ * runner processes exist to contain.
+ */
+async function readBodyCapped(
+  response: Response,
+  maxBytes: number
+): Promise<{ body: string; truncated: boolean }> {
+  if (!response.body) return { body: "", truncated: false };
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let body = "";
+  let bytes = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return { body: body + decoder.decode(), truncated: false };
+      if (bytes + value.byteLength > maxBytes) {
+        body += decoder.decode(value.subarray(0, maxBytes - bytes));
+        return { body, truncated: true };
+      }
+      bytes += value.byteLength;
+      body += decoder.decode(value, { stream: true });
+    }
+  } finally {
+    // Stops the transfer when the cap cut it (a no-op once it ended).
+    reader.cancel().catch(() => undefined);
+  }
+}
 
 /**
  * Grant-gated vault redemption, server-derived exactly like `POST /vault/redeem`:
@@ -133,6 +171,52 @@ async function redeemVaultSecretDirect(
     if (err instanceof VaultGrantError) return null;
     throw err;
   }
+}
+
+/** The hostname a URL names, lowercased; null when it is not an http(s) URL. */
+function httpHostname(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  try {
+    const url = new URL(raw);
+    return url.protocol === "https:" || url.protocol === "http:"
+      ? url.hostname.toLowerCase()
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * May a skill point its `callProvider` call at `host` (`baseUrlOverride`, or
+ * an absolute `path`)?
+ * The connection's credential goes wherever the call goes, so the host must
+ * be one a person approved: in the skill's own `allowedHosts`, or one an
+ * active, approved declarative verb of the SAME tool already points at
+ * (`providerSpec.baseUrlOverride`: gmail_search's gmail.googleapis.com lets
+ * gmail_send use it). The pod twin of the Control Plane broker's rule
+ * (`provider-proxy-hosts.ts`), which pods with their own broker key never meet.
+ */
+async function providerHostApproved(
+  host: string,
+  provider: string,
+  allowedHosts: readonly string[],
+  operatorUserId: string
+): Promise<boolean> {
+  if (allowedHosts.some((h) => h.toLowerCase() === host)) return true;
+  const verbs = await db
+    .select({ providerSpec: skills.providerSpec })
+    .from(skills)
+    .where(
+      and(
+        eq(skills.status, "active"),
+        eq(skills.approved, true),
+        drizzleSql`${skills.providerSpec}->>'tool' = ${provider}`,
+        visibleSkillsAnyWorkspaceWhere(operatorUserId)
+      )
+    );
+  return verbs.some(
+    (v) => httpHostname(v.providerSpec?.baseUrlOverride) === host
+  );
 }
 
 /**
@@ -208,6 +292,17 @@ export async function runSkillInSandbox(args: {
         executionTimeMs: Date.now() - startTime,
       };
     }
+    // Only a code skill runs. An instruction skill keeps its Markdown in
+    // `code`, and its review shows it as text, not as code to run: whatever
+    // that column holds, it is never evaluated (a row labelled instruction
+    // that carries JS would otherwise run unseen).
+    if (skill.kind !== "code") {
+      return {
+        success: false,
+        error: `"${skill.name}" is not a code skill (its kind is ${skill.kind ?? "unset"}), so it has nothing to run. Nothing ran.`,
+        executionTimeMs: Date.now() - startTime,
+      };
+    }
     if (!skill.code) {
       return {
         success: false,
@@ -220,8 +315,11 @@ export async function runSkillInSandbox(args: {
     // runs: the runtime is the handler of a code skill, so this is the check
     // `executeCapability`'s propose branch defers to for a `run`. The pod's one
     // reader of that declaration; an absent or unreadable one runs unchanged.
-    const { checkVerbParameters, describeParameterRepair } =
-      await import("../capabilities/validate-verb-parameters.js");
+    const {
+      checkVerbParameters,
+      coerceDeclaredParameters,
+      describeParameterRepair,
+    } = await import("../capabilities/validate-verb-parameters.js");
     const paramCheck = checkVerbParameters(skill, args.parameters);
     if (paramCheck.status === "invalid") {
       return {
@@ -253,7 +351,9 @@ export async function runSkillInSandbox(args: {
 
     const result = await runIsolate({
       code: skill.code,
-      args: args.parameters ?? {},
+      // The values the check above accepted, as the declared types: "5" for
+      // a `number` arrives as 5, "false" for a `boolean` as false.
+      args: coerceDeclaredParameters(skill, args.parameters ?? {}),
       context: {
         userId: operatorUserId,
         // The author contract (`skill-runtime.d.ts`) types `threadId` a
@@ -352,7 +452,9 @@ export async function runIsolate(
   const { code, args, context, timeoutMs, runner, ...bridgeParams } = params;
   return (runner ?? getSkillRunner()).run(
     { code, args, context, timeoutMs },
-    buildSkillBridges(bridgeParams)
+    buildSkillBridges(bridgeParams),
+    // The pool's per-requester share: the acting agent, else the person.
+    { requester: bridgeParams.agentUserId ?? bridgeParams.operatorUserId }
   );
 }
 
@@ -497,7 +599,10 @@ export function buildSkillBridges(params: SkillBridgeParams): SkillBridges {
           ...(typeof optsStr === "string" ? JSON.parse(optsStr) : {}),
           signal: controller.signal,
         });
-        const body = await response.text();
+        const { body, truncated } = await readBodyCapped(
+          response,
+          HOST_FETCH_MAX_BODY_BYTES
+        );
         const headers: Record<string, string> = {};
         response.headers.forEach((value, key) => {
           headers[key] = value;
@@ -506,7 +611,8 @@ export function buildSkillBridges(params: SkillBridgeParams): SkillBridges {
           ok: response.ok,
           status: response.status,
           headers,
-          body: body.slice(0, 100_000), // cap response size
+          body,
+          ...(truncated ? { truncated: true } : {}),
         };
       } finally {
         clearTimeout(timeout);
@@ -546,6 +652,31 @@ export function buildSkillBridges(params: SkillBridgeParams): SkillBridges {
       typeof (opts as Record<string, unknown>).baseUrlOverride === "string"
         ? ((opts as Record<string, unknown>).baseUrlOverride as string)
         : undefined;
+    // Where the call goes is the skill's choice two ways: `baseUrlOverride`,
+    // or an absolute `path` (a vault tool with no `config.baseUrl` honours
+    // it). Checked before the dry-run record and the governance gate: a
+    // proposal would store either and replay it on approval.
+    const steered: Array<[string, string]> = [];
+    if (baseUrlOverride !== undefined)
+      steered.push(["baseUrlOverride", baseUrlOverride]);
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(path)) steered.push(["path", path]);
+    for (const [what, target] of steered) {
+      const host = httpHostname(target);
+      if (
+        !host ||
+        !(await providerHostApproved(
+          host,
+          provider,
+          allowedHosts,
+          operatorUserId
+        ))
+      ) {
+        throw new Error(
+          `callProvider: the ${what} host "${host ?? target}" is not a host this skill may reach. ` +
+            `Add it to the skill's allowedHosts (the person approves that change), or call the provider without it.`
+        );
+      }
+    }
     let headers: Record<string, string> | undefined;
     const rawHeaders =
       typeof opts === "object" && opts !== null

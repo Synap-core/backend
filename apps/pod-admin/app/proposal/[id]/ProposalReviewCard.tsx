@@ -128,6 +128,7 @@ import {
   type ApprovalRun,
 } from "../../_lib/approval-progress/approval-progress-model";
 import {
+  renderedRevision,
   useProposalDecision,
   type ApproveChoice,
 } from "./use-proposal-decision";
@@ -526,6 +527,7 @@ function DecisionButtons({
   const [pickedId, setPickedId] = useState<string | null>(null);
   const decision = useProposalDecision(p.id, onDecided, {
     onRejected: () => setRejecting(false),
+    expectedRevision: renderedRevision(p),
   });
   const { busy } = decision;
 

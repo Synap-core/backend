@@ -24,6 +24,11 @@ import type {
   RunPathTaken,
 } from "@synap/database";
 import type { SessionActivityWire } from "@synap-core/types/run-activity";
+import type {
+  BoxRunEvidence,
+  BoxRunRow,
+  BoxRunSpec,
+} from "@synap/database/schema";
 
 /**
  * Which ledger a run came from.
@@ -268,6 +273,34 @@ interface UnifiedRunDetailBase {
    * viewer may not read (`playbookDetail.sessionPrivate`).
    */
   sessionActivity?: SessionActivityWire | null;
+  /**
+   * A BOX run's own story (0356) — the script as queued, where it is, which
+   * computer runs it, and its evidence (log head/tail, files, blocked egress,
+   * installed packages). Null for every other run, a capability run included.
+   */
+  boxRun?: BoxRunDetail | null;
+}
+
+/** One box run, as the run object page reads it. */
+export interface BoxRunDetail {
+  /** Stored status, or `stalled` (running, lease expired) — read, never stored. */
+  status: BoxRunRow["status"] | "stalled";
+  skillId: string | null;
+  script: BoxRunSpec;
+  parameters: Record<string, unknown>;
+  /** The computer that leased it (its display name), once leased. */
+  computerName: string | null;
+  /** 1 = next to run; null once it has left the queue. */
+  queuePosition: number | null;
+  attempt: number;
+  stopRequested: boolean;
+  queuedAt: Date;
+  leasedAt: Date | null;
+  startedAt: Date | null;
+  finishedAt: Date | null;
+  lastHeartbeatAt: Date | null;
+  error: string | null;
+  evidence: BoxRunEvidence | null;
 }
 
 export interface AutomationRunDetail extends UnifiedRunDetailBase {
