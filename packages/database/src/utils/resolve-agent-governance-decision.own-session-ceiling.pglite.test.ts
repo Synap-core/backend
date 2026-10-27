@@ -245,3 +245,39 @@ describe("F2 — own-session bookkeeping and the daily write ceiling", () => {
     });
   });
 });
+
+/**
+ * The daily write ceiling is OPT-IN (founder, 2026-10-27): the same real
+ * ladder, with and without AGENT's ceiling row.
+ */
+describe("no ceiling row ⇒ no daily limit", () => {
+  const manyWritesToday = async (n: number) => {
+    await pg.exec(`DELETE FROM events;`);
+    await pg.exec(
+      `INSERT INTO events (agent_user_id, is_agent) SELECT '${AGENT}', true FROM generate_series(1, ${n});`
+    );
+  };
+
+  it("with no row, an agent past 500 writes today still auto-executes", async () => {
+    await pg.exec(`DELETE FROM governance_ceilings;`);
+    try {
+      await manyWritesToday(600);
+      expect(await countAgentWritesTodayUtc(db, AGENT)).toBe(600);
+      expect((await decide("entity", "create", null)).decision).toBe("execute");
+    } finally {
+      await pg.exec(`
+        INSERT INTO governance_ceilings (principal_kind, agent_user_id, scope_kind, axis, limit_value)
+          VALUES ('agent', '${AGENT}', 'pod', 'daily_write_count', ${LIMIT});
+      `);
+    }
+  });
+
+  it("with a row, the same agent is held at that row's limit", async () => {
+    await manyWritesToday(LIMIT);
+    const r = await decide("entity", "create", null);
+    expect(r.decision).toBe("propose");
+    expect((r as { reasonCode?: string }).reasonCode).toBe(
+      "DAILY_WRITE_CEILING"
+    );
+  });
+});

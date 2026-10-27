@@ -1239,14 +1239,16 @@ export interface ResolveDailyWriteCeilingInput {
  * `limit_value`, ranked EXACTLY like `resolveGovernanceRule`: principal
  * (agent=2, any=0) + scope (workspace=2, pod=0), ties broken by newest
  * `created_at`. Returns `DEFAULT_DAILY_WRITE_CEILING` (@synap/governance-policy —
- * the ONE source of the fallback) when no row matches.
+ * the ONE source of the fallback) when no row matches: `null`, NO LIMIT. The
+ * ceiling is opt-in; every caller treats `null` as "nothing to enforce, raise
+ * or recommend".
  *
  * Mirrors `findRedeemableGrant`'s active predicate: `revoked_at IS NULL AND
  * (expires_at IS NULL OR expires_at > now())`.
  */
 export async function resolveDailyWriteCeiling(
   input: ResolveDailyWriteCeilingInput
-): Promise<number> {
+): Promise<number | null> {
   return (
     await resolveCeiling({
       db: input.db,
@@ -1285,24 +1287,35 @@ export interface ResolveCeilingInput {
   subject?: { type: string; id: string } | null;
 }
 
-export interface ResolvedCeiling {
-  value: number;
+export interface ResolvedCeiling<V extends number | null = number> {
+  /** `null` only for an axis whose default is "no limit" and no row decided. */
+  value: V;
   /** `row` — a stored ceiling decided it; `default` — `CEILING_DEFAULTS`. */
   source: "row" | "default";
   ceilingId: string | null;
 }
 
 /**
+ * The value type an axis resolves to: `number | null` for an axis whose
+ * default is "no limit" (`CEILING_DEFAULTS[axis]` is null — `daily_write_count`),
+ * `number` for every axis with a numeric default. Derived from the table, so a
+ * caller of a numeric axis never has to handle a null it cannot get.
+ */
+export type CeilingValue<A extends GovernanceCeilingAxis> =
+  null extends (typeof CEILING_DEFAULTS)[A] ? number | null : number;
+
+/**
  * THE reader of every numeric governance limit. The most specific ACTIVE row
  * wins: subject match (+8) > principal (agent 2 · class 1 · any 0) > scope
  * (workspace 2 · pod 0), newest `created_at` breaking ties — the same ranking
  * `resolveGovernanceRule` uses, with the subject on top. A row naming another
- * subject never applies. No row ⇒ `CEILING_DEFAULTS[axis]`. A tighten-only
- * axis (`TIGHTEN_ONLY_CEILING_AXES`) never resolves above its default.
+ * subject never applies. No row ⇒ `CEILING_DEFAULTS[axis]` (`null` = no limit,
+ * for an opt-in axis). A tighten-only axis (`TIGHTEN_ONLY_CEILING_AXES`) never
+ * resolves above its default.
  */
-export async function resolveCeiling(
-  input: ResolveCeilingInput
-): Promise<ResolvedCeiling> {
+export async function resolveCeiling<A extends GovernanceCeilingAxis>(
+  input: ResolveCeilingInput & { axis: A }
+): Promise<ResolvedCeiling<CeilingValue<A>>> {
   const { db, axis, agentUserId, workspaceId, subject } = input;
   const candidates = (await db
     .select({
@@ -1368,13 +1381,23 @@ export async function resolveCeiling(
     }
   }
 
-  const fallback: number = CEILING_DEFAULTS[axis];
-  if (!best) return { value: fallback, source: "default", ceilingId: null };
+  const fallback: number | null = CEILING_DEFAULTS[axis];
+  // The casts below only restate `CeilingValue<A>`: `fallback` is null only
+  // for an axis whose CeilingValue admits null.
+  if (!best) {
+    return {
+      value: fallback as CeilingValue<A>,
+      source: "default",
+      ceilingId: null,
+    };
+  }
   const tightenOnly = (
     TIGHTEN_ONLY_CEILING_AXES as ReadonlyArray<GovernanceCeilingAxis>
   ).includes(axis);
   return {
-    value: tightenOnly ? Math.min(best.limitValue, fallback) : best.limitValue,
+    value: (tightenOnly && fallback !== null
+      ? Math.min(best.limitValue, fallback)
+      : best.limitValue) as CeilingValue<A>,
     source: "row",
     ceilingId: best.id,
   };
@@ -1770,6 +1793,8 @@ async function resolveForPrincipal(
   // rung the single decision site (no verdict is synthesised here). The replay
   // of a held-writes pack a person approved is not counted: the person already
   // answered the ceiling for those writes.
+  // No ceiling row for this agent ⇒ no limit (the default, opt-in axis): the
+  // count is not even taken.
   if (
     decision.verdict === "execute" &&
     !getHeldWritesApprovedBy() &&
@@ -1780,8 +1805,10 @@ async function resolveForPrincipal(
       agentUserId,
       workspaceId,
     });
-    const writesToday = await countAgentWritesTodayUtc(db, agentUserId);
-    if (writesToday >= limit) {
+    if (
+      limit !== null &&
+      (await countAgentWritesTodayUtc(db, agentUserId)) >= limit
+    ) {
       decision = decideAgentPolicy({
         ...basePolicyInput,
         ceilingVerdict: "propose",

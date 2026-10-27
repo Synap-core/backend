@@ -615,8 +615,7 @@ describe("resolveAgentGovernanceDecision — #4 origin-trust activation via chan
           workspaceId: null,
         },
       ],
-      [], // resolveDailyWriteCeiling candidates → default limit
-      [{ n: 0 }], // countAgentWritesTodayUtc → under ceiling
+      [], // resolveDailyWriteCeiling candidates → no row, no limit (no count read)
     ]);
 
     const result = await resolveAgentGovernanceDecision({
@@ -639,8 +638,7 @@ describe("resolveAgentGovernanceDecision — #4 origin-trust activation via chan
       [], // no governance rule
       // NO channel read is issued (channelId omitted → resolveOriginTrust returns
       // undefined before querying); the next queued rows are the ceiling reads.
-      [], // resolveDailyWriteCeiling candidates
-      [{ n: 0 }], // countAgentWritesTodayUtc
+      [], // resolveDailyWriteCeiling candidates → no row, no limit (no count read)
     ]);
 
     const result = await resolveAgentGovernanceDecision({
@@ -662,13 +660,25 @@ describe("resolveAgentGovernanceDecision — #4 origin-trust activation via chan
  * those writes, so rung 2.56 must not hold them again; outside that scope the
  * ceiling holds as before.
  */
+/** A `governance_ceilings` candidate row, as `resolveCeiling` selects it. */
+function ceilingRow(limitValue: number) {
+  return {
+    id: "ceiling-1",
+    principalKind: "agent",
+    scopeKind: "pod",
+    subjectId: null,
+    limitValue,
+    createdAt: new Date("2026-01-01T00:00:00Z"),
+  };
+}
+
 describe("resolveAgentGovernanceDecision — the daily ceiling and an approved held-writes replay", () => {
   const overCeiling = () =>
     makeDb([
       [{ userType: "agent", agentMetadata: {} }],
       [{ settings: {}, workspaceType: "personal" }],
       [], // no governance rule
-      [], // resolveDailyWriteCeiling candidates → default limit (500)
+      [ceilingRow(500)], // resolveDailyWriteCeiling candidates → a 500/day row
       [{ n: 600 }], // countAgentWritesTodayUtc → over the ceiling
     ]);
   const input = {
@@ -694,6 +704,54 @@ describe("resolveAgentGovernanceDecision — the daily ceiling and an approved h
     const result = await runWithHeldWritesApproved("pack-1", () =>
       resolveAgentGovernanceDecision({ db: overCeiling(), ...input })
     );
+    expect(result.decision).toBe("execute");
+  });
+});
+
+/**
+ * The daily write ceiling is OPT-IN (founder, 2026-10-27): with no
+ * `governance_ceilings` row there is no limit, however many writes the agent
+ * made today; a stored row still holds at its limit.
+ */
+describe("resolveAgentGovernanceDecision — no ceiling row means no daily limit", () => {
+  const input = {
+    agentUserId: "agent-1",
+    workspaceId: "ws-1",
+    subjectType: "entity",
+    action: "create",
+    preferAgentMetadataAutoApproveFor: true,
+  };
+  const ladder = (ceilings: unknown[], writesToday: number) => {
+    const queue: unknown[][] = [
+      [{ userType: "agent", agentMetadata: {} }],
+      [{ settings: {}, workspaceType: "personal" }],
+      [], // no governance rule
+      ceilings, // resolveDailyWriteCeiling candidates
+      [{ n: writesToday }], // countAgentWritesTodayUtc
+    ];
+    return { db: makeDb(queue), queue };
+  };
+
+  it("no row: an agent past 500 writes today still auto-executes, and its writes are not even counted", async () => {
+    const { db, queue } = ladder([], 1_116);
+    const result = await resolveAgentGovernanceDecision({ db, ...input });
+    expect(result.decision).toBe("execute");
+    // The count row was never read: no limit, nothing to count against.
+    expect(queue).toEqual([[{ n: 1_116 }]]);
+  });
+
+  it("a row: the agent is held at that row's limit (propose, DAILY_WRITE_CEILING)", async () => {
+    const { db } = ladder([ceilingRow(500)], 500);
+    const result = await resolveAgentGovernanceDecision({ db, ...input });
+    expect(result).toMatchObject({
+      decision: "propose",
+      reasonCode: "DAILY_WRITE_CEILING",
+    });
+  });
+
+  it("a row: under its limit the write still auto-executes", async () => {
+    const { db } = ladder([ceilingRow(500)], 499);
+    const result = await resolveAgentGovernanceDecision({ db, ...input });
     expect(result.decision).toBe("execute");
   });
 });
