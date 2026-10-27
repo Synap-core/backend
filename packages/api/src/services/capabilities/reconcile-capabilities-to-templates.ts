@@ -172,25 +172,12 @@ async function stampContainerMetadata(
  */
 async function approvedSkillsAnUpdateSwitchesOff(
   def: CapabilityDefinition,
-  memberSkillIds: string[],
+  installedSkills: ReadonlyArray<
+    InstalledSkillRow & { id: string; approved: boolean }
+  >,
   memberTools: ReadonlyArray<{ id: string; name: string }>
 ): Promise<string[]> {
-  if (memberSkillIds.length === 0) return [];
-  const approved = await db
-    .select({
-      id: skills.id,
-      name: skills.name,
-      kind: skills.kind,
-      code: skills.code,
-      providerSpec: skills.providerSpec,
-      parameters: skills.parameters,
-      executionMode: skills.executionMode,
-      timeoutSeconds: skills.timeoutSeconds,
-      urlPatterns: skills.urlPatterns,
-      metadata: skills.metadata,
-    })
-    .from(skills)
-    .where(and(inArray(skills.id, memberSkillIds), eq(skills.approved, true)));
+  const approved = installedSkills.filter((r) => r.approved === true);
   if (approved.length === 0) return [];
   const held = await db
     .select({ fromId: links.fromId, toId: links.toId })
@@ -223,9 +210,13 @@ async function approvedSkillsAnUpdateSwitchesOff(
       });
     if (
       requiresWidened ||
-      definitionSkillChangesExecution(s, row as Record<string, unknown>, {
-        officialSource: true,
-      })
+      definitionSkillChangesExecution(
+        s,
+        row as unknown as Record<string, unknown>,
+        {
+          officialSource: true,
+        }
+      )
     ) {
       out.push(row.name);
     }
@@ -404,13 +395,18 @@ export async function reconcileCapabilitiesToTemplates(
           )
         );
       const memberSkillIds = memberSkillLinks.map((l) => l.fromId);
-      const installedSkills: InstalledSkillRow[] =
+      const installedSkills: Array<
+        InstalledSkillRow & { id: string; approved: boolean }
+      > =
         memberSkillIds.length > 0
           ? await db
               // Every column `PROJECTED_SKILL_FIELDS` compares — a column the
               // comparator reads but the select omits is `undefined` on every
               // row, i.e. a diff that silently can never fire.
               .select({
+                // Read by `approvedSkillsAnUpdateSwitchesOff`, not the diff.
+                id: skills.id,
+                approved: skills.approved,
                 name: skills.name,
                 providerSpec: skills.providerSpec,
                 parameters: skills.parameters,
@@ -596,7 +592,7 @@ export async function reconcileCapabilitiesToTemplates(
       if (!opts.applyNotifyPolicy) {
         const switchedOff = await approvedSkillsAnUpdateSwitchesOff(
           cachedDef,
-          memberSkillIds,
+          installedSkills,
           memberToolRows
         );
         if (switchedOff.length > 0) {
