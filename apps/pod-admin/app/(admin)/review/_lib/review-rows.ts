@@ -30,10 +30,7 @@ import {
   type LensNeedsYouSignal,
 } from "@synap-core/types/lens";
 import { isObjectNavView } from "@synap-core/types/navigation";
-import {
-  deriveDuplicateReview,
-  needsIdentityChoice,
-} from "@synap-core/types/proposals";
+import { proposalNeedsItsPage } from "@synap-core/types/proposals";
 import type { Ask } from "@synap-core/types/ask";
 import { openIn, type Exit } from "../../../../lib/open-in";
 import { isUuid } from "../../../../lib/format";
@@ -223,45 +220,12 @@ function iso(at: string | Date | null | undefined): string | null {
 }
 
 /**
- * A skill create that would RUN something: code, or a declarative call on an
- * installed tool. Approving it turns it on (founder decision 2, 2026-10-25),
- * so its page, which shows the code whole, is the one review. The request
- * rides `data.data` (the gate's envelope); a flat payload is read too.
- */
-export function isExecutableSkillCreate(
-  f: Pick<ProposalFacts, "proposalType" | "targetType" | "data">
-): boolean {
-  if (f.targetType !== "skill") return false;
-  if (f.proposalType.slice(f.proposalType.lastIndexOf(".") + 1) !== "create")
-    return false;
-  const outer = (f.data ?? {}) as { data?: unknown };
-  const request = (
-    outer.data && typeof outer.data === "object" ? outer.data : outer
-  ) as { kind?: unknown; code?: unknown; providerSpec?: unknown };
-  return (
-    request.kind === "code" ||
-    request.kind === "declarative" ||
-    (typeof request.code === "string" && request.code.trim() !== "") ||
-    (!!request.providerSpec && typeof request.providerSpec === "object")
-  );
-}
-
-/**
  * A proposal only its own page can decide, so no row approves it inline and
- * no batch sweeps it in:
- *   - a create whose twin is a record waits for the person's choice
- *     (`needsIdentityChoice`): an inline or batch approve would keep both
- *     without showing the twin;
- *   - a skill create that would run something (`isExecutableSkillCreate`):
- *     approving it turns the code on, and only the page shows the code.
+ * no batch sweeps it in: THE rule every surface and the pod's batch door read
+ * (`proposalNeedsItsPage`, `@synap-core/types` page-only.ts).
  */
 function needsItsPage(f: ProposalFacts | undefined): boolean {
-  if (!f) return false;
-  return (
-    needsIdentityChoice({
-      duplicate: deriveDuplicateReview(f.data, { singleEntityCreate: true }),
-    }) || isExecutableSkillCreate(f)
-  );
+  return f !== undefined && proposalNeedsItsPage(f);
 }
 
 /** The members a cluster row decides, when the sample IS the whole cluster. */

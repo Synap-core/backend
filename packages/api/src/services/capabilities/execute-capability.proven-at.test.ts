@@ -24,8 +24,8 @@ const updates: Array<{ table: unknown; values: unknown; where: unknown }> = [];
 vi.mock("./execute-provider-verb.js", () => ({
   executeProviderVerb: vi.fn(async () => ({ ran: "provider" })),
 }));
-vi.mock("../skills/execute-skill-via-is.js", () => ({
-  executeSkillViaIS: vi.fn(async () => ({
+vi.mock("../skills/run-skill.js", () => ({
+  runSkill: vi.fn(async () => ({
     success: true,
     result: { ran: "is" },
   })),

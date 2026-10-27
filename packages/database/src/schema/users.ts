@@ -7,6 +7,7 @@
  * - Kratos remains source of truth for authentication
  */
 
+import type { AgentOrigin } from "@synap-core/types/agents";
 import type { AgentPostureName } from "@synap/governance-policy/postures";
 import { pgTable, text, boolean, timestamp, jsonb } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
@@ -17,14 +18,11 @@ import { userPreferences } from "./user-preferences.js";
 
 /**
  * Every value `users.created_via` may hold (null for humans and for agents
- * older than migration 0225). `@synap-core/types/agents` owns the canonical
- * list (`AGENT_ORIGINS`) and its classification (`AGENT_DIRECTION_BY_ORIGIN`);
- * this package cannot import it, so `agent-users.ts` holds a compile-time
- * equality floor between the two. A writer stamping a new value fails the
- * build here first.
+ * older than migration 0225): `@synap-core/types/agents` `AgentOrigin`, the
+ * one list (`AGENT_ORIGINS`), which `AGENT_DIRECTION_BY_ORIGIN` must classify
+ * entry by entry.
  */
-export type AgentCreatedVia =
-  "cli" | "ui" | "system" | "intelligence-service" | "device";
+export type AgentCreatedVia = AgentOrigin;
 
 export interface AgentMetadata {
   agentType: string;

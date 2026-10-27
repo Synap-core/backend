@@ -2,8 +2,8 @@
  * Capability execution — ONE shared core for "launch a registered capability".
  *
  * Resolves a capability VERB (verbId = backing skill name) or a skillId to its
- * skill, runs `gateCapabilityExecution`, and on `run` delegates to the IS sandbox
- * via `executeSkillViaIS`. Returns a discriminated result the callers map to their
+ * skill, runs `gateCapabilityExecution`, and on `run` hands a code skill to the
+ * one skill door (`runSkill`). Returns a discriminated result the callers map to their
  * own shape:
  *   - Hub REST `POST /capabilities/execute` → HTTP 200/202/403/404
  *   - MCP tool `run_capability` → a text result
@@ -116,8 +116,7 @@ import { emitAiDecision } from "../../utils/ai-feedback-events.js";
 import { gateCapabilityExecution } from "./gate-capability-execution.js";
 // Straight from the package, not the shim: the shim is what unit tests mock.
 import { approvalRefusesRun } from "@synap/capability-gate";
-import { executeSkillViaIS } from "../skills/execute-skill-via-is.js";
-import { runSkillInSandbox } from "../skills/run-skill-in-sandbox.js";
+import { runSkill } from "../skills/run-skill.js";
 import { executeProviderVerb } from "./execute-provider-verb.js";
 import { isProposedEnvelope } from "./proposed-envelope.js";
 import {
@@ -1695,7 +1694,7 @@ async function runResolvedSkillInner(
     return { kind: "run", skillId: skill.id, result };
   }
 
-  // A run-time connection pick can't reach the IS sandbox (`executeSkillViaIS`
+  // A run-time connection pick can't reach a code skill's sandbox (`runSkill`
   // takes no selector). Rather than SILENTLY running against the capability's
   // default credential — the wrong account, with no signal — refuse explicitly.
   // Declarative/provider verbs (above) honor the selector; for a code-backed
@@ -1728,12 +1727,10 @@ async function runResolvedSkillInner(
     return { kind: "run", skillId: skill.id, result: queued.result };
   }
 
-  // TIER 2 (code/instruction): execute the backing skill in an isolated-vm
-  // sandbox. Default (flag unset) = the IS sandbox over Hub Protocol HTTP
-  // (`executeSkillViaIS`). Behind `SANDBOX_LOCAL === "1"` = the in-process
-  // backend sandbox (`runSkillInSandbox`) — same bridges, no IS hop. The flag
-  // defaults OFF so production behaviour is unchanged until it is flipped.
-  // Both return the identical `SkillExecutionResult` envelope
+  // TIER 2 (code/instruction): execute the backing skill through the ONE skill
+  // door (`runSkill`, R2): the pod's own sandbox by default — the bridges in
+  // this process, the code in a supervised runner process — or the IS only
+  // under the `SKILL_RUNTIME=is` rollback. It returns the `SkillExecutionResult` envelope
   // `{success, result?, error?}`. UNWRAP it here so a caller receives the skill's
   // DATA (not the envelope) on success and the ONE `kind:"error"` channel on
   // failure — a success:false must never ride through as a `kind:"run"` result.
@@ -1744,26 +1741,18 @@ async function runResolvedSkillInner(
   // are then part of the same act and never file a second proposal; a call to
   // any OTHER tool is still gated. (The IS path forwards no agent identity, so
   // its in-skill calls are decided as the operator — no second agent gate.)
-  const envelope =
-    process.env.SANDBOX_LOCAL === "1"
-      ? await runSkillInSandbox({
-          skillId: skill.id,
-          userId: ctx.userId,
-          parameters,
-          workspaceId: ctx.workspaceId,
-          agentUserId: ctx.agentUserId ?? null,
-          sessionId: ctx.sessionId ?? null,
-          verbAct: {
-            skillId: skill.id,
-            toolIds: await requiredToolIdsOf(skill.id),
-          },
-        })
-      : await executeSkillViaIS({
-          skillId: skill.id,
-          userId: ctx.userId,
-          parameters,
-          workspaceId: ctx.workspaceId,
-        });
+  const envelope = await runSkill({
+    skillId: skill.id,
+    userId: ctx.userId,
+    parameters,
+    workspaceId: ctx.workspaceId,
+    agentUserId: ctx.agentUserId ?? null,
+    sessionId: ctx.sessionId ?? null,
+    verbAct: {
+      skillId: skill.id,
+      toolIds: await requiredToolIdsOf(skill.id),
+    },
+  });
   if (!envelope.success) {
     return {
       kind: "error",

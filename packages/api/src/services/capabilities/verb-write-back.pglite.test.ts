@@ -26,9 +26,8 @@ vi.mock("@synap/database", async (importOriginal) => {
   });
   return mocked;
 });
-vi.mock("../skills/execute-skill-via-is.js", async (importOriginal) => ({
-  ...(await importOriginal<Record<string, unknown>>()),
-  executeSkillViaIS: vi.fn(async () => ({
+vi.mock("../skills/run-skill.js", () => ({
+  runSkill: vi.fn(async () => ({
     success: true,
     result: holder.sandboxResult,
   })),

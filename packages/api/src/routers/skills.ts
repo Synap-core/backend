@@ -17,7 +17,6 @@ import {
   desc,
   inArray,
   getActingAgentUserId,
-  isDelegationHeaders,
   userVisibleWhere,
   type SQL,
 } from "@synap/database";
@@ -59,7 +58,7 @@ import { emitSideEffects } from "@synap/events";
 import { randomUUID } from "crypto";
 import { parseSkillMd } from "../skills/skill-md-parser.js";
 import { parseSkillToml } from "../skills/skill-toml-parser.js";
-import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
+import { runSkill } from "../services/skills/run-skill.js";
 import * as acorn from "acorn";
 import * as acornWalk from "acorn-walk";
 import {
@@ -1862,8 +1861,8 @@ export const skillsRouter = router({
   /**
    * Execute a skill by ID
    *
-   * Delegates execution to the Intelligence Hub which has the sandboxed
-   * executor. Updates execution metadata (count + lastTestedAt) on success.
+   * Runs through the one skill door (`runSkill`): the pod's sandbox unless
+   * SKILL_RUNTIME=is. Updates execution metadata (count + lastTestedAt) on success.
    */
   execute: protectedProcedure
     .input(
@@ -1976,42 +1975,26 @@ export const skillsRouter = router({
       }
       // decision === "run" → fall through to execute.
 
-      // Resolve the intelligence service from DB (workspace pref → user pref → default)
-      const { endpoint: hubUrl, serviceApiKey: hubApiKey } =
-        await resolveIntelligenceService({
-          userId,
-          workspaceId: skill.workspaceId ?? undefined,
-        });
-
+      // The ONE skill door (R2): the pod runs it unless SKILL_RUNTIME=is. The
+      // person's own run carries no agent and no verb act: an in-skill write is
+      // the person's, gated as theirs.
       let result: {
         success: boolean;
         result?: unknown;
         error?: string;
         executionTimeMs: number;
       };
-
       try {
-        const response = await fetch(`${hubUrl}/api/skills/execute`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-API-Key": hubApiKey,
-            // D4: the skill's hub calls run as `userId` on a per-run token.
-            ...isDelegationHeaders({ isUrl: hubUrl, operatorUserId: userId }),
-          },
-          body: JSON.stringify({
-            skillId: input.id,
-            userId,
-            parameters: input.input ?? {},
-          }),
+        const envelope = await runSkill({
+          skillId: input.id,
+          userId,
+          parameters: input.input ?? {},
+          workspaceId: skill.workspaceId ?? null,
         });
-
-        if (!response.ok) {
-          const text = await response.text().catch(() => "");
-          throw new Error(`Hub returned ${response.status}: ${text}`);
-        }
-
-        result = (await response.json()) as typeof result;
+        result = {
+          ...envelope,
+          executionTimeMs: envelope.executionTimeMs ?? 0,
+        };
       } catch (err) {
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
