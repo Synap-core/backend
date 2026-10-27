@@ -49,6 +49,7 @@ vi.mock("../../../utils/project-scope.js", () => ({
 }));
 
 import { ChatTurnStatus, chatTurns } from "@synap/database";
+import { boxRuns } from "@synap/database/schema";
 import { listRuns } from "../index.js";
 
 /**
@@ -72,6 +73,9 @@ function selectChain(rows: unknown[]) {
   };
   chain.from.mockImplementation((table: unknown) => {
     fromTables.push(table);
+    // The box_runs read (0356) is a typed ledger of its own: a chat-shaped
+    // row is not a box run, so it reads empty here.
+    if (table === boxRuns) chain.limit.mockResolvedValue([]);
     return chain;
   });
   chain.innerJoin.mockReturnValue(chain);

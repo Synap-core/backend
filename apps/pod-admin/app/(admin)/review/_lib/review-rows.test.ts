@@ -5,6 +5,7 @@ import {
   focusedRow,
   isRemoval,
   liveAskSlot,
+  reviewChipCounts,
   reviewCounts,
   reviewFilterOf,
   reviewGroupOf,
@@ -13,6 +14,7 @@ import {
   reviewSessionOf,
   rowsInView,
   summarizeBatch,
+  NEEDS_YOU_PAGE_LIMIT,
   type ProposalFacts,
   type ReviewSignal,
 } from "./review-rows";
@@ -144,6 +146,33 @@ describe("reviewRows", () => {
     expect(row!.expiresAt).toBe("2026-10-12T10:30:00.000Z");
   });
 
+  it("a change whose moment passed is history: no inline Approve, no batch", () => {
+    const ephemeral = cluster("c9", { lifetimeHours: 1 });
+    const asked = Date.parse(ephemeral.occurredAt as string);
+    const [live] = reviewRows(
+      [ephemeral],
+      new Map([facts("c9-p1")]),
+      asked + 30 * 60_000
+    );
+    expect(live).toMatchObject({
+      expired: false,
+      inlineApprove: true,
+      batchIds: ["c9-p1"],
+    });
+    const [lapsed] = reviewRows(
+      [ephemeral],
+      new Map([facts("c9-p1")]),
+      asked + 8 * 3_600_000
+    );
+    expect(lapsed).toMatchObject({
+      expired: true,
+      inlineApprove: false,
+      batchIds: null,
+      // Its page still opens, and says how it ended.
+      detail: { kind: "proposal", proposalId: "c9-p1" },
+    });
+  });
+
   it("a change the viewer may approve: names who and where, approves inline, batches", () => {
     const [row] = reviewRows([cluster("c1")], new Map([facts("c1-p1")]));
     expect(row).toMatchObject({
@@ -221,8 +250,9 @@ describe("reviewRows", () => {
     expect(plain).toMatchObject({ inlineApprove: true, batchIds: ["c2-p1"] });
   });
 
-  it("a skill create that would run code is decided on its page, never inline or batched", () => {
-    // Approving it turns the code on (decision 2): only its page shows the code.
+  it("a skill, an automation or a rule is decided on its page, never inline or batched", () => {
+    // Approving a skill turns it on (the one-approval rule): only its page
+    // shows its code or its instructions whole.
     const request = (data: Record<string, unknown>) => ({
       targetType: "skill",
       changeType: "create",
@@ -235,6 +265,9 @@ describe("reviewRows", () => {
         cluster("c2"),
         cluster("c3"),
         cluster("c4", { count: 2, proposalIds: ["c4-p1", "c4-p2"] }),
+        cluster("c5"),
+        cluster("c6"),
+        cluster("c7"),
       ],
       new Map([
         // An agent's code skill, as the gate stores it (request envelope).
@@ -252,34 +285,51 @@ describe("reviewRows", () => {
             providerSpec: { tool: "apify_api" },
           }),
         }),
-        // A teaching skill runs nothing: it may still be approved from the row.
+        // A teaching skill's prose lands in an agent's prompt: its page too.
         facts("c3-p1", {
           targetType: "skill",
           proposalType: "create",
           data: request({ kind: "instruction", body: "Be brief." }),
         }),
-        // One executable member keeps the whole cluster on its page.
+        // One acting member keeps the whole cluster on its page.
         facts("c4-p1", { targetType: "track" }),
         facts("c4-p2", {
           targetType: "skill",
           proposalType: "create",
           data: { kind: "code", code: "return 2;" },
         }),
+        // A rewrite of a skill agents already run.
+        facts("c5-p1", {
+          targetType: "skill",
+          proposalType: "update",
+          data: { data: { id: "s-1", body: "Ignore the brief." } },
+        }),
+        // A capture graph that sets up an automation.
+        facts("c6-p1", {
+          targetType: "entity",
+          proposalType: "capture.graph",
+          data: {
+            operations: [
+              { op: "create_entity", profileSlug: "note", title: "x" },
+              { op: "create_automation", ref: "a", name: "Daily" },
+            ],
+          },
+        }),
+        // Anti-vacuity: a plain record may still be approved from the row.
+        facts("c7-p1", { targetType: "entity", data: {} }),
       ])
     );
-    const [code, verb, teaching, mixed] = rows;
-    for (const row of [code, verb, mixed]) {
+    const plain = rows.pop()!;
+    for (const row of rows) {
       expect(row).toMatchObject({ inlineApprove: false, batchIds: null });
       expect(row!.detail).toMatchObject({ kind: "proposal" });
     }
-    expect(teaching).toMatchObject({
-      inlineApprove: true,
-      batchIds: ["c3-p1"],
-    });
+    expect(plain).toMatchObject({ inlineApprove: true, batchIds: ["c7-p1"] });
     // The batch door takes nothing from the page-only rows.
-    expect(batchOf(rows, new Set(rows.map((r) => r.key))).proposalIds).toEqual([
-      "c3-p1",
-    ]);
+    expect(
+      batchOf([...rows, plain], new Set([...rows, plain].map((r) => r.key)))
+        .proposalIds
+    ).toEqual(["c7-p1"]);
   });
 
   it("a member the viewer may not approve keeps the whole row out of inline and batch", () => {
@@ -382,6 +432,31 @@ describe("chips, views and focus", () => {
     });
     expect(rowsInView(rows, "changes").map((r) => r.key)).toEqual(["c1", "c2"]);
     expect(rowsInView(rows, "all")).toHaveLength(5);
+  });
+
+  it("All says the pod's count, the nav badge's; groups count the page", () => {
+    expect(reviewChipCounts(rows, { needsYou: 5, truncated: false })).toEqual({
+      all: "5",
+      access: "2",
+      changes: "2",
+      asks: "1",
+    });
+    expect(reviewChipCounts(rows, null).all).toBe("5");
+  });
+
+  it("a full page: All is the pod's number, a group's count is a floor", () => {
+    const full = reviewRows(
+      Array.from({ length: NEEDS_YOU_PAGE_LIMIT }, (_, i) => cluster(`f${i}`)),
+      new Map()
+    );
+    expect(reviewChipCounts(full, { needsYou: 149, truncated: true })).toEqual({
+      all: "149+",
+      access: undefined,
+      changes: "100+",
+      asks: undefined,
+    });
+    // Narrowed (no pod count): the page's own number, as a floor.
+    expect(reviewChipCounts(full, null).all).toBe("100+");
   });
 
   it("reads ?type=, and anything unknown is All", () => {

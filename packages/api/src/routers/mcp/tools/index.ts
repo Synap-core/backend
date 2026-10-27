@@ -19,6 +19,10 @@ import { toSafeToolError, validateUuidArgs } from "../tool-errors.js";
 import { USER_OBSERVATION_CATEGORIES } from "../../../services/knowledge/remember-fact.js";
 import { ASK_DETAILS } from "../../../services/knowledge/synthesize.js";
 import { SESSION_KINDS } from "../../../services/focus-sessions/session-kind.js";
+import {
+  WORK_GRAPH_DEFAULT_WINDOW_HOURS,
+  WORK_GRAPH_MAX_WINDOW_HOURS,
+} from "../../../services/focus-sessions/work-graph-window.js";
 import { ROOM_POST_KINDS } from "../../../services/messaging/room-post-kind.js";
 import {
   SESSION_POST_INTENTS,
@@ -2788,7 +2792,7 @@ export const tools = {
             subjectEntityId: {
               type: "string",
               description:
-                "Optional: only sessions ABOUT this entity (the subject-spine anchor).",
+                "Optional: only sessions ON this entity — its subject (the subject-spine anchor), or a worker session that targets it.",
             },
             trackId: {
               type: "string",
@@ -2830,6 +2834,55 @@ export const tools = {
               default: 0,
               description:
                 "Rows to skip — pass the previous reply's `nextOffset` to read the next page. No `nextOffset` in a reply means it was the last page.",
+            },
+          },
+          required: [],
+        },
+      },
+      {
+        name: "synap_get_work_graph",
+        annotations: {
+          title: "Get the work graph",
+          readOnlyHint: true,
+          openWorldHint: false,
+        },
+        description:
+          "The whole map of YOUR work in one read — read-only. Every OPEN session, plus every session settled in the last `windowHours` (default 72), plus the far end of every edge: `nodes`, flat `edges` (`blocked_by` from waiter to blocker, `spawned_from` child to parent, `waits_on_output`, `triggered`, `updated`), `sections` (an edge read that FAILED is `unavailable`, never an empty list) and `window` (`truncated` + `omitted` when the 500-session ceiling cut). Use it instead of one `synap_get_session` per session to see what waits on what. Pod-wide unless you narrow to a workspace or project.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            windowHours: {
+              type: "number",
+              default: WORK_GRAPH_DEFAULT_WINDOW_HOURS,
+              description: `Settled sessions from this many hours back, 1–${WORK_GRAPH_MAX_WINDOW_HOURS}. Open sessions are in the graph whatever their age.`,
+            },
+            workspaceId: {
+              type: "string",
+              description: "Optional: only sessions in this workspace.",
+            },
+            projectId: {
+              type: "string",
+              description: "Optional: only sessions scoped to this project.",
+            },
+            kind: {
+              type: "string",
+              // DERIVED from the ONE vocabulary, as synap_list_sessions.
+              enum: [...SESSION_KINDS, "all"],
+              description:
+                "Which population is in the window. 'work', 'run', 'receipt', or 'all' (default). Far ends of edges are any kind.",
+            },
+            lens: {
+              type: "string",
+              enum: ["default", "triage", "all"],
+              description:
+                "'all' (default) = every session. 'default' hides agent drafts not yet accepted by a person; 'triage' = only those.",
+            },
+            detail: {
+              type: "string",
+              enum: ["lean", "full"],
+              default: "lean",
+              description:
+                "'lean' (default) = per node id, title, status, kind, parentSessionId, trackId, projectId, workspaceId, updatedAt, inWindow and the next move (kind, actor, label). 'full' = the whole list row per node: large.",
             },
           },
           required: [],
@@ -5756,6 +5809,51 @@ export const tools = {
               maximum: 300,
               description:
                 "Code skills: how long one run may take, in seconds (default 30, max 300).",
+            },
+            executionMode: {
+              type: "string",
+              enum: ["sync", "box"],
+              description:
+                "'box' = a Python or Node SCRIPT with packages that runs on the person's own computer in a fresh box (no pod access, no secrets; files written to /out come back on the run). Needs `box`. Default 'sync' = the in-pod JavaScript sandbox (API glue).",
+            },
+            box: {
+              type: "object",
+              description:
+                "Box scripts only. The reviewer approves exactly this with the code.",
+              properties: {
+                language: { type: "string", enum: ["python", "node"] },
+                entrypoint: {
+                  type: "string",
+                  description:
+                    "File name the code is saved as (default main.py / main.mjs).",
+                },
+                packages: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    properties: {
+                      name: { type: "string" },
+                      version: {
+                        type: "string",
+                        description: "Exact version, e.g. 2.2.3 (no ranges).",
+                      },
+                    },
+                    required: ["name", "version"],
+                  },
+                },
+                hosts: {
+                  type: "array",
+                  items: { type: "string" },
+                  description:
+                    "Hostnames the script may reach while it runs (e.g. api.example.com); everything else is blocked.",
+                },
+                limits: {
+                  type: "object",
+                  description:
+                    "Optional: wallSeconds (≤3600, default 900), cpus (≤2), memoryMb (≤2048), diskMb (≤8192), outMb (≤200).",
+                },
+              },
+              required: ["language"],
             },
           },
           required: ["name"],

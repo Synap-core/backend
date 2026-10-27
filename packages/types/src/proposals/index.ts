@@ -608,7 +608,23 @@ export interface ProposalReviewGraph {
     op: CompositeUpdateOperation["op"];
     kind: "skill" | "automation" | "rule" | "playbook" | "view" | "entity";
     targetId: string;
-    fields: Array<{ key: string; value: string; truncated: boolean }>;
+    /**
+     * The row's name, when the pod read it for this viewer (a skill today):
+     * a rewrite names WHICH skill it rewrites. Absent = not read.
+     */
+    targetName?: string;
+    fields: Array<{
+      key: string;
+      value: string;
+      truncated: boolean;
+      /**
+       * What the field holds NOW, excerpted like `value`: read from the live
+       * row while the proposal is still pending (a skill today). Absent =
+       * not read, or empty now.
+       */
+      before?: string;
+      beforeTruncated?: boolean;
+    }>;
   }>;
 }
 
@@ -1205,6 +1221,24 @@ export function isPlanOperation(
   op: CompositeProposalOperation
 ): op is CompositePlanOperation {
   return (PLAN_OPERATION_KINDS as readonly string[]).includes(op.op);
+}
+
+/**
+ * The op kinds that set up something that ACTS ON ITS OWN once approved: a
+ * skill an agent loads or runs, an automation that fires, a rule an agent
+ * follows. Read by the page-only rule (`proposalPageOnlyReason`).
+ */
+export const ACTING_OPERATION_KINDS = [
+  "create_skill",
+  "create_automation",
+  "create_rule",
+  "update_skill",
+  "update_automation",
+  "update_rule",
+] as const;
+
+export function isActingOperation(op: CompositeProposalOperation): boolean {
+  return (ACTING_OPERATION_KINDS as readonly string[]).includes(op.op);
 }
 
 /** True when the batch carries any plan op — it then applies all-or-none. */

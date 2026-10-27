@@ -2,7 +2,7 @@
 
 # MCP tools
 
-The pod's MCP server lists 101 tools. A new agent key lists the `entry` tools; the others arrive by group when an agent calls `synap_load_skill` with `tools:<group>` (or `tools:builder` for every group). A group narrows what is listed; it is not a permission. A call still runs under the key's scopes and the pod's governance.
+The pod's MCP server lists 102 tools. A new agent key lists the `entry` tools; the others arrive by group when an agent calls `synap_load_skill` with `tools:<group>` (or `tools:builder` for every group). A group narrows what is listed; it is not a permission. A call still runs under the key's scopes and the pod's governance.
 
 | Tool                                                                      | Title                             | Group        | Read-only |
 | ------------------------------------------------------------------------- | --------------------------------- | ------------ | --------- |
@@ -43,6 +43,7 @@ The pod's MCP server lists 101 tools. A new agent key lists the `entry` tools; t
 | [`synap_get_session`](#synap_get_session)                                 | Get focus session                 | sessions     | yes       |
 | [`synap_wait_for_answer`](#synap_wait_for_answer)                         | Wait for the person's answer      | entry        | no        |
 | [`synap_list_sessions`](#synap_list_sessions)                             | List focus sessions               | sessions     | yes       |
+| [`synap_get_work_graph`](#synap_get_work_graph)                           | Get the work graph                | sessions     | yes       |
 | [`synap_list_agents`](#synap_list_agents)                                 | List agents and computers         | sessions     | yes       |
 | [`synap_create_cell`](#synap_create_cell)                                 | Define cell                       | build        | no        |
 | [`synap_promote_cell_to_renderer`](#synap_promote_cell_to_renderer)       | Promote cell to renderer          | build        | no        |
@@ -675,7 +676,7 @@ List YOUR focus sessions, newest first — read-only. Use it to see what work is
 | `status`          | enum   | no       | 'open' (default) = every non-terminal session (active/paused/forming/scheduled). 'all' = no status filter. Or name one exact status — incl. 'stale' (reaper-marked, reopenable). One of: `active`, `paused`, `closed`, `forming`, `scheduled`, `failed`, `cancelled`, `stale`, `open`, `all`. |
 | `workspaceId`     | string | no       | Optional: only sessions in this workspace.                                                                                                                                                                                                                                                    |
 | `projectId`       | string | no       | Optional: only sessions scoped to this project.                                                                                                                                                                                                                                               |
-| `subjectEntityId` | string | no       | Optional: only sessions ABOUT this entity (the subject-spine anchor).                                                                                                                                                                                                                         |
+| `subjectEntityId` | string | no       | Optional: only sessions ON this entity — its subject (the subject-spine anchor), or a worker session that targets it.                                                                                                                                                                         |
 | `trackId`         | string | no       | Optional: only sessions in this track.                                                                                                                                                                                                                                                        |
 | `detail`          | enum   | no       | 'lean' (default) = id, title, status, kind, trackId, projectId, workspaceId, updatedAt per row. 'full' = every column (goal, criteria, stages, metadata…): large, use `synap_get_session` for one session instead. One of: `lean`, `full`.                                                    |
 | `playbookId`      | string | no       | Optional: only runs of this playbook DEFINITION. Pair with kind 'run' or 'all' — flow-linked rows are runs, so under the default nothing would match.                                                                                                                                         |
@@ -683,6 +684,21 @@ List YOUR focus sessions, newest first — read-only. Use it to see what work is
 | `kind`            | enum   | no       | Which population. 'work' = units of work a person owns. 'run' = a playbook or automation execution. 'receipt' = the container an agent's proposals were filed under. 'all' (default) = no filter. Every row carries its own `kind` either way. One of: `work`, `run`, `receipt`, `all`.       |
 | `limit`           | number | no       | Page size, 1–50.                                                                                                                                                                                                                                                                              |
 | `offset`          | number | no       | Rows to skip — pass the previous reply's `nextOffset` to read the next page. No `nextOffset` in a reply means it was the last page.                                                                                                                                                           |
+
+## synap_get_work_graph
+
+**Get the work graph** · Group: `sessions` · readOnlyHint: true · openWorldHint: false
+
+The whole map of YOUR work in one read — read-only. Every OPEN session, plus every session settled in the last `windowHours` (default 72), plus the far end of every edge: `nodes`, flat `edges` (`blocked_by` from waiter to blocker, `spawned_from` child to parent, `waits_on_output`, `triggered`, `updated`), `sections` (an edge read that FAILED is `unavailable`, never an empty list) and `window` (`truncated` + `omitted` when the 500-session ceiling cut). Use it instead of one `synap_get_session` per session to see what waits on what. Pod-wide unless you narrow to a workspace or project.
+
+| Parameter     | Type   | Required | Description                                                                                                                                                                                                                             |
+| ------------- | ------ | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `windowHours` | number | no       | Settled sessions from this many hours back, 1–720. Open sessions are in the graph whatever their age.                                                                                                                                   |
+| `workspaceId` | string | no       | Optional: only sessions in this workspace.                                                                                                                                                                                              |
+| `projectId`   | string | no       | Optional: only sessions scoped to this project.                                                                                                                                                                                         |
+| `kind`        | enum   | no       | Which population is in the window. 'work', 'run', 'receipt', or 'all' (default). Far ends of edges are any kind. One of: `work`, `run`, `receipt`, `all`.                                                                               |
+| `lens`        | enum   | no       | 'all' (default) = every session. 'default' hides agent drafts not yet accepted by a person; 'triage' = only those. One of: `default`, `triage`, `all`.                                                                                  |
+| `detail`      | enum   | no       | 'lean' (default) = per node id, title, status, kind, parentSessionId, trackId, projectId, workspaceId, updatedAt, inWindow and the next move (kind, actor, label). 'full' = the whole list row per node: large. One of: `lean`, `full`. |
 
 ## synap_list_agents
 
@@ -1652,6 +1668,8 @@ Author a skill: Documentation (always) + OPTIONAL code. Send `body` alone for a 
 | `workspaceId`    | string        | no       | Optional workspace to scope the skill to (default: pod-wide).                                                                                                                                                                                                                                                                                             |
 | `requiredTools`  | array<string> | no       | Code skills: the installed tools the code calls with callProvider, by name (e.g. ['apify_api']). The reviewer approves them with the skill; a run's own calls to these tools then ride the verb's approval instead of filing a second proposal.                                                                                                           |
 | `timeoutSeconds` | integer       | no       | Code skills: how long one run may take, in seconds (default 30, max 300).                                                                                                                                                                                                                                                                                 |
+| `executionMode`  | enum          | no       | 'box' = a Python or Node SCRIPT with packages that runs on the person's own computer in a fresh box (no pod access, no secrets; files written to /out come back on the run). Needs `box`. Default 'sync' = the in-pod JavaScript sandbox (API glue). One of: `sync`, `box`.                                                                               |
+| `box`            | object        | no       | Box scripts only. The reviewer approves exactly this with the code.                                                                                                                                                                                                                                                                                       |
 | `sessionId`      | string        | no       | Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error. |
 
 ## synap_update_skill

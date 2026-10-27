@@ -61,6 +61,8 @@ import {
   deriveDuplicateReview,
   identityResolutionByRefFor,
   needsIdentityChoice,
+  pageOnlyReasonActs,
+  proposalPageOnlyReason,
   resolveProposalAction,
   type DuplicateItemChoice,
   type ProposalDuplicateReview,
@@ -79,6 +81,8 @@ import { ExitFallback } from "../../../lib/exit-link";
 import { formatRelative, formatTimestamp, isUuid } from "../../../lib/format";
 import { trpc } from "../../../lib/trpc";
 import { navItem } from "../../../lib/console-nav";
+import { proposalExpiresAt, proposalLapsed } from "../../_lib/proposal-expiry";
+import { mediaAlt } from "../../_lib/media/stored-media-model";
 import { useConsoleRole } from "../../(admin)/components/side-nav-role";
 import { AdvancedPanel } from "../../_lib/object/advanced-panel";
 import { kindIcon } from "../../_lib/object/kind-icon";
@@ -96,9 +100,14 @@ import {
   TwinDoors,
   TwinVerbs,
 } from "./DuplicateChoice";
-import { PartEdgeList, ProposedRecordCard } from "./ProposedRecordCard";
+import {
+  PartEdgeList,
+  ProposedRecordCard,
+  RecordGroupList,
+} from "./ProposedRecordCard";
 import { ProposalSessionContext } from "./ProposalSessionContext";
-import { compositeItems } from "./composite-parts-model";
+import { compositeItems, type GraphItemKey } from "./composite-parts-model";
+import { recordGroups } from "./record-groups";
 import { proposalHeading } from "./proposal-heading";
 import { proposalProfileSlug } from "./proposal-subject-kind";
 import { proposalRequesterParts } from "./proposal-requester";
@@ -128,6 +137,7 @@ import {
   type ApprovalRun,
 } from "../../_lib/approval-progress/approval-progress-model";
 import {
+  renderedRevision,
   useProposalDecision,
   type ApproveChoice,
 } from "./use-proposal-decision";
@@ -139,6 +149,27 @@ import { useRecordDefinitions } from "./use-record-definitions";
  */
 export function isActionable(status: string): boolean {
   return status === "pending" || status === "approval_failed";
+}
+
+/**
+ * The status the review draws: a pending proposal whose moment passed is
+ * Expired — history, with no Approve — even before the pod's expiry sweep
+ * writes it (`proposal-expiry.ts`).
+ */
+export function reviewStatus(
+  p: { status?: unknown; createdAt?: unknown; lifetimeHours?: unknown },
+  now: number = Date.now()
+): string {
+  const status = String(p.status ?? "pending");
+  if (status !== "pending") return status;
+  const at =
+    typeof p.createdAt === "string" || p.createdAt instanceof Date
+      ? p.createdAt
+      : null;
+  const lifetime = typeof p.lifetimeHours === "number" ? p.lifetimeHours : null;
+  return proposalLapsed(proposalExpiresAt(at, lifetime), now)
+    ? "expired"
+    : status;
 }
 
 /** The reads one proposal review needs. */
@@ -441,6 +472,13 @@ function terminalOutcome(status: string): {
         icon: <X className="h-6 w-6" strokeWidth={2.2} />,
         message: "This change was undone after it was applied.",
       };
+    case "expired":
+      return {
+        tone: "muted",
+        icon: <Clock className="h-6 w-6" strokeWidth={2.2} />,
+        message:
+          "Its moment passed before anyone decided — nothing was applied.",
+      };
     default:
       return {
         tone: "muted",
@@ -526,6 +564,7 @@ function DecisionButtons({
   const [pickedId, setPickedId] = useState<string | null>(null);
   const decision = useProposalDecision(p.id, onDecided, {
     onRejected: () => setRejecting(false),
+    expectedRevision: renderedRevision(p),
   });
   const { busy } = decision;
 
@@ -619,9 +658,12 @@ function DecisionButtons({
         {resume ? "Resume" : "Approve"}
       </Button>
       {rejectButton}
-      {mode.kind === "plain" && (
-        <AlwaysApproveMenu proposal={p} disabled={busy} onDone={onDecided} />
-      )}
+      {/* Never widen autonomy beside the approval of something that acts on
+          its own: that moment is for reading it, not for "always". */}
+      {mode.kind === "plain" &&
+        !pageOnlyReasonActs(proposalPageOnlyReason(p)) && (
+          <AlwaysApproveMenu proposal={p} disabled={busy} onDone={onDecided} />
+        )}
       {undoChip}
       {waiting && (
         <span className="text-[12px] text-foreground/60">
@@ -681,6 +723,14 @@ function WhoDecides({ identity }: { identity?: string }) {
 
 // ─── The review ──────────────────────────────────────────────────────────────
 
+/** The graph parts that act on their own once approved: never folded. */
+const ACTING_SOURCES: ReadonlySet<GraphItemKey> = new Set<GraphItemKey>([
+  "skills",
+  "automations",
+  "rules",
+  "updates",
+]);
+
 /** The stored payload's capture-graph operations, when it is a graph. */
 function isGraphPayload(payload: unknown): boolean {
   return (
@@ -732,7 +782,7 @@ export function ProposalReviewBody({
    */
   afterDecision?: ReactNode;
 }) {
-  const status = String(p.status ?? "pending");
+  const status = reviewStatus(p);
   const payload = p.request.data ?? p.data;
   const { appConnect } = proposalHeading(p, payload);
   // A document edit carries its own before / after: the reviewer reads the
@@ -807,6 +857,12 @@ export function ProposalReviewBody({
     !graph && action === "create" && p.targetType === "entity"
       ? proposedEntityMedia(payload)
       : null;
+  const recordMediaAlt = recordMedia
+    ? mediaAlt(
+        (payload as { title?: unknown }).title,
+        (payload as { properties?: Record<string, unknown> | null }).properties
+      )
+    : undefined;
 
   /* The twin(s) the pod's duplicate door found, read with the ONE derivation.
      `duplicateCheck` rides the TOP of the stored payload (`p.data`), beside
@@ -857,6 +913,19 @@ export function ProposalReviewBody({
   /* A single create's twins sit under its own card; a graph item's sit inside
      that item's card, with its choice. */
   const twinsUnderCard = flatTwins.length > 0 && records.length === 1;
+  /* One group per kind, capped; what acts on its own and what still owes a
+     choice are never folded. */
+  const actingRefs = new Set(
+    graphItems.flatMap((item) =>
+      item.shape === "record" && ACTING_SOURCES.has(item.source)
+        ? [item.record.ref]
+        : []
+    )
+  );
+  const groups = recordGroups(
+    records,
+    (record) => actingRefs.has(record.ref) || itemByRef.has(record.ref)
+  );
   const orphanItems = (duplicate?.items ?? []).filter(
     (item) => !records.some((r) => r.ref === item.forRef)
   );
@@ -899,43 +968,53 @@ export function ProposalReviewBody({
         </Section>
       ) : records.length > 0 ? (
         <div className="flex flex-col gap-3">
-          {records.map((record) => {
-            const item = itemByRef.get(record.ref);
-            return (
-              <ProposedRecordCard
-                key={record.ref}
-                record={record}
-                media={recordMedia}
-              >
-                {twinsUnderCard && (
-                  <div className="border-t border-foreground/[0.06] pt-3">
-                    <TwinDoors
-                      candidates={flatTwins}
-                      truncated={duplicate?.check.truncated}
-                    />
-                  </div>
-                )}
-                {item &&
-                  (actionable ? (
-                    <ItemTwinChoice
-                      item={item}
-                      choice={itemChoices[item.forRef]}
-                      onChoice={(choice) =>
-                        setItemChoices((prev) => ({
-                          ...prev,
-                          [item.forRef]: choice,
-                        }))
-                      }
-                      busy={false}
-                    />
-                  ) : (
-                    <div className="border-t border-foreground/[0.06] pt-3">
-                      <TwinDoors candidates={item.resolvable} withFor={false} />
-                    </div>
-                  ))}
-              </ProposedRecordCard>
-            );
-          })}
+          {groups.map((group) => (
+            <RecordGroupList
+              key={group.kind ?? ""}
+              group={group}
+              render={(record) => {
+                const item = itemByRef.get(record.ref);
+                return (
+                  <ProposedRecordCard
+                    key={record.ref}
+                    record={record}
+                    media={recordMedia}
+                    mediaAlt={recordMediaAlt}
+                  >
+                    {twinsUnderCard && (
+                      <div className="border-t border-foreground/[0.06] pt-3">
+                        <TwinDoors
+                          candidates={flatTwins}
+                          truncated={duplicate?.check.truncated}
+                        />
+                      </div>
+                    )}
+                    {item &&
+                      (actionable ? (
+                        <ItemTwinChoice
+                          item={item}
+                          choice={itemChoices[item.forRef]}
+                          onChoice={(choice) =>
+                            setItemChoices((prev) => ({
+                              ...prev,
+                              [item.forRef]: choice,
+                            }))
+                          }
+                          busy={false}
+                        />
+                      ) : (
+                        <div className="border-t border-foreground/[0.06] pt-3">
+                          <TwinDoors
+                            candidates={item.resolvable}
+                            withFor={false}
+                          />
+                        </div>
+                      ))}
+                  </ProposedRecordCard>
+                );
+              }}
+            />
+          ))}
         </div>
       ) : null}
       {edges.length > 0 && <PartEdgeList edges={edges} />}
