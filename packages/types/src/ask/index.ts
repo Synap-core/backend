@@ -148,10 +148,6 @@ const oneLevelDeep = (iss: { code: string; keys?: unknown }) =>
     : undefined;
 const followUpOptionParams = {
   error: oneLevelDeep,
-  errorMap: (
-    iss: { code: string; keys?: unknown },
-    ctx: { defaultError: string }
-  ) => ({ message: oneLevelDeep(iss) ?? ctx.defaultError }),
 };
 const AskFollowUpOptionSchema = z.strictObject(
   AskOptionSchema.shape,
