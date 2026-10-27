@@ -426,6 +426,7 @@ describe("readRoomPostMeta — the one reader of a room question's marker", () =
     expect(answerProvenanceMark(meta!)).toEqual({
       tone: "textMuted",
       label: ASK_COPY.closedSessionEnded,
+      disposition: "closed_session_ended",
     });
   });
   it("anything else is not a room post", () => {
