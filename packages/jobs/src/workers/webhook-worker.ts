@@ -34,6 +34,10 @@
  * MATCH RULE — one, {@link subscriptionWantsEvent}: an empty `eventTypes` list
  * means "all events", otherwise the type must be listed. (The create APIs
  * require ≥1 type, so the empty case is only reachable on legacy rows.)
+ * DIRECTION RULE — only an `outbound` row is a subscriber, read by BOTH
+ * producers and again at send time: an `inbound` source (0362) is where an
+ * outside service posts TO the pod; it has no url and lists no event types,
+ * which the match rule above would read as "every event".
  * WORKSPACE RULE — one, {@link subscriptionCoversWorkspace}, applied by BOTH
  * producers: a workspace-bound subscription gets only that workspace's events.
  *
@@ -388,7 +392,8 @@ async function fanOutDomainEvent(
     .where(
       and(
         eq(webhookSubscriptions.userId, userId),
-        eq(webhookSubscriptions.active, true)
+        eq(webhookSubscriptions.active, true),
+        eq(webhookSubscriptions.direction, "outbound")
       )
     );
   const wanted = subs.filter(
@@ -437,13 +442,15 @@ export async function deliverWebhook(job: WebhookDeliverJob): Promise<void> {
       url: webhookSubscriptions.url,
       secret: webhookSubscriptions.secret,
       active: webhookSubscriptions.active,
+      direction: webhookSubscriptions.direction,
       apiKeyId: webhookSubscriptions.apiKeyId,
     })
     .from(webhookSubscriptions)
     .where(eq(webhookSubscriptions.id, job.subscriptionId))
     .limit(1);
   // Deleted or paused since enqueue: nothing to deliver, nothing to retry.
-  if (!sub || !sub.active) return;
+  // An inbound source is never a subscriber (DIRECTION RULE): no url.
+  if (!sub || !sub.active || sub.direction === "inbound" || !sub.url) return;
   // Its key revoked or expired since enqueue (S2): the same — never sent.
   if (
     sub.apiKeyId &&

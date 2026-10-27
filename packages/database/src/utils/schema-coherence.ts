@@ -714,6 +714,13 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "api_key_id",
     addedBy: "0335_webhook_subscriptions_api_key.sql",
   },
+  // A webhook row's direction (0362). Both outbound producers select it, so
+  // a missing column stops every webhook delivery.
+  {
+    table: "webhook_subscriptions",
+    column: "direction",
+    addedBy: "0362_webhook_subscriptions_direction.sql",
+  },
   // Site collections (0336). Every publish lookup filters on `site_share_id`
   // and the site doors read `site_config`, so without them every publish and
   // every site door 500s. The three member columns are read from C1b on.

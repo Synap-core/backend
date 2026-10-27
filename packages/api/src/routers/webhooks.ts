@@ -26,6 +26,11 @@ import {
   liveApiKeyIds,
   subscriptionKeyLive,
 } from "@synap/jobs/workers/webhook-worker.js";
+import {
+  createInboundWebhookSource,
+  listInboundWebhookSources,
+  rotateInboundWebhookSecret,
+} from "../services/webhooks/inbound-source.js";
 
 const logger = createLogger({ module: "webhooks-router" });
 
@@ -103,7 +108,12 @@ export const webhooksRouter = router({
 
     try {
       const subscriptions = await db.query.webhookSubscriptions.findMany({
-        where: eq(webhookSubscriptions.userId, userId),
+        // Outbound only: an inbound source (0362) is listed by
+        // `listInboundSources`, never as a delivery target.
+        where: and(
+          eq(webhookSubscriptions.userId, userId),
+          eq(webhookSubscriptions.direction, "outbound")
+        ),
         orderBy: (subscriptions, { desc }) => [desc(subscriptions.createdAt)],
       });
 
@@ -238,7 +248,8 @@ export const webhooksRouter = router({
     const subs = await db.query.webhookSubscriptions.findMany({
       where: and(
         eq(webhookSubscriptions.workspaceId, workspaceId),
-        eq(webhookSubscriptions.active, true)
+        eq(webhookSubscriptions.active, true),
+        eq(webhookSubscriptions.direction, "outbound")
       ),
       orderBy: (s, { desc }) => [desc(s.createdAt)],
     });
@@ -346,7 +357,10 @@ export const webhooksRouter = router({
     .input(z.object({ workspaceId: z.string().uuid() }))
     .query(async ({ input }) => {
       const subs = await db.query.webhookSubscriptions.findMany({
-        where: eq(webhookSubscriptions.workspaceId, input.workspaceId),
+        where: and(
+          eq(webhookSubscriptions.workspaceId, input.workspaceId),
+          eq(webhookSubscriptions.direction, "outbound")
+        ),
         orderBy: (s, { desc }) => [desc(s.createdAt)],
       });
       return subs.map(
@@ -449,6 +463,72 @@ export const webhooksRouter = router({
       > as typeof updated;
       return safe;
     }),
+
+  // ── Inbound webhook sources (0362) ───────────────────────────────────────
+  // Where an outside service posts signed events INTO a space
+  // (services/webhooks/inbound-source.ts). The secret is returned ONCE, by
+  // create and by replace; lists never carry it. Toggle and delete reuse the
+  // workspace doors above (same row, same table).
+
+  /** A space's inbound sources (workspace member). */
+  listInboundSources: workspaceProcedure.query(({ ctx }) =>
+    listInboundWebhookSources(ctx.workspaceId)
+  ),
+
+  /** Create an inbound source in the active space; the secret is shown once. */
+  createInboundSource: workspaceProcedure
+    .use(requireFreshAuthentication)
+    .input(z.object({ name: z.string().trim().min(1).max(100) }))
+    .mutation(({ ctx, input }) =>
+      createInboundWebhookSource({
+        userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
+        name: input.name,
+      })
+    ),
+
+  /** Replace an inbound source's secret; the new one is shown once. */
+  rotateInboundSourceSecret: workspaceProcedure
+    .use(requireFreshAuthentication)
+    .input(z.object({ id: z.string().uuid() }))
+    .mutation(({ ctx, input }) =>
+      rotateInboundWebhookSecret({
+        id: input.id,
+        workspaceId: ctx.workspaceId,
+      })
+    ),
+
+  /** A space's inbound sources (pod admin). */
+  adminListInboundSources: podAdminProcedure
+    .input(z.object({ workspaceId: z.string().uuid() }))
+    .query(({ input }) => listInboundWebhookSources(input.workspaceId)),
+
+  /**
+   * Create an inbound source in a space (pod admin); the secret is shown
+   * once. Owned by the admin who made it — the inbound door fires the space's
+   * automations as the source's owner.
+   */
+  adminCreateInboundSource: podAdminProcedure
+    .use(requireFreshAuthentication)
+    .input(
+      z.object({
+        workspaceId: z.string().uuid(),
+        name: z.string().trim().min(1).max(100),
+      })
+    )
+    .mutation(({ ctx, input }) =>
+      createInboundWebhookSource({
+        userId: ctx.userId,
+        workspaceId: input.workspaceId,
+        name: input.name,
+      })
+    ),
+
+  /** Replace an inbound source's secret (pod admin); shown once. */
+  adminRotateInboundSourceSecret: podAdminProcedure
+    .use(requireFreshAuthentication)
+    .input(z.object({ id: z.string().uuid(), workspaceId: z.string().uuid() }))
+    .mutation(({ input }) => rotateInboundWebhookSecret(input)),
 
   /**
    * Get recent deliveries for a subscription (pod admin)

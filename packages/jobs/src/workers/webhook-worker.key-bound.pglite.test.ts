@@ -100,6 +100,11 @@ const grantReads = async (s: KeyGrantSubject) => {
 beforeAll(async () => {
   await h.client!.exec(ddlFor(webhookSubscriptions as unknown as PgTable));
   await h.client!.exec(ddlFor(apiKeys as unknown as PgTable));
+  // 0362's default (the generic DDL carries none): every row here is a
+  // delivery target, and both producers select `direction = 'outbound'`.
+  await h.client!.exec(
+    `alter table webhook_subscriptions alter column direction set default 'outbound'`
+  );
   const keyRows: Array<[string, boolean, string | null, string | null]> = [
     [KEY.live, true, null, null],
     [KEY.denied, true, null, null],

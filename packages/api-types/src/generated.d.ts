@@ -1939,6 +1939,15 @@ export interface AutomationTriggerConfig {
 	/** Webhook subscription ID to listen on */
 	webhookSubscriptionId?: string;
 	/**
+	 * The inbound webhook source this automation listens to, BY NAME — what a
+	 * package declares (a row id is one pod's own). The create and update doors
+	 * bind it to the space's source of that name, created when missing, and set
+	 * `webhookSubscriptionId`.
+	 */
+	webhookSource?: {
+		name: string;
+	};
+	/**
 	 * Only fire for events ABOUT this entity. Enforced by the trigger matcher
 	 * (`matchRuleScopeFilters`) on the event families in
 	 * `RULE_SCOPE_EVENT_PREFIXES.entityId`; on any other family a rule carrying

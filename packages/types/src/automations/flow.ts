@@ -70,6 +70,13 @@ export interface AutomationTriggerConfig {
   // ── webhook trigger ────────────────────────────────────────────────────
   /** Webhook subscription ID to listen on */
   webhookSubscriptionId?: string;
+  /**
+   * The inbound webhook source this automation listens to, BY NAME — what a
+   * package declares (a row id is one pod's own). The create and update doors
+   * bind it to the space's source of that name, created when missing, and set
+   * `webhookSubscriptionId`.
+   */
+  webhookSource?: { name: string };
 
   // ── rule scope (entity + project) ──────────────────────────────────────
   /**
