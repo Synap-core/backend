@@ -192,6 +192,8 @@ export function defaultSpaces(
  * Nothing new is ticked for them, because the pod keeps what they approved,
  * not what they were asked: a pair missing from it may be a new ask or one
  * they unticked last time, and re-ticking a "no" is not theirs to have made.
+ * What is new is named first instead (`newAsks`), with one switch the person
+ * turns on (`allowNewAsks`).
  *
  * The launch's `space_hint` is not an input: it orders (`spaceHintFirst`),
  * it never ticks.
@@ -217,6 +219,71 @@ export function initialSelection(
     }
   }
   return out;
+}
+
+/**
+ * What a re-consent asks that is NEW: each permission on offer that the
+ * person's current approval holds in NO space, in its default spaces
+ * (`defaultSpaces`), decisions included. A first consent (no current
+ * approval) has none: everything there is new and the screen says so already.
+ * A permission with no space to give is left out: there is nothing to tick,
+ * and `withoutSpace` / the create-a-space offer already say so.
+ *
+ * Shown first ("New since you last allowed", founder 2026-10-27): the new asks
+ * sat inside rows that kept the person's previous level, so twice Allow kept
+ * the old grant with nothing on the screen saying more was asked.
+ */
+export function newAsks(
+  offer: readonly OfferedPermission[],
+  current: readonly ApprovedPair[],
+  templates: readonly string[] = []
+): OfferedPermission[] {
+  if (current.length === 0) return [];
+  const held = new Set(current.map((c) => c.permission));
+  return offer
+    .filter((o) => !held.has(o.permission))
+    .map((o) => ({ ...o, workspaces: defaultSpaces(o, templates) }))
+    .filter((o) => o.workspaces.length > 0);
+}
+
+/** Every new ask is ticked in each of its spaces: the switch reads On. */
+export function newAsksAllowed(
+  selection: Selection,
+  asks: readonly OfferedPermission[]
+): boolean {
+  return (
+    asks.length > 0 &&
+    asks.every((o) =>
+      o.workspaces.every((w) => selection.has(key(o.permission, w.workspaceId)))
+    )
+  );
+}
+
+/**
+ * "Allow the new ones" pressed: On ticks exactly the new asks' pairs, Off
+ * clears exactly them, in the ONE selection the rows and Customize edit, so
+ * each row's level follows (People goes to Edit once `entity.person.update`
+ * is ticked). It starts Off and nothing ticks it for the person: the pod keeps
+ * what they approved, not what they were asked, so a "no" they gave last time
+ * looks exactly like a new ask, and re-ticking it is theirs to do
+ * (`initialSelection`). Like `toggle`, it never adds a pair the offer does
+ * not hold.
+ */
+export function allowNewAsks(
+  selection: Selection,
+  offer: readonly OfferedPermission[],
+  asks: readonly OfferedPermission[],
+  allow: boolean
+): Selection {
+  const next = new Set(selection);
+  for (const o of asks) {
+    for (const w of o.workspaces) {
+      const k = key(o.permission, w.workspaceId);
+      if (!allow) next.delete(k);
+      else if (offered(offer, o.permission, w.workspaceId)) next.add(k);
+    }
+  }
+  return next;
 }
 
 /**

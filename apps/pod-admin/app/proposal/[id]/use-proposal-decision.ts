@@ -20,10 +20,29 @@ export interface ApproveChoice {
   identityResolutionByRef?: Record<string, DuplicateResolution>;
 }
 
+/**
+ * The revision this page rendered: the length of the proposal's revision
+ * history as read. Sent with every approve so a revise that landed after the
+ * page drew is refused (CONFLICT) instead of approved unseen; the pod refuses
+ * an approve that turns something on without it.
+ */
+export function renderedRevision(proposal: {
+  revisionHistory?: unknown;
+}): number | undefined {
+  return Array.isArray(proposal.revisionHistory)
+    ? proposal.revisionHistory.length
+    : undefined;
+}
+
 /** The `proposals.approve` input for a choice — only the keys it carries. */
-export function approveInput(proposalId: string, choice: ApproveChoice = {}) {
+export function approveInput(
+  proposalId: string,
+  choice: ApproveChoice = {},
+  expectedRevision?: number
+) {
   return {
     proposalId,
+    ...(expectedRevision !== undefined ? { expectedRevision } : {}),
     ...(choice.identityResolution
       ? { identityResolution: choice.identityResolution }
       : {}),
@@ -37,7 +56,14 @@ export function approveInput(proposalId: string, choice: ApproveChoice = {}) {
 export function useProposalDecision(
   proposalId: string,
   onDecided: () => void,
-  { onRejected }: { onRejected?: () => void } = {}
+  {
+    onRejected,
+    expectedRevision,
+  }: {
+    onRejected?: () => void;
+    /** `renderedRevision` of the proposal this page drew. */
+    expectedRevision?: number;
+  } = {}
 ) {
   const utils = trpc.useUtils();
   const approveMutation = trpc.proposals.approve.useMutation({
@@ -77,7 +103,9 @@ export function useProposalDecision(
 
   return {
     approve: (choice?: ApproveChoice) =>
-      approveMutation.mutate(approveInput(proposalId, choice)),
+      approveMutation.mutate(
+        approveInput(proposalId, choice, expectedRevision)
+      ),
     reject: (reason?: string) =>
       rejectMutation.mutate({
         proposalId,
