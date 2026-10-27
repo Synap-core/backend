@@ -549,16 +549,30 @@ pgdata_guard() {
 #   backup_loop               backup_run every BACKUP_INTERVAL_SECONDS (+ drill)
 #   backup_drill [snap]       restore a snapshot into a THROWAWAY postgres and
 #                             compare the fingerprint recorded at backup time
+#   backup_retention [--dry-run]  forget + prune per the ladder below (off unless
+#                             BACKUP_RETENTION=true; `synap backup retention`)
 #   backup_status             what is configured, last runs, alarms
 #   backup_restore_snapshot   fresh-host restore: secrets → DBs → MinIO → compare
 #
-# APPEND-ONLY BY CONSTRUCTION: this file never runs `restic forget` or `prune`.
-# Retention is the TARGET's job (rest-server --append-only + a prune job on the
-# storage host, or B2/S3 lifecycle + Object Lock) so that a compromised pod —
-# or a confused agent — can add snapshots but never delete history. Suggested
-# policy, run where the delete-capable credentials live:
-#   restic forget --keep-hourly 24 --keep-daily 14 --keep-weekly 8 --keep-monthly 12 --prune
-# deploy/__tests__/backup-offhost.test.sh fails if forget/prune ever appear.
+# RETENTION RUNS HERE, ON THE POD (founder, 2026-10-27): the repository
+# password never leaves the pod, so nothing else can forget/prune it. The pod's
+# B2 key has NO deleteFiles: restic then only HIDES what it prunes and the
+# bucket lifecycle deletes it 30 days later, so a compromised pod — or a
+# confused agent — can still only hide history, recoverable for 30 days.
+# backup_retention is the ONE call site of forget/prune, and it never removes a
+# snapshot unless a NEWER, COMPLETE one is kept (founder's rules 2a/2b):
+#   * every push is tagged trigger:scheduled (the hourly loop) or
+#     trigger:manual (`synap backup push`); untagged (older) snapshots count
+#     as scheduled;
+#   * scheduled snapshots keep a ladder, one per level, the older dropped when
+#     a newer exists: restic's --keep-last 1 --keep-hourly 2 --keep-daily 2
+#     --keep-weekly 2 --keep-monthly 2 (at most 5);
+#   * manual snapshots never take a ladder slot; they keep their own newest
+#     BACKUP_RETENTION_MANUAL_KEEP (3);
+#   * nothing is removed when the last backup run failed (.push-failed,
+#     .alarm) or the newest scheduled snapshot is not complete.
+# deploy/__tests__/backup-offhost.test.sh holds every rule, and fails if any
+# other function names forget/prune.
 #
 # Every run writes a metadata-only row into the `backup_runs` table (time,
 # ok/failed/suspect, size, snapshot id, fingerprint, drill result) — never a
@@ -761,6 +775,8 @@ _bk_lock() {
         fi
     fi
     _pgs_err "another backup run holds $l — this ${1:-backup} run is skipped"
+    # backup_runs only knows backup|drill; a skipped retention simply runs when next due.
+    [ "${1:-backup}" = retention ] && return 1
     _bk_record "$(_pgs_container)" "${1:-backup}" failed "$(_bk_now)" "" "" "" "" "skipped: another backup or drill run held the lock"
     return 1
 }
@@ -811,7 +827,7 @@ _bk_prune_good() {
 # good copies out locally NOR become the newest off-host snapshot).
 # Intentional wipe? remove state/postgres-initialized and backups/postgres/.alarm.
 backup_run() {
-    local c b ts tmp d fp users rest ents last prev suspect started rc
+    local trigger="${1:-manual}" c b ts tmp d fp users rest ents last prev suspect started rc
     c="$(_pgs_container)"; b="$(_bk_backups_dir)"
     _bk_lock backup || return 1
     started="$(_bk_now)"; ts="$(date -u +%Y%m%dT%H%M%SZ)"; tmp="$b/$ts.partial"
@@ -850,14 +866,15 @@ backup_run() {
         _bk_record "$c" backup ok "$started" "$(( $(du -sk "$d" | cut -f1) * 1024 ))" "" "$fp" "" "local only — no off-host repository configured"
         _bk_unlock; return 0
     fi
-    _bk_push "$c" "$d" "$fp" "$started"; rc=$?
+    _bk_push "$c" "$d" "$fp" "$started" "$trigger"; rc=$?
     _bk_unlock; return $rc
 }
 
 # Snapshot {dump dir, MinIO export, .env, state/} into the repository. Only
 # ever called by backup_run with a dump that passed the fingerprint gate.
+# <trigger: scheduled|manual> becomes the snapshot's trigger: tag (retention).
 _bk_push() {
-    local c="$1" d="$2" fp="$3" started="$4" b stage out sid size url
+    local c="$1" d="$2" fp="$3" started="$4" trigger="${5:-manual}" b stage out sid size url
     b="$(_bk_backups_dir)"
     case "$d" in *-SUSPECT|*.partial) _pgs_err "refusing to push $d"; return 1 ;; esac
     if [ ! -s "${BACKUP_PASSWORD_FILE:-$(_bk_password_file)}" ]; then
@@ -869,7 +886,7 @@ _bk_push() {
         _bk_minio_export "$stage" || { _bk_push_failed "$c" "$started" "$fp" "MinIO export failed"; return 1; }
         set -- "$@" "$stage"
     fi
-    out="$(_bk_restic backup --json --host "$_BK_HOST" --tag synap --tag "fp:$fp" --tag "dump:$(basename "$d")" \
+    out="$(_bk_restic backup --json --host "$_BK_HOST" --tag synap --tag "trigger:$trigger" --tag "fp:$fp" --tag "dump:$(basename "$d")" \
         --exclude "$(_bk_state_dir)/bin" --exclude "$(_bk_state_dir)/backup" --exclude "$(_bk_kit_dir)" --exclude "$(_bk_state_dir)/update.lock" \
         "$@")" || { _bk_push_failed "$c" "$started" "$fp" "restic backup failed"; return 1; }
     sid="$(printf '%s\n' "$out" | sed -n 's/.*"message_type": *"summary".*"snapshot_id": *"\([0-9a-f]*\)".*/\1/p' | tail -n 1)"
@@ -967,6 +984,114 @@ _bk_drill_due() {
     [ ! -e "$f" ] || [ -n "$(find "$f" -mmin +$(( ${BACKUP_DRILL_INTERVAL_SECONDS:-604800} / 60 )) 2>/dev/null)" ]
 }
 
+# Retention is opt-in per pod (BACKUP_RETENTION=true in .env) and runs at most
+# once per BACKUP_RETENTION_INTERVAL_SECONDS (a day), after a good scheduled push.
+_bk_retention_due() {
+    local f s
+    case "$(_bk_cfg BACKUP_RETENTION)" in true|1) ;; *) return 1 ;; esac
+    s="$(_bk_cfg BACKUP_RETENTION_INTERVAL_SECONDS)"
+    f="$(_bk_backups_dir)/.last-retention"
+    [ ! -e "$f" ] || [ -n "$(find "$f" -mmin +$(( ${s:-86400} / 60 )) 2>/dev/null)" ]
+}
+
+_bk_retention_refused() {
+    _pgs_err "[retention] REFUSED, nothing removed: $1"
+    [ -n "$2" ] || echo "$1" > "$(_bk_backups_dir)/.retention-failed"
+    return 1
+}
+
+# The ONE call site of forget/prune (rules in the header: "RETENTION RUNS HERE").
+# The plan is computed here, not by restic's own policy, because restic cannot
+# leave the manual snapshots out of the ladder; for scheduled snapshots it
+# keeps exactly what `restic forget --keep-last 1 --keep-hourly 2 --keep-daily 2
+# --keep-weekly 2 --keep-monthly 2 --group-by host` keeps (verified on the
+# perso pod's 252 snapshots, 2026-10-27). Twin: restic-retention.sh in the
+# infra repo (ops repositories), same rules.
+# --dry-run: reads only (no lock, no marker), prints the plan and what prune frees.
+backup_retention() {
+    local dry="${1:-}" b work keep ids rc
+    case "$dry" in ''|--dry-run) ;; *) _pgs_err "usage: retention [--dry-run]"; return 2 ;; esac
+    b="$(_bk_backups_dir)"
+    [ -n "$(_bk_cfg BACKUP_REPOSITORY)" ] || { _pgs_err "[retention] no off-host repository configured"; return 1; }
+    # Rule 2a, the last run's own markers: a failed or SUSPECT last run removes nothing.
+    [ -e "$b/.push-failed" ] && { _bk_retention_refused "the last push failed: $(cat "$b/.push-failed")" "$dry"; return 1; }
+    [ -e "$b/.alarm" ] && { _bk_retention_refused "the last dump is SUSPECT: $(cat "$b/.alarm")" "$dry"; return 1; }
+    work="$(mktemp -d "${TMPDIR:-/tmp}/synap-retention.XXXXXX")" || return 1
+    if ! _bk_restic --no-lock snapshots --json > "$work/snaps.json"; then
+        rm -rf "$work"; _bk_retention_refused "cannot list the repository's snapshots" "$dry"; return 1
+    fi
+    keep="$(_bk_cfg BACKUP_RETENTION_MANUAL_KEEP)"
+    python3 - "$work/snaps.json" "${keep:-3}" "$work/remove" <<'PY'
+import json, re, sys, datetime as dt
+snaps = json.load(open(sys.argv[1])) or []
+manual_keep = int(sys.argv[2])
+LADDER = [("last", 1), ("hourly", 2), ("daily", 2), ("weekly", 2), ("monthly", 2)]
+def when(s):  # restic RFC3339: up to 9 fraction digits, the writer's offset
+    m = re.match(r"(.{19})(?:\.(\d+))?(Z|[+-]\d\d:\d\d)$", s["time"])
+    return dt.datetime.fromisoformat(m.group(1) + "." + (m.group(2) or "0")[:6].ljust(6, "0") + ("+00:00" if m.group(3) == "Z" else m.group(3)))
+BUCKET = {"last": lambda t, nr: nr, "hourly": lambda t, nr: (t.year, t.month, t.day, t.hour),
+          "daily": lambda t, nr: (t.year, t.month, t.day), "weekly": lambda t, nr: tuple(t.isocalendar()[:2]),
+          "monthly": lambda t, nr: (t.year, t.month)}
+def ladder(lst):  # restic's ApplyPolicy: same buckets, same "keep the oldest while counts remain"
+    lst = sorted(lst, key=when, reverse=True); keep = {}
+    count = dict(LADDER); last = {k: None for k, _ in LADDER}
+    for nr, s in enumerate(lst):
+        why = []
+        for k, _ in LADDER:
+            if count[k] > 0:
+                v = BUCKET[k](when(s), nr)
+                if v != last[k] or nr == len(lst) - 1:
+                    last[k] = v; count[k] -= 1; why.append(k)
+        if why: keep[s["id"]] = "scheduled " + "+".join(why)
+    return keep
+complete = lambda s: bool((s.get("summary") or {}).get("backup_end"))
+manual = lambda s: "trigger:manual" in (s.get("tags") or [])
+refuse = None; remove = []; lines = []
+groups = {}
+for s in snaps: groups.setdefault(s.get("hostname", ""), []).append(s)
+for g, lst in sorted(groups.items()):
+    sched = [s for s in lst if not manual(s)]; man = [s for s in lst if manual(s)]
+    if sched and not complete(max(sched, key=when)):
+        n = max(sched, key=when); refuse = "newest scheduled snapshot %s (%s) is not complete" % (n["short_id"], n["time"][:16])
+    keep = ladder(sched)
+    for s in sorted(man, key=when, reverse=True)[:manual_keep]: keep[s["id"]] = "manual last %d" % manual_keep
+    for s in sorted(lst, key=when, reverse=True):
+        cls = "manual" if manual(s) else "scheduled"
+        if s["id"] in keep:
+            lines.append("keep   %s %s %-9s %s" % (s["short_id"], when(s).isoformat(timespec="minutes"), cls, keep[s["id"]])); continue
+        same = man if manual(s) else sched
+        if not any(o["id"] in keep and complete(o) and when(o) > when(s) for o in same):
+            refuse = refuse or "%s has no newer complete kept %s snapshot" % (s["short_id"], cls)
+        remove.append(s["id"])
+print("\n".join(lines))
+print("%d kept, %d to remove" % (len(lines), len(remove)))
+if refuse:
+    print("REFUSE " + refuse); sys.exit(3)
+open(sys.argv[3], "w").write("".join(i + "\n" for i in remove))
+PY
+    rc=$?
+    if [ "$rc" != 0 ]; then
+        rm -rf "$work"; _bk_retention_refused "$( [ "$rc" = 3 ] && echo "rule 2a (see REFUSE above)" || echo "the plan could not be computed (python3 exit $rc)")" "$dry"; return 1
+    fi
+    ids="$(cat "$work/remove")"; rm -rf "$work"
+    if [ -z "$ids" ]; then
+        _pgs_log "[retention] nothing to remove"
+    elif [ -n "$dry" ]; then
+        # shellcheck disable=SC2086  # one snapshot id per word
+        _bk_restic --no-lock forget --dry-run --prune $ids | grep -E '^(to repack|this removes|to delete|total prune|remaining|unused size)' || true
+        return 0
+    else
+        # shellcheck disable=SC2086
+        if ! _bk_restic --retry-lock 30m forget --prune $ids >/dev/null; then
+            _bk_retention_refused "restic forget/prune failed (the repository is unchanged or partly pruned; re-run)"; return 1
+        fi
+        _pgs_log "[retention] removed $(printf '%s\n' "$ids" | wc -l | tr -d ' ') snapshots and pruned"
+    fi
+    [ -n "$dry" ] && return 0
+    rm -f "$b/.retention-failed"
+    _bk_now > "$b/.last-retention"
+}
+
 # The compose `postgres-backup` service runs this.
 backup_loop() {
     mkdir -p "$(_bk_backups_dir)" "$(_bk_state_dir)"
@@ -976,8 +1101,9 @@ backup_loop() {
     while :; do
         _bk_kit_layout || true
         if _bk_auto_init_due; then backup_init --non-interactive || true; fi
-        if backup_run && [ -n "$(_bk_cfg BACKUP_REPOSITORY)" ] && _bk_drill_due; then
-            _bk_lock drill && { backup_drill latest; _bk_unlock; }
+        if backup_run scheduled && [ -n "$(_bk_cfg BACKUP_REPOSITORY)" ]; then
+            if _bk_drill_due; then _bk_lock drill && { backup_drill latest; _bk_unlock; }; fi
+            if _bk_retention_due; then _bk_lock retention && { backup_retention; _bk_unlock; }; fi
         fi
         sleep "${BACKUP_INTERVAL_SECONDS:-3600}"
     done
@@ -1161,7 +1287,7 @@ backup_status() {
     last="$(_bk_good_dumps | tail -n 1)"
     if [ -n "$last" ]; then printf '%s\n' "Latest local dump   : $(basename "$last") ($(cat "$last/fingerprint" 2>/dev/null))"
     else printf '%s\n' "Latest local dump   : none"; fi
-    for m in alarm push-failed drill-failed; do
+    for m in alarm push-failed drill-failed retention-failed; do
         [ -e "$b/.$m" ] && printf '%s\n' "ALERT $m : $(cat "$b/.$m")"
     done
     c="$(_pgs_container)"
@@ -1267,12 +1393,13 @@ if [ -n "$_pgs_main" ]; then
         backup)  pgdata_backup "${2:-manual}" ;;
         restore) pgdata_restore "${2:?usage: pgdata-safety.sh restore <dir>}" ;;
         init)    backup_init "${2:-}" ;;
-        run|push) backup_run ;;
+        run|push) backup_run manual ;;
         loop)    backup_loop ;;
         drill)   _bk_lock drill || exit 1; backup_drill "${2:-latest}"; _r=$?; _bk_unlock; exit $_r ;;
+        retention) _bk_lock retention || exit 1; backup_retention "${2:-}"; _r=$?; _bk_unlock; exit $_r ;;
         status)  backup_status ;;
         minio-import) _bk_minio_import "${2:?usage: pgdata-safety.sh minio-import <dir>}" ;;
         restore-snapshot) backup_restore_snapshot "${2:-}" ;;
-        *) echo "usage: $0 layout|guard|backup [label]|restore <dir>|init [--non-interactive]|run|loop|drill [snap]|status|restore-snapshot <snap>" >&2; exit 2 ;;
+        *) echo "usage: $0 layout|guard|backup [label]|restore <dir>|init [--non-interactive]|run|loop|drill [snap]|retention [--dry-run]|status|restore-snapshot <snap>" >&2; exit 2 ;;
     esac
 fi

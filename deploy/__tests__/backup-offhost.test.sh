@@ -16,8 +16,17 @@
 #                 fingerprint tag + MinIO export + .env + state/ (bin/ and the
 #                 password excluded) and pings the heartbeat; a SUSPECT dump is
 #                 never pushed and never pings; a failed restic marks
-#                 .push-failed and does not ping; NOTHING ever calls
-#                 forget/prune (behavioural over the whole run + a static scan).
+#                 .push-failed and does not ping; push/drill/restore NEVER call
+#                 forget/prune (behavioural) and only backup_retention names
+#                 them (static); a push by hand is tagged trigger:manual, the
+#                 loop's trigger:scheduled.
+#   T. retention — founder rules 2a/2b on a hand-built repository: the ladder
+#                 (newest + previous hour/day/week/month) over scheduled and
+#                 untagged snapshots only, manual ones keep their newest 3 and
+#                 never take a ladder slot; refused, nothing removed, when the
+#                 newest scheduled snapshot is incomplete, the last push failed
+#                 or the dump is SUSPECT; dry-run reads only; off unless
+#                 BACKUP_RETENTION=true, then at most daily.
 #   D. drill    — green on a faithful snapshot; RED on a fingerprint mismatch
 #                 and on a corrupt snapshot; never touches the live postgres.
 #   R. restore  — fresh host: secrets → DBs → MinIO → fingerprint, in that
@@ -61,7 +70,9 @@ cat > "$T/bin/restic" <<'PY'
 import json, os, shutil, sys
 open(os.environ["CALLS"], "a").write("restic " + " ".join(sys.argv[1:]) + "\n")
 repo = os.environ.get("RESTIC_REPOSITORY", ""); pwf = os.environ.get("RESTIC_PASSWORD_FILE", "")
-args = sys.argv[1:]; cmd = args[0]
+args = sys.argv[1:]
+while args and args[0] in ("--no-lock", "--retry-lock"): args = args[2:] if args[0] == "--retry-lock" else args[1:]
+cmd = args[0]
 if not repo: sys.exit("Fatal: no repository")
 def pw(): return open(pwf).read() if pwf and os.path.isfile(pwf) else ""
 if cmd == "init":
@@ -97,11 +108,21 @@ if cmd == "backup":
             shutil.copytree(p, dst, ignore=lambda d, n: [x for x in n if os.path.join(d, x) in excl])
         else:
             os.makedirs(os.path.dirname(dst), exist_ok=True); shutil.copy2(p, dst)
-    json.dump({"tags": tags, "paths": paths}, open(root + ".meta", "w"))
+    host = args[args.index("--host") + 1] if "--host" in args else "fake-host"
+    end = None if os.environ.get("FAKE_INCOMPLETE") else "2026-10-27T00:00:00Z"
+    json.dump({"tags": tags, "paths": paths, "hostname": host, "time": os.environ.get("FAKE_SNAP_TIME", "2026-10-27T12:00:00Z"),
+               "summary": {"backup_end": end} if end else {}}, open(root + ".meta", "w"))
     print(json.dumps({"message_type": "status", "percent_done": 1}, separators=(",", ":")))
     print(json.dumps({"message_type": "summary", "snapshot_id": sid, "total_bytes_processed": 4242}, separators=(",", ":")))
 elif cmd == "snapshots":
     want = [a for a in args[1:] if not a.startswith("--")]
+    if not want:  # the whole list, like `restic snapshots --json`
+        out = []
+        for i in ids:
+            m = json.load(open(os.path.join(snaps, i + ".meta")))
+            out.append({"id": i, "short_id": i[:8], "time": m.get("time", "2026-10-27T12:00:00Z"), "hostname": m.get("hostname", "fake-host"),
+                        "tags": m["tags"], "summary": m.get("summary", {})})
+        print(json.dumps(out)); sys.exit(0)
     s = pick(want[0]) if want else None
     if not s: sys.exit("Fatal: no matching ID found")
     tags = json.load(open(os.path.join(snaps, s + ".meta")))["tags"]
@@ -113,6 +134,11 @@ elif cmd == "restore":
     target = args[args.index("--target") + 1]
     excl = [args[i + 1] for i, a in enumerate(args) if a == "--exclude"]
     shutil.copytree(os.path.join(snaps, s), target, dirs_exist_ok=True, ignore=lambda d, n: [x for x in n if x in excl])
+elif cmd == "forget":
+    gone = [a for a in args[1:] if not a.startswith("--")]
+    if "--dry-run" in args: print("total prune:        3 blobs / 1.000 MiB"); sys.exit(0)
+    for i in gone:
+        shutil.rmtree(os.path.join(snaps, i)); os.remove(os.path.join(snaps, i + ".meta"))
 else:
     print("ok")
 PY
@@ -358,6 +384,7 @@ snap1="$(ls "$REPO/snaps" | grep -v meta | tail -1)"
 S="$REPO/snaps/$snap1"
 [ "$rc" = 0 ] && [ -n "$snap1" ] && ok "good dump → snapshot ${snap1:0:8}" || bad "push: rc=$rc $(cat "$T/out")"
 calls_since "$m" | grep "^restic backup" | grep >/dev/null -- "--tag fp:5|100|1" && ok "snapshot tagged with the dump's fingerprint" || bad "no fp tag: $(calls_since "$m" | grep '^restic backup')"
+calls_since "$m" | grep "^restic backup" | grep >/dev/null -- "--tag trigger:manual" && ok "a push by hand (run|push) is tagged trigger:manual" || bad "no trigger:manual tag: $(calls_since "$m" | grep '^restic backup')"
 ls "$S/backups/"*-auto/synap.dump >/dev/null 2>&1 && [ -f "$S/synap-deploy/.env" ] && [ -f "$S/synap-state/release" ] && [ -f "$S/backups/.minio-mirror/files/obj.txt" ] \
     && ok "snapshot holds dumps + .env + state/ + MinIO export (at the container paths)" || bad "snapshot content: $(cd "$S" && find . | head -20)"
 [ ! -e "$S/synap-state/bin" ] && [ ! -e "$S/synap-state/backup" ] && [ ! -e "$S/synap-state/kit" ] && [ -d "$T/state/kit" ] \
@@ -397,9 +424,91 @@ ct sh "$SAFETY" drill nosuchsnap >"$T/out" 2>&1; rc=$?
 
 echo "── P. append-only"
 calls="$(grep -E "^restic" "$CALLS" | awk '{print $2}' | sort -u | tr '\n' ' ')"
-! grep -qE "^restic (forget|prune)" "$CALLS" && [ -n "$calls" ] && ok "no forget/prune across every run (restic subcommands used: $calls)" || bad "forget/prune called: $(grep -E '^restic (forget|prune)' "$CALLS")"
-static="$(grep -nE '^[^#]*_bk_restic[^#]*\b(forget|prune)\b' "$SAFETY" || true)"
-[ -z "$static" ] && grep -c '_bk_restic ' "$SAFETY" | grep -qv '^0$' && ok "static: no _bk_restic call site names forget/prune" || bad "static: $static"
+! grep -qE "^restic( --[a-z-]+( [0-9]+m)?)* (forget|prune)" "$CALLS" && [ -n "$calls" ] && ok "no forget/prune across every run (restic subcommands used: $calls)" || bad "forget/prune called: $(grep -E '^restic (forget|prune)' "$CALLS")"
+# forget/prune have ONE call site, backup_retention (behaviour above: no push,
+# drill or restore ever called them). Static: every _bk_restic line naming them
+# sits inside that function.
+static="$(awk '/^backup_retention\(\) \{/{f=1} f&&/^}/{f=0} !f&&/^[^#]*_bk_restic[^#]*(forget|prune)/{print NR": "$0}' "$SAFETY")"
+inside="$(awk '/^backup_retention\(\) \{/{f=1} f&&/^}/{f=0} f&&/_bk_restic[^#]*forget/' "$SAFETY" | wc -l | tr -d ' ')"
+[ -z "$static" ] && [ "$inside" -ge 1 ] && ok "static: forget/prune only inside backup_retention ($inside call sites there)" || bad "static: outside=$static inside=$inside"
+
+echo "── S. scheduled push tag"
+m=$(mark)
+fresh_second
+ct sh -c '. "$1"; backup_run scheduled' _ "$SAFETY" >"$T/out" 2>&1; rc=$?
+[ "$rc" = 0 ] && calls_since "$m" | grep "^restic backup" | grep >/dev/null -- "--tag trigger:scheduled" \
+    && ok "the loop's push (backup_run scheduled) is tagged trigger:scheduled" || bad "scheduled tag: rc=$rc $(calls_since "$m" | grep '^restic backup')"
+grep -q '^        if backup_run scheduled ' "$SAFETY" && ok "backup_loop pushes as scheduled" || bad "backup_loop does not call backup_run scheduled"
+
+echo "── T. retention (founder rules 2a/2b)"
+RREPO="$T/repo-ret"; mkdir -p "$RREPO/snaps"; cp "$REPO/config" "$RREPO/config"
+# seed <id> <time> <tags,comma> [incomplete]: a snapshot as the fake restic stores it.
+seed() { mkdir -p "$RREPO/snaps/$1"; python3 - "$RREPO/snaps/$1.meta" "$2" "$3" "${4:-}" <<'PY'
+import json, sys
+meta, t, tags, inc = sys.argv[1:5]
+json.dump({"tags": [x for x in tags.split(",") if x], "paths": [], "hostname": "synap-pod", "time": t,
+           "summary": {} if inc else {"backup_end": t}}, open(meta, "w"))
+PY
+}
+fixture() {
+    rm -rf "$RREPO/snaps"; mkdir -p "$RREPO/snaps"
+    # Legacy (untagged) scheduled snapshots, then tagged scheduled ones, then manual ones newer than all.
+    seed s1 2026-08-10T03:00:00Z synap;  seed s2 2026-09-20T03:00:00Z synap;  seed s3 2026-10-12T03:00:00Z synap
+    seed s4 2026-10-20T10:00:00Z synap;  seed s5 2026-10-26T08:00:00Z synap
+    seed s6 2026-10-27T09:00:00Z synap,trigger:scheduled; seed s7 2026-10-27T10:00:00Z synap,trigger:scheduled
+    seed s8 2026-10-27T11:00:00Z synap,trigger:scheduled "${1:-}"
+    seed m1 2026-10-27T11:30:00Z synap,trigger:manual; seed m2 2026-10-27T11:40:00Z synap,trigger:manual
+    seed m3 2026-10-27T11:50:00Z synap,trigger:manual; seed m4 2026-10-27T12:00:00Z synap,trigger:manual
+}
+left() { ls "$RREPO/snaps" | grep -v meta | sort | tr '\n' ' '; }
+rret() { ct BACKUP_REPOSITORY="$RREPO" sh "$SAFETY" retention "$@" >"$T/out" 2>&1; }
+# Expected by hand (restic's ladder over s1..s8; m1..m4 apart): s8 newest+hour 11+day 27+week 44+October,
+# s7 hour 10, s5 day 26, s4 week 43, s2 September; s6 s3 s1 go. Manual: newest 3 stay, m1 goes.
+WANT="m2 m3 m4 s2 s4 s5 s7 s8 "
+
+fixture; m=$(mark); rret --dry-run; rc=$?
+fl="$(calls_since "$m" | grep -E '^restic( --[a-z-]+( [0-9]+m)?)* forget')"
+[ "$rc" = 0 ] && [ "$(left)" = "m1 m2 m3 m4 s1 s2 s3 s4 s5 s6 s7 s8 " ] && printf '%s\n' "$fl" | grep >/dev/null -- "--no-lock forget --dry-run --prune" \
+    && [ "$(printf '%s\n' "$fl" | tr ' ' '\n' | grep -E '^(s|m)[0-9]$' | sort | tr '\n' ' ')" = "m1 s1 s3 s6 " ] && [ ! -e "$T/backups/.last-retention" ] \
+    && ok "dry-run: reads only (--no-lock --dry-run), names exactly m1 s1 s3 s6, repository + markers untouched" || bad "dry-run: rc=$rc forget=[$fl] left=$(left) $(cat "$T/out")"
+grep -q "total prune" "$T/out" && ok "dry-run prints what prune would free" || bad "dry-run output: $(cat "$T/out")"
+
+fixture; m=$(mark); rret; rc=$?
+[ "$rc" = 0 ] && [ "$(left)" = "$WANT" ] && calls_since "$m" | grep -E '^restic( --[a-z-]+( [0-9]+m)?)* forget' | grep >/dev/null -- "--retry-lock 30m forget --prune" && [ -s "$T/backups/.last-retention" ] \
+    && ok "ladder: keeps s8 s7 s5 s4 s2 (newest + previous hour/day/week/month), removes s6 s3 s1" || bad "ladder: rc=$rc left=$(left) $(cat "$T/out")"
+case "$(left)" in *s7*) ok "2b: four newer MANUAL pushes did not push scheduled s7 (previous hour) out" ;; *) bad "2b: manual pushes took ladder slots: $(left)" ;; esac
+case "$(left)" in *m1*) bad "2b: manual keep-last-3 not applied: $(left)" ;; *m2*m3*m4*) ok "2b: manual snapshots keep their own newest 3 (m1 removed)" ;; *) bad "2b: manual: $(left)" ;; esac
+case "$(left)" in *s2*s4*s5*) ok "untagged (older) snapshots count as scheduled: s2 s4 s5 hold ladder slots" ;; *) bad "legacy untagged: $(left)" ;; esac
+
+echo "── T2. rule 2a refusals (nothing removed)"
+fixture incomplete; m=$(mark); rm -f "$T/backups/.retention-failed"; rret; rc=$?
+[ "$rc" != 0 ] && [ "$(left)" = "m1 m2 m3 m4 s1 s2 s3 s4 s5 s6 s7 s8 " ] && ! calls_since "$m" | grep -E >/dev/null '^restic( --[a-z-]+( [0-9]+m)?)* forget' && [ -s "$T/backups/.retention-failed" ] \
+    && ok "2a: newest scheduled snapshot incomplete → refused, no forget, .retention-failed (complete NEWER manual ones do not count)" || bad "2a incomplete: rc=$rc left=$(left) $(cat "$T/out")"
+fixture; echo "restic backup failed" > "$T/backups/.push-failed"; m=$(mark); rret; rc=$?
+[ "$rc" != 0 ] && [ "$(left)" = "m1 m2 m3 m4 s1 s2 s3 s4 s5 s6 s7 s8 " ] && ! calls_since "$m" | grep >/dev/null '^restic' \
+    && ok "2a: the last push failed (.push-failed) → refused before reading the repository" || bad "2a push-failed: rc=$rc left=$(left)"
+rm -f "$T/backups/.push-failed"; echo "0 users" > "$T/backups/.alarm"; m=$(mark); rret; rc=$?
+[ "$rc" != 0 ] && [ "$(left)" = "m1 m2 m3 m4 s1 s2 s3 s4 s5 s6 s7 s8 " ] && ! calls_since "$m" | grep >/dev/null '^restic' \
+    && ok "2a: the last dump is SUSPECT (.alarm) → refused" || bad "2a alarm: rc=$rc left=$(left)"
+rm -f "$T/backups/.alarm"
+fixture; m=$(mark); rm -f "$T/backups/.retention-failed"; rret; rc=$?
+[ "$rc" = 0 ] && [ ! -e "$T/backups/.retention-failed" ] && ok "a good run clears .retention-failed" || bad ".retention-failed stuck"
+rm -rf "$RREPO/snaps"; mkdir -p "$RREPO/snaps"
+seed m1 2026-10-27T11:30:00Z synap,trigger:manual; seed m2 2026-10-27T11:40:00Z synap,trigger:manual
+seed m3 2026-10-27T11:50:00Z synap,trigger:manual; seed m4 2026-10-27T12:00:00Z synap,trigger:manual
+seed s1 2026-10-01T03:00:00Z synap
+rret; rc=$?
+[ "$rc" = 0 ] && [ "$(left)" = "m2 m3 m4 s1 " ] && ok "2b: the only scheduled snapshot stays however many newer manual ones exist" || bad "lone scheduled: rc=$rc left=$(left)"
+
+echo "── T3. the loop runs retention only when enabled and due"
+rdue() { env SYNAP_ENV_FILE="$T/deploy/.env" SYNAP_BACKUPS_DIR="$T/backups" "$@" sh -c '. "$1"; _bk_retention_due && echo due || echo no' _ "$SAFETY"; }
+[ "$(rdue)" = no ] && ok "off by default (no BACKUP_RETENTION=true)" || bad "retention due without BACKUP_RETENTION=true"
+rm -f "$T/backups/.last-retention"
+[ "$(rdue BACKUP_RETENTION=true)" = due ] && ok "BACKUP_RETENTION=true and never run → due" || bad "not due when enabled"
+date > "$T/backups/.last-retention"
+[ "$(rdue BACKUP_RETENTION=true)" = no ] && ok "ran within the interval → not due" || bad "due right after a run"
+grep -q '^            if _bk_retention_due; then _bk_lock retention && { backup_retention; _bk_unlock; }; fi' "$SAFETY" \
+    && ok "backup_loop runs retention behind _bk_retention_due, under the backup lock" || bad "backup_loop retention wiring"
 
 echo "── R. restore from snapshot (fresh host)"
 F="$T/fresh"; mkdir -p "$F/state/bin"; cp "$T/bin/restic" "$F/state/bin/restic"
