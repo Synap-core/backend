@@ -647,6 +647,10 @@
                       "required": ["kind", "id"]
                     },
                     "maxItems": 8
+                  },
+                  "risk": {
+                    "type": "string",
+                    "enum": ["high", "medium", "low"]
                   }
                 },
                 "required": ["mode"]
@@ -668,7 +672,55 @@
                         "value": { "type": "string", "maxLength": 500 },
                         "icon": { "type": "string", "maxLength": 64 },
                         "recommended": { "type": "boolean" },
-                        "description": { "type": "string", "maxLength": 140 }
+                        "description": { "type": "string", "maxLength": 140 },
+                        "caution": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 60
+                        },
+                        "followUp": {
+                          "type": "object",
+                          "properties": {
+                            "prompt": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 120
+                            },
+                            "options": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "label": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 80
+                                  },
+                                  "value": {
+                                    "type": "string",
+                                    "maxLength": 500
+                                  },
+                                  "icon": { "type": "string", "maxLength": 64 },
+                                  "recommended": { "type": "boolean" },
+                                  "description": {
+                                    "type": "string",
+                                    "maxLength": 140
+                                  },
+                                  "caution": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 60
+                                  }
+                                },
+                                "required": ["label"],
+                                "additionalProperties": false
+                              },
+                              "minItems": 2,
+                              "maxItems": 4
+                            }
+                          },
+                          "required": ["prompt", "options"]
+                        }
                       },
                       "required": ["label"]
                     },
@@ -700,6 +752,10 @@
                       "required": ["kind", "id"]
                     },
                     "maxItems": 8
+                  },
+                  "risk": {
+                    "type": "string",
+                    "enum": ["high", "medium", "low"]
                   }
                 },
                 "required": ["mode", "options"]
@@ -771,6 +827,10 @@
                       "required": ["kind", "id"]
                     },
                     "maxItems": 8
+                  },
+                  "risk": {
+                    "type": "string",
+                    "enum": ["high", "medium", "low"]
                   }
                 },
                 "required": ["mode", "form"]
@@ -813,6 +873,10 @@
                       "required": ["kind", "id"]
                     },
                     "maxItems": 8
+                  },
+                  "risk": {
+                    "type": "string",
+                    "enum": ["high", "medium", "low"]
                   }
                 },
                 "required": ["mode"]
@@ -889,6 +953,10 @@
                       "required": ["kind", "id"]
                     },
                     "maxItems": 8
+                  },
+                  "risk": {
+                    "type": "string",
+                    "enum": ["high", "medium", "low"]
                   }
                 },
                 "required": ["mode", "provide"]
@@ -12106,6 +12174,10 @@
                                               "required": ["kind", "id"]
                                             },
                                             "maxItems": 8
+                                          },
+                                          "risk": {
+                                            "type": "string",
+                                            "enum": ["high", "medium", "low"]
                                           }
                                         },
                                         "required": ["mode"]
@@ -12141,6 +12213,62 @@
                                                 "description": {
                                                   "type": "string",
                                                   "maxLength": 140
+                                                },
+                                                "caution": {
+                                                  "type": "string",
+                                                  "minLength": 1,
+                                                  "maxLength": 60
+                                                },
+                                                "followUp": {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "prompt": {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 120
+                                                    },
+                                                    "options": {
+                                                      "type": "array",
+                                                      "items": {
+                                                        "type": "object",
+                                                        "properties": {
+                                                          "label": {
+                                                            "type": "string",
+                                                            "minLength": 1,
+                                                            "maxLength": 80
+                                                          },
+                                                          "value": {
+                                                            "type": "string",
+                                                            "maxLength": 500
+                                                          },
+                                                          "icon": {
+                                                            "type": "string",
+                                                            "maxLength": 64
+                                                          },
+                                                          "recommended": {
+                                                            "type": "boolean"
+                                                          },
+                                                          "description": {
+                                                            "type": "string",
+                                                            "maxLength": 140
+                                                          },
+                                                          "caution": {
+                                                            "type": "string",
+                                                            "minLength": 1,
+                                                            "maxLength": 60
+                                                          }
+                                                        },
+                                                        "required": ["label"],
+                                                        "additionalProperties": false
+                                                      },
+                                                      "minItems": 2,
+                                                      "maxItems": 4
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "prompt",
+                                                    "options"
+                                                  ]
                                                 }
                                               },
                                               "required": ["label"]
@@ -12173,6 +12301,10 @@
                                               "required": ["kind", "id"]
                                             },
                                             "maxItems": 8
+                                          },
+                                          "risk": {
+                                            "type": "string",
+                                            "enum": ["high", "medium", "low"]
                                           }
                                         },
                                         "required": ["mode", "options"]
@@ -12267,6 +12399,10 @@
                                               "required": ["kind", "id"]
                                             },
                                             "maxItems": 8
+                                          },
+                                          "risk": {
+                                            "type": "string",
+                                            "enum": ["high", "medium", "low"]
                                           }
                                         },
                                         "required": ["mode", "form"]
@@ -12315,6 +12451,10 @@
                                               "required": ["kind", "id"]
                                             },
                                             "maxItems": 8
+                                          },
+                                          "risk": {
+                                            "type": "string",
+                                            "enum": ["high", "medium", "low"]
                                           }
                                         },
                                         "required": ["mode"]
@@ -12403,6 +12543,10 @@
                                               "required": ["kind", "id"]
                                             },
                                             "maxItems": 8
+                                          },
+                                          "risk": {
+                                            "type": "string",
+                                            "enum": ["high", "medium", "low"]
                                           }
                                         },
                                         "required": ["mode", "provide"]
@@ -12524,6 +12668,14 @@
                                                     "required": ["kind", "id"]
                                                   },
                                                   "maxItems": 8
+                                                },
+                                                "risk": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "high",
+                                                    "medium",
+                                                    "low"
+                                                  ]
                                                 }
                                               },
                                               "required": ["mode"]
@@ -12559,6 +12711,64 @@
                                                       "description": {
                                                         "type": "string",
                                                         "maxLength": 140
+                                                      },
+                                                      "caution": {
+                                                        "type": "string",
+                                                        "minLength": 1,
+                                                        "maxLength": 60
+                                                      },
+                                                      "followUp": {
+                                                        "type": "object",
+                                                        "properties": {
+                                                          "prompt": {
+                                                            "type": "string",
+                                                            "minLength": 1,
+                                                            "maxLength": 120
+                                                          },
+                                                          "options": {
+                                                            "type": "array",
+                                                            "items": {
+                                                              "type": "object",
+                                                              "properties": {
+                                                                "label": {
+                                                                  "type": "string",
+                                                                  "minLength": 1,
+                                                                  "maxLength": 80
+                                                                },
+                                                                "value": {
+                                                                  "type": "string",
+                                                                  "maxLength": 500
+                                                                },
+                                                                "icon": {
+                                                                  "type": "string",
+                                                                  "maxLength": 64
+                                                                },
+                                                                "recommended": {
+                                                                  "type": "boolean"
+                                                                },
+                                                                "description": {
+                                                                  "type": "string",
+                                                                  "maxLength": 140
+                                                                },
+                                                                "caution": {
+                                                                  "type": "string",
+                                                                  "minLength": 1,
+                                                                  "maxLength": 60
+                                                                }
+                                                              },
+                                                              "required": [
+                                                                "label"
+                                                              ],
+                                                              "additionalProperties": false
+                                                            },
+                                                            "minItems": 2,
+                                                            "maxItems": 4
+                                                          }
+                                                        },
+                                                        "required": [
+                                                          "prompt",
+                                                          "options"
+                                                        ]
                                                       }
                                                     },
                                                     "required": ["label"]
@@ -12593,6 +12803,14 @@
                                                     "required": ["kind", "id"]
                                                   },
                                                   "maxItems": 8
+                                                },
+                                                "risk": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "high",
+                                                    "medium",
+                                                    "low"
+                                                  ]
                                                 }
                                               },
                                               "required": ["mode", "options"]
@@ -12693,6 +12911,14 @@
                                                     "required": ["kind", "id"]
                                                   },
                                                   "maxItems": 8
+                                                },
+                                                "risk": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "high",
+                                                    "medium",
+                                                    "low"
+                                                  ]
                                                 }
                                               },
                                               "required": ["mode", "form"]
@@ -12741,6 +12967,14 @@
                                                     "required": ["kind", "id"]
                                                   },
                                                   "maxItems": 8
+                                                },
+                                                "risk": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "high",
+                                                    "medium",
+                                                    "low"
+                                                  ]
                                                 }
                                               },
                                               "required": ["mode"]
@@ -12835,6 +13069,14 @@
                                                     "required": ["kind", "id"]
                                                   },
                                                   "maxItems": 8
+                                                },
+                                                "risk": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "high",
+                                                    "medium",
+                                                    "low"
+                                                  ]
                                                 }
                                               },
                                               "required": ["mode", "provide"]
@@ -14844,6 +15086,10 @@
                                               "required": ["kind", "id"]
                                             },
                                             "maxItems": 8
+                                          },
+                                          "risk": {
+                                            "type": "string",
+                                            "enum": ["high", "medium", "low"]
                                           }
                                         },
                                         "required": ["mode"]
@@ -14879,6 +15125,62 @@
                                                 "description": {
                                                   "type": "string",
                                                   "maxLength": 140
+                                                },
+                                                "caution": {
+                                                  "type": "string",
+                                                  "minLength": 1,
+                                                  "maxLength": 60
+                                                },
+                                                "followUp": {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "prompt": {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 120
+                                                    },
+                                                    "options": {
+                                                      "type": "array",
+                                                      "items": {
+                                                        "type": "object",
+                                                        "properties": {
+                                                          "label": {
+                                                            "type": "string",
+                                                            "minLength": 1,
+                                                            "maxLength": 80
+                                                          },
+                                                          "value": {
+                                                            "type": "string",
+                                                            "maxLength": 500
+                                                          },
+                                                          "icon": {
+                                                            "type": "string",
+                                                            "maxLength": 64
+                                                          },
+                                                          "recommended": {
+                                                            "type": "boolean"
+                                                          },
+                                                          "description": {
+                                                            "type": "string",
+                                                            "maxLength": 140
+                                                          },
+                                                          "caution": {
+                                                            "type": "string",
+                                                            "minLength": 1,
+                                                            "maxLength": 60
+                                                          }
+                                                        },
+                                                        "required": ["label"],
+                                                        "additionalProperties": false
+                                                      },
+                                                      "minItems": 2,
+                                                      "maxItems": 4
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "prompt",
+                                                    "options"
+                                                  ]
                                                 }
                                               },
                                               "required": ["label"]
@@ -14911,6 +15213,10 @@
                                               "required": ["kind", "id"]
                                             },
                                             "maxItems": 8
+                                          },
+                                          "risk": {
+                                            "type": "string",
+                                            "enum": ["high", "medium", "low"]
                                           }
                                         },
                                         "required": ["mode", "options"]
@@ -15005,6 +15311,10 @@
                                               "required": ["kind", "id"]
                                             },
                                             "maxItems": 8
+                                          },
+                                          "risk": {
+                                            "type": "string",
+                                            "enum": ["high", "medium", "low"]
                                           }
                                         },
                                         "required": ["mode", "form"]
@@ -15053,6 +15363,10 @@
                                               "required": ["kind", "id"]
                                             },
                                             "maxItems": 8
+                                          },
+                                          "risk": {
+                                            "type": "string",
+                                            "enum": ["high", "medium", "low"]
                                           }
                                         },
                                         "required": ["mode"]
@@ -15141,6 +15455,10 @@
                                               "required": ["kind", "id"]
                                             },
                                             "maxItems": 8
+                                          },
+                                          "risk": {
+                                            "type": "string",
+                                            "enum": ["high", "medium", "low"]
                                           }
                                         },
                                         "required": ["mode", "provide"]
@@ -15262,6 +15580,14 @@
                                                     "required": ["kind", "id"]
                                                   },
                                                   "maxItems": 8
+                                                },
+                                                "risk": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "high",
+                                                    "medium",
+                                                    "low"
+                                                  ]
                                                 }
                                               },
                                               "required": ["mode"]
@@ -15297,6 +15623,64 @@
                                                       "description": {
                                                         "type": "string",
                                                         "maxLength": 140
+                                                      },
+                                                      "caution": {
+                                                        "type": "string",
+                                                        "minLength": 1,
+                                                        "maxLength": 60
+                                                      },
+                                                      "followUp": {
+                                                        "type": "object",
+                                                        "properties": {
+                                                          "prompt": {
+                                                            "type": "string",
+                                                            "minLength": 1,
+                                                            "maxLength": 120
+                                                          },
+                                                          "options": {
+                                                            "type": "array",
+                                                            "items": {
+                                                              "type": "object",
+                                                              "properties": {
+                                                                "label": {
+                                                                  "type": "string",
+                                                                  "minLength": 1,
+                                                                  "maxLength": 80
+                                                                },
+                                                                "value": {
+                                                                  "type": "string",
+                                                                  "maxLength": 500
+                                                                },
+                                                                "icon": {
+                                                                  "type": "string",
+                                                                  "maxLength": 64
+                                                                },
+                                                                "recommended": {
+                                                                  "type": "boolean"
+                                                                },
+                                                                "description": {
+                                                                  "type": "string",
+                                                                  "maxLength": 140
+                                                                },
+                                                                "caution": {
+                                                                  "type": "string",
+                                                                  "minLength": 1,
+                                                                  "maxLength": 60
+                                                                }
+                                                              },
+                                                              "required": [
+                                                                "label"
+                                                              ],
+                                                              "additionalProperties": false
+                                                            },
+                                                            "minItems": 2,
+                                                            "maxItems": 4
+                                                          }
+                                                        },
+                                                        "required": [
+                                                          "prompt",
+                                                          "options"
+                                                        ]
                                                       }
                                                     },
                                                     "required": ["label"]
@@ -15331,6 +15715,14 @@
                                                     "required": ["kind", "id"]
                                                   },
                                                   "maxItems": 8
+                                                },
+                                                "risk": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "high",
+                                                    "medium",
+                                                    "low"
+                                                  ]
                                                 }
                                               },
                                               "required": ["mode", "options"]
@@ -15431,6 +15823,14 @@
                                                     "required": ["kind", "id"]
                                                   },
                                                   "maxItems": 8
+                                                },
+                                                "risk": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "high",
+                                                    "medium",
+                                                    "low"
+                                                  ]
                                                 }
                                               },
                                               "required": ["mode", "form"]
@@ -15479,6 +15879,14 @@
                                                     "required": ["kind", "id"]
                                                   },
                                                   "maxItems": 8
+                                                },
+                                                "risk": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "high",
+                                                    "medium",
+                                                    "low"
+                                                  ]
                                                 }
                                               },
                                               "required": ["mode"]
@@ -15573,6 +15981,14 @@
                                                     "required": ["kind", "id"]
                                                   },
                                                   "maxItems": 8
+                                                },
+                                                "risk": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "high",
+                                                    "medium",
+                                                    "low"
+                                                  ]
                                                 }
                                               },
                                               "required": ["mode", "provide"]
@@ -20142,6 +20558,10 @@
                                           "required": ["kind", "id"]
                                         },
                                         "maxItems": 8
+                                      },
+                                      "risk": {
+                                        "type": "string",
+                                        "enum": ["high", "medium", "low"]
                                       }
                                     },
                                     "required": ["mode"]
@@ -20177,6 +20597,59 @@
                                             "description": {
                                               "type": "string",
                                               "maxLength": 140
+                                            },
+                                            "caution": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 60
+                                            },
+                                            "followUp": {
+                                              "type": "object",
+                                              "properties": {
+                                                "prompt": {
+                                                  "type": "string",
+                                                  "minLength": 1,
+                                                  "maxLength": 120
+                                                },
+                                                "options": {
+                                                  "type": "array",
+                                                  "items": {
+                                                    "type": "object",
+                                                    "properties": {
+                                                      "label": {
+                                                        "type": "string",
+                                                        "minLength": 1,
+                                                        "maxLength": 80
+                                                      },
+                                                      "value": {
+                                                        "type": "string",
+                                                        "maxLength": 500
+                                                      },
+                                                      "icon": {
+                                                        "type": "string",
+                                                        "maxLength": 64
+                                                      },
+                                                      "recommended": {
+                                                        "type": "boolean"
+                                                      },
+                                                      "description": {
+                                                        "type": "string",
+                                                        "maxLength": 140
+                                                      },
+                                                      "caution": {
+                                                        "type": "string",
+                                                        "minLength": 1,
+                                                        "maxLength": 60
+                                                      }
+                                                    },
+                                                    "required": ["label"],
+                                                    "additionalProperties": false
+                                                  },
+                                                  "minItems": 2,
+                                                  "maxItems": 4
+                                                }
+                                              },
+                                              "required": ["prompt", "options"]
                                             }
                                           },
                                           "required": ["label"]
@@ -20209,6 +20682,10 @@
                                           "required": ["kind", "id"]
                                         },
                                         "maxItems": 8
+                                      },
+                                      "risk": {
+                                        "type": "string",
+                                        "enum": ["high", "medium", "low"]
                                       }
                                     },
                                     "required": ["mode", "options"]
@@ -20299,6 +20776,10 @@
                                           "required": ["kind", "id"]
                                         },
                                         "maxItems": 8
+                                      },
+                                      "risk": {
+                                        "type": "string",
+                                        "enum": ["high", "medium", "low"]
                                       }
                                     },
                                     "required": ["mode", "form"]
@@ -20347,6 +20828,10 @@
                                           "required": ["kind", "id"]
                                         },
                                         "maxItems": 8
+                                      },
+                                      "risk": {
+                                        "type": "string",
+                                        "enum": ["high", "medium", "low"]
                                       }
                                     },
                                     "required": ["mode"]
@@ -20435,6 +20920,10 @@
                                           "required": ["kind", "id"]
                                         },
                                         "maxItems": 8
+                                      },
+                                      "risk": {
+                                        "type": "string",
+                                        "enum": ["high", "medium", "low"]
                                       }
                                     },
                                     "required": ["mode", "provide"]
@@ -25551,7 +26040,7 @@
       "get": {
         "tags": ["FocusSessions"],
         "summary": "List focus sessions for a workspace or a project",
-        "description": "Scope by `workspaceId` (membership-checked), `projectId` (the project must be visible to the caller — `loadVisibleProject`, the same floor every project read and filing write uses), or both. At least one is required. Rows are always floored at the sessions the caller can read.",
+        "description": "Scope by `workspaceId` (membership-checked), `projectId` (the project must be visible to the caller — `loadVisibleProject`, the same floor every project read and filing write uses), or both. At least one is required, except for a workspace-bound key, which reads its own workspace when it names none (another `workspaceId` is a 403). Rows are always floored at the sessions the caller can read.",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -25893,6 +26382,10 @@
                                     "required": ["kind", "id"]
                                   },
                                   "maxItems": 8
+                                },
+                                "risk": {
+                                  "type": "string",
+                                  "enum": ["high", "medium", "low"]
                                 }
                               },
                               "required": ["mode"]
@@ -25926,6 +26419,59 @@
                                       "description": {
                                         "type": "string",
                                         "maxLength": 140
+                                      },
+                                      "caution": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 60
+                                      },
+                                      "followUp": {
+                                        "type": "object",
+                                        "properties": {
+                                          "prompt": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 120
+                                          },
+                                          "options": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "object",
+                                              "properties": {
+                                                "label": {
+                                                  "type": "string",
+                                                  "minLength": 1,
+                                                  "maxLength": 80
+                                                },
+                                                "value": {
+                                                  "type": "string",
+                                                  "maxLength": 500
+                                                },
+                                                "icon": {
+                                                  "type": "string",
+                                                  "maxLength": 64
+                                                },
+                                                "recommended": {
+                                                  "type": "boolean"
+                                                },
+                                                "description": {
+                                                  "type": "string",
+                                                  "maxLength": 140
+                                                },
+                                                "caution": {
+                                                  "type": "string",
+                                                  "minLength": 1,
+                                                  "maxLength": 60
+                                                }
+                                              },
+                                              "required": ["label"],
+                                              "additionalProperties": false
+                                            },
+                                            "minItems": 2,
+                                            "maxItems": 4
+                                          }
+                                        },
+                                        "required": ["prompt", "options"]
                                       }
                                     },
                                     "required": ["label"]
@@ -25958,6 +26504,10 @@
                                     "required": ["kind", "id"]
                                   },
                                   "maxItems": 8
+                                },
+                                "risk": {
+                                  "type": "string",
+                                  "enum": ["high", "medium", "low"]
                                 }
                               },
                               "required": ["mode", "options"]
@@ -26035,6 +26585,10 @@
                                     "required": ["kind", "id"]
                                   },
                                   "maxItems": 8
+                                },
+                                "risk": {
+                                  "type": "string",
+                                  "enum": ["high", "medium", "low"]
                                 }
                               },
                               "required": ["mode", "form"]
@@ -26077,6 +26631,10 @@
                                     "required": ["kind", "id"]
                                   },
                                   "maxItems": 8
+                                },
+                                "risk": {
+                                  "type": "string",
+                                  "enum": ["high", "medium", "low"]
                                 }
                               },
                               "required": ["mode"]
@@ -26165,6 +26723,10 @@
                                     "required": ["kind", "id"]
                                   },
                                   "maxItems": 8
+                                },
+                                "risk": {
+                                  "type": "string",
+                                  "enum": ["high", "medium", "low"]
                                 }
                               },
                               "required": ["mode", "provide"]
@@ -26328,6 +26890,40 @@
                                         "description": {
                                           "type": "string",
                                           "maxLength": 140
+                                        },
+                                        "caution": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 60
+                                        }
+                                      },
+                                      "required": ["label"]
+                                    },
+                                    "then": {
+                                      "type": "object",
+                                      "properties": {
+                                        "label": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 80
+                                        },
+                                        "value": {
+                                          "type": "string",
+                                          "maxLength": 500
+                                        },
+                                        "icon": {
+                                          "type": "string",
+                                          "maxLength": 64
+                                        },
+                                        "recommended": { "type": "boolean" },
+                                        "description": {
+                                          "type": "string",
+                                          "maxLength": 140
+                                        },
+                                        "caution": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 60
                                         }
                                       },
                                       "required": ["label"]
@@ -26444,6 +27040,59 @@
                                       "description": {
                                         "type": "string",
                                         "maxLength": 140
+                                      },
+                                      "caution": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 60
+                                      },
+                                      "followUp": {
+                                        "type": "object",
+                                        "properties": {
+                                          "prompt": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 120
+                                          },
+                                          "options": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "object",
+                                              "properties": {
+                                                "label": {
+                                                  "type": "string",
+                                                  "minLength": 1,
+                                                  "maxLength": 80
+                                                },
+                                                "value": {
+                                                  "type": "string",
+                                                  "maxLength": 500
+                                                },
+                                                "icon": {
+                                                  "type": "string",
+                                                  "maxLength": 64
+                                                },
+                                                "recommended": {
+                                                  "type": "boolean"
+                                                },
+                                                "description": {
+                                                  "type": "string",
+                                                  "maxLength": 140
+                                                },
+                                                "caution": {
+                                                  "type": "string",
+                                                  "minLength": 1,
+                                                  "maxLength": 60
+                                                }
+                                              },
+                                              "required": ["label"],
+                                              "additionalProperties": false
+                                            },
+                                            "minItems": 2,
+                                            "maxItems": 4
+                                          }
+                                        },
+                                        "required": ["prompt", "options"]
                                       }
                                     },
                                     "required": ["label"]
@@ -26451,6 +27100,7 @@
                                   "maxItems": 8
                                 },
                                 "chosenKey": { "type": ["string", "null"] },
+                                "thenKey": { "type": "string" },
                                 "recommendedKey": {
                                   "type": ["string", "null"]
                                 },
@@ -26558,6 +27208,40 @@
                                           "description": {
                                             "type": "string",
                                             "maxLength": 140
+                                          },
+                                          "caution": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 60
+                                          }
+                                        },
+                                        "required": ["label"]
+                                      },
+                                      "then": {
+                                        "type": "object",
+                                        "properties": {
+                                          "label": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 80
+                                          },
+                                          "value": {
+                                            "type": "string",
+                                            "maxLength": 500
+                                          },
+                                          "icon": {
+                                            "type": "string",
+                                            "maxLength": 64
+                                          },
+                                          "recommended": { "type": "boolean" },
+                                          "description": {
+                                            "type": "string",
+                                            "maxLength": 140
+                                          },
+                                          "caution": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 60
                                           }
                                         },
                                         "required": ["label"]
@@ -26674,6 +27358,59 @@
                                         "description": {
                                           "type": "string",
                                           "maxLength": 140
+                                        },
+                                        "caution": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 60
+                                        },
+                                        "followUp": {
+                                          "type": "object",
+                                          "properties": {
+                                            "prompt": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 120
+                                            },
+                                            "options": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "object",
+                                                "properties": {
+                                                  "label": {
+                                                    "type": "string",
+                                                    "minLength": 1,
+                                                    "maxLength": 80
+                                                  },
+                                                  "value": {
+                                                    "type": "string",
+                                                    "maxLength": 500
+                                                  },
+                                                  "icon": {
+                                                    "type": "string",
+                                                    "maxLength": 64
+                                                  },
+                                                  "recommended": {
+                                                    "type": "boolean"
+                                                  },
+                                                  "description": {
+                                                    "type": "string",
+                                                    "maxLength": 140
+                                                  },
+                                                  "caution": {
+                                                    "type": "string",
+                                                    "minLength": 1,
+                                                    "maxLength": 60
+                                                  }
+                                                },
+                                                "required": ["label"],
+                                                "additionalProperties": false
+                                              },
+                                              "minItems": 2,
+                                              "maxItems": 4
+                                            }
+                                          },
+                                          "required": ["prompt", "options"]
                                         }
                                       },
                                       "required": ["label"]
@@ -26681,6 +27418,7 @@
                                     "maxItems": 8
                                   },
                                   "chosenKey": { "type": ["string", "null"] },
+                                  "thenKey": { "type": "string" },
                                   "recommendedKey": {
                                     "type": ["string", "null"]
                                   },
@@ -26768,6 +27506,10 @@
                                     "required": ["kind", "id"]
                                   },
                                   "maxItems": 8
+                                },
+                                "risk": {
+                                  "type": "string",
+                                  "enum": ["high", "medium", "low"]
                                 }
                               },
                               "required": ["mode"]
@@ -26801,6 +27543,59 @@
                                       "description": {
                                         "type": "string",
                                         "maxLength": 140
+                                      },
+                                      "caution": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 60
+                                      },
+                                      "followUp": {
+                                        "type": "object",
+                                        "properties": {
+                                          "prompt": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 120
+                                          },
+                                          "options": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "object",
+                                              "properties": {
+                                                "label": {
+                                                  "type": "string",
+                                                  "minLength": 1,
+                                                  "maxLength": 80
+                                                },
+                                                "value": {
+                                                  "type": "string",
+                                                  "maxLength": 500
+                                                },
+                                                "icon": {
+                                                  "type": "string",
+                                                  "maxLength": 64
+                                                },
+                                                "recommended": {
+                                                  "type": "boolean"
+                                                },
+                                                "description": {
+                                                  "type": "string",
+                                                  "maxLength": 140
+                                                },
+                                                "caution": {
+                                                  "type": "string",
+                                                  "minLength": 1,
+                                                  "maxLength": 60
+                                                }
+                                              },
+                                              "required": ["label"],
+                                              "additionalProperties": false
+                                            },
+                                            "minItems": 2,
+                                            "maxItems": 4
+                                          }
+                                        },
+                                        "required": ["prompt", "options"]
                                       }
                                     },
                                     "required": ["label"]
@@ -26833,6 +27628,10 @@
                                     "required": ["kind", "id"]
                                   },
                                   "maxItems": 8
+                                },
+                                "risk": {
+                                  "type": "string",
+                                  "enum": ["high", "medium", "low"]
                                 }
                               },
                               "required": ["mode", "options"]
@@ -26910,6 +27709,10 @@
                                     "required": ["kind", "id"]
                                   },
                                   "maxItems": 8
+                                },
+                                "risk": {
+                                  "type": "string",
+                                  "enum": ["high", "medium", "low"]
                                 }
                               },
                               "required": ["mode", "form"]
@@ -26952,6 +27755,10 @@
                                     "required": ["kind", "id"]
                                   },
                                   "maxItems": 8
+                                },
+                                "risk": {
+                                  "type": "string",
+                                  "enum": ["high", "medium", "low"]
                                 }
                               },
                               "required": ["mode"]
@@ -27040,6 +27847,10 @@
                                     "required": ["kind", "id"]
                                   },
                                   "maxItems": 8
+                                },
+                                "risk": {
+                                  "type": "string",
+                                  "enum": ["high", "medium", "low"]
                                 }
                               },
                               "required": ["mode", "provide"]
@@ -27173,6 +27984,263 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/focus-sessions/graph": {
+      "get": {
+        "tags": ["FocusSessions"],
+        "summary": "The work graph: open work, recently settled work, every edge",
+        "description": "One read for a whole map (`services/focus-sessions/work-graph.ts`): every OPEN session, plus every session settled in the last `windowHours` (default 72), plus the far end of every edge of those, with the edges flat (`blocked_by`, `spawned_from`, `waits_on_output`, `triggered`, `updated`). For an unbound key, pod-wide when neither `workspaceId` nor `projectId` is given. A workspace-bound key reads its own workspace, far ends included, and another `workspaceId` is a 403. Floored at the sessions the caller can read, like the list. At most 500 window sessions, open first: `window.truncated` / `window.omitted` say when it cut. A failed edge read is `sections.<name>.status: unavailable`, never an empty list.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string" },
+            "required": false,
+            "name": "workspaceId",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string" },
+            "required": false,
+            "name": "projectId",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "integer", "minimum": 1, "maximum": 720 },
+            "required": false,
+            "name": "windowHours",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": ["work", "run", "receipt", "all"]
+            },
+            "required": false,
+            "name": "kind",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": ["default", "triage", "all"]
+            },
+            "required": false,
+            "name": "lens",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Work graph",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "nodes": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": { "type": "string" },
+                          "workspaceId": { "type": ["string", "null"] },
+                          "projectId": { "type": ["string", "null"] },
+                          "userId": { "type": "string" },
+                          "correlationId": { "type": ["string", "null"] },
+                          "title": { "type": ["string", "null"] },
+                          "goal": { "type": "string" },
+                          "status": { "type": "string" },
+                          "templateId": { "type": ["string", "null"] },
+                          "expectedOutputs": {},
+                          "channelId": { "type": ["string", "null"] },
+                          "progress": { "type": ["number", "null"] },
+                          "currentStage": { "type": ["string", "null"] },
+                          "agentIds": {
+                            "type": "array",
+                            "items": { "type": "string" }
+                          },
+                          "closedAt": { "type": ["string", "null"] },
+                          "verificationReport": {},
+                          "metadata": {},
+                          "startedAt": { "type": "string" },
+                          "createdAt": { "type": "string" },
+                          "updatedAt": { "type": "string" },
+                          "kind": {
+                            "type": "string",
+                            "enum": ["work", "run", "receipt"]
+                          },
+                          "parentSessionId": { "type": ["string", "null"] },
+                          "triage": {},
+                          "nextMove": {},
+                          "unitFacts": {},
+                          "live": {},
+                          "viewerRole": {
+                            "type": "string",
+                            "enum": ["owner", "member"]
+                          },
+                          "inWindow": { "type": "boolean" }
+                        },
+                        "required": [
+                          "id",
+                          "workspaceId",
+                          "projectId",
+                          "userId",
+                          "correlationId",
+                          "title",
+                          "goal",
+                          "status",
+                          "templateId",
+                          "channelId",
+                          "progress",
+                          "currentStage",
+                          "agentIds",
+                          "closedAt",
+                          "startedAt",
+                          "createdAt",
+                          "updatedAt",
+                          "kind",
+                          "parentSessionId",
+                          "viewerRole",
+                          "inWindow"
+                        ]
+                      }
+                    },
+                    "edges": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "blocked_by",
+                              "spawned_from",
+                              "waits_on_output",
+                              "triggered",
+                              "updated"
+                            ]
+                          },
+                          "from": { "type": "string" },
+                          "to": { "type": "string" },
+                          "entityId": { "type": "string" },
+                          "count": { "type": "number" },
+                          "lastAt": { "type": ["string", "null"] }
+                        },
+                        "required": ["kind", "from", "to"]
+                      }
+                    },
+                    "sections": {
+                      "type": "object",
+                      "properties": {
+                        "blockedBy": {
+                          "type": "object",
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["ok", "unavailable"]
+                            },
+                            "reason": { "type": "string" }
+                          },
+                          "required": ["status"]
+                        },
+                        "waitsOnOutputs": {
+                          "type": "object",
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["ok", "unavailable"]
+                            },
+                            "reason": { "type": "string" }
+                          },
+                          "required": ["status"]
+                        },
+                        "interactions": {
+                          "type": "object",
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["ok", "unavailable"]
+                            },
+                            "reason": { "type": "string" }
+                          },
+                          "required": ["status"]
+                        },
+                        "farEnds": {
+                          "type": "object",
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["ok", "unavailable"]
+                            },
+                            "reason": { "type": "string" }
+                          },
+                          "required": ["status"]
+                        }
+                      },
+                      "required": [
+                        "blockedBy",
+                        "waitsOnOutputs",
+                        "interactions",
+                        "farEnds"
+                      ]
+                    },
+                    "window": {
+                      "type": "object",
+                      "properties": {
+                        "since": { "type": "string" },
+                        "hours": { "type": "number" },
+                        "ceiling": { "type": "number" },
+                        "truncated": { "type": "boolean" },
+                        "omitted": { "type": "number" }
+                      },
+                      "required": [
+                        "since",
+                        "hours",
+                        "ceiling",
+                        "truncated",
+                        "omitted"
+                      ]
+                    }
+                  },
+                  "required": ["nodes", "edges", "sections", "window"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Project not found",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
@@ -27573,6 +28641,10 @@
                                     "required": ["kind", "id"]
                                   },
                                   "maxItems": 8
+                                },
+                                "risk": {
+                                  "type": "string",
+                                  "enum": ["high", "medium", "low"]
                                 }
                               },
                               "required": ["mode"]
@@ -27606,6 +28678,59 @@
                                       "description": {
                                         "type": "string",
                                         "maxLength": 140
+                                      },
+                                      "caution": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 60
+                                      },
+                                      "followUp": {
+                                        "type": "object",
+                                        "properties": {
+                                          "prompt": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 120
+                                          },
+                                          "options": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "object",
+                                              "properties": {
+                                                "label": {
+                                                  "type": "string",
+                                                  "minLength": 1,
+                                                  "maxLength": 80
+                                                },
+                                                "value": {
+                                                  "type": "string",
+                                                  "maxLength": 500
+                                                },
+                                                "icon": {
+                                                  "type": "string",
+                                                  "maxLength": 64
+                                                },
+                                                "recommended": {
+                                                  "type": "boolean"
+                                                },
+                                                "description": {
+                                                  "type": "string",
+                                                  "maxLength": 140
+                                                },
+                                                "caution": {
+                                                  "type": "string",
+                                                  "minLength": 1,
+                                                  "maxLength": 60
+                                                }
+                                              },
+                                              "required": ["label"],
+                                              "additionalProperties": false
+                                            },
+                                            "minItems": 2,
+                                            "maxItems": 4
+                                          }
+                                        },
+                                        "required": ["prompt", "options"]
                                       }
                                     },
                                     "required": ["label"]
@@ -27638,6 +28763,10 @@
                                     "required": ["kind", "id"]
                                   },
                                   "maxItems": 8
+                                },
+                                "risk": {
+                                  "type": "string",
+                                  "enum": ["high", "medium", "low"]
                                 }
                               },
                               "required": ["mode", "options"]
@@ -27715,6 +28844,10 @@
                                     "required": ["kind", "id"]
                                   },
                                   "maxItems": 8
+                                },
+                                "risk": {
+                                  "type": "string",
+                                  "enum": ["high", "medium", "low"]
                                 }
                               },
                               "required": ["mode", "form"]
@@ -27757,6 +28890,10 @@
                                     "required": ["kind", "id"]
                                   },
                                   "maxItems": 8
+                                },
+                                "risk": {
+                                  "type": "string",
+                                  "enum": ["high", "medium", "low"]
                                 }
                               },
                               "required": ["mode"]
@@ -27845,6 +28982,10 @@
                                     "required": ["kind", "id"]
                                   },
                                   "maxItems": 8
+                                },
+                                "risk": {
+                                  "type": "string",
+                                  "enum": ["high", "medium", "low"]
                                 }
                               },
                               "required": ["mode", "provide"]
@@ -28008,6 +29149,40 @@
                                         "description": {
                                           "type": "string",
                                           "maxLength": 140
+                                        },
+                                        "caution": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 60
+                                        }
+                                      },
+                                      "required": ["label"]
+                                    },
+                                    "then": {
+                                      "type": "object",
+                                      "properties": {
+                                        "label": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 80
+                                        },
+                                        "value": {
+                                          "type": "string",
+                                          "maxLength": 500
+                                        },
+                                        "icon": {
+                                          "type": "string",
+                                          "maxLength": 64
+                                        },
+                                        "recommended": { "type": "boolean" },
+                                        "description": {
+                                          "type": "string",
+                                          "maxLength": 140
+                                        },
+                                        "caution": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 60
                                         }
                                       },
                                       "required": ["label"]
@@ -28124,6 +29299,59 @@
                                       "description": {
                                         "type": "string",
                                         "maxLength": 140
+                                      },
+                                      "caution": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 60
+                                      },
+                                      "followUp": {
+                                        "type": "object",
+                                        "properties": {
+                                          "prompt": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 120
+                                          },
+                                          "options": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "object",
+                                              "properties": {
+                                                "label": {
+                                                  "type": "string",
+                                                  "minLength": 1,
+                                                  "maxLength": 80
+                                                },
+                                                "value": {
+                                                  "type": "string",
+                                                  "maxLength": 500
+                                                },
+                                                "icon": {
+                                                  "type": "string",
+                                                  "maxLength": 64
+                                                },
+                                                "recommended": {
+                                                  "type": "boolean"
+                                                },
+                                                "description": {
+                                                  "type": "string",
+                                                  "maxLength": 140
+                                                },
+                                                "caution": {
+                                                  "type": "string",
+                                                  "minLength": 1,
+                                                  "maxLength": 60
+                                                }
+                                              },
+                                              "required": ["label"],
+                                              "additionalProperties": false
+                                            },
+                                            "minItems": 2,
+                                            "maxItems": 4
+                                          }
+                                        },
+                                        "required": ["prompt", "options"]
                                       }
                                     },
                                     "required": ["label"]
@@ -28131,6 +29359,7 @@
                                   "maxItems": 8
                                 },
                                 "chosenKey": { "type": ["string", "null"] },
+                                "thenKey": { "type": "string" },
                                 "recommendedKey": {
                                   "type": ["string", "null"]
                                 },
@@ -28238,6 +29467,40 @@
                                           "description": {
                                             "type": "string",
                                             "maxLength": 140
+                                          },
+                                          "caution": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 60
+                                          }
+                                        },
+                                        "required": ["label"]
+                                      },
+                                      "then": {
+                                        "type": "object",
+                                        "properties": {
+                                          "label": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 80
+                                          },
+                                          "value": {
+                                            "type": "string",
+                                            "maxLength": 500
+                                          },
+                                          "icon": {
+                                            "type": "string",
+                                            "maxLength": 64
+                                          },
+                                          "recommended": { "type": "boolean" },
+                                          "description": {
+                                            "type": "string",
+                                            "maxLength": 140
+                                          },
+                                          "caution": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 60
                                           }
                                         },
                                         "required": ["label"]
@@ -28354,6 +29617,59 @@
                                         "description": {
                                           "type": "string",
                                           "maxLength": 140
+                                        },
+                                        "caution": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 60
+                                        },
+                                        "followUp": {
+                                          "type": "object",
+                                          "properties": {
+                                            "prompt": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 120
+                                            },
+                                            "options": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "object",
+                                                "properties": {
+                                                  "label": {
+                                                    "type": "string",
+                                                    "minLength": 1,
+                                                    "maxLength": 80
+                                                  },
+                                                  "value": {
+                                                    "type": "string",
+                                                    "maxLength": 500
+                                                  },
+                                                  "icon": {
+                                                    "type": "string",
+                                                    "maxLength": 64
+                                                  },
+                                                  "recommended": {
+                                                    "type": "boolean"
+                                                  },
+                                                  "description": {
+                                                    "type": "string",
+                                                    "maxLength": 140
+                                                  },
+                                                  "caution": {
+                                                    "type": "string",
+                                                    "minLength": 1,
+                                                    "maxLength": 60
+                                                  }
+                                                },
+                                                "required": ["label"],
+                                                "additionalProperties": false
+                                              },
+                                              "minItems": 2,
+                                              "maxItems": 4
+                                            }
+                                          },
+                                          "required": ["prompt", "options"]
                                         }
                                       },
                                       "required": ["label"]
@@ -28361,6 +29677,7 @@
                                     "maxItems": 8
                                   },
                                   "chosenKey": { "type": ["string", "null"] },
+                                  "thenKey": { "type": "string" },
                                   "recommendedKey": {
                                     "type": ["string", "null"]
                                   },
@@ -28448,6 +29765,10 @@
                                     "required": ["kind", "id"]
                                   },
                                   "maxItems": 8
+                                },
+                                "risk": {
+                                  "type": "string",
+                                  "enum": ["high", "medium", "low"]
                                 }
                               },
                               "required": ["mode"]
@@ -28481,6 +29802,59 @@
                                       "description": {
                                         "type": "string",
                                         "maxLength": 140
+                                      },
+                                      "caution": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 60
+                                      },
+                                      "followUp": {
+                                        "type": "object",
+                                        "properties": {
+                                          "prompt": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 120
+                                          },
+                                          "options": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "object",
+                                              "properties": {
+                                                "label": {
+                                                  "type": "string",
+                                                  "minLength": 1,
+                                                  "maxLength": 80
+                                                },
+                                                "value": {
+                                                  "type": "string",
+                                                  "maxLength": 500
+                                                },
+                                                "icon": {
+                                                  "type": "string",
+                                                  "maxLength": 64
+                                                },
+                                                "recommended": {
+                                                  "type": "boolean"
+                                                },
+                                                "description": {
+                                                  "type": "string",
+                                                  "maxLength": 140
+                                                },
+                                                "caution": {
+                                                  "type": "string",
+                                                  "minLength": 1,
+                                                  "maxLength": 60
+                                                }
+                                              },
+                                              "required": ["label"],
+                                              "additionalProperties": false
+                                            },
+                                            "minItems": 2,
+                                            "maxItems": 4
+                                          }
+                                        },
+                                        "required": ["prompt", "options"]
                                       }
                                     },
                                     "required": ["label"]
@@ -28513,6 +29887,10 @@
                                     "required": ["kind", "id"]
                                   },
                                   "maxItems": 8
+                                },
+                                "risk": {
+                                  "type": "string",
+                                  "enum": ["high", "medium", "low"]
                                 }
                               },
                               "required": ["mode", "options"]
@@ -28590,6 +29968,10 @@
                                     "required": ["kind", "id"]
                                   },
                                   "maxItems": 8
+                                },
+                                "risk": {
+                                  "type": "string",
+                                  "enum": ["high", "medium", "low"]
                                 }
                               },
                               "required": ["mode", "form"]
@@ -28632,6 +30014,10 @@
                                     "required": ["kind", "id"]
                                   },
                                   "maxItems": 8
+                                },
+                                "risk": {
+                                  "type": "string",
+                                  "enum": ["high", "medium", "low"]
                                 }
                               },
                               "required": ["mode"]
@@ -28720,6 +30106,10 @@
                                     "required": ["kind", "id"]
                                   },
                                   "maxItems": 8
+                                },
+                                "risk": {
+                                  "type": "string",
+                                  "enum": ["high", "medium", "low"]
                                 }
                               },
                               "required": ["mode", "provide"]
@@ -29327,6 +30717,10 @@
                               "required": ["kind", "id"]
                             },
                             "maxItems": 8
+                          },
+                          "risk": {
+                            "type": "string",
+                            "enum": ["high", "medium", "low"]
                           }
                         },
                         "required": ["mode"]
@@ -29351,6 +30745,57 @@
                                 "description": {
                                   "type": "string",
                                   "maxLength": 140
+                                },
+                                "caution": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 60
+                                },
+                                "followUp": {
+                                  "type": "object",
+                                  "properties": {
+                                    "prompt": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 120
+                                    },
+                                    "options": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "label": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 80
+                                          },
+                                          "value": {
+                                            "type": "string",
+                                            "maxLength": 500
+                                          },
+                                          "icon": {
+                                            "type": "string",
+                                            "maxLength": 64
+                                          },
+                                          "recommended": { "type": "boolean" },
+                                          "description": {
+                                            "type": "string",
+                                            "maxLength": 140
+                                          },
+                                          "caution": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 60
+                                          }
+                                        },
+                                        "required": ["label"],
+                                        "additionalProperties": false
+                                      },
+                                      "minItems": 2,
+                                      "maxItems": 4
+                                    }
+                                  },
+                                  "required": ["prompt", "options"]
                                 }
                               },
                               "required": ["label"]
@@ -29383,6 +30828,10 @@
                               "required": ["kind", "id"]
                             },
                             "maxItems": 8
+                          },
+                          "risk": {
+                            "type": "string",
+                            "enum": ["high", "medium", "low"]
                           }
                         },
                         "required": ["mode", "options"]
@@ -29460,6 +30909,10 @@
                               "required": ["kind", "id"]
                             },
                             "maxItems": 8
+                          },
+                          "risk": {
+                            "type": "string",
+                            "enum": ["high", "medium", "low"]
                           }
                         },
                         "required": ["mode", "form"]
@@ -29502,6 +30955,10 @@
                               "required": ["kind", "id"]
                             },
                             "maxItems": 8
+                          },
+                          "risk": {
+                            "type": "string",
+                            "enum": ["high", "medium", "low"]
                           }
                         },
                         "required": ["mode"]
@@ -29587,6 +31044,10 @@
                               "required": ["kind", "id"]
                             },
                             "maxItems": 8
+                          },
+                          "risk": {
+                            "type": "string",
+                            "enum": ["high", "medium", "low"]
                           }
                         },
                         "required": ["mode", "provide"]
@@ -29797,6 +31258,34 @@
                               "description": {
                                 "type": "string",
                                 "maxLength": 140
+                              },
+                              "caution": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 60
+                              }
+                            },
+                            "required": ["label"]
+                          },
+                          "then": {
+                            "type": "object",
+                            "properties": {
+                              "label": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 80
+                              },
+                              "value": { "type": "string", "maxLength": 500 },
+                              "icon": { "type": "string", "maxLength": 64 },
+                              "recommended": { "type": "boolean" },
+                              "description": {
+                                "type": "string",
+                                "maxLength": 140
+                              },
+                              "caution": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 60
                               }
                             },
                             "required": ["label"]
@@ -30395,7 +31884,7 @@
       "get": {
         "tags": ["Lifecycle"],
         "summary": "What each space produces, and how its things stand",
-        "description": "Every space the caller sees with its intent (`settings.intent`, else inferred) and, per produced kind, the pipeline in one line, needs-you, being-worked and a headline thing (`lifecycle.home`). `projectId` lists only the project's spaces (the ones it uses + its home; 404 when the caller cannot see it) and narrows every count.",
+        "description": "Every space the caller sees with its intent (`settings.intent`, else inferred) and, per produced kind, the pipeline in one line, needs-you, being-worked and a headline thing (`lifecycle.home`). `projectId` lists only the project's spaces (the ones it uses + its home; 404 when the caller cannot see it) and narrows every count. A workspace-bound key is refused (403): Home is every space.",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -30584,6 +32073,100 @@
         "responses": {
           "200": {
             "description": "Signals",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": {}
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown kind / track",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "412": {
+            "description": "The kind declares no lifecycle",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/attention/lens-page": {
+      "get": {
+        "tags": ["Attention"],
+        "summary": "A lens page, whole: what needs you, what is happening, what was produced",
+        "description": "Every class of the lens page at a scope (`signals.list({ lens: 'page' })`): Needs you, Proposed, Happening, Produced, Happened, plus the status banner, read with the caps every lens host asks for (`LENS_PAGE_READ_CAPS`). The scope is the narrowing lens (`workspaceId`, optionally with `projectId`; `projectId`; `trackId`; `sessionId`); none = the pod. `since` bounds Happened (a session sends none). Read by a space package's frame through the browser's host bridge, which stamps the scope.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string" },
+            "required": false,
+            "name": "workspaceId",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string" },
+            "required": false,
+            "name": "projectId",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string" },
+            "required": false,
+            "name": "trackId",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string" },
+            "required": false,
+            "name": "sessionId",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string", "format": "date-time" },
+            "required": false,
+            "name": "since",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Page",
             "content": {
               "application/json": {
                 "schema": {

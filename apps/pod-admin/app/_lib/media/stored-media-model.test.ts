@@ -8,6 +8,7 @@ import {
   isInlineImage,
   isRetryable,
   MediaSignError,
+  mediaAlt,
   parseSigned,
   signFailureMessage,
   signingPath,
@@ -229,5 +230,15 @@ describe("fileTypeLabel", () => {
     expect(fileTypeLabel("image/svg+xml")).toBe("SVG image");
     expect(fileTypeLabel("application/pdf")).toBe("PDF");
     expect(fileTypeLabel(null)).toBe("File");
+  });
+});
+
+describe("mediaAlt — an image is called by its record", () => {
+  it("the record's title, else the file's name, else nothing", () => {
+    expect(mediaAlt("Carousel 04", { fileName: "IMG_2041.png" })).toBe(
+      "Carousel 04"
+    );
+    expect(mediaAlt("  ", { fileName: "IMG_2041.png" })).toBe("IMG_2041.png");
+    expect(mediaAlt(null, null)).toBe("");
   });
 });

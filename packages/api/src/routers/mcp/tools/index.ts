@@ -19,6 +19,10 @@ import { toSafeToolError, validateUuidArgs } from "../tool-errors.js";
 import { USER_OBSERVATION_CATEGORIES } from "../../../services/knowledge/remember-fact.js";
 import { ASK_DETAILS } from "../../../services/knowledge/synthesize.js";
 import { SESSION_KINDS } from "../../../services/focus-sessions/session-kind.js";
+import {
+  WORK_GRAPH_DEFAULT_WINDOW_HOURS,
+  WORK_GRAPH_MAX_WINDOW_HOURS,
+} from "../../../services/focus-sessions/work-graph-window.js";
 import { ROOM_POST_KINDS } from "../../../services/messaging/room-post-kind.js";
 import {
   SESSION_POST_INTENTS,
@@ -307,7 +311,7 @@ function buildAskJsonSchema(): Record<string, unknown> {
   >;
   delete derived.$schema;
   derived.description =
-    'Only with owner=\'human\': HOW the person can answer, so they resolve it in one tap instead of writing back. mode \'confirm\' (yes/no; optional prompt), \'choose\' (1-8 options, at most ONE recommended, each with a one-line `description` of its consequence; allowOther for free text), \'form\' (a small FLAT form; credential field types are dropped — never ask for a secret in a form), \'act\' (something to DO: optional http(s) url + up to 7 steps; the person answers \'I did this\'), \'provide\' (connection {service} | file {accept} | secret {name} — handed over through the vault, never typed into a message). PREFER confirm/choose for any decision (mark exactly ONE option `recommended` when you have a view: their pick vs your recommendation is recorded, and every answered confirm/choose files a `decision` entity); use act ONLY for a physical/world task with steps. Example: {"mode":"choose","options":[{"label":"Ship now","recommended":true,"description":"Publishes today"},{"label":"Wait a week"}]}. Omit for a plain free-text answer. null clears a stored ask. Any mode may carry `lookedAt`: up to 8 {kind, id} (entity | document | view | automation | playbook) you actually read before asking, so the person sees what you based the question on — refs they cannot see are refused, and any title you send is ignored (the pod names them).';
+    'Only with owner=\'human\': HOW the person can answer, so they resolve it in one tap instead of writing back. mode \'confirm\' (yes/no; optional prompt), \'choose\' (1-8 options, at most ONE recommended, each with a one-line `description` of its consequence; allowOther for free text), \'form\' (a small FLAT form; credential field types are dropped — never ask for a secret in a form), \'act\' (something to DO: optional http(s) url + up to 7 steps; the person answers \'I did this\'), \'provide\' (connection {service} | file {accept} | secret {name} — handed over through the vault, never typed into a message). PREFER confirm/choose for any decision (mark exactly ONE option `recommended` when you have a view: their pick vs your recommendation is recorded, and every answered confirm/choose files a `decision` entity); use act ONLY for a physical/world task with steps. Example: {"mode":"choose","options":[{"label":"Ship now","recommended":true,"description":"Publishes today"},{"label":"Wait a week"}]}. A choose option may open ONE follow-up the person answers next, {"prompt":"Which environment?","options":[2-4 plain options]} (one level only: a follow-up option opening its own is refused), and may carry a `caution` (one short fact to weigh, max 60 chars, e.g. \'Skips 1,284 tests\'). Omit for a plain free-text answer. null clears a stored ask. Any mode may carry `risk` (\'high\' | \'medium\' | \'low\': how much is at stake in the answer). Any mode may carry `lookedAt`: up to 8 {kind, id} (entity | document | view | automation | playbook) you actually read before asking, so the person sees what you based the question on — refs they cannot see are refused, and any title you send is ignored (the pod names them).';
   return derived;
 }
 
@@ -552,7 +556,7 @@ const SESSION_OUTCOMES_PROPERTY = {
 const ROOM_QUESTION_ASK_JSON_SCHEMA = {
   ...buildAskJsonSchema(),
   description:
-    "With kind 'question' + slotLabel: HOW the person answers — 'confirm' (yes/no), 'choose' (1-8 options, ≤1 recommended), 'form' (small flat form; never a secret), 'act' (a physical/world task only; they answer 'I did this'), 'provide' (connection {service} | file {accept} | secret {name}, via the vault). Prefer confirm/choose for any decision. Omit for a free-text answer.",
+    "With kind 'question' + slotLabel: HOW the person answers — 'confirm' (yes/no), 'choose' (1-8 options, ≤1 recommended; an option may open ONE follow-up {prompt, 2-4 options} and carry a `caution`), 'form' (small flat form; never a secret), 'act' (a physical/world task only; they answer 'I did this'), 'provide' (connection {service} | file {accept} | secret {name}, via the vault). Prefer confirm/choose for any decision. Any mode may carry `risk` ('high' | 'medium' | 'low'). Omit for a free-text answer.",
 };
 
 /**
@@ -2069,7 +2073,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "The session BRIEFING — call first in every session. Leads with `startHere`: proposals you or your agents filed that await review (raise these first; the user's queue may hold more from others), open work sessions, the most-used kinds, runnable actions, and the skill to load for concept depth. Then your identity, what is known about the user, projects (commitments, each spanning workspaces) and the workspaces (operational domains) that hold data. Pass scope:['projects'] and/or workspaceId to narrow — and PIN a `workspaceId` and orient also returns that space's `brief`: what it is FOR (purpose, persona), the kinds it HOLDS, its rules, its SKILLS (the agent know-how this space activates — each `{ slug, mode, when? }`; `mode:'always'` is in effect now, `'on-demand'` when the task matches its `when`), plus its playbooks and anchors. That is the one door to 'what is this space for, and what does it know' — an unpinned orient carries no brief. Light omits empty domains and the full type inventory; detail:'full' adds every workspace, descriptions, onboarding specs and per-workspace profiles. Every kind and role: synap_list_profiles.",
+          "The session BRIEFING — call first in every session. Leads with `startHere`: proposals you or your agents filed that await review (raise these first; the user's queue may hold more from others), open work sessions, the open goals they serve (`openGoals`: file work into one with trackId), the most-used kinds, runnable actions, and the skill to load for concept depth. Then your identity, what is known about the user, projects (commitments, each spanning workspaces) and the workspaces (operational domains) that hold data. Pass scope:['projects'] and/or workspaceId to narrow — and PIN a `workspaceId` and orient also returns that space's `brief`: what it is FOR (purpose, persona), the kinds it HOLDS, its rules, its SKILLS (the agent know-how this space activates — each `{ slug, mode, when? }`; `mode:'always'` is in effect now, `'on-demand'` when the task matches its `when`), plus its playbooks and anchors. That is the one door to 'what is this space for, and what does it know' — an unpinned orient carries no brief. Light omits empty domains and the full type inventory; detail:'full' adds every workspace, descriptions, onboarding specs and per-workspace profiles. Every kind and role: synap_list_profiles.",
         inputSchema: {
           type: "object",
           properties: {
@@ -2115,7 +2119,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Create a focus session — a goal-bound work session — to declare 'I'm starting work on X'. Scope it to a project (projectId) OR a workspace (workspaceId), at least one; project-scoped needs no workspace membership. Work toward one of a project's GOALS (tracks in tool and field names) is born inside it: pass trackId (synap_list_tracks) — it implies the project. Give it a short `title` (the name) and a `goal` (the outcome). To decompose work, start a root session, then start each sub-session with parentSessionId = the root; declare ordering with blockedBySessionIds instead of writing the dependency chain into the goal. When the goal cannot proceed until a prerequisite is built, start THAT prerequisite with parentSessionId of the goal session AND suspendedIntent — that blocks the parent; work the child to completion, then resume the parent. Do not fold the prerequisite into the parent session. The result reports `parentLink` and `blockerLinks` — a failed edge is reported there, never silently dropped. If an open session with the same goal already exists in this scope, the existing one is returned with status 'deduped' — continue it instead of starting another. DEFAULTS: your writes are grouped into THIS conversation's session automatically even if you never call this — one per project (another conversation's session is joined only by passing its id as `sessionId`); every write reply names it in `attribution.filed`. Calling this when you begin a unit of work names your session (if one was auto-opened for you in this session's project it is ADOPTED — `adopted: true`, same id; other projects' writes stay where they are). A session you start takes all your later writes; when one is about another project the reply carries `attribution.filed.topicHint` — start a new session if it is new work. FETCH THE POD'S PROCESSES FIRST: with no templateId, the result's `playbooks` block hands you the pod's existing playbooks ranked against your title+goal, each with the `reason` it matched — suggestions only, NOTHING is applied. If one fits, start again with that `templateId` (the only way a playbook binds); if none does, carry on ad-hoc deliberately. Pass templateId: null to skip matching entirely. SIZE it from the work: one session per thing when each needs its own thinking (a post, a feature), one per batch when items are interchangeable. With a subject, the session's step IS the subject's status: move the thing (synap_update_entity + expectedStatus), the step follows. PROPOSE `criteria` — two to five binary, observable statements — and let the person validate or rewrite them; declaring none leaves you nothing to report progress against but your own opinion. Declare `expectedOutputs` for what the session will produce, so 'done' is derivable from unfilled slots rather than announced as a percentage. A detour that has to happen first is a CHILD session: `parentSessionId` plus `suspendedIntent`, one line naming what you were about to do, so popping back restates the goal.",
+          "Create a focus session — a goal-bound work session — to declare 'I'm starting work on X'. Scope it to a project (projectId) OR a workspace (workspaceId), at least one; project-scoped needs no workspace membership. Work toward one of a project's GOALS (tracks in tool and field names) is born inside it: pass trackId (synap_list_tracks) — it implies the project. Give it a short `title` (the name) and a `goal` (the outcome). To decompose work, start a root session, then start each sub-session with parentSessionId = the root; declare ordering with blockedBySessionIds instead of writing the dependency chain into the goal. When the goal cannot proceed until a prerequisite is built, start THAT prerequisite with parentSessionId of the goal session AND suspendedIntent — that blocks the parent; work the child to completion, then resume the parent. Do not fold the prerequisite into the parent session. The result reports `parentLink` and `blockerLinks` — a failed edge is reported there, never silently dropped. If an open session with the same goal already exists in this scope, the existing one is returned with status 'deduped' — continue it instead of starting another. DEFAULTS: your writes are grouped into THIS conversation's session automatically even if you never call this — one per project (another conversation's session is joined only by passing its id as `sessionId`); every write reply names it in `attribution.filed`. Calling this when you begin a unit of work names your session (if one was auto-opened for you in this session's project it is ADOPTED — `adopted: true`, same id; other projects' writes stay where they are). A session you start takes all your later writes; when one is about another project the reply carries `attribution.filed.topicHint` — start a new session if it is new work. FETCH THE POD'S PROCESSES FIRST: with no templateId, the result's `playbooks` block hands you the pod's existing playbooks ranked against your title+goal, each with the `reason` it matched — suggestions only, NOTHING is applied. If one fits, start again with that `templateId` (the only way a playbook binds); if none does, carry on ad-hoc deliberately. Pass templateId: null to skip matching entirely. The result's `offers` block (suggestions, NOTHING applied) lists `goals` — the project's open goals when you named no trackId: if the work serves one, file it with synap_update_session trackId — and `sessions` — open sessions on close work in the same goal or project: if one is the same work, continue it instead. SIZE it from the work: one session per thing when each needs its own thinking (a post, a feature), one per batch when items are interchangeable. With a subject, the session's step IS the subject's status: move the thing (synap_update_entity + expectedStatus), the step follows. PROPOSE `criteria` — two to five binary, observable statements — and let the person validate or rewrite them; declaring none leaves you nothing to report progress against but your own opinion. Declare `expectedOutputs` for what the session will produce, so 'done' is derivable from unfilled slots rather than announced as a percentage. A detour that has to happen first is a CHILD session: `parentSessionId` plus `suspendedIntent`, one line naming what you were about to do, so popping back restates the goal.",
         inputSchema: {
           type: "object",
           properties: {
@@ -2291,13 +2295,14 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Update an in-flight focus session WHILE working: title (the name), goal, status (active|paused), progress, subject (`subjectEntityId` re-points what the work is ABOUT, null clears), project (`projectId` files the session into a project — a proposal, except your OWN session from the last 24 h, untouched by the person, into your declared focus project: then it applies with an Undo; null unfiles, always a proposal), space (`moveToWorkspaceId` moves it into another Space — always a proposal), track (`trackId` ADOPTS existing work into a track — always a proposal; trackId null unfiles; `trackStage` only for a legacy staged track), deliverables (`outcomes`/`addOutput` add or update — never delete; `completeOutput` CLAIMS one by key — evidence or review marks it met; `retireOutput` withdraws one), roster (`addAgentId` appends one agent, idempotently), the playbook it FOLLOWS (`followPlaybookId` merges in its criteria + deliverables; the session stays your work and shows in that playbook's runs; null releases it), and what it WAITS ON (`addBlockedBySessionIds` / `removeBlockedBySessionIds` — each id reported on `blockerLinks` / `blockerRemovals`). When a blocker ENDED WITHOUT DELIVERING (cancelled, failed), it does not clear: the session's next move is `blocker_dropped` — re-plan: remove that blocker if the work no longer needs it, or remove it and add the session that retries it, in one call. Cannot close — use synap_complete_session for that. The reply may carry `nudges` — what the session still owes (ungraded criteria, `currentStage` unset, outputs owed by the person, once: playbooks that fit an unbound session); act on them. It may also carry `warnings[]`: an `ask` on a slot that is not `owner:'human'` is dropped and reported there.",
+          "Update an in-flight focus session WHILE working: title (the name), goal, status (active|paused), progress, subject (`subjectEntityId` re-points what the work is ABOUT, null clears), project (`projectId` files the session into a project — a proposal, except your OWN session from the last 24 h, untouched by the person, into your declared focus project: then it applies with an Undo; null unfiles, always a proposal), space (`moveToWorkspaceId` moves it into another Space — always a proposal), track (`trackId` ADOPTS existing work into a track — always a proposal; trackId null unfiles; `trackStage` only for a legacy staged track), deliverables (`outcomes`/`addOutput` add or update — never delete; `completeOutput` CLAIMS one by key — evidence or review marks it met; `retireOutput` withdraws one), roster (`addAgentId` appends one agent, idempotently), the playbook it FOLLOWS (`followPlaybookId` merges in its criteria + deliverables; the session stays your work and shows in that playbook's runs; null releases it), and what it WAITS ON (`addBlockedBySessionIds` / `removeBlockedBySessionIds` — each id reported on `blockerLinks` / `blockerRemovals`). When a blocker ENDED WITHOUT DELIVERING (cancelled, failed), it does not clear: the session's next move is `blocker_dropped` — re-plan: remove that blocker if the work no longer needs it, or remove it and add the session that retries it, in one call. Cannot close — use synap_complete_session for that. Record a PR as an outcome: `outcomes: [{ key: 'pr-<repo>-<n>', kind: 'pull_request', label, ref: { url } }]`. The reply may carry `nudges` — what the session still owes (ungraded criteria, `currentStage` unset, outputs owed by the person, once: playbooks that fit an unbound session) and `readyToClose` once everything declared is produced and nothing is owed (grade, then synap_complete_session); act on them. It may also carry `warnings[]`: an `ask` on a slot that is not `owner:'human'` is dropped and reported there.",
         inputSchema: {
           type: "object",
           properties: {
             sessionId: {
               type: "string",
-              description: "The focus session UUID to update.",
+              description:
+                "The focus session UUID to update. Optional: left out, the session THIS conversation started is used when exactly one is still open (every reply then says `inferred: true` and names it in `inferredSession`); several, none, a stale one, or a key shared by several conversations is refused with the list — nothing changes. A teammate (agents spawned in one process share its conversation) ALWAYS passes sessionId.",
             },
             title: {
               type: ["string", "null"],
@@ -2523,7 +2528,6 @@ export const tools = {
                 "Stop waiting on these sessions — how you RE-PLAN when a blocker was dropped (cancelled / failed), or when it is no longer needed. Reported per id on `blockerRemovals` (removed | absent — there was no such edge | proposed | failed with a reason). To wait on a retry instead, remove the old one and add the retry (`addBlockedBySessionIds`) in the same call.",
             },
           },
-          required: ["sessionId"],
         },
       },
       {
@@ -2686,7 +2690,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Re-find a focus session — read-only. `outcomes` is what it must yield and needs: `outcomes.outcomes[]` (key, label, verify, met + metBy, state, evidence) and `outcomes.inputs[]` (what the person must give, each pointing at the outcome it blocks); `status:'unavailable'` means the read failed, not empty. To CONTINUE a session, read `continuation` first: it is the continuation packet (userMustDecide = owed slots + pending proposals, aiCanDo = open agent deliverables, blockers, outputs, run manifest, rerun, lastCompletion, nextMove). A section with status 'unavailable' failed to load — it is NOT empty. Pass sessionId for a specific session. Omit sessionId only when you have exactly one open session (ambient). If multiple sessions are open, returns multiSession:true + openSessions[] — pass sessionId explicitly (ambient attach is disabled to prevent mis-attribution). Always yours: sessions are scoped to the calling user.",
+          "Re-find a focus session — read-only. `outcomes` is what it must yield and needs: `outcomes.outcomes[]` (key, label, verify, met + metBy, state, evidence) and `outcomes.inputs[]` (what the person must give, each pointing at the outcome it blocks); `status:'unavailable'` means the read failed, not empty. To CONTINUE a session, read `continuation` first: it is the continuation packet (userMustDecide = owed slots + pending proposals, aiCanDo = open agent deliverables, blockers, outputs, goal = the goal it serves with end state, criteria marks and KPI, siblings = the goal's (else project's) other sessions running in parallel / done before / next, workUnits = the PRs and branches it recorded (prState = open/merged/closed + checks + deployed, from the dev events the pod recorded; absent = none recorded), run manifest, rerun, lastCompletion, nextMove). A section with status 'unavailable' failed to load — it is NOT empty. Pass sessionId for a specific session. Omit sessionId only when you have exactly one open session (ambient). If multiple sessions are open, returns multiSession:true + openSessions[] — pass sessionId explicitly (ambient attach is disabled to prevent mis-attribution). Always yours: sessions are scoped to the calling user.",
         inputSchema: {
           type: "object",
           properties: {
@@ -2830,6 +2834,55 @@ export const tools = {
               default: 0,
               description:
                 "Rows to skip — pass the previous reply's `nextOffset` to read the next page. No `nextOffset` in a reply means it was the last page.",
+            },
+          },
+          required: [],
+        },
+      },
+      {
+        name: "synap_get_work_graph",
+        annotations: {
+          title: "Get the work graph",
+          readOnlyHint: true,
+          openWorldHint: false,
+        },
+        description:
+          "The whole map of YOUR work in one read — read-only. Every OPEN session, plus every session settled in the last `windowHours` (default 72), plus the far end of every edge: `nodes`, flat `edges` (`blocked_by` from waiter to blocker, `spawned_from` child to parent, `waits_on_output`, `triggered`, `updated`), `sections` (an edge read that FAILED is `unavailable`, never an empty list) and `window` (`truncated` + `omitted` when the 500-session ceiling cut). Use it instead of one `synap_get_session` per session to see what waits on what. Pod-wide unless you narrow to a workspace or project.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            windowHours: {
+              type: "number",
+              default: WORK_GRAPH_DEFAULT_WINDOW_HOURS,
+              description: `Settled sessions from this many hours back, 1–${WORK_GRAPH_MAX_WINDOW_HOURS}. Open sessions are in the graph whatever their age.`,
+            },
+            workspaceId: {
+              type: "string",
+              description: "Optional: only sessions in this workspace.",
+            },
+            projectId: {
+              type: "string",
+              description: "Optional: only sessions scoped to this project.",
+            },
+            kind: {
+              type: "string",
+              // DERIVED from the ONE vocabulary, as synap_list_sessions.
+              enum: [...SESSION_KINDS, "all"],
+              description:
+                "Which population is in the window. 'work', 'run', 'receipt', or 'all' (default). Far ends of edges are any kind.",
+            },
+            lens: {
+              type: "string",
+              enum: ["default", "triage", "all"],
+              description:
+                "'all' (default) = every session. 'default' hides agent drafts not yet accepted by a person; 'triage' = only those.",
+            },
+            detail: {
+              type: "string",
+              enum: ["lean", "full"],
+              default: "lean",
+              description:
+                "'lean' (default) = per node id, title, status, kind, parentSessionId, trackId, projectId, workspaceId, updatedAt, inWindow and the next move (kind, actor, label). 'full' = the whole list row per node: large.",
             },
           },
           required: [],
