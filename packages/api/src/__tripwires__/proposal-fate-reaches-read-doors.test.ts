@@ -1,6 +1,18 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+
+const h = vi.hoisted(() => ({ rows: [] as Array<Record<string, unknown>> }));
+// The MCP list door, behaviour: only its row fetch is stubbed.
+vi.mock(
+  "../services/proposals/proposals-service.js",
+  async (importOriginal) => ({
+    ...(await importOriginal<Record<string, unknown>>()),
+    listCreatedProposals: vi.fn(async () => h.rows),
+  })
+);
+
+import { readHandlers } from "../routers/mcp/handlers/read.js";
 import {
   ProposalBasicSchema,
   WireProposalSchema,
@@ -14,7 +26,8 @@ import {
  *   1. `enrichProposalsForDisplay` → tRPC list/get, Hub `GET /proposals/:id`,
  *      MCP get (source scan: it batch-joins the database);
  *   3. `toProposalBasic`  → Hub REST `view=basic` + MCP list (behaviour);
- *   4. `withProposalClass` → Hub REST `view=full` (behaviour);
+ *   4. `withProposalClass` → Hub REST `view=full` + MCP `detail:"full"`
+ *      (behaviour, and the MCP door driven end to end);
  * and `waits`, which needs reads, is produced by the list doors that feed 3/4
  * (source scan) and FORWARDED by 3 (behaviour).
  *
@@ -146,4 +159,36 @@ describe("the doors that batch-join stamp fate and waits (source scan)", () => {
       expect(src, rel).toMatch(/proposalWaitsFields\(row\.id,\s*waits\)/);
     }
   });
+});
+
+describe("the MCP list door answers every row's fate, in both views (behaviour)", () => {
+  // Non-uuid session ids: the waits resolver reads sessions only for uuids,
+  // and this suite has no database. A session still counts for the fate.
+  const rows = () =>
+    ONE_PER_KIND.map(({ row }, i) => ({
+      ...raw(row),
+      id: `p${i}`,
+      sessionId: row.sessionId ? "sess-1" : null,
+    }));
+
+  for (const detail of ["summary", "full"] as const) {
+    it(`detail ${detail}`, async () => {
+      h.rows = rows();
+      const res = await readHandlers.synap_list_proposals!({
+        toolName: "synap_list_proposals",
+        args: detail === "full" ? { detail: "full" } : {},
+        userId: "user-1",
+        apiKeyScopes: ["mcp.read"],
+      } as never);
+      const block = res.content?.[0];
+      if (!block || block.type !== "text") throw new Error("expected text");
+      const body = JSON.parse(block.text) as
+        | Array<{ fate?: { kind: string } }>
+        | { proposals: Array<{ fate?: { kind: string } }> };
+      const listed = Array.isArray(body) ? body : body.proposals;
+      expect(listed.map((p) => p.fate?.kind)).toEqual(
+        ONE_PER_KIND.map((k) => k.kind)
+      );
+    });
+  }
 });
