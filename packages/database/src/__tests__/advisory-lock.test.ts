@@ -11,7 +11,10 @@ const h = vi.hoisted(() => {
   const log: string[] = [];
   let failUnlock = false;
   const text = (strings: TemplateStringsArray, values: unknown[]) =>
-    strings.reduce((acc, s, i) => acc + s + (i < values.length ? String(values[i]) : ""), "");
+    strings.reduce(
+      (acc, s, i) => acc + s + (i < values.length ? String(values[i]) : ""),
+      ""
+    );
   const conn = Object.assign(
     vi.fn(async (strings: TemplateStringsArray, ...values: unknown[]) => {
       const q = text(strings, values);

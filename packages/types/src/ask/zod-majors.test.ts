@@ -13,7 +13,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 async function loadAskUnder(major: "v3" | "v4") {
   vi.resetModules();
-  vi.doMock("zod", () => (major === "v3" ? import("zod/v3") : import("zod/v4")));
+  vi.doMock("zod", () =>
+    major === "v3" ? import("zod/v3") : import("zod/v4")
+  );
   return import("./index.js");
 }
 
@@ -45,7 +47,12 @@ describe.each(["v3", "v4"] as const)("the ask schema under zod %s", (major) => {
   it("refuses a second level with its own wording", async () => {
     const { AskSchema } = await loadAskUnder(major);
     const deep = AskSchema.safeParse(
-      deepChoose({ followUp: { prompt: "Deeper?", options: [{ label: "A" }, { label: "B" }] } })
+      deepChoose({
+        followUp: {
+          prompt: "Deeper?",
+          options: [{ label: "A" }, { label: "B" }],
+        },
+      })
     );
     expect(deep.success).toBe(false);
     expect(JSON.stringify(deep.error?.issues)).toMatch(/one level deep/);
