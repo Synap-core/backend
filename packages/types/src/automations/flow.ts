@@ -291,6 +291,14 @@ export interface OutputNodeDef extends AutomationNodeBase {
       | "webhook"
       | "channel_message"
       | "session_update"
+      // Session outcome verbs (plan v5 T2, decision V4), governed like every
+      // write: complete one outcome, post evidence for criteria, re-grade
+      // criteria. Config: `sessionId` | `subjectEntityId`, then `outcomeKey` /
+      // `evidence` / `criterionKeys`. (A line comment, not JSDoc: the api-types
+      // generator would carry a JSDoc into the generated union.)
+      | "complete_outcome"
+      | "post_evidence"
+      | "reevaluate_criterion"
       | "set_state";
     config: Record<string, unknown>;
   };
