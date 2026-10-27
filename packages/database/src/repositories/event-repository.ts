@@ -108,6 +108,12 @@ export interface EventRecord {
   // recorded beside `userId` (the connecting human). Undefined for a bare/human
   // write and for rows written before the column existed.
   appId?: string;
+
+  // ── Daily-ceiling bookkeeping exemption (0364) ──────────────────────────────
+  // TRUE when this agent write is its bookkeeping of its OWN session (proven by
+  // the writer through `isOwnSessionBookkeeping`); the daily write count skips
+  // it. Undefined (stored NULL) on every other event: counted.
+  ceilingExempt?: boolean;
 }
 
 export interface EventStreamOptions {
@@ -293,11 +299,12 @@ export class EventRepository {
           workspace_id,
           proposal_id,
           session_id,
-          app_id
+          app_id,
+          ceiling_exempt
         ) VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
           $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25,
-          $26, $27
+          $26, $27, $28
         )
         RETURNING *
       `,
@@ -342,6 +349,9 @@ export class EventRepository {
           // write; null for a bare/human write (and on rows written before the
           // column existed — the schema field is optional and coerced here).
           validated.appId ?? null,
+          // Daily-ceiling bookkeeping exemption (0364): TRUE only for an agent's
+          // own-session bookkeeping; NULL otherwise (counted).
+          validated.ceilingExempt ? true : null,
         ]
       );
 
@@ -1387,6 +1397,8 @@ export class EventRepository {
       sessionId: (row.session_id as string | null) ?? undefined,
       // App attribution real column (0310). Absent on pre-migration rows.
       appId: (row.app_id as string | null) ?? undefined,
+      // Daily-ceiling bookkeeping exemption (0364). Absent unless TRUE.
+      ceilingExempt: row.ceiling_exempt === true ? true : undefined,
     };
   }
 }

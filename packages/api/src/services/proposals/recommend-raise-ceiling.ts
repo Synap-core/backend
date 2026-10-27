@@ -144,6 +144,9 @@ async function loadAgentDailyWriteCounts(
         eq(events.agentUserId, agentId),
         eq(events.isAgent, true),
         isNull(events.proposalId),
+        // Own-session bookkeeping (0364) spends no budget, so it never argues
+        // for a raise either — the same population as the daily count.
+        sqlTemplate`${events.ceilingExempt} IS NOT TRUE`,
         gte(events.timestamp, since)
       )
     )

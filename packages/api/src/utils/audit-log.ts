@@ -9,8 +9,10 @@ import {
   EventRepository,
   eventRepository,
   sql,
+  db,
   getRequestGrant,
 } from "@synap/database";
+import { isOwnSessionBookkeeping } from "@synap/database/agent-governance";
 import type { EventRecord } from "@synap/database";
 import { createUnifiedEvent } from "@synap/jobs";
 import type { SubjectType, EventAction, EventPhase } from "@synap/jobs";
@@ -104,6 +106,21 @@ export async function auditLog(
     const eventRepo =
       opts.phase === "validated" ? eventRepository : new EventRepository(sql);
 
+    // F2 (0364): an agent's bookkeeping of its OWN session is stamped here, at
+    // write time, so the daily write count skips it. Proven from the session
+    // row (owner + roster), never from the caller.
+    const isAgent = opts.isAgent ?? (opts.agentUserId ? true : undefined);
+    const ceilingExempt =
+      isAgent === true && opts.agentUserId
+        ? await isOwnSessionBookkeeping(db, {
+            userId: opts.userId,
+            agentUserId: opts.agentUserId,
+            subjectType: opts.subjectType,
+            action: opts.action,
+            subjectId: opts.subjectId,
+          })
+        : false;
+
     const event = createUnifiedEvent({
       subjectType: opts.subjectType as SubjectType,
       action: opts.action as EventAction,
@@ -142,8 +159,9 @@ export async function auditLog(
       workspaceId: opts.workspaceId ?? undefined,
       // Agent attribution → realtime presence. `is_agent` defaults to whether an
       // agent-user drove the write; both stay null for owner writes.
-      isAgent: opts.isAgent ?? (opts.agentUserId ? true : undefined),
+      isAgent,
       agentUserId: opts.agentUserId ?? undefined,
+      ...(ceilingExempt ? { ceilingExempt: true } : {}),
       // Governance linkage (0231): the proposal this agent write went through.
       // Null for a direct/ungoverned write or any human write.
       proposalId: opts.proposalId ?? undefined,
