@@ -120,8 +120,8 @@ async function filePack(): Promise<string> {
 async function writesToday(n: number): Promise<void> {
   await q(`delete from events`);
   await q(
-    `insert into events (id, subject_id, subject_type, type, user_id, data, source, timestamp, version, is_agent, agent_user_id)
-     select gen_random_uuid(), gen_random_uuid(), 'entity', 'entity.create.completed', $1, '{}'::jsonb, 'api', now(), 1, true, $2
+    `insert into events (id, subject_id, subject_type, type, user_id, data, source, timestamp, is_agent, agent_user_id)
+     select gen_random_uuid(), gen_random_uuid(), 'entity', 'entity.create.completed', $1, '{}'::jsonb, 'api', now(), true, $2
      from generate_series(1, $3)`,
     [PERSON, AGENT, n]
   );
