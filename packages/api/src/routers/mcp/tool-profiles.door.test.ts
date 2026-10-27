@@ -80,7 +80,7 @@ describe("tools/list honours the key's profile", () => {
     });
     const names = await listFor("key-1");
     expect(names).toHaveLength(ENTRY_TOOLS.length + TOOL_GROUPS.tracks.length);
-    expect(names).toContain("synap_start_track");
+    expect(names).toContain("synap_advance_track");
   });
 
   it("a LEGACY key (NULL profile — every key before 0280) lists every tool, unchanged", async () => {
