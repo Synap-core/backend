@@ -283,6 +283,12 @@ export interface Signal {
    */
   pendingRelay?: SlotPendingRelay;
   /**
+   * An `owed-slot` the closing agent kept owed past its session
+   * (`ExpectedOutput.keptOwedAt`) — its fate is no longer "ends with the
+   * session". Absent otherwise, and on every other kind.
+   */
+  keptOwedAt?: string;
+  /**
    * Decision CLASS of a `proposal-cluster` signal, carried straight off the
    * cluster (which derives it through `proposalClassFields`, the one door) —
    * and `access` on an `access-request`, which is the same decision (who may
@@ -463,6 +469,7 @@ const _KIND_SPECIFIC_SIGNAL_FIELDS = [
   "slotRef",
   "ask",
   "pendingRelay",
+  "keptOwedAt",
   "class",
   "lifetimeHours",
   "reviewLater",
@@ -886,6 +893,8 @@ export interface OwedSlotSignalInput {
   ask?: SlotAsk;
   /** A relay awaiting the tap, straight from `listOwedSlots`. */
   pendingRelay?: SlotPendingRelay;
+  /** Kept owed past its session, straight from `listOwedSlots`. */
+  keptOwedAt?: string;
   /** Who asked and their name, straight from `listOwedSlots`. */
   askedBy?: string;
   askedByName?: string;
@@ -933,6 +942,8 @@ export interface OwedSlotSignalInput {
  *                                      quick-answer a confirm / choose in place.
  *   pendingRelay                    → `pendingRelay` — a relayed answer
  *                                      awaiting the tap: the row's Confirm.
+ *   keptOwedAt                      → `keptOwedAt` — kept past its session:
+ *                                      the card's fate reads it.
  *   askedBy, askedByName            → `by` — the asker as a named mark, only
  *                                      when the pod can name it
  *   askCause                        → `askCause` — what raised it when no
@@ -971,6 +982,7 @@ const _PROJECTED_OWED_SLOT_FIELDS = [
   "askedBy",
   "askedByName",
   "askCause",
+  "keptOwedAt",
 ] as const satisfies ReadonlyArray<keyof OwedSlot>;
 
 const _WITHHELD_OWED_SLOT_FIELDS = [
@@ -1025,7 +1037,7 @@ function owedInstant(owedSince: string): Date {
  * WITHHELD — the per-ask disclosure belongs to the ask's OWN row, which the
  * person sees the moment the draft is accepted (answering one accepts it):
  *   kind, icon, blockedReason, why, claimedDone, criterionKey, ref, ask,
- *   pendingRelay, askedBy, askedByName, askCause →
+ *   pendingRelay, askedBy, askedByName, askCause, keptOwedAt →
  *     one row stands for N asks, and any single ask's reason/pointer/answer
  *     region on it would misdescribe the other N-1. The row is a door to the
  *     session, where every ask renders in full.
@@ -1054,6 +1066,7 @@ const _WITHHELD_DRAFT_ASK_FIELDS = [
   "askedBy",
   "askedByName",
   "askCause",
+  "keptOwedAt",
   "sessionStatus",
   "workspaceId",
 ] as const satisfies ReadonlyArray<keyof OwedSlot>;
@@ -1178,6 +1191,7 @@ export function signalFromOwedSlot(
     ...(row.ref ? { slotRef: row.ref } : {}),
     ...(row.ask ? { ask: row.ask } : {}),
     ...(row.pendingRelay ? { pendingRelay: row.pendingRelay } : {}),
+    ...(row.keptOwedAt ? { keptOwedAt: row.keptOwedAt } : {}),
     ...(row.askedBy && row.askedByName
       ? {
           by: {

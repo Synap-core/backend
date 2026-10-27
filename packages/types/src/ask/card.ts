@@ -532,16 +532,20 @@ export interface AskCardSlot {
   paramName?: string | null;
   /** A relayed answer waiting for the person's tap — its own clock. */
   pendingRelay?: { relayedAt?: string | null } | null;
+  /** The closing agent kept it owed past its session: it no longer ends with it. */
+  keptOwedAt?: string | null;
 }
 
 /**
  * Does this slot's ask end with its session? Read through `effectiveSlotAsk`.
  * A CRITERION grade never does, though its ask is a `choose`: it is the
  * person's verdict on the agent's work, graded on the session's scorecard
- * after the session as before it — not the agent's need to go on.
+ * after the session as before it — not the agent's need to go on. Nor does
+ * an ask the closing agent kept owed past the session (`keptOwedAt`).
  */
 export function askEndsWithSession(slot: AskCardSlot): boolean {
   if (slot.kind === CRITERION_SLOT_KIND || slot.criterionKey) return false;
+  if (slot.keptOwedAt) return false;
   const mode = (effectiveSlotAsk(slot) as Ask | null)?.mode;
   return (ASK_MODES_ENDING_WITH_SESSION as readonly string[]).includes(
     mode ?? ""

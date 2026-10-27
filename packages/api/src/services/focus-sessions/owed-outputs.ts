@@ -66,8 +66,8 @@ import {
 import type { SQL } from "@synap/database";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import { deliverableOwedBy } from "@synap-core/types/units";
+import { normalizeExpectedLabel } from "./expected-label.js";
 import {
-  ASK_MODES_ENDING_WITH_SESSION,
   askEndsWithSession,
   effectiveSlotAsk,
   effectiveAskCause,
@@ -241,6 +241,12 @@ export interface OwedSlot {
    * else a criterion / param slot's own) — the card's door.
    */
   askCause?: AskCause;
+  /**
+   * The close door's receipt that the closing agent kept this ask owed past
+   * its session (`ExpectedOutput.keptOwedAt`) — the card's fate then never
+   * says it ends with the session.
+   */
+  keptOwedAt?: string;
 }
 
 export interface ListOwedSlotsParams {
@@ -381,6 +387,7 @@ export function projectOwedSlots(row: OwedRow): OwedSlot[] {
       ...(slot.pendingRelay ? { pendingRelay: slot.pendingRelay } : {}),
       ...(slot.askedBy ? { askedBy: slot.askedBy } : {}),
       ...askCauseOf(slot),
+      ...(slot.keptOwedAt ? { keptOwedAt: slot.keptOwedAt } : {}),
     });
   }
   return owed;
@@ -518,19 +525,12 @@ export function stampRetired(
 }
 
 /**
- * The ask modes that are the AGENT's need, not the person's deliverable: a
- * `confirm` or a `choose` exists because the agent wanted an answer to go on.
- * Once its session has ended nobody will go on with it, so the ask dies with
- * the session (Resolve-XP founder default 3, 2026-10-26). An `act`, a
- * `provide` or a `form` is something the person still has to do or hand over
- * whatever happened to the session, and a slot with no ask is owed work.
- */
-export const SESSION_BOUND_ASK_MODES = ASK_MODES_ENDING_WITH_SESSION;
-
-/**
  * Does this owed slot end with its session? `askEndsWithSession`
  * (`@synap-core/types/ask`), the rule the card's fate mark reads too, through
- * `effectiveSlotAsk`: a `decision` slot stored with no ask IS a confirm.
+ * `effectiveSlotAsk`: a `decision` slot stored with no ask IS a confirm. A
+ * `confirm` or a `choose` is the AGENT's need, so it dies with the session
+ * (founder, 2026-10-26); an `act`, a `provide` or a `form` is something the
+ * person still has to do or hand over, and a slot with no ask is owed work.
  */
 export function slotEndsWithSession(slot: ExpectedOutput): boolean {
   return askEndsWithSession(slot as AskCardSlot);
@@ -549,8 +549,10 @@ export function slotEndsWithSession(slot: ExpectedOutput): boolean {
  *  - `stale` never reaches the close door at all — the reaper stamps it
  *    directly — so its slots survive, by design rather than by accident.
  *
- * `keep` names slots (by their stored label) the closing agent explicitly
- * left owed (`questionDispositions` `keep_as_owed`): its word beats both rules.
+ * `keep` names slots (by label, matched through `normalizeExpectedLabel`)
+ * the closing agent explicitly left owed (`questionDispositions`
+ * `keep_as_owed`): its word beats both rules, and the slot is stamped
+ * `keptOwedAt` so its fate no longer says it ends with the session.
  *
  * Returns `null` when nothing changes.
  */
@@ -560,19 +562,27 @@ export function retirementForClose(
   now: Date = new Date(),
   keep: ReadonlySet<string> = new Set()
 ): { outputs: ExpectedOutput[]; retiredSlots: number } | null {
+  const keptLabels = new Set(
+    [...keep].map((l) => normalizeExpectedLabel(l) ?? l)
+  );
+  const owed = (o: ExpectedOutput): boolean =>
+    !!o && typeof o === "object" && isOwedSlot(o);
+  const kept = (o: ExpectedOutput): boolean =>
+    keptLabels.has(normalizeExpectedLabel(o.label) ?? o.label);
   const which = (o: ExpectedOutput): boolean =>
-    !keep.has(o.label) &&
-    (terminalStatus === "cancelled" || slotEndsWithSession(o));
-  const retiredSlots = outputs.filter(
-    (o) => o && typeof o === "object" && isOwedSlot(o) && which(o)
-  ).length;
-  if (retiredSlots === 0) return null;
+    !kept(o) && (terminalStatus === "cancelled" || slotEndsWithSession(o));
+  const retiredSlots = outputs.filter((o) => owed(o) && which(o)).length;
+  const keeps = outputs.some((o) => owed(o) && kept(o) && !o.keptOwedAt);
+  if (retiredSlots === 0 && !keeps) return null;
+  const at = now.toISOString();
   return {
     outputs: stampRetired(
       outputs,
       terminalStatus === "cancelled" ? "session_cancelled" : "session_ended",
       now,
       which
+    ).map((o) =>
+      owed(o) && kept(o) && !o.keptOwedAt ? { ...o, keptOwedAt: at } : o
     ),
     retiredSlots,
   };
