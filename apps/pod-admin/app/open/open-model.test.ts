@@ -3,6 +3,7 @@ import {
   bounceAddressParams,
   bounceReceipt,
   bounceSummary,
+  entityPageMedia,
   entitySummary,
   openPathForResolved,
   redactSecretProperties,
@@ -211,5 +212,64 @@ describe("runFlowTypeOf — which run a /open/run page reads", () => {
         resolved({ type: "run", params: { flowType: "nope" } })
       )
     ).toBeNull();
+  });
+});
+
+describe("entityPageMedia — what an entity's page leads with", () => {
+  const ENT = "55555555-5555-4555-8555-555555555555";
+  const DOC = "66666666-6666-4666-8666-666666666666";
+  const OTHER = "77777777-7777-4777-8777-777777777777";
+
+  it("an uploaded image is the page's media, and its body is not read as text", () => {
+    expect(
+      entityPageMedia(
+        { id: ENT, documentId: DOC, properties: { mimeType: "image/png" } },
+        null
+      )
+    ).toEqual({
+      media: { via: "stored", documentId: DOC, mime: "image/png" },
+      bodyIsMedia: true,
+    });
+  });
+
+  it("a declared media property is the media; the body stays a body", () => {
+    const uiHints = {
+      presentation: {
+        family: "media",
+        media: { source: { property: "asset-document-id" } },
+      },
+    };
+    expect(
+      entityPageMedia(
+        {
+          id: ENT,
+          documentId: DOC,
+          properties: { "asset-document-id": OTHER },
+        },
+        uiHints
+      )
+    ).toEqual({
+      media: { via: "stored", documentId: OTHER },
+      bodyIsMedia: false,
+    });
+  });
+
+  it("a pod-held copy is drawn; a page with no media leads with none", () => {
+    const copy = {
+      documentId: OTHER,
+      mime: "image/webp",
+      bytes: 10,
+      sourceUrl: "https://cdn.example/cover.webp",
+      copiedAt: "2026-10-26T00:00:00Z",
+    };
+    expect(
+      entityPageMedia({ id: ENT, systemData: { media: [copy] } }, null).media
+    ).toMatchObject({ via: "stored", documentId: OTHER, mime: "image/webp" });
+    expect(
+      entityPageMedia(
+        { id: ENT, documentId: DOC, properties: { mimeType: "text/markdown" } },
+        null
+      )
+    ).toEqual({ media: null, bodyIsMedia: false });
   });
 });
