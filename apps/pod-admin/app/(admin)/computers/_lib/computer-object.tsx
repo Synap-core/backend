@@ -105,6 +105,28 @@ export function ComputerObject({
   const utils = trpc.useUtils();
   const [dialog, setDialog] = useState<null | "rename" | "lifetime">(null);
   const [proposalId, setProposalId] = useState<string | null>(null);
+  const runsScripts = trpc.machines.setRunsScripts.useMutation({
+    onSuccess: async (out) => {
+      addToast({
+        title:
+          out.status === "proposed"
+            ? "Waiting for review — nothing changed yet"
+            : out.runsScripts
+              ? "This computer now runs your scripts"
+              : "This computer no longer runs your scripts",
+        color: "default",
+      });
+      await utils.machines.invalidate();
+    },
+    onError: (err) => {
+      if (redirectToLoginIfUnauthorized(err)) return;
+      addToast({
+        title: "Couldn't change this",
+        description: readableError(err.message) ?? "Try again.",
+        color: "danger",
+      });
+    },
+  });
   const revoke = trpc.machines.revoke.useMutation({
     onError: (err) => {
       if (redirectToLoginIfUnauthorized(err)) return;
@@ -297,6 +319,33 @@ export function ComputerObject({
                     agentHref={links.agentHref}
                   />
                 </SectionCard>
+                {!revoked && (
+                  <SectionCard title="Runs scripts">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <p className="min-w-0 flex-1 text-[12.5px] text-foreground/75">
+                        {c.runsScripts
+                          ? `${c.name} picks up the scripts you approve and runs each one in a fresh box, with no access to your pod. Their logs and files come back on the run.`
+                          : `Let ${c.name} run the scripts you approve (Python or Node with packages), each in a fresh box with no access to your pod. Its runner must be installed on it.`}
+                      </p>
+                      <Button
+                        size="sm"
+                        radius="md"
+                        variant="flat"
+                        isLoading={runsScripts.isPending}
+                        onPress={() =>
+                          runsScripts.mutate({
+                            machineId: c.id,
+                            enabled: !c.runsScripts,
+                          })
+                        }
+                      >
+                        {c.runsScripts
+                          ? "Stop running scripts"
+                          : "Run my scripts here"}
+                      </Button>
+                    </div>
+                  </SectionCard>
+                )}
                 <SectionCard
                   title="Keys on this computer"
                   hint={

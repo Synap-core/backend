@@ -41,6 +41,7 @@ import { ContentBody } from "../content/content-block";
 import { prepareContent } from "../content/markdown-model";
 import { useReauthOnUnauthorized } from "../use-reauth";
 import type { ObjectFrame } from "./object-frame";
+import { BoxRunSection, boxRunFacts } from "./box-run-section";
 
 export interface RunAddress {
   flowType: RunFlowType;
@@ -68,10 +69,18 @@ export function useRunDetail(target: RunAddress | null) {
   const me = trpc.users.me.useQuery(undefined, { staleTime: 300_000 });
   const cancel = trpc.playbookRuns.cancelRun.useMutation();
   const trigger = trpc.automations.trigger.useMutation();
-  const [confirming, setConfirming] = useState<"cancel" | "again" | null>(null);
+  const stopBox = trpc.runs.stopBox.useMutation();
+  const [confirming, setConfirming] = useState<
+    "cancel" | "again" | "stop" | null
+  >(null);
   const [actError, setActError] = useState<string | null>(null);
 
   const run = detail.data?.run;
+  // A box run (code-runtime B0): its own story, and Stop while it is not
+  // over (the pod's unified status says so: one derivation).
+  const boxRun = detail.data?.boxRun ?? null;
+  const canStopBox =
+    !!boxRun && !boxRun.stopRequested && run?.status === "running";
 
   async function confirmAct() {
     if (!run) return;
@@ -80,6 +89,17 @@ export function useRunDetail(target: RunAddress | null) {
       if (confirming === "cancel") {
         await cancel.mutateAsync({ runId: run.id });
         addToast({ title: "Run cancelled", color: "default" });
+      } else if (confirming === "stop") {
+        const out = await stopBox.mutateAsync({ id: run.id });
+        addToast({
+          title:
+            out.status === "stop_requested"
+              ? "Stopping — your computer ends it at its next check-in"
+              : out.status === "stopped"
+                ? "Run stopped"
+                : "This run had already finished",
+          color: "default",
+        });
       } else if (confirming === "again" && run.flowId) {
         const result = await trigger.mutateAsync({ id: run.flowId });
         addToast({
@@ -100,20 +120,23 @@ export function useRunDetail(target: RunAddress | null) {
   return {
     detail,
     run,
-    acts: run ? runActions(run) : { cancel: false, runAgain: false },
+    acts: run
+      ? { ...runActions(run), stop: canStopBox }
+      : { cancel: false, runAgain: false, stop: false },
+    boxRun,
     pill: run ? statusPillFor(run.status) : null,
     who: run ? triggeredByLabel(run.triggeredBy, me.data?.id ?? null) : null,
     activity: (detail.data?.activity ?? []).slice(0, TIMELINE_MAX),
     activityTotal: detail.data?.activity.length ?? 0,
     confirming,
-    ask: (act: "cancel" | "again") => setConfirming(act),
+    ask: (act: "cancel" | "again" | "stop") => setConfirming(act),
     dismiss: () => {
       setConfirming(null);
       setActError(null);
     },
     confirmAct,
     actError,
-    isActing: cancel.isPending || trigger.isPending,
+    isActing: cancel.isPending || trigger.isPending || stopBox.isPending,
   };
 }
 
@@ -122,9 +145,20 @@ export type RunDetailState = ReturnType<typeof useRunDetail>;
 /** "Run again" / "Cancel run", when the run allows either. */
 export function RunActButtons({ state }: { state: RunDetailState }) {
   const { acts } = state;
-  if (!acts.cancel && !acts.runAgain) return null;
+  if (!acts.cancel && !acts.runAgain && !acts.stop) return null;
   return (
     <div className="flex flex-wrap gap-2">
+      {acts.stop && (
+        <Button
+          size="sm"
+          variant="flat"
+          radius="md"
+          color="warning"
+          onPress={() => state.ask("stop")}
+        >
+          Stop
+        </Button>
+      )}
       {acts.runAgain && (
         <Button
           size="sm"
@@ -159,12 +193,20 @@ export function RunActConfirm({ state }: { state: RunDetailState }) {
       onClose={state.dismiss}
       onConfirm={() => void state.confirmAct()}
       title={
-        confirming === "cancel"
-          ? "Cancel this run?"
-          : `Run “${run?.flowName ?? "this rule"}” again?`
+        confirming === "stop"
+          ? `Stop “${run?.flowName ?? "this script"}”?`
+          : confirming === "cancel"
+            ? "Cancel this run?"
+            : `Run “${run?.flowName ?? "this rule"}” again?`
       }
       consequence={
-        confirming === "cancel" ? (
+        confirming === "stop" ? (
+          <>
+            A run still waiting never starts. A running one is stopped by your
+            computer at its next check-in (within a minute); what it already
+            sent out stays sent, and its log so far comes back here.
+          </>
+        ) : confirming === "cancel" ? (
           <>
             The agent working on it is stopped and the run ends as cancelled.
             What it already made or changed stays.
@@ -177,7 +219,13 @@ export function RunActConfirm({ state }: { state: RunDetailState }) {
           </>
         )
       }
-      confirmLabel={confirming === "cancel" ? "Cancel run" : "Run again"}
+      confirmLabel={
+        confirming === "stop"
+          ? "Stop"
+          : confirming === "cancel"
+            ? "Cancel run"
+            : "Run again"
+      }
       confirmColor="warning"
       isPending={state.isActing}
     >
@@ -197,11 +245,12 @@ export function RunDetailBody({
   /** An object page draws the facts in its own grid, above the body. */
   showFacts?: boolean;
 }) {
-  const { run, activity } = state;
+  const { run, activity, boxRun } = state;
   if (!run) return null;
   return (
     <div className="flex flex-col gap-5">
       {showFacts && <FactsGrid columns={2} facts={runFacts(state)} />}
+      {boxRun && <BoxRunSection box={boxRun} summary={run.summary} />}
 
       {run.error?.trim() && (
         <section className="flex flex-col gap-1 rounded-lg bg-status-down/[0.06] px-3 py-2.5 ring-1 ring-inset ring-status-down/30">
@@ -235,55 +284,61 @@ export function RunDetailBody({
         />
       )}
 
-      <section className="flex flex-col gap-2">
-        <h3 className="text-[13px] font-medium text-foreground">
-          What happened
-        </h3>
-        {activity.length === 0 ? (
-          <p className="text-[12.5px] text-foreground/65">
-            This run left no step-by-step record.
-          </p>
-        ) : (
-          <ol className="flex flex-col">
-            {activity.map((item) => {
-              const itemPill = statusPillFor(item.status);
-              return (
-                <li
-                  key={item.id}
-                  className="flex items-start gap-3 border-b border-foreground/[0.05] py-2 last:border-b-0"
-                >
-                  <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-                    <span className="break-words text-[12.5px] text-foreground">
-                      {item.label}
-                    </span>
-                    <span className="text-[11.5px] text-foreground/65">
-                      {formatRelative(item.at, { empty: "—" })}
-                      {item.hint ? ` · ${item.hint}` : ""}
-                    </span>
-                  </div>
-                  {itemPill && (
-                    <StatusPill kind={itemPill.kind} label={itemPill.label} />
-                  )}
-                </li>
-              );
-            })}
-          </ol>
-        )}
-        {state.activityTotal > TIMELINE_MAX && (
-          <p className="text-[12px] text-foreground/65">
-            The first {TIMELINE_MAX} of {state.activityTotal} entries.
-          </p>
-        )}
-      </section>
+      {!boxRun && (
+        <section className="flex flex-col gap-2">
+          <h3 className="text-[13px] font-medium text-foreground">
+            What happened
+          </h3>
+          {activity.length === 0 ? (
+            <p className="text-[12.5px] text-foreground/65">
+              This run left no step-by-step record.
+            </p>
+          ) : (
+            <ol className="flex flex-col">
+              {activity.map((item) => {
+                const itemPill = statusPillFor(item.status);
+                return (
+                  <li
+                    key={item.id}
+                    className="flex items-start gap-3 border-b border-foreground/[0.05] py-2 last:border-b-0"
+                  >
+                    <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                      <span className="break-words text-[12.5px] text-foreground">
+                        {item.label}
+                      </span>
+                      <span className="text-[11.5px] text-foreground/65">
+                        {formatRelative(item.at, { empty: "—" })}
+                        {item.hint ? ` · ${item.hint}` : ""}
+                      </span>
+                    </div>
+                    {itemPill && (
+                      <StatusPill kind={itemPill.kind} label={itemPill.label} />
+                    )}
+                  </li>
+                );
+              })}
+            </ol>
+          )}
+          {state.activityTotal > TIMELINE_MAX && (
+            <p className="text-[12px] text-foreground/65">
+              The first {TIMELINE_MAX} of {state.activityTotal} entries.
+            </p>
+          )}
+        </section>
+      )}
     </div>
   );
 }
 
 function runFacts(state: RunDetailState) {
-  const { run, who } = state;
+  const { run, who, boxRun } = state;
   if (!run) return [];
   return [
-    { label: "Started", value: formatTimestamp(run.startedAt) },
+    {
+      label: boxRun ? "Queued" : "Started",
+      value: formatTimestamp(run.startedAt),
+    },
+    ...(boxRun ? boxRunFacts(boxRun) : []),
     {
       label: "Finished",
       value: run.completedAt
@@ -368,11 +423,13 @@ function RunPage({ id, flowType, frame }: RunAddress & { frame: ObjectFrame }) {
           kind: "run",
           noun,
           title,
-          summary: run.error?.trim()
-            ? "It failed. Why is below."
-            : run.status === "running"
-              ? "It is still running."
-              : undefined,
+          summary: state.boxRun
+            ? (run.summary ?? undefined)
+            : run.error?.trim()
+              ? "It failed. Why is below."
+              : run.status === "running"
+                ? "It is still running."
+                : undefined,
           status: pill,
           breadcrumb: frame.breadcrumb?.(title),
           primaryAction: <RunActButtons state={state} />,

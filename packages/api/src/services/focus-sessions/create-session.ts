@@ -54,6 +54,9 @@ import {
   sanitizeDeclaredOutputs,
 } from "./update-session.js";
 import { stampSlotKeys } from "./slot-keys.js";
+// Its own line (not merged into the `paramOwedSlots` import below) so this
+// change and a sibling import added there cannot touch the same line.
+import { missingParamsRefusal } from "./param-slots.js";
 import {
   guidanceForBlockedSlots,
   newlyBlockedSlots,
@@ -667,6 +670,25 @@ export async function createFocusSession(
     throw Object.assign(new Error(describeParamTypeError(first!)), {
       code: "BAD_REQUEST",
     });
+  }
+
+  // E3 (founder, 2026-10-27): a required param of the playbook an AGENT
+  // started this session from, left unanswered, goes back to that agent before
+  // the membrane — never a slot in the person's Needs you (`param-slots.ts`).
+  // A person's own session still owes it below. A TRACK's method params are
+  // not the agent's to supply (they are the person's answers on their own
+  // goal, and `startStageSession` takes none), so they still owe.
+  if (agentUserId && playbook) {
+    const { missingRequired } = validatePlaybookParams(
+      readPlaybookParams(playbook.params),
+      params.params
+    );
+    if (missingRequired.length > 0) {
+      throw Object.assign(
+        new Error(missingParamsRefusal(missingRequired, playbook.name)),
+        { code: "BAD_REQUEST" }
+      );
+    }
   }
 
   const perm = await checkPermissionOrPropose({

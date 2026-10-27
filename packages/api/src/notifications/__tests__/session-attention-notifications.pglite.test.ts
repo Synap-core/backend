@@ -118,6 +118,7 @@ import {
 } from "@synap/database";
 import {
   recordSessionEvaluation,
+  escalateFailingCriteria,
   criterionEscalationGroupKey,
   CRITERION_ESCALATED_NOTIFICATION_TYPE,
 } from "../../services/focus-sessions/evaluations/record.js";
@@ -199,7 +200,11 @@ const notifs = (type?: string) =>
     type ? [type] : []
   ).then((r) => r.rows);
 
-/** Burn the automatic attempts on one criterion, returning the last result. */
+/**
+ * Burn the automatic attempts on one criterion, then evaluate the session the
+ * way `evaluate_session` does (the only point that escalates, E3). Returns the
+ * last record and whether this criterion was escalated now.
+ */
 async function exhaust(sessionId: string, criterionKey: string) {
   let last;
   for (let i = 0; i < 2; i++) {
@@ -212,7 +217,8 @@ async function exhaust(sessionId: string, criterionKey: string) {
       evaluatorKind: "evidence",
     });
   }
-  return last!;
+  const escalated = await escalateFailingCriteria({ sessionId, userId: USER });
+  return { last: last!, escalated: escalated.includes(criterionKey) };
 }
 
 /**
@@ -292,9 +298,9 @@ describe("session attention notifications", () => {
 
   it("escalation: exhausting the attempts on a required criterion writes ONE notification, and pushes", async () => {
     const id = await seed({ title: "Ship the parser" });
-    const last = await exhaust(id, "typecheck");
+    const { last, escalated } = await exhaust(id, "typecheck");
     expect(last.status).toBe("recorded");
-    if (last.status === "recorded") expect(last.escalated).toBe(true);
+    expect(escalated).toBe(true);
 
     const rows = await notifs(CRITERION_ESCALATED_NOTIFICATION_TYPE);
     expect(rows).toHaveLength(1);
@@ -328,7 +334,10 @@ describe("session attention notifications", () => {
       evaluatorKind: "evidence",
     });
     expect(first.status).toBe("recorded");
-    if (first.status === "recorded") expect(first.escalated).toBe(false);
+    if (first.status === "recorded") expect(first.exhausted).toBe(false);
+    expect(
+      await escalateFailingCriteria({ sessionId: id, userId: USER })
+    ).toEqual([]);
     expect(await notifs()).toHaveLength(0);
     expect(h.pushes).toHaveLength(0);
   });
@@ -371,11 +380,11 @@ describe("session attention notifications", () => {
       [randomUUID(), USER]
     );
     const id = await seed();
-    const last = await exhaust(id, "typecheck");
+    const { last, escalated } = await exhaust(id, "typecheck");
 
     // The WORK still happened — the owed slot is filed regardless of prefs.
     expect(last.status).toBe("recorded");
-    if (last.status === "recorded") expect(last.escalated).toBe(true);
+    expect(escalated).toBe(true);
     // Only the telling is suppressed.
     expect(await notifs()).toHaveLength(0);
     expect(h.pushes).toHaveLength(0);

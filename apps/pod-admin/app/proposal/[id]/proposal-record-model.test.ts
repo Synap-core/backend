@@ -246,19 +246,20 @@ describe("proposedRecord — a skill create: the code is read whole, first", () 
     expect(field.wide).toBe(true);
   });
 
-  it("leads with the code and the tools it declared, ahead of the fold", () => {
+  it("leads with the code, its instructions and its tools, ahead of the fold", () => {
     expect(record.fields.length).toBeGreaterThan(RECORD_FIELDS_SHOWN);
-    expect(record.fields.slice(0, 2).map((f) => f.key)).toEqual([
+    expect(record.fields.slice(0, 3).map((f) => f.key)).toEqual([
       "code",
+      "body",
       "requiredToolNames",
     ]);
-    expect(record.fields[1]!.after).toEqual({
+    expect(record.fields[2]!.after).toEqual({
       kind: "tags",
       items: ["apify_api"],
     });
     // The rest keep the pod's order.
-    expect(record.fields.slice(2).map((f) => f.key)).toEqual(
-      filler.map((f) => f.path)
+    expect(record.fields.slice(3).map((f) => f.key)).toEqual(
+      filler.map((f) => f.path).filter((p) => p !== "body")
     );
   });
 
@@ -276,6 +277,74 @@ describe("proposedRecord — a skill create: the code is read whole, first", () 
       ],
     })!;
     expect(entity.fields[0]!.after?.kind).toBe("text");
+  });
+});
+
+describe("proposedRecord — a skill's instructions are never cut", () => {
+  // An agent's rewrite of a skill's instructions: ~9,000 characters, the
+  // size the old 600-character clip cut to its first lines.
+  const before = "## Creative director\n\nKeep the brand voice.";
+  const after = Array.from(
+    { length: 300 },
+    (_, i) => `- Rule ${i}: write the caption the way the brief says.`
+  ).join("\n");
+
+  it("an update draws the whole new body and the old one, first", () => {
+    const record = proposedRecord({
+      action: "update",
+      kind: "skill",
+      targetName: "creative-director",
+      changes: [
+        {
+          path: "description",
+          label: "Description",
+          operation: "update" as const,
+          before: "old",
+          after: "new",
+        },
+        {
+          path: "body",
+          label: "Body",
+          operation: "update" as const,
+          before,
+          after,
+        },
+      ],
+    })!;
+    expect(record.title).toBe("creative-director");
+    const field = record.fields[0]!;
+    expect(field.key).toBe("body");
+    expect(after.length).toBeGreaterThan(9_000);
+    expect(field.after).toEqual({ kind: "code", text: after, lines: 300 });
+    expect(field.before).toEqual({ kind: "code", text: before, lines: 3 });
+    expect(field.wide).toBe(true);
+  });
+
+  it("`instructions` is read whole too; a PROPERTY named body is not", () => {
+    const record = proposedRecord({
+      action: "create",
+      kind: "skill",
+      changes: [
+        {
+          path: "instructions",
+          label: "Instructions",
+          operation: "create" as const,
+          after,
+        },
+        {
+          path: "properties.body",
+          label: "Body",
+          operation: "create" as const,
+          after: "Short note",
+        },
+      ],
+    })!;
+    expect(record.fields[0]!.after).toEqual({
+      kind: "code",
+      text: after,
+      lines: 300,
+    });
+    expect(record.fields[1]!.after?.kind).toBe("text");
   });
 });
 

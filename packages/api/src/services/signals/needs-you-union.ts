@@ -884,6 +884,11 @@ export interface OwedSlotSignalInput {
  *                     never from a kind string — undrawn context, not a hole.
  *                     (`kind` was withheld under this same reasoning until it
  *                     turned out to decide the VERB, not the icon.)
+ *   subjectEntityId → the thing the session is about. A signal's door is the
+ *                     session (`target`), and the kind lens already narrows
+ *                     by thing in SQL (`subject`); its reader is the owed door
+ *                     a pod app reads (`GET /focus-sessions/owed`), which
+ *                     places each ask on its thing's own page.
  */
 const _PROJECTED_OWED_SLOT_FIELDS = [
   "sessionId",
@@ -905,6 +910,7 @@ const _WITHHELD_OWED_SLOT_FIELDS = [
   "sessionStatus",
   "workspaceId",
   "icon",
+  "subjectEntityId",
 ] as const satisfies ReadonlyArray<keyof OwedSlot>;
 
 /**
@@ -979,6 +985,7 @@ const _WITHHELD_DRAFT_ASK_FIELDS = [
   "ask",
   "sessionStatus",
   "workspaceId",
+  "subjectEntityId",
 ] as const satisfies ReadonlyArray<keyof OwedSlot>;
 
 type _DraftAskFieldsClassified =
