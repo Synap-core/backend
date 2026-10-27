@@ -22,6 +22,8 @@ import {
   type ListOwedSlotsParams,
 } from "../focus-sessions/owed-outputs.js";
 import { resolveScope } from "../../utils/scope-filter.js";
+import { isNeedsYou } from "@synap-core/types/needs-you/rule";
+import { owedSlotClassOf } from "./needs-you-union.js";
 
 /** The owed half of needs-you: the owner floor; on a draft, only its asks. */
 export function listNeedsYouOwed(
@@ -56,7 +58,7 @@ export async function asksYouSessionIds(
   });
   return new Set(
     slots
-      .filter((s) => (s.needsYouClass ?? "needs_you") === "needs_you")
+      .filter((s) => isNeedsYou({ needsYouClass: owedSlotClassOf(s) }))
       .map((s) => s.sessionId)
   );
 }

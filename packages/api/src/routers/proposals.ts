@@ -139,7 +139,11 @@ import {
   sessionReadableWhere,
 } from "../access/session-visibility.js";
 import { redactUnreadableSessionTargets } from "../services/proposals/session-content-redaction.js";
-import { classifyPendingProposals } from "../services/proposals/proposal-needs-you.js";
+import {
+  classifyPendingProposals,
+  clusterFoldCounts,
+} from "../services/proposals/proposal-needs-you.js";
+import { isNeedsYou } from "@synap-core/types/needs-you/rule";
 export { buildProposalChanges } from "./proposals/changes.js";
 import {
   planProposalRevert,
@@ -457,6 +461,14 @@ export const proposalsRouter = router({
          */
         automationId: z.string().uuid().optional(),
         /**
+         * Stamp each PENDING item with THE needs-you rule's class
+         * (`needsYouClass`, decision E6) — the SAME `classifyPendingProposals`
+         * call `groups` makes, so a page of proposals and the Inbox's clusters
+         * fold one proposal the same way. Absent ⇒ no class (the review queue:
+         * every pending proposal is its to decide).
+         */
+        classifyNeedsYou: z.boolean().optional(),
+        /**
          * `validated` = approved ∪ auto_approved (the applied set, kept for its
          * existing readers). `auto_approved` = ONLY the writes that executed
          * without anyone deciding them — the "notice" tier of
@@ -692,13 +704,28 @@ export const proposalsRouter = router({
           })
         );
       }
+      // THE needs-you rule per pending row (decision E6): the groups door's
+      // own call, on the UNREDACTED rows (the waits read floors sessions).
+      const needsYouClasses = input.classifyNeedsYou
+        ? await classifyPendingProposals(rows, {
+            userId: reviewerId,
+            roster: rosterReadFor(ctx),
+          })
+        : null;
       const itemsWithPermission = items.map((it) => {
         const verdict = reviewVerdicts.get(it.id);
         const viewerCanReview = verdict?.viewerCanReview ?? false;
         const viewerCanReviewReason =
           verdict?.viewerCanReviewReason ?? "not-authorized";
         const revertable = revertableById.get(it.id) ?? false;
-        return { ...it, viewerCanReview, viewerCanReviewReason, revertable };
+        const needsYouClass = needsYouClasses?.get(it.id);
+        return {
+          ...it,
+          viewerCanReview,
+          viewerCanReviewReason,
+          revertable,
+          ...(needsYouClass ? { needsYouClass } : {}),
+        };
       });
 
       const nextCursor =
@@ -987,7 +1014,7 @@ export const proposalsRouter = router({
           // Classified ⇒ out of the headline is the rule's answer, not the
           // durable-work clock alone.
           reviewLater: needsYouClass
-            ? needsYouClass !== "needs_you"
+            ? !isNeedsYou({ needsYouClass })
             : r.reviewLater === true,
           needsYouClass,
         };
@@ -1028,16 +1055,9 @@ export const proposalsRouter = router({
         reviewLater: clusters.filter((c) => c.reviewLater).length,
         /**
          * Of `reviewLater`, by the rule's fold (`classifyNeedsYou` only):
-         * Review later vs Changes to review. Before the slice too.
+         * Working, Review later, Changes to review. Before the slice too.
          */
-        folds: {
-          reviewLater: clusters.filter(
-            (c) => c.reviewLater && c.needsYouClass !== "changes_to_review"
-          ).length,
-          changesToReview: clusters.filter(
-            (c) => c.needsYouClass === "changes_to_review"
-          ).length,
-        },
+        folds: clusterFoldCounts(clusters),
         /** Pending rows actually scanned — the row total while not truncated. */
         scanned: rows.length,
         /** The scan hit `scanLimit`: `distinct`/`scanned` are FLOORS, not totals. */

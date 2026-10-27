@@ -107,6 +107,12 @@ export interface SessionActivityLive {
   since: Date | string | null;
   /** The newest activity `at`; null when nothing has happened yet. */
   lastAt: Date | string | null;
+  /**
+   * The newest AGENT evidence of work (the needs-you rule's Working clock,
+   * `SessionLiveFacts.lastAgentWorkAt`); null when there is none. Absent on
+   * an older pod.
+   */
+  lastAgentWorkAt?: Date | string | null;
 }
 
 export interface SessionActivityWire {

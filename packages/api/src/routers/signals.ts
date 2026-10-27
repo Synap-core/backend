@@ -153,6 +153,7 @@ import {
   listUnfinishedCaptures,
   type UnfinishedCapture,
 } from "../services/intake/capture-room.js";
+import { clusterFoldCounts } from "../services/proposals/proposal-needs-you.js";
 import { sessionKindWhere } from "../services/focus-sessions/session-kind.js";
 import { OPEN_SESSION_STATUSES } from "../services/focus-sessions/session-statuses.js";
 import {
@@ -441,7 +442,7 @@ async function readAttention(
         groups: [],
         distinct: 0,
         reviewLater: 0,
-        folds: { reviewLater: 0, changesToReview: 0 },
+        folds: { working: 0, reviewLater: 0, changesToReview: 0 },
         scanTruncated: false,
         scanned: 0,
       },
@@ -1391,14 +1392,7 @@ function narrowAttention(
       groups: clusters,
       distinct: clusters.length,
       reviewLater: clusters.filter((c) => c.reviewLater).length,
-      folds: {
-        reviewLater: clusters.filter(
-          (c) => c.reviewLater && c.needsYouClass !== "changes_to_review"
-        ).length,
-        changesToReview: clusters.filter(
-          (c) => c.needsYouClass === "changes_to_review"
-        ).length,
-      },
+      folds: clusterFoldCounts(clusters),
       scanTruncated: false,
     },
     notifications: scope.kindClusters

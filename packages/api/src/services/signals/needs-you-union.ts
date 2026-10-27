@@ -45,6 +45,7 @@ import {
 } from "@synap-core/types/ask";
 import { needsYouTotal } from "@synap-core/types/units";
 import { REVIEW_LATER_AFTER_MS } from "@synap-core/types/proposals/fate";
+import type { ClusterFoldCounts } from "../proposals/proposal-needs-you.js";
 import {
   foldNeedsYouCounts,
   type NeedsYouClass,
@@ -53,6 +54,7 @@ import {
 } from "@synap-core/types/needs-you/rule";
 import {
   SUGGESTIONS_CAP,
+  needsYouFoldOf,
   type GroupableSignal,
   type NeedsYouAccessRequest,
   type NeedsYouInvite,
@@ -709,7 +711,9 @@ export interface ClusterSessionName {
 }
 
 /** The id / group-key suffix of a cluster's Review later part. Pure. */
-function reviewLaterSuffix(cluster: Pick<ProposalCluster, "reviewLater">): string {
+function reviewLaterSuffix(
+  cluster: Pick<ProposalCluster, "reviewLater">
+): string {
   return cluster.reviewLater ? "@review-later" : "";
 }
 
@@ -1784,9 +1788,7 @@ export function unionNeedsYou(args: {
       ...(args.reviewSessions ?? []).map((r) =>
         signalFromReviewSession(r, now)
       ),
-      ...liveCaptureRows(args).map((r) =>
-        signalFromUnfinishedCapture(r, now)
-      ),
+      ...liveCaptureRows(args).map((r) => signalFromUnfinishedCapture(r, now)),
       ...signalsFromAccessRequests(args.accessRequests, now),
       ...signalsFromSpaceInvites(args.spaceInvites, now),
       ...args.clusters.map((c) =>
@@ -2049,10 +2051,11 @@ export function countNeedsYou(args: {
   reviewLaterClusters?: number;
   /**
    * `proposals.groups`.folds — of `reviewLaterClusters`, how many the rule
-   * classed `review_later` and how many `changes_to_review` (decision E6).
-   * Absent ⇒ every out-of-headline cluster is Review later (an older read).
+   * classed `working`, `review_later` and `changes_to_review` (decision E6,
+   * F2). Absent ⇒ every out-of-headline cluster is Review later (an older
+   * read).
    */
-  clusterFolds?: { reviewLater: number; changesToReview: number };
+  clusterFolds?: ClusterFoldCounts;
   /** `proposals.groups`.scanTruncated. */
   clustersTruncated: boolean;
   /** Unread notifications, already page-limited by the caller. */
@@ -2117,10 +2120,11 @@ export function countNeedsYou(args: {
    */
   reviewLater: number;
   /**
-   * The rule's folds (decision E), over the SAME rows a list draws
-   * (`owedSlotClassOf`, the cluster's class): `needsYou` = owed asks plus
-   * proposal clusters in the headline (`blocked + decisions`); Working, Stopped (+ its sessions), Review later, From the
-   * system, Changes to review. One number, one source.
+   * The rule's folds (decision E), over the SAME rows a list draws (each
+   * row's fold read by `needsYouFoldOf`, the derivation every surface folds
+   * its rows with): `needsYou` IS the headline total above (one number, one
+   * source); Working, Stopped (+ its sessions), Review later, From the
+   * system, Changes to review.
    */
   folds: NeedsYouFoldCounts;
   /** Unread notifications that survive the dedupe. */
@@ -2195,24 +2199,17 @@ export function countNeedsYou(args: {
   }).filter((s) => s.kind === "owed-slot");
   const owedFolds = foldNeedsYouCounts(
     owedRows.map((s) => ({
-      needsYouClass:
-        s.needsYouClass ?? (s.reviewLater ? "review_later" : "needs_you"),
+      needsYouClass: needsYouFoldOf(s) ?? "needs_you",
       sessionId: s.target?.id ?? null,
     }))
   );
   const blocked = owedFolds.needsYou;
   const owedOut = owedRows.length - blocked;
   const reviewLater = reviewLaterClusters + owedOut;
-  const clusterFolds = args.clusterFolds ?? {
+  const clusterFolds: ClusterFoldCounts = args.clusterFolds ?? {
+    working: 0,
     reviewLater: reviewLaterClusters,
     changesToReview: 0,
-  };
-  const folds: NeedsYouFoldCounts = {
-    ...owedFolds,
-    // The rule's headline: owed asks AND waited-on proposal clusters.
-    needsYou: blocked + decisions,
-    reviewLater: owedFolds.reviewLater + clusterFolds.reviewLater,
-    changesToReview: clusterFolds.changesToReview,
   };
   const review = args.reviewSessions ?? 0;
   const captures = liveCaptureRows({
@@ -2226,16 +2223,25 @@ export function countNeedsYou(args: {
   const drafts = args.draftAsks
     ? signalsFromDraftAsks(args.draftAsks).length
     : 0;
+  // THE item sum (`needsYouTotal`) over the rule's three populations, plus
+  // the notification half. Drafts are PROPOSED (2026-10-04) and never count
+  // as drafts; a draft's ASKS are owed slots, in `blocked` (2026-10-22).
+  const needsYou =
+    needsYouTotal({ owed: blocked, decisions, review }) +
+    notifications +
+    captures +
+    requests +
+    invites;
+  const folds: NeedsYouFoldCounts = {
+    ...owedFolds,
+    // ONE headline number: the folds never state a second one (M5).
+    needsYou,
+    working: owedFolds.working + clusterFolds.working,
+    reviewLater: owedFolds.reviewLater + clusterFolds.reviewLater,
+    changesToReview: clusterFolds.changesToReview,
+  };
   return {
-    // THE item sum (`needsYouTotal`) over the rule's three populations, plus
-    // the notification half. Drafts are PROPOSED (2026-10-04) and never count
-    // as drafts; a draft's ASKS are owed slots, in `blocked` (2026-10-22).
-    needsYou:
-      needsYouTotal({ owed: blocked, decisions, review }) +
-      notifications +
-      captures +
-      requests +
-      invites,
+    needsYou,
     distinct: decisions,
     decisions,
     reviewLater,

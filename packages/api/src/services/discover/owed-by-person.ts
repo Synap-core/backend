@@ -24,6 +24,7 @@
 
 import {
   foldNeedsYouCounts,
+  isNeedsYou,
   type NeedsYouFoldCounts,
 } from "@synap-core/types/needs-you/rule";
 import type { OwedSlot } from "../focus-sessions/owed-outputs.js";
@@ -105,7 +106,9 @@ export function foldOwedByPerson(p: {
       sessionId: s.sessionId,
     }))
   );
-  const headline = p.needsYou.filter((s) => classOf(s) === "needs_you");
+  const headline = p.needsYou.filter((s) =>
+    isNeedsYou({ needsYouClass: classOf(s) })
+  );
   const bySession = new Map<string, { slots: OwedSlot[]; inbox: OwedInbox }>();
   // Needs-you first: a session with any needs-you slot is a needs-you row.
   const add = (slots: readonly OwedSlot[], inbox: OwedInbox) => {
