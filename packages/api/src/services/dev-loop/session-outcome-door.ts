@@ -19,6 +19,7 @@
  * person's approval). Every door is OWNER-floored on `userId`.
  */
 
+import { createLogger } from "@synap-core/core";
 import { db, and, eq, focusSessions } from "@synap/database";
 import type {
   OutcomeCompletion,
@@ -36,6 +37,8 @@ import {
   evaluateSession,
   type EvaluateSessionResult,
 } from "../focus-sessions/evaluations/evaluate.js";
+
+const logger = createLogger({ module: "dev-loop/session-outcome-door" });
 
 async function ownsSession(sessionId: string, userId: string) {
   const [row] = await db
@@ -78,11 +81,21 @@ export async function completeOutcome(input: {
   });
   const claimed = report as CompleteOutputOutcome | undefined;
   if (claimed?.result === "claimed") {
-    const verdict = await satisfyClaimsByEvidence({
-      sessionId: input.sessionId,
-      userId: input.userId,
-    });
-    report = withEvidenceVerdict(claimed, verdict.satisfied);
+    // The evidence verdict is best-effort for its callers (its own contract,
+    // and the approval executor's): a failed verdict leaves the CLAIM
+    // standing — reported as `claimed`, never as done — and is logged.
+    try {
+      const verdict = await satisfyClaimsByEvidence({
+        sessionId: input.sessionId,
+        userId: input.userId,
+      });
+      report = withEvidenceVerdict(claimed, verdict.satisfied);
+    } catch (err) {
+      logger.warn(
+        { err, sessionId: input.sessionId, outcomeKey: input.outcomeKey },
+        "complete_outcome: the evidence verdict failed; the claim stands"
+      );
+    }
   }
   const final = report as CompleteOutputOutcome | undefined;
   return {
