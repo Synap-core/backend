@@ -4,10 +4,14 @@ import {
   DEFERRED_OUTCOME_TONE,
   deriveDeferredWritesReview,
   describeHeldWritesProposal,
+  heldWritesPackName,
   isHeldWritesProposal,
   type DeferredWrite,
 } from "../deferred-writes.js";
-import { resolveObjectNoun } from "../../vocabulary/index.js";
+import {
+  buildObjectActionTitle,
+  resolveObjectNoun,
+} from "../../vocabulary/index.js";
 
 const AGENT = "0cf10d69-c16c-499a-8a1b-1f2e3d4c5b6a";
 const PERSON = "7a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
@@ -159,7 +163,9 @@ describe("describeHeldWritesProposal", () => {
 
   it("names the agent whose writes wait", () => {
     const d = describeHeldWritesProposal(row)!;
-    expect(d.title).toBe("Claude Code's writes held past today's limit");
+    expect(d.title).toBe(
+      "Writes held for review: Claude Code, 2026-10-27, 5 items"
+    );
     expect(d.agentName).toBe("Claude Code");
     expect(d.writes).toBe(5);
   });
@@ -167,7 +173,7 @@ describe("describeHeldWritesProposal", () => {
   it("prefers the pod-resolved target name", () => {
     expect(
       describeHeldWritesProposal({ ...row, targetName: "Scout" })!.title
-    ).toBe("Scout's writes held past today's limit");
+    ).toBe("Writes held for review: Scout, 2026-10-27, 5 items");
   });
 
   it("never an id, never the kind's noun as a name, never the raw token", () => {
@@ -178,7 +184,7 @@ describe("describeHeldWritesProposal", () => {
         agentName: name,
       })!;
       expect(d.agentName).toBeNull();
-      expect(d.title).toBe("Writes held past today's limit");
+      expect(d.title).toBe("Writes held for review: 2026-10-27, 5 items");
       expect(d.title).not.toMatch(/held_writes|Held writes Agent/);
     }
   });
@@ -191,5 +197,36 @@ describe("describeHeldWritesProposal", () => {
       false
     );
     expect(isHeldWritesProposal(row)).toBe(true);
+  });
+});
+
+describe("the held-writes pack's title (F6, founder 2026-10-27)", () => {
+  it("names itself from its own data: the agent name the pod stored, the day, the writes it holds now", () => {
+    expect(heldWritesPackName({ ...pack, agentName: "Claude Code" })).toBe(
+      "Claude Code, 2026-10-27, 5 items"
+    );
+    expect(
+      heldWritesPackName({ ...pack, deferredWrites: pack.deferredWrites.slice(0, 1) })
+    ).toBe("2026-10-27, 1 item");
+    expect(heldWritesPackName({ deferredWrites: [] })).toBeUndefined();
+  });
+
+  it("every door titling it from proposalType + targetType + name reads the lead, never \"Held writes Agent\"", () => {
+    const title = (mood: "imperative" | "past") =>
+      buildObjectActionTitle({
+        action: "held_writes",
+        objectKind: "agent",
+        objectName: heldWritesPackName({ ...pack, agentName: "Claude Code" }),
+        mood,
+      });
+    expect(title("imperative")).toBe(
+      "Writes held for review: Claude Code, 2026-10-27, 5 items"
+    );
+    expect(title("past")).toBe(
+      "Writes held for review: Claude Code, 2026-10-27, 5 items"
+    );
+    expect(
+      buildObjectActionTitle({ action: "held_writes", objectKind: "agent" })
+    ).toBe("Writes held for review");
   });
 });

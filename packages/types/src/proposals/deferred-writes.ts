@@ -22,6 +22,7 @@
 import type { EnumTone } from "../property-render/enum-tone.js";
 import {
   buildObjectActionTitle,
+  countedNoun,
   normalizeObjectKind,
   resolveObjectNoun,
 } from "../vocabulary/index.js";
@@ -303,7 +304,7 @@ export interface HeldWritesProposalLike {
 export interface HeldWritesSummary {
   /** The agent's name, or null when the pod resolved none. */
   agentName: string | null;
-  /** "Claude Code's writes held past today's limit". */
+  /** "Writes held for review: Claude Code, 2026-10-27, 12 items". */
   title: string;
   /** The writes it holds, readable or not. */
   writes: number;
@@ -329,19 +330,59 @@ function agentNameOf(raw: string | null | undefined): string | null {
 }
 
 /**
- * The heading of a held-writes pack, naming the agent whose writes wait — or
- * null when the row is not one (a caller then keeps its generic title).
+ * The NAME of a held-writes pack, read off its own `data` (`fileHeldWrites`
+ * stores `agentName` and `day`): "Claude Code, 2026-10-27, 12 items". The
+ * count is the writes it holds NOW (read, never stored), so it never goes
+ * stale as writes join. Undefined when `data` is not a pack's. The title door
+ * (`buildObjectActionTitle`, action `held_writes`) leads it with "Writes held
+ * for review:"; every door that titles a proposal from its data reaches it
+ * through the pod's `extractProposalName`.
+ */
+export function heldWritesPackName(
+  data: unknown,
+  agentName?: string | null
+): string | undefined {
+  const d = asRecord(data);
+  if (
+    !d ||
+    typeof d.day !== "string" ||
+    typeof d.agentUserId !== "string" ||
+    !Array.isArray(d.deferredWrites)
+  ) {
+    return undefined;
+  }
+  const name =
+    agentNameOf(agentName) ??
+    agentNameOf(typeof d.agentName === "string" ? d.agentName : null);
+  const total = deriveDeferredWritesReview(d)?.total ?? 0;
+  return [name, d.day.trim() || null, countedNoun(total, "item")]
+    .filter(Boolean)
+    .join(", ");
+}
+
+/**
+ * The heading of a held-writes pack, through the one title door — or null
+ * when the row is not one (a caller then keeps its generic title).
  */
 export function describeHeldWritesProposal(
   p: HeldWritesProposalLike
 ): HeldWritesSummary | null {
   if (!isHeldWritesProposal(p)) return null;
-  const agentName = agentNameOf(p.targetName) ?? agentNameOf(p.agentName);
+  const agentName =
+    agentNameOf(p.targetName) ??
+    agentNameOf(p.agentName) ??
+    agentNameOf(
+      typeof asRecord(p.data)?.agentName === "string"
+        ? (asRecord(p.data)!.agentName as string)
+        : null
+    );
   return {
     agentName,
-    title: agentName
-      ? `${agentName}'s writes held past today's limit`
-      : "Writes held past today's limit",
+    title: buildObjectActionTitle({
+      action: HELD_WRITES_PROPOSAL_TYPE,
+      objectKind: HELD_WRITES_TARGET_TYPE,
+      objectName: heldWritesPackName(p.data, agentName),
+    }),
     writes: deriveDeferredWritesReview(p.data)?.total ?? 0,
   };
 }

@@ -212,7 +212,9 @@ describe("a held-writes pack", () => {
   it("heads with the agent's name, never 'Held writes Agent'", () => {
     state.proposal = heldWrites(10);
     const seen = text(render());
-    expect(seen).toContain("Claude-code's writes held past today's limit");
+    expect(seen).toContain(
+      "Writes held for review: Claude-code, 2026-10-27, 11 items"
+    );
     expect(seen).not.toMatch(/Held writes/);
   });
 
