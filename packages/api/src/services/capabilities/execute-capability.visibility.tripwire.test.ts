@@ -7,6 +7,11 @@ const FILE = join(
   dirname(fileURLToPath(import.meta.url)),
   "execute-capability.ts"
 );
+/** The run door's verb→skill rule, shared with the review's reach read. */
+const RULE_FILE = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "verb-skill.ts"
+);
 
 /**
  * `skillId` is a convenience selector, never an authorization grant. These
@@ -19,21 +24,31 @@ describe("executeCapability direct skillId visibility and lifecycle contract", (
     src.indexOf("const [skillRow]"),
     src.indexOf("if (!skillRow)")
   );
+  // The lens and lifecycle conditions live in ONE rule (`verb-skill.ts`),
+  // which the resolver must apply to both selectors.
+  const rule = readFileSync(RULE_FILE, "utf8");
+  const ruleBody = rule.slice(
+    rule.indexOf("export function answeringSkillsWhere")
+  );
+
+  it("resolves through the one answering-skill rule", () => {
+    expect(resolver).toContain("answeringSkillsWhere(userId, workspaceId)");
+  });
 
   it("does not resolve a foreign user skill id outside the canonical caller lens", () => {
-    expect(resolver).toContain(
+    expect(ruleBody).toContain(
       "visibleSkillsWhere(userId, workspaceId ?? undefined)"
     );
   });
 
   it("does not resolve a foreign workspace skill id without the shared membership predicate", () => {
-    expect(resolver).toContain(
+    expect(ruleBody).toContain(
       "visibleSkillsWhere(userId, workspaceId ?? undefined)"
     );
   });
 
   it("does not resolve an inactive direct skill id", () => {
-    expect(resolver).toContain('eq(skills.status, "active")');
+    expect(ruleBody).toContain('eq(skills.status, "active")');
   });
 
   it("applies the same visibility and lifecycle conditions to skillId and verbId", () => {

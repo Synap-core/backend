@@ -25,7 +25,11 @@
  */
 
 import { ruleThenWords, ruleWhenWords } from "@synap-core/types/automations";
-import type { ProposalReviewGraph } from "@synap-core/types/proposals";
+import {
+  partReachWords,
+  type ProposalPartReach,
+  type ProposalReviewGraph,
+} from "@synap-core/types/proposals";
 import {
   formatFieldLabel,
   type EffectivePropertyDef,
@@ -35,6 +39,7 @@ import {
   humanizeToken,
   resolveObjectNoun,
   resolveStatusLabel,
+  resolveVerbStepLabel,
 } from "@synap-core/types/vocabulary";
 import {
   codeValue,
@@ -110,6 +115,15 @@ function tags(items: readonly string[] | null | undefined): RecordValue | null {
   return clean.length ? { kind: "tags", items: clean } : null;
 }
 
+/**
+ * What a part that acts on its own can reach, in the words every surface
+ * says (`partReachWords`). Not measured (an older pod) ⇒ no fact: never
+ * "nothing" for "not read".
+ */
+function reach(value: ProposalPartReach | undefined): RecordValue | null {
+  return value ? text(partReachWords(value)) : null;
+}
+
 function status(raw: string): RecordValue {
   return { kind: "status", label: resolveStatusLabel(raw), raw };
 }
@@ -154,9 +168,10 @@ function flowRuns(flow: unknown): RecordValue | null {
     .filter((n) => n?.type !== "trigger")
     .map((n) => {
       const d = n.data ?? {};
+      const verbId = str(d.verbId);
       const name =
         str(d.skillName) ??
-        str(d.verbId) ??
+        (verbId ? resolveVerbStepLabel(verbId) : null) ??
         str(d.playbookName) ??
         str(d.name) ??
         str(d.label);
@@ -200,6 +215,7 @@ const DRAWERS = {
           text(ruleWhenWords(a.triggerType, flow?.triggerConfig ?? null).text)
         ),
         ...field("runs", flowRuns(flow)),
+        ...field("canReach", reach(a.reach)),
         ...field("description", text(a.description)),
       ]);
     }),
@@ -343,6 +359,7 @@ const DRAWERS = {
             id: u.targetId,
             name: u.targetName ?? resolveObjectNoun(u.kind),
           }),
+          ...field("canReach", reach(u.reach)),
           ...fields,
         ],
         "update"

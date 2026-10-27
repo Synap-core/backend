@@ -90,6 +90,7 @@ const devApprovalProposal = {
   targetType: "entity",
   targetId: null,
   sessionId: null,
+  proposalType: "deploy_approval",
 };
 
 beforeEach(() => {
@@ -193,6 +194,7 @@ describe("(3) NO LOCKOUT — the floor never denies a legitimate human", () => {
         targetType: "entity",
         targetId: null,
         sessionId: null,
+        proposalType: "create",
       },
       userId: HUMAN,
       purpose: "approve",
@@ -353,6 +355,7 @@ describe("(5) REVERT is a decision — the same floor as approve", () => {
         targetType: "entity",
         targetId: null,
         sessionId: null,
+        proposalType: "create",
       },
       userId: HUMAN,
       purpose: "approve",
