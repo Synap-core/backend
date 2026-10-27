@@ -4,9 +4,9 @@
  * The hole (backend review F1): an agent files a skill create with code, then
  * revises `{kind: "instruction"}`. The page-only rule read the label, so the
  * proposal fell into every "Approve all", and approving it turned the code on
- * unseen. The rule now reads what the skill carries (`skillRequestExecutes`).
- * Driven through the shared revise core every revise door uses, then the one
- * page-only rule every approve door reads.
+ * unseen. Two locks, each tested alone: the revise core refuses a change of a
+ * skill's `kind`, and the page-only rule reads what the skill carries
+ * (`skillRequestExecutes`), so a relabelled payload stays page-only anyway.
  */
 import { describe, expect, it } from "vitest";
 import { proposalPageOnlyReason } from "@synap-core/types/proposals";
@@ -20,32 +20,44 @@ const codeSkillCreate = () => ({
 });
 
 describe("revise {kind: instruction} on a code skill create", () => {
-  it("is still decided on its page, as code", () => {
-    const { merged } = computeRevisedEnvelope({
-      envelope: codeSkillCreate(),
-      patch: { kind: "inner", fields: { kind: "instruction" } },
-    });
-    expect((merged.data as Record<string, unknown>).kind).toBe("instruction");
-    expect(
-      proposalPageOnlyReason({
-        targetType: "skill",
-        proposalType: "create",
-        data: merged,
+  it("is refused by the revise core", () => {
+    expect(() =>
+      computeRevisedEnvelope({
+        envelope: codeSkillCreate(),
+        patch: { kind: "inner", fields: { kind: "instruction" } },
       })
-    ).toBe("executable_skill");
+    ).toThrow(/cannot change a skill's `kind`/);
+    expect(() =>
+      computeRevisedEnvelope({
+        envelope: codeSkillCreate(),
+        patch: {
+          kind: "envelope",
+          fields: { data: { ...codeSkillCreate().data, kind: "instruction" } },
+        },
+      })
+    ).toThrow(/cannot change a skill's `kind`/);
   });
 
-  it("emptying its code too still leaves a skill create on its page", () => {
+  it("a revise that echoes the same kind, or fixes the code, passes", () => {
     const { merged } = computeRevisedEnvelope({
       envelope: codeSkillCreate(),
-      patch: { kind: "inner", fields: { kind: "instruction", code: "" } },
+      patch: { kind: "inner", fields: { kind: "code", code: "return 2;" } },
     });
+    expect((merged.data as Record<string, unknown>).code).toBe("return 2;");
+  });
+
+  it("a payload relabelled anyway is still decided on its page, as code", () => {
+    // The relabel as it would read had it landed (an older row, another door).
+    const relabelled = {
+      ...codeSkillCreate(),
+      data: { ...codeSkillCreate().data, kind: "instruction" },
+    };
     expect(
       proposalPageOnlyReason({
         targetType: "skill",
         proposalType: "create",
-        data: merged,
+        data: relabelled,
       })
-    ).toBe("acts_on_its_own");
+    ).toBe("executable_skill");
   });
 });
