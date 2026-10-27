@@ -1985,6 +1985,9 @@ export async function relaySessionAnswer(p: {
     requireOpenAsk: true,
     now,
   });
+  // `no_pending_relay` answers a Confirm (`confirmsRelayAt`), which a relay
+  // never sends; should it appear, the slot is no longer open to a relay.
+  if (answered.status === "no_pending_relay") return { status: "not_open" };
   if (answered.status !== "answered") return answered;
   let questionId: string | null = null;
   if (question) {
