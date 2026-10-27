@@ -3,7 +3,6 @@ import {
   batchOf,
   exitOf,
   focusedRow,
-  isExecutableSkillCreate,
   isRemoval,
   liveAskSlot,
   reviewCounts,
@@ -281,30 +280,6 @@ describe("reviewRows", () => {
     expect(batchOf(rows, new Set(rows.map((r) => r.key))).proposalIds).toEqual([
       "c3-p1",
     ]);
-  });
-
-  it("isExecutableSkillCreate reads the verb and the kind, never a skill update", () => {
-    expect(
-      isExecutableSkillCreate({
-        targetType: "skill",
-        proposalType: "update",
-        data: { data: { code: "return 1;" } },
-      })
-    ).toBe(false);
-    expect(
-      isExecutableSkillCreate({
-        targetType: "tool",
-        proposalType: "create",
-        data: { data: { code: "return 1;" } },
-      })
-    ).toBe(false);
-    expect(
-      isExecutableSkillCreate({
-        targetType: "skill",
-        proposalType: "skill.create",
-        data: { data: { code: "return 1;" } },
-      })
-    ).toBe(true);
   });
 
   it("a member the viewer may not approve keeps the whole row out of inline and batch", () => {

@@ -50,8 +50,11 @@ import type {
 } from "@synap-core/types";
 import {
   buildFallbackTitle,
+  PAGE_ONLY_REASON_CODE,
+  PAGE_ONLY_SENTENCE,
   PROPOSAL_BATCH_MAX,
   PROPOSAL_REJECTION_REASONS,
+  proposalPageOnlyReason,
 } from "@synap-core/types/proposals";
 import {
   PROPOSAL_STATUSES,
@@ -356,6 +359,17 @@ function notSessionBookkeepingWhere() {
     notInArray(proposals.proposalType, [...SESSION_BOOKKEEPING_PROPOSAL_TYPES]),
     inArray(proposals.status, DECIDE_STATUSES)
   )!;
+}
+
+/** `batchApprove`'s page-only refusal, read off the error it threw. */
+function pageOnlyFailureFields(error: unknown): {
+  reasonCode?: "REVIEW_ON_ITS_PAGE";
+} {
+  return error instanceof TRPCError &&
+    (error.cause as { reasonCode?: unknown } | undefined)?.reasonCode ===
+      PAGE_ONLY_REASON_CODE
+    ? { reasonCode: PAGE_ONLY_REASON_CODE }
+    : {};
 }
 
 export const proposalsRouter = router({
@@ -3248,11 +3262,13 @@ export const proposalsRouter = router({
         /** Parts the executor declined to apply, each a reviewer sentence — see ProposalExecutorResult. */
         refusals?: ProposalExecutorResult["refusals"];
         /**
-         * Set only when this item's CONFLICT is the weak same-name gate.
-         * A revision-guard CONFLICT has no reasonCode — clients must not
-         * treat every CONFLICT as "changed after you opened this".
+         * `ENTITY_WEAK_DEDUP`: set only when this item's CONFLICT is the weak
+         * same-name gate. A revision-guard CONFLICT has no reasonCode —
+         * clients must not treat every CONFLICT as "changed after you opened
+         * this". `REVIEW_ON_ITS_PAGE` (`BAD_REQUEST`): only the proposal's own
+         * page may approve it (`proposalPageOnlyReason`); it stays pending.
          */
-        reasonCode?: "ENTITY_WEAK_DEDUP";
+        reasonCode?: "ENTITY_WEAK_DEDUP" | "REVIEW_ON_ITS_PAGE";
         candidates?: Array<{ id: string; title: string | null; type: string }>;
         opRef?: string;
         identity?: ProposalExecutorResult["identity"];
@@ -3333,6 +3349,25 @@ export const proposalsRouter = router({
             });
           }
 
+          // Page-only (`@synap-core/types` page-only.ts, the rule every
+          // surface reads): a skill create that runs code is turned on by its
+          // approval and only its page shows the code; a create with a record
+          // twin keeps both unless the reviewer chose a verb. Refused per item,
+          // before anything is applied, and left pending. A twin whose verb
+          // the caller sends (`resolutions`) was chosen, so it may pass.
+          const resolution = input.resolutions?.[proposalId];
+          const pageOnly = proposalPageOnlyReason(proposal);
+          if (
+            pageOnly === "executable_skill" ||
+            (pageOnly === "identity_choice" && !resolution)
+          ) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: PAGE_ONLY_SENTENCE[pageOnly],
+              cause: { reasonCode: PAGE_ONLY_REASON_CODE },
+            });
+          }
+
           // ONE door — the SAME `applyProposalApproval` single approve runs.
           // This block used to inline only the generic `.validated`-emit tail
           // and never resolved an executor, so "Approve all" flipped the row
@@ -3351,7 +3386,6 @@ export const proposalsRouter = router({
           // single approve does) while every remaining item is still attempted.
           // Idempotency is layered: the status guard above skips terminal rows,
           // and each executor keeps its own already-APPROVED short-circuit.
-          const resolution = input.resolutions?.[proposalId];
           const result = await applyProposalApproval({
             proposal,
             userId,
@@ -3408,6 +3442,7 @@ export const proposalsRouter = router({
             errorCode:
               error instanceof TRPCError ? error.code : "INTERNAL_SERVER_ERROR",
             ...weakDedupFailureFields(error),
+            ...pageOnlyFailureFields(error),
           });
         }
       }
