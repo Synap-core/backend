@@ -156,6 +156,10 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "pod-mcp": "synap_get_thread_context",
     "cp-connector": "pod__get_thread_context",
   },
+  synap_get_work_graph: {
+    "pod-mcp": "synap_get_work_graph",
+    "cp-connector": null,
+  },
   synap_governance: {
     "pod-mcp": "synap_governance",
     "cp-connector": "pod__governance",

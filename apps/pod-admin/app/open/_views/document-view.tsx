@@ -20,6 +20,7 @@ import { trpc } from "../../../lib/trpc";
 import { formatRelative, humanizeBytes } from "../../../lib/format";
 import { DocumentContentSection } from "../../_lib/object/content/content-block";
 import { MediaView } from "../../_lib/media/media-view";
+import { mediaAlt } from "../../_lib/media/stored-media-model";
 import {
   documentFileMedia,
   fileTypeLabel,
@@ -114,11 +115,7 @@ export function DocumentView({ id }: { id: string }) {
       }}
     >
       {media ? (
-        <MediaView
-          media={media}
-          alt={doc.title?.trim() || "Untitled document"}
-          size="full"
-        />
+        <MediaView media={media} alt={mediaAlt(doc.title, null)} size="full" />
       ) : (
         <DocumentContentSection
           title="Content"

@@ -71,12 +71,15 @@ describe("tool profiles", () => {
     expect(named.filter((n) => !advertised.has(n))).toEqual([]);
   });
 
-  it("the entry surface is the 9 tools of D4", () => {
+  it("the entry surface is the 9 tools of D4 + the goal and pick-up tools of plan v5 T1", () => {
     expect([...ENTRY_TOOLS].sort()).toEqual(
       [
         "synap_orient",
         "synap_ask",
         "synap_capture",
+        "synap_list_tracks",
+        "synap_start_track",
+        "synap_get_session",
         "synap_start_session",
         "synap_update_session",
         "synap_wait_for_answer",
@@ -87,18 +90,18 @@ describe("tool profiles", () => {
     );
   });
 
-  it("legacy (NULL) and builder keys list every tool; an entry key lists 9 + its unlocked groups", () => {
+  it("legacy (NULL) and builder keys list every tool; an entry key lists 12 + its unlocked groups", () => {
     expect(visibleToolNames({ profile: null, groups: [] })).toBeNull();
     expect(visibleToolNames({ profile: "builder", groups: [] })).toBeNull();
 
     const entryOnly = visibleToolNames({ profile: "entry", groups: [] })!;
-    expect(entryOnly.size).toBe(9);
+    expect(entryOnly.size).toBe(12);
 
     const withSchema = visibleToolNames({
       profile: "entry",
       groups: ["schema", "not-a-group"],
     })!;
-    expect(withSchema.size).toBe(9 + TOOL_GROUPS.schema.length);
+    expect(withSchema.size).toBe(12 + TOOL_GROUPS.schema.length);
     expect(withSchema.has("synap_define_kind")).toBe(true);
     // An unknown stored group is ignored, never widened.
     expect(withSchema.has("synap_create_view")).toBe(false);

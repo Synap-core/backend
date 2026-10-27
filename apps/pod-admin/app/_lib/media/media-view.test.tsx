@@ -38,6 +38,10 @@ describe("MediaFrame — every state drawn and worded", () => {
     expect(out).toContain('loading="lazy"');
     expect(out).toContain("max-h-40");
     expect(out).toContain('aria-label="Open Contact sheet full size"');
+    // Its edge is an outline: an inset ring paints under the image's pixels.
+    const img = out.slice(out.indexOf("<img"));
+    expect(img).toContain("outline-foreground/10");
+    expect(img.slice(0, img.indexOf(">"))).not.toContain("ring-inset");
   });
 
   it("failed: says why and offers Try again when asking again can help", () => {

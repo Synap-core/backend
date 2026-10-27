@@ -34,9 +34,11 @@ export function redactSecrets(output: string): string {
       // `Authorization: Basic <base64 user:pass>` — the single most common
       // shape after Bearer — sailed through both the storage redaction and
       // the approver-facing sentence. Found by the round-2 test that drives
-      // the real `executors/shared.ts` interpolation.
+      // the real `executors/shared.ts` interpolation. `:` is part of the
+      // credential: fal.ai's `Authorization: Key <key_id>:<key_secret>` kept
+      // its secret half when the match stopped at the colon.
       .replace(
-        /\bAuthorization\s*:\s*([A-Za-z][A-Za-z0-9-]*)\s+[A-Za-z0-9_\-.~+/]+=*/gi,
+        /\bAuthorization\s*:\s*([A-Za-z][A-Za-z0-9-]*)\s+[A-Za-z0-9_\-.~+/:]+=*/gi,
         "Authorization: $1 ***REDACTED***"
       )
       // Bearer tokens (also outside an Authorization header)
