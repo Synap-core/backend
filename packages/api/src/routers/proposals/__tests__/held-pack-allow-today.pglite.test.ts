@@ -14,7 +14,15 @@
  * runs its body on the one PGlite connection.
  */
 
-import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  vi,
+  beforeAll,
+  beforeEach,
+  afterEach,
+} from "vitest";
 import { randomUUID } from "node:crypto";
 
 const h = vi.hoisted(() => ({
@@ -155,10 +163,7 @@ beforeAll(async () => {
       !!v && typeof v === "object" && Symbol.for("drizzle:IsDrizzleTable") in v
   );
   for (const t of tables) await h.client!.exec(ddlFor(t));
-  await q(
-    `insert into users (id, user_type) values ($1, 'human')`,
-    [PERSON]
-  );
+  await q(`insert into users (id, user_type) values ($1, 'human')`, [PERSON]);
   await q(
     `insert into users (id, user_type, created_by_user_id, agent_metadata) values ($1, 'agent', $2, $3::jsonb)`,
     [AGENT, PERSON, JSON.stringify({ autoApproveFor: ["entity.create"] })]
@@ -188,7 +193,11 @@ describe("F3 — approve and allow today", () => {
   it("writes an agent ceiling row: 2x the limit in force, expiring at the next 00:00 UTC", async () => {
     const pack = await filePack();
     const out = (await approve(human(PERSON), pack, true)) as {
-      allowedToday?: { limit: number; previousLimit: number; expiresAt: string };
+      allowedToday?: {
+        limit: number;
+        previousLimit: number;
+        expiresAt: string;
+      };
     };
     expect(h.applied).toEqual([pack]);
     const now = new Date();
