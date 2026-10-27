@@ -60,11 +60,14 @@ describe("extractProviderErrorMessage — the provider's reason reaches the call
   });
 
   it("reads a string `detail` and caps a long list at three items", () => {
-    expect(extractProviderErrorMessage(404, { detail: "Application not found" })).toBe(
-      "Application not found"
-    );
+    expect(
+      extractProviderErrorMessage(404, { detail: "Application not found" })
+    ).toBe("Application not found");
     const many = {
-      detail: [1, 2, 3, 4, 5].map((i) => ({ loc: ["body", `f${i}`], msg: "bad" })),
+      detail: [1, 2, 3, 4, 5].map((i) => ({
+        loc: ["body", `f${i}`],
+        msg: "bad",
+      })),
     };
     expect(extractProviderErrorMessage(422, many)).toBe(
       "body.f1: bad; body.f2: bad; body.f3: bad (+2 more)"
@@ -73,7 +76,9 @@ describe("extractProviderErrorMessage — the provider's reason reaches the call
 
   it("redacts a credential the provider quotes back, and bounds the text", () => {
     const msg = extractProviderErrorMessage(401, {
-      detail: "Invalid header Authorization: Key 4f1c2a9e-1111-2222-3333-444455556666:abcdef0123456789 " + "x".repeat(1000),
+      detail:
+        "Invalid header Authorization: Key 4f1c2a9e-1111-2222-3333-444455556666:abcdef0123456789 " +
+        "x".repeat(1000),
     });
     expect(msg).not.toContain("4f1c2a9e-1111-2222-3333-444455556666");
     // fal keys are `<id>:<secret>`: the half after the colon is the secret.
@@ -82,12 +87,14 @@ describe("extractProviderErrorMessage — the provider's reason reaches the call
   });
 
   it("keeps the earlier shapes and the status fallback", () => {
-    expect(extractProviderErrorMessage(403, { error: { message: "API not enabled" } })).toBe(
-      "API not enabled"
-    );
-    expect(extractProviderErrorMessage(401, { error: "Invalid API token" })).toBe(
-      "Invalid API token"
-    );
+    expect(
+      extractProviderErrorMessage(403, {
+        error: { message: "API not enabled" },
+      })
+    ).toBe("API not enabled");
+    expect(
+      extractProviderErrorMessage(401, { error: "Invalid API token" })
+    ).toBe("Invalid API token");
     expect(extractProviderErrorMessage(422, { detail: [] })).toBe(
       "provider call failed (status 422)"
     );
