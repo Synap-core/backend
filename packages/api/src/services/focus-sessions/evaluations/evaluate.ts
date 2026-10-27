@@ -20,7 +20,12 @@
  */
 
 import { db, focusSessions, and, eq, drizzleSql } from "@synap/database";
-import { readCriteria, type SessionCriterion } from "@synap/playbooks";
+import {
+  readCriteria,
+  type ExpectedOutput,
+  type SessionCriterion,
+} from "@synap/playbooks";
+import { deriveSlotKeys } from "../slot-keys.js";
 import {
   isJudgeRequestRefused,
   judgeSessionCriteria,
@@ -149,6 +154,31 @@ export function capabilityVerdict(
   };
 }
 
+/**
+ * The outcome a criterion checks, as a capability parameter: the session's
+ * slot with the criterion's key, `{ outcome: {key, kind, label, ref?} }`, or
+ * nothing when there is none. Pure.
+ */
+export function outcomeParameter(
+  expectedOutputs: unknown,
+  criterionKey: string
+): { outcome?: { key: string; kind: string; label: string; ref?: unknown } } {
+  const slots = Array.isArray(expectedOutputs)
+    ? (expectedOutputs as ExpectedOutput[])
+    : [];
+  const index = deriveSlotKeys(slots).indexOf(criterionKey);
+  const slot = index === -1 ? undefined : slots[index];
+  if (!slot) return {};
+  return {
+    outcome: {
+      key: criterionKey,
+      kind: slot.kind,
+      label: slot.label,
+      ...(slot.ref ? { ref: slot.ref } : {}),
+    },
+  };
+}
+
 export async function evaluateSession(
   params: EvaluateSessionParams
 ): Promise<EvaluateSessionResult> {
@@ -228,7 +258,14 @@ export async function evaluateSession(
     } else if (c.check.kind === "capability") {
       const run = await executeCapability({
         verbId: c.check.capability,
-        parameters: { sessionId, criterionKey: c.key },
+        parameters: {
+          sessionId,
+          criterionKey: c.key,
+          // The outcome this criterion checks (same key), with its `ref`, so
+          // a verb that reads the world (a GitHub PR read) can find WHAT to
+          // check without a second lookup (plan v5 T2).
+          ...outcomeParameter(session.expectedOutputs, c.key),
+        },
         workspaceId: session.workspaceId,
         userId,
         agentUserId,
