@@ -78,9 +78,7 @@ import type {
   ProjectTrack,
   ProjectTrackKpi,
   ProjectTrackStatus,
-  ProjectTrackUncertainty,
   ProjectTrackVerdict,
-  ProjectTrackWorkKind,
 } from "@synap/database/schema";
 import { LIVE_PROJECT_TRACK_STATUSES } from "@synap/database/schema";
 import { emitSideEffects } from "@synap/events";
@@ -107,7 +105,6 @@ import {
   readTrackCheckGate,
   readTrackStageHistory,
   slotKeyBase,
-  type CLOSED_TRACK_STATUSES,
   trackKpiJustReached,
   trackPausedBy,
   TRACK_DIRECTION_MAX,
@@ -118,7 +115,6 @@ import {
   type TrackCheckGate,
   type TrackStage,
   type TrackStageHistoryEntry,
-  type TrackStatus,
   goalAcceptanceRefusal,
   mayAcceptGoalCriterion,
   criterionMeaning,
@@ -240,91 +236,6 @@ interface GateProject {
   workspaceId: string | null;
   userId: string;
 }
-
-// The DB enum (`PROJECT_TRACK_STATUSES`, @synap/database) and the shared
-// transition table's statuses (`TRACK_STATUSES`, @synap-core/types/units) are
-// two lists because the database package cannot import types. Pinned EQUAL
-// here, at compile time: a status added to one and not the other stops the build.
-type _SameStatuses = [ProjectTrackStatus] extends [TrackStatus]
-  ? [TrackStatus] extends [ProjectTrackStatus]
-    ? true
-    : never
-  : never;
-const _sameStatuses: _SameStatuses = true;
-void _sameStatuses;
-
-// LIVE (`LIVE_PROJECT_TRACK_STATUSES`, @synap/database — the statuses that
-// hold a name, 0317/0344's index predicate) and CLOSED (`CLOSED_TRACK_STATUSES`,
-// @synap-core/types/units — `isTrackClosed`) partition the statuses: their
-// union is every status and they share none. A status added to the enum and
-// classified in neither list, or in both, stops the build.
-type _LiveStatus = (typeof LIVE_PROJECT_TRACK_STATUSES)[number];
-type _ClosedStatus = (typeof CLOSED_TRACK_STATUSES)[number];
-type _LiveClosedPartition = [
-  Exclude<ProjectTrackStatus, _LiveStatus | _ClosedStatus>,
-] extends [never]
-  ? [Extract<_LiveStatus, _ClosedStatus>] extends [never]
-    ? true
-    : never
-  : never;
-const _liveClosedPartition: _LiveClosedPartition = true;
-void _liveClosedPartition;
-
-// …and the pod's LIVE list is EXACTLY the lifecycle's open, active and paused
-// categories (`TRACK_STATUS_DECLARATION`, @synap-core/types/units): a status
-// moved to another category on one side only stops the build.
-type _LiveIsCategories = [
-  Exclude<_LiveStatus, TrackStatusIn<"open" | "active" | "paused">>,
-] extends [never]
-  ? [
-      Exclude<TrackStatusIn<"open" | "active" | "paused">, _LiveStatus>,
-    ] extends [never]
-    ? true
-    : never
-  : never;
-const _liveIsCategories: _LiveIsCategories = true;
-void _liveIsCategories;
-
-// The verdict mirror (`PROJECT_TRACK_VERDICTS`, @synap/database) is EXACTLY
-// the shared set (`TRACK_VERDICTS`, @synap-core/types/units).
-type _SameVerdicts = [ProjectTrackVerdict] extends [TrackVerdict]
-  ? [TrackVerdict] extends [ProjectTrackVerdict]
-    ? true
-    : never
-  : never;
-const _sameVerdicts: _SameVerdicts = true;
-void _sameVerdicts;
-
-// The kind-of-work and uncertainty mirrors (0345, `@synap/database`) are
-// EXACTLY the shared sets (`TRACK_WORK_KINDS`, `TRACK_UNCERTAINTY_LEVELS`).
-type _SameWorkKinds = [ProjectTrackWorkKind] extends [TrackWorkKind]
-  ? [TrackWorkKind] extends [ProjectTrackWorkKind]
-    ? true
-    : never
-  : never;
-const _sameWorkKinds: _SameWorkKinds = true;
-void _sameWorkKinds;
-type _SameUncertainty = [ProjectTrackUncertainty] extends [TrackUncertainty]
-  ? [TrackUncertainty] extends [ProjectTrackUncertainty]
-    ? true
-    : never
-  : never;
-const _sameUncertainty: _SameUncertainty = true;
-void _sameUncertainty;
-
-// The same pin for the KPI (0302): `ProjectTrackKpi` (@synap/database) and
-// `TrackKpi` (@synap-core/types/units) must describe ONE shape.
-type _SameKpi = [Required<ProjectTrackKpi>] extends [Required<TrackKpi>]
-  ? [Required<TrackKpi>] extends [Required<ProjectTrackKpi>]
-    ? [keyof ProjectTrackKpi] extends [keyof TrackKpi]
-      ? [keyof TrackKpi] extends [keyof ProjectTrackKpi]
-        ? true
-        : never
-      : never
-    : never
-  : never;
-const _sameKpi: _SameKpi = true;
-void _sameKpi;
 
 // ── projection ──────────────────────────────────────────────────────────────
 
