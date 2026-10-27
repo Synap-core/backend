@@ -18,16 +18,18 @@
  * shown ONCE: on create, and again only by replacing it
  * (`rotateInboundWebhookSecret`, the old one stops at once).
  *
- * An automation (an agent's, a package install's) only DECLARES the source it
- * listens to, by name (`triggerConfig.webhookSource.name`): its insert and
- * update doors BIND to the space's source of that name when it exists
- * (`bindDeclaredWebhookSource`, which never creates one), and creating the
- * source later binds every automation in the space that declared it
+ * An automation (an agent's, a package install's, a template's) only
+ * DECLARES the source it listens to, by name (`triggerConfig.webhookSource.name`):
+ * its insert and update doors and the template install BIND to the space's
+ * source of that name when it exists (`bindWebhookSourceDeclaration` in
+ * @synap/database, which never creates one), and creating the source later
+ * binds every automation in the space that declared it
  * (`createInboundWebhookSource`). Either order works; no door but a person's
  * mints the credential.
  *
  * Every door here takes a workspace the caller has already been checked
- * against (a workspace member or a pod admin, the router's procedure).
+ * against: the router's doors are POD ADMIN only (creating a source re-binds
+ * other members' automations to a secret its creator holds).
  */
 
 import { randomBytes } from "crypto";
@@ -40,6 +42,12 @@ import {
   isUniqueViolation,
   automations,
   webhookSubscriptions,
+  bindWebhookSourceDeclaration,
+  findInboundWebhookSourceRow,
+  readWebhookSourceDeclaration,
+  INBOUND_WEBHOOK_SOURCE_COLUMNS,
+  WebhookSourceDeclarationError,
+  type InboundWebhookSourceRow,
 } from "@synap/database";
 
 /** The generic inbound door (apps/api mounts `webhooksInboundRouter` at `/api/webhooks`). */
@@ -72,23 +80,9 @@ export interface InboundWebhookSource {
   inboundUrl: string | null;
 }
 
-const SOURCE_COLUMNS = {
-  id: webhookSubscriptions.id,
-  name: webhookSubscriptions.name,
-  workspaceId: webhookSubscriptions.workspaceId,
-  active: webhookSubscriptions.active,
-  createdAt: webhookSubscriptions.createdAt,
-  lastTriggeredAt: webhookSubscriptions.lastTriggeredAt,
-};
+const SOURCE_COLUMNS = INBOUND_WEBHOOK_SOURCE_COLUMNS;
 
-function toSource(row: {
-  id: string;
-  name: string;
-  workspaceId: string | null;
-  active: boolean;
-  createdAt: Date;
-  lastTriggeredAt: Date | null;
-}): InboundWebhookSource {
+function toSource(row: InboundWebhookSourceRow): InboundWebhookSource {
   const address = inboundWebhookAddress(row.id);
   return {
     id: row.id,
@@ -128,16 +122,7 @@ export async function findInboundWebhookSourceByName(
   workspaceId: string,
   name: string
 ): Promise<InboundWebhookSource | null> {
-  const [row] = await db
-    .select(SOURCE_COLUMNS)
-    .from(webhookSubscriptions)
-    .where(
-      and(
-        isInboundIn(workspaceId),
-        drizzleSql`lower(${webhookSubscriptions.name}) = lower(${name.trim()})`
-      )
-    )
-    .limit(1);
+  const row = await findInboundWebhookSourceRow(db, workspaceId, name);
   return row ? toSource(row) : null;
 }
 
@@ -220,54 +205,35 @@ export async function rotateInboundWebhookSecret(input: {
   return { source: toSource(row), secret };
 }
 
-/**
- * What an automation declares when it needs a source:
- * `triggerConfig.webhookSource = { name }` on a `webhook` trigger. A package
- * (a catalog automation) can only name the source — the row id is a pod's
- * own — so the install binds the name to this space's source.
- */
-export interface DeclaredWebhookSource {
-  name: string;
+/** A refused declaration as the doors' 400. */
+function asBadRequest(err: unknown): never {
+  if (err instanceof WebhookSourceDeclarationError) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
+  }
+  throw err;
 }
 
-/** The declared source of a trigger config, or null; throws on a malformed one. */
+/**
+ * The declared source of a trigger config (`triggerConfig.webhookSource`), or
+ * null; a malformed one is a 400 (`readWebhookSourceDeclaration`).
+ */
 export function declaredWebhookSource(
   triggerType: string | undefined,
   triggerConfig: Record<string, unknown> | undefined
-): DeclaredWebhookSource | null {
-  const declared = triggerConfig?.webhookSource;
-  if (declared === undefined) return null;
-  const name =
-    declared && typeof declared === "object" && !Array.isArray(declared)
-      ? (declared as { name?: unknown }).name
-      : undefined;
-  if (typeof name !== "string" || !name.trim() || name.trim().length > 100) {
-    throw new TRPCError({
-      code: "BAD_REQUEST",
-      message:
-        "triggerConfig.webhookSource must be { name: string } (1-100 characters): the inbound webhook source this automation listens to.",
-    });
+): { name: string } | null {
+  try {
+    return readWebhookSourceDeclaration(triggerType, triggerConfig);
+  } catch (err) {
+    return asBadRequest(err);
   }
-  if (triggerType !== "webhook") {
-    throw new TRPCError({
-      code: "BAD_REQUEST",
-      message:
-        "triggerConfig.webhookSource is read only by a `webhook` trigger.",
-    });
-  }
-  return { name: name.trim() };
 }
 
 /**
- * Bind an automation's DECLARED source (`triggerConfig.webhookSource.name`)
- * to this space's source of that name: returns the trigger config with
- * `webhookSubscriptionId` set to it (the matcher's one binding) and the
- * source, or the config as is and `source: null` when the space has no such
- * source yet — creating it is a person's act, and binds this automation then
- * (`bindDeclaringAutomations`). A config that declares nothing is returned as
- * is. Reads only: called by the automation insert and update doors AFTER
- * governance. The declaration stays on the config, so a re-install in another
- * pod binds that pod's own source.
+ * Bind an automation's DECLARED source to this space's source of that name
+ * (`bindWebhookSourceDeclaration`, which never creates one): the config with
+ * `webhookSubscriptionId` set and the source, or the config as is and
+ * `source: null` while the space has none. Called by the automation insert
+ * and update doors AFTER governance.
  */
 export async function bindDeclaredWebhookSource(input: {
   workspaceId: string | null | undefined;
@@ -277,28 +243,12 @@ export async function bindDeclaredWebhookSource(input: {
   triggerConfig: Record<string, unknown>;
   source: InboundWebhookSource | null;
 }> {
-  const declared = declaredWebhookSource(
-    input.triggerType,
-    input.triggerConfig
+  const bound = await bindWebhookSourceDeclaration(db, input).catch(
+    asBadRequest
   );
-  if (!declared) return { triggerConfig: input.triggerConfig, source: null };
-  if (!input.workspaceId) {
-    throw new TRPCError({
-      code: "BAD_REQUEST",
-      message: `An automation listening to the webhook source "${declared.name}" needs a space: a source belongs to one space (give the automation a workspaceId).`,
-    });
-  }
-  const source = await findInboundWebhookSourceByName(
-    input.workspaceId,
-    declared.name
-  );
-  if (!source) return { triggerConfig: input.triggerConfig, source: null };
   return {
-    triggerConfig: {
-      ...input.triggerConfig,
-      webhookSubscriptionId: source.id,
-    },
-    source,
+    triggerConfig: bound.triggerConfig,
+    source: bound.source ? toSource(bound.source) : null,
   };
 }
 

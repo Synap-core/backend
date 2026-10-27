@@ -8,7 +8,7 @@
  *   - an agent create that PROPOSES binds nothing (no source is created for a
  *     change nobody approved);
  *   - a malformed declaration is refused before governance and before insert.
- * The binder itself (find-or-create on a real table) is
+ * The binder itself (find, never create, on a real table) is
  * `services/webhooks/inbound-source.pglite.test.ts`.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";

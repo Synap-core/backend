@@ -6,10 +6,11 @@
  * space's automations whose trigger listens to it (`webhookSource.name` in a
  * catalog automation binds to the source of that name).
  *
- * The secret is shown ONCE: when the source is created, and when it is
- * replaced (the old one stops at once). An automation or a package install
- * that creates a source never reveals its secret — this card is where a
- * person gets it (services/webhooks/inbound-source.ts).
+ * Only a person creates a source, here: an automation or a package install
+ * only names the source it listens to, and binds to it once it exists (it
+ * never creates one). The secret is shown ONCE: when the source is created,
+ * and when it is replaced (the old one stops at once)
+ * (services/webhooks/inbound-source.ts).
  */
 
 import {

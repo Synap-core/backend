@@ -344,7 +344,7 @@ export const AUTOMATION_SCHEMA = {
         webhookSubscriptionId:
           "string — ID of the webhook subscription to listen on",
         webhookSource:
-          "{ name: string } — the space's inbound webhook source BY NAME (what a package declares); bound to that source, created when missing, and webhookSubscriptionId is set. Its secret is revealed to a person in pod-admin, never to the caller.",
+          "{ name: string } — the space's inbound webhook source BY NAME (what a package declares). Bound to the source of that name a person created (webhookSubscriptionId is set); never created by the automation. When the space has none yet, the automation binds when a person creates it. Its secret is revealed to a person in pod-admin, never to the caller.",
       },
     },
     manual: {

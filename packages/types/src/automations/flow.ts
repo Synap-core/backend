@@ -73,8 +73,9 @@ export interface AutomationTriggerConfig {
   /**
    * The inbound webhook source this automation listens to, BY NAME — what a
    * package declares (a row id is one pod's own). The create and update doors
-   * bind it to the space's source of that name, created when missing, and set
-   * `webhookSubscriptionId`.
+   * and a template install bind it to the space's source of that name when a
+   * person has created one, and set `webhookSubscriptionId`; they never create
+   * a source. Created later, the source binds this automation then.
    */
   webhookSource?: { name: string };
 

@@ -109,7 +109,7 @@ export const webhooksRouter = router({
     try {
       const subscriptions = await db.query.webhookSubscriptions.findMany({
         // Outbound only: an inbound source (0362) is listed by
-        // `listInboundSources`, never as a delivery target.
+        // `adminListInboundSources`, never as a delivery target.
         where: and(
           eq(webhookSubscriptions.userId, userId),
           eq(webhookSubscriptions.direction, "outbound")
@@ -468,35 +468,12 @@ export const webhooksRouter = router({
   // Where an outside service posts signed events INTO a space
   // (services/webhooks/inbound-source.ts). The secret is returned ONCE, by
   // create and by replace; lists never carry it. Toggle and delete reuse the
-  // workspace doors above (same row, same table).
-
-  /** A space's inbound sources (workspace member). */
-  listInboundSources: workspaceProcedure.query(({ ctx }) =>
-    listInboundWebhookSources(ctx.workspaceId)
-  ),
-
-  /** Create an inbound source in the active space; the secret is shown once. */
-  createInboundSource: workspaceProcedure
-    .use(requireFreshAuthentication)
-    .input(z.object({ name: z.string().trim().min(1).max(100) }))
-    .mutation(({ ctx, input }) =>
-      createInboundWebhookSource({
-        userId: ctx.userId,
-        workspaceId: ctx.workspaceId,
-        name: input.name,
-      })
-    ),
-
-  /** Replace an inbound source's secret; the new one is shown once. */
-  rotateInboundSourceSecret: workspaceProcedure
-    .use(requireFreshAuthentication)
-    .input(z.object({ id: z.string().uuid() }))
-    .mutation(({ ctx, input }) =>
-      rotateInboundWebhookSecret({
-        id: input.id,
-        workspaceId: ctx.workspaceId,
-      })
-    ),
+  // pod-admin workspace doors above (same row, same table).
+  //
+  // POD ADMIN ONLY: a source is a credential that fires the space's
+  // automations as its owner, and creating one re-binds every automation of
+  // the space that declared its name — other members' included. There is no
+  // member-level door (`webhooks.inbound-doors.test.ts`).
 
   /** A space's inbound sources (pod admin). */
   adminListInboundSources: podAdminProcedure
