@@ -83,7 +83,13 @@ const CreateSkillRequestSchema = z.object({
   slug: z.string().min(1).max(255).optional(),
   parameters: z.record(z.string(), z.unknown()).optional(),
   category: z.string().optional(),
-  executionMode: z.enum(["sync", "async"]).optional(),
+  /** `box` = a script run on the person's computer; needs `box`. */
+  executionMode: z.enum(["sync", "async", "box"]).optional(),
+  /**
+   * A box skill's declaration — language, packages (exact versions), hosts,
+   * limits. Parsed by the router (`parseBoxDeclaration`), not here.
+   */
+  box: z.record(z.string(), z.unknown()).optional(),
   timeoutSeconds: z.number().min(1).max(300).optional(),
   /** Tool ids this skill requires — written as `skill → requires → tool` links. */
   requires: z.array(z.string().uuid()).optional(),
@@ -338,6 +344,7 @@ export function registerSkillsCrudRoutes(app: HubHono): void {
         parameters: body.parameters,
         category: body.category,
         executionMode: body.executionMode ?? "sync",
+        ...(body.box ? { metadata: { box: body.box } } : {}),
         timeoutSeconds: body.timeoutSeconds ?? 30,
         workspaceId: workspaceId ?? undefined,
         agentUserId,

@@ -2487,7 +2487,12 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           userId: acting.userId,
           agentUserId: (c.get("agentUserId") as string | undefined) ?? null,
           evidence: parsed.data.evidence,
-          ...(onlyEvidence ? { kinds: ["evidence"] as const } : {}),
+          // The evidence door is a mid-session self-grade: a spent criterion
+          // stays the agent's work. `/evaluate` (evaluate_session) hands the
+          // person what the agent could not pass (E3).
+          ...(onlyEvidence
+            ? { kinds: ["evidence"] as const }
+            : { escalate: true }),
         });
         if (result.status === "not_found") {
           return c.json({ error: `Focus session ${id} not found` }, 404);
