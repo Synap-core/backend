@@ -1344,10 +1344,9 @@ async function readNeedsYouClassified(
   const count = countOf(attention);
   const all: NeedsYouClassifiedRows = {
     needs_you: [],
-    ...(Object.fromEntries(NEEDS_YOU_FOLDS.map((f) => [f, []])) as Record<
-      NeedsYouFold,
-      Signal[]
-    >),
+    ...(Object.fromEntries(
+      NEEDS_YOU_FOLDS.map((f): [NeedsYouFold, Signal[]] => [f, []])
+    ) as Record<NeedsYouFold, Signal[]>),
   };
   for (const s of blockingSignals(attention)) {
     all[needsYouFoldOf(s) ?? "needs_you"].push(s);
@@ -1918,7 +1917,7 @@ export const signalsRouter = router({
           ...SignalScope,
           limit: z.number().int().min(1).max(200).default(100),
         })
-        .default({})
+        .default({ limit: 100 })
     )
     .query(({ ctx, input }) => readNeedsYouClassified(ctx, input)),
 
