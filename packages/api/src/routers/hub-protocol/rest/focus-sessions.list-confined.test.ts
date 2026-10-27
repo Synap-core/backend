@@ -90,9 +90,7 @@ describe("Hub REST GET /focus-sessions — a workspace-bound key", () => {
   afterEach(() => selectSpy.mockRestore());
 
   it("bound to W and naming no workspace ⇒ lists W, a project lens ANDs with it", async () => {
-    expect((await buildTestApp(W).request(`/focus-sessions`)).status).toBe(
-      200
-    );
+    expect((await buildTestApp(W).request(`/focus-sessions`)).status).toBe(200);
     expect(
       (await buildTestApp(W).request(`/focus-sessions?projectId=${PROJECT}`))
         .status
