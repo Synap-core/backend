@@ -43,7 +43,12 @@ import {
 } from "@synap/database";
 import type { ExpectedOutput } from "@synap/playbooks";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
-import { ASK_COPY, type Ask } from "@synap-core/types/ask";
+import {
+  ASK_COPY,
+  askCardSlotOf,
+  askCardView,
+  type Ask,
+} from "@synap-core/types/ask";
 import {
   blockingAskTarget,
   quickAnswerFor,
@@ -209,8 +214,12 @@ export async function notifySessionNeedsYou(p: {
       fresh = [slot];
       slotCount = 1;
       const quote = relay.quote?.trim();
+      // The card's heading, not the raw label: the question as every surface
+      // draws it ("Decide:" stripped, a confirm's prompt), so the lock screen
+      // and the card it opens say the same thing.
+      const { heading } = askCardView(askCardSlotOf(slot));
       summary = clip(
-        `${slot.label} · ${ASK_COPY.awaitingYourTap(agent?.name ?? null)}${quote ? ` “${quote}”` : ""}`
+        `${heading} · ${ASK_COPY.awaitingYourTap(agent?.name ?? null)}${quote ? ` · ${ASK_COPY.youSaid(quote)}` : ""}`
       );
       groupKey = relayAwaitsTapGroupKey(p.sessionId, slot.label);
     } else if (p.reason.kind === "slots") {

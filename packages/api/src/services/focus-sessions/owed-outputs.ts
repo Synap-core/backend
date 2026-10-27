@@ -254,6 +254,12 @@ export interface OwedSlot {
    * says it ends with the session.
    */
   keptOwedAt?: string;
+  /**
+   * A param slot's param (`ExpectedOutput.paramName`): what it asks the
+   * person to set. Its cause is already on `askCause`; the name travels so a
+   * surface hands the whole row to the card adapter (`askCardSlotOf`).
+   */
+  paramName?: string;
 }
 
 export interface ListOwedSlotsParams {
@@ -398,6 +404,7 @@ export function projectOwedSlots(row: OwedRow): OwedSlot[] {
       ...(slot.askedBy ? { askedBy: slot.askedBy } : {}),
       ...askCauseOf(slot),
       ...(slot.keptOwedAt ? { keptOwedAt: slot.keptOwedAt } : {}),
+      ...(slot.paramName ? { paramName: slot.paramName } : {}),
     });
   }
   return owed;
