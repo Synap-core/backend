@@ -2123,7 +2123,9 @@ const captureBaseRouter = router({
         timeoutMs: STRUCTURE_TIMEOUT_MS,
       };
       let structureResult: Awaited<ReturnType<typeof client.structure>>;
-      let structureAttempts = 0;
+      // Attempts made: one, plus each retry `onRetry` reports (an auth throw
+      // leaves the loop without an outcome to read them from).
+      let structureAttempts = 1;
       let structureFailReason: StructureRetryReason | undefined;
       let structureFailure: StructureFailure | undefined;
       try {
@@ -2135,17 +2137,16 @@ const captureBaseRouter = router({
         // observable — it was invisible until measured by hand during the
         // 2026-08-01 IS outage.
         const outcome = await callStructureWithRetry(
-          (report) => {
-            structureAttempts += 1;
-            return client.structure(structureInput, {
+          (report) =>
+            client.structure(structureInput, {
               onProgress: structureProgressSink(),
               onFailure: report,
-            });
-          },
+            }),
           {
             timeoutMs: STRUCTURE_TIMEOUT_MS,
             maxAttempts: STRUCTURE_MAX_ATTEMPTS,
             onRetry: ({ attempt, maxAttempts, elapsedMs, backoffMs }) => {
+              structureAttempts = attempt + 1;
               reportStructureRetry();
               logger.warn(
                 { userId, attempt, maxAttempts, elapsedMs, backoffMs },
