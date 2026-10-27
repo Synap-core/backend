@@ -6731,6 +6731,7 @@ export interface EventRecord {
 	proposalId?: string;
 	sessionId?: string;
 	appId?: string;
+	ceilingExempt?: boolean;
 }
 /**
  * One bucket of agent-run spend — a UTC day, or the whole window (`total`).
@@ -30750,6 +30751,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				agentUserId?: string;
 				appId?: string;
 				causationId?: string;
+				ceilingExempt?: boolean;
 				correlationId?: string;
 				costUsd?: number | null;
 				data: Record<string, unknown>;
