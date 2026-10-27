@@ -58,7 +58,11 @@ import {
   SESSION_TITLE_MAX,
   titleSourcePatch,
 } from "@synap-core/types/focus-sessions";
-import { AskAnswerValueSchema, AskSchema } from "@synap-core/types/ask";
+import {
+  ASK_LIMITS,
+  AskAnswerValueSchema,
+  AskSchema,
+} from "@synap-core/types/ask";
 import {
   completeFocusSession,
   isOpenQuestionsAtCloseError,
