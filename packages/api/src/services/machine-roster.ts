@@ -35,6 +35,7 @@ import {
   isNull,
 } from "@synap/database";
 import {
+  BOX_RUNNER_SCOPE,
   apiKeys,
   grants,
   users,
@@ -122,6 +123,8 @@ export interface MachineView {
   maxKeyTtlDays: number;
   /** The live key's access, by the grant's name ("AI — read & propose"). */
   accessName: string | null;
+  /** "Runs scripts" is on: the computer leases its person's box runs. */
+  runsScripts: boolean;
   agents: HostedAgentView[];
 }
 
@@ -337,6 +340,7 @@ async function loadMachineViews(
         minKeyTtlDays: MACHINE_KEY_TTL_MIN_DAYS,
         maxKeyTtlDays: MACHINE_KEY_TTL_MAX_DAYS,
         accessName: labels.length > 0 ? [...new Set(labels)].join(", ") : null,
+        runsScripts: meta.runsScripts === true,
         agents: hosted
           .filter((a) => a.hostUserId === m.id)
           .map((a) => {
@@ -463,4 +467,37 @@ export async function setMachineOwnKeyTtlDays(
     .where(
       and(eq(users.id, machineUserId), eq(users.agentType, MACHINE_AGENT_TYPE))
     );
+}
+
+/**
+ * "Runs scripts" (code-runtime B0): the computer may lease its person's box
+ * runs. Recorded on the computer (`agentMetadata.runsScripts`, so a reconnect
+ * mints the key with the scope) AND applied to its live keys' `box.runner`
+ * scope now — the box-runs routes read the scope, never the flag.
+ */
+export async function setMachineRunsScripts(
+  machineUserId: string,
+  enabled: boolean
+): Promise<{ keysUpdated: number }> {
+  await db
+    .update(users)
+    .set({
+      agentMetadata: enabled
+        ? drizzleSql`coalesce(${users.agentMetadata}, '{}'::jsonb) || '{"runsScripts": true}'::jsonb`
+        : drizzleSql`coalesce(${users.agentMetadata}, '{}'::jsonb) - 'runsScripts'`,
+      updatedAt: new Date(),
+    })
+    .where(
+      and(eq(users.id, machineUserId), eq(users.agentType, MACHINE_AGENT_TYPE))
+    );
+  const updated = await db
+    .update(apiKeys)
+    .set({
+      scope: enabled
+        ? drizzleSql`array_append(array_remove(${apiKeys.scope}, ${BOX_RUNNER_SCOPE}), ${BOX_RUNNER_SCOPE})`
+        : drizzleSql`array_remove(${apiKeys.scope}, ${BOX_RUNNER_SCOPE})`,
+    })
+    .where(and(eq(apiKeys.userId, machineUserId), isNull(apiKeys.revokedAt)))
+    .returning({ id: apiKeys.id });
+  return { keysUpdated: updated.length };
 }

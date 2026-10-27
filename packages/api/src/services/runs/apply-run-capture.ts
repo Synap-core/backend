@@ -45,6 +45,8 @@ export async function applyRunCapture(p: {
   status?: CaptureRunStatus;
   summary?: string;
   error?: string;
+  /** Why a `failed` run stopped when nothing broke (`playbook_runs.stop_reason`). */
+  stopReason?: PlaybookRun["stopReason"];
   producedEntityIds?: string[];
   usedCapabilities?: Array<{ kind: "tool" | "skill" | "command"; id: string }>;
 }): Promise<PlaybookRun | null> {
@@ -69,6 +71,9 @@ export async function applyRunCapture(p: {
       status: nextStatus,
       summary: p.summary ?? run.summary,
       error: p.error ?? run.error,
+      // Undefined is left unwritten by `.set()`. Not a conditional spread: a
+      // nested `{` hides this writer from the terminal-settles tripwire.
+      stopReason: p.stopReason,
       completedAt: terminal ? new Date() : run.completedAt,
     })
     .where(

@@ -29,6 +29,13 @@
  * reaper see it — never a false `completed` — and the count is NOT reset, so
  * the next stop asks again instead of continuing on its own.
  *
+ * NO PERSON IN THE LOOP (founder decision E3, 2026-10-27). A run an automation
+ * started (its schedule included) has nobody watching it, so step 2 never
+ * happens there: once its continuations are spent it ENDS, `failed` with the
+ * reason and `stop_reason = 'budget'` (so its automation's breakers skip it,
+ * founder F3), and a pod notice in the room says why. Asking would put "Keep
+ * the run going" in a person's Needs you for a run they never started.
+ *
  * WHAT IS RECORDED (`focus_sessions.metadata.runTurns`, server-owned): each
  * turn's end as the IS measured it — the budget ceiling, the input tokens
  * spent, and the FIRST provider call's size by part (system prompt, tools,
@@ -56,6 +63,7 @@ import {
 import { normalizeExpectedLabel } from "../focus-sessions/expected-label.js";
 import { updateExpectedOutputsLocked } from "../focus-sessions/delegate-output.js";
 import { blockExpectedOutput } from "../focus-sessions/block-output.js";
+import { startedByAutomation } from "../focus-sessions/session-kind.js";
 
 const logger = createLogger({ module: "run-turn-end" });
 
@@ -146,6 +154,8 @@ export type CompleteRunStatus =
   | "continued"
   | "waiting_on_you"
   | "left_running"
+  /** No person in the loop: the run ended at its limit, with a notice. */
+  | "stopped"
   /** A retried report of a turn already settled: nothing done again. */
   | "duplicate";
 
@@ -236,20 +246,26 @@ async function recordTurnEnd(
   state: RunTurnsState;
   /** This turn's report was already recorded (a retry): nothing written. */
   duplicate: boolean;
+  /** {@link hasNoPersonInTheLoop}, read on the locked row. */
+  unattended: boolean;
 } | null> {
   return db.transaction(async (tx) => {
     const [locked] = await tx
-      .select({ metadata: focusSessions.metadata })
+      .select({
+        metadata: focusSessions.metadata,
+        origin: focusSessions.origin,
+      })
       .from(focusSessions)
       .where(eq(focusSessions.id, sessionId))
       .for("update");
     if (!locked) return null;
+    const unattended = hasNoPersonInTheLoop(locked);
     const state = readRunTurns(locked.metadata, runId);
     if (
       body.turnKey &&
       [state.firstTurn, ...state.turns].some((t) => t?.turnKey === body.turnKey)
     ) {
-      return { decision: null, state, duplicate: true };
+      return { decision: null, state, duplicate: true, unattended };
     }
     const stopped = body.outcome === "stopped";
     const decision = stopped ? nextAfterStop(state) : null;
@@ -289,7 +305,7 @@ async function recordTurnEnd(
       .update(focusSessions)
       .set({ metadata: mergeSessionMetadata({ [RUN_TURNS_META_KEY]: next }) })
       .where(eq(focusSessions.id, sessionId));
-    return { decision, state: next, duplicate: false };
+    return { decision, state: next, duplicate: false, unattended };
   });
 }
 
@@ -338,6 +354,69 @@ interface SessionRoom {
   id: string;
   userId: string;
   channelId: string | null;
+}
+
+/**
+ * Is nobody in this run's loop? True when an automation opened the session
+ * (`origin: "automation"`, or the automation keys `openRunSession` and the
+ * scheduled `playbook_run` step stamp, read by the ONE predicate
+ * `startedByAutomation`), unless a person took it on from triage
+ * (`triage.acceptedAt`, the same receipt `projectSessionKind` reads).
+ */
+export function hasNoPersonInTheLoop(row: {
+  origin: string | null;
+  metadata: unknown;
+}): boolean {
+  const triage = (row.metadata as { triage?: { acceptedAt?: unknown } } | null)
+    ?.triage;
+  if (triage?.acceptedAt != null) return false;
+  return row.origin === "automation" || startedByAutomation(row.metadata);
+}
+
+/**
+ * The end of an unattended run whose continuations are spent: `failed` with
+ * the reason (the run did not finish, and nobody can be asked), then a pod
+ * notice in the room. The notice is posted only once the run really ended, so
+ * it never says so of a run another writer had already settled.
+ */
+async function endUnattendedRun(p: {
+  run: RunRow;
+  session: SessionRoom;
+  stops: number;
+  turnRef: string;
+  reason: RunStopReason | undefined;
+}): Promise<CompleteRunStatus> {
+  const limit = stopLimitWords(p.reason);
+  const why =
+    `Stopped at its ${limit}: the run stopped before it was finished ${p.stops} times ` +
+    `and continued on its own ${MAX_AUTO_CONTINUATIONS} times. ` +
+    "An automation started it, so nobody was asked to keep it going.";
+  const ended = await applyRunCapture({
+    run: p.run,
+    status: "failed",
+    error: why,
+    // Not a fault: the parent automation run and its breakers read this
+    // (`automation-parent-settle.ts`), so a budget stop never turns a rule off.
+    stopReason: "budget",
+  });
+  if (!ended) return "no-running-run";
+  if (p.session.channelId) {
+    try {
+      await postChannelMessage({
+        channelId: p.session.channelId,
+        content: `${why} The run ends here; what it did so far stays in this session.`,
+        userId: p.session.userId,
+        role: "system",
+        idempotencyKey: `run-stopped:${p.run.id}:${p.turnRef}`,
+      });
+    } catch (err) {
+      logger.error(
+        { err, runId: p.run.id, sessionId: p.session.id },
+        "run-turn-end: the run ended, but its notice could not be posted"
+      );
+    }
+  }
+  return "stopped";
 }
 
 /** The continuation: a pod notice in the room, dispatched as the next turn. */
@@ -489,7 +568,7 @@ export async function settleRunTurnEnd(p: {
   // below — even when the turn could not be recorded (row gone mid-call).
   if (recorded?.duplicate) return "duplicate";
   if (!recorded?.decision) return "left_running";
-  const { decision, state } = recorded;
+  const { decision, state, unattended } = recorded;
   // Idempotency for the room posts: the IS's turn id, else (an older IS) the
   // stop count — which a retried report re-increments, so only `turnKey`
   // makes a retry recognisable.
@@ -507,6 +586,18 @@ export async function settleRunTurnEnd(p: {
       reason: body.reason,
     });
     if (continued) return "continued";
+    // No person to ask: a continuation that could not be dispatched leaves
+    // the run live for the stall flag and the reaper.
+    if (unattended) return "left_running";
+  }
+  if (unattended) {
+    return endUnattendedRun({
+      run,
+      session,
+      stops: state.stops,
+      turnRef,
+      reason: body.reason,
+    });
   }
 
   const asked = await askToKeepGoing({

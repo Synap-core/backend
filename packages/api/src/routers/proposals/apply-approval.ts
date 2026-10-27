@@ -34,7 +34,6 @@ import {
   createGuideline,
   type GovernanceScope,
   type GovernanceTarget,
-  getActingAgentUserId,
 } from "@synap/database";
 import { proposals } from "@synap/database/schema";
 import { markProposalNotificationsActioned } from "../../notifications/mark-proposal-notifications-actioned.js";
@@ -77,9 +76,9 @@ import { assertAppSignInMayApprove } from "../../services/app-sign-in-policy.js"
 import {
   assertMayDecideProposal,
   assertMayDecideProposalAt,
-  isAgentPrincipal,
   refuseAgentProposalApprover,
 } from "./review-authority.js";
+import { personIsApproving } from "../../services/capabilities/skill-born-approved.js";
 import {
   applyGovConfigChange,
   type SettingsUpdateProposalData,
@@ -1079,18 +1078,15 @@ async function applyProposalApprovalInner(
             workspaceId: compositeCtx.workspaceId,
             auditSource: "rule_loop_approval",
             // The proposal's author (the actor `compositeCtx` already
-            // carries), and whether a PERSON is approving: the same three
-            // facts the `skill/create` executor reads (`executors/skill.ts`),
-            // so an agent's skill is born approved only by a person's
-            // approval of the batch that carries it. Read only when the
-            // batch creates a skill.
+            // carries), and whether a PERSON is approving (`personIsApproving`,
+            // the reading the `skill/create` executor uses too), so an agent's
+            // skill is born approved only by a person's approval of the batch
+            // that carries it. Read only when the batch creates a skill.
             skillAuthor: {
               agentUserId: compositeCtx.agentUserId,
               personApproved:
                 reconciledOperations.some((op) => op.op === "create_skill") &&
-                !ctx?.agentUserId &&
-                !getActingAgentUserId() &&
-                !(await isAgentPrincipal(userId)),
+                (await personIsApproving(ctx, userId)),
             },
           }),
           // Per-op link idempotency keyed by THIS proposal (client-stable): a

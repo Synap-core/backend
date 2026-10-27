@@ -771,10 +771,13 @@ describe("parseQueryFilterConditions (query node filter parsing)", () => {
     ]);
   });
 
-  it("returns [] (not a throw) for an unparseable/empty filter", () => {
+  it("returns [] for an absent/empty filter, and THROWS for an unparseable one", () => {
     expect(parseQueryFilterConditions(undefined, ctx())).toEqual([]);
-    expect(parseQueryFilterConditions("not json", ctx())).toEqual([]);
     expect(parseQueryFilterConditions("", ctx())).toEqual([]);
+    // A failed read is not an empty filter (steps/query-filter-fails.test.ts).
+    expect(() => parseQueryFilterConditions("not json", ctx())).toThrow(
+      /not valid JSON after templating/
+    );
   });
 });
 
