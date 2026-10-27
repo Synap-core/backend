@@ -1249,6 +1249,7 @@ export async function enrichProposalsForDisplay(
   const documentTitleById = new Map(
     documentRows.map((row) => [row.id, row.title])
   );
+  const skillTargetById = await readSkillUpdateTargets(rows, userId);
   // NEW: Populate batch-joined lookup maps
   const playbookById = new Map<
     string,
@@ -1552,6 +1553,10 @@ export async function enrichProposalsForDisplay(
       // "playbook"); the id is the one `referencedNameIds` batch-joined.
       (row.targetType === "playbook"
         ? playbookById.get(row.targetId)?.name
+        : undefined) ??
+      // A skill rewrite carries `name` only when it renames.
+      (row.targetType === "skill"
+        ? skillTargetById.get(row.targetId)?.name
         : undefined) ??
       entityMeta?.title ??
       entityMeta?.preview ??
@@ -2013,12 +2018,111 @@ export async function enrichProposalsForDisplay(
           : undefined,
         resolveEntityTitle: resolveEntityTitleScoped,
         existingRolesByEntityId,
+        ...skillUpdateReads(row, skillTargetById),
         events: request.correlationId
           ? (traceByCorrelationId.get(request.correlationId) ?? [])
           : [],
       }),
     };
   });
+}
+
+/** A skill as an update's review reads it: its name and its values now. */
+type SkillTargetRead = { name: string; values: Record<string, unknown> };
+
+/** `skill.update` (stored `update`) on a skill row. */
+function isSkillUpdateRow(row: ProposalRow): boolean {
+  return (
+    row.targetType === "skill" &&
+    row.proposalType.slice(row.proposalType.lastIndexOf(".") + 1) === "update"
+  );
+}
+
+/**
+ * The skills the page's updates rewrite — a `skill.update`'s target and a
+ * composite's `update_skill` ops — read once, floored by the skill read rule
+ * (`visibleSkillsWhere`, per proposal workspace) so the review never names or
+ * quotes a skill the viewer cannot read. Columns are the ones a skill update
+ * may patch (`skills.update`'s input), keyed as the patch names them.
+ */
+async function readSkillUpdateTargets(
+  rows: readonly ProposalRow[],
+  userId: string
+): Promise<Map<string, SkillTargetRead>> {
+  const ids = uniqueStrings(
+    rows.flatMap((row) => {
+      if (isSkillUpdateRow(row)) return [row.targetId];
+      const data = row.data as StoredProposalData | null | undefined;
+      if (!isCompositeProposalData(data)) return [];
+      return data.operations.flatMap((op) =>
+        isUpdateOperation(op) && op.op === "update_skill"
+          ? [updateOperationTargetId(op)]
+          : []
+      );
+    })
+  ).filter(isLikelyUUID);
+  if (ids.length === 0) return new Map();
+  const workspaceIds = uniqueStrings(rows.map((row) => row.workspaceId)).filter(
+    isLikelyUUID
+  );
+  const found = await db
+    .select({
+      id: skills.id,
+      name: skills.name,
+      kind: skills.kind,
+      scope: skills.scope,
+      agentTypes: skills.agentTypes,
+      description: skills.description,
+      body: skills.body,
+      code: skills.code,
+      providerSpec: skills.providerSpec,
+      parameters: skills.parameters,
+      category: skills.category,
+      executionMode: skills.executionMode,
+      timeoutSeconds: skills.timeoutSeconds,
+      metadata: skills.metadata,
+    })
+    .from(skills)
+    .where(
+      and(
+        inArray(skills.id, ids),
+        or(
+          visibleSkillsWhere(userId, undefined, { includeExpired: true }),
+          ...workspaceIds.map((ws) =>
+            visibleSkillsWhere(userId, ws, { includeExpired: true })
+          )
+        )
+      )
+    );
+  return new Map(
+    found.map(({ id, ...values }) => [id, { name: values.name, values }])
+  );
+}
+
+/**
+ * What a row's review reads of the skills it rewrites: the values NOW only
+ * while it is still pending (once applied, the row holds the proposed value).
+ */
+function skillUpdateReads(
+  row: ProposalRow,
+  skillById: ReadonlyMap<string, SkillTargetRead>
+): {
+  resolveUpdateTarget?: UpdateTargetResolver;
+  targetBefore?: Readonly<Record<string, unknown>>;
+} {
+  if (skillById.size === 0) return {};
+  const live = isLiveProposalStatus(row.status);
+  if (isSkillUpdateRow(row)) {
+    const skill = skillById.get(row.targetId);
+    return live && skill ? { targetBefore: skill.values } : {};
+  }
+  return {
+    resolveUpdateTarget: (kind, targetId) => {
+      const skill = kind === "skill" ? skillById.get(targetId) : undefined;
+      if (!skill) return undefined;
+      return live ? skill : { name: skill.name };
+    },
+  };
 }
 
 function buildProposalReviewModel(params: {
@@ -2044,6 +2148,10 @@ function buildProposalReviewModel(params: {
     string,
     Array<{ profileSlug: string; status?: string | null }>
   >;
+  /** The rows a composite's `update_*` ops rewrite, as read now. */
+  resolveUpdateTarget?: UpdateTargetResolver;
+  /** A pending non-entity update: its target's values now (a skill's). */
+  targetBefore?: Readonly<Record<string, unknown>>;
   events: Awaited<ReturnType<EventRepository["getCorrelatedEvents"]>>;
 }): ProposalReviewModel {
   const {
@@ -2055,6 +2163,8 @@ function buildProposalReviewModel(params: {
     removal,
     resolveEntityTitle,
     existingRolesByEntityId,
+    resolveUpdateTarget,
+    targetBefore,
     events,
   } = params;
   const requestData =
@@ -2063,7 +2173,12 @@ function buildProposalReviewModel(params: {
   // the flat `changes` model can't express. Detect and build a `graph` instead.
   const rawData = row.data as StoredProposalData | null | undefined;
   const graph = isCompositeProposalData(rawData)
-    ? buildProposalGraph(rawData, resolveEntityTitle, existingRolesByEntityId)
+    ? buildProposalGraph(
+        rawData,
+        resolveEntityTitle,
+        existingRolesByEntityId,
+        resolveUpdateTarget
+      )
     : undefined;
   // Durable before-snapshot captured at proposal-creation time (entity updates).
   // Preferred over the live `current` entity so the diff survives approval and
@@ -2113,7 +2228,7 @@ function buildProposalReviewModel(params: {
       previousData,
       // Drift is a question about a proposal NOT YET applied: once applied,
       // the live row holds the proposed value by construction.
-      { measureDrift: isLiveProposalStatus(row.status) }
+      { measureDrift: isLiveProposalStatus(row.status), targetBefore }
     ),
     ...(graph ? { graph } : {}),
     ...(removal ? { removal } : {}),
@@ -2157,7 +2272,8 @@ export function buildProposalGraph(
   existingRolesByEntityId?: Map<
     string,
     Array<{ profileSlug: string; status?: string | null }>
-  >
+  >,
+  resolveUpdateTarget?: UpdateTargetResolver
 ): ProposalReviewGraph {
   const refToTitle = new Map<string, string>();
   // Every ref alias ($opN / op `ref` / $primary / a linked entity's UUID) → the
@@ -2291,7 +2407,11 @@ export function buildProposalGraph(
   // this on `isPlanBatch` (as the plan builder is) would leave exactly that
   // batch unrendered — and unrendered means the refusal below throws for the
   // whole page.
-  const config = buildConfigReviewItems(data, renderedOpIndexes);
+  const config = buildConfigReviewItems(
+    data,
+    renderedOpIndexes,
+    resolveUpdateTarget
+  );
 
   // REFUSE a composite whose ops this pipeline cannot fully render — no member
   // may reach a reviewer invisibly (and then apply undeniably).
@@ -2332,9 +2452,35 @@ export function buildProposalGraph(
  */
 const SKILL_BODY_EXCERPT_CHARS = 280;
 
+type UpdateReviewKind = NonNullable<
+  ProposalReviewGraph["updates"]
+>[number]["kind"];
+
+/** What the pod read of the row an `update_*` op rewrites, for this viewer. */
+export interface UpdateTargetRead {
+  name?: string;
+  /** The row's values now, keyed as the op's `patch` names them. */
+  values?: Readonly<Record<string, unknown>>;
+}
+
+export type UpdateTargetResolver = (
+  kind: UpdateReviewKind,
+  targetId: string
+) => UpdateTargetRead | undefined;
+
+/** A field value as review text, cut to the excerpt length. */
+function excerptOf(value: unknown): { text: string; truncated: boolean } {
+  const text = typeof value === "string" ? value : JSON.stringify(value);
+  return {
+    text: text.slice(0, SKILL_BODY_EXCERPT_CHARS),
+    truncated: text.length > SKILL_BODY_EXCERPT_CHARS,
+  };
+}
+
 function buildConfigReviewItems(
   data: CompositeProposalData,
-  renderedOpIndexes: Set<number>
+  renderedOpIndexes: Set<number>,
+  resolveUpdateTarget?: UpdateTargetResolver
 ): Partial<ProposalReviewGraph> {
   const skills: NonNullable<ProposalReviewGraph["skills"]> = [];
   const automations: NonNullable<ProposalReviewGraph["automations"]> = [];
@@ -2346,20 +2492,32 @@ function buildConfigReviewItems(
   data.operations.forEach((op, index) => {
     if (isUpdateOperation(op)) {
       renderedOpIndexes.add(index);
+      const kind = UPDATE_REVIEW_KIND[op.op];
+      const targetId = updateOperationTargetId(op);
+      // A rewrite names the row it rewrites and what each field holds now.
+      const target = resolveUpdateTarget?.(kind, targetId);
       updates.push({
         ref: op.ref,
         op: op.op,
-        kind: UPDATE_REVIEW_KIND[op.op],
-        targetId: updateOperationTargetId(op),
+        kind,
+        targetId,
+        ...(target?.name ? { targetName: target.name } : {}),
         fields: Object.entries((op.patch ?? {}) as Record<string, unknown>)
           .filter(([, value]) => value !== undefined)
           .map(([key, value]) => {
-            const text =
-              typeof value === "string" ? value : JSON.stringify(value);
+            const after = excerptOf(value);
+            const now = target?.values?.[key];
+            const before =
+              now === undefined || now === null || now === ""
+                ? null
+                : excerptOf(now);
             return {
               key,
-              value: text.slice(0, SKILL_BODY_EXCERPT_CHARS),
-              truncated: text.length > SKILL_BODY_EXCERPT_CHARS,
+              value: after.text,
+              truncated: after.truncated,
+              ...(before
+                ? { before: before.text, beforeTruncated: before.truncated }
+                : {}),
             };
           }),
       });

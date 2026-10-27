@@ -45,14 +45,14 @@ The user's Synap pod: source of truth. Tool names below are stems; your door may
 
 1. **Recall first.** Before answering or creating, `ask`.
 2. **Capture after.** A durable fact, decision, person, task: `capture`; about the user: `remember_fact`. No private scratchpad.
-3. **Orient once.** `orient`: pending review, open sessions.
-4. **Work in a session.** `start_session` or resume (playbook `templateId`); a goal (tools: TRACK): `list_tracks`, else `start_track`; work in it = `start_session` + `trackId`; 2-5 `criteria`; status moves carry `expectedStatus`; person-only: `owner:'human'` slot + `blockedReason` + `ask` (confirm/choose with 1 `recommended`/form/act/provide), then `wait_for_answer` if listed; post progress, questions and results in its room (`post_message` to `session.channelId`); your own chat may repeat them, questions as `Q-<id8>`; chat answer → `relay_answer`, words verbatim; `evaluate_session`, close open asks, `complete_session`.
+3. **Orient once.** `orient`: pending review (raise first), open sessions.
+4. **Work in a session.** `start_session` or resume (playbook `templateId`); goal (TRACK): `list_tracks`, else `start_track`; work in it = `start_session` + `trackId`; 2-5 `criteria`; status moves carry `expectedStatus`; person-only: `owner:'human'` slot + `blockedReason` + `ask` (confirm/choose with 1 `recommended`/form/act/provide), then `wait_for_answer` if listed; post progress, questions and results in its room (`post_message` to `session.channelId`); your own chat may repeat them (`Q-<id8>`); chat answer → `relay_answer`, words verbatim; PR = outcome `pr-<repo>-<n>` (`ref.url`); `evaluate_session`, close open asks, `complete_session`.
 5. **Never guess a project**: pin only what the user names (`set_*_focus`).
 6. **`proposed` is success**: keep going, never retry.
-7. **Discover before inventing**: `list_profiles` / `list_capabilities` before defining a kind, role, space. **Extend first**, never a twin.
+7. **Discover before inventing**: `list_profiles` / `list_capabilities`; **extend** (facet, overlay, parent), never a twin.
 8. **One space per domain**; projects filter it (`file_into_project`, `project_use_workspace`).
 
-Depth: `load_skill` `system/synap/concepts`, `work-model`, `focus-sessions`, `from-intent`, `escalation-ladder`, `writes`, `catalog`.
+Depth: `load_skill` `system/synap/concepts`, `work-model`, `focus-sessions`, `from-intent`, `escalation-ladder`, `writes`.
 
 ---
 
@@ -151,6 +151,12 @@ A worker is a playbook **activator**, declared on the method and owned by the li
 ### Goals (tracks)
 
 A goal is a _track_ in every tool and field name (`start_track`, `trackId`) — say "goal" to the person; a session's one-line `goal` is its **Aim**. A goal holds an owner, a direction, instructions, the workers it turns on, and what done means (criteria, or a number measured as transitions into `done`). It has no stages. A goal can stay open as long as it matters, or finish: a person closes it with a verdict once its criteria are met (`set_track_status` `completed` + `verdict`; dropped = `archived`, with a `verdict` saying why). Your close is a proposal; a closed goal comes back only as a new version. Pause it while nobody should work on it. Work in it = `start_session` + `trackId`. A thing may count for two goals. Solo users may never need one: workers can run space-wide. Legacy: `start_stage_session` and `add_track_stage` serve old goals started from a method; never `advance_track` without the user.
+
+**Keep the pod current (every agent, every session)** — three rules, so the next agent picks your step up from the pod alone:
+
+1. **Attach the session to its goal.** `orient`'s `startHere.openGoals` and the start reply's `offers.goals` name the open goals; start with `trackId`, or file an open session with `update_session` `trackId` (a proposal for an agent). No goal fits: say so in the room, never invent one silently.
+2. **Record your PR as an outcome** the moment you open it: `update_session` `outcomes: [{ key: "pr-<repo>-<n>", kind: "pull_request", label: "<repo>#<n>", ref: { url: "<PR url>" } }]`. With no `sessionId`, the pod files it on the one open session this conversation started, and refuses with the list when there are several.
+3. **Close when your outcomes are met.** When every outcome is met the `update_session` reply carries `nudges.readyToClose`: grade with `evaluate_session`, then `complete_session`. A merged PR is not always the end of the work: if more remains, declare it instead.
 
 **The rest of the goal protocol** (`set_track_participant`, `reopen_track`, `convert_to_goal`, `update_track`):
 
@@ -304,7 +310,7 @@ Before the first write, name the layer in one word, then take its door. Most req
 | **view**       | to SEE existing things: a list, a grouping, a board, a dashboard       | `synap_list_views` first, so you do not duplicate one; then `synap_create_view` (`tools:build`). Never copy records into a new space to show them.            |
 | **capability** | access beyond the graph: connect Gmail, send mail, search the live web | §2b: `synap_list_capabilities`, then run it or file its install. Never build a view to stand in for a capability.                                             |
 | **session**    | "I'm starting work on X": one bounded piece of work                    | `synap_start_session` with a one-line goal. Not a task.                                                                                                       |
-| **goal**       | a goal inside a project: "launch the new site" (a _track_)             | §2c: `synap_list_tracks`, else `synap_start_track` (`tools:tracks`). Not a project, not a pack, not a playbook.                                               |
+| **goal**       | a goal inside a project: "launch the new site" (a _track_)             | §2c: `synap_list_tracks`, else `synap_start_track` (both on every key). Not a project, not a pack, not a playbook.                                               |
 | **rule**       | a standing intent: "always…", "from now on…", "every Monday…"          | `synap_create_rule` (`tools:governance`) with the user's own words as `intent`; a trigger→steps reaction is `synap_create_automation` (`tools:capabilities`). |
 | **structure**  | a new area of work that needs kinds, spaces or a project               | the rest of this skill, from §0.                                                                                                                              |
 
@@ -2164,6 +2170,7 @@ On `synap_update_session`, `outcomes` UPSERTS by key — a renamed label keeps i
 - **Room first.** Post progress, questions and results in the session room (below); your own chat may repeat them; show a question there with its short id, `Q-` + the first 8 characters of its message id (`Q-1a2b3c4d`).
 - **Grade before you say done.** `synap_evaluate_session { sessionId, evidence: { <criterionKey>: { passed, detail } } }` with the real evidence — the command output, the link, the count. Then close every question you asked that is still open (answer or withdraw it, below), then `synap_complete_session`: the pod refuses your close while your own room questions are undispositioned. Closing never blocks on criteria, but an ungraded one reads as unmeasured: a claim nobody checked.
 - **The doors remind you.** `synap_update_session` and `synap_complete_session` replies (and Hub `PATCH /focus-sessions/:id` / `POST …/complete`) carry `nudges` (criteria still ungraded, no criteria, a stage never set, outputs owed by the person, and — once, on a session born without a playbook — the playbooks that fit it). `orient`'s `startHere.sessionsOwingGrade` lists your open sessions with ungraded criteria.
+- **Goal, PR, close.** File the session into the goal it serves (`trackId`: the start reply's `offers.goals` lists the project's open goals, `offers.sessions` the open sessions already on close work — continue one of those rather than opening a twin). Record each PR as an outcome `pr-<repo>-<n>` (`kind: 'pull_request'`, `ref: { url }`; `sessionId` may be left out when this conversation has exactly one open session). When every outcome is met, the reply's `nudges.readyToClose` says so: grade, then close. `synap_get_session`'s continuation carries the `goal` (end state, criteria marks, KPI), the `siblings` (parallel, before, next) and the `workUnits` (your recorded PRs and their state).
 - **Keep the books: end what you started.** `orient`'s `startHere.looseEnds` lists YOUR leftovers — sessions you opened, idle over a week; asks you left owed by the person on sessions you ended; your proposals pending over a week; automations you made that never fired — each row with the call that ends it (`close`). Close your own idle session when no person touched it and it owes the person nothing. Otherwise withdraw its asks (`retireOutput`, the person confirms) or hand them over in its room first. A close that leaves asks with the person returns `leftOwed`: only a cancel retires them, so withdraw or hand over each one — never leave one owed without saying so.
 
 **Hub Protocol REST** (for IS → backend; always include `workspaceId`):
