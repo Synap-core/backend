@@ -201,7 +201,10 @@ export function registerDiagnoseRoutes(app: HubHono): void {
       const usage = await readUsageForCaller(userId, q);
       return c.json(usage);
     } catch (err) {
-      if (!(err instanceof TRPCError) || err.code !== "FORBIDDEN") {
+      const refused =
+        err instanceof TRPCError &&
+        (err.code === "FORBIDDEN" || err.code === "BAD_REQUEST");
+      if (!refused) {
         logger.error({ err, userId }, "usage read failed");
       }
       return c.json(

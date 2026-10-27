@@ -43,6 +43,7 @@ vi.mock("@synap/database", async (orig) => ({
 import { registerDiagnoseRoutes } from "./diagnose.js";
 import type { HubHono, HubVariables } from "./_shared.js";
 import { diagnoseRouter } from "../../../services/diagnose/index.js";
+import { USAGE_FORBIDDEN_MESSAGE } from "../../../services/usage/read-usage.js";
 
 const USER = "11111111-1111-4111-8111-111111111111";
 const KEY = "22222222-2222-4222-8222-222222222222";
@@ -67,8 +68,8 @@ describe("GET /usage", () => {
   it("refuses a caller who is not a pod admin (403), and reads nothing", async () => {
     const res = await buildApp().request("/usage");
     expect(res.status).toBe(403);
-    expect(((await res.json()) as { error: string }).error).toMatch(
-      /owner or an admin/
+    expect(((await res.json()) as { error: string }).error).toBe(
+      USAGE_FORBIDDEN_MESSAGE
     );
     expect(h.reads).toHaveLength(0);
   });
@@ -106,7 +107,7 @@ describe("GET /usage", () => {
 describe("synap_diagnose type usage", () => {
   it("refuses a non-admin with an error, reads nothing", async () => {
     const r = await diagnoseRouter({ userId: USER, type: "usage" });
-    expect(r).toEqual({ error: expect.stringMatching(/owner or an admin/) });
+    expect(r).toEqual({ error: USAGE_FORBIDDEN_MESSAGE });
     expect(h.reads).toHaveLength(0);
   });
 
