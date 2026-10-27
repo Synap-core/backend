@@ -5,6 +5,7 @@ import {
   focusedRow,
   isRemoval,
   liveAskSlot,
+  reviewChipCounts,
   reviewCounts,
   reviewFilterOf,
   reviewGroupOf,
@@ -13,6 +14,7 @@ import {
   reviewSessionOf,
   rowsInView,
   summarizeBatch,
+  NEEDS_YOU_PAGE_LIMIT,
   type ProposalFacts,
   type ReviewSignal,
 } from "./review-rows";
@@ -142,6 +144,33 @@ describe("reviewRows", () => {
     expect(row!.detail).toEqual({ kind: "app-request", requestId: "r1" });
     expect(row!.nounKind).toBe("application");
     expect(row!.expiresAt).toBe("2026-10-12T10:30:00.000Z");
+  });
+
+  it("a change whose moment passed is history: no inline Approve, no batch", () => {
+    const ephemeral = cluster("c9", { lifetimeHours: 1 });
+    const asked = Date.parse(ephemeral.occurredAt as string);
+    const [live] = reviewRows(
+      [ephemeral],
+      new Map([facts("c9-p1")]),
+      asked + 30 * 60_000
+    );
+    expect(live).toMatchObject({
+      expired: false,
+      inlineApprove: true,
+      batchIds: ["c9-p1"],
+    });
+    const [lapsed] = reviewRows(
+      [ephemeral],
+      new Map([facts("c9-p1")]),
+      asked + 8 * 3_600_000
+    );
+    expect(lapsed).toMatchObject({
+      expired: true,
+      inlineApprove: false,
+      batchIds: null,
+      // Its page still opens, and says how it ended.
+      detail: { kind: "proposal", proposalId: "c9-p1" },
+    });
   });
 
   it("a change the viewer may approve: names who and where, approves inline, batches", () => {
@@ -403,6 +432,31 @@ describe("chips, views and focus", () => {
     });
     expect(rowsInView(rows, "changes").map((r) => r.key)).toEqual(["c1", "c2"]);
     expect(rowsInView(rows, "all")).toHaveLength(5);
+  });
+
+  it("All says the pod's count, the nav badge's; groups count the page", () => {
+    expect(reviewChipCounts(rows, { needsYou: 5, truncated: false })).toEqual({
+      all: "5",
+      access: "2",
+      changes: "2",
+      asks: "1",
+    });
+    expect(reviewChipCounts(rows, null).all).toBe("5");
+  });
+
+  it("a full page: All is the pod's number, a group's count is a floor", () => {
+    const full = reviewRows(
+      Array.from({ length: NEEDS_YOU_PAGE_LIMIT }, (_, i) => cluster(`f${i}`)),
+      new Map()
+    );
+    expect(reviewChipCounts(full, { needsYou: 149, truncated: true })).toEqual({
+      all: "149+",
+      access: undefined,
+      changes: "100+",
+      asks: undefined,
+    });
+    // Narrowed (no pod count): the page's own number, as a floor.
+    expect(reviewChipCounts(full, null).all).toBe("100+");
   });
 
   it("reads ?type=, and anything unknown is All", () => {
