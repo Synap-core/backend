@@ -36,18 +36,26 @@ const {
 vi.mock("@synap/database", () => ({
   sql: sqlMock,
   resolveDefaultIntelligenceEndpoint: resolveEndpointMock,
-  loadDocumentBodyTexts: vi.fn(async (_db: unknown, ids: string[]) => ({
-    texts: new Map(
-      ids
-        .filter((id) => bodies.texts.has(id))
-        .map((id) => [id, bodies.texts.get(id)!])
-    ),
-    failed: new Map(
-      ids
-        .filter((id) => bodies.failed.has(id))
-        .map((id) => [id, bodies.failed.get(id)!])
-    ),
-  })),
+  // Like the real reader: the stored text, turned to prose by the caller's
+  // `markdownText` (the fixtures here are markdown bodies).
+  loadDocumentBodyTexts: vi.fn(
+    async (
+      _db: unknown,
+      ids: string[],
+      opts: { markdownText: (m: string) => string }
+    ) => ({
+      texts: new Map(
+        ids
+          .filter((id) => bodies.texts.has(id))
+          .map((id) => [id, opts.markdownText(bodies.texts.get(id)!)])
+      ),
+      failed: new Map(
+        ids
+          .filter((id) => bodies.failed.has(id))
+          .map((id) => [id, bodies.failed.get(id)!])
+      ),
+    })
+  ),
   entities: {
     id: "entities.id",
     title: "entities.title",
