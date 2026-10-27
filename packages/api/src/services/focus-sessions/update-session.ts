@@ -899,7 +899,7 @@ export function personsSlotsHandedAway(
 }
 
 /** The refusal of {@link personsSlotsHandedAway}, as a `BAD_REQUEST`. */
-export function personsSlotHandBackError(labels: string[]): TRPCError {
+function personsSlotHandBackError(labels: string[]): TRPCError {
   const named = labels
     .slice(0, 5)
     .map((l) => `"${l}"`)
@@ -920,7 +920,7 @@ export function personsSlotHandBackError(labels: string[]): TRPCError {
  * person: it goes when the ask changes (its Confirm would answer a question
  * the person never answered) or the slot stops being theirs. Pure.
  */
-export function withoutStaleRelay(
+function withoutStaleRelay(
   prior: OutputItem,
   next: OutputItem
 ): OutputItem {

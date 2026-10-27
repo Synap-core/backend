@@ -235,7 +235,7 @@ export function isOpenQuestionsAtCloseError(err: unknown): err is Error & {
  * what the refusal lists; a disposition naming no open question of this agent
  * (answered meanwhile, someone else's, a typo) is counted, never applied.
  */
-export function planQuestionDispositions(
+function planQuestionDispositions(
   open: readonly OpenQuestionAtClose[],
   dispositions: readonly CloseQuestionDisposition[] = []
 ): {

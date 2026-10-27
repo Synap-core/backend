@@ -1605,7 +1605,7 @@ export interface RelayPodFacts {
   humanOnlyMoveOn: ReadonlySet<string>;
 }
 
-export const NO_RELAY_POD_FACTS: RelayPodFacts = {
+const NO_RELAY_POD_FACTS: RelayPodFacts = {
   gatePending: false,
   humanOnlyMoveOn: new Set(),
 };
@@ -1638,7 +1638,7 @@ function slotEntityIds(slot: ExpectedOutput, ask: RelayAsk): string[] {
  * NOT computable, stated: SPEND — no pod fact marks a write as spending, so
  * the agent's declared `stakes` stays the only signal for it.
  */
-export function podForcesCommitment(p: {
+function podForcesCommitment(p: {
   slot: ExpectedOutput | null;
   ask: RelayAsk;
   facts: RelayPodFacts;
@@ -1651,7 +1651,7 @@ export function podForcesCommitment(p: {
 }
 
 /** One read of the pending proposals {@link podForcesCommitment} looks for. */
-export async function readRelayPodFacts(
+async function readRelayPodFacts(
   sessionId: string,
   slot: ExpectedOutput | null
 ): Promise<RelayPodFacts> {
@@ -1705,7 +1705,7 @@ export async function readRelayPodFacts(
  *     secret of the person's;
  *   - what the pod forces from its proposals ({@link podForcesCommitment}).
  */
-export function relayForcedToTap(p: {
+function relayForcedToTap(p: {
   slot: ExpectedOutput | null;
   ask: RelayAsk;
   question: Pick<OpenQuestion, "confirmationId"> | null;
@@ -1731,7 +1731,7 @@ export function relayForcedToTap(p: {
  * the very step the person holds. A connection or file the agent no longer
  * needs IS withdrawable. Pure.
  */
-export function withdrawKeepsPersonsStep(p: {
+function withdrawKeepsPersonsStep(p: {
   slot: ExpectedOutput | null;
   question: Pick<OpenQuestion, "confirmationId"> | null;
   facts: RelayPodFacts;
@@ -1748,7 +1748,7 @@ export function withdrawKeepsPersonsStep(p: {
 }
 
 /** The stakes a relay to this slot / question is held to. Pure. */
-export function relayStakes(p: {
+function relayStakes(p: {
   slot: ExpectedOutput | null;
   question: Pick<OpenQuestion, "confirmationId"> | null;
   facts?: RelayPodFacts;
@@ -2200,7 +2200,7 @@ export async function dropPendingRelayStamps(
  * form / provide / act snapshot does not keep its fields, so the slot is
  * re-asked in words. Pure.
  */
-export function askFromSnapshot(
+function askFromSnapshot(
   snapshot: SlotAskSnapshot | undefined
 ): SlotAsk | null {
   if (!snapshot) return null;
