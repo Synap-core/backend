@@ -11,8 +11,8 @@
  * The canonical rule is one decision per user-visible act.
  *
  * ── WHAT RUNS FOR REAL ──────────────────────────────────────────────────────
- * `runResolvedSkill` (the shared POST-gate runner both doors call) with
- * `SANDBOX_LOCAL=1` → the real `isolated-vm` sandbox running the skill's code
+ * `runResolvedSkill` (the shared POST-gate runner both doors call) on the pod
+ * runtime (the default since R2; `SKILL_RUNTIME` unset) → the real `isolated-vm` sandbox running the skill's code
  * → the real `callProvider` bridge → the real `triggerProviderAction` → the
  * real `gateCapabilityExecution` → the real vault handler. Stubbed: rows (db),
  * the grant / rule lookups (no grant, no rule), the proposal insert (recorded),
@@ -209,14 +209,15 @@ const asAgent = {
   agentUserId: "agent-1",
 };
 
-let prevSandbox: string | undefined;
+// The pod runtime is the default; a SKILL_RUNTIME=is left in the environment
+// would send these runs to the IS (rollback) and the test would not run here.
+let prevRuntime: string | undefined;
 beforeAll(() => {
-  prevSandbox = process.env.SANDBOX_LOCAL;
-  process.env.SANDBOX_LOCAL = "1";
+  prevRuntime = process.env.SKILL_RUNTIME;
+  delete process.env.SKILL_RUNTIME;
 });
 afterAll(() => {
-  if (prevSandbox === undefined) delete process.env.SANDBOX_LOCAL;
-  else process.env.SANDBOX_LOCAL = prevSandbox;
+  if (prevRuntime !== undefined) process.env.SKILL_RUNTIME = prevRuntime;
   vi.unstubAllGlobals();
 });
 

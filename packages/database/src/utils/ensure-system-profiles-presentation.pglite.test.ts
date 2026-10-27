@@ -11,7 +11,7 @@
  *  - every media/fields property a system presentation names is a property
  *    the kind links (`SYSTEM_PROFILE_PROPERTY_LINKS`).
  * That every value parses under `parseProfilePresentation` is pinned on the
- * api side (`@synap/database` cannot import `@synap-core/types`).
+ * api side.
  * The cases share ONE pod and run in order — run the file, not `-t`.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";

@@ -985,11 +985,11 @@ export async function markProfileRetired(
  * (an edit, or a row older than the stamp) and is left alone too. The stamp
  * asserts exactly what the comparator reads: the value this door wrote.
  *
- * NOT a validator. `@synap/database` cannot import `@synap-core/types` (types
- * dev-depends on this package), so the ONE parser, `parseProfilePresentation`
+ * NOT a validator, by design: the ONE parser, `parseProfilePresentation`
  * (`@synap-core/types/presentation`), runs at the doors that accept a
  * declaration — the catalog validator, the tRPC definition schemas, MCP
- * `define_kind` — and again in every reader's normaliser.
+ * `define_kind` — and again in every reader's normaliser. This writer stores
+ * what those doors already accepted.
  */
 export async function setProfilePresentation(
   db: Pick<PostgresJsDatabase<typeof schema>, "update">,
