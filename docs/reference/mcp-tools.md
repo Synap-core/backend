@@ -2,7 +2,7 @@
 
 # MCP tools
 
-The pod's MCP server lists 102 tools. A new agent key lists the `entry` tools; the others arrive by group when an agent calls `synap_load_skill` with `tools:<group>` (or `tools:builder` for every group). A group narrows what is listed; it is not a permission. A call still runs under the key's scopes and the pod's governance.
+The pod's MCP server lists 103 tools. A new agent key lists the `entry` tools; the others arrive by group when an agent calls `synap_load_skill` with `tools:<group>` (or `tools:builder` for every group). A group narrows what is listed; it is not a permission. A call still runs under the key's scopes and the pod's governance.
 
 | Tool                                                                      | Title                             | Group        | Read-only |
 | ------------------------------------------------------------------------- | --------------------------------- | ------------ | --------- |
@@ -43,6 +43,7 @@ The pod's MCP server lists 102 tools. A new agent key lists the `entry` tools; t
 | [`synap_get_session`](#synap_get_session)                                 | Get focus session                 | sessions     | yes       |
 | [`synap_wait_for_answer`](#synap_wait_for_answer)                         | Wait for the person's answer      | entry        | no        |
 | [`synap_relay_answer`](#synap_relay_answer)                               | Relay the person's answer         | entry        | no        |
+| [`synap_needs_you`](#synap_needs_you)                                     | What needs the person             | sessions     | yes       |
 | [`synap_list_sessions`](#synap_list_sessions)                             | List focus sessions               | sessions     | yes       |
 | [`synap_list_agents`](#synap_list_agents)                                 | List agents and computers         | sessions     | yes       |
 | [`synap_create_cell`](#synap_create_cell)                                 | Define cell                       | build        | no        |
@@ -683,6 +684,20 @@ The person answered your question HERE, in this chat, instead of in Synap: relay
 | `value`        | object | no       | The typed answer you read in their words, for an output with an ask: {type:'confirm', confirmed:true\|false} \| {type:'chip', chip:{label, value}} (one of the options offered) \| {type:'form', values:{...}} \| {type:'text'}. Omit for a free-text question. |
 | `relaySurface` | string | no       | Where they said it, e.g. 'claude-code' or 'claude-ai'.                                                                                                                                                                                                          |
 | `note`         | string | no       | With 'withdrawn': one line on why you no longer need it.                                                                                                                                                                                                        |
+
+## synap_needs_you
+
+**What needs the person** · Group: `sessions` · readOnlyHint: true · openWorldHint: false
+
+What REALLY needs the person right now, classified by the pod's one needs-you rule — read-only. `rows.needs_you` is the headline: a real asker, live work no agent is working on right now, under 7 days old or a commitment. Everything else is in a named fold, never dropped: `working` (an agent is on it: it asks when they can), `stopped` (no agent moved the session for 7 days: resume or close it), `review_later` (a real ask over 7 days), `from_system` (no real asker raised it), `changes_to_review` (pending proposals nothing waits on). `count` carries the numbers, `count.folds` per fold. Read this instead of re-deriving 'needs you' from session reads; point the person at the headline first.
+
+| Parameter     | Type   | Required | Description                            |
+| ------------- | ------ | -------- | -------------------------------------- |
+| `workspaceId` | string | no       | Optional: only this workspace (space). |
+| `projectId`   | string | no       | Optional: only this project.           |
+| `trackId`     | string | no       | Optional: only this goal (track).      |
+| `sessionId`   | string | no       | Optional: only this session.           |
+| `limit`       | number | no       | Rows per fold (default 100, max 200).  |
 
 ## synap_list_sessions
 

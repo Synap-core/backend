@@ -10300,6 +10300,76 @@ export type UndoPromotePropertyToBodyResult = {
 	status: "refused";
 };
 /**
+ *   `expires`          — an ephemeral ask with a lifetime: lapses at
+ *                        `expiresAt`. `orSessionEnd` when it is bound to a
+ *                        session too: closing the session retires it as well,
+ *                        so it goes at the EARLIER of the two.
+ *   `dies_with_session` — a session-bound draft: retired when its session ends.
+ *   `review_later`     — objectWork untouched for 7 days: out of the headline
+ *                        count, kept in the Review later pile `since` then.
+ *   `until_decided`    — waits for a decision, with no deadline.
+ */
+export type ProposalFate = {
+	expiresAt: string;
+	kind: "expires";
+	orSessionEnd: boolean;
+} | {
+	kind: "dies_with_session";
+} | {
+	kind: "until_decided";
+} | {
+	kind: "review_later";
+	since: string;
+};
+declare const PROPOSAL_WAIT_REASONS: readonly [
+	"gate",
+	"owed_slot",
+	"parked_run"
+];
+export type ProposalWaitReason = (typeof PROPOSAL_WAIT_REASONS)[number];
+export interface ProposalWaits {
+	waits: boolean;
+	/** Present only when `waits`. */
+	reason?: ProposalWaitReason;
+}
+declare const NEEDS_YOU_SLOT_CLASSES: readonly [
+	"needs_you",
+	"from_system",
+	"stopped",
+	"working",
+	"review_later"
+];
+export type NeedsYouSlotClass = (typeof NEEDS_YOU_SLOT_CLASSES)[number];
+declare const NEEDS_YOU_PROPOSAL_CLASSES: readonly [
+	"needs_you",
+	"review_later",
+	"changes_to_review"
+];
+export type NeedsYouProposalClass = (typeof NEEDS_YOU_PROPOSAL_CLASSES)[number];
+/** Every class a row can carry — one vocabulary across slots and proposals. */
+export type NeedsYouClass = NeedsYouSlotClass | NeedsYouProposalClass;
+declare const NEEDS_YOU_FOLDS: readonly [
+	"working",
+	"stopped",
+	"review_later",
+	"from_system",
+	"changes_to_review"
+];
+export type NeedsYouFold = (typeof NEEDS_YOU_FOLDS)[number];
+/** The headline and every fold, counted over the SAME rows a list draws. */
+export interface NeedsYouFoldCounts {
+	/** The headline: rows that really need the person. */
+	needsYou: number;
+	working: number;
+	/** Stopped rows… */
+	stopped: number;
+	/** …on this many sessions (Stopped draws one row per session). */
+	stoppedSessions: number;
+	reviewLater: number;
+	fromSystem: number;
+	changesToReview: number;
+}
+/**
  * WHO is asking for access, on an `access-request` row — a pod-level request
  * that is not a proposal: an external service asking to be a TRUSTED ISSUER
  * (it would sign identity tokens this pod accepts), or an APPLICATION asking
@@ -10338,39 +10408,6 @@ export interface NeedsYouInvite {
 	scope: "pod" | "workspace";
 	/** The space's name; null for a pod-wide invite or an unnamed space. */
 	spaceName: string | null;
-}
-/**
- *   `expires`          — an ephemeral ask with a lifetime: lapses at
- *                        `expiresAt`. `orSessionEnd` when it is bound to a
- *                        session too: closing the session retires it as well,
- *                        so it goes at the EARLIER of the two.
- *   `dies_with_session` — a session-bound draft: retired when its session ends.
- *   `review_later`     — objectWork untouched for 7 days: out of the headline
- *                        count, kept in the Review later pile `since` then.
- *   `until_decided`    — waits for a decision, with no deadline.
- */
-export type ProposalFate = {
-	expiresAt: string;
-	kind: "expires";
-	orSessionEnd: boolean;
-} | {
-	kind: "dies_with_session";
-} | {
-	kind: "until_decided";
-} | {
-	kind: "review_later";
-	since: string;
-};
-declare const PROPOSAL_WAIT_REASONS: readonly [
-	"gate",
-	"owed_slot",
-	"parked_run"
-];
-export type ProposalWaitReason = (typeof PROPOSAL_WAIT_REASONS)[number];
-export interface ProposalWaits {
-	waits: boolean;
-	/** Present only when `waits`. */
-	reason?: ProposalWaitReason;
 }
 /**
  * CONNECTION EVENT LINES — the ONE rule that turns a connection's lifecycle
@@ -10647,6 +10684,19 @@ export interface ExpectedOutput {
 	 * Only meaningful alongside `owner: 'human'`.
 	 */
 	why?: string;
+	/**
+	 * WHAT MOVES when the person answers — one line naming the next step, the
+	 * session or the PR that waits on the answer ("the EU launch deploy",
+	 * "session 'Pricing page' starts"). Decision E (needs-truth §5): a needs-you
+	 * row says what to do, WHAT IT UNBLOCKS, who asked and since when.
+	 *
+	 * DECLARED by the agent with the hand-over, like `why`, and REQUIRED when
+	 * an agent hands a slot to the person (`slotsMissingUnblocks`, api
+	 * `slot-asked-event.ts`); a system producer's slot reads it from its cause
+	 * (`effectiveSlotUnblocks`, `@synap-core/types/ask`). Cleared with the other
+	 * ownership fields when the slot goes back to the agent.
+	 */
+	unblocks?: string;
 	/**
 	 * WHEN the slot became the human's — stamped the moment `owner` becomes
 	 * `human`, and cleared with it. Mirrors `delegatedAt` accompanying
@@ -12245,6 +12295,8 @@ export interface ProposalCluster {
 	 * cluster is out of the needs-you headline and drawn in its own fold.
 	 */
 	reviewLater: boolean;
+	/** Every member's needs-you class (see `ClusterInputRow.needsYouClass`). */
+	needsYouClass?: NeedsYouProposalClass;
 	count: number;
 	/** Up to `sampleCap` member proposal ids (newest-first as fed). */
 	sampleProposalIds: string[];
@@ -13797,6 +13849,19 @@ export interface OwedSlot {
 	 */
 	askCause?: AskCause;
 	/**
+	 * WHAT MOVES when the person answers (`effectiveSlotUnblocks`): the slot's
+	 * declared line, else its cause's. Absent when neither says (decision E).
+	 */
+	unblocks?: string;
+	/**
+	 * THE needs-you rule's class for this slot (`classifyOwedAsk`,
+	 * `@synap-core/types/needs-you/rule`, decision E): `needs_you` is the
+	 * headline; `working` / `stopped` / `review_later` / `from_system` are its
+	 * folds. Set by the NEEDS-YOU read only (`needsYouLens`), which measures the
+	 * session's agent evidence in the same query; absent on every other read.
+	 */
+	needsYouClass?: NeedsYouSlotClass;
+	/**
 	 * The close door's receipt that the closing agent kept this ask owed past
 	 * its session (`ExpectedOutput.keptOwedAt`) — the card's fate then never
 	 * says it ends with the session.
@@ -13806,13 +13871,24 @@ export interface OwedSlot {
 /** Where the person finds a session's asks in their Inbox. */
 export type OwedInbox = "needs-you" | "proposed";
 export interface OwedByPerson {
-	/** Owed slots across every session (both lenses), Review later excluded. */
+	/**
+	 * The headline: asks that really need the person (THE needs-you rule,
+	 * `classifyOwedAsk`, decision E) plus a draft's ask-less slots (Proposed).
+	 * Every other owed ask is in {@link folds}, never dropped.
+	 */
 	count: number;
 	/**
-	 * Needs-you asks owed for more than 7 days — in Review later, out of the
-	 * headline (`isAskReviewLater`, the predicate the needs-you count reads).
+	 * Real asks owed for more than 7 days — the Review later fold, out of the
+	 * headline (the same class the needs-you count reads).
 	 */
 	reviewLater: number;
+	/**
+	 * Every needs-you owed ask by the rule's fold — the SAME classes
+	 * `signals.count` counts (`owedSlotClassOf`): `needsYou` (the headline asks),
+	 * Working, Stopped (+ its sessions), Review later, From the system.
+	 * `changesToReview` is 0 here: proposals are orient's `pendingReview`.
+	 */
+	folds: NeedsYouFoldCounts;
 	/** Sessions holding at least one. */
 	sessions: number;
 	/** True when a lens hit its read cap — "at least this many". */
@@ -20285,6 +20361,20 @@ export interface Signal {
 	 */
 	reviewLater?: true;
 	/**
+	 * THE needs-you rule's class (decision E, `@synap-core/types/needs-you/rule`)
+	 * on an `owed-slot` (`classifyOwedAsk`) or a `proposal-cluster`
+	 * (`classifyPendingProposal`). Every class but `needs_you` is OUT of the
+	 * headline and also carries `reviewLater`, so a client older than this
+	 * field still draws it in its one out-of-headline fold — and the count
+	 * still equals the rows. Absent where the read did not classify.
+	 */
+	needsYouClass?: NeedsYouClass;
+	/**
+	 * `owed-slot`: WHAT MOVES when the person answers — the card's "Unblocks"
+	 * line (decision E; `effectiveSlotUnblocks`). Absent when nothing says.
+	 */
+	unblocks?: string;
+	/**
 	 * WHERE the row came from — the small provenance door (lens grammar §5: a
 	 * source is shown only when it differs from the page's scope; the client
 	 * decides that with `visibleSource`, `@synap-core/types/lens`). The most
@@ -20416,6 +20506,134 @@ export interface SignalSource {
 	label: string;
 }
 /**
+ * The minimum a notification row must expose to become a signal. Mirrors the
+ * `notifications` columns the reader already selects — no DB dependency.
+ */
+export interface NotificationSignalInput {
+	id: string;
+	title: string;
+	category: string;
+	sourceType: string;
+	sourceId: string | null;
+	createdAt: Date;
+	/**
+	 * The registry type (`notifications.type`). Read ONLY for the type's
+	 * `needsYou` role (`needsYouRole`, registry.ts). Optional because this is a
+	 * DB-free mirror; every real row carries it, and a row without one is an
+	 * ordinary `"item"`.
+	 */
+	type?: string;
+	/**
+	 * The row's persisted registry actions (`notifications.actions`). Read ONLY
+	 * for a `navigate-object` action's `view`, so a notification that opens a
+	 * room from its banner also opens the room from the inbox — one source, the
+	 * registry row, never a per-type map here.
+	 */
+	actions?: unknown;
+	/**
+	 * The producer's collapse key (`notifications.group_key`). Read ONLY for a
+	 * type whose registry `foldBy` is `"groupKey"` ({@link foldNotifications}).
+	 */
+	groupKey?: string | null;
+}
+/**
+ * The CONTAINER a notification resolves to, derived from what it points at
+ * (`lens-containers.ts`: its session target, or the room its message was
+ * posted in) — never a stored column. Only a session the VIEWER may read is
+ * ever named, so a container never leaks a session the person cannot open.
+ */
+export interface NotificationContainer {
+	sessionId: string | null;
+	/** The session's display name (`resolveSessionTitle`), when it has one. */
+	sessionTitle: string | null;
+	projectId: string | null;
+	trackId: string | null;
+}
+/**
+ * The minimum an owed slot must expose to become a signal. A DB-free mirror of
+ * the fields `listOwedSlots` (`focus-sessions/owed-outputs.ts`) already
+ * projects — nothing is re-derived here.
+ */
+export interface OwedSlotSignalInput {
+	sessionId: string;
+	/** The DECLARED label. It is the title, verbatim — see below. */
+	label: string;
+	/** ISO-8601, written by the block door. The ordering key. */
+	owedSince: string;
+	/**
+	 * The three disclosure fields, carried from `listOwedSlots` straight through.
+	 * Optional here because a slot blocked before these existed has none — and an
+	 * absent reason must render as "no reason recorded", never as a guessed one.
+	 */
+	blockedReason?: ExpectedOutput["blockedReason"];
+	why?: string;
+	claimedDone?: boolean;
+	/** The owning session's declared goal, straight from `listOwedSlots`. */
+	sessionGoal?: string | null;
+	/** The owning session's display name, straight from `listOwedSlots`. */
+	sessionTitle?: string | null;
+	/** The owning session's project, straight from `listOwedSlots`. */
+	projectId?: string | null;
+	/**
+	 * The slot's own `ExpectedOutput.kind`, straight from `listOwedSlots`.
+	 * Optional here only because this input is a DB-free mirror; every real slot
+	 * carries one.
+	 */
+	kind?: string;
+	/**
+	 * The criterion key of a criterion slot, straight from `listOwedSlots`.
+	 * Optional for the same reason as `kind`, plus back-compat: an older slot
+	 * carries none.
+	 */
+	criterionKey?: string;
+	/** The slot's pointer, straight from `listOwedSlots`. */
+	ref?: OutputRef;
+	/** The slot's ask, straight from `listOwedSlots`. */
+	ask?: SlotAsk;
+	/** A relay awaiting the tap, straight from `listOwedSlots`. */
+	pendingRelay?: SlotPendingRelay;
+	/** Kept owed past its session, straight from `listOwedSlots`. */
+	keptOwedAt?: string;
+	/** Who asked and their name, straight from `listOwedSlots`. */
+	askedBy?: string;
+	askedByName?: string;
+	/** What raised it when no agent did, straight from `listOwedSlots`. */
+	askCause?: AskCause;
+	/** The rule's class, straight from `listOwedSlots` (`needsYouLens`). */
+	needsYouClass?: NeedsYouSlotClass;
+	/** What the answer unblocks, straight from `listOwedSlots`. */
+	unblocks?: string;
+}
+/** A pending trusted issuer, as `listPendingIssuers` reads it. */
+export interface PendingIssuerSignalInput {
+	id: string;
+	displayName: string;
+	issuerUrl: string;
+	createdAt: Date;
+}
+/** An app connection request waiting on an owner, as `listPendingAppRequests` reads it. */
+export interface PendingAppRequestSignalInput {
+	id: string;
+	displayName: string;
+	requestedOrigin: string;
+	createdAt: Date;
+	/** The handoff lease: past it the request is expired, never decidable. */
+	expiresAt: Date;
+}
+/** An open invite to another space, as `listOpenSpaceInvites` reads it. */
+export interface SpaceInviteSignalInput {
+	id: string;
+	token: string;
+	type: "pod" | "workspace";
+	role: string;
+	workspaceId: string | null;
+	/** The space's name (null: a pod-wide invite, or the space has none). */
+	spaceName: string | null;
+	createdAt: Date;
+	/** Past it the pod refuses the invite: the row's countdown ends there. */
+	expiresAt: Date;
+}
+/**
  * The STATUS BANNER — system health, never a needs-you row (lens grammar,
  * founder-approved 2026-10-04). ONE banner for the page, however many health
  * rows are unread: each issue is folded per `(type, source)` — "Intelligence
@@ -20476,6 +20694,26 @@ export interface LensPagePicks {
 	/** Halves that FAILED. Non-empty ⇒ never "nothing to do". */
 	unreadable: string[];
 }
+export interface UnfinishedCapture {
+	sessionId: string;
+	title: string | null;
+	goal: string | null;
+	updatedAt: Date;
+	projectId: string | null;
+	status: "needs_answer" | "suggested";
+}
+/** One project session whose next move is the person's acceptance. */
+export interface ReviewSessionRow {
+	id: string;
+	title: string | null;
+	goal: string | null;
+	/** When the session last moved — the row's `occurredAt`. */
+	updatedAt: Date;
+	/** The session's containers — the row's provenance door. */
+	workspaceId: string | null;
+	projectId: string | null;
+	trackId: string | null;
+}
 /** A sub-read's name — what `unreadable` reports. */
 export type SignalSubRead = "activity" | "app-requests" | "captures" | "drafts" | "events" | "invites" | "issuers" | "liveness" | "notifications" | "outputs" | "owed" | "proposals" | "review";
 /** One class of the lens page. */
@@ -20508,6 +20746,8 @@ export interface LensPageWire {
 	 */
 	picks?: LensPagePicks;
 }
+/** The needs-you rows by fold: the headline, then each fold of the rule. */
+export type NeedsYouClassifiedRows = Record<"needs_you" | NeedsYouFold, Signal[]>;
 /**
  * resolveEntityOpenTarget — WHERE opening this entity should go, decided on the
  * pod so every client (browser, relay) only dispatches.
@@ -30619,6 +30859,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					url: string;
 				} | null | undefined;
 				sessionId: string;
+				unblocks?: string | undefined;
 				why?: string | undefined;
 			};
 			meta: object;
@@ -31094,6 +31335,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						relationType: string;
 						status: "linked" | "proposed" | "skipped";
 					} | undefined;
+					unblocks?: string | undefined;
 					why?: string | undefined;
 				}[] | undefined;
 				forceCreate?: boolean | undefined;
@@ -32093,6 +32335,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						relationType: string;
 						status: "linked" | "proposed" | "skipped";
 					} | undefined;
+					unblocks?: string | undefined;
 					why?: string | undefined;
 				}[] | undefined;
 				followPlaybookId?: string | null | undefined;
@@ -40890,6 +41133,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				agentOnly?: boolean | undefined;
 				agentUserId?: string | undefined;
 				automationId?: string | undefined;
+				classifyNeedsYou?: boolean | undefined;
 				excludeDraftSessions?: boolean | undefined;
 				limit?: number | undefined;
 				profileSlug?: string | undefined;
@@ -40906,6 +41150,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: {
 				distinct: number;
+				folds: {
+					changesToReview: number;
+					reviewLater: number;
+				};
 				groups: ProposalCluster[];
 				reviewLater: number;
 				scanTruncated: boolean;
@@ -42963,6 +43211,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				distinct: number;
 				drafts: number;
 				draftsTruncated: boolean;
+				folds: NeedsYouFoldCounts;
 				invites: number;
 				needsYou: number;
 				notifications: number;
@@ -42989,6 +43238,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					distinct: number;
 					drafts: number;
 					draftsTruncated: boolean;
+					folds: NeedsYouFoldCounts;
 					invites: number;
 					needsYou: number;
 					notifications: number;
@@ -43019,6 +43269,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					distinct: number;
 					drafts: number;
 					draftsTruncated: boolean;
+					folds: NeedsYouFoldCounts;
 					invites: number;
 					needsYou: number;
 					notifications: number;
@@ -43062,6 +43313,104 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				page?: LensPageWire;
 				signals: Signal[];
+			};
+		}>;
+		needsYou: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				automationId?: string | undefined;
+				limit?: number | undefined;
+				profileSlug?: string | undefined;
+				projectId?: string | undefined;
+				sessionId?: string | undefined;
+				trackId?: string | undefined;
+				workspaceId?: string | null | undefined;
+			} | undefined;
+			meta: object;
+			output: {
+				count: ReturnType<(a: {
+					accessRequests: {
+						applications: PendingAppRequestSignalInput[];
+						issuers: PendingIssuerSignalInput[];
+					};
+					accessRequestsTruncated: boolean;
+					allNotifications: (NotificationSignalInput & {
+						workspaceId: string | null;
+					})[];
+					captures: {
+						captures: UnfinishedCapture[];
+						truncated: boolean;
+					};
+					clusterSessions: Map<any, any>;
+					containers: Map<string, NotificationContainer>;
+					draftAsks: {
+						slots: OwedSlotSignalInput[];
+						starterNames: Map<string, string>;
+					};
+					draftAsksTruncated: boolean;
+					failures: {
+						blocking: {
+							error: unknown;
+							source: SignalSubRead;
+						}[];
+						proposed: {
+							error: unknown;
+							source: SignalSubRead;
+						}[];
+						status: {
+							error: unknown;
+							source: SignalSubRead;
+						}[];
+					};
+					groups: {
+						distinct: number;
+						folds: {
+							changesToReview: number;
+							reviewLater: number;
+						};
+						groups: ProposalCluster[];
+						reviewLater: number;
+						scanTruncated: boolean;
+						scanned: number;
+					};
+					measuredOwedSessionIds: Set<string>;
+					notifications: (NotificationSignalInput & {
+						workspaceId: string | null;
+					})[];
+					notificationsTruncated: boolean;
+					openQuestionSessionIds: Set<string> | undefined;
+					owed: (OwedSlotSignalInput & {
+						workspaceId: string | null;
+					})[];
+					owedTruncated: boolean;
+					review: {
+						sessions: ReviewSessionRow[];
+						truncated: boolean;
+					};
+					spaceInvites: SpaceInviteSignalInput[];
+					spaceInvitesTruncated: boolean;
+					statusNotifications: (NotificationSignalInput & {
+						workspaceId: string | null;
+					})[];
+				}) => {
+					blocked: number;
+					captures: number;
+					decisions: number;
+					distinct: number;
+					drafts: number;
+					draftsTruncated: boolean;
+					folds: NeedsYouFoldCounts;
+					invites: number;
+					needsYou: number;
+					notifications: number;
+					requests: number;
+					review: number;
+					reviewLater: number;
+					suggestions: number;
+					truncated: boolean;
+				}>;
+				lens: "needs-you";
+				rows: NeedsYouClassifiedRows;
+				truncated: boolean;
 			};
 		}>;
 		skipNextMove: import("@trpc/server").TRPCMutationProcedure<{

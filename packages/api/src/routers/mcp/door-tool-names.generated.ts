@@ -5,397 +5,106 @@
 import type { DoorToolNameRow } from "./door-tool-names.build.js";
 
 export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
-  synap_add_track_stage: {
-    "pod-mcp": "synap_add_track_stage",
-    "cp-connector": "pod__add_track_stage",
-  },
-  synap_advance_track: {
-    "pod-mcp": "synap_advance_track",
-    "cp-connector": "pod__advance_track",
-  },
-  synap_archive_workspace: {
-    "pod-mcp": "synap_archive_workspace",
-    "cp-connector": "pod__archive_workspace",
-  },
+  synap_add_track_stage: { "pod-mcp": "synap_add_track_stage", "cp-connector": "pod__add_track_stage" },
+  synap_advance_track: { "pod-mcp": "synap_advance_track", "cp-connector": "pod__advance_track" },
+  synap_archive_workspace: { "pod-mcp": "synap_archive_workspace", "cp-connector": "pod__archive_workspace" },
   synap_ask: { "pod-mcp": "synap_ask", "cp-connector": "pod__ask" },
-  synap_attach_facet: {
-    "pod-mcp": "synap_attach_facet",
-    "cp-connector": "pod__attach_facet",
-  },
+  synap_attach_facet: { "pod-mcp": "synap_attach_facet", "cp-connector": "pod__attach_facet" },
   synap_capture: { "pod-mcp": "synap_capture", "cp-connector": "pod__capture" },
-  synap_change_kind_scope: {
-    "pod-mcp": "synap_change_kind_scope",
-    "cp-connector": "pod__change_kind_scope",
-  },
-  synap_complete_session: {
-    "pod-mcp": "synap_complete_session",
-    "cp-connector": "pod__complete_session",
-  },
-  synap_convert_to_goal: {
-    "pod-mcp": "synap_convert_to_goal",
-    "cp-connector": "pod__convert_to_goal",
-  },
-  synap_create_automation: {
-    "pod-mcp": "synap_create_automation",
-    "cp-connector": "pod__create_automation",
-  },
-  synap_create_cell: {
-    "pod-mcp": "synap_create_cell",
-    "cp-connector": "pod__create_cell",
-  },
-  synap_create_document: {
-    "pod-mcp": "synap_create_document",
-    "cp-connector": "pod__create_document",
-  },
-  synap_create_entity: {
-    "pod-mcp": "synap_create_entity",
-    "cp-connector": "pod__create_entity",
-  },
-  synap_create_playbook: {
-    "pod-mcp": "synap_create_playbook",
-    "cp-connector": "pod__create_playbook",
-  },
-  synap_create_project: {
-    "pod-mcp": "synap_create_project",
-    "cp-connector": "pod__create_project",
-  },
-  synap_create_rule: {
-    "pod-mcp": "synap_create_rule",
-    "cp-connector": "pod__create_rule",
-  },
-  synap_create_skill: {
-    "pod-mcp": "synap_create_skill",
-    "cp-connector": "pod__create_skill",
-  },
-  synap_create_verb: {
-    "pod-mcp": "synap_create_verb",
-    "cp-connector": "pod__create_verb",
-  },
-  synap_create_view: {
-    "pod-mcp": "synap_create_view",
-    "cp-connector": "pod__create_view",
-  },
-  synap_create_workspace: {
-    "pod-mcp": "synap_create_workspace",
-    "cp-connector": "pod__create_workspace",
-  },
-  synap_declare_workspace_source: {
-    "pod-mcp": "synap_declare_workspace_source",
-    "cp-connector": "pod__declare_workspace_source",
-  },
-  synap_define_kind: {
-    "pod-mcp": "synap_define_kind",
-    "cp-connector": "pod__define_kind",
-  },
-  synap_define_role: {
-    "pod-mcp": "synap_define_role",
-    "cp-connector": "pod__define_role",
-  },
-  synap_delete_entity: {
-    "pod-mcp": "synap_delete_entity",
-    "cp-connector": "pod__delete_entity",
-  },
-  synap_detach_facet: {
-    "pod-mcp": "synap_detach_facet",
-    "cp-connector": "pod__detach_facet",
-  },
-  synap_diagnose: {
-    "pod-mcp": "synap_diagnose",
-    "cp-connector": "pod__diagnose",
-  },
-  synap_evaluate_session: {
-    "pod-mcp": "synap_evaluate_session",
-    "cp-connector": "pod__evaluate_session",
-  },
-  synap_export_project_pack: {
-    "pod-mcp": "synap_export_project_pack",
-    "cp-connector": "pod__export_project_pack",
-  },
-  synap_file_into_project: {
-    "pod-mcp": "synap_file_into_project",
-    "cp-connector": "pod__file_into_project",
-  },
+  synap_change_kind_scope: { "pod-mcp": "synap_change_kind_scope", "cp-connector": "pod__change_kind_scope" },
+  synap_complete_session: { "pod-mcp": "synap_complete_session", "cp-connector": "pod__complete_session" },
+  synap_convert_to_goal: { "pod-mcp": "synap_convert_to_goal", "cp-connector": "pod__convert_to_goal" },
+  synap_create_automation: { "pod-mcp": "synap_create_automation", "cp-connector": "pod__create_automation" },
+  synap_create_cell: { "pod-mcp": "synap_create_cell", "cp-connector": "pod__create_cell" },
+  synap_create_document: { "pod-mcp": "synap_create_document", "cp-connector": "pod__create_document" },
+  synap_create_entity: { "pod-mcp": "synap_create_entity", "cp-connector": "pod__create_entity" },
+  synap_create_playbook: { "pod-mcp": "synap_create_playbook", "cp-connector": "pod__create_playbook" },
+  synap_create_project: { "pod-mcp": "synap_create_project", "cp-connector": "pod__create_project" },
+  synap_create_rule: { "pod-mcp": "synap_create_rule", "cp-connector": "pod__create_rule" },
+  synap_create_skill: { "pod-mcp": "synap_create_skill", "cp-connector": "pod__create_skill" },
+  synap_create_verb: { "pod-mcp": "synap_create_verb", "cp-connector": "pod__create_verb" },
+  synap_create_view: { "pod-mcp": "synap_create_view", "cp-connector": "pod__create_view" },
+  synap_create_workspace: { "pod-mcp": "synap_create_workspace", "cp-connector": "pod__create_workspace" },
+  synap_declare_workspace_source: { "pod-mcp": "synap_declare_workspace_source", "cp-connector": "pod__declare_workspace_source" },
+  synap_define_kind: { "pod-mcp": "synap_define_kind", "cp-connector": "pod__define_kind" },
+  synap_define_role: { "pod-mcp": "synap_define_role", "cp-connector": "pod__define_role" },
+  synap_delete_entity: { "pod-mcp": "synap_delete_entity", "cp-connector": "pod__delete_entity" },
+  synap_detach_facet: { "pod-mcp": "synap_detach_facet", "cp-connector": "pod__detach_facet" },
+  synap_diagnose: { "pod-mcp": "synap_diagnose", "cp-connector": "pod__diagnose" },
+  synap_evaluate_session: { "pod-mcp": "synap_evaluate_session", "cp-connector": "pod__evaluate_session" },
+  synap_export_project_pack: { "pod-mcp": "synap_export_project_pack", "cp-connector": "pod__export_project_pack" },
+  synap_file_into_project: { "pod-mcp": "synap_file_into_project", "cp-connector": "pod__file_into_project" },
   synap_find: { "pod-mcp": "synap_find", "cp-connector": "pod__find" },
-  synap_get_channel: {
-    "pod-mcp": "synap_get_channel",
-    "cp-connector": "pod__get_channel",
-  },
-  synap_get_document: {
-    "pod-mcp": "synap_get_document",
-    "cp-connector": "pod__get_document",
-  },
-  synap_get_entities: {
-    "pod-mcp": "synap_get_entities",
-    "cp-connector": "pod__get_entities",
-  },
-  synap_get_entity: {
-    "pod-mcp": "synap_get_entity",
-    "cp-connector": "pod__get_entity",
-  },
-  synap_get_graph: {
-    "pod-mcp": "synap_get_graph",
-    "cp-connector": "pod__get_graph",
-  },
-  synap_get_project: {
-    "pod-mcp": "synap_get_project",
-    "cp-connector": "pod__get_project",
-  },
-  synap_get_proposal: {
-    "pod-mcp": "synap_get_proposal",
-    "cp-connector": "pod__get_proposal",
-  },
-  synap_get_relations: {
-    "pod-mcp": "synap_get_relations",
-    "cp-connector": "pod__get_relations",
-  },
-  synap_get_session: {
-    "pod-mcp": "synap_get_session",
-    "cp-connector": "pod__get_session",
-  },
-  synap_get_thread_context: {
-    "pod-mcp": "synap_get_thread_context",
-    "cp-connector": "pod__get_thread_context",
-  },
-  synap_governance: {
-    "pod-mcp": "synap_governance",
-    "cp-connector": "pod__governance",
-  },
-  synap_grant_profile_access: {
-    "pod-mcp": "synap_grant_profile_access",
-    "cp-connector": "pod__grant_profile_access",
-  },
-  synap_link_entities: {
-    "pod-mcp": "synap_link_entities",
-    "cp-connector": "pod__link_entities",
-  },
-  synap_list_agents: {
-    "pod-mcp": "synap_list_agents",
-    "cp-connector": "pod__list_agents",
-  },
-  synap_list_automations: {
-    "pod-mcp": "synap_list_automations",
-    "cp-connector": "pod__list_automations",
-  },
-  synap_list_capabilities: {
-    "pod-mcp": "synap_list_capabilities",
-    "cp-connector": "pod__list_capabilities",
-  },
-  synap_list_playbooks: {
-    "pod-mcp": "synap_list_playbooks",
-    "cp-connector": "pod__list_playbooks",
-  },
-  synap_list_profiles: {
-    "pod-mcp": "synap_list_profiles",
-    "cp-connector": "pod__list_profiles",
-  },
-  synap_list_projects: {
-    "pod-mcp": "synap_list_projects",
-    "cp-connector": "pod__list_projects",
-  },
-  synap_list_proposals: {
-    "pod-mcp": "synap_list_proposals",
-    "cp-connector": "pod__list_proposals",
-  },
-  synap_list_sessions: {
-    "pod-mcp": "synap_list_sessions",
-    "cp-connector": "pod__list_sessions",
-  },
-  synap_list_tracks: {
-    "pod-mcp": "synap_list_tracks",
-    "cp-connector": "pod__list_tracks",
-  },
-  synap_list_views: {
-    "pod-mcp": "synap_list_views",
-    "cp-connector": "pod__list_views",
-  },
-  synap_list_widgets: {
-    "pod-mcp": "synap_list_widgets",
-    "cp-connector": "pod__list_widgets",
-  },
-  synap_list_workspaces: {
-    "pod-mcp": "synap_list_workspaces",
-    "cp-connector": "pod__list_workspaces",
-  },
-  synap_load_skill: {
-    "pod-mcp": "synap_load_skill",
-    "cp-connector": "pod__load_skill",
-  },
-  synap_match_playbooks: {
-    "pod-mcp": "synap_match_playbooks",
-    "cp-connector": "pod__match_playbooks",
-  },
-  synap_move_entities: {
-    "pod-mcp": "synap_move_entities",
-    "cp-connector": "pod__move_entities",
-  },
-  synap_organize_library: {
-    "pod-mcp": "synap_organize_library",
-    "cp-connector": "pod__organize_library",
-  },
+  synap_get_channel: { "pod-mcp": "synap_get_channel", "cp-connector": "pod__get_channel" },
+  synap_get_document: { "pod-mcp": "synap_get_document", "cp-connector": "pod__get_document" },
+  synap_get_entities: { "pod-mcp": "synap_get_entities", "cp-connector": "pod__get_entities" },
+  synap_get_entity: { "pod-mcp": "synap_get_entity", "cp-connector": "pod__get_entity" },
+  synap_get_graph: { "pod-mcp": "synap_get_graph", "cp-connector": "pod__get_graph" },
+  synap_get_project: { "pod-mcp": "synap_get_project", "cp-connector": "pod__get_project" },
+  synap_get_proposal: { "pod-mcp": "synap_get_proposal", "cp-connector": "pod__get_proposal" },
+  synap_get_relations: { "pod-mcp": "synap_get_relations", "cp-connector": "pod__get_relations" },
+  synap_get_session: { "pod-mcp": "synap_get_session", "cp-connector": "pod__get_session" },
+  synap_get_thread_context: { "pod-mcp": "synap_get_thread_context", "cp-connector": "pod__get_thread_context" },
+  synap_governance: { "pod-mcp": "synap_governance", "cp-connector": "pod__governance" },
+  synap_grant_profile_access: { "pod-mcp": "synap_grant_profile_access", "cp-connector": "pod__grant_profile_access" },
+  synap_link_entities: { "pod-mcp": "synap_link_entities", "cp-connector": "pod__link_entities" },
+  synap_list_agents: { "pod-mcp": "synap_list_agents", "cp-connector": "pod__list_agents" },
+  synap_list_automations: { "pod-mcp": "synap_list_automations", "cp-connector": "pod__list_automations" },
+  synap_list_capabilities: { "pod-mcp": "synap_list_capabilities", "cp-connector": "pod__list_capabilities" },
+  synap_list_playbooks: { "pod-mcp": "synap_list_playbooks", "cp-connector": "pod__list_playbooks" },
+  synap_list_profiles: { "pod-mcp": "synap_list_profiles", "cp-connector": "pod__list_profiles" },
+  synap_list_projects: { "pod-mcp": "synap_list_projects", "cp-connector": "pod__list_projects" },
+  synap_list_proposals: { "pod-mcp": "synap_list_proposals", "cp-connector": "pod__list_proposals" },
+  synap_list_sessions: { "pod-mcp": "synap_list_sessions", "cp-connector": "pod__list_sessions" },
+  synap_list_tracks: { "pod-mcp": "synap_list_tracks", "cp-connector": "pod__list_tracks" },
+  synap_list_views: { "pod-mcp": "synap_list_views", "cp-connector": "pod__list_views" },
+  synap_list_widgets: { "pod-mcp": "synap_list_widgets", "cp-connector": "pod__list_widgets" },
+  synap_list_workspaces: { "pod-mcp": "synap_list_workspaces", "cp-connector": "pod__list_workspaces" },
+  synap_load_skill: { "pod-mcp": "synap_load_skill", "cp-connector": "pod__load_skill" },
+  synap_match_playbooks: { "pod-mcp": "synap_match_playbooks", "cp-connector": "pod__match_playbooks" },
+  synap_move_entities: { "pod-mcp": "synap_move_entities", "cp-connector": "pod__move_entities" },
+  synap_organize_library: { "pod-mcp": "synap_organize_library", "cp-connector": "pod__organize_library" },
   synap_orient: { "pod-mcp": "synap_orient", "cp-connector": "pod__orient" },
-  synap_post_message: {
-    "pod-mcp": "synap_post_message",
-    "cp-connector": "pod__post_message",
-  },
-  synap_project_use_workspace: {
-    "pod-mcp": "synap_project_use_workspace",
-    "cp-connector": "pod__project_use_workspace",
-  },
-  synap_promote_cell_to_renderer: {
-    "pod-mcp": "synap_promote_cell_to_renderer",
-    "cp-connector": "pod__promote_cell_to_renderer",
-  },
-  synap_promote_session_to_playbook: {
-    "pod-mcp": "synap_promote_session_to_playbook",
-    "cp-connector": "pod__promote_session_to_playbook",
-  },
-  synap_reject_proposal: {
-    "pod-mcp": "synap_reject_proposal",
-    "cp-connector": "pod__reject_proposal",
-  },
+  synap_post_message: { "pod-mcp": "synap_post_message", "cp-connector": "pod__post_message" },
+  synap_project_use_workspace: { "pod-mcp": "synap_project_use_workspace", "cp-connector": "pod__project_use_workspace" },
+  synap_promote_cell_to_renderer: { "pod-mcp": "synap_promote_cell_to_renderer", "cp-connector": "pod__promote_cell_to_renderer" },
+  synap_promote_session_to_playbook: { "pod-mcp": "synap_promote_session_to_playbook", "cp-connector": "pod__promote_session_to_playbook" },
+  synap_reject_proposal: { "pod-mcp": "synap_reject_proposal", "cp-connector": "pod__reject_proposal" },
   synap_relay_answer: { "pod-mcp": "synap_relay_answer", "cp-connector": null },
-  synap_remember_fact: {
-    "pod-mcp": "synap_remember_fact",
-    "cp-connector": "pod__remember_fact",
-  },
-  synap_reopen_track: {
-    "pod-mcp": "synap_reopen_track",
-    "cp-connector": "pod__reopen_track",
-  },
-  synap_request_deploy_approval: {
-    "pod-mcp": "synap_request_deploy_approval",
-    "cp-connector": "pod__request_deploy_approval",
-  },
-  synap_request_upload: {
-    "pod-mcp": "synap_request_upload",
-    "cp-connector": null,
-  },
-  synap_rerun_session: {
-    "pod-mcp": "synap_rerun_session",
-    "cp-connector": "pod__rerun_session",
-  },
-  synap_resolve_identity: {
-    "pod-mcp": "synap_resolve_identity",
-    "cp-connector": "pod__resolve_identity",
-  },
-  synap_retire_field: {
-    "pod-mcp": "synap_retire_field",
-    "cp-connector": "pod__retire_field",
-  },
-  synap_retire_workspace: {
-    "pod-mcp": "synap_retire_workspace",
-    "cp-connector": "pod__retire_workspace",
-  },
-  synap_revert_session: {
-    "pod-mcp": "synap_revert_session",
-    "cp-connector": "pod__revert_session",
-  },
-  synap_revise_proposal: {
-    "pod-mcp": "synap_revise_proposal",
-    "cp-connector": "pod__revise_proposal",
-  },
-  synap_run_capability: {
-    "pod-mcp": "synap_run_capability",
-    "cp-connector": "pod__run_capability",
-  },
-  synap_run_playbook: {
-    "pod-mcp": "synap_run_playbook",
-    "cp-connector": "pod__run_playbook",
-  },
-  synap_set_project_focus: {
-    "pod-mcp": "synap_set_project_focus",
-    "cp-connector": "pod__set_project_focus",
-  },
-  synap_set_track_params: {
-    "pod-mcp": "synap_set_track_params",
-    "cp-connector": "pod__set_track_params",
-  },
-  synap_set_track_participant: {
-    "pod-mcp": "synap_set_track_participant",
-    "cp-connector": "pod__set_track_participant",
-  },
-  synap_set_track_status: {
-    "pod-mcp": "synap_set_track_status",
-    "cp-connector": "pod__set_track_status",
-  },
-  synap_set_workspace_focus: {
-    "pod-mcp": "synap_set_workspace_focus",
-    "cp-connector": "pod__set_workspace_focus",
-  },
-  synap_start_session: {
-    "pod-mcp": "synap_start_session",
-    "cp-connector": "pod__start_session",
-  },
-  synap_start_stage_session: {
-    "pod-mcp": "synap_start_stage_session",
-    "cp-connector": "pod__start_stage_session",
-  },
-  synap_start_track: {
-    "pod-mcp": "synap_start_track",
-    "cp-connector": "pod__start_track",
-  },
-  synap_store_file: {
-    "pod-mcp": "synap_store_file",
-    "cp-connector": "pod__store_file",
-  },
-  synap_template_health: {
-    "pod-mcp": "synap_template_health",
-    "cp-connector": "pod__template_health",
-  },
-  synap_trigger_automation: {
-    "pod-mcp": "synap_trigger_automation",
-    "cp-connector": "pod__trigger_automation",
-  },
-  synap_update_document: {
-    "pod-mcp": "synap_update_document",
-    "cp-connector": "pod__update_document",
-  },
-  synap_update_entities: {
-    "pod-mcp": "synap_update_entities",
-    "cp-connector": "pod__update_entities",
-  },
-  synap_update_entity: {
-    "pod-mcp": "synap_update_entity",
-    "cp-connector": "pod__update_entity",
-  },
-  synap_update_playbook: {
-    "pod-mcp": "synap_update_playbook",
-    "cp-connector": "pod__update_playbook",
-  },
-  synap_update_project: {
-    "pod-mcp": "synap_update_project",
-    "cp-connector": "pod__update_project",
-  },
-  synap_update_rule: {
-    "pod-mcp": "synap_update_rule",
-    "cp-connector": "pod__update_rule",
-  },
-  synap_update_session: {
-    "pod-mcp": "synap_update_session",
-    "cp-connector": "pod__update_session",
-  },
-  synap_update_skill: {
-    "pod-mcp": "synap_update_skill",
-    "cp-connector": "pod__update_skill",
-  },
-  synap_update_space_brief: {
-    "pod-mcp": "synap_update_space_brief",
-    "cp-connector": "pod__update_space_brief",
-  },
-  synap_update_track: {
-    "pod-mcp": "synap_update_track",
-    "cp-connector": "pod__update_track",
-  },
-  synap_update_view_content: {
-    "pod-mcp": "synap_update_view_content",
-    "cp-connector": "pod__update_view_content",
-  },
-  synap_update_workspace: {
-    "pod-mcp": "synap_update_workspace",
-    "cp-connector": "pod__update_workspace",
-  },
-  synap_wait_for_answer: {
-    "pod-mcp": "synap_wait_for_answer",
-    "cp-connector": null,
-  },
+  synap_remember_fact: { "pod-mcp": "synap_remember_fact", "cp-connector": "pod__remember_fact" },
+  synap_reopen_track: { "pod-mcp": "synap_reopen_track", "cp-connector": "pod__reopen_track" },
+  synap_request_deploy_approval: { "pod-mcp": "synap_request_deploy_approval", "cp-connector": "pod__request_deploy_approval" },
+  synap_request_upload: { "pod-mcp": "synap_request_upload", "cp-connector": null },
+  synap_rerun_session: { "pod-mcp": "synap_rerun_session", "cp-connector": "pod__rerun_session" },
+  synap_resolve_identity: { "pod-mcp": "synap_resolve_identity", "cp-connector": "pod__resolve_identity" },
+  synap_retire_field: { "pod-mcp": "synap_retire_field", "cp-connector": "pod__retire_field" },
+  synap_retire_workspace: { "pod-mcp": "synap_retire_workspace", "cp-connector": "pod__retire_workspace" },
+  synap_revert_session: { "pod-mcp": "synap_revert_session", "cp-connector": "pod__revert_session" },
+  synap_revise_proposal: { "pod-mcp": "synap_revise_proposal", "cp-connector": "pod__revise_proposal" },
+  synap_run_capability: { "pod-mcp": "synap_run_capability", "cp-connector": "pod__run_capability" },
+  synap_run_playbook: { "pod-mcp": "synap_run_playbook", "cp-connector": "pod__run_playbook" },
+  synap_set_project_focus: { "pod-mcp": "synap_set_project_focus", "cp-connector": "pod__set_project_focus" },
+  synap_set_track_params: { "pod-mcp": "synap_set_track_params", "cp-connector": "pod__set_track_params" },
+  synap_set_track_participant: { "pod-mcp": "synap_set_track_participant", "cp-connector": "pod__set_track_participant" },
+  synap_set_track_status: { "pod-mcp": "synap_set_track_status", "cp-connector": "pod__set_track_status" },
+  synap_set_workspace_focus: { "pod-mcp": "synap_set_workspace_focus", "cp-connector": "pod__set_workspace_focus" },
+  synap_start_session: { "pod-mcp": "synap_start_session", "cp-connector": "pod__start_session" },
+  synap_start_stage_session: { "pod-mcp": "synap_start_stage_session", "cp-connector": "pod__start_stage_session" },
+  synap_start_track: { "pod-mcp": "synap_start_track", "cp-connector": "pod__start_track" },
+  synap_store_file: { "pod-mcp": "synap_store_file", "cp-connector": "pod__store_file" },
+  synap_template_health: { "pod-mcp": "synap_template_health", "cp-connector": "pod__template_health" },
+  synap_trigger_automation: { "pod-mcp": "synap_trigger_automation", "cp-connector": "pod__trigger_automation" },
+  synap_update_document: { "pod-mcp": "synap_update_document", "cp-connector": "pod__update_document" },
+  synap_update_entities: { "pod-mcp": "synap_update_entities", "cp-connector": "pod__update_entities" },
+  synap_update_entity: { "pod-mcp": "synap_update_entity", "cp-connector": "pod__update_entity" },
+  synap_update_playbook: { "pod-mcp": "synap_update_playbook", "cp-connector": "pod__update_playbook" },
+  synap_update_project: { "pod-mcp": "synap_update_project", "cp-connector": "pod__update_project" },
+  synap_update_rule: { "pod-mcp": "synap_update_rule", "cp-connector": "pod__update_rule" },
+  synap_update_session: { "pod-mcp": "synap_update_session", "cp-connector": "pod__update_session" },
+  synap_update_skill: { "pod-mcp": "synap_update_skill", "cp-connector": "pod__update_skill" },
+  synap_update_space_brief: { "pod-mcp": "synap_update_space_brief", "cp-connector": "pod__update_space_brief" },
+  synap_update_track: { "pod-mcp": "synap_update_track", "cp-connector": "pod__update_track" },
+  synap_update_view_content: { "pod-mcp": "synap_update_view_content", "cp-connector": "pod__update_view_content" },
+  synap_update_workspace: { "pod-mcp": "synap_update_workspace", "cp-connector": "pod__update_workspace" },
+  synap_wait_for_answer: { "pod-mcp": "synap_wait_for_answer", "cp-connector": null },
 };
