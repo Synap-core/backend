@@ -19,6 +19,12 @@
  *    writes nothing; an unattributed hub key (no app) too; an app's own AGENT
  *    key too, its proposal naming nothing as the person.
  *
+ * And a PLAIN field the same key PATCHes (the forwarder's `source`,
+ * `hubWriteSource`): the person's write, applied on the person's ladder with
+ * no proposal and no anonymous-AI receipt; an agent key's same PATCH still
+ * runs the agent ladder (a proposal or an auto-approved receipt, both
+ * attributed to the agent).
+ *
  * NOT COVERED: the Hub HTTP auth door itself (`pod-app-person-token.pglite
  * .test.ts` proves the app_person key resolves to this scope); the event's
  * fan-out (`@synap/events` lifecycle-transition.test.ts proves the outbox
@@ -220,11 +226,22 @@ const inRequest = <T>(
   );
 
 /** `PATCH /entities/:id` with `status` + `expectedStatus`, as Content Studio sends it. */
-async function patchStatus(
+const patchStatus = (
   key: { clientId: string | null; agent?: string },
   entityId: string,
   to: string,
   expectedStatus: string
+) => patch(key, entityId, { metadata: { status: to }, expectedStatus });
+
+/** `PATCH /entities/:id` through the hub forwarder, inside the key's request. */
+async function patch(
+  key: { clientId: string | null; agent?: string },
+  entityId: string,
+  body: {
+    title?: string;
+    metadata?: Record<string, unknown>;
+    expectedStatus?: string;
+  }
 ) {
   return inRequest(key, key.agent, async () => {
     const ctx = await createHubProtocolCallerContext(
@@ -240,8 +257,7 @@ async function patchStatus(
       .updateEntity({
         entityId,
         userId: USER,
-        metadata: { status: to },
-        expectedStatus,
+        ...body,
       });
     return res as { status?: string };
   });
@@ -265,6 +281,10 @@ async function seedPiece(status = "idea"): Promise<string> {
   );
   return id;
 }
+
+const titleOf = async (id: string) =>
+  (await q<{ title: string }>(`select title from entities where id = $1`, [id]))
+    .rows[0]?.title;
 
 const statusOf = async (id: string) =>
   (
@@ -470,6 +490,26 @@ describe("every other key keeps the agent floor", () => {
         agentUserId: AGENT,
         appId: null,
       }),
+    ]);
+  });
+});
+
+describe("a PLAIN field an app sign-in PATCHes is the person's write", () => {
+  it("applied on the person's ladder: no proposal, no anonymous-AI receipt", async () => {
+    const piece = await seedPiece("idea");
+    const res = await patch(PERSON_APP_KEY, piece, { title: "Renamed" });
+    expect(res.status, JSON.stringify(res)).not.toBe("proposed");
+    expect(await titleOf(piece)).toBe("Renamed");
+    // The AI ladders leave a row on every write they decide (a pending
+    // proposal, or an auto-approved receipt); the person's ladder leaves none.
+    expect(await proposalsOn(piece)).toEqual([]);
+  });
+
+  it("an agent key's same PATCH still runs the agent ladder, attributed to it", async () => {
+    const piece = await seedPiece("idea");
+    await patch(AGENT_KEY, piece, { title: "Renamed by the agent" });
+    expect(await proposalsOn(piece)).toEqual([
+      expect.objectContaining({ agent_user_id: AGENT }),
     ]);
   });
 });
