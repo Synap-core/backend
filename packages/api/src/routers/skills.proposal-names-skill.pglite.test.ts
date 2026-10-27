@@ -103,7 +103,8 @@ vi.mock("../utils/split-brain-service.js", async (importOriginal) => ({
 vi.mock("../utils/chat-realtime-broadcast.js", () => ({
   emitChatEvent: () => undefined,
 }));
-vi.mock("../services/links/links-service.js", () => ({
+vi.mock("../services/links/links-service.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   createLinks: async () => [],
   createLink: async () => ({}),
 }));
