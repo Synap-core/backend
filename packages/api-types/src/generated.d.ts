@@ -18837,12 +18837,6 @@ export type SessionInteractionsSection = {
 	reason: string;
 	status: "unavailable";
 };
-/**
- * Who the viewer is TO this session — the field read doors expose so a UI can
- * hide write verbs for a member. Only meaningful on a row the viewer already
- * read through {@link sessionReadableWhere}.
- */
-export type SessionViewerRole = "member" | "owner";
 declare function projectSessionRows(sessions: FocusSession[], userId: string | null | undefined): Promise<({
 	agentIds: string[] | null;
 	channelId: string | null;
