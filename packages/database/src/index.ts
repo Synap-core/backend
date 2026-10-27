@@ -60,6 +60,7 @@ export * from "./utils/project-guardrails.js";
 export * from "./utils/reserved-profile-slugs.js";
 export * from "./utils/profile-slug-precedence.js";
 export * from "./utils/request-write-context.js";
+export * from "./utils/api-usage.js";
 export * from "./utils/listable-entity.js";
 export * from "./utils/grant-read-hook.js";
 export * from "./utils/exposure-policy-settings.js";
