@@ -106,6 +106,7 @@ export * from "./utils/agent-turn-overrides.js";
 export * from "./utils/workspace-client-projection.js";
 export * from "./utils/workspace-identity.js";
 export * from "./utils/pg-errors.js";
+export * from "./utils/webhook-source-declaration.js";
 export * from "./utils/backfill-governance-rules.js";
 export * from "./utils/floor-covered-actions.js";
 export * from "./utils/governance-rule-provenance.js";
