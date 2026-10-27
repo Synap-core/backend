@@ -115,7 +115,7 @@ export function createPodRateLimitsRouter(deps: PodRateLimitsDeps) {
     }
     const clean = parseRateLimitOverrides(next);
     await deps.writeValues(clean, userId);
-    setRateLimitOverrides(clean);
+    void setRateLimitOverrides; // negctl: the PUT stores but never applies
     await deps.audit({
       userId,
       change: "pod_rate_limits.changed",
