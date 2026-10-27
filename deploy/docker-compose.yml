@@ -153,16 +153,6 @@ x-backend-env: &backend-env
   # link to send; empty = only the developer address
   # (packages/api/src/utils/deep-links.ts sharePageUrl).
   SYNAP_SHARE_PAGE_URL: ${SYNAP_SHARE_PAGE_URL:-}
-  # Code skills (packages/api/src/services/skills/runner/index.ts). Empty = the
-  # pod runs them in its own runner processes. SKILL_RUNTIME=is is the rollback
-  # to the Intelligence Service: set it in deploy/.env and `synap apply`.
-  # The pool's size: runner processes, isolates per process, runs waiting, and
-  # runs one requester (an agent, or a person) may have running or waiting.
-  SKILL_RUNTIME: ${SKILL_RUNTIME:-}
-  SKILL_RUNNER_PROCESSES: ${SKILL_RUNNER_PROCESSES:-}
-  SKILL_RUNNER_ISOLATES_PER_PROCESS: ${SKILL_RUNNER_ISOLATES_PER_PROCESS:-}
-  SKILL_RUNNER_QUEUE_MAX: ${SKILL_RUNNER_QUEUE_MAX:-}
-  SKILL_RUNNER_PER_REQUESTER_MAX: ${SKILL_RUNNER_PER_REQUESTER_MAX:-}
 
 # ============================================================================
 # CONTAINER LOGS — bounded (json-file, 10 MB × 3 files per container), so a

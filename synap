@@ -1743,14 +1743,6 @@ EOF
 # INSTALL COMMAND
 # ============================================================================
 
-# ─── Backend health probe (canary, post-swap and post-update checks) ─────────
-# Run inside the backend container (no curl/wget in the alpine image). HTTP 200
-# is not enough: /health stays 200 while a pod whose code-skill runtime cannot
-# start (skillRuntime.status "unavailable", body-only) serves, and since the pod
-# runs every code skill itself nothing else would stop such an image. Its last
-# stderr line says why. deploy/__tests__/backend-health-probe.test.sh runs it.
-_BACKEND_HEALTH_PROBE="const r=require('http').get('http://localhost:4000/health',(s)=>{if(s.statusCode!==200)process.exit(1);let b='';s.setEncoding('utf8');s.on('data',(c)=>{b+=c});s.on('end',()=>{let h;try{h=JSON.parse(b)}catch(e){console.error('/health did not answer JSON');process.exit(1)}const k=h&&h.skillRuntime;if(k&&k.status==='unavailable'){console.error('code skills cannot run: '+(k.reason||'the skill runtime is unavailable'));process.exit(1)}process.exit(0)})});r.setTimeout(4000,()=>{r.destroy();process.exit(1)});r.on('error',()=>process.exit(1))"
-
 # ─── Canary-gated backend swap (near-zero-downtime, safe rollback) ────────────
 # Validates the NEW backend image in a sidecar `backend-canary` container BEFORE
 # the live production backend is ever touched. Used by BOTH cmd_install (eve's
@@ -1776,7 +1768,7 @@ _BACKEND_HEALTH_PROBE="const r=require('http').get('http://localhost:4000/health
 # failed its health check (the caller must roll back).
 _swap_backend_canary() {
     local canary_name="synap-backend-canary"
-    local health_probe="$_BACKEND_HEALTH_PROBE"
+    local health_probe="const r=require('http').get('http://localhost:4000/health',(s)=>{process.exit(s.statusCode===200?0:1)});r.setTimeout(4000,()=>{r.destroy();process.exit(1)});r.on('error',()=>process.exit(1))"
 
     # Is a production backend already running? (container present)
     local backend_cid
@@ -1815,10 +1807,10 @@ _swap_backend_canary() {
     # alpine image; localhost avoids DNS collision with the prod `backend` alias).
     # Up to 3 minutes (18 × 10s).
     echo -e "${BLUE}  Waiting for canary health (up to 3 min)...${NC}"
-    local canary_ok=false i canary_why=""
+    local canary_ok=false i
     for i in $(seq 1 18); do
         sleep "${SYNAP_HEALTH_INTERVAL:-10}"
-        if canary_why="$(docker exec "$canary_name" node -e "$health_probe" 2>&1 >/dev/null)"; then
+        if docker exec "$canary_name" node -e "$health_probe" >/dev/null 2>&1; then
             canary_ok=true
             echo -e "${GREEN}  ✓ Canary healthy after ${i}0s — image is good${NC}"
             break
@@ -1830,7 +1822,6 @@ _swap_backend_canary() {
 
     if [ "$canary_ok" != true ]; then
         echo -e "${RED}  ✗ Canary failed health check after 3 min — live backend untouched, still serving.${NC}"
-        [ -n "$canary_why" ] && echo -e "${YELLOW}    Last answer: $(printf '%s' "$canary_why" | tail -1)${NC}"
         echo -e "${YELLOW}    The new image is broken; nothing was swapped. Investigate, then re-run.${NC}"
         return 1
     fi
@@ -4109,7 +4100,7 @@ _ue_schema_state() {
 }
 
 _ue_backend_healthy() { # waits up to SYNAP_UPDATE_HEALTH_TRIES × SYNAP_HEALTH_INTERVAL
-    local i cid probe="$_BACKEND_HEALTH_PROBE"
+    local i cid probe="const r=require('http').get('http://localhost:4000/health',(s)=>{process.exit(s.statusCode===200?0:1)});r.setTimeout(4000,()=>{r.destroy();process.exit(1)});r.on('error',()=>process.exit(1))"
     for i in $(seq 1 "${SYNAP_UPDATE_HEALTH_TRIES:-12}"); do
         sleep "${SYNAP_HEALTH_INTERVAL:-10}"
         cid="$(docker compose ps -q backend 2>/dev/null | head -1)"
