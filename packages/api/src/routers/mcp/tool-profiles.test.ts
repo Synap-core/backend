@@ -71,7 +71,7 @@ describe("tool profiles", () => {
     expect(named.filter((n) => !advertised.has(n))).toEqual([]);
   });
 
-  it("the entry surface is the 9 tools of D4 + the relay door (Resolve-XP W1)", () => {
+  it("the entry surface is the 9 tools of D4 + the relay door", () => {
     expect([...ENTRY_TOOLS].sort()).toEqual(
       [
         "synap_orient",

@@ -1,7 +1,7 @@
 /**
  * The pending door on a REAL Postgres (PGlite): an agent's newer version of an
  * update REPLACES its older pending one, and an agent's proposal carries the
- * room moment it was filed at (Resolve-XP W3).
+ * room moment it was filed at.
  *
  * Supersede scope — each row rules out one wrong rule:
  *   - same agent + session + target + update, new payload → the old row is

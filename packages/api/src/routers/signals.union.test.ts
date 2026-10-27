@@ -210,7 +210,7 @@ function owed(over: Partial<OwedSlotSignalInput> = {}): OwedSlotSignalInput {
     sessionId: "sess-1",
     label: "Stripe restricted key",
     // Fresh by default: an owed ask 7+ days old leaves the headline for
-    // Review later (Resolve-XP decision 3), which these counts are not about.
+    // Review later (founder, 2026-10-26), which these counts are not about.
     owedSince: new Date(Date.now() - 3_600_000).toISOString(),
     ...over,
   };

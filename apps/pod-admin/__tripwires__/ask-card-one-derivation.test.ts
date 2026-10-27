@@ -1,6 +1,6 @@
 /**
  * TRIPWIRE — the console draws an ask ONLY through `askCardView`
- * (`@synap-core/types/ask`; Resolve-XP W6a, founder 2026-10-26).
+ * (`@synap-core/types/ask`; founder, 2026-10-26).
  *
  * The defect: Review drew the slot's label as the heading, its `why` under it
  * and the confirm's prompt again above Yes / No — the same sentence three

@@ -9,7 +9,7 @@
  * Each row names what it rules out:
  *   - an answered question still counted (the `answer` stamp ignored);
  *   - a question closed without an answer (its session ended, its agent
- *     withdrew it) still counted (the `closed` stamp ignored, Resolve-XP W2);
+ *     withdrew it) still counted (the `closed` stamp ignored);
  *   - a deleted question still counted;
  *   - a HUMAN's message marked question counted (only agents ask);
  *   - a plain agent update counted as a question;
@@ -98,7 +98,7 @@ afterAll(async () => {
   await client.close();
 });
 
-// The gate arm (Resolve-XP W3) reads `proposals`; its own cases live in
+// The gate arm reads `proposals`; its own cases live in
 // `awaited-gate-wait.pglite.test.ts`. Here it only has to exist.
 beforeAll(async () => {
   await client.exec(

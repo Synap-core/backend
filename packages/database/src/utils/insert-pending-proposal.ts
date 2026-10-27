@@ -204,7 +204,7 @@ export const SUPERSEDED_REASON = "Replaced by a newer version";
 
 /**
  * Does a new pending proposal REPLACE the agent's earlier pending versions of
- * itself? (Resolve-XP, founder default 2026-10-26: "supersede = same agent +
+ * itself? (founder, 2026-10-26: "supersede = same agent +
  * same session + same target, updates/patches only".)
  *
  * Only an AGENT's write in a SESSION (a person's proposal is never withdrawn
@@ -635,7 +635,7 @@ export async function insertPendingProposal(
     ? { ...input.data, [SESSION_SOURCE_MARKER_KEY]: "derived" as const }
     : input.data;
 
-  // THE MOMENT IT WAS FILED (Resolve-XP): an external agent (Claude Code over
+  // THE MOMENT IT WAS FILED: an external agent (Claude Code over
   // MCP) files with no `sourceMessageId` — no MCP door passes one — so the
   // apps had no point in the room to reopen. Its latest post in the session's
   // room is that moment. Only when the caller named none (the chat path names

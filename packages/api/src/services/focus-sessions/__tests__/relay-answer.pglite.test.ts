@@ -1,5 +1,5 @@
 /**
- * THE RELAY DOOR (Resolve-XP W1), driven through the REAL Hub doors and read
+ * THE RELAY DOOR, driven through the REAL Hub doors and read
  * back out of PGlite.
  *
  *   - an agent relays the person's chat words to the EXACT question it asked
@@ -713,7 +713,7 @@ describe("the relay door", () => {
     expect((await slot(sessionId)).owner).toBeUndefined();
   });
 
-  // ── Only an OPEN question, only inside the grant (R1 M1, M2) ───────────────
+  // ── Only an OPEN question, only inside the grant ───────────────────────────
 
   it("a relay never overwrites the person's tap, and never answers a slot nobody asked them", async () => {
     const { sessionId, channelId } = await seed();
@@ -829,7 +829,7 @@ describe("the relay door", () => {
     expect((await slot(sessionId)).answer).toBeUndefined();
   });
 
-  // ── Withdraw (R1 M3) ───────────────────────────────────────────────────────
+  // ── Withdraw ───────────────────────────────────────────────────────────────
 
   it("WITHDRAW never takes back a step only the person may take", async () => {
     const { sessionId, channelId } = await seed();
@@ -975,7 +975,7 @@ describe("the relay door", () => {
     expect((await slot(sessionId)).answer).toBeUndefined();
   });
 
-  // ── "Not what I said" (R1 S1, S6) ──────────────────────────────────────────
+  // ── "Not what I said" ──────────────────────────────────────────────────────
 
   it("NOT WHAT I SAID re-opens the decision the relay decided, without its pick or its words", async () => {
     const { sessionId, channelId } = await seed();

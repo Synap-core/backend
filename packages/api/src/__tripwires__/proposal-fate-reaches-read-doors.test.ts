@@ -21,7 +21,7 @@ import {
 } from "../routers/hub-protocol/rest/_codecs/proposal.js";
 
 /**
- * Proposal FATE (and WAITS) reach every read door (Resolve-XP W3) — the same
+ * Proposal FATE (and WAITS) reach every read door — the same
  * four doors `proposal-class-reaches-read-doors.test.ts` pins for the class:
  *   1. `enrichProposalsForDisplay` → tRPC list/get, Hub `GET /proposals/:id`,
  *      MCP get (source scan: it batch-joins the database);

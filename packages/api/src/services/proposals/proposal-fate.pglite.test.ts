@@ -3,7 +3,7 @@
  *
  * `reviewLaterProposalWhere` (what the counts read: needs-you `decisions`
  * through `proposals.groups`, orient `pendingReview`) is evaluated by Postgres
- * over a fixture matrix, and `isProposalReviewLater` (W0 `isReviewLater` over
+ * over a fixture matrix, and `isProposalReviewLater` (`isReviewLater` over
  * the class door — what `fate` on every row reads) over the same rows. Any
  * disagreement fails.
  *

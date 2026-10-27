@@ -371,7 +371,7 @@ describe("count counts exactly the folded list", () => {
     // Non-vacuity: the fold really happened (3 rows became 1).
     expect(listed.find((s) => s.id === "notification:r1")?.repeatCount).toBe(3);
     expect(counted.notifications).toBe(2);
-    // The 9-day owed ask is in Review later (Resolve-XP decision 3): listed
+    // The 9-day owed ask is in Review later (founder, 2026-10-26): listed
     // in its fold, out of the headline — the count says so, row for row.
     const later = listed.filter((s) => s.reviewLater);
     expect(later.map((s) => s.title)).toEqual(["B"]);

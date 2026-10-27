@@ -137,7 +137,7 @@ const OWED_SLOT = {
   status: "pending",
   owner: "human",
   // Fresh: an owed ask 7+ days old leaves the headline for Review later
-  // (Resolve-XP decision 3), which this test is not about.
+  // (founder, 2026-10-26), which this test is not about.
   owedSince: new Date(Date.now() - 3_600_000).toISOString(),
   why: "the live restricted key",
 };

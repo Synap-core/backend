@@ -31,8 +31,8 @@
  * the reaper gave up on is the strongest case there is for the human still
  * owing what they said they would do.
  *
- * One kind of owed slot does end on `closed` / `failed` too (Resolve-XP founder
- * default 3, 2026-10-26): a `confirm` / `choose` ask is the AGENT's need, and it
+ * One kind of owed slot does end on `closed` / `failed` too (founder,
+ * 2026-10-26): a `confirm` / `choose` ask is the AGENT's need, and it
  * is stamped `session_ended` (`retirementForClose`). An `act`, `provide` or
  * `form` ask, or a slot with no ask, is the person's deliverable and stays owed.
  *

@@ -236,8 +236,8 @@ describe("retirementForClose — which exit ends the obligation", () => {
     expect(retirementForClose(outputs, "failed")).toBeNull();
   });
 
-  // Resolve-XP founder default 3: the agent's own asks end with the session,
-  // the person's deliverables do not. The rows are the inputs where "retire on
+  // The agent's own asks end with the session, the person's deliverables do
+  // not (founder, 2026-10-26). The rows are the inputs where "retire on
   // cancel only" and "retire every owed slot" disagree with the rule.
   const ASKS: ExpectedOutput[] = [
     { ...OWED, label: "confirm", ask: { mode: "confirm" } },

@@ -1,5 +1,5 @@
 /**
- * A session that ends stops asking (Resolve-XP W2) — the REAL
+ * A session that ends stops asking — the REAL
  * `completeFocusSession` on PGlite, with the room's messages in the database.
  *
  * Each test names what it rules out:
