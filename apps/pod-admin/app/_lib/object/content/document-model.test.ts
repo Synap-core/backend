@@ -51,12 +51,43 @@ describe("documentContent — readable bodies", () => {
     });
   });
 
-  it("an html document is shown as its source, never as HTML", () => {
-    const out = documentContent(null, md("<script>x()</script>", "html"));
-    expect(out).toMatchObject({
-      kind: "content",
-      prepared: { format: "source", text: "<script>x()</script>" },
+  it("an html document is a page to run in the frame, its source beside it", () => {
+    const out = documentContent(null, {
+      document: {
+        type: "html",
+        storageKey: "k",
+        storageUrl: null,
+        workspaceId: "ws-1",
+      },
+      content: "<script>x()</script>",
     });
+    expect(out).toEqual({
+      kind: "page",
+      html: "<script>x()</script>",
+      bytes: 20,
+      tooLarge: false,
+      workspaceId: "ws-1",
+      source: {
+        format: "source",
+        text: "<script>x()</script>",
+        truncated: false,
+        shownPercent: 100,
+      },
+    });
+  });
+
+  it("a page over 2 MB is too large to run (source only), measured in bytes", () => {
+    // 1.5 M two-byte characters: 1.5 M chars but 3 MB — over the cap.
+    const out = documentContent(null, md("é".repeat(1_500_000), "html"));
+    expect(out).toMatchObject({ kind: "page", tooLarge: true });
+    expect(out.kind === "page" && out.bytes).toBe(3_000_000);
+    const fits = documentContent(null, md("a".repeat(2 * 1024 * 1024), "html"));
+    expect(fits).toMatchObject({ kind: "page", tooLarge: false });
+  });
+
+  it("a page with no space reads with no space lens", () => {
+    const out = documentContent(null, md("<p>hi</p>", "html"));
+    expect(out).toMatchObject({ kind: "page", workspaceId: null });
   });
 
   it("an empty body says so", () => {
