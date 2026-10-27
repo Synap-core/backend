@@ -104,7 +104,23 @@ describe("askSlotOf — which needs-you rows are answered here", () => {
       blockedReason: "decision",
       owedSince: "2026-10-20T09:00:00.000Z",
       askerName: "Claude Code",
+      askerId: null,
       askCause: null,
+      pendingRelay: null,
+      keptOwedAt: null,
+      paramName: null,
+    });
+  });
+  it("carries the fields the card's fate and cause read", () => {
+    expect(
+      askSlotOf({
+        ...owed,
+        keptOwedAt: "2026-10-21T09:00:00.000Z",
+        paramName: "channel",
+      })
+    ).toMatchObject({
+      keptOwedAt: "2026-10-21T09:00:00.000Z",
+      paramName: "channel",
     });
   });
   it("leaves out a criterion slot, any other kind, and a slot with no session", () => {
