@@ -146,3 +146,28 @@ describe("evaluateSession criterionKeys", () => {
     ]);
   });
 });
+
+describe("outcomeParameter — what a capability check is told about the outcome", () => {
+  it("hands the slot with the criterion's key, ref included", async () => {
+    const { outcomeParameter } = await import("./evaluate.js");
+    const slots = [
+      { kind: "document", label: "Spec", key: "spec" },
+      {
+        kind: "pull_request",
+        label: "PR backend #255",
+        key: "pr-backend-255",
+        ref: { url: "https://github.com/Synap-core/backend/pull/255" },
+      },
+    ];
+    expect(outcomeParameter(slots, "pr-backend-255")).toEqual({
+      outcome: {
+        key: "pr-backend-255",
+        kind: "pull_request",
+        label: "PR backend #255",
+        ref: { url: "https://github.com/Synap-core/backend/pull/255" },
+      },
+    });
+    expect(outcomeParameter(slots, "nope")).toEqual({});
+    expect(outcomeParameter(null, "spec")).toEqual({});
+  });
+});
