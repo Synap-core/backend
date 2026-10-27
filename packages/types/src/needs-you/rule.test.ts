@@ -543,5 +543,12 @@ describe("fold words (vocabulary): one name and one hint per fold", () => {
     }
     expect(resolveNeedsYouFoldLabel("stopped")).toBe("Stopped");
     expect(resolveNeedsYouFoldHint("brand_new")).toBeNull();
+    // The fold offers its rows one by one: the hint promises no batch (S6).
+    expect(resolveNeedsYouFoldHint("changes_to_review")).not.toMatch(/batch/i);
+  });
+
+  it("names the headline's age partition by what its rows share (D3)", async () => {
+    const { NEEDS_YOU_OLDER_LABEL } = await import("../vocabulary/index.js");
+    expect(NEEDS_YOU_OLDER_LABEL).toBe("Waiting over a week");
   });
 });

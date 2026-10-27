@@ -2236,9 +2236,16 @@ const NEEDS_YOU_FOLD_WORDS: Record<
   },
   changes_to_review: {
     label: "Changes to review",
-    hint: "Nothing waits on these: approve them in a batch",
+    hint: "Nothing waits on these: open one to approve or decline it",
   },
 };
+
+/**
+ * The headline's age partition (`needsYouRows(...).older`): real asks of the
+ * headline waiting more than 7 days. Never bare "Older" (rv-ui-ux D3): it
+ * says what the rows have in common, not that they are old.
+ */
+export const NEEDS_YOU_OLDER_LABEL = "Waiting over a week";
 
 /** A fold's section name ("Stopped"). An unknown fold humanizes, never leaks. */
 export function resolveNeedsYouFoldLabel(fold: string): string {
