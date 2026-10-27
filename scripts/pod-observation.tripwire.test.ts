@@ -48,7 +48,10 @@ const TYPE_SHAPE = new RegExp(
 );
 
 const SID = "cb0df539-7346-4db4-bf7d-a42b2abed58c";
-const repository = { full_name: "Synap-core/backend" };
+const repository = {
+  full_name: "Synap-core/backend",
+  default_branch: "main",
+};
 const pr = (over: Record<string, unknown> = {}) => ({
   number: 42,
   html_url: "https://github.com/Synap-core/backend/pull/42",
@@ -176,8 +179,31 @@ describe("pod-observation: the facts it carries", () => {
       headSha: "bead001",
       branch: "feat/x",
       base: "main",
+      intoDefault: true,
       sessionId: SID,
     });
+  });
+
+  it("a stacked PR merged into its parent branch is not into the default branch", () => {
+    const merged = pr({
+      merged: true,
+      merged_at: "2026-10-26T12:00:00Z",
+      base: { ref: "feat/parent" },
+    });
+    const o = observationFromEvent("pull_request", {
+      action: "closed",
+      pull_request: merged,
+      repository,
+    });
+    expect(o?.data).toMatchObject({ base: "feat/parent", intoDefault: false });
+    expect(checkDevLoopPayload(o!.type, o!.data)).toMatchObject({ ok: true });
+    // No default branch in the payload: unknown, so absent (never guessed).
+    const unknown = observationFromEvent("pull_request", {
+      action: "closed",
+      pull_request: merged,
+      repository: { full_name: "Synap-core/backend" },
+    });
+    expect(unknown?.data).not.toHaveProperty("intoDefault");
   });
 
   it("a PR closed without merge carries its head sha", () => {

@@ -8,7 +8,8 @@
  * (packages/api/src/routers/hub-protocol/observations.ts):
  *
  *   pull_request opened/reopened    → dev.pr_opened
- *   pull_request closed, merged     → dev.pr_merged
+ *   pull_request closed, merged     → dev.pr_merged (`intoDefault`: into the
+ *                                     repo's default branch, not a stacked base)
  *   pull_request closed, not merged → dev.pr_closed
  *   workflow_run completed          → ci.finished
  *
@@ -78,7 +79,7 @@ const CI_STATUS = {
   stale: "cancelled",
 };
 
-function prObservation(action, pr, repo) {
+function prObservation(action, pr, repo, defaultBranch) {
   let type;
   let occurredAt;
   if (action === "opened" || action === "reopened") {
@@ -103,6 +104,12 @@ function prObservation(action, pr, repo) {
       sha: pr.merged ? pr.merge_commit_sha : pr.head?.sha,
       branch: pr.head?.ref,
       base: pr.base?.ref,
+      // Only a merge into the default branch delivers: a stacked PR merges
+      // into its parent branch first (the sweeper keeps that outcome open).
+      intoDefault:
+        defaultBranch && pr.base?.ref
+          ? pr.base.ref === defaultBranch
+          : undefined,
       title: pr.title?.slice(0, MAX_TITLE),
       body: pr.body?.slice(0, MAX_BODY),
       sessionId: podSessionFromBody(pr.body),
@@ -153,7 +160,12 @@ export function observationFromEvent(
   const repo = payload?.repository?.full_name;
   if (!repo) return null;
   if (eventName === "pull_request" && payload.pull_request) {
-    return prObservation(payload.action, payload.pull_request, repo);
+    return prObservation(
+      payload.action,
+      payload.pull_request,
+      repo,
+      payload.repository.default_branch
+    );
   }
   if (
     eventName === "workflow_run" &&
