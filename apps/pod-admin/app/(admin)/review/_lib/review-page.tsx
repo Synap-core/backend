@@ -32,6 +32,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { TRPCClientError } from "@trpc/client";
 import { Alert, Button, Textarea, addToast } from "@heroui/react";
 import { Check, ChevronRight, SlidersHorizontal, X } from "lucide-react";
 import { navHref } from "../../../../lib/console-nav";
@@ -335,7 +336,8 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
       });
       setAlwaysFor(null);
     } catch (err) {
-      if (redirectToLoginIfUnauthorized(err)) return;
+      if (err instanceof TRPCClientError && redirectToLoginIfUnauthorized(err))
+        return;
       addToast({
         title: "The rule was not created",
         description: err instanceof Error ? err.message : undefined,

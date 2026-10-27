@@ -17,6 +17,7 @@
 
 import { useEffect, useState } from "react";
 import { Switch, addToast } from "@heroui/react";
+import { TRPCClientError } from "@trpc/client";
 import {
   REVIEW_GROUP_BYS,
   REVIEW_PACKAGES,
@@ -163,7 +164,8 @@ function HandOffRules() {
         color: "success",
       });
     } catch (err) {
-      if (redirectToLoginIfUnauthorized(err)) return;
+      if (err instanceof TRPCClientError && redirectToLoginIfUnauthorized(err))
+        return;
       addToast({
         title: "Not changed",
         description: err instanceof Error ? err.message : undefined,
