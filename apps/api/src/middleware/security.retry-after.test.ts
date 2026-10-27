@@ -34,7 +34,10 @@ function makeApp() {
 }
 
 /** Sends `request(i)` until the first 429 (at most `max` + 1 times) and returns it, or null. */
-async function firstLimited(send: (i: number) => Promise<Response>, max: number): Promise<Response | null> {
+async function firstLimited(
+  send: (i: number) => Promise<Response>,
+  max: number
+): Promise<Response | null> {
   for (let i = 0; i <= max; i += 1) {
     const res = await send(i);
     if (res.status === 429) return res;
@@ -52,7 +55,8 @@ function expectUsableRetryAfter(res: Response | null, windowSec: number) {
 }
 
 beforeAll(async () => {
-  process.env.DATABASE_URL ??= "postgresql://synap:test@localhost:5432/synap_test";
+  process.env.DATABASE_URL ??=
+    "postgresql://synap:test@localhost:5432/synap_test";
   process.env.RATE_LIMIT_CRUD_MAX = String(CRUD_MAX);
   process.env.RATE_LIMIT_CRUD_IP_CEILING = String(CRUD_CEILING);
   process.env.RATE_LIMIT_CALENDAR_FEED_IP_MAX = String(CALENDAR_IP_MAX);
@@ -65,27 +69,56 @@ describe("every rate-limit 429 carries Retry-After", () => {
     const app = makeApp();
     const ip = nextIp();
     const bearer = `Bearer synap_hub_live_${"a".repeat(40)}`;
-    const res = await firstLimited((): Promise<Response> => Promise.resolve(app.request("/api/hub/entities", { headers: { authorization: bearer, "x-forwarded-for": ip } })), CRUD_MAX);
+    const res = await firstLimited(
+      (): Promise<Response> =>
+        Promise.resolve(
+          app.request("/api/hub/entities", {
+            headers: { authorization: bearer, "x-forwarded-for": ip },
+          })
+        ),
+      CRUD_MAX
+    );
     expectUsableRetryAfter(res, 900);
-    expect(res!.headers.get("ratelimit")).toMatch(new RegExp(`^limit=${CRUD_MAX}, remaining=0, reset=\\d+$`));
+    expect(res!.headers.get("ratelimit")).toMatch(
+      new RegExp(`^limit=${CRUD_MAX}, remaining=0, reset=\\d+$`)
+    );
   });
 
   it("the crud address ceiling (a key per request from one address)", async () => {
     const app = makeApp();
     const ip = nextIp();
     const res = await firstLimited(
-      (i): Promise<Response> => Promise.resolve(app.request("/api/hub/entities", { headers: { authorization: `Bearer synap_hub_live_${String(i).padStart(40, "k")}`, "x-forwarded-for": ip } })),
-      CRUD_CEILING,
+      (i): Promise<Response> =>
+        Promise.resolve(
+          app.request("/api/hub/entities", {
+            headers: {
+              authorization: `Bearer synap_hub_live_${String(i).padStart(40, "k")}`,
+              "x-forwarded-for": ip,
+            },
+          })
+        ),
+      CRUD_CEILING
     );
     expectUsableRetryAfter(res, 900);
     // The ceiling's 429, not a per-key one: each key above was used once.
-    expect(await res!.json()).toMatchObject({ class: "crud", limit: CRUD_CEILING });
+    expect(await res!.json()).toMatchObject({
+      class: "crud",
+      limit: CRUD_CEILING,
+    });
   });
 
   it("the calendar feed's address ceiling (a token per request)", async () => {
     const app = makeApp();
     const ip = nextIp();
-    const res = await firstLimited((i): Promise<Response> => Promise.resolve(app.request(`/api/hub/calendar/feed/t${i}.ics`, { headers: { "x-forwarded-for": ip } })), CALENDAR_IP_MAX);
+    const res = await firstLimited(
+      (i): Promise<Response> =>
+        Promise.resolve(
+          app.request(`/api/hub/calendar/feed/t${i}.ics`, {
+            headers: { "x-forwarded-for": ip },
+          })
+        ),
+      CALENDAR_IP_MAX
+    );
     expectUsableRetryAfter(res, 300);
   });
 
@@ -97,11 +130,18 @@ describe("every rate-limit 429 carries Retry-After", () => {
         Promise.resolve(
           app.request("/token", {
             method: "POST",
-            headers: { "content-type": "application/x-www-form-urlencoded", "x-forwarded-for": ip },
-            body: new URLSearchParams({ grant_type: "refresh_token", client_id: "https://app.example.com/c.json", refresh_token: `r${i}` }).toString(),
-          }),
+            headers: {
+              "content-type": "application/x-www-form-urlencoded",
+              "x-forwarded-for": ip,
+            },
+            body: new URLSearchParams({
+              grant_type: "refresh_token",
+              client_id: "https://app.example.com/c.json",
+              refresh_token: `r${i}`,
+            }).toString(),
+          })
         ),
-      TOKEN_CEILING,
+      TOKEN_CEILING
     );
     expectUsableRetryAfter(res, 600);
   });
