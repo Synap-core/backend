@@ -32,7 +32,11 @@ vi.mock("@synap/database", async (importOriginal) => {
 });
 
 import { getTableConfig } from "drizzle-orm/pg-core";
-import { userPreferences, users } from "@synap/database/schema";
+import {
+  syncGeneration,
+  userPreferences,
+  users,
+} from "@synap/database/schema";
 import { preferencesRouter } from "./preferences.js";
 
 const U = randomUUID();
@@ -67,7 +71,10 @@ const as = (userId: string) =>
   } as never);
 
 beforeAll(async () => {
-  for (const t of [users, userPreferences]) await h.client!.exec(ddlFor(t));
+  // `syncGeneration`: the mutation middleware's replica guard reads it (an
+  // empty table = this pod is not a read-only replica).
+  for (const t of [users, userPreferences, syncGeneration])
+    await h.client!.exec(ddlFor(t));
   await h.client!.query(`insert into users (id, email) values ($1,$2)`, [
     U,
     `${U}@x.io`,
