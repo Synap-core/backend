@@ -1,6 +1,6 @@
 /**
- * A `proposed` decision IS a question for the person (W3 of the decision mesh,
- * the inverse of W2's answer → decision).
+ * A `proposed` decision IS a question for the person (the decision mesh: the
+ * inverse of answer → decision, `decision-from-answer.ts`).
  *
  * THE SEAM: every entity create/update door ends in `emitSideEffects`
  * (`recordDomainMutation` on the tRPC/MCP/Hub doors, the materializer on the
@@ -23,7 +23,7 @@
  *   HOME: the session it was created in (its `sourceSessionId`, else the
  *   writing request's session) when that session is the owner's and open;
  *   otherwise a minimal one-slot session named after the decision. Answering
- *   the slot UPDATES the decision (W2, `slot.decisionId`).
+ *   the slot UPDATES the decision (`slot.decisionId`).
  *
  * ON ANY OTHER STATUS — an owed slot still asking about it is moot (decided on
  * the entity itself): retired `decision_resolved`. An ANSWERED slot is left
@@ -62,7 +62,7 @@ import {
   AskOptionSchema,
   AskSchema,
   askOptionKey,
-  askTextRestates,
+  stripLeadingRestatement,
   ASK_LIMITS,
   type AskOption,
 } from "@synap-core/types/ask";
@@ -146,7 +146,7 @@ export function askForDecision(properties: Record<string, unknown>): SlotAsk {
     const ask = AskSchema.safeParse({ mode: "choose", options: marked });
     if (ask.success) return ask.data as SlotAsk;
   }
-  // Each answer says what it does (founder decision 2, 2026-10-26). No
+  // Each answer says what it does (founder, 2026-10-26). No
   // prompt: a confirm's prompt becomes the card's heading (`askCardView`), and
   // the decision's own title — the slot's label — is what the person must see
   // there; "Accept: <title>?" was the same words twice.
@@ -155,6 +155,23 @@ export function askForDecision(properties: Record<string, unknown>): SlotAsk {
     yes: { label: "Accept", description: "Marks it accepted" },
     no: { label: "Reject", description: "Marks it rejected" },
   };
+}
+
+/**
+ * The title as a slot label no other slot of the session holds: "<title>",
+ * else "<title> (2)", "(3)"… The label is the card's heading, so it is never
+ * made unique with an id fragment. Pure.
+ */
+function uniqueLabel(title: string, taken: ReadonlySet<string>): string {
+  const free = (label: string) =>
+    !taken.has(normalizeExpectedLabel(label) ?? "");
+  const label = clip(title, LABEL_MAX);
+  if (free(label)) return label;
+  for (let n = 2; ; n += 1) {
+    const suffix = ` (${n})`;
+    const numbered = `${clip(title, LABEL_MAX - suffix.length)}${suffix}`;
+    if (free(numbered)) return numbered;
+  }
 }
 
 /** The decision's name as the person reads it. Pure. */
@@ -174,21 +191,14 @@ export function decisionSlot(
   now: Date = new Date()
 ): ExpectedOutput {
   const title = decisionTitle(decision);
-  let label = clip(title, LABEL_MAX);
-  if (takenLabels.has(normalizeExpectedLabel(label) ?? "")) {
-    label = `${clip(title, LABEL_MAX - 11)} (${decision.id.slice(0, 8)})`;
-  }
+  const label = uniqueLabel(title, takenLabels);
   const summary =
     typeof decision.properties.summary === "string"
       ? decision.properties.summary.trim()
       : "";
   // The summary minus the title it opens with (a title cut from the summary's
   // first sentence, the 10-18 backfill), or nothing when that is all it says.
-  const why = !askTextRestates(summary, title)
-    ? summary
-    : summary.startsWith(title)
-      ? summary.slice(title.length).replace(/^[\s.:;,—–-]+/, "")
-      : "";
+  const why = stripLeadingRestatement(summary, title);
   return reconcileOwedSince(
     {
       kind: "decision",
@@ -206,7 +216,7 @@ export function decisionSlot(
 }
 
 /** What raised the ask: the agent's decision, as the card's door. Pure. */
-export function decisionAskCause(
+function decisionAskCause(
   decision: Pick<DecisionRow, "id" | "createdAt">
 ): SlotAskCause {
   return {
@@ -226,7 +236,7 @@ export function isOpenDecisionAsk(
 
 /**
  * Did an AGENT write this decision? Only then is `proposed` a question for the
- * person (founder decision 1, 2026-10-26): a person's own proposed decision is
+ * person (founder, 2026-10-26): a person's own proposed decision is
  * their note, and nobody is asking them anything. Pure.
  */
 export function decisionHasAgentAuthor(
@@ -242,7 +252,7 @@ export function decisionHasAgentAuthor(
  * emitter's update for every status move). Any other edit of a proposed
  * decision (a renamed title, a backfill) is not a new question. Pure.
  */
-export function entersProposed(payload: {
+function entersProposed(payload: {
   action: string;
   data?: Record<string, unknown> | null;
 }): boolean {

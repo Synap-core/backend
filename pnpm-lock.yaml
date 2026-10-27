@@ -795,7 +795,11 @@ importers:
         specifier: ^4.1.10
         version: 4.1.11(@opentelemetry/api@1.9.0)(@types/node@20.19.28)(@vitest/ui@4.1.11)(vite@7.3.1(@types/node@20.19.28)(jiti@2.6.1)(lightningcss@1.32.0)(tsx@4.23.15)(yaml@2.9.1))
 
-  packages/governance-policy: {}
+  packages/governance-policy:
+    dependencies:
+      '@synap-core/types':
+        specifier: workspace:*
+        version: link:../types
 
   packages/hub-protocol:
     dependencies:

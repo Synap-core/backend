@@ -864,7 +864,7 @@ export const proposalsRouter = router({
           // without this column a cluster cannot warn that it contains an item
           // the injection floor exists to surface.
           governanceReason: proposals.governanceReason,
-          // Review later (Resolve-XP): THE count predicate, in SQL — the same
+          // Review later: THE count predicate, in SQL — the same
           // clause orient's `pendingReview` reads. Pending queue only: a
           // rejected proposal has no fate.
           reviewLater:

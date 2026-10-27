@@ -44,7 +44,7 @@ export function openRoomQuestionConditions(m: MessagesTable = messages): SQL[] {
     drizzleSql`NOT ((${m.metadata}->${ROOM_POST_META_KEY}) ? 'answer')`,
     // A closed question is not waiting on anyone: it leaves needs-you, the
     // answer loop no longer reads a reply as its answer, and the reapers no
-    // longer hold its session for it (Resolve-XP W2).
+    // longer hold its session for it.
     drizzleSql`NOT ((${m.metadata}->${ROOM_POST_META_KEY}) ? 'closed')`,
   ];
 }

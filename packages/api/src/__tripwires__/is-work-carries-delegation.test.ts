@@ -23,10 +23,15 @@ const IS_WORK_ENDPOINTS = [
   "/api/skills/execute",
   "/api/tasks/execute",
   "/api/proactive-scan",
-  // `/api/skills/:id/dry-run`: the IS builds an operator client from the body
-  // userId, so a dry-run is IS work for a person (W4-D4B finding).
-  "/dry-run",
 ];
+/**
+ * `/api/skills/:id/dry-run`: the IS builds an operator client from the body
+ * userId, so a dry-run is IS work for a person (W4-D4B finding). Its call is a
+ * template whose TAIL is exactly `/dry-run` (`${is}/api/skills/${id}/dry-run`),
+ * matched exactly: a route string ending in `/dry-run` (`"/skills/:id/dry-run"`)
+ * is the pod's own door, not IS work (R2 made it call the pod's skill door).
+ */
+const IS_WORK_EXACT = ["/dry-run"];
 /**
  * Each such file must CALL `isDelegationHeaders(` (@synap/database).
  *
@@ -98,14 +103,18 @@ function scan(file: string, text: string) {
 }
 
 function namesIsWork(literals: string[]): boolean {
-  return literals.some((l) => IS_WORK_ENDPOINTS.some((e) => l.endsWith(e)));
+  return literals.some(
+    (l) =>
+      IS_WORK_ENDPOINTS.some((e) => l.endsWith(e)) || IS_WORK_EXACT.includes(l)
+  );
 }
 
 describe("tripwire: pod→IS work carries the per-turn delegation", () => {
   const files = sourceRoots().flatMap((root) => tsFiles(root));
   const isWorkFiles = files.filter((f) => {
     const text = readFileSync(f, "utf8");
-    if (!IS_WORK_ENDPOINTS.some((e) => text.includes(e))) return false;
+    if (![...IS_WORK_ENDPOINTS, ...IS_WORK_EXACT].some((e) => text.includes(e)))
+      return false;
     return namesIsWork(scan(f, text).literals);
   });
 
@@ -120,7 +129,9 @@ describe("tripwire: pod→IS work carries the per-turn delegation", () => {
     ]) {
       expect(rel).toContain(known);
     }
-    expect(isWorkFiles.length).toBeGreaterThanOrEqual(8);
+    // 7 since R2 (2026-10-26): the skill run and both skill dry-runs moved out
+    // of three routers into `execute-skill-via-is.ts`, behind the one door.
+    expect(isWorkFiles.length).toBeGreaterThanOrEqual(7);
   });
 
   it("the matcher can still see a literal sample", () => {
@@ -134,6 +145,15 @@ describe("tripwire: pod→IS work carries the per-turn delegation", () => {
     expect(namesIsWork(scan("c.ts", "// POST /api/chat/stream").literals)).toBe(
       false
     );
+    // An IS dry-run is seen; the pod's own dry-run route string is not.
+    expect(
+      namesIsWork(
+        scan("d.ts", "fetch(`${isUrl}/api/skills/${id}/dry-run`);").literals
+      )
+    ).toBe(true);
+    expect(
+      namesIsWork(scan("r.ts", 'app.post("/skills/:id/dry-run", h);').literals)
+    ).toBe(false);
   });
 
   it("every file that starts IS work mints isDelegationHeaders", () => {

@@ -240,8 +240,49 @@ export function decisionUpdateFromAnswer(p: {
   return update;
 }
 
+/** The relay's record on a decision ({@link relayFields}). */
+export const RELAY_DECISION_FIELDS = [
+  "answeredVia",
+  "relayedBy",
+  "relayQuote",
+] as const;
+
 /**
- * Where the answer came from, on the decision it filed (Resolve-XP W1). Only
+ * The relay fields an answer must REMOVE from the decision it updates: a tap
+ * after a relay the person rejected writes none of its own, and `entities.update`
+ * merges properties, so the rejected relay's provenance and words would stay
+ * on a decision they no longer decided. Pure.
+ */
+export function staleRelayFields(
+  existing: Record<string, unknown>,
+  answer: SlotAnswer
+): string[] {
+  if (answer.relayedBy) return [];
+  return RELAY_DECISION_FIELDS.filter((k) => existing[k] !== undefined);
+}
+
+/**
+ * The person said "Not what I said" to the relayed answer that decided this
+ * decision: it is undecided again — `proposed`, without the pick and without
+ * the relay — until their own answer decides it. Pure.
+ */
+export function decisionReopenedFromRelay(): {
+  properties: Record<string, unknown>;
+  deleteProperties: string[];
+} {
+  return {
+    properties: { decisionStatus: "proposed" },
+    deleteProperties: [
+      "decidedAt",
+      "chosenOption",
+      "followedRecommendation",
+      ...RELAY_DECISION_FIELDS,
+    ],
+  };
+}
+
+/**
+ * Where the answer came from, on the decision it filed (the relay door). Only
  * an answer an agent RELAYED carries any: `answeredVia` says whether the
  * person then tapped Confirm (`tap`) or the relay alone decided (`relayed`),
  * and `relayedBy` / `relayQuote` keep who carried which words, both ways — a

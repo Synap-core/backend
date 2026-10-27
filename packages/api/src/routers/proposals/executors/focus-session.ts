@@ -730,15 +730,28 @@ export function registerFocusSessionExecutors(): void {
       if (isTerminalSessionStatus(requestedStatus)) {
         const terminalStatus: TerminalSessionStatus = requestedStatus;
         // Terminal path: human approve executes complete without re-entering
-        // agent governance (no agentUserId from the original proposal).
+        // agent governance (no agentUserId from the original proposal). The
+        // closing agent's word on its own questions rides on the proposal and
+        // is applied (`approvedCloseOf`), never dropped.
         try {
           const { completeFocusSession } =
             await import("../../../services/focus-sessions/complete-session.js");
+          const { readCloseQuestionDispositions } =
+            await import("../../../services/messaging/room-post-kind.js");
+          const dispositions = readCloseQuestionDispositions(
+            innerData.questionDispositions
+          );
           const result = await completeFocusSession({
             sessionId,
             // Scope by session owner so the service's userId floor resolves.
             userId: session.userId,
             terminalStatus,
+            ...(proposal.agentUserId
+              ? {
+                  approvedCloseOf: proposal.agentUserId,
+                  questionDispositions: dispositions,
+                }
+              : {}),
             summary:
               typeof innerData.sessionSummary === "string"
                 ? innerData.sessionSummary

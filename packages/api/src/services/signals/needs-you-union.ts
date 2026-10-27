@@ -317,7 +317,7 @@ export interface Signal {
    * A `proposal-cluster` whose members all sat untouched for 7 days
    * (`ProposalCluster.reviewLater`, the ONE count predicate), or an
    * `owed-slot` owed for more than 7 days (`isAskReviewLater`, the same
-   * clock — Resolve-XP decision 3): drawn in the Review later fold, OUT of
+   * clock — founder, 2026-10-26): drawn in the Review later fold, OUT of
    * the headline — `countNeedsYou` counts it as `reviewLater`, never in
    * `needsYou`. Absent on every other row.
    */
@@ -485,9 +485,6 @@ const _KIND_SPECIFIC_SIGNAL_FIELDS = [
   "source",
   "by",
   "askCause",
-  // `owed-slot` only (W1, the relay door) — classified here so the floor
-  // below compiles; it was on `Signal` unclassified.
-  "pendingRelay",
   "live",
   "progress",
   "ruleRun",
@@ -699,6 +696,11 @@ export interface ClusterSessionName {
   projectId: string | null;
 }
 
+/** The id / group-key suffix of a cluster's Review later part. Pure. */
+function reviewLaterSuffix(cluster: Pick<ProposalCluster, "reviewLater">): string {
+  return cluster.reviewLater ? "@review-later" : "";
+}
+
 /** One cluster → one signal. Title via the vocabulary SSOT, imperative mood
  *  (the card describes what approving it WILL do, not what happened).
  *
@@ -723,11 +725,13 @@ export function signalFromCluster(
     // A session PART of a split cluster (`splitBySession`) shares its
     // fingerprint with the other parts, so its newest member makes the id
     // unique. Never the session id: a session the viewer cannot read must not
-    // leak through a row id (cluster-sessions.pglite.test.ts pins it).
+    // leak through a row id (cluster-sessions.pglite.test.ts pins it). The
+    // Review later part of a sessionless cluster shares it with the fresh part
+    // the same way, and is told apart by its fold.
     id:
       cluster.sessionId && sampleId
         ? `cluster:${cluster.fingerprint}@${sampleId}`
-        : `cluster:${cluster.fingerprint}`,
+        : `cluster:${cluster.fingerprint}${reviewLaterSuffix(cluster)}`,
     kind: "proposal-cluster",
     title: buildObjectActionTitle({
       action: cluster.proposalType,
@@ -768,7 +772,7 @@ export function signalFromCluster(
     ...(readableSession ? sessionSource(readableSession, session?.title) : {}),
     groupKey: inSession
       ? sessionGroupKey(inSession)
-      : `proposal-cluster:${cluster.fingerprint}`,
+      : `proposal-cluster:${cluster.fingerprint}${reviewLaterSuffix(cluster)}`,
     // Review later is 7+ days old by its own rule, so `older` — stamped, not
     // measured: the pod's SQL clock and this one may straddle the line, and a
     // client that predates `reviewLater` must fold it under Older, never Recent.
@@ -1222,7 +1226,9 @@ export function signalFromOwedSlot(
     ...sessionSource(row.sessionId, row.sessionTitle),
     groupKey: sessionGroupKey(row.sessionId),
     // Review later wins over Older, like a cluster's: a client that predates
-    // the flag still folds it under Older (owed > 7 days is older too).
+    // the flag still folds it under Older (owed > 7 days is older too). It
+    // keeps its session key: a session is never split, so the slot folds with
+    // its session's freshest row (`needsYouRows`).
     ageBucket: ageBucketOf(occurredAt, now),
     ...outOfHeadline(owedSlotClassOf(row, now), !!row.needsYouClass),
     repeatCount: 1,
@@ -2089,7 +2095,7 @@ export function countNeedsYou(args: {
    */
   suggestions: number;
 } {
-  // Review later leaves the headline (Resolve-XP): the SAME cluster flag the
+  // Review later leaves the headline: the SAME cluster flag the
   // list stamps on its rows (`signalFromCluster`), counted by the groups door
   // before its page slice.
   const reviewLaterClusters = args.reviewLaterClusters ?? 0;

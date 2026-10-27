@@ -11,7 +11,10 @@
  *   - the same agent in ANOTHER session → untouched;
  *   - a PERSON's update → never withdrawn, and a person's filing withdraws
  *     nothing;
- *   - a section patch (part of a document) → two patches both stand.
+ *   - a section patch (part of a document) → two patches both stand;
+ *   - a newer update that does NOT carry every change of the older one (two
+ *     disjoint property patches, a move then a field edit, through the request
+ *     envelope too) → both stand; one that covers it → it is replaced.
  *
  * Source message: the agent's NEWEST live post in the session's room — not a
  * deleted one, not another agent's, not a person's — and never over an id the
@@ -184,6 +187,59 @@ describe("supersede — an agent's newer version replaces its older pending one"
     });
     expect(b.superseded).toEqual([]);
     expect((await statusOf(a.proposal.id)).status).toBe("pending");
+  });
+});
+
+describe("supersede — only a newer version that carries every older change", () => {
+  it("two disjoint property patches of one target both stand", async () => {
+    const status = await file({
+      targetId: "deal-1",
+      data: { id: "deal-1", properties: { status: "won" } },
+    });
+    const amount = await file({
+      targetId: "deal-1",
+      data: { id: "deal-1", properties: { amount: 5000 } },
+    });
+    expect(amount.superseded).toEqual([]);
+    expect((await statusOf(status.proposal.id)).status).toBe("pending");
+  });
+
+  it("a move then a field edit both stand", async () => {
+    const move = await file({
+      targetId: "deal-2",
+      data: { id: "deal-2", toWorkspaceId: "ws-b" },
+    });
+    const edit = await file({
+      targetId: "deal-2",
+      data: { id: "deal-2", properties: { amount: 1 } },
+    });
+    expect(edit.superseded).toEqual([]);
+    expect((await statusOf(move.proposal.id)).status).toBe("pending");
+  });
+
+  it("through the request envelope: disjoint stands, covering replaces", async () => {
+    const envelope = (record: Record<string, unknown>) => ({
+      requestId: randomUUID(),
+      targetType: "entity",
+      changeType: "update",
+      data: { id: "deal-3", ...record },
+    });
+    const a = await file({
+      targetId: "deal-3",
+      data: envelope({ properties: { status: "won" } }),
+    });
+    const b = await file({
+      targetId: "deal-3",
+      data: envelope({ properties: { amount: 7 } }),
+    });
+    expect(b.superseded).toEqual([]);
+    const c = await file({
+      targetId: "deal-3",
+      data: envelope({ properties: { status: "lost", amount: 8 } }),
+    });
+    expect([...c.superseded!].sort()).toEqual(
+      [a.proposal.id, b.proposal.id].sort()
+    );
   });
 });
 

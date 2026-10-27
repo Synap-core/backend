@@ -32,7 +32,7 @@ export type PendingReviewState =
  * list: widening the list without widening this would make `oldestDays` a
  * number computed over a different set than the count printed beside it.
  *
- * REVIEW LATER (Resolve-XP, founder default 2026-10-26): untouched durable
+ * REVIEW LATER (founder default, 2026-10-26): untouched durable
  * proposals leave the headline after 7 days. `count`, `oldestDays` and
  * `oldestId` are the headline; `reviewLater` counts the rest — through the
  * SAME predicate the needs-you `decisions` count reads

@@ -23,7 +23,12 @@ import {
 } from "../units/index.js";
 import { isTerminalSessionStatus } from "../focus-sessions/statuses.js";
 import { resolveSessionTitle } from "../focus-sessions/title.js";
-import type { NeedsYouBucket } from "../needs-you/buckets.js";
+import {
+  inReviewLater,
+  type BucketableSignal,
+  type NeedsYouBucket,
+  type NeedsYouBuckets,
+} from "../needs-you/buckets.js";
 import type { LensRow } from "./rows.js";
 
 /** "Your next three moves". */
@@ -180,19 +185,30 @@ export function homeBriefInputOf(reads: HomeBriefReads): HomeBriefInput | null {
 
 /**
  * "Your next three moves": the Inbox's own order, routine changes held back
- * for their one batch line (they are approved together, from the Inbox).
+ * for their one batch line (they are approved together, from the Inbox), and
+ * Review later left out as the counts leave it out.
  */
-export function homeMoves<R extends { bucket: NeedsYouBucket }>(model: {
+export function homeMoves<
+  R extends { bucket: NeedsYouBucket; signal?: object | null },
+>(model: {
   rows: readonly R[];
   counts: Record<NeedsYouBucket, number>;
 }): { moves: R[]; routine: number } {
   return {
     moves: model.rows
-      .filter((r) => r.bucket !== "routine")
+      .filter((r) => r.bucket !== "routine" && !inReviewLater(r.signal))
       .slice(0, HOME_MOVES_CAP),
     routine: model.counts.routine,
   };
 }
+
+// Compile-time floor: Home takes what `needsYouBuckets` files, whatever the
+// signal declares (a `{ reviewLater?: boolean }` bound is a weak type that
+// refused signals without the field).
+const _homeTakesFiledRows = (
+  filed: NeedsYouBuckets<Omit<BucketableSignal, "reviewLater">>
+) => homeMoves(filed);
+void _homeTakesFiledRows;
 
 // ── Where your projects stand ───────────────────────────────────────────────
 

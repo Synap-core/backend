@@ -21,6 +21,12 @@
  * needs-you read uses) whose label was NOT owed in `before`. An echoed array
  * that merely repeats an old block is not a new hand-off.
  *
+ * A RELAY WAITING FOR THE TAP (`reason.kind === 'relay'`, the relay door) is
+ * news of its own: the person answered in a chat, the answer is a commitment,
+ * and the agent is stopped until they tap Confirm. It is keyed per SLOT
+ * ({@link relayAwaitsTapGroupKey}), so the push that asked the question —
+ * still unread inside the window, most likely — does not swallow it.
+ *
  * Side effect only: never throws, never gates the write it follows, never
  * touches governance (`NotificationService.create` is itself non-fatal).
  */
@@ -28,6 +34,7 @@ import {
   db,
   focusSessions,
   notifications,
+  users,
   eq,
   and,
   ne,
@@ -36,7 +43,7 @@ import {
 } from "@synap/database";
 import type { ExpectedOutput } from "@synap/playbooks";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
-import type { Ask } from "@synap-core/types/ask";
+import { ASK_COPY, type Ask } from "@synap-core/types/ask";
 import {
   blockingAskTarget,
   quickAnswerFor,
@@ -61,6 +68,14 @@ export const SESSION_NEEDS_YOU_NOTIFICATION_TYPE = notificationType;
 /** The session is the identity: one push per session per dedupe window. */
 export function sessionNeedsYouGroupKey(sessionId: string): string {
   return `${SESSION_NEEDS_YOU_NOTIFICATION_TYPE}:${sessionId}`;
+}
+
+/** One relay-awaiting-tap push per slot per window. */
+export function relayAwaitsTapGroupKey(
+  sessionId: string,
+  label: string
+): string {
+  return `${sessionNeedsYouGroupKey(sessionId)}:relay:${normalizeExpectedLabel(label) ?? label}`;
 }
 
 /** Longest `why` / question quoted in the notification body. */
@@ -150,7 +165,9 @@ export function needsYouPush(
 
 type Reason =
   | { kind: "slots"; before: unknown; after: unknown }
-  | { kind: "question"; text: string; channelId: string };
+  | { kind: "question"; text: string; channelId: string }
+  /** A commitment's relay, stamped on `slot.pendingRelay`, awaiting the tap. */
+  | { kind: "relay"; slot: ExpectedOutput };
 
 /**
  * Tell the session's owner the session needs them. Returns true when a
@@ -179,7 +196,24 @@ export async function notifySessionNeedsYou(p: {
     let summary: string;
     let slotCount = 0;
     let fresh: ExpectedOutput[] = [];
-    if (p.reason.kind === "slots") {
+    let groupKey: string | null = null;
+    if (p.reason.kind === "relay") {
+      const { slot } = p.reason;
+      const relay = slot.pendingRelay;
+      if (!relay) return false;
+      const [agent] = await db
+        .select({ name: users.name })
+        .from(users)
+        .where(eq(users.id, relay.relayedBy))
+        .limit(1);
+      fresh = [slot];
+      slotCount = 1;
+      const quote = relay.quote?.trim();
+      summary = clip(
+        `${slot.label} — ${ASK_COPY.awaitingYourTap(agent?.name ?? null)}${quote ? ` “${quote}”` : ""}`
+      );
+      groupKey = relayAwaitsTapGroupKey(p.sessionId, slot.label);
+    } else if (p.reason.kind === "slots") {
       fresh = newlyOwedSlots(
         Array.isArray(p.reason.before)
           ? (p.reason.before as ExpectedOutput[])
@@ -219,7 +253,7 @@ export async function notifySessionNeedsYou(p: {
       // The SESSION is the destination (the registry's navigate-object action
       // and the push tap both read `sourceId` as the object id).
       sourceId: session.id,
-      groupKey: sessionNeedsYouGroupKey(session.id),
+      groupKey: groupKey ?? sessionNeedsYouGroupKey(session.id),
       // The push lands on the ASK when one slot is owed (the in-app row keeps
       // its registry action: open the session). A room question keeps the
       // session target the registry derives.

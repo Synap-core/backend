@@ -83,7 +83,7 @@ export const FOCUS_SESSION_SLOT_ASKED_EVENT_TYPE =
 
 /**
  * The person said "Not what I said" about an answer an agent RELAYED from a
- * chat (`session-answer.ts`, Resolve-XP W1): the relayed answer — or the relay
+ * chat (`session-answer.ts`): the relayed answer — or the relay
  * still waiting for their tap — is dropped and the question is theirs again.
  * Carries the relaying agent (`relayedBy`) so a rule or a scorecard can count
  * an agent's misrelays.
@@ -91,3 +91,14 @@ export const FOCUS_SESSION_SLOT_ASKED_EVENT_TYPE =
 export const FOCUS_SESSION_RELAY_CORRECT_ACTION = "relay_corrected" as const;
 export const FOCUS_SESSION_RELAY_CORRECTED_EVENT_TYPE =
   `${FOCUS_SESSION_SUBJECT_TYPE}.${FOCUS_SESSION_RELAY_CORRECT_ACTION}.completed` as const;
+
+/**
+ * An agent WITHDREW a question it asked the person (`synap_relay_answer`
+ * `disposition: 'withdrawn'`): its need is gone, and the slot, if it was the
+ * person's, is the agent's again. The history row is the record of WHY the
+ * person's turn was taken back (`note`, `withdrawnBy`) — a slot addressed by
+ * label has no room question to carry the note.
+ */
+export const FOCUS_SESSION_QUESTION_WITHDRAW_ACTION = "question_withdrawn" as const;
+export const FOCUS_SESSION_QUESTION_WITHDRAWN_EVENT_TYPE =
+  `${FOCUS_SESSION_SUBJECT_TYPE}.${FOCUS_SESSION_QUESTION_WITHDRAW_ACTION}.completed` as const;

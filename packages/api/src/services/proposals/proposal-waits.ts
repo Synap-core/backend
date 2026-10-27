@@ -1,5 +1,5 @@
 /**
- * Does an agent WAIT on this proposal? (Resolve-XP W3, `ProposalWaits` from
+ * Does an agent WAIT on this proposal? (`ProposalWaits` from
  * `@synap-core/types/proposals/fate`.) The context card's "Waiting on it"
  * line reads it; it is OMITTED when nothing waits.
  *

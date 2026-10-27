@@ -1,6 +1,6 @@
 /**
  * "The session waits on its GATE" — a pending plan/deploy approval filed in
- * the session (Resolve-XP W3). The third arm of the waits-on-the-person rule
+ * the session. The third arm of the waits-on-the-person rule
  * (`open-room-question.ts`): a dev-loop agent files `dev.plan_approval` and
  * STOPS until the person decides, which owes no slot and asks no room
  * question, so the reapers read that session as idle and failed its run.

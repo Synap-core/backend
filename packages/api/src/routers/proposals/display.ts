@@ -1179,7 +1179,7 @@ export async function enrichProposalsForDisplay(
     // The rules behind this page's auto-approved receipts (names resolved
     // below, from the loaded users first).
     readReceiptRules(rows, userId),
-    // WAITING ON IT (Resolve-XP): gate / owed slot / parked run — two batched
+    // WAITING ON IT: gate / owed slot / parked run — two batched
     // reads for the page, through the same session read rule as the titles.
     resolveProposalWaits(rows, { userId, roster: opts.roster ?? false }),
   ]);
@@ -1889,7 +1889,7 @@ export async function enrichProposalsForDisplay(
         row.targetType,
         capabilityRunVerbId(row.data)
       ),
-      // FATE on silence (pending only) and who WAITS on it (Resolve-XP W3):
+      // FATE on silence (pending only) and who WAITS on it:
       // the context card's "If you ignore it" and "Waiting on it" lines.
       ...proposalFateFields(row),
       ...proposalWaitsFields(row.id, waitsByProposal),
