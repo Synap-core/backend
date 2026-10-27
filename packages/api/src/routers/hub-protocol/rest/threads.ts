@@ -35,7 +35,11 @@ import {
   type ResolvedSessionPost,
 } from "../../../services/messaging/session-post.js";
 import { recordOwnerRoomReply } from "../../../services/focus-sessions/session-answer.js";
-import { fileRoomQuestionOnSlot } from "../../../services/focus-sessions/room-question-slot.js";
+import {
+  checkRoomQuestionSlot,
+  fileRoomQuestionOnSlot,
+} from "../../../services/focus-sessions/room-question-slot.js";
+import { roomQuestionSlotRefusal } from "../../../services/focus-sessions/room-question-slot-refusal.js";
 import type { SlotAsk } from "@synap/playbooks";
 import { createRoute, z } from "@hono/zod-openapi";
 import {
@@ -1208,6 +1212,28 @@ export function registerThreadsRoutes(app: HubHono): void {
         return c.json({ error: anchorGate.error }, anchorGate.status);
       }
 
+      // An AGENT's question about a slot is refused BEFORE the insert when the
+      // slot cannot take it — undeclared, a room of no session, or saying
+      // nothing about what the answer unblocks (decision E): the same check
+      // and wording as the MCP post door (`postChannelMessage`).
+      if (
+        c.get("agentUserId") &&
+        body.intent === undefined &&
+        body.kind === "question" &&
+        body.slotLabel?.trim()
+      ) {
+        const refusal = roomQuestionSlotRefusal(
+          await checkRoomQuestionSlot({
+            channelId: threadId,
+            slotLabel: body.slotLabel,
+            userId,
+            ...(body.ask ? { ask: body.ask as SlotAsk } : {}),
+          }),
+          body.slotLabel
+        );
+        if (refusal) return c.json({ error: refusal }, 400);
+      }
+
       const { randomUUID } = await import("crypto");
       const msgId = randomUUID();
       // Canonical tamper-hash: computeMessageHash(id, content) — the ONE formula
@@ -1362,8 +1388,9 @@ export function registerThreadsRoutes(app: HubHono): void {
       }
 
       // An AGENT's question about a slot is filed ON the slot as its ask —
-      // the same service the MCP post door reaches (`post-message.ts`). After
-      // the insert: the question stands whatever the slot says.
+      // the same service the MCP post door reaches (`post-message.ts`). The
+      // slot was checked before the insert; a filing that still lands nothing
+      // (already delivered, a race) leaves the question standing, and says so.
       let slot: { status: string } | undefined;
       if (
         ctxAgentUserId &&

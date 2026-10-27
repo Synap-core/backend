@@ -231,17 +231,7 @@ export async function blockExpectedOutput(
   // Checked on the slot as it WILL be stamped, before the lock: a refusal
   // must change nothing.
   if (params.agentUserId && !params.askCause) {
-    const stamped = stampBlocked(
-      [slot],
-      slot.label,
-      params.blockedReason,
-      params.why,
-      undefined,
-      params.ref,
-      params.ask,
-      params.unblocks
-    );
-    const missing = slotsMissingUnblocks([slot], stamped);
+    const missing = handOverMissingUnblocks(slot, params);
     if (missing.length > 0) {
       return {
         status: "unblocks_required",
@@ -359,6 +349,33 @@ export async function unblockExpectedOutput(
   if (!stamped) return { status: "not_found" };
 
   return { status: "unblocked", expectedLabel: slot.label, kind: slot.kind };
+}
+
+/**
+ * The labels an agent's hand-over of `slot` would newly pose to the person
+ * with nothing it unblocks (`slotsMissingUnblocks` over the slot as it WILL be
+ * stamped); empty = the hand-over may land. THE check `blockExpectedOutput`
+ * applies, shared with the room question's pre-post check
+ * (`checkRoomQuestionSlot`) so the two can never disagree. Pure.
+ */
+export function handOverMissingUnblocks(
+  slot: ExpectedOutput,
+  params: Pick<
+    BlockExpectedOutputParams,
+    "blockedReason" | "why" | "ref" | "ask" | "unblocks"
+  >
+): string[] {
+  const stamped = stampBlocked(
+    [slot],
+    slot.label,
+    params.blockedReason,
+    params.why,
+    undefined,
+    params.ref,
+    params.ask,
+    params.unblocks
+  );
+  return slotsMissingUnblocks([slot], stamped);
 }
 
 /**

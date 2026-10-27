@@ -348,6 +348,7 @@ export async function postChannelMessage(
         channelId,
         slotLabel: params.slotLabel,
         userId,
+        ...(params.ask ? { ask: params.ask } : {}),
       }),
       params.slotLabel
     );

@@ -790,6 +790,61 @@ describe("param / criterion / provide / room question on the ONE answer door", (
     expect((await slotOf(sessionId, "Region")).owner).toBeUndefined();
   });
 
+  /**
+   * WHAT IT UNBLOCKS (decision E): a question that newly hands a slot to the
+   * person must say what moves on the answer. Refused BEFORE the post at both
+   * doors — the block door's own check, so the question can never post while
+   * its filing is refused. A follow-up on a slot already the person's, with
+   * the same ask, poses nothing new and still posts.
+   */
+  it("a question newly posing a slot that says nothing it unblocks is refused at both doors — nothing posted", async () => {
+    const SILENT = { kind: "document", label: "Region" };
+    const { sessionId, channelId } = await seed([SILENT]);
+    const hubRes = await hubPost(channelId, {
+      content: "Bill the EU entity?",
+      kind: "question",
+      slotLabel: "Region",
+      ask: CONFIRM,
+    });
+    expect(hubRes.status).toBe(400);
+    expect(((await hubRes.json()) as { error: string }).error).toMatch(
+      /^NOTHING WAS POSTED: say what the person's answer unblocks.*"Region"/
+    );
+    await expect(
+      postChannelMessage({
+        channelId,
+        content: "Which region should we bill?",
+        role: "assistant",
+        triggerAI: false,
+        kind: "question",
+        slotLabel: "region",
+        userId: OWNER,
+        agentUserId: IS_AGENT,
+      })
+    ).rejects.toThrow(/^NOTHING WAS POSTED: say what the person's answer unblocks/);
+    expect(await roomMessages(channelId)).toHaveLength(0);
+    expect((await slotOf(sessionId, "Region")).owner).toBeUndefined();
+
+    // Already the person's, same ask: a follow-up poses nothing new.
+    const held = await seed([
+      {
+        ...SILENT,
+        owner: "human",
+        blockedReason: "decision",
+        why: "Bill the EU entity?",
+        ask: CONFIRM,
+        owedSince: new Date().toISOString(),
+      },
+    ]);
+    const again = await hubPost(held.channelId, {
+      content: "Still need this one: bill the EU entity?",
+      kind: "question",
+      slotLabel: "Region",
+    });
+    expect(again.status).toBe(200);
+    expect(await roomMessages(held.channelId)).toHaveLength(1);
+  });
+
   it("Hub: an ask without a slot question is refused before anything is written", async () => {
     const { channelId } = await seed([AGENT_SLOT]);
     const res = await hubPost(channelId, {
