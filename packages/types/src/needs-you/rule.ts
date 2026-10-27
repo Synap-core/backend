@@ -243,7 +243,9 @@ export type NeedsYouSessionClass = "stopped" | "working" | "live";
 /**
  * Stopped (ended, or no agent evidence for 7 days, the start counting as
  * evidence), working (a turn in flight, or agent evidence inside the working
- * window), else live.
+ * window), else live. A session with NO readable clock at all (no agent
+ * evidence and no start — a legacy row) is never called stopped: an
+ * unreadable clock fails toward keeping, as `askFate` does.
  */
 export function needsYouSessionClass(
   session: NeedsYouSessionFacts,
@@ -265,7 +267,7 @@ export function needsYouSessionClass(
       : started === null
         ? agent
         : Math.max(agent, started);
-  if (moved === null || moved < at - NEEDS_YOU_STOPPED_AFTER_MS) {
+  if (moved !== null && moved < at - NEEDS_YOU_STOPPED_AFTER_MS) {
     return "stopped";
   }
   if (session.turnInFlight) return "working";

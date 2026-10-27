@@ -299,7 +299,7 @@ const ROWS: ReadonlyArray<{
     slot: ASK,
   },
   {
-    rulesOut: "no evidence at all read as live",
+    rulesOut: "no clock at all read as stopped (fails toward keeping)",
     session: { startedAt: null },
     slot: ASK,
   },
