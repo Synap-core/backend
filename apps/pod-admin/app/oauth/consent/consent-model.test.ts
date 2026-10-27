@@ -43,6 +43,9 @@ import {
   setObjectLevel,
   shownSpaces,
   toggleObjectSpace,
+  newAsks,
+  newAsksAllowed,
+  allowNewAsks,
   type OfferedPermission,
   type Selection,
 } from "./consent-model";
@@ -1128,5 +1131,139 @@ describe("an app asks for anything an agent key may hold (apps = agents)", () =>
     expect(
       toApproved(setObjectLevel(on, ASK, full, "off", TEMPLATES), ASK)
     ).toEqual([]);
+  });
+});
+
+// ─── A re-consent names what is new (founder, 2026-10-27) ────────────────────
+
+describe("a re-consent names what it asks that is new", () => {
+  /** The CRM's spaces: one from its declared template, one not. */
+  const CRM_S = {
+    workspaceId: "crm",
+    workspaceName: "CRM",
+    templateSlug: "crm",
+  };
+  const CRM_TEMPLATES = ["crm"];
+  /**
+   * crm.synap.live's re-consent of 2026-10-26: four asks added (person and
+   * company edits, reading and running a process) to what the person had
+   * allowed. `proposal.read` they had allowed in Brand only.
+   */
+  const CRM_ASK = [
+    "entity.person.read",
+    "entity.person.update",
+    "entity.company.read",
+    "entity.company.update",
+    "proposal.read",
+    "playbook.read",
+    "playbook.run",
+  ];
+  const CRM: OfferedPermission[] = CRM_ASK.map((permission) => ({
+    permission,
+    workspaces: [BRAND_S, CRM_S],
+  }));
+  const CURRENT = [
+    { permission: "entity.person.read", workspaceId: "crm" },
+    { permission: "entity.company.read", workspaceId: "crm" },
+    { permission: "proposal.read", workspaceId: "brand" },
+  ];
+  const asks = () => newAsks(CRM, CURRENT, CRM_TEMPLATES);
+
+  it("lists each permission the approval holds in no space, in its default spaces", () => {
+    expect(asks().map((o) => [o.permission, ids(o.workspaces)])).toEqual([
+      ["entity.person.update", ["crm"]],
+      ["entity.company.update", ["crm"]],
+      ["playbook.read", ["crm"]],
+      ["playbook.run", ["crm"]],
+    ]);
+  });
+
+  it("a permission allowed in another space is not new", () => {
+    // Allowed in Brand, not in CRM: a narrowing the person chose, not news.
+    expect(asks().map((o) => o.permission)).not.toContain("proposal.read");
+  });
+
+  it("a first consent has none; the same ask again has none", () => {
+    expect(newAsks(CRM, [], CRM_TEMPLATES)).toEqual([]);
+    const all = CRM_ASK.map((permission) => ({
+      permission,
+      workspaceId: "crm",
+    }));
+    expect(newAsks(CRM, all, CRM_TEMPLATES)).toEqual([]);
+  });
+
+  it("a new decision is listed, and still starts unticked", () => {
+    const run = asks().find((o) => o.permission === "playbook.run");
+    expect(run).toBeDefined();
+    expect(isDecisionPermission("playbook.run")).toBe(true);
+    const s = initialSelection(CRM, CURRENT, CRM_TEMPLATES);
+    expect(isTicked(s, "playbook.run", "crm")).toBe(false);
+  });
+
+  it("a new ask with no space to give is left out (nothing to tick)", () => {
+    const offer = [...CRM, { permission: "document.read", workspaces: [] }];
+    expect(
+      newAsks(offer, CURRENT, CRM_TEMPLATES).map((o) => o.permission)
+    ).not.toContain("document.read");
+  });
+
+  it("the switch starts Off: the selection is exactly the current approval", () => {
+    const s = initialSelection(CRM, CURRENT, CRM_TEMPLATES);
+    expect(newAsksAllowed(s, asks())).toBe(false);
+    expect(toApproved(s, CRM)).toEqual(CURRENT);
+  });
+
+  it("On: the selection gains exactly the new pairs, and the rows follow", () => {
+    const before = initialSelection(CRM, CURRENT, CRM_TEMPLATES);
+    const after = allowNewAsks(before, CRM, asks(), true);
+    const k = (a: { permission: string; workspaceId: string }) =>
+      `${a.permission}@${a.workspaceId}`;
+    const was = new Set(toApproved(before, CRM).map(k));
+    expect(
+      toApproved(after, CRM)
+        .map(k)
+        .filter((x) => !was.has(x))
+    ).toEqual([
+      "entity.person.update@crm",
+      "entity.company.update@crm",
+      "playbook.read@crm",
+      "playbook.run@crm",
+    ]);
+    // Nothing it held is lost.
+    for (const x of was) expect(toApproved(after, CRM).map(k)).toContain(x);
+    expect(newAsksAllowed(after, asks())).toBe(true);
+    // The ONE selection: People and Companies were View, now Edit; the
+    // decision row is On.
+    expect(objectLevel(before, row(CRM, "entity.person"))).toBe("view");
+    expect(objectLevel(after, row(CRM, "entity.person"))).toBe("edit");
+    expect(objectLevel(after, row(CRM, "entity.company"))).toBe("edit");
+    expect(objectLevel(after, row(CRM, "decisions"))).toBe("on");
+  });
+
+  it("Off leaves the selection unchanged; On then Off returns to it", () => {
+    const before = initialSelection(CRM, CURRENT, CRM_TEMPLATES);
+    expect(allowNewAsks(before, CRM, asks(), false)).toEqual(before);
+    const on = allowNewAsks(before, CRM, asks(), true);
+    expect(allowNewAsks(on, CRM, asks(), false)).toEqual(before);
+  });
+
+  it("one new pair unticked in a row: the switch reads Off, pressing it ticks them all", () => {
+    const on = allowNewAsks(
+      initialSelection(CRM, CURRENT, CRM_TEMPLATES),
+      CRM,
+      asks(),
+      true
+    );
+    const one = toggle(on, CRM, "playbook.run", "crm");
+    expect(newAsksAllowed(one, asks())).toBe(false);
+    expect(allowNewAsks(one, CRM, asks(), true)).toEqual(on);
+  });
+
+  it("never a pair outside today's offer, from asks of an older offer", () => {
+    const stale: OfferedPermission[] = [
+      { permission: "entity.deal.update", workspaces: [CRM_S] },
+    ];
+    const s = allowNewAsks(new Set(), CRM, stale, true);
+    expect(s.size).toBe(0);
   });
 });

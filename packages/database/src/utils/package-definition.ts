@@ -128,9 +128,8 @@ export interface PackageLoop {
 
 // ─── The space brief (stored at `workspace.settings.onboarding`) ─────────────
 //
-// ONE type: `SpaceBrief` in `@synap-core/types/space-brief`, mirrored once on
-// the database side as `WorkspaceSpaceBrief` (schema/workspaces.ts — this
-// package cannot import `@synap-core/types`). The names below are ALIASES kept
+// ONE type: `SpaceBrief` in `@synap-core/types/space-brief` (the database side
+// calls it `WorkspaceSpaceBrief`, an alias). The names below are ALIASES kept
 // so existing importers compile; they are not a second declaration.
 //
 // The interview fields (goal / collect / openingQuestions / doneWhen) are the

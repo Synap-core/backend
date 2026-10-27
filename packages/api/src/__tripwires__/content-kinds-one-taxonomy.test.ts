@@ -3,10 +3,11 @@
  * `@synap-core/types/renderables` (the renderables catalog, which the browser's
  * `@synap-core/capabilities` re-exports).
  *
- * Two copies remain because their packages cannot import it yet, and each is
- * pinned here to the catalog, element for element and in order:
- *   - `@synap/database/schema` — the pod's column vocabulary (the database
- *     package does not depend on `@synap-core/types`);
+ * The pod's column vocabulary (`@synap/database/schema` `CONTENT_KINDS`) IS
+ * the catalog, re-exported (collapsed 2026-10-26, once the database package
+ * depended on `@synap-core/types`). One copy remains because its package
+ * cannot import it, pinned here to the catalog, element for element and in
+ * order:
  *   - the CLI (`synap-cli/src/commands/cell.ts`) — depends on neither types nor
  *     database; read from source text, SKIPPED when the sibling repo is absent
  *     (a missing checkout is not a drift).
@@ -14,8 +15,7 @@
  *
  * And no OTHER copy may appear: a derived scan (every non-test source file of
  * synap-backend, the IS and the CLI, AST-parsed) flags any array literal
- * holding ≥ 4 content-kind literals outside the catalog and the two pinned
- * copies. It found `services/surfaces/renderer-usage.ts` (a private copy of the
+ * holding ≥ 4 content-kind literals outside the catalog and the pinned copy. It found `services/surfaces/renderer-usage.ts` (a private copy of the
  * profile kinds), now imported from the catalog (W7a).
  */
 
@@ -45,8 +45,8 @@ describe("tripwire: one content-kind taxonomy", () => {
     expect([...CONTENT_KINDS]).toContain("widget");
   });
 
-  it("the database copy equals the catalog", () => {
-    expect([...DATABASE_CONTENT_KINDS]).toEqual([...CONTENT_KINDS]);
+  it("the database reads the catalog itself, not a copy", () => {
+    expect(DATABASE_CONTENT_KINDS).toBe(CONTENT_KINDS);
   });
 
   it.skipIf(!existsSync(CLI_CELL))("the CLI copy equals the catalog", () => {
@@ -61,7 +61,6 @@ describe("tripwire: one content-kind taxonomy", () => {
 const MONOREPO = REPO_ROOT;
 const ALLOWED = new Set([
   "synap-backend/packages/types/src/renderables/content-kinds.ts",
-  "synap-backend/packages/database/src/schema/widget-definitions.ts",
   "synap-cli/src/commands/cell.ts",
 ]);
 const KINDS = new Set<string>(CONTENT_KINDS);
@@ -117,13 +116,10 @@ describe("tripwire: no other content-kind copy", () => {
     })
     .map((f) => relative(MONOREPO, f));
 
-  it("non-vacuous: sees the catalog and the pinned database copy", () => {
+  it("non-vacuous: sees the catalog", () => {
     expect(files.length).toBeGreaterThan(1000);
     expect(copies).toContain(
       "synap-backend/packages/types/src/renderables/content-kinds.ts"
-    );
-    expect(copies).toContain(
-      "synap-backend/packages/database/src/schema/widget-definitions.ts"
     );
   });
 

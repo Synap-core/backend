@@ -8,10 +8,10 @@
  * hold a judge who is also a delegate, and a commitment has a state, a
  * counter-offer, a report and an acknowledgement.
  *
- * Roles, principal kinds and commitment states mirror `@synap-core/types/units`
- * (`TRACK_PARTICIPANT_ROLES`, …); this package cannot import that one, so the
- * participants service pins the lists equal at compile time, and the 0348
- * CHECK constraints spell the same sets.
+ * Roles, principal kinds and commitment states are declared once, in
+ * `@synap-core/types/units` (`TRACK_PARTICIPANT_ROLES`, …), and re-exported
+ * here under the pod's `*_KEYS` names; the 0348 CHECK constraints spell the
+ * same sets.
  *
  * A participant row grants NO read (D5-A): an agent reads the goal only as the
  * person it acts for; a person reads it through the project's own floor.
@@ -31,30 +31,24 @@ import {
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
+import {
+  TRACK_PARTICIPANT_ROLES as TRACK_PARTICIPANT_ROLE_KEYS,
+  TRACK_PRINCIPAL_KINDS as TRACK_PRINCIPAL_KIND_KEYS,
+  TRACK_COMMITMENT_STATES as TRACK_COMMITMENT_STATE_KEYS,
+  type TrackParticipantRole as TrackParticipantRoleKey,
+  type TrackPrincipalKind as TrackPrincipalKindKey,
+  type TrackCommitmentState as TrackCommitmentStateKey,
+} from "@synap-core/types/units";
 import { projectTracks } from "./project-tracks.js";
 
-export const TRACK_PARTICIPANT_ROLE_KEYS = [
-  "owner",
-  "judge",
-  "delegate",
-  "integrator",
-] as const;
-export type TrackParticipantRoleKey =
-  (typeof TRACK_PARTICIPANT_ROLE_KEYS)[number];
-
-export const TRACK_PRINCIPAL_KIND_KEYS = ["person", "agent"] as const;
-export type TrackPrincipalKindKey = (typeof TRACK_PRINCIPAL_KIND_KEYS)[number];
-
-export const TRACK_COMMITMENT_STATE_KEYS = [
-  "proposed",
-  "accepted",
-  "countered",
-  "declined",
-  "reported_impossible",
-  "done",
-] as const;
-export type TrackCommitmentStateKey =
-  (typeof TRACK_COMMITMENT_STATE_KEYS)[number];
+export {
+  TRACK_PARTICIPANT_ROLE_KEYS,
+  TRACK_PRINCIPAL_KIND_KEYS,
+  TRACK_COMMITMENT_STATE_KEYS,
+  type TrackParticipantRoleKey,
+  type TrackPrincipalKindKey,
+  type TrackCommitmentStateKey,
+};
 
 export const trackParticipants = pgTable(
   "track_participants",
