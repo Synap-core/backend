@@ -8078,6 +8078,13 @@ export interface ProposalReviewGraph {
 	 */
 	updates?: Array<{
 		fields: Array<{
+			/**
+			 * What the field holds NOW, excerpted like `value`: read from the live
+			 * row while the proposal is still pending (a skill today). Absent =
+			 * not read, or empty now.
+			 */
+			before?: string;
+			beforeTruncated?: boolean;
 			key: string;
 			truncated: boolean;
 			value: string;
@@ -8086,6 +8093,11 @@ export interface ProposalReviewGraph {
 		op: CompositeUpdateOperation["op"];
 		ref: string;
 		targetId: string;
+		/**
+		 * The row's name, when the pod read it for this viewer (a skill today):
+		 * a rewrite names WHICH skill it rewrites. Absent = not read.
+		 */
+		targetName?: string;
 	}>;
 }
 export interface ProposalReviewModel {
