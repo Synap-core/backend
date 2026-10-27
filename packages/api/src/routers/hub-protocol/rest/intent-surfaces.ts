@@ -26,6 +26,7 @@ import { z } from "@hono/zod-openapi";
 import { ErrorSchema, uuidQueryParam } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import {
+  confineWorkspaceOrForbidden,
   hasScope,
   logger,
   type HubHono,
@@ -94,11 +95,17 @@ const attentionQuery = z.object({
 
 type HubContext = HonoContext<{ Variables: HubVariables }>;
 
-/** The shared door: scope check, query parse, caller context, error map. */
+/**
+ * The shared door: scope check, query parse, caller context, error map.
+ * `confineWorkspace`: the query's `workspaceId` goes through the one clamp
+ * (`getConfinedWorkspace`), so a workspace-bound key reads its own workspace
+ * when it names none and is refused (403) on another.
+ */
 function readDoor<Q extends z.ZodTypeAny>(
   name: string,
   schema: Q,
-  run: (ctx: Context, query: z.infer<Q>) => Promise<unknown>
+  run: (ctx: Context, query: z.infer<Q>) => Promise<unknown>,
+  opts: { confineWorkspace?: boolean } = {}
 ) {
   return async (c: HubContext) => {
     const scopes = c.get("scopes") as string[];
@@ -116,10 +123,19 @@ function readDoor<Q extends z.ZodTypeAny>(
         400
       );
     }
+    let query = parsed.data as z.infer<Q>;
+    if (opts.confineWorkspace) {
+      const confined = confineWorkspaceOrForbidden(
+        c,
+        (query as { workspaceId?: string }).workspaceId
+      );
+      if (!confined.ok) return c.json({ error: confined.error }, 403);
+      query = { ...query, workspaceId: confined.workspaceId ?? undefined };
+    }
     const userId = c.get("userId") as string;
     try {
       const ctx = await createHubProtocolCallerContext(userId, scopes);
-      return c.json((await run(ctx as Context, parsed.data)) as never);
+      return c.json((await run(ctx as Context, query)) as never);
     } catch (err) {
       logger.error({ err, userId }, `${name} failed`);
       return c.json(
@@ -220,7 +236,8 @@ export function registerIntentSurfacesRoutes(app: HubHono): void {
     method: "get",
     path: "/attention/lens-page",
     tags: ["Attention"],
-    summary: "A lens page, whole: what needs you, what is happening, what was produced",
+    summary:
+      "A lens page, whole: what needs you, what is happening, what was produced",
     description:
       "Every class of the lens page at a scope (`signals.list({ lens: 'page' })`): Needs you, Proposed, Happening, Produced, Happened, plus the status banner, read with the caps every lens host asks for (`LENS_PAGE_READ_CAPS`). The scope is the narrowing lens (`workspaceId`, optionally with `projectId`; `projectId`; `trackId`; `sessionId`); none = the pod. `since` bounds Happened (a session sends none). Read by a space package's frame through the browser's host bridge, which stamps the scope.",
     request: { query: lensPageQuery },
@@ -298,16 +315,22 @@ export function registerIntentSurfacesRoutes(app: HubHono): void {
   );
   app.get(
     "/attention/lens-page",
-    readDoor("attention.lens-page", lensPageQuery, (ctx, q) =>
-      signalsRouter.createCaller(ctx).list({
-        lens: "page",
-        ...(q.workspaceId ? { workspaceId: q.workspaceId } : {}),
-        ...(q.projectId ? { projectId: q.projectId } : {}),
-        ...(q.trackId ? { trackId: q.trackId } : {}),
-        ...(q.sessionId ? { sessionId: q.sessionId } : {}),
-        caps: { ...LENS_PAGE_READ_CAPS },
-        ...(q.since ? { since: q.since } : {}),
-      })
+    readDoor(
+      "attention.lens-page",
+      lensPageQuery,
+      (ctx, q) =>
+        signalsRouter.createCaller(ctx).list({
+          lens: "page",
+          ...(q.workspaceId ? { workspaceId: q.workspaceId } : {}),
+          ...(q.projectId ? { projectId: q.projectId } : {}),
+          ...(q.trackId ? { trackId: q.trackId } : {}),
+          ...(q.sessionId ? { sessionId: q.sessionId } : {}),
+          caps: { ...LENS_PAGE_READ_CAPS },
+          ...(q.since ? { since: q.since } : {}),
+        }),
+      // A frame's or pod app's key is a bound key: its page is its space's,
+      // never the pod's (the scope axes AND with the workspace).
+      { confineWorkspace: true }
     )
   );
   app.get(
