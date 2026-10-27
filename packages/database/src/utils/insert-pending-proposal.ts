@@ -175,12 +175,22 @@ export interface InsertPendingProposalResult {
   deduped: boolean;
   /**
    * Older PENDING versions this proposal REPLACED (see
-   * {@link supersedesEarlierVersions}) — now `withdrawn`, their notifications
-   * actioned. Empty for a dedup hit and for every proposal the rule skips.
-   * Optional on the TYPE only so hand-built results (test doubles of this
-   * door) need not spell it; this function always sets it.
+   * {@link supersedesEarlierVersions}) — now `withdrawn` (with `reviewedAt`),
+   * their notifications actioned. Each carries what the caller needs to run a
+   * withdrawal's remaining side effects after its commit (the live queue
+   * event, the staged source blob). Empty for a dedup hit and for every
+   * proposal the rule skips. Optional on the TYPE only so hand-built results
+   * (test doubles of this door) need not spell it; this function always sets it.
    */
-  superseded?: string[];
+  superseded?: SupersededVersion[];
+}
+
+/** One older version a new proposal replaced. */
+export interface SupersededVersion {
+  id: string;
+  workspaceId: string | null;
+  /** Its stored `data`, read for a staged source blob to discard. */
+  data: unknown;
 }
 
 /** `proposals.data` key on a superseded row: the id of the version that replaced it. */
@@ -206,7 +216,7 @@ export const SUPERSEDED_REASON = "Replaced by a newer version";
  * only a newer version that COVERS the older one replaces it
  * ({@link coversEarlierVersion}).
  */
-export function supersedesEarlierVersions(input: {
+function supersedesEarlierVersions(input: {
   agentUserId?: string | null;
   sessionId?: string | null;
   proposalType: string;
@@ -263,7 +273,7 @@ const SUPERSEDE_META_KEYS = new Set<string>([
  * withdrawing the first would drop the status move with nobody left to
  * approve it. Pure.
  */
-export function coversEarlierVersion(
+function coversEarlierVersion(
   newer: Record<string, unknown>,
   older: Record<string, unknown>
 ): boolean {
@@ -732,7 +742,7 @@ export async function insertPendingProposal(
 async function supersedeEarlierVersions(
   tx: DbTx,
   latest: typeof proposals.$inferSelect
-): Promise<string[]> {
+): Promise<SupersededVersion[]> {
   if (!latest.agentUserId || !latest.sessionId) return [];
   const candidates = await tx
     .select({ id: proposals.id, data: proposals.data })
@@ -759,11 +769,14 @@ async function supersedeEarlierVersions(
     [SUPERSEDED_BY_KEY]: latest.id,
     withdrawReason: SUPERSEDED_REASON,
   });
+  // `reviewedAt` like the person's withdraw: the row was decided, now.
+  const at = new Date();
   const replaced = await tx
     .update(proposals)
     .set({
       status: ProposalStatus.WITHDRAWN,
-      updatedAt: new Date(),
+      reviewedAt: at,
+      updatedAt: at,
       data: drizzleSql`COALESCE(${proposals.data}, '{}'::jsonb) || ${stamp}::jsonb`,
     })
     .where(
@@ -772,10 +785,18 @@ async function supersedeEarlierVersions(
         eq(proposals.status, ProposalStatus.PENDING)
       )
     )
-    .returning({ id: proposals.id });
-  const ids = replaced.map((r) => r.id);
-  if (ids.length > 0) await actionProposalNotifications(ids, tx);
-  return ids;
+    .returning({
+      id: proposals.id,
+      workspaceId: proposals.workspaceId,
+      data: proposals.data,
+    });
+  if (replaced.length > 0) {
+    await actionProposalNotifications(
+      replaced.map((r) => r.id),
+      tx
+    );
+  }
+  return replaced;
 }
 
 /**

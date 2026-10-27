@@ -63,6 +63,9 @@ const S2 = randomUUID();
 const ROOM1 = randomUUID();
 const ROOM2 = randomUUID();
 
+const ids = (r: { superseded?: Array<{ id: string }> }) =>
+  (r.superseded ?? []).map((v) => v.id);
+
 const file = (over: Partial<InsertPendingProposalInput>) =>
   insertPendingProposal(
     {
@@ -114,9 +117,21 @@ describe("supersede — an agent's newer version replaces its older pending one"
       [randomUUID(), v1.proposal.id]
     );
     const v2 = await file({ data: { title: "v2" } });
-    expect(v2.superseded).toEqual([v1.proposal.id]);
+    expect(v2.superseded).toEqual([
+      expect.objectContaining({
+        id: v1.proposal.id,
+        workspaceId: null,
+        data: expect.objectContaining({ title: "v1" }),
+      }),
+    ]);
     const old = await statusOf(v1.proposal.id);
     expect(old.status).toBe("withdrawn");
+    // Decided now, like a person's withdraw.
+    const [reviewed] = await q<{ reviewed_at: string | null }>(
+      `select reviewed_at from proposals where id = $1`,
+      [v1.proposal.id]
+    );
+    expect(reviewed!.reviewed_at).not.toBeNull();
     expect(old.data[SUPERSEDED_BY_KEY]).toBe(v2.proposal.id);
     expect(old.data.withdrawReason).toBe(SUPERSEDED_REASON);
     expect(old.data.title).toBe("v1");
@@ -140,7 +155,7 @@ describe("supersede — an agent's newer version replaces its older pending one"
       proposalType: "create",
       data: { name: "c2" },
     });
-    expect(create2.superseded).toEqual([]);
+    expect(ids(create2)).toEqual([]);
     const mine = await file({ ...target, data: { title: "mine" } });
     const theirs = await file({
       ...target,
@@ -161,15 +176,15 @@ describe("supersede — an agent's newer version replaces its older pending one"
     });
     // The agent files again in S1: only ITS S1 update goes.
     const again = await file({ ...target, data: { title: "again" } });
-    expect(again.superseded).toEqual([mine.proposal.id]);
+    expect(ids(again)).toEqual([mine.proposal.id]);
     for (const kept of [create1, create2, theirs, elsewhere, person]) {
       expect(
         (await statusOf(kept.proposal.id)).status,
         kept.proposal.proposalType
       ).toBe("pending");
     }
-    expect(theirs.superseded).toEqual([]);
-    expect(person.superseded).toEqual([]);
+    expect(ids(theirs)).toEqual([]);
+    expect(ids(person)).toEqual([]);
   });
 
   it("two section patches of one document both stand", async () => {
@@ -185,7 +200,7 @@ describe("supersede — an agent's newer version replaces its older pending one"
       proposalType: "section_update",
       data: { section: "plan", text: "b" },
     });
-    expect(b.superseded).toEqual([]);
+    expect(ids(b)).toEqual([]);
     expect((await statusOf(a.proposal.id)).status).toBe("pending");
   });
 });
@@ -200,7 +215,7 @@ describe("supersede — only a newer version that carries every older change", (
       targetId: "deal-1",
       data: { id: "deal-1", properties: { amount: 5000 } },
     });
-    expect(amount.superseded).toEqual([]);
+    expect(ids(amount)).toEqual([]);
     expect((await statusOf(status.proposal.id)).status).toBe("pending");
   });
 
@@ -213,7 +228,7 @@ describe("supersede — only a newer version that carries every older change", (
       targetId: "deal-2",
       data: { id: "deal-2", properties: { amount: 1 } },
     });
-    expect(edit.superseded).toEqual([]);
+    expect(ids(edit)).toEqual([]);
     expect((await statusOf(move.proposal.id)).status).toBe("pending");
   });
 
@@ -232,12 +247,12 @@ describe("supersede — only a newer version that carries every older change", (
       targetId: "deal-3",
       data: envelope({ properties: { amount: 7 } }),
     });
-    expect(b.superseded).toEqual([]);
+    expect(ids(b)).toEqual([]);
     const c = await file({
       targetId: "deal-3",
       data: envelope({ properties: { status: "lost", amount: 8 } }),
     });
-    expect([...c.superseded!].sort()).toEqual(
+    expect(ids(c).sort()).toEqual(
       [a.proposal.id, b.proposal.id].sort()
     );
   });
