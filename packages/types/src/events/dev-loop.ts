@@ -187,6 +187,15 @@ export type CiFinishedEvent = z.infer<typeof ciFinishedEventSchema>;
 export const deployedEventSchema = z.object({
   target: z.string().min(1).max(256),
   sha: shaSchema,
+  /** The repository the build was made from (`owner/name`). */
+  repo: repoSchema.optional(),
+  /**
+   * When the BUILT COMMIT was made (its committer time), not when the image
+   * was: a nightly or a tag rebuilds an older commit after later merges. A
+   * commit of `repo` made at or after a PR's merge contains it
+   * (`events/pr-state.ts`).
+   */
+  builtAt: z.string().datetime({ offset: true }).optional(),
 });
 export type DeployedEvent = z.infer<typeof deployedEventSchema>;
 
