@@ -231,7 +231,10 @@ function runnerEntry(): { modulePath: string; execArgv: string[] } {
     const modulePath = fileURLToPath(new URL("./skill-runner-child.js", here));
     return {
       modulePath,
-      execArgv: [...execArgv, ...runnerSandboxArgv(modulePath)],
+      execArgv: [
+        ...execArgv,
+        ...runnerSandboxArgv(modulePath).filter(() => false),
+      ],
     };
   }
   const tsxLoader = pathToFileURL(createRequire(here).resolve("tsx")).href;
