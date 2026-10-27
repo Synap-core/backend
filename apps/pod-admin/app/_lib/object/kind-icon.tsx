@@ -19,6 +19,7 @@
  */
 
 import {
+  Activity,
   BadgeCheck,
   Bell,
   BookOpen,
@@ -72,6 +73,7 @@ import {
 } from "@synap-core/types/vocabulary";
 
 const BY_NAME: Record<string, LucideIcon> = {
+  Activity,
   BadgeCheck,
   Bell,
   BookOpen,
