@@ -67,6 +67,35 @@ function tokensMatch(a: string, b: string): boolean {
 // Bearer-hash or IP — already throttles.)
 const MAX_INBOUND_WEBHOOK_BODY = 1 * 1024 * 1024; // 1 MB
 
+// Senders sign the SAME way (`sha256=<hex>` HMAC-SHA256 of the raw body with
+// the subscription secret) but under different header names. Synap's own name
+// first, then the conventional WebSub/GitHub one; the first present is read.
+const SIGNATURE_HEADERS = ["x-synap-signature", "x-hub-signature-256"];
+// The event type and delivery id a sender carries in HEADERS, not the body.
+// Forwarded on the automation event so a flow can branch on the event type and
+// a consumer can dedupe a redelivery. Absent when the sender sends none.
+// Synap's own names are the ones its outbound worker sends (chat.v1, event.v1).
+const EVENT_TYPE_HEADERS = [
+  "x-synap-event",
+  "x-synap-event-type",
+  "x-github-event",
+];
+const DELIVERY_ID_HEADERS = ["x-synap-delivery-id", "x-github-delivery"];
+// The handshake event a sender posts when the webhook is created: answered 2xx
+// once authenticated, never forwarded to automations.
+const PING_EVENT = "ping";
+
+function firstHeader(
+  header: (name: string) => string | undefined,
+  names: readonly string[]
+): string | undefined {
+  for (const name of names) {
+    const value = header(name)?.trim();
+    if (value) return value;
+  }
+  return undefined;
+}
+
 webhooksInboundRouter.post("/inbound/:subscriptionId", async (c) => {
   const subscriptionId = c.req.param("subscriptionId");
 
@@ -93,7 +122,8 @@ webhooksInboundRouter.post("/inbound/:subscriptionId", async (c) => {
   // Uniform auth failure: an unknown/inactive subscription and a bad signature
   // return the SAME 401 body, so a caller cannot enumerate which subscription
   // ids exist. Verify HMAC-SHA256 — timingSafeEqual needs equal-length buffers.
-  const signature = c.req.header("x-synap-signature") ?? "";
+  const header = (name: string) => c.req.header(name);
+  const signature = firstHeader(header, SIGNATURE_HEADERS) ?? "";
   const expected = subscription
     ? `sha256=${createHmac("sha256", subscription.secret).update(rawBody).digest("hex")}`
     : "";
@@ -110,6 +140,12 @@ webhooksInboundRouter.post("/inbound/:subscriptionId", async (c) => {
       "Rejected inbound webhook (unknown subscription or invalid signature)"
     );
     return c.json({ error: "Unauthorized" }, 401);
+  }
+
+  const event = firstHeader(header, EVENT_TYPE_HEADERS);
+  const deliveryId = firstHeader(header, DELIVERY_ID_HEADERS);
+  if (event === PING_EVENT) {
+    return c.json({ received: true, ping: true }, 200);
   }
 
   let payload: unknown;
@@ -138,7 +174,12 @@ webhooksInboundRouter.post("/inbound/:subscriptionId", async (c) => {
       subjectId: subscriptionId,
       userId: subscription.userId,
       workspaceId: subscription.workspaceId,
-      data: { subscriptionId, payload },
+      data: {
+        subscriptionId,
+        payload,
+        ...(event ? { event } : {}),
+        ...(deliveryId ? { deliveryId } : {}),
+      },
     }).catch((err) => {
       logger.warn(
         { err, subscriptionId },
