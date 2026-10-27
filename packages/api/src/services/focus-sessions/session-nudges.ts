@@ -33,6 +33,7 @@ import {
 import type { FocusSession } from "@synap/database";
 import type { ExpectedOutput } from "@synap/playbooks";
 import { createLogger } from "@synap-core/core";
+import { createHash } from "node:crypto";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import {
   attachSessionVerdicts,
@@ -60,6 +61,13 @@ export const NUDGE_PLAYBOOK_CANDIDATES_MAX = 3;
 
 /** The metadata key that records the playbook offer was made (once). */
 export const PLAYBOOK_OFFERED_AT_KEY = "playbookOfferedAt";
+
+/**
+ * The metadata key that records the `readyToClose` nudge was made, as the
+ * fingerprint of the outputs it was made for: said ONCE per set of outputs,
+ * and re-armed when they change (rv-be-needs S6).
+ */
+export const READY_TO_CLOSE_NUDGED_FOR_KEY = "readyToCloseNudgedFor";
 
 export type NudgePhase = "update" | "complete";
 
@@ -277,6 +285,42 @@ export async function claimPlaybookOffer(
   return won.length > 0;
 }
 
+/** The fingerprint of a session's outputs — what the ready nudge is stamped for. */
+export function outputsFingerprint(expectedOutputs: unknown): string {
+  return createHash("sha256")
+    .update(JSON.stringify(readSlots(expectedOutputs)))
+    .digest("hex")
+    .slice(0, 16);
+}
+
+/**
+ * Stamp the `readyToClose` nudge ONCE for these outputs. Atomic like
+ * {@link claimPlaybookOffer}: only the call that writes a NEW fingerprint
+ * wins, so the nudge repeats only after the outputs changed. Owner-floored.
+ */
+export async function claimReadyToCloseNudge(
+  sessionId: string,
+  userId: string,
+  fingerprint: string
+): Promise<boolean> {
+  const won = await db
+    .update(focusSessions)
+    .set({
+      metadata: mergeSessionMetadata({
+        [READY_TO_CLOSE_NUDGED_FOR_KEY]: fingerprint,
+      }),
+    })
+    .where(
+      and(
+        eq(focusSessions.id, sessionId),
+        eq(focusSessions.userId, userId),
+        drizzleSql`coalesce(${focusSessions.metadata} ->> ${READY_TO_CLOSE_NUDGED_FOR_KEY}, '') <> ${fingerprint}`
+      )
+    )
+    .returning({ id: focusSessions.id });
+  return won.length > 0;
+}
+
 /**
  * The door-side loader: read the evaluation summary (the shared read), rank
  * playbooks when an offer is due (update only), and compute. A failed read is
@@ -321,17 +365,29 @@ export async function loadSessionNudges(p: {
     }
   }
   // F4: the next move, by THE rule, only when it could be `ready_to_close`.
-  // A failed read omits the nudge (a courtesy), never claims "ready".
+  // A failed read omits the nudge (a courtesy), never claims "ready". Said
+  // once per set of outputs (`claimReadyToCloseNudge`); orient's loose end
+  // keeps listing the session until it is closed.
   let nextMove: Pick<ContinuationNextMove, "kind" | "reason"> | undefined;
   if (p.phase === "update" && mayBeReadyToClose(p.session)) {
     try {
       const [row] = await attachNextMove([p.session], { userId: p.userId });
       nextMove = row?.nextMove;
+      if (
+        nextMove?.kind === "ready_to_close" &&
+        !(await claimReadyToCloseNudge(
+          p.session.id,
+          p.userId,
+          outputsFingerprint(p.session.expectedOutputs)
+        ))
+      ) {
+        nextMove = undefined;
+      }
     } catch (err) {
       // The owed criteria/stage nudges still stand.
       logger.warn(
         { err, sessionId: p.session.id },
-        "session nudges: next move NOT read — no ready_to_close nudge"
+        "session nudges: ready_to_close NOT checked — no nudge"
       );
     }
   }

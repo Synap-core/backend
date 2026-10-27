@@ -189,6 +189,38 @@ describe("update_session nudge: readyToClose (F4)", () => {
     });
   });
 
+  it("said ONCE per set of outputs; re-armed when the outputs change", async () => {
+    const id = await session({ outputs: [delivered] });
+    const nudge = async () =>
+      loadSessionNudges({
+        session: await row(id),
+        phase: "update",
+        userId: PERSON,
+        agentUserId: AGENT,
+      });
+    expect(await nudge()).toMatchObject({ readyToClose: expect.any(Object) });
+    // The same outputs again: not repeated on every update_session.
+    const again = await nudge();
+    expect(again && "readyToClose" in again).toBeFalsy();
+    // A new delivered output: the session is ready again, for new outputs.
+    await q(
+      `update focus_sessions set expected_outputs = $2::jsonb where id = $1`,
+      [
+        id,
+        JSON.stringify([
+          delivered,
+          {
+            ...delivered,
+            key: "pr-backend-282",
+            label: "backend#282",
+            ref: { url: "https://github.com/Synap-core/backend/pull/282" },
+          },
+        ]),
+      ]
+    );
+    expect(await nudge()).toMatchObject({ readyToClose: expect.any(Object) });
+  });
+
   it("an outcome still open on the agent: no readyToClose", async () => {
     const id = await session({ outputs: [delivered, stillOpen] });
     const nudges = await loadSessionNudges({

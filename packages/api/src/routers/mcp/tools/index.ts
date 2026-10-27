@@ -2298,7 +2298,7 @@ export const tools = {
             sessionId: {
               type: "string",
               description:
-                "The focus session UUID to update. Optional: left out, the session THIS conversation started is used when exactly one is still open (the reply says `inferred: true`); several, none, or a key shared by several conversations is refused with the list — nothing changes.",
+                "The focus session UUID to update. Optional: left out, the session THIS conversation started is used when exactly one is still open (every reply then says `inferred: true` and names it in `inferredSession`); several, none, a stale one, or a key shared by several conversations is refused with the list — nothing changes. A teammate (agents spawned in one process share its conversation) ALWAYS passes sessionId.",
             },
             title: {
               type: ["string", "null"],

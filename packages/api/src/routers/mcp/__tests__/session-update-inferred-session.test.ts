@@ -18,6 +18,7 @@ const h = vi.hoisted(() => ({
   calls: [] as Array<Record<string, unknown>>,
   resolverCalls: 0,
   found: { status: "none" } as Record<string, unknown>,
+  result: null as null | Record<string, unknown>,
 }));
 
 vi.mock("../../../services/focus-sessions/update-session.js", async (orig) => {
@@ -29,7 +30,9 @@ vi.mock("../../../services/focus-sessions/update-session.js", async (orig) => {
     ...actual,
     updateFocusSession: async (params: Record<string, unknown>) => {
       h.calls.push(params);
-      return { status: "updated", session: { id: params.sessionId } };
+      return (
+        h.result ?? { status: "updated", session: { id: params.sessionId } }
+      );
     },
   };
 });
@@ -83,6 +86,7 @@ const run = async (args: Record<string, unknown>) =>
 beforeEach(() => {
   h.calls.length = 0;
   h.resolverCalls = 0;
+  h.result = null;
 });
 
 describe("the manifest no longer REQUIRES sessionId on update_session", () => {
@@ -94,11 +98,18 @@ describe("the manifest no longer REQUIRES sessionId on update_session", () => {
       String(tool!.inputSchema.properties.sessionId.description)
     ).toContain("Optional");
   });
+
+  it("tells a teammate to always pass it (teammates share one conversation)", () => {
+    const tool = MANIFEST.tools.find((t) => t.name === "synap_update_session");
+    expect(String(tool!.inputSchema.properties.sessionId.description)).toMatch(
+      /teammate[^.]*ALWAYS passes sessionId/i
+    );
+  });
 });
 
 describe("update_session with no sessionId", () => {
   it("ONE open session this conversation started: the write lands on it, said as inferred", async () => {
-    h.found = { status: "one", sessionId: MINE };
+    h.found = { status: "one", sessionId: MINE, title: "Work map" };
     const out = await run(CLAIM);
     expect(h.calls).toHaveLength(1);
     expect(h.calls[0]).toMatchObject({ sessionId: MINE });
@@ -106,7 +117,40 @@ describe("update_session with no sessionId", () => {
       status: "updated",
       inferred: true,
       via: "client",
+      inferredSession: { sessionId: MINE, title: "Work map" },
     });
+  });
+
+  // rv-be-needs S1: teammates share one client key, so a write may land on a
+  // session the caller did not start — EVERY reply names which one.
+  it.each([
+    [
+      "proposed",
+      { status: "proposed", proposalId: "p-1", summary: "s", reviewPath: "/r" },
+    ],
+    ["not_found", { status: "not_found" }],
+    ["denied", { status: "denied", reason: "no" }],
+  ])("a %s reply names the inferred session too", async (_arm, result) => {
+    h.found = { status: "one", sessionId: MINE, title: "Work map" };
+    h.result = result;
+    const out = await run(CLAIM);
+    expect(out).toMatchObject({
+      inferred: true,
+      inferredSession: { sessionId: MINE, title: "Work map" },
+    });
+  });
+
+  it("a STALE session is named as such, never 'no open session' (and is not chosen)", async () => {
+    h.found = {
+      status: "stale",
+      sessions: [{ id: MINE, title: "Work map", startedAt: null }],
+    };
+    const out = await run(CLAIM);
+    expect(h.calls).toHaveLength(0);
+    expect(String(out.error)).toContain("stale");
+    expect(String(out.error)).toContain("NOTHING WAS CHANGED");
+    expect(String(out.error)).not.toContain("started no session");
+    expect(out.sessions).toEqual([expect.objectContaining({ id: MINE })]);
   });
 
   it("SEVERAL: refused with the list, and the service is never reached", async () => {

@@ -160,6 +160,7 @@ describe("update_session outcomes with no sessionId (F2), on PGlite", () => {
       status: "updated",
       inferred: true,
       via: "client",
+      inferredSession: { sessionId: started, title: "Work map" },
     });
     const slot = (await slotsOf(started)).find((s) => s.key === PR.key);
     expect(slot).toMatchObject({

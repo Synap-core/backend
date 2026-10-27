@@ -33,6 +33,7 @@ const USER = "user-1";
 const ONE = "key:k1|conv:claude-code:aaa";
 const MANY = "key:k1|conv:claude-code:bbb";
 const NONE = "key:k1|conv:claude-code:ccc";
+const STALE = "key:k1|conv:claude-code:ddd";
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -72,6 +73,7 @@ async function session(
 }
 
 let mine: string;
+let quiet: string;
 beforeAll(async () => {
   await h.client!.exec(ddlFor(focusSessions as unknown as PgTable));
   mine = await session(ONE, { title: "Work map" });
@@ -84,13 +86,15 @@ beforeAll(async () => {
   await session(MANY, { title: "First" });
   await session(MANY, { title: "Second", status: "paused" });
   await session(NONE, { autoOpened: true });
+  quiet = await session(STALE, { title: "Gone quiet", status: "stale" });
+  await session(STALE, { autoOpened: true, status: "stale" });
 });
 
 describe("resolveClientOpenSession (F2)", () => {
   it("exactly one open session this conversation started: that one", async () => {
     expect(
       await resolveClientOpenSession({ userId: USER, clientKey: ONE })
-    ).toEqual({ status: "one", sessionId: mine });
+    ).toEqual({ status: "one", sessionId: mine, title: "Work map" });
   });
 
   it("several: lists them with the exact count, guesses none", async () => {
@@ -105,6 +109,17 @@ describe("resolveClientOpenSession (F2)", () => {
     expect(
       await resolveClientOpenSession({ userId: USER, clientKey: NONE })
     ).toEqual({ status: "none" });
+  });
+
+  it("no open session but a STALE one it started: stale names it (never 'none'), never its receipt", async () => {
+    const r = await resolveClientOpenSession({
+      userId: USER,
+      clientKey: STALE,
+    });
+    expect(r).toMatchObject({ status: "stale" });
+    expect(r.status === "stale" && r.sessions.map((s) => s.id)).toEqual([
+      quiet,
+    ]);
   });
 
   it.each([

@@ -170,9 +170,21 @@ const offersFor = (over: Partial<Parameters<typeof readStartOffers>[0]> = {}) =>
   });
 
 describe("start offers (F5): the project's open goals, best match first", () => {
-  it("offers every OPEN goal of the project, the matching one first; never a closed one", async () => {
+  it("offers the OPEN goals the session's words meet; never a closed one, never one with no word in common", async () => {
     const offers = await offersFor();
-    expect(offers?.goals).toMatchObject({ status: "ok", total: 2 });
+    expect(offers?.goals).toMatchObject({ status: "ok", total: 1 });
+    const goals =
+      offers?.goals && "items" in offers.goals ? offers.goals.items : [];
+    // "Ship the CRM" shares no word with "Founder work map graph view".
+    expect(goals.map((g) => g.id)).toEqual([G.map]);
+    expect(goals[0]!.score).toBeGreaterThan(0);
+  });
+
+  it("several goals the words meet: best match first", async () => {
+    const offers = await offersFor({
+      title: "Founder work map and the CRM",
+      goal: "Founder work map and the CRM",
+    });
     const goals =
       offers?.goals && "items" in offers.goals ? offers.goals.items : [];
     expect(goals.map((g) => g.id)).toEqual([G.map, G.crm]);
@@ -228,5 +240,11 @@ describe("start offers (F6): open sessions on close work", () => {
 
   it("no project and no goal: no offers at all (nothing to look in)", async () => {
     expect(await offersFor({ projectId: null })).toBeUndefined();
+  });
+
+  it("both parts read and found nothing: no offers block (and no hint)", async () => {
+    expect(
+      await offersFor({ title: "Zebra stripes", goal: "Zebra stripes" })
+    ).toBeUndefined();
   });
 });

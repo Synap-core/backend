@@ -9,9 +9,10 @@
  * taken only if the agent already knew it.
  *
  *  - `goals`    — the project's OPEN goals (only when the start named no
- *                 `trackId`), best match first: "this may serve goal X —
- *                 file it with `trackId`". Read through `listOpenGoalRows`,
- *                 the reader orient's `openGoals` uses.
+ *                 `trackId`) that share a word with the session, best match
+ *                 first: "this may serve goal X — file it with `trackId`".
+ *                 Read through `listOpenGoalRows`, the reader orient's
+ *                 `openGoals` uses (orient lists every open goal).
  *  - `sessions` — OPEN sessions on close work in the same goal (when filed
  *                 into one) or the same project: "continue one of these?".
  *                 Same similarity as the twin matcher (`tokenSetOverlap`), at a
@@ -20,7 +21,9 @@
  *
  * SUGGEST-ONLY, like the playbook offer: nothing is joined, adopted or filed.
  * Each part is its own section; a failed read is `unavailable`, never an empty
- * offer, and never fails the start it rides on.
+ * offer, and never fails the start it rides on. Nothing to offer in either
+ * part: no block at all (rv-be-needs S6 — an empty block was noise on every
+ * start, and its hint told the agent to cancel the session it had just begun).
  */
 import {
   db,
@@ -100,7 +103,8 @@ const words = (...parts: Array<string | null | undefined>): string =>
 
 /**
  * The offers for a session just started. `undefined` when there is no scope to
- * look in (no project and no goal) — not an empty offer.
+ * look in (no project and no goal), or when both parts READ and found nothing
+ * — never when a part failed (that part says `unavailable`).
  */
 export async function readStartOffers(p: {
   userId: string;
@@ -123,9 +127,8 @@ export async function readStartOffers(p: {
           limit: GOALS_SCAN,
         })
           .then((rows) => {
-            // Every open goal of the project is offered (best match first):
-            // a project's goals are few, and a goal the words miss is still
-            // the one the work may serve.
+            // Only a goal that shares a word with the session (score > 0),
+            // best match first: one the words miss entirely is noise here.
             const ranked = rows
               .map((g) => ({
                 id: g.id,
@@ -134,6 +137,7 @@ export async function readStartOffers(p: {
                 endState: g.endState,
                 score: tokenSetOverlap(said, words(g.name, g.endState)),
               }))
+              .filter((g) => g.score > 0)
               .sort((a, b) => b.score - a.score);
             return {
               status: "ok" as const,
@@ -202,6 +206,9 @@ export async function readStartOffers(p: {
       };
     });
 
+  const found = (part?: { status: "ok"; total: number } | Unavailable) =>
+    !!part && (part.status === "unavailable" || part.total > 0);
+  if (!found(goals) && !found(sessions)) return undefined;
   return {
     ...(goals ? { goals } : {}),
     sessions,
