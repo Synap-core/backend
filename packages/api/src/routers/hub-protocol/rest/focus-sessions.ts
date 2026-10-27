@@ -754,8 +754,10 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       "every OPEN session, plus every session settled in the last " +
       "`windowHours` (default 72), plus the far end of every edge of those, " +
       "with the edges flat (`blocked_by`, `spawned_from`, `waits_on_output`, " +
-      "`triggered`, `updated`). Pod-wide when neither `workspaceId` nor " +
-      "`projectId` is given. Floored at the sessions the caller can read, " +
+      "`triggered`, `updated`). For an unbound key, pod-wide when neither " +
+      "`workspaceId` nor `projectId` is given. A workspace-bound key reads " +
+      "its own workspace, far ends included, and another `workspaceId` is a " +
+      "403. Floored at the sessions the caller can read, " +
       "like the list. At most 500 window sessions, open first: " +
       "`window.truncated` / `window.omitted` say when it cut. A failed edge " +
       "read is `sections.<name>.status: unavailable`, never an empty list.",
