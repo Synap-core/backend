@@ -156,12 +156,13 @@ describe("stopped: no agent moved the work for 7 days, or it ended", () => {
       startedAt: ago(9 * DAY),
     };
     expect(needsYouSessionClass(never, NOW)).toBe("stopped");
+    // No readable clock at all (a legacy row): never called stopped.
     expect(
       needsYouSessionClass(
         { ...live, lastAgentActivityAt: null, startedAt: null },
         NOW
       )
-    ).toBe("stopped");
+    ).toBe("live");
   });
 
   it("outranks working: an agent turn on an ended session is still stopped", () => {

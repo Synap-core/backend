@@ -137,6 +137,9 @@ import {
   workspaceMembers,
   podMembers,
   projectMembers,
+  chatTurns,
+  events,
+  playbookRuns,
 } from "@synap/database";
 import { FOCUS_SESSION_TRIAGE_ACCEPTED_EVENT_TYPE } from "../lifecycle-events.js";
 import { answerSessionSlot, attestSessionSlot } from "../session-answer.js";
@@ -260,6 +263,10 @@ describe("draft asks: the read and acceptance on engagement", () => {
       workspaceMembers,
       podMembers,
       projectMembers,
+      // The needs-you rule's facts (agent evidence, proposal waits).
+      chatTurns,
+      events,
+      playbookRuns,
     ]) {
       await h.client!.exec(ddlFor(t as unknown as PgTable));
     }

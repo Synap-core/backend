@@ -93,8 +93,8 @@ export function needsYouSessionClassSql(s: string, now: Date): SQL {
   const t = now.getTime();
   return drizzleSql`(SELECT CASE
       WHEN ${col(s, "status")} NOT IN (${OPEN_STATUSES}) THEN 'stopped'
-      WHEN GREATEST(ny_la.at, ${col(s, "started_at")}) IS NULL
-        OR GREATEST(ny_la.at, ${col(s, "started_at")}) < ${at(t - NEEDS_YOU_STOPPED_AFTER_MS)}
+      -- No readable clock at all (NULL) is never stopped: fails toward keeping.
+      WHEN GREATEST(ny_la.at, ${col(s, "started_at")}) < ${at(t - NEEDS_YOU_STOPPED_AFTER_MS)}
         THEN 'stopped'
       WHEN ${sessionTurnInFlightSql(s)} THEN 'working'
       WHEN ny_la.at >= ${at(t - NEEDS_YOU_WORKING_WINDOW_MS)} THEN 'working'

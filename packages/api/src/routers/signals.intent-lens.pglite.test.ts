@@ -87,6 +87,7 @@ import {
   entityFacets,
   profiles,
   links,
+  playbookRuns,
 } from "@synap/database";
 import { signalsRouter } from "./signals.js";
 
@@ -193,6 +194,8 @@ beforeAll(async () => {
     entityFacets,
     profiles,
     links,
+    // The needs-you rule's facts (agent evidence, proposal waits).
+    playbookRuns,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }
