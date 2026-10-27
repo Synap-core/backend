@@ -425,7 +425,11 @@ describe("continuation packet — the WORK UNITS a session recorded", () => {
         retiredAt: "2026-10-27T00:00:00Z",
       } as Partial<ExpectedOutput>),
       slot({ kind: "document", label: "The plan" }),
-      slot({ kind: "document", label: "Docs", ref: { url: "https://x.dev/a" } }),
+      slot({
+        kind: "document",
+        label: "Docs",
+        ref: { url: "https://x.dev/a" },
+      }),
     ]);
     expect(section).toMatchObject({
       status: "ok",

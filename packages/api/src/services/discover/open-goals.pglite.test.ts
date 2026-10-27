@@ -148,7 +148,11 @@ const goalIds = (s: Awaited<ReturnType<typeof readOpenGoals>>) =>
 describe("orient startHere.openGoals", () => {
   it("pod-wide: every LIVE goal the caller can see, never a closed / dropped one or another person's", async () => {
     const s = await readOpenGoals(ME);
-    expect(s).toMatchObject({ lens: "pod", count: 4, countIsLowerBound: false });
+    expect(s).toMatchObject({
+      lens: "pod",
+      count: 4,
+      countIsLowerBound: false,
+    });
     expect(goalIds(s)).toEqual(
       [G.active, G.proposed, G.paused, G.secondProject].sort()
     );

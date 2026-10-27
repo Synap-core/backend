@@ -112,9 +112,9 @@ describe("resolveClientOpenSession (F2)", () => {
     ["a per-call run", "key:k1|call:xyz"],
     ["no client at all", null],
   ])("%s: no_client, never a guess", async (_name, clientKey) => {
-    expect(
-      await resolveClientOpenSession({ userId: USER, clientKey })
-    ).toEqual({ status: "no_client" });
+    expect(await resolveClientOpenSession({ userId: USER, clientKey })).toEqual(
+      { status: "no_client" }
+    );
   });
 
   it("a FAILED read is unavailable, never none", async () => {

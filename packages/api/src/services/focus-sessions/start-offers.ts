@@ -80,8 +80,7 @@ export interface StartSessionOffer {
 export interface StartOffers {
   /** Absent when the start named a goal, or has no project to look in. */
   goals?:
-    | { status: "ok"; total: number; items: StartGoalOffer[] }
-    | Unavailable;
+    { status: "ok"; total: number; items: StartGoalOffer[] } | Unavailable;
   sessions:
     | {
         status: "ok";
@@ -204,7 +203,6 @@ export async function readStartOffers(p: {
   return {
     ...(goals ? { goals } : {}),
     sessions,
-    hint:
-      "Suggestions only — nothing was applied. If this work serves one of `goals`, file it: update_session with trackId. If one of `sessions` is the same work, continue it (and close this one with complete_session, terminalStatus cancelled) instead of running two.",
+    hint: "Suggestions only — nothing was applied. If this work serves one of `goals`, file it: update_session with trackId. If one of `sessions` is the same work, continue it (and close this one with complete_session, terminalStatus cancelled) instead of running two.",
   };
 }

@@ -47,7 +47,9 @@ export async function listOpenGoalRows(p: {
     import("@synap/database"),
     import("../tracks/goal-content.js"),
   ]);
-  const rows = await scopedDb(AccessContext.from({ userId: p.userId })).findMany<{
+  const rows = await scopedDb(
+    AccessContext.from({ userId: p.userId })
+  ).findMany<{
     id: string;
     projectId: string;
     name: string;

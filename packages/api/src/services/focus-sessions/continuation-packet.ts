@@ -347,7 +347,8 @@ export interface PacketSiblings {
 export const WORK_UNIT_KINDS = ["pull_request", "branch"] as const;
 
 /** A GitHub PR / branch / commit URL — a work unit whatever the slot's kind. */
-const WORK_UNIT_URL = /^https?:\/\/github\.com\/[^/]+\/[^/]+\/(pull|tree|commit)\//i;
+const WORK_UNIT_URL =
+  /^https?:\/\/github\.com\/[^/]+\/[^/]+\/(pull|tree|commit)\//i;
 
 /**
  * A pull request or branch this session recorded as an outcome (`ref.url`),
@@ -1220,7 +1221,10 @@ async function readSiblings(
     if (row.trackStage) {
       const track = await getTrack(row.trackId, { userId: reader.userId });
       const stages = track
-        ? deriveTrackStages(track.definitionSnapshot?.stages, track.currentStage)
+        ? deriveTrackStages(
+            track.definitionSnapshot?.stages,
+            track.currentStage
+          )
         : [];
       const at = stages.findIndex(
         (s) => s.key === filedStageKey(row.trackStage, stages)
