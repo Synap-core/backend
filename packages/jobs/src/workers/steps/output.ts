@@ -29,6 +29,7 @@ import {
   insertChannelMessage,
   ChannelRepository,
 } from "@synap/database";
+import type { SQL } from "@synap/database";
 import { MessageRole, MessageAuthorType } from "@synap/database/schema";
 import type { ExpectedOutput } from "@synap/playbooks";
 import { emitSideEffects } from "@synap/events";
@@ -42,6 +43,7 @@ import {
   PolicyBlockedError,
 } from "../../utils/automation-governance.js";
 import { advanceSessionStageViaSlot } from "../../utils/stage-advance.js";
+import { sessionOutcomeDoor } from "../../utils/session-outcome-door.js";
 import {
   lifecycleSlugOf,
   moveStatusFromAutomation,
@@ -80,6 +82,11 @@ const PRODUCER_REVIEWED_OUTPUT_TYPES = new Set<string>([
   "entity_create",
   "entity_update",
   "session_update",
+  // Session outcome verbs (plan v5 T2): governed by checkAutomationWriteOrPropose
+  // with the producer ladder, like session_update.
+  "complete_outcome",
+  "post_evidence",
+  "reevaluate_criterion",
   "webhook",
   "channel_message",
   "notification",
@@ -1085,20 +1092,10 @@ export async function executeOutputStep(
       const addOutput = config.addOutput as
         Pick<ExpectedOutput, "kind" | "label" | "icon"> | undefined;
 
-      let session: typeof focusSessions.$inferSelect | undefined;
-      if (sessionId) {
-        session = await db.query.focusSessions.findFirst({
-          where: eq(focusSessions.id, sessionId),
-        });
-      } else if (subjectEntityId) {
-        session = await db.query.focusSessions.findFirst({
-          where: and(
-            eq(focusSessions.subjectEntityId, subjectEntityId),
-            eq(focusSessions.status, "active")
-          ),
-          orderBy: [desc(focusSessions.startedAt)],
-        });
-      }
+      const session = await resolveFlowSession(
+        { sessionId, subjectEntityId },
+        ownerId
+      );
 
       if (!session) {
         return { status: "skipped", reason: "no matching session" };
@@ -1257,6 +1254,124 @@ export async function executeOutputStep(
         // reported only "updated" would read as "carry on" to every downstream
         // node and to the run feed.
         ...(stageGated ? { stageGated: true } : {}),
+      };
+    }
+
+    case "complete_outcome":
+    case "post_evidence":
+    case "reevaluate_criterion": {
+      // The session OUTCOME verbs (plan v5 T2, decision V4): an automation may
+      // mark an outcome met, post evidence for criteria, or re-grade criteria —
+      // "PR merged → the step is done" as stored config. Governed like
+      // session_update (same gate, same producer ladder); a GRANT reaches the
+      // api doors through the fail-closed slot, a PROPOSAL carries the same
+      // patch to the `focus_session/update` executor, which applies it through
+      // the SAME doors on approval.
+      const target = await resolveFlowSession(config, ownerId);
+      if (!target) return { status: "skipped", reason: "no matching session" };
+      if (target.workspaceId && target.workspaceId !== workspaceId) {
+        throw new Error(
+          `${data.outputType}: session ${target.id} not visible in workspace ${workspaceId}`
+        );
+      }
+      // An automation acts for its OWNER: it moves the owner's sessions only.
+      if (target.userId !== ownerId) {
+        throw new Error(
+          `${data.outputType}: session ${target.id} is not the automation owner's`
+        );
+      }
+
+      // One shape per verb: the same patch is the gate's proposal payload and
+      // the door call's input.
+      let patch:
+        | { completeOutput: string }
+        | { evidence: Record<string, { passed: boolean; detail?: string }> }
+        | { reevaluateCriteria: string[] };
+      if (data.outputType === "complete_outcome") {
+        const outcomeKey = config.outcomeKey;
+        if (typeof outcomeKey !== "string" || outcomeKey.trim() === "") {
+          throw new Error("complete_outcome: config.outcomeKey is required");
+        }
+        patch = { completeOutput: outcomeKey.trim() };
+      } else if (data.outputType === "post_evidence") {
+        const evidence = readPostedEvidence(config.evidence);
+        if (!evidence) {
+          throw new Error(
+            "post_evidence: config.evidence must be { <evidenceKey>: { passed: boolean, detail?: string } }"
+          );
+        }
+        patch = { evidence };
+      } else {
+        const keys = Array.isArray(config.criterionKeys)
+          ? config.criterionKeys.filter(
+              (k): k is string => typeof k === "string" && k.trim() !== ""
+            )
+          : [];
+        if (keys.length === 0) {
+          throw new Error(
+            "reevaluate_criterion: config.criterionKeys must name at least one criterion"
+          );
+        }
+        patch = { reevaluateCriteria: keys };
+      }
+
+      const gate = await checkAutomationWriteOrPropose({
+        ownerId,
+        workspaceId,
+        subjectType: "focus_session",
+        action: "update",
+        data: { id: target.id, ...patch },
+        policyReason: automationProposedSentence("updating a focus session"),
+        automationRunId: automationContext.automationRunId,
+        correlationId: automationContext.rootRunId,
+        sessionId: automationContext.focusSessionId,
+        stepRunId: attribution?.stepRunId,
+        nodeId: attribution?.nodeId,
+        producerAgentUserId,
+      });
+      if ("denied" in gate) {
+        throw new PolicyBlockedError(
+          "deny",
+          `${data.outputType} denied by governance: ${gate.reason}`
+        );
+      }
+      if ("proposed" in gate) {
+        // SAFETY: a proposal was created — do NOT direct-write.
+        return { status: "proposed", proposalId: gate.proposalId };
+      }
+
+      const door = sessionOutcomeDoor();
+      if ("completeOutput" in patch) {
+        const r = await door.completeOutcome({
+          sessionId: target.id,
+          userId: target.userId,
+          outcomeKey: patch.completeOutput,
+        });
+        return {
+          status: r.result,
+          sessionId: target.id,
+          ...(r.message ? { message: r.message } : {}),
+        };
+      }
+      const r =
+        "evidence" in patch
+          ? await door.postEvidence({
+              sessionId: target.id,
+              userId: target.userId,
+              agentUserId: producerAgentUserId ?? null,
+              evidence: patch.evidence,
+            })
+          : await door.reevaluateCriteria({
+              sessionId: target.id,
+              userId: target.userId,
+              agentUserId: producerAgentUserId ?? null,
+              criterionKeys: patch.reevaluateCriteria,
+            });
+      return {
+        status: r.status,
+        sessionId: target.id,
+        recorded: r.recorded,
+        skipped: r.skipped,
       };
     }
 
@@ -1462,4 +1577,82 @@ export function notificationDigest(title: string, body: string): string {
     .update(`${title}\u0000${body}`)
     .digest("hex")
     .slice(0, 12);
+}
+
+/**
+ * WHERE a session-scoped output finds its session — the ONE resolution
+ * `session_update` and the outcome verbs share: `config.sessionId`, else the
+ * ACTIVE session whose subject is `config.subjectEntityId`, newest first,
+ * among the automation OWNER's sessions (on a multi-member pod the newest
+ * session on a subject may be someone else's, and the owner's own must still
+ * be found). An explicit id is not floored here: the callers refuse another
+ * person's session by name, so that refusal says why. `null` = no lookup.
+ */
+export function flowSessionLookup(
+  config: Record<string, unknown>,
+  ownerId: string
+): { where: SQL; newestFirst: boolean } | null {
+  const sessionId =
+    typeof config.sessionId === "string" && config.sessionId
+      ? config.sessionId
+      : undefined;
+  const subjectEntityId =
+    typeof config.subjectEntityId === "string" && config.subjectEntityId
+      ? config.subjectEntityId
+      : undefined;
+  if (sessionId) {
+    return { where: eq(focusSessions.id, sessionId), newestFirst: false };
+  }
+  if (subjectEntityId) {
+    return {
+      where: and(
+        eq(focusSessions.subjectEntityId, subjectEntityId),
+        eq(focusSessions.status, "active"),
+        eq(focusSessions.userId, ownerId)
+      )!,
+      newestFirst: true,
+    };
+  }
+  return null;
+}
+
+async function resolveFlowSession(
+  config: Record<string, unknown>,
+  ownerId: string
+): Promise<typeof focusSessions.$inferSelect | undefined> {
+  const lookup = flowSessionLookup(config, ownerId);
+  if (!lookup) return undefined;
+  return db.query.focusSessions.findFirst({
+    where: lookup.where,
+    ...(lookup.newestFirst ? { orderBy: [desc(focusSessions.startedAt)] } : {}),
+  });
+}
+
+/**
+ * `post_evidence`'s `config.evidence` after templating: `{ key: { passed,
+ * detail? } }`. A templated `"true"` / `"false"` reads as the boolean it
+ * names (a flow's `{{trigger.data.status == 'success'}}` arrives as text);
+ * anything else is refused — never read as "passed".
+ */
+export function readPostedEvidence(
+  raw: unknown
+): Record<string, { passed: boolean; detail?: string }> | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const out: Record<string, { passed: boolean; detail?: string }> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!key.trim() || !value || typeof value !== "object") return null;
+    const v = value as { passed?: unknown; detail?: unknown };
+    const passed =
+      v.passed === true || v.passed === "true"
+        ? true
+        : v.passed === false || v.passed === "false"
+          ? false
+          : null;
+    if (passed === null) return null;
+    out[key] = {
+      passed,
+      ...(typeof v.detail === "string" && v.detail ? { detail: v.detail } : {}),
+    };
+  }
+  return Object.keys(out).length > 0 ? out : null;
 }

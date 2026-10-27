@@ -93,6 +93,30 @@ const NODE_TYPE_DOCS: Record<(typeof FLOW_NODE_TYPES)[number], NodeTypeDoc> = {
           content: "string (template)",
         },
       },
+      // Session outcome verbs (plan v5 T2) — governed like every write: an
+      // agent-produced trigger PROPOSES, never writes ungoverned.
+      complete_outcome: {
+        fields: {
+          sessionId:
+            "string (template) — or subjectEntityId: the active session about that entity",
+          outcomeKey:
+            "string — the outcome's key (e.g. pr-backend-255); done when its ref is the evidence",
+        },
+      },
+      post_evidence: {
+        fields: {
+          sessionId: "string (template) — or subjectEntityId",
+          evidence:
+            "Record<evidenceKey, { passed: boolean | 'true' | 'false', detail?: string }> — grades the evidence criteria named",
+        },
+      },
+      reevaluate_criterion: {
+        fields: {
+          sessionId: "string (template) — or subjectEntityId",
+          criterionKeys:
+            "string[] — the criteria to grade again (capability + judge checks re-run)",
+        },
+      },
     },
   },
   command: {
