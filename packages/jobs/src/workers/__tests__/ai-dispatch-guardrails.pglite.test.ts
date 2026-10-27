@@ -36,6 +36,8 @@ const h = vi.hoisted(() => ({
   commandCalls: 0,
   /** Status the stub runner writes on the child run row it creates. */
   childStatus: "running" as string,
+  /** `stop_reason` it writes there (`budget` = run-turn-end's budget end). */
+  childStopReason: null as string | null,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -106,13 +108,18 @@ vi.mock("../steps/playbook-run.js", () => ({
       ]
     );
     await h.client!.query(
-      `insert into playbook_runs (id, playbook_id, session_id, status, error, started_at, completed_at)
-       values ($1, gen_random_uuid(), $2, $3, $4, now(), case when $3 = 'running' then null else now() end)`,
+      `insert into playbook_runs (id, playbook_id, session_id, status, error, stop_reason, started_at, completed_at)
+       values ($1, gen_random_uuid(), $2, $3, $4, $5, now(), case when $3 = 'running' then null else now() end)`,
       [
         runId,
         sessionId,
         h.childStatus,
-        h.childStatus === "failed" ? "IS turn failed" : null,
+        h.childStatus !== "failed"
+          ? null
+          : h.childStopReason === "budget"
+            ? "Stopped at its token budget: the run stopped before it was finished 3 times."
+            : "IS turn failed",
+        h.childStopReason,
       ]
     );
     return { runId, sessionId, status: h.childStatus };
@@ -128,7 +135,11 @@ import {
   AI_DISPATCH_GUARDRAILS,
   AUTOMATION_SKIP_REASONS,
 } from "@synap-core/types/automations";
-import { NEVER_WORKED_FAILURE_LIMIT } from "../automation-breaker.js";
+import {
+  CONSECUTIVE_FAILURE_LIMIT,
+  NEVER_WORKED_FAILURE_LIMIT,
+} from "../automation-breaker.js";
+import { resettleAutomationRunFromChildren } from "../../utils/automation-parent-settle.js";
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -306,6 +317,7 @@ beforeEach(async () => {
   h.playbookCalls = 0;
   h.commandCalls = 0;
   h.childStatus = "running";
+  h.childStopReason = null;
   await h.client!.exec(
     "delete from automations; delete from automation_runs; delete from automation_step_runs; delete from playbook_runs; delete from focus_sessions;"
   );
@@ -495,5 +507,123 @@ describe("a parent run settles from its children's outcomes", () => {
     await execute(a, r);
     expect((await runRow(r)).status).toBe("completed");
     expect((await automationRow(a)).success_count).toBe(1);
+  });
+});
+
+/**
+ * Founder F3 default (2026-10-27): an unattended run that ends at its budget
+ * (`run-turn-end.ts`, `stop_reason = 'budget'`) fails its parent, but neither
+ * breaker counts it. A daily rule that keeps stopping at its budget must not
+ * come back on day 10 as "broken".
+ */
+describe("a budget stop never turns a rule off", () => {
+  const stopReasonOf = async (id: string) =>
+    (
+      await q<{ stop_reason: string | null }>(
+        "select stop_reason from automation_runs where id = $1",
+        [id]
+      )
+    ).rows[0]!.stop_reason;
+  /** `n` settled failed runs in the ledger, older than anything new. */
+  const priorFailures = async (a: string, n: number, stopReason?: string) => {
+    for (let i = 0; i < n; i++) {
+      const id = await run(a, {}, { status: "failed", hoursAgo: 48 + i });
+      if (stopReason)
+        await q("update automation_runs set stop_reason = $2 where id = $1", [
+          id,
+          stopReason,
+        ]);
+    }
+  };
+
+  it("never-worked: the budget stop fails the parent, moves the counters, and trips nothing", async () => {
+    h.childStatus = "failed";
+    h.childStopReason = "budget";
+    const a = await automation({
+      flow: SINGLE_PLAYBOOK,
+      failureCount: NEVER_WORKED_FAILURE_LIMIT - 1,
+    });
+    const r = await run(a);
+    await execute(a, r);
+
+    const parent = await runRow(r);
+    expect(parent.status).toBe("failed");
+    expect(parent.error_message).toContain(
+      "1 of 1 playbook run this run started stopped at its budget"
+    );
+    expect(parent.error_message).toContain("Stopped at its token budget");
+    expect(await stopReasonOf(r)).toBe("budget");
+    const auto = await automationRow(a);
+    expect(auto.failure_count).toBe(NEVER_WORKED_FAILURE_LIMIT);
+    expect(auto.status).toBe("active");
+  });
+
+  it("never-worked: earlier budget stops are subtracted from an ordinary failure's count", async () => {
+    h.childStatus = "failed";
+    const a = await automation({
+      flow: SINGLE_PLAYBOOK,
+      failureCount: NEVER_WORKED_FAILURE_LIMIT - 1,
+    });
+    await priorFailures(a, 1, "budget");
+    const r = await run(a);
+    await execute(a, r);
+    expect(await stopReasonOf(r)).toBeNull();
+    const auto = await automationRow(a);
+    // 10 failures on the counter, one of them a budget stop: 9, no trip.
+    expect(auto.failure_count).toBe(NEVER_WORKED_FAILURE_LIMIT);
+    expect(auto.status).toBe("active");
+  });
+
+  it("worked-then-broke: a budget stop neither extends nor heals the streak", async () => {
+    const a = await automation({ flow: SINGLE_PLAYBOOK, successCount: 5 });
+    await priorFailures(a, CONSECUTIVE_FAILURE_LIMIT - 2);
+
+    h.childStatus = "failed";
+    h.childStopReason = "budget";
+    await execute(a, await run(a));
+    expect((await automationRow(a)).status).toBe("active");
+
+    // Nine ordinary failures in a row: counted, the budget stop would make ten.
+    h.childStopReason = null;
+    await execute(a, await run(a));
+    expect((await automationRow(a)).status).toBe("active");
+
+    // The tenth ordinary failure trips it: the budget stop between them did
+    // not reset the streak either.
+    await execute(a, await run(a));
+    expect((await automationRow(a)).status).toBe("error");
+  });
+
+  it("a parent marked as a budget stop that then gets an ordinary failed child is a fault, and the breaker runs", async () => {
+    h.childStatus = "failed";
+    h.childStopReason = "budget";
+    const a = await automation({
+      flow: SINGLE_PLAYBOOK,
+      failureCount: NEVER_WORKED_FAILURE_LIMIT - 1,
+    });
+    const r = await run(a);
+    await execute(a, r);
+    expect(await stopReasonOf(r)).toBe("budget");
+    expect((await automationRow(a)).status).toBe("active");
+
+    // A second child of the same run fails for real.
+    const sessionId = randomUUID();
+    await q(
+      `insert into focus_sessions (id, user_id, goal, status, metadata, started_at, updated_at)
+       values ($1, 'owner', 'g', 'active', $2::jsonb, now(), now())`,
+      [sessionId, JSON.stringify({ automationId: a, automationRunId: r })]
+    );
+    await q(
+      `insert into playbook_runs (id, playbook_id, session_id, status, error, started_at, completed_at)
+       values (gen_random_uuid(), gen_random_uuid(), $1, 'failed', 'IS turn failed', now(), now())`,
+      [sessionId]
+    );
+    await resettleAutomationRunFromChildren(r);
+
+    expect(await stopReasonOf(r)).toBeNull();
+    expect((await runRow(r)).error_message).toContain(
+      "2 playbook runs this run started failed. First failure: IS turn failed"
+    );
+    expect((await automationRow(a)).status).toBe("error");
   });
 });

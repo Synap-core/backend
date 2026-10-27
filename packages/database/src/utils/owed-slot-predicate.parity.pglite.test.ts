@@ -15,10 +15,8 @@
  *   - retired + human / retired + agent — retirement on one owner branch only;
  *   - JSON `false` / `0` stamps — a falsy test reads them as not retired.
  *
- * TEST-ONLY relative import of the authored rule: `@synap/database` cannot
- * depend on `@synap-core/types` (types depends on database — a build cycle);
- * tsconfig excludes tests, so this path never enters the database build. Same
- * pattern as `guideline-vocabulary-parity.test.ts`.
+ * The SQL and the TypeScript rule cannot be one declaration (Postgres runs
+ * the one, Node the other), which is why this parity test exists at all.
  *
  * The second block is the copy guard: no other pod source spells the
  * retirement clause (the blocked-slot scanner once carried its own copy of all
@@ -37,7 +35,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { PgDialect } from "drizzle-orm/pg-core";
 import { sql as drizzleSql } from "drizzle-orm";
 import { OWED_SLOT_CLAUSES, owedSlotExistsIn } from "./owed-slot-predicate.js";
-import { deliverableOwedBy } from "../../../types/src/units/deliverable.js";
+import { deliverableOwedBy } from "@synap-core/types/units";
 
 const STAMP = "2026-09-08T13:00:00.000Z";
 

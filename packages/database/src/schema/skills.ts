@@ -303,8 +303,12 @@ export const skills = pgTable(
 
     // ── Execution (code skills only) ─────────────────────────────────────
 
+    // `box` (0356): the skill is a script that runs on the person's own
+    // computer, never in the pod — running it queues a `box_runs` row, and
+    // `metadata.box` declares its language, packages, hosts and limits
+    // (`services/box-runs/box-spec.ts`). A text column: no DB enum to alter.
     executionMode: text("execution_mode", {
-      enum: ["sync", "async"],
+      enum: ["sync", "async", "box"],
     })
       .notNull()
       .default("sync"),

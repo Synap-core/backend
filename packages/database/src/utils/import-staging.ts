@@ -4,16 +4,15 @@
  * group is built. Nothing lists it as a capture or a document, and the search
  * reindex skips it: it is the person's raw batch, not yet anybody's record.
  *
- * The value mirrors `IMPORT_STAGED_MARKER` in `@synap-core/types/imports`
- * (this package does not depend on that one); a parity test in `@synap/api`
- * (`services/imports/__tests__/imports.pglite.test.ts`, "the staged marker")
- * keeps them equal.
+ * The value is `IMPORT_STAGED_MARKER` (`@synap-core/types/imports`, the client
+ * contract), under the pod's name.
  */
 
 import { sql, type SQL } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
+import { IMPORT_STAGED_MARKER } from "@synap-core/types/imports";
 
-export const IMPORT_AWAITING_CURATION = "awaiting_curation";
+export const IMPORT_AWAITING_CURATION = IMPORT_STAGED_MARKER;
 
 /**
  * `metadata` does NOT carry the staged marker. Spelled `IS DISTINCT FROM` so a

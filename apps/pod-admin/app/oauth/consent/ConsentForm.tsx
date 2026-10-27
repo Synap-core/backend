@@ -14,6 +14,7 @@ import {
   Radio,
   RadioGroup,
   Spinner,
+  Switch,
 } from "@heroui/react";
 import {
   Check,
@@ -23,6 +24,7 @@ import {
   ShieldAlert,
   ShieldCheck,
   Smartphone,
+  Sparkles,
   X,
 } from "lucide-react";
 
@@ -34,6 +36,7 @@ import { trpc } from "../../../lib/trpc";
 import {
   actsAsHeadline,
   allowBlockedReason,
+  allowNewAsks,
   alsoSeeLine,
   consentWidth,
   decideLine,
@@ -45,6 +48,8 @@ import {
   isTicked,
   LEVEL_WORDS,
   levelControlLabel,
+  newAsks,
+  newAsksAllowed,
   objectLevel,
   objectSpaceLabel,
   objectSpaces,
@@ -422,6 +427,11 @@ export function ConsentForm({
                   onToggleObjectSpace={(row, workspaceId) =>
                     setSelection((s) =>
                       toggleObjectSpace(s, app.permissions, row, workspaceId)
+                    )
+                  }
+                  onAllowNewAsks={(asks, allow) =>
+                    setSelection((s) =>
+                      allowNewAsks(s, app.permissions, asks, allow)
                     )
                   }
                   customize={customize}
@@ -1203,6 +1213,7 @@ export function AppConsent({
   onToggleSection,
   onSetLevel,
   onToggleObjectSpace,
+  onAllowNewAsks,
   customize,
   onCustomize,
   onSpaceCreated,
@@ -1222,6 +1233,8 @@ export function AppConsent({
   onSetLevel: (row: ConsentObject, level: AccessLevel) => void;
   /** A row's space tick pressed (`toggleObjectSpace`). */
   onToggleObjectSpace: (row: ConsentObject, workspaceId: string) => void;
+  /** "Allow the new ones" pressed (`allowNewAsks` over these asks). */
+  onAllowNewAsks: (asks: readonly OfferedPermission[], allow: boolean) => void;
   /**
    * The full permission × space matrix is shown instead of the rows. Both
    * edit the same `selection`.
@@ -1245,6 +1258,11 @@ export function AppConsent({
   );
   const objects = rows.filter((r) => !r.decisions);
   const decide = rows.filter((r) => r.decisions);
+  // A re-consent: what it asks now that the person never allowed (`newAsks`).
+  const asks = useMemo(
+    () => newAsks(app.permissions, app.approved, app.templates),
+    [app.permissions, app.approved, app.templates]
+  );
   const groupId = useId();
   // The server's list of pod-wide kinds, never a hand list.
   const podWide = (row: ConsentObject) =>
@@ -1264,6 +1282,14 @@ export function AppConsent({
   );
   return (
     <>
+      {asks.length > 0 && (
+        <NewAsks
+          asks={asks}
+          allowed={newAsksAllowed(selection, asks)}
+          busy={busy}
+          onAllow={(allow) => onAllowNewAsks(asks, allow)}
+        />
+      )}
       <div className="flex flex-col gap-3 rounded-lg bg-foreground/[0.03] px-4 py-3 ring-1 ring-inset ring-foreground/10">
         {!customize && objects.length > 0 && (
           <section
@@ -1436,6 +1462,78 @@ export function AppConsent({
         . Revoking there stops it in every browser, not just this one.
       </p>
     </>
+  );
+}
+
+/**
+ * A re-consent's new asks, first (`newAsks`): each in words with its raw
+ * token, the developer's reason and its spaces, then ONE switch. The switch is
+ * read from the selection (`newAsksAllowed`), never held apart: On ticks
+ * exactly these pairs, and the rows below move with them. It starts Off: the
+ * pod keeps what the person approved, not what they were asked, so a past
+ * "no" is indistinguishable from a new ask, and re-ticking it is their act.
+ * Omitted when nothing is new (a first consent, or the same ask again).
+ */
+function NewAsks({
+  asks,
+  allowed,
+  busy,
+  onAllow,
+}: {
+  asks: readonly OfferedPermission[];
+  allowed: boolean;
+  busy: boolean;
+  onAllow: (allow: boolean) => void;
+}) {
+  const id = useId();
+  return (
+    <section
+      aria-labelledby={`${id}-new`}
+      data-new-asks
+      className="flex flex-col gap-2.5 rounded-lg bg-primary/[0.06] px-4 py-3 ring-1 ring-inset ring-primary/30"
+    >
+      <p
+        id={`${id}-new`}
+        className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-[0.04em] text-foreground/75"
+      >
+        <Sparkles className="h-3 w-3 text-primary" aria-hidden /> New since you
+        last allowed
+      </p>
+      <ul className="flex flex-col gap-2">
+        {asks.map((p) => {
+          const reason = reasonOf(p);
+          return (
+            <li key={p.permission} className="flex flex-col gap-0.5">
+              <span className="text-sm text-foreground/90">
+                {permissionLabel(p.permission)}{" "}
+                <span className="font-mono text-xs text-foreground/65">
+                  {p.permission}
+                </span>
+              </span>
+              <span className="text-xs text-foreground/65">
+                {scopeLabel(p.workspaces)}
+              </span>
+              {reason ? (
+                <span className="text-pretty text-xs leading-relaxed text-foreground/75">
+                  {/* The developer's words, as text: why it asks. */}
+                  <span className="text-foreground/65">Its reason: </span>
+                  {reason}
+                </span>
+              ) : null}
+            </li>
+          );
+        })}
+      </ul>
+      <Switch
+        size="sm"
+        classNames={{ base: "min-h-10" }}
+        isSelected={allowed}
+        isDisabled={busy}
+        onValueChange={onAllow}
+      >
+        <span className="text-sm text-foreground/90">Allow the new ones</span>
+      </Switch>
+    </section>
   );
 }
 

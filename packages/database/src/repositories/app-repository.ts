@@ -14,6 +14,7 @@
 import { and, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import { randomUUID } from "crypto";
+import { APP_PUBLIC_ID_PREFIX } from "@synap-core/types/membrane";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { db } from "../client-pg.js";
 import {
@@ -173,12 +174,10 @@ function newest(dates: Array<Date | null | undefined>): Date | null {
 
 /**
  * The prefix of every app `public_id` (and so of every app grant's
- * `client_id`). A MIRROR of `@synap-core/types/membrane`'s constant — this
- * package cannot import that one (types → dev @synap/database is a cycle);
- * `isAppPublicId` lives there only, and `app-public-id-mirror.tripwire`
- * (api) keeps the two prefixes identical.
+ * `client_id`): `@synap-core/types/membrane`'s, the one `isAppPublicId`
+ * reads, re-exported.
  */
-export const APP_PUBLIC_ID_PREFIX = "app_";
+export { APP_PUBLIC_ID_PREFIX };
 
 /** `app_<lowercased-uuid>` — the stable public id, used verbatim as `client_id`. */
 function makePublicId(): string {

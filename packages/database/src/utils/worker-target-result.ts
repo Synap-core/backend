@@ -3,7 +3,7 @@
  * thing it targets (work model L4/L5).
  *
  * The edge is `session --targets--> entity` with `links.metadata.role =
- * WORKER_TARGET_LINK_ROLE` (`worker-enablement.ts`, pinned equal to
+ * WORKER_TARGET_LINK_ROLE` (`worker-enablement.ts`, which is
  * `@synap-core/types/workers` `WORKER_TARGET_ROLE`). A target with no `result`
  * is still being worked; a result is a MARK (done / failed / skipped /
  * created), never an absence.
@@ -29,19 +29,14 @@ import {
   WORKER_IN_FLIGHT_SESSION_STATUSES,
   WORKER_TARGET_LINK_ROLE,
 } from "./worker-enablement.js";
+import {
+  WORKER_TARGET_RESULTS,
+  type WorkerTargetResult,
+} from "@synap-core/types/workers";
 
-/**
- * The pod's copy of `@synap-core/types/workers` `WORKER_TARGET_RESULTS`
- * (types imports this package, so the pod cannot import it).
- */
-export const WORKER_TARGET_LINK_RESULTS = [
-  "done",
-  "failed",
-  "skipped",
-  "created",
-] as const;
-export type WorkerTargetLinkResult =
-  (typeof WORKER_TARGET_LINK_RESULTS)[number];
+/** `@synap-core/types/workers` `WORKER_TARGET_RESULTS`, under the pod's name. */
+export const WORKER_TARGET_LINK_RESULTS = WORKER_TARGET_RESULTS;
+export type WorkerTargetLinkResult = WorkerTargetResult;
 
 /** A worker target edge of `sessionId` (any target, or one). */
 function workerTargetWhere(sessionId: string, entityId?: string): SQL {

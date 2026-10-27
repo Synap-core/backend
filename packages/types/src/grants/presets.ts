@@ -27,7 +27,7 @@ import { parsePermission } from "./grammar.js";
  *
  * Built from two subject lists, each pinned to its real source by the api
  * tripwire `__tripwires__/ai-preset.tripwire.test.ts` — this package cannot
- * import them (types → database → governance-policy → types is a build cycle):
+ * import them (it is the published leaf: it depends on no backend package):
  *  - READS: every subject the access layer's read hook knows
  *    (`api/src/access/grant-read.ts` GRANT_READ_SPECS), minus AI_PRESET_EXCLUSIONS.
  *  - WRITES: create/update on every subject a governed write door
@@ -72,6 +72,9 @@ export const AI_READ_SUBJECTS = [
   "role",
   "session",
   "share",
+  // The runs of a box skill (box_runs, grant-read.ts): an agent that writes a
+  // skill reads how its runs went.
+  "skill",
   "source",
   "tool",
   "track",

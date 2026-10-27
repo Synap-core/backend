@@ -62,10 +62,8 @@ import {
  * definition's automations `status: "active"` — so a package/template can seed
  * an event automation whose `filters` the matcher cannot evaluate, landing the
  * same permanently-unreachable-but-healthy-looking row the tRPC door now
- * rejects. The validator cannot be applied inside `@synap/database` itself:
- * `@synap-core/types` depends on `@synap/database`, so importing it there would
- * close a dependency cycle. Validating at the DEFINITION PARSE boundary (here,
- * in `@synap/api`) is the honest fix — it is where the untrusted payload enters.
+ * rejects. Validating at the DEFINITION PARSE boundary (here, in `@synap/api`)
+ * is the honest fix — it is where the untrusted payload enters.
  *
  * Zero shipped capability/workspace JSON carries a trigger `filters` key today
  * (verified by a full JSON walk over both repos), so this cannot reject any
