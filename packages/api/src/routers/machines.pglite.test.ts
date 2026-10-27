@@ -250,6 +250,60 @@ describe("machines.setKeyTtl", () => {
   });
 });
 
+describe("machines.setRunsScripts", () => {
+  const liveScopes = async () =>
+    (
+      await q<{ scope: string[] }>(
+        `select scope from api_keys where user_id = $1 and revoked_at is null`,
+        [computerId]
+      )
+    ).map((r) => r.scope);
+
+  it("puts box.runner on the computer's live key and records it; off takes it away", async () => {
+    expect((await liveScopes()).length).toBeGreaterThan(0);
+    expect((await liveScopes()).every((s) => !s.includes("box.runner"))).toBe(
+      true
+    );
+    await expect(
+      caller(HUMAN).setRunsScripts({ machineId: computerId, enabled: true })
+    ).resolves.toMatchObject({ status: "updated", runsScripts: true });
+    // Twice on is still one scope, never a duplicate.
+    await caller(HUMAN).setRunsScripts({
+      machineId: computerId,
+      enabled: true,
+    });
+    for (const s of await liveScopes()) {
+      expect(s.filter((x) => x === "box.runner")).toHaveLength(1);
+      expect(s).toContain("hub-protocol.write");
+    }
+    expect((await caller(HUMAN).list())[0]).toMatchObject({
+      runsScripts: true,
+    });
+    await caller(HUMAN).setRunsScripts({
+      machineId: computerId,
+      enabled: false,
+    });
+    expect((await liveScopes()).every((s) => !s.includes("box.runner"))).toBe(
+      true
+    );
+    expect((await caller(HUMAN).list())[0]).toMatchObject({
+      runsScripts: false,
+    });
+  });
+
+  it("a stranger gets NOT_FOUND; a key is refused", async () => {
+    await expect(
+      caller(STRANGER).setRunsScripts({ machineId: computerId, enabled: true })
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(
+      caller(HUMAN, false).setRunsScripts({
+        machineId: computerId,
+        enabled: true,
+      })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+});
+
 describe("machines.revoke", () => {
   it("a stranger and a key cannot revoke", async () => {
     await expect(

@@ -55,7 +55,9 @@ function newPool(config: Partial<ProcessPoolConfig> = {}): ProcessSkillPool {
     processes: 3,
     isolatesPerProcess: 1,
     queueMax: 8,
+    perRequesterMax: 8,
     watchdogGraceMs: 2_000,
+    startTimeoutMs: 10_000,
     ...config,
   });
   pools.push(pool);

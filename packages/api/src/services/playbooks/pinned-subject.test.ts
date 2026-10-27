@@ -14,6 +14,7 @@ import {
   parsePinnedEntityIds,
   pickFirstEligible,
   readPinnedIds,
+  readPinnedStrategy,
   shouldDropPin,
 } from "./pinned-subject.js";
 
@@ -201,5 +202,26 @@ describe("definition version", () => {
         { inputStrategy: { kind: "none" } }
       )
     ).toBe(false);
+  });
+});
+
+describe("readPinnedStrategy keeps the fallback filter as stored", () => {
+  // Dropped, a filter that is not an object made the fallback pick from every
+  // record of the kind. Kept, the query DSL parser refuses it at run time.
+  it("a filter that is not an object is kept, not dropped", () => {
+    for (const filter of ['{"stage": "open"', ["stage"], 42, true]) {
+      expect(
+        readPinnedStrategy({ kind: "pinned", fallback: { filter } })
+      ).toEqual({ kind: "pinned", fallback: { filter } });
+    }
+  });
+
+  it("an object filter and an absent one read as before", () => {
+    expect(
+      readPinnedStrategy({ kind: "pinned", fallback: { filter: { a: 1 } } })
+    ).toEqual({ kind: "pinned", fallback: { filter: { a: 1 } } });
+    expect(
+      readPinnedStrategy({ kind: "pinned", fallback: { filter: null } })
+    ).toEqual({ kind: "pinned" });
   });
 });
