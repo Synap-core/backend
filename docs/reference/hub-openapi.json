@@ -10406,8 +10406,9 @@
                   "category": { "type": "string" },
                   "executionMode": {
                     "type": "string",
-                    "enum": ["sync", "async"]
+                    "enum": ["sync", "async", "box"]
                   },
+                  "box": { "type": "object", "additionalProperties": {} },
                   "timeoutSeconds": {
                     "type": "number",
                     "minimum": 1,
@@ -27194,6 +27195,102 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/focus-sessions/owed": {
+      "get": {
+        "tags": ["FocusSessions"],
+        "summary": "What waits on you: the asks owed to the caller",
+        "description": "THE needs-you owed read (`listNeedsYouOwed`, the predicate the Inbox count and list read): every human-owned, unfinished slot on a session the caller owns, whatever the session's status (a slot outlives its session); on an undecided agent draft, only the slots that ask. Oldest first. Narrow by `workspaceId` / `projectId` and by the thing the sessions are on (`subjectEntityId` or `subjectProfileSlug`). Each slot carries its session's `subjectEntityId` and `agentName` (the first agent on the session's roster, null when none). A scoped key reads only its grant's sessions. `truncated` = the page hit `limit`.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string" },
+            "required": false,
+            "name": "workspaceId",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string" },
+            "required": false,
+            "name": "projectId",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "required": false,
+            "name": "subjectEntityId",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string", "minLength": 1 },
+            "required": false,
+            "name": "subjectProfileSlug",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "integer", "minimum": 1, "maximum": 200 },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Owed slots",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "slots": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {},
+                        "additionalProperties": {}
+                      }
+                    },
+                    "truncated": { "type": "boolean" }
+                  },
+                  "required": ["slots", "truncated"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Project or kind not found",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
