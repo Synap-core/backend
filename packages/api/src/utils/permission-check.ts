@@ -10,6 +10,7 @@
  * Returns immediately — no async event pipeline.
  */
 
+import { HELD_WRITES_PROPOSAL_TYPE } from "./held-writes-type.js";
 import {
   describeBoxDeclaration,
   parseBoxDeclaration,
@@ -3394,7 +3395,7 @@ export const JOIN_GATE_DEFERRED_MESSAGE =
  * the `agent/held_writes` executor, which replays each kept write.
  */
 export const HELD_WRITES_TARGET_TYPE = "agent";
-export const HELD_WRITES_PROPOSAL_TYPE = "held_writes";
+export { HELD_WRITES_PROPOSAL_TYPE };
 /** Writes one day's pack may hold: one more day's worth at the default ceiling. */
 export const HELD_WRITES_MAX = DEFAULT_DAILY_WRITE_CEILING;
 /** The rung 2.56 reason code that routes a write to the pack. */
