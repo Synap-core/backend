@@ -74,12 +74,7 @@ export const skillsRouter = router({
             limit: PAGE,
             offset,
           });
-          rows.push(
-            ...page.filter(
-              (r: { executionMode?: string | null }) =>
-                r.executionMode !== "box"
-            )
-          );
+          rows.push(...page);
           if (page.length < PAGE) break;
         }
       }
