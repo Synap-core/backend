@@ -92,7 +92,12 @@ async function seedSession(workspaceId: string): Promise<string> {
 }
 
 const APP_GRANT = {
-  scopes: [{ permissions: ["session.read", "entity.person.read"], workspaceIds: [WS_CRM] }],
+  scopes: [
+    {
+      permissions: ["session.read", "entity.person.read"],
+      workspaceIds: [WS_CRM],
+    },
+  ],
   clientId: null,
 };
 

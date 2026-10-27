@@ -74,7 +74,10 @@ const PERSON = (subject: string): FencedReadDoor => ({
  * live scope grants `<subject>.read`, pinned or not: an app, whose grant is
  * always pinned to spaces, reads the row the list door already gives it.
  */
-const NARROWED = (subject: string, full: readonly string[]): FencedReadDoor => ({
+const NARROWED = (
+  subject: string,
+  full: readonly string[]
+): FencedReadDoor => ({
   bound: "narrowed",
   subject,
   full,
@@ -87,7 +90,9 @@ const REFUSED = (reason: string): FencedReadDoor => ({
 /** Does one live scope grant `<subject>.read`, whatever it is pinned to? */
 function grantReadsSubject(grant: KeyGrant, subject: string): boolean {
   return grant.scopes.some((scope) =>
-    scope.permissions.some((p) => patternMatches(p, { subject, action: "read" }))
+    scope.permissions.some((p) =>
+      patternMatches(p, { subject, action: "read" })
+    )
   );
 }
 

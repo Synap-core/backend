@@ -139,7 +139,9 @@ describe("declared session read doors (a scoped agent key reads its session)", (
   it("the session itself is admitted to a pinned key: the route narrows it", () => {
     // An app's grant is always pinned to spaces. The route reads the row
     // through the grant and withholds the packet (sessionPacketReadable).
-    expect(restDoorAllowed("GET", `/focus-sessions/${S}`, PINNED_AI)).toBe(true);
+    expect(restDoorAllowed("GET", `/focus-sessions/${S}`, PINNED_AI)).toBe(
+      true
+    );
     expect(
       restDoorAllowed(
         "GET",
