@@ -14,6 +14,9 @@
  *
  * The sha is the RUNNING build (`SYNAP_GIT_SHA`, stamped at image build), not
  * the version string the engine wrote: what is live is what the process runs.
+ * The build also names its repo (`SYNAP_GIT_REPO`) and when its commit was
+ * made (`SYNAP_BUILD_AT`), so a PR merged before that commit reads as
+ * deployed (`events/pr-state.ts`); both are left out when the image has none.
  *
  * IDEMPOTENT per update id: the subject is `pod-update:<updateId>`, and a boot
  * that finds a `dev.deployed` event on that subject records nothing. Never
@@ -59,6 +62,10 @@ export type PodDeployedResult =
 export interface PodDeployedDeps {
   /** The running build's sha (`SYNAP_GIT_SHA`). */
   buildSha(): string | null;
+  /** The repository it was built from, `owner/name` (`SYNAP_GIT_REPO`). */
+  buildRepo(): string | null;
+  /** When the built commit was made (`SYNAP_BUILD_AT`). */
+  builtAt(): string | null;
   /** Where the build is live — this pod's public host. */
   target(): string;
   owner(): Promise<string | null>;
@@ -73,6 +80,8 @@ export function podDeployedSubjectRef(updateId: string): string {
 
 const defaultDeps: PodDeployedDeps = {
   buildSha: () => process.env.SYNAP_GIT_SHA?.trim() || null,
+  buildRepo: () => process.env.SYNAP_GIT_REPO?.trim() || null,
+  builtAt: () => process.env.SYNAP_BUILD_AT?.trim() || null,
   target: () => {
     const url = process.env.PUBLIC_URL?.trim();
     if (!url) return "pod";
@@ -99,6 +108,13 @@ const defaultDeps: PodDeployedDeps = {
   record: recordObservation,
 };
 
+/** One spelling of a time (UTC ISO); `null` for none or an unreadable one. */
+function isoTime(value: string | null): string | null {
+  if (!value) return null;
+  const t = new Date(value);
+  return Number.isNaN(t.getTime()) ? null : t.toISOString();
+}
+
 export async function recordPodDeployed(
   outcome: PodDeployedOutcome,
   deps: PodDeployedDeps = defaultDeps
@@ -107,9 +123,13 @@ export async function recordPodDeployed(
     return { status: "skipped", reason: "not_a_success" };
   }
   const sha = deps.buildSha();
+  const repo = deps.buildRepo();
+  const builtAt = isoTime(deps.builtAt());
   const data = {
     target: deps.target(),
     sha: sha ?? "",
+    ...(repo ? { repo } : {}),
+    ...(builtAt ? { builtAt } : {}),
     updateId: outcome.updateId,
     from: outcome.from,
     to: outcome.to,
