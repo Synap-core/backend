@@ -667,6 +667,24 @@ describe("the run names WHO works it and HOW (plan v5 T2)", () => {
     expect(lastData().templateId).toBe(playbookId);
   });
 
+  it("a method playbook the person asked cannot see is dropped — the run is still proposed (S11)", async () => {
+    // Rules out: the start door's BAD_REQUEST ("names no playbook you can
+    // see") thrown on every tick, so a shared goal never proposes again.
+    const playbookId = randomUUID();
+    await q(
+      `insert into playbooks (id, workspace_id, name, goal_template, status, executor, stages, params, expected_outputs, criteria, created_by)
+       values ($1, $2, 'Their method', 'Ship', 'active', 'is-agent', '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, $3)`,
+      [playbookId, randomUUID(), "someone-else"]
+    );
+    const id = await goal({ name: "Not my method" });
+    await q(`update project_tracks set playbook_id = $1 where id = $2`, [
+      playbookId,
+      id,
+    ]);
+    expect((await runGoalLoop(id)).status).toBe("proposed");
+    expect(lastData().templateId ?? null).toBeNull();
+  });
+
   it("a goal with no method proposes a run with no playbook", async () => {
     const id = await goal({ name: "No method" });
     expect((await runGoalLoop(id)).status).toBe("proposed");

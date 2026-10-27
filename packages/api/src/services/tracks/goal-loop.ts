@@ -53,6 +53,7 @@ import {
   notifications,
   projectTracks,
   projects,
+  playbooks,
   proposals,
   drizzleSql,
 } from "@synap/database";
@@ -87,6 +88,7 @@ import {
   createFocusSession,
 } from "../focus-sessions/create-session.js";
 import { NotificationService } from "../../notifications/NotificationService.js";
+import { AccessContext, scopedDb } from "../../access/index.js";
 
 const logger = createLogger({ module: "goal-loop" });
 
@@ -226,8 +228,10 @@ export async function runGoalLoop(goalId: string): Promise<GoalLoopRunResult> {
   }
 
   const carried = criteria.filter((c) => decision.carry.includes(c.key));
+  const owner = await goalOwnerToAsk(track);
+  const templateId = await methodPlaybookFor(track, owner);
   const result = await createFocusSession({
-    userId: await goalOwnerToAsk(track),
+    userId: owner,
     workspaceId: row.workspaceId,
     projectId: track.projectId,
     trackId: track.id,
@@ -244,7 +248,7 @@ export async function runGoalLoop(goalId: string): Promise<GoalLoopRunResult> {
     // playbook is the run's playbook. Before, the run named neither and an
     // approved run waited for someone to notice it.
     ...(workerAgentId ? { agentIds: [workerAgentId] } : {}),
-    ...(track.playbookId ? { templateId: track.playbookId } : {}),
+    ...(templateId ? { templateId } : {}),
     goalLoopOf: track.id,
   });
   if (result.status !== "proposed") {
@@ -263,6 +267,32 @@ export async function runGoalLoop(goalId: string): Promise<GoalLoopRunResult> {
     proposalId: result.proposalId,
     carry: decision.carry,
   };
+}
+
+/**
+ * The goal's method playbook, when the person the run is proposed for can see
+ * it — the start door refuses a playbook its caller cannot see
+ * (`createFocusSession`, BAD_REQUEST), read through the SAME access-layer
+ * floor. On a shared goal whose owner-to-ask is not the playbook's owner, a
+ * refusal would throw on every tick and the goal would never propose again;
+ * so the run is proposed without the playbook, and that is logged.
+ */
+async function methodPlaybookFor(
+  track: Pick<ProjectTrack, "id" | "playbookId">,
+  owner: string
+): Promise<string | null> {
+  if (!track.playbookId) return null;
+  const visible = await scopedDb(
+    AccessContext.agent({ userId: owner })
+  ).findFirst<typeof playbooks.$inferSelect>(playbooks, {
+    where: eq(playbooks.id, track.playbookId),
+  });
+  if (visible) return track.playbookId;
+  logger.warn(
+    { goalId: track.id, playbookId: track.playbookId, owner },
+    "goal loop: the goal's playbook is not visible to the person asked — proposing the run without it"
+  );
+  return null;
 }
 
 /**
