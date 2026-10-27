@@ -945,6 +945,7 @@ export const buildHandlers: McpHandlerMap = {
       reasoning: args.reasoning as string | undefined,
       projectId: trimmed(args.projectId),
       trackId: trimmed(args.trackId),
+      handToAgentId: trimmed(args.handToAgentId),
       source: "mcp",
     });
     return renderPlaybookDoorOutcome(outcome, userId);
