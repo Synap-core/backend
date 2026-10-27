@@ -13,6 +13,7 @@ import {
   formatKeyFingerprint,
   type MarketplaceTrust,
 } from "@synap-core/types/marketplace-source";
+import { canReachLine, existingConnections } from "@synap-core/types/proposals";
 import { formatDate, formatRelative } from "../../../../lib/format";
 import type { StatusKind } from "../../components/status-pill";
 import type {
@@ -182,18 +183,6 @@ export function installMode(
   return { kind: "install" };
 }
 
-/** "Gmail" / "Gmail and Slack" / "Gmail, Notion and Slack". */
-function joinNames(names: string[]): string {
-  return names.length < 2
-    ? (names[0] ?? "")
-    : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
-}
-
-/** "my existing Gmail connection" / "my existing Gmail and Slack connections". */
-function existingConnections(names: string[], owner: "my" | "your"): string {
-  return `${owner} existing ${joinNames(names)} connection${names.length === 1 ? "" : "s"}`;
-}
-
 /** One extra confirm the install asks for — a key of `requires`. */
 export type ConfirmKey = "code" | "network" | "connectors";
 
@@ -250,7 +239,7 @@ export function riskLines(
   }
   if (risks.code.length > 0) lines.push(`Runs code: ${risks.code.join(", ")}`);
   if (risks.networkHosts.length > 0) {
-    lines.push(`Can reach: ${risks.networkHosts.join(", ")}`);
+    lines.push(canReachLine(risks.networkHosts));
   }
   if (risks.connectors.length > 0) {
     lines.push(`Connects: ${risks.connectors.join(", ")}`);

@@ -358,3 +358,14 @@ export function resolveToolLabel(
   const row = TOOL_LABEL_OVERRIDES[key] ?? compose(key);
   return row ? row[mood] : humanizeToken(toolName);
 }
+
+/**
+ * A capability verb as an automation step reads it: "apify.run_actor" →
+ * "Run actor (Apify)". The provider prefix stays, in words, because it says
+ * what the step reaches. Every surface that names a step reads it here.
+ */
+export function resolveVerbStepLabel(verbId: string): string {
+  const dot = verbId.indexOf(".");
+  const label = resolveToolLabel(verbId, "imperative");
+  return dot > 0 ? `${label} (${humanizeToken(verbId.slice(0, dot))})` : label;
+}
