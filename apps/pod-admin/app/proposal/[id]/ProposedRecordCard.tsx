@@ -21,6 +21,7 @@ import { MediaView } from "../../_lib/media/media-view";
 import { ChangeLines } from "../../_lib/object/content/document-changes";
 import { resolveObjectNounPlural } from "@synap-core/types/vocabulary";
 import type { PartEdge } from "./composite-parts-model";
+import type { RecordGroup } from "./record-groups";
 import {
   RECORD_FIELDS_SHOWN,
   type ProposedRecord,
@@ -210,11 +211,14 @@ function Field({ field }: { field: RecordField }) {
 export function ProposedRecordCard({
   record,
   media,
+  mediaAlt,
   children,
 }: {
   record: ProposedRecord;
   /** The record's image (an upload waiting for approval), drawn as a thumbnail. */
   media?: MediaRef | null;
+  /** The image's name for someone who cannot see it (`mediaAlt`). */
+  mediaAlt?: string;
   /** What sits under the fields: this record's twins and its choice. */
   children?: ReactNode;
 }) {
@@ -252,7 +256,13 @@ export function ProposedRecordCard({
           </span>
         )}
       </header>
-      {media && <MediaView media={media} alt={title} size="thumb" />}
+      {media && (
+        <MediaView
+          media={media}
+          alt={mediaAlt ?? record.title ?? ""}
+          size="thumb"
+        />
+      )}
       {fields.length > 0 && (
         <dl className={RECORD_GRID_CLASS}>
           {fields.map((field) => (
@@ -272,6 +282,37 @@ export function ProposedRecordCard({
       )}
       {children}
     </section>
+  );
+}
+
+/**
+ * One kind's records, capped (`record-groups.ts`), then "Show all N <kind>".
+ * `render` draws one record (its card, its twins and its choice).
+ */
+export function RecordGroupList<T extends ProposedRecord>({
+  group,
+  render,
+}: {
+  group: RecordGroup<T>;
+  render: (record: T) => ReactNode;
+}) {
+  const [all, setAll] = useState(false);
+  const shown = all ? group.all : group.shown;
+  const noun = resolveObjectNounPlural(group.kind ?? "entity");
+  return (
+    <>
+      {shown.map(render)}
+      {group.all.length > shown.length && (
+        <Button
+          size="sm"
+          variant="light"
+          className="self-start px-1 text-[12.5px] text-foreground/65"
+          onPress={() => setAll(true)}
+        >
+          Show all {group.all.length} {noun.toLowerCase()}
+        </Button>
+      )}
+    </>
   );
 }
 

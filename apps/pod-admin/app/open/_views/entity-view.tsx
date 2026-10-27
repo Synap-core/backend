@@ -27,6 +27,7 @@ import { trpc } from "../../../lib/trpc";
 import { formatRelative } from "../../../lib/format";
 import { FieldList } from "../../_lib/object/field-list";
 import { MediaView } from "../../_lib/media/media-view";
+import { mediaAlt } from "../../_lib/media/stored-media-model";
 import { proseFields } from "../../_lib/object/field-rows";
 import {
   definitionsOf,
@@ -170,7 +171,12 @@ export function EntityView({ id }: { id: string }) {
       }}
     >
       {media && (
-        <MediaView media={media} alt={title} size="full" viaEntityId={id} />
+        <MediaView
+          media={media}
+          alt={mediaAlt(entity.title, properties)}
+          size="full"
+          viaEntityId={id}
+        />
       )}
       {roles.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
