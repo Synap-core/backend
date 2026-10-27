@@ -251,9 +251,9 @@ export function readTrackStageHistory(raw: unknown): TrackStageHistoryEntry[] {
 
 /**
  * A track's status — the stored option keys of its SYSTEM LIFECYCLE (work
- * model D1, 2026-10-23). The DB column (`project_tracks.status`,
- * `PROJECT_TRACK_STATUSES` in `@synap/database`) holds exactly these — the
- * pod's tracks service pins the two lists equal at COMPILE time.
+ * model D1, 2026-10-23). The DB column (`project_tracks.status`) holds exactly
+ * these: the pod re-exports this list as `PROJECT_TRACK_STATUSES`
+ * (`@synap/database`).
  *
  * Machine values are contracts (the CLI, IS, Control Plane, Relay and the
  * browser send them): `completed` and `archived` keep their keys; people read
@@ -435,10 +435,9 @@ export function trackStatusMoves(
 
 /**
  * How a closed or dropped track ENDED — its verdict (R1), stored beside the
- * status (`project_tracks.verdict`), never as more statuses. The DB mirror
- * (`PROJECT_TRACK_VERDICTS`, `@synap/database`) and the `project_tracks`
- * CHECK spell the same set; the tracks service pins the mirror equal at
- * compile time. Words: `resolveTrackVerdictLabel`.
+ * status (`project_tracks.verdict`), never as more statuses. The pod
+ * re-exports it as `PROJECT_TRACK_VERDICTS` (`@synap/database`); the
+ * `project_tracks` CHECK spells the same set. Words: `resolveTrackVerdictLabel`.
  */
 export const TRACK_VERDICTS = [
   "met",
@@ -684,9 +683,9 @@ export function isTrackRetired(track: { status: string }): boolean {
 /**
  * The CLOSED statuses — the done and lost categories of
  * {@link TRACK_STATUS_DECLARATION}; the complement of the LIVE ones that hold
- * a track's name on its project ({@link LIVE_TRACK_STATUSES}). Pinned to the
- * declaration below; the pod's tracks service pins its own live list
- * (`LIVE_PROJECT_TRACK_STATUSES`, @synap/database) to the same partition.
+ * a track's name on its project ({@link LIVE_TRACK_STATUSES}, which the pod
+ * re-exports as `LIVE_PROJECT_TRACK_STATUSES`). Pinned to the declaration
+ * below.
  */
 export const CLOSED_TRACK_STATUSES = [
   "completed",
@@ -933,8 +932,8 @@ export function trackStagesEmerged(
  * toward. (A lower-is-better KPI is not modelled yet; state it as the number
  * to reach, e.g. "days saved", not "days taken".)
  *
- * The DB mirror is `ProjectTrackKpi` (`@synap/database`, which cannot import
- * this package); the pod pins the two equal at compile time.
+ * The pod types `project_tracks.kpi` with this declaration (re-exported as
+ * `ProjectTrackKpi`, `@synap/database`).
  */
 export interface TrackKpi {
   label: string;

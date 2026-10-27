@@ -9,11 +9,9 @@
  * `policyReason`); rows already written still do. A reader uses
  * `isGovernancePolicySentence` to tell the policy's words from the proposer's.
  *
- * HOME: `PROPOSE_REASON` in `@synap/governance-policy`. This is a MIRROR, not a
- * re-export: governance-policy cannot depend on @synap-core/types (types →(dev)
- * @synap/database → governance-policy → types is a build cycle). The api
- * tripwire `governance-policy-sentences-mirror.test.ts` imports BOTH and fails
- * on any drift: edit PROPOSE_REASON, then copy the object here.
+ * HOME: here. The governance engine (`@synap/governance-policy`) reads this
+ * object as its `PROPOSE_REASON` — one declaration, so a sentence edited here
+ * is the sentence the engine stamps.
  */
 export const GOVERNANCE_POLICY_SENTENCES = {
   ADMIN: "This changes how your pod is run, so it waits for you.",
@@ -70,8 +68,8 @@ export type GovernanceReasonCode = keyof typeof GOVERNANCE_POLICY_SENTENCES;
  * the label's one home, is what keeps every card from drawing them.
  *
  * Typed by the sentences' own keys, so a code added to the engine (and so to
- * the mirror above) does not compile until it is classified here: a label, or
- * an explicit `null`.
+ * the sentences above) does not compile until it is classified here: a label,
+ * or an explicit `null`.
  */
 export const GOVERNANCE_REASON_SHORT_LABELS: Readonly<
   Record<GovernanceReasonCode, string | null>

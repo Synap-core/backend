@@ -11,8 +11,8 @@
  * The canonical rule is one decision per user-visible act.
  *
  * ── WHAT RUNS FOR REAL ──────────────────────────────────────────────────────
- * `runResolvedSkill` (the shared POST-gate runner both doors call) with
- * `SANDBOX_LOCAL=1` → the real `isolated-vm` sandbox running the skill's code
+ * `runResolvedSkill` (the shared POST-gate runner both doors call) on the pod
+ * runtime (the default since R2; `SKILL_RUNTIME` unset) → the real `isolated-vm` sandbox running the skill's code
  * → the real `callProvider` bridge → the real `triggerProviderAction` → the
  * real `gateCapabilityExecution` → the real vault handler. Stubbed: rows (db),
  * the grant / rule lookups (no grant, no rule), the proposal insert (recorded),
@@ -128,6 +128,9 @@ vi.mock("@synap/database", async (importOriginal) => {
     getDb: async () => ({}),
     findCapabilityGrant: (...a: unknown[]) => h.findGrant(...a),
     resolveCapabilityGrant: async () => ({ ok: true }),
+    // A session reaches the worker send ceiling (worker-send-ceiling.ts), which
+    // asks which worker started it; these sessions are no worker's.
+    workerAutomationOfSession: async () => null,
     db: {
       select,
       update,
@@ -206,14 +209,15 @@ const asAgent = {
   agentUserId: "agent-1",
 };
 
-let prevSandbox: string | undefined;
+// The pod runtime is the default; a SKILL_RUNTIME=is left in the environment
+// would send these runs to the IS (rollback) and the test would not run here.
+let prevRuntime: string | undefined;
 beforeAll(() => {
-  prevSandbox = process.env.SANDBOX_LOCAL;
-  process.env.SANDBOX_LOCAL = "1";
+  prevRuntime = process.env.SKILL_RUNTIME;
+  delete process.env.SKILL_RUNTIME;
 });
 afterAll(() => {
-  if (prevSandbox === undefined) delete process.env.SANDBOX_LOCAL;
-  else process.env.SANDBOX_LOCAL = prevSandbox;
+  if (prevRuntime !== undefined) process.env.SKILL_RUNTIME = prevRuntime;
   vi.unstubAllGlobals();
 });
 
@@ -305,5 +309,41 @@ describe("a DIRECT provider call (no verb decision) is still gated", () => {
     expect(out.proposed).toBe(true);
     expect(h.proposals).toHaveLength(1);
     expect(fetchCalls).toEqual([]);
+  });
+});
+
+describe("the run's focus session reaches the proposal an in-skill write files (R1)", () => {
+  // The seam: a door's ctx.sessionId → runResolvedSkill → runSkillInSandbox →
+  // the callProvider bridge → triggerProviderAction → the proposal row. The IS
+  // path dropped it (its 45 live `capability/run` proposals had session_id NULL).
+  const SESSION_ID = "5e551011-0000-4000-8000-000000000001";
+  const runIn = (sessionId?: string) => {
+    h.skillRow = {
+      id: h.SKILL_ID,
+      name: "vendor_start",
+      kind: "code",
+      status: "active",
+      approved: true,
+      code: codeCalling("other_api"),
+      timeoutSeconds: 10,
+      metadata: {},
+    };
+    return runResolvedSkill(SKILL as never, {}, { ...asAgent, sessionId });
+  };
+
+  it("a gated write in a session → the proposal carries that session", async () => {
+    const out = await runIn(SESSION_ID);
+    expect(out.kind, JSON.stringify(out)).toBe("run");
+    expect(h.proposals).toHaveLength(1);
+    expect(h.proposals[0]).toMatchObject({
+      agentUserId: "agent-1",
+      sessionId: SESSION_ID,
+    });
+  });
+
+  it("no session → NULL, never synthesised", async () => {
+    await runIn(undefined);
+    expect(h.proposals).toHaveLength(1);
+    expect(h.proposals[0]!.sessionId).toBeNull();
   });
 });

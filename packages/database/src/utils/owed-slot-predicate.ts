@@ -20,9 +20,9 @@
  *
  * THE RULE THIS MIRRORS is `deliverableOwedBy(slot) === "you"`
  * (`@synap-core/types/units`, `deliverable.ts`) — the one deliverable rule
- * every surface calls; the api's `isOwedSlot` calls it directly. This package
- * cannot import it (types depends on database), so the SQL is a mirror held to
- * the rule by a behavioural parity test on PGlite
+ * every surface calls; the api's `isOwedSlot` calls it directly. A WHERE clause
+ * cannot call TypeScript, so the SQL is a mirror held to the rule by a
+ * behavioural parity test on PGlite
  * (`owed-slot-predicate.parity.pglite.test.ts`) over the inputs where naive
  * spellings disagree — `retiredAt: ""` above all: any stamp, even an empty
  * one, is a retirement on both sides (`IS NULL` here, `== null` there).

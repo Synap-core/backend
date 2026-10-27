@@ -22,12 +22,43 @@ import { getDefaultActiveService } from "../../utils/intelligence-routing.js";
 import { isCallBudgetMs } from "@synap/intelligence-client";
 import { isDelegationHeaders } from "@synap/database";
 
+/**
+ * A side effect a skill WOULD have performed live. A dry-run records it
+ * host-side instead of performing it, so a caller can preview the skill's
+ * writes and sends before approving it. Mirrors the Intelligence Hub type.
+ */
+export type RecordedEffect =
+  | {
+      kind: "propose.entity";
+      profileSlug: string;
+      title: string;
+      properties?: Record<string, unknown>;
+      content?: string;
+    }
+  | {
+      kind: "callProvider";
+      provider: string;
+      method: string;
+      path: string;
+      body?: unknown;
+      baseUrlOverride?: string;
+    }
+  | {
+      kind: "fetch";
+      url: string;
+      method: string;
+    };
+
 /** Mirrors the Intelligence Hub `SkillExecutionResult`. */
 export interface SkillExecutionResult {
   success: boolean;
   result?: unknown;
   error?: string;
   executionTimeMs?: number;
+  /** The skill-runtime stdlib version the isolate booted with (`skill-stdlib.ts`). Set on success. */
+  runtimeVersion?: number;
+  /** Dry-run only: the side effects the skill intended, none of them performed. */
+  dryRunEffects?: RecordedEffect[];
   /**
    * P1: when the skill failed BECAUSE an in-skill `callProvider` hit a classified
    * provider failure (e.g. a 401 → `auth`), these ride the envelope so the
@@ -94,4 +125,48 @@ export async function executeSkillViaIS(args: {
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * The IS dry-run wire (`POST {IS}/api/skills/:id/dry-run`), kept beside the
+ * execute wire so the IS contract stays in this one file. Reached only through
+ * `run-skill.ts` under the `SKILL_RUNTIME=is` rollback.
+ *
+ * The IS answers `{ result: <SkillExecutionResult>, dryRunEffects }`; this
+ * returns that envelope with its effects, the same shape `runSkillInSandbox`
+ * returns for a dry run.
+ */
+export async function dryRunSkillViaIS(args: {
+  skillId: string;
+  userId: string;
+  parameters?: Record<string, unknown>;
+  workspaceId?: string | null;
+}): Promise<SkillExecutionResult> {
+  const { endpoint: isUrl, apiKey: isApiKey } = await getDefaultActiveService();
+  const res = await fetch(`${isUrl}/api/skills/${args.skillId}/dry-run`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-API-Key": isApiKey,
+      // D4: the IS acts for userId on this dry-run — a per-run token.
+      ...isDelegationHeaders({ isUrl, operatorUserId: args.userId }),
+    },
+    body: JSON.stringify({
+      userId: args.userId,
+      parameters: args.parameters ?? {},
+      workspaceId: args.workspaceId ?? undefined,
+    }),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`Skill dry-run failed: ${res.status} ${body}`.trim());
+  }
+  const data = (await res.json()) as {
+    result?: SkillExecutionResult;
+    dryRunEffects?: RecordedEffect[];
+  };
+  if (!data.result) {
+    throw new Error("Skill dry-run failed: the IS answered without a result.");
+  }
+  return { ...data.result, dryRunEffects: data.dryRunEffects ?? [] };
 }

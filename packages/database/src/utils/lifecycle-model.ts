@@ -11,52 +11,28 @@
  * that must reason about "where does this stand" — terminal state, goals,
  * governance, hand-off — reads the CATEGORY, never an option name.
  *
- * This file is the pod's copy of the model. `@synap-core/types/lifecycle`
- * (which the frontends import) holds the same category list and option shape,
- * pinned EQUAL at compile time by `database/src/wire-parity/lifecycle.ts`.
+ * The category list, the option shape and the declaration are
+ * `@synap-core/types/lifecycle`'s (which the frontends import), re-exported
+ * here: ONE declaration. This file
+ * adds the pod's side of the model — declarations, validation, moves.
  */
 
+import {
+  LIFECYCLE_CATEGORIES,
+  TERMINAL_LIFECYCLE_CATEGORIES,
+  type LifecycleCategory,
+  type LifecycleDeclaration,
+  type LifecycleOption,
+} from "@synap-core/types/lifecycle";
 import { foldPropertyKey } from "../services/did-you-mean.js";
 
-export const LIFECYCLE_CATEGORIES = [
-  "open",
-  "active",
-  "paused",
-  "done",
-  "lost",
-] as const;
-export type LifecycleCategory = (typeof LIFECYCLE_CATEGORIES)[number];
-
-/** Categories that END the thing's journey. An agent entering one proposes (W14). */
-export const TERMINAL_LIFECYCLE_CATEGORIES: readonly LifecycleCategory[] = [
-  "done",
-  "lost",
-];
-
-export interface LifecycleOption {
-  /** The stored value (what `entities.status` / `properties[slug]` hold). */
-  key: string;
-  /** Authored label. Absent ⇒ the vocabulary's `resolveStatusLabel(key)`. */
-  label?: string;
-  category: LifecycleCategory;
-  /** A `UnitTone` token. Absent ⇒ the category's default tone. */
-  tone?: string;
-  /** Only a person may move a thing INTO this option (no rule can widen it). */
-  humanOnly?: boolean;
-  /**
-   * A thing sitting in this option longer than this many days is STUCK (an
-   * intent surface's "Stuck" count, a card's mark). Optional: absent ⇒ the
-   * option has no stuck rule and nothing guesses one. Open/active/paused
-   * options only — a done or lost thing has finished, it cannot be stuck.
-   */
-  stuckAfterDays?: number;
-}
-
-export interface LifecycleDeclaration {
-  /** The lifecycle property's slug — the key of the read projection. */
-  propertySlug: string;
-  options: LifecycleOption[];
-}
+export {
+  LIFECYCLE_CATEGORIES,
+  TERMINAL_LIFECYCLE_CATEGORIES,
+  type LifecycleCategory,
+  type LifecycleDeclaration,
+  type LifecycleOption,
+};
 
 /**
  * A profile's lifecycle as RESOLVED for use (`getEffectiveLifecycle`): the
