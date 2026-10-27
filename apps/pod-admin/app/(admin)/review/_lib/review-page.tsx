@@ -85,6 +85,8 @@ import { ReviewGroups } from "./review-groups";
 import { ReviewListRow } from "./review-list-row";
 import { useReviewPreferences } from "./review-preferences";
 import { handOffRuleFor } from "./hand-off-rule";
+import { ReviewOnboarding } from "./review-onboarding";
+import { showReviewOnboarding } from "./review-onboarding-model";
 import { ReviewHistory } from "./review-history";
 import { SessionFilter } from "./review-session-filter";
 import { nextRowKey } from "./ask-detail";
@@ -353,6 +355,34 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
       : null;
 
   const activeKey = open ? detailKey(open.detail) : null;
+
+  // The one onboarding step (B-4): once, to a person with items waiting who
+  // never chose — never over a link that names a session, view or decision.
+  if (
+    showReviewOnboarding({
+      prefsLoaded: !reviewPrefs.isLoading,
+      prefsFailed: reviewPrefs.isError,
+      hasSavedChoice: reviewPrefs.saved !== null,
+      waiting: rows.length,
+      narrowed:
+        !!sessionId ||
+        !!focusId ||
+        filter !== "all" ||
+        searchParams.get("group") !== null,
+    })
+  ) {
+    return (
+      <PageShell>
+        <ReviewOnboarding
+          rows={rows}
+          saving={reviewPrefs.isSaving}
+          onChoose={(g) =>
+            void reviewPrefs.save({ groupBy: g }).catch(() => {})
+          }
+        />
+      </PageShell>
+    );
+  }
 
   return (
     <PageShell>
