@@ -70,6 +70,9 @@ interface SessionFixture {
   humanProposalAt?: string;
   agentEventAt?: string;
   humanEventAt?: string;
+  /** The ASKING itself: an agent question post / its `slot_asked` event. */
+  agentQuestionAt?: string;
+  agentAskEventAt?: string;
 }
 
 /** A turn row's `updated_at`: declared, else an old one for a bare running turn. */
@@ -79,14 +82,21 @@ function turnTime(s: SessionFixture): string | undefined {
 
 /** The facts the rule reads, as the fixture DECLARES them. */
 function factsOf(s: SessionFixture) {
-  const agent = [s.agentPostAt, turnTime(s), s.agentProposalAt, s.agentEventAt]
-    .filter((v): v is string => !!v)
-    .sort()
-    .pop();
+  const newest = (xs: Array<string | undefined>) =>
+    xs
+      .filter((v): v is string => !!v)
+      .sort()
+      .pop() ?? null;
+  const work = [s.agentPostAt, turnTime(s), s.agentProposalAt, s.agentEventAt];
   return {
     status: s.status ?? "active",
     turnInFlight: !!s.turnRunning,
-    lastAgentActivityAt: agent ?? null,
+    lastAgentActivityAt: newest([
+      ...work,
+      s.agentQuestionAt,
+      s.agentAskEventAt,
+    ]),
+    lastAgentWorkAt: newest(work),
     startedAt: s.startedAt === undefined ? ago(3 * DAY) : s.startedAt,
   };
 }
@@ -110,13 +120,20 @@ async function insertSession(
       s.updatedAt ?? NOW.toISOString(),
     ]
   );
-  const msg = (author: string, ts: string) =>
+  const msg = (author: string, ts: string, kind = "update") =>
     client.query(
-      `insert into messages (id, channel_id, author_type, timestamp) values ($1, $2, $3, $4)`,
-      [randomUUID(), channel, author, ts]
+      `insert into messages (id, channel_id, author_type, timestamp, metadata) values ($1, $2, $3, $4, $5::jsonb)`,
+      [
+        randomUUID(),
+        channel,
+        author,
+        ts,
+        JSON.stringify({ roomPost: { kind } }),
+      ]
     );
   if (s.agentPostAt) await msg("ai_agent", s.agentPostAt);
   if (s.humanPostAt) await msg("user", s.humanPostAt);
+  if (s.agentQuestionAt) await msg("ai_agent", s.agentQuestionAt, "question");
   if (s.turnAt || s.turnRunning) {
     await client.query(
       `insert into chat_turns (id, channel_id, status, updated_at) values ($1, $2, $3, $4)`,
@@ -136,13 +153,23 @@ async function insertSession(
     );
   if (s.agentProposalAt) await proposal("agent-1", s.agentProposalAt);
   if (s.humanProposalAt) await proposal(null, s.humanProposalAt);
-  const event = (agent: string | null, ts: string) =>
+  const event = (
+    agent: string | null,
+    ts: string,
+    type = "entity.update.completed"
+  ) =>
     client.query(
-      `insert into events (id, session_id, agent_user_id, timestamp) values ($1, $2, $3, $4)`,
-      [randomUUID(), id, agent, ts]
+      `insert into events (id, session_id, agent_user_id, timestamp, type) values ($1, $2, $3, $4, $5)`,
+      [randomUUID(), id, agent, ts, type]
     );
   if (s.agentEventAt) await event("agent-1", s.agentEventAt);
   if (s.humanEventAt) await event(null, s.humanEventAt);
+  if (s.agentAskEventAt)
+    await event(
+      "agent-1",
+      s.agentAskEventAt,
+      "focus_session.slot_asked.completed"
+    );
   return id;
 }
 
@@ -343,6 +370,21 @@ const ROWS: ReadonlyArray<{
     slot: ASK,
   },
   {
+    rulesOut: "an agent's own question read as it working",
+    session: { agentPostAt: ago(2 * DAY), agentQuestionAt: ago(60_000) },
+    slot: ASK,
+  },
+  {
+    rulesOut: "an agent's slot_asked event read as it working",
+    session: { agentPostAt: ago(2 * DAY), agentAskEventAt: ago(60_000) },
+    slot: ASK,
+  },
+  {
+    rulesOut: "an agent's question not counted as it moving the session",
+    session: { startedAt: ago(20 * DAY), agentQuestionAt: ago(2 * DAY) },
+    slot: ASK,
+  },
+  {
     rulesOut: "start read as working",
     session: { startedAt: ago(60_000) },
     slot: ASK,
@@ -439,10 +481,10 @@ beforeAll(async () => {
   client = new PGlite();
   await client.exec(`
     create table focus_sessions (id uuid primary key, status text, expected_outputs jsonb, channel_id uuid, started_at timestamptz, updated_at timestamptz);
-    create table messages (id uuid primary key, channel_id uuid, author_type text, timestamp timestamptz);
+    create table messages (id uuid primary key, channel_id uuid, author_type text, timestamp timestamptz, metadata jsonb);
     create table chat_turns (id uuid primary key, channel_id uuid, status text, updated_at timestamptz);
     create table proposals (id uuid primary key, session_id uuid, agent_user_id text, created_at timestamptz, status text, proposal_type text);
-    create table events (id uuid primary key, session_id uuid, agent_user_id text, timestamp timestamptz);
+    create table events (id uuid primary key, session_id uuid, agent_user_id text, timestamp timestamptz, type text);
   `);
 }, 60_000);
 
