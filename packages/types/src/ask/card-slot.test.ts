@@ -293,3 +293,25 @@ describe("the relay mark is a mark", () => {
     expect(FATE_COPY.nothingNewWaiting).toBe("Nothing new is waiting on you.");
   });
 });
+
+describe("the card's age, in marks and in words", () => {
+  it("says when it was asked, and the same in full words for a screen reader", () => {
+    const view = askCardView(
+      { label: "X", ask: ask({ mode: "act", steps: ["a"] }), owedSince: daysAgo(1) },
+      { now: NOW }
+    );
+    expect(view.ageFate.label).toBe("Asked 1d ago · Stays until you decide");
+    expect(view.ageFate.spoken).toBe("Asked 1 day ago · Stays until you decide");
+  });
+
+  it("an unstamped ask says its fate alone, in both", () => {
+    const view = askCardView({ label: "X" }, { now: NOW });
+    expect(view.ageFate.label).toBe(FATE_COPY.untilDecided);
+    expect(view.ageFate.spoken).toBe(FATE_COPY.untilDecided);
+  });
+
+  it("a page-partial Review later count reads as a floor", () => {
+    expect(FATE_COPY.reviewLaterFold(12, true)).toBe("Review later · 12+");
+    expect(FATE_COPY.reviewLaterFold(3)).toBe("Review later · 3");
+  });
+});

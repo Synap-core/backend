@@ -169,7 +169,7 @@ describe("askView — one control per mode", () => {
       kind: "cause",
       label: "From a proposed decision",
     });
-    expect(view.ageFate.label).toBe("8d · In Review later");
+    expect(view.ageFate.label).toBe("Asked 8d ago · In Review later");
     expect(view.note.label).toBe("Add a note");
   });
 
@@ -554,6 +554,7 @@ describe("a relayed answer waiting for the tap", () => {
       mark: {
         tone: "warning",
         label: "Relayed by Claude Code · needs your tap",
+        disposition: "awaiting_your_tap",
       },
       recorded: "Yes",
       said: "You said “yes, ship it friday”",

@@ -23,6 +23,7 @@ import {
   questionDisposition,
   resolveAskResolution,
   type Ask,
+  type QuestionDisposition,
   type QuestionDispositionInput,
   type AskOption,
   type AskProvideKind,
@@ -40,7 +41,7 @@ import {
   FATE_TONE,
   REVIEW_LATER_AFTER_MS,
 } from "../proposals/fate.js";
-import { ageSpan, shortDate } from "../lens/age.js";
+import { ageSpan, ageSpanSpoken, shortDate } from "../lens/age.js";
 import { CRITERION_SLOT_KIND } from "../focus-sessions/criterion-slot.js";
 
 // ─── Copy ───────────────────────────────────────────────────────────────────
@@ -199,6 +200,8 @@ export const ASK_COPY = {
     return words ? `“${words}”` : null;
   },
   // ── The card's anatomy ({@link askCardView}) ──
+  /** The card's age: "Asked 8d ago", or spoken, "Asked 8 days ago". */
+  askedAgo: (span: string): string => `Asked ${span} ago`,
   /** The collapsed note affordance: one label, no placeholder repeating it. */
   addNote: "Add a note",
   /** The note field once opened: a noun, not the verb that opened it. */
@@ -475,6 +478,8 @@ export function askRecommendationOutcome(
 export interface AnswerProvenanceMark {
   tone: UnitTone;
   label: string;
+  /** The question's state the mark stands for — what a glyph keys on. */
+  disposition: Exclude<QuestionDisposition, "open">;
 }
 
 /**
@@ -490,24 +495,38 @@ export function answerProvenanceMark(
   opts: { agent?: string | null } = {}
 ): AnswerProvenanceMark | null {
   const agent = opts.agent ?? null;
-  switch (questionDisposition(input)) {
+  const disposition = questionDisposition(input);
+  switch (disposition) {
     case "open":
       return null;
     case "answered":
       return input.answer?.confirmedAt && input.answer.relayedBy
-        ? { tone: "success", label: ASK_COPY.relayConfirmed(agent) }
-        : { tone: "success", label: ASK_COPY.answeredByYou };
+        ? {
+            tone: "success",
+            label: ASK_COPY.relayConfirmed(agent),
+            disposition,
+          }
+        : { tone: "success", label: ASK_COPY.answeredByYou, disposition };
     case "relayed":
-      return { tone: "ai", label: ASK_COPY.relayedBy(agent) };
+      return { tone: "ai", label: ASK_COPY.relayedBy(agent), disposition };
     case "awaiting_your_tap":
-      return { tone: "warning", label: ASK_COPY.awaitingYourTap(agent) };
+      return {
+        tone: "warning",
+        label: ASK_COPY.awaitingYourTap(agent),
+        disposition,
+      };
     case "withdrawn":
       return {
         tone: "textMuted",
         label: ASK_COPY.withdrawn(input.closed?.note),
+        disposition,
       };
     case "closed_session_ended":
-      return { tone: "textMuted", label: ASK_COPY.closedSessionEnded };
+      return {
+        tone: "textMuted",
+        label: ASK_COPY.closedSessionEnded,
+        disposition,
+      };
   }
 }
 
@@ -721,8 +740,11 @@ export interface AskCardView {
   context: string | null;
   /** Who asked, as a named mark; `null` when nobody can be named. */
   asker: AskCardAsker | null;
-  /** Age + fate as ONE mark ("8d · stays until you decide"). */
-  ageFate: { label: string; tone: UnitTone; fate: AskFate };
+  /**
+   * Age + fate as ONE mark ("Asked 8d ago · Stays until you decide");
+   * `spoken` is the same in full words, for a screen reader.
+   */
+  ageFate: { label: string; spoken: string; tone: UnitTone; fate: AskFate };
   /** The answer buttons (confirm, choose); empty for every other mode. */
   answers: AskCardAnswer[];
   /** The collapsed note affordance. */
@@ -788,9 +810,13 @@ export function askCardView(
         ? FATE_COPY.endsWithSession
         : FATE_COPY.untilDecided;
   const owed = slot.owedSince ? Date.parse(slot.owedSince) : NaN;
+  const asked = Number.isFinite(owed);
   const ageFate = {
-    label: Number.isFinite(owed)
-      ? `${ageSpan(nowMs - owed)} · ${fateWords}`
+    label: asked
+      ? `${ASK_COPY.askedAgo(ageSpan(nowMs - owed))} · ${fateWords}`
+      : fateWords,
+    spoken: asked
+      ? `${ASK_COPY.askedAgo(ageSpanSpoken(nowMs - owed))} · ${fateWords}`
       : fateWords,
     tone: FATE_TONE[
       fate.kind === "ends_with_session" ? "dies_with_session" : fate.kind

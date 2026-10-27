@@ -9,6 +9,7 @@
 import { isDocumentEditProposal } from "./intent.js";
 import type { UnitTone } from "../units/state.js";
 import type { AskFate } from "../ask/card.js";
+import { formatFloorCount } from "../lens/header.js";
 
 /**
  * Untouched `objectWork` proposals leave the headline count after this many
@@ -141,8 +142,12 @@ export const FATE_COPY = {
   reviewLaterSince: (date: string): string => `In Review later since ${date}`,
   /** The Review later pile's name; a surface with a count slot draws the count there. */
   reviewLaterPile: "Review later",
-  /** The fold's own label, with how many rows it holds. */
-  reviewLaterFold: (count: number): string => `Review later · ${count}`,
+  /**
+   * The fold's own label, with how many rows it holds; `floor` when the read
+   * was capped, so the count reads "12+" (`formatFloorCount`), never exact.
+   */
+  reviewLaterFold: (count: number, floor = false): string =>
+    `Review later · ${formatFloorCount(count, floor)}`,
   /** The fold's one-line caption, once over its rows: why they are there. */
   reviewLaterCaption: `Untouched for ${REVIEW_LATER_AFTER_DAYS} days · not in your count`,
   /** The empty line of a list whose only items wait in the Review later fold. */

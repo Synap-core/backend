@@ -301,10 +301,12 @@ export function AskAnswer({
             </>
           )}
           <span
+            aria-hidden
             className={`tabular-nums ${TONE_TEXT[view.ageFate.tone] ?? "text-foreground/65"}`}
           >
             {view.ageFate.label}
           </span>
+          <span className="sr-only">{view.ageFate.spoken}</span>
         </p>
         {view.claimedDone && (
           <p className="text-[12.5px] text-foreground/65">

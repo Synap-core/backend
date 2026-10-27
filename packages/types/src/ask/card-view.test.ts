@@ -69,7 +69,8 @@ describe("askCardView — the founder's card", () => {
 
   it("age and fate are ONE mark; 8 days owed is Review later", () => {
     expect(view.ageFate).toMatchObject({
-      label: "8d · In Review later",
+      label: "Asked 8d ago · In Review later",
+      spoken: "Asked 8 days ago · In Review later",
       tone: "textMuted",
       fate: { kind: "review_later" },
     });
@@ -246,7 +247,7 @@ describe("askFate — the owed ask's fate on silence", () => {
         { label: "a", ask: confirm, owedSince: daysAgo(2) },
         { now: NOW }
       ).ageFate.label
-    ).toBe("2d · Ends with the session");
+    ).toBe("Asked 2d ago · Ends with the session");
   });
 
   it("a fate with no deadline is never amber; it reads as the proposal's", () => {
@@ -259,7 +260,7 @@ describe("askFate — the owed ask's fate on silence", () => {
     expect(view.ageFate.tone).toBe(FATE_TONE.dies_with_session);
     expect(view.ageFate.tone).not.toBe("warning");
     expect(view.ageFate.label).toBe(
-      `2d · ${proposalFateLine({ kind: "dies_with_session" }, NOW)}`
+      `Asked 2d ago · ${proposalFateLine({ kind: "dies_with_session" }, NOW)}`
     );
   });
 
