@@ -89,7 +89,7 @@ import {
   automations,
   playbookRuns,
 } from "@synap/database";
-import { needsYouRows } from "@synap-core/types/needs-you";
+import { needsYouFoldOf, needsYouRows } from "@synap-core/types/needs-you";
 import {
   lensItemsOfClass,
   lensRowOfLiveSignal,
@@ -331,6 +331,7 @@ describe("one population, nested scopes — the totals agree", () => {
     // under the needs-you rule (decision E2).
     expect(s1.blocking.total).toBe(3);
     expect(s2.blocking.total).toBe(1);
+    expect(s2.blocking.rows.map((r) => needsYouFoldOf(r))).toContain("working");
     expect(s3.blocking.total).toBe(2);
     expect(s4.blocking.total).toBe(1);
     // track = its two sessions.
@@ -343,9 +344,12 @@ describe("one population, nested scopes — the totals agree", () => {
     expect(pod.blocking.total).toBe(
       project.blocking.total + s4.blocking.total + 1
     );
-    // Rows ARE the total at every scope (no cap hit) — one derivation.
+    // The HEADLINE rows ARE the total at every scope (no cap hit) — one
+    // derivation. A fold row rides along, never dropped, never counted.
     for (const p of [pod, project, track, s1, s2, s3, s4]) {
-      expect(p.blocking.rows).toHaveLength(p.blocking.total);
+      expect(
+        p.blocking.rows.filter((r) => needsYouFoldOf(r) === null)
+      ).toHaveLength(p.blocking.total);
       expect(p.blocking.unreadable).toEqual([]);
       expect(p.blocking.truncated).toBe(false);
     }

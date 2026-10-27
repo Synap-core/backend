@@ -63,6 +63,7 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
   synap_load_skill: { "pod-mcp": "synap_load_skill", "cp-connector": "pod__load_skill" },
   synap_match_playbooks: { "pod-mcp": "synap_match_playbooks", "cp-connector": "pod__match_playbooks" },
   synap_move_entities: { "pod-mcp": "synap_move_entities", "cp-connector": "pod__move_entities" },
+  synap_needs_you: { "pod-mcp": "synap_needs_you", "cp-connector": null },
   synap_organize_library: { "pod-mcp": "synap_organize_library", "cp-connector": "pod__organize_library" },
   synap_orient: { "pod-mcp": "synap_orient", "cp-connector": "pod__orient" },
   synap_post_message: { "pod-mcp": "synap_post_message", "cp-connector": "pod__post_message" },
