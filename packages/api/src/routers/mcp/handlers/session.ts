@@ -475,6 +475,9 @@ export const sessionHandlers: McpHandlerMap = {
       // `null` is the explicit opt-out of template matching; absent = match.
       templateId: readTemplateIdArg(args.templateId),
       matchTemplate: true,
+      // F5/F6: the project's open goals (no trackId named) and the open
+      // sessions on close work — suggestions on the reply, never applied.
+      offerStartContext: true,
       // Answers to the named template's declared params. Free-form on the wire
       // (the playbook owns the shape); validated against the declaration by the
       // service, with the same pure function the run funnel uses.
@@ -1029,7 +1032,8 @@ export const sessionHandlers: McpHandlerMap = {
   synap_update_session: async (
     ctx: McpToolContext
   ): Promise<CallToolResult> => {
-    const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
+    const { toolName, userId, apiKeyScopes, agentUserId } = ctx;
+    let args = ctx.args;
     requireScope(apiKeyScopes, "mcp.write", toolName);
     /**
      * REFUSE LOUDLY rather than accept and drop.
@@ -1067,8 +1071,67 @@ export const sessionHandlers: McpHandlerMap = {
     const undeclared = await refuseUndeclaredArgs("synap_update_session", args);
     if (undeclared) return undeclared;
 
+    /**
+     * NO `sessionId` (F2, plan v5) — the session THIS conversation started,
+     * when it started exactly one that is still open (`resolveClientOpenSession`
+     * — never an auto-opened receipt, never a guess among several). So the PR
+     * hook can say "record it" in one call with no id. Several, none, a shared
+     * key or a failed read: refused in words, with the list when there is one.
+     */
+    let inferredSession: { sessionId: string; title: string } | undefined;
+    if (typeof args.sessionId !== "string" || args.sessionId.trim() === "") {
+      const { resolveClientOpenSession, requestClientKey } =
+        await import("../../../services/focus-sessions/resolve-work-session.js");
+      const found = await resolveClientOpenSession({
+        userId,
+        clientKey: requestClientKey(agentUserId),
+      });
+      switch (found.status) {
+        case "one":
+          args = { ...args, sessionId: found.sessionId };
+          inferredSession = { sessionId: found.sessionId, title: found.title };
+          break;
+        case "several":
+          return ok({
+            error: `sessionId is required: this conversation has ${found.count} open sessions, so none is guessed — NOTHING WAS CHANGED. Send the call again with the sessionId of the one this belongs to.`,
+            sessions: found.sessions,
+          });
+        case "stale":
+          return ok({
+            error: `sessionId is required: this conversation has no open session, and the one it started went quiet (stale) — NOTHING WAS CHANGED. If this belongs to it, send the call again with its sessionId (the write brings it back); otherwise start one with synap_start_session.`,
+            sessions: found.sessions,
+          });
+        case "none":
+          return ok({
+            error:
+              "sessionId is required: this conversation started no session that is still open — NOTHING WAS CHANGED. Start one with synap_start_session, or pass the sessionId of the session this belongs to.",
+          });
+        case "no_client":
+          return ok({
+            error:
+              "sessionId is required: this connection cannot tell your conversation apart from others on the same key — NOTHING WAS CHANGED. Pass the sessionId.",
+          });
+        case "unavailable":
+          return ok({
+            error:
+              "sessionId is required: your open sessions could not be read just now — NOTHING WAS CHANGED. Pass the sessionId.",
+          });
+      }
+    }
+    /**
+     * Said on EVERY reply once the session was resolved for the caller — the
+     * id and title it landed on, refusals included (rv-be-needs S1: teammates
+     * share one client key, so the caller must see WHICH session it was).
+     */
+    const reply = (body: object): CallToolResult =>
+      ok(
+        inferredSession
+          ? { ...body, inferred: true, via: "client", inferredSession }
+          : body
+      );
+
     const blockerEdits = parseBlockerEdits(args);
-    if ("error" in blockerEdits) return ok(blockerEdits);
+    if ("error" in blockerEdits) return reply(blockerEdits);
     const editsBlockers =
       blockerEdits.add.length > 0 || blockerEdits.remove.length > 0;
 
@@ -1125,7 +1188,7 @@ export const sessionHandlers: McpHandlerMap = {
         )
         .limit(1);
       if (!own) {
-        return ok({
+        return reply({
           error: `Focus session ${String(args.sessionId)} not found`,
         });
       }
@@ -1140,7 +1203,7 @@ export const sessionHandlers: McpHandlerMap = {
           !(k === "projectId" && args[k] === own.projectId)
       );
       if (asked.length === 0) {
-        return ok({
+        return reply({
           sessionId: args.sessionId,
           ...(await applyBlockerEdits()),
           message:
@@ -1157,12 +1220,12 @@ export const sessionHandlers: McpHandlerMap = {
       expectedOutputWireSchema,
       addOutputWireSchema,
     });
-    if ("error" in slots) return ok(slots);
+    if ("error" in slots) return reply(slots);
     // `outcomes` (A4): UPSERTED by key onto the stored lists (or onto the
     // wholesale lists this same call sent), then written through the same
     // `expectedOutputs` / `criteria` fields — one merge, one governance path.
     const outcomes = await parseOutcomesArg(args.outcomes);
-    if ("error" in outcomes) return ok(outcomes);
+    if ("error" in outcomes) return reply(outcomes);
     let outcomeLists:
       | { expectedOutputs: ExpectedOutput[]; criteria: SessionCriterion[] }
       | undefined;
@@ -1177,7 +1240,7 @@ export const sessionHandlers: McpHandlerMap = {
         criteria: args.criteria as SessionCriterion[] | undefined,
       });
       if (!resolved) {
-        return ok({
+        return reply({
           error: `Focus session ${String(args.sessionId)} not found`,
         });
       }
@@ -1290,19 +1353,19 @@ export const sessionHandlers: McpHandlerMap = {
       : {};
     switch (result.status) {
       case "not_found":
-        return ok({
+        return reply({
           error: `Focus session ${args.sessionId as string} not found`,
           ...blockersNotApplied,
         });
       case "denied":
         // A filing the pod applied on its own receipt still landed.
-        return ok({
+        return reply({
           error: result.reason,
           ...(result.filing ? { filing: result.filing } : {}),
           ...blockersNotApplied,
         });
       case "proposed":
-        return ok({
+        return reply({
           ...(await applyBlockerEdits()),
           status: "proposed",
           message: proposedMessageFor(
@@ -1333,7 +1396,7 @@ export const sessionHandlers: McpHandlerMap = {
         // of the patch landed. Without it a refused mark is indistinguishable
         // from a completed one — the row simply comes back unchanged and the
         // agent reads that as done.
-        return ok({
+        return reply({
           ...(await applyBlockerEdits()),
           status: "updated",
           session: result.session,
