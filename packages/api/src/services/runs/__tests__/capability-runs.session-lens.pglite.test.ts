@@ -54,6 +54,7 @@ import {
   podMembers,
   users,
   projectMembers,
+  boxRuns,
 } from "@synap/database/schema";
 import { listRuns } from "../index.js";
 
@@ -186,6 +187,7 @@ beforeAll(async () => {
     podMembers,
     users,
     projectMembers,
+    boxRuns,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }
@@ -368,5 +370,62 @@ describe("RunScope.sessionId — the capability-run session lens", () => {
     expect(ids(runs)).toEqual(
       ids([{ id: PROP_A }, { id: PROP_BOTH }, { id: CORR_DIRECT_A }])
     );
+  });
+
+  // A BOX run (0356) is a capability run read from `box_runs`: it answers the
+  // session lens on its own column, and the approved proposal that only QUEUED
+  // it is not listed a second time as a "completed" run.
+  it("a box run answers the session lens, and its queuing proposal is not a second run", async () => {
+    const BOX = randomUUID();
+    const QUEUING = randomUUID();
+    await h.client!.query(
+      `insert into box_runs (id, user_id, session_id, spec, parameters, status, attempt, queued_at, created_at, updated_at)
+       values ($1, $2, $3, $4::jsonb, '{}'::jsonb, 'queued', 0, $5, now(), now())`,
+      [
+        BOX,
+        USER,
+        SESSION_A,
+        JSON.stringify({ name: "chart_csv", language: "python" }),
+        new Date(Date.UTC(2026, 0, 1, 0, 9)).toISOString(),
+      ]
+    );
+    await h.client!.query(
+      `insert into proposals (id, proposal_type, target_type, target_id, status,
+         correlation_id, session_id, workspace_id, project_id, created_at, reviewed_at, data)
+       values ($1,'capability.run','capability','t','approved',$2,$3,null,null,$4,$4,$5::jsonb)`,
+      [
+        QUEUING,
+        randomUUID(),
+        SESSION_A,
+        new Date(Date.UTC(2026, 0, 1, 0, 9)).toISOString(),
+        JSON.stringify({
+          verbId: "chart_csv",
+          runResult: { status: "queued", boxRunId: BOX, message: "Queued" },
+        }),
+      ]
+    );
+    const inA = await listRuns({
+      userId: USER,
+      flowType: "capability",
+      scope: { sessionId: SESSION_A },
+    });
+    expect(ids(inA)).toEqual(
+      ids([
+        { id: PROP_A },
+        { id: PROP_BOTH },
+        { id: CORR_DIRECT_A },
+        { id: BOX },
+      ])
+    );
+    expect(inA.find((r) => r.id === BOX)).toMatchObject({
+      flowName: "chart_csv",
+      status: "running",
+    });
+    const inB = await listRuns({
+      userId: USER,
+      flowType: "capability",
+      scope: { sessionId: SESSION_B },
+    });
+    expect(ids(inB)).not.toContain(BOX);
   });
 });

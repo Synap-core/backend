@@ -6,17 +6,21 @@
  * Rows that rule out a wrong rule:
  *  - a `builtin` kind is executable: rules out pod-admin's first copy
  *    (`kind` code|declarative only);
- *  - an explicit `instruction` kind is not, even carrying a `code` string:
- *    rules out "any code string means code";
+ *  - an explicit `instruction` kind carrying a `code` string IS executable:
+ *    rules out "the label decides" (the runtime evaluates any code it finds);
  *  - no `kind` with blank code is not: rules out "a code key means code";
- *  - a skill UPDATE and a tool create with code are not: rules out reading
- *    the payload without the verb or the target;
+ *  - a skill UPDATE and a tool create with code are not executable: rules out
+ *    reading the payload without the verb or the target;
+ *  - an instruction skill create, a skill update and a composite carrying a
+ *    skill, automation or rule act on their own; a composite of records does
+ *    not: rules out "only code needs the page" and "every composite";
  *  - a pending-proposal twin is not page-only, a record twin is: rules out
  *    "any duplicate answer".
  */
 import { describe, expect, it } from "vitest";
 import {
   isExecutableSkillCreate,
+  pageOnlyReasonActs,
   proposalNeedsItsPage,
   proposalPageOnlyReason,
 } from "../page-only.js";
@@ -55,10 +59,25 @@ describe("isExecutableSkillCreate", () => {
       );
     }
     expect(
+      isExecutableSkillCreate(skillCreate({ name: "s", kind: "instruction" }))
+    ).toBe(false);
+  });
+
+  it("code runs whatever the kind says", () => {
+    expect(
       isExecutableSkillCreate(
         skillCreate({ name: "s", kind: "instruction", code: "return 1;" })
       )
-    ).toBe(false);
+    ).toBe(true);
+    expect(
+      isExecutableSkillCreate(
+        skillCreate({
+          name: "s",
+          kind: "instruction",
+          providerSpec: { tool: "apify" },
+        })
+      )
+    ).toBe(true);
   });
 
   it("with no kind, it is read by what it carries", () => {
@@ -121,10 +140,7 @@ describe("proposalPageOnlyReason", () => {
     expect(proposalPageOnlyReason(entityCreate([twin("proposal")]))).toBeNull();
   });
 
-  it("an instruction skill and a plain create may be batched", () => {
-    expect(
-      proposalNeedsItsPage(skillCreate({ name: "s", kind: "instruction" }))
-    ).toBe(false);
+  it("a plain create may be batched", () => {
     expect(
       proposalNeedsItsPage({
         targetType: "entity",
@@ -149,5 +165,80 @@ describe("proposalPageOnlyReason", () => {
         )
       )
     ).toBe("executable_skill");
+  });
+});
+
+const composite = (ops: Array<Record<string, unknown>>) => ({
+  targetType: "entity",
+  proposalType: "capture.graph",
+  data: { operations: ops },
+});
+
+const entityOp = { op: "create_entity", profileSlug: "note", title: "x" };
+
+describe("acts_on_its_own", () => {
+  it("an instruction skill create: its prose lands in an agent's prompt", () => {
+    const p = skillCreate({ name: "s", kind: "instruction", body: "Do X" });
+    expect(proposalPageOnlyReason(p)).toBe("acts_on_its_own");
+  });
+
+  it("any skill update, whatever it patches", () => {
+    for (const proposalType of ["update", "skill.update"]) {
+      expect(
+        proposalPageOnlyReason({
+          targetType: "skill",
+          proposalType,
+          data: { data: { id: "s-1", description: "x" } },
+        })
+      ).toBe("acts_on_its_own");
+    }
+  });
+
+  it("a composite carrying a skill, an automation or a rule", () => {
+    for (const op of [
+      "create_skill",
+      "create_automation",
+      "create_rule",
+      "update_skill",
+      "update_automation",
+      "update_rule",
+    ]) {
+      expect(
+        proposalPageOnlyReason(composite([entityOp, { op, ref: "a" }]))
+      ).toBe("acts_on_its_own");
+    }
+  });
+
+  it("reads the ops one level down too (a client row rebuilt from its request)", () => {
+    const ops = [entityOp, { op: "create_rule", ref: "r" }];
+    expect(
+      proposalPageOnlyReason({
+        targetType: "entity",
+        proposalType: "create",
+        data: { data: { operations: ops } },
+      })
+    ).toBe("acts_on_its_own");
+  });
+
+  it("a composite of records only, and a skill delete, may be batched", () => {
+    expect(
+      proposalPageOnlyReason(
+        composite([entityOp, { op: "update_view", ref: "v", viewId: "v-1" }])
+      )
+    ).toBeNull();
+    expect(
+      proposalPageOnlyReason({
+        targetType: "skill",
+        proposalType: "delete",
+        data: { data: { id: "s-1" } },
+      })
+    ).toBeNull();
+  });
+
+  it("the acting reasons are the two whose approval turns something on", () => {
+    expect(pageOnlyReasonActs("executable_skill")).toBe(true);
+    expect(pageOnlyReasonActs("acts_on_its_own")).toBe(true);
+    expect(pageOnlyReasonActs("identity_choice")).toBe(false);
+    expect(pageOnlyReasonActs(null)).toBe(false);
   });
 });

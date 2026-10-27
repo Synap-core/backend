@@ -22,6 +22,7 @@ const slot = (
   sessionGoal: `goal ${sessionId}`,
   sessionTitle: `title ${sessionId}`,
   sessionStatus: "active",
+  subjectEntityId: null,
   workspaceId: null,
   projectId: null,
   label,

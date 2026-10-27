@@ -107,6 +107,12 @@ export interface AgentMetadata {
    * 90. Applies to the computer's key and to the keys of the agents it hosts.
    */
   keyTtlDays?: number;
+  /**
+   * COMPUTER principals only (0356): the person turned on "Runs scripts" — the
+   * computer's key carries `box.runner` and leases its person's box runs. Kept
+   * here so a re-enrolment (device flow) mints the new key with the same scope.
+   */
+  runsScripts?: boolean;
 }
 
 export const users = pgTable("users", {
