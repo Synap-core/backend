@@ -1,4 +1,4 @@
-## The intent vocabulary — one SSOT, three mirrors
+## The intent vocabulary — one SSOT, two mirrors
 
 **What a capability DOES** — `send_message`, `generate_media`, `publish_post`,
 `delegate_agent_task` — is the
@@ -29,15 +29,17 @@ This is why every code-side copy is a **mirror** and not the source. A slug that
 none of the existing rows leaves `intent` UNSET; the vocabulary is deliberately not
 open for developers to mint (cf. W3C Web Intents, abandoned partly for that reason).
 
-### The three mirrors, and why each one must exist
+### The two mirrors, and why each one must exist
 
-There are exactly **three**. A fourth was deleted in 2026-10-01 (see below).
+There are exactly **two**. Two more were removed: `AbstractVerb` in
+`@synap/playbooks` (deleted 2026-10-01, see below), and the pod's own
+`ABSTRACT_VERBS` copy (collapsed 2026-10-26 — `@synap/database` now depends on
+`@synap-core/types`, so it re-exports mirror 1 under that name).
 
-| #   | Where                                                                                                                             | Kind                              | Why it cannot import the SSOT                                                                                                                                                                                                                                |
-| --- | --------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 1   | `synap-backend/packages/database/src/schema/tools.ts` — `ABSTRACT_VERBS`                                                          | runtime, the 0283 SEED union (13) | `@synap-core/types` **devDepends on** `@synap/database`. A reverse import is a build cycle — the same constraint that forces `GUIDELINE_SCOPE_ORDER` to be mirrored.                                                                                         |
-| 2   | `synap-backend/packages/types/src/capability-intents/` — `ABSTRACT_INTENTS`, `REGISTERED_EXTRAS`, `CAPABILITY_INTENTS`            | runtime, published leaf           | Same cycle, other direction. It is a **leaf subpath** (`@synap-core/types/capability-intents`) rather than the `./` barrel because the barrel re-exports `@synap/database` types and a VALUE import from a barrel crashes Hermes (relay ships React Native). |
-| 3   | `synap-control-plane-api/src/seeds/capability-intent-vocabulary.ts` — `ABSTRACT_VERBS`, `REGISTERED_EXTRAS`, `CAPABILITY_INTENTS` | runtime, the CP catalog seeder    | The control plane is a **separate deploy target with its own `pnpm-lock.yaml`**. It resolves neither `@synap-core/types` nor the pod's packages (verified: `require.resolve('@synap-core/types')` → `MODULE_NOT_FOUND`).                                     |
+| #   | Where                                                                                                                             | Kind                           | Why it cannot import the SSOT                                                                                                                                                                                             |
+| --- | --------------------------------------------------------------------------------------------------------------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | `synap-backend/packages/types/src/capability-intents/` — `ABSTRACT_INTENTS`, `REGISTERED_EXTRAS`, `CAPABILITY_INTENTS`            | runtime, published leaf        | The SSOT is SQL rows; a TypeScript list is a mirror by construction. The pod reads it too: `ABSTRACT_VERBS` in `packages/database/src/schema/tools.ts` is this `ABSTRACT_INTENTS`, re-exported (the 0283 SEED union, 13). |
+| 2   | `synap-control-plane-api/src/seeds/capability-intent-vocabulary.ts` — `ABSTRACT_VERBS`, `REGISTERED_EXTRAS`, `CAPABILITY_INTENTS` | runtime, the CP catalog seeder | The control plane is a **separate deploy target with its own `pnpm-lock.yaml`**. It resolves neither `@synap-core/types` nor the pod's packages (verified: `require.resolve('@synap-core/types')` → `MODULE_NOT_FOUND`).  |
 
 Consumed by: `@synap/api` (`intent-registry`, `create-from-definition`,
 `schemas/playbook-definition.ts`), `synap-app/packages/workspace-templates`
@@ -60,7 +62,7 @@ Search for this chapter by the field you are holding, not by the word "intent":
 All four are validated against this ONE vocabulary, so a workspace and a playbook
 cannot be spelled from two different lists.
 
-### THE FOURTH MIRROR WAS DELETED — do not re-add it
+### THE PLAYBOOKS MIRROR WAS DELETED — do not re-add it
 
 `AbstractVerb` in `@synap/playbooks/src/index.ts` was a TYPE-only mirror of all 13
 slugs. It was **stale** (no `publish_post`) and **dead** — a whole-repo scan across
@@ -79,18 +81,16 @@ a package that consumes nothing would go stale in the one direction that is invi
    `INSERT INTO "capability_intents" ("slug", "effect", "statement") VALUES (...) ON CONFLICT ("slug") DO NOTHING;`
    `effect` ∈ `read|write|act`. Never `drizzle-kit generate` — hand-write it, and mirror it into
    `0000_baseline_schema.sql` if it adds a table or column.
-2. **Add it to mirror 1** — `ABSTRACT_VERBS` in `packages/database/src/schema/tools.ts`,
-   **only if it is a SEED slug**. A post-seed row does not belong there (that is what
-   `publish_post` / `REGISTERED_EXTRAS` is for).
-   Post-seed rows today: `publish_post` (0284, write) and `delegate_agent_task`
-   (0314, act — every verb of an external-agent binding, `tools.config.agentBinding`:
-   start / send / status / cancel).
-3. **Add it to mirror 2** — `ABSTRACT_INTENTS` or `REGISTERED_EXTRAS` in
-   `packages/types/src/capability-intents/index.ts`. Then **`cd packages/types && pnpm build`** —
+2. **Add it to mirror 1** — `ABSTRACT_INTENTS` (a SEED slug) or `REGISTERED_EXTRAS`
+   (a post-seed row) in `packages/types/src/capability-intents/index.ts`. The pod's
+   `ABSTRACT_VERBS` is `ABSTRACT_INTENTS`, so it follows. Then **`cd packages/types && pnpm build`** —
    consumers typecheck against the built `dist/`, so a skipped rebuild makes your gate lie.
-4. **Add it to mirror 3** — the same two lists in the control plane's
+   Post-seed rows today: `publish_post` (0284, write), `delegate_agent_task`
+   (0314, act — every verb of an external-agent binding, `tools.config.agentBinding`:
+   start / send / status / cancel) and `read_webpage` (0329).
+3. **Add it to mirror 2** — the same two lists in the control plane's
    `capability-intent-vocabulary.ts`.
-5. **Update the arity floors** — `SEED_SLUG_ARITY` / `EXTRA_SLUG_ARITY` in
+4. **Update the arity floors** — `SEED_SLUG_ARITY` / `EXTRA_SLUG_ARITY` in
    `packages/api/src/__tripwires__/intent-vocabulary-one-ssot.tripwire.test.ts`.
    These are the ONE place you must edit by hand, and the build stops until you do.
 
@@ -99,8 +99,8 @@ from the migration SQL, so it is a red build — never a divergence nobody notic
 
 ### What can still go wrong
 
-- **A mirror can be added.** Nothing structurally prevents a fifth copy; the tripwire
-  only polices the names it knows. This is why step 5 exists as a hand-edit floor.
+- **A mirror can be added.** Nothing structurally prevents a third copy; the tripwire
+  only polices the names it knows. This is why step 4 exists as a hand-edit floor.
 - **A guard proves SAMENESS, never CORRECTNESS.** If every mirror and the migration agree
   on a slug that should not exist, all four guards stay green. The vocabulary's MEANING is
   reviewed by a human, not derived.

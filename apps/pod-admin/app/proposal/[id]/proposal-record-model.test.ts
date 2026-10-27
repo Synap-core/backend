@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 import {
   graphRecords,
   isMachineKey,
+  proposedEntityMedia,
   proposedRecord,
   RECORD_FIELDS_SHOWN,
   recordValue,
@@ -331,5 +332,35 @@ describe("graphRecords — a capture graph's new records", () => {
       ["e0", "Ada", "person", 1],
       ["$op1", "Acme", "company", 0],
     ]);
+  });
+});
+
+describe("proposedEntityMedia — the upload a create would make", () => {
+  const doc = "44444444-4444-4444-8444-444444444444";
+
+  it("an uploaded image waiting for approval is drawn from its stored document", () => {
+    expect(
+      proposedEntityMedia({
+        profileSlug: "file",
+        title: "Carousel 04",
+        documentId: doc,
+        properties: { mimeType: "image/png", fileSize: 1200 },
+      })
+    ).toEqual({ via: "stored", documentId: doc, mime: "image/png" });
+  });
+
+  it("a record with no image — or no record — has none", () => {
+    expect(
+      proposedEntityMedia({
+        profileSlug: "file",
+        documentId: doc,
+        properties: { mimeType: "application/pdf" },
+      })
+    ).toBeNull();
+    expect(
+      proposedEntityMedia({ profileSlug: "person", title: "Ana" })
+    ).toBeNull();
+    expect(proposedEntityMedia(null)).toBeNull();
+    expect(proposedEntityMedia("x")).toBeNull();
   });
 });

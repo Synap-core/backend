@@ -5,8 +5,8 @@
  * named, the owner judges), any number of DELEGATES (people or AIs), each with
  * a COMMITMENT they accept, counter or decline and may later report
  * impossible, and an optional INTEGRATOR. Stored in `track_participants`
- * (0348); `@synap/database` mirrors the three sets below and the pod's
- * participants service pins the mirror equal at compile time.
+ * (0348), whose columns `@synap/database` types with the three sets below
+ * (re-exported there under `*_KEYS` names).
  *
  * Two rules every surface and every authority check reads from here:
  *   - {@link goalJudge} — the ONE answer to "who may close this goal / accept
