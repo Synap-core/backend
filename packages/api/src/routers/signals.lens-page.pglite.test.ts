@@ -326,9 +326,11 @@ describe("one population, nested scopes — the totals agree", () => {
       page({ sessionId: S3 }),
       page({ sessionId: S4 }),
     ]);
-    // s1: slot + its proposal part + session.unblocked; s2: slot + mention.
+    // s1: slot + its proposal part + session.unblocked; s2: the mention only —
+    // its slot is Working (a turn runs in its room), out of the headline
+    // under the needs-you rule (decision E2).
     expect(s1.blocking.total).toBe(3);
-    expect(s2.blocking.total).toBe(2);
+    expect(s2.blocking.total).toBe(1);
     expect(s3.blocking.total).toBe(2);
     expect(s4.blocking.total).toBe(1);
     // track = its two sessions.
