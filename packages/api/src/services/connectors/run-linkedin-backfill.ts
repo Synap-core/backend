@@ -15,7 +15,7 @@
  * pin) BEFORE recording — the capability install does NOT persist to
  * messaging_accounts today, so without this the inbound `/messaging` webhook
  * could not later resolve this account. Provider is `"linkedin"` to match what
- * `UnipileConnector.parseWebhook` reports (`mapProviderType('LINKEDIN')`), which
+ * `UnipileConnector.parseWebhook` reports (the v2 `account_provider`), which
  * is the key the webhook looks the row up by.
  *
  * Verb param names + result shapes come from the unipile-linkedin capability
