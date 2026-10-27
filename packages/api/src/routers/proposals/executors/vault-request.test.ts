@@ -147,7 +147,10 @@ describe("approving a vault.request", () => {
 
     // The proposal is approved and carries what the agent's poll reads.
     expect(h.updates).toHaveLength(1);
-    expect(h.updates[0]).toMatchObject({ status: "approved", reviewedBy: APPROVER });
+    expect(h.updates[0]).toMatchObject({
+      status: "approved",
+      reviewedBy: APPROVER,
+    });
     expect(JSON.stringify(h.updates[0]!.data)).toContain(`vault://${FAL}`);
   });
 
@@ -161,7 +164,10 @@ describe("approving a vault.request", () => {
   });
 
   it("several matching secrets: refuses and says where to pick one", async () => {
-    h.owned = [secretRow(FAL, "fal.ai key (old)"), secretRow(FAL2, "fal.ai key (team)")];
+    h.owned = [
+      secretRow(FAL, "fal.ai key (old)"),
+      secretRow(FAL2, "fal.ai key (team)"),
+    ];
     await expect(approve(falRequest)).rejects.toMatchObject({
       code: "BAD_REQUEST",
       message: expect.stringContaining("2 secrets in your vault match fal.ai"),
@@ -173,13 +179,17 @@ describe("approving a vault.request", () => {
     h.owned = [secretRow(OPENAI, "OpenAI key")];
     await expect(approve(falRequest)).rejects.toMatchObject({
       code: "BAD_REQUEST",
-      message: expect.stringContaining("No secret in your vault matches fal.ai"),
+      message: expect.stringContaining(
+        "No secret in your vault matches fal.ai"
+      ),
     });
     expect(h.inserts).toHaveLength(0);
   });
 
   it("a named secret that is not the approver's: refuses, grants nothing", async () => {
-    await expect(approve({ ...falRequest, secretId: FAL2 })).rejects.toMatchObject({
+    await expect(
+      approve({ ...falRequest, secretId: FAL2 })
+    ).rejects.toMatchObject({
       code: "NOT_FOUND",
     });
     expect(h.inserts).toHaveLength(0);
@@ -187,7 +197,9 @@ describe("approving a vault.request", () => {
 
   it("an already approved request is not granted twice", async () => {
     h.proposalStatus = "approved";
-    await expect(approve(falRequest)).resolves.toMatchObject({ alreadyApproved: true });
+    await expect(approve(falRequest)).resolves.toMatchObject({
+      alreadyApproved: true,
+    });
     expect(h.inserts).toHaveLength(0);
   });
 });

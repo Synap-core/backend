@@ -79,8 +79,7 @@ async function resolveRequestedSecret(
   const service = typeof inner.service === "string" ? inner.service : "";
   const matches = matchVaultRequestSecrets(owned, {
     service,
-    secretType:
-      typeof inner.secretType === "string" ? inner.secretType : null,
+    secretType: typeof inner.secretType === "string" ? inner.secretType : null,
   });
   if (matches.length === 1) return matches[0]!;
   throw new TRPCError({
@@ -127,7 +126,8 @@ export function registerVaultExecutors(): void {
       const workspaceId = proposal.workspaceId ?? null;
       assertGrantScoped({ grantedTo, workspaceId });
 
-      const ttl = typeof inner.ttl === "number" && inner.ttl > 0 ? inner.ttl : 60;
+      const ttl =
+        typeof inner.ttl === "number" && inner.ttl > 0 ? inner.ttl : 60;
       const grant = await applyVaultSecretGrant({
         secretId: secret.id,
         grantedTo,
