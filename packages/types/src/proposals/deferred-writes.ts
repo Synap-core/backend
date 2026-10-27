@@ -11,8 +11,13 @@
  * approving access never approves content. What each replay did is recorded
  * on `data.deferredOutcomes[ref]`.
  *
- * Pure + dependency-free (same contract as `../vocabulary`).
+ * The same writes are kept on an agent's HELD-WRITES pack (`agent/held_writes`,
+ * past its daily write ceiling); `heldWritesPackName` names that pack.
+ *
+ * Pure (same contract as `../vocabulary`, the one door its words come through).
  */
+
+import { countedNoun, resolveObjectNoun } from "../vocabulary/index.js";
 
 /** Writes one join may hold. The next one is refused, in words. */
 export const DEFERRED_WRITES_MAX = 50;
@@ -160,4 +165,52 @@ export function readDeferredOutcomes(
     }
   }
   return out;
+}
+
+// ── The held-writes pack's name (F6, founder 2026-10-27) ────────────────────
+
+const UUID_NAME =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** A name to show for the agent: never an id, never the kind's own noun. */
+function agentDisplayName(raw: unknown): string | null {
+  const name = typeof raw === "string" ? raw.trim() : "";
+  if (!name || UUID_NAME.test(name)) return null;
+  if (name.toLowerCase() === resolveObjectNoun("agent").toLowerCase()) {
+    return null;
+  }
+  return name;
+}
+
+/**
+ * The NAME of an agent's held-writes pack, read off its own `data`
+ * (`fileHeldWrites` stores `agentName`, `day`, `agentUserId`): "Claude Code,
+ * 2026-10-27, 12 items". The count is the writes it holds NOW (read, never
+ * stored), so it never goes stale as writes join. Undefined when `data` is not
+ * a pack's (a workspace join carries no `day`). The title door
+ * (`buildObjectActionTitle`, action `held_writes`, an `ACTION_TITLE_LEADS`
+ * member) leads it: "Writes held for review: Claude Code, 2026-10-27, 12
+ * items", never "Held writes Agent".
+ */
+export function heldWritesPackName(
+  data: unknown,
+  agentName?: string | null
+): string | undefined {
+  const d = asRecord(data);
+  if (
+    !d ||
+    typeof d.day !== "string" ||
+    typeof d.agentUserId !== "string" ||
+    !Array.isArray(d.deferredWrites)
+  ) {
+    return undefined;
+  }
+  const { writes, unreadable } = readDeferredWrites(d);
+  return [
+    agentDisplayName(agentName) ?? agentDisplayName(d.agentName),
+    d.day.trim() || null,
+    countedNoun(writes.length + unreadable, "item"),
+  ]
+    .filter(Boolean)
+    .join(", ");
 }

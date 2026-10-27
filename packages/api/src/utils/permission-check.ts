@@ -4890,6 +4890,10 @@ async function fileHeldWrites(
     data: {
       day: utcDay(new Date(write.at)),
       agentUserId: write.agentUserId,
+      // The pack's title names the agent from its own data (F6,
+      // `heldWritesPackName`): every door that titles a proposal reads it
+      // without a users join.
+      ...(agent?.name ? { agentName: agent.name } : {}),
       deferredWrites: [write],
       source: "agent",
     },
