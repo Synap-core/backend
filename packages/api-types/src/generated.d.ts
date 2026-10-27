@@ -9986,6 +9986,174 @@ export interface ImportAnalysisPlan {
 	overallConfidence: number;
 }
 /**
+ * WHY `structure()` returned `null`, reported through its `onFailure` option.
+ * The `null` contract is unchanged; this only stops the cause from living in a
+ * `console.warn` line alone (issue 1c252b3b: a degraded capture nobody could
+ * explain without host log access).
+ *
+ *   http    — a non-OK answer (auth excepted: that one throws), or a 200 body
+ *             that would not parse;
+ *   stream  — a non-200 `result` frame, an `error` frame, or a stream cut
+ *             before its result;
+ *   network — the request never got an answer;
+ *   timeout — aborted, on the deadline or by the caller.
+ *
+ * `failure` is the IS failure envelope (`{ code, retryable, … }`) when the
+ * answer carried one; never the rest of the body. `message` is the transport
+ * error's own text on a `network` failure (ECONNREFUSED, fetch failed): the
+ * evidence a classifier reads, not words for a person.
+ */
+export interface StructureFailure {
+	cause: "http" | "network" | "stream" | "timeout";
+	status?: number;
+	failure?: unknown;
+	message?: string;
+}
+/**
+ * WHO is asking for access, on an `access-request` row — a pod-level request
+ * that is not a proposal: an external service asking to be a TRUSTED ISSUER
+ * (it would sign identity tokens this pod accepts), or an APPLICATION asking
+ * that its browser origin may call this pod. Pod admins only; the pod reads
+ * them from their own tables (`trusted_issuers`, application connection
+ * requests), so they need no notification to exist.
+ *
+ * Carried on the row because they are two of the trust signals a reviewer
+ * decides on — the asker's name and where it asks from — and a tray must be
+ * able to say them without a second read.
+ */
+export interface NeedsYouAccessRequest {
+	/** What would be granted: issuer trust, or an application's browser origin. */
+	subject: "application" | "issuer";
+	/** The asker's display name (the issuer's host, the app's name). */
+	name: string;
+	/** Where it asks from: the issuer URL, or the app's requested origin. */
+	from: string;
+}
+/**
+ * An invite to ANOTHER space of this pod, addressed to the viewer's email, on
+ * a `space-invite` row (founder, wave PQ 2026-10-22): joined IN the app, with
+ * Accept on the row and Decline beside it. Read from the pod's own `invites`
+ * table for this person only, so it needs no notification to exist.
+ *
+ * `token` is what `workspaces.acceptInvite` takes (the same value
+ * `workspaces.listMyInvites` already hands this person); `id` is what
+ * `workspaces.rejectInvite` takes.
+ */
+export interface NeedsYouInvite {
+	id: string;
+	token: string;
+	/** The role the invite grants (`editor`, `viewer`, …). */
+	role: string;
+	/** `workspace` = one space; `pod` = every space of the pod. */
+	scope: "pod" | "workspace";
+	/** The space's name; null for a pod-wide invite or an unnamed space. */
+	spaceName: string | null;
+}
+/**
+ * CONNECTION EVENT LINES — the ONE rule that turns a connection's lifecycle
+ * event into a human line.
+ *
+ * `parseRecordChange` reads the CRUD half of the events log ("Created person").
+ * Everything a connection does that is NOT a record change — a key revoked or
+ * replaced, an app asking for access, a sync, a sign-in that expired, a
+ * messaging account connected, a message arriving, a webhook delivery, a
+ * session or track moving — is read HERE, so no surface hand-writes those
+ * words. Every word goes through the vocabulary (`resolveActionLabel` past
+ * mood, `resolveObjectNoun`, `resolveConnectionStateLabel`) and the service
+ * names through `resolveServiceName`; this module only arranges them.
+ *
+ * Input is the event's `type` (`${subjectType}.${action}.completed`, or the
+ * two-segment connector form) and, when the reader has it, its `data`. Every
+ * line reads without `data` too (a surface that only holds the type still
+ * gets words); `data` adds the name and the detail.
+ *
+ * Null = not a connection lifecycle event (a record change, an unknown
+ * family, a governance phase, or an in-flight sync tick that is not a fact).
+ */
+/** One lifecycle event, as a line. */
+export interface ConnectionEventLine {
+	/** Vocabulary action token (`revoke`, `sync`, `receive`, …). */
+	action: string;
+	/** Vocabulary object kind (`apiKey`, `app`, `messaging_account`, …). */
+	objectKind: string;
+	/**
+	 * The thing's own name when the event carries one — a key's name, the
+	 * service ("WhatsApp"), the sender, the stage. Already words.
+	 */
+	name: string | null;
+	/** A short trailing fact ("42 new"), or a message preview. Already words. */
+	detail: string | null;
+	/** The act failed (a failed sync or delivery, an expired sign-in). */
+	failed: boolean;
+	/** The whole line, composed: "Synced Gmail · 42 new". */
+	text: string;
+}
+/** An object-nav address (the `Signal.target` shape). The host routes it. */
+export interface LensDoor {
+	kind: string;
+	id: string;
+	/** Optional view reading (`room`), from `OBJECT_NAV_VIEWS`. */
+	view?: string;
+}
+declare const AI_FAILURE_CODES: readonly [
+	"provider_no_credit",
+	"quota_exhausted",
+	"account_quota_exceeded",
+	"not_entitled",
+	"credits_empty",
+	"access_suspended",
+	"account_inactive",
+	"llm_budget_exceeded",
+	"context_length_exceeded",
+	"content_filter",
+	"cancelled",
+	"provider_auth",
+	"rate_limited",
+	"timeout",
+	"circuit_open",
+	"upstream_error",
+	"bad_request",
+	"invalid_response",
+	"unknown"
+];
+export type AiFailureCode = (typeof AI_FAILURE_CODES)[number];
+export type AiFailureClass = "access_suspended" | "account_inactive" | "account_quota" | "auth" | "bad_request" | "budget" | "cancelled" | "circuit" | "content_filter" | "context_length" | "credits_empty" | "invalid_response" | "not_entitled" | "plan_quota" | "quota" | "rate_limit" | "timeout" | "unknown" | "upstream";
+/**
+ * A COMMITTED PARTIAL turn — the client-shaped verdict.
+ *
+ * The IS commits the text produced before a mid-stream provider death and ends
+ * the stream NORMALLY (no `error` frame), so nothing on the terminal path can
+ * tell a truncated answer from a finished one. This is that missing signal.
+ *
+ * FIELD NAMES ARE THE CLIENT'S, not this module's: the streaming codec
+ * (`turn-decode.ts` → `resolveStreamingError` → `StreamError`) reads
+ * `code` / `message` / `recoverable` / `needsOperator`. Emitting `retryable`
+ * here instead would typecheck, ship, and render nothing — the same defect
+ * `chat-turn-sse.ts` documents for the error frame.
+ */
+export interface PartialTurnFailure {
+	readonly code: AiFailureCode;
+	readonly message: string;
+	/** Client spelling of `retryable`. Drives whether Retry may be offered. */
+	readonly recoverable: boolean;
+	readonly needsOperator: boolean;
+}
+/** An existing record the raw text names by a strong atom. */
+export interface DegradedCaptureMention {
+	entityId: string;
+	title: string;
+	profileSlug: string;
+	/** The atom in the text that matched it. */
+	signal: "email" | "phone";
+}
+/** Same shape as the structured lane's `dedupCandidates` entries. */
+export interface DegradedDedupCandidate {
+	entityId: string;
+	title: string;
+	profileSlug: string;
+	score: number;
+}
+/**
  * The ONE shape of the AI's pending "move to X?" suggestion on every
  * `capture.execute` outcome (applied AND proposed). Nothing was moved: the
  * capture landed where it would have without the AI; the caller confirms by
@@ -10706,6 +10874,24 @@ export type DegradedCaptureReason = "is_auth_error" | "is_empty_result" | "is_in
  * a generic pod one — see the empty-result guard in `structure`.
  */
 export type DegradedCaptureReasonOrUnknown = DegradedCaptureReason | (string & {});
+/**
+ * WHY a capture degraded, returned beside `degradedReason` (which keeps its
+ * value: clients branch on it). A status code and two classes, never the IS
+ * body or a provider name, so it is safe to show (plan B, open question 2).
+ *
+ *   cause        — the client-reported cause (`StructureFailure`), `empty`
+ *                  for a well-formed answer with nothing in it, `unknown`
+ *                  when the call reported none;
+ *   attempts     — structure calls made, retries included;
+ *   failureClass — the ONE failure door's class (`utils/ai-failure.ts`): what
+ *                  a reader needs to say whether retrying can help.
+ */
+export interface DegradedCaptureDetail {
+	cause: StructureFailure["cause"] | "empty" | "unknown";
+	status?: number;
+	attempts: number;
+	failureClass: AiFailureClass;
+}
 declare function buildDegradedCaptureFallback(inputText: string, degradedReason: DegradedCaptureReasonOrUnknown, 
 /** A caller-named kind already resolved by `resolveDegradedFallbackKind`. */
 kind?: string): {
@@ -10803,135 +10989,6 @@ export type UndoPromotePropertyToBodyResult = {
 	reason: UndoPromoteToBodyRefusal;
 	status: "refused";
 };
-/**
- * WHO is asking for access, on an `access-request` row — a pod-level request
- * that is not a proposal: an external service asking to be a TRUSTED ISSUER
- * (it would sign identity tokens this pod accepts), or an APPLICATION asking
- * that its browser origin may call this pod. Pod admins only; the pod reads
- * them from their own tables (`trusted_issuers`, application connection
- * requests), so they need no notification to exist.
- *
- * Carried on the row because they are two of the trust signals a reviewer
- * decides on — the asker's name and where it asks from — and a tray must be
- * able to say them without a second read.
- */
-export interface NeedsYouAccessRequest {
-	/** What would be granted: issuer trust, or an application's browser origin. */
-	subject: "application" | "issuer";
-	/** The asker's display name (the issuer's host, the app's name). */
-	name: string;
-	/** Where it asks from: the issuer URL, or the app's requested origin. */
-	from: string;
-}
-/**
- * An invite to ANOTHER space of this pod, addressed to the viewer's email, on
- * a `space-invite` row (founder, wave PQ 2026-10-22): joined IN the app, with
- * Accept on the row and Decline beside it. Read from the pod's own `invites`
- * table for this person only, so it needs no notification to exist.
- *
- * `token` is what `workspaces.acceptInvite` takes (the same value
- * `workspaces.listMyInvites` already hands this person); `id` is what
- * `workspaces.rejectInvite` takes.
- */
-export interface NeedsYouInvite {
-	id: string;
-	token: string;
-	/** The role the invite grants (`editor`, `viewer`, …). */
-	role: string;
-	/** `workspace` = one space; `pod` = every space of the pod. */
-	scope: "pod" | "workspace";
-	/** The space's name; null for a pod-wide invite or an unnamed space. */
-	spaceName: string | null;
-}
-/**
- * CONNECTION EVENT LINES — the ONE rule that turns a connection's lifecycle
- * event into a human line.
- *
- * `parseRecordChange` reads the CRUD half of the events log ("Created person").
- * Everything a connection does that is NOT a record change — a key revoked or
- * replaced, an app asking for access, a sync, a sign-in that expired, a
- * messaging account connected, a message arriving, a webhook delivery, a
- * session or track moving — is read HERE, so no surface hand-writes those
- * words. Every word goes through the vocabulary (`resolveActionLabel` past
- * mood, `resolveObjectNoun`, `resolveConnectionStateLabel`) and the service
- * names through `resolveServiceName`; this module only arranges them.
- *
- * Input is the event's `type` (`${subjectType}.${action}.completed`, or the
- * two-segment connector form) and, when the reader has it, its `data`. Every
- * line reads without `data` too (a surface that only holds the type still
- * gets words); `data` adds the name and the detail.
- *
- * Null = not a connection lifecycle event (a record change, an unknown
- * family, a governance phase, or an in-flight sync tick that is not a fact).
- */
-/** One lifecycle event, as a line. */
-export interface ConnectionEventLine {
-	/** Vocabulary action token (`revoke`, `sync`, `receive`, …). */
-	action: string;
-	/** Vocabulary object kind (`apiKey`, `app`, `messaging_account`, …). */
-	objectKind: string;
-	/**
-	 * The thing's own name when the event carries one — a key's name, the
-	 * service ("WhatsApp"), the sender, the stage. Already words.
-	 */
-	name: string | null;
-	/** A short trailing fact ("42 new"), or a message preview. Already words. */
-	detail: string | null;
-	/** The act failed (a failed sync or delivery, an expired sign-in). */
-	failed: boolean;
-	/** The whole line, composed: "Synced Gmail · 42 new". */
-	text: string;
-}
-/** An object-nav address (the `Signal.target` shape). The host routes it. */
-export interface LensDoor {
-	kind: string;
-	id: string;
-	/** Optional view reading (`room`), from `OBJECT_NAV_VIEWS`. */
-	view?: string;
-}
-declare const AI_FAILURE_CODES: readonly [
-	"provider_no_credit",
-	"quota_exhausted",
-	"account_quota_exceeded",
-	"not_entitled",
-	"credits_empty",
-	"access_suspended",
-	"account_inactive",
-	"llm_budget_exceeded",
-	"context_length_exceeded",
-	"content_filter",
-	"cancelled",
-	"provider_auth",
-	"rate_limited",
-	"timeout",
-	"circuit_open",
-	"upstream_error",
-	"bad_request",
-	"invalid_response",
-	"unknown"
-];
-export type AiFailureCode = (typeof AI_FAILURE_CODES)[number];
-export type AiFailureClass = "access_suspended" | "account_inactive" | "account_quota" | "auth" | "bad_request" | "budget" | "cancelled" | "circuit" | "content_filter" | "context_length" | "credits_empty" | "invalid_response" | "not_entitled" | "plan_quota" | "quota" | "rate_limit" | "timeout" | "unknown" | "upstream";
-/**
- * A COMMITTED PARTIAL turn — the client-shaped verdict.
- *
- * The IS commits the text produced before a mid-stream provider death and ends
- * the stream NORMALLY (no `error` frame), so nothing on the terminal path can
- * tell a truncated answer from a finished one. This is that missing signal.
- *
- * FIELD NAMES ARE THE CLIENT'S, not this module's: the streaming codec
- * (`turn-decode.ts` → `resolveStreamingError` → `StreamError`) reads
- * `code` / `message` / `recoverable` / `needsOperator`. Emitting `retryable`
- * here instead would typecheck, ship, and render nothing — the same defect
- * `chat-turn-sse.ts` documents for the error frame.
- */
-export interface PartialTurnFailure {
-	readonly code: AiFailureCode;
-	readonly message: string;
-	/** Client spelling of `retryable`. Drives whether Retry may be offered. */
-	readonly recoverable: boolean;
-	readonly needsOperator: boolean;
-}
 /**
  * @synap/playbooks — Playbooks & Capability Substrate contracts
  *
@@ -25001,16 +25058,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetProjectId: string | null;
 				targetWorkspaceId: string | null;
 			} | ({
-				dedupCandidates: Record<string, {
-					entityId: string;
-					profileSlug: string;
-					score: number;
-					title: string;
-				}[]>;
+				dedupCandidates: Record<string, DegradedDedupCandidate[]>;
+				dedupSkipped?: true | undefined;
 				degraded: true;
+				degradedDetail: DegradedCaptureDetail;
 				degradedReason: (string & {}) | ("is_auth_error" | "is_empty_result" | "is_invalid_response");
 				followUp: string | StructuredFollowUp | null;
 				formSpec: null;
+				mentions: DegradedCaptureMention[];
 				proposals: {
 					confidence: number;
 					description: string | undefined;
@@ -25862,16 +25917,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetProjectId: string | null;
 				targetWorkspaceId: string | null;
 			} | ({
-				dedupCandidates: Record<string, {
-					entityId: string;
-					profileSlug: string;
-					score: number;
-					title: string;
-				}[]>;
+				dedupCandidates: Record<string, DegradedDedupCandidate[]>;
+				dedupSkipped?: true | undefined;
 				degraded: true;
+				degradedDetail: DegradedCaptureDetail;
 				degradedReason: (string & {}) | ("is_auth_error" | "is_empty_result" | "is_invalid_response");
 				followUp: string | StructuredFollowUp | null;
 				formSpec: null;
+				mentions: DegradedCaptureMention[];
 				proposals: {
 					confidence: number;
 					description: string | undefined;
