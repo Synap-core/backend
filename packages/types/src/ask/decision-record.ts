@@ -76,7 +76,7 @@ function readOptions(raw: unknown): AskOption[] {
 /**
  * The properties as the snapshot the shared rule reads. A `choose`, unless
  * the decision was a confirm (no options, and a `yes` / `no` pick or
- * recommendation — decision 2, 2026-10-26: a confirm may recommend), so
+ * recommendation — founder, 2026-10-26: a confirm may recommend), so
  * "AI picked: Yes" reads the confirm's own words. The recommendation is
  * `recommendedOption` when set, else the option flagged `recommended`.
  */

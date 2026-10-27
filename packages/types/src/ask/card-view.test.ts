@@ -1,5 +1,5 @@
 /**
- * The ask card's ONE anatomy (Resolve-XP W6, founder decisions 2026-10-26):
+ * The ask card's ONE anatomy (founder decisions, 2026-10-26):
  * `askCardView`, `askFate`, the confirm's recommendation + consequences.
  *
  * The first case is the founder's own card, verbatim in shape: a decision
@@ -13,13 +13,19 @@ import {
   ASK_COPY,
   askCardView,
   askFate,
+  answerProvenanceMark,
+  answerWasRelayed,
   askRecommendationOutcome,
+  readRoomPostMeta,
+  ROOM_POST_META_KEY,
   buildAskSnapshot,
+  stripLeadingRestatement,
   isAskReviewLater,
   type Ask,
   type AskCardSlot,
 } from "./index.js";
-import { REVIEW_LATER_AFTER_DAYS } from "../proposals/fate.js";
+import { FATE_TONE, REVIEW_LATER_AFTER_DAYS } from "../proposals/fate.js";
+import { proposalFateLine } from "../lens/rows.js";
 
 const DAY = 24 * 3_600_000;
 const NOW = Date.parse("2026-10-26T12:00:00.000Z");
@@ -56,7 +62,7 @@ describe("askCardView — the founder's card", () => {
       cause: { kind: "decision", ref: { kind: "entity", id: "3fa5e462" } },
     });
     expect(view.asker?.kind === "cause" && view.asker.label).toMatch(
-      /^From your decision note · /
+      /^From a proposed decision · /
     );
     expect(JSON.stringify(view)).not.toMatch(/an agent|waiting on your/i);
   });
@@ -240,7 +246,21 @@ describe("askFate — the owed ask's fate on silence", () => {
         { label: "a", ask: confirm, owedSince: daysAgo(2) },
         { now: NOW }
       ).ageFate.label
-    ).toBe("2d · Retires when the session ends");
+    ).toBe("2d · Ends with the session");
+  });
+
+  it("a fate with no deadline is never amber; it reads as the proposal's", () => {
+    // Most confirms end with their session: an amber mark on each would stop
+    // meaning "act soon". Same words and tone as a session-bound draft.
+    const view = askCardView(
+      { label: "a", ask: confirm, owedSince: daysAgo(2) },
+      { now: NOW }
+    );
+    expect(view.ageFate.tone).toBe(FATE_TONE.dies_with_session);
+    expect(view.ageFate.tone).not.toBe("warning");
+    expect(view.ageFate.label).toBe(
+      `2d · ${proposalFateLine({ kind: "dies_with_session" }, NOW)}`
+    );
   });
 
   it("past REVIEW_LATER_AFTER_DAYS: Review later, any mode, never expired", () => {
@@ -257,6 +277,49 @@ describe("askFate — the owed ask's fate on silence", () => {
       kind: "review_later",
       since: new Date(NOW - DAY).toISOString(),
     });
+  });
+
+  it("a criterion grade never retires with its session, though its ask is a choose", () => {
+    const grade = ask({
+      mode: "choose",
+      options: [
+        { label: "Pass", value: "pass" },
+        { label: "Fail", value: "fail" },
+      ],
+    });
+    expect(
+      askFate(
+        { label: "a", kind: "criterion", ask: grade, owedSince: daysAgo(1) },
+        NOW
+      )
+    ).toEqual({ kind: "until_decided" });
+    expect(
+      askFate(
+        { label: "a", criterionKey: "tests", ask: grade, owedSince: daysAgo(1) },
+        NOW
+      )
+    ).toEqual({ kind: "until_decided" });
+  });
+
+  it("a relay waiting for the tap is fresh news, whatever the slot's age", () => {
+    const old = daysAgo(REVIEW_LATER_AFTER_DAYS + 3);
+    expect(isAskReviewLater({ owedSince: old }, NOW)).toBe(true);
+    expect(
+      isAskReviewLater(
+        { owedSince: old, pendingRelay: { relayedAt: daysAgo(0.1) } },
+        NOW
+      )
+    ).toBe(false);
+    // A relay left waiting past the window ages out like anything else.
+    expect(
+      isAskReviewLater(
+        {
+          owedSince: old,
+          pendingRelay: { relayedAt: daysAgo(REVIEW_LATER_AFTER_DAYS + 1) },
+        },
+        NOW
+      )
+    ).toBe(true);
   });
 
   it("an unreadable owedSince fails toward KEEPING it in the headline", () => {
@@ -307,5 +370,65 @@ describe("a confirm's recommendation — the contract", () => {
     });
     expect(snap.followedRecommendation).toBeNull();
     expect(askRecommendationOutcome(snap).outcome).toBe("none");
+  });
+});
+
+describe("stripLeadingRestatement — one fold with askTextRestates", () => {
+  it("strips the restated lead in any case and keeps the rest", () => {
+    expect(
+      stripLeadingRestatement(
+        "Pricing model: use three tiers",
+        "pricing model"
+      )
+    ).toBe("use three tiers");
+    expect(
+      stripLeadingRestatement("Decide: pricing MODEL. Seats.", "Pricing model")
+    ).toBe("Seats.");
+  });
+  it("all of it restated ⇒ empty; not restated ⇒ untouched", () => {
+    expect(stripLeadingRestatement("Pricing model.", "pricing model")).toBe("");
+    expect(
+      stripLeadingRestatement("Seats are cheaper.", "Pricing model")
+    ).toBe("Seats are cheaper.");
+    // A longer word that merely starts with the lead is not a restatement.
+    expect(
+      stripLeadingRestatement("Pricing models differ.", "Pricing model")
+    ).toBe("Pricing models differ.");
+  });
+});
+
+describe("relayed answers — one reader, one receipt", () => {
+  it("answerWasRelayed: a relay stays a relay once the person confirmed it", () => {
+    expect(answerWasRelayed({ via: "relayed", relayedBy: "a1" })).toBe(true);
+    expect(answerWasRelayed({ via: "tap", relayedBy: "a1" })).toBe(true);
+    expect(answerWasRelayed({ via: "tap" })).toBe(false);
+    expect(answerWasRelayed(null)).toBe(false);
+  });
+  it("ASK_COPY.relayedWords shows the person's QUOTE over the recorded text", () => {
+    expect(ASK_COPY.relayedWords({ quote: "ship it", text: "Yes" })).toBe(
+      "“ship it”"
+    );
+    expect(ASK_COPY.relayedWords({ text: "Yes" })).toBe("“Yes”");
+    expect(ASK_COPY.relayedWords({ quote: " ", text: null })).toBeNull();
+  });
+});
+
+describe("readRoomPostMeta — the one reader of a room question's marker", () => {
+  it("reads the stamp the pod writes, and drives the question's mark", () => {
+    const meta = readRoomPostMeta({
+      [ROOM_POST_META_KEY]: {
+        kind: "question",
+        closed: { reason: "session_ended", at: "2026-10-26T12:00:00.000Z" },
+      },
+    });
+    expect(meta?.kind).toBe("question");
+    expect(answerProvenanceMark(meta!)).toEqual({
+      tone: "textMuted",
+      label: ASK_COPY.closedSessionEnded,
+    });
+  });
+  it("anything else is not a room post", () => {
+    expect(readRoomPostMeta(null)).toBeNull();
+    expect(readRoomPostMeta({ [ROOM_POST_META_KEY]: { kind: "chat" } })).toBeNull();
   });
 });

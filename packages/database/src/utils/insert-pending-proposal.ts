@@ -19,6 +19,10 @@ import { focusSessions } from "../schema/focus-sessions.js";
 // here moved WITH it, so no caller loses the 22P02 protection.
 import { resolveProjectPlacement } from "../services/project-resolution-service.js";
 import { stableStringify } from "./stable-stringify.js";
+import {
+  isRequestShapedProposalData,
+  type StoredProposalData,
+} from "@synap-core/types/proposals";
 import { isUniqueViolation } from "./pg-errors.js";
 import {
   callingKeyAttribution,
@@ -198,7 +202,9 @@ export const SUPERSEDED_REASON = "Replaced by a newer version";
  * `<kind>.update`): a create is a new thing, not a version; a section or
  * narrative patch writes PART of a document, so two of them are two changes,
  * not a revision. The match itself — same agent, same session, same target,
- * same proposal type — is the WHERE in {@link insertPendingProposal}.
+ * same proposal type — is the WHERE in {@link supersedeEarlierVersions}, and
+ * only a newer version that COVERS the older one replaces it
+ * ({@link coversEarlierVersion}).
  */
 export function supersedesEarlierVersions(input: {
   agentUserId?: string | null;
@@ -210,6 +216,62 @@ export function supersedesEarlierVersions(input: {
     input.proposalType.lastIndexOf(".") + 1
   );
   return action === "update";
+}
+
+/**
+ * The fields a proposal payload CHANGES: its record's keys (the request
+ * envelope's `data.data`, else the payload itself), minus the envelope and
+ * plumbing keys the dedup hash ignores, with a plain-object value (an entity
+ * update's `properties`) expanded one level — `properties.status` and
+ * `properties.amount` are two changes, not one. Arrays and scalars are one
+ * field each. Pure.
+ */
+export function changedFields(data: Record<string, unknown>): Set<string> {
+  const record =
+    isRequestEnvelope(data) &&
+    data.data !== null &&
+    typeof data.data === "object" &&
+    !Array.isArray(data.data)
+      ? (data.data as Record<string, unknown>)
+      : data;
+  const fields = new Set<string>();
+  for (const [key, value] of Object.entries(record)) {
+    if (VOLATILE_DEDUP_KEYS.has(key) || SUPERSEDE_META_KEYS.has(key)) continue;
+    if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+      const inner = Object.keys(value as Record<string, unknown>);
+      if (inner.length === 0) fields.add(key);
+      for (const k of inner) fields.add(`${key}.${k}`);
+    } else {
+      fields.add(key);
+    }
+  }
+  return fields;
+}
+
+/** Stamps on a stored payload that are not part of the change. */
+const SUPERSEDE_META_KEYS = new Set<string>([
+  SUPERSEDED_BY_KEY,
+  "withdrawReason",
+  "sessionSource",
+]);
+
+/**
+ * Does the NEWER pending version carry every change the older one proposed?
+ * Only then is the older one "replaced": an update is a PARTIAL patch (the
+ * entity executor merges `properties`), and the same type also carries moves
+ * (`toWorkspaceId`), so `{status:'won'}` then `{amount:5000}` are two changes —
+ * withdrawing the first would drop the status move with nobody left to
+ * approve it. Pure.
+ */
+export function coversEarlierVersion(
+  newer: Record<string, unknown>,
+  older: Record<string, unknown>
+): boolean {
+  const covered = changedFields(newer);
+  for (const field of changedFields(older)) {
+    if (!covered.has(field)) return false;
+  }
+  return true;
 }
 
 /**
@@ -247,21 +309,6 @@ const VOLATILE_DEDUP_KEYS = new Set([
   // collapse the very retry it exists for.
   "duplicateCheck",
 ]);
-
-/**
- * True when a stored payload is the REQUEST ENVELOPE `checkPermissionOrPropose`
- * writes — `{ requestId, targetType, changeType, data: <the record>, … }` —
- * rather than a flat record. The same three-field signature as
- * `isRequestShapedProposalData` (`@synap-core/types/proposals`); mirrored, not
- * imported, because `@synap-core/types` builds against this package.
- */
-function isRequestEnvelope(data: Record<string, unknown>): boolean {
-  return (
-    typeof data.targetType === "string" &&
-    typeof data.changeType === "string" &&
-    typeof data.requestId === "string"
-  );
-}
 
 /**
  * What makes two proposed creates the SAME record: the record the create door
@@ -322,7 +369,11 @@ export function computeProposalDedupHash(p: {
   const record = payload.data;
   if (
     isCreate &&
-    isRequestEnvelope(p.data) &&
+    // The REQUEST ENVELOPE `checkPermissionOrPropose` writes —
+    // `{ requestId, targetType, changeType, data: <the record>, … }` — rather
+    // than a flat record. The guard reads any object (it widens its argument
+    // back to a record itself); the cast only meets its parameter type.
+    isRequestShapedProposalData(p.data as unknown as StoredProposalData) &&
     record !== null &&
     typeof record === "object" &&
     !Array.isArray(record)
@@ -671,7 +722,8 @@ export async function insertPendingProposal(
 
 /**
  * Withdraw the agent's older PENDING versions of `latest` — same agent, same
- * session, same target, same proposal type — stamping what replaced them, and
+ * session, same target, same proposal type, and every change of theirs carried
+ * by `latest` ({@link coversEarlierVersion}) — stamping what replaced them, and
  * action their notifications so the bell drops them with the queue. Runs in
  * the insert's transaction, after the new row exists. The new row's own hash
  * differs from theirs by construction: an identical one was returned as a
@@ -682,6 +734,27 @@ async function supersedeEarlierVersions(
   latest: typeof proposals.$inferSelect
 ): Promise<string[]> {
   if (!latest.agentUserId || !latest.sessionId) return [];
+  const candidates = await tx
+    .select({ id: proposals.id, data: proposals.data })
+    .from(proposals)
+    .where(
+      and(
+        eq(proposals.status, ProposalStatus.PENDING),
+        eq(proposals.agentUserId, latest.agentUserId),
+        eq(proposals.sessionId, latest.sessionId),
+        eq(proposals.targetType, latest.targetType),
+        eq(proposals.targetId, latest.targetId),
+        eq(proposals.proposalType, latest.proposalType),
+        ne(proposals.id, latest.id)
+      )
+    );
+  const newer = (latest.data ?? {}) as Record<string, unknown>;
+  const covered = candidates
+    .filter((c) =>
+      coversEarlierVersion(newer, (c.data ?? {}) as Record<string, unknown>)
+    )
+    .map((c) => c.id);
+  if (covered.length === 0) return [];
   const stamp = JSON.stringify({
     [SUPERSEDED_BY_KEY]: latest.id,
     withdrawReason: SUPERSEDED_REASON,
@@ -695,13 +768,8 @@ async function supersedeEarlierVersions(
     })
     .where(
       and(
-        eq(proposals.status, ProposalStatus.PENDING),
-        eq(proposals.agentUserId, latest.agentUserId),
-        eq(proposals.sessionId, latest.sessionId),
-        eq(proposals.targetType, latest.targetType),
-        eq(proposals.targetId, latest.targetId),
-        eq(proposals.proposalType, latest.proposalType),
-        ne(proposals.id, latest.id)
+        inArray(proposals.id, covered),
+        eq(proposals.status, ProposalStatus.PENDING)
       )
     )
     .returning({ id: proposals.id });

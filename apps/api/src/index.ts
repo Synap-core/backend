@@ -2150,7 +2150,7 @@ runStartupHooks().catch((err) => {
   apiLogger.error({ err }, "Startup hooks failed (non-fatal)");
 });
 
-// Code skills on this pod (SANDBOX_LOCAL=1): start one runner process now, so
+// Code skills run on this pod (default since R2): start one runner process now, so
 // /health's `skillRuntime` answers at boot whether it can. Never throws.
 void warmSkillRuntime();
 
@@ -2173,11 +2173,11 @@ void startupHooksSettled
     )
   );
 
-// Decision asks NOBODY ASKED (founder decision 1, 2026-10-26): open asks the
-// old reactor raised on a person's own proposed decision retire `not_asked`,
-// and the Decide sessions it opened for them close through the one close
-// door. Idempotent (a retired ask is no longer open), so it simply runs at
-// every boot. Off the boot path.
+// Decision asks NOBODY ASKED: open asks the old reactor raised on a person's
+// own proposed decision retire `not_asked`, and the Decide sessions it opened
+// for them close through the one close door. Runs ONCE (a pod_settings
+// marker, written only after a pass with no failure); later boots return at
+// the marker. Off the boot path.
 void startupHooksSettled
   .then(async () => {
     const { retireUnaskedDecisionAsks } = await import("@synap/api");

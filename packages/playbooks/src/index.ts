@@ -38,7 +38,7 @@ export type ToolKind =
 export type ToolVerbKind = "read" | "write" | "action";
 
 // ⚠️ `AbstractVerb` USED TO BE RE-DECLARED HERE and was DELETED (2026-10-01).
-// It was a fourth, TYPE-only copy of the intent vocabulary, and it had gone
+// It was a TYPE-only copy of the intent vocabulary, and it had gone
 // STALE: 13 slugs, missing `publish_post` (migration 0284). Worse, it was
 // DEAD — a whole-repo scan (every repo, `src/`, `dist/`, and generated `.d.ts`)
 // found ZERO importers of `AbstractVerb` from this package, so nothing could
@@ -52,25 +52,22 @@ export type ToolVerbKind = "read" | "write" | "action";
 // stale, and it would be stale in the one direction that is invisible — nothing
 // here consumes it, so no typecheck fails when a row is added.
 //
-// THE VOCABULARY'S THREE REMAINING MIRRORS, and why each must stay:
-//   - `ABSTRACT_VERBS` (runtime, 13-slug seed) — @synap/database
-//     `schema/tools.ts`. Cannot import `@synap-core/types` (types devDepends on
-//     database ⇒ build cycle). Guarded by
-//     `src/utils/intent-vocabulary-parity.test.ts` (migration SQL).
+// THE VOCABULARY'S TWO REMAINING MIRRORS, and why each must stay:
 //   - `ABSTRACT_INTENTS` + `REGISTERED_EXTRAS` + `CAPABILITY_INTENTS` —
 //     @synap-core/types `src/capability-intents/`, a LEAF subpath (pure, no
-//     generated dep) because the barrel re-exports `@synap/database` types and
-//     a VALUE import from a barrel crashes Hermes. Linked by synap-app +
-//     @synap/api. Guarded by its own `parity.test.ts` (migration SQL).
+//     generated dep) because a VALUE import from a barrel crashes Hermes.
+//     Linked by synap-app + @synap/api, and read by the pod: @synap/database
+//     `schema/tools.ts` re-exports `ABSTRACT_INTENTS` as `ABSTRACT_VERBS` (a
+//     copy until 2026-10-26). Guarded by its own `parity.test.ts` (migration SQL).
 //   - `ABSTRACT_VERBS` + `REGISTERED_EXTRAS` + `CAPABILITY_INTENTS` —
 //     synap-control-plane-api `src/seeds/capability-intent-vocabulary.ts`. A
 //     SEPARATE DEPLOY TARGET with its OWN lockfile; it resolves neither
 //     `@synap-core/types` nor the pod's packages (verified: `require.resolve`
 //     → MODULE_NOT_FOUND). Guarded inside `capability-provides.test.ts`.
-// A fourth copy with no importers was not a mirror — it was a comment that
-// looked like a contract.
+// A copy with no importers was not a mirror — it was a comment that looked
+// like a contract.
 //
-// To add a slug: write the migration, then all three mirrors. Every guard
+// To add a slug: write the migration, then both mirrors. Every guard
 // re-derives from the migration SQL, so a missed mirror is a RED BUILD, never a
 // silent divergence. See `skills/intent-vocabulary-ssot` for the full procedure.
 
@@ -285,11 +282,11 @@ export const OUTPUT_RETIRED_REASONS = [
   "withdrawn",
   // The session ENDED with an agent-need ask (`confirm` / `choose`) still
   // owed: the agent's question is moot once its session is gone. A person's
-  // deliverable (`act` / `provide` / `form`) stays owed instead — Resolve-XP
-  // founder default 3 (2026-10-26), stamped by the close door (W2).
+  // deliverable (`act` / `provide` / `form`) stays owed instead — founder
+  // default, 2026-10-26, stamped by the close door (`completeFocusSession`).
   "session_ended",
   // Nobody asked: a `proposed` decision a PERSON wrote raised an ask with no
-  // agent behind it (founder decision 1, 2026-10-26). Only an agent-authored
+  // agent behind it (founder, 2026-10-26). Only an agent-authored
   // proposed decision asks; the asks raised before that rule retire here
   // (api `services/decisions/retire-unasked-decision-asks.ts`).
   "not_asked",
@@ -622,7 +619,7 @@ export interface ExpectedOutput {
   answerPickedUpAt?: string;
   /**
    * A relayed answer to a `commitment` ask, waiting for the person's tap — see
-   * {@link SlotPendingRelay}. SERVER-STAMPED by the relay door only (W1); the
+   * {@link SlotPendingRelay}. SERVER-STAMPED by the relay door only; the
    * slot stays owed (`owner: 'human'`) while it is here, and the person's
    * Confirm / "Not what I said" clears it.
    */

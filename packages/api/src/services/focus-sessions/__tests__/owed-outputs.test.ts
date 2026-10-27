@@ -266,6 +266,27 @@ describe("retirementForClose — which exit ends the obligation", () => {
     }
   );
 
+  it("a criterion grade outlives the close: its choose is the person's verdict, not the agent's need", () => {
+    const grade: ExpectedOutput = {
+      ...OWED,
+      kind: "criterion",
+      label: "Tests pass",
+      criterionKey: "tests-pass",
+      ask: {
+        mode: "choose",
+        options: [
+          { label: "Pass", value: "pass" },
+          { label: "Fail", value: "fail" },
+        ],
+      } as never,
+    };
+    for (const status of ["closed", "failed"] as const) {
+      expect(retirementForClose([grade], status)).toBeNull();
+    }
+    // Cancel still ends every obligation.
+    expect(retirementForClose([grade], "cancelled")?.retiredSlots).toBe(1);
+  });
+
   it("a slot the closing agent kept owed is never retired, on any exit", () => {
     const keep = new Set(["confirm"]);
     expect(

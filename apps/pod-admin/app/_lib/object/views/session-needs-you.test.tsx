@@ -324,7 +324,7 @@ describe("Needs you — the session's own asks, answered in place", () => {
     expect(seenText).not.toMatch(
       /Decide:|Accept:|An agent|waiting on your answer|Question|Answer the agent/
     );
-    expect(seenText).toContain("From your decision note");
+    expect(seenText).toContain("From a proposed decision");
     expect(seenText).toMatch(/Yes Recommended Marks it accepted/);
     expect(seenText).toContain("Marks it rejected");
     expect(seenText.match(/Add a note/g)).toHaveLength(1);

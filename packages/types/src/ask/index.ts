@@ -449,7 +449,7 @@ const lookedAtField = {
 // ─── Stakes ─────────────────────────────────────────────────────────────────
 
 /**
- * What an answer COMMITS the person to — Resolve-XP founder default 1
+ * What an answer COMMITS the person to — founder default 1 (2026-10-26)
  * (2026-10-26): an answer an agent RELAYS from a chat unblocks it without a
  * tap, EXCEPT a `commitment`, which waits for the person's own tap.
  *   `routine`    — input the agent needs (the default; absent reads routine).
@@ -473,7 +473,7 @@ const stakesField = {
  * `stakes` counts when it says `commitment`, never to lower what the pod
  * forces.
  *
- * `forced` is computed by the pod (Resolve-XP W1, the relay door), from facts
+ * `forced` is computed by the pod (the relay door), from facts
  * an agent cannot author: the slot fills a plan/deploy gate
  * (`AWAITED_GATE_PROPOSAL_TYPES`, `@synap/playbooks`), the answer would make a
  * human-only status move (`lifecycle.options[].humanOnly`), or it would spend.
@@ -498,7 +498,7 @@ export function effectiveAskStakes(input: {
 // ─── Who asked ──────────────────────────────────────────────────────────────
 
 /**
- * What raised an ask when no agent did (founder decision 4, 2026-10-26: the
+ * What raised an ask when no agent did (founder, 2026-10-26: the
  * card NAMES THE CAUSE as a door, never "An agent"). Server-stamped on the
  * slot (`ExpectedOutput.askCause`) by the producer that wrote it:
  *   `decision`          — a `proposed` decision note (the decision-ask reactor)
@@ -649,7 +649,7 @@ export const AskAnswerValueSchema = z.discriminatedUnion("type", [
 ]);
 export type AskAnswerValue = z.infer<typeof AskAnswerValueSchema>;
 
-// ─── Answer provenance + question disposition (Resolve-XP W0) ──────────────
+// ─── Answer provenance + question disposition ──────────────────────
 //
 // WHERE an answer came from and where a question stands (pod doc 86890dee).
 // Two stamps carry these fields, both SERVER-STAMPED: a slot's answer
@@ -712,6 +712,18 @@ export function answerVia(
   return answer?.via === "relayed" ? "relayed" : "tap";
 }
 
+/**
+ * Did an agent carry these words from a chat? True on a relay nobody tapped
+ * AND on one the person then confirmed (the confirm writes `via: 'tap'` but
+ * keeps `relayedBy`): the relay is never erased from what the receipt says.
+ * The ONE reader for every surface.
+ */
+export function answerWasRelayed(
+  answer: Pick<AnswerProvenance, "via" | "relayedBy"> | null | undefined
+): boolean {
+  return answerVia(answer) === "relayed" || Boolean(answer?.relayedBy);
+}
+
 // ─── A relay that waits for the person's tap ────────────────────────────────
 
 /**
@@ -725,7 +737,7 @@ export function answerVia(
  * relay is still waiting on the person, so it must stay open in all three:
  * keeping it off `answer` means none of them changes, and the person's tap
  * still claims `answer` atomically through the door it uses today. One JSONB
- * write stamps it (W1), one write clears it.
+ * write stamps it (the relay door), one write clears it.
  */
 export const PendingRelayedAnswerSchema = z.object({
   /** The answer as it would be recorded (`SlotAnswer.text`). */
@@ -746,8 +758,8 @@ export type PendingRelayedAnswer = z.infer<typeof PendingRelayedAnswerSchema>;
  * Why a room question stopped being open without an answer. The SAME tokens
  * as the matching `OUTPUT_RETIRED_REASONS` (`@synap/playbooks`), so a slot
  * and a room question that closed for one reason read one word.
- *   `session_ended` — its session ended with the question still open (W2).
- *   `withdrawn`     — the agent withdrew it, overtaken (W1).
+ *   `session_ended` — its session ended with the question still open.
+ *   `withdrawn`     — the agent withdrew it, overtaken.
  */
 export const QUESTION_CLOSED_REASONS = ["session_ended", "withdrawn"] as const;
 export type QuestionClosedReason = (typeof QUESTION_CLOSED_REASONS)[number];
@@ -841,7 +853,7 @@ export interface DecisionAskSlotLite<A = Ask> {
  * this", which closed a decision with nobody deciding anything. Such a slot
  * gets a `confirm` (Yes / No) instead, with NO prompt: the slot already says
  * what is asked (its label) and why (its `why`), and a prompt copied from
- * either is the same words drawn twice on the card (Resolve-XP W6).
+ * either is the same words drawn twice on the card (founder, 2026-10-26).
  *
  * A param slot (`PARAM_SLOT_KIND`) is exempt: its only ask-less form is a
  * credential-named param whose value is set on the run, and a yes/no there
@@ -1362,6 +1374,7 @@ export {
   effectiveSlotUnblocks,
   stripAskVerbPrefix,
   askTextRestates,
+  stripLeadingRestatement,
   type AskCardAnswer,
   type AskCardAsker,
   type AskCardSlot,
@@ -1380,6 +1393,16 @@ export {
   type AskOptionChip,
   type ActView,
 } from "./card.js";
+
+/** A room post's marker and its one reader — see `./room-post.ts`. */
+export {
+  ROOM_POST_KINDS,
+  ROOM_POST_META_KEY,
+  ROOM_POST_SLOT_LABEL_MAX,
+  readRoomPostMeta,
+  type RoomPostKind,
+  type RoomPostMeta,
+} from "./room-post.js";
 
 /** A decision entity's ask record → the shared outcome rule — see `./decision-record.ts`. */
 export {

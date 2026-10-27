@@ -159,7 +159,7 @@ export const proposalsRouter = router({
         items as unknown as Record<string, unknown>[],
         input.userId
       );
-      // WAITING ON IT (Resolve-XP W3) — forwarded by both REST views; the
+      // WAITING ON IT — forwarded by both REST views; the
       // agent door reads sessions owner-only (decision D1).
       const waits = await resolveProposalWaits(items, {
         userId: ctx.userId as string,

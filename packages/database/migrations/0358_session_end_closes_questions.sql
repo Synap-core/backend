@@ -1,4 +1,4 @@
--- 0358 — a session that ended stops asking (Resolve-XP W2, founder default 3)
+-- 0358 — a session that ended stops asking (founder default 3)
 --
 -- From now on the close door (`completeFocusSession`, api) does two things at
 -- every exit, in the transaction that stamps the terminal status:
@@ -8,7 +8,8 @@
 --   2. every owed slot whose ask is the AGENT's need (`confirm` / `choose`,
 --      read through `effectiveSlotAsk`: a `decision` slot with no ask IS a
 --      confirm) is stamped `retiredAt` + `retiredReason: 'session_ended'`.
---      `act` / `provide` / `form` asks and slots with no ask stay owed.
+--      `act` / `provide` / `form` asks, slots with no ask, and criterion
+--      grades stay owed.
 --
 -- This migration applies the same two stamps to sessions that ENDED BEFORE the
 -- rule existed, so their questions and asks leave needs-you the way a session
@@ -20,9 +21,10 @@
 --     an ai_agent message, not deleted, roomPost kind 'question', no `answer`,
 --     no `closed`. A room some OPEN session still uses is left alone.
 --   - owed slot = `OWED_SLOT_CLAUSES` (owed-slot-predicate.ts).
---   - session-bound ask = `slotEndsWithSession` (api owed-outputs.ts) over
---     `deriveDecisionAsk` (@synap-core/types/ask): an explicit confirm/choose,
---     or no ask on a human `decision` slot that is not a playbook param.
+--   - session-bound ask = `askEndsWithSession` (@synap-core/types/ask) over
+--     `deriveDecisionAsk`: an explicit confirm/choose, or no ask on a human
+--     `decision` slot that is not a playbook param — never a `criterion` slot,
+--     whose `choose` is the person's grade on the scorecard and stays owed.
 --
 -- Idempotent: a second run finds nothing open and nothing owed to stamp.
 
@@ -59,6 +61,8 @@ SET "expected_outputs" = (
         AND slot->>'status' IS DISTINCT FROM 'done'
         AND slot->>'retiredAt' IS NULL
         AND slot->>'optional' IS DISTINCT FROM 'true'
+        AND slot->>'kind' IS DISTINCT FROM 'criterion'
+        AND slot->>'criterionKey' IS NULL
         AND (
           slot->'ask'->>'mode' IN ('confirm', 'choose')
           OR (
@@ -87,6 +91,8 @@ WHERE fs."status" IN ('closed', 'cancelled', 'failed')
       AND slot->>'status' IS DISTINCT FROM 'done'
       AND slot->>'retiredAt' IS NULL
       AND slot->>'optional' IS DISTINCT FROM 'true'
+      AND slot->>'kind' IS DISTINCT FROM 'criterion'
+      AND slot->>'criterionKey' IS NULL
       AND (
         slot->'ask'->>'mode' IN ('confirm', 'choose')
         OR (

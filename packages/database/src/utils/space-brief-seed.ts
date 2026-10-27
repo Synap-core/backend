@@ -39,22 +39,16 @@ import {
   seedRefAliasIndex,
   type SeedRefShape,
 } from "./seed-refs.js";
+import { SPACE_BRIEF_TEMPLATE_FIELDS } from "@synap-core/types/space-brief";
 
 /**
- * Mirror of `SPACE_BRIEF_TEMPLATE_FIELDS` (`@synap-core/types/space-brief`) —
- * this package cannot import it (build cycle). Parity is a test-only import.
+ * The fields a template seeds: `SPACE_BRIEF_TEMPLATE_FIELDS`
+ * (`@synap-core/types/space-brief`), under the pod's name.
  */
-export const SPACE_BRIEF_SEEDED_FIELDS = [
-  "purpose",
-  "goal",
-  "framing",
-  "expertise",
-  "collect",
-  "openingQuestions",
-  "doneWhen",
-  "anchors",
-  "fetch",
-] as const satisfies ReadonlyArray<keyof WorkspaceSpaceBrief>;
+export const SPACE_BRIEF_SEEDED_FIELDS =
+  SPACE_BRIEF_TEMPLATE_FIELDS satisfies ReadonlyArray<
+    keyof WorkspaceSpaceBrief
+  >;
 
 export type SpaceBriefSeededField = (typeof SPACE_BRIEF_SEEDED_FIELDS)[number];
 

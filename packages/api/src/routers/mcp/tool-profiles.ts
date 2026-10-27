@@ -39,7 +39,7 @@ export const ENTRY_TOOLS = [
   "synap_wait_for_answer",
   "synap_post_message",
   // The answer loop's return half when the person answers in the agent's own
-  // chat (Resolve-XP W1): an entry agent that asks must be able to relay.
+  // chat (`synap_relay_answer`): an entry agent that asks must be able to relay.
   "synap_relay_answer",
   "synap_complete_session",
   "synap_load_skill",

@@ -3344,9 +3344,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       );
     }
     const id = c.req.param("id");
-    // The answer door's grant rung: the session's own space + project.
-    const denial = await grantWriteDenial(await answerGrantWrite(id));
-    if (denial) return c.json({ error: denial }, 403);
+    // The grant rung runs inside the service (`relaySessionAnswer`), so the
+    // MCP twin cannot skip it.
     if (!isUuid(id)) {
       return c.json({ error: `Focus session ${id} not found` }, 404);
     }

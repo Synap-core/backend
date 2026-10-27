@@ -430,6 +430,19 @@ describe("signal targets", () => {
     expect(targetFromNotification("entity", null)).toBeNull();
   });
 
+  it("a sessionless cluster split by Review later is two rows, never one id twice", () => {
+    const fresh = signalFromCluster(cluster());
+    const later = signalFromCluster(
+      cluster({
+        reviewLater: true,
+        sampleProposalIds: ["prop-9"],
+        latestAt: new Date("2026-08-01T10:00:00Z"),
+      })
+    );
+    expect(later.id).not.toBe(fresh.id);
+    expect(later.groupKey).not.toBe(fresh.groupKey);
+  });
+
   it("addresses a cluster by its sample proposal", () => {
     expect(signalFromCluster(cluster()).target).toEqual({
       kind: "proposal",

@@ -19,6 +19,11 @@
  *             answered here (`ask-detail.ts`), one at a time, never batched;
  *             anything else opens where it lives.
  *
+ * Review later: a durable proposal untouched for 7 days, or an ask nobody
+ * answered for 7 days, leaves the headline and the counts for its own fold —
+ * the SHARED fold (`needsYouRows`), so the console folds exactly what the
+ * badge leaves out and what the desktop and phone apps fold.
+ *
  * Words come from the vocabulary door; nothing here names a kind by hand.
  */
 
@@ -30,6 +35,7 @@ import {
   type LensNeedsYouSignal,
 } from "@synap-core/types/lens";
 import { isObjectNavView } from "@synap-core/types/navigation";
+import { needsYouRows } from "@synap-core/types/needs-you";
 import { proposalNeedsItsPage } from "@synap-core/types/proposals";
 import { askTextRestates, type Ask } from "@synap-core/types/ask";
 import { openIn, type Exit } from "../../../../lib/open-in";
@@ -168,6 +174,8 @@ export interface ReviewRow {
   batchIds: string[] | null;
   /** Every id a `?focus=` may name this row by. */
   ids: string[];
+  /** In the Review later fold: out of the headline and the counts. */
+  reviewLater: boolean;
 }
 
 /**
@@ -341,6 +349,7 @@ export function reviewRows(
   signals: readonly ReviewSignal[],
   facts: ReadonlyMap<string, ProposalFacts>
 ): ReviewRow[] {
+  const later = reviewLaterIds(signals);
   return signals.map((s) => {
     const group = reviewGroupOf(s);
     const shape =
@@ -364,8 +373,18 @@ export function reviewRows(
       occurredAt,
       expiresAt,
       count: Math.max(1, s.count),
+      reviewLater: later.has(s.id),
     };
   });
+}
+
+/** The signals the shared needs-you fold puts in Review later. */
+function reviewLaterIds(signals: readonly ReviewSignal[]): Set<string> {
+  return new Set(
+    needsYouRows(signals).reviewLater.flatMap((r) =>
+      r.kind === "item" ? [r.signal.id] : r.items.map((s) => s.id)
+    )
+  );
 }
 
 /** The live question an open ask detail names, or null once it moved on. */
@@ -384,21 +403,33 @@ export function liveAskSlot(
   return null;
 }
 
-/** Rows per chip: All and each group. */
+/** Rows per chip: All and each group — the headline, as the badge counts it. */
 export function reviewCounts(
   rows: readonly ReviewRow[]
 ): Record<"all" | ReviewGroup, number> {
-  const out = { all: rows.length, access: 0, changes: 0, asks: 0 };
-  for (const r of rows) out[r.group] += 1;
+  const out = { all: 0, access: 0, changes: 0, asks: 0 };
+  for (const r of rows) {
+    if (r.reviewLater) continue;
+    out.all += 1;
+    out[r.group] += 1;
+  }
   return out;
 }
 
-/** The rows a needs-you view shows ("history" is not a needs-you view). */
+/**
+ * What a needs-you view shows ("history" is not one): its headline rows, and
+ * the rows of its Review later fold.
+ */
 export function rowsInView(
   rows: readonly ReviewRow[],
   filter: Exclude<ReviewFilter, "history">
-): ReviewRow[] {
-  return filter === "all" ? [...rows] : rows.filter((r) => r.group === filter);
+): { headline: ReviewRow[]; reviewLater: ReviewRow[] } {
+  const inView =
+    filter === "all" ? rows : rows.filter((r) => r.group === filter);
+  return {
+    headline: inView.filter((r) => !r.reviewLater),
+    reviewLater: inView.filter((r) => r.reviewLater),
+  };
 }
 
 /** The row a `?focus=<id>` names — by signal, target or member proposal id. */

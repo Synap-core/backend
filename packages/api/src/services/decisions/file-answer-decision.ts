@@ -26,6 +26,7 @@ import { updateExpectedOutputsLocked } from "../focus-sessions/delegate-output.j
 import {
   decisionFromAnswer,
   decisionUpdateFromAnswer,
+  staleRelayFields,
 } from "./decision-from-answer.js";
 import {
   createDecisionEntity,
@@ -113,15 +114,17 @@ export async function fileAnswerDecision(p: {
             sessionId: p.session.id,
           })
         : null;
+      const existing = (row.properties ?? {}) as Record<string, unknown>;
       await updateDecisionEntity(
         scope,
         p.slot.decisionId,
         decisionUpdateFromAnswer({
           draft,
           previous,
-          existing: (row.properties ?? {}) as Record<string, unknown>,
+          existing,
           answer: p.answer,
-        })
+        }),
+        staleRelayFields(existing, p.answer)
       );
       return { status: "updated", decisionId: p.slot.decisionId };
     } catch (err) {

@@ -134,6 +134,14 @@ export interface CompleteFocusSessionParams {
    * `agentUserId`.
    */
   questionDispositions?: CloseQuestionDisposition[];
+  /**
+   * The approval of an agent's PROPOSED close (the `focus_session/update`
+   * executor): the agent whose `questionDispositions` ride on the proposal.
+   * Its word on its own questions is applied as if it had closed directly;
+   * it governs nothing (the person's approval already did) and refuses
+   * nothing — a question it did not cover closes with the session.
+   */
+  approvedCloseOf?: string;
 }
 
 /** One of the closing agent's still-open questions, as the refusal lists it. */
@@ -455,14 +463,19 @@ export async function completeFocusSession(
   // THE AGENT'S OWN QUESTIONS, before governance: a refused close files no
   // proposal and changes nothing. A cancel is exempt — abandoning the work is
   // the disposition — and so is every close no agent made.
+  const questionsOf = params.agentUserId ?? params.approvedCloseOf;
   const agentQuestions =
-    params.agentUserId && session.channelId && terminalStatus !== "cancelled"
+    questionsOf && session.channelId && terminalStatus !== "cancelled"
       ? planQuestionDispositions(
-          await loadAgentOpenQuestions(session.channelId, params.agentUserId),
+          await loadAgentOpenQuestions(session.channelId, questionsOf),
           params.questionDispositions
         )
       : null;
-  if (agentQuestions && agentQuestions.uncovered.length > 0) {
+  if (
+    params.agentUserId &&
+    agentQuestions &&
+    agentQuestions.uncovered.length > 0
+  ) {
     throw openQuestionsAtCloseError(agentQuestions.uncovered);
   }
 
@@ -488,6 +501,11 @@ export async function completeFocusSession(
       previousStatus: session.status,
       ...(summary !== undefined ? { sessionSummary: summary } : {}),
       ...(verificationReport != null ? { verificationReport } : {}),
+      // A proposed close carries the agent's word on its own questions, so
+      // the approval applies it (`approvedCloseOf`) instead of dropping it.
+      ...(params.agentUserId && params.questionDispositions?.length
+        ? { questionDispositions: params.questionDispositions }
+        : {}),
     },
     ignoreSessionForcePropose: true,
   });
@@ -535,13 +553,13 @@ export async function completeFocusSession(
   // and `keep` exempts them by label.
   const warnings: string[] = [];
   const keep = new Set<string>();
-  if (agentQuestions && params.agentUserId && session.channelId) {
+  if (agentQuestions && questionsOf && session.channelId) {
     for (const question of agentQuestions.keep) {
       const kept = await keepQuestionOwed({
         sessionId,
         channelId: session.channelId,
         userId: params.userId,
-        agentUserId: params.agentUserId,
+        agentUserId: questionsOf,
         question,
       });
       if ("label" in kept) keep.add(kept.label);
@@ -659,11 +677,11 @@ export async function completeFocusSession(
         await closeOpenRoomQuestions(tx, {
           channelId: session.channelId,
           messageIds: [question.messageId],
-          askedBy: params.agentUserId,
+          askedBy: questionsOf,
           closed: {
             reason: "withdrawn",
             at,
-            ...(params.agentUserId ? { by: params.agentUserId } : {}),
+            ...(questionsOf ? { by: questionsOf } : {}),
             ...(note ? { note } : {}),
           },
         });

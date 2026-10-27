@@ -14,6 +14,8 @@ import {
   formFieldErrors,
   initialFormDraft,
   nextRowKey,
+  relayCall,
+  relayWaitingView,
   slotCall,
   type AskSlot,
   type FormFieldView,
@@ -165,7 +167,7 @@ describe("askView — one control per mode", () => {
     expect(view.context).toBeNull();
     expect(view.asker).toMatchObject({
       kind: "cause",
-      label: "From your decision note",
+      label: "From a proposed decision",
     });
     expect(view.ageFate.label).toBe("8d · In Review later");
     expect(view.note.label).toBe("Add a note");
@@ -526,5 +528,60 @@ describe("nextRowKey", () => {
     expect(nextRowKey(["a", "b", "c"], "b")).toBe("c");
     expect(nextRowKey(["a", "b", "c"], "c")).toBe("b");
     expect(nextRowKey(["a"], "a")).toBeNull();
+  });
+});
+
+describe("a relayed answer waiting for the tap", () => {
+  const relay = {
+    text: "Yes",
+    quote: "yes, ship it friday",
+    relayedBy: "agent-1",
+    relayedAt: "2026-10-26T10:00:00.000Z",
+  };
+  const confirm: Ask = { mode: "confirm", prompt: "Deploy now?" };
+
+  it("reaches the slot from the needs-you signal", () => {
+    const s = askSlotOf({
+      kind: "owed-slot",
+      title: "Deploy",
+      target: { kind: "session", id: "s1" },
+      ask: confirm,
+      by: { id: "agent-1", label: "Claude Code" },
+      pendingRelay: relay,
+    });
+    expect(s?.pendingRelay).toEqual(relay);
+    expect(relayWaitingView(s!)).toEqual({
+      mark: {
+        tone: "warning",
+        label: "Claude Code relayed your answer. Confirm it.",
+      },
+      words: "“yes, ship it friday”",
+    });
+  });
+
+  it("names the relayer only when it is the agent that asked", () => {
+    const other = slot(confirm, {
+      askerId: "agent-2",
+      askerName: "Scout",
+      pendingRelay: relay,
+    });
+    expect(relayWaitingView(other)?.mark.label).toBe(
+      "Your answer was relayed. Confirm it."
+    );
+    expect(relayWaitingView(slot(confirm))).toBeNull();
+  });
+
+  it("Confirm and Not what I said address the slot, nothing else", () => {
+    const s = slot(confirm, { pendingRelay: relay });
+    expect(relayCall(s, "confirm")).toEqual({
+      sessionId: s.sessionId,
+      expectedLabel: s.label,
+      confirmRelayed: true,
+    });
+    expect(relayCall(s, "reject")).toEqual({
+      sessionId: s.sessionId,
+      expectedLabel: s.label,
+      rejectRelayed: true,
+    });
   });
 });
