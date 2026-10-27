@@ -25,11 +25,9 @@
  * Labels are NOT here: they are vocabulary (`resolveFilterOperatorLabel` in
  * `@synap-core/types/vocabulary`).
  *
- * ⚠️ MIRRORED by `@synap/database`'s `VIEW_FILTER_OPERATORS`
- * (`services/view-filter-compiler.ts`). The compiler cannot import this file —
- * `@synap-core/types` depends on `@synap/database`, so the reverse import is a
- * build cycle (same precedent as `GUIDELINE_SCOPE_ORDER`). The parity +
- * every-operator-compiles tripwire lives at
+ * The pod's compiler (`@synap/database` `services/view-filter-compiler.ts`)
+ * evaluates this grammar and re-exports it; its every-operator-compiles
+ * tripwire lives at
  * `packages/database/src/services/view-filter-operators-parity.test.ts`.
  *
  * Pure: depends only on zod. Safe in browser, Electron, Node and relay.
@@ -218,8 +216,8 @@ const FilterScalarSchema = z.union([z.string(), z.number(), z.boolean()]);
  * The entity columns a filter may name directly. Anything else is a property
  * and must be spelled `properties.<slug>` — a bare `status` names nothing the
  * compiler can read, and used to compile to "no condition" (every row back,
- * looking filtered). MIRRORED by the compiler's `VIEW_FILTER_CORE_FIELDS`
- * (same parity tripwire as the operators).
+ * looking filtered). The pod's compiler reads this list (re-exported as its
+ * `VIEW_FILTER_CORE_FIELDS`).
  */
 export const VIEW_FILTER_CORE_FIELDS = [
   "title",

@@ -9,9 +9,9 @@ WORKDIR /app
 # Builder — install full workspace + build pod-admin and its workspace deps
 #
 # Why the whole workspace: pod-admin imports `@synap-core/api-types` which
-# transitively pulls in `@synap-core/types`, which devDepends on `@synap/database`
-# and `@synap-core/core` — both of which need their own tsconfig + source to
-# compile. Trying to copy a hand-curated subset breaks under topological build
+# transitively pulls in `@synap-core/types` (and its devDependency
+# `@synap-core/core`) and `@synap/governance-policy` — each needs its own
+# tsconfig + source to compile. Trying to copy a hand-curated subset breaks under topological build
 # (turbo / pnpm). The backend Dockerfile takes the same shape — copy everything,
 # install once, let turbo handle the order.
 # ============================================================================

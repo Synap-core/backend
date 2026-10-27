@@ -70,6 +70,7 @@ import { effectiveSlotAsk } from "@synap-core/types/ask";
 import type { ExpectedOutput, OutputRef, SlotAsk } from "@synap/playbooks";
 import type { ResolvedScope } from "../../utils/scope-filter.js";
 import { sessionScopeConditions } from "./session-scope.js";
+import { sessionReadableWhere } from "../../access/session-visibility.js";
 import {
   sessionSubjectWhere,
   type SessionSubject,
@@ -176,6 +177,12 @@ export interface OwedSlot {
   sessionTitle: string | null;
   /** The session's lifecycle state — an owed slot outlives its session. */
   sessionStatus: string;
+  /**
+   * The thing the session is ABOUT (`focus_sessions.subject_entity_id`), or
+   * null. What lets a reader place the ask on its thing — a post's page, a
+   * deal's card — without re-reading the session.
+   */
+  subjectEntityId: string | null;
   workspaceId: string | null;
   projectId: string | null;
   /** The DECLARED label — the key every slot door matches on. */
@@ -275,6 +282,8 @@ type OwedRow = {
   status: string;
   workspaceId: string | null;
   projectId: string | null;
+  /** Optional: a caller that selected no subject reads as "about nothing". */
+  subjectEntityId?: string | null;
   expectedOutputs: unknown;
   /** Selected only under `needsYouLens`: the session is an undecided draft. */
   isDraft?: boolean;
@@ -326,6 +335,7 @@ export function projectOwedSlots(row: OwedRow): OwedSlot[] {
       sessionGoal: row.goal,
       sessionTitle: resolveSessionTitle(row) || null,
       sessionStatus: row.status,
+      subjectEntityId: row.subjectEntityId ?? null,
       workspaceId: row.workspaceId,
       projectId: row.projectId,
       label: slot.label,
@@ -369,7 +379,12 @@ export async function listOwedSlots(
   const { userId, scope, limit } = params;
 
   const conditions: SQL[] = [
-    eq(focusSessions.userId, userId),
+    // THE session read predicate, owner-only (`roster` off: what the person
+    // owes is on the sessions they OWN). Without a key grant it is exactly the
+    // bare owner floor; under a scoped key it ANDs the key's grant (`session`
+    // subject), so this read is bounded by the grant like `GET /focus-sessions`
+    // and a space-scoped key (a pod app) reads only its granted spaces' asks.
+    sessionReadableWhere({ userId }),
     ...sessionScopeConditions(scope),
     owedSlotPrefilter(),
     owedSlotWhere(),
@@ -399,6 +414,7 @@ export async function listOwedSlots(
       status: focusSessions.status,
       workspaceId: focusSessions.workspaceId,
       projectId: focusSessions.projectId,
+      subjectEntityId: focusSessions.subjectEntityId,
       expectedOutputs: focusSessions.expectedOutputs,
       ...(params.needsYouLens
         ? { isDraft: drizzleSql<boolean>`(${triagePendingWhere()})` }

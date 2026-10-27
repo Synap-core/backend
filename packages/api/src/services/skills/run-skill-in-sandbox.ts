@@ -36,8 +36,8 @@
  * `runtimeVersion` on the result — so the pod can become the only runtime
  * without a regression.
  *
- * Behind the `SANDBOX_LOCAL` flag (default OFF) — the chokepoint in
- * `execute-capability.ts` still calls `executeSkillViaIS` unless it is "1".
+ * Reached only through the one door `run-skill.ts` (R2): the pod's runtime by
+ * default, the Intelligence Service only under the `SKILL_RUNTIME=is` rollback.
  *
  * WHERE the isolate runs is the skill runner's business (`runner/`): a
  * supervised child process in production, never this process (pod decision

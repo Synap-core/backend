@@ -44,10 +44,10 @@ export async function loadIvm(): Promise<typeof IvmModule> {
       .catch((err: unknown) => {
         ivmModulePromise = null; // never cache a failure — a redeploy may fix it
         throw new Error(
-          `SANDBOX_LOCAL is enabled but the isolated-vm native addon could not be loaded ` +
+          `The pod runs code skills but the isolated-vm native addon could not be loaded ` +
             `(${err instanceof Error ? err.message : String(err)}). ` +
-            `isolated-vm 6 ships builds for Node 22 and 24 only. Unset SANDBOX_LOCAL to ` +
-            `route code skills to the Intelligence Service sandbox instead.`
+            `isolated-vm 6 ships builds for Node 22 and 24 only. SKILL_RUNTIME=is sends ` +
+            `code skills back to the Intelligence Service sandbox (rollback).`
         );
       });
   }
