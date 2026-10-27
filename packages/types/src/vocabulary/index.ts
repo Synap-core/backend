@@ -280,6 +280,9 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   // words for a running processor loses the "will run again" meaning.
   pause: { imperative: "Pause", past: "Paused" },
   resume: { imperative: "Resume", past: "Resumed" },
+  // A STOPPED session's one verb (needs-you decision E1): no agent moved it
+  // for 7 days, so the person resumes it or closes it — both open it.
+  resume_or_close: { imperative: "Resume or close", past: "Resumed or closed" },
   join: { imperative: "Join", past: "Joined" },
   import: { imperative: "Import", past: "Imported" },
   capture: { imperative: "Capture", past: "Captured" },

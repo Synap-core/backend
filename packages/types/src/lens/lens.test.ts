@@ -273,6 +273,31 @@ describe("scope address", () => {
 });
 
 describe("lensRowOfNeedsYou — one item = one row, through needsYouRows", () => {
+  it("a STOPPED session is one session row with 'Resume or close', never its ask's verbs (E1)", () => {
+    const { folds } = needsYouRows([
+      sig({
+        id: "s",
+        kind: "owed-slot",
+        title: "Decision 1",
+        groupKey: "session:S",
+        sessionTitle: "Pricing page",
+        needsYouClass: "stopped",
+        reviewLater: true,
+      }),
+    ]);
+    expect(folds.stopped).toHaveLength(1);
+    const row = lensRowOfNeedsYou(folds.stopped[0]!, "blocking");
+    expect(row.objectKind).toBe("session");
+    expect(row.title).toBe("Pricing page");
+    expect(row.verb).toEqual({
+      action: "resume_or_close",
+      label: "Resume or close",
+    });
+    expect(row.door).toEqual({ kind: "session", id: "S" });
+    // The quiet mark, never "waiting on you".
+    expect(resolveUnitState(row.state).state).toBe("paused");
+  });
+
   it("an owed slot carries what its answer unblocks; nothing else does (decision E)", () => {
     const { recent } = needsYouRows([
       sig({

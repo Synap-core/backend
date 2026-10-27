@@ -306,6 +306,13 @@ export const STOPPED_SESSION_VERBS: readonly NeedsYouSessionVerb[] = [
   "close",
 ];
 
+/**
+ * A stopped session's ONE inline verb on a lens row (`lensRowOfNeedsYou`):
+ * the action key `resolveActionLabel` words "Resume or close". Opens the
+ * session, where both {@link STOPPED_SESSION_VERBS} live.
+ */
+export const STOPPED_SESSION_VERB = "resume_or_close";
+
 export interface NeedsYouRows<T extends GroupableSignal> {
   recent: NeedsYouRow<T>[];
   older: NeedsYouRow<T>[];

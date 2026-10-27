@@ -18,6 +18,7 @@ import {
   needsYouCountsLabel,
   needsYouReasonOf,
   repeatLabel,
+  STOPPED_SESSION_VERB,
   type GroupableSignal,
   type NeedsYouAccessRequest,
   type NeedsYouInvite,
@@ -557,6 +558,25 @@ export function lensRowOfNeedsYou<T extends LensNeedsYouSignal>(
       // An agent ASKED — never a failure an agent merely suffered.
       byAgent: s.category === AGENT_CATEGORY && !isFailureSignal(s),
       expiresAt: expiresAt(s.occurredAt, s.lifetimeHours),
+    };
+  }
+  // A STOPPED session (decision E1, `needsYouRows().folds.stopped`): no agent
+  // moved it for 7 days. Its row is the SESSION, never one of its asks — the
+  // quiet mark, and its one verb "Resume or close", which opens it.
+  if (row.verbs?.length) {
+    return {
+      key: row.key,
+      cls,
+      state: { idle: true, everStarted: true },
+      objectKind: "session",
+      title: row.title ?? "",
+      reason: needsYouCountsLabel(row.counts),
+      repeat: null,
+      source: null,
+      occurredAt: iso(row.newestAt),
+      verb: verb(STOPPED_SESSION_VERB),
+      door: { kind: "session", id: row.sessionId },
+      count: row.items.length,
     };
   }
   const owed = row.items.filter((s) => s.kind === "owed-slot").length;
