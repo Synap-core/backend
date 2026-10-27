@@ -26,7 +26,7 @@ describe("proposalFateLine", () => {
 
   it("the three other fates", () => {
     expect(proposalFateLine({ kind: "dies_with_session" }, NOW)).toBe(
-      "Dropped when the session ends"
+      "Ends with the session"
     );
     expect(proposalFateLine({ kind: "until_decided" }, NOW)).toBe(
       "Stays until you decide"

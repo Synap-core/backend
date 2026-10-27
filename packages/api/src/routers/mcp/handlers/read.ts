@@ -417,7 +417,7 @@ export const readHandlers: McpHandlerMap = {
       rawRows as Record<string, unknown>[],
       userId
     );
-    // WAITING ON IT (Resolve-XP W3): the same resolver the Hub list door
+    // WAITING ON IT: the same resolver the Hub list door
     // stamps, owner-only on this agent door (decision D1).
     const { resolveProposalWaits, proposalWaitsFields } =
       await import("../../../services/proposals/proposal-waits.js");

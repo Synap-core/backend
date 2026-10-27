@@ -513,9 +513,8 @@ export const APP_PUBLIC_ID_PREFIX = "app_";
 
 /**
  * Is this an Application's `public_id` (a grant `client_id` naming an app, not
- * an OAuth `dcr_` client)? `@synap/database` mints with a mirror of this rule
- * (it cannot import this package); `app-public-id-mirror.tripwire` keeps the
- * two identical.
+ * an OAuth `dcr_` client)? `@synap/database` mints with this same
+ * {@link APP_PUBLIC_ID_PREFIX}.
  */
 export function isAppPublicId(ref: string | null | undefined): boolean {
   return typeof ref === "string" && ref.startsWith(APP_PUBLIC_ID_PREFIX);

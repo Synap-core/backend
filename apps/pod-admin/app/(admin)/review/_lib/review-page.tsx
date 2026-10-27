@@ -18,13 +18,23 @@
  * review offers to "what else from this session waits for you". From
  * `lg` up the decision docks beside the list; below, it opens in a drawer.
  * An agent's question is answered in the same place (`ask-answer.tsx`);
- * once it is, the detail closes and focus moves to the next row.
+ * once it is, the detail closes and focus moves to the next row. What waited
+ * more than 7 days sits in a "Review later" fold under the list, out of the
+ * counts (`review-rows.ts`).
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Alert, Button, Checkbox, Textarea, addToast } from "@heroui/react";
-import { ArrowUpRight, Check, Lock, MessageSquare, X } from "lucide-react";
+import {
+  ArrowUpRight,
+  Check,
+  ChevronRight,
+  Lock,
+  MessageSquare,
+  X,
+} from "lucide-react";
+import { FATE_COPY } from "@synap-core/types/proposals/fate";
 import { trpc } from "../../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
 import { formatRelative, isUuid } from "../../../../lib/format";
@@ -138,7 +148,12 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
     [signals.data, facts]
   );
   const counts = reviewCounts(rows);
-  const visible = filter === "history" ? [] : rowsInView(rows, filter);
+  const view =
+    filter === "history"
+      ? { headline: [], reviewLater: [] }
+      : rowsInView(rows, filter);
+  const visible = view.headline;
+  const [laterOpen, setLaterOpen] = useState(false);
 
   // ── The drawer, and the `?focus=` receiver ────────────────────────────────
   const [open, setOpen] = useState<OpenReview | null>(null);
@@ -149,6 +164,7 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
       return;
     handledFocus.current = focusId;
     const row = focusedRow(rows, focusId);
+    if (row?.reviewLater) setLaterOpen(true);
     const opened = row ? openOf(row) : null;
     if (opened) {
       setOpen(opened);
@@ -173,8 +189,9 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
     open?.detail.kind === "ask" ? liveAskSlot(rows, open.detail) : null;
   function askSettled() {
     const answered = open ? detailKey(open.detail) : null;
-    const keys = visible.map((r) => r.key);
-    const at = visible.find(
+    const shown = laterOpen ? [...visible, ...view.reviewLater] : visible;
+    const keys = shown.map((r) => r.key);
+    const at = shown.find(
       (r) =>
         r.detail && r.detail.kind !== "open" && detailKey(r.detail) === answered
     );
@@ -285,8 +302,8 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
     ? rows.length >= NEEDS_YOU_PAGE_LIMIT
       ? `Showing the newest ${rows.length} from this session.`
       : null
-    : count.data && count.data.needsYou > rows.length
-      ? `Showing the newest ${rows.length} of ${count.data.truncated ? "more than " : ""}${count.data.needsYou}.`
+    : count.data && count.data.needsYou > counts.all
+      ? `Showing the newest ${counts.all} of ${count.data.truncated ? "more than " : ""}${count.data.needsYou}.`
       : null;
 
   const activeKey = open ? detailKey(open.detail) : null;
@@ -445,6 +462,60 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
               ))
             )}
           </section>
+
+          {view.reviewLater.length > 0 && (
+            <div className="mt-3">
+              <Button
+                size="sm"
+                variant="light"
+                radius="md"
+                className="-ml-2 text-foreground/75"
+                aria-expanded={laterOpen}
+                aria-controls="review-later"
+                startContent={
+                  <ChevronRight
+                    className={`h-3.5 w-3.5 transition-transform duration-150 ${laterOpen ? "rotate-90" : ""}`}
+                    aria-hidden
+                  />
+                }
+                onPress={() => setLaterOpen((o) => !o)}
+              >
+                <span className="tabular-nums">
+                  {FATE_COPY.reviewLaterFold(view.reviewLater.length)}
+                </span>
+              </Button>
+              {laterOpen && (
+                <section
+                  id="review-later"
+                  aria-label={FATE_COPY.reviewLater}
+                  className="mt-1 divide-y divide-foreground/[0.05] rounded-lg bg-foreground/[0.02] ring-1 ring-inset ring-foreground/10"
+                >
+                  {view.reviewLater.map((row) => (
+                    <ReviewListRow
+                      key={row.key}
+                      // Never batched: "Approve N" is the headline's.
+                      row={{ ...row, batchIds: null }}
+                      active={
+                        activeKey !== null &&
+                        row.detail !== null &&
+                        row.detail.kind !== "open" &&
+                        detailKey(row.detail) === activeKey
+                      }
+                      selectable={selectable}
+                      selected={false}
+                      onToggle={() => undefined}
+                      onOpen={() => {
+                        const opened = openOf(row);
+                        if (opened) setOpen(opened);
+                      }}
+                      onApprove={() => void approveRows([row])}
+                      approving={busy}
+                    />
+                  ))}
+                </section>
+              )}
+            </div>
+          )}
 
           {filter !== "history" && (desktopExit || shownOfTotal) && (
             <div className="mt-2 flex flex-wrap items-center justify-between gap-2 px-1 text-[12px] text-foreground/65">

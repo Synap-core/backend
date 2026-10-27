@@ -68,6 +68,10 @@ import {
   isNull,
   MessageAuthorType,
   openRoomQuestionConditions as sharedOpenRoomQuestionConditions,
+  proposals,
+  ProposalStatus,
+  inArray,
+  or,
 } from "@synap/database";
 import type { SQL } from "@synap/database";
 import { createLogger } from "@synap-core/core";
@@ -92,6 +96,7 @@ import {
   ASK_CHANGED_PREFIX,
   ASK_INVALID_PREFIX,
   SLOT_MOVED_ON_PHRASES,
+  type Ask,
   type AskAnswerValue,
   type AskAnswerRefusalCode,
   type AskStakes,
@@ -115,11 +120,15 @@ import { resolveAgentReach } from "../agent-dispatch/agent-binding.js";
 import { agentsOperatedBy } from "../agent-presence.js";
 import { wakeExternalAgent } from "../agent-dispatch/wake-external-agent.js";
 import { normalizeExpectedLabel } from "./expected-label.js";
+import { isTerminalSessionStatus } from "./session-statuses.js";
 import {
   attestExpectedOutput,
   type AttestExpectedOutputResult,
 } from "./satisfy-expected-output.js";
-import { readCriteria } from "@synap/playbooks";
+import { AWAITED_GATE_PROPOSAL_TYPES, readCriteria } from "@synap/playbooks";
+import type { PROPOSE_REASON } from "@synap/governance-policy";
+import { grantWriteDenial } from "../../utils/grant-write-check.js";
+import { notifySessionNeedsYou } from "./notify-needs-you.js";
 import { CRITERION_SLOT_KIND } from "@synap-core/types/focus-sessions";
 import { checkProvideRef } from "./provide-ref.js";
 import {
@@ -143,6 +152,7 @@ import {
   FOCUS_SESSION_SUBJECT_TYPE,
   FOCUS_SESSION_RELAY_CORRECT_ACTION,
   FOCUS_SESSION_RELAY_CORRECTED_EVENT_TYPE,
+  FOCUS_SESSION_QUESTION_WITHDRAWN_EVENT_TYPE,
 } from "./lifecycle-events.js";
 
 const logger = createLogger({ module: "session-answer" });
@@ -1081,6 +1091,9 @@ export async function answerSessionSlot(p: {
     // A grade keeps the slot the person's: the grade door discharges it.
     ...(verdict ? { handBack: false } : {}),
     ...(provenance ? { provenance, now: confirmedAt } : {}),
+    // A Confirm confirms the relay the person was shown, re-checked under the
+    // lock: a "Not what I said" or a re-ask in between refuses it.
+    ...(pending ? { confirmsRelayAt: pending.relayedAt } : {}),
   });
   if (answered.status !== "answered") {
     await withdrawProvidedSecretGrant(createdGrantId);
@@ -1385,7 +1398,8 @@ export function resolveAnswer(
 export type SlotDoorRefusal =
   | Exclude<AnswerSessionSlotResult, { status: "answered" }>
   | { status: "no_room" }
-  | { status: "no_relayed_answer" };
+  | { status: "no_relayed_answer" }
+  | { status: "session_ended" };
 
 /**
  * The ONE wording of a slot-door refusal, for every door (tRPC answer +
@@ -1444,6 +1458,17 @@ export function describeAnswerRefusal(
       return {
         code: "BAD_REQUEST",
         message: `"${expectedLabel}" has no relayed answer waiting for you to confirm.`,
+      };
+    case "not_open":
+      return {
+        code: "CONFLICT",
+        message: `"${expectedLabel}" is no longer an open question: it was answered, or it is no longer the person's.`,
+      };
+    case "session_ended":
+      return {
+        code: "BAD_REQUEST",
+        message:
+          "This session has ended, so its questions are closed — there is nothing to re-open.",
       };
     case "no_relayed_answer":
       return {
@@ -1510,6 +1535,10 @@ export type RelaySessionAnswerResult =
   | { status: "not_yours" }
   | { status: "quote_required" }
   | { status: "note_required" }
+  /** The key's grant does not reach the session's space / project. */
+  | { status: "forbidden"; reason: string }
+  /** A withdraw of a step only the person may take ({@link withdrawKeepsPersonsStep}). */
+  | { status: "persons_step" }
   | {
       status: "relayed";
       stakes: "routine";
@@ -1539,28 +1568,158 @@ export type RelaySessionAnswerResult =
     };
 
 /**
- * POD FACTS that make a relay wait for the person's own tap, whatever stakes
- * the agent declared (`effectiveAskStakes` `forced`; it adds a secret
- * `provide` itself). Each one is a step only the person may take:
+ * What the pod knows about where a slot's answer leads — facts an agent cannot
+ * author, read by {@link readRelayPodFacts}.
+ */
+export interface RelayPodFacts {
+  /**
+   * The session is stopped at its plan/deploy gate: a PENDING proposal of an
+   * awaited gate type (`AWAITED_GATE_PROPOSAL_TYPES`) filed in it.
+   */
+  gatePending: boolean;
+  /** Objects with a PENDING human-only status move (`HUMAN_ONLY_STATUS`). */
+  humanOnlyMoveOn: ReadonlySet<string>;
+}
+
+export const NO_RELAY_POD_FACTS: RelayPodFacts = {
+  gatePending: false,
+  humanOnlyMoveOn: new Set(),
+};
+
+/** The governance rung's reason code on a human-only status move proposal. */
+const HUMAN_ONLY_STATUS_REASON =
+  "HUMAN_ONLY_STATUS" satisfies keyof typeof PROPOSE_REASON;
+
+/** A slot's ask as `effectiveSlotAsk` reads it. */
+type RelayAsk = SlotAsk | Ask | null;
+
+/** The in-pod entities a slot is ABOUT: its `ref` and what its ask looked at. Pure. */
+function slotEntityIds(slot: ExpectedOutput, ask: RelayAsk): string[] {
+  const ids = new Set<string>();
+  const ref = slot.ref;
+  if (ref && "kind" in ref && ref.kind === "entity") ids.add(ref.id);
+  for (const r of ask?.lookedAt ?? []) if (r.kind === "entity") ids.add(r.id);
+  return [...ids];
+}
+
+/**
+ * A COMMITMENT the pod forces from its own facts (founder default: plan/deploy
+ * gates, human-only status moves, provide-secret, spend). Pure.
+ *   - GATE: the session is stopped at its plan/deploy gate, or the gate raised
+ *     the ask (`askCause.kind === 'gate'`) — a relayed "yes" while the gate is
+ *     pending would read as the go-ahead the gate exists to take;
+ *   - HUMAN-ONLY STATUS: the slot is about (its `ref`, or what its ask looked
+ *     at) an object with a pending human-only status move;
+ *   - a provide-SECRET is forced by `effectiveAskStakes` itself.
+ * NOT computable, stated: SPEND — no pod fact marks a write as spending, so
+ * the agent's declared `stakes` stays the only signal for it.
+ */
+export function podForcesCommitment(p: {
+  slot: ExpectedOutput | null;
+  ask: RelayAsk;
+  facts: RelayPodFacts;
+}): boolean {
+  if (!p.slot) return false;
+  if (p.facts.gatePending || p.slot.askCause?.kind === "gate") return true;
+  return slotEntityIds(p.slot, p.ask).some((id) =>
+    p.facts.humanOnlyMoveOn.has(id)
+  );
+}
+
+/** One read of the pending proposals {@link podForcesCommitment} looks for. */
+export async function readRelayPodFacts(
+  sessionId: string,
+  slot: ExpectedOutput | null
+): Promise<RelayPodFacts> {
+  if (!slot) return NO_RELAY_POD_FACTS;
+  const entityIds = slotEntityIds(slot, effectiveSlotAsk(slot));
+  const rows = await db
+    .select({
+      proposalType: proposals.proposalType,
+      targetId: proposals.targetId,
+      governanceReason: proposals.governanceReason,
+    })
+    .from(proposals)
+    .where(
+      and(
+        eq(proposals.status, ProposalStatus.PENDING),
+        or(
+          and(
+            eq(proposals.sessionId, sessionId),
+            inArray(proposals.proposalType, [...AWAITED_GATE_PROPOSAL_TYPES])
+          ),
+          ...(entityIds.length > 0
+            ? [
+                and(
+                  eq(proposals.governanceReason, HUMAN_ONLY_STATUS_REASON),
+                  inArray(proposals.targetId, entityIds)
+                ),
+              ]
+            : [])
+        )
+      )
+    );
+  const gates = AWAITED_GATE_PROPOSAL_TYPES as readonly string[];
+  return {
+    gatePending: rows.some((r) => gates.includes(r.proposalType)),
+    humanOnlyMoveOn: new Set(
+      rows
+        .filter((r) => r.governanceReason === HUMAN_ONLY_STATUS_REASON)
+        .map((r) => r.targetId)
+    ),
+  };
+}
+
+/**
+ * The facts that make a relay wait for the person's own tap, whatever stakes
+ * the agent declared (`effectiveAskStakes` `forced`). Each one is a step only
+ * the person may take:
  *   - an APPROVAL CARD — the question approves an external agent's tool call
  *     (`confirmationId`, set only by the status poll);
  *   - a GRADE — a criterion slot's answer passes or fails the agent's work;
  *   - a HAND-OVER — a `provide` ask gives the agent a connection, a file or a
- *     secret of the person's.
- * NOT computable here, stated: plan/deploy gates and human-only status moves
- * are proposals, decided only through the proposal door (an agent key never
- * approves); no slot is linked to one, so the agent's declared `stakes` is the
- * only signal for a question ABOUT them. Same for spend.
+ *     secret of the person's;
+ *   - what the pod forces from its proposals ({@link podForcesCommitment}).
  */
 export function relayForcedToTap(p: {
-  slot: Pick<ExpectedOutput, "kind"> | null;
-  ask: Pick<SlotAsk, "mode"> | null;
+  slot: ExpectedOutput | null;
+  ask: RelayAsk;
   question: Pick<OpenQuestion, "confirmationId"> | null;
+  facts?: RelayPodFacts;
 }): boolean {
   return (
     !!p.question?.confirmationId ||
     p.slot?.kind === CRITERION_SLOT_KIND ||
-    p.ask?.mode === "provide"
+    p.ask?.mode === "provide" ||
+    podForcesCommitment({
+      slot: p.slot,
+      ask: p.ask,
+      facts: p.facts ?? NO_RELAY_POD_FACTS,
+    })
+  );
+}
+
+/**
+ * Is the person's turn on this question a step only THEY may take — an
+ * approval card, a grade, or a commitment (declared, a provide-secret, or
+ * forced by the pod)? Then the asking agent may not withdraw it: a withdraw
+ * hands the slot back with no answer, which would let the agent go on past
+ * the very step the person holds. A connection or file the agent no longer
+ * needs IS withdrawable. Pure.
+ */
+export function withdrawKeepsPersonsStep(p: {
+  slot: ExpectedOutput | null;
+  question: Pick<OpenQuestion, "confirmationId"> | null;
+  facts: RelayPodFacts;
+}): boolean {
+  const ask = p.slot ? effectiveSlotAsk(p.slot) : null;
+  return (
+    !!p.question?.confirmationId ||
+    p.slot?.kind === CRITERION_SLOT_KIND ||
+    effectiveAskStakes({
+      ask,
+      forced: podForcesCommitment({ slot: p.slot, ask, facts: p.facts }),
+    }) === "commitment"
   );
 }
 
@@ -1568,11 +1727,17 @@ export function relayForcedToTap(p: {
 export function relayStakes(p: {
   slot: ExpectedOutput | null;
   question: Pick<OpenQuestion, "confirmationId"> | null;
+  facts?: RelayPodFacts;
 }): AskStakes {
   const ask = p.slot ? effectiveSlotAsk(p.slot) : null;
   return effectiveAskStakes({
     ask,
-    forced: relayForcedToTap({ slot: p.slot, ask, question: p.question }),
+    forced: relayForcedToTap({
+      slot: p.slot,
+      ask,
+      question: p.question,
+      facts: p.facts,
+    }),
   });
 }
 
@@ -1582,14 +1747,18 @@ export function relayStakes(p: {
  * `synap_relay_answer`, Hub `POST /focus-sessions/:id/answers/relay`.
  *
  * WHO: an AGENT key only (the doors refuse a person), relaying for the
- * session's owner (`userId`, the owner floor). The narrowest rule that still
- * lets the agent do its job: a room question may be relayed only by the agent
- * that ASKED it (`messages.routed_teammate_id`); a slot nobody asked about in
- * the room, only by an agent on the session's roster (`agentIds`).
+ * session's owner (`userId`, the owner floor), inside the key's grant (the
+ * answer doors' rung, `answerGrantWrite` — here, so both relay doors run it).
+ * The narrowest rule that still lets the agent do its job: a room question
+ * may be relayed only by the agent that ASKED it (`messages.routed_teammate_id`);
+ * a slot with no room question, only by the agent that asked it (`askedBy`),
+ * else — a slot asked before that stamp existed — an agent on the roster.
  *
  * WHICH: an EXACT question — `messageId` (a room question) or `slotLabel` (a
  * slot; with it, the open question naming that slot moves too). Never "the
  * newest open one": a relay that guessed would put words on the wrong ask.
+ * And only a question still OPEN: a slot the person still owes, unanswered,
+ * with no relay waiting — a relay never overwrites the person's own tap.
  *
  * ANSWERED — `quote` (the person's words, verbatim, trimmed and capped like an
  * answer) is required; `value` is the typed pick the agent read in them,
@@ -1601,21 +1770,25 @@ export function relayStakes(p: {
  *                    their answer. Nobody is woken: the relaying agent already
  *                    has it, and an IS turn needs a person's message to start
  *                    from, which a relay never posts.
- *   - `commitment` → `pendingRelay` on the slot AND its question, nothing
- *                    else: the slot stays owed (the needs-you row is the
- *                    one-tap Confirm), no decision, no wake. The person's
- *                    Confirm (`answerSessionSlot` `confirmRelayed`) answers.
+ *   - `commitment` → `pendingRelay` on the slot AND its question, and a push
+ *                    asking for the tap; nothing else: the slot stays owed
+ *                    (the needs-you row is the one-tap Confirm), no decision,
+ *                    no wake. The person's Confirm (`answerSessionSlot`
+ *                    `confirmRelayed`) answers.
  *   A slotless room question has no ask, so nothing can raise its stakes: it
  *   is always routine.
  * WITHDRAWN — `note` required. The question is stamped `closed` (reason
  * `withdrawn`); a slot that was the person's goes back to the agent exactly as
- * `unblockExpectedOutput` hands it back. Never retired: an act / provide /
- * form slot handed back is still owed, by the agent, until delivered.
+ * `unblockExpectedOutput` hands it back, and the note is kept on the
+ * `question_withdrawn` history row. Never retired: an act / provide / form
+ * slot handed back is still owed, by the agent, until delivered. Refused for a
+ * step only the person may take ({@link withdrawKeepsPersonsStep}).
  *
  * NOT `checkPermissionOrPropose`, deliberately: like posting a question or
  * blocking a slot, this records speech about the agent's own ask, and its
  * governance IS the stakes rule above — a commitment never moves without the
- * person's tap. Every stamp is attributed (`relayedBy`, `closed.by`).
+ * person's tap, and the person's step is never withdrawn. Every stamp is
+ * attributed (`relayedBy`, `closed.by`, the withdraw's history row).
  */
 export async function relaySessionAnswer(p: {
   sessionId: string;
@@ -1635,6 +1808,8 @@ export async function relaySessionAnswer(p: {
 }): Promise<RelaySessionAnswerResult> {
   const wantedLabel = p.slotLabel?.trim() || null;
   if (!p.messageId && !wantedLabel) return { status: "address_required" };
+  const denial = await grantWriteDenial(await answerGrantWrite(p.sessionId));
+  if (denial) return { status: "forbidden", reason: denial };
   const session = await db.query.focusSessions.findFirst({
     where: and(
       eq(focusSessions.id, p.sessionId),
@@ -1676,19 +1851,22 @@ export async function relaySessionAnswer(p: {
     question = await findOpenQuestion(session.channelId, { slotLabel: label });
   }
 
-  // 2. Whose it is.
-  const mine = question
-    ? question.agentUserId === p.agentUserId
-    : (session.agentIds ?? []).includes(p.agentUserId);
-  if (!mine) return { status: "not_yours" };
-
   const chosen = label ? selectSlotToAnswer(outputs, label) : null;
   if (chosen && "refused" in chosen) return { status: chosen.refused };
   const slot = chosen ? outputs[chosen.index]! : null;
+
+  // 2. Whose it is: the asker's.
+  const mine = question
+    ? question.agentUserId === p.agentUserId
+    : slot?.askedBy
+      ? slot.askedBy === p.agentUserId
+      : (session.agentIds ?? []).includes(p.agentUserId);
+  if (!mine) return { status: "not_yours" };
   const now = p.now ?? new Date();
+  const facts = await readRelayPodFacts(session.id, slot);
 
   if (p.disposition === "withdrawn") {
-    return withdrawRelayedQuestion({ ...p, now, question, slot });
+    return withdrawRelayedQuestion({ ...p, now, question, slot, facts });
   }
 
   // 3. ANSWERED — the person's words first.
@@ -1728,7 +1906,7 @@ export async function relaySessionAnswer(p: {
     };
   }
 
-  if (slot.pendingRelay) return { status: "not_open" };
+  if (!isOpenAsk(slot)) return { status: "not_open" };
   const ask = effectiveSlotAsk(slot);
   const resolved = resolveAnswer(ask, p.value, p.text?.trim() || quote);
   if ("refused" in resolved) return resolved.refused;
@@ -1744,7 +1922,7 @@ export async function relaySessionAnswer(p: {
   }
   const seenAsk = askFingerprint(ask);
 
-  if (relayStakes({ slot, question }) === "commitment") {
+  if (relayStakes({ slot, question, facts }) === "commitment") {
     const pendingRelay: SlotPendingRelay = {
       text,
       ...(resolved.value ? { value: resolved.value } : {}),
@@ -1765,7 +1943,7 @@ export async function relaySessionAnswer(p: {
         return null;
       }
       const live = current[again.index]!;
-      if (live.pendingRelay) return null;
+      if (!isOpenAsk(live)) return null;
       if (askFingerprint(effectiveSlotAsk(live)) !== seenAsk) {
         lock.refused = "ask_changed";
         return null;
@@ -1778,6 +1956,13 @@ export async function relaySessionAnswer(p: {
     const onQuestion = question
       ? await stampOpenQuestion(question.id, "pendingRelay", pendingRelay)
       : false;
+    // The one interrupt a relay raises: the agent is stopped until the person
+    // taps, and they may be nowhere near the pod.
+    await notifySessionNeedsYou({
+      sessionId: session.id,
+      byAgent: true,
+      reason: { kind: "relay", slot: { ...slot, pendingRelay } },
+    });
     return {
       status: "awaiting_tap",
       stakes: "commitment",
@@ -1797,8 +1982,12 @@ export async function relaySessionAnswer(p: {
     ...(resolved.value ? { value: resolved.value } : {}),
     askFingerprint: seenAsk,
     provenance,
+    requireOpenAsk: true,
     now,
   });
+  // `no_pending_relay` answers a Confirm (`confirmsRelayAt`), which a relay
+  // never sends; should it appear, the slot is no longer open to a relay.
+  if (answered.status === "no_pending_relay") return { status: "not_open" };
   if (answered.status !== "answered") return answered;
   let questionId: string | null = null;
   if (question) {
@@ -1822,19 +2011,38 @@ export async function relaySessionAnswer(p: {
   };
 }
 
-/** WITHDRAWN — close the agent's own question; hand its slot back. */
+/**
+ * A slot a relay may speak to: owed to the person, unanswered, with no relay
+ * already waiting for their tap. Pure.
+ */
+function isOpenAsk(slot: ExpectedOutput): boolean {
+  return slot.owner === "human" && !slot.answer && !slot.pendingRelay;
+}
+
+/** WITHDRAWN — close the agent's own question; hand its slot back; record why. */
 async function withdrawRelayedQuestion(p: {
   sessionId: string;
+  userId: string;
   agentUserId: string;
   note?: string;
   now: Date;
   question: OpenQuestion | null;
   slot: ExpectedOutput | null;
+  facts: RelayPodFacts;
 }): Promise<RelaySessionAnswerResult> {
   const note = p.note?.trim().slice(0, ASK_LIMITS.promptMaxChars);
   if (!note) return { status: "note_required" };
   const owed = p.slot?.owner === "human";
   if (!p.question && !owed) return { status: "not_open" };
+  if (
+    withdrawKeepsPersonsStep({
+      slot: owed ? p.slot : null,
+      question: p.question,
+      facts: p.facts,
+    })
+  ) {
+    return { status: "persons_step" };
+  }
 
   let questionId: string | null = null;
   if (p.question) {
@@ -1863,10 +2071,38 @@ async function withdrawRelayedQuestion(p: {
       return stampUnblocked(current, current[again.index]!.label);
     });
   }
+  if (!questionId && !handedBack) return { status: "not_open" };
+
+  const expectedLabel = p.slot?.label ?? null;
+  try {
+    await logEvent(
+      p.userId,
+      FOCUS_SESSION_QUESTION_WITHDRAWN_EVENT_TYPE,
+      {
+        sessionId: p.sessionId,
+        expectedLabel,
+        questionId,
+        withdrawnBy: p.agentUserId,
+        note,
+        handedBack,
+        withdrawnAt: p.now.toISOString(),
+      },
+      {
+        subjectId: p.sessionId,
+        subjectType: FOCUS_SESSION_SUBJECT_TYPE,
+        source: "api",
+      }
+    );
+  } catch (err) {
+    logger.warn(
+      { err, sessionId: p.sessionId },
+      "relay withdraw: the history row failed — the withdraw stands"
+    );
+  }
   return {
     status: "withdrawn",
     questionId,
-    expectedLabel: p.slot?.label ?? null,
+    expectedLabel,
     handedBack,
   };
 }
@@ -1877,6 +2113,8 @@ export type CorrectRelayedAnswerResult =
   | { status: "not_found" | "unknown_label" | "already_done" | "retired" }
   /** Nothing relayed to correct: no pending relay, no unconfirmed relay. */
   | { status: "no_relayed_answer" }
+  /** The session ended: its questions are closed and stay closed. */
+  | { status: "session_ended" }
   | {
       status: "corrected";
       /** What was dropped: a relay waiting for the tap, or a relayed answer. */
@@ -1886,7 +2124,48 @@ export type CorrectRelayedAnswerResult =
       relayedBy: string;
       /** The question is the person's again (the slot is owed to them). */
       reopened: boolean;
+      /**
+       * The decision the dropped answer had decided, back to `proposed` with
+       * the relay's words and the pick removed. `failed` is said, never
+       * hidden: the correction stands, the decision still reads decided.
+       */
+      decision?:
+        | { status: "reopened"; decisionId: string }
+        | { status: "failed"; decisionId: string; reason: string };
     };
+
+/**
+ * Drop the waiting relay from EVERY open question of the room about `label`
+ * — not only the newest: a later question about the same slot must not leave
+ * the stamped one carrying a relay nobody can confirm. Returns the ids
+ * touched.
+ */
+export async function dropPendingRelayStamps(
+  channelId: string,
+  label: string
+): Promise<string[]> {
+  const rows = await db
+    .select({ id: messages.id, metadata: messages.metadata })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.channelId, channelId),
+        eq(messages.authorType, MessageAuthorType.AI_AGENT),
+        drizzleSql`(${messages.metadata}->${ROOM_POST_META_KEY}) ? 'pendingRelay'`
+      )
+    );
+  const wanted = normalizeExpectedLabel(label);
+  const ids = rows
+    .filter(
+      (r) => normalizeExpectedLabel(readRoomPostMeta(r.metadata)?.slotLabel) === wanted
+    )
+    .map((r) => r.id);
+  const dropped: string[] = [];
+  for (const id of ids) {
+    if (await dropRelayedQuestionStamp(id, "pendingRelay")) dropped.push(id);
+  }
+  return dropped;
+}
 
 /**
  * The ask a relayed answer was given to, rebuilt from its snapshot, to pose
@@ -1929,9 +2208,11 @@ export function askFromSnapshot(
  *     undone: the slot's answer is archived to `answerHistory` and the slot is
  *     the person's again with its ask re-posed (`stampBlocked`, the one
  *     re-ask); the room question's answer stamp is dropped, so it is open.
- *     A decision the relay filed stays, and is UPDATED by the next answer
- *     (the slot keeps `decisionId`).
- * A tap — including a confirmed relay — is never undone here.
+ *     The decision the relay decided goes back to `proposed`, its pick and
+ *     the relay's words removed; the next answer decides it (the slot keeps
+ *     `decisionId`).
+ * A tap — including a confirmed relay — is never undone here, and an ENDED
+ * session is never re-asked (`session_ended`).
  *
  * ONE event, `focus_session.relay_corrected.completed`, naming the relaying
  * agent (`relayedBy`): the count a scorecard reads.
@@ -1954,12 +2235,19 @@ export async function correctRelayedAnswer(p: {
       channelId: true,
       expectedOutputs: true,
       workspaceId: true,
+      status: true,
     },
   });
   if (!session) return { status: "not_found" };
+  // The close stamped its questions closed and retired its asks; re-asking
+  // one now would make an ended session ask again, with nobody to go on.
+  if (isTerminalSessionStatus(session.status)) {
+    return { status: "session_ended" };
+  }
   const now = p.now ?? new Date();
 
   let result: CorrectRelayedAnswerResult = { status: "no_relayed_answer" };
+  let reopenDecisionId: string | null = null;
   if (p.expectedLabel?.trim()) {
     const outputs: ExpectedOutput[] = Array.isArray(session.expectedOutputs)
       ? (session.expectedOutputs as ExpectedOutput[])
@@ -1972,6 +2260,7 @@ export async function correctRelayedAnswer(p: {
         kind: "pending" | "answer";
         relayedBy: string;
         questionId: string | null;
+        decisionId?: string;
       };
     } = {};
     await updateExpectedOutputsLocked(session.id, (current) => {
@@ -1993,8 +2282,10 @@ export async function correctRelayedAnswer(p: {
           kind: "answer",
           relayedBy: answer.relayedBy,
           questionId: answer.messageId,
+          ...(live.decisionId ? { decisionId: live.decisionId } : {}),
         };
         // The one re-ask: archives the answer, hands the slot to the person.
+        // No push: they are the one who just said "Not what I said".
         return stampBlocked(
           current,
           live.label,
@@ -2013,10 +2304,8 @@ export async function correctRelayedAnswer(p: {
     let questionId: string | null = null;
     if (session.channelId) {
       if (hit.kind === "pending") {
-        const q = await findOpenQuestion(session.channelId, { slotLabel: label });
-        if (q && (await dropRelayedQuestionStamp(q.id, "pendingRelay"))) {
-          questionId = q.id;
-        }
+        questionId =
+          (await dropPendingRelayStamps(session.channelId, label))[0] ?? null;
       } else if (
         hit.questionId &&
         (await dropRelayedQuestionStamp(hit.questionId, "answer"))
@@ -2024,6 +2313,7 @@ export async function correctRelayedAnswer(p: {
         questionId = hit.questionId;
       }
     }
+    reopenDecisionId = hit.decisionId ?? null;
     result = {
       status: "corrected",
       dropped: hit.kind,
@@ -2060,6 +2350,42 @@ export async function correctRelayedAnswer(p: {
     };
   }
   if (result.status !== "corrected") return result;
+
+  // The relay decided the slot's decision; the person said it did not. Back
+  // to undecided, through the decision door, until their own answer decides it.
+  if (reopenDecisionId) {
+    try {
+      const { updateDecisionEntity } =
+        await import("../decisions/decision-entity-door.js");
+      const { decisionReopenedFromRelay } =
+        await import("../decisions/decision-from-answer.js");
+      const reopen = decisionReopenedFromRelay();
+      await updateDecisionEntity(
+        {
+          userId: p.userId,
+          workspaceId: session.workspaceId ?? null,
+          sessionId: session.id,
+        },
+        reopenDecisionId,
+        reopen.properties,
+        reopen.deleteProperties
+      );
+      result = {
+        ...result,
+        decision: { status: "reopened", decisionId: reopenDecisionId },
+      };
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      logger.error(
+        { err, sessionId: session.id, decisionId: reopenDecisionId },
+        "relay correction: re-opening the decision the relay decided FAILED — it still reads decided"
+      );
+      result = {
+        ...result,
+        decision: { status: "failed", decisionId: reopenDecisionId, reason },
+      };
+    }
+  }
 
   const data = {
     sessionId: session.id,
@@ -2144,6 +2470,14 @@ export function describeRelayRefusal(
       return {
         code: "BAD_REQUEST",
         message: "`note` is required: one line saying why the question is withdrawn.",
+      };
+    case "forbidden":
+      return { code: "FORBIDDEN", message: result.reason };
+    case "persons_step":
+      return {
+        code: "CONFLICT",
+        message:
+          "This question is a step only the person may take (a commitment, an approval, a grade or a secret), so it cannot be withdrawn. Leave it with them; if your work no longer needs it, say so in the room.",
       };
     default:
       return describeAnswerRefusal(result, p.slotLabel ?? "", p.sessionId);

@@ -7,6 +7,8 @@
  *   confirm / choose / form / no ask → `focusSessions.answerOutput`
  *   act                              → `attestOutput` ("I did this") ·
  *                                      `unblockOutput` ("Not mine")
+ *   a relay waiting on the tap       → `answerOutput` `confirmRelayed` ·
+ *                                      `rejectRelayed` ("Not what I said")
  *   provide                          → `provideOptions`, then `answerOutput`
  *                                      with a reference: one of the person's
  *                                      own vault secrets (a new one is added
@@ -57,6 +59,7 @@ import {
   MessageSquare,
   Plug,
   StickyNote,
+  Undo2,
   X,
 } from "lucide-react";
 import {
@@ -90,6 +93,8 @@ import {
   answerCall,
   askStaleness,
   askView,
+  relayCall,
+  relayWaitingView,
   formFieldErrors,
   initialFormDraft,
   slotCall,
@@ -100,6 +105,7 @@ import {
   type FormDraft,
   type FormFieldView,
   type LookedAtItem,
+  type RelayWaitingView,
 } from "./ask-detail";
 import {
   connectedReceipt,
@@ -225,6 +231,21 @@ export function AskAnswer({
     onSuccess: () => settled({ title: "Handed back to the agent" }),
     onError: (err) => refused(err),
   });
+  // A relay waiting on the tap: Confirm makes it the person's answer; "Not
+  // what I said" drops it and the question is theirs to answer here.
+  const [relayDropped, setRelayDropped] = useState(false);
+  const relay = trpc.focusSessions.answerOutput.useMutation({
+    onSuccess: (_data, call) => {
+      if ("confirmRelayed" in call && call.confirmRelayed) {
+        settled({ title: ASK_COPY.relayConfirmed(null) });
+        return;
+      }
+      setRelayDropped(true);
+      refresh();
+    },
+    onError: (err) => refused(err),
+  });
+  const relayWaiting = relayDropped ? null : relayWaitingView(seen);
   const askAbout = trpc.focusSessions.askAboutSlot.useMutation({
     onSuccess: () => {
       setAsked(true);
@@ -234,6 +255,7 @@ export function AskAnswer({
   });
   const busy =
     answer.isPending ||
+    relay.isPending ||
     attest.isPending ||
     handBack.isPending ||
     askAbout.isPending;
@@ -339,56 +361,74 @@ export function AskAnswer({
               {failure}
             </Alert>
           )}
-          <Controls
-            // A new question is a new form: nothing typed against the old
-            // one carries over.
-            key={`${seen.sessionId}:${seen.label}:${JSON.stringify(seen.ask)}`}
-            slot={seen}
-            control={view.control}
-            busy={busy || staleness === "changed"}
-            pending={answer.isPending}
-            onAnswer={(draft) => {
-              const built = answerCall(seen, draft);
-              if (!built.ok) {
-                setFailure(built.message);
-                return built.fieldErrors ?? null;
+          {relayWaiting ? (
+            <RelayWaiting
+              view={relayWaiting}
+              busy={busy || staleness === "changed"}
+              pressed={
+                relay.isPending
+                  ? relay.variables && "confirmRelayed" in relay.variables
+                    ? "confirm"
+                    : "reject"
+                  : null
               }
-              send(built.call);
-              return null;
-            }}
-            onAttest={() => {
-              setFailure(null);
-              attest.mutate(slotCall(seen));
-            }}
-            attesting={attest.isPending}
-            onHandBack={() => {
-              setFailure(null);
-              handBack.mutate({
-                sessionId: seen.sessionId,
-                expectedLabel: seen.label,
-              });
-            }}
-            handingBack={handBack.isPending}
-            onProvide={(ref, extras) => {
-              const built = answerCall(seen, { type: "provide", ref });
-              if (!built.ok) {
-                setFailure(built.message);
-                return;
+              onPress={(act) => {
+                setFailure(null);
+                relay.mutate(relayCall(seen, act));
+              }}
+            />
+          ) : (
+            <Controls
+              // A new question is a new form: nothing typed against the old
+              // one carries over.
+              key={`${seen.sessionId}:${seen.label}:${JSON.stringify(seen.ask)}`}
+              slot={seen}
+              control={view.control}
+              busy={busy || staleness === "changed"}
+              pending={answer.isPending}
+              onAnswer={(draft) => {
+                const built = answerCall(seen, draft);
+                if (!built.ok) {
+                  setFailure(built.message);
+                  return built.fieldErrors ?? null;
+                }
+                send(built.call);
+                return null;
+              }}
+              onAttest={() => {
+                setFailure(null);
+                attest.mutate(slotCall(seen));
+              }}
+              attesting={attest.isPending}
+              onHandBack={() => {
+                setFailure(null);
+                handBack.mutate({
+                  sessionId: seen.sessionId,
+                  expectedLabel: seen.label,
+                });
+              }}
+              handingBack={handBack.isPending}
+              onProvide={(ref, extras) => {
+                const built = answerCall(seen, { type: "provide", ref });
+                if (!built.ok) {
+                  setFailure(built.message);
+                  return;
+                }
+                keptIfRefused.current = extras?.keptIfRefused ?? null;
+                const expectedGranteeId = extras?.expectedGranteeId;
+                send(
+                  expectedGranteeId
+                    ? { ...built.call, expectedGranteeId }
+                    : built.call
+                );
+              }}
+              onStale={refused}
+              onFailure={setFailure}
+              onConnected={(serviceName) =>
+                settled(connectedReceipt(serviceName))
               }
-              keptIfRefused.current = extras?.keptIfRefused ?? null;
-              const expectedGranteeId = extras?.expectedGranteeId;
-              send(
-                expectedGranteeId
-                  ? { ...built.call, expectedGranteeId }
-                  : built.call
-              );
-            }}
-            onStale={refused}
-            onFailure={setFailure}
-            onConnected={(serviceName) =>
-              settled(connectedReceipt(serviceName))
-            }
-          />
+            />
+          )}
         </>
       )}
 
@@ -417,6 +457,67 @@ export function AskAnswer({
             </Button>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * An answer an agent relayed from a chat, waiting for the person's tap: the
+ * mark that says so, their words, and Confirm · "Not what I said" as an
+ * EQUAL pair — a heavier Confirm would be the console nudging a commitment
+ * (a deploy, a spend) through on someone else's account of what was said.
+ */
+function RelayWaiting({
+  view,
+  busy,
+  pressed,
+  onPress,
+}: {
+  view: RelayWaitingView;
+  busy: boolean;
+  pressed: "confirm" | "reject" | null;
+  onPress: (act: "confirm" | "reject") => void;
+}) {
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-1">
+        <p
+          className={`text-[12.5px] font-medium ${TONE_TEXT[view.mark.tone] ?? "text-foreground/80"}`}
+        >
+          {view.mark.label}
+        </p>
+        {view.words && (
+          <blockquote className="text-pretty text-[13.5px] leading-relaxed text-foreground/85">
+            {view.words}
+          </blockquote>
+        )}
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <Button
+          variant="bordered"
+          className="min-h-10 transition-transform active:scale-[0.96]"
+          startContent={
+            pressed !== "confirm" && <Check className="h-4 w-4" aria-hidden />
+          }
+          isLoading={pressed === "confirm"}
+          isDisabled={busy}
+          onPress={() => onPress("confirm")}
+        >
+          {ASK_COPY.confirmRelayed}
+        </Button>
+        <Button
+          variant="bordered"
+          className="min-h-10 transition-transform active:scale-[0.96]"
+          startContent={
+            pressed !== "reject" && <Undo2 className="h-4 w-4" aria-hidden />
+          }
+          isLoading={pressed === "reject"}
+          isDisabled={busy}
+          onPress={() => onPress("reject")}
+        >
+          {ASK_COPY.notWhatISaid}
+        </Button>
       </div>
     </div>
   );
@@ -655,7 +756,7 @@ function ConfirmControl({
             <div key={a.key} className="flex min-w-0 flex-col gap-1.5">
               <Button
                 // The affirmative answer wears the positive tone; the agent's
-                // pick is the solid one (decision 2, 2026-10-26).
+                // pick is the solid one (founder, 2026-10-26).
                 color={a.tone === "positive" ? "success" : "default"}
                 variant={a.recommended ? "solid" : "flat"}
                 className="min-h-10 transition-transform active:scale-[0.96]"
@@ -696,7 +797,7 @@ function ConfirmControl({
 
 /**
  * The optional note to the agent, collapsed behind ONE label until asked for.
- * The open field carries the same label and no placeholder repeating it.
+ * Opened, the field is labelled with the noun, and no placeholder repeats it.
  */
 function NoteField({
   value,
@@ -727,7 +828,7 @@ function NoteField({
   return (
     <Input
       size="sm"
-      label={ASK_COPY.addNote}
+      label={ASK_COPY.note}
       value={value}
       onValueChange={onChange}
       isDisabled={busy}

@@ -1,8 +1,8 @@
 /**
  * A pending proposal's FATE on the pod's wire, and the Review later predicate
- * every COUNT reads (Resolve-XP W3, pod doc 86890dee).
+ * every COUNT reads (pod doc 86890dee).
  *
- * The rule is W0's `proposalFate` (`@synap-core/types/proposals/fate`). This
+ * The rule is `proposalFate` (`@synap-core/types/proposals/fate`). This
  * module only feeds it the class fields from the ONE class door
  * (`proposalClassFields`), so a row's fate and its class can never disagree.
  *
@@ -49,7 +49,7 @@ export interface ProposalFateRow {
   sessionId?: string | null;
 }
 
-export function proposalFateInput(
+function proposalFateInput(
   row: ProposalFateRow,
   now: Date | number
 ): ProposalFateInput {

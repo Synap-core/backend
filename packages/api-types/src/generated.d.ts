@@ -10541,7 +10541,7 @@ export interface ExpectedOutput {
 	answerPickedUpAt?: string;
 	/**
 	 * A relayed answer to a `commitment` ask, waiting for the person's tap — see
-	 * {@link SlotPendingRelay}. SERVER-STAMPED by the relay door only (W1); the
+	 * {@link SlotPendingRelay}. SERVER-STAMPED by the relay door only; the
 	 * slot stays owed (`owner: 'human'`) while it is here, and the person's
 	 * Confirm / "Not what I said" clears it.
 	 */
@@ -18680,6 +18680,14 @@ export type AnswerExpectedOutputResult = {
 /** The slot's ask is no longer the one the answer was given against. */
  | {
 	status: "ask_changed";
+}
+/** `requireOpenAsk`: the person answered it, or it is no longer theirs. */
+ | {
+	status: "not_open";
+}
+/** `confirmsRelayAt`: the relay the person confirmed is no longer there. */
+ | {
+	status: "no_pending_relay";
 } | {
 	answer: SlotAnswer;
 	/** The slot as it stood BEFORE the answer — who it was delegated to, etc. */
@@ -20321,7 +20329,7 @@ export interface Signal {
 	 * A `proposal-cluster` whose members all sat untouched for 7 days
 	 * (`ProposalCluster.reviewLater`, the ONE count predicate), or an
 	 * `owed-slot` owed for more than 7 days (`isAskReviewLater`, the same
-	 * clock — Resolve-XP decision 3): drawn in the Review later fold, OUT of
+	 * clock — founder, 2026-10-26): drawn in the Review later fold, OUT of
 	 * the headline — `countNeedsYou` counts it as `reviewLater`, never in
 	 * `needsYou`. Absent on every other row.
 	 */
@@ -30442,6 +30450,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: {
+				decision?: {
+					decisionId: string;
+					status: "reopened";
+				} | {
+					decisionId: string;
+					reason: string;
+					status: "failed";
+				};
 				dropped: "answer" | "pending";
 				expectedLabel: string | null;
 				ok: true;

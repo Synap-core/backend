@@ -106,7 +106,7 @@ const proposalClassShape = {
 } as const;
 
 /**
- * FATE on silence + who WAITS on it (Resolve-XP W3) — the context card's
+ * FATE on silence + who WAITS on it — the context card's
  * "If you ignore it" and "Waiting on it" lines. `fate` is DERIVED here, on
  * every pending row (`proposalFateFields`); `waits` needs two reads, so it is
  * FORWARDED from the list door that resolves it (`resolveProposalWaits`), the

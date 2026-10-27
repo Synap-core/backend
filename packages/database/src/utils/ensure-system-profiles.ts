@@ -481,7 +481,7 @@ export const SYSTEM_PROFILE_PROPERTY_LINKS: ReadonlyArray<{
       { slug: "sourceSessionId", required: false, displayOrder: 14 },
       { slug: "askedByAgent", required: false, displayOrder: 15 },
       // Where the answer came from when an agent RELAYED it from a chat
-      // (Resolve-XP W1, api `decision-from-answer.ts`): absent on a tap.
+      // (api `decision-from-answer.ts`): absent on a tap.
       { slug: "answeredVia", required: false, displayOrder: 16 },
       { slug: "relayedBy", required: false, displayOrder: 17 },
       { slug: "relayQuote", required: false, displayOrder: 18 },

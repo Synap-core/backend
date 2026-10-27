@@ -29,86 +29,50 @@ import {
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
+import {
+  TRACK_STATUSES as PROJECT_TRACK_STATUSES,
+  LIVE_TRACK_STATUSES as LIVE_PROJECT_TRACK_STATUSES,
+  TRACK_VERDICTS as PROJECT_TRACK_VERDICTS,
+  TRACK_WORK_KINDS as PROJECT_TRACK_WORK_KINDS,
+  TRACK_UNCERTAINTY_LEVELS as PROJECT_TRACK_UNCERTAINTY_LEVELS,
+  type TrackKpi as ProjectTrackKpi,
+  type TrackStatus as ProjectTrackStatus,
+  type TrackVerdict as ProjectTrackVerdict,
+  type TrackWorkKind as ProjectTrackWorkKind,
+  type TrackUncertainty as ProjectTrackUncertainty,
+} from "@synap-core/types/units";
 import { projects } from "./projects.js";
 import { playbooks } from "./playbooks.js";
 
 /**
- * The stored option keys of a track's SYSTEM LIFECYCLE (0344). Categories,
- * words and who may enter each live in `@synap-core/types/units`
- * (`TRACK_STATUS_DECLARATION`); this package cannot import that one, so the
- * tracks service pins the two lists equal at compile time. `completed` (done,
- * "Closed") and `archived` (lost, "Dropped") are contract keys — never renamed.
+ * The track vocabularies are declared ONCE, in `@synap-core/types/units`, and
+ * re-exported here under the pod's names:
+ *  - `PROJECT_TRACK_STATUSES` — the stored option keys of a track's SYSTEM
+ *    LIFECYCLE (0344), `TRACK_STATUSES`; categories, words and who may enter
+ *    each are `TRACK_STATUS_DECLARATION`. `completed` (done, "Closed") and
+ *    `archived` (lost, "Dropped") are contract keys — never renamed.
+ *  - `LIVE_PROJECT_TRACK_STATUSES` — the statuses under which a track is LIVE
+ *    and holds its name on its project (`uniq_project_tracks_live_name`,
+ *    0317/0344 — whose predicate spells the same set), `LIVE_TRACK_STATUSES`.
+ *  - `PROJECT_TRACK_VERDICTS` — how a closed or dropped track ended (0344, R1),
+ *    `TRACK_VERDICTS`; `project_tracks_verdict_check` spells the same set.
+ *  - `PROJECT_TRACK_WORK_KINDS` — the kind of work a goal is (0345, decision
+ *    4), `TRACK_WORK_KINDS`; `project_tracks_work_kind_check` spells the same set.
+ *  - `PROJECT_TRACK_UNCERTAINTY_LEVELS` — how well the way is known (0345),
+ *    `TRACK_UNCERTAINTY_LEVELS`; `project_tracks_uncertainty_check` spells the
+ *    same set.
  */
-export const PROJECT_TRACK_STATUSES = [
-  "proposed",
-  "agreed",
-  "ready",
-  "active",
-  "paused",
-  "completed",
-  "archived",
-] as const;
-export type ProjectTrackStatus = (typeof PROJECT_TRACK_STATUSES)[number];
-/**
- * The statuses under which a track is LIVE and holds its name on its project
- * — the open, active and paused categories (`uniq_project_tracks_live_name`,
- * 0317/0344 — whose predicate spells the same set).
- */
-export const LIVE_PROJECT_TRACK_STATUSES = [
-  "proposed",
-  "agreed",
-  "ready",
-  "active",
-  "paused",
-] as const satisfies readonly ProjectTrackStatus[];
-
-/**
- * How a closed or dropped track ended (0344, R1) — mirror of `TRACK_VERDICTS`
- * (`@synap-core/types/units`), pinned equal by the tracks service; the
- * `project_tracks_verdict_check` constraint spells the same set.
- */
-export const PROJECT_TRACK_VERDICTS = [
-  "met",
-  "partly_met",
-  "not_met",
-  "retired",
-  "no_longer_needed",
-  "impossible",
-  "replaced",
-  "mistake",
-] as const;
-export type ProjectTrackVerdict = (typeof PROJECT_TRACK_VERDICTS)[number];
-
-/**
- * The kind of work a goal is (0345, decision 4) — mirror of
- * `TRACK_WORK_KINDS` (`@synap-core/types/units`), pinned equal by the tracks
- * service; `project_tracks_work_kind_check` spells the same set.
- */
-export const PROJECT_TRACK_WORK_KINDS = [
-  "project",
-  "flow",
-  "operation",
-  "investigation",
-  "incident",
-  "commission",
-  "pathway",
-] as const;
-export type ProjectTrackWorkKind = (typeof PROJECT_TRACK_WORK_KINDS)[number];
-
-/**
- * How well the way is known (0345, decision 4) — mirror of
- * `TRACK_UNCERTAINTY_LEVELS`, pinned the same way;
- * `project_tracks_uncertainty_check` spells the same set.
- */
-export const PROJECT_TRACK_UNCERTAINTY_LEVELS = [
-  "clear",
-  "complicated",
-  "complex",
-  "chaotic",
-  "unknown",
-] as const;
-export type ProjectTrackUncertainty =
-  (typeof PROJECT_TRACK_UNCERTAINTY_LEVELS)[number];
+export {
+  PROJECT_TRACK_STATUSES,
+  LIVE_PROJECT_TRACK_STATUSES,
+  PROJECT_TRACK_VERDICTS,
+  PROJECT_TRACK_WORK_KINDS,
+  PROJECT_TRACK_UNCERTAINTY_LEVELS,
+  type ProjectTrackStatus,
+  type ProjectTrackVerdict,
+  type ProjectTrackWorkKind,
+  type ProjectTrackUncertainty,
+};
 
 /**
  * What a track pinned from its method at start. Every key optional: a track
@@ -154,20 +118,10 @@ export interface ProjectTrackStageHistoryEntry {
  * The optional number a track steers by (0302). `current` is STATED — by a
  * person or an agent — never measured: nothing in the pod derives "qualified
  * leads per month", so the value always travels with when it was stated
- * (`updatedAt`) and by whom (`updatedBy`). Mirrored as `TrackKpi` in
- * `@synap-core/types/units` (this package cannot import types); the tracks
- * service pins the two equal at compile time.
+ * (`updatedAt`) and by whom (`updatedBy`). Declared once, as `TrackKpi` in
+ * `@synap-core/types/units`.
  */
-export interface ProjectTrackKpi {
-  label: string;
-  unit?: string;
-  target: number;
-  current?: number;
-  /** ISO-8601 — when `current` was last stated. */
-  updatedAt?: string;
-  /** The user (or agent) id that stated `current`. */
-  updatedBy?: string;
-}
+export type { ProjectTrackKpi };
 
 export const projectTracks = pgTable(
   "project_tracks",

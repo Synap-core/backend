@@ -7,9 +7,8 @@
  * `playbook/run` proposal it files (`proposeRulePlaybookRun`, jobs). Both the
  * api runner and the jobs step read these, which is why they live here.
  *
- * The pod's copy of the target edge role: `@synap-core/types/workers`
- * `WORKER_TARGET_ROLE`. `database/src/wire-parity/workers.ts` pins the two
- * EQUAL at compile time.
+ * The target edge role is `@synap-core/types/workers` `WORKER_TARGET_ROLE`,
+ * re-exported under the pod's name.
  */
 
 import { and, eq, gte, inArray, or, sql } from "drizzle-orm";
@@ -19,9 +18,10 @@ import { focusSessions, FocusSessionStatus } from "../schema/focus-sessions.js";
 import { links } from "../schema/links.js";
 import { automationRuns, automationStepRuns } from "../schema/automations.js";
 import { events } from "../schema/events.js";
+import { WORKER_TARGET_ROLE } from "@synap-core/types/workers";
 
 /** `links.metadata.role` of a worker's `session --targets--> entity` edge. */
-export const WORKER_TARGET_LINK_ROLE = "worker_target" as const;
+export const WORKER_TARGET_LINK_ROLE = WORKER_TARGET_ROLE;
 
 /**
  * THE "in flight" rule for a worker session (backend F9): its targets are

@@ -219,7 +219,8 @@ describe("ASK_COPY", () => {
         : v
     );
     expect(strings.length).toBeGreaterThan(10);
-    for (const s of strings) expect(s).not.toContain("—");
+    // A builder with nothing to show returns null: nothing is drawn.
+    for (const s of strings) if (s != null) expect(s).not.toContain("—");
     expect(ASK_COPY.youAnswered("Yes")).toBe("You answered: Yes");
   });
 
@@ -295,8 +296,13 @@ describe("answerProvenanceMark", () => {
     );
     for (const v of Object.values(ASK_COPY)) {
       const text =
-        typeof v === "function" ? (v as (a: string) => string)("x") : v;
-      expect(text).not.toContain("—");
+        typeof v === "function" ? (v as (a: string) => string | null)("x") : v;
+      if (text != null) expect(text).not.toContain("—");
     }
+    expect(ASK_COPY.relayedWords({ quote: " yes go ", text: "Yes" })).toBe(
+      "“yes go”"
+    );
+    expect(ASK_COPY.relayedWords({ text: "Yes" })).toBe("“Yes”");
+    expect(ASK_COPY.relayedWords({ quote: " ", text: null })).toBeNull();
   });
 });
