@@ -35,13 +35,19 @@ const PR_MERGED_FLOW = {
         y: 120,
       },
       data: {
-        label: "The PR names its session",
+        label: "The PR names its session and landed on the default branch",
         checks: [
           {
             path: "trigger.payload.data.sessionId",
             minLength: 36,
             message:
               "The PR body names no Pod session: nothing to advance (the merge sweeper still completed any outcome whose ref is this PR).",
+          },
+          {
+            path: "trigger.payload.data.intoDefault",
+            equals: true,
+            message:
+              "Merged into a branch that is not the default one (a stacked PR): not delivered yet, the step stays where it is.",
           },
         ],
       },
@@ -108,6 +114,18 @@ describe("the PR-merged automation config", () => {
     const r = validateFlowDefinition(PR_MERGED_FLOW);
     expect(r.errors).toEqual([]);
     expect(r.valid).toBe(true);
+  });
+
+  it("advances only a merge into the DEFAULT branch (F3: a stacked merge is not delivered)", () => {
+    const guard = PR_MERGED_FLOW.nodes.find((n) => n.type === "guard")!;
+    const checks = (guard.data as { checks: Array<Record<string, unknown>> })
+      .checks;
+    expect(checks).toContainEqual(
+      expect.objectContaining({
+        path: "trigger.payload.data.intoDefault",
+        equals: true,
+      })
+    );
   });
 
   it("uses the outcome verb this lane added (post_evidence)", () => {
