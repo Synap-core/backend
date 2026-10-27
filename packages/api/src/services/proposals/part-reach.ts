@@ -7,7 +7,7 @@
  * approved without its reach. This reads each step the way the runtime will
  * run it:
  *   - a `capability` step → the skill that answers its verb, through the run
- *     door's own rule (`answeringSkillsWhere` + `ANSWERING_SKILL_ORDER`,
+ *     door's own rule (`answeringSkillsWhere` + `answeringSkillOrder`,
  *     `executeCapability`); a `skill` step → that skill by id, same lens;
  *   - the skill's reach by kind: a code skill's `metadata.allowedHosts` (the
  *     sandbox egress list `runSkillInSandbox` enforces), a declarative verb's
@@ -32,7 +32,7 @@ import {
   type StoredProposalData,
 } from "@synap-core/types/proposals";
 import {
-  ANSWERING_SKILL_ORDER,
+  answeringSkillOrder,
   answeringSkillsWhere,
 } from "../capabilities/verb-skill.js";
 
@@ -245,7 +245,7 @@ export async function readStepSkillLookups(
           )
         )
       )
-      .orderBy(...ANSWERING_SKILL_ORDER);
+      .orderBy(...answeringSkillOrder());
     const byName = new Map<string, SkillReachRow>();
     const byId = new Map<string, SkillReachRow>();
     for (const row of found) {

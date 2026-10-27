@@ -24,8 +24,10 @@ export function answeringSkillsWhere(
   );
 }
 
-/** Among several answering skills of one name: approved first, then newest. */
-export const ANSWERING_SKILL_ORDER = [
-  desc(skills.approved),
-  desc(skills.updatedAt),
-] as const;
+/**
+ * Among several answering skills of one name: approved first, then newest.
+ * Built per call, never at import (a test's database mock loads this module).
+ */
+export function answeringSkillOrder() {
+  return [desc(skills.approved), desc(skills.updatedAt)] as const;
+}

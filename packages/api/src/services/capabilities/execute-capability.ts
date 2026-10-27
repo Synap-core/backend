@@ -148,7 +148,7 @@ import {
   capabilityNextAction,
   type CapabilityNextAction,
 } from "./capability-enable-link.js";
-import { ANSWERING_SKILL_ORDER, answeringSkillsWhere } from "./verb-skill.js";
+import { answeringSkillOrder, answeringSkillsWhere } from "./verb-skill.js";
 import { resolveEntityVerbRunSubject } from "./capability-run-subject.js";
 import {
   proposeCapabilityEnable,
@@ -561,7 +561,7 @@ export async function executeCapability(input: {
     // updated — so a fresh re-apply wins over a stale shadow instead of a random
     // `.limit(1)`. (The real fix for duplicates is de-dup; this hardens the door.)
     // One rule with the review's reach read (`verb-skill.ts`).
-    .orderBy(...ANSWERING_SKILL_ORDER)
+    .orderBy(...answeringSkillOrder())
     .limit(1);
 
   if (!skillRow) {
