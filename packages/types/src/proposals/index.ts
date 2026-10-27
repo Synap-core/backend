@@ -1207,6 +1207,24 @@ export function isPlanOperation(
   return (PLAN_OPERATION_KINDS as readonly string[]).includes(op.op);
 }
 
+/**
+ * The op kinds that set up something that ACTS ON ITS OWN once approved: a
+ * skill an agent loads or runs, an automation that fires, a rule an agent
+ * follows. Read by the page-only rule (`proposalPageOnlyReason`).
+ */
+export const ACTING_OPERATION_KINDS = [
+  "create_skill",
+  "create_automation",
+  "create_rule",
+  "update_skill",
+  "update_automation",
+  "update_rule",
+] as const;
+
+export function isActingOperation(op: CompositeProposalOperation): boolean {
+  return (ACTING_OPERATION_KINDS as readonly string[]).includes(op.op);
+}
+
 /** True when the batch carries any plan op — it then applies all-or-none. */
 export function isPlanBatch(operations: CompositeProposalOperation[]): boolean {
   return operations.some(isPlanOperation);
