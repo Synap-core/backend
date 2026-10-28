@@ -30,7 +30,7 @@ import { createSynapEvent } from "@synap-core/core";
 import { eventRepository, readBackupStatus } from "@synap/database";
 import { eventStreamManager } from "../event-stream-manager.js";
 import { eventVisibleWhereFor } from "../access/event-visibility.js";
-import { db, eq, and, sqlDrizzle } from "@synap/database";
+import { db, eq, and, desc, sqlDrizzle } from "@synap/database";
 import {
   users,
   workspaces,
@@ -1001,12 +1001,17 @@ export const systemRouter = router({
         notAnAppAgent(users.id)
       );
 
-      const userList = await db.query.users.findMany({
-        where: conditions,
-        limit: input.limit,
-        offset: input.offset,
-        orderBy: (users, { desc }) => [desc(users.createdAt)],
-      });
+      // A core select, not `db.query.users.findMany`: the relational builder
+      // re-aliases EVERY column in `where` to the root table, so the
+      // `apps.agent_user_id` inside `notAnAppAgent` became
+      // `users.agent_user_id` and the query failed on every call.
+      const userList = await db
+        .select()
+        .from(users)
+        .where(conditions)
+        .orderBy(desc(users.createdAt))
+        .limit(input.limit)
+        .offset(input.offset);
 
       // Get membership counts for each user
       const usersWithMemberships = await Promise.all(
