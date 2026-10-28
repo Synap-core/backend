@@ -42,7 +42,14 @@
  */
 
 import { resolveSessionTitle } from "../focus-sessions/title.js";
-import { resolveNeedsYouItemCount } from "../vocabulary/index.js";
+import {
+  nounInSentence,
+  resolveNeedsYouItemCount,
+  resolveObjectNoun,
+  resolveObjectNounPlural,
+} from "../vocabulary/index.js";
+import type { GoalConvertibleKind } from "../units/goal-entry.js";
+import { NEEDS_YOU_FOLDS, type NeedsYouFold } from "./rule.js";
 
 /** `older` = occurred more than 7 days ago — stamped by the pod, never measured here. */
 export type NeedsYouAgeBucket = "recent" | "older";
@@ -81,6 +88,30 @@ export interface GroupableSignal {
    * drawn in the Review later fold. Stamped by the pod, never measured here.
    */
   reviewLater?: boolean;
+  /**
+   * THE needs-you rule's class for this row (`classifyOwedAsk` /
+   * `classifyPendingProposal`, `./rule.ts`), stamped by the pod. Every class
+   * but `needs_you` is out of the headline and ALSO carries `reviewLater`, so
+   * a client older than this field draws it in its one out-of-headline fold
+   * and the count still equals the rows above it. Absent on an older pod.
+   */
+  needsYouClass?: string | null;
+}
+
+/**
+ * Which fold a row sits in — its class when the pod stamped one, else
+ * `review_later` for a row flagged out of the headline by an older pod. `null`
+ * = the headline (Recent / Older).
+ */
+export function needsYouFoldOf(
+  signal: Pick<GroupableSignal, "reviewLater" | "needsYouClass">
+): NeedsYouFold | null {
+  const c = signal.needsYouClass;
+  if (c && (NEEDS_YOU_FOLDS as readonly string[]).includes(c)) {
+    return c as NeedsYouFold;
+  }
+  if (c === "needs_you") return null;
+  return signal.reviewLater === true ? "review_later" : null;
 }
 
 /** One session's rows (or a lone row) — internal. */
@@ -134,50 +165,90 @@ function pushInto<T extends GroupableSignal>(
   groups.push({ key: signal.id, sessionId: null, items: [signal] });
 }
 
-type Fold = "recent" | "older" | "reviewLater";
+/**
+ * Where an UNCLASSED row (or a headline row) would sit on its own: Recent,
+ * Older, or Review later for a row an older pod flagged with no class.
+ */
+type Bucket = "recent" | "older" | "review_later";
 
-/** Where ONE row folds on its own; a session's rows fold together (`runsOf`). */
-function foldOf(s: GroupableSignal): Fold {
-  if (s.reviewLater === true) return "reviewLater";
+function bucketOf(s: GroupableSignal): Bucket {
+  if (s.reviewLater === true && !s.needsYouClass) return "review_later";
   return s.ageBucket === "older" ? "older" : "recent";
 }
 
-/** Freshest first: a session folds where its freshest row would. */
-const FOLD_RANK: Record<Fold, number> = { recent: 0, older: 1, reviewLater: 2 };
+/** Freshest first: a session's unclassed rows sit where its freshest would. */
+const BUCKET_RANK: Record<Bucket, number> = {
+  recent: 0,
+  older: 1,
+  review_later: 2,
+};
 
 /**
- * Split a server-ordered page into one run per session + the Older and Review
- * later partitions. A session is ONE row, never split across folds: its rows
- * fold together, where its freshest row would (a session that still owes
- * something fresh stays in Recent, its week-old ask with it). The pod lifts a
- * session's rows into one age bucket already; the Review later flag is per
- * row (an owed ask's own clock), so it is joined here.
+ * Split a server-ordered page into one run per session + the Older partition,
+ * the rule's folds, and their union (`reviewLater`, every row out of the
+ * headline).
+ *
+ * THE RULE'S CLASS IS AUTHORITATIVE (decision E): a row the pod classed out of
+ * the headline sits in its fold — Working, Stopped, Review later, From the
+ * system, Changes to review — whatever else its session owes, so each fold's
+ * rows are exactly what its count counts. INSIDE a place a session is ONE row
+ * (`pushInto`). Resolve-XP's "a session folds where its freshest row would"
+ * applies to everything else — the headline rows and the rows an older pod
+ * flagged `reviewLater` with no class: a session that still owes something
+ * fresh keeps its week-old unclassed ask in Recent with it.
  */
 function runsOf<T extends GroupableSignal>(
   signals: readonly T[]
-): { recent: Run<T>[]; older: Run<T>[]; reviewLater: Run<T>[] } {
-  const sessionFold = new Map<string, Fold>();
+): {
+  recent: Run<T>[];
+  older: Run<T>[];
+  reviewLater: Run<T>[];
+  folds: Record<NeedsYouFold, Run<T>[]>;
+} {
+  /** A row the pod CLASSED out of the headline: its fold, else null. */
+  const classedFold = (s: GroupableSignal): NeedsYouFold | null =>
+    s.needsYouClass ? needsYouFoldOf(s) : null;
+  const sessionBucket = new Map<string, Bucket>();
   for (const s of signals) {
+    if (classedFold(s)) continue;
     const sessionId = sessionIdOfGroupKey(s.groupKey);
     if (!sessionId) continue;
-    const own = foldOf(s);
-    const seen = sessionFold.get(sessionId);
-    if (!seen || FOLD_RANK[own] < FOLD_RANK[seen]) {
-      sessionFold.set(sessionId, own);
+    const own = bucketOf(s);
+    const seen = sessionBucket.get(sessionId);
+    if (!seen || BUCKET_RANK[own] < BUCKET_RANK[seen]) {
+      sessionBucket.set(sessionId, own);
     }
   }
-  const folds: Record<Fold, Run<T>[]> = {
-    recent: [],
-    older: [],
-    reviewLater: [],
-  };
-  const bySession = new Map<string, Run<T>>();
+  const recent: Run<T>[] = [];
+  const older: Run<T>[] = [];
+  const reviewLater: Run<T>[] = [];
+  const folds = Object.fromEntries(
+    NEEDS_YOU_FOLDS.map((f) => [f, [] as Run<T>[]])
+  ) as Record<NeedsYouFold, Run<T>[]>;
+  const recentBySession = new Map<string, Run<T>>();
+  const olderBySession = new Map<string, Run<T>>();
+  const unionBySession = new Map<string, Run<T>>();
+  const foldBySession = Object.fromEntries(
+    NEEDS_YOU_FOLDS.map((f) => [f, new Map<string, Run<T>>()])
+  ) as Record<NeedsYouFold, Map<string, Run<T>>>;
   for (const s of signals) {
     const sessionId = sessionIdOfGroupKey(s.groupKey);
-    const fold = (sessionId && sessionFold.get(sessionId)) || foldOf(s);
-    pushInto(folds[fold], s, bySession);
+    const fold: NeedsYouFold | null =
+      classedFold(s) ??
+      (((sessionId && sessionBucket.get(sessionId)) || bucketOf(s)) ===
+      "review_later"
+        ? "review_later"
+        : null);
+    if (fold) {
+      pushInto(folds[fold], s, foldBySession[fold]);
+      pushInto(reviewLater, s, unionBySession);
+      continue;
+    }
+    const bucket = (sessionId && sessionBucket.get(sessionId)) || bucketOf(s);
+    if (bucket === "older") pushInto(older, s, olderBySession);
+    else pushInto(recent, s, recentBySession);
   }
-  return folds;
+  return { recent, older, reviewLater, folds };
 }
 
 /** The fields `repeatLabel` reads. Optional: a row from a pre-W2 pod may lack them. */
@@ -264,23 +335,59 @@ export type NeedsYouRow<T extends GroupableSignal> =
       /** Display name: the pod's `sessionTitle`, else the goal's first line. */
       title: string | null;
       projectId: string | null;
-      /** ≥ 2, in server order — what the optional peek shows. */
+      /**
+       * ≥ 2, in server order — what the optional peek shows. In the Stopped
+       * fold a session is ALWAYS this row, even for one item (see `verbs`).
+       */
       items: T[];
+      /**
+       * The row's own verbs, as action keys for `resolveActionLabel`
+       * (`@synap-core/types/vocabulary`). Set on a STOPPED session only
+       * (decision E1): `["resume", "close"]` — no agent moved it for 7 days,
+       * so the person resumes it or closes it; both open the session.
+       */
+      verbs?: readonly NeedsYouSessionVerb[];
       /** By kind, in order of first appearance. */
       counts: NeedsYouCount[];
       /** The newest item's `occurredAt` (null when no item carries one). */
       newestAt: string | Date | null;
     };
 
+/** A session row's own verbs — see `NeedsYouRow.verbs`. */
+export type NeedsYouSessionVerb = "resume" | "close";
+
+/** A stopped session's verbs (decision E1): resume it, or close it. */
+export const STOPPED_SESSION_VERBS: readonly NeedsYouSessionVerb[] = [
+  "resume",
+  "close",
+];
+
+/**
+ * A stopped session's ONE inline verb on a lens row (`lensRowOfNeedsYou`):
+ * the action key `resolveActionLabel` words "Resume or close". Opens the
+ * session, where both {@link STOPPED_SESSION_VERBS} live.
+ */
+export const STOPPED_SESSION_VERB = "resume_or_close";
+
 export interface NeedsYouRows<T extends GroupableSignal> {
   recent: NeedsYouRow<T>[];
   older: NeedsYouRow<T>[];
   /** ROWS under the Older fold — a session card is one (what "Older · N" states). */
   olderCount: number;
-  /** Untouched durable proposals and owed asks — the "Review later · N" fold, out of the headline count. */
+  /**
+   * EVERY row out of the headline count, whatever its fold — what a surface
+   * that draws one out-of-headline fold shows ("Review later · N"). Since the
+   * needs-you rule (decision E) it is the union of {@link folds}.
+   */
   reviewLater: NeedsYouRow<T>[];
   /** ROWS under the Review later fold (what "Review later · N" states). */
   reviewLaterCount: number;
+  /**
+   * The same rows split by the rule's fold (`./rule.ts`): Working ("asks you
+   * when you can"), Stopped (one row per session, "Resume or close"), Review
+   * later, From the system, Changes to review. A session is one row per fold.
+   */
+  folds: Record<NeedsYouFold, NeedsYouRow<T>[]>;
 }
 
 /**
@@ -341,7 +448,13 @@ function timeOf(at: string | Date | undefined): number {
 }
 
 function toRows<T extends GroupableSignal>(
-  groups: readonly Run<T>[]
+  groups: readonly Run<T>[],
+  /**
+   * The Stopped fold: a session is ONE session row whatever its item count,
+   * carrying its verbs — the person acts on the SESSION (resume or close),
+   * never on one of its asks.
+   */
+  opts: { sessionVerbs?: readonly NeedsYouSessionVerb[] } = {}
 ): NeedsYouRow<T>[] {
   const rows: NeedsYouRow<T>[] = [];
   for (const g of groups) {
@@ -352,7 +465,7 @@ function toRows<T extends GroupableSignal>(
       continue;
     }
     const ref = sessionRefOf(g.sessionId, g.items);
-    if (g.items.length === 1) {
+    if (g.items.length === 1 && !opts.sessionVerbs) {
       const signal = g.items[0]!;
       rows.push({ kind: "item", key: signal.id, signal, session: ref });
       continue;
@@ -378,6 +491,7 @@ function toRows<T extends GroupableSignal>(
       items: g.items,
       counts,
       newestAt,
+      ...(opts.sessionVerbs ? { verbs: opts.sessionVerbs } : {}),
     });
   }
   return rows;
@@ -400,6 +514,15 @@ export function needsYouRows<T extends GroupableSignal>(
     olderCount: older.length,
     reviewLater,
     reviewLaterCount: reviewLater.length,
+    folds: Object.fromEntries(
+      NEEDS_YOU_FOLDS.map((f) => [
+        f,
+        toRows(
+          shape.folds[f],
+          f === "stopped" ? { sessionVerbs: STOPPED_SESSION_VERBS } : {}
+        ),
+      ])
+    ) as Record<NeedsYouFold, NeedsYouRow<T>[]>,
   };
 }
 
@@ -491,6 +614,78 @@ export interface NeedsYouInvite {
   spaceName: string | null;
 }
 
+/**
+ * One entity of a retired goal kind (Life OS `goal`, Enterprise `objective`,
+ * Project Management `okr`) that was never made a goal, on the
+ * `convertible-goals` card (founder decision D-3, 2026-10-26).
+ */
+export interface NeedsYouConvertibleGoal {
+  entityId: string;
+  /** The entity's title; null when it has none (the host names its kind). */
+  title: string | null;
+  kind: GoalConvertibleKind;
+  /** The space it lives in; null for a pod-wide entity or an unnamed space. */
+  spaceName: string | null;
+  /**
+   * The projects it is filed in that the viewer can see (`belongs_to_project`)
+   * — where its goal lands by default, as "Make it a goal" does.
+   */
+  projectIds: string[];
+}
+
+/**
+ * The pod's ONE "Make them goals" card (founder decision D-3, 2026-10-26): the
+ * entities of a retired goal kind the viewer can read that were never made a
+ * goal (no `promoted_to` edge to a track). The person reviews them and makes
+ * them goals, each through the one convert door; nothing converts on its own.
+ */
+export interface NeedsYouConvertibleGoals {
+  /** Newest first, at most the pod's scan cap. */
+  entities: NeedsYouConvertibleGoal[];
+  /** The scan hit its cap: there are more than `entities.length`. */
+  truncated: boolean;
+}
+
+function joinedWords(words: readonly string[]): string {
+  if (words.length <= 1) return words[0] ?? "";
+  return `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`;
+}
+
+/**
+ * The card's title, said once for every surface: "3 goals from Life OS can
+ * become goals", "2 goals and 1 objective from Life OS and Enterprise OS can
+ * become goals", "100+ goals and OKRs from 3 spaces can become goals".
+ */
+export function convertibleGoalsTitle(card: NeedsYouConvertibleGoals): string {
+  const counts = new Map<GoalConvertibleKind, number>();
+  for (const e of card.entities)
+    counts.set(e.kind, (counts.get(e.kind) ?? 0) + 1);
+  const plural = (k: string) => nounInSentence(resolveObjectNounPlural(k));
+  const what = card.truncated
+    ? `${card.entities.length}+ ${joinedWords([...counts.keys()].map(plural))}`
+    : joinedWords(
+        [...counts].map(([k, n]) =>
+          n === 1
+            ? `1 ${nounInSentence(resolveObjectNoun(k))}`
+            : `${n} ${plural(k)}`
+        )
+      );
+  const spaces = [
+    ...new Set(
+      card.entities.flatMap((e) =>
+        e.spaceName?.trim() ? [e.spaceName.trim()] : []
+      )
+    ),
+  ];
+  const from =
+    spaces.length === 0
+      ? ""
+      : spaces.length <= 2
+        ? ` from ${joinedWords(spaces)}`
+        : ` from ${spaces.length} ${nounInSentence(resolveObjectNounPlural("workspace"))}`;
+  return `${what}${from} can become ${nounInSentence(resolveObjectNounPlural("track"))}`;
+}
+
 /** The Inbox's four filters and its triage order — see `./buckets.ts`. */
 export {
   NEEDS_YOU_BUCKETS,
@@ -535,3 +730,6 @@ export {
   type OwedSlotContextInput,
   type ProposalContextInput,
 } from "./context.js";
+
+/** THE needs-you rule and its folds (decision E) — see `./rule.ts`. */
+export * from "./rule.js";

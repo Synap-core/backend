@@ -89,7 +89,11 @@ import {
   LENS_CAPS,
   type LensPagePicks,
 } from "@synap-core/types/lens";
-import { needsYouRows } from "@synap-core/types/needs-you";
+import { needsYouFoldOf, needsYouRows } from "@synap-core/types/needs-you";
+import {
+  NEEDS_YOU_FOLDS,
+  type NeedsYouFold,
+} from "@synap-core/types/needs-you/rule";
 import { requireUserId } from "../utils/user-scoped.js";
 import { proposalsRouter, assertProposalWorkspaceRead } from "./proposals.js";
 import { notifCenterRouter } from "./notif-center.js";
@@ -111,6 +115,7 @@ import {
   type PendingAppRequestSignalInput,
   type PendingIssuerSignalInput,
   type Signal,
+  type ConvertibleGoalsSignalInput,
   type SpaceInviteSignalInput,
   type StatusBanner,
 } from "../services/signals/needs-you-union.js";
@@ -120,6 +125,7 @@ import {
   podAdminCheck,
 } from "../services/signals/access-requests.js";
 import { listOpenSpaceInvites } from "../services/signals/space-invites.js";
+import { listConvertibleGoals } from "../services/signals/convertible-goals.js";
 import { listSessionsAwaitingReview } from "../services/projects/project-needs-you.js";
 import { sessionsWithOpenQuestion } from "../services/signals/open-question-sessions.js";
 import {
@@ -153,6 +159,7 @@ import {
   listUnfinishedCaptures,
   type UnfinishedCapture,
 } from "../services/intake/capture-room.js";
+import { clusterFoldCounts } from "../services/proposals/proposal-needs-you.js";
 import { sessionKindWhere } from "../services/focus-sessions/session-kind.js";
 import { OPEN_SESSION_STATUSES } from "../services/focus-sessions/session-statuses.js";
 import {
@@ -292,6 +299,7 @@ export type SignalSubRead =
   | "issuers"
   | "app-requests"
   | "invites"
+  | "convertible-goals"
   | "liveness"
   | "outputs"
   | "activity"
@@ -422,6 +430,9 @@ async function readAttention(
   // Open invites to other spaces are the person's own and live in no space
   // they are in yet: the same floor-only rule (Home, the whole Inbox).
   const readsInvites = readsCaptures;
+  // The "Make them goals" card (D-3) is the pod's ONE card, never a space's
+  // or a project's: the same floor-only rule.
+  const readsConvertible = readsCaptures;
   const isAdmin = podAdminCheck(userId);
   const [
     groups,
@@ -434,6 +445,7 @@ async function readAttention(
     issuers,
     appRequests,
     spaceInvites,
+    convertibleGoals,
   ] = await Promise.all([
     settle(
       "proposals",
@@ -441,6 +453,7 @@ async function readAttention(
         groups: [],
         distinct: 0,
         reviewLater: 0,
+        folds: { working: 0, reviewLater: 0, changesToReview: 0 },
         scanTruncated: false,
         scanned: 0,
       },
@@ -456,6 +469,8 @@ async function readAttention(
           limit: clusterLimit,
           excludeDraftSessions: true,
           splitBySession: true,
+          // THE needs-you rule over proposals (decision E6).
+          classifyNeedsYou: true,
         })
     ),
     // Under a container lens the door narrows IN SQL, before its limit
@@ -556,6 +571,18 @@ async function readAttention(
           ? await listOpenSpaceInvites({ userId })
           : { rows: [], truncated: false }
     ),
+    settle(
+      "convertible-goals",
+      {
+        rows: [],
+        truncated: false,
+        newestAt: null,
+      } as ConvertibleGoalsSignalInput,
+      async (): Promise<ConvertibleGoalsSignalInput> =>
+        readsConvertible
+          ? await listConvertibleGoals({ access: AccessContext.from(ctx) })
+          : { rows: [], truncated: false, newestAt: null }
+    ),
   ]);
 
   const allNotifications = notifs.value;
@@ -611,6 +638,7 @@ async function readAttention(
       issuers.value.truncated || appRequests.value.truncated,
     spaceInvites: spaceInvites.value.rows,
     spaceInvitesTruncated: spaceInvites.value.truncated,
+    convertibleGoals: convertibleGoals.value,
     // An unmeasured open-question read stays `undefined` (= unmeasured).
     openQuestionSessionIds: openQuestions.failed
       ? undefined
@@ -627,6 +655,7 @@ async function readAttention(
         issuers,
         appRequests,
         spaceInvites,
+        convertibleGoals,
         containers,
         clusterSessions,
         openQuestions,
@@ -654,6 +683,7 @@ function blockingSignals(a: Attention): Signal[] {
     unfinishedCaptures: a.captures.captures,
     accessRequests: a.accessRequests,
     spaceInvites: a.spaceInvites,
+    convertibleGoals: a.convertibleGoals,
   });
 }
 
@@ -669,6 +699,7 @@ function countOf(a: Attention) {
   return countNeedsYou({
     distinctClusters: a.groups.distinct,
     reviewLaterClusters: a.groups.reviewLater,
+    clusterFolds: a.groups.folds,
     clustersTruncated: a.groups.scanTruncated,
     clusters: a.groups.groups,
     clusterSessions: a.clusterSessions,
@@ -691,6 +722,7 @@ function countOf(a: Attention) {
     accessRequestsTruncated: a.accessRequestsTruncated,
     spaceInvites: a.spaceInvites,
     spaceInvitesTruncated: a.spaceInvitesTruncated,
+    convertibleGoals: a.convertibleGoals,
   });
 }
 
@@ -1310,6 +1342,51 @@ async function countSignals(ctx: SignalsCtx, input: SignalScopeInput) {
   return countOf(attention);
 }
 
+/** The needs-you rows by fold: the headline, then each fold of the rule. */
+export type NeedsYouClassifiedRows = Record<
+  "needs_you" | NeedsYouFold,
+  Signal[]
+>;
+
+/**
+ * `signals.needsYou` — one attention read, counted (`countOf`) and listed
+ * (`blockingSignals`), the rows split by THE fold rule. One number, one
+ * source: the count and the rows cannot come from two reads.
+ */
+async function readNeedsYouClassified(
+  ctx: SignalsCtx,
+  input: SignalScopeInput & { limit: number }
+): Promise<{
+  lens: "needs-you";
+  count: ReturnType<typeof countOf>;
+  rows: NeedsYouClassifiedRows;
+  truncated: boolean;
+}> {
+  const attention = await readAttention(ctx, input, CLUSTER_PAGE_LIMIT);
+  throwIfFailed([
+    ...attention.failures.blocking,
+    ...attention.failures.proposed,
+  ]);
+  const count = countOf(attention);
+  const all: NeedsYouClassifiedRows = {
+    needs_you: [],
+    ...(Object.fromEntries(
+      NEEDS_YOU_FOLDS.map((f): [NeedsYouFold, Signal[]] => [f, []])
+    ) as Record<NeedsYouFold, Signal[]>),
+  };
+  for (const s of blockingSignals(attention)) {
+    all[needsYouFoldOf(s) ?? "needs_you"].push(s);
+  }
+  let cut = false;
+  const rows = Object.fromEntries(
+    Object.entries(all).map(([fold, list]) => {
+      if (list.length > input.limit) cut = true;
+      return [fold, list.slice(0, input.limit)];
+    })
+  ) as NeedsYouClassifiedRows;
+  return { lens: "needs-you", count, rows, truncated: cut || count.truncated };
+}
+
 /** The scopes a grouped needs-you read answers: each space, and kinds in it. */
 export interface NeedsYouScopes {
   projectId?: string;
@@ -1387,6 +1464,7 @@ function narrowAttention(
       groups: clusters,
       distinct: clusters.length,
       reviewLater: clusters.filter((c) => c.reviewLater).length,
+      folds: clusterFoldCounts(clusters),
       scanTruncated: false,
     },
     notifications: scope.kindClusters
@@ -1406,7 +1484,8 @@ function narrowAttention(
         ? a.captures
         : { captures: [], truncated: false },
     // Access requests live in no space either: pod-level only, like captures.
-    // So do invites to other spaces (none the person is in yet).
+    // So do invites to other spaces (none the person is in yet), and the
+    // "Make them goals" card (the pod's one card, D-3).
     ...(scope.workspaceId === null && !scope.kindClusters
       ? {}
       : {
@@ -1414,6 +1493,7 @@ function narrowAttention(
           accessRequestsTruncated: false,
           spaceInvites: [],
           spaceInvitesTruncated: false,
+          convertibleGoals: { rows: [], truncated: false, newestAt: null },
         }),
   };
 }
@@ -1561,6 +1641,7 @@ export async function countNeedsYouByScope(
               limit: CLUSTER_PAGE_LIMIT,
               excludeDraftSessions: true,
               splitBySession: true,
+              classifyNeedsYou: true,
             }),
             sessionIds.length
               ? db
@@ -1828,8 +1909,9 @@ export const signalsRouter = router({
    *
    * The number ships WITH its parts: `decisions`, `notifications`, `blocked`,
    * `review`, `captures`, `requests` (pending issuers + app connection
-   * requests, pod admins at the floor only) and `invites` (the viewer's open
-   * invites to other spaces, at the floor only), with `needsYou` their sum. A
+   * requests, pod admins at the floor only), `invites` (the viewer's open
+   * invites to other spaces, at the floor only) and `convertible` (the ONE
+   * "Make them goals" card, at the floor only), with `needsYou` their sum. A
    * client reads the part it needs; it never derives one by
    * subtracting the others. `suggestions` and `drafts` (PROPOSED) ship in the
    * same result and are NOT parts: they are never added into `needsYou`.
@@ -1837,6 +1919,29 @@ export const signalsRouter = router({
   count: protectedProcedure
     .input(z.object(SignalScope).default({}))
     .query(({ ctx, input }) => countSignals(ctx, input)),
+
+  /**
+   * THE needs-you read for OUTSIDE readers (decision E, needs-truth §5): the
+   * rows CLASSIFIED by the rule and the folds COUNTED, from ONE attention read
+   * — so a reader outside the pod (the session map, a CLI, an agent) stops
+   * re-deriving "needs you" from 59 session reads. Hub `GET /needs-you` and
+   * MCP `synap_needs_you` are its doors.
+   *
+   * `count` is `signals.count` over the same read; `rows` are the needs-you
+   * list's rows split by fold (`needsYouFoldOf`, the shared shaping rule),
+   * each cut at `limit` in the ONE order. `truncated` says a fold or the
+   * count is a floor.
+   */
+  needsYou: protectedProcedure
+    .input(
+      z
+        .object({
+          ...SignalScope,
+          limit: z.number().int().min(1).max(200).default(100),
+        })
+        .default({ limit: 100 })
+    )
+    .query(({ ctx, input }) => readNeedsYouClassified(ctx, input)),
 
   /**
    * The STATUS BANNER only — what `list({lens: "page"})` returns as `status`

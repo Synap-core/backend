@@ -21,7 +21,12 @@ import { initTRPC } from "@trpc/server";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { isPublicTrpcRequest, trpcSessionGate } from "./trpc-session-gate.js";
+import {
+  PUBLIC_TRPC_NAMESPACES,
+  PUBLIC_TRPC_PROCEDURES,
+  isPublicTrpcRequest,
+  trpcSessionGate,
+} from "./trpc-session-gate.js";
 import { stripComments } from "../../../scripts/strip-comments.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -29,7 +34,22 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const t = initTRPC.create();
 let reachedPrivate = 0;
 const router = t.router({
-  health: t.router({ check: t.procedure.query(() => "ok") }),
+  health: t.router({
+    alive: t.procedure.query(() => "ok"),
+    ready: t.procedure.query(() => "ready"),
+    metrics: t.procedure.query(() => {
+      reachedPrivate++;
+      return "metrics";
+    }),
+    readyDetails: t.procedure.query(() => {
+      reachedPrivate++;
+      return "details";
+    }),
+    migrations: t.procedure.query(() => {
+      reachedPrivate++;
+      return "migrations";
+    }),
+  }),
   setup: t.router({ status: t.procedure.query(() => "setup") }),
   workspaces: t.router({
     previewInvite: t.procedure.query(() => "preview"),
@@ -89,7 +109,7 @@ describe("main /trpc session gate — batch paths", () => {
   it("…in either order, and behind setup.* / an invite procedure", async () => {
     const before = reachedPrivate;
     for (const url of [
-      "/trpc/n8nActions.createEntity,health.check?batch=1",
+      "/trpc/n8nActions.createEntity,health.alive?batch=1",
       "/trpc/setup.status,n8nActions.createEntity?batch=1",
       "/trpc/workspaces.previewInvite,n8nActions.createEntity?batch=1",
     ]) {
@@ -102,7 +122,7 @@ describe("main /trpc session gate — batch paths", () => {
     const before = reachedPrivate;
     const input = encodeURIComponent(JSON.stringify({ 0: {}, 1: {} }));
     const res = await makeApp().request(
-      `/trpc/health.check,workspaces.listWorkspaces?batch=1&input=${input}`,
+      `/trpc/health.alive,workspaces.listWorkspaces?batch=1&input=${input}`,
       { headers: BEARER }
     );
     expect(res.status).toBe(401);
@@ -110,7 +130,7 @@ describe("main /trpc session gate — batch paths", () => {
   });
 
   it("a public NAME as a substring of a private path does not open it", async () => {
-    expect(isPublicTrpcRequest("/trpc/xhealth.check")).toBe(false);
+    expect(isPublicTrpcRequest("/trpc/xhealth.alive")).toBe(false);
     expect(isPublicTrpcRequest("/trpc/n8nActions.createEntity/health.")).toBe(
       false
     );
@@ -120,7 +140,7 @@ describe("main /trpc session gate — batch paths", () => {
   it("an encoded comma never reaches the private procedure", async () => {
     const before = reachedPrivate;
     const res = await post(
-      "/trpc/health.check%2Cn8nActions.createEntity?batch=1"
+      "/trpc/health.alive%2Cn8nActions.createEntity?batch=1"
     );
     expect(res.status).not.toBe(200);
     expect(reachedPrivate).toBe(before);
@@ -128,15 +148,15 @@ describe("main /trpc session gate — batch paths", () => {
 });
 
 describe("main /trpc session gate — the public doors still work", () => {
-  it("plain /trpc/health.check works without a session", async () => {
-    const res = await makeApp().request("/trpc/health.check");
+  it("plain /trpc/health.alive works without a session", async () => {
+    const res = await makeApp().request("/trpc/health.alive");
     expect(res.status).toBe(200);
   });
 
   it("an all-public batch works without a session", async () => {
     const input = encodeURIComponent(JSON.stringify({ 0: {}, 1: {} }));
     const res = await makeApp().request(
-      `/trpc/health.check,setup.status?batch=1&input=${input}`
+      `/trpc/health.alive,setup.status?batch=1&input=${input}`
     );
     expect(res.status).toBe(200);
   });
@@ -151,6 +171,59 @@ describe("main /trpc session gate — the public doors still work", () => {
 
   it("CONTROL — a session-only procedure alone is 401 to a Bearer key", async () => {
     expect((await post("/trpc/n8nActions.createEntity")).status).toBe(401);
+  });
+});
+
+describe("main /trpc session gate — health is public only for its probes (audit F12)", () => {
+  it("health.metrics, health.readyDetails and health.migrations need a session", async () => {
+    const before = reachedPrivate;
+    for (const p of ["metrics", "readyDetails", "migrations"]) {
+      const res = await makeApp().request(`/trpc/health.${p}`, {
+        headers: BEARER,
+      });
+      expect(res.status, p).toBe(401);
+    }
+    expect(reachedPrivate).toBe(before);
+  });
+
+  it("…also behind a public probe in a batch", async () => {
+    const before = reachedPrivate;
+    const input = encodeURIComponent(JSON.stringify({ 0: {}, 1: {} }));
+    const res = await makeApp().request(
+      `/trpc/health.ready,health.metrics?batch=1&input=${input}`,
+      { headers: BEARER }
+    );
+    expect(res.status).toBe(401);
+    expect(reachedPrivate).toBe(before);
+  });
+
+  it("health.ready works without a session", async () => {
+    expect((await makeApp().request("/trpc/health.ready")).status).toBe(200);
+  });
+
+  it("the gate's public health names are exactly the router's publicProcedure ones", () => {
+    // Derived from the real router source, so a procedure made public there
+    // and not here (or the reverse) is caught.
+    const healthSrc = stripComments(
+      readFileSync(
+        path.join(HERE, "../../../packages/api/src/routers/health.ts"),
+        "utf8"
+      ),
+      "ts"
+    ) as string;
+    const declared = [...healthSrc.matchAll(/^\s{2}(\w+):\s*(\w+)\./gm)].map(
+      (m) => ({ name: m[1], builder: m[2] })
+    );
+    expect(declared.map((d) => d.name)).toContain("metrics");
+    const routerPublic = declared
+      .filter((d) => d.builder === "publicProcedure")
+      .map((d) => `health.${d.name}`)
+      .sort();
+    const gatePublic = [...PUBLIC_TRPC_PROCEDURES]
+      .filter((p) => p.startsWith("health."))
+      .sort();
+    expect(gatePublic).toEqual(routerPublic);
+    expect(PUBLIC_TRPC_NAMESPACES).not.toContain("health");
   });
 });
 

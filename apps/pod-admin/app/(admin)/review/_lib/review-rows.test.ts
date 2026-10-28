@@ -420,11 +420,32 @@ describe("reviewRows", () => {
     expect(caused!.who).toBe("From the run");
   });
 
-  it("a criterion slot is graded on the scorecard, so it opens where it lives", () => {
+  it("a criterion slot with no grade ask opens where it is graded", () => {
     const [row] = reviewRows([{ ...ask, slotKind: "criterion" }], new Map());
     expect(row!.detail).toEqual({
       kind: "open",
       door: { kind: "session", id: "s1" },
+    });
+  });
+
+  it("an escalated criterion (Pass / Fail) is graded right here, through the answer door", () => {
+    // The ask the pod files on an escalated criterion (`CRITERION_SLOT_ASK`).
+    const grade = {
+      mode: "choose" as const,
+      options: [
+        { label: "Pass", value: "pass" },
+        { label: "Fail", value: "fail" },
+      ],
+    };
+    const [row] = reviewRows(
+      [{ ...ask, slotKind: "criterion", ask: grade }],
+      new Map()
+    );
+    expect(row!.detail).toMatchObject({
+      kind: "ask",
+      sessionId: "s1",
+      label: "Pick the headline",
+      slot: { ask: grade },
     });
   });
 

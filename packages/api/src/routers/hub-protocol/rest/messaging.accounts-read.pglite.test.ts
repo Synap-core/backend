@@ -9,7 +9,8 @@
  *    The live account below carries an `accessToken`: a door that spread the
  *    live object instead of projecting it would return it;
  *  - the live status wins over the stored one, and a disconnected account is
- *    not listed;
+ *    not listed — nor a stored one the provider no longer has (a retired
+ *    Unipile v1 account), which must not hide the live account either;
  *  - a failed live read is an error (503), never the stored rows: those carry
  *    the LAST known status, so a dead read used to answer "connected";
  *  - a pod with no messaging service set up says so (409
@@ -62,6 +63,7 @@ import type { HubHono, HubVariables } from "./_shared.js";
 
 const ALICE = "alice-ar";
 const BOB = "bob-ar";
+const CAROL = "carol-ar";
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -70,8 +72,10 @@ function ddlFor(table: PgTable): string {
   const cols = cfg.columns.map((c) => {
     const t = c.getSQLType();
     const type = BASIC.test(t) ? t.replace(/\(.*\)/, "") : "text";
+    // The real ids default to gen_random_uuid() (messaging_accounts.id is
+    // text: `(gen_random_uuid())::text`); the auto-seed insert relies on it.
     const key = c.primary
-      ? ` primary key${type === "uuid" ? " default gen_random_uuid()" : ""}`
+      ? ` primary key${type === "uuid" ? " default gen_random_uuid()" : type === "text" ? " default gen_random_uuid()::text" : ""}`
       : "";
     return `"${c.name}" ${type}${key}`;
   });
@@ -181,6 +185,43 @@ describe("GET /messaging/accounts — what an app learns about connected account
     ).toEqual([
       ["gmail", "alice@x", "reconnection_required"],
       ["linkedin", "Alice Liddell", "connected"],
+    ]);
+  });
+
+  it("a stored account Unipile no longer lists (retired v1) is gone, and does not hide the live one; another person's live account is not claimed", async () => {
+    await q(
+      `insert into messaging_accounts (id, user_id, workspace_id, provider, external_id, display_name, status) values ($1, $2, $3, $4, $5, $6, $7)`,
+      [
+        "acc-carol-v1",
+        CAROL,
+        null,
+        "linkedin",
+        "v1-li",
+        "Carol (v1)",
+        "connected",
+      ]
+    );
+    h.live = [
+      {
+        id: "acc_carol",
+        externalId: "acc_carol",
+        provider: "linkedin",
+        displayName: "Carol",
+        status: "connected",
+      },
+      {
+        id: "ext-bob",
+        externalId: "ext-bob",
+        provider: "linkedin",
+        displayName: "Bob",
+        status: "connected",
+      },
+    ];
+    const res = await read(CAROL);
+    expect(res.status).toBe(200);
+    const rows = (await res.json()) as Array<Record<string, unknown>>;
+    expect(rows.map((r) => [r.externalId, r.displayName, r.status])).toEqual([
+      ["acc_carol", "Carol", "connected"],
     ]);
   });
 

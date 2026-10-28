@@ -34,12 +34,24 @@
 
 import { z } from "zod";
 import { resolveStageGate } from "@synap/playbooks";
+import { TRPCError } from "@trpc/server";
+import { db, eq, focusSessions, getRequestGrant } from "@synap/database";
 import { createEventBackedProposal } from "../../utils/event-backed-proposal.js";
+import { isFencedGrant } from "../../access/grant-door-fence.js";
+import { grantWriteDenial } from "../../utils/grant-write-check.js";
 
 /** Proposal type filed before the agent writes any code. */
 export const DEV_PLAN_APPROVAL_TYPE = "dev.plan_approval";
 /** Proposal type filed before the agent deploys a verified commit. */
 export const DEV_DEPLOY_APPROVAL_TYPE = "dev.deploy_approval";
+
+/**
+ * What a deploy approval lets ship: a push to a protected branch, a package
+ * publish, or a deploy. An approval covers its commit for its step only
+ * (founder, 2026-10-28): approving "push to main" does not approve a publish.
+ */
+export const DEV_DEPLOY_STEPS = ["push", "publish", "deploy"] as const;
+export type DevDeployStep = (typeof DEV_DEPLOY_STEPS)[number];
 
 /**
  * The LEGACY stage a session sits at once a gate clears — used only when the
@@ -171,6 +183,15 @@ export const DevDeployApprovalPayloadSchema = z.object({
       "The command the agent will run on approval. DISCLOSURE ONLY — the pod " +
         "never executes it."
     ),
+  step: z
+    .enum(DEV_DEPLOY_STEPS)
+    .optional()
+    .describe(
+      "What the approval lets ship: 'push' (to a protected branch), 'publish' " +
+        "(a package) or 'deploy'. It covers this step only. Optional so older " +
+        "callers keep filing; with none, a reader takes the step from " +
+        "`deployCommand`."
+    ),
 });
 export type DevDeployApprovalPayload = z.infer<
   typeof DevDeployApprovalPayloadSchema
@@ -233,14 +254,47 @@ export async function createDevApprovalProposal(
   const payload = schema.parse(input.payload) as
     DevPlanApprovalPayload | DevDeployApprovalPayload;
 
+  // Approval stamps the session and advances its stage, as the person. A key
+  // limited to spaces may file it only for a session its grant lets it update
+  // (`focus_session.update` where the session lives, as the answer doors
+  // check), and files it there (issue 314a6554 sibling). Other keys: unchanged.
+  let workspaceId = input.workspaceId ?? null;
+  let projectId = input.projectId ?? null;
+  if (isFencedGrant(getRequestGrant())) {
+    const [session] = await db
+      .select({
+        workspaceId: focusSessions.workspaceId,
+        projectId: focusSessions.projectId,
+      })
+      .from(focusSessions)
+      .where(eq(focusSessions.id, payload.sessionId))
+      .limit(1);
+    const denial = !session
+      ? "This key's grant does not reach that session."
+      : ((await grantWriteDenial({
+          subjectType: "focus_session",
+          action: "update",
+          workspaceId: session.workspaceId ?? null,
+          projectId: session.projectId ?? null,
+          data: { id: payload.sessionId },
+        })) ??
+        (input.workspaceId != null &&
+        input.workspaceId !== (session.workspaceId ?? null)
+          ? "workspaceId must be the session's own space."
+          : null));
+    if (denial) throw new TRPCError({ code: "FORBIDDEN", message: denial });
+    workspaceId = session!.workspaceId ?? null;
+    projectId = session!.projectId ?? null;
+  }
+
   const summary = summarize(input.type, payload);
   const action =
     input.type === DEV_PLAN_APPROVAL_TYPE ? "plan_approval" : "deploy_approval";
 
   const { proposal } = await createEventBackedProposal({
     userId: input.userId,
-    workspaceId: input.workspaceId ?? null,
-    projectId: input.projectId ?? null,
+    workspaceId,
+    projectId,
     targetType: DEV_APPROVAL_TARGET_TYPE,
     // The session IS the target — see DEV_APPROVAL_TARGET_TYPE.
     targetId: payload.sessionId,

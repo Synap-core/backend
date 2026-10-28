@@ -268,6 +268,26 @@ export interface ControlPlaneEntitlementSync {
   message: string | null;
 }
 
+/**
+ * The pod admin's switch for sharing onboarding milestones with the Control
+ * Plane (onboarding plan §5, founder OQ3: ON by default, disclosed). Absent =
+ * ON. Written only by a signed-in pod admin (`onboardingMilestones.set`); read
+ * by the `onboarding-milestones` job (`@synap/database`
+ * utils/onboarding-milestones.ts).
+ */
+export interface OnboardingMilestonesSetting {
+  enabled: boolean;
+  /** User id of the pod admin who last changed it. */
+  changedBy: string;
+  changedAt: string;
+}
+
+/** The last milestone payload the CP accepted (its digest), so an unchanged one is not re-sent. */
+export interface OnboardingMilestonesSync {
+  digest: string;
+  sentAt: string;
+}
+
 export interface PodSettingsBlob {
   machineDefaults?: PodMachineDefaults;
   podApps?: PodAppsPolicySetting;
@@ -283,6 +303,8 @@ export interface PodSettingsBlob {
   officialCatalogSignature?: OfficialCatalogSignature;
   controlPlaneEntitlement?: ControlPlaneEntitlement;
   controlPlaneEntitlementSync?: ControlPlaneEntitlementSync;
+  onboardingMilestones?: OnboardingMilestonesSetting;
+  onboardingMilestonesSync?: OnboardingMilestonesSync;
   [k: string]: unknown;
 }
 

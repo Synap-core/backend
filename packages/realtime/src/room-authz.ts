@@ -98,6 +98,20 @@ export type RealtimePrincipal =
   | { kind: "user"; userId: string }
   | ({ kind: "service" } & RealtimeKeyPrincipal);
 
+/**
+ * The same decision as `canPrincipalJoinRoom`, but a lookup that fails THROWS
+ * instead of reading as "denied" — for the periodic re-check of open sockets
+ * (presence-sweep.ts), where a database blip must not evict everyone.
+ */
+export function decidePrincipalJoinRoom(
+  roomId: string,
+  principal: RealtimePrincipal
+): Promise<boolean> {
+  return principal.kind === "service"
+    ? decideForKey(roomId, principal)
+    : decide(roomId, principal.userId);
+}
+
 /** THE room gate of `/presence`: handshake rooms and every `join-room`. */
 export function canPrincipalJoinRoom(
   roomId: string,

@@ -73,6 +73,8 @@ import {
   channels,
   channelMembers,
   relations,
+  messages,
+  events,
 } from "@synap/database";
 import { sessionNeedsYou, tallyNeedsYou } from "@synap-core/types/units";
 import { AccessContext } from "../../access/index.js";
@@ -140,7 +142,8 @@ const OWED_SLOT = [
     kind: "credential",
     label: "Stripe key",
     owner: "human",
-    owedSince: "2026-09-01T00:00:00.000Z",
+    // A live ask (under 7 days): the needs-you rule counts it in the headline.
+    owedSince: new Date(Date.now() - 3_600_000).toISOString(),
   },
 ];
 
@@ -223,6 +226,9 @@ beforeAll(async () => {
     channelMembers,
     // The listing rule the outputs scan composes reads filings (FB1020 B5).
     relations,
+    // The needs-you rule's agent-evidence clock (`unitFacts`) reads these.
+    messages,
+    events,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }

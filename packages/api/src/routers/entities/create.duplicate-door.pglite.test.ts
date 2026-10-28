@@ -17,7 +17,9 @@
  *    lands it — the reviewer owns the twin (B2b);
  *  - an agent cannot pass the reviewer's flag — rules out a renamed forceCreate;
  *  - the same agent's identical retry is the retry class, not floored: the
- *    retry dedup answers it with the first write before the gate.
+ *    retry dedup answers it with the first write before the gate;
+ *  - an event's identity is title + start: an approval replay of a same-title
+ *    event on another date lands, the same instant still refuses.
  */
 import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 import { randomUUID } from "node:crypto";
@@ -95,6 +97,7 @@ const SAM = randomUUID();
 const RHEA = randomUUID();
 const UMA = randomUUID();
 const DEMO_PROJECT = randomUUID();
+const STANDUP = randomUUID();
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -211,6 +214,16 @@ beforeAll(async () => {
             (gen_random_uuid(),$2,'email','rhea@real.test','seed'),
             (gen_random_uuid(),$3,'email','uma@real.test','seed')`,
     [DANA, RHEA, UMA]
+  );
+  // An event the person already has: a timed one, stored as UTC.
+  const events = await q(
+    `insert into profiles (id, slug, display_name, profile_kind, scope, entity_scope, workspace_id, is_active, ui_hints)
+     values (gen_random_uuid(),'event','Event','kind','system','pod',null,true,'{}'::jsonb) returning id`
+  );
+  await q(
+    `insert into entities (id, user_id, type, profile_id, title, properties, workspace_id, created_at)
+     values ($1,$2,'event',$3,'Daily standup','{"startDate":"2026-10-07T18:50:00.000Z"}'::jsonb,null, now() - interval '1 day')`,
+    [STANDUP, USER, (events.rows[0] as { id: string }).id]
   );
   // A create the agent filed earlier, still waiting for review.
   await q(
@@ -337,6 +350,29 @@ describe("entities.create: the one duplicate door", () => {
       },
     });
     expect(h.gate).not.toHaveBeenCalled();
+  });
+
+  it("an event's identity is title + start: another date lands, the same instant refuses", async () => {
+    const replay = (startDate: string) =>
+      create({
+        profileSlug: "event",
+        title: "Daily standup",
+        properties: { startDate },
+        source: "system",
+        approvalDuplicate: "ask_reviewer",
+      });
+    // The next day's standup is another event: no twin to ask about.
+    const nextDay = await replay("2026-10-08T20:50:00+02:00");
+    expect(nextDay.status).toBe("created");
+    expect(nextDay.id).not.toBe(STANDUP);
+    // The same instant (another offset) is the same event: the reviewer picks.
+    await expect(replay("2026-10-07T20:50:00+02:00")).rejects.toMatchObject({
+      code: "CONFLICT",
+      cause: {
+        code: "ENTITY_WEAK_DEDUP",
+        candidates: [expect.objectContaining({ id: STANDUP, type: "event" })],
+      },
+    });
   });
 
   it("the reviewer's keep both lands the twin", async () => {

@@ -66,6 +66,9 @@ export const CONSOLE_PAGES = {
   keys: { path: "/keys", audience: "admin", focus: true, verb: "see-all" },
   members: { path: "/members", audience: "admin", focus: true, verb: "manage" },
   sources: { path: "/sources", audience: "admin", focus: true, verb: "manage" },
+  // What is ON the pod: capabilities, their actions, skills (`?tab=` installed
+  // · actions · skills; `?focus=<capabilityId>` on installed and actions).
+  tools: { path: "/tools", audience: "admin", focus: true, verb: "manage" },
   marketplace: {
     path: "/marketplace",
     audience: "admin",

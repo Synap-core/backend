@@ -34,8 +34,11 @@ import {
 } from "./_shared.js";
 import type { MessagingAccount as DbMessagingAccount } from "@synap/database";
 
-import { getServiceSecret, upsertServiceSecret } from "@synap/database";
 import { getMessagingConnector } from "../../../connectors/index.js";
+import {
+  describeMessagingService,
+  UNIPILE_NOT_CONFIGURED_MESSAGE,
+} from "../../../connectors/unipile-connection.js";
 import { sendExternalMessage } from "../../../connectors/external-dispatch.js";
 import { pullToImport } from "../../../services/connector-import-bridge.js";
 import { landInboundMessage } from "../../../services/connectors/land-inbound-message.js";
@@ -52,12 +55,13 @@ import { channelVisibilityWhere } from "../../../utils/channel-visibility.js";
 import { jsonGoverned } from "../proposal-response.js";
 
 /**
- * The pod has no messaging service: no Unipile credential in the vault
- * (`messaging-connector`), the workspace settings or the env. That is a
- * configuration state, not an outage: a retry never changes it, so it is a 409
- * with a code, never a 503 (a 5xx body is redacted before egress, which left
- * apps unable to tell it from a failed live read and telling people to try
- * again). Set it up through POST /messaging/service-config.
+ * The pod has no messaging service: the "Unipile — Messaging & LinkedIn"
+ * capability (`unipile-linkedin`) is not installed, or holds no v2 API key
+ * (`connectors/unipile-connection.ts`). That is a configuration state, not an
+ * outage: a retry never changes it, so it is a 409 with a code, never a 503 (a
+ * 5xx body is redacted before egress, which left apps unable to tell it from a
+ * failed live read and telling people to try again). Set it up by installing
+ * the capability and connecting the key.
  */
 const MESSAGING_NOT_CONFIGURED_DESCRIPTION =
   "No messaging service is set up on this pod (code MESSAGING_NOT_CONFIGURED)";
@@ -70,7 +74,7 @@ const MessagingNotConfiguredSchema = z
 function messagingNotConfigured(c: Context) {
   return c.json(
     {
-      error: "No messaging service is set up on this pod.",
+      error: UNIPILE_NOT_CONFIGURED_MESSAGE,
       code: "MESSAGING_NOT_CONFIGURED" as const,
     },
     409
@@ -366,9 +370,26 @@ export function registerMessagingRoutes(app: HubHono): void {
           );
         }
 
-        // Auto-seed: claim all live accounts for this user if DB is empty.
-        if (dbAccounts.length === 0 && liveAccounts.length > 0) {
+        const liveByExternalId = new Map(
+          liveAccounts.map((a) => [a.externalId, a])
+        );
+        // Auto-seed: when none of this user's rows is a live account (none
+        // yet, or only rows of accounts the provider no longer has, e.g. a
+        // retired v1 Unipile account), claim the live accounts no one else
+        // holds.
+        if (
+          liveAccounts.length > 0 &&
+          !dbAccounts.some((row) => liveByExternalId.has(row.externalId))
+        ) {
+          const held = new Set(
+            (
+              await db.query.messagingAccounts.findMany({
+                columns: { externalId: true },
+              })
+            ).map((row) => row.externalId)
+          );
           for (const account of liveAccounts) {
+            if (held.has(account.externalId)) continue;
             await db
               .insert(messagingAccounts)
               .values({
@@ -385,12 +406,10 @@ export function registerMessagingRoutes(app: HubHono): void {
           });
         }
 
-        const liveByExternalId = new Map(
-          liveAccounts.map((a) => [a.externalId, a])
-        );
         // Unipile is the source of truth for live status.
         // Merge live status first, then filter — so a DB-"disconnected" row
-        // that Unipile still has running gets revived rather than hidden.
+        // that Unipile still has running gets revived rather than hidden, and
+        // a row Unipile no longer lists (the read succeeded) is gone.
         const result = dbAccounts
           .map((row: DbMessagingAccount) => {
             const live = liveByExternalId.get(row.externalId);
@@ -399,7 +418,7 @@ export function registerMessagingRoutes(app: HubHono): void {
               externalId: row.externalId,
               provider: row.provider,
               displayName: live?.displayName ?? row.displayName,
-              status: (live?.status ?? row.status) as
+              status: (live?.status ?? "disconnected") as
                 "connected" | "reconnection_required" | "disconnected",
             };
           })
@@ -560,32 +579,29 @@ export function registerMessagingRoutes(app: HubHono): void {
   );
 
   // ── GET /messaging/service-config ─────────────────────────────────────────
-  // Returns the resolved connector config with active source + migration info.
+  // Whether the pod has a messaging service, and through which connection. The
+  // ONE connection is the installed Unipile v2 capability: its key is set on
+  // the capability, never here (there is no write door).
   app.openapi(
     createRoute({
       method: "get",
       path: "/messaging/service-config",
       tags: ["Messaging"],
-      summary: "Get current messaging connector config state (masked)",
+      summary: "Get the messaging service's connection state (no secret)",
       responses: {
         200: {
-          description: "Config state",
+          description: "Connection state",
           content: {
             "application/json": {
               schema: z
                 .object({
                   configured: z.boolean(),
-                  source: z
-                    .enum(["vault", "workspace_settings", "env"])
+                  capabilityKey: z.string(),
+                  capabilityId: z.string().nullable(),
+                  problem: z
+                    .enum(["not-installed", "no-key", "unreadable"])
                     .nullable(),
-                  dsn: z.string().nullable(),
-                  hasApiKey: z.boolean(),
-                  hasWebhookSecret: z.boolean(),
-                  migration: z.object({
-                    available: z.boolean(),
-                    hasDsn: z.boolean(),
-                    hasApiKey: z.boolean(),
-                  }),
+                  message: z.string().nullable(),
                 })
                 .openapi("MessagingServiceConfig"),
             },
@@ -593,184 +609,7 @@ export function registerMessagingRoutes(app: HubHono): void {
         },
       },
     }),
-    async (c) => {
-      const userId = c.get("userId") as string;
-
-      const ws = await db.query.workspaces.findFirst({
-        columns: { settings: true },
-      });
-      const wsCfg = ((ws?.settings as Record<string, unknown>)?.messaging ??
-        {}) as Record<string, unknown>;
-      const wsDsn = wsCfg.unipileDsn as string | undefined;
-      const wsApiKey = wsCfg.unipileApiKey as string | undefined;
-      const wsWebhookSecret = wsCfg.unipileWebhookSecret as string | undefined;
-
-      const vaultCfg = await getServiceSecret("messaging-connector", userId);
-
-      const safeHostname = (raw: string | undefined) => {
-        if (!raw) return null;
-        try {
-          return new URL(raw).hostname;
-        } catch {
-          return null;
-        }
-      };
-
-      let source: "vault" | "workspace_settings" | "env" | null = null;
-      let dsn: string | null = null;
-      let hasApiKey = false;
-      let hasWebhookSecret = false;
-
-      if (vaultCfg?.dsn && vaultCfg?.apiKey) {
-        source = "vault";
-        dsn = safeHostname(vaultCfg.dsn);
-        hasApiKey = true;
-        hasWebhookSecret = !!vaultCfg.webhookSecret;
-      } else if (wsDsn && wsApiKey) {
-        source = "workspace_settings";
-        dsn = safeHostname(wsDsn);
-        hasApiKey = true;
-        hasWebhookSecret = !!wsWebhookSecret;
-      } else if (process.env.UNIPILE_DSN && process.env.UNIPILE_API_KEY) {
-        source = "env";
-        dsn = safeHostname(process.env.UNIPILE_DSN);
-        hasApiKey = true;
-        hasWebhookSecret = !!process.env.UNIPILE_WEBHOOK_SECRET;
-      }
-
-      return c.json(
-        {
-          configured: source !== null,
-          source,
-          dsn,
-          hasApiKey,
-          hasWebhookSecret,
-          migration: {
-            available: !!(wsDsn && wsApiKey) && source !== "vault",
-            hasDsn: !!wsDsn,
-            hasApiKey: !!wsApiKey,
-          },
-        },
-        200
-      );
-    }
-  );
-
-  // ── POST /messaging/service-config/migrate ────────────────────────────────
-  // Atomically copies workspace.settings.messaging credentials into vault.
-  // Must be declared BEFORE the generic POST /service-config (Hono static-first).
-  app.openapi(
-    createRoute({
-      method: "post",
-      path: "/messaging/service-config/migrate",
-      tags: ["Messaging"],
-      summary: "Migrate workspace settings messaging credentials to vault",
-      responses: {
-        200: {
-          description: "Migrated",
-          content: {
-            "application/json": {
-              schema: z
-                .object({ ok: z.boolean() })
-                .openapi("MessagingMigrateResult"),
-            },
-          },
-        },
-        400: {
-          description: "No credentials to migrate",
-          content: { "application/json": { schema: ErrorSchema } },
-        },
-      },
-    }),
-    async (c) => {
-      const denied = writeScopeDenied(c);
-      if (denied) return denied as never;
-      const userId = c.get("userId") as string;
-      const ws = await db.query.workspaces.findFirst({
-        columns: { settings: true },
-      });
-      const wsCfg = ((ws?.settings as Record<string, unknown>)?.messaging ??
-        {}) as Record<string, unknown>;
-      const dsn = wsCfg.unipileDsn as string | undefined;
-      const apiKey = wsCfg.unipileApiKey as string | undefined;
-      const webhookSecret = wsCfg.unipileWebhookSecret as string | undefined;
-      if (!dsn || !apiKey) {
-        return c.json(
-          { error: "No workspace settings credentials to migrate" },
-          400
-        );
-      }
-      await upsertServiceSecret(
-        "messaging-connector",
-        userId,
-        "Unipile Messaging Connector",
-        {
-          dsn,
-          apiKey,
-          ...(webhookSecret ? { webhookSecret } : {}),
-        }
-      );
-      return c.json({ ok: true }, 200);
-    }
-  );
-
-  // ── POST /messaging/service-config ────────────────────────────────────────
-  // Stores Unipile connector credentials in the vault (server-encrypted).
-  app.openapi(
-    createRoute({
-      method: "post",
-      path: "/messaging/service-config",
-      tags: ["Messaging"],
-      summary: "Store Unipile connector credentials in the vault",
-      request: {
-        body: {
-          content: {
-            "application/json": {
-              schema: z
-                .object({
-                  dsn: z.string(),
-                  apiKey: z.string(),
-                  webhookSecret: z.string().optional(),
-                })
-                .openapi("MessagingServiceConfigInput"),
-            },
-          },
-        },
-      },
-      responses: {
-        200: {
-          description: "Stored successfully",
-          content: {
-            "application/json": {
-              schema: z
-                .object({ ok: z.boolean() })
-                .openapi("MessagingServiceConfigResult"),
-            },
-          },
-        },
-        400: {
-          description: "Missing required fields",
-          content: { "application/json": { schema: ErrorSchema } },
-        },
-      },
-    }),
-    async (c) => {
-      const denied = writeScopeDenied(c);
-      if (denied) return denied as never;
-      const userId = c.get("userId") as string;
-      const { dsn, apiKey, webhookSecret } = c.req.valid("json");
-      await upsertServiceSecret(
-        "messaging-connector",
-        userId,
-        "Unipile Messaging Connector",
-        {
-          dsn,
-          apiKey,
-          ...(webhookSecret ? { webhookSecret } : {}),
-        }
-      );
-      return c.json({ ok: true }, 200);
-    }
+    async (c) => c.json(await describeMessagingService(), 200)
   );
 
   // ── DELETE /messaging/accounts/:accountId ─────────────────────────────────

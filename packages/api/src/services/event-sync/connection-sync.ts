@@ -95,7 +95,9 @@ import { findRejectedConnectionSyncImport } from "../../utils/pending-capture-de
 import { recordDomainMutation } from "../../utils/domain-mutation.js";
 import {
   emptySyncGraph,
+  foldEventTwins,
   mergeSyncGraph,
+  separateSyncCreates,
   type SyncGraph,
   type SyncGraphEntity,
 } from "./sync-graph.js";
@@ -453,19 +455,23 @@ function linkIdempotency(owner: string, source: string) {
 }
 
 /**
- * Graph → composite operations for ONE proposal. An entity already in the pod
- * (external link → kind dedup → strong identity signal) is pinned as
- * `existingEntityId`, so approval links rather than duplicates.
+ * Graph → composite operations for ONE proposal. Events that are the same event
+ * (title + start) are folded into one first (`foldEventTwins`). An entity
+ * already in the pod (external link → kind dedup → strong identity signal) is
+ * pinned as `existingEntityId`, so approval links rather than duplicates.
  */
 export async function buildSyncGraphOperations(
-  graph: SyncGraph,
+  input: SyncGraph,
   handlers: SyncKindHandler[],
   ctx: SyncKindContext
 ): Promise<{
   operations: CompositeProposalOperation[];
   /** ref → the entity it already matches in the pod. */
   existingIds: Map<string, string>;
+  /** The graph the operations were built from (twins folded). */
+  graph: SyncGraph;
 }> {
+  const graph = foldEventTwins(input);
   const operations: CompositeProposalOperation[] = [];
   const existingIds = new Map<string, string>();
   for (const e of graph.entities) {
@@ -485,14 +491,12 @@ export async function buildSyncGraphOperations(
       properties: e.properties,
       // Approval registers these through the link door, so the approved
       // import carries provider link + url + connection stamp immediately.
-      externalLinks: [
-        {
-          provider: e.identity.source,
-          externalId: e.identity.externalId,
-          url: e.identity.url,
-          connectionId: ctx.connectionId,
-        },
-      ],
+      externalLinks: [e.identity, ...(e.alsoIdentities ?? [])].map((id) => ({
+        provider: id.source,
+        externalId: id.externalId,
+        url: id.url,
+        connectionId: ctx.connectionId,
+      })),
       ...(existingId ? { existingEntityId: existingId } : {}),
     });
   }
@@ -504,7 +508,7 @@ export async function buildSyncGraphOperations(
       targetRef: r.targetRef,
     });
   }
-  return { operations, existingIds };
+  return { operations, existingIds, graph };
 }
 
 /**
@@ -533,10 +537,14 @@ async function fileSyncProposal(
     });
     if (rejected) return null;
   }
+  const proposedIdentityResolutionByRef = separateSyncCreates(operations);
   const { proposalId } = await submitSyncGraphToImport({
     userId: ctx.owner,
     workspaceId: ctx.workspaceId,
     operations,
+    ...(Object.keys(proposedIdentityResolutionByRef).length > 0
+      ? { proposedIdentityResolutionByRef }
+      : {}),
     summary,
     connectionSync: {
       connectionId: ctx.connectionId,
@@ -935,12 +943,9 @@ async function runGroupedProposal(
   const handlers = read.map((r) => r.handler);
 
   try {
-    const { operations, existingIds } = await buildSyncGraphOperations(
-      graph,
-      handlers,
-      ctx
-    );
-    for (const e of graph.entities) {
+    const built = await buildSyncGraphOperations(graph, handlers, ctx);
+    const { operations, existingIds } = built;
+    for (const e of built.graph.entities) {
       const owner = refKind.get(e.ref);
       if (!owner) continue;
       const outcome = existingIds.has(e.ref) ? "merged" : "created";
@@ -953,7 +958,7 @@ async function runGroupedProposal(
     // contact re-emits its `works_at`) is not new.
     const relationIdem = linkIdempotency(ctx.owner, ctx.provider);
     let newRelations = 0;
-    for (const r of graph.relations) {
+    for (const r of built.graph.relations) {
       const sourceId = existingIds.get(r.sourceRef);
       const targetId = existingIds.get(r.targetRef);
       const exists =
@@ -964,7 +969,8 @@ async function runGroupedProposal(
       if (!exists) newRelations += 1;
     }
     const nothingNew =
-      graph.entities.every((e) => existingIds.has(e.ref)) && newRelations === 0;
+      built.graph.entities.every((e) => existingIds.has(e.ref)) &&
+      newRelations === 0;
 
     const kinds = read.map((r) => r.ctx.kind);
     const proposalId = nothingNew

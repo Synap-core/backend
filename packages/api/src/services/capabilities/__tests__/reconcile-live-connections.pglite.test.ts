@@ -29,6 +29,8 @@ import { dirname, join } from "node:path";
 const holder = vi.hoisted(() => ({
   db: undefined as unknown,
   enqueued: [] as Array<Record<string, unknown>>,
+  // The broker the reconcile supersedes through; none configured by default.
+  broker: { ok: false, reason: "not-configured", error: "none" } as unknown,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -36,6 +38,8 @@ vi.mock("@synap/database", async (importOriginal) => {
   const mocked = {
     ...actual,
     encryptServerSide: () => ({ encryptedData: "", iv: "", authTag: "" }),
+    // Governance rules live in a table this test does not create.
+    retireConnectionRules: async () => ({ revokedRuleIds: [] }),
   };
   Object.defineProperty(mocked, "db", {
     get: () => holder.db,
@@ -43,6 +47,11 @@ vi.mock("@synap/database", async (importOriginal) => {
   });
   return mocked;
 });
+
+vi.mock("../../../connectors/index.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  resolveBroker: vi.fn(async () => holder.broker),
+}));
 
 vi.mock("../../event-sync/connection-sync.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
@@ -55,7 +64,12 @@ import { PGlite } from "@electric-sql/pglite";
 import { drizzle } from "drizzle-orm/pglite";
 import { SQL } from "drizzle-orm";
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
-import { secrets, tools, links } from "@synap/database/schema";
+import {
+  secrets,
+  tools,
+  links,
+  entityExternalLinks,
+} from "@synap/database/schema";
 import { reconcileLiveConnections } from "../capability-nango-sync.js";
 
 /** CREATE TABLE from the drizzle definition — columns, types and literal defaults. */
@@ -86,7 +100,7 @@ const USER = "user-1";
 
 async function freshDb() {
   const client = new PGlite();
-  for (const table of [secrets, tools, links]) {
+  for (const table of [secrets, tools, links, entityExternalLinks]) {
     await client.exec(ddlFor(table as unknown as PgTable));
   }
   holder.db = drizzle(client);
@@ -129,6 +143,7 @@ async function pointerRows(client: PGlite) {
 
 beforeEach(() => {
   holder.enqueued = [];
+  holder.broker = { ok: false, reason: "not-configured", error: "none" };
 });
 
 describe("reconcileLiveConnections — a client refetch mirrors a new connection", () => {
@@ -174,6 +189,71 @@ describe("reconcileLiveConnections — a client refetch mirrors a new connection
 
     expect(await pointerRows(client)).toHaveLength(0);
     expect(holder.enqueued).toHaveLength(0);
+  });
+});
+
+describe("reconcileLiveConnections — a reconnect leaves one connection", () => {
+  const dated = (
+    connectionId: string,
+    iso: string,
+    over: Record<string, unknown> = {}
+  ) => ({ ...live(connectionId), createdAt: new Date(iso), ...over });
+
+  function brokerRevoking(revoke: (id: string) => Promise<void>) {
+    const revokeConnection = vi.fn(async (id: string) => revoke(id));
+    holder.broker = { ok: true, broker: { revokeConnection }, source: "env" };
+    return revokeConnection;
+  }
+
+  it("revokes the dead connection a reconnect left behind and keeps the new one", async () => {
+    const client = await freshDb();
+    await seedGoogleCapability(client);
+    // Before the reconnect: the old connection is mirrored.
+    await reconcileLiveConnections(USER, [dated("conn-old", "2026-09-13")]);
+    const revokeConnection = brokerRevoking(async () => {});
+
+    const outcome = await reconcileLiveConnections(USER, [
+      dated("conn-new", "2026-10-28"),
+      dated("conn-old", "2026-09-13", { hasError: true }),
+    ]);
+
+    expect(revokeConnection).toHaveBeenCalledWith("conn-old", "google", USER);
+    expect(outcome).toMatchObject({ ok: true, superseded: ["conn-old"] });
+    expect((await pointerRows(client)).map((r) => r.account_hint)).toEqual([
+      "conn-new",
+    ]);
+  });
+
+  it("a revoke that fails keeps the connection for the next reconcile", async () => {
+    const client = await freshDb();
+    await seedGoogleCapability(client);
+    brokerRevoking(async () => {
+      throw new Error("CP unreachable");
+    });
+
+    const outcome = await reconcileLiveConnections(USER, [
+      dated("conn-new", "2026-10-28"),
+      dated("conn-old", "2026-09-13", { hasError: true }),
+    ]);
+
+    expect(outcome).toMatchObject({ ok: true, superseded: [] });
+    expect(
+      (await pointerRows(client)).map((r) => r.account_hint).sort()
+    ).toEqual(["conn-new", "conn-old"]);
+  });
+
+  it("revokes nothing when the broker gave no dates and nothing is dead", async () => {
+    const client = await freshDb();
+    await seedGoogleCapability(client);
+    const revokeConnection = brokerRevoking(async () => {});
+
+    await reconcileLiveConnections(USER, [
+      { ...live("conn-a"), createdAt: null },
+      { ...live("conn-b"), createdAt: null },
+    ]);
+
+    expect(revokeConnection).not.toHaveBeenCalled();
+    expect(await pointerRows(client)).toHaveLength(2);
   });
 });
 

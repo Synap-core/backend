@@ -94,6 +94,7 @@ import { workersRouter } from "./routers/workers.js";
 import { automationsRouter } from "./routers/automations.js";
 import { knowledgeRouter } from "./routers/knowledge.js";
 import { onboardingRouter } from "./routers/onboarding.js";
+import { onboardingMilestonesRouter } from "./routers/onboarding-milestones.js";
 // Previously mounted ONLY via the dynamic `registerRouter` registry (so they
 // were served but invisible to codegen). Folded into coreRouter so root.ts is
 // the SINGLE source of truth for the served + typed API surface.
@@ -215,6 +216,8 @@ export const coreRouter = router({
   lifecycle: lifecycleRouter,
   workers: workersRouter,
   onboarding: onboardingRouter,
+  // Settings › Privacy: share setup milestones with the CP (plan §5, OQ3).
+  onboardingMilestones: onboardingMilestonesRouter,
   diagnose: diagnoseRouter,
   signal: signalRouter,
   signals: signalsRouter,

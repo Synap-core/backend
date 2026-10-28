@@ -10,7 +10,9 @@
  * new read door is refused until someone verifies it and lists it here.
  *
  * Writes on Hub REST and MCP stay open: each one is meant to pass the gate,
- * whose rung 0 denies an out-of-grant write. On the Bearer tRPC door (S7,
+ * whose rung 0 denies an out-of-grant write. The free-form `POST /proposals`
+ * passes no gate, so it runs rung 0 itself on an allowlist
+ * (`fenced-proposal.ts`, 2026-10-28). On the Bearer tRPC door (S7,
  * 2026-10-20) a mutation passes only when `TRPC_KEY_MUTATION_DOORS` says the
  * gate really bounds it; every other one needs an unbounded `*` key.
  *
@@ -437,6 +439,7 @@ export const MCP_READ_TOOL_DOORS: Readonly<Record<string, FencedReadDoor>> = {
   synap_list_proposals: READS("proposal", "entity"),
   synap_get_proposal: READS("proposal", "entity"),
   synap_list_sessions: READS("session", "project"),
+  synap_needs_you: READS("session", "proposal", "channel", "entity"),
   // Same subjects as `GET /focus-sessions/graph` (GRANT_REST_GET_READS).
   synap_get_work_graph: READS(
     "session",
@@ -553,11 +556,9 @@ export const GRANT_OWNER_WIDE_REST_DOORS: readonly RegExp[] = [
  *    member.
  *  - `DELETE /messaging/accounts/:id` (disconnects the person's messaging
  *    account at the provider), `POST /messaging/accounts/sync` (rewrites the
- *    person's account mirror, registers provider webhooks), `POST
- *    /messaging/service-config[/migrate]` (replaces the pod's messaging
- *    connector credentials). The send through an account is NOT here: it
- *    checks `messaging.send` in the conversation's space
- *    (`sendExternalMessage`).
+ *    person's account mirror, registers provider webhooks). The send through
+ *    an account is NOT here: it checks `messaging.send` in the conversation's
+ *    space (`sendExternalMessage`).
  *  - `/memory` writes (`POST /memory`, `/memory/turns|sessions|writes`,
  *    `DELETE /memory/:id`; S5 2026-10-20): `knowledge_facts` about the
  *    person, recalled in EVERY workspace, written directly — no grant narrows
@@ -579,7 +580,6 @@ export const GRANT_OWNER_WIDE_REST_WRITES: readonly RegExp[] = [
   /^\/connectors\/disconnect\/?$/,
   /^\/connectors\/(?:connect|session)\/?$/,
   /^\/messaging\/accounts\/[^/]+\/?$/,
-  /^\/messaging\/service-config(?:\/migrate)?\/?$/,
   /^\/memory(?:\/(?!search\/?$)[^/]+)?\/?$/,
   /^\/knowledge\/(?!(?:search|ask|answer)\/?$)[^/]+\/?$/,
 ];
@@ -774,7 +774,8 @@ export const TRPC_KEY_MUTATION_DOORS: Readonly<Record<string, TrpcWriteDoor>> =
     "automations.updateAutomation": GATED,
     "automations.activateAutomation": GATED,
     "automations.triggerAutomation": GATED,
-    // D3: revising honours the key's space / project / object pins.
+    // D3: revising honours the key's space / project / object pins, and a
+    // fenced key never changes the payload or the space (issue 314a6554).
     "proposals.updateProposal": GATED,
     // D5: an observation is `event.create` where it lands; never widened.
     "observations.append": GATED,

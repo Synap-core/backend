@@ -74,6 +74,43 @@ if command -v node >/dev/null 2>&1; then
     && ok "reader parity: pod-agent's readPodAgentPolicy takes the file as written" || bad "reader parity: $got"
 fi
 
+# refuse / allow (audit 2026-10-28: an owner could refuse update or suspend only by
+# hand-editing the JSON). The list replaces the mode default, so the first edit
+# writes the default out.
+rm -f "$F"; pol refuse suspend; rc=$?
+[ "$rc" = 0 ] && [ "$(jq -c .refuse "$F")" = '["archive","restore-archive","configure","suspend"]' ] && [ "$(jq -r .mode "$F")" = self-hosted ] \
+  && ok "refuse: on the self-hosted default, adds to the default list" || { bad "refuse suspend rc=$rc: $(cat "$F" 2>/dev/null)"; cat "$TMP/out"; }
+pol refuse suspend; [ "$(jq -c .refuse "$F")" = '["archive","restore-archive","configure","suspend"]' ] && ok "refuse: idempotent" || bad "refuse duplicated: $(jq -c .refuse "$F")"
+pol allow configure; rc=$?
+[ "$rc" = 0 ] && [ "$(jq -c .refuse "$F")" = '["archive","restore-archive","suspend"]' ] && ok "allow: removes one command" || { bad "allow configure rc=$rc: $(jq -c .refuse "$F")"; cat "$TMP/out"; }
+rm -f "$F"; pol set-mode managed; pol refuse update
+[ "$(jq -c .refuse "$F")" = '["update"]' ] && ok "refuse: on managed, starts from nothing" || bad "managed refuse: $(jq -c .refuse "$F")"
+pol allow update; pol show
+[ "$(jq -c .refuse "$F")" = '[]' ] && grep -q '^refuse: (nothing)$' "$TMP/out" && ok "allow: the last refusal removed reads as (nothing)" || { bad "allow last: $(jq -c .refuse "$F")"; cat "$TMP/out"; }
+for badc in "" "rm -rf" "UPDATE" "nope" "update;x"; do
+  before="$(cat "$F")"; pol refuse "$badc"; rc=$?
+  [ "$rc" != 0 ] && [ "$(cat "$F")" = "$before" ] || bad "refuse accepted '$badc'"
+done
+ok "refuse: an unknown command is refused, file unchanged"
+# The CLI's command list is the pod-agent's: COMMANDS in server.js (derived) +
+# the pulled update + every pushed read's name check (derived).
+srv="$HERE/deploy/pod-agent/server.js"
+derived="$( { awk '/^const COMMANDS = \{/{p=1;next} p&&/^\};/{exit} p' "$srv" | sed -nE 's/^  "?([a-z][a-z0-9-]*)"?: \{.*/\1/p'
+              grep -oE 'resolveCommandName\(payload\) !== "[a-z-]+"' "$srv" | sed -E 's/.*"([a-z-]+)"/\1/'
+              echo update; } | sort -u | tr '\n' ' ')"
+listed="$(sed -n 's/^SYNAP_POLICY_COMMANDS="\(.*\)"$/\1/p' "$HERE/synap" | tr ' ' '\n' | sort -u | tr '\n' ' ')"
+[ -n "$listed" ] && [ "$listed" = "$derived" ] && [ "$(echo "$derived" | wc -w)" -ge 8 ] \
+  && ok "SYNAP_POLICY_COMMANDS = the pod-agent's commands ($listed)" || bad "SYNAP_POLICY_COMMANDS '$listed' != server.js '$derived'"
+# The default the CLI writes out is policy.js's.
+if command -v node >/dev/null 2>&1; then
+  got="$(node -e 'process.stdout.write(JSON.stringify(require(process.argv[1]).SELF_HOSTED_REFUSALS))' "$HERE/deploy/pod-agent/policy.js")"
+  [ "$got" = "$(sed -n "s/^SYNAP_POLICY_SELF_HOSTED_DEFAULT='\(.*\)'$/\1/p" "$HERE/synap")" ] \
+    && ok "the self-hosted default is policy.js's SELF_HOSTED_REFUSALS" || bad "self-hosted default differs from policy.js: $got"
+  rm -f "$F"; pol refuse suspend
+  got="$(node -e 'const m=require(process.argv[1]);const p=m.readPodAgentPolicy(process.argv[2]);try{m.assertCommandAllowed(p,"suspend");process.stdout.write("allowed")}catch(e){process.stdout.write(e.code)}' "$HERE/deploy/pod-agent/policy.js" "$F")"
+  [ "$got" = POD_POLICY_REFUSED ] && ok "reader parity: the pod-agent refuses what \`synap policy refuse\` wrote" || bad "reader parity (refuse): $got"
+fi
+
 pol bogus; [ $? != 0 ] && grep -q '^Usage: synap policy' "$TMP/out" && ok "unknown action prints the usage" || bad "unknown action"
 ( cd "$ROOT" && bash "$ROOT/synap" help ) 2>&1 | grep -q 'synap policy <action>' && ok "help documents synap policy" || bad "help lacks synap policy"
 

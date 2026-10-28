@@ -51,6 +51,8 @@ import {
   normalizeCommandNodeData,
   liveRunStatusWhere,
   isLiveRunStatus,
+  automationOwnerHasSpaceAccess,
+  AUTOMATION_OWNER_LEFT_SPACE,
 } from "@synap/database";
 import type {
   AutomationTriggerConfig,
@@ -2318,6 +2320,42 @@ export async function handleAutomationExecute(job: {
       { runId, status: run.status },
       "Skipping automation execution: run already finalized"
     );
+    return;
+  }
+
+  // OFFBOARDING (audit F9): a space automation runs for a person who must
+  // still be a member of that space. Its writes re-check RBAC, but its reads
+  // and outbound steps do not, so the run itself is refused here (every
+  // trigger kind, every queued run) and the automation is paused with the
+  // reason the person sees.
+  if (
+    !(await automationOwnerHasSpaceAccess(db, {
+      ownerId: automation.createdBy,
+      workspaceId: automation.workspaceId,
+    }))
+  ) {
+    logger.warn(
+      { runId, automationId, workspaceId: automation.workspaceId },
+      "Automation run refused: its owner is no longer a member of the space"
+    );
+    await db
+      .update(automationRuns)
+      .set({
+        status: "blocked_by_policy",
+        errorMessage: AUTOMATION_OWNER_LEFT_SPACE,
+        completedAt: new Date(),
+      })
+      .where(eq(automationRuns.id, runId));
+    await db
+      .update(automations)
+      .set({
+        status: "paused",
+        errorMessage: AUTOMATION_OWNER_LEFT_SPACE,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(eq(automations.id, automationId), eq(automations.status, "active"))
+      );
     return;
   }
 

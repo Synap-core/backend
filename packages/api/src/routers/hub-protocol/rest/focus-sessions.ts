@@ -61,7 +61,11 @@ import {
   SESSION_TITLE_MAX,
   titleSourcePatch,
 } from "@synap-core/types/focus-sessions";
-import { AskAnswerValueSchema, AskSchema } from "@synap-core/types/ask";
+import {
+  ASK_LIMITS,
+  AskAnswerValueSchema,
+  AskSchema,
+} from "@synap-core/types/ask";
 import {
   completeFocusSession,
   isOpenQuestionsAtCloseError,
@@ -517,6 +521,18 @@ const BlockOutputBodySchema = z.object({
   expectedLabel: z.string().min(1).max(500),
   blockedReason: z.enum(BLOCKED_REASONS),
   why: z.string().max(500).optional(),
+  /**
+   * WHAT MOVES when the person answers — one line (decision E). Expected from
+   * an agent key unless the slot already declares it: ADVISED, never refused
+   * (the slot lands with `ASK_UNBLOCKS_DEFAULT` and the reply's `warnings`
+   * says so). Twin of the tRPC `blockOutput.unblocks`.
+   */
+  unblocks: z
+    .string()
+    .trim()
+    .min(1)
+    .max(ASK_LIMITS.unblocksMaxChars)
+    .optional(),
   /**
    * WHERE the person must go. `null` clears a stored pointer; omitted leaves it.
    * Twin of the tRPC `blockOutput.ref` — same union, same one visibility floor.
@@ -3537,6 +3553,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
                 ? { blockGuidelines: result.blockGuidelines }
                 : {}),
               ...("hint" in result && result.hint ? { hint: result.hint } : {}),
+              ...("warnings" in result && result.warnings?.length
+                ? { warnings: result.warnings }
+                : {}),
             });
         }
       } catch (err) {

@@ -129,11 +129,12 @@ export function TopNav({
           aria-hidden
           className="
             glass-icon
-            flex h-6 w-6 items-center justify-center
+            flex h-6 w-6 items-center justify-center bg-primary
           "
-          style={{ background: "linear-gradient(135deg, #10B981, #34D399)" }}
         >
-          <span className="text-[10px] font-semibold text-white/95">S</span>
+          <span className="text-[10px] font-semibold text-primary-foreground">
+            S
+          </span>
         </span>
         <span className="text-[13px] font-medium tracking-tight text-foreground">
           Pod Console

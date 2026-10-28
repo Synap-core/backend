@@ -86,3 +86,62 @@ describe("buildProposalChanges — playbook structure", () => {
     ).toEqual(["title", "properties.stage"]);
   });
 });
+
+/**
+ * A pending playbook UPDATE carries its text as it reads now (`targetBefore`,
+ * read by `display.ts`), so every rewritten text is before → after and the
+ * review can draw it as one diff. Live (proposal 5b766295, 28 Oct): an update
+ * of "Follow up on leads in outreach" listed only the new goal and stages.
+ */
+describe("buildProposalChanges — a playbook update reads before → after", () => {
+  const now = {
+    description: "Draft follow-ups.",
+    goalTemplate: "Follow up on the leads whose date is today.",
+    stages: [
+      { key: "draft", name: "Draft", goal: "Draft one follow-up each." },
+      { key: "send", name: "Send", goal: "The person sends." },
+    ],
+  };
+  const update = {
+    description: "Draft follow-ups, never send.",
+    goalTemplate: "Follow up on the leads whose date is today or past.",
+    stages: [
+      {
+        key: "draft",
+        name: "Draft",
+        goal: "Draft one follow-up each, in the campaign's angle.",
+      },
+      { key: "send", name: "Send", goal: "The person sends." },
+      { key: "nurture", name: "Nurture", goal: "Propose nurturing." },
+    ],
+  };
+  const changes = buildProposalChanges(update, "update", undefined, undefined, {
+    targetBefore: now,
+  });
+  const byPath = new Map(changes.map((c) => [c.path, c]));
+
+  it("the description and the goal carry what they read now", () => {
+    expect(byPath.get("description")).toMatchObject({
+      before: "Draft follow-ups.",
+      after: "Draft follow-ups, never send.",
+    });
+    expect(byPath.get("goalTemplate")).toMatchObject({
+      before: "Follow up on the leads whose date is today.",
+      after: "Follow up on the leads whose date is today or past.",
+    });
+  });
+
+  it("each stage carries its own goal now, matched by key; a new stage has none", () => {
+    expect(byPath.get("stages.draft")).toMatchObject({
+      before: "Draft one follow-up each.",
+      after: "Draft one follow-up each, in the campaign's angle.",
+    });
+    expect(byPath.get("stages.send")?.before).toBe("The person sends.");
+    expect(byPath.get("stages.nurture")?.before).toBeUndefined();
+  });
+
+  it("without the target read, nothing is invented", () => {
+    const bare = buildProposalChanges(update, "update");
+    expect(bare.every((c) => c.before === undefined)).toBe(true);
+  });
+});

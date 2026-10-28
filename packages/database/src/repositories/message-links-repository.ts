@@ -6,12 +6,24 @@
  */
 
 import {
+  channels,
   messageLinks,
   messages,
   type MessageLink,
   type NewMessageLink,
 } from "../schema/index.js";
-import { eq, and, inArray, desc, lt, or, isNull } from "drizzle-orm";
+import {
+  eq,
+  and,
+  inArray,
+  desc,
+  lt,
+  or,
+  isNull,
+  exists,
+  sql,
+  type SQL,
+} from "drizzle-orm";
 
 export interface CreateMessageLinkInput {
   messageId: string;
@@ -36,6 +48,14 @@ export interface QueryMessageLinksInput {
 export interface GetByTargetWithMessagesOptions {
   limit?: number;
   cursor?: string; // opaque: "createdAt:linkId" for next page
+  /**
+   * The caller's READ floor on the joined message's CHANNEL (a predicate over
+   * `channels`, e.g. the access layer's registered channel visibility). A link
+   * row is only as readable as its workspace; the message content it joins in
+   * must also pass its channel's floor. Applied in SQL (an `exists` on the
+   * message's channel), so a page is never short and the cursor stays exact.
+   */
+  channelVisibleWhere?: SQL;
 }
 
 /** Minimal message fields for list/preview */
@@ -137,7 +157,7 @@ export class MessageLinksRepository {
     nextCursor: string | undefined;
     hasMore: boolean;
   }> {
-    const { limit = 50, cursor } = options;
+    const { limit = 50, cursor, channelVisibleWhere } = options;
     const limitFetch = limit + 1;
 
     type Row = {
@@ -157,6 +177,18 @@ export class MessageLinksRepository {
     ];
     if (workspaceId) {
       conditions.push(eq(messageLinks.workspaceId, workspaceId));
+    }
+    if (channelVisibleWhere) {
+      conditions.push(
+        exists(
+          this.db
+            .select({ one: sql`1` })
+            .from(channels)
+            .where(
+              and(eq(channels.id, messages.channelId), channelVisibleWhere)
+            )
+        )
+      );
     }
 
     if (cursor) {

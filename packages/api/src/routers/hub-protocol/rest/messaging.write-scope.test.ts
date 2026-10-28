@@ -71,13 +71,6 @@ const FIXTURES: Record<string, { url: string; body?: unknown }> = {
     body: { provider: "email", messageId: "m1", externalId: "x1", text: "hi" },
   },
   "POST /messaging/accounts/sync": { url: "/messaging/accounts/sync" },
-  "POST /messaging/service-config/migrate": {
-    url: "/messaging/service-config/migrate",
-  },
-  "POST /messaging/service-config": {
-    url: "/messaging/service-config",
-    body: { dsn: "https://attacker.example", apiKey: "k" },
-  },
   "DELETE /messaging/accounts/:accountId": { url: "/messaging/accounts/a1" },
   "POST /messaging/channels/connect": {
     url: "/messaging/channels/connect",
@@ -136,7 +129,7 @@ describe("messaging writes — hub-protocol.write", () => {
   const routes = writeRoutes();
 
   it("scans the registered write routes (non-vacuity), each with a fixture", () => {
-    expect(routes.length).toBeGreaterThanOrEqual(10);
+    expect(routes.length).toBeGreaterThanOrEqual(8);
     expect(routes).toContain("POST /messaging/conversations/:threadId/send");
     expect(routes.filter((r) => !FIXTURES[r])).toEqual([]);
   });

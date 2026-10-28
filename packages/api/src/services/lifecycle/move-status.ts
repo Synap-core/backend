@@ -277,6 +277,10 @@ export async function moveStatus(
       agentUserId: input.actor.agentUserId ?? undefined,
       workspaceId: governanceWorkspaceId,
       grantWorkspaceId,
+      // A shared role's row names no space: its proposal is filed in the space
+      // the grant was checked in. Record only: the decision is unchanged.
+      proposalWorkspaceId:
+        target.workspaceId ?? grantWorkspaceId ?? input.workspaceId ?? null,
       subjectType: "entity",
       action: "transition",
       // An unattributed agent reaches the anonymous AI ladder; never "user".

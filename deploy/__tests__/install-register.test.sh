@@ -171,11 +171,13 @@ setup() {
   echo "$DEPLOY/state/registration-nonce/nonce.json" > "$TMP/nonce-path"
   export FAKE
 }
+# Signatures are release-signature.test.sh's question: an UNSET mode runs as warn
+# here (no bundle is published), a caller's explicit mode (even empty) wins.
 run_install() { # <args...>
   ( cd "$ROOT" || exit; PATH="$TMP/bin:$PATH" SYNAP_DEPLOY_DIR="$DEPLOY" SYNAP_RELEASE_BASE_URL="$BASE/rel" \
     SYNAP_LOCAL_POD_URL="$BASE" SYNAP_METADATA_IP_URL="$BASE/meta/ip" \
     SYNAP_HEALTH_INTERVAL=0 SYNAP_REGISTER_RETRY_SECONDS=0 SYNAP_REGISTER_HEALTH_TRIES=2 \
-    bash "$ROOT/synap" install "$@" ) >"$S/out" 2>&1 </dev/null
+    SYNAP_RELEASE_VERIFY="${SYNAP_RELEASE_VERIFY-warn}" bash "$ROOT/synap" install "$@" ) >"$S/out" 2>&1 </dev/null
 }
 env_of() { grep "^$1=" "$DEPLOY/.env" | tail -1 | cut -d= -f2-; }
 req()    { jq -r "$2" "$TMP/req-$1.json" 2>/dev/null; }
@@ -234,6 +236,8 @@ run_install "${REG[@]}"; rc=$?
 [ "$(env_of ADMIN_BOOTSTRAP_MODE)" = token ] && ok "happy: admin bootstrap = token (never open /registration)" || bad "happy: ADMIN_BOOTSTRAP_MODE=$(env_of ADMIN_BOOTSTRAP_MODE)"
 [ "$(env_of LETSENCRYPT_EMAIL)" = "ops@synap.live" ] && ok "happy: ACME contact defaults for a registered pod" || bad "happy: LETSENCRYPT_EMAIL=$(env_of LETSENCRYPT_EMAIL)"
 [ -n "$(env_of VAULT_SERVER_KEY)" ] && [ -n "$(env_of HUB_JWT_SECRET)" ] && ok "happy: VAULT_SERVER_KEY (compose-required) + hub secrets generated" || bad "happy: VAULT_SERVER_KEY/HUB_JWT_SECRET missing"
+[[ "$(env_of BRIDGE_SECRET)" =~ ^[0-9a-f]{64}$ ]] && [[ "$(env_of GRAFANA_PASSWORD)" =~ ^[0-9a-f]{64}$ ]] \
+  && ok "happy: BRIDGE_SECRET and GRAFANA_PASSWORD generated" || bad "happy: BRIDGE_SECRET/GRAFANA_PASSWORD missing or malformed"
 [ "$(env_of SYNAP_RELEASE_ID)" = "$REL" ] && ok "happy: release block pinned to $REL" || bad "happy: SYNAP_RELEASE_ID=$(env_of SYNAP_RELEASE_ID)"
 # the register request
 [ "$(req pods_register '.body|fromjson|.token')" = "$TOKEN" ] && [ "$(req pods_register '.body|fromjson|.name')" = lab1 ] \
@@ -413,7 +417,7 @@ cp "$TMP/srv/rel/channel-stable/release.json" "$TMP/srv/rel/$BREL/release.json"
 boot() { # <dir> <args...>
   local d="$1"; shift
   PATH="$TMP/bin:$PATH" SYNAP_RELEASE_BASE_URL="$BASE/rel" SYNAP_DIR="$d" SYNAP_BIN_DIR="$B/bin" \
-    bash "$HERE/install.sh" "$@" >"$B/out" 2>&1 </dev/null
+    SYNAP_RELEASE_VERIFY=warn bash "$HERE/install.sh" "$@" >"$B/out" 2>&1 </dev/null   # signatures: install-manifest-signature.test.sh
 }
 for retired in "--provisioning-token x" "--control-plane-url https://cp" "--backend-version v1" "--token x"; do
   # shellcheck disable=SC2086

@@ -121,14 +121,16 @@ export function rulePill(
   );
 }
 
-export type RuleRowAction = "pause" | "run" | null;
+export type RuleRowAction = "pause" | "run" | "turn_on" | null;
 
 /**
  * The ONE act a row offers. A failing rule offers "Run now" — the question in
  * front of the owner is "does it work again?" — but only when the pod would
  * accept the run (`automations.trigger` refuses paused/error rules unless the
  * rule is manual). Any other live rule offers Pause, the de-escalation that
- * never waits for review. Nothing else is decided from a list.
+ * never waits for review. A draft or a paused rule offers Turn on
+ * (`automations.activate`): an agent's rule is born a draft, and only a person
+ * switches it on. Nothing else is decided from a list.
  */
 export function ruleRowAction(
   rule: RuleFacts,
@@ -140,6 +142,7 @@ export function ruleRowAction(
     (rule.triggerType === "manual" && rule.status !== "archived");
   if (ruleIsFailing(rule, health) && runnable) return "run";
   if (rule.status === "active") return "pause";
+  if (rule.status === "draft" || rule.status === "paused") return "turn_on";
   return null;
 }
 

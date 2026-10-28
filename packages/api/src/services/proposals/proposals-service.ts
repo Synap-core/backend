@@ -21,8 +21,11 @@ import {
   or,
   desc,
   drizzleSql,
+  getActingAgentUserId,
 } from "@synap/database";
 import type { ProposalRevision } from "@synap/database";
+import { getRequestGrant } from "@synap/database";
+import { isFencedGrant } from "../../access/grant-door-fence.js";
 import { isDeepStrictEqual } from "node:util";
 import { TRPCError } from "@trpc/server";
 import { assertReviewedRevision } from "../../utils/reviewed-revision.js";
@@ -757,9 +760,26 @@ export async function mergeProposalRevision(
     // ⛔ The agent id is NOT forwarded into `computeCanReviewApproval` below.
     // Author authority lets an agent change WHAT IT IS ASKING FOR; it never
     // lets the agent decide the request. A human still approves.
+    //
+    // The acting agent is the AMBIENT one first (`runWithActingAgent`, entered
+    // server-side at every key-auth door), then the door's own value: a door
+    // that forgets to forward it cannot turn an agent into its human.
+    const actingAgentUserId =
+      getActingAgentUserId() ?? params.actingAgentUserId ?? null;
     const isAuthor =
-      !!params.actingAgentUserId &&
-      existing.agentUserId === params.actingAgentUserId;
+      !!actingAgentUserId && existing.agentUserId === actingAgentUserId;
+
+    // AN AGENT REVISES ONLY ITS OWN REQUEST (audit F1, 2026-10-28). Revising
+    // someone else's pending proposal (another agent's, the IS's, a person's)
+    // rewrites what a person is about to approve: that is a review act, and an
+    // agent never reviews. The reviewer ladder below cannot judge it, because
+    // an agent key is remapped to its HUMAN owner (`actorId`), who may always
+    // review; and the key half (`assertMayReviseProposal`) passes for a
+    // default agent grant (`*`). So an acting agent that is not the author is
+    // refused here, before either. NOT_FOUND, like the ladder: no oracle.
+    if (actingAgentUserId && !isAuthor) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "Proposal not found" });
+    }
 
     const { computeCanReviewApproval, assertMayReviseProposal } =
       await import("../../routers/proposals/review-authority.js");
@@ -791,6 +811,22 @@ export async function mergeProposalRevision(
     // The KEY half: a key revising a proposal its agent did not author needs
     // the approve right. After the ladder, so a refusal is no existence oracle.
     assertMayReviseProposal(existing);
+    // A key limited to spaces may reword a proposal, never change what its
+    // approval runs: a payload patch or a re-target passes no gate, so its
+    // own proposal (filed in-grant) could be pointed outside the grant before
+    // the person approves it (issue 314a6554). Every other key: unchanged.
+    if (
+      isFencedGrant(getRequestGrant()) &&
+      ((patch && Object.keys(patch.fields).length > 0) ||
+        params.workspaceId !== undefined ||
+        params.projectId !== undefined)
+    ) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message:
+          "A key limited to spaces can change a proposal's summary or reasoning, not what it does or where. Withdraw it and file the change again.",
+      });
+    }
 
     if (existing.status !== ProposalStatus.PENDING) {
       throw new TRPCError({
@@ -821,7 +857,7 @@ export async function mergeProposalRevision(
       reasoning: params.reasoning,
       actorId: params.actorId,
       actingAgentUserId:
-        params.attributionAgentUserId ?? params.actingAgentUserId ?? null,
+        params.attributionAgentUserId ?? actingAgentUserId ?? null,
     });
 
     // A revision that changes the PAYLOAD was checked before the lock by
@@ -893,6 +929,13 @@ const REVISED_PAYLOAD_VALIDATORS: Record<
       "update",
       payload
     ),
+  // A revised shell command is judged by the same policy the Hub door files
+  // it under (audit F1): otherwise a revise is a way around the denylist.
+  "command/execute": async (payload) => {
+    const { commandPolicyRefusal } = await import("@synap/governance-policy");
+    const refusal = commandPolicyRefusal(payload.command);
+    if (refusal) throw new Error(refusal);
+  },
 };
 
 async function checkRevisedPayload(

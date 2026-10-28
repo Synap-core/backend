@@ -26,6 +26,7 @@ import type { Socket } from "socket.io";
 import { verifyHandshakeUser } from "./session-auth.js";
 import { trackDeviceSocket } from "./device-sockets.js";
 import { storage } from "@synap/storage";
+import { getViewCategory } from "@synap-core/types/views";
 import { recordYjsPersist, recordYjsPersistFailure } from "./bridge.js";
 import {
   applyDocumentRoomPlan,
@@ -68,6 +69,24 @@ const UUID_RE =
 export type RoomAccess = "edit" | "read" | "none";
 
 /**
+ * A room's kind must be its document's kind. A `whiteboard-` room persists a
+ * Tldraw store over the document's body (`writeState`), and a bare document
+ * room seeds and writes back markdown; either one opened on the other kind of
+ * document overwrites its body with no version. Canvas documents are typed by
+ * their canvas view type (`views.create`: whiteboard, mindmap), so the one
+ * view-category table decides.
+ *
+ * Exported for `__tests__/yjs-room-auth.test.ts`.
+ */
+export function roomFitsDocumentType(
+  roomName: string,
+  documentType: string
+): boolean {
+  const isCanvas = getViewCategory(documentType) === "canvas";
+  return roomName.startsWith("whiteboard-") ? isCanvas : !isCanvas;
+}
+
+/**
  * Authorize a (server-proven) user against the ROOM they are joining.
  *
  * The room name carries the documentId; the answer is the DOCUMENT'S OWN
@@ -94,7 +113,19 @@ export async function authorizeRoomAccess(
 ): Promise<RoomAccess> {
   const documentId = parseRoomName(roomName);
   if (!documentId || !UUID_RE.test(documentId)) return "none";
-  return resolveDocumentRoomAccess(userId, documentId);
+  const access = await resolveDocumentRoomAccess(userId, documentId);
+  if (access === "none") return "none";
+  const doc = await db.query.documents.findFirst({
+    where: eq(documents.id, documentId),
+    columns: { type: true },
+  });
+  if (!doc || !roomFitsDocumentType(roomName, doc.type)) {
+    console.warn(
+      `[Yjs] Room ${roomName} does not fit document type ${doc?.type ?? "(missing)"} — refused`
+    );
+    return "none";
+  }
+  return access;
 }
 
 /**
@@ -305,6 +336,12 @@ class DatabasePersistence {
       });
 
       if (!doc) return;
+      if (!roomFitsDocumentType(roomName, doc.type)) {
+        console.error(
+          `[Yjs] Refusing to persist room ${roomName} over a ${doc.type} document`
+        );
+        return;
+      }
 
       const isWhiteboard = roomName.startsWith("whiteboard-");
 
@@ -493,6 +530,8 @@ class DatabasePersistence {
       });
 
       if (!doc) return;
+      // writeState refuses the same mismatch; never checkpoint it either.
+      if (!roomFitsDocumentType(roomName, doc.type)) return;
 
       const isWhiteboard = roomName.startsWith("whiteboard-");
 

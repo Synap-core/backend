@@ -1259,6 +1259,7 @@ export async function enrichProposalsForDisplay(
     documentRows.map((row) => [row.id, row.title])
   );
   const skillTargetById = await readSkillUpdateTargets(rows, userId);
+  const playbookTargetById = await readPlaybookUpdateTargets(rows, nameAccess);
   // What the automations of a pending mixed proposal can reach: the skills
   // their steps would run, read through the run door's rule.
   const stepSkillsFor = await readStepSkillLookups(
@@ -2039,6 +2040,7 @@ export async function enrichProposalsForDisplay(
         resolveEntityTitle: resolveEntityTitleScoped,
         existingRolesByEntityId,
         ...skillUpdateReads(row, skillTargetById),
+        ...playbookUpdateReads(row, playbookTargetById),
         ...(isLiveProposalStatus(row.status)
           ? { stepSkills: stepSkillsFor(row.workspaceId) }
           : {}),
@@ -2049,6 +2051,57 @@ export async function enrichProposalsForDisplay(
       }),
     };
   });
+}
+
+/** `update` on a playbook row (a template or a method rewritten). */
+function isPlaybookUpdateRow(row: ProposalRow): boolean {
+  return (
+    row.targetType === "playbook" &&
+    row.proposalType.slice(row.proposalType.lastIndexOf(".") + 1) === "update"
+  );
+}
+
+/**
+ * The texts the PENDING playbook updates on the page rewrite, as they read
+ * now, keyed as the update's payload names them: the review shows each one
+ * before → after (the description, the goal, each stage's goal) instead of
+ * only the new text. Read once, floored by the playbook visibility rule the
+ * page's name reads use, so a review never quotes a playbook the viewer
+ * cannot read. Once applied the row holds the proposed text, so an applied
+ * proposal reads nothing.
+ */
+async function readPlaybookUpdateTargets(
+  rows: readonly ProposalRow[],
+  access: ReturnType<typeof scopedDb>
+): Promise<Map<string, Record<string, unknown>>> {
+  const ids = uniqueStrings(
+    rows.flatMap((row) =>
+      isPlaybookUpdateRow(row) && isLiveProposalStatus(row.status)
+        ? [row.targetId]
+        : []
+    )
+  ).filter(isLikelyUUID);
+  if (ids.length === 0) return new Map();
+  const found = await db
+    .select({
+      id: playbooks.id,
+      description: playbooks.description,
+      goalTemplate: playbooks.goalTemplate,
+      stages: playbooks.stages,
+    })
+    .from(playbooks)
+    .where(and(inArray(playbooks.id, ids), access.predicate(playbooks)));
+  return new Map(found.map(({ id, ...values }) => [id, values]));
+}
+
+/** A pending playbook update's values now, for its before → after rows. */
+function playbookUpdateReads(
+  row: ProposalRow,
+  playbookById: ReadonlyMap<string, Record<string, unknown>>
+): { targetBefore?: Readonly<Record<string, unknown>> } {
+  if (!isPlaybookUpdateRow(row) || !isLiveProposalStatus(row.status)) return {};
+  const values = playbookById.get(row.targetId);
+  return values ? { targetBefore: values } : {};
 }
 
 /** A skill as an update's review reads it: its name and its values now. */
