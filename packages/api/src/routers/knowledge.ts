@@ -165,6 +165,12 @@ export const knowledgeRouter = router({
          */
         truncated: synthesis.truncated,
         /**
+         * Present only when retrieval matched records that were REPLACED
+         * (`supersededBy` set): they are left out of the answer and of
+         * `sources`, and listed here with the id of their replacement.
+         */
+        superseded: synthesis.superseded,
+        /**
          * Where the asked-about kinds live (`ask()`'s spaces hint): the member
          * spaces holding them, or `{ status: "unavailable" }` when that read
          * failed. Absent when no kind was understood. Same field on every door.

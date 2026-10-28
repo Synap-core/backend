@@ -1002,6 +1002,16 @@ export function registerKnowledgeRoutes(app: HubHono): void {
       title: z.string(),
     })
     .openapi("KnowledgeAnswerSource");
+  // A matched record that was REPLACED (`supersededBy` set): left out of the
+  // answer and of `sources`, named here with its replacement's id.
+  const SupersededSourceSchema = z
+    .object({
+      substrate: z.string(),
+      id: z.string(),
+      title: z.string(),
+      supersededBy: z.string(),
+    })
+    .openapi("KnowledgeAnswerSupersededSource");
 
   const answerRoute = createRoute({
     method: "post",
@@ -1044,6 +1054,8 @@ export function registerKnowledgeRoutes(app: HubHono): void {
               // with `error`.
               detail: z.enum(ASK_DETAILS).optional(),
               sources: z.array(SourceSchema),
+              // Present only when retrieval matched replaced records.
+              superseded: z.array(SupersededSourceSchema).optional(),
               routedTo: z.array(z.string()),
               // SAME shape `POST /knowledge/search` already publishes (see
               // `retrievalResponseSchema`) — one representation, not two.
@@ -1174,6 +1186,8 @@ export function registerKnowledgeRoutes(app: HubHono): void {
           // instead of hoping the model echoes the prose notice — the prose
           // dies with the response whenever synthesis fails.
           ...(synthesis.truncated ? { truncated: synthesis.truncated } : {}),
+          // Replaced records the answer left out, each with its replacement.
+          ...(synthesis.superseded ? { superseded: synthesis.superseded } : {}),
           ...(synthesis.error && failure
             ? {
                 error: synthesis.error,
