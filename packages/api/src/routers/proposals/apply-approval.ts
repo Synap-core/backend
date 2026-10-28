@@ -821,9 +821,9 @@ export function assertProposalMayBeApproved(proposal: {
  * source scan could not see that; this reads the row.
  *
  * Still pending (or failed) after a successful apply: a defect, logged as one,
- * and the status door marks it approved by the approver. Anything else (it was
- * rejected or withdrawn meanwhile, or the row is gone): the approval fails
- * loudly. Never a silent pending.
+ * and the status door marks it approved by the approver. Moved elsewhere
+ * meanwhile (rejected, withdrawn): the approval fails loudly. No row to read
+ * back: logged, since nothing can sit pending. Never a silent pending.
  */
 export async function assertApprovalLanded(
   proposal: {
@@ -839,10 +839,18 @@ export async function assertApprovalLanded(
   });
   const status = row?.status as ProposalStatus | undefined;
   if (status && APPLIED_PROPOSAL_STATUSES.includes(status)) return;
+  if (!status) {
+    // No row to read: nothing can sit pending, and nothing can be marked.
+    logger.error(
+      { proposalId: proposal.id },
+      "approval postcondition: the approved proposal's row could not be read back"
+    );
+    return;
+  }
   logger.error(
     {
       proposalId: proposal.id,
-      status: status ?? null,
+      status,
       targetType: proposal.targetType,
       proposalType: proposal.proposalType,
     },
@@ -857,7 +865,7 @@ export async function assertApprovalLanded(
   if (healed.length > 0) return;
   throw new TRPCError({
     code: "INTERNAL_SERVER_ERROR",
-    message: `The approval ran, but the proposal now reads ${status ? resolveStatusLabel(status) : "missing"} instead of approved.`,
+    message: `The approval ran, but the proposal now reads ${resolveStatusLabel(status)} instead of approved.`,
   });
 }
 

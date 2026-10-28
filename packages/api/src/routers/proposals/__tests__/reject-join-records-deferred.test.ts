@@ -39,7 +39,8 @@ describe("rejecting a join records its kept writes", () => {
   for (const door of ["reject", "batchReject"]) {
     it(`${door}: calls recordRejectedDeferredWrites on a join, after the REJECTED flip`, () => {
       const b = body(door);
-      const flip = b.indexOf("status: ProposalStatus.REJECTED");
+      // The flip goes through the status door (`transitionProposal`).
+      const flip = b.indexOf("to: ProposalStatus.REJECTED");
       const call = b.indexOf("recordRejectedDeferredWrites(");
       expect(flip, "REJECTED flip not found").toBeGreaterThan(-1);
       expect(
