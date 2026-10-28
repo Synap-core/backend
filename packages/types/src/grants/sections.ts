@@ -54,6 +54,9 @@ export const GRANT_SUBJECT_GROUPS: readonly GrantSubjectGroup[] = [
       "channel",
     ],
   },
+  // The event log: what happened (observations, commits, builds). Its own
+  // group, never under Records: `event` here is not the calendar kind.
+  { id: "activity", label: "Activity", subjects: ["event"] },
   { id: "schema", label: "Schema", subjects: ["profile", "property_def"] },
 ];
 
@@ -74,6 +77,7 @@ export const GRANT_SUBJECT_DESCRIPTIONS: Readonly<Record<string, string>> = {
   playbook: "Reusable step-by-step processes",
   automation: "Rules that run when something happens",
   channel: "Conversations and their messages",
+  event: "What happened: commits, builds, observations",
   profile: "Kinds and roles: the shape of your records",
   property_def: "The fields each kind carries",
 };
