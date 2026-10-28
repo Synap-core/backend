@@ -11,6 +11,7 @@
 import { describe, it, expect } from "vitest";
 import type { ProposalCluster } from "../services/proposals/fingerprint.js";
 import { proposalClassFields } from "../services/proposals/proposal-class.js";
+import { reviewPackageOfRow } from "../services/proposals/review-package-of-row.js";
 import {
   unionNeedsYou,
   countNeedsYou,
@@ -26,6 +27,7 @@ import {
 import { CRITERION_SLOT_KIND } from "@synap-core/types/focus-sessions";
 import { resolveObjectNoun } from "@synap-core/types/vocabulary";
 import { normalizeExpectedLabel } from "../services/focus-sessions/expected-label.js";
+import { needsYouRows } from "@synap-core/types/needs-you";
 
 function cluster(over: Partial<ProposalCluster> = {}): ProposalCluster {
   const proposalType = over.proposalType ?? "create";
@@ -38,6 +40,7 @@ function cluster(over: Partial<ProposalCluster> = {}): ProposalCluster {
     // Derived through the ONE door, never hand-written: a fixture that pins
     // its own class values would keep passing after the real classifier moved.
     ...proposalClassFields(proposalType, targetType, null),
+    reviewLater: false,
     count: 3,
     sampleProposalIds: ["prop-1", "prop-2", "prop-3"],
     sources: [],
@@ -47,6 +50,8 @@ function cluster(over: Partial<ProposalCluster> = {}): ProposalCluster {
     agent: null,
     reasonCounts: {},
     attentionFloorCount: 0,
+    // Through the one door, like the class above.
+    package: reviewPackageOfRow({ proposalType, targetType, data: null }),
     ...over,
   };
 }
@@ -177,6 +182,7 @@ describe("needs-you union", () => {
       truncated: false,
       blocked: 0,
       decisions: 0,
+      reviewLater: 0,
       notifications: 0,
       review: 0,
       captures: 0,
@@ -206,7 +212,9 @@ function owed(over: Partial<OwedSlotSignalInput> = {}): OwedSlotSignalInput {
   return {
     sessionId: "sess-1",
     label: "Stripe restricted key",
-    owedSince: "2026-09-02T08:00:00Z",
+    // Fresh by default: an owed ask 7+ days old leaves the headline for
+    // Review later (founder, 2026-10-26), which these counts are not about.
+    owedSince: new Date(Date.now() - 3_600_000).toISOString(),
     ...over,
   };
 }
@@ -357,6 +365,44 @@ describe("owed slots in the needs-you union", () => {
     expect(counted.needsYou).toBe(listed.length);
   });
 
+  it("the badge counts exactly the owed rows drawn outside the Review later fold", () => {
+    // The input where "every week-old ask leaves the headline" and "a session
+    // is never split" disagree: one session owing a fresh ask AND a week-old
+    // one (the stale ask rides in the fresh card), beside a session whose only
+    // ask is a week old (it folds into Review later).
+    const now = new Date("2026-10-27T10:00:00Z");
+    const fresh = new Date(now.getTime() - 3_600_000).toISOString();
+    const stale = new Date(now.getTime() - 9 * 86_400_000).toISOString();
+    const owedSlots = [
+      owed({ sessionId: "mixed", label: "Fresh ask", owedSince: fresh }),
+      owed({ sessionId: "mixed", label: "Week-old ask", owedSince: stale }),
+      owed({ sessionId: "quiet", label: "Forgotten ask", owedSince: stale }),
+    ];
+    const listed = unionNeedsYou({
+      clusters: [],
+      notifications: [],
+      owedSlots,
+      now,
+    });
+    const rows = needsYouRows(listed);
+    const drawnOutsideFold = [...rows.recent, ...rows.older]
+      .flatMap((r) => (r.kind === "session" ? r.items : [r.signal]))
+      .filter((s) => s.kind === "owed-slot").length;
+    const counted = countNeedsYou({
+      distinctClusters: 0,
+      clustersTruncated: false,
+      clusters: [],
+      notifications: [],
+      notificationsTruncated: false,
+      owedSlots,
+      owedTruncated: false,
+      now,
+    });
+    expect(drawnOutsideFold).toBe(2);
+    expect(counted.blocked).toBe(drawnOutsideFold);
+    expect(counted.reviewLater).toBe(rows.reviewLaterCount);
+  });
+
   it("breaks the number into its three parts, and the parts SUM to it", () => {
     // Governance said "16 decisions pending" beside a shell badge of 89 with
     // nothing on screen to reconcile them. The count now carries the parts; a
@@ -400,6 +446,29 @@ describe("owed slots in the needs-you union", () => {
   });
 });
 
+describe("review packages on needs-you rows (founder B-1)", () => {
+  it("every row carries its package: a cluster its own, any other by its kind", () => {
+    const signals = unionNeedsYou({
+      clusters: [
+        cluster({ proposalType: "assign_agent", targetType: "focus_session" }),
+      ],
+      notifications: [notif()],
+      owedSlots: [owed()],
+    });
+    const byKind = Object.fromEntries(signals.map((s) => [s.kind, s.package]));
+    expect(byKind).toEqual({
+      "proposal-cluster": "hand-offs",
+      notification: "questions",
+      "owed-slot": "questions",
+    });
+  });
+
+  it("a cluster forwards the package its collapse decided, never re-derives it", () => {
+    const signal = signalFromCluster(cluster({ package: "knowledge" }));
+    expect(signal.package).toBe("knowledge");
+  });
+});
+
 describe("signal targets", () => {
   it("maps a known sourceType to an object-nav address", () => {
     expect(targetFromNotification("entity", "e-1")).toEqual({
@@ -415,6 +484,19 @@ describe("signal targets", () => {
   it("returns null rather than guessing a route for an unmapped sourceType", () => {
     expect(targetFromNotification("connector", "conn-1")).toBeNull();
     expect(targetFromNotification("entity", null)).toBeNull();
+  });
+
+  it("a sessionless cluster split by Review later is two rows, never one id twice", () => {
+    const fresh = signalFromCluster(cluster());
+    const later = signalFromCluster(
+      cluster({
+        reviewLater: true,
+        sampleProposalIds: ["prop-9"],
+        latestAt: new Date("2026-08-01T10:00:00Z"),
+      })
+    );
+    expect(later.id).not.toBe(fresh.id);
+    expect(later.groupKey).not.toBe(fresh.groupKey);
   });
 
   it("addresses a cluster by its sample proposal", () => {

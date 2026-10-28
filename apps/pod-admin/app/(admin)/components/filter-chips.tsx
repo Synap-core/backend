@@ -30,12 +30,15 @@ export function FilterChips<K extends string>({
   defaultKey,
   onSelect,
   ariaLabel = "Filter",
+  className = "mb-4",
 }: Binding<K> & {
   chips: readonly FilterChip<K>[];
   active: K;
   /** Runs on every press, after the URL is written (when bound). */
   onSelect?: (key: K) => void;
   ariaLabel?: string;
+  /** Spacing around the group; a list's filter sits `mb-4` above it. */
+  className?: string;
 }) {
   const replaceParams = useReplaceParams();
 
@@ -53,7 +56,7 @@ export function FilterChips<K extends string>({
     <div
       role="group"
       aria-label={ariaLabel}
-      className="mb-4 flex flex-wrap items-center gap-2"
+      className={`${className} flex flex-wrap items-center gap-2`}
     >
       {chips.map((c) => {
         const pressed = c.key === active;

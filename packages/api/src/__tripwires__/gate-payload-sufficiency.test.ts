@@ -101,6 +101,15 @@ const DOORS: DoorPin[] = [
     fields: ["config", "workspaceId"],
   },
   {
+    file: "routers/playbooks.ts",
+    subjectType: "playbook",
+    action: "run",
+    // The run the caller asked for: its arguments, its subject, and who does
+    // it — without `handToAgentId` an approved run starts the built-in AI
+    // instead of the agent it was handed to.
+    fields: ["params", "subjectId", "agentIds", "handToAgentId"],
+  },
+  {
     file: "routers/hub-protocol/rest/runs.ts",
     subjectType: "playbook_run",
     action: "update",

@@ -27,6 +27,14 @@ export interface GrantSubjectSpec {
   readonly subject: string;
   /** The actions the UI offers for it, in display order. */
   readonly actions: readonly GrantAction[];
+  /**
+   * The vocabulary key that names it, when that is not the subject itself.
+   * `event` is the event log here, while the vocabulary's `event` is the
+   * calendar kind; the log's noun is `activity`. A renderer that resolves an
+   * icon or a noun for a row reads `grantSubjectNoun(subject)`, never the
+   * bare subject.
+   */
+  readonly noun?: string;
 }
 
 /**
@@ -48,6 +56,11 @@ export const GRANT_SUBJECT_CATALOG: readonly GrantSubjectSpec[] = [
   { subject: "channel", actions: ["read", "create"] },
   { subject: "automation", actions: ["read", "create", "update"] },
   { subject: "playbook", actions: ["read", "create", "update"] },
+  // The event log (`observations.append` checks `event.create`): what a CI or
+  // devbox poster needs, and nothing else. Last, so adding it moved no other
+  // subject's canonical order (`normalizeGrantPermissions` sorts by catalog
+  // index). Display order is the sections' (`sections.ts`, group Activity).
+  { subject: "event", actions: ["read", "create"], noun: "activity" },
 ];
 
 /** Is this subject's key qualified by a kind (`entity.<kind>.<action>`)? */
@@ -62,9 +75,14 @@ export function grantSubjectSpec(
   return GRANT_SUBJECT_CATALOG.find((s) => s.subject === subject);
 }
 
-/** "Documents", "Entities" — the plural noun, from the vocabulary. */
+/** The vocabulary key a subject is named by (`event` → `activity`). */
+export function grantSubjectNoun(subject: string): string {
+  return grantSubjectSpec(subject)?.noun ?? subject;
+}
+
+/** "Documents", "Entities", "Activity" — the plural noun, from the vocabulary. */
 export function grantSubjectLabel(subject: string): string {
-  return resolveObjectNounPlural(subject);
+  return resolveObjectNounPlural(grantSubjectNoun(subject));
 }
 
 /** A kind row's label: the pod's own name for it, else the vocabulary noun. */

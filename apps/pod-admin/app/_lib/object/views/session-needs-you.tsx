@@ -117,7 +117,6 @@ export function NeedsYouSection({ sessionId }: { sessionId: string }) {
                 key={`${row.detail.sessionId}:${row.detail.label}`}
                 slot={row.detail.slot}
                 live={liveAskSlot(rows, row.detail)}
-                occurredAt={row.occurredAt}
                 onSettled={() => settle(row.key)}
                 onClose={() => settle(row.key)}
                 sessionDoor={false}

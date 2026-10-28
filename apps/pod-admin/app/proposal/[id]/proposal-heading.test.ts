@@ -53,6 +53,28 @@ describe("the review page heading", () => {
     expect(h.heading).toMatch(/^Create/);
   });
 
+  it("an agent's held-writes pack names the agent, never 'Held writes Agent'", () => {
+    const row = {
+      targetType: "agent",
+      targetName: null,
+      proposalType: "held_writes",
+      agentActorName: "Claude-code",
+    };
+    const pack = { day: "2026-10-27", agentUserId: "a1", deferredWrites: [] };
+    const h = proposalHeading(row, pack);
+    expect(h.heading).toBe(
+      "Writes held for review: Claude-code, 2026-10-27, 0 items"
+    );
+    expect(h.heading).not.toMatch(/Held writes|Agent/);
+    // No name the pod resolved: still never the raw token or "Agent".
+    expect(
+      proposalHeading({ ...row, agentActorName: null }, pack).heading
+    ).toBe("Writes held for review: 2026-10-27, 0 items");
+    expect(proposalHeading({ ...row, agentActorName: null }, {}).heading).toBe(
+      "Writes held for review"
+    );
+  });
+
   it("the decision card (page and Review drawer) renders the lines in place of the raw payload", () => {
     const src = readFileSync(join(__dirname, "ProposalReviewCard.tsx"), "utf8");
     expect(src).toMatch(/proposalHeading\(p, payload\)/);

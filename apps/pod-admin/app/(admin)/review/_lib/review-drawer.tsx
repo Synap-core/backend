@@ -75,9 +75,8 @@ type DrawerDetail = Exclude<ReviewDetail, { kind: "open" }>;
 
 export interface OpenReview {
   detail: DrawerDetail;
+  /** The decision's title; for an ask, the question (`askCardView`). */
   title: string;
-  /** When the row's ask was raised (ISO), for "asked 2h ago". */
-  occurredAt?: string | null;
 }
 
 interface ReviewFrameProps {
@@ -90,7 +89,7 @@ interface ReviewFrameProps {
   onAskSettled: () => void;
 }
 
-type DetailProps = Omit<ReviewFrameProps, "open"> & { open: OpenReview };
+export type DetailProps = Omit<ReviewFrameProps, "open"> & { open: OpenReview };
 
 /** Below `lg`: the decision in a modal drawer over the list. */
 export function ReviewDrawer({ open, ...rest }: ReviewFrameProps) {
@@ -117,9 +116,7 @@ export function ReviewDock({ open, ...rest }: ReviewFrameProps) {
   const { onClose } = rest;
   return (
     <aside
-      aria-label={
-        open.detail.kind === "ask" ? "Question details" : "Request details"
-      }
+      aria-label={open.title}
       className="sticky top-4 flex max-h-[calc(100dvh-6rem)] min-w-0 flex-col overflow-hidden rounded-lg bg-content1 ring-1 ring-inset ring-foreground/10"
     >
       <div className="flex items-center gap-3 border-b border-foreground/[0.06] px-6 py-4">
@@ -145,6 +142,15 @@ export function ReviewDock({ open, ...rest }: ReviewFrameProps) {
   );
 }
 
+/**
+ * The decision drawn in place — no frame. How things work's "Diff" layout
+ * reads a rule's change beside its list with it (founder B-1): the same
+ * `ReviewDetail` the dock and drawer draw, never a copy.
+ */
+export function ReviewInline(props: DetailProps) {
+  return <ReviewDetail {...props} />;
+}
+
 function ReviewDetail({
   open,
   viewer,
@@ -160,9 +166,10 @@ function ReviewDetail({
           key={`${detail.sessionId}:${detail.label}`}
           slot={detail.slot}
           live={liveAsk}
-          occurredAt={open.occurredAt ?? null}
           onSettled={onAskSettled}
           onClose={onClose}
+          // The frame's title IS the question: read once.
+          showHeading={false}
         />
       )}
       {detail.kind === "proposal" && (

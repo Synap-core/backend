@@ -74,6 +74,14 @@ vi.mock("@synap/database", async (importOriginal) => ({
 /** What the mocked `createGuideline` (the ONE guideline write door) returns. */
 let guidelineRow: { id: string } | undefined;
 
+// The daily write limit in force for the raise-ceiling branch (`null` = no
+// ceiling row: no limit, the default). Only this reader is swapped.
+vi.mock("@synap/database/agent-governance", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  resolveDailyWriteCeiling: async () => limitInForce,
+}));
+let limitInForce: number | null = 100;
+
 // Heavy siblings that the two branches under test never reach.
 vi.mock("../approve-executors.js", () => ({
   registerApproveExecutors: () => {},
@@ -165,6 +173,7 @@ beforeEach(() => {
   updates.length = 0;
   podAdminChecks.length = 0;
   guidelineRow = { id: "guideline-1" };
+  limitInForce = 100;
 });
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -255,6 +264,46 @@ describe("(b) an approval that writes reports applied with a non-zero count", ()
 
     expect(result.effect).toMatchObject({ applied: "verified", rows: 0 });
     expect(receiptStateForEffect(result.effect!)).toBe("no_effect");
+  });
+
+  it("governance.raise_ceiling with NO daily limit in force writes nothing and says why", async () => {
+    limitInForce = null;
+    updateReturning = [[{ id: "ceiling-old" }]];
+    insertReturning = [[{ id: "ceiling-new" }]];
+
+    const result = await applyProposalApproval(
+      approveArgs("governance.raise_ceiling", {
+        agentUserId: "agent-1",
+        proposedLimit: 200,
+      })
+    );
+
+    expect(result.effect).toMatchObject({ applied: "none" });
+    expect(
+      (result.effect as { applied: "none"; reason: string }).reason
+    ).toMatch(/no daily write limit/i);
+    // No ceiling was written or revoked: only the proposal's own review row.
+    expect(inserts).toEqual([]);
+    expect(updates.some((u) => "revokedAt" in u)).toBe(false);
+    expect(updates[0]).toMatchObject({ status: "approved" });
+  });
+
+  it("governance.raise_ceiling never LOWERS a limit already at/above the proposal", async () => {
+    limitInForce = 2_147_483_647;
+
+    const result = await applyProposalApproval(
+      approveArgs("governance.raise_ceiling", {
+        agentUserId: "agent-1",
+        proposedLimit: 750,
+      })
+    );
+
+    expect(result.effect).toMatchObject({ applied: "none" });
+    expect(
+      (result.effect as { applied: "none"; reason: string }).reason
+    ).toMatch(/already 2147483647/);
+    expect(inserts).toEqual([]);
+    expect(updates.some((u) => "revokedAt" in u)).toBe(false);
   });
 
   it("governance.raise_ceiling counts BOTH statements (supersede + insert)", async () => {

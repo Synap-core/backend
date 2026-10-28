@@ -136,7 +136,9 @@ const OWED_SLOT = {
   label: "Stripe key",
   status: "pending",
   owner: "human",
-  owedSince: "2026-09-25T10:00:00.000Z",
+  // Fresh: an owed ask 7+ days old leaves the headline for Review later
+  // (founder, 2026-10-26), which this test is not about.
+  owedSince: new Date(Date.now() - 3_600_000).toISOString(),
   why: "the live restricted key",
 };
 

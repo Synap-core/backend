@@ -78,6 +78,38 @@ for impl in $impls; do
   synap /dev/null ps >/dev/null 2>&1; [ $? = 0 ] && ok "[$impl] read-only command unaffected" || bad "[$impl] ps failed"
 done
 
+# flock: an operation stopped mid-way leaves the processes it started holding
+# the lock (they inherited fd 9). The refusal names them and the command that
+# stops them, not only the gone pid in the owner text (27 Oct: a killed
+# `synap update` left its `docker build` holding the lock for good).
+if command -v flock >/dev/null 2>&1 && [ -d /proc/self/fd ]; then
+  unset SYNAP_LOCK_IMPL
+  rm -rf "$DEPLOY/state"; : > "$TMP/orphan.log"
+  FAKE_DOCKER_SLEEP=8 synap "$TMP/orphan.log" rebuild pod-agent >"$TMP/orphan-holder.out" 2>&1 &
+  HOLDER_PID=$!
+  for _ in $(seq 1 80); do grep -q "compose build" "$TMP/orphan.log" && break; sleep 0.1; done
+  owner="$(sed -n 's/.* pid=\([0-9][0-9]*\).*/\1/p' "$DEPLOY/state/update.lock")"
+  kill -9 "$owner" 2>/dev/null; sleep 0.3
+  synap /dev/null update >"$TMP/orphan.out" 2>&1; rc=$?
+  left="$(sed -n 's/.*kill \([0-9 ]*\)$/\1/p' "$TMP/orphan.out")"
+  [ "$rc" != 0 ] && grep -q "left over from a stopped operation" "$TMP/orphan.out" \
+    && ok "[flock] refusal says the lock is held by what a stopped operation left" \
+    || bad "[flock] stopped-holder refusal: $(head -6 "$TMP/orphan.out")"
+  live=1; [ -n "${left// /}" ] || live=0
+  for p in $left; do [ "$p" != "$owner" ] && kill -0 "$p" 2>/dev/null || live=0; done
+  [ "$live" = 1 ] && grep -q "docker" "$TMP/orphan.out" \
+    && ok "[flock] it names the live leftover processes (the fake docker) in its kill command" \
+    || bad "[flock] kill command names: '${left}' — $(cat "$TMP/orphan.out")"
+  for p in $left; do kill "$p" 2>/dev/null; done
+  wait "$HOLDER_PID" 2>/dev/null; HOLDER_PID=""
+  for _ in $(seq 1 30); do synap /dev/null rebuild pod-agent >"$TMP/after.out" 2>&1 && break; sleep 0.2; done
+  grep -q "already running\|left over" "$TMP/after.out" \
+    && bad "[flock] lock still held after the named kill: $(head -3 "$TMP/after.out")" \
+    || ok "[flock] after the named kill the next operation runs"
+else
+  echo "skip - flock or /proc missing; the stopped-holder case runs on Linux CI"
+fi
+
 # mkdir fallback: a lock left by a dead process is taken over, not a dead end
 export SYNAP_LOCK_IMPL=mkdir
 rm -rf "$DEPLOY/state"; mkdir -p "$DEPLOY/state/update.lock.d"

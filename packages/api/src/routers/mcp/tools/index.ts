@@ -23,7 +23,10 @@ import {
   WORK_GRAPH_DEFAULT_WINDOW_HOURS,
   WORK_GRAPH_MAX_WINDOW_HOURS,
 } from "../../../services/focus-sessions/work-graph-window.js";
-import { ROOM_POST_KINDS } from "../../../services/messaging/room-post-kind.js";
+import {
+  CLOSE_QUESTION_DISPOSITIONS,
+  ROOM_POST_KINDS,
+} from "../../../services/messaging/room-post-kind.js";
 import {
   SESSION_POST_INTENTS,
   SESSION_POST_REF_KINDS,
@@ -74,7 +77,12 @@ import {
 } from "@synap/playbooks";
 // The ONE ask schema (`@synap-core/types/ask`) — the MCP `ask` property is
 // DERIVED from it (below), never hand-copied.
-import { AskSchema } from "@synap-core/types/ask";
+import {
+  ASK_LIMITS,
+  AskSchema,
+  RELAY_SURFACE_MAX_CHARS,
+} from "@synap-core/types/ask";
+import { RELAY_DISPOSITIONS } from "../../../services/focus-sessions/session-answer.js";
 
 import { automationDataContractSchema } from "../../automations.js";
 import { playbookStageSchema } from "../../../schemas/playbook-stage.js";
@@ -102,6 +110,7 @@ import {
   WAIT_MAX_SECONDS,
 } from "../../../services/focus-sessions/wait-for-answers.js";
 import { SESSION_CHANGE_KINDS } from "../../../services/focus-sessions/session-changes.js";
+import { REVIEW_PACKAGES } from "@synap-core/types/proposals/review-package";
 import { TRACK_PARTICIPANT_ACTIONS } from "../handlers/track-participants.js";
 
 /**
@@ -311,7 +320,7 @@ function buildAskJsonSchema(): Record<string, unknown> {
   >;
   delete derived.$schema;
   derived.description =
-    'Only with owner=\'human\': HOW the person can answer, so they resolve it in one tap instead of writing back. mode \'confirm\' (yes/no; optional prompt), \'choose\' (1-8 options, at most ONE recommended, each with a one-line `description` of its consequence; allowOther for free text), \'form\' (a small FLAT form; credential field types are dropped — never ask for a secret in a form), \'act\' (something to DO: optional http(s) url + up to 7 steps; the person answers \'I did this\'), \'provide\' (connection {service} | file {accept} | secret {name} — handed over through the vault, never typed into a message). PREFER confirm/choose for any decision (mark exactly ONE option `recommended` when you have a view: their pick vs your recommendation is recorded, and every answered confirm/choose files a `decision` entity); use act ONLY for a physical/world task with steps. Example: {"mode":"choose","options":[{"label":"Ship now","recommended":true,"description":"Publishes today"},{"label":"Wait a week"}]}. A choose option may open ONE follow-up the person answers next, {"prompt":"Which environment?","options":[2-4 plain options]} (one level only: a follow-up option opening its own is refused), and may carry a `caution` (one short fact to weigh, max 60 chars, e.g. \'Skips 1,284 tests\'). Omit for a plain free-text answer. null clears a stored ask. Any mode may carry `risk` (\'high\' | \'medium\' | \'low\': how much is at stake in the answer). Any mode may carry `lookedAt`: up to 8 {kind, id} (entity | document | view | automation | playbook) you actually read before asking, so the person sees what you based the question on — refs they cannot see are refused, and any title you send is ignored (the pod names them).';
+    'Only with owner=\'human\': HOW the person can answer, so they resolve it in one tap instead of writing back. mode \'confirm\' (yes/no: `prompt` IS the question; `yes` / `no` may each carry a one-line `description` of what that answer does, and ONE may be `recommended`), \'choose\' (1-8 options, at most ONE recommended, each with a one-line `description` of its consequence; allowOther for free text), \'form\' (a small FLAT form; credential field types are dropped — never ask for a secret in a form), \'act\' (something to DO: optional http(s) url + up to 7 steps; the person answers \'I did this\'), \'provide\' (connection {service} | file {accept} | secret {name} — handed over through the vault, never typed into a message). PREFER confirm/choose for any decision (mark exactly ONE answer `recommended` when you have a view: their pick vs your recommendation is recorded, and every answered confirm/choose files a `decision` entity); use act ONLY for a physical/world task with steps. Example: {"mode":"choose","options":[{"label":"Ship now","recommended":true,"description":"Publishes today"},{"label":"Wait a week"}]}. A choose option may open ONE follow-up the person answers next, {"prompt":"Which environment?","options":[2-4 plain options]} (one level only: a follow-up option opening its own is refused), and may carry a `caution` (one short fact to weigh, max 60 chars, e.g. \'Skips 1,284 tests\'). Omit for a plain free-text answer. null clears a stored ask. Any mode may carry `risk` (\'high\' | \'medium\' | \'low\': how much is at stake in the answer). Any mode may carry `lookedAt`: up to 8 {kind, id} (entity | document | view | automation | playbook) you actually read before asking, so the person sees what you based the question on — refs they cannot see are refused, and any title you send is ignored (the pod names them).';
   return derived;
 }
 
@@ -508,7 +517,11 @@ const SESSION_OUTCOMES_PROPERTY = {
         description:
           "Optional stable id (lowercase slug a-z 0-9 -). Default: a slug of the label. Name the outcome by this key in completeOutput and later updates; a renamed label keeps its key.",
       },
-      label: { type: "string", description: "What it is, in words." },
+      label: {
+        type: "string",
+        description:
+          "A short name for it, a few words: a key, not the question ('Stripe account', not 'Decide: which Stripe account?'). The question goes in the ask.",
+      },
       kind: {
         type: "string",
         description:
@@ -877,6 +890,12 @@ export const tools = {
               description:
                 "'summary' (default) returns one compact row per proposal — id, type, target, provenance, and a one-line summary — which is what a LIST is for. 'full' includes the entire `data` payload of every row: only ask for it when you need to inspect a specific proposal's contents, and pair it with a small `limit`.",
             },
+            package: {
+              type: "string",
+              enum: [...REVIEW_PACKAGES],
+              description:
+                "Only proposals of this review package — the decision they ask the person: questions, access, releases, how-things-work (skills, rules, playbooks, automations, governance), data-changes, hand-offs, knowledge, bookkeeping (an agent's notes on its own session).",
+            },
           },
           required: [],
         },
@@ -939,7 +958,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          'Understand what\'s happening / what\'s wrong — the pod\'s health door (the third door, alongside ask + capture). The MODE is derived from what you pass (never a tool name you choose): NO ARGS → whole-pod health (stuck runs, failed flows, review backlog + age, duplicate-proposal clusters, capability posture, agents hitting the daily cap) with a plain-language summary; `type` → a class as a surface (type:"proposal" = the review queue: pending count, oldest, duplicate clusters; type:"session" = stuck sessions; type:"agent" = agent roster + quality; type:"capability" = which installed verbs are turned on and which are not (a verb that is not turned on refuses to run); type:"run" = per-flow failure counts; type:"workspace" = the workspace landscape: per-workspace entity counts + which kinds live in each, PAIRWISE profile-slug overlap between workspaces, and flags for empty / duplicate-named / no-authored-identity workspaces — the "do I have too many workspaces?" read); `id` → auto-detects what the id is (proposal / session / capability / automation-run / playbook-run / agent / entity / view / document / workspace) and explains its state + WHY; `agentId` → an agent\'s behavioural scorecard (approve/reject/revise rates, top rejection reasons, duplicate rate, daily-cap posture). Backward-compatible: `runId`+`flowType` → that run\'s activity timeline (a capture\'s decision + trace events, each with a machine-readable reason + fixHint); `flowType`/`flowId` → the run feed. USER-scoped automatically.',
+          'Understand what\'s happening / what\'s wrong — the pod\'s health door (the third door, alongside ask + capture). The MODE is derived from what you pass (never a tool name you choose): NO ARGS → whole-pod health (stuck runs, failed flows, review backlog + age, duplicate-proposal clusters, capability posture, agents hitting the daily cap) with a plain-language summary; `type` → a class as a surface (type:"proposal" = the review queue: pending count, oldest, duplicate clusters; type:"session" = stuck sessions; type:"agent" = agent roster + quality; type:"capability" = which installed verbs are turned on and which are not (a verb that is not turned on refuses to run); type:"run" = per-flow failure counts; type:"workspace" = the workspace landscape: per-workspace entity counts + which kinds live in each, PAIRWISE profile-slug overlap between workspaces, and flags for empty / duplicate-named / no-authored-identity workspaces — the "do I have too many workspaces?" read); `id` → auto-detects what the id is (proposal / session / capability / automation-run / playbook-run / agent / entity / view / document / workspace) and explains its state + WHY; `agentId` → an agent\'s behavioural scorecard over its last 7 days (`window`): approve/reject/revise counts and rates, top rejection reasons, a duplicate rate read from a sample (`duplicateSample`), daily-cap posture. Backward-compatible: `runId`+`flowType` → that run\'s activity timeline (a capture\'s decision + trace events, each with a machine-readable reason + fixHint); `flowType`/`flowId` → the run feed. USER-scoped automatically.',
         inputSchema: {
           type: "object",
           properties: {
@@ -965,7 +984,7 @@ export const tools = {
             agentId: {
               type: "string",
               description:
-                "An agent-user id → its behavioural quality scorecard (approve/reject/revise rates, rejection reasons, duplicate rate, daily-cap posture).",
+                "An agent-user id → its behavioural quality scorecard over its last 7 days (approve/reject/revise counts and rates, rejection reasons, a sampled duplicate rate, daily-cap posture).",
             },
             workspaceId: {
               type: "string",
@@ -1501,7 +1520,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Edit a document with ops — a section, a passage, an addition — instead of rewriting it. Read it first with synap_get_document and pass its `revision` as `baseRevision`. Ops, applied in order: `upsert_section {id, title, body}` writes ONE `::::synap-section` block by id (replaces your own `ai` section, or appends a new one); `replace_text {old, new}` — `old` must match EXACTLY once, copy it from the document and include enough context (0 or 2+ matches is refused with the count); `append {body}`; `replace_all {content}` (whole body — needs baseRevision, always goes to review). Refused: changing a section whose owner is `human` (by any op), and removing an embed unless `allow_removing_embeds: true`. Usually returns 'proposed' (the person reviews a per-section before/after); a governance rule may apply it directly. The response carries `preview` and `diagnostics` (embeds that will not render, each with a `fix` — advisory, never a refusal). A 'changed after you read it' error means re-read and redraft.",
+          "Edit a document with ops — a section, a passage, an addition — instead of rewriting it. Read it first with synap_get_document and pass its `revision` as `baseRevision`. Ops, applied in order: `upsert_section {id, title, body}` writes ONE `::::synap-section` block by id (replaces your own `ai` section, or appends a new one); `replace_text {old, new}` — `old` must match EXACTLY once, copy it from the document and include enough context (0 or 2+ matches is refused with the count); `append {body}`; `replace_all {content}` (whole body — needs baseRevision, always goes to review); `set_title {title}` renames the document (its one title — a human name, never an id), governed like the other ops. Refused: changing a section whose owner is `human` (by any op), and removing an embed unless `allow_removing_embeds: true`. Usually returns 'proposed' (the person reviews a per-section before/after); a governance rule may apply it directly. The response carries `preview` and `diagnostics` (embeds that will not render, each with a `fix` — advisory, never a refusal). A 'changed after you read it' error means re-read and redraft.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1526,6 +1545,7 @@ export const tools = {
                       "replace_text",
                       "append",
                       "replace_all",
+                      "set_title",
                     ],
                   },
                   id: {
@@ -1535,7 +1555,8 @@ export const tools = {
                   },
                   title: {
                     type: "string",
-                    description: "upsert_section: the section heading.",
+                    description:
+                      "upsert_section: the section heading. set_title: the document's new name.",
                   },
                   body: {
                     type: "string",
@@ -2247,7 +2268,7 @@ export const tools = {
                     type: "string",
                     maxLength: 500,
                     description:
-                      "Only with owner='human'. ONE line naming WHICH thing is missing, not its class — 'the Stripe restricted key for the live account', not 'a credential'. This is what the person reads to know what to do.",
+                      "Only with owner='human'. ONE line naming WHICH thing is missing, not its class — 'the Stripe restricted key for the live account', not 'a credential'. Context the question does not already say: never a repeat of the label or the prompt.",
                   },
                   ref: {
                     description:
@@ -2391,7 +2412,7 @@ export const tools = {
                     type: "string",
                     maxLength: 500,
                     description:
-                      "Only with owner='human'. ONE line naming WHICH thing is missing, not its class — 'the Stripe restricted key for the live account', not 'a credential'. This is what the person reads to know what to do.",
+                      "Only with owner='human'. ONE line naming WHICH thing is missing, not its class — 'the Stripe restricted key for the live account', not 'a credential'. Context the question does not already say: never a repeat of the label or the prompt.",
                   },
                   ref: {
                     description:
@@ -2448,7 +2469,7 @@ export const tools = {
                   type: "string",
                   maxLength: 500,
                   description:
-                    "Only with owner='human'. ONE line naming WHICH thing is missing, not its class.",
+                    "Only with owner='human'. ONE line naming WHICH thing is missing, not its class; never a repeat of the label or the prompt.",
                 },
                 ref: {
                   description:
@@ -2574,7 +2595,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "End a focus session — the ONE door for every lifecycle exit. `terminalStatus` says HOW it ended: 'closed' (the work finished, default), 'cancelled' (abandoned — you stopped on purpose), 'failed' (you could not complete it). Say which honestly: a cancelled or failed session recorded as 'closed' tells the user work succeeded when it did not. 'cancelled' also STOPS the session's in-flight work where a real stop exists (queued jobs, a running agent reply) and returns `cancel`: { stopped[], notStoppable[] (already running — it will finish), finished[] (proposals that already applied) }. A cancel may come back status 'proposed' — that is NOT an error: it is queued for the user's review and nothing is stopped until they approve. Also closes any running playbook_run. Returns a **review pack**: pendingProposals[], counts, and warnings (e.g. unfinished expectedOutputs — warn only), plus `nudges` for what closed still owed (ungraded criteria: grade them with synap_evaluate_session — best BEFORE closing). Use synap_list_proposals({sessionId}) to re-fetch the pack.",
+          "End a focus session — the ONE door for every lifecycle exit. `terminalStatus` says HOW it ended: 'closed' (the work finished, default), 'cancelled' (abandoned — you stopped on purpose), 'failed' (you could not complete it). Say which honestly: a cancelled or failed session recorded as 'closed' tells the user work succeeded when it did not. 'cancelled' also STOPS the session's in-flight work where a real stop exists (queued jobs, a running agent reply) and returns `cancel`: { stopped[], notStoppable[] (already running — it will finish), finished[] (proposals that already applied) }. A cancel may come back status 'proposed' — that is NOT an error: it is queued for the user's review and nothing is stopped until they approve. Also closes any running playbook_run. Returns a **review pack**: pendingProposals[], counts, and warnings (e.g. unfinished expectedOutputs — warn only), plus `nudges` for what closed still owed (ungraded criteria: grade them with synap_evaluate_session — best BEFORE closing). Use synap_list_proposals({sessionId}) to re-fetch the pack. QUESTIONS: every question still open in the room is stamped 'closed — session ended' (never deleted), and an open confirm/choose ask the person owed retires with the session (act/provide/form stay owed). Before you close as 'closed' or 'failed', settle each question YOU asked that is still open: if the person answered you in chat, relay their exact words with synap_relay_answer; otherwise pass `questionDispositions`. A close that leaves one of your questions unsettled is refused with status 'refused' and `openQuestions` (messageId, shortId Q-xxxxxxxx, text) — nothing is closed. A 'cancelled' close is never refused.",
         inputSchema: {
           type: "object",
           properties: {
@@ -2597,6 +2618,33 @@ export const tools = {
               enum: [...TERMINAL_SESSION_STATUSES],
               description:
                 "How the session ended. 'closed' (default) = the work finished. 'cancelled' = abandoned on purpose. 'failed' = attempted and could not be completed. All three run the SAME close (review pack, playbook_run close, ephemeral expiry, close event) — only the recorded outcome differs.",
+            },
+            questionDispositions: {
+              type: "array",
+              maxItems: 100,
+              description:
+                "Your word on each question you asked in the room that is still open (the refusal lists them). 'withdrawn' = your work overtook it (say why in `note`). 'keep_as_owed' = the person still owes you the answer after this session: it becomes an owed slot of theirs.",
+              items: {
+                type: "object",
+                properties: {
+                  messageId: {
+                    type: "string",
+                    description:
+                      "The question's full message id (from the refusal's openQuestions), not the Q- short id.",
+                  },
+                  disposition: {
+                    type: "string",
+                    enum: [...CLOSE_QUESTION_DISPOSITIONS],
+                  },
+                  note: {
+                    type: "string",
+                    maxLength: 500,
+                    description:
+                      "One line: why it was withdrawn ('you answered it in the brief').",
+                  },
+                },
+                required: ["messageId", "disposition"],
+              },
             },
           },
           required: ["sessionId"],
@@ -2753,6 +2801,73 @@ export const tools = {
         },
       },
       {
+        name: "synap_relay_answer",
+        annotations: {
+          title: "Relay the person's answer",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+        description:
+          "The person answered your question HERE, in this chat, instead of in Synap: relay their answer to the question you asked (a room question you posted, or a slot you handed them). Name the EXACT question — `messageId` (the id synap_post_message returned) and/or `slotLabel`; never guess the newest. `quote` = their words VERBATIM, never your paraphrase or summary; `value` = the pick you read in them, for a confirm/choose ask. A routine question is answered and marked relayed by you. A commitment (a plan/deploy gate, a human-only status move, an approval card, a grade, handing over a secret/connection/file, or an ask you marked stakes 'commitment' — mark deploy, spend, publish, delete) is NOT answered: it returns status 'awaiting_tap' and waits for the person's own tap — do not act on it yet. When your question is overtaken (you no longer need it), disposition 'withdrawn' + `note` closes it and hands its slot back to you.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            sessionId: {
+              type: "string",
+              description: "The focus session you asked in.",
+            },
+            disposition: {
+              type: "string",
+              enum: [...RELAY_DISPOSITIONS],
+              description:
+                "'answered' = the person answered in this chat (needs quote). 'withdrawn' = you no longer need the answer (needs note).",
+            },
+            messageId: {
+              type: "string",
+              description:
+                "Your room question's message id (from synap_post_message).",
+            },
+            slotLabel: {
+              type: "string",
+              maxLength: 500,
+              description:
+                "The output the question is about — alone when you asked through the output itself (owner 'human' + ask).",
+            },
+            quote: {
+              type: "string",
+              maxLength: ASK_LIMITS.answerTextMaxChars,
+              description:
+                "The person's own words, verbatim, as they typed them. Required with 'answered'.",
+            },
+            text: {
+              type: "string",
+              maxLength: ASK_LIMITS.answerTextMaxChars,
+              description:
+                "Optional: the answer as filed when it is not the quote itself (a note beside a pick). Default: the quote.",
+            },
+            value: {
+              type: "object",
+              description:
+                "The typed answer you read in their words, for an output with an ask: {type:'confirm', confirmed:true|false} | {type:'chip', chip:{label, value}} (one of the options offered) | {type:'form', values:{...}} | {type:'text'}. Omit for a free-text question.",
+            },
+            relaySurface: {
+              type: "string",
+              maxLength: RELAY_SURFACE_MAX_CHARS,
+              description:
+                "Where they said it, e.g. 'claude-code' or 'claude-ai'.",
+            },
+            note: {
+              type: "string",
+              maxLength: ASK_LIMITS.promptMaxChars,
+              description:
+                "With 'withdrawn': one line on why you no longer need it.",
+            },
+          },
+          required: ["sessionId", "disposition"],
+        },
+      },
+      {
         name: "synap_list_sessions",
         annotations: {
           title: "List focus sessions",
@@ -2885,6 +3000,21 @@ export const tools = {
                 "'lean' (default) = per node id, title, status, kind, parentSessionId, trackId, projectId, workspaceId, updatedAt, inWindow and the next move (kind, actor, label). 'full' = the whole list row per node: large.",
             },
           },
+          required: [],
+        },
+      },
+      {
+        name: "synap_get_work_release",
+        annotations: {
+          title: "Get the release state",
+          readOnlyHint: true,
+          openWorldHint: false,
+        },
+        description:
+          "Can the work be released, and what blocks it — read-only. Per repo: `main` (health ok | red | infra | unmeasured, `reason`, `fixedBy`) and `live` (what is deployed, `behindBy`). Per PR: `stage` on the road to main (working, checks, ready, on_main), `verdict` (green, own_red, inherited = red only because main is red, infra = did not run, queued, running, unmeasured), `fold` (draft, negctl, dependabot, stale; null = shown), the session holding it and `holder.live` (that session worked in the last 5 min), and `blockedBy`. `blockers` are ranked by how much waits behind each, transitively: the first is the thing to fix. `sources` says when the producer's snapshots are stale or missing, or a read failed (`unavailable` is not an empty list). Facts come from the devbox producer's `dev.repo_snapshot` observations; the pod reads no GitHub itself.",
+        inputSchema: {
+          type: "object",
+          properties: {},
           required: [],
         },
       },
@@ -5746,6 +5876,11 @@ export const tools = {
               description:
                 "Optional track UUID (synap_list_tracks) — the method, inside a project, this run advances. Implies its project; a different projectId is refused.",
             },
+            handToAgentId: {
+              type: "string",
+              description:
+                "Optional agent user id (synap_list_agents) to HAND the run to: that agent does the work and the playbook's own executor is not started. A person may name any of their agents; an agent may name only itself. An unknown, paused or foreign agent is refused by name — never replaced by the built-in AI.",
+            },
           },
           required: [],
         },
@@ -5780,7 +5915,7 @@ export const tools = {
             code: {
               type: "string",
               description:
-                "Optional executable source (runs sandboxed). Present ⇒ the skill is runnable; absent ⇒ it is a teaching skill.",
+                "Optional executable source (runs sandboxed). Present ⇒ the skill is runnable; absent ⇒ it is a teaching skill. It is the BODY of `async function(args, context)`: read inputs from `args` and `return` the result. Not a function of its own: `async (args) => { … }` is refused, since nothing would call it.",
             },
             body: {
               type: "string",

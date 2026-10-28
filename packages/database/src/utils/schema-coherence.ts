@@ -714,6 +714,13 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "api_key_id",
     addedBy: "0335_webhook_subscriptions_api_key.sql",
   },
+  // A webhook row's direction (0362). Both outbound producers select it, so
+  // a missing column stops every webhook delivery.
+  {
+    table: "webhook_subscriptions",
+    column: "direction",
+    addedBy: "0362_webhook_subscriptions_direction.sql",
+  },
   // Site collections (0336). Every publish lookup filters on `site_share_id`
   // and the site doors read `site_config`, so without them every publish and
   // every site door 500s. The three member columns are read from C1b on.
@@ -1036,6 +1043,12 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "role_id",
     addedBy: "0307_grant_roles.sql",
   },
+  // Where a key made from a role is used (0363); every role read selects it.
+  {
+    table: "grant_roles",
+    column: "uses",
+    addedBy: "0363_key_requests_and_role_uses.sql",
+  },
 
   // apps — a developer's application identity (0309, App Connect v1). `public_id`
   // is the app id AND the `client_id` a grant carries; a missing column means a
@@ -1196,6 +1209,18 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "device_auth_requests",
     column: "poll_interval_seconds",
     addedBy: "0321_device_auth_requests.sql",
+  },
+  // key_requests — the CLI's door to a key (0363). Absence means
+  // `synap keys create` and the pod-admin review page would 42P01.
+  {
+    table: "key_requests",
+    column: "request_code_hash",
+    addedBy: "0363_key_requests_and_role_uses.sql",
+  },
+  {
+    table: "key_requests",
+    column: "approved_draft",
+    addedBy: "0363_key_requests_and_role_uses.sql",
   },
 
   // library_groups — the Library's persistent groups (0328). Absence means
@@ -1566,6 +1591,14 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "events",
     column: "app_id",
     addedBy: "0310_app_attribution.sql",
+  },
+  // events — DAILY-CEILING BOOKKEEPING EXEMPTION (0365, F2). `auditLog` stamps
+  // it on an agent's own-session bookkeeping and the daily write count reads
+  // it: without the column every agent append and every count 42703s.
+  {
+    table: "events",
+    column: "ceiling_exempt",
+    addedBy: "0365_events_ceiling_exempt.sql",
   },
 
   // vault_grants → capability grants generalization (0142). The polymorphic

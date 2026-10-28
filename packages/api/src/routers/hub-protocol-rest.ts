@@ -116,6 +116,7 @@ import {
   registerResolveRoutes,
   registerGraphRoutes,
   registerCentralityRoutes,
+  registerWorkReleaseRoutes,
   registerObservabilityRoutes,
   registerPublicProjectionRoutes,
   registerPublicSharesRoutes,
@@ -262,6 +263,11 @@ app.use(
       // route returns one-shot keys — never cache either.
       "/setup/device",
       "/setup/device/token",
+      // Key requests: the token route returns a one-shot key — never cache.
+      // The request route returns the poll secret (`request_code`) — never
+      // cache it either.
+      "/keys/requests",
+      "/keys/requests/token",
       // Mint/rotate return the plaintext feed URL once — never cache.
       "/calendar/feed",
       "/calendar/feed/rotate",
@@ -355,7 +361,7 @@ registerOrientRoutes(app); // /orient
 registerPodConfigRoutes(app); // /pod/config
 registerPodAdoptRoutes(app); // /pod/adopt
 registerFederationRoutes(app); // /federation/oidc-config — CP→pod OIDC federation push
-registerKeysRoutes(app); // /keys/rotate-cli
+registerKeysRoutes(app); // /keys/rotate-cli + key requests (/keys/templates, /keys/requests[/token], /keys/requested[/:keyId])
 registerAiProvidersRoutes(app); // /ai-providers
 registerFocusSessionsRoutes(app); // /focus-sessions*
 registerIntentSurfacesRoutes(app); // /lifecycle/{board,throughput}, /attention/{needs-you,count}
@@ -372,6 +378,7 @@ registerWorkflowsRoutes(app); // /workflows/:kind/:id/place + /feed (workflow pl
 registerResolveRoutes(app); // /resolve/:id — universal ID resolver
 registerGraphRoutes(app); // /graph/:type/:id — object + typed neighbour graph
 registerCentralityRoutes(app); // /centrality/status, /centrality/recompute — PageRank centrality window
+registerWorkReleaseRoutes(app); // /work-release — Work › Ship, the release read
 registerObservabilityRoutes(app); // /observability/routing-health — decision/correction routing analysis
 // /health/dependencies — AUTHENTICATED readiness probe (IS reachability).
 // Deliberately registered HERE, after the auth middleware, and NOT next to the

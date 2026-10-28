@@ -3,7 +3,7 @@
  *
  * Research the V1 plan leans on: tool-selection accuracy degrades past ~30-40
  * always-loaded tools, and Codex / Cursor do not defer MCP tools the way
- * Claude Code does. So a NEW agent key lists the 12-tool `entry` surface; the
+ * Claude Code does. So a NEW agent key lists the 13-tool `entry` surface; the
  * rest arrive in named GROUPS, unlocked by `synap_load_skill` (`tools:<group>`,
  * `tools:builder` for all of them, or a skill whose teaching needs a group).
  *
@@ -49,6 +49,9 @@ export const ENTRY_TOOLS = [
   "synap_update_session",
   "synap_wait_for_answer",
   "synap_post_message",
+  // The answer loop's return half when the person answers in the agent's own
+  // chat (`synap_relay_answer`): an entry agent that asks must be able to relay.
+  "synap_relay_answer",
   "synap_complete_session",
   "synap_load_skill",
 ] as const;
@@ -94,6 +97,7 @@ export const TOOL_GROUPS = {
   sessions: [
     "synap_list_sessions",
     "synap_get_work_graph",
+    "synap_get_work_release",
     "synap_list_agents",
     "synap_evaluate_session",
     "synap_revert_session",

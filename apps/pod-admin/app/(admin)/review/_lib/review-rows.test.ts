@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
+  agentGroups,
   batchOf,
+  bookkeepingSuggestion,
   exitOf,
+  itemCount,
+  keepAllOf,
+  oldestAt,
+  packageGroups,
+  sessionGroups,
   focusedRow,
   isRemoval,
   liveAskSlot,
@@ -383,6 +390,36 @@ describe("reviewRows", () => {
     });
   });
 
+  it("an ask row says its question once and names who asked (askCardView)", () => {
+    const [row] = reviewRows(
+      [
+        {
+          ...ask,
+          title: "Decide: Ship the launch post",
+          ask: { mode: "confirm", prompt: "Accept: Ship the launch post?" },
+          source: {
+            kind: "session",
+            id: "s1",
+            label: "Decide: Ship the launch post",
+          },
+          by: { kind: "agent", id: "a1", label: "Claude Code" },
+        },
+      ],
+      new Map()
+    );
+    expect(row).toMatchObject({
+      title: "Ship the launch post?",
+      who: "Claude Code",
+      // The session is named after the question: saying it again adds nothing.
+      where: null,
+    });
+    const [caused] = reviewRows(
+      [{ ...ask, askCause: { kind: "run" } }],
+      new Map()
+    );
+    expect(caused!.who).toBe("From the run");
+  });
+
   it("a criterion slot is graded on the scorecard, so it opens where it lives", () => {
     const [row] = reviewRows([{ ...ask, slotKind: "criterion" }], new Map());
     expect(row!.detail).toEqual({
@@ -430,8 +467,29 @@ describe("chips, views and focus", () => {
       changes: 2,
       asks: 1,
     });
-    expect(rowsInView(rows, "changes").map((r) => r.key)).toEqual(["c1", "c2"]);
-    expect(rowsInView(rows, "all")).toHaveLength(5);
+    expect(rowsInView(rows, "changes").headline.map((r) => r.key)).toEqual([
+      "c1",
+      "c2",
+    ]);
+    expect(rowsInView(rows, "all").headline).toHaveLength(5);
+  });
+
+  it("Review later is its own fold, out of the headline and every count", () => {
+    // Rules out "a stale row is just an older row": the badge leaves it out,
+    // so a chip that counted it would say a number the badge cannot explain.
+    const later = reviewRows(
+      [cluster("fresh"), cluster("stale", { reviewLater: true })],
+      new Map([facts("fresh-p1"), facts("stale-p1")])
+    );
+    expect(reviewCounts(later)).toEqual({
+      all: 1,
+      access: 0,
+      changes: 1,
+      asks: 0,
+    });
+    const view = rowsInView(later, "all");
+    expect(view.headline.map((r) => r.key)).toEqual(["fresh"]);
+    expect(view.reviewLater.map((r) => r.key)).toEqual(["stale"]);
   });
 
   it("All says the pod's count, the nav badge's; groups count the page", () => {
@@ -583,5 +641,143 @@ describe("?session= — Review narrowed to one session", () => {
       new Map()
     );
     expect(reviewRowMembers(row!)).toEqual(["c1-p1", "c1-p2"]);
+  });
+});
+
+describe("Review by package (founder B-1)", () => {
+  const AGENT = { kind: "agent" as const, id: "agent-1", label: "Claude Code" };
+  const inSession = (id: string, sessionId: string, over = {}) =>
+    cluster(id, {
+      groupKey: `session:${sessionId}`,
+      sessionTitle: `Session ${sessionId}`,
+      by: AGENT,
+      ...over,
+    });
+  const known = new Map([
+    facts("book-1-p1", { proposalType: "update", targetType: "focus_session" }),
+    facts("book-2-p1", { proposalType: "update", targetType: "focus_session" }),
+    facts("hand-1-p1", {
+      proposalType: "assign_agent",
+      targetType: "focus_session",
+    }),
+    facts("know-1-p1", { proposalType: "import.graph", targetType: "entity" }),
+  ]);
+
+  it("files each row under the package the pod stamped", () => {
+    const rows = reviewRows(
+      [cluster("x", { package: "releases" } as Partial<ReviewSignal>)],
+      new Map([facts("x-p1")])
+    );
+    expect(rows[0]?.package).toBe("releases");
+  });
+
+  it("classifies a row itself when the pod is older than the stamp", () => {
+    const rows = reviewRows(
+      [inSession("book-1", "s1"), inSession("hand-1", "s2"), ask],
+      known
+    );
+    expect(rows.map((r) => r.package)).toEqual([
+      "bookkeeping",
+      "hand-offs",
+      "questions",
+    ]);
+  });
+
+  it("groups in the FIXED order, stakes first, and leaves out empty packages", () => {
+    const rows = reviewRows(
+      [inSession("book-1", "s1"), inSession("know-1", "s1"), ask],
+      known
+    );
+    expect(packageGroups(rows).map((g) => g.package)).toEqual([
+      "questions",
+      "knowledge",
+      "bookkeeping",
+    ]);
+  });
+
+  it("folds by session and by agent, the rows with none last", () => {
+    const rows = reviewRows(
+      [
+        inSession("book-1", "s1"),
+        inSession("book-2", "s2"),
+        inSession("know-1", "s1"),
+        cluster("loose", { by: null }),
+      ],
+      new Map([...known, facts("loose-p1")])
+    );
+    expect(
+      sessionGroups(rows).map((g) => [g.id, g.title, g.rows.length])
+    ).toEqual([
+      ["s1", "Session s1", 2],
+      ["s2", "Session s2", 1],
+      [null, null, 1],
+    ]);
+    expect(agentGroups(rows).map((g) => [g.id, g.rows.length])).toEqual([
+      ["agent-1", 3],
+      [null, 1],
+    ]);
+  });
+
+  it("counts items, not rows, and finds the oldest", () => {
+    const rows = reviewRows(
+      [
+        inSession("book-1", "s1", {
+          count: 3,
+          proposalIds: ["a", "b", "c"],
+          occurredAt: "2026-10-01T00:00:00.000Z",
+        }),
+        inSession("book-2", "s2"),
+      ],
+      known
+    );
+    expect(itemCount(rows)).toBe(4);
+    expect(oldestAt(rows)).toBe("2026-10-01T00:00:00.000Z");
+  });
+
+  it("Keep all takes batchable rows only, never past one batch", () => {
+    const many = Array.from({ length: 3 }, (_, i) =>
+      inSession(`big-${i}`, "s1", {
+        count: 20,
+        proposalIds: Array.from({ length: 20 }, (_, j) => `big-${i}-${j}`),
+      })
+    );
+    const viewer = new Map(
+      many.flatMap((m) =>
+        (m.proposalIds ?? []).map((id) =>
+          facts(id, { proposalType: "update", targetType: "focus_session" })
+        )
+      )
+    );
+    const rows = reviewRows(many, viewer);
+    const keep = keepAllOf(rows);
+    // 20 + 20 fit one batch of 50; the third row would make 60.
+    expect(keep.proposalIds).toHaveLength(40);
+    expect(keep.left).toBe(1);
+  });
+
+  it("suggests keeping bookkeeping as one only when every row can be kept", () => {
+    const rows = reviewRows(
+      [inSession("book-1", "s1"), inSession("book-2", "s2")],
+      known
+    );
+    expect(bookkeepingSuggestion(rows)).toMatchObject({
+      count: 2,
+      sessions: 2,
+    });
+    const notMine = reviewRows(
+      [inSession("book-1", "s1"), inSession("book-2", "s2")],
+      new Map([
+        facts("book-1-p1", {
+          proposalType: "update",
+          targetType: "focus_session",
+        }),
+        facts("book-2-p1", {
+          proposalType: "update",
+          targetType: "focus_session",
+          viewerCanReview: false,
+        }),
+      ])
+    );
+    expect(bookkeepingSuggestion(notMine)).toBeNull();
   });
 });

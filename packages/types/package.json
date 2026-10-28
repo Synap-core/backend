@@ -1,6 +1,6 @@
 {
   "name": "@synap-core/types",
-  "version": "1.12.7",
+  "version": "1.12.10",
   "description": "Shared TypeScript types and Zod schemas for the Synap platform",
   "type": "module",
   "publishConfig": {
@@ -79,6 +79,10 @@
     "./renderables": {
       "types": "./dist/renderables/index.d.ts",
       "import": "./dist/renderables/index.js"
+    },
+    "./cell-bridge": {
+      "types": "./dist/cell-bridge/index.d.ts",
+      "import": "./dist/cell-bridge/index.js"
     },
     "./presentation": {
       "types": "./dist/presentation/index.d.ts",
@@ -201,6 +205,10 @@
       "types": "./dist/proposals/intent.d.ts",
       "import": "./dist/proposals/intent.js"
     },
+    "./proposals/fate": {
+      "types": "./dist/proposals/fate.d.ts",
+      "import": "./dist/proposals/fate.js"
+    },
     "./proposals/item-pack": {
       "types": "./dist/proposals/item-pack.d.ts",
       "import": "./dist/proposals/item-pack.js"
@@ -216,6 +224,10 @@
     "./proposals/capability-run": {
       "types": "./dist/proposals/capability-run.d.ts",
       "import": "./dist/proposals/capability-run.js"
+    },
+    "./proposals/review-package": {
+      "types": "./dist/proposals/review-package.d.ts",
+      "import": "./dist/proposals/review-package.js"
     },
     "./text": {
       "types": "./dist/text/index.d.ts",
@@ -308,6 +320,10 @@
     "./needs-you": {
       "types": "./dist/needs-you/index.d.ts",
       "import": "./dist/needs-you/index.js"
+    },
+    "./work-release": {
+      "types": "./dist/work-release/index.d.ts",
+      "import": "./dist/work-release/index.js"
     },
     "./lens": {
       "types": "./dist/lens/index.d.ts",

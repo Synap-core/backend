@@ -30,6 +30,12 @@ import type { GovernanceRung, MatrixMark } from "../agent-matrix/index.js";
 import type { FilterOperator } from "../views/filters.js";
 import type { NeedsYouBucket } from "../needs-you/buckets.js";
 import type {
+  CheckVerdict,
+  RepoMainHealth,
+  ShipFold,
+  ShipStage,
+} from "../work-release/index.js";
+import type {
   PullRequestChecks,
   PullRequestState,
 } from "../events/pr-state.js";
@@ -52,6 +58,9 @@ export * from "./embed-words.js";
 
 /** Who is on a goal: participant roles, commitment states, "Silent 6 h". */
 export * from "./track-participant-words.js";
+
+/** Review's packages, groupings and layouts (`../proposals/review-package.ts`). */
+export * from "./review-words.js";
 
 /**
  * Words a sentence-cased token must still spell the way people write them —
@@ -422,6 +431,14 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   // taking them back out (a `belongs_to_project` link delete). One verb pair
   // for the act a person names "filing"; never "Link"/"Delete".
   file_entities: { imperative: "File", past: "Filed" },
+  // An agent's held-writes pack (`agent/held_writes`, past its daily write
+  // ceiling): a state the writes are in, not a verb a person performs, so both
+  // moods read the same. Titled as a LEAD (`ACTION_TITLE_LEADS`): "Writes held
+  // for review: Claude Code, 2026-10-27, 12 items" — never "Held writes Agent".
+  held_writes: {
+    imperative: "Writes held for review",
+    past: "Writes held for review",
+  },
   // Filing a captured record (a capture chip's accept): the proposal it was
   // becomes the thing. "File" on the button, "Filed" on the chip and receipt.
   file: {
@@ -605,6 +622,14 @@ export const ACTION_OBJECT_PREPOSITIONS: Readonly<Record<string, string>> = {
   session_narrative_update: "of",
   widen_scopes: "for",
 };
+
+/**
+ * Actions whose title is a LEAD, `<verb>: <name>`, with no kind noun: the
+ * object is a batch the name describes, not a record of a kind ("Writes held
+ * for review: Claude Code, 2026-10-27, 12 items"). Keyed like
+ * {@link ACTION_VERBS} (whole token).
+ */
+export const ACTION_TITLE_LEADS: ReadonlySet<string> = new Set(["held_writes"]);
 
 function resolveActionPreposition(action: string | null | undefined): string {
   if (!action) return "";
@@ -923,6 +948,10 @@ export function buildObjectActionTitle(params: {
   const { action, fallbackAction, objectKind, objectName, mood } = params;
   const actionToken = action ?? fallbackAction;
   const verb = resolveActionLabel(actionToken, mood ?? "imperative");
+  if (actionToken && ACTION_TITLE_LEADS.has(actionToken.toLowerCase())) {
+    const lead = nameSlot(objectName, verb, verb, "");
+    return lead ? `${verb}: ${lead}` : verb;
+  }
   // `entity` is the generic base kind — naming it adds nothing ("Create
   // Entity"), so it is suppressed in favour of the concrete profile slug.
   const noun =
@@ -1387,6 +1416,45 @@ export const PULL_REQUEST_CHECKS_LABELS: Readonly<
 
 /** A deploy named the PR's merge commit. */
 export const PULL_REQUEST_DEPLOYED_LABEL = "Deployed";
+
+/**
+ * WORK › SHIP marks (`@synap-core/types/work-release`): the columns of the
+ * road to main, a PR's check verdict, the folds and a main's health. Their
+ * own tables: `ready`, `running` and `stale` already mean other things in
+ * {@link STATUS_LABELS}. Keyed by every member, so a new one stops the build.
+ */
+export const SHIP_STAGE_LABELS: Readonly<Record<ShipStage, string>> = {
+  working: "Working",
+  checks: "Checks",
+  ready: "Ready",
+  on_main: "On main",
+};
+
+export const CHECK_VERDICT_LABELS: Readonly<Record<CheckVerdict, string>> = {
+  green: "Green",
+  own_red: "Own red",
+  inherited: "Inherited red",
+  infra: "Did not run",
+  queued: "Queued",
+  running: "Running",
+  unmeasured: "No checks yet",
+};
+
+export const SHIP_FOLD_LABELS: Readonly<Record<NonNullable<ShipFold>, string>> =
+  {
+    draft: "Drafts",
+    negctl: "Negative controls",
+    dependabot: "Dependabot",
+    stale: "Stale",
+  };
+
+export const REPO_MAIN_HEALTH_LABELS: Readonly<Record<RepoMainHealth, string>> =
+  {
+    ok: "Main green",
+    red: "Main red",
+    infra: "Main did not run",
+    unmeasured: "Main not measured",
+  };
 
 export function resolvePullRequestStateLabel(state: PullRequestState): string {
   return PULL_REQUEST_STATE_LABELS[state];
@@ -1891,6 +1959,30 @@ export function resolveSignInWayLabel(
 }
 
 /**
+ * Where a key is used — the doors a person picks on the New key page, in
+ * words (`@synap-core/types/grants` `KEY_USES`, stored on a template as
+ * `grant_roles.uses`). The person never sees a scope token: each use names
+ * the scopes it opens, and the mint door derives them (`scopesForKey`).
+ */
+export const KEY_USE_LABELS = {
+  hub: "A website or app (Hub API)",
+  mcp: "An AI client over MCP",
+  n8n: "n8n",
+  "n8n-analyze": "AI analysis in n8n",
+  realtime: "Live updates (realtime)",
+  chat: "Chat streaming",
+  skills: "Skills",
+} as const;
+
+export function resolveKeyUseLabel(use: string | null | undefined): string {
+  if (!use?.trim()) return "";
+  return (
+    (KEY_USE_LABELS as Readonly<Record<string, string>>)[use.trim()] ??
+    humanizeToken(use)
+  );
+}
+
+/**
  * CAPTURE CHIP states — where one record a capture proposed stands, as the word
  * beside its mark.
  *
@@ -2142,6 +2234,10 @@ export const OUTPUT_RETIRED_REASON_LABELS: Readonly<Record<string, string>> = {
   decision_resolved: "Decided elsewhere",
   /** The agent withdrew a deliverable it had declared (`retireOutput`). */
   withdrawn: "Withdrawn",
+  /** The session ended with the agent's own question (confirm / choose) still open. */
+  session_ended: "Session ended",
+  /** A proposed decision a person wrote asked them with no agent behind it. */
+  not_asked: "Not asked by anyone",
 };
 
 /** The human label for a retired reason; unknown values humanize, never leak. */

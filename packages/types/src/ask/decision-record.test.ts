@@ -68,6 +68,16 @@ describe("decisionRecordView", () => {
     expect(v.options[0]).toMatchObject({ key: "A", chosen: true });
   });
 
+  it("a confirm that recommended Yes and was answered No reads overrode, in the receipt's words", () => {
+    const v = decisionRecordView({
+      chosenOption: "no",
+      recommendedOption: "yes",
+      followedRecommendation: false,
+    });
+    expect(v.options).toEqual([]);
+    expect(v.outcome).toEqual({ outcome: "overrode", recommendedLabel: "Yes" });
+  });
+
   it("garbage yields an empty honest view and never throws", () => {
     for (const bad of [
       null,

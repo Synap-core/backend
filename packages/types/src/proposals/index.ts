@@ -6,6 +6,7 @@
 
 import type { EventAction } from "../events/unified.js";
 import { isLikelyUUID } from "./proposal-utils.js";
+import type { ProposalPartReach } from "./reach.js";
 export { isLikelyUUID };
 
 // Governance grant-option derivation (pure, browser-safe) — the SSOT the
@@ -29,6 +30,9 @@ export * from "./duplicate-review.js";
 // Which proposals only their own page may approve: the one rule every surface
 // and the pod's batch door read.
 export * from "./page-only.js";
+// What a part that acts on its own can reach, and the words for it (the
+// marketplace preflight says the same).
+export * from "./reach.js";
 
 /**
  * The pod's cap on one batch decision (`proposals.batchApprove` /
@@ -286,7 +290,8 @@ export interface ProposalReviewChange {
   label: string;
   operation: "create" | "update" | "delete" | "set";
   /**
-   * The value before this change, on UPDATE rows only.
+   * The value before this change: on an UPDATE row, the value it replaces;
+   * on a DELETE row, the value it removes (a delete row has no `after`).
    *
    *   - `null`      — RECORDED empty: the propose-time snapshot read this
    *     field and it had no value ("was empty");
@@ -558,6 +563,12 @@ export interface ProposalReviewGraph {
      * assume it starts firing.
      */
     bornEnabled: false;
+    /**
+     * What its steps can reach outside the pod once it runs, read the way the
+     * runtime resolves each step (a verb → the skill that answers it).
+     * Absent = not measured (draw nothing, never "nothing").
+     */
+    reach?: ProposalPartReach;
   }>;
   rules?: Array<{
     ref: string;
@@ -625,6 +636,12 @@ export interface ProposalReviewGraph {
       before?: string;
       beforeTruncated?: boolean;
     }>;
+    /**
+     * What the row it rewrites can reach outside the pod (a skill that runs:
+     * code, a provider verb, a builtin), read while the proposal is pending.
+     * Absent = not read, or it runs nothing (an instruction).
+     */
+    reach?: ProposalPartReach;
   }>;
 }
 
@@ -650,7 +667,45 @@ export interface ProposalReviewModel {
   graph?: ProposalReviewGraph;
   /** Present ONLY for delete proposals — see {@link ProposalRemoval}. */
   removal?: ProposalRemoval;
+  /**
+   * Present ONLY for a pending `capability.enable`: what approving it turns
+   * on — see {@link ProposalTurnsOn}.
+   */
+  turnsOn?: ProposalTurnsOn;
   events: ProposalReviewEvent[];
+}
+
+/**
+ * What a `capability.enable` would turn on, read NOW (while it is pending)
+ * under the viewer's skill read rule: each skill whole, so the person reads
+ * the code or prose they are switching on and where it can reach. A skill the
+ * viewer cannot read is COUNTED in `unreadSkills`, never dropped silently.
+ */
+export interface ProposalTurnsOn {
+  skills: ProposalTurnOnSkill[];
+  /** Skills in the request this viewer could not read (or that are gone). */
+  unreadSkills: number;
+}
+
+export interface ProposalTurnOnSkill {
+  id: string;
+  name: string;
+  /** `code` | `instruction` | `declarative` | `builtin`. */
+  kind: string;
+  /** `box` = a script run on the person's computer, not in the pod. */
+  executionMode: string;
+  /** The whole code it would run; never excerpted. */
+  code?: string;
+  /** Its whole documentation, or an instruction skill's prose. */
+  body?: string;
+  /** A box script's declaration (packages, hosts, limits), as stored. */
+  box?: Record<string, unknown>;
+  /**
+   * What it can reach outside the pod, read like every "Can reach" fact.
+   * Absent for an instruction (it runs nothing) and for a box script (its
+   * declaration says what it reaches, not the pod's sandbox).
+   */
+  reach?: ProposalPartReach;
 }
 
 /**

@@ -10,7 +10,9 @@
  *  - `acts_on_its_own`: anything else that sets up a skill, an automation or a
  *    rule: an instruction skill create (its prose lands in an agent's system
  *    prompt, a prompt-injection vector once a person approves it), any skill
- *    update, and a composite carrying such ops.
+ *    update, a composite carrying such ops, and a `capability.enable` (it
+ *    turns on skills and tools: code, provider verbs or prose, and only its
+ *    page shows each one whole with its reach; founder, 2026-10-28).
  *  - `identity_choice`: a create whose twin is a record (`needsIdentityChoice`).
  *    A plain approve keeps both without the reviewer seeing the twin; the
  *    page offers the same-name verbs.
@@ -64,7 +66,7 @@ export const PAGE_ONLY_SENTENCE: Readonly<Record<PageOnlyReason, string>> = {
   executable_skill:
     "Open it to approve: approving this skill turns its code on, and only its page shows the code.",
   acts_on_its_own:
-    "Open it to approve: it sets up a skill, automation or rule that acts on its own, and only its page shows it whole.",
+    "Open it to approve: it sets up or turns on a skill, automation or rule that acts on its own, and only its page shows it whole.",
 };
 
 /** The reasons whose approval turns something on. */
@@ -116,12 +118,17 @@ export function isExecutableSkillCreate(p: PageOnlyProposalFacts): boolean {
   return skillRequestExecutes(requestOf(p.data));
 }
 
+/** The request that turns installed skills and tools on (`proposeCapabilityEnable`). */
+const CAPABILITY_ENABLE_PROPOSAL_TYPE = "capability.enable" as const;
+
 /**
  * Any other proposal that sets up something acting on its own: a skill create
- * or update of any kind, or a composite whose ops create or change a skill,
- * an automation or a rule (`ACTING_OPERATION_KINDS`).
+ * or update of any kind, a composite whose ops create or change a skill, an
+ * automation or a rule (`ACTING_OPERATION_KINDS`), or a request to turn
+ * skills and tools on (every member it turns on runs or lands in a prompt).
  */
 export function actsOnItsOwn(p: PageOnlyProposalFacts): boolean {
+  if (p.proposalType === CAPABILITY_ENABLE_PROPOSAL_TYPE) return true;
   if (p.targetType === "skill") {
     const verb = verbOf(p.proposalType);
     if (verb === "create" || verb === "update") return true;

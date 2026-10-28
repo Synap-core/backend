@@ -180,9 +180,10 @@ export interface PostChannelMessageResult {
    * `failed`). A slot the session does not declare, or a room with no
    * session, is REFUSED before posting (`checkRoomQuestionSlot`), so
    * `unknown_label` / `no_session` only reach here on a race. Absent for
-   * every other post.
+   * every other post. `hint` when the ask's prompt only repeats the slot's
+   * label (`ask-text.ts`): filed anyway, said back.
    */
-  slot?: { status: string };
+  slot?: { status: string; hint?: string };
 }
 
 /**
@@ -312,7 +313,10 @@ async function fileSlotQuestion(
       agentUserId,
       userId,
     });
-    return { status: filed.status };
+    return {
+      status: filed.status,
+      ...("hint" in filed && filed.hint ? { hint: filed.hint } : {}),
+    };
   } catch (err) {
     logger.warn(
       { err, channelId, messageId },

@@ -239,6 +239,11 @@ export async function runPlaybookDoor(
     trackId?: string;
     /** The stage of that track (0274); absent ⇒ its current stage. */
     trackStage?: string;
+    /**
+     * Hand the run to this agent (`RunPlaybookInput.handToAgentId`). Refused
+     * by name by `playbooks.run` when nobody could take it; never a fallback.
+     */
+    handToAgentId?: string;
     /** Provenance label of the door (`mcp`, `hub-rest`). */
     source: string;
   }
@@ -352,6 +357,7 @@ export async function runPlaybookDoor(
     ...(input.trackId && input.trackStage
       ? { trackStage: input.trackStage }
       : {}),
+    ...(input.handToAgentId ? { handToAgentId: input.handToAgentId } : {}),
     source: input.source,
     reasoning: input.reasoning,
     agentUserId: identity.agentUserId,

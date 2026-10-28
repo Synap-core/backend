@@ -413,9 +413,10 @@ describe("an agent's template update of an installed space", () => {
     expect(await stampOf(ws)).toBe("h-v1");
     expect(result.versionStamped).toBe(false);
     // …and the reviewer is TOLD, in the pod's one sentence — never a clean
-    // approval for an update that did not finish (review2 O2).
+    // approval for an update that did not finish (review2 O2) — naming what
+    // did not land and why (the finisher records each line, #350).
     expect(result.refusals).toEqual([
-      "Not finished: part of builder-broken did not apply. Run `synap templates update builder-broken` to retry.",
+      'Not finished: part of builder-broken did not apply (playbooks:Design to implementation: goalTemplate has placeholders no run will fill: {design}. Declare "design" in params, e.g. params: [{ "name": "design", "type": "text", "required": true }]). Run `synap templates update builder-broken` to retry.',
     ]);
   });
 

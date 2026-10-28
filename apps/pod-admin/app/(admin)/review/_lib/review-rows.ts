@@ -19,6 +19,11 @@
  *             answered here (`ask-detail.ts`), one at a time, never batched;
  *             anything else opens where it lives.
  *
+ * Review later: a durable proposal untouched for 7 days, or an ask nobody
+ * answered for 7 days, leaves the headline and the counts for its own fold —
+ * the SHARED fold (`needsYouRows`), so the console folds exactly what the
+ * badge leaves out and what the desktop and phone apps fold.
+ *
  * Words come from the vocabulary door; nothing here names a kind by hand.
  */
 
@@ -30,15 +35,22 @@ import {
   type LensNeedsYouSignal,
 } from "@synap-core/types/lens";
 import { isObjectNavView } from "@synap-core/types/navigation";
+import { needsYouRows } from "@synap-core/types/needs-you";
 import { proposalNeedsItsPage } from "@synap-core/types/proposals";
-import type { Ask } from "@synap-core/types/ask";
+import { askTextRestates, type Ask } from "@synap-core/types/ask";
+import {
+  REVIEW_PACKAGE_ORDER,
+  isReviewPackage,
+  reviewPackageOf,
+  type ReviewPackage,
+} from "@synap-core/types/proposals/review-package";
 import { openIn, type Exit } from "../../../../lib/open-in";
 import {
   proposalExpiresAt,
   proposalLapsed,
 } from "../../../_lib/proposal-expiry";
 import { isUuid } from "../../../../lib/format";
-import { askSlotOf, type AskSlot } from "./ask-detail";
+import { askSlotOf, askView, type AskSlot } from "./ask-detail";
 import {
   proposalRequester,
   type ProposalPrincipalView,
@@ -92,6 +104,12 @@ export interface ReviewSignal extends LensNeedsYouSignal {
   ask?: Ask | null;
   /** `owed-slot`: the agent's own (unverified) claim it produced this. */
   claimedDone?: boolean | null;
+  /**
+   * The review package the pod stamped — the decision the row asks
+   * (`reviewPackageOf`). Absent on a pod older than the stamp: the row is
+   * then classified here, through the same function.
+   */
+  package?: string | null;
 }
 
 /**
@@ -150,6 +168,14 @@ export interface ReviewRow {
   /** Stable key: the signal id. */
   key: string;
   group: ReviewGroup;
+  /** The decision it asks — what Review groups by (founder B-1). */
+  package: ReviewPackage;
+  /** The session it belongs to, when the viewer may read it. */
+  sessionId: string | null;
+  /** That session's name. */
+  sessionTitle: string | null;
+  /** The ONE agent that asked (the pod's `by`), when there is one. */
+  agent: { id: string; label: string } | null;
   /** Object kind for the noun chip + icon (`agent`, `issuer`, `track`…). */
   nounKind: string;
   title: string;
@@ -177,6 +203,8 @@ export interface ReviewRow {
   batchIds: string[] | null;
   /** Every id a `?focus=` may name this row by. */
   ids: string[];
+  /** In the Review later fold: out of the headline and the counts. */
+  reviewLater: boolean;
 }
 
 /**
@@ -247,14 +275,27 @@ function wholeCluster(s: ReviewSignal): string[] | null {
   return ids.length > 0 && ids.length === Math.max(1, s.count) ? ids : null;
 }
 
+/** A row's kind-specific half; `title` only when it is not the signal's. */
+type RowShape = Omit<
+  ReviewRow,
+  | "key"
+  | "group"
+  | "package"
+  | "sessionId"
+  | "sessionTitle"
+  | "agent"
+  | "title"
+  | "occurredAt"
+  | "count"
+  | "reviewLater"
+  | "expired"
+> & { title?: string };
+
 function proposalRow(
   s: ReviewSignal,
   group: ReviewGroup,
   facts: ReadonlyMap<string, ProposalFacts>
-): Omit<
-  ReviewRow,
-  "key" | "group" | "title" | "occurredAt" | "count" | "expired"
-> {
+): RowShape {
   const sampleId = s.target?.kind === "proposal" ? s.target.id : null;
   const sample = sampleId ? facts.get(sampleId) : undefined;
   const members = wholeCluster(s);
@@ -287,12 +328,7 @@ function proposalRow(
   };
 }
 
-function accessRow(
-  s: ReviewSignal
-): Omit<
-  ReviewRow,
-  "key" | "group" | "title" | "occurredAt" | "count" | "expired"
-> {
+function accessRow(s: ReviewSignal): RowShape {
   const target = s.target;
   return {
     nounKind: s.access?.subject ?? "application",
@@ -313,23 +349,23 @@ function accessRow(
   };
 }
 
-function askRow(
-  s: ReviewSignal
-): Omit<
-  ReviewRow,
-  "key" | "group" | "title" | "occurredAt" | "count" | "expired"
-> {
-  // The shared lens row decides an ask's noun, chip and door — the same
-  // words browser and relay draw for it.
+function askRow(s: ReviewSignal): RowShape {
+  // The shared lens row decides an ask's noun, chip, door and title (the
+  // card's question, `askCardView`) — the same words browser and relay draw.
   const lens = lensRowOfNeedsYou(
     { kind: "item", key: s.id, signal: s, session: null },
     "blocking"
   );
   const slot = askSlotOf(s);
+  // Who asked: the agent by name, else the cause — the card's own mark.
+  const asker = slot ? askView(slot).asker : null;
+  const where = s.source?.label || s.sessionTitle || null;
   return {
+    title: lens.title,
     nounKind: lens.objectKind,
-    who: null,
-    where: s.source?.label || s.sessionTitle || null,
+    who: asker ? (asker.kind === "agent" ? asker.name : asker.label) : null,
+    // A session named after the question ("Decide: X") says it twice.
+    where: where && !askTextRestates(where, lens.title) ? where : null,
     reason: lens.reason,
     expiresAt: null,
     detail: slot
@@ -353,6 +389,7 @@ export function reviewRows(
   facts: ReadonlyMap<string, ProposalFacts>,
   now: number = Date.now()
 ): ReviewRow[] {
+  const later = reviewLaterIds(signals);
   return signals.map((s) => {
     const group = reviewGroupOf(s);
     const shape =
@@ -364,18 +401,191 @@ export function reviewRows(
     const occurredAt = iso(s.occurredAt);
     const expiresAt = proposalExpiresAt(occurredAt, s.lifetimeHours);
     const expired = proposalLapsed(expiresAt, now);
+    const sessionId = sessionOf(s);
     return {
       ...shape,
       ...(expired ? { inlineApprove: false, batchIds: null } : {}),
       key: s.id,
       group,
-      title: s.title,
+      package: packageOf(s, facts),
+      sessionId,
+      sessionTitle: sessionId
+        ? s.sessionTitle ||
+          (s.source?.kind === "session" ? s.source.label : null) ||
+          null
+        : null,
+      agent: s.by?.id && s.by.label ? { id: s.by.id, label: s.by.label } : null,
+      title: shape.title ?? s.title,
       occurredAt,
       expiresAt,
       expired,
       count: Math.max(1, s.count),
+      reviewLater: later.has(s.id),
     };
   });
+}
+
+/** The signals the shared needs-you fold puts in Review later. */
+function reviewLaterIds(signals: readonly ReviewSignal[]): Set<string> {
+  return new Set(
+    needsYouRows(signals).reviewLater.flatMap((r) =>
+      r.kind === "item" ? [r.signal.id] : r.items.map((s) => s.id)
+    )
+  );
+}
+
+const SESSION_KEY = "session:";
+
+/** The session a row belongs to: its block key, else a session source. */
+function sessionOf(s: ReviewSignal): string | null {
+  if (s.groupKey?.startsWith(SESSION_KEY))
+    return s.groupKey.slice(SESSION_KEY.length);
+  return s.source?.kind === "session" ? s.source.id : null;
+}
+
+/**
+ * The row's review package: the pod's stamp, else the same classifier over
+ * what the page knows (a pod older than the stamp).
+ */
+function packageOf(
+  s: ReviewSignal,
+  facts: ReadonlyMap<string, ProposalFacts>
+): ReviewPackage {
+  if (isReviewPackage(s.package)) return s.package;
+  const sample =
+    s.target?.kind === "proposal" ? facts.get(s.target.id) : undefined;
+  const request = sample?.requestData as { profileSlug?: unknown } | undefined;
+  return reviewPackageOf({
+    kind: s.kind,
+    proposalType: sample?.proposalType,
+    targetType: sample?.targetType,
+    class: s.class,
+    data: sample?.data,
+    objectKind:
+      typeof request?.profileSlug === "string" ? request.profileSlug : null,
+  });
+}
+
+// ── Grouping (founder B-1 / B-4) ─────────────────────────────────────────────
+
+/** How many things rows stand for — a cluster counts its members. */
+export function itemCount(rows: readonly ReviewRow[]): number {
+  return rows.reduce((n, r) => n + r.count, 0);
+}
+
+/** The oldest `occurredAt` of rows (ISO), or null when none is known. */
+export function oldestAt(rows: readonly ReviewRow[]): string | null {
+  let oldest: string | null = null;
+  for (const r of rows)
+    if (r.occurredAt && (oldest === null || r.occurredAt < oldest))
+      oldest = r.occurredAt;
+  return oldest;
+}
+
+/** One package's rows, in the page's order. */
+export interface PackageGroup {
+  package: ReviewPackage;
+  rows: ReviewRow[];
+}
+
+/**
+ * Rows by PACKAGE, in the fixed order (stakes first); a package with no row
+ * is left out. Inside a package the server's order (newest first) holds.
+ */
+export function packageGroups(rows: readonly ReviewRow[]): PackageGroup[] {
+  return REVIEW_PACKAGE_ORDER.map((pkg) => ({
+    package: pkg,
+    rows: rows.filter((r) => r.package === pkg),
+  })).filter((g) => g.rows.length > 0);
+}
+
+/** A block of rows under one session or one agent. */
+export interface RowGroup {
+  /** The session or agent id; `null` for the rows that have none. */
+  id: string | null;
+  /** Its name; `null` for the rows that have none (the page words it). */
+  title: string | null;
+  rows: ReviewRow[];
+}
+
+function groupBy(
+  rows: readonly ReviewRow[],
+  keyOf: (r: ReviewRow) => { id: string; title: string | null } | null
+): RowGroup[] {
+  const groups = new Map<string, RowGroup>();
+  const loose: ReviewRow[] = [];
+  for (const r of rows) {
+    const key = keyOf(r);
+    if (!key) {
+      loose.push(r);
+      continue;
+    }
+    const g = groups.get(key.id);
+    if (g) {
+      g.rows.push(r);
+      g.title ??= key.title;
+    } else groups.set(key.id, { id: key.id, title: key.title, rows: [r] });
+  }
+  // First appearance = the server's newest-first order; the loose rows last.
+  const out = [...groups.values()];
+  if (loose.length > 0) out.push({ id: null, title: null, rows: loose });
+  return out;
+}
+
+/** Rows by SESSION ("Group by Work", and Bookkeeping's fold). */
+export function sessionGroups(rows: readonly ReviewRow[]): RowGroup[] {
+  return groupBy(rows, (r) =>
+    r.sessionId ? { id: r.sessionId, title: r.sessionTitle } : null
+  );
+}
+
+/** Rows by the AGENT that asked ("Group by Agent", and Hand-offs' fold). */
+export function agentGroups(rows: readonly ReviewRow[]): RowGroup[] {
+  return groupBy(rows, (r) =>
+    r.agent ? { id: r.agent.id, title: r.agent.label } : null
+  );
+}
+
+/**
+ * What "Keep all" / "Allow all" over a set of rows approves: the batchable
+ * rows, in order, while their members fit ONE batch (`BATCH_MAX`). A row the
+ * viewer may not approve whole, an access row, a page-only proposal or an
+ * expired one is never swept in (`batchIds` is null for each). `left` is how
+ * many rows the action does NOT take.
+ */
+export function keepAllOf(rows: readonly ReviewRow[]): {
+  rows: ReviewRow[];
+  proposalIds: string[];
+  left: number;
+} {
+  const picked: ReviewRow[] = [];
+  const proposalIds: string[] = [];
+  for (const r of rows) {
+    if (!r.batchIds) continue;
+    if (proposalIds.length + r.batchIds.length > BATCH_MAX) break;
+    picked.push(r);
+    proposalIds.push(...r.batchIds);
+  }
+  return { rows: picked, proposalIds, left: rows.length - picked.length };
+}
+
+/**
+ * The ONE suggestion Review offers (optional, last in the brief): agents'
+ * notes on their own sessions that can all be kept at once. Offered when
+ * Bookkeeping holds at least two items and "Keep all" takes every row.
+ */
+export function bookkeepingSuggestion(
+  rows: readonly ReviewRow[]
+): { count: number; sessions: number; rows: ReviewRow[] } | null {
+  const books = rows.filter((r) => r.package === "bookkeeping");
+  const keep = keepAllOf(books);
+  const count = itemCount(keep.rows);
+  if (count < 2 || keep.left > 0) return null;
+  return {
+    count,
+    sessions: sessionGroups(keep.rows).length,
+    rows: keep.rows,
+  };
 }
 
 /** The live question an open ask detail names, or null once it moved on. */
@@ -394,12 +604,16 @@ export function liveAskSlot(
   return null;
 }
 
-/** Rows per chip: All and each group. */
+/** Rows per chip: All and each group — the headline, as the badge counts it. */
 export function reviewCounts(
   rows: readonly ReviewRow[]
 ): Record<"all" | ReviewGroup, number> {
-  const out = { all: rows.length, access: 0, changes: 0, asks: 0 };
-  for (const r of rows) out[r.group] += 1;
+  const out = { all: 0, access: 0, changes: 0, asks: 0 };
+  for (const r of rows) {
+    if (r.reviewLater) continue;
+    out.all += 1;
+    out[r.group] += 1;
+  }
   return out;
 }
 
@@ -430,12 +644,20 @@ export function reviewChipCounts(
   };
 }
 
-/** The rows a needs-you view shows ("history" is not a needs-you view). */
+/**
+ * What a needs-you view shows ("history" is not one): its headline rows, and
+ * the rows of its Review later fold.
+ */
 export function rowsInView(
   rows: readonly ReviewRow[],
   filter: Exclude<ReviewFilter, "history">
-): ReviewRow[] {
-  return filter === "all" ? [...rows] : rows.filter((r) => r.group === filter);
+): { headline: ReviewRow[]; reviewLater: ReviewRow[] } {
+  const inView =
+    filter === "all" ? rows : rows.filter((r) => r.group === filter);
+  return {
+    headline: inView.filter((r) => !r.reviewLater),
+    reviewLater: inView.filter((r) => r.reviewLater),
+  };
 }
 
 /** The row a `?focus=<id>` names — by signal, target or member proposal id. */
