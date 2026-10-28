@@ -505,12 +505,18 @@ describe("the pod-wide authority gate runs BEFORE any executor dispatch", () => 
   );
 
   it("approve: computeCanReviewApproval precedes applyProposalApproval", () => {
-    const gate = ROUTER.indexOf(
-      "const { allowed: canApprove, reason: approveReason }"
-    );
-    const apply = ROUTER.indexOf(
-      "const approved = await applyProposalApproval({"
-    );
+    // Within the `approve` procedure, and blind to the statement around each
+    // call (the apply was `return await …` until #365 made it
+    // `const approved = await …`): the ORDER of the two calls is the invariant.
+    // That a refused gate never reaches the apply is pinned behaviourally in
+    // approve-acting-agent-floor.test.ts.
+    const start = ROUTER.indexOf("\n  approve: protectedProcedure");
+    const end = ROUTER.indexOf("\n  revise: protectedProcedure", start);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const approve = ROUTER.slice(start, end);
+    const gate = approve.indexOf("await computeCanReviewApproval(");
+    const apply = approve.indexOf("await applyProposalApproval(");
     expect(gate).toBeGreaterThan(-1);
     expect(apply).toBeGreaterThan(-1);
     expect(gate).toBeLessThan(apply);
