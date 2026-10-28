@@ -185,7 +185,21 @@ function ddlFor(table: PgTable): string {
     else if (c.hasDefault && type.endsWith("[]")) def = ` default '{}'`;
     return `"${c.name}" ${type}${pk}${def}`;
   });
-  return `create table "${cfg.name}" (${cols.join(", ")});`;
+  // The schema's plain unique indexes too: an `on conflict (…)` insert (links'
+  // `idx_links_unique_edge`) needs its target. Partial or expression indexes
+  // are left out; no write here depends on one.
+  const uniques = cfg.indexes.flatMap((idx) => {
+    const { unique, where, columns, name } = idx.config;
+    const names = columns.map((c) => (c as { name?: unknown }).name);
+    if (!unique || where || !names.every((n) => typeof n === "string"))
+      return [];
+    return [
+      `create unique index "${name ?? `${cfg.name}_${names.join("_")}_uidx`}" on "${cfg.name}" (${names.map((n) => `"${n}"`).join(", ")});`,
+    ];
+  });
+  return [`create table "${cfg.name}" (${cols.join(", ")});`, ...uniques].join(
+    "\n"
+  );
 }
 
 const q = <T = Record<string, unknown>>(sql: string, params?: unknown[]) =>
