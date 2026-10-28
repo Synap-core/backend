@@ -752,8 +752,11 @@ export const systemRouter = router({
    * - Typesense (Search)
    * - MinIO (Storage)
    * - Kratos (Identity Provider)
+   *
+   * Pod admin only: it reports the pod's infrastructure, including raw
+   * connection errors (audit 2026-10-28, pod-routers F8).
    */
-  getServiceHealth: protectedProcedure.query(async () => {
+  getServiceHealth: podAdminProcedure.query(async () => {
     const services: Array<{
       name: string;
       status: "healthy" | "unhealthy" | "degraded";
@@ -940,9 +943,10 @@ export const systemRouter = router({
    * Get Data Pod Stats
    *
    * Returns global counts for the Data Pod overview dashboard.
-   * Requires authentication.
+   * Pod admin only: pod-wide counts are the admin overview, not a member's
+   * (audit 2026-10-28, pod-routers F8).
    */
-  getDataPodStats: protectedProcedure.query(async () => {
+  getDataPodStats: podAdminProcedure.query(async () => {
     const [userResult] = await db
       .select({ value: count() })
       .from(users)
@@ -974,8 +978,14 @@ export const systemRouter = router({
    *
    * Admin-level query returning all users with optional type filter and pagination.
    * Includes workspace membership count for each user.
+   *
+   * Pod admin only (audit 2026-10-28, pod-routers F8): it returns every
+   * person's email and every agent's governance metadata. It was open to any
+   * signed-in principal, guests included (guest containment blocks only
+   * mutations). A member who needs the people of a space reads
+   * `workspaces.listMembers`, which is scoped to that space.
    */
-  listUsers: protectedProcedure
+  listUsers: podAdminProcedure
     .input(
       z.object({
         type: z.enum(["all", "human", "agent"]).default("all"),
