@@ -54,10 +54,13 @@ export function secondaryLine(
   row: ReviewRow,
   { showPackage = false }: { showPackage?: boolean } = {}
 ): string {
+  // Outside "Group by Package" the row says which decision it asks; a kind
+  // that reads the same word (Knowledge · Knowledge) is said once.
+  const pkg = showPackage ? resolveReviewPackageLabel(row.package) : null;
+  const kind = kindLabel(row.nounKind);
   return [
-    // Outside "Group by Package" the row says which decision it asks.
-    showPackage ? resolveReviewPackageLabel(row.package) : null,
-    kindLabel(row.nounKind),
+    pkg,
+    kind === pkg ? null : kind,
     row.who,
     row.where,
     row.reason,
