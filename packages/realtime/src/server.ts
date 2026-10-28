@@ -16,96 +16,12 @@ import { setupBridge } from "./bridge.js";
 import { validateRealtimeApiKey } from "./api-key-auth.js";
 import { verifyHandshakeUser } from "./session-auth.js";
 import { startDeviceSocketSweep, trackDeviceSocket } from "./device-sockets.js";
-import {
-  db,
-  and,
-  eq,
-  arrayContains,
-  federatedApplicationConnections,
-} from "@synap/database";
 import { canPrincipalJoinRoom, type RealtimePrincipal } from "./room-authz.js";
 import { firstDeniedHandshakeRoom, handshakeRooms } from "./presence-rooms.js";
 import { startPresenceSweep, type SweptSocket } from "./presence-sweep.js";
-import { realtimeFirstPartyBase } from "./first-party-base.js";
+import { isAllowedRealtimeOrigin } from "./realtime-origin.js";
 
 const PORT = parseInt(process.env.REALTIME_PORT || "4001", 10);
-const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
-
-/**
- * Origin policy — mirrors apps/api/src/cors-origin.ts. This is a separate
- * process/package so the check is duplicated by design. The Socket.IO handshake
- * is credentialed, so reflecting every origin is a CSWSH surface; trust only
- * first-party origins (env/base-domain) and APPROVED cross-origin applications.
- *
- * Async because the approved-application check hits the DB — the same
- * `federated_application_connections` table the HTTP door consults. Omitting
- * that path was the bug: an approved app (e.g. crm.synap.live) was authorized
- * for HTTP/tRPC but its Socket.IO handshake was rejected with no
- * Access-Control-Allow-Origin, so realtime was silently down for every approved
- * cross-origin app.
- */
-async function isAllowedRealtimeOrigin(origin?: string): Promise<boolean> {
-  if (!origin || origin === "null") return true; // native/same-origin or Electron (opaque origin) — CORS does not apply
-  let u: URL;
-  try {
-    u = new URL(origin);
-  } catch {
-    return false; // malformed origin
-  }
-  const host = u.hostname.toLowerCase();
-  const base = realtimeFirstPartyBase(process.env.SYNAP_BASE_DOMAIN);
-  // Derived subdomain trust requires https + the default port (dev allows http) —
-  // matches apps/api/src/cors-origin.ts.
-  const schemeOk =
-    u.protocol === "https:" || process.env.NODE_ENV !== "production";
-  if (
-    base &&
-    schemeOk &&
-    u.port === "" &&
-    (host === base || host.endsWith(`.${base}`))
-  ) {
-    return true;
-  }
-  // Explicit allowlist. FRONTEND_URL is included only when actually set — never
-  // its localhost default — so production can't silently trust localhost.
-  const explicit = [
-    ...(process.env.ALLOWED_ORIGINS ?? "").split(",").map((s) => s.trim()),
-    process.env.PUBLIC_URL ?? "",
-    process.env.POD_ADMIN_URL ?? "",
-    ...(process.env.FRONTEND_URL ? [FRONTEND_URL] : []),
-  ].filter(Boolean);
-  if (
-    explicit.some((o) => {
-      try {
-        return new URL(o).origin === u.origin;
-      } catch {
-        return false;
-      }
-    })
-  ) {
-    return true;
-  }
-  // Approved cross-origin applications — trusted exactly as the HTTP CORS door
-  // trusts them (`isApprovedApplicationOrigin`): an APPROVED row whose
-  // `allowed_origins` contains this exact origin. A DB outage fails CLOSED —
-  // never reflect an unknown Origin onto a credentialed WebSocket.
-  try {
-    const connection = await db.query.federatedApplicationConnections.findFirst(
-      {
-        where: and(
-          eq(federatedApplicationConnections.status, "approved"),
-          arrayContains(federatedApplicationConnections.allowedOrigins, [
-            u.origin,
-          ])
-        ),
-        columns: { id: true },
-      }
-    );
-    return Boolean(connection);
-  } catch {
-    return false;
-  }
-}
 
 // Create HTTP server
 const httpServer = createServer();
