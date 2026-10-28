@@ -27,7 +27,8 @@
  * SNAPSHOT_HEARTBEAT_S (default 300): the pod marks a snapshot "stale" after 30 min. The timer runs every
  * 2 min (devbox-dev-facts.timer), so a change reaches the pod within ~2 min.
  * Env: SYNAP_POD_URL, SYNAP_OBS_KEY (never printed or logged), SNAPSHOT_REPOS (slugs), SNAPSHOT_STATE (state
- *      file), SNAPSHOT_DEVBOX_STATUS (reader command), SNAPSHOT_POD_HEALTH_URL, SNAPSHOT_TZ (day for
+ *      file), SNAPSHOT_DEVBOX_STATUS (reader command), SNAPSHOT_POD_HEALTH_URL, SNAPSHOT_CP_HEALTH_URL,
+ *      SNAPSHOT_IS_HEALTH_URL, SNAPSHOT_TZ (day for
  *      mergedToday, default Europe/Paris), SNAPSHOT_DRY=1.
  * A repo whose read fails is SKIPPED this cycle (logged), never posted as empty: an unreadable GitHub is not
  * an empty repo. A pod that refuses the key (401/403, no `event.create` grant) is a warning, exit 0.
@@ -739,8 +740,48 @@ async function commitsBehind(repo, liveSha) {
   }
 }
 
+/**
+ * A service whose /health says its build: `buildSha` that is not a hex sha ("unknown", empty, absent: the deploy
+ * does not stamp it) is an honest unknown (sha null), never a fake sha. An unreachable health still throws.
+ */
+async function liveFromHealth(repo, kind, label, url, getJson_, behind) {
+  const health = await getJson_(url);
+  const raw =
+    typeof health?.buildSha === "string" ? health.buildSha.trim() : "";
+  const sha = /^[0-9a-f]{7,40}$/i.test(raw) ? raw.toLowerCase() : null;
+  return {
+    kind,
+    sha,
+    label,
+    behindBy: sha ? await behind(repo, sha) : null,
+  };
+}
+
 /** What is deployed from this repo, when it can be read; null when it cannot be (the caller keeps the last good). */
-async function readLive(repo) {
+export async function readLive(repo, deps = {}) {
+  const getJson_ = deps.getJson ?? getJson;
+  const behind = deps.commitsBehind ?? commitsBehind;
+  if (repo === "Synap-core/control-plane-api") {
+    return liveFromHealth(
+      repo,
+      "site",
+      "control plane",
+      process.env.SNAPSHOT_CP_HEALTH_URL || "https://api.synap.live/health",
+      getJson_,
+      behind
+    );
+  }
+  if (repo === "Synap-core/intelligence-hub") {
+    return liveFromHealth(
+      repo,
+      "site",
+      "intelligence hub",
+      process.env.SNAPSHOT_IS_HEALTH_URL ||
+        "https://intelligence.synap.live/health",
+      getJson_,
+      behind
+    );
+  }
   if (repo === "Synap-core/backend") {
     const health = await getJson(
       process.env.SNAPSHOT_POD_HEALTH_URL ||

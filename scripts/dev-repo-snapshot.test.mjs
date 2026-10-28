@@ -21,6 +21,7 @@ import {
   mergeableFrom,
   mergedTodayFrom,
   podSessionFromBody,
+  readLive,
   snapshotObservation,
   startOfDayMs,
 } from "./dev-repo-snapshot.mjs";
@@ -496,4 +497,60 @@ test("fixedBy: only a PR that says it fixes main, or the founder's mark; branch 
     { mainFailing: [], devbox: () => ({ checks: "infra" }) }
   );
   assert.deepEqual([pr.branch, pr.checks], ["negctl/x", "infra"]);
+});
+
+test("readLive reads the control plane and IS /health: sha + behindBy, unknown -> null, unreachable throws", async () => {
+  const CP = "Synap-core/control-plane-api";
+  const IS = "Synap-core/intelligence-hub";
+  const SHA = "0123456789abcdef0123456789abcdef01234567";
+  const urls = [];
+  const health = (buildSha) => async (url) => {
+    urls.push(url);
+    return { status: "healthy", buildSha };
+  };
+  const behind = async (repo, sha) => (sha === SHA ? 4 : 99);
+
+  const live = await readLive(CP, {
+    getJson: health(SHA.toUpperCase()),
+    commitsBehind: behind,
+  });
+  assert.deepEqual(live, {
+    kind: "site",
+    sha: SHA,
+    label: "control plane",
+    behindBy: 4,
+  });
+  assert.equal(urls[0], "https://api.synap.live/health");
+
+  for (const bad of ["unknown", "", "  ", "v1.2.3", "dev", undefined, 42]) {
+    const l = await readLive(CP, {
+      getJson: health(bad),
+      commitsBehind: behind,
+    });
+    assert.equal(l.sha, null, `buildSha ${JSON.stringify(bad)}`);
+    assert.equal(l.behindBy, null);
+  }
+
+  const is = await readLive(IS, {
+    getJson: health(SHA),
+    commitsBehind: behind,
+  });
+  assert.equal(is.kind, "site");
+  assert.equal(is.sha, SHA);
+  assert.equal(urls.at(-1), "https://intelligence.synap.live/health");
+  assert.equal(
+    (await readLive(IS, { getJson: health("unknown"), commitsBehind: behind }))
+      .sha,
+    null
+  );
+
+  await assert.rejects(
+    readLive(CP, {
+      getJson: async () => {
+        throw new Error("HTTP 502");
+      },
+      commitsBehind: behind,
+    }),
+    /502/
+  );
 });
