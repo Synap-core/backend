@@ -1391,7 +1391,8 @@ function workUnitUrl(slot: ExpectedOutput): string | null {
  * `retiredAt`), never a guess about the PR.
  */
 export function workUnitsSection(
-  all: ExpectedOutput[]
+  all: ExpectedOutput[],
+  opts: { uncapped?: boolean } = {}
 ): PacketSection<PacketWorkUnitItem> {
   const keys = deriveSlotKeys(all);
   const items = all.flatMap((slot, i): PacketWorkUnitItem[] => {
@@ -1418,7 +1419,28 @@ export function workUnitsSection(
       },
     ];
   });
-  return section(items);
+  return opts.uncapped
+    ? { status: "ok", total: items.length, items }
+    : section(items);
+}
+
+/**
+ * EVERY work unit the session recorded, each PR with its state: the session
+ * page's "Show all" of its pull requests and branches. The packet carries the
+ * first {@link PACKET_TOP_N} ({@link ContinuationPacket.workUnits}); this is
+ * the SAME rule (`workUnitsSection`) and the SAME state read
+ * (`withPullRequestStates`) over all of them, never a second derivation. The
+ * row must already be read through `sessionReadableWhere` by the door.
+ */
+export async function readAllWorkUnits(
+  row: SessionRow,
+  ctx: ProjectContinuationPacketCtx
+): Promise<PacketSection<PacketWorkUnitItem>> {
+  return withPullRequestStates(
+    workUnitsSection(slots(row), { uncapped: true }),
+    { userId: ctx.userId, roster: ctx.roster },
+    ctx.database ?? db
+  );
 }
 
 /**

@@ -33721,6 +33721,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: SessionUsage;
 		}>;
+		workUnits: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				sessionId: string;
+			};
+			meta: object;
+			output: PacketSection<PacketWorkUnitItem>;
+		}>;
 	}>>;
 	forms: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
