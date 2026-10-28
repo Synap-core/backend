@@ -23,7 +23,9 @@ const base: StartFacts = {
 };
 const f = (o: Partial<StartFacts>): StartFacts => ({ ...base, ...o });
 const done = (facts: StartFacts) =>
-  deriveStartSteps(facts).filter((s) => s.done).map((s) => s.id);
+  deriveStartSteps(facts)
+    .filter((s) => s.done)
+    .map((s) => s.id);
 
 const setupVals = {
   v: 1 as const,
@@ -61,12 +63,16 @@ describe("deriveStartSteps (§2.2 table)", () => {
   it("5. setup: a stored proposalId alone is NOT done (values are not trusted)", () => {
     const facts = f({
       values: setupVals,
-      setupProposal: { status: "pending", activeSpaceCount: 0, approvedAt: null },
+      setupProposal: {
+        status: "pending",
+        activeSpaceCount: 0,
+        approvedAt: null,
+      },
     });
     expect(done(facts)).not.toContain("start:setup");
-    expect(
-      done(f({ values: setupVals, setupProposal: null }))
-    ).not.toContain("start:setup");
+    expect(done(f({ values: setupVals, setupProposal: null }))).not.toContain(
+      "start:setup"
+    );
   });
 
   it("6. setup: approved but every created space archived is NOT done", () => {
@@ -91,11 +97,17 @@ describe("deriveStartSteps (§2.2 table)", () => {
       "start:agent",
     ]);
     expect(nextStartStep(deriveStartSteps(facts))).toBe("start:first-work");
-    expect(done(f({ agentConnection: "pending" }))).not.toContain("start:agent");
+    expect(done(f({ agentConnection: "pending" }))).not.toContain(
+      "start:agent"
+    );
   });
 
   it("8. first-work needs a review AFTER setup approval; done follows the journey", () => {
-    const setupProposal = { status: "approved", activeSpaceCount: 1, approvedAt: LATER };
+    const setupProposal = {
+      status: "approved",
+      activeSpaceCount: 1,
+      approvedAt: LATER,
+    };
     expect(
       done(f({ setupProposal, externalAgentApprovalReviewedAt: T }))
     ).not.toContain("start:first-work");
@@ -123,7 +135,12 @@ describe("resolveKindView (pref, then space default, then template first)", () =
     { slug: "deal-pipeline", type: "kanban" },
     { slug: "deals-table", type: "table" },
   ];
-  const pref = { view: "deals-table", type: "table", at: T, source: "settings" as const };
+  const pref = {
+    view: "deals-table",
+    type: "table",
+    at: T,
+    source: "settings" as const,
+  };
 
   it("pref wins", () => {
     expect(
@@ -132,7 +149,11 @@ describe("resolveKindView (pref, then space default, then template first)", () =
   });
   it("space default beats template first", () => {
     expect(
-      resolveKindView({ pref: null, templateViews, spaceDefault: "deals-table" })
+      resolveKindView({
+        pref: null,
+        templateViews,
+        spaceDefault: "deals-table",
+      })
     ).toMatchObject({ view: "deals-table", from: "space-default" });
   });
   it("template first is the last resort", () => {
@@ -170,8 +191,15 @@ describe("buildGetStartedPrompt", () => {
 describe("UIPreferencesSchema", () => {
   it("keeps kindViews (a zod object strips unknown keys)", () => {
     const kindViews = {
-      deal: { view: "deal-pipeline", type: "kanban", at: T, source: "onboarding" },
+      deal: {
+        view: "deal-pipeline",
+        type: "kanban",
+        at: T,
+        source: "onboarding",
+      },
     };
-    expect(UIPreferencesSchema.parse({ kindViews })?.kindViews).toEqual(kindViews);
+    expect(UIPreferencesSchema.parse({ kindViews })?.kindViews).toEqual(
+      kindViews
+    );
   });
 });

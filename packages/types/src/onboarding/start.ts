@@ -55,7 +55,8 @@ export interface StartFacts {
   agentConnection: StartAgentConnection;
   /** Latest reviewed, approved proposal by an external agent the viewer operates. */
   externalAgentApprovalReviewedAt: string | null;
-  journeyStatus: "offered" | "active" | "completed" | "dismissed" | string | null;
+  journeyStatus:
+    "offered" | "active" | "completed" | "dismissed" | string | null;
 }
 
 export interface StartStepState {
@@ -73,8 +74,7 @@ const isAfter = (a: string | null, b: string | null): boolean => {
 const DONE_RULES: Record<StartStepId, (f: StartFacts) => boolean> = {
   "start:intent": (f) => !!f.values?.intent,
   "start:views": (f) =>
-    !!f.values?.view ||
-    (f.startViewCount !== null && f.startViewCount < 2),
+    !!f.values?.view || (f.startViewCount !== null && f.startViewCount < 2),
   "start:path": (f) => !!f.values?.path,
   "start:setup": (f) =>
     !!f.values?.setup?.proposalId &&
