@@ -30,7 +30,14 @@ pnpm install
 | ------------ | --------------------------------------------------------------------- |
 | `commit-msg` | commitlint (see "Commits" below)                                      |
 | `pre-commit` | prettier and eslint on the staged files; it checks, it never rewrites |
-| `pre-push`   | `pnpm typecheck && pnpm build`                                        |
+| `pre-push`   | on a push to `main` only: typecheck of the changed packages, no build |
+
+The `pre-push` hook is cheap on purpose: builds and test suites run on the PR's GitHub CI, not on
+your machine. It prints one line saying what it ran or why it skipped. It skips a push that does
+not update `main` (the draft PR's Release gate typechecks and builds it), a checkout with no
+`node_modules`, and any push made with `SYNAP_HOOK_SKIP=1` or `HUSKY=0`. On a push to `main` it
+runs `turbo run typecheck --filter=...[<remote main>] --only`: the packages changed since the
+remote's `main` and their dependents, checked against the `dist/` already built.
 
 ## Repository layout
 
