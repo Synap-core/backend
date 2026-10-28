@@ -65,21 +65,23 @@ export function StartIntentForm({ model }: { model: IntentModel }) {
   const [error, setError] = useState<string | null>(null);
 
   const run = async (kind: Exclude<Pending, null>) => {
+    if (kind === "continue" && !selected) return;
     setPending(kind);
     setError(null);
-    const failure =
+    const failure = await postStart(
       kind === "continue" && selected
-        ? await postStart({
-            action: "intent",
-            ...intentPatch(selected, model),
-          })
-        : await postStart({ action: "skip" });
+        ? { action: "intent", ...intentPatch(selected, model) }
+        : { action: "skip" }
+    );
     if (failure) {
       setError(failure);
       setPending(null);
       return;
     }
-    router.push(kind === "continue" ? "/start" : navHref("home"));
+    // Continue reloads /start so the SERVER sends the person to the step the
+    // pod now says is next (a client push to the same address may reuse it).
+    if (kind === "continue") window.location.assign("/start");
+    else router.push(navHref("home"));
   };
 
   return (
