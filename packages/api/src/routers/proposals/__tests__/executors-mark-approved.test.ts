@@ -176,15 +176,18 @@ describe("playbook/archive and entity/renderer.set mark the proposal approved", 
       null,
       { data: { entityId: "e-1", ref: { kind: "cell", cellKey: "k" } } },
     ],
-  ] as const)("%s flips status, attributed to the approver", async (key, type, ws, data) => {
-    await run(key, { ...data }, type, ws);
-    const flip = updates.find((u) => u.status === ProposalStatus.APPROVED);
-    expect(flip).toMatchObject({
-      status: ProposalStatus.APPROVED,
-      reviewedBy: "human-1",
-    });
-    expect(emitted).toContainEqual(["p1", ws, "approved", "human-1"]);
-  });
+  ] as const)(
+    "%s flips status, attributed to the approver",
+    async (key, type, ws, data) => {
+      await run(key, { ...data }, type, ws);
+      const flip = updates.find((u) => u.status === ProposalStatus.APPROVED);
+      expect(flip).toMatchObject({
+        status: ProposalStatus.APPROVED,
+        reviewedBy: "human-1",
+      });
+      expect(emitted).toContainEqual(["p1", ws, "approved", "human-1"]);
+    }
+  );
 });
 
 describe("convention: every executor file marks APPROVED", () => {

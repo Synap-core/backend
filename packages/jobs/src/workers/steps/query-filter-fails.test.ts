@@ -16,7 +16,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { StepContext } from "../automation-executor-types.js";
 
-const mocks = vi.hoisted(() => ({ selects: 0 }));
+const mocks = vi.hoisted(() => ({ selects: 0, lookups: 0 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@synap/database")>();
@@ -33,6 +33,15 @@ vi.mock("@synap/database", async (importOriginal) => {
       select: () => {
         mocks.selects++;
         return query;
+      },
+      // The step resolves the slug's profile rows (kind or role) first.
+      query: {
+        profiles: {
+          findMany: async () => {
+            mocks.lookups++;
+            return [];
+          },
+        },
       },
     },
   };
@@ -61,6 +70,7 @@ const run = (filter: string | undefined, payload = {}) =>
 
 beforeEach(() => {
   mocks.selects = 0;
+  mocks.lookups = 0;
 });
 
 describe("query step: a filter that cannot be read fails the step", () => {
@@ -69,6 +79,7 @@ describe("query step: a filter that cannot be read fails the step", () => {
       QueryFilterParseError
     );
     expect(mocks.selects).toBe(0);
+    expect(mocks.lookups).toBe(0);
   });
 
   it("a templated filter that breaks JSON once resolved rejects too", async () => {
@@ -77,6 +88,7 @@ describe("query step: a filter that cannot be read fails the step", () => {
       run('{"stage": "{{trigger.payload.stage}}"}', { stage: 'say "hi"' })
     ).rejects.toThrow(/not valid JSON after templating.*unfiltered/);
     expect(mocks.selects).toBe(0);
+    expect(mocks.lookups).toBe(0);
   });
 
   it("a filter that parses to something other than an object rejects", () => {
