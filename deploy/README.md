@@ -43,8 +43,14 @@ What `install.sh` does (see its header for the full contract):
 5. Runs `synap install --non-interactive --release <id>` with every other flag
    you passed. Images are pulled by digest; nothing is built on the host.
 
-`SYNAP_RELEASE_VERIFY=warn|enforce|off` (default `warn`) controls the check of
-the release manifest's signature.
+`SYNAP_RELEASE_VERIFY=enforce|warn|off` (default `enforce`) controls the check
+of the release manifest's signature (cosign, keyless, Synap CI's identity). With
+no cosign on the host, sigstore's pinned image runs it through Docker. `enforce`
+refuses a missing or failing signature; `warn` reports it and goes on; `off`
+skips the check (a private mirror). The same rule applies to `synap install` and
+`synap update`; `synap update --insecure-skip-verify` goes on unverified for one
+run. Unattended updates (the Control Plane's orders, the update timer) always
+enforce.
 
 Every flag other than `--release` and `--dir` goes to `synap install`. The
 common ones:

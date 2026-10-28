@@ -268,6 +268,14 @@ function validateUpdateTargetVersion(payload) {
 // security wave 2026-10-13). Control characters are refused here, before any
 // argv is built, and the key set a command may never touch is enforced on the
 // same parsed entries the script receives.
+//
+// ALLOWLIST (audit 2026-10-28): a command may set ONLY the keys env.schema
+// flags `cp` (the names, origins, SMTP relay and backup vault the Control Plane
+// delivers), plus `retired` ones (env-config.sh drops them unwritten). Every
+// other key is operator-local. A denylist let a CP-signed configure set
+// SYNAP_UPDATE_NOTIFY_CMD, which `synap update` ran through `sh -c` as root on
+// the host: a CP compromise was root on every pod host. configure-pod.sh
+// enforces the same set again (`envcfg_set --cp`).
 
 const CONFIGURE_ENV_KEY_PATTERN = /^[A-Z][A-Z0-9_]*$/;
 // \n and \r split the pairs file; NUL truncates argv in the kernel.
@@ -287,33 +295,55 @@ const CONFIGURE_NEVER_KEYS = Object.freeze([
   // The CP must never re-open its own push door (D2): the owner closes it.
   "POD_AGENT_PUSH_ENABLED",
 ]);
+/**
+ * A key that names a command, hook or script is operator-local whatever the
+ * schema says: a value of it is code the host may run. Refused before the `cp`
+ * allowlist, so flagging one `cp` by mistake cannot reopen the hole.
+ */
+const CONFIGURE_COMMAND_KEY_PATTERN = /_(CMD|COMMAND|HOOK|SCRIPT)$/;
 // docker compose profile / service names.
 const COMPOSE_NAME_PATTERN = /^[a-z0-9][a-z0-9_.-]{0,62}$/;
 
 /**
- * The `immutable` keys of deploy/env.schema (exact names, and `PREFIX*`
- * entries as prefixes). Parsed with the same column rules env-config.sh uses:
- * `KEY TYPE FLAGS`, `#` comments and blank lines skipped.
+ * What deploy/env.schema says a command may touch, parsed with the same column
+ * rules env-config.sh uses (`KEY TYPE FLAGS`, `#` comments and blank lines
+ * skipped; `PREFIX*` entries match as prefixes):
+ *   exact/prefixes  the `immutable` keys (never set by a command)
+ *   cp              the keys a Control Plane `configure` may set (allowlist)
+ *   retired         keys tolerated and dropped unwritten by env-config.sh
  */
 function parseImmutableEnvKeys(schemaText) {
-  const exact = new Set();
-  const prefixes = [];
+  const flagged = () => ({ exact: new Set(), prefixes: [] });
+  const byFlag = { immutable: flagged(), cp: flagged(), retired: flagged() };
   for (const rawLine of String(schemaText).split("\n")) {
     const line = rawLine.trim();
     if (!line || line.startsWith("#")) continue;
     const [key, , flags = "-"] = line.split(/\s+/);
-    if (!flags.split(",").includes("immutable")) continue;
-    if (key.endsWith("*")) prefixes.push(key.slice(0, -1));
-    else exact.add(key);
+    for (const flag of flags.split(",")) {
+      const set = byFlag[flag];
+      if (!set) continue;
+      if (key.endsWith("*")) set.prefixes.push(key.slice(0, -1));
+      else set.exact.add(key);
+    }
   }
-  return { exact, prefixes };
+  return {
+    exact: byFlag.immutable.exact,
+    prefixes: byFlag.immutable.prefixes,
+    cp: byFlag.cp,
+    retired: byFlag.retired,
+  };
+}
+
+function matchesKeySet(key, set) {
+  return (
+    !!set &&
+    (set.exact.has(key) ||
+      set.prefixes.some((prefix) => key.startsWith(prefix)))
+  );
 }
 
 function isImmutableKey(key, immutable) {
-  return (
-    immutable.exact.has(key) ||
-    immutable.prefixes.some((prefix) => key.startsWith(prefix))
-  );
+  return matchesKeySet(key, immutable);
 }
 
 /** The KEY=VALUE strings a configure payload carries — the ONE conversion. */
@@ -332,16 +362,22 @@ function configureEnvEntries(payload) {
  * value in an error (values are secrets: hub keys, SMTP URIs, B2 keys).
  *
  * @param payload   the verified command payload
- * @param immutable result of parseImmutableEnvKeys(env.schema) — REQUIRED and
- *                  non-empty when the payload carries env: a schema we could
- *                  not read must not silently widen what a command may write.
+ * @param immutable result of parseImmutableEnvKeys(env.schema) — REQUIRED,
+ *                  with non-empty `immutable` and `cp` sets, when the payload
+ *                  carries env: a schema we could not read must not silently
+ *                  widen what a command may write.
  */
 function validateConfigurePayload(payload, immutable) {
   const entries = configureEnvEntries(payload);
   const values = new Map();
 
   if (entries.length > 0) {
-    if (!immutable || immutable.exact.size + immutable.prefixes.length === 0) {
+    if (
+      !immutable ||
+      immutable.exact.size + immutable.prefixes.length === 0 ||
+      !immutable.cp ||
+      immutable.cp.exact.size + immutable.cp.prefixes.length === 0
+    ) {
       const error = new Error("env schema unavailable — configure refused");
       error.code = "CONFIG_SCHEMA_UNAVAILABLE";
       throw error;
@@ -369,6 +405,19 @@ function validateConfigurePayload(payload, immutable) {
     }
     if (CONFIGURE_NEVER_KEYS.includes(key) || isImmutableKey(key, immutable)) {
       throw invalidPayload(`${key} cannot be changed by a command`);
+    }
+    if (CONFIGURE_COMMAND_KEY_PATTERN.test(key)) {
+      throw invalidPayload(
+        `${key} names a command the host runs: only the pod's operator sets it (synap config set)`
+      );
+    }
+    if (
+      !matchesKeySet(key, immutable.cp) &&
+      !matchesKeySet(key, immutable.retired)
+    ) {
+      throw invalidPayload(
+        `${key} is operator-local: a Control Plane command may set only the keys env.schema flags \`cp\``
+      );
     }
     values.set(key, value);
   }
@@ -482,6 +531,7 @@ function commandErrorStatus(error) {
 }
 
 module.exports = {
+  CONFIGURE_COMMAND_KEY_PATTERN,
   CONFIGURE_NEVER_KEYS,
   MAX_COMMAND_TOKEN_LIFETIME_SECONDS,
   POD_COMMAND_TYPE,

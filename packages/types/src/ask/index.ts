@@ -73,6 +73,8 @@ export const ASK_LIMITS = {
   /** "What I looked at" — the objects the agent read before asking. */
   lookedAtMax: 8,
   lookedAtIdMaxChars: 200,
+  /** "What it unblocks" — one line on a human-owned slot (decision E). */
+  unblocksMaxChars: 200,
 } as const;
 
 // ─── Modes ──────────────────────────────────────────────────────────────────
@@ -1502,6 +1504,8 @@ export {
   askFate,
   isAskReviewLater,
   effectiveAskCause,
+  effectiveSlotUnblocks,
+  ASK_UNBLOCKS_DEFAULT,
   stripAskVerbPrefix,
   askTextRestates,
   stripLeadingRestatement,

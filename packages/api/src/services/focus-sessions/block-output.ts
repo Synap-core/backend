@@ -37,6 +37,7 @@
  */
 
 import { db, focusSessions, and, eq } from "@synap/database";
+import { ASK_UNBLOCKS_DEFAULT } from "@synap-core/types/ask";
 import type {
   BlockedReason,
   ExpectedOutput,
@@ -58,7 +59,12 @@ import {
 } from "./block-guidelines.js";
 import { notifySessionNeedsYou } from "./notify-needs-you.js";
 import { archivedAnswerHistory } from "./answer-history.js";
-import { logSlotsAsked, stampAskProvenance } from "./slot-asked-event.js";
+import {
+  logSlotsAsked,
+  slotsMissingUnblocks,
+  stampAskProvenance,
+  unblocksAdvisedMessage,
+} from "./slot-asked-event.js";
 import { restatedAskHints } from "./ask-text.js";
 
 export interface BlockExpectedOutputParams {
@@ -71,6 +77,14 @@ export interface BlockExpectedOutputParams {
   blockedReason: BlockedReason;
   /** ONE line naming WHICH thing is missing, not its class. */
   why?: string;
+  /**
+   * WHAT MOVES when the person answers (decision E). Expected when an agent
+   * hands the slot over (`agentUserId` with no system `askCause`) and the
+   * slot does not already say it: ADVISED, never refused (rv-be-needs F1) —
+   * the slot lands with `ASK_UNBLOCKS_DEFAULT` and the result's `warnings`
+   * says so. `undefined` keeps a stored line.
+   */
+  unblocks?: string;
   /**
    * WHERE the person must go — an in-pod object or an external link. Optional,
    * and it is what turns "the Stripe restricted key for the live account" from
@@ -141,6 +155,12 @@ export type BlockExpectedOutputResult =
       blockGuidelines?: BlockGuidance;
       /** Block only: the ask's prompt only repeats the label (`ask-text.ts`). */
       hint?: string;
+      /**
+       * Block only: what the pod did not keep as sent, while the block landed.
+       * Today: an agent's hand-over that said nothing it unblocks, stamped
+       * with `ASK_UNBLOCKS_DEFAULT` (`unblocksAdvisedMessage`).
+       */
+      warnings?: string[];
     };
 
 /**
@@ -209,6 +229,20 @@ export async function blockExpectedOutput(
     }
   }
 
+  // WHAT IT UNBLOCKS (decision E): an agent handing the person a slot says
+  // what moves on the answer. A system producer names its cause instead.
+  // Checked on the slot as it WILL be stamped. ADVISED, never refused
+  // (rv-be-needs F1): a hand-over that says nothing lands with
+  // `ASK_UNBLOCKS_DEFAULT`, and `warnings` tells the agent.
+  let unblocksAdvice: string | null = null;
+  if (params.agentUserId && !params.askCause) {
+    const missing = handOverMissingUnblocks(slot, params);
+    if (missing.length > 0) {
+      params = { ...params, unblocks: ASK_UNBLOCKS_DEFAULT };
+      unblocksAdvice = unblocksAdvisedMessage(missing);
+    }
+  }
+
   // Re-derived INSIDE the lock from the REQUESTED label, never from the array
   // this call read before it — the TOCTOU the delegation door documents.
   // The locked base and result, captured for the `slot_asked` history row.
@@ -227,7 +261,8 @@ export async function blockExpectedOutput(
           params.why,
           undefined,
           params.ref,
-          params.ask
+          params.ask,
+          params.unblocks
         ),
         { askedBy: params.agentUserId, askCause: params.askCause }
       );
@@ -296,6 +331,7 @@ export async function blockExpectedOutput(
     kind: slot.kind,
     ...(blockGuidelines ? { blockGuidelines } : {}),
     ...(hint ? { hint } : {}),
+    ...(unblocksAdvice ? { warnings: [unblocksAdvice] } : {}),
   };
 }
 
@@ -320,6 +356,31 @@ export async function unblockExpectedOutput(
 }
 
 /**
+ * The labels an agent's hand-over of `slot` would newly pose to the person
+ * with nothing it unblocks (`slotsMissingUnblocks` over the slot as it WILL be
+ * stamped); empty = the hand-over says it. Pure.
+ */
+function handOverMissingUnblocks(
+  slot: ExpectedOutput,
+  params: Pick<
+    BlockExpectedOutputParams,
+    "blockedReason" | "why" | "ref" | "ask" | "unblocks"
+  >
+): string[] {
+  const stamped = stampBlocked(
+    [slot],
+    slot.label,
+    params.blockedReason,
+    params.why,
+    undefined,
+    params.ref,
+    params.ask,
+    params.unblocks
+  );
+  return slotsMissingUnblocks([slot], stamped);
+}
+
+/**
  * Hand the named slot to the human, every other slot untouched. Pure, so the
  * rule is testable without a database.
  */
@@ -336,10 +397,13 @@ export function stampBlocked(
    */
   ref?: OutputRef | null,
   /** Same three-state contract as `ref`. */
-  ask?: SlotAsk | null
+  ask?: SlotAsk | null,
+  /** What the answer unblocks; `undefined` keeps a stored line. */
+  unblocks?: string
 ): ExpectedOutput[] {
   const wanted = normalizeExpectedLabel(label);
   const trimmed = (why ?? "").trim();
+  const unblocking = (unblocks ?? "").trim();
   return outputs.map((o) => {
     if (normalizeExpectedLabel(o.label) !== wanted) return o;
     // Spread, never re-list: a field added to `ExpectedOutput` tomorrow rides
@@ -365,6 +429,7 @@ export function stampBlocked(
         owner: "human",
         blockedReason,
         ...(trimmed ? { why: trimmed } : {}),
+        ...(unblocking ? { unblocks: unblocking } : {}),
       },
       now
     );
@@ -390,6 +455,7 @@ export function stampUnblocked(
       owner: _owner,
       blockedReason: _blockedReason,
       why: _why,
+      unblocks: _unblocks,
       owedSince: _owedSince,
       ask: _ask,
       askedBy: _askedBy,

@@ -314,10 +314,24 @@ grep -qx "compose up -d --no-build --force-recreate --no-deps backend" "$FAKE_LO
   && ok "configure-pod: the recreate runs on the HOST, under the pinned compose project" || bad "configure-pod recreate: $(cat "$FAKE_LOG") project=$(cat "$FAKE_LOG.project" 2>/dev/null)"
 reset_env; before="$(cat "$DEPLOY/.env")"
 configure DOMAIN=x.example.com PATH=/usr/bin --recreate backend; rc=$?
-[ "$rc" != 0 ] && [ "$(cat "$DEPLOY/.env")" = "$before" ] && ! grep -q "compose" "$FAKE_LOG" && grep -q "PATH: unknown key" "$TMP/out" \
+[ "$rc" != 0 ] && [ "$(cat "$DEPLOY/.env")" = "$before" ] && ! grep -q "compose" "$FAKE_LOG" && grep -q "PATH: operator-local" "$TMP/out" \
   && ok "configure-pod: one unknown key → nothing written, no container touched" || bad "configure-pod refusal (rc=$rc): $(cat "$TMP/out") $(cat "$FAKE_LOG")"
 configure PUBLIC_URL=https://drift.example.com; [ $? != 0 ] && [ "$(envval PUBLIC_URL)" = https://pod.example.com ] && ok "configure-pod: PUBLIC_URL without POD_AGENT_AUDIENCE refused" || bad "configure-pod audience drift accepted"
 configure OPENAI_API_KEY=sk-CONFIGSECRET; grep -q CONFIGSECRET "$TMP/out" && bad "configure-pod logged a secret" || ok "configure-pod never logs values"
+# Audit 2026-10-28: a CP command sets only `cp` keys (the same allowlist as
+# pod-agent trust.js). SYNAP_UPDATE_NOTIFY_CMD once reached `sh -c` as root.
+reset_env; before="$(cat "$DEPLOY/.env")"
+configure "SYNAP_UPDATE_NOTIFY_CMD=touch $TMP/pwned"; rc=$?
+[ "$rc" != 0 ] && [ "$(cat "$DEPLOY/.env")" = "$before" ] && grep -q "SYNAP_UPDATE_NOTIFY_CMD: names a command the host runs" "$TMP/out" \
+  && ok "configure-pod: a command-type key (SYNAP_UPDATE_NOTIFY_CMD) is refused, nothing written" || bad "configure-pod accepted a command key (rc=$rc): $(cat "$TMP/out")"
+configure SMTP_FROM_ADDRESS=pod@example.com SYNAP_EDGE=traefik; rc=$?
+[ "$rc" != 0 ] && [ "$(cat "$DEPLOY/.env")" = "$before" ] && grep -q "SYNAP_EDGE: operator-local" "$TMP/out" \
+  && ok "configure-pod: an operator-local key refuses the whole command" || bad "configure-pod accepted an operator-local key (rc=$rc): $(cat "$TMP/out")"
+configure SMTP_FROM_ADDRESS=pod@example.com; rc=$?
+[ "$rc" = 0 ] && [ "$(envval SMTP_FROM_ADDRESS)" = pod@example.com ] \
+  && ok "configure-pod: a \`cp\` key (SMTP_FROM_ADDRESS) is written" || bad "configure-pod refused a cp key (rc=$rc): $(cat "$TMP/out")"
+( cd "$DEPLOY" && SYNAP_DEPLOY_DIR="$DEPLOY" dash -c '. ./env-config.sh && envcfg_set SYNAP_EDGE=traefik' ) >"$TMP/out" 2>&1 \
+  && [ "$(envval SYNAP_EDGE)" = traefik ] && ok "the operator (no --cp) still sets an operator-local key" || bad "operator set SYNAP_EDGE: $(cat "$TMP/out")"
 # An older Control Plane's retired OpenClaw add-on configure: accepted, the
 # retired keys dropped, the profile (no service carries it now) harmless.
 reset_env

@@ -21,6 +21,16 @@
  * output comes from one of those two ledgers). It is exposed as `hasOutputs`,
  * never as a count.
  *
+ * ── THE COUNTS ARE THE NEEDS-YOU HEADLINE ─────────────────────────────────
+ * `unitFacts` counts what NEEDS the person by THE rule (decision E,
+ * `@synap-core/types/needs-you/rule`): owed asks the rule classes
+ * `needs_you`, and pending proposals it classes `needs_you`. A Stopped,
+ * Working, Review later or system ask, and a change to review, never make a
+ * card, a pill or the graph say "Needs you" (rv-ui-ux U1): the same classes
+ * `signals.count` counts, so the two numbers are one. The section items
+ * (`owedSlots`, `pendingProposals`) still list everything owed: they are
+ * what the next move reads.
+ *
  * ── A FAILED READ IS NOT AN EMPTY ONE ───────────────────────────────────────
  * A batched section that fails marks that section `unavailable` on every row
  * (the rule then answers `unknown`), never `[]`.
@@ -39,6 +49,9 @@ import {
   lte,
   drizzleSql,
   ProposalStatus,
+  sessionLastAgentActivitySql,
+  sessionLastAgentWorkSql,
+  sessionTurnInFlightSql,
 } from "@synap/database";
 import {
   buildObjectActionTitle,
@@ -60,6 +73,9 @@ import {
   type PacketSlotFacts,
 } from "./continuation-packet.js";
 import { projectOwedSlots, type OwedSlot } from "./owed-outputs.js";
+import { isNeedsYou } from "@synap-core/types/needs-you/rule";
+import { owedSlotClassOf } from "../signals/needs-you-union.js";
+import { classifyPendingProposals } from "../proposals/proposal-needs-you.js";
 import { readDependencyFacts } from "../links/dependency-links.js";
 import { readOpenInboxes } from "./session-inbox.js";
 import { OPEN_SESSION_STATUSES } from "./session-statuses.js";
@@ -104,9 +120,8 @@ export interface SessionPathSections {
   /**
    * The facts a state mark and THE needs-you rule read, shaped exactly as
    * `SessionUnitFacts` and `NeedsYouFacts` (`@synap-core/types/units`) read
-   * them, from the SAME reads as `nextMove` so the mark, the rule and the next
-   * move cannot disagree. `pendingDecisions: null` means the proposals read
-   * FAILED — not zero.
+   * them: the needs-you HEADLINE only (see the header). `null` means that
+   * read FAILED — not zero.
    */
   unitFacts: SessionUnitCounts;
 }
@@ -116,7 +131,9 @@ export interface SessionPathSections {
  * to `sessionNeedsYou` / `tallyNeedsYou` unchanged.
  */
 export interface SessionUnitCounts {
-  owedFromYou: number;
+  /** Owed asks the needs-you rule classes `needs_you`. */
+  owedFromYou: number | null;
+  /** Pending proposals the needs-you rule classes `needs_you`. */
   pendingDecisions: number | null;
   /**
    * Finished and awaiting the person's review / close — this row's
@@ -322,6 +339,95 @@ async function readPendingProposals(
   );
 }
 
+/** Per session: how many owed asks and pending proposals NEED the person. */
+interface PageNeedsYou {
+  owed: Map<string, number>;
+  decisions: Map<string, number>;
+}
+
+/**
+ * THE needs-you rule over the page (decision E): the rule's session facts,
+ * measured by the SQL twin's own fragments (the needs-you reader's measure),
+ * classify each row's owed slots; `classifyPendingProposals` (the groups
+ * door's) classifies its pending proposals. Two reads plus the proposal
+ * classification's own; a failure THROWS, so `settle` marks the counts
+ * unavailable rather than zero.
+ */
+async function readPageNeedsYou<R extends PathSourceRow>(
+  database: typeof db,
+  userId: string,
+  rows: readonly R[],
+  now: Date
+): Promise<PageNeedsYou> {
+  const ids = rows.map((r) => r.id);
+  const [facts, pending] = await Promise.all([
+    database
+      .select({
+        id: focusSessions.id,
+        startedAt: focusSessions.startedAt,
+        turnInFlight: drizzleSql<boolean>`${sessionTurnInFlightSql("focus_sessions")}`,
+        lastAgentActivityAt: drizzleSql<
+          Date | string | null
+        >`${sessionLastAgentActivitySql("focus_sessions")}`,
+        lastAgentWorkAt: drizzleSql<
+          Date | string | null
+        >`${sessionLastAgentWorkSql("focus_sessions")}`,
+      })
+      .from(focusSessions)
+      .where(inArray(focusSessions.id, ids)),
+    database
+      .select({
+        id: proposals.id,
+        proposalType: proposals.proposalType,
+        status: proposals.status,
+        sessionId: proposals.sessionId,
+        data: proposals.data,
+        createdAt: proposals.createdAt,
+      })
+      .from(proposals)
+      .where(
+        and(
+          inArray(proposals.sessionId, ids),
+          eq(proposals.status, ProposalStatus.PENDING)
+        )
+      ),
+  ]);
+  const factsOf = new Map(facts.map((f) => [f.id, f]));
+  const owed = new Map<string, number>();
+  for (const row of rows) {
+    const f = factsOf.get(row.id);
+    const slots = projectOwedSlots(
+      {
+        id: row.id,
+        goal: row.goal,
+        status: row.status,
+        workspaceId: row.workspaceId,
+        projectId: row.projectId,
+        expectedOutputs: row.expectedOutputs,
+        startedAt: f?.startedAt ?? null,
+        turnInFlight: f?.turnInFlight === true,
+        lastAgentActivityAt: f?.lastAgentActivityAt ?? null,
+        lastAgentWorkAt: f?.lastAgentWorkAt ?? null,
+      },
+      now
+    );
+    owed.set(
+      row.id,
+      slots.filter((s) =>
+        isNeedsYou({ needsYouClass: owedSlotClassOf(s, now) })
+      ).length
+    );
+  }
+  const classes = await classifyPendingProposals(pending, { userId }, now);
+  const decisions = new Map<string, number>();
+  for (const p of pending) {
+    const cls = classes.get(p.id);
+    if (!p.sessionId || !cls || !isNeedsYou({ needsYouClass: cls })) continue;
+    decisions.set(p.sessionId, (decisions.get(p.sessionId) ?? 0) + 1);
+  }
+  return { owed, decisions };
+}
+
 /** Which page sessions produced anything, from both output ledgers. */
 async function readOutputPresence(
   database: typeof db,
@@ -368,6 +474,8 @@ export async function attachPathSections<R extends PathSourceRow>(
     database?: typeof db;
     /** Names the caller in a failed-section log line. */
     logContext?: Record<string, unknown>;
+    /** The clock the needs-you rule reads. Absent ⇒ now. */
+    now?: Date;
   }
 ): Promise<Array<R & SessionPathSections>> {
   if (rows.length === 0) return [];
@@ -375,48 +483,62 @@ export async function attachPathSections<R extends PathSourceRow>(
   const ctx = opts.logContext ?? {};
   const ids = rows.map((r) => r.id);
 
-  const [proposalsBy, outbound, inbound, outputsWith, dependencies, inboxes] =
-    await Promise.all([
-      settle(
-        ctx,
-        "pendingProposals",
-        "Pending proposals could not be read.",
-        () => readPendingProposals(database, ids)
-      ),
-      settle(
-        ctx,
-        "outboundEdges",
-        "The sessions these wait on could not be read.",
-        () => readEdges(database, opts.userId, ids, "outbound")
-      ),
-      settle(
-        ctx,
-        "inboundEdges",
-        "The sessions these unblock could not be read.",
-        () => readEdges(database, opts.userId, ids, "inbound")
-      ),
-      settle(ctx, "outputs", "Session outputs could not be read.", () =>
-        readOutputPresence(database, ids)
-      ),
-      settle(
-        ctx,
-        "dependencies",
-        "Whether these sessions are blocked could not be read.",
-        () =>
-          readDependencyFacts(
-            ids.map((id) => ({ kind: "session", id })),
-            opts.userId
-          )
-      ),
-      // The open inboxes (`message_waiting`) — the packet's own reader,
-      // batched for the page.
-      settle(
-        ctx,
-        "inbox",
-        "The messages other sessions sent these could not be read.",
-        () => readOpenInboxes(database, opts.userId, ids)
-      ),
-    ]);
+  const now = opts.now ?? new Date();
+  const [
+    proposalsBy,
+    outbound,
+    inbound,
+    outputsWith,
+    dependencies,
+    inboxes,
+    needsYou,
+  ] = await Promise.all([
+    settle(
+      ctx,
+      "pendingProposals",
+      "Pending proposals could not be read.",
+      () => readPendingProposals(database, ids)
+    ),
+    settle(
+      ctx,
+      "outboundEdges",
+      "The sessions these wait on could not be read.",
+      () => readEdges(database, opts.userId, ids, "outbound")
+    ),
+    settle(
+      ctx,
+      "inboundEdges",
+      "The sessions these unblock could not be read.",
+      () => readEdges(database, opts.userId, ids, "inbound")
+    ),
+    settle(ctx, "outputs", "Session outputs could not be read.", () =>
+      readOutputPresence(database, ids)
+    ),
+    settle(
+      ctx,
+      "dependencies",
+      "Whether these sessions are blocked could not be read.",
+      () =>
+        readDependencyFacts(
+          ids.map((id) => ({ kind: "session", id })),
+          opts.userId
+        )
+    ),
+    // The open inboxes (`message_waiting`) — the packet's own reader,
+    // batched for the page.
+    settle(
+      ctx,
+      "inbox",
+      "The messages other sessions sent these could not be read.",
+      () => readOpenInboxes(database, opts.userId, ids)
+    ),
+    settle(
+      ctx,
+      "needsYou",
+      "What needs you in these sessions could not be read.",
+      () => readPageNeedsYou(database, opts.userId, rows, now)
+    ),
+  ]);
 
   /** A section from a settled page-wide map, or that read's `unavailable`. */
   const pick = <T>(
@@ -501,10 +623,15 @@ export async function attachPathSections<R extends PathSourceRow>(
           : outputsWith,
       nextMove,
       unitFacts: {
-        // Projected from the row itself — there is no read here to fail.
-        owedFromYou: owedList.length,
+        // The needs-you HEADLINE (see the header), never every owed slot.
+        owedFromYou:
+          needsYou.status === "ok"
+            ? (needsYou.value.owed.get(row.id) ?? 0)
+            : null,
         pendingDecisions:
-          pendingProposals.status === "ok" ? pendingProposals.total : null,
+          needsYou.status === "ok"
+            ? (needsYou.value.decisions.get(row.id) ?? 0)
+            : null,
         awaitingReview: nextMove.kind === "ready_to_close",
         draft: projectTriage(row).pending,
       },
