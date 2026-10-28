@@ -142,10 +142,9 @@ describe("system admin reads — a member (owner of her own space) is refused", 
 describe("system admin reads — a pod admin still reads them", () => {
   it("listUsers returns the pod's people", async () => {
     const res = await caller(ADMIN).listUsers({});
-    expect(res.users.map((u) => u.email).sort()).toEqual([
-      `${ADMIN}@pod.example`,
-      `${MEMBER}@pod.example`,
-    ]);
+    expect(res.users.map((u) => u.email).sort()).toEqual(
+      [`${ADMIN}@pod.example`, `${MEMBER}@pod.example`].sort()
+    );
   });
 
   it("getDataPodStats counts them", async () => {
