@@ -32,6 +32,9 @@ import {
   readJsonBody,
 } from "./_shared.js";
 import { createEventBackedProposal } from "../../../utils/event-backed-proposal.js";
+import { getRequestGrant } from "@synap/database";
+import { isFencedGrant } from "../../../access/grant-door-fence.js";
+import { fencedProposalVerdict } from "../../../access/fenced-proposal.js";
 import {
   createDevApprovalProposal,
   DEV_APPROVAL_SCHEMAS,
@@ -1038,9 +1041,42 @@ export function registerProposalsRoutes(app: HubHono): void {
       );
     }
     // Item 3 Part 3: confine a bound service key to its workspace before the write.
-    const workspaceId = getConfinedWorkspace(c, body.workspaceId) ?? null;
+    let workspaceId = getConfinedWorkspace(c, body.workspaceId) ?? null;
+    const ctxAgentUserId = c.get("agentUserId") as string | undefined;
+    // A key limited to spaces files only what its governed door would have
+    // filed for it: this door never passes the gate, so rung 0 runs here
+    // (access/fenced-proposal.ts, issue 314a6554). Every other key: unchanged.
+    const grant = getRequestGrant();
+    if (isFencedGrant(grant)) {
+      if (!isUuid(body.targetId)) {
+        return c.json({ error: "targetId must be a UUID" }, 400);
+      }
+      // Its proposals are its own agent's: it names no other.
+      if (body.agentUserId && body.agentUserId !== ctxAgentUserId) {
+        return c.json(
+          { error: "agentUserId must be this key's own agent" },
+          403
+        );
+      }
+      const verdict = await fencedProposalVerdict(
+        {
+          targetType: body.targetType,
+          targetId: body.targetId,
+          proposalType: body.proposalType,
+          workspaceId,
+          data: body.data,
+        },
+        grant!
+      );
+      if (!verdict.ok) {
+        return c.json(
+          { error: verdict.error, code: verdict.code },
+          verdict.status
+        );
+      }
+      workspaceId = verdict.workspaceId;
+    }
     try {
-      const ctxAgentUserId = c.get("agentUserId") as string | undefined;
       const resolvedAgentUserId = body.agentUserId ?? ctxAgentUserId;
       // TWO principals, never one. `userId` is the HUMAN the proposal is filed
       // for — the recipient of the `proposal.created` notification and the

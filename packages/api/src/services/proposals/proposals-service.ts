@@ -23,6 +23,8 @@ import {
   drizzleSql,
 } from "@synap/database";
 import type { ProposalRevision } from "@synap/database";
+import { getRequestGrant } from "@synap/database";
+import { isFencedGrant } from "../../access/grant-door-fence.js";
 import { isDeepStrictEqual } from "node:util";
 import { TRPCError } from "@trpc/server";
 import { assertReviewedRevision } from "../../utils/reviewed-revision.js";
@@ -791,6 +793,22 @@ export async function mergeProposalRevision(
     // The KEY half: a key revising a proposal its agent did not author needs
     // the approve right. After the ladder, so a refusal is no existence oracle.
     assertMayReviseProposal(existing);
+    // A key limited to spaces may reword a proposal, never change what its
+    // approval runs: a payload patch or a re-target passes no gate, so its
+    // own proposal (filed in-grant) could be pointed outside the grant before
+    // the person approves it (issue 314a6554). Every other key: unchanged.
+    if (
+      isFencedGrant(getRequestGrant()) &&
+      ((patch && Object.keys(patch.fields).length > 0) ||
+        params.workspaceId !== undefined ||
+        params.projectId !== undefined)
+    ) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message:
+          "A key limited to spaces can change a proposal's summary or reasoning, not what it does or where. Withdraw it and file the change again.",
+      });
+    }
 
     if (existing.status !== ProposalStatus.PENDING) {
       throw new TRPCError({
