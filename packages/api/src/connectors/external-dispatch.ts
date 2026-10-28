@@ -44,7 +44,7 @@ import { getMessagingConnector } from "./index.js";
 import { resolveBroker } from "./index.js";
 import type { SyncConnectorConnection } from "./SyncConnector.js";
 import { resolveVaultSecret } from "../utils/vault-resolver.js";
-import { resolveCapabilityGrant } from "@synap/database";
+import { resolveCapabilityGrant, getRequestGrant } from "@synap/database";
 import { validateExternalUrl, safeExternalFetch } from "@synap/shared-utils";
 import {
   getSession,
@@ -844,7 +844,11 @@ export async function sendExternalMessage(
   // re-entry (`alreadyApproved`) SKIPS the gate and dispatches directly, exactly
   // once — BYTE-IDENTICAL to pre-W3b behavior. Only an AGENT send (agentUserId
   // present) is gated: approved+grant+exec-mode → run, else → propose/deny.
-  if (input.agentUserId && !input.alreadyApproved) {
+  // A POD APP's send is gated too, person token included (grant `clientId`,
+  // no agent): the gate's app outward floor proposes it (decision 4A), and the
+  // owner branch would have sent it with no review.
+  const appSend = !!getRequestGrant()?.clientId;
+  if ((input.agentUserId || appSend) && !input.alreadyApproved) {
     const gateResult = await gateMessagingSend({ ...input, provider });
     if (gateResult.kind === "deny") {
       // Say why nothing was sent (this used to return a bare `success: false`),
@@ -976,8 +980,9 @@ type MessagingGateResult =
  * owner-less `GateToolRow`. For an agent run with no active grant the gate routes
  * to `propose` either way (safe-by-default) — never an auto-run.
  *
- * Only reached for an AGENT send that is NOT an already-approved re-entry; the
- * owner door never calls this (it dispatches directly upstream).
+ * Only reached for an AGENT or POD APP send that is NOT an already-approved
+ * re-entry; the person's own send never calls this (it dispatches directly
+ * upstream).
  */
 async function gateMessagingSend(
   input: SendExternalMessageInput & { provider?: string }
