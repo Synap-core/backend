@@ -112,6 +112,11 @@ export const RE_APPROVAL_FIELDS = [
   // widens what the reader's vendor sees — the same trust class as
   // `allowedHosts` — so a change re-earns approval.
   "urlPatterns",
+  // How an app's input becomes this verb's parameters (`input_map`, 0368).
+  // Re-pointing `$.text` at another parameter changes what an approved verb
+  // sends for every app, so a change re-earns approval — the "only approved
+  // templates declare it" rule rests on this.
+  "inputMap",
 ] as const;
 
 /**

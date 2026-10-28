@@ -56,6 +56,7 @@ import { publicServiceRow } from "../utils/intelligence-service-projection.js";
 import { assertSafeServiceUrl } from "../utils/intelligence-service-url.js";
 import { safeExternalFetch, isBlockedOutboundError } from "@synap/shared-utils";
 import { scopedDb, accessFor } from "../access/index.js";
+import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import {
   ensureAgentThread,
   getAgentIdBySlug,
@@ -183,6 +184,25 @@ const selectionContextSchema = z.object({
   documentIds: z.array(z.string().uuid()).optional(),
   text: z.string().optional(),
 });
+
+/**
+ * The WRITE floor of a shared AI command (audit F9). The scoped load above it
+ * is the READ floor: every member, viewers included, sees a
+ * `sharedScope: 'workspace'` command. Rewriting its prompt or widening its
+ * tools changes what the next teammate's run executes, so it takes its creator
+ * or an editor+ of the command's workspace (the gate `tools.update` uses, on
+ * the LOADED row).
+ */
+async function assertCommandWrite(
+  userId: string | null | undefined,
+  cmd: { workspaceId: string | null; createdBy: string | null }
+): Promise<void> {
+  if (userId && cmd.createdBy === userId) return;
+  await assertWorkspaceWrite(db, userId, {
+    workspaceId: cmd.workspaceId,
+    ownerId: cmd.createdBy,
+  });
+}
 
 export const intelligenceRouter = router({
   /** List commands for workspace */
@@ -318,6 +338,7 @@ export const intelligenceRouter = router({
           message: "Command not found",
         });
       }
+      await assertCommandWrite(ctx.userId, cmd);
       const updates: Record<string, unknown> = {
         updatedAt: new Date(),
         ...(input.title !== undefined && { title: input.title }),
@@ -378,6 +399,7 @@ export const intelligenceRouter = router({
           message: "Command not found",
         });
       }
+      await assertCommandWrite(ctx.userId, cmd);
       await db
         .delete(intelligenceCommands)
         .where(eq(intelligenceCommands.id, input.id));

@@ -1919,6 +1919,31 @@ export type ProviderVerbSpec = {
  * workspace — visible to all members of the workspace
  */
 export type SkillScope = "pod" | "user" | "workspace";
+/**
+ * `skills.input_map` (0368): a verb parameter ← `"$.<path>"` (the app's input,
+ * validated against the intent's input schema), `"$account.<id|label|provider>"`
+ * (the account the action targets) or `{ const: <value> }`. Validated by
+ * `services/capabilities/intent-input.ts` before it is stored.
+ */
+export type SkillInputMapValue = string | {
+	const: unknown;
+};
+/**
+ * Where a verb's ACCOUNTS come from when they live inside the tool, not in
+ * pod connections (a Postiz key reaches several social channels): a READ verb
+ * of the same tool that lists them, and which field of each listed record is
+ * its id, its label and its provider.
+ */
+export type SkillInputMapAccounts = {
+	id: string;
+	label: string;
+	provider?: string;
+	verb: string;
+};
+export type SkillInputMap = {
+	accounts?: SkillInputMapAccounts;
+	params: Record<string, SkillInputMapValue>;
+};
 declare const WORKER_SIZES: readonly [
 	"per_thing",
 	"per_moment"
@@ -18850,6 +18875,15 @@ export type SyncConnectionToImportResult = {
 	recordCount: number;
 	source: typeof IMPORT_SOURCE;
 };
+export type UnipileConnectionProblem = "no-key" | "not-installed" | "unreadable";
+/** The messaging service's connection state, as the settings screens read it. */
+export interface MessagingServiceState {
+	configured: boolean;
+	capabilityKey: string;
+	capabilityId: string | null;
+	problem: UnipileConnectionProblem | null;
+	message: string | null;
+}
 export interface EnrichmentResult {
 	source: string;
 	confidence: number;
@@ -20779,6 +20813,60 @@ export type ChangeTrackParticipantsResult = {
 	status: "updated";
 	trackId: string;
 } | ProposedOutcome;
+declare const START_STEP_IDS: readonly [
+	"start:intent",
+	"start:views",
+	"start:path",
+	"start:setup",
+	"start:agent",
+	"start:first-work",
+	"start:done"
+];
+export type StartStepId = (typeof START_STEP_IDS)[number];
+export interface StartStepState {
+	id: StartStepId;
+	done: boolean;
+}
+declare const startDeclarationSchema: z.ZodObject<{
+	example: z.ZodDefault<z.ZodArray<z.ZodRecord<z.ZodString, z.ZodUnknown>>>;
+	firstSession: z.ZodOptional<z.ZodObject<{
+		goal: z.ZodString;
+		title: z.ZodString;
+	}, z.core.$strip>>;
+	label: z.ZodString;
+	order: z.ZodNumber;
+	profile: z.ZodString;
+	promise: z.ZodString;
+	starters: z.ZodDefault<z.ZodArray<z.ZodString>>;
+	suggestFor: z.ZodDefault<z.ZodArray<z.ZodString>>;
+	views: z.ZodArray<z.ZodString>;
+}, z.core.$strip>;
+export interface StartCard extends z.infer<typeof startDeclarationSchema> {
+	/** The template slug: the start's identity. */
+	slug: string;
+	icon: string;
+}
+declare const answersSchema: z.ZodObject<{
+	answeredAt: z.ZodOptional<z.ZodString>;
+	identity: z.ZodOptional<z.ZodArray<z.ZodString>>;
+	start: z.ZodOptional<z.ZodString>;
+	tools: z.ZodOptional<z.ZodArray<z.ZodString>>;
+	workingOn: z.ZodOptional<z.ZodString>;
+}, z.core.$strip>;
+export type CloudAnswers = z.infer<typeof answersSchema>;
+export type CloudState = {
+	answers: CloudAnswers;
+	experiments: Record<string, string> | null;
+	status: "ok";
+} | {
+	status: "empty";
+} | {
+	status: "not-linked";
+} | {
+	reason: CloudFailure;
+	status: "failed";
+};
+export type CloudFailure = "credential" | "invalid" | "link-unreadable" | "not-enrolled" | "refused" | "server-error" | "unknown-pod" | "unreachable";
 export interface ActionDescriptor {
 	id: string;
 	kind: "browse_marketplace" | "capture" | "connect_source" | "import_data" | "link_website" | "open_primary_surface" | "resume_guided_setup" | "start_empty" | "start_guided_setup";
@@ -29708,17 +29796,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			}[];
 		}>;
 		getMessagingConfig: import("@trpc/server").TRPCQueryProcedure<{
-			input: {
-				workspaceId?: string | undefined;
-			} | undefined;
+			input: void;
 			meta: object;
-			output: {
-				configured: boolean;
-				fromEnv: boolean;
-				hasApiKey: boolean;
-				hasDsn: boolean;
-				hasWebhookSecret: boolean;
-			};
+			output: MessagingServiceState;
 		}>;
 		getNangoConfig: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
@@ -29787,17 +29867,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				apifyToken?: string | undefined;
 				apolloApiKey?: string | undefined;
-			};
-			meta: object;
-			output: {
-				success: boolean;
-			};
-		}>;
-		saveMessagingConfig: import("@trpc/server").TRPCMutationProcedure<{
-			input: {
-				unipileApiKey?: string | undefined;
-				unipileDsn?: string | undefined;
-				unipileWebhookSecret?: string | undefined;
 			};
 			meta: object;
 			output: {
@@ -31114,6 +31183,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				reasoning?: string | undefined;
 				source?: "agent" | "ai" | "intelligence" | "system" | "user" | undefined;
+				viewContext?: {
+					typeKey?: string | undefined;
+					viewId?: string | undefined;
+				} | undefined;
 			};
 			meta: object;
 			output: {
@@ -35490,6 +35563,18 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					database: string;
 					jobQueue: string;
 				};
+				status: string;
+				timestamp: string;
+			};
+		}>;
+		readyDetails: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			meta: object;
+			output: {
+				checks: {
+					database: string;
+					jobQueue: string;
+				};
 				degraded: string[];
 				details: {
 					database: any;
@@ -38974,6 +39059,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				userId: string;
 			} | null;
 		}>;
+		listStarts: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			meta: object;
+			output: StartCard[];
+		}>;
 		pauseJourney: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				lens: {
@@ -38995,6 +39085,42 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					values?: Record<string, unknown> | undefined;
 				} | undefined;
 				templateVersion?: string | undefined;
+			};
+			meta: object;
+			output: {
+				completedAt: string | null;
+				createdAt: string;
+				dismissedAt: string | null;
+				evidence: OnboardingJourneyEvidenceRecord;
+				id: string;
+				lens: {
+					kind: "pod";
+				} | {
+					kind: "workspace";
+					workspaceId: string;
+				} | {
+					kind: "project";
+					projectId: string;
+				} | {
+					kind: "project_workspace";
+					projectId: string;
+					workspaceId: string;
+				};
+				lensKey: string;
+				offeredAt: string;
+				pausedAt: string | null;
+				progress: OnboardingJourneyProgressRecord;
+				startedAt: string | null;
+				status: OnboardingJourneyStatus;
+				templateVersion: string;
+				updatedAt: string;
+				userId: string;
+			} | null;
+		}>;
+		recordStartStep: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				patch: Record<string, unknown>;
+				step: string;
 			};
 			meta: object;
 			output: {
@@ -39295,6 +39421,50 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				updatedAt: string;
 				userId: string;
 			} | null;
+		}>;
+		startState: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			meta: object;
+			output: {
+				cloud: CloudState | null;
+				counts: {
+					done: number;
+					total: number;
+				};
+				due: boolean;
+				journey: {
+					completedAt: string | null;
+					createdAt: string;
+					dismissedAt: string | null;
+					evidence: OnboardingJourneyEvidenceRecord;
+					id: string;
+					lens: {
+						kind: "pod";
+					} | {
+						kind: "workspace";
+						workspaceId: string;
+					} | {
+						kind: "project";
+						projectId: string;
+					} | {
+						kind: "project_workspace";
+						projectId: string;
+						workspaceId: string;
+					};
+					lensKey: string;
+					offeredAt: string;
+					pausedAt: string | null;
+					progress: OnboardingJourneyProgressRecord;
+					startedAt: string | null;
+					status: OnboardingJourneyStatus;
+					templateVersion: string;
+					updatedAt: string;
+					userId: string;
+				} | null;
+				next: "start:agent" | "start:done" | "start:first-work" | "start:intent" | "start:path" | "start:setup" | "start:views" | null;
+				starts: StartCard[] | undefined;
+				steps: StartStepState[];
+			};
 		}>;
 	}>>;
 	outputs: import("@trpc/server").TRPCBuiltRouter<{
@@ -41079,6 +41249,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					defaultView?: "grid" | "list" | "timeline" | undefined;
 					entityOpenMode?: "floating" | "modal" | "side" | undefined;
 					fontSize?: string | undefined;
+					kindViews?: Record<string, {
+						at: string;
+						source: "onboarding" | "settings";
+						type: string;
+						view: string;
+					}> | undefined;
 					lastActiveView?: string | undefined;
 					panelPositions?: Record<string, {
 						x: number;
@@ -43753,6 +43929,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				sourceEntityId: string;
 				targetEntityId: string;
 				type: string;
+				viewContext?: {
+					typeKey?: string | undefined;
+					viewId?: string | undefined;
+				} | undefined;
 				workspaceId?: string | undefined;
 			};
 			meta: object;
@@ -45393,6 +45573,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code?: string | undefined;
 				description?: string | undefined;
 				executionMode?: "async" | "box" | "sync" | undefined;
+				inputMap?: Record<string, unknown> | undefined;
 				intent?: string | undefined;
 				kind?: "builtin" | "code" | "declarative" | "instruction" | undefined;
 				metadata?: Record<string, unknown> | undefined;
@@ -45518,6 +45699,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					errorMessage: string | null;
 					executionMode: "async" | "box" | "sync";
 					id: string;
+					inputMap: SkillInputMap | null;
 					intent: string | null;
 					kind: SkillKind;
 					metadata: Record<string, unknown>;
@@ -45687,6 +45869,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					errorMessage: string | null;
 					executionMode: "async" | "box" | "sync";
 					id: string;
+					inputMap: SkillInputMap | null;
 					intent: string | null;
 					kind: SkillKind;
 					metadata: Record<string, unknown>;
@@ -47542,6 +47725,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					errorMessage: string | null;
 					executionMode: "async" | "box" | "sync";
 					id: string;
+					inputMap: SkillInputMap | null;
 					intent: string | null;
 					kind: SkillKind;
 					metadata: Record<string, unknown>;

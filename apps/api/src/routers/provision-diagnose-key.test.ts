@@ -1,8 +1,14 @@
 /**
- * `GET /api/provision/diagnose-intelligence` is unauthenticated. It used to
- * return the first 12 characters of the DECRYPTED Intelligence Service key
- * (security wave 2026-10-13, LOW list). It now returns a fingerprint
- * (`sha256:` + 8 hex) and no character of the key.
+ * `GET /api/provision/diagnose-intelligence` used to return the first 12
+ * characters of the DECRYPTED Intelligence Service key (security wave
+ * 2026-10-13, LOW list). It now returns a fingerprint (`sha256:` + 8 hex) and
+ * no character of the key.
+ *
+ * It was also PUBLIC: anyone read the shared intelligence service's private
+ * address and key fingerprint, and each anonymous hit made the pod fire two
+ * probes at it (audit pod-doors F4). It is now for the pod's Control Plane, a
+ * pod admin, or an in-container (loopback) caller: anyone else gets a 401 and
+ * nothing is resolved or probed.
  *
  * Real route handler; the serving-service resolver, the key decrypt and the
  * probe are stubbed at their module edges.
@@ -20,8 +26,11 @@ vi.mock("bcrypt", () => ({ default: {} }));
 vi.mock("./pod-updates-deps.js", () => ({
   readPodUpdateSettingsRaw: async () => undefined,
 }));
+const { probeIntelligenceService } = vi.hoisted(() => ({
+  probeIntelligenceService: vi.fn(async () => ({ reachable: false })),
+}));
 vi.mock("./provision-intelligence-probe.js", () => ({
-  probeIntelligenceService: async () => ({ reachable: false }),
+  probeIntelligenceService,
 }));
 // provision.ts imports the account-recovery deps; the real module pulls
 // @synap/jobs in, which this test's @synap/database stub cannot satisfy.
@@ -34,7 +43,7 @@ vi.mock("@synap/api", () => ({
   podAudience: () => process.env.PUBLIC_URL?.replace(/\/+$/, "") || null,
   createAndVerifyHubInboundKey: vi.fn(),
   encryptServiceKey: vi.fn(),
-  describeServingIntelligence: async () => ({
+  describeServingIntelligence: vi.fn(async () => ({
     service: {
       apiKey: "encrypted-blob",
       enabled: true,
@@ -42,7 +51,7 @@ vi.mock("@synap/api", () => ({
     },
     url: "http://is.invalid",
     via: "pod_default",
-  }),
+  })),
   envIntelligenceEndpoint: vi.fn(),
   getSyncGenerationState: vi.fn(),
   resolveServiceKey: () => FAKE_KEY,
@@ -51,6 +60,7 @@ vi.mock("@synap/api", () => ({
 }));
 vi.mock("@synap/database", () => ({
   getDb: vi.fn(),
+  readControlPlaneLink: async () => ({ issuer: "https://cp.test.invalid" }),
   eq: vi.fn(),
   and: vi.fn(),
   sql: vi.fn(),
@@ -72,9 +82,69 @@ vi.mock("@synap/database/schema", () => ({
 
 const { provisionRouter } = await import("./provision.js");
 
+/** The pod's Control Plane, through the trusted-issuer door. */
+async function asControlPlane(): Promise<Response> {
+  const { verifyTrustedIssuerJwt } = await import("@synap/api");
+  vi.mocked(verifyTrustedIssuerJwt).mockResolvedValue({ type: "pod-status" });
+  vi.stubEnv("PUBLIC_URL", "https://pod.test.invalid");
+  try {
+    return await provisionRouter.request("/diagnose-intelligence", {
+      headers: { Authorization: "Bearer test-cp-jwt" },
+    });
+  } finally {
+    vi.unstubAllEnvs();
+  }
+}
+
+/** A Node socket peer, the way @hono/node-server hands it to a route. */
+const peer = (remoteAddress: string) => ({
+  incoming: { socket: { remoteAddress } },
+});
+
+describe("GET /diagnose-intelligence — who may read it (audit pod-doors F4)", () => {
+  it("an anonymous caller gets 401, and nothing is resolved or probed", async () => {
+    const { describeServingIntelligence } = await import("@synap/api");
+    vi.mocked(describeServingIntelligence).mockClear();
+    probeIntelligenceService.mockClear();
+    const res = await provisionRouter.request(
+      "/diagnose-intelligence",
+      {},
+      peer("203.0.113.7")
+    );
+    expect(res.status).toBe(401);
+    const text = await res.text();
+    expect(text).not.toContain("is.invalid");
+    expect(text).not.toContain("sha256:");
+    expect(vi.mocked(describeServingIntelligence)).not.toHaveBeenCalled();
+    expect(probeIntelligenceService).not.toHaveBeenCalled();
+  });
+
+  it("a loopback peer behind a proxy header is not in-container: 401", async () => {
+    const res = await provisionRouter.request(
+      "/diagnose-intelligence",
+      { headers: { "x-forwarded-for": "203.0.113.7" } },
+      peer("127.0.0.1")
+    );
+    expect(res.status).toBe(401);
+  });
+
+  it("an in-container (loopback) caller reads it", async () => {
+    const res = await provisionRouter.request(
+      "/diagnose-intelligence",
+      {},
+      peer("127.0.0.1")
+    );
+    expect(res.status).toBe(200);
+  });
+
+  it("the pod's Control Plane reads it", async () => {
+    expect((await asControlPlane()).status).toBe(200);
+  });
+});
+
 describe("GET /diagnose-intelligence", () => {
   it("returns a fingerprint of the IS key, never any of its characters", async () => {
-    const res = await provisionRouter.request("/diagnose-intelligence");
+    const res = await asControlPlane();
     expect(res.status).toBe(200);
     const text = await res.text();
     const body = JSON.parse(text) as {

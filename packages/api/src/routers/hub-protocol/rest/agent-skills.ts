@@ -46,6 +46,7 @@ import { visibleSkillsWhere } from "../../../services/skills/visibility.js";
 import { updateSkillGoverned } from "../../../services/skills/update-skill-governed.js";
 import { searchInstructionSkills } from "../../../services/skills/search.js";
 import { reservedSkillSlugReason } from "../../../services/skills/reserved-slug.js";
+import { defaultSkillScope } from "../../../services/skills/skill-write-authority.js";
 
 // ── Wire schemas ───────────────────────────────────────────────────────────
 
@@ -576,10 +577,8 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
         userId: authUserId,
         agentUserId,
         workspaceId: null,
-        // `scope: "pod"` is the column default this door has always written —
-        // stated explicitly here so the governed path is byte-identical to the
-        // direct insert it replaces.
-        scope: "pod",
+        // Pod-wide when the person may publish one, else their own (F6).
+        scope: await defaultSkillScope(authUserId, null),
         slug: parsed.data.slug,
         kind: "instruction",
         name: parsed.data.name,
@@ -848,7 +847,8 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
         agentUserId,
         workspaceId: null,
         kind: "instruction",
-        scope: "pod",
+        // Pod-wide when the person may publish one, else their own (F6).
+        scope: await defaultSkillScope(userId, null),
         slug: skillMeta.slug,
         name: skillMeta.name,
         description: skillMeta.description ?? null,

@@ -35,10 +35,12 @@ import {
   GRANT_ACTIONS,
   grantActionLabel,
   grantKindLabel,
+  grantPlainAction,
   grantSubjectLabel,
   isQualifiedGrantSubject,
   parsePermission,
 } from "@synap-core/types/grants";
+import { intentRunLabel } from "@synap-core/types/capability-intents";
 import { isAppPublicId } from "@synap-core/types/membrane";
 import { FIRST_PARTY_CLIENT_NAMES } from "@synap-core/types/vocabulary";
 import { patternMatches } from "@synap/governance-policy/grants";
@@ -85,7 +87,8 @@ const key = (permission: string, workspaceId: string) =>
  * The permission names a gate verb (approve, reject, archive, merge,
  * transition, run, …: any verb but read / create / update / delete), or is
  * full access (`*`), which covers every one. Each is a decision the person
- * gives on its own (#94, #133); Edit never includes one.
+ * gives on its own (#94, #133); Edit never includes one. `facet.attach` /
+ * `facet.detach` are create / delete (`grantPlainAction`), never a decision.
  */
 export function isDecisionPermission(permission: string): boolean {
   const { subject, action } = parts(permission);
@@ -123,6 +126,16 @@ function parts(permission: string): {
   }
   const subject = segs[0] ?? "";
   const verb = (v: string | undefined) => (v && v !== "*" ? v : null);
+  // A capability's qualifier is an INTENT, not a kind: the object stays
+  // `capability` (one "Tools" row), the intent rides in `kind` for the label.
+  if (subject === "capability") {
+    return {
+      object: subject,
+      subject,
+      kind: verb(segs[1]),
+      action: verb(segs[2]),
+    };
+  }
   if (isQualifiedGrantSubject(subject)) {
     const kind = segs[1] ?? "*";
     return {
@@ -132,7 +145,13 @@ function parts(permission: string): {
       action: verb(segs[2]),
     };
   }
-  return { object: subject, subject, kind: null, action: verb(segs[1]) };
+  return {
+    object: subject,
+    subject,
+    kind: null,
+    // `facet.attach` IS `facet.create` (#411): one treatment for both.
+    action: grantPlainAction(subject, verb(segs[1])),
+  };
 }
 
 /** The offer as the screen lists it: reads and writes, then decisions apart. */
@@ -548,6 +567,15 @@ const ACTION_WORDS: Record<string, string> = {
 };
 
 /**
+ * A role on a record (`facet.create`, `facet.delete`, and the door's spelling
+ * `facet.attach` / `facet.detach`): the person reads the act, not the row.
+ */
+const ROLE_ON_RECORD_WORDS: Record<string, string> = {
+  create: "Add roles to records",
+  delete: "Remove roles from records",
+};
+
+/**
  * A bare subject or kind (`entity.post`, `entity.*`): every plain verb,
  * "Read, create, edit and delete".
  */
@@ -569,7 +597,8 @@ const midSentence = (noun: string) =>
  * `proposal.approve` → "Approve changes waiting for your review",
  * `entity.post.archive` → "Archive posts", `playbook.run` → "Run templates",
  * `entity.deal.transition` → "Move deals", `entity.*` → "Read, create, edit
- * and delete everything in it", `*` → "Full access". The raw permission is
+ * and delete everything in it", `capability.publish_post.run` → "Publish
+ * posts with your tools", `*` → "Full access". The raw permission is
  * shown beside it, so an unusual one is never hidden behind a friendly word.
  */
 export function permissionLabel(permission: string): string {
@@ -577,6 +606,15 @@ export function permissionLabel(permission: string): string {
   if (subject === "*") return FULL_ACCESS_LABEL;
   if (subject === "proposal" && action && isDecisionPermission(permission)) {
     return `${grantActionLabel(action)} changes waiting for your review`;
+  }
+  // A capability's qualifier is the INTENT a run serves, never a kind
+  // (decision 2A, 2026-10-28): `capability.publish_post.run` → "Publish posts
+  // with your tools". Every other capability permission reads as before
+  // (`capability.run` → "Run tools"): `parts` gives it no kind.
+  if (subject === "capability" && action === "run" && kind)
+    return intentRunLabel(kind);
+  if (subject === "facet" && action && ROLE_ON_RECORD_WORDS[action]) {
+    return ROLE_ON_RECORD_WORDS[action];
   }
   // A gate verb (archive, merge, run, …) in the vocabulary's words.
   const verb =

@@ -233,10 +233,12 @@ export const proposalsRouter = router({
       await mergeProposalRevision({
         proposalId: input.proposalId,
         actorId: ctx.userId as string,
-        // ATTRIBUTION ONLY — never the author rung. `ctx.userId` is the key's
-        // human owner, so without this an IS agent revising from a room comment
-        // is recorded as the human and scored as a human correction (B21).
-        attributionAgentUserId: ctx.agentUserId ?? null,
+        // The acting agent: the author rung when it filed this proposal, and
+        // a refusal (NOT_FOUND) when it did not — an agent never revises
+        // another principal's request (audit F1). `ctx.userId` is the key's
+        // human owner, so the agent is also what the revision is recorded as
+        // (B21: not scored as a human correction).
+        actingAgentUserId: ctx.agentUserId ?? null,
         patch: { kind: "inner", fields: input.data },
         summary: input.summary,
         expectedRevision: input.expectedRevision,

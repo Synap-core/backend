@@ -54,7 +54,10 @@ import {
   itemPackAlreadyApproved,
   markItemPackApproved,
 } from "../../../services/proposals/item-pack.js";
-import { assertUpdatePackItemCurrent } from "../../../services/entities/update-entities.js";
+import {
+  assertUpdatePackItemCurrent,
+  entityFieldsChangedSinceFiled,
+} from "../../../services/entities/update-entities.js";
 import {
   applyIdentityResolution,
   entityIdentityPorts,
@@ -749,6 +752,25 @@ export function registerEntityExecutors(): void {
           userId
         );
         return { success: true, primaryId: entityId };
+      }
+
+      // BASE (audit F7, 2026-10-28): the touched fields as they stood when
+      // this was proposed (`previousData`, also the review card's "before").
+      // A person's edit made since is not overwritten: the approval is
+      // refused, as an update pack refuses a stale item, and nothing is
+      // written. A proposal filed with no snapshot applies as before.
+      const filedBase = outerUpdateData.previousData;
+      if (filedBase && typeof filedBase === "object") {
+        const changed = await entityFieldsChangedSinceFiled(
+          entityId,
+          filedBase as Parameters<typeof entityFieldsChangedSinceFiled>[1]
+        );
+        if (changed) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: `Changed since this was proposed (${changed.join(", ")}) — not overwritten. Ask for the change again against the current values.`,
+          });
+        }
       }
 
       const { undoBefore, undoAfter } = await applyApprovedEntityPatch({

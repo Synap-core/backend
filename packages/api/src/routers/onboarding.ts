@@ -17,6 +17,7 @@ import {
   projectMembers,
   projects,
   readTemplateState,
+  users,
   workspaces,
   listableEntityWhere,
 } from "@synap/database";
@@ -26,7 +27,8 @@ import type {
   OnboardingJourneyProgressRecord,
   WorkspaceSettings,
 } from "@synap/database";
-import { podProcedure, router } from "../trpc.js";
+import { podAdminProcedure, podProcedure, router } from "../trpc.js";
+import { startFirstSession } from "../services/focus-sessions/first-session.js";
 import { normalizeToolName } from "@synap-core/types/tools";
 import {
   isInterviewBrief,
@@ -36,6 +38,23 @@ import {
   recordToolDemand,
   type RecordToolDemandResult,
 } from "../services/tool-demand/record-tool-demand.js";
+import {
+  completedStartPrefix,
+  deriveStartSteps,
+  nextStartStep,
+  START_STEP_IDS,
+  type StartStepId,
+  type StartValues,
+} from "@synap-core/types/onboarding/start";
+import {
+  countNonSystemSpaces,
+  deepMerge,
+  gatherStartFacts,
+  isStartDue,
+  listBundledStarts,
+  readCloudAnswers,
+} from "../services/onboarding-start.js";
+import { isPodAdmin } from "../utils/workspace-role.js";
 import { accessScopeWhere, projectLensWhere } from "../utils/project-scope.js";
 import {
   ownerPrivateVisibleWhere,
@@ -609,7 +628,15 @@ async function saveJourney(input: {
   lens: OnboardingLens;
   templateVersion?: string;
   status: JourneyStatus;
-  progress?: Partial<OnboardingJourneyProgressRecord>;
+  /**
+   * A function reads the row's progress UNDER the transition lock, so a merge
+   * that depends on the stored value never races another device's write.
+   */
+  progress?:
+    | Partial<OnboardingJourneyProgressRecord>
+    | ((
+        existing: OnboardingJourneyProgressRecord | undefined
+      ) => Partial<OnboardingJourneyProgressRecord>);
   evidence?: OnboardingJourneyEvidenceRecord;
   /** Start over from ANY status (only with status "active"). */
   restart?: boolean;
@@ -651,7 +678,9 @@ async function saveJourney(input: {
       restarting
         ? restartJourneyProgress(existing?.progress)
         : existing?.progress,
-      input.progress
+      typeof input.progress === "function"
+        ? input.progress(restarting ? undefined : existing?.progress)
+        : input.progress
     );
     const priorEvidence = existing?.evidence ?? {
       meaningfulEntityIds: [],
@@ -805,6 +834,59 @@ async function recordJourneyValues(input: {
     return serializeJourney(saved);
   });
 }
+
+// ── Start journey (plan v1 §2.2): the pod's reads and the ONE write door ───
+
+const POD_LENS = { kind: "pod" } as const;
+const POD_TEMPLATE_VERSION = "1";
+
+/** Step name → the `values.start` key it fills, and the patch it accepts. */
+const startPatchSchemas = {
+  intent: z.object({
+    slug: z.string().min(1).max(200),
+    source: z.enum(["cloud", "here"]),
+  }),
+  views: z.object({
+    profile: z.string().min(1).max(200),
+    view: z.string().min(1).max(200),
+    type: z.string().min(1).max(100),
+  }),
+  path: z.object({ kind: z.enum(["quick", "cobuild"]) }),
+  setup: z.object({ proposalId: z.string().uuid() }),
+  agent: z.object({ agentUserId: z.string().min(1).max(200) }),
+  "first-work": z.object({ sessionId: z.string().uuid() }),
+} as const;
+type RecordableStep = keyof typeof startPatchSchemas;
+const START_VALUE_KEY: Record<RecordableStep, string> = {
+  intent: "intent",
+  views: "view",
+  path: "path",
+  setup: "setup",
+  agent: "agent",
+  "first-work": "firstSession",
+};
+
+const startValuesOf = (
+  progress: OnboardingJourneyProgressRecord | undefined
+): StartValues | null =>
+  (progress?.values?.start as StartValues | undefined) ?? null;
+
+async function viewerEmail(userId: string): Promise<string> {
+  const db = await getDb();
+  const [row] = await db
+    .select({ email: users.email })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+  if (!row) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "User not found" });
+  }
+  return row.email;
+}
+
+const startNames = new Set<string>(
+  START_STEP_IDS.map((id) => id.slice("start:".length))
+);
 
 export const onboardingRouter = router({
   resolveContext: podProcedure
@@ -1065,6 +1147,17 @@ export const onboardingRouter = router({
       })
     ),
 
+  /**
+   * The first session with a goal (start step S6, plan v1 §2.6): one focus
+   * session in the setup's space, with the person's connected agent on it and
+   * every agent write in it proposed. Everything it needs is read from the
+   * pod (`services/focus-sessions/first-session.ts`); an open first session is
+   * handed back, never created twice.
+   */
+  startFirstSession: podAdminProcedure.mutation(({ ctx }) =>
+    startFirstSession({ userId: ctx.userId })
+  ),
+
   recordTools: podProcedure
     .input(
       z.object({
@@ -1139,5 +1232,191 @@ export const onboardingRouter = router({
         : serializeJourney(existing);
 
       return { recorded, journey };
+    }),
+  /**
+   * Is onboarding due, and where is this person in it? A pure read: it fails
+   * loudly (the client shows the failure) and never forces onboarding on a
+   * guess. `cloud` is asked only while the intent step is open, and only of a
+   * pod admin.
+   */
+  startState: podProcedure.query(async ({ ctx }) => {
+    const admin = await isPodAdmin(ctx.userId);
+    const journey = await findJourney(
+      ctx.userId,
+      POD_LENS,
+      POD_TEMPLATE_VERSION
+    );
+    const values = startValuesOf(journey?.progress);
+    const spaces = admin ? await countNonSystemSpaces() : 0;
+    const due = isStartDue({
+      isPodAdmin: admin,
+      journeyStatus: journey?.status ?? null,
+      hasStartValues: values !== null,
+      nonSystemSpaceCount: spaces,
+    });
+    if (!admin) {
+      return {
+        due,
+        journey: serializeJourney(journey),
+        steps: [],
+        next: null,
+        counts: { done: 0, total: START_STEP_IDS.length },
+        cloud: null,
+        starts: undefined,
+      };
+    }
+    const steps = deriveStartSteps(
+      await gatherStartFacts({
+        userId: ctx.userId,
+        values,
+        journeyStatus: journey?.status ?? null,
+      })
+    );
+    const intentOpen = !steps[0]!.done;
+    return {
+      due,
+      journey: serializeJourney(journey),
+      steps,
+      next: nextStartStep(steps),
+      counts: {
+        done: steps.filter((s) => s.done).length,
+        total: steps.length,
+      },
+      cloud: intentOpen
+        ? await readCloudAnswers(await viewerEmail(ctx.userId))
+        : null,
+      starts: intentOpen ? listBundledStarts() : undefined,
+    };
+  }),
+
+  /** The starts, from the bundled templates package: works offline. */
+  listStarts: podProcedure.query(() => listBundledStarts()),
+
+  /**
+   * The ONE write door of the start journey. Deep-merges `values.start[step]`
+   * under the journey lock (no client read-modify-write across devices), sets
+   * the resume step and the model's completed prefix (never a client list),
+   * and moves offered / none / paused / dismissed to active.
+   */
+  recordStartStep: podProcedure
+    .input(
+      z.object({
+        step: z.string().refine((s) => startNames.has(s), "unknown step"),
+        patch: z.record(z.string(), z.unknown()),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (!(await isPodAdmin(ctx.userId))) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Pod admin access required",
+        });
+      }
+      const step = input.step as RecordableStep;
+      const schema = startPatchSchemas[step];
+      if (!schema) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Step ${input.step} is derived, not recorded`,
+        });
+      }
+      const patch: Record<string, unknown> = schema.parse(input.patch);
+      const now = new Date().toISOString();
+      const key = START_VALUE_KEY[step];
+
+      if (step === "intent") {
+        if (!listBundledStarts().some((s) => s.slug === patch.slug)) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `Unknown start: ${String(patch.slug)}`,
+          });
+        }
+        // A cloud choice copies what the CP said, read here, never what the
+        // client claims it said.
+        if (patch.source === "cloud") {
+          const cloud = await readCloudAnswers(await viewerEmail(ctx.userId));
+          if (cloud.status !== "ok") {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: `The cloud answer is not available (${cloud.status})`,
+            });
+          }
+        }
+      }
+
+      const existing = await findJourney(
+        ctx.userId,
+        POD_LENS,
+        POD_TEMPLATE_VERSION
+      );
+      const before = startValuesOf(existing?.progress);
+      const factsOf = (values: StartValues | null, status: string | null) =>
+        gatherStartFacts({ userId: ctx.userId, values, journeyStatus: status });
+
+      // Transitions: a step may be recorded when every step before it is done
+      // (the next step, or a step already passed, to change a choice).
+      const next = nextStartStep(
+        deriveStartSteps(await factsOf(before, existing?.status ?? null))
+      );
+      if (
+        next !== null &&
+        START_STEP_IDS.indexOf(`start:${step}` as StartStepId) >
+          START_STEP_IDS.indexOf(next)
+      ) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: `Step ${step} cannot be recorded before ${next}`,
+        });
+      }
+
+      const cloudCopy =
+        step === "intent" && patch.source === "cloud"
+          ? await readCloudAnswers(await viewerEmail(ctx.userId))
+          : null;
+
+      const mergeStart = (stored: StartValues | null): StartValues => {
+        let merged = deepMerge(
+          (stored ?? { v: 1 }) as Record<string, unknown>,
+          {
+            v: 1,
+            [key]: { ...patch, at: now },
+          }
+        );
+        if (cloudCopy?.status === "ok") {
+          merged = deepMerge(merged, {
+            cloud: {
+              ...cloudCopy.answers,
+              experiments: cloudCopy.experiments,
+              readAt: now,
+            },
+          });
+        }
+        return merged as unknown as StartValues;
+      };
+      // Facts are read before the lock (no query may run inside the journey
+      // transaction); the merge and the derived prefix are computed under it.
+      const afterFacts = await factsOf(mergeStart(before), "active");
+
+      const journey = await saveJourney({
+        userId: ctx.userId,
+        lens: POD_LENS,
+        status: "active",
+        progress: (stored) => {
+          const merged = mergeStart(startValuesOf(stored));
+          const steps = deriveStartSteps({ ...afterFacts, values: merged });
+          return {
+            values: { start: merged },
+            // Foreign ids (`relay:...`) stay; the start ids are the model's.
+            completedActionIds: [
+              ...(stored?.completedActionIds ?? []).filter(
+                (id) => !id.startsWith("start:")
+              ),
+              ...completedStartPrefix(steps),
+            ],
+            currentActionId: nextStartStep(steps) ?? "start:done",
+          };
+        },
+      });
+      return journey;
     }),
 });

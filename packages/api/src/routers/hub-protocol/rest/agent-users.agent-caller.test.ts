@@ -13,9 +13,19 @@
  *    as the human, so an agent could write its own auto-approve rules.
  *
  * WHAT IS ASSERTED: refusals write nothing (no mint, no rule sync, no posture
- * write); the legitimate callers still work — a human session mints, and an
- * agent may still TIGHTEN (posture, empty list, writesRequireProposal true),
- * which `synap init` relies on.
+ * write); the legitimate callers still work — a human session mints and sets
+ * governance.
+ *
+ * GOVERNANCE IS A PERSON'S ACT (audit 2026-10-28 F2). The door used to let an
+ * agent "tighten". It was not tightening: `posture: null`, a different posture
+ * and `autoApproveFor: []` each REVOKE the stored `propose` rows, so an
+ * ask-first agent could switch itself (or a sibling agent of the same person)
+ * back to the pod default and write unreviewed. Every body shape from an
+ * agent credential (agent key or IS internal key) is now refused before any
+ * read; the posture names are DERIVED from @synap/governance-policy so a new
+ * posture is covered without editing this file. `synap init` / `synap
+ * connect` set governance with the person's key (synap-cli targets.ts
+ * `ensureAgentGovernance(cfg, …)`), so they are unaffected.
  *
  * NOT COVERED: the posture engine itself (postures never auto-approve past the
  * floors) — pinned in @synap/governance-policy postures tests.
@@ -88,6 +98,8 @@ vi.mock("../../../services/app-agent-floor.js", () => ({
       : null,
 }));
 
+import { AGENT_POSTURE_NAMES } from "@synap/governance-policy/postures";
+import { db } from "@synap/database";
 import { registerAgentUsersRoutes } from "./agent-users.js";
 import { createNamedAgent } from "../../../services/agent-identity-service.js";
 import {
@@ -96,12 +108,16 @@ import {
 } from "@synap/database/agent-governance";
 import type { HubHono, HubVariables } from "./_shared.js";
 
-function buildApp(asAgent: boolean): HubHono {
+const SIBLING = "33333333-3333-4333-8333-333333333333";
+
+/** `true` = an agent key; `"is"` = the IS internal key (no agentUserId). */
+function buildApp(asAgent: boolean | "is"): HubHono {
   const app: HubHono = new OpenAPIHono<{ Variables: HubVariables }>();
   app.use("*", async (c, next) => {
     c.set("scopes", ["hub-protocol.read", "hub-protocol.write"]);
     c.set("userId", HUMAN);
-    if (asAgent) c.set("agentUserId", AGENT);
+    if (asAgent === true) c.set("agentUserId", AGENT);
+    if (asAgent === "is") c.set("keyType", "is_internal");
     await next();
   });
   registerAgentUsersRoutes(app);
@@ -148,51 +164,58 @@ describe("POST /agent-users", () => {
 });
 
 describe("PATCH /agent-users/:id/governance", () => {
-  const patch = (asAgent: boolean, body: unknown) =>
+  const patch = (
+    asAgent: boolean | "is",
+    body: unknown,
+    target: string = AGENT
+  ) =>
     buildApp(asAgent).request(
-      `/agent-users/${AGENT}/governance`,
+      `/agent-users/${target}/governance`,
       json("PATCH", body)
     );
 
-  it.each([
+  // Every body the door accepts from a person. Posture names come from the
+  // policy package, never a hand list.
+  const BODIES: Array<[string, Record<string, unknown>]> = [
+    ["clearing to the pod default (posture null)", { posture: null }],
+    ...AGENT_POSTURE_NAMES.map((name): [string, Record<string, unknown>] => [
+      `the named posture "${name}"`,
+      { posture: name },
+    ]),
+    ["an empty auto-approve list", { autoApproveFor: [] }],
     ["a non-empty auto-approve list", { autoApproveFor: ["entity.create"] }],
+    ["writesRequireProposal true", { writesRequireProposal: true }],
     ["writesRequireProposal false", { writesRequireProposal: false }],
-  ])("refuses an agent writing %s, and writes nothing", async (_l, body) => {
-    const res = await patch(true, body);
-    expect(res.status).toBe(403);
-    expect(vi.mocked(syncAutoApproveRules)).not.toHaveBeenCalled();
-    expect(h.updates).toBe(0);
+  ];
+
+  it("derives at least one posture name (the list is not empty)", () => {
+    expect(AGENT_POSTURE_NAMES.length).toBeGreaterThan(0);
   });
 
-  it("lets an agent choose a named posture (synap init)", async () => {
-    const res = await patch(true, { posture: "create-with-undo" });
-    expect(res.status).toBe(200);
-    expect(vi.mocked(applyAgentPosture)).toHaveBeenCalled();
-  });
-
-  it("lets an agent clear its list without loosening the stored dial", async () => {
-    const res = await patch(true, { autoApproveFor: [] });
-    expect(res.status).toBe(200);
-    await expect(res.json()).resolves.toMatchObject({
-      writesRequireProposal: true,
-    });
-  });
-
-  it.each([
-    ["clearing to the pod default", { posture: null }],
-    ["a named posture", { posture: "create-with-undo" }],
-    ["an empty list", { autoApproveFor: [] }],
-  ])(
-    "PB4: refuses an agent changing an APP's agent — %s — and writes nothing",
-    async (_l, body) => {
-      appAgent.is = true;
-      const res = await patch(true, body);
+  it.each(
+    BODIES.flatMap(([label, body]) => [
+      [`agent key, itself, ${label}`, true, AGENT, body] as const,
+      [`agent key, a sibling agent, ${label}`, true, SIBLING, body] as const,
+      [`IS internal key, ${label}`, "is", AGENT, body] as const,
+    ])
+  )(
+    "F2: refuses %s, and reads and writes nothing",
+    async (_l, asAgent, target, body) => {
+      h.agentRow = { ...h.agentRow!, id: target };
+      const res = await patch(asAgent, body, target);
       expect(res.status).toBe(403);
       expect(vi.mocked(applyAgentPosture)).not.toHaveBeenCalled();
       expect(vi.mocked(syncAutoApproveRules)).not.toHaveBeenCalled();
       expect(h.updates).toBe(0);
+      expect(vi.mocked(db.select)).not.toHaveBeenCalled();
     }
   );
+
+  it("the human creator still sets ask-first", async () => {
+    const res = await patch(false, { posture: AGENT_POSTURE_NAMES[0] });
+    expect(res.status).toBe(200);
+    expect(vi.mocked(applyAgentPosture)).toHaveBeenCalled();
+  });
 
   it("PB4: the human owner still sets an app's agent", async () => {
     appAgent.is = true;

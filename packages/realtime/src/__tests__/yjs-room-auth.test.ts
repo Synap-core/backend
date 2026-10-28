@@ -33,6 +33,16 @@ import * as Y from "yjs";
 
 const DOC = "11111111-1111-4111-8111-111111111111";
 const DOC_POD = "33333333-3333-4333-8333-333333333333"; // no workspace
+const BOARD = "44444444-4444-4444-8444-444444444444"; // a canvas document
+const MINDMAP = "55555555-5555-4555-8555-555555555555"; // a canvas document
+
+/** `documents.type`, as a table: documentId → type. */
+const DOC_TYPES: Record<string, string> = {
+  [DOC]: "markdown",
+  [DOC_POD]: "markdown",
+  [BOARD]: "whiteboard",
+  [MINDMAP]: "mindmap",
+};
 
 const EDITOR = "user-editor";
 const READER = "user-reader";
@@ -40,7 +50,12 @@ const STRANGER = "user-stranger"; // e.g. a member of some OTHER workspace
 
 /** The api floor, as a table: [user][doc] → access. */
 const FLOOR: Record<string, Record<string, "edit" | "read">> = {
-  [EDITOR]: { [DOC]: "edit", [DOC_POD]: "edit" },
+  [EDITOR]: {
+    [DOC]: "edit",
+    [DOC_POD]: "edit",
+    [BOARD]: "edit",
+    [MINDMAP]: "edit",
+  },
   [READER]: { [DOC]: "read" },
 };
 
@@ -55,6 +70,7 @@ const mocks = vi.hoisted(() => ({
   resolveAccess: vi.fn(),
   byToken: vi.fn(),
   byCookie: vi.fn(),
+  findDocument: vi.fn(),
 }));
 
 vi.mock("@synap/api/document-access", () => ({
@@ -67,8 +83,8 @@ vi.mock("@synap/auth", () => ({
 }));
 
 vi.mock("@synap/database", () => ({
-  db: { query: {} },
-  eq: vi.fn(),
+  db: { query: { documents: { findFirst: mocks.findDocument } } },
+  eq: (_column: unknown, value: unknown) => ({ value }),
   and: vi.fn(),
   claimDocumentRevision: vi.fn(),
   INHERIT_LAST_AUTHOR: Symbol("inherit"),
@@ -106,6 +122,7 @@ import {
   authorizeRoomAccess,
   insecureYjsAllowed,
   installReadOnlySync,
+  roomFitsDocumentType,
   setupYjsServer,
 } from "../yjs-server.js";
 import { declaredEditorSchema } from "../document-room.js";
@@ -121,6 +138,10 @@ beforeEach(() => {
     SESSIONS[token] ? { active: true, identity: { id: SESSIONS[token] } } : null
   );
   mocks.byCookie.mockResolvedValue(null);
+  mocks.findDocument.mockImplementation(
+    async ({ where }: { where: { value: string } }) =>
+      DOC_TYPES[where.value] ? { type: DOC_TYPES[where.value] } : undefined
+  );
 });
 
 afterEach(() => {
@@ -154,6 +175,47 @@ describe("authorizeRoomAccess follows the document's own floor", () => {
   ])("refuses %s without asking the floor", async (_label, roomName) => {
     await expect(authorizeRoomAccess(roomName, EDITOR)).resolves.toBe("none");
     expect(mocks.resolveAccess).not.toHaveBeenCalled();
+  });
+
+  it("a whiteboard- room opens only a canvas document, a bare room only a non-canvas one", async () => {
+    await expect(
+      authorizeRoomAccess(`whiteboard-${BOARD}`, EDITOR)
+    ).resolves.toBe("edit");
+    await expect(
+      authorizeRoomAccess(`whiteboard-${MINDMAP}`, EDITOR)
+    ).resolves.toBe("edit");
+    // The finding: a whiteboard room on a markdown document would persist a
+    // Tldraw store over its body. Refused even for the document's editor.
+    await expect(
+      authorizeRoomAccess(`whiteboard-${DOC}`, EDITOR)
+    ).resolves.toBe("none");
+    // The reverse: a markdown room on a canvas document would write markdown back over it.
+    await expect(authorizeRoomAccess(BOARD, EDITOR)).resolves.toBe("none");
+  });
+
+  it("asks the document's type only after the floor admitted the user", async () => {
+    await expect(
+      authorizeRoomAccess(`whiteboard-${BOARD}`, STRANGER)
+    ).resolves.toBe("none");
+    expect(mocks.findDocument).not.toHaveBeenCalled();
+  });
+
+  it("a document that vanished after the floor answered is refused, not opened", async () => {
+    mocks.findDocument.mockResolvedValueOnce(undefined);
+    await expect(authorizeRoomAccess(DOC, EDITOR)).resolves.toBe("none");
+  });
+
+  it.each([
+    ["whiteboard-", "whiteboard", true],
+    ["whiteboard-", "mindmap", true],
+    ["whiteboard-", "markdown", false],
+    ["whiteboard-", "text", false],
+    ["", "markdown", true],
+    ["", "code", true],
+    ["", "whiteboard", false],
+    ["", "mindmap", false],
+  ])("roomFitsDocumentType(%s<id>, %s) = %s", (prefix, type, fits) => {
+    expect(roomFitsDocumentType(`${prefix}${DOC}`, type)).toBe(fits);
   });
 
   it("propagates a floor error rather than swallowing it into an allow", async () => {
@@ -208,6 +270,21 @@ describe("the /yjs handshake: identity is server-proven", () => {
     const r = await connect(DOC, { userId: EDITOR, token: "tok-editor" });
     expect(r.err).toBeUndefined();
     expect(r.data.yjsAccess).toBe("edit");
+  });
+
+  it("admits the editor of a board to its whiteboard room, refuses its markdown sibling", async () => {
+    const board = await connect(`whiteboard-${BOARD}`, {
+      userId: EDITOR,
+      token: "tok-editor",
+    });
+    expect(board.err).toBeUndefined();
+    expect(board.data.yjsAccess).toBe("edit");
+    const mismatched = await connect(`whiteboard-${DOC}`, {
+      userId: EDITOR,
+      token: "tok-editor",
+    });
+    expect(mismatched.err).toBeInstanceOf(Error);
+    expect(mismatched.data.yjsAccess).toBeUndefined();
   });
 
   it("admits a reader READ-ONLY", async () => {

@@ -74,6 +74,7 @@ import {
 import { scopedDb, AccessContext } from "../access/index.js";
 import { TRPCError } from "@trpc/server";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
+import { resolveViewTrust } from "../services/view-trust-service.js";
 import { getLinksFor } from "../services/links/links-service.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import {
@@ -906,9 +907,30 @@ export const relationsRouter = router({
         type: z.string().min(1),
         metadata: z.record(z.string(), z.any()).optional(),
         workspaceId: z.string().uuid().optional(),
+        /**
+         * Host-stamped framed-view identity (NOT a trust assertion), as on
+         * `entities.create` / `update`: trust is re-resolved server-side via
+         * `resolveViewTrust()`, and an untrusted view's edge proposes
+         * (clients audit F2). Absent → legacy behavior.
+         */
+        viewContext: z
+          .object({
+            viewId: z.string().uuid().optional(),
+            typeKey: z.string().optional(),
+          })
+          .optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
+      // Framed-view trust, resolved SERVER-SIDE (never from the request body),
+      // before either branch below so neither can skip it.
+      const issuer = input.viewContext
+        ? await resolveViewTrust(
+            input.viewContext,
+            ctx.userId,
+            input.workspaceId || ctx.workspaceId || null
+          )
+        : undefined;
       // Exposure edges are NOT freely creatable — an exposure edge grants
       // cross-anchor visibility and MUST go through its sanctioned writer. The
       // rejected set is the WHOLE `EXPOSURE_RELATION_TYPES` whitelist, imported,
@@ -942,6 +964,7 @@ export const relationsRouter = router({
             // Provenance: which relation slug the caller asked for.
             metadata: { ...(input.metadata ?? {}), relationType: input.type },
             door: "relations.create (dependency)",
+            ...(issuer ? { issuer } : {}),
           })
         );
       }
@@ -1019,6 +1042,8 @@ export const relationsRouter = router({
         grantWorkspaceId: relationWorkspaceId,
         subjectType: "relation",
         action: "create",
+        // An untrusted framed view's edge proposes (clients audit F2).
+        ...(issuer ? { issuer } : {}),
         // Attribute to the acting agent so the write routes through the
         // governance membrane (propose) instead of auto-applying as the
         // operator. Without this the caller context carries agentUserId but the

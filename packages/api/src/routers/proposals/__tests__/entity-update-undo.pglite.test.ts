@@ -568,3 +568,80 @@ describe("an AUTO-APPROVED entity update is undoable from its receipt", () => {
     expect(await entityRow(client, entityId)).toEqual(ORIGINAL);
   });
 });
+
+describe("audit F7: an approval never overwrites a person's edit made since filing", () => {
+  /** The pending update with the base its door snapshots at filing. */
+  async function insertPendingUpdateWithBase(
+    client: PGlite,
+    entityId: string
+  ): Promise<string> {
+    const id = randomUUID();
+    await client.query(
+      `insert into proposals (id, status, proposal_type, target_type, target_id, data, created_by, subject_user_id)
+       values ($1, 'pending', 'update', 'entity', $2, $3::jsonb, 'agent-1', $4)`,
+      [
+        id,
+        entityId,
+        JSON.stringify({
+          changeType: "update",
+          targetType: "entity",
+          data: { id: entityId, ...EDIT },
+          // What `captureEntityPreviousData` stores: only the touched fields;
+          // a key absent at filing is `null`.
+          previousData: {
+            title: ORIGINAL.title,
+            description: ORIGINAL.preview,
+            properties: { stage: "lead", added: null, gone: "x" },
+          },
+        }),
+        USER,
+      ]
+    );
+    return id;
+  }
+
+  it("a touched field the person edited after filing refuses the approval; nothing is written", async () => {
+    const { client } = await freshDb();
+    const entityId = await insertEntity(client);
+    const proposalId = await insertPendingUpdateWithBase(client, entityId);
+
+    // Tuesday: the person moves the stage by hand.
+    await client.query(
+      `update entities set properties = properties || '{"stage":"negotiation"}'::jsonb where id = $1`,
+      [entityId]
+    );
+
+    await expect(
+      approveThroughExecutor(client, proposalId)
+    ).rejects.toMatchObject({
+      code: "CONFLICT",
+      message: expect.stringContaining(
+        "Changed since this was proposed (stage)"
+      ),
+    });
+    const after = await entityRow(client, entityId);
+    expect(after.title).toBe(ORIGINAL.title);
+    expect(after.properties).toMatchObject({ stage: "negotiation", gone: "x" });
+    expect(after.properties).not.toHaveProperty("added");
+  });
+
+  it("an edit to a field the proposal does not touch does not block it", async () => {
+    const { client } = await freshDb();
+    const entityId = await insertEntity(client);
+    const proposalId = await insertPendingUpdateWithBase(client, entityId);
+    await client.query(
+      `update entities set properties = properties || '{"owner":"bob"}'::jsonb where id = $1`,
+      [entityId]
+    );
+
+    await approveThroughExecutor(client, proposalId);
+
+    const after = await entityRow(client, entityId);
+    expect(after.title).toBe("New title");
+    expect(after.properties).toMatchObject({
+      stage: "client",
+      added: 1,
+      owner: "bob",
+    });
+  });
+});

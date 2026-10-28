@@ -89,6 +89,7 @@ const F_OTHER = randomUUID();
 const F_DETACHED = randomUUID();
 const F_PARTNER = randomUUID();
 const F_FIN = randomUUID(); // pod-wide CLIENT facet on the OTHER-stored C_FIN
+const F_T_CRM_CLIENT = randomUUID(); // pod-wide CLIENT facet on the CRM-stored T_CRM
 
 const D_CRM = randomUUID(); // body of P_CRM
 const D_CLIENT = randomUUID(); // body of C_CLIENT
@@ -212,6 +213,7 @@ beforeAll(async () => {
   await facet(F_DETACHED, P_DETACHED, ROLE_LEAD, PERSON, CRM, true);
   await facet(F_PARTNER, P_PARTNER, ROLE_PARTNER, PERSON, null);
   await facet(F_FIN, C_FIN, ROLE_CLIENT, PERSON, null);
+  await facet(F_T_CRM_CLIENT, T_CRM, ROLE_CLIENT, PERSON, null);
 
   for (const d of [D_CRM, D_CLIENT, D_UNROLED, D_PARTNER]) {
     await q(
@@ -354,6 +356,24 @@ describe("the role rows and the bodies follow (facets, documents)", () => {
         workspaceIds: [CRM],
       })
     ).not.toContain(F_FIN);
+  });
+
+  it("facets: a pod-wide shared-role facet on an entity STORED in CRM is a CRM role row (a member of CRM reads both)", async () => {
+    expect(
+      await read(entityFacets, {
+        permissions: ["facet.read"],
+        workspaceIds: [CRM],
+      })
+    ).toContain(F_T_CRM_CLIENT);
+  });
+
+  it("facets: granted CRM and OTHER, the CLIENT row on the OTHER-stored entity is read: its role is granted to CRM and its entity stored in OTHER, as for a member of both", async () => {
+    expect(
+      await read(entityFacets, {
+        permissions: ["facet.read"],
+        workspaceIds: [CRM, OTHER],
+      })
+    ).toContain(F_FIN);
   });
 
   it("documents: exactly the bodies a MEMBER of CRM reads — the pod-shared (b) body, not one reached only by a stamped role (rv-security B-4)", async () => {

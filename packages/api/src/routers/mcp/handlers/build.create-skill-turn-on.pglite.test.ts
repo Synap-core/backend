@@ -293,6 +293,17 @@ beforeAll(async () => {
       ($2, 'a@x.test', 'Scout', 'agent', $1, 'claude-code')`,
     [USER, AGENT]
   );
+  // The person is the pod owner, so a pod admin: publishing a pod-wide skill
+  // needs that authority (audit F6, `holdsSkillAuthority`).
+  const podAdminSpace = randomUUID();
+  await q(
+    `insert into workspaces (id, owner_id, name, system_slug) values ($1, $2, 'Pod admin', 'pod-admin')`,
+    [podAdminSpace, USER]
+  );
+  await q(
+    `insert into workspace_members (id, workspace_id, user_id, role) values ($1, $2, $3, 'owner')`,
+    [randomUUID(), podAdminSpace, USER]
+  );
   // A connection tool the person can see: the name `requiredTools` resolves.
   await q(
     `insert into tools (id, created_by, name, kind, approved) values ($1, $2, 'gmail_api', 'provider', true)`,

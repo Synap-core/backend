@@ -4,10 +4,12 @@
  * `StatusPill` — single source of truth for the four-state status palette
  * used everywhere a row, card, or chip needs to convey health.
  *
- *   • healthy — green   (#34D399)
- *   • stale   — amber   (#FBBF24) — expiring soon, behind, overdue
- *   • down    — red     (#F87171) — expired, failed, disconnected
- *   • unknown — grey    (#94A3B8) — no signal yet
+ *   • healthy — sage   (success)
+ *   • stale   — orange (warning) — expiring soon, behind, overdue
+ *   • down    — clay   (danger)  — expired, failed, disconnected
+ *   • unknown — grey   (default-500) — no signal yet
+ *
+ * The colours are the ochre token SSOT's, per mode (tailwind.config.ts).
  *
  * Renders as a HeroUI Chip (size sm, radius sm, variant flat) so the
  * concentric radius rule (pane 24 → card 16 → inner 8) holds inside any

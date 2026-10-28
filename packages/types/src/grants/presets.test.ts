@@ -95,6 +95,16 @@ describe("AI — read & propose: the gate verbs", () => {
       expect(Object.keys(AI_PRESET_EXCLUSIONS)).not.toContain(v);
     }
   });
+  // Intent actions (decision 2A, 2026-10-28): `run` on a capability is named
+  // per intent (`capability.publish_post.run`) and the AI preset holds none —
+  // adding it would widen every AI key to run the person's tools.
+  it("never runs a tool, by any intent or none", () => {
+    for (const qualifier of [null, "publish_post", "send_message"])
+      expect(
+        allows(perms, { subject: "capability", qualifier, action: "run" }),
+        String(qualifier)
+      ).toBe(false);
+  });
   it("lists sessions once, in the grammar spelling", () => {
     expect(perms.some((p) => p.startsWith("focus_session"))).toBe(false);
     expect(perms).toContain("session.create");

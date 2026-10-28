@@ -1267,3 +1267,70 @@ describe("a re-consent names what it asks that is new", () => {
     expect(s.size).toBe(0);
   });
 });
+
+// Intent actions (decision 2A, 2026-10-28): an app asks to run the person's
+// tools for ONE intent — `capability.<intent>.run` — and the screen says what
+// that does in the person's words, never the slug. Rules out: the intent read
+// as a kind ("Run publish_posts"), the bare `capability.run` losing its words,
+// and an intent run folded into Edit.
+describe("capability.<intent>.run reads in people's words", () => {
+  it.each([
+    ["capability.publish_post.run", "Publish posts with your tools"],
+    ["capability.send_message.run", "Send messages with your tools"],
+    ["capability.run", "Run tools"],
+    ["capability.*.run", "Run tools"],
+  ])("%s → %s", (permission, label) => {
+    expect(permissionLabel(permission)).toBe(label);
+  });
+
+  it("is a decision, given on its own", () => {
+    expect(isDecisionPermission("capability.publish_post.run")).toBe(true);
+  });
+});
+
+// A role on a record (#411): the app is granted `facet.create` /
+// `facet.delete`; `facet.attach` / `facet.detach` are the door's spelling of
+// the same act and get the same treatment, never a decision row.
+describe("adding and removing roles on records", () => {
+  const ROLES: OfferedPermission[] = [
+    "facet.read",
+    "facet.create",
+    "facet.attach",
+    "facet.update",
+    "facet.delete",
+    "facet.detach",
+  ].map((permission) => ({ permission, workspaces: [CO] }));
+
+  it.each([
+    ["facet.create", "Add roles to records"],
+    ["facet.attach", "Add roles to records"],
+    ["facet.delete", "Remove roles from records"],
+    ["facet.detach", "Remove roles from records"],
+    ["facet.update", "Edit roles"],
+    ["facet.read", "Read roles"],
+  ])("%s → %s", (permission, label) => {
+    expect(permissionLabel(permission)).toBe(label);
+  });
+
+  it("attach and detach are writes, as create and delete are, never a decision", () => {
+    for (const p of ROLES.map((o) => o.permission)) {
+      expect(isDecisionPermission(p), p).toBe(false);
+    }
+    expect(splitOffer(ROLES).decisions).toEqual([]);
+  });
+
+  it("every spelling sits in ONE Roles row, at Edit", () => {
+    const rows = groupByObject(ROLES, "agent");
+    expect(rows.map((r) => [r.key, r.label, r.levels.join("/")])).toEqual([
+      ["facet", "Roles", "off/view/edit"],
+    ]);
+    expect(rows[0]!.permissions).toHaveLength(ROLES.length);
+  });
+
+  it("first consent ticks attach and detach as it ticks create and delete", () => {
+    const approved = toApproved(initialSelection(ROLES, []), ROLES);
+    expect(approved.map((a) => a.permission)).toEqual(
+      ROLES.map((o) => o.permission)
+    );
+  });
+});
