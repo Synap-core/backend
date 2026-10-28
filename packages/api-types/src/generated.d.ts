@@ -20828,6 +20828,19 @@ export type ChangeTrackParticipantsResult = {
 	status: "updated";
 	trackId: string;
 } | ProposedOutcome;
+export interface ProposeSetupResult {
+	proposalId: string;
+	/** True when a pending setup already existed and was handed back. */
+	reused: boolean;
+}
+export interface UndoSetupResult {
+	proposalId: string;
+	spaces: Array<{
+		proposalId?: string;
+		status: "archived" | "proposed";
+		workspaceId: string;
+	}>;
+}
 export interface StartFirstSessionResult {
 	sessionId: string;
 	/** True when the open first session was handed back, nothing created. */
@@ -39140,6 +39153,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				userId: string;
 			} | null;
 		}>;
+		proposeSetup: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				slug: string;
+				view?: {
+					profile: string;
+					view: string;
+				} | undefined;
+			};
+			meta: object;
+			output: ProposeSetupResult;
+		}>;
 		recordStartStep: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				patch: Record<string, unknown>;
@@ -39493,6 +39517,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				starts: StartCard[] | undefined;
 				steps: StartStepState[];
 			};
+		}>;
+		undoSetup: import("@trpc/server").TRPCMutationProcedure<{
+			input: void;
+			meta: object;
+			output: UndoSetupResult;
 		}>;
 	}>>;
 	onboardingMilestones: import("@trpc/server").TRPCBuiltRouter<{

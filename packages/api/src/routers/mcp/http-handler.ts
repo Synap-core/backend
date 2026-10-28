@@ -30,14 +30,9 @@
  * any other Hub Protocol caller.
  */
 
-import {
-  GRANT_DOOR_UNSUPPORTED,
-  isFencedGrant,
-  mcpToolAllowed,
-} from "../../access/grant-door-fence.js";
+import { MCP_BATCH_REFUSED } from "./call-fence.js";
 import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
-import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { apiKeyService } from "../../services/api-keys.js";
 import { resolveKeyIdentity } from "../../access/key-identity.js";
@@ -209,54 +204,6 @@ export async function buildGrounding(
   }
 }
 
-/**
- * Phase 0 attribution hard-reject (docs/decisions/agent-governance.md, D1).
- *
- * A `user_pat`/`hub_inbound` key with no `linkedUserId` is a bare human key
- * used directly against MCP — a human doesn't speak MCP, so a `tools/call`
- * for a WRITE tool arriving here on a bare key is by definition an
- * un-provisioned agent. Left alone it falls to the anonymous/human
- * governance path and, for DEFAULT_AUTO_APPROVE verbs, executes with no
- * proposal at all — the silent bypass this closes.
- *
- * Reads still work (an unknown/read-only tool, or any non-`tools/call`
- * method, is never rejected) — an un-provisioned key isn't bricked, only
- * blocked from writing. Hub REST (`/api/hub/*`) is untouched — a human
- * curling it with the same bare key stays anonymous, correctly.
- *
- * Pure (no DB) so the decision is unit-testable without mocking the SDK
- * transport or the key-validation DB call — mirrors `formatGrounding` above.
- */
-export function shouldRejectUnattributedWrite(
-  parsedBody: unknown,
-  toolDefs: ReadonlyArray<Pick<Tool, "name" | "annotations">>,
-  keyType: string | null | undefined,
-  linkedUserId: string | null | undefined,
-  isAgent?: boolean
-): boolean {
-  // The is-agent signal ADMITS a real agent principal — including a pod-wide
-  // agent (userType='agent', no linked human), which is a bare hub_inbound
-  // key today and would otherwise be wrongly rejected here. It is
-  // ANDed onto the existing bare-key predicate rather than replacing it, so the
-  // gate still admits owner-attributed non-agent keys (e.g. service creds) and
-  // still rejects a bare human PAT/hub_inbound misused as an agent write.
-  const isBareKey =
-    !isAgent &&
-    !linkedUserId &&
-    (keyType === "user_pat" || keyType === "hub_inbound");
-  if (!isBareKey) return false;
-
-  const method = (parsedBody as { method?: string } | null)?.method;
-  if (method !== "tools/call") return false;
-
-  const toolName = (parsedBody as { params?: { name?: string } } | null)?.params
-    ?.name;
-  const tool = toolDefs.find((t) => t.name === toolName);
-  // Unknown tool name isn't ours to explain — let the SDK's own "unknown
-  // tool" error surface it. Only a KNOWN, non-read-only tool is rejected.
-  return !!tool && tool.annotations?.readOnlyHint !== true;
-}
-
 // ── Auth helper ───────────────────────────────────────────────────────────────
 
 /**
@@ -389,11 +336,10 @@ function hubRateLimitWait(
 }
 
 /**
- * A valid, non-agent key attempting a write over `/mcp` (see the attribution
- * hard-reject below). This is neither an auth failure (401 → try again with a
- * new key) nor a rate limit (429 → back off) — the key works fine, it's just
- * not provisioned to write here. 403, no `WWW-Authenticate` header: retrying
- * auth would not fix this.
+ * A valid key whose principal may not use MCP at all (a guest, below). This is
+ * neither an auth failure (401 → try again with a new key) nor a rate limit
+ * (429 → back off). 403, no `WWW-Authenticate` header: retrying auth would not
+ * fix this.
  */
 function jsonRpcForbidden(id: unknown, message: string) {
   return Response.json(
@@ -534,6 +480,20 @@ mcpHttpApp.post("/", async (c) => {
       { status: 400 }
     );
   }
+  // A JSON-RPC BATCH is refused. The SDK transport would dispatch every
+  // request in an array, and the per-message reads below (`initialize`, the
+  // conversation `_meta`, the refusals in the tools/call door) are written for
+  // ONE message. MCP removed batching in protocol 2025-06-18 (audit F4).
+  if (Array.isArray(parsedBody)) {
+    return Response.json(
+      {
+        jsonrpc: "2.0",
+        id: null,
+        error: { code: -32600, message: MCP_BATCH_REFUSED },
+      },
+      { status: 400 }
+    );
+  }
 
   // THE CONVERSATION IDENTITY. The transport stays stateless, but `initialize`
   // MINTS an `Mcp-Session-Id` (the SDK stamps it on the response), which the
@@ -572,8 +532,8 @@ mcpHttpApp.post("/", async (c) => {
   // (so the agent reads the user's second brain), while the agent itself is
   // tracked as `agentUserId` — derived from the principal's `userType === 'agent'`
   // — so WRITES still route through the governance membrane (propose, never
-  // auto-apply as the operator). Resolved BEFORE the reject gate so the gate can
-  // ADMIT an agent principal (the `isAgent` bit) instead of keying off the
+  // auto-apply as the operator). The `isAgent` bit lets the tools/call door's
+  // attribution check ADMIT an agent principal instead of keying off the
   // delegation fact.
   const { effectiveUserId, agentUserId, isAgent, grant } =
     await resolveKeyIdentity(keyRecord);
@@ -589,43 +549,9 @@ mcpHttpApp.post("/", async (c) => {
   // Pod-access floor, report mode (B1, access/pod-access.ts).
   await reportNoPodAccess(effectiveUserId, c.req.raw, "mcp");
 
-  // ── 2b. Attribution hard-reject (Phase 0, docs/decisions/agent-governance.md D1) ──
-  if (
-    shouldRejectUnattributedWrite(
-      parsedBody,
-      await tools.list(),
-      keyRecord.keyType,
-      keyRecord.linkedUserId,
-      isAgent
-    )
-  ) {
-    const requestId = (parsedBody as { id?: unknown } | null)?.id ?? null;
-    return jsonRpcForbidden(
-      requestId,
-      "This key is not an agent key. Run `synap init` to provision one."
-    );
-  }
-
-  // ── 2c. W1 fence: a scoped key may only call READ tools whose reads are
-  // bounded by its grant (access/grant-door-fence.ts). Write tools pass to the
-  // gate. Unknown tool names fall through to the SDK's own error.
-  if (
-    isFencedGrant(grant) &&
-    (parsedBody as { method?: string } | null)?.method === "tools/call"
-  ) {
-    const toolName = (parsedBody as { params?: { name?: string } }).params
-      ?.name;
-    const tool = (await tools.list()).find((t) => t.name === toolName);
-    if (
-      tool &&
-      !mcpToolAllowed(tool.name, tool.annotations?.readOnlyHint, grant!)
-    ) {
-      return jsonRpcForbidden(
-        (parsedBody as { id?: unknown } | null)?.id ?? null,
-        GRANT_DOOR_UNSUPPORTED
-      );
-    }
-  }
+  // ── 2b/2c. The attribution hard-reject and the W1 grant fence run in the
+  // tools/call door (`call-fence.ts`, via `createMCPServer`), which every tool
+  // call reaches whatever the body's shape — not here on one parsed object.
 
   // Optional scoping from the URL: ?workspaceId= (workspace lens) and
   // ?projectId= (project focus lens). Both narrow tool calls; orthogonal.
@@ -677,7 +603,14 @@ mcpHttpApp.post("/", async (c) => {
     // MCP Apps: the renderers bound on the `mcp-app` surface for this user.
     // Resolved per request — no cross-request cache, so a new/revoked binding
     // shows up on the very next tools/list.
-    resolveUiRendererFromDb
+    resolveUiRendererFromDb,
+    // The key as the tools/call door judges it: attribution + W1 grant fence.
+    {
+      grant,
+      keyType: keyRecord.keyType,
+      linkedUserId: keyRecord.linkedUserId,
+      isAgent,
+    }
   );
   await server.connect(transport);
 

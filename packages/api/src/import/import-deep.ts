@@ -329,7 +329,12 @@ export interface EntitySearch {
   searchCollection(
     collection: string,
     query: string,
-    opts: { userId: string; workspaceId?: string; limit?: number }
+    opts: {
+      userId: string;
+      workspaceId?: string;
+      limit?: number;
+      titleOnly?: boolean;
+    }
   ): Promise<{
     results: Array<{
       document?: { id?: string; title?: string; entityType?: string };
@@ -393,6 +398,7 @@ export function makeGraphResolver(
         userId: ctx.userId,
         workspaceId: ctx.workspaceId,
         limit: 3,
+        titleOnly: true,
       });
       const want = normTitle(title);
       for (const r of sr.results) {

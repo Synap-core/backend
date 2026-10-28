@@ -6,7 +6,13 @@
  */
 
 import type PgBoss from "pg-boss";
-import { indexingService } from "@synap/search";
+import {
+  indexingService,
+  collectionsBehind,
+  readSearchIndexVersions,
+  stampSearchIndexVersion,
+  SEARCH_INDEX_VERSIONS,
+} from "@synap/search";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "search-worker" });
@@ -77,7 +83,9 @@ export async function handleBulkIndex(): Promise<void> {
 
 /**
  * Full reindex: sync all live DB records into Typesense and prune stale docs.
- * Called by the `search-reindex` pg-boss job (admin-triggered).
+ * Called by the `search-reindex` pg-boss job (admin-triggered, or enqueued at
+ * boot by `enqueueSearchReindexIfBehind`). A collection that reindexed with no
+ * error is stamped at its current index version.
  */
 export async function handleFullReindex(
   job: PgBoss.Job<{ collections?: string[] }>
@@ -86,4 +94,40 @@ export async function handleFullReindex(
   logger.info({ collections }, "Starting full search reindex");
   const results = await indexingService.fullReindex(collections);
   logger.info({ results }, "Full search reindex complete");
+
+  for (const [collection, result] of Object.entries(results)) {
+    if (result.error || !(collection in SEARCH_INDEX_VERSIONS)) continue;
+    try {
+      await stampSearchIndexVersion(collection);
+    } catch (err) {
+      // Unstamped ⇒ the next boot reindexes it again: wasted work, not a loss.
+      logger.warn({ err, collection }, "Could not stamp search index version");
+    }
+  }
+}
+
+/** The singleton key of the boot reindex, so several booting workers queue one. */
+export const SEARCH_INDEX_VERSION_SINGLETON = "search-index-version";
+
+/**
+ * At boot: when this pod's search index predates the indexer (a collection's
+ * stamped version is below `SEARCH_INDEX_VERSIONS`), enqueue ONE full reindex
+ * of the collections behind. Without it, an indexer change reaches only the
+ * rows written after the deploy. Returns the collections it queued.
+ */
+export async function enqueueSearchReindexIfBehind(
+  boss: Pick<PgBoss, "send">
+): Promise<string[]> {
+  const behind = collectionsBehind(await readSearchIndexVersions());
+  if (behind.length === 0) return [];
+  await boss.send(
+    "search-reindex",
+    { collections: behind },
+    { singletonKey: SEARCH_INDEX_VERSION_SINGLETON }
+  );
+  logger.info(
+    { collections: behind },
+    "Search index is behind the indexer — full reindex queued"
+  );
+  return behind;
 }

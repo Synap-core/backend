@@ -11,7 +11,14 @@ interface Entity {
   id: string;
   title: string;
   content: string | null;
-  description: string | null;
+  /**
+   * The entity's short summary — the `entities.preview` column, which the write
+   * doors fill from a `description` input. Indexed as the search doc's
+   * `description` field. (The row has no `description` column: reading one
+   * left the field empty on every entity, so a note was never found by its
+   * summary.)
+   */
+  preview: string | null;
   userId: string;
   workspaceId: string | null;
   projectId: string | null;
@@ -78,7 +85,7 @@ export class EntityIndexer extends BaseIndexer<Entity> {
       id: entity.id,
       title: entity.title,
       content,
-      description: entity.description || undefined,
+      description: entity.preview || undefined,
       userId: entity.userId,
       workspaceId: toSearchWorkspaceScope(entity.workspaceId),
       projectId: entity.projectId || undefined,

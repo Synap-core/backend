@@ -19,11 +19,13 @@
  * CI provides the sibling for asserts it (`siblingRequired()`), a local-only
  * guard skips with the reason this module formats (`siblingSkipReason`).
  *
- * Self-contained on purpose (node: imports only), like strip-comments.mjs.
+ * Self-contained on purpose (node: imports and the layout resolver only), like
+ * strip-comments.mjs.
  */
 import { existsSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { loadLayout } from "./layout/layout.mjs";
 
 /** The root of THIS checkout (the directory holding `scripts/`). */
 export const BACKEND_ROOT = resolve(
@@ -31,14 +33,19 @@ export const BACKEND_ROOT = resolve(
   ".."
 );
 
-/** Every directory name a repo is checked out under, and its override var. */
-export const SIBLINGS = {
-  "synap-app": { env: "SYNAP_APP_DIR", names: ["synap-app", "app-bases"] },
-  "synap-control-plane-api": {
-    env: "SYNAP_CONTROL_PLANE_DIR",
-    names: ["synap-control-plane-api", "control-plane-api"],
-  },
-};
+/**
+ * Every directory name a repo is checked out under, and its override var:
+ * DERIVED from the one layout manifest (scripts/layout/layout.json), never a
+ * second list. Names = the layout directory, then the GitHub repo name.
+ */
+export const SIBLINGS = Object.fromEntries(
+  Object.entries(loadLayout().repos)
+    .filter(([dir]) => dir !== "synap-backend")
+    .map(([dir, def]) => [
+      dir,
+      { env: def.env, names: [...new Set([dir, def.slug])] },
+    ])
+);
 
 const WORKTREES = `${sep}.claude${sep}worktrees${sep}`;
 

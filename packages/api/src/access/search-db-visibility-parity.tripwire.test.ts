@@ -206,7 +206,7 @@ describe("indexer denormalizes visibleInWorkspaces = own ws ∪ active facet ws"
   const base = {
     title: "t",
     content: null,
-    description: null,
+    preview: null,
     userId: CALLER,
     projectId: null,
     type: "note",

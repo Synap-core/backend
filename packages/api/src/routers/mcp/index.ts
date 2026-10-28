@@ -17,6 +17,7 @@ import {
   ReadResourceRequestSchema,
   ListPromptsRequestSchema,
   GetPromptRequestSchema,
+  McpError,
 } from "@modelcontextprotocol/sdk/types.js";
 import { loadSkillPackagesFromDisk } from "../hub-protocol/rest/skills.js";
 import { resources } from "./resources/index.js";
@@ -26,6 +27,12 @@ import { filterToolsForAccess } from "./tool-profiles.js";
 import { loadKeyToolAccess } from "./tool-access.js";
 import { ENTRY_REFLEX_PROSE } from "./entry-instructions.js";
 import { shadowUndeclaredArgs } from "./undeclared-args.js";
+import {
+  MCP_CALL_REFUSED_CODE,
+  resourceReadRefusal,
+  toolCallRefusal,
+  type McpCallPrincipal,
+} from "./call-fence.js";
 import {
   NO_UI_RENDERER,
   listUiResources,
@@ -182,7 +189,14 @@ export function createMCPServer(
    * `resources/list`, and serves `resources/read`. Defaults to "none", so an
    * unwired server's tools and resources are unchanged.
    */
-  uiRenderer: UiRendererLookup = NO_UI_RENDERER
+  uiRenderer: UiRendererLookup = NO_UI_RENDERER,
+  /**
+   * The authenticating key as the tools/call door judges it (`call-fence.ts`):
+   * the attribution hard-reject and the W1 grant fence run on EVERY tool call
+   * below, whatever shape the HTTP body had. Undefined only where no key
+   * exists (stdio/dev, the unauthenticated GET/SSE branch).
+   */
+  callPrincipal?: McpCallPrincipal
 ) {
   // Who is asking, for the renderer ladder (user → workspace → pod). The
   // workspace is the URL lens — the same one `tools/list` is built for.
@@ -234,6 +248,16 @@ export function createMCPServer(
           "Use the HTTP MCP endpoint (POST /mcp) with Authorization: Bearer <api-key> instead."
       );
     }
+    // W1 fence: a `synap://` resource is a read door no grant bounds (entity
+    // lists, thread context), so a scoped key may not read one. `ui://`
+    // documents are static UI, not pod data.
+    const resourceRefusal = resourceReadRefusal(
+      request.params.uri,
+      callPrincipal
+    );
+    if (resourceRefusal) {
+      throw new McpError(MCP_CALL_REFUSED_CODE, resourceRefusal);
+    }
     const userId =
       sessionUserId ?? process.env.MCP_USER_ID ?? "dev-placeholder";
     // HTTP: the key's own scopes. stdio/dev only: MCP_SCOPES env fallback.
@@ -279,6 +303,16 @@ export function createMCPServer(
         "MCP stdio server requires MCP_USER_ID in production. " +
           "Use the HTTP MCP endpoint (POST /mcp) with Authorization: Bearer <api-key> instead."
       );
+    }
+    // The key's refusals (attribution, W1 grant fence), before anything runs.
+    // A JSON-RPC error, as the HTTP door's 403 body used to carry.
+    if (callPrincipal) {
+      const refusal = toolCallRefusal(
+        request.params.name,
+        await tools.list(),
+        callPrincipal
+      );
+      if (refusal) throw new McpError(MCP_CALL_REFUSED_CODE, refusal);
     }
     const userId =
       sessionUserId ?? process.env.MCP_USER_ID ?? "dev-placeholder";
