@@ -30,7 +30,7 @@ import { createSynapEvent } from "@synap-core/core";
 import { eventRepository, readBackupStatus } from "@synap/database";
 import { eventStreamManager } from "../event-stream-manager.js";
 import { eventVisibleWhereFor } from "../access/event-visibility.js";
-import { db, eq, and, sqlDrizzle } from "@synap/database";
+import { db, eq, and, desc, sqlDrizzle } from "@synap/database";
 import {
   users,
   workspaces,
@@ -752,8 +752,11 @@ export const systemRouter = router({
    * - Typesense (Search)
    * - MinIO (Storage)
    * - Kratos (Identity Provider)
+   *
+   * Pod admin only: it reports the pod's infrastructure, including raw
+   * connection errors (audit 2026-10-28, pod-routers F8).
    */
-  getServiceHealth: protectedProcedure.query(async () => {
+  getServiceHealth: podAdminProcedure.query(async () => {
     const services: Array<{
       name: string;
       status: "healthy" | "unhealthy" | "degraded";
@@ -940,9 +943,10 @@ export const systemRouter = router({
    * Get Data Pod Stats
    *
    * Returns global counts for the Data Pod overview dashboard.
-   * Requires authentication.
+   * Pod admin only: pod-wide counts are the admin overview, not a member's
+   * (audit 2026-10-28, pod-routers F8).
    */
-  getDataPodStats: protectedProcedure.query(async () => {
+  getDataPodStats: podAdminProcedure.query(async () => {
     const [userResult] = await db
       .select({ value: count() })
       .from(users)
@@ -974,8 +978,14 @@ export const systemRouter = router({
    *
    * Admin-level query returning all users with optional type filter and pagination.
    * Includes workspace membership count for each user.
+   *
+   * Pod admin only (audit 2026-10-28, pod-routers F8): it returns every
+   * person's email and every agent's governance metadata. It was open to any
+   * signed-in principal, guests included (guest containment blocks only
+   * mutations). A member who needs the people of a space reads
+   * `workspaces.listMembers`, which is scoped to that space.
    */
-  listUsers: protectedProcedure
+  listUsers: podAdminProcedure
     .input(
       z.object({
         type: z.enum(["all", "human", "agent"]).default("all"),
@@ -991,12 +1001,17 @@ export const systemRouter = router({
         notAnAppAgent(users.id)
       );
 
-      const userList = await db.query.users.findMany({
-        where: conditions,
-        limit: input.limit,
-        offset: input.offset,
-        orderBy: (users, { desc }) => [desc(users.createdAt)],
-      });
+      // A core select, not `db.query.users.findMany`: the relational builder
+      // re-aliases EVERY column in `where` to the root table, so the
+      // `apps.agent_user_id` inside `notAnAppAgent` became
+      // `users.agent_user_id` and the query failed on every call.
+      const userList = await db
+        .select()
+        .from(users)
+        .where(conditions)
+        .orderBy(desc(users.createdAt))
+        .limit(input.limit)
+        .offset(input.offset);
 
       // Get membership counts for each user
       const usersWithMemberships = await Promise.all(
