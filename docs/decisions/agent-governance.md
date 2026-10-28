@@ -67,18 +67,18 @@ Phase 2 (2026-07-27):
 
 ## State on 2026-10-20
 
-| Decision                          | Where                                                                                                                                              |
-| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Pure engine, ladder in its header | `packages/governance-policy/src/index.ts` (`decideAgentPolicy`)                                                                                    |
-| The one call site                 | `packages/database/src/utils/resolve-agent-governance-decision.ts`                                                                                 |
-| Identity door, reject rule        | `packages/api/src/access/key-identity.ts` (`resolveKeyIdentity`), `packages/api/src/routers/mcp/http-handler.ts` (`shouldRejectUnattributedWrite`) |
-| Rules store                       | migration `0215_governance_rules.sql`; backfill `packages/database/src/utils/backfill-governance-rules.ts`                                         |
-| Trusted lane                      | `packages/jobs/src/workers/governance-lane-scanner.ts` (total ≥ 100, approve rate > 0.95, duplicate rate < 0.15)                                   |
-| Capability rules in the gate      | `packages/capability-gate/src/index.ts`                                                                                                            |
-| Rules panel                       | `apps/pod-admin/app/(admin)/workspaces/[id]/_lib/governance-rules-panel.tsx`                                                                       |
-| Ceilings (rung 2.56)              | migrations `0236_governance_ceilings.sql`, `0330_governance_ceiling_axes_fold.sql`                                                                 |
-| Untrusted origin (rung 2.55)      | `decideAgentPolicy`; the resolver takes a `channelId`                                                                                              |
-| `knowledge_facts` dedup           | migration `0216_knowledge_facts_dedup.sql`                                                                                                         |
+| Decision                          | Where                                                                                                                                                                        |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Pure engine, ladder in its header | `packages/governance-policy/src/index.ts` (`decideAgentPolicy`)                                                                                                              |
+| The one call site                 | `packages/database/src/utils/resolve-agent-governance-decision.ts`                                                                                                           |
+| Identity door, reject rule        | `packages/api/src/access/key-identity.ts` (`resolveKeyIdentity`), `packages/api/src/routers/mcp/call-fence.ts` (`shouldRejectUnattributedWrite`, run in the tools/call door) |
+| Rules store                       | migration `0215_governance_rules.sql`; backfill `packages/database/src/utils/backfill-governance-rules.ts`                                                                   |
+| Trusted lane                      | `packages/jobs/src/workers/governance-lane-scanner.ts` (total ≥ 100, approve rate > 0.95, duplicate rate < 0.15)                                                             |
+| Capability rules in the gate      | `packages/capability-gate/src/index.ts`                                                                                                                                      |
+| Rules panel                       | `apps/pod-admin/app/(admin)/workspaces/[id]/_lib/governance-rules-panel.tsx`                                                                                                 |
+| Ceilings (rung 2.56)              | migrations `0236_governance_ceilings.sql`, `0330_governance_ceiling_axes_fold.sql`                                                                                           |
+| Untrusted origin (rung 2.55)      | `decideAgentPolicy`; the resolver takes a `channelId`                                                                                                                        |
+| `knowledge_facts` dedup           | migration `0216_knowledge_facts_dedup.sql`                                                                                                                                   |
 
 The `GOVERNANCE_MODES` presets named in the plan as dead code are gone. A
 pod-wide agent key is minted server-side with `podWide: true` on
