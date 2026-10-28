@@ -25,13 +25,25 @@ export function capBriefEnvelope<P extends AskPendingBlock | undefined>(
 } {
   if (detail !== "brief") return { synthesis, pending, keepSpaces: true };
   const cut = synthesis.sources.length - BRIEF_MAX_SOURCES;
+  // `truncated.omittedSources` is a second full-length id list (a live brief
+  // carried ~176 entries); cap it like `sources`, keeping `omitted` / `total`.
+  const truncated = synthesis.truncated;
+  const cappedTruncated =
+    truncated && truncated.omittedSources.length > BRIEF_MAX_SOURCES
+      ? {
+          ...truncated,
+          omittedSources: truncated.omittedSources.slice(0, BRIEF_MAX_SOURCES),
+        }
+      : truncated;
+  const capped = cappedTruncated !== truncated;
   return {
     synthesis:
-      cut > 0
+      cut > 0 || capped
         ? {
             ...synthesis,
+            ...(capped ? { truncated: cappedTruncated } : {}),
             sources: synthesis.sources.slice(0, BRIEF_MAX_SOURCES),
-            sourcesOmitted: cut,
+            ...(cut > 0 ? { sourcesOmitted: cut } : {}),
           }
         : synthesis,
     pending: (pending

@@ -180,6 +180,27 @@ describe("ask router", () => {
     );
   });
 
+  it("requires 3 matched terms for an uncued procedural lane, 2 when cued", async () => {
+    await ask({
+      ...baseParams,
+      query:
+        "What are the 3 most important things the founder should do this week?",
+    });
+    expect(searchFullTextMock).toHaveBeenLastCalledWith(
+      expect.anything(),
+      "user-1",
+      5,
+      expect.objectContaining({ minMatchedTerms: 3 })
+    );
+    await ask({ ...baseParams, query: "how to deploy" });
+    expect(searchFullTextMock).toHaveBeenLastCalledWith(
+      expect.anything(),
+      "user-1",
+      5,
+      expect.objectContaining({ minMatchedTerms: 2 })
+    );
+  });
+
   it("uses the pinned workspace lens for procedural search when provided", async () => {
     await ask({ ...baseParams, workspaceId: "ws-9", query: "how to deploy" });
     expect(searchFullTextMock).toHaveBeenCalledWith(

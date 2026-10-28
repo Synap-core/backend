@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { classifySubstrates } from "./classify.js";
+import { classifySubstrates, queryIsEnumerative } from "./classify.js";
 
 describe("classifySubstrates", () => {
   it("always includes semantic (the backbone)", () => {
@@ -293,5 +293,17 @@ describe("library lane", () => {
     expect(classifySubstrates("the onboarding revamp project").primary).toBe(
       "semantic"
     );
+  });
+});
+
+describe("queryIsEnumerative", () => {
+  it("is true for a list-shaped query naming a kind", () => {
+    expect(queryIsEnumerative("show my events next week")).toBe(true);
+  });
+
+  it("is false for a technical query that merely contains a kind word", () => {
+    expect(
+      queryIsEnumerative("events API 200 limit paging offset gotcha")
+    ).toBe(false);
   });
 });

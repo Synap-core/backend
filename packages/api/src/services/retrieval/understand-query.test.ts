@@ -57,6 +57,18 @@ describe("understandQuery — type inference", () => {
   });
 });
 
+describe("understandQuery — kind detection is token-based", () => {
+  it("does not infer `event` from the substring in 'prevent'", () => {
+    const u = understandQuery("prevent duplicates", CATALOG);
+    expect(u.profileTypes).not.toContain("event");
+  });
+
+  it("still infers `event` from 'my events'", () => {
+    const u = understandQuery("my events", CATALOG);
+    expect(u.profileTypes).toContain("event");
+  });
+});
+
 describe("understandQuery — data-driven vocabulary (0197 plural/synonyms)", () => {
   // Irregular plural + a slug/name that does NOT substring-match it, and a slug
   // no KIND_CUE covers — so ONLY the `plural` column can produce the match.

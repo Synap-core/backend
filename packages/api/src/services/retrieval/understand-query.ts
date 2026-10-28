@@ -286,9 +286,10 @@ export function scoreProfileCatalog(
     const plural = p.plural?.toLowerCase();
     // Strong (3): the query names the profile — slug/name as a substring, or the
     // declared plural as a substring or plural-tolerant token ("people").
+    // Token-based (`cueHit`), never a raw substring: "prevent" is not `event`.
     if (
-      q.includes(slug) ||
-      q.includes(name) ||
+      cueHit(slug.replace(/[-_]+/g, " ")) ||
+      cueHit(name) ||
       (plural ? q.includes(plural) || cueHit(plural) : false)
     ) {
       bump(p.slug, 3);

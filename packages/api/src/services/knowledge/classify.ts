@@ -230,6 +230,39 @@ function catalogWords(entry: ProfileCatalogEntry): string[] {
   );
 }
 
+/**
+ * Is the query list-shaped AND naming a kind? A kind is "named" by the builtin
+ * cues OR by the pod's own catalog. The catalog arm is what makes role profiles
+ * (client, partner, lead …) reachable at all — without it the structured lane
+ * is limited to 9 hardcoded kinds. `q` is the lowercased, space-padded query.
+ */
+function isEnumerativeQuery(
+  q: string,
+  tokenSet: Set<string>,
+  catalog?: ProfileCatalogEntry[]
+): boolean {
+  const namesKind =
+    Object.values(KIND_CUES).some((cues) => cuesKind(q, tokenSet, cues)) ||
+    (catalog ? namesCatalogProfile(q, tokenSet, catalog) : false);
+  return (
+    (ENUMERATIVE_RE.some((re) => re.test(q)) ||
+      (ENUMERATIVE_LEAD_RE.test(q) && namesPluralKind(tokenSet, catalog))) &&
+    namesKind
+  );
+}
+
+/** Public form of the enumerative gate, for callers holding the raw query. */
+export function queryIsEnumerative(
+  query: string,
+  catalog?: ProfileCatalogEntry[]
+): boolean {
+  return isEnumerativeQuery(
+    ` ${query.toLowerCase()} `,
+    new Set(tokenize(query)),
+    catalog
+  );
+}
+
 export interface SubstrateRoute {
   /** Every substrate to query (semantic always present). */
   substrates: SubstrateKind[];
@@ -273,17 +306,7 @@ export function classifySubstrates(
   // query is really a how-to (procedural) or a raw-capture recall (episodic), so
   // "what did I note about the project" stays episodic rather than listing every
   // project. Enumerative + typed = the user wants the whole set, not fuzzy top-k.
-  // A kind is "named" by the builtin cues OR by the pod's own catalog. The
-  // catalog arm is what makes role profiles (client, partner, lead …) reachable
-  // at all — without it the structured lane is limited to 9 hardcoded kinds.
-  const namesKind =
-    Object.values(KIND_CUES).some((cues) => cuesKind(q, tokenSet, cues)) ||
-    (catalog ? namesCatalogProfile(q, tokenSet, catalog) : false);
-
-  const enumerative =
-    (ENUMERATIVE_RE.some((re) => re.test(q)) ||
-      (ENUMERATIVE_LEAD_RE.test(q) && namesPluralKind(tokenSet, catalog))) &&
-    namesKind;
+  const enumerative = isEnumerativeQuery(q, tokenSet, catalog);
   const structured = enumerative && !procedural && !episodic;
 
   // Task-lane status filter — only meaningful when the enumerative query named
