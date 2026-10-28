@@ -3,7 +3,7 @@
  */
 
 import { z } from "zod";
-import { getDb, and, eq, isNull, or } from "@synap/database";
+import { getDb, and, eq, inArray, isNull, or } from "@synap/database";
 import {
   widgetDefinitions,
   CONTENT_KINDS,
@@ -61,8 +61,14 @@ function getCpUrl(): string {
 export function registerCellsRoutes(app: HubHono): void {
   /**
    * GET /cells?workspaceId=...
-   * List installed ViewFrame cells for a workspace, plus pod-global cells (workspaceId IS NULL).
-   * workspaceId is optional — when omitted, only pod-global cells are returned.
+   * List installed source cells for a workspace — `frame` (an ES-module React
+   * cell) and `iframe` (an HTML page) — plus pod-global cells (workspaceId IS
+   * NULL). workspaceId is optional — when omitted, only pod-global cells are
+   * returned.
+   *
+   * Both mechanisms, because a cell an agent defines is stored as `iframe`
+   * when its source is an HTML page (`defineCell`, migration 0366): listing
+   * `frame` alone hid every page an agent made from the agent that made it.
    */
   app.get("/cells", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
@@ -80,7 +86,7 @@ export function registerCellsRoutes(app: HubHono): void {
       const db = await getDb();
       const rows = await db.query.widgetDefinitions.findMany({
         where: and(
-          eq(widgetDefinitions.rendererType, "frame"),
+          inArray(widgetDefinitions.rendererType, ["frame", "iframe"]),
           eq(widgetDefinitions.isActive, true),
           workspaceId
             ? or(
@@ -95,6 +101,8 @@ export function registerCellsRoutes(app: HubHono): void {
         rows.map((r) => ({
           typeKey: r.typeKey,
           name: r.name,
+          // `frame` | `iframe`: how a surface draws `rendererSource`.
+          rendererType: r.rendererType,
           deps: (r.deps as Record<string, string>) ?? {},
           rendererSource: r.rendererSource ?? "",
           // Null when the cell declares no view-renderer affinity (0221).

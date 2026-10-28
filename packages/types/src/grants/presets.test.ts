@@ -6,9 +6,16 @@ import {
   AI_READ_SUBJECTS,
   AI_WRITE_SUBJECTS,
   GRANT_PRESETS,
+  DEV_LOOP_POSTER_TEMPLATE_ID,
+  KEY_AGENT_DOOR,
+  KEY_TEMPLATES,
   agentKeyGrantPermissions,
   aiDefaultCapabilities,
+  keyTemplate,
 } from "./presets.js";
+import { GRANT_SUBJECT_CATALOG } from "./catalog.js";
+import { validateGrantDraft } from "./draft.js";
+import { isKeyUseId, scopesForKey } from "./key-uses.js";
 import { MAX_GRANT_PERMISSIONS } from "./draft.js";
 import {
   GRANT_GATE_ACTIONS,
@@ -146,5 +153,107 @@ describe("agentKeyGrantPermissions — an agent's key grant from its capabilitie
     expect(dropped).toEqual(["projectMember.create"]);
     expect(permissions).toContain("shell");
     expect(permissions).not.toContain("*");
+  });
+});
+
+describe("key templates", () => {
+  const get = (id: string) => {
+    const t = keyTemplate(id);
+    if (!t) throw new Error(`no template ${id}`);
+    return t;
+  };
+
+  it("are the four built-ins, unique ids, each a valid grant with uses and a lifetime", () => {
+    expect(KEY_TEMPLATES.map((t) => t.id)).toEqual([
+      "dev-loop-poster",
+      "website-or-pod-app",
+      "read-only",
+      "full-access",
+    ]);
+    for (const t of KEY_TEMPLATES) {
+      expect(validateGrantDraft(t.grant), t.id).toEqual({ ok: true });
+      expect(t.uses?.length, t.id).toBeGreaterThan(0);
+      expect(t.uses?.every(isKeyUseId), t.id).toBe(true);
+      expect(typeof t.grant.expiresInDays, t.id).toBe("number");
+    }
+  });
+
+  // The CI / devbox observation key (`pod-observations.yml`, `pod-obs.py`):
+  // the door checks `hub-protocol.write` then the grant's `event.create`.
+  it("Dev loop poster = event.create only, on the Hub API, 90 days", () => {
+    const t = get(DEV_LOOP_POSTER_TEMPLATE_ID);
+    expect(t.grant).toEqual({
+      permissions: ["event.create"],
+      expiresInDays: 90,
+    });
+    expect(
+      scopesForKey({ uses: t.uses ?? [], permissions: t.grant.permissions })
+    ).toEqual(["hub-protocol.read", "hub-protocol.write"]);
+    const p = t.grant.permissions;
+    expect(allows(p, { subject: "event", action: "create" })).toBe(true);
+    for (const req of [
+      { subject: "event", action: "read" },
+      { subject: "entity", qualifier: "note", action: "create" },
+      { subject: "document", action: "read" },
+      { subject: "proposal", action: "approve" },
+    ])
+      expect(allows(p, req), JSON.stringify(req)).toBe(false);
+  });
+
+  it("Website or pod app and Read-only change nothing, so they get no write door", () => {
+    for (const id of ["website-or-pod-app", "read-only"]) {
+      const t = get(id);
+      expect(
+        scopesForKey({ uses: t.uses ?? [], permissions: t.grant.permissions }),
+        id
+      ).not.toEqual(expect.arrayContaining(["hub-protocol.write"]));
+      expect(
+        allows(t.grant.permissions, {
+          subject: "entity",
+          qualifier: "note",
+          action: "create",
+        }),
+        id
+      ).toBe(false);
+    }
+    expect(get("website-or-pod-app").grant.permissions).toEqual(
+      GRANT_PRESETS.find((r) => r.id === "read-only-site")?.grant.permissions
+    );
+  });
+
+  it("Read-only reads every catalog subject, the event log included", () => {
+    const p = get("read-only").grant.permissions;
+    for (const s of GRANT_SUBJECT_CATALOG)
+      expect(
+        allows(p, { subject: s.subject, qualifier: "note", action: "read" }),
+        s.subject
+      ).toBe(true);
+    expect(allows(p, { subject: "vault", action: "read" })).toBe(false);
+  });
+
+  it("Full access is * with the shortest lifetime", () => {
+    const t = get("full-access");
+    expect(t.grant.permissions).toEqual(["*"]);
+    const days = KEY_TEMPLATES.map((x) => x.grant.expiresInDays as number);
+    expect(t.grant.expiresInDays).toBe(Math.min(...days));
+    expect(t.grant.expiresInDays).toBe(30);
+  });
+
+  it("no template is the AI preset: an AI is connected as an agent", () => {
+    for (const t of KEY_TEMPLATES) {
+      expect(t.id).not.toBe(AI_READ_PROPOSE_ROLE_ID);
+      expect(t.grant.permissions).not.toEqual(perms);
+    }
+    expect(KEY_AGENT_DOOR.id).not.toBe(AI_READ_PROPOSE_ROLE_ID);
+    expect(keyTemplate(AI_READ_PROPOSE_ROLE_ID)).toBeUndefined();
+  });
+
+  it("the role presets are unchanged (pod-admin indexes them)", () => {
+    expect(GRANT_PRESETS.map((r) => r.id)).toEqual([
+      "read-only-site",
+      AI_READ_PROPOSE_ROLE_ID,
+      "full-access",
+    ]);
+    for (const r of GRANT_PRESETS) expect(r.uses, r.id).toBeUndefined();
   });
 });

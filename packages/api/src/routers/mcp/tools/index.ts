@@ -2997,6 +2997,21 @@ export const tools = {
         },
       },
       {
+        name: "synap_get_work_release",
+        annotations: {
+          title: "Get the release state",
+          readOnlyHint: true,
+          openWorldHint: false,
+        },
+        description:
+          "Can the work be released, and what blocks it — read-only. Per repo: `main` (health ok | red | infra | unmeasured, `reason`, `fixedBy`) and `live` (what is deployed, `behindBy`). Per PR: `stage` on the road to main (working, checks, ready, on_main), `verdict` (green, own_red, inherited = red only because main is red, infra = did not run, queued, running, unmeasured), `fold` (draft, negctl, dependabot, stale; null = shown), the session holding it and `holder.live` (that session worked in the last 5 min), and `blockedBy`. `blockers` are ranked by how much waits behind each, transitively: the first is the thing to fix. `sources` says when the producer's snapshots are stale or missing, or a read failed (`unavailable` is not an empty list). Facts come from the devbox producer's `dev.repo_snapshot` observations; the pod reads no GitHub itself.",
+        inputSchema: {
+          type: "object",
+          properties: {},
+          required: [],
+        },
+      },
+      {
         name: "synap_list_agents",
         annotations: {
           title: "List agents and computers",

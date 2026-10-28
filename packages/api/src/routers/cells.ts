@@ -12,7 +12,7 @@
 import { z } from "zod";
 import { router, workspaceProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
-import { getDb, and, eq } from "@synap/database";
+import { getDb, and, eq, inArray } from "@synap/database";
 import { widgetDefinitions } from "@synap/database/schema";
 import {
   installCellFromDefinition,
@@ -194,13 +194,15 @@ export const cellsRouter = router({
     }),
 
   /**
-   * List all installed frame-type cells for the current workspace.
+   * List all installed source cells (`frame` modules and `iframe` HTML pages)
+   * for the current workspace. Both, because an agent's HTML page is stored as
+   * `iframe` (`defineCell`, migration 0366) and is just as installed.
    */
   listInstalled: workspaceProcedure.query(async ({ ctx }) => {
     const db = await getDb();
     const rows = await db.query.widgetDefinitions.findMany({
       where: and(
-        eq(widgetDefinitions.rendererType, "frame"),
+        inArray(widgetDefinitions.rendererType, ["frame", "iframe"]),
         eq(widgetDefinitions.workspaceId, ctx.workspaceId!),
         eq(widgetDefinitions.isActive, true)
       ),
