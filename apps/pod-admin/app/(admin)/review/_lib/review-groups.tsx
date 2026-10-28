@@ -34,6 +34,7 @@ import {
 import { formatRelative } from "../../../../lib/format";
 import { openIn } from "../../../../lib/open-in";
 import { SectionCard } from "../../components/section-card";
+import { ResourceRow } from "../../components/resource-row";
 import { FilterChips } from "../../components/filter-chips";
 import { kindIcon, kindLabel } from "../../../_lib/object/kind-icon";
 import { Pill } from "../../../_lib/object/provenance-chips";
@@ -506,33 +507,43 @@ function FoldedBySession({
         const expanded = openKey === key;
         return (
           <div key={key}>
-            <div className="flex min-h-12 flex-wrap items-center gap-2 px-3 py-2">
-              <SessionIcon
-                className="h-4 w-4 shrink-0 text-foreground/50"
-                aria-hidden
-              />
-              <span className="min-w-0 flex-1 truncate text-[13px] text-foreground">
-                {g.title ??
-                  (g.id ? resolveObjectNoun("session") : "Not in a session")}
-              </span>
-              <Chip size="sm" radius="sm" variant="flat" className="tabular">
-                {itemCount(g.rows)}
-              </Chip>
-              <Button
-                size="sm"
-                variant="light"
-                aria-expanded={expanded}
-                onPress={() => setOpenKey(expanded ? null : key)}
-              >
-                {expanded ? "Hide them" : "See them"}
-              </Button>
-              <KeepAllButton
-                verb={verb}
-                rows={g.rows}
-                actions={actions}
-                primary={false}
-              />
-            </div>
+            {/* The canonical row, `wrap`: on a phone the buttons drop under
+                the name instead of squeezing it to one letter (finding
+                cf73140d). */}
+            <ResourceRow
+              wrap
+              Icon={SessionIcon}
+              primary={
+                g.title ??
+                (g.id ? resolveObjectNoun("session") : "Not in a session")
+              }
+              actions={
+                <div className="flex items-center gap-2">
+                  <Chip
+                    size="sm"
+                    radius="sm"
+                    variant="flat"
+                    className="tabular"
+                  >
+                    {itemCount(g.rows)}
+                  </Chip>
+                  <Button
+                    size="sm"
+                    variant="light"
+                    aria-expanded={expanded}
+                    onPress={() => setOpenKey(expanded ? null : key)}
+                  >
+                    {expanded ? "Hide them" : "See them"}
+                  </Button>
+                  <KeepAllButton
+                    verb={verb}
+                    rows={g.rows}
+                    actions={actions}
+                    primary={false}
+                  />
+                </div>
+              }
+            />
             {expanded && (
               <div className="ml-6 border-l border-foreground/[0.08]">
                 <CappedRows
