@@ -43,12 +43,11 @@ vi.mock("@synap/storage", () => ({
           code: "STORAGE_OBJECT_TOO_LARGE",
         });
       }
-      async function* body() {
-        for (let i = 0; i < bytes.length; i += 3)
-          yield bytes.subarray(i, i + 3);
+      async function* body(data: Buffer) {
+        for (let i = 0; i < data.length; i += 3) yield data.subarray(i, i + 3);
       }
       return {
-        body: body(),
+        body: body(bytes),
         size: bytes.length,
         contentType: "application/octet-stream",
         cancel() {},
