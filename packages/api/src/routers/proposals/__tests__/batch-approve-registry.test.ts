@@ -75,6 +75,15 @@ const BATCH_APPROVE_BLOCK = (() => {
   return ROUTER.slice(start, end);
 })();
 
+/** `approve`'s body (up to the next procedure). */
+const APPROVE_BLOCK = (() => {
+  const start = ROUTER.indexOf("\n  approve: protectedProcedure");
+  const end = ROUTER.indexOf("\n  revise: protectedProcedure", start);
+  expect(start).toBeGreaterThan(-1);
+  expect(end).toBeGreaterThan(start);
+  return ROUTER.slice(start, end);
+})();
+
 /** A minimal proposal row of the given type. */
 function proposalRow(
   id: string,
@@ -264,13 +273,25 @@ describe("(b) approve and batchApprove share one implementation", () => {
   });
 
   it("single approve calls the same function", () => {
-    // The interactive door opts in to the background hand-off for a large
-    // graph (`background: true`) — the same function, the same gates.
-    expect(ROUTER).toMatch(
-      /return await applyProposalApproval\(\{\s*proposal,\s*userId,\s*input,\s*ctx,\s*background: true,\s*\}\);/
+    // Scoped to the `approve` procedure and blind to the statement around the
+    // call: it was `return await …` until #365 (F3 "allow today") kept the
+    // result as `const approved = await …`. The call is what must hold, not
+    // its line. The interactive door opts in to the background hand-off for
+    // a large graph (`background: true`) — the same function, the same gates.
+    // That its result is what approve returns is pinned behaviourally in
+    // approve-acting-agent-floor.test.ts (the CONTROL case).
+    const call = APPROVE_BLOCK.match(
+      /await applyProposalApproval\(\{([^}]*)\}\)/
     );
+    expect(
+      call,
+      "approve no longer dispatches through applyProposalApproval"
+    ).not.toBeNull();
+    expect(call![1]).toMatch(/\bproposal,/);
+    expect(call![1]).toMatch(/\bbackground: true\b/);
     // Exactly two call sites: the two approve doors. A third would be drift.
     expect(ROUTER.match(/await applyProposalApproval\(/g)?.length).toBe(2);
+    expect(BATCH_APPROVE_BLOCK).toMatch(/await applyProposalApproval\(/);
   });
 
   it("applyProposalApproval's tail IS the registry dispatch", () => {

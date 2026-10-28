@@ -14934,11 +14934,21 @@ export interface PacketDeployApproval {
 	repo: string | null;
 	targetHost: string | null;
 	approvedAt: string | null;
+	/** The session it was approved on; set on `ownerDeploys` entries. */
+	sessionId?: string;
 }
 export type PacketGatesSection = {
 	deploy: PacketDeployApproval | null;
 	/** In the process's stage order. Not capped: one entry per gated stage. */
 	items: PacketGateItem[];
+	/**
+	 * Every `dev.deploy_approval` a PERSON approved on ANY session of this
+	 * session's owner in the last 14 days, newest first (at most 20). An
+	 * approval belongs to the work and its commit, not to the session or
+	 * agent that asked (founder, 2026-10-28): a deploy gate accepts a commit
+	 * any of these covers.
+	 */
+	ownerDeploys: PacketDeployApproval[];
 	status: "ok";
 } | {
 	reason: string;
@@ -15517,8 +15527,10 @@ export interface ContinuationPacket {
 	/**
 	 * GATES — every gated stage of the session's process and its state, DERIVED
 	 * FROM PROPOSAL ROWS only (`session-gates.ts`), plus `deploy`: the newest
-	 * `dev.deploy_approval` a PERSON approved. "Is commit X approved to ship by a
-	 * human?" is `deploy?.commitSha` prefix-matching X.
+	 * `dev.deploy_approval` a PERSON approved, and `ownerDeploys`: the ones a
+	 * person approved on any of the owner's sessions. "Is commit X approved to
+	 * ship by a human?" is `deploy?.commitSha`, or any `ownerDeploys[].commitSha`,
+	 * prefix-matching X.
 	 */
 	gates: PacketGatesSection;
 	/**
