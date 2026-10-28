@@ -32,6 +32,10 @@ export function registerUsersRoutes(app: HubHono): void {
    * GET /users/me — return the authenticated agent/user identity.
    * Used by the CLI and external agents to verify their API key.
    */
+  // No hub-protocol scope check, unlike its siblings (audit 2026-10-28 F8,
+  // kept on purpose): it answers only the calling credential's own id, scopes
+  // and posture, and it is how a client classifies ANY key it holds
+  // (synap-cli `credential-class.ts`), including one with no hub scope.
   app.get("/users/me", async (c) => {
     const userId = c.get("userId") as string | undefined;
     const scopes = c.get("scopes") as string[] | undefined;
