@@ -78,18 +78,21 @@ function ddlFor(table: PgTable): string {
     const t = c.getSQLType();
     const type = BASIC.test(t) ? t.replace(/\(.*\)/, "") : "text";
     const pk = c.primary ? " primary key" : "";
+    // `uuid("id").defaultRandom()`: a real `create` inserts with id = default.
     const def =
-      c.name === "approved" || c.name === "enabled"
-        ? ` default ${c.name === "enabled"}`
-        : c.name === "args"
-          ? " default '[]'"
-          : c.name === "env"
-            ? " default '{}'"
-            : c.name === "created_at" || c.name === "updated_at"
-              ? " default now()"
-              : c.name === "status"
-                ? " default 'unknown'"
-                : "";
+      c.name === "id" && type === "uuid"
+        ? " default gen_random_uuid()"
+        : c.name === "approved" || c.name === "enabled"
+          ? ` default ${c.name === "enabled"}`
+          : c.name === "args"
+            ? " default '[]'"
+            : c.name === "env"
+              ? " default '{}'"
+              : c.name === "created_at" || c.name === "updated_at"
+                ? " default now()"
+                : c.name === "status"
+                  ? " default 'unknown'"
+                  : "";
     return `"${c.name}" ${type}${pk}${def}`;
   });
   return `create table "${cfg.name}" (${cols.join(", ")});`;
