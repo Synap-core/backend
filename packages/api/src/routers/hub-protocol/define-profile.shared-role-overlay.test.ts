@@ -16,9 +16,18 @@ async function defineWith(profileResult: Record<string, unknown>) {
   const caller = {
     profiles: {
       createProfile: async () => profileResult,
-      createPropertyDef: async (input: Record<string, unknown>) => {
-        fieldCalls.push(input);
-        return { status: "applied" };
+      // One batch call carries every field (ticket a375443d).
+      createPropertyDefs: async (input: {
+        fields: Array<Record<string, unknown>>;
+      }) => {
+        fieldCalls.push(...input.fields);
+        return {
+          status: "applied",
+          properties: input.fields.map((f) => ({
+            slug: f.slug,
+            status: "applied",
+          })),
+        };
       },
     },
   };

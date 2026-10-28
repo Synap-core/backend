@@ -59,6 +59,10 @@ The governed write-back. Returns `{ status, proposalId, proposedEntityId, messag
 2. It can still be off: when the person who approved may not turn verbs on (the approval result says so in `refusals`), or after its code changed (an edit turns it off until approved again). `synap_list_capabilities` then shows it as `blocked: "not_enabled"` with an `enable.url`: hand that link to the user instead of running it.
 3. `console.log` goes to the pod log, not to your result: return what you need to see.
 
+## Fixing a code skill
+
+Change it in place with `synap_update_skill` (`id` or `slug`): it takes `code` (the whole new source), `parameters`, `timeoutSeconds` and `requiredTools` (the list replaces the declared set), as well as `body`, `description` and `name`. Never call `synap_create_skill` again under the same name: it is refused with the existing skill's id, because two skills with one name make a run by name ambiguous. A change to what the skill runs (code, parameters, timeout, a tool added) turns it off until the person approves it again: read `synap_list_capabilities` before running it.
+
 ## Box scripts (packages, files, Python or Node)
 
 When the work needs packages, files or another language (chart a CSV with pandas, convert a file, scrape with a headless browser), write a BOX script instead: `synap_create_skill` with `executionMode: "box"`, the script in `code` (a whole program, not a function body) and `box: { language: "python" | "node", packages: [{ name, version }], hosts: ["api.example.com"], limits? }`.

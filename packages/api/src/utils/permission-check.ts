@@ -1807,15 +1807,29 @@ async function evaluatePermission(
     // (utils/ai-write.ts), so a door and the gate never disagree on "AI".
     const isAiWrite = isAiWriteRequest({ agentUserId, source });
     let podAdminSchemaChange = false;
+    // A batch (`kindFields`, hub `createPropertyDefs`) is read whole: one
+    // required/default link in it is enough.
+    const batch: unknown = data?.kindFields;
+    const linksToCheck: Array<{ required?: unknown; defaultValue?: unknown }> =
+      Array.isArray(batch)
+        ? batch.filter(
+            (f): f is Record<string, unknown> => !!f && typeof f === "object"
+          )
+        : data
+          ? [data]
+          : [];
     if (
       subjectType === "property_def" &&
       action === "create" &&
       typeof data?.profileId === "string" &&
-      propertyLinkLevel({
-        required: data.required === true,
-        defaultValue: data.defaultValue,
-        alreadyLinked: false,
-      }) !== "additive"
+      linksToCheck.some(
+        (link) =>
+          propertyLinkLevel({
+            required: link.required === true,
+            defaultValue: link.defaultValue,
+            alreadyLinked: false,
+          }) !== "additive"
+      )
     ) {
       const schemaProfile = await new ProfileResolutionService(
         db
@@ -3106,6 +3120,18 @@ export function buildProposalSummary(
   ) {
     return `${buildObjectActionTitle({ action, objectKind: "library" })}: ${data.summary.trim()}`;
   }
+  // N fields added to an EXISTING kind in one proposal (hub
+  // `createPropertyDefs`, ticket a375443d): the sentence names the kind and
+  // the fields, never "Create Field" for one of them.
+  if (
+    subjectType === "property_def" &&
+    action === "create" &&
+    Array.isArray(data.kindFields)
+  ) {
+    const kindName = payloadName(data.targetName);
+    const n = data.kindFields.length;
+    return `Add ${n} field${n === 1 ? "" : "s"} to ${kindName ? `"${kindName}"` : "a kind"}:${fieldSlugList(data.kindFields)}`;
+  }
   // focus_session lifecycle close — human-readable "Complete session …"
   if (
     subjectType === "focus_session" &&
@@ -3365,7 +3391,13 @@ function requiredToolsClause(data: Record<string, unknown>): string {
 function carriedFieldsClause(data: Record<string, unknown>): string {
   if (!Array.isArray(data.kindFields) || data.kindFields.length === 0)
     return "";
-  const slugs = (data.kindFields as unknown[]).flatMap((f) =>
+  const n = data.kindFields.length;
+  return ` with ${n} field${n === 1 ? "" : "s"}:${fieldSlugList(data.kindFields)}`;
+}
+
+/** ` botscore, handle and 3 more`: the slugs of a `kindFields` list. */
+function fieldSlugList(fields: unknown[]): string {
+  const slugs = fields.flatMap((f) =>
     f &&
     typeof f === "object" &&
     typeof (f as { slug?: unknown }).slug === "string"
@@ -3375,8 +3407,7 @@ function carriedFieldsClause(data: Record<string, unknown>): string {
   const SHOWN = 8;
   const listed = slugs.slice(0, SHOWN).join(", ");
   const more = slugs.length > SHOWN ? ` and ${slugs.length - SHOWN} more` : "";
-  const n = data.kindFields.length;
-  return ` with ${n} field${n === 1 ? "" : "s"}: ${listed}${more}`;
+  return ` ${listed}${more}`;
 }
 
 /**
