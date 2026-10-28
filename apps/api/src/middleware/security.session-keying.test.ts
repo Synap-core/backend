@@ -77,7 +77,11 @@ describe("crud budget — one per signed-in person, not one per address", () => 
       if (v === undefined) delete process.env[k];
       else process.env[k] = v;
     }
-  });
+    // `security.ts` loads the whole `@synap/api` barrel (security.ts:11): 20-30 s
+    // on a CI runner, against a 30 s default hook timeout (as in
+    // security.request-size-limit.test.ts). The real fix is to stop that import
+    // loading the barrel, not this budget.
+  }, 120_000);
 
   it("a second person keeps their budget after the first spends theirs", async () => {
     const app = makeApp();

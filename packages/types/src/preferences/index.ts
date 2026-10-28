@@ -30,6 +30,7 @@ export type {
 export {
   CustomThemeSchema,
   UIPreferencesSchema,
+  ReviewPreferencesSchema,
   GraphPreferencesSchema,
   UpdatePreferencesInputSchema,
 } from "./schemas.js";

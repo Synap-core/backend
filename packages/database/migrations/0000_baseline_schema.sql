@@ -252,6 +252,41 @@ CREATE UNIQUE INDEX IF NOT EXISTS "device_auth_requests_device_code_hash_idx"
 CREATE UNIQUE INDEX IF NOT EXISTS "device_auth_requests_pending_user_code_idx"
   ON "device_auth_requests" ("user_code_hash") WHERE "status" = 'pending';
 
+-- key_requests — the CLI's door to a key (mirrors 0363, keys plan Decision 4).
+-- Hashes only: no code, token or key is ever stored in clear.
+CREATE TABLE IF NOT EXISTS "key_requests" (
+  "id"                         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "request_code_hash"          text NOT NULL,
+  "status"                     text NOT NULL DEFAULT 'pending',
+  "requester_user_id"          text NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
+  "requester_key_id"           uuid,
+  "person_user_id"             text NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
+  "template_id"                text NOT NULL,
+  "requested_name"             text NOT NULL,
+  "requested_uses"             text[] NOT NULL DEFAULT '{}',
+  "requested_permissions"      text[] NOT NULL DEFAULT '{}',
+  "requested_workspace_ids"    uuid[],
+  "requested_project_ids"      uuid[],
+  "requested_entity_ids"       uuid[],
+  "requested_expires_in_days"  integer,
+  "requested_never_expires"    boolean NOT NULL DEFAULT false,
+  "approved_by_user_id"        text REFERENCES "users"("id") ON DELETE SET NULL,
+  "approved_at"                timestamptz,
+  "approved_draft"             jsonb,
+  "minted_key_id"              uuid,
+  "poll_interval_seconds"      integer NOT NULL DEFAULT 5,
+  "last_polled_at"             timestamptz,
+  "consumed_at"                timestamptz,
+  "expires_at"                 timestamptz NOT NULL,
+  "created_at"                 timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS "key_requests_request_code_hash_idx"
+  ON "key_requests" ("request_code_hash");
+CREATE INDEX IF NOT EXISTS "key_requests_requester_idx"
+  ON "key_requests" ("requester_user_id");
+CREATE INDEX IF NOT EXISTS "key_requests_person_idx"
+  ON "key_requests" ("person_user_id");
+
 -- mcp_connect_codes — one-time consent codes for the CP-MCP pod-accept gate
 -- (mirrors 0206_mcp_connect_codes.sql). Only a sha256 HASH of the code is stored;
 -- single-use (consumed_at) + short TTL (expires_at). The claude-web agent key is
@@ -5066,6 +5101,7 @@ CREATE TABLE IF NOT EXISTS "grant_roles" (
   "archived_at"     timestamptz
 );
 CREATE INDEX IF NOT EXISTS "grant_roles_user_idx" ON "grant_roles" ("user_id");
+ALTER TABLE "grant_roles" ADD COLUMN IF NOT EXISTS "uses" text[];  -- 0363 (KEY_USES ids; NULL = the role sets no door)
 
 ALTER TABLE "grants" ADD COLUMN IF NOT EXISTS "role_id" uuid
   REFERENCES "grant_roles"("id") ON DELETE SET NULL;

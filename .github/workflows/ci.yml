@@ -177,7 +177,12 @@ jobs:
 
       # Fail if the generated API-types contract is stale (router changed but
       # @synap-core/api-types/generated.d.ts wasn't regenerated). The frontends
-      # consume this artifact, so drift is a silent type-safety hole.
+      # consume this artifact, so drift is a silent type-safety hole. The file
+      # stays COMMITTED: synap-app, browser and relay read it from a backend
+      # checkout that never builds @synap/api. In the merge queue this checks
+      # the PR merged with the next main, so a combined file the generator
+      # would not produce never lands; nothing regenerates it after a merge.
+      # Fix when red: the hint the check prints (scripts/gen-types.mjs).
       - name: Verify generated API types are up to date
         run: pnpm --filter @synap/api gen-types:check
 
@@ -448,7 +453,9 @@ jobs:
           failed=""
           # One vitest run per owning package, under that package's config.
           for dir in $(for f in $FILES; do echo "$f" | grep -oE '^(packages|apps)/[^/]+' || echo .; done | sort -u); do
-            rel=$(for f in $FILES; do case "$f" in "$dir"/*) echo "${f#"$dir"/}";; esac; [ "$dir" = . ] && ! echo "$f" | grep -qE '^(packages|apps)/' && echo "$f"; done)
+            # `|| true`: for any package dir the loop's last test is false, and
+            # under `bash -e` that failed substitution ended the step before vitest.
+            rel=$(for f in $FILES; do case "$f" in "$dir"/*) echo "${f#"$dir"/}";; esac; [ "$dir" = . ] && ! echo "$f" | grep -qE '^(packages|apps)/' && echo "$f"; done) || true
             echo "::group::$dir: $rel"
             (cd "$dir" && npx vitest run $rel) || failed="$failed $dir"
             echo "::endgroup::"

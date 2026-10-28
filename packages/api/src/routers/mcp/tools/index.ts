@@ -110,6 +110,7 @@ import {
   WAIT_MAX_SECONDS,
 } from "../../../services/focus-sessions/wait-for-answers.js";
 import { SESSION_CHANGE_KINDS } from "../../../services/focus-sessions/session-changes.js";
+import { REVIEW_PACKAGES } from "@synap-core/types/proposals/review-package";
 import { TRACK_PARTICIPANT_ACTIONS } from "../handlers/track-participants.js";
 
 /**
@@ -888,6 +889,12 @@ export const tools = {
               default: "summary",
               description:
                 "'summary' (default) returns one compact row per proposal — id, type, target, provenance, and a one-line summary — which is what a LIST is for. 'full' includes the entire `data` payload of every row: only ask for it when you need to inspect a specific proposal's contents, and pair it with a small `limit`.",
+            },
+            package: {
+              type: "string",
+              enum: [...REVIEW_PACKAGES],
+              description:
+                "Only proposals of this review package — the decision they ask the person: questions, access, releases, how-things-work (skills, rules, playbooks, automations, governance), data-changes, hand-offs, knowledge, bookkeeping (an agent's notes on its own session).",
             },
           },
           required: [],
@@ -2993,6 +3000,21 @@ export const tools = {
                 "'lean' (default) = per node id, title, status, kind, parentSessionId, trackId, projectId, workspaceId, updatedAt, inWindow and the next move (kind, actor, label). 'full' = the whole list row per node: large.",
             },
           },
+          required: [],
+        },
+      },
+      {
+        name: "synap_get_work_release",
+        annotations: {
+          title: "Get the release state",
+          readOnlyHint: true,
+          openWorldHint: false,
+        },
+        description:
+          "Can the work be released, and what blocks it — read-only. Per repo: `main` (health ok | red | infra | unmeasured, `reason`, `fixedBy`) and `live` (what is deployed, `behindBy`). Per PR: `stage` on the road to main (working, checks, ready, on_main), `verdict` (green, own_red, inherited = red only because main is red, infra = did not run, queued, running, unmeasured), `fold` (draft, negctl, dependabot, stale; null = shown), the session holding it and `holder.live` (that session worked in the last 5 min), and `blockedBy`. `blockers` are ranked by how much waits behind each, transitively: the first is the thing to fix. `sources` says when the producer's snapshots are stale or missing, or a read failed (`unavailable` is not an empty list). Facts come from the devbox producer's `dev.repo_snapshot` observations; the pod reads no GitHub itself.",
+        inputSchema: {
+          type: "object",
+          properties: {},
           required: [],
         },
       },
@@ -5893,7 +5915,7 @@ export const tools = {
             code: {
               type: "string",
               description:
-                "Optional executable source (runs sandboxed). Present ⇒ the skill is runnable; absent ⇒ it is a teaching skill.",
+                "Optional executable source (runs sandboxed). Present ⇒ the skill is runnable; absent ⇒ it is a teaching skill. It is the BODY of `async function(args, context)`: read inputs from `args` and `return` the result. Not a function of its own: `async (args) => { … }` is refused, since nothing would call it.",
             },
             body: {
               type: "string",

@@ -94,8 +94,9 @@ export interface PackageCellDefinition {
   /**
    * Rendering MECHANISM the package declares — `"frame"` (sandboxed ESM React
    * cell) or `"iframe"` (raw HTML document). Absent ⇒ undefined ⇒ `defineCell`
-   * applies its `"frame"` default on insert and leaves an existing row's
-   * mechanism untouched, the same omit-is-silence rule as `viewTypes`.
+   * derives it from the source (`iframe` for an HTML page, else `frame`) and
+   * re-derives a stored frame/iframe row the same way (see
+   * `DefineCellInput.rendererType`).
    *
    * This slot exists because the export→publish→install round trip was
    * `rendererType`-BLIND: an `iframe` HTML Card installed elsewhere as an ESM
@@ -202,8 +203,8 @@ export async function installCellFromDefinition(
       definition.contentKind,
       definition.viewTypes
     ),
-    // Undefined when the package says nothing — `defineCell` then applies its
-    // `"frame"` default on insert and leaves an existing row untouched. An
+    // Undefined when the package says nothing — `defineCell` then derives it
+    // from the source (`DefineCellInput.rendererType`). An
     // unrecognised value is dropped rather than forwarded: the payload is
     // caller-supplied and `"builtin"`/`"native"` must never reach the column
     // through a package.

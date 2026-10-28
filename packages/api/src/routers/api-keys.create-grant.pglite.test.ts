@@ -338,3 +338,95 @@ describe("apiKeys.createForWorkspace with a grant (W1f)", () => {
     expect(keys.some((k) => k.keyName === "ws plain")).toBe(false);
   });
 });
+
+// D-2 / D-4 (keys plan §4): a system or service key takes a grant and follows
+// the one lifetime rule. Rules out: an omitted lifetime still meaning "never"
+// on these doors, and a grant given to them being dropped for Full access.
+describe("system and service keys: a grant (D-2) and one lifetime rule (D-4)", () => {
+  const grantOf = async (id: string) =>
+    (
+      await h.client!.query<{
+        permissions: string[];
+        workspace_ids: string[] | null;
+      }>(
+        `select permissions, workspace_ids from grants where api_key_id = $1`,
+        [id]
+      )
+    ).rows;
+  const scopeOf = async (id: string) =>
+    (
+      await h.client!.query<{ scope: string[] }>(
+        `select scope from api_keys where id = $1`,
+        [id]
+      )
+    ).rows[0].scope;
+
+  it("an omitted lifetime is 90 days, null is never, as on a person's key", async () => {
+    const sys = await caller().createSystemKey({
+      keyName: "sys default",
+      uses: ["hub"],
+    });
+    const svc = await caller().adminCreateServiceKey({
+      keyName: "svc default",
+      uses: ["hub"],
+      workspaceId: randomUUID(),
+    });
+    for (const id of [sys.id, svc.id]) {
+      const exp = new Date((await keyRow(id)).expires_at!).getTime();
+      expect(Math.abs(exp - (Date.now() + 90 * DAY))).toBeLessThan(60_000);
+    }
+    const never = await caller().createSystemKey({
+      keyName: "sys never",
+      uses: ["hub"],
+      expiresInDays: null,
+    });
+    expect((await keyRow(never.id)).expires_at).toBeNull();
+  });
+
+  it("a grant given is the grant it holds, pinned to the service key's space", async () => {
+    const WS = randomUUID();
+    const sys = await caller().createSystemKey({
+      keyName: "poster",
+      uses: ["hub"],
+      grant: { permissions: ["event.create"] },
+    });
+    expect(await grantOf(sys.id)).toMatchObject([
+      { permissions: ["event.create"] },
+    ]);
+    const svc = await caller().adminCreateServiceKey({
+      keyName: "site",
+      uses: ["hub"],
+      workspaceId: WS,
+      grant: { permissions: ["entity.*.read"] },
+    });
+    expect(await grantOf(svc.id)).toMatchObject([
+      { permissions: ["entity.*.read"], workspace_ids: [WS] },
+    ]);
+    await expect(
+      caller().adminCreateServiceKey({
+        keyName: "elsewhere",
+        uses: ["hub"],
+        workspaceId: WS,
+        grant: { permissions: ["entity.*.read"], workspaceIds: [randomUUID()] },
+      })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("uses derive the doors against the grant: a read-only grant gets no write door", async () => {
+    const ro = await caller().createSystemKey({
+      keyName: "reader",
+      uses: ["hub", "mcp"],
+      grant: { permissions: ["entity.*.read"] },
+    });
+    expect(await scopeOf(ro.id)).toEqual(["hub-protocol.read", "mcp.read"]);
+    const full = await caller().createSystemKey({
+      keyName: "full",
+      uses: ["hub"],
+    });
+    expect(await scopeOf(full.id)).toEqual([
+      "hub-protocol.read",
+      "hub-protocol.write",
+    ]);
+    expect(await grantOf(full.id)).toMatchObject([{ permissions: ["*"] }]);
+  });
+});

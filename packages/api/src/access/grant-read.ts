@@ -24,9 +24,9 @@
  * (entities, their facets, their bodies), built from the SAME space-keyed
  * builders the member floor uses (utils/project-scope.ts,
  * @synap/database facet-visibility.ts). The write gate (grant-write-check.ts)
- * checks the stored row's own workspace, except an UPDATE of a reached
- * pod-wide role facet (`reachedFacetGrantSpace`, founder decision 1,
- * 2026-10-26): checked in the space its role is granted to.
+ * checks the stored row's own workspace, except a ROLE write
+ * (utils/role-write-grant.ts, D1 + founder decision 812ee060): checked in the
+ * role's space, a shared role in the spaces it is granted to.
  */
 
 import {

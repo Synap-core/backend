@@ -11,7 +11,9 @@
  * so a keystroke never waits for it.
  *
  * Idempotent by the stamp: a document whose stored diagnostics already describe
- * its current revision (the patch door stamps its own) is skipped. A check that
+ * its current revision under the current checker (the patch door stamps its
+ * own) is skipped; a stamp from an older checker is re-stamped, keeping its
+ * run-time items (content cannot re-derive them). A check that
  * cannot run stamps NOTHING — readers then see "not checked" (the read door
  * re-checks live), never an empty list that claims the document is clean.
  */
@@ -24,6 +26,7 @@ import {
   readPatchDocumentContent,
   readStoredDiagnostics,
   storeDocumentDiagnostics,
+  storedRunTimeDiagnostics,
 } from "./apply-document-patch.js";
 
 const logger = createLogger({ module: "document-diagnostics-reactor" });
@@ -56,11 +59,10 @@ export async function refreshDocumentDiagnostics(
   // owner's, the readers' lens is the document's own workspace.
   const outcome = await diagnoseForDocument(content, doc, doc.userId);
   if (!outcome.items) return "failed";
-  return (await storeDocumentDiagnostics(
-    doc.id,
-    doc.contentRevision,
-    outcome.items
-  ))
+  return (await storeDocumentDiagnostics(doc.id, doc.contentRevision, [
+    ...outcome.items,
+    ...storedRunTimeDiagnostics(doc.metadata, doc.contentRevision),
+  ]))
     ? "stamped"
     : "moved";
 }

@@ -1515,6 +1515,37 @@ export const focusSessionsRouter = router({
     }),
 
   /**
+   * EVERY pull request and branch a session recorded, each PR with its state:
+   * the session page's "Show all" (its packet carries the first few). The same
+   * rule and state read as the packet's `workUnits` (`readAllWorkUnits`),
+   * under the same read floor as `get`.
+   */
+  workUnits: protectedProcedure
+    .input(z.object({ sessionId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const roster = rosterReadFor(ctx);
+      const row = await db.query.focusSessions.findFirst({
+        where: and(
+          eq(focusSessions.id, input.sessionId),
+          sessionReadableWhere({ userId: requireUserId(ctx.userId), roster })
+        ),
+      });
+      if (!row) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Focus session ${input.sessionId} not found`,
+        });
+      }
+      const { readAllWorkUnits } =
+        await import("../services/focus-sessions/continuation-packet.js");
+      return readAllWorkUnits(row, {
+        database: db,
+        userId: requireUserId(ctx.userId),
+        roster,
+      });
+    }),
+
+  /**
    * Get a single focus session by ID.
    * Scoped to the authenticated user — cannot read another user's session.
    *

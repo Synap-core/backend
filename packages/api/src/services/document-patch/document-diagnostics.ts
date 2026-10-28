@@ -222,6 +222,22 @@ function firstOf(
   return undefined;
 }
 
+/**
+ * The version of `diagnoseDocument`'s verdicts. A stored stamp is served only
+ * while it carries THIS version, so a checker fix reaches documents stamped
+ * before it (their next read re-checks) instead of their old verdict being
+ * served for as long as their text does not change. Bump it whenever the
+ * checker's verdicts change meaning.
+ */
+export const DOCUMENT_DIAGNOSTICS_CHECKER = 2;
+
+/**
+ * Codes a flow may stamp: run-time facts only; content codes are derived,
+ * never asserted. They live only in the stamp (content cannot re-derive them),
+ * so a re-check of the same revision carries them over.
+ */
+export const RUN_TIME_DIAGNOSTIC_CODES = ["freeze_failed"] as const;
+
 /** Every diagnostic for `markdown`, judged with `resolver`. Never throws on content. */
 export async function diagnoseDocument(
   markdown: string,

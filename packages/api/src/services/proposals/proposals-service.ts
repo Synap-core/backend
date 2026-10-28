@@ -33,6 +33,10 @@ import {
 } from "@synap-core/types/proposals";
 import type { ProposalStatusFilter } from "../../routers/hub-protocol/rest/_codecs/proposal.js";
 import { ownAgentUserFilter } from "../agent-identity-service.js";
+import {
+  reviewPackageOfRow,
+  type ReviewPackage,
+} from "./review-package-of-row.js";
 
 /**
  * List proposals CREATED BY a user (optionally narrowed to a workspace/status),
@@ -54,6 +58,32 @@ export async function listCreatedProposals(params: {
    * (caller owns the focus_session) and lists all proposals for that session —
    * not only rows createdBy the agent key (agent vs human createdBy mismatch).
    */
+  sessionId?: string;
+  status?: string;
+  limit?: number;
+  /**
+   * Only rows of this REVIEW PACKAGE (`reviewPackageOfRow`). Decided per row,
+   * so it filters a bounded scan ({@link PACKAGE_SCAN_LIMIT}) of the newest
+   * matching rows, then takes `limit`.
+   */
+  package?: ReviewPackage;
+}): Promise<Array<typeof proposals.$inferSelect>> {
+  const rows = await listCreatedProposalRows({
+    ...params,
+    limit: params.package ? PACKAGE_SCAN_LIMIT : params.limit,
+  });
+  if (!params.package) return rows;
+  return rows
+    .filter((r) => reviewPackageOfRow(r) === params.package)
+    .slice(0, params.limit ?? 20);
+}
+
+/** Rows a `package` filter scans before taking `limit`. */
+const PACKAGE_SCAN_LIMIT = 500;
+
+async function listCreatedProposalRows(params: {
+  createdBy: string;
+  workspaceId?: string;
   sessionId?: string;
   status?: string;
   limit?: number;

@@ -22,6 +22,7 @@ import {
 } from "@synap/database";
 import { skills, tools } from "@synap/database/schema";
 import type { ProviderVerbSpec } from "@synap/database/schema";
+import type { CapabilityEnableOffer } from "../services/capabilities/propose-capability-enable.js";
 import {
   getLinksFor,
   createLinks,
@@ -150,6 +151,8 @@ export function scanSkillGlobals(code: string): {
   ok: boolean;
   unknownGlobals: string[];
   parseError?: string;
+  /** The code only DEFINES functions: see {@link onlyDefinesFunctions}. */
+  onlyDefinesFunctions?: boolean;
 } {
   const wrapped = `(async function(args, context){\n${code}\n})`;
   let ast: acorn.Node;
@@ -242,7 +245,41 @@ export function scanSkillGlobals(code: string): {
       (name) => !bound.has(name) && !SKILL_RUNTIME_ALLOWED_GLOBALS.has(name)
     )
     .sort();
-  return { ok: unknownGlobals.length === 0, unknownGlobals };
+  return {
+    ok: unknownGlobals.length === 0,
+    unknownGlobals,
+    onlyDefinesFunctions: onlyDefinesFunctions(ast),
+  };
+}
+
+/**
+ * The runner runs a skill's code as the BODY of `async function(args,
+ * context)` (runner/skill-isolate.ts). Code that is itself a function —
+ * `async (args, context) => { … }` or `function run() { … }` — is defined by
+ * that body and never called: every run returns `undefined` and still reports
+ * success. Live (skill dogfood_echo, run 12b2997a, 2026-10-28): approved,
+ * delivered, no result.
+ */
+function onlyDefinesFunctions(ast: acorn.Node): boolean {
+  const program = ast as unknown as {
+    body: Array<{ expression?: { body?: { body?: acorn.Node[] } } }>;
+  };
+  const statements = program.body[0]?.expression?.body?.body ?? [];
+  return (
+    statements.length > 0 &&
+    statements.every((node) => {
+      const s = node as unknown as {
+        type: string;
+        expression?: { type: string };
+      };
+      return (
+        s.type === "FunctionDeclaration" ||
+        (s.type === "ExpressionStatement" &&
+          (s.expression?.type === "FunctionExpression" ||
+            s.expression?.type === "ArrowFunctionExpression"))
+      );
+    })
+  );
 }
 
 /**
@@ -344,6 +381,17 @@ export function assertSkillGlobalsAllowed(
     throw new TRPCError({
       code: "BAD_REQUEST",
       message: `Skill code has a syntax error: ${scan.parseError}`,
+    });
+  }
+  if (scan.onlyDefinesFunctions) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "Skill code only defines a function, so a run would call nothing and return nothing. " +
+        "The code is the BODY of a function that receives `args` and `context`: " +
+        "write its statements directly and `return` the result " +
+        '(e.g. `const text = String(args.text ?? ""); return { echoed: text };`), ' +
+        "without a wrapper like `async (args, context) => { … }`.",
     });
   }
   if (!scan.ok) {
@@ -478,7 +526,15 @@ export type InsertSkillGovernedInput = typeof skills.$inferInsert & {
 };
 
 export type InsertSkillGovernedResult =
-  | { status: "installed"; skill: typeof skills.$inferSelect }
+  | {
+      status: "installed";
+      skill: typeof skills.$inferSelect;
+      /**
+       * An agent's skill no person reviewed, born off: the "turn this on?"
+       * request filed for the person (`requestAgentSkillTurnOn`).
+       */
+      turnOnRequest?: CapabilityEnableOffer;
+    }
   | { status: "proposed"; proposalId: string }
   | { status: "denied"; reason: string };
 
@@ -539,13 +595,20 @@ export async function insertSkillGoverned(
     return { status: "proposed", proposalId: perm.proposalId };
   }
 
+  const authorAgentUserId = agentUserId ?? skillAuthor?.agentUserId;
+  const personApprovedProposal =
+    !agentUserId && skillAuthor?.personApproved === true;
   const approved = skillBornApproved({
     kind: values.kind,
     code: values.code,
     providerSpec: values.providerSpec,
-    agentUserId: agentUserId ?? skillAuthor?.agentUserId,
-    personApprovedProposal:
-      !agentUserId && skillAuthor?.personApproved === true,
+    agentUserId: authorAgentUserId,
+    personApprovedProposal,
+    executionMode: values.executionMode,
+    metadata: values.metadata,
+    // No door through here declares `requires` tools (the `skill/create`
+    // executor writes them after, and re-decides with them).
+    requiredTools: [],
   });
 
   const [skill] = await db
@@ -576,7 +639,23 @@ export async function insertSkillGoverned(
     workspaceId: values.workspaceId ?? undefined,
   });
 
-  return { status: "installed", skill };
+  // Dynamic, like the other enable-request imports here: the proposer's module
+  // graph stays out of this router's load.
+  const { requestAgentSkillTurnOn } =
+    await import("../services/capabilities/request-skill-turn-on.js");
+  const turnOnRequest = await requestAgentSkillTurnOn({
+    skill,
+    authorAgentUserId,
+    personReviewed: personApprovedProposal,
+    userId: values.userId,
+    workspaceId: values.workspaceId ?? null,
+  });
+
+  return {
+    status: "installed",
+    skill,
+    ...(turnOnRequest ? { turnOnRequest } : {}),
+  };
 }
 
 /**
@@ -1532,6 +1611,10 @@ export const skillsRouter = router({
             code: input.code,
             providerSpec: input.providerSpec,
             agentUserId: input.agentUserId,
+            executionMode: input.executionMode,
+            metadata,
+            // Declared now, linked just below: the rule must see them.
+            requiredTools: requiredToolIds,
           }),
         })
         .returning();
@@ -1564,9 +1647,25 @@ export const skillsRouter = router({
         workspaceId: input.workspaceId,
       });
 
+      // 5. An agent's skill born off with no person reviewing it (a rule
+      //    granted the create): ONE "turn this on?" request for the person.
+      const { requestAgentSkillTurnOn } =
+        await import("../services/capabilities/request-skill-turn-on.js");
+      const turnOnRequest = await requestAgentSkillTurnOn({
+        skill,
+        authorAgentUserId: input.agentUserId,
+        personReviewed: false,
+        userId,
+        workspaceId: input.workspaceId ?? null,
+        sessionId: ctx.sessionId ?? null,
+      });
+
       return {
         id: skill.id,
         status: "created" as const,
+        approved: skill.approved,
+        // Present only when one was filed (undefined never reaches the wire).
+        turnOnRequest: turnOnRequest ?? undefined,
       };
     }),
 
@@ -1839,6 +1938,22 @@ export const skillsRouter = router({
           existingSkill.slug,
           updateData.body
         );
+      }
+
+      // 6. An agent's change switched the skill off (a rule granted the edit,
+      //    so no person reviewed it): ONE "turn this on?" request for the
+      //    person, so an edited skill never sits off unseen either.
+      if (execChanged && actingAgentUserId && _updated && !_updated.approved) {
+        const { requestAgentSkillTurnOn } =
+          await import("../services/capabilities/request-skill-turn-on.js");
+        await requestAgentSkillTurnOn({
+          skill: _updated,
+          authorAgentUserId: actingAgentUserId,
+          personReviewed: false,
+          userId,
+          workspaceId: existingSkill.workspaceId ?? null,
+          sessionId: ctx.sessionId ?? null,
+        });
       }
 
       return {

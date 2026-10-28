@@ -315,9 +315,18 @@ describe("BORN-APPROVED DOWNGRADE stays intact (security)", () => {
 });
 
 describe("ONE APPROVAL: a person approving the create turns the skill on (decision 2)", () => {
+  // Code that calls a connection: an agent's code that reaches NOTHING is
+  // born on whoever approves (rule 3 of `skillBornApproved`), so these rows,
+  // which are about WHO approves, need code that reaches out.
+  const REACHING = 'return await callProvider("apify", "POST", "/acts");';
   const codeSkill = () =>
-    declarativeSkill({ kind: "code", providerSpec: null, approved: false });
-  const codeData = { name: "score_handle", kind: "code", code: "return 1;" };
+    declarativeSkill({
+      kind: "code",
+      providerSpec: null,
+      approved: false,
+      code: REACHING,
+    });
+  const codeData = { name: "score_handle", kind: "code", code: REACHING };
 
   it("an AGENT's code skill a PERSON approved is enabled through the one enable door", async () => {
     const result = await run({

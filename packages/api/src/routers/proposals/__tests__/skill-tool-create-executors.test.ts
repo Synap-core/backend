@@ -84,6 +84,9 @@ function approvedAfterSkillCreateApproval(args: {
   proposalAgentUserId: string | null;
   /** A PERSON (not an agent path) clicked approve. */
   approvedByPerson?: boolean;
+  executionMode?: string;
+  metadata?: unknown;
+  requiredTools?: string[];
 }): boolean {
   return skillBornApproved({
     kind: args.kind,
@@ -91,8 +94,61 @@ function approvedAfterSkillCreateApproval(args: {
     providerSpec: args.providerSpec ?? null,
     agentUserId: args.proposalAgentUserId,
     personApprovedProposal: args.approvedByPerson,
+    executionMode: args.executionMode ?? "sync",
+    metadata: args.metadata ?? {},
+    requiredTools: args.requiredTools ?? [],
   });
 }
+
+/** Code that reaches the person's Gmail connection through the pod. */
+const REACHING_CODE = 'return await callProvider("gmail", "GET", "/m");';
+
+/**
+ * Rule 3 (founder, 2026-10-28): an agent's CODE skill no person reviewed is
+ * born on when it reaches nothing outside the pod, read by `skillReach` (the
+ * review's "Can reach"). Each row below rules out a looser reading: a host,
+ * a declared tool, a written-out or a hidden `callProvider`, a box script, a
+ * provider spec, and a person's own code (rule 3 is the agent's only).
+ */
+describe("(rule 3) an agent's code that reaches nothing is born on", () => {
+  const agentCode = (
+    over: Partial<Parameters<typeof approvedAfterSkillCreateApproval>[0]>
+  ) =>
+    approvedAfterSkillCreateApproval({
+      kind: "code",
+      code: "return input.n * 2;",
+      proposalAgentUserId: "agent-user-id",
+      ...over,
+    });
+
+  it("pure code: born on", () => {
+    expect(agentCode({})).toBe(true);
+  });
+
+  it("anything that reaches out keeps it off", () => {
+    expect(agentCode({ metadata: { allowedHosts: ["api.acme.test"] } })).toBe(
+      false
+    );
+    expect(agentCode({ requiredTools: ["gmail_api"] })).toBe(false);
+    expect(agentCode({ code: REACHING_CODE })).toBe(false);
+    expect(
+      agentCode({
+        code: "const p = input.p; return callProvider(p, 'GET', '/');",
+      })
+    ).toBe(false);
+    expect(agentCode({ executionMode: "box" })).toBe(false);
+    expect(agentCode({ providerSpec: { tool: "gmail" } })).toBe(false);
+  });
+
+  it("only CODE: an agent's instruction or declarative skill stays off", () => {
+    expect(agentCode({ kind: "instruction", code: null })).toBe(false);
+    expect(agentCode({ kind: "declarative", code: null })).toBe(false);
+  });
+
+  it("a person's own pure code is unchanged: off until they turn it on", () => {
+    expect(agentCode({ proposalAgentUserId: null })).toBe(false);
+  });
+});
 
 describe("(A) skill/create approval — one approval, no escalation", () => {
   it("an AGENT-proposed instruction skill NOT approved by a person persists approved === false", () => {
@@ -134,6 +190,9 @@ describe("(A) skill/create approval — one approval, no escalation", () => {
         expect(
           approvedAfterSkillCreateApproval({
             kind,
+            // Reaching code: an agent's code that reaches nothing is rule 3.
+            code: kind === "code" ? REACHING_CODE : null,
+            providerSpec: kind === "declarative" ? { tool: "x" } : null,
             proposalAgentUserId: agent,
           })
         ).toBe(false);

@@ -30,6 +30,12 @@ import type { GovernanceRung, MatrixMark } from "../agent-matrix/index.js";
 import type { FilterOperator } from "../views/filters.js";
 import type { NeedsYouBucket } from "../needs-you/buckets.js";
 import type {
+  CheckVerdict,
+  RepoMainHealth,
+  ShipFold,
+  ShipStage,
+} from "../work-release/index.js";
+import type {
   PullRequestChecks,
   PullRequestState,
 } from "../events/pr-state.js";
@@ -52,6 +58,9 @@ export * from "./embed-words.js";
 
 /** Who is on a goal: participant roles, commitment states, "Silent 6 h". */
 export * from "./track-participant-words.js";
+
+/** Review's packages, groupings and layouts (`../proposals/review-package.ts`). */
+export * from "./review-words.js";
 
 /**
  * Words a sentence-cased token must still spell the way people write them —
@@ -1408,6 +1417,45 @@ export const PULL_REQUEST_CHECKS_LABELS: Readonly<
 /** A deploy named the PR's merge commit. */
 export const PULL_REQUEST_DEPLOYED_LABEL = "Deployed";
 
+/**
+ * WORK › SHIP marks (`@synap-core/types/work-release`): the columns of the
+ * road to main, a PR's check verdict, the folds and a main's health. Their
+ * own tables: `ready`, `running` and `stale` already mean other things in
+ * {@link STATUS_LABELS}. Keyed by every member, so a new one stops the build.
+ */
+export const SHIP_STAGE_LABELS: Readonly<Record<ShipStage, string>> = {
+  working: "Working",
+  checks: "Checks",
+  ready: "Ready",
+  on_main: "On main",
+};
+
+export const CHECK_VERDICT_LABELS: Readonly<Record<CheckVerdict, string>> = {
+  green: "Green",
+  own_red: "Own red",
+  inherited: "Inherited red",
+  infra: "Did not run",
+  queued: "Queued",
+  running: "Running",
+  unmeasured: "No checks yet",
+};
+
+export const SHIP_FOLD_LABELS: Readonly<Record<NonNullable<ShipFold>, string>> =
+  {
+    draft: "Drafts",
+    negctl: "Negative controls",
+    dependabot: "Dependabot",
+    stale: "Stale",
+  };
+
+export const REPO_MAIN_HEALTH_LABELS: Readonly<Record<RepoMainHealth, string>> =
+  {
+    ok: "Main green",
+    red: "Main red",
+    infra: "Main did not run",
+    unmeasured: "Main not measured",
+  };
+
 export function resolvePullRequestStateLabel(state: PullRequestState): string {
   return PULL_REQUEST_STATE_LABELS[state];
 }
@@ -1908,6 +1956,30 @@ export function resolveSignInWayLabel(
     >
   )[way.trim().toLowerCase()];
   return row ? row[form] : humanizeToken(way);
+}
+
+/**
+ * Where a key is used — the doors a person picks on the New key page, in
+ * words (`@synap-core/types/grants` `KEY_USES`, stored on a template as
+ * `grant_roles.uses`). The person never sees a scope token: each use names
+ * the scopes it opens, and the mint door derives them (`scopesForKey`).
+ */
+export const KEY_USE_LABELS = {
+  hub: "A website or app (Hub API)",
+  mcp: "An AI client over MCP",
+  n8n: "n8n",
+  "n8n-analyze": "AI analysis in n8n",
+  realtime: "Live updates (realtime)",
+  chat: "Chat streaming",
+  skills: "Skills",
+} as const;
+
+export function resolveKeyUseLabel(use: string | null | undefined): string {
+  if (!use?.trim()) return "";
+  return (
+    (KEY_USE_LABELS as Readonly<Record<string, string>>)[use.trim()] ??
+    humanizeToken(use)
+  );
 }
 
 /**
