@@ -25,6 +25,7 @@ import {
 import { assertProposalVisibleTo } from "../../utils/proposal-visibility.js";
 import { findUserDefaultWorkspaceId } from "../../utils/user-default-workspace.js";
 import { assertChannelWrite } from "../../utils/assert-channel-write.js";
+import { AccessContext, scopedDb } from "../../access/index.js";
 
 export const contextRouter = router({
   /**
@@ -77,14 +78,27 @@ export const contextRouter = router({
         ((ctx as Record<string, unknown>).workspaceId as string | null) ??
         null;
       const threadUserId = thread?.userId ?? ctx.userId!;
-      // Use the thread's actual userId (not API key owner "system")
+      // The channel and its messages are read AS THE THREAD'S OWNER: the floor
+      // above already admitted the caller to this channel, and the owner's
+      // context is what the channel reads key on. Nothing else is: the recent
+      // entities and the linked items below are read as the CALLER (audit F6,
+      // 2026-10-28) — read as the owner, they handed any member who could see
+      // a shared channel the owner's 10 newest entity titles, including ones
+      // in spaces that member is not in.
       const callerContext = await createHubProtocolCallerContext(
         threadUserId,
         ctx.scopes || [],
         workspaceId
       );
       const chatCaller = channelsRouter.createCaller(callerContext);
-      const entitiesCaller = entitiesRouter.createCaller(callerContext);
+      const entitiesCaller = entitiesRouter.createCaller(
+        await createHubProtocolCallerContext(
+          ctx.userId!,
+          ctx.scopes || [],
+          workspaceId
+        )
+      );
+      const asCaller = scopedDb(AccessContext.from(ctx));
 
       // Get channel with context (includes channel_context_items rows)
       const threadResult = await chatCaller.getChannel({
@@ -99,7 +113,7 @@ export const contextRouter = router({
         limit: input.limit ?? 50,
       });
 
-      // Get recent entities for this user
+      // The caller's own recent entities (floored by the caller and its grant).
       const entitiesResult = await entitiesCaller.list({
         limit: 10,
       });
@@ -123,7 +137,14 @@ export const contextRouter = router({
       let linkedDocuments: Array<{ id: string; title: string | null }> = [];
 
       if (linkedEntityIds.length > 0) {
-        const rows = await db.query.entities.findMany({
+        // Through the caller's read floor + grant: an item attached to the
+        // channel is shown only if the caller may read it.
+        const rows = await asCaller.findMany<{
+          id: string;
+          type: string;
+          title: string | null;
+          properties: unknown;
+        }>(entities, {
           where: inArray(entities.id, linkedEntityIds),
           columns: { id: true, type: true, title: true, properties: true },
         });
@@ -139,7 +160,10 @@ export const contextRouter = router({
         }));
       }
       if (linkedDocumentIds.length > 0) {
-        const rows = await db.query.documents.findMany({
+        const rows = await asCaller.findMany<{
+          id: string;
+          title: string | null;
+        }>(documents, {
           where: inArray(documents.id, linkedDocumentIds),
           columns: { id: true, title: true },
         });
