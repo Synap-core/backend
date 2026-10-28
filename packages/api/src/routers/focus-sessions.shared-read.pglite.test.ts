@@ -104,7 +104,8 @@ const OWED = {
   owner: "human",
   blockedReason: "credential",
   why: "the live restricted key",
-  owedSince: "2026-09-01T00:00:00.000Z",
+  // A live ask (under 7 days): the needs-you rule counts it in the headline.
+  owedSince: new Date(Date.now() - 3_600_000).toISOString(),
 };
 
 const caller = (userId: string, agentUserId?: string) =>

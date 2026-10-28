@@ -120,6 +120,10 @@ import {
   workspaceMembers,
   podMembers,
   projectMembers,
+  chatTurns,
+  events,
+  playbookRuns,
+  proposals,
 } from "@synap/database";
 import { signalsRouter } from "./signals.js";
 
@@ -239,6 +243,11 @@ describe("signals: session.needs_you in needs-you (session.room_update retired)"
       workspaceMembers,
       podMembers,
       projectMembers,
+      // The needs-you rule's facts (agent evidence, proposal waits).
+      chatTurns,
+      events,
+      playbookRuns,
+      proposals,
     ]) {
       await h.client!.exec(ddlFor(t as unknown as PgTable));
     }

@@ -188,6 +188,7 @@ export class CpBrokerConnector implements ConnectionBroker {
       createdAt: c.createdAt ? new Date(c.createdAt) : null,
       lastSyncAt: c.lastFetchedAt ? new Date(c.lastFetchedAt) : undefined,
       hasError: c.hasError === true,
+      objectScoped: c.objectScoped === true,
     }));
     return { ok: true, connections };
   }
@@ -398,21 +399,5 @@ export class CpBrokerConnector implements ConnectionBroker {
     throw new Error(
       `Sync failure report was not recorded: ${this.failure(sent).error}`
     );
-  }
-
-  async dedupeConnections(userId: string, provider: string): Promise<string[]> {
-    const r = await this.fetchRows(userId);
-    if (!r.ok) {
-      throw new Error(`Could not list connections to dedupe: ${r.error}`);
-    }
-    const plain = r.rows
-      .filter((c) => c.provider === provider && !c.objectScoped)
-      .sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
-    const revoked: string[] = [];
-    for (const c of plain.slice(1)) {
-      await this.revokeConnection(c.connectionId, provider, userId);
-      revoked.push(c.connectionId);
-    }
-    return revoked;
   }
 }

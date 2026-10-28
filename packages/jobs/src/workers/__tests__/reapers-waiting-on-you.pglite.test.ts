@@ -39,12 +39,15 @@ import {
   automationStepRuns,
   playbookRuns,
   messages,
+  chatTurns,
+  events,
 } from "@synap/database/schema";
 import { handleFocusSessionReaper } from "../focus-session-reaper.js";
 import { handleAutomationRunReaper } from "../automation-run-reaper.js";
 import { handlePlaybookRunReaper } from "../playbook-run-reaper.js";
 import {
   registerSessionCloser,
+  registerStoppedSessionStaler,
   closeSessionViaDoor,
 } from "../../utils/session-close.js";
 
@@ -65,6 +68,8 @@ const q = <T>(sql: string, params?: unknown[]) =>
   h.client!.query<T>(sql, params);
 
 const closed: string[] = [];
+/** Sessions handed to the stopped-session door (decision E1). */
+const staled: string[] = [];
 
 /** A slot the agent handed to the person and nobody has closed. */
 const OWED = [
@@ -83,11 +88,13 @@ async function session(opts: {
   outputs?: unknown[];
   metadata?: Record<string, unknown>;
   status?: string;
+  /** When it started (days ago) — the agent-evidence floor. Default: now. */
+  startedDaysAgo?: number;
 }): Promise<string> {
   const id = randomUUID();
   await q(
     `insert into focus_sessions (id, user_id, goal, status, metadata, expected_outputs, started_at, updated_at, channel_id)
-     values ($1, 'u1', 'g', $2, $3::jsonb, $4::jsonb, now(), now() - ($5::int * interval '1 hour'), $6)`,
+     values ($1, 'u1', 'g', $2, $3::jsonb, $4::jsonb, now() - ($7::int * interval '1 day'), now() - ($5::int * interval '1 hour'), $6)`,
     [
       id,
       opts.status ?? "active",
@@ -95,6 +102,7 @@ async function session(opts: {
       JSON.stringify(opts.outputs ?? []),
       opts.idleHours,
       roomOf(id),
+      opts.startedDaysAgo ?? 0,
     ]
   );
   return id;
@@ -136,8 +144,14 @@ beforeAll(async () => {
     automationStepRuns,
     playbookRuns,
     messages,
+    chatTurns,
+    events,
   ])
     await h.client!.exec(ddlFor(t as unknown as PgTable));
+  registerStoppedSessionStaler(async ({ sessionId }) => {
+    staled.push(sessionId);
+    return { sessionId, retiredSlots: 1, closedQuestions: 0 };
+  });
   registerSessionCloser(async ({ sessionId }) => {
     closed.push(sessionId);
     return {
@@ -150,8 +164,9 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   closed.length = 0;
+  staled.length = 0;
   await h.client!.exec(
-    "delete from focus_sessions; delete from proposals; delete from automation_runs; delete from automation_step_runs; delete from playbook_runs; delete from messages;"
+    "delete from focus_sessions; delete from proposals; delete from automation_runs; delete from automation_step_runs; delete from playbook_runs; delete from messages; delete from chat_turns; delete from events;"
   );
 });
 
@@ -179,6 +194,46 @@ describe("focus-session reaper", () => {
     await handleFocusSessionReaper();
     expect(closed).toEqual([done]);
     expect(closed).not.toContain(owing);
+  });
+});
+
+describe("focus-session reaper: a session that STOPPED on its own asks (decision E1)", () => {
+  /** The agent's own question: a confirm it posed to go on. */
+  const ASKED = [{ ...OWED[0], kind: "decision", ask: { mode: "confirm" } }];
+
+  it("hands a session no agent moved for 7 days, owing only its agent's asks, to the stale door", async () => {
+    const stopped = await session({
+      idleHours: 1,
+      outputs: ASKED,
+      startedDaysAgo: 20,
+    });
+    await handleFocusSessionReaper();
+    expect(staled).toEqual([stopped]);
+  });
+
+  it("never when the person still has to DO something (an act, or plain owed work)", async () => {
+    await session({
+      idleHours: 1,
+      outputs: [...ASKED, { ...OWED[0], label: "Mint", ask: { mode: "act" } }],
+      startedDaysAgo: 20,
+    });
+    await session({ idleHours: 1, outputs: OWED, startedDaysAgo: 20 });
+    await handleFocusSessionReaper();
+    expect(staled).toEqual([]);
+  });
+
+  it("never when an agent moved it in the last 7 days (a post), whatever updated_at says", async () => {
+    const moved = await session({
+      idleHours: 300,
+      outputs: ASKED,
+      startedDaysAgo: 20,
+    });
+    await q(
+      `insert into messages (id, channel_id, author_type, timestamp, metadata) values ($1, $2, 'ai_agent', now() - interval '2 days', '{}'::jsonb)`,
+      [randomUUID(), roomOf(moved)]
+    );
+    await handleFocusSessionReaper();
+    expect(staled).toEqual([]);
   });
 });
 

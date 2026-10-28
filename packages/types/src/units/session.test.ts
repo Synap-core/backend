@@ -58,9 +58,11 @@ describe("sessionUnitInput — one session", () => {
     expect(
       stateOf({ status: "paused", owedFromYou: 0, pendingDecisions: null })
     ).toBe("paused");
+    // A closed session whose proposals read FAILED may still owe a decision:
+    // no Done (this case used to pin "done", against its own name).
     expect(
       stateOf({ status: "closed", owedFromYou: 0, pendingDecisions: null })
-    ).toBe("done");
+    ).toBe("unmeasured");
   });
 
   it("failed outranks terminal although failed is a terminal status", () => {
@@ -636,5 +638,106 @@ describe("card vs rule parity: one session, one answer", () => {
     expect([...seen].sort()).toEqual(
       ["from_system", "needs_you", "stopped", "working"].sort()
     );
+  });
+});
+
+describe("a FAILED needs-you count is never a measured 0 (relay, 2026-10-27)", () => {
+  const live = { turnInFlight: false, lastAt: null };
+  const facts = (owedFromYou: number | null) => ({
+    owedFromYou,
+    pendingDecisions: 0,
+    awaitingReview: false,
+    draft: false,
+  });
+
+  it("a path row: null reads unmeasured, 0 reads the quiet state", () => {
+    expect(
+      pathRowUnitView({
+        status: "active",
+        unitFacts: facts(null),
+        live,
+      } as never).state
+    ).toBe("unmeasured");
+    expect(
+      pathRowUnitView({ status: "active", unitFacts: facts(0), live } as never)
+        .state
+    ).toBe("paused");
+  });
+
+  it("a draft is never unread: it never needs you", () => {
+    expect(
+      pathRowUnitView({
+        status: "active",
+        unitFacts: { ...facts(null), draft: true },
+        live,
+      } as never).state
+    ).toBe("paused");
+  });
+
+  it("a project: one unread open session is unmeasured, never idle", () => {
+    const state = (owedFromYou: number | null) =>
+      resolveUnitState(
+        projectAggregateInput({
+          sessions: [
+            { status: "active", unitFacts: facts(0), live },
+            { status: "active", unitFacts: facts(owedFromYou), live },
+          ],
+          unreadable: false,
+        })
+      ).state;
+    expect(state(null)).toBe("unmeasured");
+    expect(state(0)).toBe("paused");
+  });
+});
+
+describe("a closed session whose needs-you count FAILED claims no Done (team-lead, 2026-10-27)", () => {
+  it("closed + owedFromYou null (or pendingDecisions null) reads unmeasured, never done", () => {
+    expect(stateOf({ status: "closed", owedFromYou: null })).toBe("unmeasured");
+    expect(
+      stateOf({ status: "closed", owedFromYou: 0, pendingDecisions: null })
+    ).toBe("unmeasured");
+    // The measured twin: nothing owed, read fine ⇒ done.
+    expect(
+      stateOf({ status: "closed", owedFromYou: 0, pendingDecisions: 0 })
+    ).toBe("done");
+  });
+
+  it("failed still outranks an unread count", () => {
+    expect(stateOf({ status: "failed", owedFromYou: null })).toBe("failed");
+  });
+
+  it("a project of closed sessions, one unread: unmeasured, never done", () => {
+    const facts = (owedFromYou: number | null) => ({
+      owedFromYou,
+      pendingDecisions: 0,
+      awaitingReview: false,
+      draft: false,
+    });
+    const state = (owedFromYou: number | null) =>
+      resolveUnitState(
+        projectAggregateInput({
+          sessions: [
+            { status: "closed", unitFacts: facts(0) },
+            { status: "closed", unitFacts: facts(owedFromYou) },
+          ],
+          unreadable: false,
+        })
+      ).state;
+    expect(state(null)).toBe("unmeasured");
+    expect(state(0)).toBe("done");
+  });
+
+  it("a closed path row with an unread count: unmeasured", () => {
+    expect(
+      pathRowUnitView({
+        status: "closed",
+        unitFacts: {
+          owedFromYou: null,
+          pendingDecisions: 0,
+          awaitingReview: false,
+          draft: false,
+        },
+      } as never).state
+    ).toBe("unmeasured");
   });
 });

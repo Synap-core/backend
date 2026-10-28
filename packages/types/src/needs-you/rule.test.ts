@@ -531,3 +531,24 @@ describe("the census shape (needs-truth §6): 114 claims, 7 real", () => {
     });
   });
 });
+
+describe("fold words (vocabulary): one name and one hint per fold", () => {
+  it("covers every fold, and an unknown one humanizes", async () => {
+    const { resolveNeedsYouFoldLabel, resolveNeedsYouFoldHint } =
+      await import("../vocabulary/index.js");
+    const { NEEDS_YOU_FOLDS } = await import("./rule.js");
+    for (const f of NEEDS_YOU_FOLDS) {
+      expect(resolveNeedsYouFoldLabel(f)).not.toMatch(/_/);
+      expect(resolveNeedsYouFoldHint(f)).toBeTruthy();
+    }
+    expect(resolveNeedsYouFoldLabel("stopped")).toBe("Stopped");
+    expect(resolveNeedsYouFoldHint("brand_new")).toBeNull();
+    // The fold offers its rows one by one: the hint promises no batch (S6).
+    expect(resolveNeedsYouFoldHint("changes_to_review")).not.toMatch(/batch/i);
+  });
+
+  it("names the headline's age partition by what its rows share (D3)", async () => {
+    const { NEEDS_YOU_OLDER_LABEL } = await import("../vocabulary/index.js");
+    expect(NEEDS_YOU_OLDER_LABEL).toBe("Waiting over a week");
+  });
+});

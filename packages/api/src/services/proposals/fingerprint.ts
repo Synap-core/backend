@@ -23,6 +23,7 @@
  * runs at write time and is unaffected by anything in this file.
  */
 
+import type { NeedsYouProposalClass } from "@synap-core/types/needs-you/rule";
 import { decodeHtmlEntities } from "@synap-core/types/text";
 import { heldWritesPackName } from "@synap-core/types/proposals/deferred-writes";
 import type { PROPOSE_REASON } from "@synap/governance-policy";
@@ -243,6 +244,12 @@ export interface ClusterInputRow extends ProposalFingerprintInput {
    * one or the other, never a mix.
    */
   reviewLater?: boolean;
+  /**
+   * THE needs-you rule's class for this pending member
+   * (`classifyPendingProposal`, decision E), when the groups read classified
+   * it. Members SPLIT on it like `reviewLater`, so a cluster has one class.
+   */
+  needsYouClass?: NeedsYouProposalClass | null;
 }
 
 /**
@@ -321,6 +328,8 @@ export interface ProposalCluster {
    * cluster is out of the needs-you headline and drawn in its own fold.
    */
   reviewLater: boolean;
+  /** Every member's needs-you class (see `ClusterInputRow.needsYouClass`). */
+  needsYouClass?: NeedsYouProposalClass;
   count: number;
   /** Up to `sampleCap` member proposal ids (newest-first as fed). */
   sampleProposalIds: string[];
@@ -412,6 +421,7 @@ interface ClusterAccumulator {
   /** A capability run's verb — one per cluster (runs cluster on the verb's skill id). */
   runVerbId: string | null;
   reviewLater: boolean;
+  needsYouClass: NeedsYouProposalClass | null;
   targetLabel: string;
   count: number;
   sampleProposalIds: string[];
@@ -475,10 +485,13 @@ export function collapseProposalsToClusters(
   for (const row of rows) {
     const fingerprint = computeProposalFingerprint(row);
     const reviewLater = row.reviewLater === true;
+    const needsYouClass = row.needsYouClass ?? null;
     const key =
       (opts?.splitBySession
         ? `${fingerprint}${SEP}${row.sessionId ?? ""}`
-        : fingerprint) + (reviewLater ? `${SEP}review-later` : "");
+        : fingerprint) +
+      (reviewLater ? `${SEP}review-later` : "") +
+      (needsYouClass ? `${SEP}${needsYouClass}` : "");
     let acc = byFingerprint.get(key);
     if (!acc) {
       acc = {
@@ -487,6 +500,7 @@ export function collapseProposalsToClusters(
         targetType: row.targetType,
         runVerbId: capabilityRunVerbId(row.data),
         reviewLater,
+        needsYouClass,
         targetLabel: resolveTargetLabel(row),
         count: 0,
         sampleProposalIds: [],
@@ -556,6 +570,7 @@ export function collapseProposalsToClusters(
     targetLabel: acc.targetLabel,
     ...proposalClassFields(acc.proposalType, acc.targetType, acc.runVerbId),
     reviewLater: acc.reviewLater,
+    ...(acc.needsYouClass ? { needsYouClass: acc.needsYouClass } : {}),
     count: acc.count,
     sampleProposalIds: acc.sampleProposalIds,
     sources: acc.sources,

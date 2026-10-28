@@ -99,7 +99,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   process.env.PUBLIC_URL = "https://pod.example.test";
   h.enqueue.mockResolvedValue(undefined);
-  h.reconcile.mockResolvedValue({ ok: true, capabilities: 0 });
+  h.reconcile.mockResolvedValue({ ok: true, capabilities: 0, superseded: [] });
 });
 
 describe("POST /sync-trigger — registry ownership on real SQL", () => {

@@ -602,7 +602,7 @@ export function registerConnectorsRoutes(app: HubHono): void {
         // ── Already connected? Return it instead of a fresh OAuth — UNLESS the
         // caller forces a reconnect (expired/revoked token: the record exists but
         // its credential is dead, which only forcing a fresh OAuth session fixes).
-        const existing = connections.find(
+        let existing = connections.find(
           (conn) => conn.provider === match.uniqueKey
         );
         if (existing && !forceReauth) {
@@ -625,33 +625,26 @@ export function registerConnectorsRoutes(app: HubHono): void {
             unlocked = result.unlocked.filter(
               (u) => u.provider === match.uniqueKey
             );
-            // Mirror the connection into the registry → its first sync.
-            await reconcileLiveConnections(userId, connections);
+            // Mirror the connection into the registry → its first sync. The
+            // reconcile also revokes the connections a reconnect left behind
+            // (one per user and provider), so answer with the one it kept.
+            const reconciled = await reconcileLiveConnections(
+              userId,
+              connections
+            );
+            if (reconciled.ok && reconciled.superseded.length > 0) {
+              const gone = new Set(reconciled.superseded);
+              existing =
+                connections.find(
+                  (cn) =>
+                    cn.provider === match.uniqueKey &&
+                    !gone.has(cn.connectionId)
+                ) ?? existing;
+            }
           } catch (matErr) {
             logger.warn(
               { err: matErr, provider: match.uniqueKey },
               "connect: tool materialization failed (connection still valid)"
-            );
-          }
-          // Idempotency: a reconnect leaves stale Nango connections behind. Keep
-          // the most-recent un-scoped connection for this (user, provider) and
-          // revoke the older dups — object-scoped (entity/project) connections are
-          // preserved. Best-effort; never breaks the "connected" signal.
-          try {
-            const revoked = await connector.dedupeConnections(
-              userId,
-              match.uniqueKey
-            );
-            if (revoked.length > 0) {
-              logger.info(
-                { provider: match.uniqueKey, revoked: revoked.length },
-                "connect: revoked stale duplicate connections"
-              );
-            }
-          } catch (dedupErr) {
-            logger.warn(
-              { err: dedupErr, provider: match.uniqueKey },
-              "connect: connection dedup failed (non-fatal)"
             );
           }
           return c.json(

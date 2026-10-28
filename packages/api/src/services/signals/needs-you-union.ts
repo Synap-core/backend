@@ -45,8 +45,16 @@ import {
 } from "@synap-core/types/ask";
 import { needsYouTotal } from "@synap-core/types/units";
 import { REVIEW_LATER_AFTER_MS } from "@synap-core/types/proposals/fate";
+import type { ClusterFoldCounts } from "../proposals/proposal-needs-you.js";
+import {
+  foldNeedsYouCounts,
+  type NeedsYouClass,
+  type NeedsYouFoldCounts,
+  type NeedsYouSlotClass,
+} from "@synap-core/types/needs-you/rule";
 import {
   SUGGESTIONS_CAP,
+  needsYouFoldOf,
   type GroupableSignal,
   convertibleGoalsTitle,
   type NeedsYouAccessRequest,
@@ -347,6 +355,20 @@ export interface Signal {
    */
   reviewLater?: true;
   /**
+   * THE needs-you rule's class (decision E, `@synap-core/types/needs-you/rule`)
+   * on an `owed-slot` (`classifyOwedAsk`) or a `proposal-cluster`
+   * (`classifyPendingProposal`). Every class but `needs_you` is OUT of the
+   * headline and also carries `reviewLater`, so a client older than this
+   * field still draws it in its one out-of-headline fold — and the count
+   * still equals the rows. Absent where the read did not classify.
+   */
+  needsYouClass?: NeedsYouClass;
+  /**
+   * `owed-slot`: WHAT MOVES when the person answers — the card's "Unblocks"
+   * line (decision E; `effectiveSlotUnblocks`). Absent when nothing says.
+   */
+  unblocks?: string;
+  /**
    * WHERE the row came from — the small provenance door (lens grammar §5: a
    * source is shown only when it differs from the page's scope; the client
    * decides that with `visibleSource`, `@synap-core/types/lens`). The most
@@ -511,6 +533,8 @@ const _KIND_SPECIFIC_SIGNAL_FIELDS = [
   "class",
   "lifetimeHours",
   "reviewLater",
+  "needsYouClass",
+  "unblocks",
   "source",
   "by",
   "askCause",
@@ -818,6 +842,7 @@ export function signalFromCluster(
       ? "older"
       : ageBucketOf(cluster.latestAt, now),
     ...(cluster.reviewLater ? { reviewLater: true as const } : {}),
+    ...(cluster.needsYouClass ? { needsYouClass: cluster.needsYouClass } : {}),
     repeatCount: 1,
   };
 }
@@ -949,6 +974,10 @@ export interface OwedSlotSignalInput {
   askedByName?: string;
   /** What raised it when no agent did, straight from `listOwedSlots`. */
   askCause?: AskCause;
+  /** The rule's class, straight from `listOwedSlots` (`needsYouLens`). */
+  needsYouClass?: NeedsYouSlotClass;
+  /** What the answer unblocks, straight from `listOwedSlots`. */
+  unblocks?: string;
 }
 
 /**
@@ -1038,6 +1067,8 @@ const _PROJECTED_OWED_SLOT_FIELDS = [
   "askedBy",
   "askedByName",
   "askCause",
+  "needsYouClass",
+  "unblocks",
   "keptOwedAt",
   "paramName",
 ] as const satisfies ReadonlyArray<keyof OwedSlot>;
@@ -1124,6 +1155,8 @@ const _WITHHELD_DRAFT_ASK_FIELDS = [
   "askedBy",
   "askedByName",
   "askCause",
+  "needsYouClass",
+  "unblocks",
   "keptOwedAt",
   "paramName",
   "sessionStatus",
@@ -1201,6 +1234,20 @@ export function signalsFromDraftAsks(
 }
 
 /**
+ * THE class of one owed slot — the one derivation the list and the count
+ * read. The rule's class when the read stamped it (`listNeedsYouOwed`
+ * classifies); else the older reading: Review later past 7 days
+ * (`isAskReviewLater`), the headline otherwise.
+ */
+export function owedSlotClassOf(
+  row: Pick<OwedSlotSignalInput, "needsYouClass" | "owedSince">,
+  now: Date = new Date()
+): NeedsYouSlotClass {
+  if (row.needsYouClass) return row.needsYouClass;
+  return isAskReviewLater(row, now) ? "review_later" : "needs_you";
+}
+
+/**
  * One owed slot → one signal.
  *
  * ONE ROW PER SLOT, never a cluster: a session owing three deliverables owes
@@ -1263,6 +1310,7 @@ export function signalFromOwedSlot(
         }
       : {}),
     ...(row.askCause ? { askCause: row.askCause } : {}),
+    ...(row.unblocks ? { unblocks: row.unblocks } : {}),
     ...sessionSource(row.sessionId, row.sessionTitle),
     groupKey: sessionGroupKey(row.sessionId),
     // Review later wins over Older, like a cluster's: a client that predates
@@ -1270,8 +1318,22 @@ export function signalFromOwedSlot(
     // keeps its session key: a session is never split, so the slot folds with
     // its session's freshest row (`needsYouRows`).
     ageBucket: ageBucketOf(occurredAt, now),
-    ...(isAskReviewLater(row, now) ? { reviewLater: true as const } : {}),
+    ...outOfHeadline(owedSlotClassOf(row, now), !!row.needsYouClass),
     repeatCount: 1,
+  };
+}
+
+/**
+ * The two stamps a classified row carries: its class (only when the read
+ * classified it), and `reviewLater` whenever it is out of the headline.
+ */
+function outOfHeadline(
+  cls: NeedsYouClass,
+  stamped: boolean
+): { reviewLater?: true; needsYouClass?: NeedsYouClass } {
+  return {
+    ...(cls !== "needs_you" ? { reviewLater: true as const } : {}),
+    ...(stamped ? { needsYouClass: cls } : {}),
   };
 }
 
@@ -1999,7 +2061,9 @@ function liftSessionAgeBuckets(signals: readonly Signal[]): Signal[] {
  * has a row OUTSIDE Review later: a session is never split (`needsYouRows`),
  * so the ask rides in that session's card, where it is drawn — and counted.
  * After this, `reviewLater` on an owed-slot row means "folds into Review
- * later", the ONE predicate the list and the count read. Pure.
+ * later", the ONE predicate the list and the count read. Only an UNCLASSED
+ * ask is held: a row the needs-you rule classed sits in its fold whatever its
+ * session owes (decision E, `runsOf` in `@synap-core/types/needs-you`). Pure.
  */
 function holdAsksWithTheirSession(signals: readonly Signal[]): Signal[] {
   const held = new Set<string>();
@@ -2009,7 +2073,7 @@ function holdAsksWithTheirSession(signals: readonly Signal[]): Signal[] {
     }
   }
   return signals.map((s) => {
-    if (s.kind !== "owed-slot" || !s.reviewLater) return s;
+    if (s.kind !== "owed-slot" || !s.reviewLater || s.needsYouClass) return s;
     if (!s.groupKey || !held.has(s.groupKey)) return s;
     const { reviewLater: _held, ...rest } = s;
     return rest;
@@ -2101,6 +2165,13 @@ export function countNeedsYou(args: {
    * later. Out of `decisions` and `needsYou`; reported as `reviewLater`.
    */
   reviewLaterClusters?: number;
+  /**
+   * `proposals.groups`.folds — of `reviewLaterClusters`, how many the rule
+   * classed `working`, `review_later` and `changes_to_review` (decision E6,
+   * F2). Absent ⇒ every out-of-headline cluster is Review later (an older
+   * read).
+   */
+  clusterFolds?: ClusterFoldCounts;
   /** `proposals.groups`.scanTruncated. */
   clustersTruncated: boolean;
   /** Unread notifications, already page-limited by the caller. */
@@ -2165,8 +2236,18 @@ export function countNeedsYou(args: {
    * nobody answered, 7+ days (founder defaults 2 and 3, 2026-10-26). NOT a
    * part of `needsYou`: exactly the rows a needs-you list marks
    * `reviewLater` (the cluster flag, `isAskReviewLater` for an owed slot).
+   * Since the needs-you rule (decision E): EVERY row out of the headline,
+   * whatever its fold — the union {@link folds} splits.
    */
   reviewLater: number;
+  /**
+   * The rule's folds (decision E), over the SAME rows a list draws (each
+   * row's fold read by `needsYouFoldOf`, the derivation every surface folds
+   * its rows with): `needsYou` IS the headline total above (one number, one
+   * source); Working, Stopped (+ its sessions), Review later, From the
+   * system, Changes to review.
+   */
+  folds: NeedsYouFoldCounts;
   /** Unread notifications that survive the dedupe. */
   notifications: number;
   /** Sessions awaiting your review / close (every scope). */
@@ -2218,12 +2299,13 @@ export function countNeedsYou(args: {
   // Folded, like the list: the same news raised N times is ONE row there, so
   // it is one here — the badge must equal the number of rows it stands for.
   const notifications = foldNotifications(buckets.needsYou).length;
-  // An owed ask nobody answered for 7 days leaves the headline where the list
-  // folds it into Review later — not while it rides in a session card that
-  // still owes something fresh. THE rows the list draws, counted: the session
-  // grouping is the list's own (`unionNeedsYou`), never re-derived here.
+  // THE rows the list draws, classified and counted: the session grouping is
+  // the list's own (`unionNeedsYou`, which holds an unclassed week-old ask in
+  // its session's card), never re-derived here. A row the rule classed counts
+  // in its class (decision E: the class is authoritative); an unclassed row
+  // (an older read) counts in Review later when the list folds it there.
   const now = args.now ?? new Date();
-  const owedReviewLater = unionNeedsYou({
+  const owedRows = unionNeedsYou({
     clusters: args.clusters,
     clusterSessions: args.clusterSessions,
     notifications: args.notifications,
@@ -2241,9 +2323,21 @@ export function countNeedsYou(args: {
     })),
     unfinishedCaptures: args.unfinishedCaptures,
     now,
-  }).filter((s) => s.kind === "owed-slot" && s.reviewLater).length;
-  const blocked = args.owedSlots.length - owedReviewLater;
-  const reviewLater = reviewLaterClusters + owedReviewLater;
+  }).filter((s) => s.kind === "owed-slot");
+  const owedFolds = foldNeedsYouCounts(
+    owedRows.map((s) => ({
+      needsYouClass: needsYouFoldOf(s) ?? "needs_you",
+      sessionId: s.target?.id ?? null,
+    }))
+  );
+  const blocked = owedFolds.needsYou;
+  const owedOut = owedRows.length - blocked;
+  const reviewLater = reviewLaterClusters + owedOut;
+  const clusterFolds: ClusterFoldCounts = args.clusterFolds ?? {
+    working: 0,
+    reviewLater: reviewLaterClusters,
+    changesToReview: 0,
+  };
   const review = args.reviewSessions ?? 0;
   const captures = liveCaptureRows({
     unfinishedCaptures: args.unfinishedCaptures,
@@ -2257,20 +2351,30 @@ export function countNeedsYou(args: {
   const drafts = args.draftAsks
     ? signalsFromDraftAsks(args.draftAsks).length
     : 0;
+  // THE item sum (`needsYouTotal`) over the rule's three populations, plus
+  // the notification half. Drafts are PROPOSED (2026-10-04) and never count
+  // as drafts; a draft's ASKS are owed slots, in `blocked` (2026-10-22).
+  const needsYou =
+    needsYouTotal({ owed: blocked, decisions, review }) +
+    notifications +
+    captures +
+    requests +
+    invites +
+    convertible;
+  const folds: NeedsYouFoldCounts = {
+    ...owedFolds,
+    // ONE headline number: the folds never state a second one (M5).
+    needsYou,
+    working: owedFolds.working + clusterFolds.working,
+    reviewLater: owedFolds.reviewLater + clusterFolds.reviewLater,
+    changesToReview: clusterFolds.changesToReview,
+  };
   return {
-    // THE item sum (`needsYouTotal`) over the rule's three populations, plus
-    // the notification half. Drafts are PROPOSED (2026-10-04) and never count
-    // as drafts; a draft's ASKS are owed slots, in `blocked` (2026-10-22).
-    needsYou:
-      needsYouTotal({ owed: blocked, decisions, review }) +
-      notifications +
-      captures +
-      requests +
-      invites +
-      convertible,
+    needsYou,
     distinct: decisions,
     decisions,
     reviewLater,
+    folds,
     notifications,
     truncated:
       args.clustersTruncated ||
