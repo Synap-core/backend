@@ -94,7 +94,7 @@ export async function createHubProtocolCallerContext(
  *    gate, so honouring it would let an unattributed key leave the
  *    anonymous-AI ladder.
  */
-export function hubWriteSource<S extends string>(
+export function hubWriteSource<S extends string = never>(
   stated?: S | null
 ): S | "user" | "intelligence" {
   if (!appSignInPublicId()) return "intelligence";
