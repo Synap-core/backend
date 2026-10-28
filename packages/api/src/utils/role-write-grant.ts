@@ -30,7 +30,8 @@
  *    workspace passes with no reach clause.
  *
  * Every role write is checked in the role's own space(s) and needs the record
- * in their reach: a key's other spaces never lend it.
+ * in their reach: a key's other spaces never lend it. A role row outside every
+ * space of the key is not found (`roleRowInKeyReach`), never refused by name.
  *
  * The returned `space` is what the governed gate's grant rung re-checks
  * (`grantWorkspaceId`), and the space a proposal is filed in when the role
@@ -147,6 +148,43 @@ export async function roleWriteGrantSpace(
   return { space: spaces[0]! };
 }
 
+/**
+ * A key limited to spaces finds a role row only in their reach: stamped in one
+ * of them, or a shared row they read (`sharedRoleRowsInSpacesWhere`). Outside
+ * it the row is not found, as an attach onto a record the key cannot read is,
+ * never a refusal that names another space. No grant, or a scope not limited
+ * to spaces: every row the person's floor finds.
+ */
+export async function roleRowInKeyReach(
+  facetId: string,
+  grant: KeyGrant | undefined = getRequestGrant()
+): Promise<boolean> {
+  if (!grant || grant.scopes.some((scope) => !scope.workspaceIds)) return true;
+  const spaces = keySpaces(grant);
+  if (spaces.length === 0) return false;
+  const [row] = await db
+    .select({ id: entityFacets.id })
+    .from(entityFacets)
+    .where(
+      and(
+        eq(entityFacets.id, facetId),
+        or(
+          inArray(entityFacets.workspaceId, spaces),
+          sharedRoleRowsInSpacesWhere(spaces)
+        )
+      )
+    )
+    .limit(1);
+  return Boolean(row);
+}
+
+/** Every space the key's scopes are limited to. */
+function keySpaces(grant: KeyGrant): string[] {
+  return [
+    ...new Set(grant.scopes.flatMap((scope) => scope.workspaceIds ?? [])),
+  ];
+}
+
 /** A scope with no space limit permits `write` in `space` on its own. */
 async function permittedUnlimited(
   write: Omit<GrantWriteInput, "workspaceId">,
@@ -243,10 +281,7 @@ async function reachedFacetGrantSpace(
   write: Omit<GrantWriteInput, "workspaceId">,
   grant: KeyGrant
 ): Promise<string | null> {
-  const spaces = [
-    ...new Set(grant.scopes.flatMap((scope) => scope.workspaceIds ?? [])),
-  ];
-  for (const space of spaces) {
+  for (const space of keySpaces(grant)) {
     const [reached] = await db
       .select({ id: entityFacets.id })
       .from(entityFacets)

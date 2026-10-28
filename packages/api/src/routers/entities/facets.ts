@@ -31,6 +31,7 @@ import {
 } from "../../utils/permission-check.js";
 import { auditLog } from "../../utils/audit-log.js";
 import {
+  roleRowInKeyReach,
   roleWriteGrantSpace,
   type RoleWriteDoor,
   type RoleWriteTarget,
@@ -499,7 +500,11 @@ export const facetProcs = {
       // A workspace-scoped role is shared operational state (owner/admin/editor
       // of that workspace); a pod-wide role answers to the pod owner/admins.
       const existing = await facetRepo.getById(input.facetId);
-      if (!existing || !(await canWriteFacet(existing, ctx.userId))) {
+      if (
+        !existing ||
+        !(await canWriteFacet(existing, ctx.userId)) ||
+        !(await roleRowInKeyReach(existing.id))
+      ) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: `Facet not found: ${input.facetId}`,
@@ -748,7 +753,11 @@ export const facetProcs = {
       const facetRepo = new FacetRepository(database, eventRepo);
 
       const existing = await facetRepo.getById(input.facetId);
-      if (!existing || !(await canWriteFacet(existing, ctx.userId))) {
+      if (
+        !existing ||
+        !(await canWriteFacet(existing, ctx.userId)) ||
+        !(await roleRowInKeyReach(existing.id))
+      ) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: `Facet not found: ${input.facetId}`,
