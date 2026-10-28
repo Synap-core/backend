@@ -10943,6 +10943,36 @@ export interface ProposalWaits {
 	/** Present only when `waits`. */
 	reason?: ProposalWaitReason;
 }
+declare const NEEDS_YOU_SLOT_CLASSES: readonly [
+	"needs_you",
+	"from_system",
+	"stopped",
+	"working",
+	"review_later"
+];
+export type NeedsYouSlotClass = (typeof NEEDS_YOU_SLOT_CLASSES)[number];
+declare const NEEDS_YOU_PROPOSAL_CLASSES: readonly [
+	"needs_you",
+	"working",
+	"review_later",
+	"changes_to_review"
+];
+export type NeedsYouProposalClass = (typeof NEEDS_YOU_PROPOSAL_CLASSES)[number];
+/** Every class a row can carry — one vocabulary across slots and proposals. */
+export type NeedsYouClass = NeedsYouSlotClass | NeedsYouProposalClass;
+/** The headline and every fold, counted over the SAME rows a list draws. */
+export interface NeedsYouFoldCounts {
+	/** The headline: rows that really need the person. */
+	needsYou: number;
+	working: number;
+	/** Stopped rows… */
+	stopped: number;
+	/** …on this many sessions (Stopped draws one row per session). */
+	stoppedSessions: number;
+	reviewLater: number;
+	fromSystem: number;
+	changesToReview: number;
+}
 /**
  * WHO is asking for access, on an `access-request` row — a pod-level request
  * that is not a proposal: an external service asking to be a TRUSTED ISSUER
@@ -12161,6 +12191,12 @@ export interface SessionActivityLive {
 	since: Date | string | null;
 	/** The newest activity `at`; null when nothing has happened yet. */
 	lastAt: Date | string | null;
+	/**
+	 * The newest AGENT evidence of work (the needs-you rule's Working clock,
+	 * `SessionLiveFacts.lastAgentWorkAt`); null when there is none. Absent on
+	 * an older pod.
+	 */
+	lastAgentWorkAt?: Date | string | null;
 }
 export interface SessionActivityWire {
 	sessionId: string;
@@ -12900,6 +12936,8 @@ export interface ProposalCluster {
 	 * cluster is out of the needs-you headline and drawn in its own fold.
 	 */
 	reviewLater: boolean;
+	/** Every member's needs-you class (see `ClusterInputRow.needsYouClass`). */
+	needsYouClass?: NeedsYouProposalClass;
 	count: number;
 	/** Up to `sampleCap` member proposal ids (newest-first as fed). */
 	sampleProposalIds: string[];
@@ -12939,6 +12977,18 @@ export interface ProposalCluster {
 	 * them out, never sweep them in.
 	 */
 	attentionFloorCount: number;
+}
+/**
+ * Who the viewer is TO this session — the field read doors expose so a UI can
+ * hide write verbs for a member. Only meaningful on a row the viewer already
+ * read through {@link sessionReadableWhere}.
+ */
+export type SessionViewerRole = "member" | "owner";
+/** How many clusters out of the headline sit in each of the rule's folds. */
+export interface ClusterFoldCounts {
+	working: number;
+	reviewLater: number;
+	changesToReview: number;
 }
 /**
  * Approval patterns — the "notice" rung of record → notice → propose → ratify.
@@ -14477,6 +14527,14 @@ export interface OwedSlot {
 	 */
 	askCause?: AskCause;
 	/**
+	 * THE needs-you rule's class for this slot (`classifyOwedAsk`,
+	 * `@synap-core/types/needs-you/rule`, decision E): `needs_you` is the
+	 * headline; `working` / `stopped` / `review_later` / `from_system` are its
+	 * folds. Set by the NEEDS-YOU read only (`needsYouLens`), which measures the
+	 * session's agent evidence in the same query; absent on every other read.
+	 */
+	needsYouClass?: NeedsYouSlotClass;
+	/**
 	 * The close door's receipt that the closing agent kept this ask owed past
 	 * its session (`ExpectedOutput.keptOwedAt`) — the card's fate then never
 	 * says it ends with the session.
@@ -14492,13 +14550,24 @@ export interface OwedSlot {
 /** Where the person finds a session's asks in their Inbox. */
 export type OwedInbox = "needs-you" | "proposed";
 export interface OwedByPerson {
-	/** Owed slots across every session (both lenses), Review later excluded. */
+	/**
+	 * The headline: asks that really need the person (THE needs-you rule,
+	 * `classifyOwedAsk`, decision E) plus a draft's ask-less slots (Proposed).
+	 * Every other owed ask is in {@link folds}, never dropped.
+	 */
 	count: number;
 	/**
-	 * Needs-you asks owed for more than 7 days — in Review later, out of the
-	 * headline (`isAskReviewLater`, the predicate the needs-you count reads).
+	 * Real asks owed for more than 7 days — the Review later fold, out of the
+	 * headline (the same class the needs-you count reads).
 	 */
 	reviewLater: number;
+	/**
+	 * Every needs-you owed ask by the rule's fold — the SAME classes
+	 * `signals.count` counts (`owedSlotClassOf`): `needsYou` (the headline asks),
+	 * Working, Stopped (+ its sessions), Review later, From the system.
+	 * `changesToReview` is 0 here: proposals are orient's `pendingReview`.
+	 */
+	folds: NeedsYouFoldCounts;
 	/** Sessions holding at least one. */
 	sessions: number;
 	/** True when a lens hit its read cap — "at least this many". */
@@ -14743,12 +14812,6 @@ declare const SESSION_KINDS: readonly [
 	"receipt"
 ];
 export type SessionKind = (typeof SESSION_KINDS)[number];
-/**
- * Who the viewer is TO this session — the field read doors expose so a UI can
- * hide write verbs for a member. Only meaningful on a row the viewer already
- * read through {@link sessionReadableWhere}.
- */
-export type SessionViewerRole = "member" | "owner";
 export interface SessionExternalAgent {
 	runId: string;
 	/** The run's own lifecycle (`running`, `failed`, `cancelled`, `proposed`, …). */
@@ -19173,7 +19236,9 @@ export type PathCount = {
  * to `sessionNeedsYou` / `tallyNeedsYou` unchanged.
  */
 export interface SessionUnitCounts {
-	owedFromYou: number;
+	/** Owed asks the needs-you rule classes `needs_you`. */
+	owedFromYou: number | null;
+	/** Pending proposals the needs-you rule classes `needs_you`. */
 	pendingDecisions: number | null;
 	/**
 	 * Finished and awaiting the person's review / close — this row's
@@ -21266,6 +21331,15 @@ export interface Signal {
 	 * `needsYou`. Absent on every other row.
 	 */
 	reviewLater?: true;
+	/**
+	 * THE needs-you rule's class (decision E, `@synap-core/types/needs-you/rule`)
+	 * on an `owed-slot` (`classifyOwedAsk`) or a `proposal-cluster`
+	 * (`classifyPendingProposal`). Every class but `needs_you` is OUT of the
+	 * headline and also carries `reviewLater`, so a client older than this
+	 * field still draws it in its one out-of-headline fold — and the count
+	 * still equals the rows. Absent where the read did not classify.
+	 */
+	needsYouClass?: NeedsYouClass;
 	/**
 	 * WHERE the row came from — the small provenance door (lens grammar §5: a
 	 * source is shown only when it differs from the page's scope; the client
@@ -42242,6 +42316,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				agentOnly?: boolean | undefined;
 				agentUserId?: string | undefined;
 				automationId?: string | undefined;
+				classifyNeedsYou?: boolean | undefined;
 				excludeDraftSessions?: boolean | undefined;
 				limit?: number | undefined;
 				profileSlug?: string | undefined;
@@ -42258,6 +42333,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: {
 				distinct: number;
+				folds: ClusterFoldCounts;
 				groups: ProposalCluster[];
 				reviewLater: number;
 				scanTruncated: boolean;
@@ -42269,6 +42345,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				agentOnly?: boolean | undefined;
 				agentUserId?: string | undefined;
 				automationId?: string | undefined;
+				classifyNeedsYou?: boolean | undefined;
 				correlationId?: string | undefined;
 				cursor?: string | undefined;
 				excludeBookkeeping?: boolean | undefined;
@@ -42323,6 +42400,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					governanceRuleId?: string;
 					id: string;
 					lifetimeHours: number | null;
+					needsYouClass?: "changes_to_review" | "needs_you" | "review_later" | "working" | undefined;
 					nodeId: string | null;
 					objectRefs?: Record<string, ProposalObjectRef>;
 					onBehalfOfName?: string;
@@ -42412,6 +42490,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					governanceRuleId?: string;
 					id: string;
 					lifetimeHours: number | null;
+					needsYouClass?: "changes_to_review" | "needs_you" | "review_later" | "working" | undefined;
 					nodeId: string | null;
 					objectRefs?: Record<string, ProposalObjectRef>;
 					onBehalfOfName?: string;
@@ -44324,6 +44403,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				distinct: number;
 				drafts: number;
 				draftsTruncated: boolean;
+				folds: NeedsYouFoldCounts;
 				invites: number;
 				needsYou: number;
 				notifications: number;
@@ -44350,6 +44430,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					distinct: number;
 					drafts: number;
 					draftsTruncated: boolean;
+					folds: NeedsYouFoldCounts;
 					invites: number;
 					needsYou: number;
 					notifications: number;
@@ -44380,6 +44461,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					distinct: number;
 					drafts: number;
 					draftsTruncated: boolean;
+					folds: NeedsYouFoldCounts;
 					invites: number;
 					needsYou: number;
 					notifications: number;
