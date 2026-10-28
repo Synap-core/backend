@@ -183,6 +183,7 @@ import {
 } from "./proposals/apply-approval.js";
 import {
   identityResolutionByRefInput,
+  identityResolutionForTwinsInput,
   identityResolutionInput,
 } from "./proposals/executors/identity-resolution.js";
 import { weakDedupFailureFields } from "../utils/weak-dedup-wire.js";
@@ -1678,6 +1679,14 @@ export const proposalsRouter = router({
          * `dispositions` uses. A missing key keeps today's create for that op.
          */
         identityResolutionByRef: identityResolutionByRefInput.optional(),
+        /**
+         * Composite: ONE answer for every same-name twin no per-ref choice
+         * covers — "Use existing records and continue" (`keep_existing`: link
+         * the twin; several twins leave the record out) or "Keep both and
+         * continue" (`separate`), after a large import stopped on a record
+         * that already exists. A large approval replays it from its run.
+         */
+        identityResolutionForTwins: identityResolutionForTwinsInput.optional(),
         /**
          * F3 "Approve and allow today" — held-writes packs only
          * (`agent/held_writes`). With `true`, approving the pack ALSO lifts

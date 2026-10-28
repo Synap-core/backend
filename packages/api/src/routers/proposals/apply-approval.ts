@@ -613,6 +613,8 @@ export async function applyProposalApproval(args: {
     identityResolution?: IdentityResolutionInput;
     /** Composite per-create choice, keyed by the disposition ref. */
     identityResolutionByRef?: Record<string, IdentityResolutionInput>;
+    /** Composite: one answer for every twin no per-ref choice covers. */
+    identityResolutionForTwins?: "keep_existing" | "separate";
   };
   ctx: Context;
   /**
@@ -1127,6 +1129,11 @@ async function applyProposalApprovalInner(
               .proposedIdentityResolutionByRef,
             input.identityResolutionByRef
           ),
+          // The reviewer's answer for every twin not chosen one by one ("Use
+          // existing records and continue" after an import stopped on one).
+          ...(input.identityResolutionForTwins
+            ? { identityResolutionForTwins: input.identityResolutionForTwins }
+            : {}),
           entityRef: (op, index) =>
             entityRefByIndex.get(index) ?? op.ref ?? opRef(index),
           // A background approval reports how far it got (approval-runs.ts).
@@ -1193,6 +1200,7 @@ async function applyProposalApprovalInner(
       entities: createdEntities,
       refToRealId,
       relationsFailed,
+      entitiesSkipped,
     } = materializeResult;
 
     // A proposed capture that carried a file: the bytes were STAGED at propose
@@ -1458,6 +1466,7 @@ async function applyProposalApprovalInner(
       // to the caller — dropping it here is what made an approval whose every
       // edge failed read as a clean success.
       ...(relationsFailed.length > 0 ? { relationsFailed } : {}),
+      ...(entitiesSkipped?.length ? { entitiesSkipped } : {}),
       ...(identities.length > 0 ? { identities } : {}),
       ...(identity ? { identity } : {}),
     };

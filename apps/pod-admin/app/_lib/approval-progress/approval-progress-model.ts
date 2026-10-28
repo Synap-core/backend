@@ -28,6 +28,31 @@ export interface ApprovalRun {
   primaryId: string | null;
   sessionId: string | null;
   relationsFailed: number;
+  /**
+   * The records that already exist and stopped the run (the same-name gate).
+   * Absent from a pod older than this field.
+   */
+  twins?: ApprovalRunTwin[] | null;
+  /** Records a finished run left out: several existing ones shared the name. */
+  skipped?: number;
+}
+
+/** An existing record a stopped run met. */
+export interface ApprovalRunTwin {
+  id: string;
+  title: string | null;
+  kind: string;
+}
+
+/** Did the run stop on records that already exist (the reviewer can answer)? */
+export function stoppedOnTwins(
+  run: ApprovalRun | null | undefined
+): run is ApprovalRun & { twins: ApprovalRunTwin[] } {
+  return (
+    (run?.state === "failed" || run?.state === "stalled") &&
+    Array.isArray(run.twins) &&
+    run.twins.length > 0
+  );
 }
 
 export type ApprovalTone = "default" | "success" | "danger" | "warning";
@@ -113,11 +138,21 @@ export function approvalProgressCopy(run: ApprovalRun): ApprovalProgressCopy {
         run.relationsFailed > 0
           ? `${n(run.relationsFailed)} connections did not land`
           : null;
+      const skipped = run.skipped ?? 0;
+      const skippedNote =
+        skipped > 0
+          ? `${n(skipped)} left out: several existing records share the name`
+          : null;
       return {
-        tone: run.failed > 0 || run.relationsFailed > 0 ? "warning" : "success",
+        tone:
+          run.failed > 0 || run.relationsFailed > 0 || skipped > 0
+            ? "warning"
+            : "success",
         busy: false,
         title: `Approved: ${n(run.total)} changes applied`,
-        detail: [counts, relationsNote].filter(Boolean).join(" · ") || null,
+        detail:
+          [counts, relationsNote, skippedNote].filter(Boolean).join(" · ") ||
+          null,
         percent: 100,
         door: approvalDoor(run),
         resumable: false,
@@ -125,6 +160,21 @@ export function approvalProgressCopy(run: ApprovalRun): ApprovalProgressCopy {
     }
     case "failed":
     case "stalled":
+      if (stoppedOnTwins(run)) {
+        const name = run.twins[0]!.title;
+        return {
+          tone: "danger",
+          busy: false,
+          title: name
+            ? `Stopped at ${n(run.done)} of ${n(run.total)}: “${name}” already exists`
+            : `Stopped at ${n(run.done)} of ${n(run.total)}: a record already exists`,
+          detail:
+            "Choose what happens to every record that already exists, then the approval goes on. What was created is kept.",
+          percent: percentOf(run),
+          door: null,
+          resumable: true,
+        };
+      }
       return {
         tone: "danger",
         busy: false,
