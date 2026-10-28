@@ -46,9 +46,19 @@ const h = vi.hoisted(() => {
 
 vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@synap/database")>();
+  // The real query BUILDER (the visibility filters build subqueries with it;
+  // nothing executes), with only the row reads replaced.
+  const db = Object.create(actual.db as object) as Record<string, unknown>;
+  db.query = h.database.query;
+  const database = Object.create(actual.db as object) as Record<
+    string,
+    unknown
+  >;
+  database.query = h.database.query;
+  h.getDb.mockImplementation(async () => database as never);
   return {
     ...actual,
-    db: h.database,
+    db,
     getDb: h.getDb,
     eventRepository: { __shared: true },
   };

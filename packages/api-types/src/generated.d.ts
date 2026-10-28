@@ -30386,6 +30386,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				reasoning?: string | undefined;
 				source?: "agent" | "ai" | "intelligence" | "system" | "user" | undefined;
+				viewContext?: {
+					typeKey?: string | undefined;
+					viewId?: string | undefined;
+				} | undefined;
 			};
 			meta: object;
 			output: {
@@ -42949,6 +42953,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				sourceEntityId: string;
 				targetEntityId: string;
 				type: string;
+				viewContext?: {
+					typeKey?: string | undefined;
+					viewId?: string | undefined;
+				} | undefined;
 				workspaceId?: string | undefined;
 			};
 			meta: object;
