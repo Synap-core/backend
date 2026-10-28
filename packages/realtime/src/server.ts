@@ -23,8 +23,8 @@ import {
   arrayContains,
   federatedApplicationConnections,
 } from "@synap/database";
-import { workspaceMembers } from "@synap/database/schema";
 import { canPrincipalJoinRoom, type RealtimePrincipal } from "./room-authz.js";
+import { firstDeniedHandshakeRoom, handshakeRooms } from "./presence-rooms.js";
 import { realtimeFirstPartyBase } from "./first-party-base.js";
 
 const PORT = parseInt(process.env.REALTIME_PORT || "4001", 10);
@@ -195,9 +195,9 @@ presenceNamespace.use(async (socket, next) => {
   const auth = socket.handshake.auth as Record<string, unknown>;
   const apiKey = typeof auth.apiKey === "string" ? auth.apiKey : null;
   const userId = typeof auth.userId === "string" ? auth.userId : null;
-  const workspaceId =
-    typeof auth.workspaceId === "string" ? auth.workspaceId : null;
 
+  let principal: RealtimePrincipal & { keyName?: string; scopes?: string[] };
+  let deviceId: string | undefined;
   if (apiKey) {
     const validated = await validateRealtimeApiKey(apiKey);
     if (!validated) {
@@ -206,7 +206,7 @@ presenceNamespace.use(async (socket, next) => {
       );
       return next(new Error("Realtime auth: invalid api key"));
     }
-    const principal = {
+    principal = {
       kind: "service" as const,
       userId: validated.userId,
       ownerUserId: validated.ownerUserId,
@@ -215,52 +215,32 @@ presenceNamespace.use(async (socket, next) => {
       keyName: validated.keyName,
       scopes: validated.scopes,
     };
-    // The connection handler joins the handshake's workspace and view rooms
-    // unasked; they pass the same gate as a `join-room`.
-    const viewId = typeof auth.viewId === "string" ? auth.viewId : null;
-    for (const room of [
-      workspaceId ? `workspace:${workspaceId}` : null,
-      viewId ? `view:${viewId}` : null,
-    ]) {
-      if (room && !(await canPrincipalJoinRoom(room, principal))) {
-        console.error(`[Presence] API key may not join ${room}`);
-        return next(new Error("Realtime auth: workspace access denied"));
-      }
-    }
-    socket.data.principal = principal;
-    return next();
-  }
-
-  if (userId) {
+  } else if (userId) {
     const identity = await verifyHandshakeUser(auth);
     if (!identity.ok) {
       console.error(`[Presence] User handshake rejected: ${identity.error}`);
       return next(new Error(identity.error));
     }
-    const resolvedUserId = identity.userId;
-
-    if (workspaceId) {
-      const membership = await db.query.workspaceMembers.findFirst({
-        where: and(
-          eq(workspaceMembers.workspaceId, workspaceId),
-          eq(workspaceMembers.userId, resolvedUserId)
-        ),
-      });
-      if (!membership) {
-        console.error("[Presence] User is not a member of requested workspace");
-        return next(new Error("Realtime auth: workspace access denied"));
-      }
-    }
-
-    socket.data.principal = { kind: "user", userId: resolvedUserId };
-    if (identity.deviceId) trackDeviceSocket(socket, identity.deviceId);
-    return next();
+    principal = { kind: "user", userId: identity.userId };
+    deviceId = identity.deviceId;
+  } else {
+    console.error(
+      "[Presence] Missing userId or apiKey in handshake, disconnecting"
+    );
+    return next(new Error("Realtime auth: missing userId or apiKey"));
   }
 
-  console.error(
-    "[Presence] Missing userId or apiKey in handshake, disconnecting"
-  );
-  return next(new Error("Realtime auth: missing userId or apiKey"));
+  // The connection handler joins the handshake's workspace and view rooms
+  // unasked; for EVERY principal they pass the same gate as a `join-room`.
+  const denied = await firstDeniedHandshakeRoom(auth, principal);
+  if (denied) {
+    console.error(`[Presence] ${principal.userId} may not join ${denied}`);
+    return next(new Error("Realtime auth: room access denied"));
+  }
+
+  socket.data.principal = principal;
+  if (deviceId) trackDeviceSocket(socket, deviceId);
+  return next();
 });
 
 presenceNamespace.on("connection", (socket) => {
@@ -287,10 +267,6 @@ presenceNamespace.on("connection", (socket) => {
     : typeof socket.handshake.auth.userName === "string"
       ? socket.handshake.auth.userName
       : null;
-  const viewId =
-    typeof socket.handshake.auth.viewId === "string"
-      ? socket.handshake.auth.viewId
-      : null;
   const viewType =
     typeof socket.handshake.auth.viewType === "string"
       ? socket.handshake.auth.viewType
@@ -300,10 +276,13 @@ presenceNamespace.on("connection", (socket) => {
       ? socket.handshake.auth.workspaceId
       : null;
 
-  // Use viewId if provided, otherwise use workspaceId as fallback for workspace-level presence.
-  // NULL is now a legitimate state — see the pod-altitude note below.
-  const effectiveViewId =
-    viewId || (workspaceId ? `workspace:${workspaceId}` : null);
+  // The view (or workspace-level view) this socket is present in, and the
+  // rooms it joins unasked: the SAME derivation the handshake gate authorized
+  // (presence-rooms.ts). NULL is a legitimate state — see the pod-altitude
+  // note below.
+  const { effectiveViewId, rooms: handshakeRoomIds } = handshakeRooms(
+    socket.handshake.auth as Record<string, unknown>
+  );
 
   // ── Self-scoped rooms — joined at EVERY altitude ────────────────────────
   // Join user-specific room so bridge emissions to user:${userId} reach this client.
@@ -330,14 +309,11 @@ presenceNamespace.on("connection", (socket) => {
   // not an option either: `pod-membership.ts:24-31` is explicit that "an
   // un-faceted pod-wide entity stays owner-private", so pod-wide ≠ visible to
   // all pod members, and fanning one out would leak owner-private rows.
-  if (effectiveViewId) {
-    // Join room for this view (or workspace)
-    socket.join(`view:${effectiveViewId}`);
-  }
-  // Also join workspace room so bridge emissions to workspace:${workspaceId} reach this client
-  if (workspaceId) {
-    socket.join(`workspace:${workspaceId}`);
-  }
+  //
+  // The view (or workspace-level view) room, and the workspace room so bridge
+  // emissions to workspace:${workspaceId} reach this client — each one passed
+  // the handshake gate.
+  for (const room of handshakeRoomIds) socket.join(room);
 
   // Presence is defined RELATIVE TO A VIEW — a pod-altitude socket has nothing
   // to be present in, so it registers no presence session (and no stale

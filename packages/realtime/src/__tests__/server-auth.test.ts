@@ -54,8 +54,12 @@ vi.mock("bcrypt", () => ({
   },
 }));
 
+// The room gate is not under test here (presence-rooms.test.ts).
+vi.mock("../room-authz.js", () => ({ canPrincipalJoinRoom: vi.fn() }));
+
 import bcrypt from "bcrypt";
 import { validateRealtimeApiKey } from "../api-key-auth.js";
+import { handshakeRooms } from "../presence-rooms.js";
 
 describe("validateRealtimeApiKey — Phase 3A handshake", () => {
   beforeEach(() => {
@@ -333,27 +337,19 @@ describe("Handshake principal resolution — Phase 3A", () => {
 //     join this for Phase 3A to work.
 //   • Always join `user:${userId}` — bridge per-user emits
 
-// ⚠️ REPLICA of the join logic in `server.ts`'s connection handler — it is not
-// imported, so it can DRIFT. It already did: this helper kept returning `[]` for
-// a workspace-less socket (asserting a disconnect branch that no longer exists)
-// and the suite stayed green, catching nothing. If you change the join order or
-// conditions in `server.ts`, change them here too, or extract the real function
-// and import it.
+// The handler joins its own `user:` room, then exactly `handshakeRooms(...)
+// .rooms` — the real derivation, imported (it used to be a replica here, and
+// it drifted: it kept asserting a disconnect branch that no longer existed).
 function computeRoomsToJoin(args: {
   viewId: string | null;
   workspaceId: string | null;
   userId: string;
 }): string[] {
-  const effectiveViewId =
-    args.viewId || (args.workspaceId ? `workspace:${args.workspaceId}` : null);
-
-  // POD ALTITUDE: a socket with neither a view nor a workspace is no longer
-  // disconnected. It is fully authenticated (Kratos token matched to auth.userId,
-  // a check that never depended on a workspace) and holds its self-scoped room.
-  const rooms = [`user:${args.userId}`];
-  if (effectiveViewId) rooms.push(`view:${effectiveViewId}`);
-  if (args.workspaceId) rooms.push(`workspace:${args.workspaceId}`);
-  return rooms;
+  return [
+    `user:${args.userId}`,
+    ...handshakeRooms({ viewId: args.viewId, workspaceId: args.workspaceId })
+      .rooms,
+  ];
 }
 
 describe("Service-account room joins — Phase 3A", () => {
