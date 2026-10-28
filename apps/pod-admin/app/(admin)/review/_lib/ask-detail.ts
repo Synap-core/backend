@@ -45,7 +45,10 @@ import {
   type PendingRelayedAnswer,
   PendingRelayedAnswerSchema,
 } from "@synap-core/types/ask";
-import { CRITERION_SLOT_KIND } from "@synap-core/types/focus-sessions";
+import {
+  CRITERION_SLOT_KIND,
+  isCriterionGradeAsk,
+} from "@synap-core/types/focus-sessions";
 import { resolveServiceName } from "@synap-core/types/service-marks";
 import { resolveObjectNoun } from "@synap-core/types/vocabulary";
 
@@ -103,12 +106,17 @@ export interface AskSlot {
 
 /**
  * The slot an `owed-slot` signal stands for, when Review can answer it here.
- * Not a criterion slot: that one is GRADED on the session's scorecard, and
- * "I did this" on it would mark the slot done while the verdict never moves.
+ * A criterion slot only when its ask IS the grade (Pass / Fail,
+ * `isCriterionGradeAsk`): the answer door records that answer as the grade
+ * (`gradeCriterionAsOwner`), so the person grades it here. Any other ask on a
+ * criterion slot would mark the slot done while the verdict never moves, so it
+ * opens where it is graded.
  */
 export function askSlotOf(s: AskSlotSignal): AskSlot | null {
   if (s.kind !== "owed-slot" || s.target?.kind !== "session") return null;
-  if (s.slotKind === CRITERION_SLOT_KIND) return null;
+  if (s.slotKind === CRITERION_SLOT_KIND && !isCriterionGradeAsk(s.ask)) {
+    return null;
+  }
   return {
     sessionId: s.target.id,
     label: s.title,

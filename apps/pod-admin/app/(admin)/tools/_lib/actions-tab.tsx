@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Marketplace › Tools — every verb an installed capability brings, and whether
+ * Tools › Actions — every verb an installed capability brings, and whether
  * it is turned on. A verb that is off is refused every time something calls
  * it; turning it on is `capabilities.setToolEnabled` (the backing skill's
  * `approved`, the flag the execution gate reads).
@@ -38,7 +38,7 @@ import { CAPABILITY_READ_OPTIONS, CATALOG_INPUT } from "./installed-tab";
 
 const CapabilityIcon = kindIcon("capability");
 
-export function ToolsTab() {
+export function ActionsTab() {
   const utils = trpc.useUtils();
   const catalog = trpc.capabilities.catalog.useQuery(
     CATALOG_INPUT,
@@ -126,7 +126,7 @@ export function ToolsTab() {
   );
 }
 
-/** The Tools tab's card — the same `SectionCard` + `-mx-2` row edge as every tab. */
+/** The Actions tab's card — the same `SectionCard` + `-mx-2` row edge as every tab. */
 function ToolsCard({ children }: { children: ReactNode }) {
   return (
     <SectionCard title="Tools" hint="What installed capabilities can do">

@@ -9,7 +9,7 @@
  *
  * Reads (both user-floored): `capabilities.containers.get` — the container, its
  * space, and NOT_FOUND for one the reader cannot see — and the catalog card
- * (`capabilities.catalog`, the same cached read Marketplace › Tools uses) for
+ * (`capabilities.catalog`, the same cached read Tools › Actions uses) for
  * its state, its verbs and the pod's own next-step sentence.
  *
  * The one act on the web is turning verbs on or off
@@ -35,11 +35,11 @@ import {
 import {
   CAPABILITY_READ_OPTIONS,
   CATALOG_INPUT,
-} from "../../../(admin)/marketplace/_lib/installed-tab";
+} from "../../../(admin)/tools/_lib/installed-tab";
 import {
   toolGroups,
   type CardVerbLike,
-} from "../../../(admin)/marketplace/_lib/installed-model";
+} from "../../../(admin)/tools/_lib/installed-model";
 import {
   capabilityStatusPill,
   mayTurnVerbsOn,

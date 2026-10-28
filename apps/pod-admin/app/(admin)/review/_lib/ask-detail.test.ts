@@ -123,10 +123,34 @@ describe("askSlotOf — which needs-you rows are answered here", () => {
       paramName: "channel",
     });
   });
-  it("leaves out a criterion slot, any other kind, and a slot with no session", () => {
+  it("leaves out a criterion slot whose ask is not its grade, any other kind, and a slot with no session", () => {
+    // `choose` carries one verdict value ("fail") beside a plain option: not a
+    // grade (wrong rule: any verdict option makes it one).
     expect(askSlotOf({ ...owed, slotKind: "criterion" })).toBeNull();
+    expect(askSlotOf({ ...owed, slotKind: "criterion", ask: null })).toBeNull();
     expect(askSlotOf({ ...owed, kind: "draft-asks" })).toBeNull();
     expect(askSlotOf({ ...owed, target: null })).toBeNull();
+  });
+});
+
+describe("askSlotOf — an escalated criterion is graded here", () => {
+  it("reads a criterion slot whose ask is Pass / Fail, so its answer is the grade", () => {
+    const grade: Ask = {
+      mode: "choose",
+      options: [
+        { label: "Pass", value: "pass" },
+        { label: "Fail", value: "fail" },
+      ],
+    };
+    expect(
+      askSlotOf({
+        kind: "owed-slot",
+        title: "Check: the rules match their pod skills",
+        slotKind: "criterion",
+        target: { kind: "session", id: "s1" },
+        ask: grade,
+      })
+    ).toMatchObject({ sessionId: "s1", ask: grade });
   });
 });
 

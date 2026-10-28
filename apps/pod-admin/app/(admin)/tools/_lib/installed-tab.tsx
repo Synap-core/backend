@@ -1,12 +1,12 @@
 "use client";
 
 /**
- * Marketplace › Installed — every capability installed on the pod, where it
+ * Tools › Installed — every capability installed on the pod, where it
  * lives, whether its verbs are turned on, how its parts are wired, and how
  * its runs are going. Shaping in `installed-model.ts`.
  *
  * Nothing is approved here, on purpose: the container's `approved` flag
- * gates no run, so the one act is to turn its verbs on — in the Tools tab,
+ * gates no run, so the one act is to turn its verbs on — in the Actions tab,
  * focused on this capability. `?focus=<capabilityId>` highlights a row.
  */
 
@@ -30,7 +30,7 @@ import { installedRows, type InstalledRow } from "./installed-model";
 
 const CapabilityIcon = kindIcon("capability");
 
-/** Shared with the Tools tab: one cached catalog read for both. */
+/** Shared with the Actions tab: one cached catalog read for both. */
 export const CATALOG_INPUT = {} as const;
 export const CAPABILITY_READ_OPTIONS = { staleTime: 30_000 } as const;
 
@@ -105,14 +105,14 @@ function InstalledRowView({ row }: { row: InstalledRow }) {
           row.verbsOff !== null && row.verbsOff > 0 ? (
             <Button
               as={Link}
-              href={navHref("marketplace", { tab: "tools", focus: row.id })}
+              href={navHref("tools", { tab: "actions", focus: row.id })}
               // A tab switch, not a new place: keep the scroll, no history entry.
               scroll={false}
               replace
               size="sm"
               variant="flat"
               radius="md"
-              aria-label={`Turn on ${row.name}'s tools`}
+              aria-label={`Turn on ${row.name}'s actions`}
             >
               Turn on
             </Button>

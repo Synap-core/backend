@@ -1,5 +1,5 @@
 /**
- * Marketplace › Installed and › Tools — what is installed on the pod, whether
+ * Tools › Installed and › Actions — what is installed on the pod, whether
  * it works, and which of its verbs are turned on.
  *
  * PURE: rows are shaped here from two reads and tested at the seam.

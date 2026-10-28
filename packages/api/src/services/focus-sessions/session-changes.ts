@@ -38,6 +38,16 @@
  *                          it. `id` = the message id: pass it back as `cause`
  *                          when replying. With no `since`: the UNREAD ones
  *                          (no read receipt yet), any age — like answers.
+ *   - `pr_merged` /      — a pull request of the session was merged / closed
+ *     `pr_closed`          without merging: the `dev.pr_merged` / `dev.pr_closed`
+ *                          fact the pod recorded (GitHub webhook, CI or devbox
+ *                          producer). "Of the session" = the fact was resolved
+ *                          to it (`data.sessionId`, its `Pod session:` line or
+ *                          its outcome), or it is a PR the session declared as
+ *                          an outcome `ref`. `at` = when the POD heard of it
+ *                          (`data.ingestedAt`, else the row time), so a late
+ *                          webhook is not dropped behind the cursor. The PR
+ *                          title is the author's words: `fenced`, untrusted.
  *
  * CURSOR: `since` is EXCLUSIVE over each event's `at` (millisecond ISO — the
  * database's microseconds are truncated BEFORE the comparison, or a row would
@@ -58,6 +68,7 @@
 
 import {
   db,
+  events as eventsTable,
   focusSessions,
   messages,
   proposals,
@@ -70,10 +81,16 @@ import {
   eq,
   inArray,
   isNull,
+  or,
   drizzleSql,
 } from "@synap/database";
 import type { SQLWrapper } from "drizzle-orm";
 import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
+import {
+  DEV_LOOP_EVENT_TYPES,
+  parsePullRequestRef,
+  type PullRequestRef,
+} from "@synap-core/types";
 import {
   listSessionAnswers,
   SESSION_ANSWERS_DEFAULT_LIMIT,
@@ -81,6 +98,7 @@ import {
   type SessionAnswerItem,
 } from "./list-session-answers.js";
 import { sessionReadableWhere } from "../../access/session-visibility.js";
+import { eventVisibleWhere } from "../../access/event-visibility.js";
 import { extractProposalName } from "../proposals/fingerprint.js";
 import { fenceUntrustedData } from "../agent-dispatch/binding-call.js";
 import type {
@@ -100,6 +118,8 @@ export const SESSION_CHANGE_KINDS = [
   "stage_moved",
   "owner_message",
   "session_message",
+  "pr_merged",
+  "pr_closed",
 ] as const;
 export type SessionChangeKind = (typeof SESSION_CHANGE_KINDS)[number];
 
@@ -214,6 +234,22 @@ export type SessionChangeEvent =
         wakeHeld?: SessionPostMeta["wakeHeld"];
         readAt: string | null;
       };
+    })
+  | (EventBase & {
+      kind: "pr_merged" | "pr_closed";
+      /** The PR title is its author's words: data, never instructions. */
+      untrusted: true;
+      /** The title, fenced; null when the fact carried none. */
+      fenced: string | null;
+      pr: {
+        repo: string;
+        number: number;
+        url: string;
+        title: string | null;
+        /** Merged into the default branch (only then is it delivered). */
+        intoDefault: boolean | null;
+        base: string | null;
+      };
     });
 
 export interface SessionChangesPage {
@@ -226,6 +262,23 @@ export interface SessionChangesPage {
   hasMore: boolean;
   /** The session as it stands — pass `currentStage` back as `knownStage`. */
   state: { currentStage: string | null; status: string };
+}
+
+/**
+ * The pull requests a session DECLARED: every outcome whose `ref.url` is a PR
+ * (the work-units rule records each PR as `pr-<repo>-<n>` with its url).
+ */
+export function sessionPullRequestRefs(
+  expectedOutputs: unknown
+): PullRequestRef[] {
+  if (!Array.isArray(expectedOutputs)) return [];
+  const out = new Map<string, PullRequestRef>();
+  for (const o of expectedOutputs) {
+    const url = (o as { ref?: { url?: unknown } } | null)?.ref?.url;
+    const ref = typeof url === "string" ? parsePullRequestRef(url) : null;
+    if (ref) out.set(`${ref.repo.toLowerCase()}#${ref.number}`, ref);
+  }
+  return [...out.values()];
 }
 
 /** A timestamp column truncated to the millisecond, as a UTC ISO string. */
@@ -282,6 +335,7 @@ export async function listSessionChanges(p: {
       currentStage: true,
       status: true,
       updatedAt: true,
+      expectedOutputs: true,
     },
   });
   if (!session) return null;
@@ -482,6 +536,84 @@ export async function listSessionChanges(p: {
           hop: meta.hop,
           ...(meta.wakeHeld ? { wakeHeld: meta.wakeHeld } : {}),
           readAt: meta.readAt ?? null,
+        },
+      });
+    }
+  }
+
+  const prKinds = (["pr_merged", "pr_closed"] as const).filter((k) =>
+    p.kinds.has(k)
+  );
+  if (prKinds.length > 0) {
+    const types = prKinds.map((k) =>
+      k === "pr_merged"
+        ? DEV_LOOP_EVENT_TYPES.prMerged
+        : DEV_LOOP_EVENT_TYPES.prClosed
+    );
+    // When the pod HEARD of it, not when it happened: a webhook that lands
+    // after the caller's cursor moved past `merged_at` is still news.
+    const heardAt = msIso(
+      drizzleSql`coalesce((${eventsTable.data}->>'ingestedAt')::timestamptz, ${eventsTable.timestamp})`
+    );
+    const refs = sessionPullRequestRefs(session.expectedOutputs);
+    const rows = await db
+      .select({
+        id: eventsTable.id,
+        type: eventsTable.type,
+        data: eventsTable.data,
+        at: heardAt,
+      })
+      .from(eventsTable)
+      .where(
+        and(
+          inArray(eventsTable.type, types),
+          or(
+            drizzleSql`${eventsTable.data}->>'sessionId' = ${session.id}`,
+            ...refs.map(
+              (r) =>
+                drizzleSql`(lower(${eventsTable.data}->>'repo') = ${r.repo.toLowerCase()} and ${eventsTable.data}->>'number' = ${String(r.number)})`
+            )
+          ),
+          eventVisibleWhere({ userId: p.userId, roster: false }),
+          ...(floor
+            ? [
+                // The raw column first: it walks the timestamp index (and the
+                // hypertable's chunks). Stated limit: a fact that HAPPENED more
+                // than a day before the pod heard of it is not reported.
+                drizzleSql`${eventsTable.timestamp} > ${floor}::timestamptz - interval '1 day'`,
+                drizzleSql`${heardAt} > ${floor}`,
+              ]
+            : [])
+        )
+      )
+      .orderBy(asc(heardAt), asc(eventsTable.id))
+      .limit(limit + 1);
+    sourceHasMore ||= rows.length > limit;
+    for (const r of rows.slice(0, limit)) {
+      const d = (r.data ?? {}) as Record<string, unknown>;
+      const repo = typeof d.repo === "string" ? d.repo : null;
+      const number = typeof d.number === "number" ? d.number : null;
+      const url = typeof d.url === "string" ? d.url : null;
+      if (!repo || number === null || !url) continue;
+      const title =
+        typeof d.title === "string" && d.title.trim() ? d.title : null;
+      cursored.push({
+        kind:
+          r.type === DEV_LOOP_EVENT_TYPES.prMerged ? "pr_merged" : "pr_closed",
+        id: `event:${r.id}`,
+        at: r.at,
+        untrusted: true,
+        fenced: title
+          ? fenceUntrustedData(title, "github pull request title")
+          : null,
+        pr: {
+          repo,
+          number,
+          url,
+          title,
+          intoDefault:
+            typeof d.intoDefault === "boolean" ? d.intoDefault : null,
+          base: typeof d.base === "string" ? d.base : null,
         },
       });
     }
