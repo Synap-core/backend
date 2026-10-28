@@ -9,6 +9,8 @@
  * nothing from the database package.
  */
 
+import type { ReviewPreferences } from "../proposals/review-package.js";
+
 export interface CustomTheme {
   colors?: {
     primary?: string;
@@ -62,6 +64,12 @@ export interface UIPreferences {
   defaultView?: "list" | "grid" | "timeline";
   /** Where to open entity detail: floating panel (default), side panel, or modal */
   entityOpenMode?: EntityOpenMode;
+  /**
+   * How the person reviews what agents propose (founder B-4): the grouping and
+   * each package's layout. Absent = never chosen — Review opens by package and
+   * the onboarding step offers the choice once.
+   */
+  review?: ReviewPreferences;
 }
 
 export interface GraphPreferences {

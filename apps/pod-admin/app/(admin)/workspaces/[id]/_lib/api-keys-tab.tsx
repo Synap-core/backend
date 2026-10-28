@@ -4,7 +4,8 @@
  * API Keys tab — the keys confined to this space
  * (`apiKeys.adminListAll({ workspaceId })` filters on the key's own space). A
  * member's pod-wide key can reach the space too, but it is not one of its
- * keys: it lives on the Keys page. A key made here is confined to this space.
+ * keys: it lives on the Keys page. "Create key" opens the New key page for
+ * this space (`/keys/new?space=`), where the key is confined to it.
  */
 
 import {
@@ -16,12 +17,10 @@ import {
   ModalFooter,
   ModalHeader,
   Input,
-  Select,
-  SelectItem,
-  Snippet,
   useDisclosure,
 } from "@heroui/react";
-import { Ban, KeyRound, Plus, ShieldAlert, Trash2 } from "lucide-react";
+import { Ban, KeyRound, Plus } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import { trpc } from "../../../../../lib/trpc";
 import { SectionCard } from "../../../components/section-card";
@@ -32,15 +31,7 @@ import {
 } from "../../../components/resource-row";
 import { StatusPill } from "../../../components/status-pill";
 import { useFocusRow } from "../../../components/use-focus-row";
-import {
-  GrantRolePicker,
-  keyMintFromRole,
-  roleFitsWorkspace,
-  roleSetsLifetime,
-  useGrantRoleOptions,
-} from "../../../keys/_lib/grant-role-picker";
-import { useOfferedKeyScopes } from "../../../keys/_lib/key-scopes";
-import type { GrantMintInput } from "@synap-core/types/grants";
+import { newKeyHref } from "../../../keys/_lib/key-form-model";
 import { formatRelative } from "../../../../../lib/format";
 
 interface ApiKey {
@@ -86,12 +77,8 @@ function typeBadge(keyType: string | null | undefined): string {
 }
 
 export function ApiKeysTab({ workspaceId }: { workspaceId: string }) {
-  const [createOpen, setCreateOpen] = useState(false);
+  const router = useRouter();
   const [revokeTarget, setRevokeTarget] = useState<ApiKey | null>(null);
-  const [revealedKey, setRevealedKey] = useState<{
-    keyName: string;
-    plaintext: string;
-  } | null>(null);
 
   const utils = trpc.useUtils();
   const keysQuery = trpc.apiKeys.adminListAll.useQuery(
@@ -109,21 +96,6 @@ export function ApiKeysTab({ workspaceId }: { workspaceId: string }) {
   useFocusRow({ ready: !keysQuery.isLoading });
   const active = useMemo(() => keys.filter((k) => k.isActive), [keys]);
   const revoked = useMemo(() => keys.filter((k) => !k.isActive), [keys]);
-
-  const createMutation = trpc.apiKeys.create.useMutation({
-    onSuccess: (res) => {
-      void utils.apiKeys.adminListAll.invalidate({ workspaceId });
-      if (res && "key" in res && typeof res.key === "string" && res.key) {
-        setRevealedKey({ keyName: "New key", plaintext: res.key });
-      }
-    },
-    onError: (err) =>
-      addToast({
-        title: "Create failed",
-        description: err.message,
-        color: "danger",
-      }),
-  });
 
   const revokeMutation = trpc.apiKeys.revoke.useMutation({
     onSuccess: () => {
@@ -151,7 +123,7 @@ export function ApiKeysTab({ workspaceId }: { workspaceId: string }) {
             radius="md"
             color="primary"
             startContent={<Plus className="h-3.5 w-3.5" />}
-            onPress={() => setCreateOpen(true)}
+            onPress={() => router.push(newKeyHref({ space: workspaceId }))}
           >
             Create key
           </Button>
@@ -182,27 +154,6 @@ export function ApiKeysTab({ workspaceId }: { workspaceId: string }) {
         )}
       </SectionCard>
 
-      {createOpen ? (
-        <CreateKeyModal
-          workspaceId={workspaceId}
-          isPending={createMutation.isPending}
-          onClose={() => setCreateOpen(false)}
-          onConfirm={async (input) => {
-            const res = await createMutation.mutateAsync({
-              keyName: input.keyName,
-              scope: input.scope,
-              workspaceId,
-              expiresInDays: input.expiresInDays,
-              grant: input.grant,
-            });
-            if (res && "key" in res && typeof res.key === "string" && res.key) {
-              setRevealedKey({ keyName: input.keyName, plaintext: res.key });
-            }
-            setCreateOpen(false);
-          }}
-        />
-      ) : null}
-
       {revokeTarget ? (
         <RevokeKeyModal
           apiKey={revokeTarget}
@@ -214,14 +165,6 @@ export function ApiKeysTab({ workspaceId }: { workspaceId: string }) {
               reason,
             });
           }}
-        />
-      ) : null}
-
-      {revealedKey ? (
-        <RevealKeyModal
-          keyName={revealedKey.keyName}
-          plaintext={revealedKey.plaintext}
-          onClose={() => setRevealedKey(null)}
         />
       ) : null}
     </div>
@@ -303,174 +246,6 @@ function KeyRow({
   );
 }
 
-// ─── Create modal ──────────────────────────────────────────────────────
-
-type CreateInput = {
-  keyName: string;
-  scope: string[];
-  /** null = never (omitted = the 90-day default). */
-  expiresInDays?: number | null;
-  /** What it may touch, confined to this workspace. */
-  grant: GrantMintInput["grant"];
-};
-
-function CreateKeyModal({
-  workspaceId,
-  isPending,
-  onClose,
-  onConfirm,
-}: {
-  workspaceId: string;
-  isPending: boolean;
-  onClose: () => void;
-  onConfirm: (input: CreateInput) => void | Promise<void>;
-}) {
-  const { isOpen, onOpenChange } = useDisclosure({
-    defaultOpen: true,
-    onClose,
-  });
-  const [name, setName] = useState("");
-  const [scopes, setScopes] = useState<string[]>(["data.read"]);
-  const [expiry, setExpiry] = useState("90");
-  const {
-    roles: allRoles,
-    isError: rolesFailed,
-    refetch: refetchRoles,
-  } = useGrantRoleOptions();
-  // A key made here is confined to this workspace, so roles made for other
-  // workspaces are not offered.
-  const roles = allRoles.filter((r) => roleFitsWorkspace(r, workspaceId));
-  const [roleId, setRoleId] = useState<string>(roles[0].id);
-  const offeredScopes = useOfferedKeyScopes("personal");
-  const expiresInDays = expiry === "never" ? null : Number(expiry);
-  const minted = keyMintFromRole(roleId, roles, {
-    expiresInDays,
-    workspaceId,
-  });
-  const roleLifetime = roleSetsLifetime(roleId, roles);
-
-  function toggle(s: string) {
-    setScopes((prev) =>
-      prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s]
-    );
-  }
-
-  return (
-    <Modal
-      isOpen={isOpen}
-      onOpenChange={onOpenChange}
-      size="md"
-      placement="center"
-    >
-      <ModalContent>
-        <ModalHeader className="flex items-center gap-2 border-b border-foreground/[0.06] px-6 py-4">
-          <span
-            className="glass-icon flex h-7 w-7 items-center justify-center"
-            style={{ background: "rgba(52, 211, 153, 0.18)" }}
-          >
-            <KeyRound className="h-3.5 w-3.5 text-foreground/85" />
-          </span>
-          <span className="text-[15px] font-medium">New API key</span>
-        </ModalHeader>
-        <ModalBody className="gap-4 px-6 py-4">
-          <Input
-            label="Key name"
-            placeholder="e.g. My integration"
-            value={name}
-            onValueChange={setName}
-            size="sm"
-            isDisabled={isPending}
-          />
-          <div>
-            <p className="mb-1.5 text-[12.5px] font-medium text-foreground">
-              Scopes
-            </p>
-            <div className="flex flex-wrap gap-1.5">
-              {offeredScopes.map((s) => {
-                const active = scopes.includes(s);
-                return (
-                  <button
-                    key={s}
-                    type="button"
-                    onClick={() => toggle(s)}
-                    className={[
-                      "rounded-md px-2 py-1 text-[11.5px] font-medium transition-colors",
-                      active
-                        ? "bg-primary/15 text-primary ring-1 ring-inset ring-primary/40"
-                        : "bg-foreground/[0.05] text-foreground/65 hover:bg-foreground/[0.08]",
-                    ].join(" ")}
-                  >
-                    {s}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-          <GrantRolePicker
-            value={roleId}
-            onChange={setRoleId}
-            roles={roles}
-            minted={minted}
-            scopes={scopes}
-            rolesFailed={rolesFailed}
-            onRetryRoles={refetchRoles}
-            isDisabled={isPending}
-          />
-          {/* A role with its own lifetime sets it; the summary line says when. */}
-          {roleLifetime ? null : (
-            <Select
-              label="Expires in"
-              size="sm"
-              selectedKeys={[expiry]}
-              onSelectionChange={(keys) => {
-                const k = Array.from(keys as Set<string>)[0];
-                if (k) setExpiry(k);
-              }}
-              isDisabled={isPending}
-            >
-              <SelectItem key="never">Never</SelectItem>
-              <SelectItem key="30">30 days</SelectItem>
-              <SelectItem key="90">90 days</SelectItem>
-              <SelectItem key="365">1 year</SelectItem>
-            </Select>
-          )}
-        </ModalBody>
-        <ModalFooter className="border-t border-foreground/[0.06] px-6 py-3">
-          <Button
-            variant="flat"
-            radius="md"
-            size="sm"
-            onPress={onClose}
-            isDisabled={isPending}
-          >
-            Cancel
-          </Button>
-          <Button
-            color="primary"
-            radius="md"
-            size="sm"
-            isDisabled={
-              !name.trim() || scopes.length === 0 || !minted || isPending
-            }
-            isLoading={isPending}
-            onPress={() =>
-              minted &&
-              void onConfirm({
-                keyName: name.trim(),
-                scope: scopes,
-                expiresInDays: minted.expiresInDays,
-                grant: minted.grant,
-              })
-            }
-          >
-            Create
-          </Button>
-        </ModalFooter>
-      </ModalContent>
-    </Modal>
-  );
-}
-
 // ─── Revoke modal ──────────────────────────────────────────────────────
 
 function RevokeKeyModal({
@@ -545,68 +320,3 @@ function RevokeKeyModal({
     </Modal>
   );
 }
-
-// ─── Reveal modal ──────────────────────────────────────────────────────
-
-function RevealKeyModal({
-  keyName,
-  plaintext,
-  onClose,
-}: {
-  keyName: string;
-  plaintext: string;
-  onClose: () => void;
-}) {
-  const { isOpen, onOpenChange } = useDisclosure({
-    defaultOpen: true,
-    onClose,
-  });
-
-  return (
-    <Modal
-      isOpen={isOpen}
-      onOpenChange={onOpenChange}
-      size="md"
-      placement="center"
-      isDismissable={false}
-      hideCloseButton
-    >
-      <ModalContent>
-        <ModalHeader className="flex items-center gap-2 border-b border-foreground/[0.06] px-6 py-4">
-          <span
-            className="glass-icon flex h-7 w-7 items-center justify-center"
-            style={{ background: "rgba(245, 158, 11, 0.20)" }}
-          >
-            <ShieldAlert className="h-3.5 w-3.5 text-foreground/85" />
-          </span>
-          <span className="text-[15px] font-medium">Key created</span>
-        </ModalHeader>
-        <ModalBody className="gap-3 px-6 py-4">
-          <p className="text-[12.5px] text-foreground/85">
-            Save <span className="font-medium">{keyName}</span> now — this is
-            the only time it will be shown.
-          </p>
-          <Snippet
-            symbol=""
-            size="sm"
-            className="overflow-hidden font-mono"
-            classNames={{ base: "bg-foreground/[0.05]" }}
-          >
-            {plaintext}
-          </Snippet>
-          <p className="text-[11.5px] text-foreground/65">
-            Treat this like a password. Anyone with the key can act on this
-            space within its scopes.
-          </p>
-        </ModalBody>
-        <ModalFooter className="border-t border-foreground/[0.06] px-6 py-3">
-          <Button color="primary" size="sm" radius="md" onPress={onClose}>
-            I have saved it
-          </Button>
-        </ModalFooter>
-      </ModalContent>
-    </Modal>
-  );
-}
-
-void Trash2;
