@@ -1,0 +1,84 @@
+{
+  "$note": "THE multi-repo layout of Synap (R8 option C1, wave e902fc95). One row per repo: the directory it is checked out under beside its siblings (`dir`, the developer root's name), its GitHub name under `owner` (`slug`), the other names people and tools use for it (`aliases`), and the override variable a test may set to point at a checkout elsewhere (`env`). `layouts` name the sibling sets each caller lays out beside its own checkout. Read by scripts/layout/layout.mjs (the resolver) and scripts/sibling-checkout.mjs; the devbox gate and the app/relay CI read it from backend main. Add a repo or a caller here, never in a caller.",
+  "owner": "Synap-core",
+  "defaultBranch": "main",
+  "repos": {
+    "synap-backend": {
+      "slug": "backend",
+      "aliases": ["backend"],
+      "env": "SYNAP_BACKEND_DIR",
+      "public": true
+    },
+    "synap-app": {
+      "slug": "app-bases",
+      "aliases": ["app-bases", "app"],
+      "env": "SYNAP_APP_DIR",
+      "public": false
+    },
+    "synap-control-plane-api": {
+      "slug": "control-plane-api",
+      "aliases": ["control-plane-api", "cp-api", "cp"],
+      "env": "SYNAP_CONTROL_PLANE_DIR",
+      "public": false
+    },
+    "browser": {
+      "slug": "browser",
+      "aliases": [],
+      "env": "SYNAP_BROWSER_DIR",
+      "public": false
+    },
+    "relay-app": {
+      "slug": "relay-app",
+      "aliases": ["relay"],
+      "env": "SYNAP_RELAY_DIR",
+      "public": false
+    },
+    "synap-cli": {
+      "slug": "synap-cli",
+      "aliases": ["cli"],
+      "env": "SYNAP_CLI_DIR",
+      "public": true
+    },
+    "synap-landing": {
+      "slug": "control-plane",
+      "aliases": ["control-plane", "landing"],
+      "env": "SYNAP_LANDING_DIR",
+      "public": false
+    },
+    "synap-control-plane-dashboard": {
+      "slug": "control-plane-dashboard",
+      "aliases": ["cp-dashboard"],
+      "env": "SYNAP_CP_DASHBOARD_DIR",
+      "public": false
+    },
+    "synap-intelligence-service": {
+      "slug": "intelligence-hub",
+      "aliases": ["intelligence-hub", "is"],
+      "env": "SYNAP_IS_DIR",
+      "public": false
+    }
+  },
+  "layouts": {
+    "backend-ci": {
+      "self": "synap-backend",
+      "siblings": ["synap-control-plane-api", "synap-app"]
+    },
+    "app-ci": {
+      "self": "synap-app",
+      "siblings": ["synap-backend", "synap-control-plane-api"]
+    },
+    "app-ci-full": {
+      "self": "synap-app",
+      "siblings": [
+        "synap-backend",
+        "synap-control-plane-api",
+        "browser",
+        "relay-app"
+      ]
+    },
+    "cp-ci": {
+      "self": "synap-control-plane-api",
+      "siblings": ["synap-app", "synap-backend"]
+    }
+  }
+}
