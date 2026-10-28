@@ -271,6 +271,9 @@ describe("a privileged mint needs a fresh sign-in, whatever the session", () => 
     expect(await keyCount()).toBe(before);
   });
 
+  // Coverage, not a discriminating case: the credential step-up
+  // (`credentialProcedure`) already refuses a stale device session on main,
+  // so this one stays green under the negative control.
   it("a stale phone device session is refused", async () => {
     const before = await keyCount();
     await expect(
