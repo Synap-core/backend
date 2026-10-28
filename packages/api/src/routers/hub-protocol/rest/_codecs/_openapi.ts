@@ -92,6 +92,12 @@ export const uuidParam = z
 export const ErrorSchema = z
   .object({
     error: z.string(),
+    /**
+     * On a 400 for a body or query that failed validation: dotted field path
+     * (`items.0.title`; `""` = the input as a whole) → its messages. The same
+     * projection as tRPC `error.data.fieldErrors` (`utils/zod-field-errors.ts`).
+     */
+    fieldErrors: z.record(z.string(), z.array(z.string())).optional(),
   })
   .openapi("HubError");
 

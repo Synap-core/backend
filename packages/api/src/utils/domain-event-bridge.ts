@@ -8,6 +8,7 @@
  *
  * Event type mapping (backend eventType → Socket.IO event name):
  * - entity.*.completed → entity:created | entity:updated | entity:deleted
+ *   (entity.restore.completed → entity:updated)
  * - view.*.completed → view:created | view:updated | view:deleted
  * - workspaces.update.completed → workspace:updated
  * - relation.*.completed → relation:created | relation:updated | relation:deleted
@@ -63,6 +64,12 @@ function mapToSocketEvent(
     },
     "entity.delete.completed": {
       event: EventNames.ENTITY_DELETED,
+      workspaceIdRequired: false,
+    },
+    // `entities.restore` clears `deletedAt`: the row changed and is listed
+    // again, which clients read as an update of that entity.
+    "entity.restore.completed": {
+      event: EventNames.ENTITY_UPDATED,
       workspaceIdRequired: false,
     },
     "view.create.completed": {
