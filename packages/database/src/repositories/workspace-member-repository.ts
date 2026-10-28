@@ -7,6 +7,7 @@
 import type { EventRepository } from "./event-repository.js";
 import { workspaceMembers, invites } from "../schema/index.js";
 import { eq, and } from "drizzle-orm";
+import { pauseAutomationsOfRemovedMember } from "../utils/automation-owner-access.js";
 
 export interface AddMemberInput {
   workspaceId: string;
@@ -82,6 +83,10 @@ export class WorkspaceMemberRepository {
           eq(workspaceMembers.userId, input.userId)
         )
       );
+
+    // Offboarding offboards (audit F9): what ran for this person in the space
+    // (their automations, and their agents') stops with their membership.
+    await pauseAutomationsOfRemovedMember(this.db, input);
 
     await this.eventRepo.append({
       id: crypto.randomUUID(),

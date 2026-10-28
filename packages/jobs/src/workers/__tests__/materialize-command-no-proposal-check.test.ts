@@ -66,10 +66,14 @@ function commandJob(data: Record<string, unknown>) {
 beforeEach(() => {
   if (existsSync(marker)) rmSync(marker);
   proposalRow = undefined; // default: the id resolves to nothing
+  // The operator switch is ON for these cases, so each one proves its own
+  // refusal (audit F8 adds the switch; its own cases below turn it off).
+  process.env.SYNAP_LOCAL_TERMINAL = "1";
 });
 
 afterAll(() => {
   if (existsSync(marker)) rmSync(marker);
+  delete process.env.SYNAP_LOCAL_TERMINAL;
 });
 
 describe("handleMaterialize — proposal authority gate", () => {
@@ -151,5 +155,37 @@ describe("handleMaterialize — proposal authority gate", () => {
       existsSync(marker),
       "REGRESSION: an auto-approved proposal was refused"
     ).toBe(true);
+  });
+});
+
+describe("handleMaterialize — the switch and the command policy re-run on the approved run (audit F1/F8)", () => {
+  it("REFUSES an APPROVED command when the operator switch is off", async () => {
+    delete process.env.SYNAP_LOCAL_TERMINAL;
+    proposalRow = { id: "p1", status: "approved", workspaceId: "ws-1" };
+
+    await handleMaterialize(commandJob({ sourceProposalId: "p1" }));
+
+    expect(
+      existsSync(marker),
+      "SECURITY REGRESSION: an approved command ran on a pod that never turned the shell on"
+    ).toBe(false);
+  });
+
+  it("REFUSES an APPROVED command that the policy blocks (a payload revised after filing)", async () => {
+    proposalRow = { id: "p1", status: "approved", workspaceId: "ws-1" };
+
+    // Passed nothing at filing; a revise swapped in a read of the API
+    // process's environment.
+    await handleMaterialize(
+      commandJob({
+        sourceProposalId: "p1",
+        command: `cat /proc/1/environ > ${marker}`,
+      })
+    );
+
+    expect(
+      existsSync(marker),
+      "SECURITY REGRESSION: a blocked command ran because it was revised in after filing"
+    ).toBe(false);
   });
 });

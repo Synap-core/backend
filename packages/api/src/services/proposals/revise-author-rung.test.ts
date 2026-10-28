@@ -138,14 +138,42 @@ describe("THE INVARIANT — the agent id never reaches the reviewer ladder", () 
       proposalId: "p1",
       summary: "after",
       actorId: HUMAN,
-      actingAgentUserId: OTHER_AGENT,
     });
     expect(h.reviewCalls).toEqual([HUMAN]);
-    expect(h.reviewCalls).not.toContain(OTHER_AGENT);
   });
 });
 
 describe("THE NARROWNESS — the rung authorizes the AUTHOR and nobody else", () => {
+  it("F1: a DIFFERENT agent is refused even where its human may review — before the ladder", async () => {
+    h.allowed = true; // the agent key's human owner may review this proposal
+    await expect(
+      mergeProposalRevision({
+        proposalId: "p1",
+        summary: "hijack",
+        patch: { kind: "inner", fields: { command: "cat /proc/1/environ" } },
+        actorId: HUMAN,
+        actingAgentUserId: OTHER_AGENT,
+      })
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(h.updates).toBe(0);
+    // Refused on the agent itself: the human's ladder never decided it.
+    expect(h.reviewCalls).toEqual([]);
+  });
+
+  it("F1: a person's own proposal (no agent) cannot be revised by an agent either", async () => {
+    h.allowed = true;
+    h.row = { ...h.row, agentUserId: null };
+    await expect(
+      mergeProposalRevision({
+        proposalId: "p1",
+        summary: "hijack",
+        actorId: HUMAN,
+        actingAgentUserId: OTHER_AGENT,
+      })
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(h.updates).toBe(0);
+  });
+
   it("a DIFFERENT agent cannot amend this proposal", async () => {
     await expect(
       mergeProposalRevision({
@@ -210,6 +238,60 @@ describe("PATCH reaches the core (so narrative and payload cannot diverge)", () 
   });
 });
 
+describe("F1: a revised shell command is judged by the command policy", () => {
+  const commandRow = (command: string) => ({
+    ...h.row,
+    data: {
+      targetType: "command",
+      changeType: "execute",
+      data: { command, reason: "check the repo" },
+    },
+  });
+
+  it("the authoring agent cannot revise a filed command into a blocked one", async () => {
+    h.row = commandRow("git status");
+    await expect(
+      mergeProposalRevision({
+        proposalId: "p1",
+        patch: {
+          kind: "inner",
+          fields: { command: "cat /proc/1/environ | tr '\\0' '\\n'" },
+        },
+        actorId: HUMAN,
+        actingAgentUserId: AGENT,
+      })
+    ).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: expect.stringContaining("blocked by security policy"),
+    });
+    expect(h.updates).toBe(0);
+  });
+
+  it("…nor smuggle a substitution in", async () => {
+    h.row = commandRow("git status");
+    await expect(
+      mergeProposalRevision({
+        proposalId: "p1",
+        patch: { kind: "inner", fields: { command: "echo $(id)" } },
+        actorId: HUMAN,
+        actingAgentUserId: AGENT,
+      })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(h.updates).toBe(0);
+  });
+
+  it("a revision to another allowed command lands", async () => {
+    h.row = commandRow("git status");
+    await mergeProposalRevision({
+      proposalId: "p1",
+      patch: { kind: "inner", fields: { command: "git log --oneline -5" } },
+      actorId: HUMAN,
+      actingAgentUserId: AGENT,
+    });
+    expect(h.updates).toBe(1);
+  });
+});
+
 describe("THE KEY HALF — revising needs the approve right, unless the key's agent authored it", () => {
   const AI_KEY = {
     scopes: [{ permissions: ["proposal.reject", "entity.update"] }],
@@ -247,16 +329,37 @@ describe("THE KEY HALF — revising needs the approve right, unless the key's ag
           actorId: HUMAN,
         })
       )
-    ).rejects.toMatchObject({
-      code: "FORBIDDEN",
-      message: expect.stringContaining("Give it the 'approve' right"),
-    });
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
     expect(h.updates).toBe(0);
   });
 
-  it("a key holding proposal.approve may revise someone else's proposal", async () => {
+  it("F1: an agent key holding proposal.approve (a default `*` grant) still cannot revise another's proposal", async () => {
     h.allowed = true;
-    await asKey(OTHER_AGENT, APPROVER_KEY, () =>
+    // The Hub door shape: the door passes no agent; the AMBIENT acting agent
+    // (entered by the key-auth middleware) is what the core reads.
+    await expect(
+      asKey(OTHER_AGENT, APPROVER_KEY, () =>
+        mergeProposalRevision({
+          proposalId: "p1",
+          summary: "x",
+          patch: { kind: "inner", fields: { amount: 1 } },
+          actorId: HUMAN,
+        })
+      )
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(h.updates).toBe(0);
+  });
+
+  it("a person's key (no agent) holding proposal.approve may revise someone else's proposal", async () => {
+    h.allowed = true;
+    await asKey(undefined, APPROVER_KEY, () =>
+      mergeProposalRevision({ proposalId: "p1", summary: "x", actorId: HUMAN })
+    );
+    expect(h.updates).toBe(1);
+  });
+
+  it("the authoring agent's key revises through the Hub door shape (ambient agent, none passed)", async () => {
+    await asKey(AGENT, AI_KEY, () =>
       mergeProposalRevision({ proposalId: "p1", summary: "x", actorId: HUMAN })
     );
     expect(h.updates).toBe(1);

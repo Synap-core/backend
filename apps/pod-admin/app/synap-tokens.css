@@ -1,0 +1,997 @@
+/* GENERATED from src/tokens/*.tokens.json by scripts/build-tokens.ts — do not edit by hand.
+ * Change the JSON, then run `pnpm --filter @synap-core/design-tokens build`. */
+/**
+ * @synap-core/design-tokens — canonical semantic CSS-variable contract
+ * ====================================================================
+ *
+ * The SINGLE agnostic `--synap-*` token layer that BOTH Synap surfaces supply
+ * at runtime, so any shared `@synap-core/*` package can write
+ * `var(--synap-primary)` (and the rest) and get a correct, theme-aware value
+ * in EITHER context — with no per-package palette and no per-package fallback
+ * required for theming.
+ *
+ *   - browser/ (Electron, spatial-shell)  → @import-ed by spatial-shell.css
+ *   - synap-app/apps/* (HeroUI)           → @import-ed by heroui-base.css
+ *
+ * The vocabulary deliberately MIRRORS the existing Tamagui `@synap-core/ui-system`
+ * semantic tokens ($primary, $background, $color, $muted, $borderColor, $ai,
+ * $success/$error/$warning/$info, $glassBackground, radius $1-$4/$round, the
+ * 6px space scale, fonts) so the Tamagui-removal migration is a 1:1 rename
+ * (`$primary` → `var(--synap-primary)`), not a re-learn.
+ *
+ * COLOR VALUES are the LOCKED spatial brand (the ochre / teal / sage / clay
+ * paper-and-ink palette). THIS FILE is the single source of truth for those
+ * values. The DERIVED spatial chrome (`--synap-spatial-*`, aliasing back to the
+ * `--synap-*` names declared here) is the last block of this file, emitted from
+ * src/tokens/spatial-derived.css; spatial-shell.css defines no tokens (see
+ * TOKEN-ARCHITECTURE-DECISION.md).
+ *
+ * ── Theme switching ─────────────────────────────────────────────────────────
+ * Default (`:root`) is DARK — the project default in both surfaces.
+ *   - LIGHT is selected by ANY of:  [data-theme="light"]  |  html.light / .light
+ *   - DARK  is (re)asserted by:     [data-theme="dark"]   |  html.dark  / .dark
+ *                                   |  .synap-spatial--dark (compat alias, below)
+ * ONE convention (D3): every mode-dependent `--synap-*` value — including the
+ * spatial chrome materials — is declared HERE, keyed on these selectors and
+ * nowhere else. `[data-theme]` is canonical (`applyThemeMode` sets it on
+ * <body>); apps toggle `.dark` / `.light` on <html> (next-themes
+ * attribute="class"). `.synap-spatial--dark` is a COMPAT alias only: it is
+ * still set by applyThemeMode and read as a class by consumers outside the
+ * token layer (whiteboard, graph views, view-renderer AdapterThemeScope,
+ * browser RendererGallery, apps/telegram). Delete it once they key on
+ * `[data-theme]`.
+ *
+ * Pure CSS custom properties. No JS. Framework-free. GENERATED: the source is
+ * src/tokens/*.tokens.json (W3C DTCG) — edit the JSON, never this file.
+ */
+
+/* ───────────────────────────── DARK (default) ───────────────────────────── */
+:root {
+  color-scheme: dark; /* native controls/scrollbars follow the theme */
+
+  /* Brand / accent */
+  --synap-primary: #c28a4a; /* spatial ochre (dark) */
+  --synap-primary-hover: #d9964a;
+  --synap-primary-light: rgba(194, 138, 74, 0.16); /* spatial ochre-soft */
+  /* FILL of a filled primary button — what --synap-primary-button-text sits on.
+   * Measured with @synap-core/theme contrastRatio (2026-09-23):
+   *   DARK  aliases --synap-primary: #1f1b17 on #c28a4a = 5.73:1.
+   *   LIGHT one ochre step darker: #fbf7ee on #9d652c = 4.53:1. On --synap-primary
+   *         itself it is 3.98:1 (#a86e2e) — 3.71:1 on the retired #b07232 — both
+   *         under WCAG AA 4.5:1. --synap-primary is unchanged everywhere else.
+   * A CONTRACT var: a theme that repaints --synap-primary repaints this too. */
+  --synap-primary-button: var(--synap-primary);
+  --synap-primary-button-text: #1f1b17;
+  /* The readable (TEXT) ochre in dark. --synap-primary #c28a4a is the accent FILL (>= 3:1, non-text); text in ochre is this ink. 2026-10-27, lifted with the dark elevation ladder: >= 4.5:1 on every step (7.21 page / 5.75 card / 5.02 popover) and on its own --synap-primary-light wash up to the card (5.62 page / 4.53 card) */
+  --synap-primary-ink: #e0a25b;
+  --synap-secondary: #76b9b2; /* spatial teal (dark) */
+  --synap-secondary-hover: #8fcfc8;
+  --synap-secondary-light: rgba(118, 185, 178, 0.13);
+
+  /* AI — the logo yellow (brand/src/tokens.ts gradient tip #ffdb23).
+   * DARK: the tip itself is the mark, the text and the fill. LIGHT: the tip is
+   * 1.12:1 on the cream page, so marks/text use a deep gold at the logo hue and
+   * the tip is a SURFACE (--synap-ai-surface) with dark ink on it.
+   * Measured in theme/src/contrast.test.ts. */
+  --synap-ai: #ffdb23;
+  --synap-ai-light: rgba(255, 219, 35, 0.14);
+  --synap-ai-hover: #ffe885;
+  /* Text ink partner for --synap-ai. DARK reuses the logo yellow: 11.00:1 on
+   * --synap-background #2b2620, 9.16 on the card film, 7.65 on its own wash. */
+  --synap-ai-ink: #ffdb23;
+  --synap-ai-surface: #ffdb23;
+
+  /* Status */
+  --synap-success: #a8ba91; /* spatial sage (dark) */
+  --synap-success-light: rgba(168, 186, 145, 0.13);
+  --synap-success-ink: #a8ba91; /* readable (TEXT/ICON) partner of --synap-success — the sage fill already reads as text here: 7.21:1 page / 6.01 film */
+  --synap-error: #db8867; /* spatial clay (dark), AA-corrected from #d98361, which read 4.38:1 on the card film; #db8867 clears 4.60 film / 5.52 page */
+  --synap-error-light: rgba(217, 131, 97, 0.13);
+  --synap-error-ink: #e59878; /* readable partner of --synap-error (the clay fill is for marks). 2026-10-27, lifted with the dark elevation ladder: >= 4.5:1 on every step (6.91 page / 5.51 card / 4.81 popover) and on its own --synap-error-light wash up to the card (5.64 page / 4.52 card) */
+  --synap-warning: #ff6a0d;
+  --synap-warning-light: rgba(255, 106, 13, 0.16);
+  --synap-warning-ink: #ff9044; /* readable partner of --synap-warning — 6.66 page / 5.54 film / 5.26 on its wash */
+  --synap-info: #76b9b2;
+  --synap-info-light: rgba(118, 185, 178, 0.13);
+  --synap-info-ink: #8fc9c3; /* readable partner of --synap-info — one teal step up: 8.07 page / 6.34 on its own wash */
+
+  /* Unit-state TONES — one fill + one ink per `UnitTone` of resolveUnitState
+   * (@synap-core/types units/state.ts; relay's useToneFill / useToneInk read the
+   * same pairs). FILL is a MARK (dot, rail, border, wash): >= 3:1 on the page.
+   * INK is something READ: >= 4.5:1 on the page. Measured in both modes by
+   * theme/src/tones.test.ts, which also fails if a UnitTone has no pair.
+   * The ai fill is --synap-ai in both modes: the light deep gold clears 3:1 (4.91). */
+  --synap-tone-primary-fill: var(--synap-primary);
+  --synap-tone-primary-ink: var(--synap-primary-ink);
+  --synap-tone-ai-fill: var(--synap-ai);
+  --synap-tone-ai-ink: var(--synap-ai-ink);
+  --synap-tone-info-fill: var(--synap-info);
+  --synap-tone-info-ink: var(--synap-info-ink);
+  --synap-tone-error-fill: var(--synap-error);
+  --synap-tone-error-ink: var(--synap-error-ink);
+  --synap-tone-warning-fill: var(--synap-warning);
+  --synap-tone-warning-ink: var(--synap-warning-ink);
+  --synap-tone-success-fill: var(--synap-success);
+  --synap-tone-success-ink: var(--synap-success-ink);
+  --synap-tone-text-secondary-fill: var(--synap-color-secondary);
+  --synap-tone-text-secondary-ink: var(--synap-color-secondary);
+  --synap-tone-text-muted-fill: var(--synap-muted);
+  --synap-tone-text-muted-ink: var(--synap-muted);
+
+  /* Agent identity — 7-slot categorical scale for distinguishing AI agents.
+   * Slot 0 is --synap-ai (the logo yellow); these are slots 1..7. Muted, sophisticated
+   * siblings of the warm paper-and-ink family, mutually distinguishable.
+   * DARK: lighter/softer fills so the dark-ink orb glyph (--synap-primary-button-text)
+   * stays legible on the fill. */
+  --synap-identity-1: #d4a25e; /* ochre/amber — sibling of primary */
+  --synap-identity-2: #76b9b2; /* teal — sibling of secondary */
+  --synap-identity-3: #a8ba91; /* sage — sibling of success */
+  --synap-identity-4: #d98361; /* clay/terracotta — sibling of error */
+  --synap-identity-5: #b89bc4; /* plum/mauve — muted dusty purple */
+  --synap-identity-6: #8aa0c4; /* slate-blue — earthy desaturated indigo */
+  --synap-identity-7: #ed9ecb; /* berry — re-hued from gold/brass (same hue as the AI yellow); nearest neighbour dE_OK 7.5 dark / 9.9 light */
+  --synap-identity-8: #cf93a6; /* dusty rose */
+  --synap-identity-9: #6fb7c7; /* aqua/cyan */
+  --synap-identity-10: #aebd7c; /* moss/lime */
+  --synap-identity-11: #a89bd2; /* periwinkle/lavender */
+  --synap-identity-12: #c99f77; /* sienna/caramel */
+
+  /* Background / surfaces */
+  /* AUTHORED page background, the ladder's floor. 2026-10-27: #2b2620 -> #26211c, so a card stands 1.25:1 off the page and a popover 1.15:1 off the card with every ink still >= 4.5:1 on the top step. Warm, never black. Every dark glass / paper / ink value below is tuned against THIS number.
+   * The dark ELEVATION LADDER, lighter as it rises: page < panel < card < raised (scripts/elevation-ladder.test.ts pins the order and the steps). */
+  --synap-background: #26211c;
+  --synap-background-surface: rgba(255, 238, 205, 0.03); /* The PANEL step of the dark elevation ladder (see background): a section / inset wash, 1.08:1 over the page in dark (was 6.5% = 1.20:1, above the card: the ladder ran backwards). */
+  --synap-background-hover: rgba(255, 238, 205, 0.12);
+  --synap-background-press: rgba(255, 238, 205, 0.16);
+  /* spatial paper, the CARD step of the dark elevation ladder (see background). Dark: opaque, 1.25:1 above the page (#26211c); was rgba(57,49,39,.92) = 1.16:1, which read muddy. Ink 10.8:1, secondary 8.3:1, muted 5.6:1 on it. */
+  --synap-paper: #3a3128;
+
+  /* Text / ink */
+  --synap-color: #f4ecdc; /* spatial ink — 12.76:1 */
+  --synap-color-secondary: #d9cfbd; /* spatial ink-2 — 9.72:1 */
+  --synap-muted: #b6aa96; /* spatial ink-3 — 6.55:1 */
+  --synap-muted-foreground: var(--synap-muted); /* DEPRECATED alias of --synap-muted */
+
+  /* Borders */
+  --synap-border-color: rgba(255, 238, 205, 0.09); /* spatial hairline */
+  --synap-border-color-hover: rgba(255, 238, 205, 0.15); /* spatial hairline-2 */
+  --synap-border-color-subtle: rgba(255, 238, 205, 0.06);
+  --synap-border-color-focus: #c28a4a;
+  /* Image/avatar edge — pure alpha (never tinted) so photos read true */
+  --synap-image-outline: rgba(255, 255, 255, 0.1);
+
+  /* Glass / overlay — lifted with the page (was rgba(43,36,28,.78), which sat
+   * at 1.164:1 on #15110d but collapsed to 1.017:1 on #2b2620, i.e. visually
+   * identical to the page). Restored to 1.162:1. Depth stays luminance +
+   * hairline — no shadows added. */
+  --synap-glass-background: rgba(68, 58, 46, 0.94); /* spatial glass-strong */
+  --synap-glass-border: rgba(255, 238, 205, 0.1);
+  --synap-overlay-background: rgba(5, 4, 3, 0.54); /* spatial modal-backdrop */
+
+  /* Spatial chrome materials — MODE-DIVERGENT literals the spatial-shell chrome
+   * paints (atmosphere, floating materials, inputs). Moved here from
+   * spatial-shell.css (D3, 2026-09-23) so light/dark key on the SAME selectors as
+   * every other token (`:root` = dark, `[data-theme]` / `.light` / `.dark`).
+   * The DERIVED `--synap-spatial-*` (color-mix) layer is spatial-derived.css.
+   * The atmosphere + the four floating materials are CONTRACT vars — a theme
+   * repaints them through @synap-core/theme, never with raw CSS. */
+  --synap-spatial-atmos-1: #1d1812; /* desk ground gradient, top */
+  --synap-spatial-atmos-2: #15110d; /* desk ground gradient, middle */
+  --synap-spatial-atmos-3: #0e0b08; /* desk ground gradient, bottom */
+  --synap-spatial-atmos-tint-a: rgba(184, 126, 62, 0.18);
+  --synap-spatial-atmos-tint-b: rgba(74, 54, 34, 0.42);
+  --synap-spatial-surface-raised: rgba(255, 238, 205, 0.085); /* alpha lift — 1.275:1 */
+  /* The three opaque-ish dark materials (surface-strong, modal-surface, surface-paper-2)
+   * were re-tuned in 2026-08 when --synap-background moved #15110d → #2b2620:
+   * each was authored to sit slightly LIGHTER than the old page, and against the
+   * new one they collapsed onto it (surface-strong 1.179:1 → 1.030:1,
+   * modal-surface 1.111:1 → 1.101:1 and flipped to RECESSED). Lifted so they read
+   * as floating material again — luminance + hairline, never a shadow. */
+  --synap-spatial-surface-strong: #443a2e; /* RAISED step: 1.15:1 over paper, 1.44:1 on #26211c */
+  --synap-spatial-input-surface: rgba(255, 238, 205, 0.06); /* alpha lift — 1.183:1 */
+  --synap-spatial-input-surface-hover: rgba(255, 238, 205, 0.095);
+  --synap-spatial-modal-surface: #443a2e; /* RAISED step (modal): 1.44:1 on #26211c */
+  --synap-spatial-modal-backdrop-glow: rgba(184, 126, 62, 0.14);
+  --synap-spatial-surface-paper-2: rgba(61, 49, 33, 0.9); /* nested surface — 1.164:1 on #2b2620 (was rgba(40,32,22,.90): 1.064:1) */
+
+  /* Selection & focus (design-language §8.1) */
+  --synap-selection-bg: rgba(255, 238, 205, 0.085); /* quiet lift for selected/keyboard-cursor row */
+  --synap-selection-accent: var(--synap-primary); /* the 2px cursor rail — overridable per-scope on a container */
+  /* keyboard focus outline — opaque, so it holds WCAG 2.4.11 / 1.4.11 (>= 3:1 against
+   * the ground it is drawn on) on every neutral surface, both modes
+   * (scripts/focus-ring.test.ts). The binding grounds are the hover row (dark) and the
+   * selected row (light). */
+  --synap-focus-ring: #c28a4a;
+
+  /* Lit-edge highlight — promoted from spatial-shell (design-language §8.2) */
+  --synap-highlight: rgba(255, 238, 205, 0.085); /* inset 0 1px 0 top-edge catch-light */
+  --synap-highlight-strong: rgba(255, 238, 205, 0.14); /* stronger edge for popover/modal */
+
+  /* Elevation — the ONLY sanctioned shadows: ambient lift for glass over canvas (design-language §8.3) */
+  --synap-elevation-overlay: 0 8px 32px rgba(0, 0, 0, 0.35);
+  --synap-elevation-popover: 0 16px 48px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 0, 0, 0.2);
+  --synap-elevation-card: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --synap-elevation-card-hover: 0 6px 16px -6px rgba(0, 0, 0, 0.5);
+
+  /* Radius — mirrors Tamagui $1–$4 / $round, extended for large surfaces (design-language §8.4) */
+  --synap-radius-chip: 4px; /* a status pill, tag or kbd chip (AffectUI 4px) */
+  --synap-radius-1: 6px;
+  --synap-radius-2: 8px;
+  --synap-radius-3: 12px;
+  --synap-radius-4: 16px;
+  --synap-radius-5: 18px; /* large container surfaces / floating islands */
+  --synap-radius-overlay: 22px; /* side panels / large glass surfaces */
+  --synap-radius-modal: 28px; /* modal cards */
+  --synap-radius-round: 9999px;
+  --synap-radius-card: var(--synap-radius-2); /* a card, an option card, an open row panel (AffectUI 8px) */
+  --synap-radius-control: var(--synap-radius-1); /* a button, input or icon tile inside a card (6px: concentric with radius-card) */
+
+  /* Space — ONE shared 4px-based scale for web + relay (founder decision 2026-09-24).
+   * Atlassian-style names: the number is the step as a percentage of the 8px base
+   * (`100` = 8px, `050` = 4px, `150` = 12px), so they never collide with the
+   * legacy 6px-base names below. 6 (`075`) and 10 (`125`) are kept as half-steps
+   * because web and relay both measured them heavily. New code uses THESE names.
+   *
+   * LEGACY (`space-0-5` … `space-24`): the Tamagui-inherited 6px scale. DEPRECATED.
+   * Each is an ALIAS of the new step it equals, with 3→4, 18→16 and 30→32
+   * SNAPPED (founder chose "snap"; 18→16 by usage: 16 is 3.4× as common as 20 in
+   * padding/gap and 75 sites pair it as `space-2 space-3` = 12/18). The 4px-grid
+   * values with no named step (36, 60, 72, 144) keep their value, deprecated. */
+  --synap-space-025: 2px; /* hairline gap / icon nudge */
+  --synap-space-050: 4px; /* tight inline gap (icon–label, chip inner) */
+  --synap-space-075: 6px; /* half-step — measured (web 1,675 + relay 74 literals) */
+  --synap-space-100: 8px; /* base unit — the commonest value on both platforms */
+  --synap-space-125: 10px; /* half-step — measured (web 1,121 + relay 119 literals) */
+  --synap-space-150: 12px; /* control / row padding */
+  --synap-space-200: 16px; /* card / panel padding */
+  --synap-space-250: 20px; /* comfortable padding (Apple regular margin) */
+  --synap-space-300: 24px; /* section gap */
+  --synap-space-400: 32px; /* large section gap */
+  --synap-space-500: 40px; /* layout gap */
+  --synap-space-600: 48px; /* layout gap / empty-state padding */
+  --synap-space-800: 64px; /* page-level spacing */
+  --synap-space-1000: 80px; /* page-level spacing */
+  --synap-space-1200: 96px; /* hero / page-level spacing */
+  --synap-space-0-5: var(--synap-space-050); /* DEPRECATED legacy 6px-base step — use --synap-space-050 (3px → snapped to 4) */
+  --synap-space-1: var(--synap-space-075); /* DEPRECATED legacy 6px-base step — use --synap-space-075 */
+  --synap-space-2: var(--synap-space-150); /* DEPRECATED legacy 6px-base step — use --synap-space-150 */
+  --synap-space-3: var(--synap-space-200); /* DEPRECATED legacy 6px-base step — use --synap-space-200 (18px → snapped to 16) */
+  --synap-space-4: var(--synap-space-300); /* DEPRECATED legacy 6px-base step — use --synap-space-300 */
+  --synap-space-5: var(--synap-space-400); /* DEPRECATED legacy 6px-base step — use --synap-space-400 (30px → snapped to 32) */
+  --synap-space-6: 36px; /* DEPRECATED legacy 6px-base step — no named step on the 4px scale; migrate to the nearest step at the call site */
+  --synap-space-8: var(--synap-space-600); /* DEPRECATED legacy 6px-base step — use --synap-space-600 */
+  --synap-space-10: 60px; /* DEPRECATED legacy 6px-base step — no named step on the 4px scale; migrate to the nearest step at the call site */
+  --synap-space-12: 72px; /* DEPRECATED legacy 6px-base step — no named step on the 4px scale; migrate to the nearest step at the call site */
+  --synap-space-16: var(--synap-space-1200); /* DEPRECATED legacy 6px-base step — use --synap-space-1200 */
+  --synap-space-24: 144px; /* DEPRECATED legacy 6px-base step — no named step on the 4px scale; migrate to the nearest step at the call site */
+
+  /* Type scale — font-size ramp (THEME-INVARIANT, declared ONCE at :root).
+   * Unlike colors, a px font-size never flips between light/dark, so these are
+   * NOT repeated in the LIGHT / DARK-reassert blocks — they cascade unchanged.
+   *
+   * The ramp absorbs the historical 21-value px sprawl (8…48) into a tight
+   * 11-step scale tuned for a dense, Linear/Raycast-class UI: three sub-base
+   * steps (3xs/2xs/sm) keep the 10 vs 11 vs 13 distinctions real for chips,
+   * captions, and meta rows, then `base`(14) is the body default and the upper
+   * steps open up for headings. Mapping rules used to collapse the old values:
+   *   8,9,10 → 3xs(10)   ·   11 → 2xs(11)   ·   11.5,12,12.5 → xs(12)
+   *   13,13.5 → sm(13)   ·   14 → base(14)  ·   15 → md(15)
+   *   16,17 → lg(17)     ·   18,20 → xl(20) ·   24 → 2xl
+   *   28 → 3xl           ·   32,34 → 4xl(34)·   40,48 → 5xl(48)
+   * Half-px one-offs (11.5/12.5/13.5) collapse to the nearest integer step. */
+  --synap-text-3xs: 10px; /* micro labels / dense chip text (absorbs 8,9,10) */
+  --synap-text-2xs: 11px; /* small captions / overline */
+  --synap-text-xs: 12px; /* secondary meta (absorbs 11.5,12,12.5) */
+  --synap-text-sm: 13px; /* compact body / list rows (absorbs 13,13.5) */
+  --synap-text-base: 14px; /* body default */
+  --synap-text-md: 15px; /* comfortable body / emphasised row */
+  --synap-text-lg: 17px; /* lead text / small heading (absorbs 16,17) */
+  --synap-text-xl: 20px; /* heading (absorbs 18,20) */
+  --synap-text-2xl: 24px; /* section heading */
+  --synap-text-3xl: 28px; /* page heading */
+  --synap-text-4xl: 34px; /* display heading (absorbs 32,34) */
+  --synap-text-5xl: 48px; /* hero display (absorbs 40,48) */
+
+  /* Fonts */
+  --synap-font-heading: "Fraunces", Georgia, "Times New Roman", serif;
+  --synap-font-body:
+    "Geist", "DM Sans", -apple-system, BlinkMacSystemFont, system-ui,
+    sans-serif;
+  --synap-font-mono:
+    "Geist Mono", "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo,
+    monospace;
+
+  /* Font weight — the snap set (2,331 web literals: 600 ×1218, 500 ×565, 700 ×293, 400 ×49, 800 ×12; the variable-font
+   * off-grid weights snap 450→500, 550/650→600, 680/720/750/760→700). Relay uses the same five. */
+  --synap-weight-regular: 400;
+  --synap-weight-medium: 500;
+  --synap-weight-semibold: 600;
+  --synap-weight-bold: 700;
+  --synap-weight-extrabold: 800;
+
+  /* Line height — unitless RATIOS (CSS computes ratio × font-size; native rounds size × ratio to px).
+   * Derived from the 870 web literals: 1.5 ×190 · 1 ×107 · 1.4 ×95 · 1.45 ×88 · 1.3 ×48 · 1.6 ×42 · 1.55 ×39 · 1.2 ×35 · 1.35 ×27.
+   * The same six reproduce every relay role leading exactly (34/28, 26/20, 22/17, 21/15, 18/13, 14/11). */
+  --synap-leading-none: 1; /* single-line boxes: badges, icon buttons, pills */
+  --synap-leading-tight: 1.2; /* display / large headings (absorbs 1.1–1.25) */
+  --synap-leading-snug: 1.3; /* titles, headings, labels (absorbs 1.3–1.35) */
+  --synap-leading-normal: 1.4; /* UI body and captions */
+  --synap-leading-relaxed: 1.5; /* reading text, messages (absorbs 1.45–1.55) */
+  --synap-leading-loose: 1.6; /* long-form prose (absorbs 1.6–1.8) */
+
+  /* Type ROLES — shared by web and relay (mirrors relay-app `type`). Each role = family + size (from the
+   * text scale, absorb rules included) + leading + weight + tracking. Web emits one custom property per
+   * part (`--synap-type-<role>-family|-size|-leading|-weight|-tracking`, plus `-transform` /
+   * `-numeric` where the role sets them) and `SYNAP_TYPE.<role>` for inline styles; native emits RN
+   * style objects (`synapNative.type.<role>`). Heading/display faces are Fraunces; body is the body face
+   * (relay renders body roles in the platform system font by rule). */
+  /* display — screen title — Fraunces 28/34 */
+  --synap-type-display-family: var(--synap-font-heading);
+  --synap-type-display-size: var(--synap-text-3xl);
+  --synap-type-display-weight: var(--synap-weight-bold);
+  --synap-type-display-leading: var(--synap-leading-tight);
+  --synap-type-display-tracking: 0;
+  /* title — section / sheet title — Fraunces 20/26 */
+  --synap-type-title-family: var(--synap-font-heading);
+  --synap-type-title-size: var(--synap-text-xl);
+  --synap-type-title-weight: var(--synap-weight-semibold);
+  --synap-type-title-leading: var(--synap-leading-snug);
+  --synap-type-title-tracking: 0;
+  /* heading — in-content heading — 17/22 semibold (16 absorbs to 17) */
+  --synap-type-heading-family: var(--synap-font-body);
+  --synap-type-heading-size: var(--synap-text-lg);
+  --synap-type-heading-weight: var(--synap-weight-semibold);
+  --synap-type-heading-leading: var(--synap-leading-snug);
+  --synap-type-heading-tracking: 0;
+  /* body — reading text — 15/21 */
+  --synap-type-body-family: var(--synap-font-body);
+  --synap-type-body-size: var(--synap-text-md);
+  --synap-type-body-weight: var(--synap-weight-regular);
+  --synap-type-body-leading: var(--synap-leading-normal);
+  --synap-type-body-tracking: 0;
+  /* caption — secondary text, meta — 13/18 */
+  --synap-type-caption-family: var(--synap-font-body);
+  --synap-type-caption-size: var(--synap-text-sm);
+  --synap-type-caption-weight: var(--synap-weight-regular);
+  --synap-type-caption-leading: var(--synap-leading-normal);
+  --synap-type-caption-tracking: 0;
+  /* label — overline label — 11/14 semibold uppercase */
+  --synap-type-label-family: var(--synap-font-body);
+  --synap-type-label-size: var(--synap-text-2xs);
+  --synap-type-label-weight: var(--synap-weight-semibold);
+  --synap-type-label-leading: var(--synap-leading-snug);
+  --synap-type-label-tracking: 0.8px;
+  --synap-type-label-transform: uppercase;
+  /* row-title — the title of a row or card (lens row, pipeline card, session row) — 14/18 medium */
+  --synap-type-row-title-family: var(--synap-font-body);
+  --synap-type-row-title-size: var(--synap-text-base);
+  --synap-type-row-title-weight: var(--synap-weight-medium);
+  --synap-type-row-title-leading: var(--synap-leading-snug);
+  --synap-type-row-title-tracking: 0;
+  /* num — figures in running text — body + tabular numerals */
+  --synap-type-num-family: var(--synap-font-body);
+  --synap-type-num-size: var(--synap-text-md);
+  --synap-type-num-weight: var(--synap-weight-regular);
+  --synap-type-num-leading: var(--synap-leading-normal);
+  --synap-type-num-tracking: 0;
+  --synap-type-num-numeric: tabular-nums;
+  /* num-large — headline figure — 20/26 semibold tabular */
+  --synap-type-num-large-family: var(--synap-font-body);
+  --synap-type-num-large-size: var(--synap-text-xl);
+  --synap-type-num-large-weight: var(--synap-weight-semibold);
+  --synap-type-num-large-leading: var(--synap-leading-snug);
+  --synap-type-num-large-tracking: 0;
+  --synap-type-num-large-numeric: tabular-nums;
+
+  /* Theme-helper contract (DARK) — mode-flipping inputs the spatial-shell
+   * chrome tokens DERIVE from via color-mix(). A theme may override these. */
+  --synap-theme-mix-base: #ffffff;        /* chrome lifts toward white in both modes */
+  --synap-theme-shadow-base: rgba(0, 0, 0, 1); /* shadow ink — black in dark */
+  --synap-theme-edge-alpha: 8%;            /* inset top-highlight strength */
+  --synap-theme-tonal-hover-tint: 32%;
+  --synap-theme-mode: dark;
+
+  /* ── Z-index scale (harvested 2026-09-22) ──────────────────────────────────
+   * Mode-independent: stacking order has no light/dark variant. Named from the
+   * ad-hoc literals actually in use today across spatial-ui/spatial-shell
+   * (`z-index: 1 | 2 | 100 | 240 | 300 | 900`) — not invented. `base: 0` is the
+   * implicit ground plane, added for completeness. Consumers still hardcode
+   * these numbers; this token set does not migrate them (that is a later,
+   * separate change). */
+  --synap-z-base: 0;
+  --synap-z-raised: 1; /* local stacking context above flow siblings — e.g. segmented-control rail, modal card */
+  --synap-z-sticky: 2; /* sticky app header */
+  --synap-z-popover: 100; /* SpatialPopover / dropdown / menu */
+  --synap-z-modal: 240; /* SpatialModal overlay + card */
+  --synap-z-drawer: 300; /* SpatialDrawer backdrop + panel */
+  --synap-z-toast: 900; /* SpatialToast stack — always above everything else */
+
+  /* ── Motion scale (harvested 2026-09-22) ───────────────────────────────────
+   * Seeded from the values actually repeated across spatial-ui/styles.css +
+   * spatial-shell.css: `160ms cubic-bezier(0.2, 0, 0, 1)` is the transition on
+   * the overwhelming majority of interactive rules (89 occurrences) — that is
+   * `--synap-duration-base` + `--synap-ease-standard`. `120ms` (17 occurrences)
+   * is the next most common (micro-interactions) → `-fast`. `220ms` (drawer/
+   * toast enter-exit, same easing) → `-slow`. Extended 2026-10-04 (UI-feel
+   * pass, founder-approved): `-instant` 100ms and `-slower` 300ms bound the
+   * scale, `ease-enter` (decelerate, already the literal on ~19 rules) and
+   * `ease-exit` (accelerate) join `ease-standard`. Off-scale CSS literals
+   * snap: 80–100ms → instant, 130 → fast, 140–180 → base, 200–240 → slow,
+   * 260–320 → slower (≥400ms deliberate, loops and delays stay literal).
+   * Consumers reference these vars with literal fallbacks; spring physics
+   * lives in the `spring` group (JS/native only). */
+  --synap-duration-instant: 100ms;
+  --synap-duration-fast: 120ms;
+  --synap-duration-base: 160ms;
+  --synap-duration-slow: 220ms;
+  --synap-duration-slower: 300ms;
+  --synap-duration-rise: 360ms; /* a card, an outcome or an opened row rising into place (AffectUI 360ms) */
+  --synap-duration-draw: 420ms; /* a connector drawing on, a tree node entering (AffectUI 420ms) */
+  --synap-ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --synap-ease-enter: cubic-bezier(0.22, 1, 0.36, 1);
+  --synap-ease-exit: cubic-bezier(0.3, 0, 1, 1);
+
+  /* ── Motion presets (founder decision 2026-10-13) ───────────────────────────
+   * The timing half of the ONE named menu of motion presets: fade · fade-rise ·
+   * scale-in · slide-in-side · collapse · list-stagger, each with an ENTER and
+   * an EXIT transition. Spelled as DTCG 2025.10 `transition` composites whose
+   * parts ALIAS the duration/ease tokens above, so re-valuing the scale re-times
+   * every preset; CSS keeps them live (`var(--synap-duration-*) var(--synap-ease-*)
+   * <delay>`), usable as `transition: opacity var(--synap-transition-fade-enter)`.
+   * Values are what spatial-ui already does, not invented: scale-in = synap-pop-in
+   * (base/enter in, fast/exit out), fade-rise = modal card / toast (slow/enter in,
+   * base/exit out), slide-in-side = drawer panel (slow both ways), collapse =
+   * accordion panel (slow/standard), fade = modal backdrop (base), list-stagger =
+   * kanban/list rows (base/standard + `stagger-step` per index, capped at
+   * `duration-slow`). The FROM/TO states and each preset's REQUIRED reduced-motion
+   * fallback live in `@synap-core/web/motion` (MOTION_PRESETS) — DTCG has no
+   * slot for a state. */
+  --synap-transition-fade-enter: var(--synap-duration-base) var(--synap-ease-enter) 0ms;
+  --synap-transition-fade-exit: var(--synap-duration-base) var(--synap-ease-exit) 0ms;
+  --synap-transition-fade-rise-enter: var(--synap-duration-slow) var(--synap-ease-enter) 0ms;
+  --synap-transition-fade-rise-exit: var(--synap-duration-base) var(--synap-ease-exit) 0ms;
+  --synap-transition-scale-in-enter: var(--synap-duration-base) var(--synap-ease-enter) 0ms;
+  --synap-transition-scale-in-exit: var(--synap-duration-fast) var(--synap-ease-exit) 0ms;
+  --synap-transition-slide-in-side-enter: var(--synap-duration-slow) var(--synap-ease-enter) 0ms;
+  --synap-transition-slide-in-side-exit: var(--synap-duration-slow) var(--synap-ease-exit) 0ms;
+  --synap-transition-collapse-enter: var(--synap-duration-slow) var(--synap-ease-standard) 0ms;
+  --synap-transition-collapse-exit: var(--synap-duration-slow) var(--synap-ease-standard) 0ms;
+  --synap-transition-list-stagger-enter: var(--synap-duration-base) var(--synap-ease-standard) 0ms;
+  --synap-transition-list-stagger-exit: var(--synap-duration-fast) var(--synap-ease-exit) 0ms;
+  --synap-stagger-step: 20ms;
+
+  /* ── Breakpoints (harvested 2026-09-22) ────────────────────────────────────
+   * NOTE: CSS custom properties CANNOT be read inside an `@media` query — these
+   * exist for JS/container-query reference only (e.g. a `useMediaQuery` hook),
+   * not to be interpolated into `@media (max-width: var(--synap-bp-md))`.
+   * Values are the median of the ad-hoc `@media` width literals actually in use
+   * across spatial-shell.css + browser/electron/renderer (measured cluster:
+   * 540-560px, 860-980px, 1040-1180px including spatial-shell's own 1100px
+   * breakpoint) — not invented. */
+  --synap-bp-sm: 560px;
+  --synap-bp-md: 900px;
+  --synap-bp-lg: 1100px;
+
+  /* ── Row heights (surfaces W0, 2026-10-12) ───────────────────────────────
+   * The ONE height scale for list rows and cards, shared by web and relay:
+   * `row-compact` 32 = navigation / sidebar rows, `row` 40 = index rows (a session
+   * list, a work list), `row-roomy` 48 = lens rows and one-line pipeline cards.
+   * A MIN-height: a row that wraps grows past it. Not a control size (controls
+   * use the button scale xs 28 · sm 34 · md 40 · lg 46). */
+  --synap-row-compact: 32px;
+  --synap-row: 40px;
+  --synap-row-roomy: 48px;
+
+  /* ── Reading measure ─────────────────────────────────────────────────────
+   * The ONE width a reading column caps at: the detail shell's reading body
+   * (`ObjectDetailShell` `.ods__scroll`) and the document page's prose column
+   * (`@synap-core/document` `.docsurf__column`). One value, so a document and
+   * every other detail page share one left edge and one line length (D-shell,
+   * 2026-09-27; was 760px in the shell and 68ch in the document). */
+  --synap-measure-reading: 760px;
+  --synap-measure-list: 880px;
+  --synap-measure-detail: 960px;
+}
+
+/* ───────────────────────────────── LIGHT ───────────────────────────────────
+ * Selected by data-theme="light" (browser) or .light class (apps). Color
+ * values are the LOCKED spatial light palette (paper + warm ink + ochre).     */
+[data-theme="light"],
+html.light,
+.light {
+  color-scheme: light;
+  --synap-primary: #a86e2e; /* spatial ochre (light) — #a86e2e since D10 (was #b07232): 3.49:1 page / 3.98 paper, up from 3.25 / 3.71 */
+  --synap-primary-hover: #5f3c13; /* spatial ochre-ink */
+  --synap-primary-light: rgba(168, 110, 46, 0.14); /* spatial ochre-soft */
+  --synap-primary-button: #9d652c; /* 4.53:1 under --synap-primary-button-text — see :root DARK block */
+  --synap-primary-button-text: #fbf7ee;
+  /* Small/bold text set in --synap-primary on its own --synap-primary-light wash
+   * over the page measures 3.00:1 in light mode (fails WCAG AA 4.5:1 for <18px/600) —
+   * reuse --synap-primary-hover's darker ochre-ink value, which clears 6.92:1
+   * against the same blended tint (re-measured 2026-09-23 for the #a86e2e ochre). */
+  --synap-primary-ink: #5f3c13;
+  --synap-secondary: #2f6d69; /* spatial teal (light) */
+  --synap-secondary-hover: #1f5c58;
+  --synap-secondary-light: rgba(47, 109, 105, 0.12);
+
+  --synap-ai: #756201;
+  --synap-ai-light: rgba(255, 219, 35, 0.3);
+  --synap-ai-hover: #5e4f01;
+  /* --synap-ai-ink (light) is the deep gold one step below the mark: 5.58:1 on
+   * --synap-background (#f0e8d6), 6.36 on paper, 5.33 on the --synap-ai-light wash. */
+  --synap-ai-ink: #6b5a02;
+  --synap-ai-surface: #ffdb23;
+
+  --synap-success: #5e7351; /* spatial sage (light) */
+  --synap-success-light: rgba(94, 115, 81, 0.14);
+  --synap-success-ink: #3f5136; /* the sage fill is only 4.25:1 on the page — same ramp darkened: 7.05 page / 5.98 on its own wash */
+  --synap-error: #9e4729; /* spatial clay (light) */
+  --synap-error-light: rgba(158, 71, 41, 0.1);
+  --synap-error-ink: #8a3d22; /* the clay fill is 4.44:1 as a pill label on its own wash — one step down: 5.43 wash / 6.21 page */
+  --synap-warning: #e25500;
+  --synap-warning-light: rgba(226, 85, 0, 0.12);
+  --synap-warning-ink: #9b3d00; /* the orange fill is 3.11:1 on the page — burnt orange: 5.62 page / 4.89 wash */
+  --synap-info: #2f6d69;
+  --synap-info-light: rgba(47, 109, 105, 0.12);
+  --synap-info-ink: #255551; /* the teal fill is 4.20:1 on its own wash — one step down: 6.90 page / 5.90 wash */
+
+  --synap-tone-primary-fill: var(--synap-primary);
+  --synap-tone-primary-ink: var(--synap-primary-ink);
+  --synap-tone-ai-fill: var(--synap-ai);
+  --synap-tone-ai-ink: var(--synap-ai-ink);
+  --synap-tone-info-fill: var(--synap-info);
+  --synap-tone-info-ink: var(--synap-info-ink);
+  --synap-tone-error-fill: var(--synap-error);
+  --synap-tone-error-ink: var(--synap-error-ink);
+  --synap-tone-warning-fill: var(--synap-warning);
+  --synap-tone-warning-ink: var(--synap-warning-ink);
+  --synap-tone-success-fill: var(--synap-success);
+  --synap-tone-success-ink: var(--synap-success-ink);
+  --synap-tone-text-secondary-fill: var(--synap-color-secondary);
+  --synap-tone-text-secondary-ink: var(--synap-color-secondary);
+  --synap-tone-text-muted-fill: var(--synap-muted);
+  --synap-tone-text-muted-ink: var(--synap-muted);
+
+  /* Agent identity — slots 1..7 (slot 0 = --synap-ai).
+   * LIGHT: deeper/more-saturated fills so the light-paper orb glyph
+   * (--synap-primary-button-text) stays legible on the fill. */
+  --synap-identity-1: #a86e2e; /* ochre/amber — sibling of primary */
+  --synap-identity-2: #2f6d69; /* teal — sibling of secondary */
+  --synap-identity-3: #5e7351; /* sage — sibling of success */
+  --synap-identity-4: #9e4729; /* clay/terracotta — sibling of error */
+  --synap-identity-5: #7d5a8c; /* plum/mauve — muted dusty purple */
+  --synap-identity-6: #4a6394; /* slate-blue — earthy desaturated indigo */
+  --synap-identity-7: #833365; /* berry — re-hued off the AI yellow */
+  --synap-identity-8: #a85f78; /* dusty rose */
+  --synap-identity-9: #337d8f; /* aqua/cyan */
+  --synap-identity-10: #77863e; /* moss/lime */
+  --synap-identity-11: #6b5aad; /* periwinkle/lavender */
+  --synap-identity-12: #8f6740; /* sienna/caramel */
+
+  --synap-background: #f0e8d6; /* spatial atmos-1 (light) */
+  --synap-background-surface: rgba(255, 252, 245, 0.48); /* spatial surface */
+  --synap-background-hover: rgba(50, 38, 22, 0.06);
+  --synap-background-press: rgba(50, 38, 22, 0.1);
+  --synap-paper: #fbf7ee; /* spatial paper */
+
+  --synap-color: #1f1b17; /* spatial ink */
+  --synap-color-secondary: #3a3530; /* spatial ink-2 */
+  --synap-muted: #685f54; /* spatial ink-3 */
+  --synap-muted-foreground: var(--synap-muted); /* DEPRECATED alias of --synap-muted */
+
+  --synap-border-color: rgba(50, 38, 22, 0.1); /* spatial hairline */
+  --synap-border-color-hover: rgba(50, 38, 22, 0.16);
+  --synap-border-color-subtle: rgba(50, 38, 22, 0.05);
+  --synap-border-color-focus: #a86e2e;
+  --synap-image-outline: rgba(0, 0, 0, 0.1);
+
+  --synap-glass-background: rgba(252, 247, 238, 0.84); /* spatial glass-strong */
+  --synap-glass-border: rgba(120, 95, 60, 0.12);
+  --synap-overlay-background: rgba(52, 39, 22, 0.34); /* spatial modal-backdrop */
+
+  --synap-spatial-atmos-1: #f0e8d6;
+  --synap-spatial-atmos-2: #e6dbc4;
+  --synap-spatial-atmos-3: #d8caae;
+  --synap-spatial-atmos-tint-a: rgba(255, 232, 198, 0.55);
+  --synap-spatial-atmos-tint-b: rgba(184, 140, 95, 0.18);
+  --synap-spatial-surface-raised: rgba(255, 252, 245, 0.58);
+  --synap-spatial-surface-strong: rgba(255, 252, 245, 0.86);
+  --synap-spatial-input-surface: rgba(255, 252, 245, 0.7);
+  --synap-spatial-input-surface-hover: rgba(255, 252, 245, 0.84);
+  --synap-spatial-modal-surface: rgba(255, 252, 245, 0.82);
+  --synap-spatial-modal-backdrop-glow: rgba(255, 252, 245, 0.18);
+  --synap-spatial-surface-paper-2: rgba(245, 240, 228, 0.85);
+
+  /* Selection & focus (design-language §8.1) */
+  --synap-selection-bg: rgba(50, 38, 22, 0.05);
+  --synap-selection-accent: var(--synap-primary);
+  --synap-focus-ring: #a86e2e;
+
+  /* Lit-edge highlight (design-language §8.2) */
+  --synap-highlight: rgba(255, 252, 245, 0.56);
+  --synap-highlight-strong: rgba(255, 252, 245, 0.68);
+
+  /* Elevation — ambient lift for glass over canvas (design-language §8.3) */
+  --synap-elevation-overlay: 0 8px 32px rgba(50, 38, 22, 0.12);
+  --synap-elevation-popover: 0 16px 48px rgba(50, 38, 22, 0.18), 0 2px 8px rgba(50, 38, 22, 0.1);
+  --synap-elevation-card: 0 1px 1px -1px rgba(50, 38, 22, 0.1), 0 1px 2px rgba(50, 38, 22, 0.05);
+  --synap-elevation-card-hover: 0 4px 12px -4px rgba(50, 38, 22, 0.14), 0 1px 2px rgba(50, 38, 22, 0.06);
+
+  /* Theme-helper contract (LIGHT) — see DARK block for purpose. */
+  --synap-theme-mix-base: #ffffff;             /* chrome lifts toward white */
+  --synap-theme-shadow-base: rgba(58, 42, 18, 1); /* shadow ink — warm brown in light */
+  --synap-theme-edge-alpha: 85%;               /* inset top-highlight strength */
+  --synap-theme-tonal-hover-tint: 34%;
+  --synap-theme-mode: light;
+}
+
+/* ─────────────────────────── DARK (re-assert) ───────────────────────────────
+ * When a surface explicitly forces dark via a class/attr (rather than relying
+ * on :root), re-state the dark color set so it wins over any cascaded light.   */
+[data-theme="dark"],
+html.dark,
+.dark,
+.synap-spatial--dark {
+  color-scheme: dark;
+  --synap-primary: #c28a4a;
+  --synap-primary-hover: #d9964a;
+  --synap-primary-light: rgba(194, 138, 74, 0.16);
+  --synap-primary-button: var(--synap-primary); /* 5.73:1 under --synap-primary-button-text */
+  --synap-primary-button-text: #1f1b17;
+  --synap-primary-ink: #e0a25b; /* see :root DARK block — 4.53:1 on its wash over the card */
+  --synap-secondary: #76b9b2;
+  --synap-secondary-hover: #8fcfc8;
+  --synap-secondary-light: rgba(118, 185, 178, 0.13);
+
+  --synap-ai: #ffdb23;
+  --synap-ai-light: rgba(255, 219, 35, 0.14);
+  --synap-ai-hover: #ffe885;
+  --synap-ai-ink: #ffdb23; /* see :root DARK block — 11.00:1 on --synap-background #2b2620 */
+  --synap-ai-surface: #ffdb23;
+
+  --synap-success: #a8ba91;
+  --synap-success-light: rgba(168, 186, 145, 0.13);
+  --synap-success-ink: #a8ba91; /* see :root DARK block */
+  --synap-error: #db8867;
+  --synap-error-light: rgba(217, 131, 97, 0.13);
+  --synap-error-ink: #e59878; /* see :root DARK block */
+  --synap-warning: #ff6a0d;
+  --synap-warning-light: rgba(255, 106, 13, 0.16);
+  --synap-warning-ink: #ff9044; /* see :root DARK block */
+  --synap-info: #76b9b2;
+  --synap-info-light: rgba(118, 185, 178, 0.13);
+  --synap-info-ink: #8fc9c3; /* see :root DARK block */
+
+  --synap-tone-primary-fill: var(--synap-primary);
+  --synap-tone-primary-ink: var(--synap-primary-ink);
+  --synap-tone-ai-fill: var(--synap-ai);
+  --synap-tone-ai-ink: var(--synap-ai-ink);
+  --synap-tone-info-fill: var(--synap-info);
+  --synap-tone-info-ink: var(--synap-info-ink);
+  --synap-tone-error-fill: var(--synap-error);
+  --synap-tone-error-ink: var(--synap-error-ink);
+  --synap-tone-warning-fill: var(--synap-warning);
+  --synap-tone-warning-ink: var(--synap-warning-ink);
+  --synap-tone-success-fill: var(--synap-success);
+  --synap-tone-success-ink: var(--synap-success-ink);
+  --synap-tone-text-secondary-fill: var(--synap-color-secondary);
+  --synap-tone-text-secondary-ink: var(--synap-color-secondary);
+  --synap-tone-text-muted-fill: var(--synap-muted);
+  --synap-tone-text-muted-ink: var(--synap-muted);
+
+  /* Agent identity — slots 1..7 (slot 0 = --synap-ai). DARK re-assert. */
+  --synap-identity-1: #d4a25e;
+  --synap-identity-2: #76b9b2;
+  --synap-identity-3: #a8ba91;
+  --synap-identity-4: #d98361;
+  --synap-identity-5: #b89bc4;
+  --synap-identity-6: #8aa0c4;
+  --synap-identity-7: #ed9ecb;
+  --synap-identity-8: #cf93a6;
+  --synap-identity-9: #6fb7c7;
+  --synap-identity-10: #aebd7c;
+  --synap-identity-11: #a89bd2;
+  --synap-identity-12: #c99f77;
+
+  --synap-background: #26211c; /* see :root DARK block — authored page background */
+  --synap-background-surface: rgba(255, 238, 205, 0.03);
+  --synap-background-hover: rgba(255, 238, 205, 0.12);
+  --synap-background-press: rgba(255, 238, 205, 0.16);
+  --synap-paper: #3a3128; /* CARD step: 1.25:1 above the page */
+
+  --synap-color: #f4ecdc;
+  --synap-color-secondary: #d9cfbd;
+  --synap-muted: #b6aa96;
+  --synap-muted-foreground: var(--synap-muted);
+
+  --synap-border-color: rgba(255, 238, 205, 0.09);
+  --synap-border-color-hover: rgba(255, 238, 205, 0.15);
+  --synap-border-color-subtle: rgba(255, 238, 205, 0.06);
+  --synap-border-color-focus: #c28a4a;
+  --synap-image-outline: rgba(255, 255, 255, 0.1);
+
+  --synap-glass-background: rgba(68, 58, 46, 0.94); /* RAISED step at 94% (floating glass) */
+  --synap-glass-border: rgba(255, 238, 205, 0.1);
+  --synap-overlay-background: rgba(5, 4, 3, 0.54);
+
+  --synap-spatial-atmos-1: #1d1812;
+  --synap-spatial-atmos-2: #15110d;
+  --synap-spatial-atmos-3: #0e0b08;
+  --synap-spatial-atmos-tint-a: rgba(184, 126, 62, 0.18);
+  --synap-spatial-atmos-tint-b: rgba(74, 54, 34, 0.42);
+  --synap-spatial-surface-raised: rgba(255, 238, 205, 0.085);
+  --synap-spatial-surface-strong: #443a2e;
+  --synap-spatial-input-surface: rgba(255, 238, 205, 0.06);
+  --synap-spatial-input-surface-hover: rgba(255, 238, 205, 0.095);
+  --synap-spatial-modal-surface: #443a2e;
+  --synap-spatial-modal-backdrop-glow: rgba(184, 126, 62, 0.14);
+  --synap-spatial-surface-paper-2: rgba(61, 49, 33, 0.9);
+
+  /* Selection & focus (design-language §8.1) */
+  --synap-selection-bg: rgba(255, 238, 205, 0.085);
+  --synap-selection-accent: var(--synap-primary);
+  --synap-focus-ring: #c28a4a;
+
+  /* Lit-edge highlight (design-language §8.2) */
+  --synap-highlight: rgba(255, 238, 205, 0.085);
+  --synap-highlight-strong: rgba(255, 238, 205, 0.14);
+
+  /* Elevation — ambient lift for glass over canvas (design-language §8.3) */
+  --synap-elevation-overlay: 0 8px 32px rgba(0, 0, 0, 0.35);
+  --synap-elevation-popover: 0 16px 48px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 0, 0, 0.2);
+  --synap-elevation-card: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --synap-elevation-card-hover: 0 6px 16px -6px rgba(0, 0, 0, 0.5);
+
+  /* Theme-helper contract (DARK re-assert) — see :root DARK block. */
+  --synap-theme-mix-base: #ffffff;
+  --synap-theme-shadow-base: rgba(0, 0, 0, 1);
+  --synap-theme-edge-alpha: 8%;
+  --synap-theme-tonal-hover-tint: 32%;
+  --synap-theme-mode: dark;
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+ *  FOREGROUND PARTNERS + NOTES  (2026 token-architecture decision)
+ *  See packages/design-tokens/TOKEN-ARCHITECTURE-DECISION.md
+ *
+ *  ONE vocabulary: this file is the single source of truth; the DERIVED chrome
+ *  block at the end of it aliases every `--synap-spatial-*` back to a
+ *  `--synap-*` here. Earlier "drift" tokens (names consumers invented) were
+ *  reconciled by REWRITING those consumers to the canonical token — not by
+ *  adding alias tokens — so the contract stays minimal. The guard that enforces
+ *  "no reference to an undefined --synap-* token" (across .css AND .tsx inline
+ *  styles) is `pnpm check:tokens` (scripts/check-token-usage.mjs).
+ *
+ *  Foreground partners = the text/icon colour that sits ON a coloured fill.
+ *  Declared on the union of every theme-root selector + the `.synap-spatial`
+ *  stage so they re-derive in light, dark, and nested-stage subtrees. Add a new
+ *  partner only when a fill actually needs one (avoid speculative tokens).
+ * ════════════════════════════════════════════════════════════════════════════ */
+:root,
+[data-theme="light"], html.light, .light,
+[data-theme="dark"], html.dark, .dark,
+.synap-spatial, .synap-spatial--dark {
+  --synap-ai-foreground: #1f1b17; /* text on --synap-ai-surface (the logo yellow): #1f1b17 = 12.55:1 */
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+ *  THE 0.5px RING
+ *  Ink-relative, so it is declared once with a live color-mix() and re-derives
+ *  in every theme root and nested stage. Composed into box-shadows in the
+ *  derived block at the end of this file (--synap-shadow-ring / -card).
+ * ════════════════════════════════════════════════════════════════════════════ */
+:root,
+[data-theme="light"], html.light, .light,
+[data-theme="dark"], html.dark, .dark,
+.synap-spatial, .synap-spatial--dark {
+  /* The 0.5px alpha ring, AffectUI's card edge: ink at 16% at rest, 30% on hover or selection, drawn as a box-shadow so it adds no layout. The box-shadow values are composed in spatial-derived.css: --synap-shadow-ring, --synap-shadow-ring-strong, --synap-shadow-card (ring + elevation-card) and --synap-shadow-card-hover. */
+  --synap-ring-width: 0.5px;
+  --synap-ring-color: color-mix(in srgb, var(--synap-color) 16%, transparent);
+  --synap-ring-color-strong: color-mix(in srgb, var(--synap-color) 30%, transparent);
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+ *  BRIDGE ALIASES (2026-07 check:tokens sweep)
+ *  These are drift-token names invented by consumers across browser/ and
+ *  synap-app/ — per the policy above, the durable fix is REWRITING each
+ *  consumer to the canonical token on the right, not keeping an alias. That
+ *  rewrite touches ~15 consumer files outside this package (several under
+ *  other in-flight sessions' WIP at the time this sweep ran), so it is out of
+ *  scope here. This block only makes `pnpm check:tokens` a truthful signal
+ *  again (no dangling reference) with zero visual change — every value below
+ *  matches the hard-coded `var(--x, fallback)` the consumer already carried.
+ *  Follow-up: delete each alias as its consumer(s) are rewritten to the target.
+ * ════════════════════════════════════════════════════════════════════════════ */
+:root,
+[data-theme="light"], html.light, .light,
+[data-theme="dark"], html.dark, .dark,
+.synap-spatial, .synap-spatial--dark {
+  --synap-accent: var(--synap-identity-5); /* plum/mauve — 7th hue, distinct from primary/secondary/success/warning/error/ai */
+  --synap-danger: var(--synap-error);
+  --synap-destructive: var(--synap-error);
+  --synap-color-error: var(--synap-error);
+  --synap-color-primary: var(--synap-primary);
+  --synap-color-background: var(--synap-background);
+  --synap-foreground: var(--synap-color);
+  --synap-text: var(--synap-color);
+  --synap-surface: var(--synap-background-surface);
+  --synap-background-elevated: var(--synap-background-surface);
+  --synap-background-overlay: var(--synap-overlay-background);
+  --synap-background-active: var(--synap-background-press);
+  --synap-background-inverse: #0c0c0e; /* fixed neutral — "logo on dark chip" preview, theme-invariant by design */
+  --synap-background-light: #f5f5f7; /* fixed neutral — "logo on light chip" preview, theme-invariant by design */
+  --synap-border: var(--synap-border-color);
+  --synap-border-strong: var(--synap-border-color-hover);
+  --synap-border-color-strong: var(--synap-border-color-hover);
+  --synap-focus: var(--synap-border-color-focus);
+  --synap-radius: var(--synap-radius-3);
+  --synap-radius-full: var(--synap-radius-round);
+  --synap-font-size-base: var(--synap-text-base);
+  --synap-primary-soft: var(--synap-primary-light);
+  --synap-primary-subtle: var(--synap-primary-light);
+  --synap-elevation-tool: var(--synap-elevation-popover);
+  --synap-ai-soft: color-mix(in srgb, var(--synap-ai) 10%, transparent);
+  --synap-ai-border: color-mix(in srgb, var(--synap-ai) 28%, transparent);
+  --synap-error-soft: var(--synap-error-light);
+  --synap-error-border: color-mix(in srgb, var(--synap-error) 28%, transparent);
+  --synap-warning-soft: var(--synap-warning-light);
+  --synap-warning-border: color-mix(in srgb, var(--synap-warning) 28%, transparent);
+  /* Bento categorical accents — mapped to the closest existing identity hue
+   * rather than reintroducing bright Tailwind-default colors that clash with
+   * the muted spatial palette. */
+  --synap-amber: var(--synap-identity-1); /* ochre/amber (identity-7 was re-hued to berry) */
+  --synap-cyan: var(--synap-identity-9); /* aqua/cyan */
+  --synap-violet: var(--synap-identity-11); /* periwinkle/lavender */
+}
+
+/*
+ * ════════════════════════════════════════════════════════════════════════════
+ *  DERIVED SPATIAL CHROME — hand-authored CSS, emitted VERBATIM into
+ *  synap-tokens.css by scripts/build-tokens.ts (css-layout.json "derived").
+ * ════════════════════════════════════════════════════════════════════════════
+ *
+ *  Not DTCG: these are CSS-only derivations — two-colour and variable-
+ *  percentage color-mix(), composite box-shadows — kept LIVE so any theme
+ *  re-tints them by setting only CONTRACT vars (@synap-core/theme). No native
+ *  platform needs them, so they never reach the TS / native outputs.
+ *
+ *  CONTRACT (themes set these; @synap-core/theme CONTRACT_VARS is the list):
+ *    --synap-paper / -background / -background-surface / -color / -muted
+ *    --synap-primary / -secondary / -success / -error (+ -light variants)
+ *    --synap-border-color* / -glass-background / the floating materials
+ *    --synap-theme-mix-base    chrome-lift base (white, both modes)
+ *    --synap-theme-shadow-base  shadow ink (warm brown light / black dark)
+ *    --synap-theme-edge-alpha   inset top-highlight strength (85% / 8%)
+ *    --synap-theme-mode         'light' | 'dark'
+ *
+ *  A custom property holding var() is computed ONCE, on the element that
+ *  declares it, and inherited as that value — so this block is declared on
+ *  EVERY element that can carry a theme marker (the same selectors as the
+ *  mode blocks above) plus the `.synap-spatial` stage. Everything under <body>,
+ *  including overlays portaled into #modal-root, re-derives against the ACTIVE
+ *  mode instead of :root's dark default.
+ * ════════════════════════════════════════════════════════════════════════════
+ */
+:root,
+[data-theme="light"],
+html.light,
+.light,
+[data-theme="dark"],
+html.dark,
+.dark,
+.synap-spatial,
+.synap-spatial--dark {
+  /* Derived helper: inset top-edge catch-light (strength from contract) */
+  --synap-theme-edge-light: color-mix(in srgb, var(--synap-theme-mix-base) var(--synap-theme-edge-alpha), transparent);
+
+  /* Glass + soft surfaces (derive from paper / surface) */
+  --synap-spatial-glass: color-mix(in srgb, var(--synap-paper) 62%, transparent);
+  --synap-spatial-glass-strong: color-mix(in srgb, var(--synap-paper) 85%, transparent);
+  --synap-spatial-surface-soft: color-mix(in srgb, var(--synap-background-surface) 70%, transparent);
+  --synap-spatial-paper-2: color-mix(in srgb, var(--synap-theme-mix-base) 4%, var(--synap-paper));
+
+  /* Chrome-only ink + accent tints */
+  --synap-spatial-ink-5: color-mix(in srgb, var(--synap-muted) 45%, var(--synap-background));
+  --synap-spatial-ochre-edge: color-mix(in srgb, var(--synap-primary) 30%, transparent);
+  --synap-spatial-teal-edge: color-mix(in srgb, var(--synap-secondary) 16%, transparent);
+  --synap-spatial-sage-edge: color-mix(in srgb, var(--synap-success) 22%, transparent);
+  --synap-spatial-clay-soft: color-mix(in srgb, var(--synap-error) 12%, transparent);
+  --synap-spatial-clay-edge: color-mix(in srgb, var(--synap-error) 26%, transparent);
+  --synap-spatial-sage-ink: color-mix(in srgb, var(--synap-success), var(--synap-color) 55%);
+  --synap-spatial-teal-ink: color-mix(in srgb, var(--synap-secondary), var(--synap-color) 55%);
+  --synap-spatial-clay-ink: color-mix(in srgb, var(--synap-error), var(--synap-color) 55%);
+  --synap-spatial-ochre-ink: color-mix(in srgb, var(--synap-primary), var(--synap-color) 65%);
+
+  /* Canvas grid / dot / pattern chrome. A full-bleed canvas IS the ground, so
+     its pattern is CHROME (tokenized) even though the shapes drawn on it are
+     user CONTENT (exempt). Derived from --synap-muted so both strengths track
+     the theme; the whiteboard previously hardcoded #888 and
+     rgba(128,128,128,0.15), which read as grey-on-grey in dark theme.
+     --synap-grid is the ruled line (a wash); --synap-grid-strong is the dot,
+     which needs more presence at 1-1.5px to register at all. */
+  --synap-grid: color-mix(in srgb, var(--synap-muted) 15%, transparent);
+  --synap-grid-strong: color-mix(in srgb, var(--synap-muted) 55%, transparent);
+
+  /* Scrollbar chrome. Derived from --synap-muted so ONE declaration is right in
+     both themes: --synap-muted is a light warm grey on the dark ground and a
+     dark warm grey on the light one, so the thumb reads against its track
+     either way. browser/App.tsx previously hardcoded rgba(255,255,255,.1/.2)
+     with NO light branch (a white thumb, invisible on the light theme — which
+     is the default) plus a hand-rolled [data-theme="light"] branch on the
+     sidebar only; that split is exactly what a derived token removes. */
+  --synap-scrollbar-thumb: color-mix(in srgb, var(--synap-muted) 20%, transparent);
+  --synap-scrollbar-thumb-hover: color-mix(in srgb, var(--synap-muted) 38%, transparent);
+
+  /* Hairlines / skeleton / spinner */
+  --synap-spatial-hairline-3: color-mix(in srgb, var(--synap-muted) 20%, transparent);
+  --synap-spatial-skeleton-base: color-mix(in srgb, var(--synap-background-surface) 70%, transparent);
+  --synap-spatial-skeleton-glint: color-mix(in srgb, var(--synap-theme-mix-base) var(--synap-theme-edge-alpha), transparent);
+  --synap-spatial-skeleton-edge: var(--synap-border-color-subtle);
+  --synap-spatial-spinner-track: color-mix(in srgb, var(--synap-muted) 16%, transparent);
+
+  /* Flat shadows (single-colour) */
+  --synap-spatial-hover-shadow: color-mix(in srgb, var(--synap-theme-shadow-base) 14%, transparent);
+  --synap-spatial-soft-shadow: color-mix(in srgb, var(--synap-theme-shadow-base) 24%, transparent);
+  --synap-spatial-modal-shadow: color-mix(in srgb, var(--synap-theme-shadow-base) 36%, transparent);
+
+  /* Composite box-shadows — offsets/blur kept from the LIGHT recipe; each
+     layer's ink derives from --synap-theme-shadow-base, top inset uses the
+     derived edge-light. (Dark accepts a minor blur/strength delta.) */
+  --synap-spatial-shadow-paper:
+    0 1px 1px color-mix(in srgb, var(--synap-theme-shadow-base) 4%, transparent),
+    0 4px 10px color-mix(in srgb, var(--synap-theme-shadow-base) 6%, transparent),
+    0 24px 56px color-mix(in srgb, var(--synap-theme-shadow-base) 10%, transparent),
+    0 1px 0 var(--synap-theme-edge-light) inset;
+  --synap-spatial-shadow-glass:
+    0 1px 1px color-mix(in srgb, var(--synap-theme-shadow-base) 4%, transparent),
+    0 6px 14px color-mix(in srgb, var(--synap-theme-shadow-base) 8%, transparent),
+    0 28px 60px color-mix(in srgb, var(--synap-theme-shadow-base) 10%, transparent),
+    0 1px 0 var(--synap-theme-edge-light) inset,
+    0 0 0 1px color-mix(in srgb, var(--synap-theme-shadow-base) 6%, transparent) inset;
+  --synap-spatial-shadow-companion:
+    0 1px 1px color-mix(in srgb, var(--synap-theme-shadow-base) 5%, transparent),
+    0 12px 24px color-mix(in srgb, var(--synap-theme-shadow-base) 10%, transparent),
+    0 36px 80px color-mix(in srgb, var(--synap-theme-shadow-base) 16%, transparent),
+    0 1px 0 var(--synap-theme-edge-light) inset,
+    0 0 0 1px color-mix(in srgb, var(--synap-theme-shadow-base) 8%, transparent) inset;
+  --synap-spatial-shadow-tool:
+    0 1px 1px color-mix(in srgb, var(--synap-theme-shadow-base) 6%, transparent),
+    0 8px 18px color-mix(in srgb, var(--synap-theme-shadow-base) 12%, transparent),
+    0 1px 0 var(--synap-theme-edge-light) inset;
+  /* The card finish: the 0.5px ring (ring group) alone for
+     an in-flow edge, + elevation-card for a CARD at rest (Decision B: cards
+     only), + the strong ring and elevation-card-hover for its hover lift. */
+  --synap-shadow-ring: 0 0 0 var(--synap-ring-width) var(--synap-ring-color);
+  --synap-shadow-ring-strong: 0 0 0 var(--synap-ring-width) var(--synap-ring-color-strong);
+  --synap-shadow-card: var(--synap-shadow-ring), var(--synap-elevation-card);
+  --synap-shadow-card-hover: var(--synap-shadow-ring-strong), var(--synap-elevation-card-hover);
+  /* SEMANTIC — aliased to the canonical --synap-* layer (single source of truth) */
+  --synap-spatial-ink: var(--synap-color);
+  --synap-spatial-ink-2: var(--synap-color-secondary);
+  --synap-spatial-ink-3: var(--synap-muted);
+  --synap-spatial-ink-4: var(--synap-muted); /* @deprecated use --synap-spatial-ink-3: one muted text ink */
+  --synap-spatial-paper: var(--synap-paper);
+  --synap-spatial-surface: var(--synap-background-surface);
+  --synap-spatial-surface-hover: var(--synap-background-hover);
+  --synap-spatial-modal-backdrop: var(--synap-overlay-background);
+  --synap-spatial-highlight: var(--synap-highlight);
+  --synap-spatial-highlight-strong: var(--synap-highlight-strong);
+  --synap-spatial-hairline: var(--synap-border-color);
+  --synap-spatial-hairline-2: var(--synap-border-color-hover);
+  --synap-spatial-ochre: var(--synap-primary);
+  --synap-spatial-ochre-soft: var(--synap-primary-light);
+  --synap-spatial-teal: var(--synap-secondary);
+  --synap-spatial-teal-soft: var(--synap-secondary-light);
+  --synap-spatial-sage: var(--synap-success);
+  --synap-spatial-sage-soft: var(--synap-success-light);
+  --synap-spatial-clay: var(--synap-error);
+  --synap-spatial-font: var(--synap-font-body);
+  --synap-spatial-mono: var(--synap-font-mono);
+  /* Skeleton loading shimmer highlight — uses ochre family */
+  --synap-spatial-skeleton-shimmer: var(--synap-spatial-ochre-soft);
+}
+
+/* ── DTCG (D1, 2026-09-23): the source of truth is src/tokens/*.tokens.json
+ *    (W3C DTCG 2025.10). scripts/build-tokens.ts generates this file, the
+ *    iframe string (SYNAP_TOKENS_CSS), typed TS (SYNAP_TOKENS) and the React
+ *    Native module (@synap-core/design-tokens/native) from it. */

@@ -7,7 +7,14 @@
 import { z } from "zod";
 import { router, workspaceProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
-import { getDb, MessageLinksRepository } from "@synap/database";
+import {
+  channels,
+  eq,
+  getDb,
+  messages,
+  MessageLinksRepository,
+} from "@synap/database";
+import { AccessContext, scopedDb } from "../access/index.js";
 import {
   MessageLinkTargetType,
   MessageLinkRelationshipType,
@@ -36,13 +43,36 @@ const queryMessageLinksSchema = z.object({
 
 export const messageLinksRouter = router({
   /**
-   * Create a message link
+   * Create a message link.
+   *
+   * The caller must be able to READ the message: a link is how
+   * `listLinkedMessages` later joins the message's content in, so linking a
+   * message id you cannot read would hand you its content (audit F6).
    */
   create: workspaceProcedure
     .input(createMessageLinkSchema)
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();
       const linksRepo = new MessageLinksRepository(db);
+
+      // The message's read floor is its channel's: the registered, grant-aware
+      // channel visibility (the gate getMessages / setMessagePinned use).
+      const [message] = await db
+        .select({ channelId: messages.channelId })
+        .from(messages)
+        .where(eq(messages.id, input.messageId))
+        .limit(1);
+      const channel = message
+        ? await scopedDb(AccessContext.from(ctx)).findFirst(channels, {
+            where: eq(channels.id, message.channelId),
+          })
+        : undefined;
+      if (!channel) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Message not found or access denied",
+        });
+      }
 
       const link = await linksRepo.create({
         ...input,
@@ -170,7 +200,16 @@ export const messageLinksRouter = router({
         input.targetType,
         input.targetId,
         ctx.workspaceId,
-        { limit: input.limit, cursor: input.cursor }
+        {
+          limit: input.limit,
+          cursor: input.cursor,
+          // The link row's workspace is the caller's; the message it joins in
+          // must ALSO be readable by the caller: its channel passes the
+          // registered channel visibility (audit F6).
+          channelVisibleWhere: scopedDb(AccessContext.from(ctx)).predicate(
+            channels
+          ),
+        }
       );
     }),
 });

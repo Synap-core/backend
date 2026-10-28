@@ -35,6 +35,12 @@ import { jsonGoverned } from "../proposal-response.js";
 // executor error), so the two cannot drift. Widened there with the
 // vendor-prefixed key and JWT shapes this copy never had.
 import { redactSecrets } from "../../../utils/redact-secrets.js";
+import { config } from "@synap-core/core";
+import {
+  commandPolicyRefusal,
+  isPodShellAllowed,
+  POD_SHELL_OFF_REFUSAL,
+} from "@synap/governance-policy";
 
 // ─── Rate limiter for terminal commands ─────────────────────────────────────
 const _commandRateLimiter = new Map<
@@ -59,56 +65,6 @@ function checkCommandRateLimit(workspaceId: string): boolean {
   entry.count++;
   return true;
 }
-
-/** Commands that are always blocked regardless of permissions */
-const BLOCKED_COMMAND_PATTERNS = [
-  // Filesystem destruction
-  /\brm\s+.*-[a-z]*r[a-z]*f/i, // rm -rf (any flags order)
-  /\brm\s+.*\s+\/($|\s)/i, // rm anything at root
-  /\brm\s+-[a-z]*r/i, // any recursive rm
-
-  // System control
-  /\bshutdown\b/i,
-  /\breboot\b/i,
-  /\bhalt\b/i,
-  /\bpoweroff\b/i,
-  /\binit\s+[0-6]\b/i,
-  /\bsystemctl\s+(halt|poweroff|reboot)\b/i,
-
-  // Disk/device destruction
-  /\bmkfs\b/i,
-  /\bdd\b.*\bof\s*=\s*\/dev\//i, // dd to block devices
-  />\s*\/dev\/sd[a-z]/i, // write to block devices
-  />\s*\/dev\/nvme/i,
-
-  // Fork bombs and resource exhaustion
-  /:\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;?\s*:/, // :(){ :|:& };:
-  /\bfork\s*bomb/i,
-  /while\s+true.*do/i, // while true; do ... (infinite loops)
-  /\byes\s*\|/i, // yes | ... (can flood stdin)
-
-  // Remote code execution via pipe
-  /\bcurl\b.*\|\s*(bash|sh|zsh|python|perl|ruby)\b/i,
-  /\bwget\b.*\|\s*(bash|sh|zsh|python|perl|ruby)\b/i,
-  /\bcurl\b.*>\s*[^\s]+\s*&&\s*(bash|sh|chmod)/i, // curl > file && bash/chmod
-
-  // Credential / key theft
-  /\bcat\b.*\/(\.ssh|\.gnupg|\.aws\/credentials)/i,
-  /\bcp\b.*\/(\.ssh|\.gnupg|\.aws\/credentials)/i,
-
-  // Environment manipulation that could affect the host
-  /\bexport\b.*\b(PATH|LD_PRELOAD|LD_LIBRARY_PATH)\s*=/i,
-  /\bchmod\s+[0-7]*[2367][0-7]*\s+\//i, // chmod making system files world-writable
-  /\bchown\b.*\s+\/($|\s)/i, // chown on root
-
-  // Container/VM escape attempts
-  /\bnsenter\b/i,
-  /\bdocker\s+run\b.*--privileged/i,
-  /\bmount\b.*\/dev\//i,
-
-  // Network exfiltration of system files
-  /\b(nc|ncat|netcat)\b.*<\s*\//i, // piping system files to netcat
-];
 
 /** Allowlisted environment variables passed to child processes */
 const SAFE_ENV_VARS = [
@@ -339,6 +295,12 @@ export function registerCommandsRoutes(app: HubHono): void {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
+    // THE SWITCH (audit F8): a shell in the backend container reads every
+    // secret the pod holds. Off unless the operator turned it on; nothing is
+    // filed, so no proposal for a command that could never run.
+    if (!isPodShellAllowed(process.env, config.server.localMode === true)) {
+      return c.json({ status: "denied", message: POD_SHELL_OFF_REFUSAL });
+    }
 
     const jsonRead = await readJsonBody(c);
     if (!jsonRead.ok) return jsonRead.res;
@@ -390,34 +352,18 @@ export function registerCommandsRoutes(app: HubHono): void {
       return c.json({ error: actorResolution.error }, 400);
     const agentUserId = resolvedAgentUserId;
 
-    // Reject commands with shell metacharacters that could bypass checks
-    if (/`[^`]*`/.test(command) || /\$\(/.test(command)) {
-      logger.warn(
-        { command, userId },
-        "Blocked command with shell substitution"
-      );
-      return c.json({
-        status: "denied",
-        message:
-          "Shell substitution (backticks, $()) is not allowed. Run commands directly.",
-      });
+    // The one content check (shared with the revise core and the approved
+    // run in the jobs materializer, so a revised payload is judged too).
+    const refusal = commandPolicyRefusal(command);
+    if (refusal) {
+      logger.warn({ command, userId }, "Blocked command by policy");
+      return c.json({ status: "denied", message: refusal });
     }
 
     // Validate working directory (prevent path traversal)
     const dirResult = validateWorkingDir(workingDir);
     if (dirResult.error) {
       return c.json({ status: "denied", message: dirResult.error }, 400);
-    }
-
-    // Hard block dangerous commands
-    for (const pattern of BLOCKED_COMMAND_PATTERNS) {
-      if (pattern.test(command)) {
-        logger.warn({ command, userId }, "Blocked dangerous command");
-        return c.json({
-          status: "denied",
-          message: "This command is blocked by security policy",
-        });
-      }
     }
 
     try {

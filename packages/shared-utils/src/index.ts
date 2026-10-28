@@ -14,3 +14,4 @@ export type {
 } from "./feed-types-sync.js";
 export * from "./pinned-fetch.js";
 export * from "./env-int.js";
+export * from "./redact-secrets.js";

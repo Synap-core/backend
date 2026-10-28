@@ -38,7 +38,13 @@ import {
 } from "./cp-relay-credential.js";
 
 export type PodCpPurpose =
-  "invites" | "projects" | "capabilities" | "relay" | "broker" | "entitlement";
+  | "invites"
+  | "projects"
+  | "capabilities"
+  | "relay"
+  | "broker"
+  | "entitlement"
+  | "onboarding";
 
 /** The credential a call site used before R1-b (its transition fallback). */
 export type PodCpLegacyCredential = "internal-key" | "relay-key";
