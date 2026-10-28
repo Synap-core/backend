@@ -76,16 +76,64 @@ export function filterLiteral(value: string, field: string): string {
   return `\`${value}\``;
 }
 
-export class SearchService {
-  private queryFieldsMap: Record<string, string> = {
-    entities: "title",
-    documents: "title",
-    views: "name",
-    channels: "title",
-    agents: "title",
-    messages: "content",
-  };
+/**
+ * What a collection is searched by: `query_by`, its `query_by_weights` (same
+ * order), and the fields returned whole in highlights.
+ *
+ * An entity is found by its title first, then a handle/alias, then its summary
+ * (`description`, the `preview` column) and last its text (`content`: the linked
+ * document body + property values). Querying the title alone meant a note was
+ * found only when the question repeated its title (ticket 75134529). `content`
+ * can hold a 64k body, so it is searched but never returned whole.
+ */
+interface CollectionQuery {
+  queryBy: string;
+  weights?: string;
+  highlightFull: string;
+}
 
+const COLLECTION_QUERIES: Record<string, CollectionQuery> = {
+  entities: {
+    queryBy: "title,searchAliases,description,content",
+    weights: "4,3,2,1",
+    highlightFull: "title,description",
+  },
+  documents: { queryBy: "title", highlightFull: "title" },
+  views: { queryBy: "name", highlightFull: "name" },
+  channels: { queryBy: "title", highlightFull: "title" },
+  agents: { queryBy: "title", highlightFull: "title" },
+  messages: { queryBy: "content", highlightFull: "content" },
+};
+
+const TITLE_QUERY: CollectionQuery = {
+  queryBy: "title",
+  highlightFull: "title",
+};
+
+/**
+ * The `query_by` / weights / highlight params for one collection's search.
+ * `titleOnly` is for a title-dedup lookup, which asks "is there one NAMED this",
+ * not "what is about this".
+ */
+export function collectionQueryParams(
+  collection: string,
+  opts: { titleOnly?: boolean } = {}
+): {
+  query_by: string;
+  query_by_weights?: string;
+  highlight_full_fields: string;
+} {
+  const q = opts.titleOnly
+    ? TITLE_QUERY
+    : (COLLECTION_QUERIES[collection] ?? TITLE_QUERY);
+  return {
+    query_by: q.queryBy,
+    ...(q.weights ? { query_by_weights: q.weights } : {}),
+    highlight_full_fields: q.highlightFull,
+  };
+}
+
+export class SearchService {
   /**
    * Unified search across multiple collections
    * Uses multi_search for parallel queries
@@ -115,7 +163,7 @@ export class SearchService {
         const searchParams: any = {
           collection,
           q: options.query,
-          query_by: this.getQueryFields(collection),
+          ...collectionQueryParams(collection),
           filter_by: this.buildFilter({
             ...options,
             collection,
@@ -124,7 +172,6 @@ export class SearchService {
           sort_by: "_text_match:desc,updatedAt:desc",
           per_page: options.limit || 20,
           page: options.page || 1,
-          highlight_full_fields: this.getQueryFields(collection),
           highlight_affix_num_tokens: 3,
           prioritize_exact_match: !options.prefix,
           prioritize_token_position: true,
@@ -228,6 +275,8 @@ export class SearchService {
       status?: string[];
       /** `documents` only: keep Library items (`libraryItem:=true`) and nothing else. */
       libraryOnly?: boolean;
+      /** Match titles only (a title-dedup lookup); see `collectionQueryParams`. */
+      titleOnly?: boolean;
       prefix?: boolean;
       facetBy?: string[];
     }
@@ -244,7 +293,7 @@ export class SearchService {
 
     const searchParams: any = {
       q: query,
-      query_by: this.getQueryFields(collection),
+      ...collectionQueryParams(collection, { titleOnly: options.titleOnly }),
       filter_by: this.buildFilter({
         ...options,
         collection,
@@ -253,7 +302,6 @@ export class SearchService {
       sort_by: "_text_match:desc,updatedAt:desc",
       per_page: options.limit || 20,
       page: options.page || 1,
-      highlight_full_fields: this.getQueryFields(collection),
       highlight_affix_num_tokens: 3,
       prioritize_exact_match: !options.prefix,
       prioritize_token_position: true,
@@ -300,13 +348,6 @@ export class SearchService {
       searchTimeMs: result.search_time_ms || 0,
       facetCounts,
     };
-  }
-
-  /**
-   * Get query fields for collection
-   */
-  private getQueryFields(collection: string): string {
-    return this.queryFieldsMap[collection] || "title";
   }
 
   /**
