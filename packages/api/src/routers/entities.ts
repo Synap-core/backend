@@ -246,6 +246,7 @@ export const entitiesRouter = router({
   updateFacet: facetProcs.updateFacet,
   detachFacet: facetProcs.detachFacet,
   delete: mutateProcs.delete,
+  restore: mutateProcs.restore,
   moveToWorkspace: mutateProcs.moveToWorkspace,
   setEntityViewMode: mutateProcs.setEntityViewMode,
   setEntityRenderer: mutateProcs.setEntityRenderer,

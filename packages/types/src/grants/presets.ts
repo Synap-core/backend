@@ -134,6 +134,8 @@ export const AI_GATE_VERBS: readonly string[] = [
   // A lifecycle status move (the moveStatus door): reversible, and the door
   // floors done/lost and humanOnly options on its own.
   "entity.*.transition",
+  // Undo a delete (`entities.restore`): a proposal for an agent by default.
+  "entity.*.restore",
   "facet.attach",
   "facet.detach",
   // Propose how to organise the person's Library (always a proposal).
