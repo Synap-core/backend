@@ -153,7 +153,7 @@ const GMAIL_TOOL = randomUUID();
 const CALLS_GMAIL = `const r = await callProvider("gmail", "GET", "/users/me/messages");
 return r;`;
 /** Pure computation: reaches nothing outside the pod. */
-const PURE = `const n = Number(input.n ?? 0);
+const PURE = `const n = Number(args.n ?? 0);
 return { doubled: n * 2 };`;
 
 const BASIC =
@@ -426,7 +426,7 @@ describe("an agent's code skill is born ON only when it reaches nothing", () => 
   it("a provider call it does not write out is reach too (never read as nothing)", async () => {
     const reply = await agentCreates({
       name: "any_provider",
-      code: `const p = input.provider;\nreturn await callProvider(p, "GET", "/x");`,
+      code: `const p = args.provider;\nreturn await callProvider(p, "GET", "/x");`,
     });
     expect(await approvedOf(reply.id)).toBe(false);
     expect(await enableRequestsFor(reply.id)).toHaveLength(1);
