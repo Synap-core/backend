@@ -67,6 +67,7 @@ jobs:
       negctl: ${{ steps.decide.outputs.negctl }}
       negctl_tests: ${{ steps.decide.outputs.negctl_tests }}
       hold: ${{ steps.decide.outputs.hold }}
+      dependents: ${{ steps.decide.outputs.dependents }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -624,3 +625,124 @@ jobs:
           name: e2e-reports
           path: coverage/test-ratchet/
           retention-days: 7
+
+  # ADVISORY (not a required check): backend CI never saw the repos that link this
+  # one's shared packages by source, so a types change could break an app repo with
+  # every backend check green (#372). When packages/types, api-types or markdown-core
+  # change, check out app-bases, browser and relay-app with the Synap Reader App
+  # token (read-only; SECURITY-RELEASE-RUNBOOK.md §5.1) and typecheck them against
+  # this head. The access step lists which repos the App could read, so a repo it
+  # is not installed on shows by name. The three repos are red at main on their own
+  # (devbox baseline), so the typechecks report and annotate; they do not fail the
+  # job. Only an unreadable repo or a failed install does. NEEDS a baseline compare
+  # (errors at the PR's base types vs head) before it can become a required check.
+  dependent-repos:
+    name: Dependent repos typecheck
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.dependents == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Lays out ../synap-app (app-bases), ../synap-control-plane-api and
+      # ../synap-backend, installs and builds this repo.
+      - name: Monorepo layout + dependencies
+        id: setup
+        uses: ./.github/actions/monorepo-setup
+        with:
+          app-id: ${{ vars.SYNAP_READER_APP_ID }}
+          app-key: ${{ secrets.SYNAP_READER_APP_KEY }}
+          cross-repo-token: ${{ secrets.CROSS_REPO_TOKEN }}
+
+      - name: Mint browser + relay-app read token (GitHub App)
+        id: app-token
+        if: ${{ vars.SYNAP_READER_APP_ID != '' }}
+        continue-on-error: true
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        with:
+          app-id: ${{ vars.SYNAP_READER_APP_ID }}
+          private-key: ${{ secrets.SYNAP_READER_APP_KEY }}
+          owner: Synap-core
+          repositories: |
+            app-bases
+            browser
+            relay-app
+          permission-contents: read
+
+      - name: Checkout browser
+        id: co-browser
+        continue-on-error: true
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: Synap-core/browser
+          token: ${{ steps.app-token.outputs.token || secrets.CROSS_REPO_TOKEN }}
+          path: .browser-checkout
+
+      - name: Checkout relay-app
+        id: co-relay
+        continue-on-error: true
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: Synap-core/relay-app
+          token: ${{ steps.app-token.outputs.token || secrets.CROSS_REPO_TOKEN }}
+          path: .relay-checkout
+
+      - name: Reader App access to the dependent repos
+        env:
+          BROWSER: ${{ steps.co-browser.outcome }}
+          RELAY: ${{ steps.co-relay.outcome }}
+          TOKEN: ${{ steps.app-token.outcome }}
+        run: |
+          echo "token mint (app-bases, browser, relay-app): $TOKEN"
+          echo "app-bases : cloned at $(cd ../synap-app && git rev-parse --short HEAD) (monorepo-setup)"
+          if [ -d .browser-checkout/.git ]; then echo "browser   : cloned at $(cd .browser-checkout && git rev-parse --short HEAD)"; else echo "browser   : $BROWSER"; fi
+          if [ -d .relay-checkout/.git ]; then echo "relay-app : cloned at $(cd .relay-checkout && git rev-parse --short HEAD)"; else echo "relay-app : $RELAY"; fi
+          fail=0
+          [ "$BROWSER" = success ] || { echo "::error::The Reader App token cannot read Synap-core/browser. Install the App on it (org settings, GitHub Apps), or set CROSS_REPO_TOKEN."; fail=1; }
+          [ "$RELAY" = success ] || { echo "::error::The Reader App token cannot read Synap-core/relay-app. Install the App on it, or set CROSS_REPO_TOKEN."; fail=1; }
+          exit $fail
+
+      - name: Lay out the root workspace slice
+        run: |
+          set -euo pipefail
+          P="${GITHUB_WORKSPACE}/.."
+          mv .browser-checkout "$P/browser"
+          mv .relay-checkout "$P/relay-app"
+          cp scripts/ci/dependent-root/package.json scripts/ci/dependent-root/pnpm-workspace.yaml "$P/"
+          cp scripts/ci/dependent-root/dot-npmrc "$P/.npmrc"
+          ls "$P"
+
+      - name: Install the slice
+        working-directory: ..
+        run: pnpm install --no-frozen-lockfile --reporter=append-only
+
+      - name: Build the linked backend packages
+        working-directory: ..
+        run: pnpm --filter @synap-core/types --filter @synap-core/api-types --filter @synap-core/markdown-core run build
+
+      - name: Typecheck app-bases headless
+        continue-on-error: true
+        working-directory: ..
+        run: pnpm --filter @synap-core/headless run type-check
+
+      - name: Typecheck app-bases hooks
+        continue-on-error: true
+        working-directory: ..
+        run: pnpm --filter @synap-core/hooks run type-check
+
+      - name: Typecheck app-bases web
+        continue-on-error: true
+        working-directory: ..
+        run: pnpm --filter @synap-core/web run type-check
+
+      - name: Typecheck browser
+        continue-on-error: true
+        working-directory: ..
+        run: pnpm --filter @synap-core/browser run typecheck
+
+      - name: Typecheck relay-app
+        continue-on-error: true
+        working-directory: ..
+        run: pnpm --filter relay-app run typecheck

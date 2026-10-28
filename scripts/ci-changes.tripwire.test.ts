@@ -250,6 +250,29 @@ describe("ci-changes: a draft's skipped suites never read as passed", () => {
       ).toBe("");
   });
 
+  it("shared-package changes run the Dependent repos job; nothing else does", () => {
+    const rows: [string, string[], boolean][] = [
+      ["types", ["packages/types/src/x.ts"], true],
+      ["api-types", ["packages/api-types/src/generated.d.ts"], true],
+      ["markdown-core", ["packages/markdown-core/src/x.ts"], true],
+      ["the job's own root", ["scripts/ci/dependent-root/package.json"], true],
+      ["ci.yml", [".github/workflows/ci.yml"], true],
+      ["api source", ["packages/api/src/x.ts"], false],
+      ["a sibling named like types", ["packages/types-extra/src/x.ts"], false],
+    ];
+    for (const [label, files, want] of rows)
+      expect(pr(files).dependents, label).toBe(want);
+    expect(pr(null).dependents, "unknown files").toBe(true);
+    expect(pr(["docs/DEVELOPER.md"]).dependents, "docs only").toBe(false);
+    expect(
+      pr(["packages/types/src/x.ts"], { headRef: "negctl/x" }).dependents
+    ).toBe(false);
+    expect(
+      pr(["packages/types/src/x.ts"], { draft: true }).dependents,
+      "a draft"
+    ).toBe(true);
+  });
+
   it("the decision reaches the job outputs (the script's own GITHUB_OUTPUT)", () => {
     const outputs = (draft: string) => {
       const file = join(mkdtempSync(join(tmpdir(), "ci-changes-")), "out");
@@ -352,5 +375,23 @@ describe("ci-changes: a draft's skipped suites never read as passed", () => {
       expect(first, j.name).toContain(`if: \${{ ${HOLD} }}`);
       expect(first, j.name).toMatch(/\n\s+exit 1\n/);
     }
+  });
+
+  it("the Dependent repos job checks out the three repos, with the Reader App token", () => {
+    const job = jobs.find((j) => j.name === "Dependent repos typecheck");
+    expect(job, "job exists").toBeDefined();
+    expect(job?.if).toContain("needs.changes.outputs.dependents == 'true'");
+    expect(job?.block).toContain("repository: Synap-core/browser");
+    expect(job?.block).toContain("repository: Synap-core/relay-app");
+    // app-bases comes through monorepo-setup, whose token covers it.
+    expect(job?.block).toContain("uses: ./.github/actions/monorepo-setup");
+    expect(job?.block).toMatch(
+      /repositories: \|\n\s+app-bases\n\s+browser\n\s+relay-app/
+    );
+    expect(job?.block).toContain("permission-contents: read");
+    const changes = jobs.find((j) => j.name === "What changed");
+    expect(changes?.block).toContain(
+      "dependents: ${{ steps.decide.outputs.dependents }}"
+    );
   });
 });

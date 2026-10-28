@@ -24,6 +24,9 @@
  *   hold          why a required check reports RED instead of being skipped:
  *                 "draft" | "negctl" | "stacked" | "" (see decide())
  *   draft_hold    hold == "draft" (kept for readers of the old output)
+ *   dependents    the "Dependent repos" job runs: shared types changed (or the
+ *                 job's own files), so app-bases, browser and relay-app are
+ *                 checked out and typechecked against this head
  *   reason        one line for the job log
  *
  * Usage (ci.yml): node scripts/ci-changes.mjs
@@ -60,6 +63,18 @@ const IMAGE_NEUTRAL = [
 
 const TEST_FILE = /\.test\.(ts|tsx|mts|mjs|js)$/;
 
+// Paths the other repos link by source (app-bases, browser and relay-app read
+// @synap-core/types, api-types and markdown-core from this checkout; #372 broke
+// an app repo with backend CI green), plus the job's own files so a change to
+// the job runs it.
+const SHARED_FOR_DEPENDENTS = [
+  /^packages\/(types|api-types|markdown-core)\//,
+  /^scripts\/ci\/dependent-root\//,
+  /^\.github\/workflows\/ci\.yml$/,
+];
+export const touchesDependents = (files) =>
+  files.some((f) => SHARED_FOR_DEPENDENTS.some((re) => re.test(f)));
+
 export const isDocsOnly = (path) => DOCS_ONLY.some((re) => re.test(path));
 export const isImageNeutral = (path) =>
   isDocsOnly(path) || IMAGE_NEUTRAL.some((re) => re.test(path));
@@ -89,11 +104,16 @@ export function decide({
     negctlTests: [],
     draftHold: false,
     hold: "",
+    dependents: false,
   };
   if (event !== "pull_request")
     return { ...all, reason: `${event}: every check runs` };
   if (!files)
-    return { ...all, reason: "changed files unknown: every check runs" };
+    return {
+      ...all,
+      dependents: true,
+      reason: "changed files unknown: every check runs",
+    };
 
   if (headRef?.startsWith("negctl/")) {
     const tests = new Set(files.filter((f) => TEST_FILE.test(f)));
@@ -112,6 +132,7 @@ export function decide({
       negctlTests: [...tests].sort(),
       draftHold: false,
       hold: "negctl",
+      dependents: false,
       reason: `negctl branch: only its ${tests.size} test file(s) run; every required check reports red (a negctl branch never merges)`,
     };
   }
@@ -125,6 +146,7 @@ export function decide({
       negctlTests: [],
       draftHold: false,
       hold: "",
+      dependents: false,
       reason: `docs only (${files.length} file(s)): no check needs to run`,
     };
 
@@ -151,6 +173,7 @@ export function decide({
     // above: their skip does not change when the PR is marked ready.
     draftHold: hold === "draft",
     hold,
+    dependents: touchesDependents(files),
     reason:
       [
         stacked
@@ -207,6 +230,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     `negctl_tests=${d.negctlTests.join(" ")}`,
     `draft_hold=${d.draftHold}`,
     `hold=${d.hold}`,
+    `dependents=${d.dependents}`,
     `reason=${d.reason}`,
   ];
   console.log(out.join("\n"));
