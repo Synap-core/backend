@@ -40,8 +40,11 @@
  *   dir <name>                  the directory of a repo, from any of its names
  *   slug <name>                 its owner/slug on GitHub
  *   siblings <layout>           the sibling directories a layout lays out
- *   depends-on [source] [--self <repo>] [--format text|json|lane-refs]
- *       source: --body-file F | --body-env VAR | --git-range R [--git-dir D]
+ *   depends-on [sources] [--self <repo>] [--format text|json|lane-refs]
+ *       sources, any of: --body-file F | --body-env VAR | --git-range R
+ *       [--git-dir D] | --compare <repo>@<ref> (the trailers of the commits
+ *       <ref> has beyond main, read through GitHub) | --pins-of <repo>@<ref>
+ *       (that repo's monorepo.json pins at <ref>: each must be on its main)
  *       exit 0 = every dependency landed (or none), 3 = waiting, 4 = blocked
  *       lane-refs prints `<dir>=<ref>` for each dependency that has not landed:
  *       the devbox gate's LANE_REFS, so a change is tested with it.
@@ -470,6 +473,46 @@ function pathExists(p) {
   }
 }
 
+/**
+ * The messages of the commits `ref` has beyond `base` (GitHub compare), for
+ * `Depends-On:` trailers of a direct-commit repo. Throws when the list is
+ * incomplete (GitHub returns at most 250): a trailer it did not read must hold.
+ */
+export async function commitMessages(gh, repo, ref, base = "main") {
+  const cmp = await gh.compare(repo, base, ref);
+  const commits = cmp.commits ?? [];
+  if ((cmp.total_commits ?? commits.length) > commits.length) {
+    throw new Error(
+      `${ref} is ${cmp.total_commits} commits ahead of ${base}; only ${commits.length} were read`
+    );
+  }
+  return commits.map((c) => c.commit?.message ?? "").join("\n");
+}
+
+/**
+ * A repo's sibling pins (relay-app's monorepo.json: repos[].{repo, ref}) at
+ * `ref`, as `Depends-On:` lines: a pin is a dependency that must be on its
+ * repo's main (R8 option C3).
+ */
+export async function pinsText(gh, repo, ref, file = "monorepo.json") {
+  const got = await gh.get(
+    repo,
+    `/contents/${file}?ref=${encodeURIComponent(ref)}`
+  );
+  const manifest = JSON.parse(
+    Buffer.from(got.content ?? "", "base64").toString("utf8")
+  );
+  return (manifest.repos ?? [])
+    .map((r) => `Depends-On: ${r.repo}@${r.ref}`)
+    .join("\n");
+}
+
+function splitRepoRef(value, need) {
+  const at = String(value).indexOf("@");
+  if (at < 1) throw new Error(`${value}: expected <repo>@<ref>`);
+  return { repo: need(value.slice(0, at)), ref: value.slice(at + 1) };
+}
+
 // ── CLI ──────────────────────────────────────────────────────────────────────
 function readSource(opts) {
   if (opts["body-file"]) return readFileSync(opts["body-file"], "utf8");
@@ -531,22 +574,70 @@ async function main(argv) {
       console.log(layoutNamed(pos[0], layout).siblings.join("\n"));
       return 0;
     case "depends-on": {
-      const text = readSource(opts);
-      if (text === null)
-        throw new Error(
-          "depends-on needs --body-file, --body-env or --git-range"
-        );
+      const gh = githubClient();
       const self = opts.self ? need(opts.self).dir : null;
-      const parsed = parseDependsOn(text, { self, layout });
-      const results = await evaluateAll(parsed, githubClient(), {
-        defaultBranch: layout.defaultBranch,
-      });
+      const texts = [];
+      const failures = [];
+      const local = readSource(opts);
+      if (local !== null) texts.push(local);
+      if (opts.compare) {
+        const { repo, ref } = splitRepoRef(opts.compare, need);
+        try {
+          texts.push(
+            await commitMessages(gh, repo.fullName, ref, layout.defaultBranch)
+          );
+        } catch (e) {
+          failures.push(`commits of ${repo.slug}@${ref}: ${e.message}`);
+        }
+      }
+      let pins = { deps: [], errors: [] };
+      if (opts["pins-of"]) {
+        const { repo, ref } = splitRepoRef(opts["pins-of"], need);
+        try {
+          pins = parseDependsOn(await pinsText(gh, repo.fullName, ref), {
+            layout,
+          });
+          for (const d of pins.deps) {
+            d.pin = true;
+            d.label = `pin ${d.label}`;
+          }
+        } catch (e) {
+          failures.push(`pins of ${repo.slug}@${ref}: ${e.message}`);
+        }
+      }
+      if (!texts.length && !opts.compare && !opts["pins-of"])
+        throw new Error(
+          "depends-on needs --body-file, --body-env, --git-range, --compare or --pins-of"
+        );
+      const parsed = parseDependsOn(texts.join("\n"), { self, layout });
+      const results = await evaluateAll(
+        {
+          deps: [...parsed.deps, ...pins.deps],
+          errors: [...parsed.errors, ...pins.errors],
+        },
+        gh,
+        { defaultBranch: layout.defaultBranch }
+      );
+      // A source that could not be read HOLDS (it may carry a dependency).
+      for (const f of failures) {
+        results.push({
+          dep: { label: "(source)" },
+          status: "waiting",
+          testRef: null,
+          detail: `could not read ${f}`,
+        });
+      }
       const verdict = verdictOf(results);
       const format = opts.format ?? "text";
       if (format === "json") {
         console.log(JSON.stringify({ verdict, results }, null, 2));
       } else if (format === "lane-refs") {
-        const refs = laneRefs(results, { exclude: self ? [self] : [] });
+        // A pin is built from at its own commit (rc-* gates); it never moves
+        // a sibling of the gate tree.
+        const refs = laneRefs(
+          results.filter((r) => !r.dep.pin),
+          { exclude: self ? [self] : [] }
+        );
         console.log([...refs].map(([d, r]) => `${d}=${r}`).join(" "));
         if (results.length) console.error(formatResults(results));
       } else {

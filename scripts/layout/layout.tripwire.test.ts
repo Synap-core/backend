@@ -292,6 +292,55 @@ describe("landed, waiting, blocked", () => {
   });
 });
 
+describe("sources a direct-commit repo declares its dependencies in", () => {
+  it("reads the trailers of every commit beyond main, and refuses a list GitHub cut", async () => {
+    const gh = {
+      compare: async () => ({
+        total_commits: 2,
+        commits: [
+          { commit: { message: "feat: x\n\nDepends-On: backend#311" } },
+          { commit: { message: "fix: y" } },
+        ],
+      }),
+    };
+    const text = await L.commitMessages(gh, "Synap-core/relay-app", "feat/x");
+    expect(parse(text).deps.map((d: any) => d.label)).toEqual(["backend#311"]);
+    const cut = { compare: async () => ({ total_commits: 300, commits: [] }) };
+    await expect(
+      L.commitMessages(cut, "Synap-core/relay-app", "feat/x")
+    ).rejects.toThrow(/300 commits ahead/);
+  });
+
+  it("turns relay's monorepo.json pins into commit dependencies", async () => {
+    const manifest = {
+      repos: [
+        { dir: "synap-app", repo: "Synap-core/app-bases", ref: "a".repeat(40) },
+        {
+          dir: "synap-backend",
+          repo: "Synap-core/backend",
+          ref: "b".repeat(40),
+        },
+      ],
+    };
+    const gh = {
+      get: async (_repo: string, path: string) => {
+        expect(path).toBe("/contents/monorepo.json?ref=feat%2Fx");
+        return {
+          content: Buffer.from(JSON.stringify(manifest)).toString("base64"),
+        };
+      },
+    };
+    const { deps, errors } = parse(
+      await L.pinsText(gh, "Synap-core/relay-app", "feat/x")
+    );
+    expect(errors).toEqual([]);
+    expect(deps.map((d: any) => [d.dir, d.kind, d.ref])).toEqual([
+      ["synap-app", "ref", "a".repeat(40)],
+      ["synap-backend", "ref", "b".repeat(40)],
+    ]);
+  });
+});
+
 describe("the check run each verdict posts", () => {
   const r = (status: string, label = "backend#1") => ({
     status,
