@@ -18,9 +18,11 @@ import {
 import { foldVerbsByIntent } from "../../../services/capabilities/capability-intent-index.js";
 import { projectRunnableActions } from "../../../services/capabilities/action-projection.js";
 import { listIntentActions } from "../../../services/capabilities/intent-actions.js";
+import { loadRecipient } from "../../../services/capabilities/intent-recipient.js";
 import {
   admitIntent,
   IntentActionSchema,
+  refusal,
   takesIntentForm,
 } from "./capabilities-intent.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
@@ -78,7 +80,12 @@ export function registerCapabilitiesActionsRoutes(app: HubHono): void {
       "A key the grant fence bounds (a pod app) must pass `intent`, needs " +
       "`capability.<intent>.run` in that workspace, and gets that intent's " +
       "actions in the pod's words: an opaque id, the verb's label, the tool, " +
-      "the account, and the ONE input the action accepts.",
+      "the account, and the ONE input the action accepts. Such a key may pass " +
+      "`subject` (a person's or company's entity id it may read, else 403 " +
+      "SUBJECT_NOT_READABLE): each action then carries `reach` " +
+      "({ ok, why? }: can it reach them, from the addresses the pod holds), " +
+      "and the list is ranked for them: reachable first, then the channel " +
+      "last used with them.",
     request: {
       query: z.object({
         workspaceId: z.string().uuid(),
@@ -88,6 +95,8 @@ export function registerCapabilitiesActionsRoutes(app: HubHono): void {
         // can send a message", without knowing `gmail_send`. Resolved by the
         // shared reverse index (`foldVerbsByIntent`), never a second lookup.
         intent: z.string().regex(INTENT_SLUG_RE).optional(),
+        // Intent form only: the person or company the actions are for.
+        subject: z.string().uuid().optional(),
         limit: z.coerce.number().int().positive().max(100).optional(),
       }),
     },
@@ -131,14 +140,26 @@ export function registerCapabilitiesActionsRoutes(app: HubHono): void {
       );
       if (!admitted.ok) return c.json(admitted.body, admitted.status);
       try {
-        const listed = await listIntentActions(
-          {
-            userId: admitted.userId,
-            workspaceId: admitted.workspaceId,
-            agentUserId: (c.get("agentUserId") as string | undefined) ?? null,
-          },
-          admitted.intent
-        );
+        const ctx = {
+          userId: admitted.userId,
+          workspaceId: admitted.workspaceId,
+          agentUserId: (c.get("agentUserId") as string | undefined) ?? null,
+        };
+        const subjectId = c.req.query("subject")?.trim() || undefined;
+        const subject = subjectId
+          ? await loadRecipient(ctx, subjectId)
+          : undefined;
+        if (subject === null) {
+          const refused = refusal(
+            403,
+            "SUBJECT_NOT_READABLE",
+            "`subject` names no person or company this key may read."
+          );
+          return c.json(refused.body, refused.status);
+        }
+        const listed = await listIntentActions(ctx, admitted.intent, {
+          ...(subject ? { subject } : {}),
+        });
         return c.json(
           { actions: (listed?.actions ?? []).map((a) => a.view) },
           200

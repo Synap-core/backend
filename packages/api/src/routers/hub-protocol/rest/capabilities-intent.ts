@@ -12,7 +12,11 @@
  * (a signed-in session, an unbounded `*` key) keeps both doors as they were.
  *
  * Refusals carry a `code` an app can branch on: INTENT_REQUIRED, UNKNOWN_INTENT,
- * GRANT_DENIED, INTENT_MISMATCH, INVALID_INPUT, ACTION_NOT_FOUND, RATE_LIMITED.
+ * GRANT_DENIED, INTENT_MISMATCH, INVALID_INPUT, ACTION_NOT_FOUND, RATE_LIMITED,
+ * SUBJECT_NOT_READABLE (the `subject` listed for, or the `to` asked to send
+ * to, names nothing the key may read: absent and hidden read alike) and
+ * RECIPIENT_UNREACHABLE (the pod has no address for `to` on that action's
+ * account; `why` says which).
  */
 import { z } from "@hono/zod-openapi";
 import { getRequestGrant } from "@synap/database";
@@ -42,6 +46,8 @@ export const IntentActionSchema = z.object({
   governance: z.enum(["auto", "propose"]),
   intent: z.string(),
   input: z.record(z.string(), z.unknown()),
+  /** Listed for a `subject` only: can this action reach them, and if not why. */
+  reach: z.object({ ok: z.boolean(), why: z.string().optional() }).optional(),
 });
 
 /** The run body of the intent form: nothing else is accepted from such a key. */

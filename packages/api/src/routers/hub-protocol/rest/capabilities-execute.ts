@@ -115,7 +115,11 @@ export function registerCapabilitiesExecuteRoutes(app: HubHono): void {
       "bounds (a pod app) sends { workspaceId, intent, actionId, input, " +
       "idempotencyKey? } instead: an action listed by GET /capabilities/actions, " +
       "its input checked against that action's input schema, under " +
-      "`capability.<intent>.run`; an outward intent always files a proposal.",
+      "`capability.<intent>.run`; an outward intent always files a proposal. " +
+      "When the action sends to someone, `input.to` is a person's or company's " +
+      "entity id the key may read (else 403 SUBJECT_NOT_READABLE); the pod " +
+      "finds their address for the action's account at run time (none on " +
+      "file: 400 RECIPIENT_UNREACHABLE with `why`), and the proposal names them.",
     request: { body: ExecuteCapabilityRequestSchema },
     responses: {
       200: {
@@ -238,6 +242,24 @@ export function registerCapabilitiesExecuteRoutes(app: HubHono): void {
               error: "The input does not match what this action accepts.",
               code: "INVALID_INPUT",
               issues: resolved.issues,
+            },
+            400
+          );
+        case "subject_not_readable":
+          return c.json(
+            {
+              error:
+                "`to` names no person or company this key may read: pass the id of one it can read.",
+              code: "SUBJECT_NOT_READABLE",
+            },
+            403
+          );
+        case "recipient_unreachable":
+          return c.json(
+            {
+              error: resolved.why,
+              code: "RECIPIENT_UNREACHABLE",
+              why: resolved.why,
             },
             400
           );

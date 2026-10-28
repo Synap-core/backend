@@ -150,6 +150,7 @@ import {
 } from "./capability-enable-link.js";
 import { answeringSkillOrder, answeringSkillsWhere } from "./verb-skill.js";
 import type { IntentRequestRecord } from "./intent-actions.js";
+import { describeIntentRun } from "./intent-input.js";
 import { resolveEntityVerbRunSubject } from "./capability-run-subject.js";
 import {
   proposeCapabilityEnable,
@@ -775,14 +776,19 @@ export async function executeCapability(input: {
         //
         // Built from the payload that is already here — nothing new is stored
         // and `summary` is in VOLATILE_DEDUP_KEYS, so dedup is unaffected.
-        summary: describeCapabilityRun(
-          verbId ?? null,
-          parameters ?? {},
-          await resolveEntityVerbRunSubject(
-            entityVerbRunTarget(verbId ?? null, parameters ?? {}),
-            userId
-          )
-        ),
+        // A pod app's intent run reads as what the app asked, by name: the
+        // action, the recipient, the account ("Send message to Marie Dupont
+        // from Antoine Servant on LinkedIn"), never the verb's raw ids.
+        summary: input.intentRequest
+          ? describeIntentRun(input.intentRequest)
+          : describeCapabilityRun(
+              verbId ?? null,
+              parameters ?? {},
+              await resolveEntityVerbRunSubject(
+                entityVerbRunTarget(verbId ?? null, parameters ?? {}),
+                userId
+              )
+            ),
         // WHY — the run door has no top-level `reasoning`, so an agent's reason
         // rides in `parameters`; hoisted to where the review card reads it
         // (`request.reasoning`). `reasoning` is a volatile dedup key, so this
