@@ -170,10 +170,9 @@ describe("MCP HTTP door: a JSON-RPC batch is refused", () => {
     const body = (await res.json()) as {
       error?: { code: number; message: string };
     };
-    expect(body.error).toEqual({
-      code: -32001,
-      message: GRANT_DOOR_UNSUPPORTED,
-    });
+    // The SDK serialises an McpError as "MCP error <code>: <message>".
+    expect(body.error?.code).toBe(-32001);
+    expect(body.error?.message).toContain(GRANT_DOOR_UNSUPPORTED);
     expect(execute).not.toHaveBeenCalled();
   });
 
@@ -249,14 +248,18 @@ describe("MCP tools/call door: the grant fence", () => {
     expect(execute).toHaveBeenCalledTimes(2);
   });
 
-  it("refuses a space-pinned key a synap:// resource, never a ui:// one", async () => {
-    const { readResource } = handlersFor({ ...AGENT, grant: SPACE_PINNED });
-    await expect(readResource("synap://entities")).rejects.toThrow(
-      GRANT_DOOR_UNSUPPORTED
-    );
+  it("refuses every scoped key a synap:// resource; a key with no grant reads it", async () => {
+    // No synap:// resource is classified in the W1 inventory, so the fence
+    // fails closed for ANY scoped grant, pinned or not.
+    for (const grant of [SPACE_PINNED, UNPINNED]) {
+      const { readResource } = handlersFor({ ...AGENT, grant });
+      await expect(readResource("synap://entities")).rejects.toThrow(
+        GRANT_DOOR_UNSUPPORTED
+      );
+    }
     expect(resources.read).not.toHaveBeenCalled();
-    const open = handlersFor({ ...AGENT, grant: UNPINNED });
-    await open.readResource("synap://entities");
+    const legacy = handlersFor({ ...AGENT, grant: null });
+    await legacy.readResource("synap://entities");
     expect(resources.read).toHaveBeenCalledTimes(1);
   });
 });
