@@ -124,8 +124,19 @@ describe("approve — an agent behind a human userId is an agent principal", () 
   });
 
   it("CONTROL: the same human, no agent in ctx, still approves", async () => {
-    await callerFor(null).approve({ proposalId: PROPOSAL_ID });
+    const approved = await callerFor(null).approve({ proposalId: PROPOSAL_ID });
     expect(h.apply).toHaveBeenCalledTimes(1);
+    // The one shared door, with the interactive door's background hand-off,
+    // and its answer is what approve returns (batch-approve-registry.test.ts
+    // pins the call in the source; this pins that it is reached).
+    expect(h.apply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        proposal: expect.objectContaining({ id: PROPOSAL_ID }),
+        userId: HUMAN,
+        background: true,
+      })
+    );
+    expect(approved).toEqual({ success: true });
   });
 
   it("REFUSES each batchApprove item when ctx carries agentUserId", async () => {
