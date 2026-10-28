@@ -94,6 +94,10 @@ export async function createHubProtocolCallerContext(
  *    gate, so honouring it would let an unattributed key leave the
  *    anonymous-AI ladder.
  */
+export function hubWriteSource(): "user" | "intelligence";
+export function hubWriteSource<S extends string>(
+  stated: S | null | undefined
+): S | "user" | "intelligence";
 export function hubWriteSource<S extends string>(
   stated?: S | null
 ): S | "user" | "intelligence" {
