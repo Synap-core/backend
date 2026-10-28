@@ -110,6 +110,7 @@ import {
   WAIT_MAX_SECONDS,
 } from "../../../services/focus-sessions/wait-for-answers.js";
 import { SESSION_CHANGE_KINDS } from "../../../services/focus-sessions/session-changes.js";
+import { REVIEW_PACKAGES } from "@synap-core/types/proposals/review-package";
 import { TRACK_PARTICIPANT_ACTIONS } from "../handlers/track-participants.js";
 
 /**
@@ -550,6 +551,12 @@ const SESSION_OUTCOMES_PROPERTY = {
       },
       blockedReason: { type: "string", enum: [...BLOCKED_REASONS] },
       why: { type: "string", maxLength: 500 },
+      unblocks: {
+        type: "string",
+        maxLength: 200,
+        description:
+          "Only with owner='human', and expected then: ONE line saying what MOVES when the person answers — the next step, session or PR that waits on the answer ('the EU launch deploy', 'session Pricing page starts'). A hand-over without it lands with 'The agent goes on with this work' and a warning.",
+      },
       ref: {
         description:
           'WHERE it lives — {"kind":"entity|document|view|cell|automation|playbook","id":"<uuid>"} or {"url":"https://..."}. A ref is evidence for a claimed deliverable.',
@@ -888,6 +895,12 @@ export const tools = {
               default: "summary",
               description:
                 "'summary' (default) returns one compact row per proposal — id, type, target, provenance, and a one-line summary — which is what a LIST is for. 'full' includes the entire `data` payload of every row: only ask for it when you need to inspect a specific proposal's contents, and pair it with a small `limit`.",
+            },
+            package: {
+              type: "string",
+              enum: [...REVIEW_PACKAGES],
+              description:
+                "Only proposals of this review package — the decision they ask the person: questions, access, releases, how-things-work (skills, rules, playbooks, automations, governance), data-changes, hand-offs, knowledge, bookkeeping (an agent's notes on its own session).",
             },
           },
           required: [],
@@ -2263,6 +2276,12 @@ export const tools = {
                     description:
                       "Only with owner='human'. ONE line naming WHICH thing is missing, not its class — 'the Stripe restricted key for the live account', not 'a credential'. Context the question does not already say: never a repeat of the label or the prompt.",
                   },
+                  unblocks: {
+                    type: "string",
+                    maxLength: 200,
+                    description:
+                      "Only with owner='human', and expected then: ONE line saying what MOVES when the person answers — the next step, session or PR that waits on the answer ('the EU launch deploy', 'session Pricing page starts'). A hand-over without it lands with 'The agent goes on with this work' and a warning.",
+                  },
                   ref: {
                     description:
                       'WHERE to go for this deliverable — turns the card\'s title into a door instead of leaving the person to search. ONE of two shapes: {"kind":"entity|document|view|cell|automation|playbook","id":"<uuid>"} for something in the pod, or {"url":"https://..."} for an external page. REFUSED if the object is not one you can already see. Use it above all with owner=\'human\': name the blocker in `why`, then point at it here.',
@@ -2407,6 +2426,12 @@ export const tools = {
                     description:
                       "Only with owner='human'. ONE line naming WHICH thing is missing, not its class — 'the Stripe restricted key for the live account', not 'a credential'. Context the question does not already say: never a repeat of the label or the prompt.",
                   },
+                  unblocks: {
+                    type: "string",
+                    maxLength: 200,
+                    description:
+                      "Only with owner='human', and expected then: ONE line saying what MOVES when the person answers — the next step, session or PR that waits on the answer ('the EU launch deploy', 'session Pricing page starts'). A hand-over without it lands with 'The agent goes on with this work' and a warning.",
+                  },
                   ref: {
                     description:
                       'WHERE to go for this deliverable — turns the card\'s title into a door instead of leaving the person to search. ONE of two shapes: {"kind":"entity|document|view|cell|automation|playbook","id":"<uuid>"} for something in the pod, or {"url":"https://..."} for an external page. REFUSED if the object is not one you can already see. Use it above all with owner=\'human\': name the blocker in `why`, then point at it here.',
@@ -2463,6 +2488,12 @@ export const tools = {
                   maxLength: 500,
                   description:
                     "Only with owner='human'. ONE line naming WHICH thing is missing, not its class; never a repeat of the label or the prompt.",
+                },
+                unblocks: {
+                  type: "string",
+                  maxLength: 200,
+                  description:
+                    "Only with owner='human', and expected then: ONE line saying what MOVES when the person answers — the next step, session or PR that waits on the answer ('the EU launch deploy', 'session Pricing page starts'). A hand-over without it lands with 'The agent goes on with this work' and a warning.",
                 },
                 ref: {
                   description:
@@ -2861,6 +2892,41 @@ export const tools = {
         },
       },
       {
+        name: "synap_needs_you",
+        annotations: {
+          title: "What needs the person",
+          readOnlyHint: true,
+          openWorldHint: false,
+        },
+        description:
+          "What REALLY needs the person right now, classified by the pod's one needs-you rule — read-only. `rows.needs_you` is the headline: a real asker, live work no agent is working on right now, under 7 days old or a commitment. Everything else is in a named fold, never dropped: `working` (an agent is on it: it asks when they can), `stopped` (no agent moved the session for 7 days: resume or close it), `review_later` (a real ask over 7 days), `from_system` (no real asker raised it), `changes_to_review` (pending proposals nothing waits on). `count` carries the numbers, `count.folds` per fold. Read this instead of re-deriving 'needs you' from session reads; point the person at the headline first.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            workspaceId: {
+              type: "string",
+              description: "Optional: only this workspace (space).",
+            },
+            projectId: {
+              type: "string",
+              description: "Optional: only this project.",
+            },
+            trackId: {
+              type: "string",
+              description: "Optional: only this goal (track).",
+            },
+            sessionId: {
+              type: "string",
+              description: "Optional: only this session.",
+            },
+            limit: {
+              type: "number",
+              description: "Rows per fold (default 100, max 200).",
+            },
+          },
+        },
+      },
+      {
         name: "synap_list_sessions",
         annotations: {
           title: "List focus sessions",
@@ -2993,6 +3059,21 @@ export const tools = {
                 "'lean' (default) = per node id, title, status, kind, parentSessionId, trackId, projectId, workspaceId, updatedAt, inWindow and the next move (kind, actor, label). 'full' = the whole list row per node: large.",
             },
           },
+          required: [],
+        },
+      },
+      {
+        name: "synap_get_work_release",
+        annotations: {
+          title: "Get the release state",
+          readOnlyHint: true,
+          openWorldHint: false,
+        },
+        description:
+          "Can the work be released, and what blocks it — read-only. Per repo: `main` (health ok | red | infra | unmeasured, `reason`, `fixedBy`) and `live` (what is deployed, `behindBy`). Per PR: `stage` on the road to main (working, checks, ready, on_main), `verdict` (green, own_red, inherited = red only because main is red, infra = did not run, queued, running, unmeasured), `fold` (draft, negctl, dependabot, stale; null = shown), the session holding it and `holder.live` (that session worked in the last 5 min), and `blockedBy`. `blockers` are ranked by how much waits behind each, transitively: the first is the thing to fix. `sources` says when the producer's snapshots are stale or missing, or a read failed (`unavailable` is not an empty list). Facts come from the devbox producer's `dev.repo_snapshot` observations; the pod reads no GitHub itself.",
+        inputSchema: {
+          type: "object",
+          properties: {},
           required: [],
         },
       },
@@ -4231,7 +4312,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Move a goal (a track) through its lifecycle: proposed, agreed, ready (a goal still being shaped), active, paused, completed (Closed) or archived (Dropped). A goal can stay open as long as it matters, or finish: a person closes it with a verdict once its criteria are met. Closing (status='completed') needs verdict met | partly_met | not_met — an operation (workKind 'operation') is never met: it closes retired, and only an operation does; dropping it when it stopped mattering (status='archived') should carry verdict no_longer_needed | impossible | replaced | mistake, and impossible and replaced need verdictReason. Both are FINAL: a closed goal comes back only as a new version. Your close is ALWAYS a proposal the person approves — never close a goal the person has not judged. Pause it while nobody should work on it (its agent loses access to the project's spaces until it resumes). Resuming (status='active') also releases a track a check gate held (pausedBy='check'). A move the lifecycle does not allow, or a close without its verdict, is refused with the reason. Governed: status='proposed' is SUCCESS — pass on reviewUrl, do not retry.",
+          "Move a goal (a track) through its lifecycle: proposed, agreed, ready (a goal still being shaped), active, paused, completed (Closed) or archived (Dropped). A goal can stay open as long as it matters, or finish: a person closes it with a verdict once its criteria are met. Closing (status='completed') needs verdict met | partly_met | not_met — an operation (workKind 'operation') is never met: it closes retired, and only an operation does; dropping it when it stopped mattering (status='archived') should carry verdict no_longer_needed | impossible | replaced | mistake, and impossible and replaced need verdictReason. Both are FINAL: a closed goal comes back only as a new version. Your close is ALWAYS a proposal the person approves — never close a goal the person has not judged. Pause it while nobody should work on it (its agent loses access to the project's spaces until it resumes). Resuming (status='active') also releases a track a check gate held (pausedBy='check'). Pass `expectedStatus` = the status you read the goal in: `conflict` means someone moved it meanwhile (nothing changed — re-read it and decide again). A move the lifecycle does not allow, or a close without its verdict, is refused with the reason. Governed: status='proposed' is SUCCESS — pass on reviewUrl, do not retry.",
         inputSchema: {
           type: "object",
           properties: {
@@ -4253,6 +4334,12 @@ export const tools = {
               type: "string",
               description:
                 "Why, in one line — required for verdict 'impossible' (what made it impossible) and 'replaced' (what replaced it).",
+            },
+            expectedStatus: {
+              type: "string",
+              enum: [...PROJECT_TRACK_STATUSES],
+              description:
+                "The status you read the goal in (synap_list_tracks) — always send it. Compare-and-set: if it moved meanwhile the call answers status='conflict' with the current status and writes nothing.",
             },
             reasoning: {
               type: "string",
@@ -5893,7 +5980,7 @@ export const tools = {
             code: {
               type: "string",
               description:
-                "Optional executable source (runs sandboxed). Present ⇒ the skill is runnable; absent ⇒ it is a teaching skill.",
+                "Optional executable source (runs sandboxed). Present ⇒ the skill is runnable; absent ⇒ it is a teaching skill. It is the BODY of `async function(args, context)`: read inputs from `args` and `return` the result. Not a function of its own: `async (args) => { … }` is refused, since nothing would call it.",
             },
             body: {
               type: "string",

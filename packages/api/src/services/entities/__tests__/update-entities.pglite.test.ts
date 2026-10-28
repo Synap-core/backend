@@ -25,7 +25,8 @@ const holder = vi.hoisted(() => ({
   db: undefined as unknown,
   client: undefined as unknown,
   verdicts: new Map<string, "execute" | "propose" | "deny">(),
-  ceiling: { limit: 500, used: 0 },
+  /** `limit: null` = no ceiling row: no daily limit (the default). */
+  ceiling: { limit: null as number | null, used: 0 },
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -352,7 +353,7 @@ registerEntityExecutors();
 
 beforeEach(() => {
   holder.verdicts.clear();
-  holder.ceiling = { limit: 500, used: 0 };
+  holder.ceiling = { limit: null, used: 0 };
 });
 
 describe("updateEntities — one call, one review", () => {
@@ -430,6 +431,26 @@ describe("updateEntities — one call, one review", () => {
     expect(result.proposed).toMatchObject({ count: 2, ids: ids.slice(1) });
     expect(await rows(client, "pending")).toHaveLength(1);
     expect(result.items[1]!.reason).toMatch(/daily write limit \(5\)/);
+  });
+
+  it("no daily limit (no ceiling row, the default): every execute item applies, however many writes today", async () => {
+    const { client, database } = await freshDb();
+    holder.ceiling = { limit: null, used: 1_116 };
+    const ids = [
+      await insertEntity(client, "A1"),
+      await insertEntity(client, "A2"),
+    ];
+
+    const result = await updateEntities({
+      ctx: ctx(database),
+      agentUserId: AGENT,
+      items: ids.map((id) => ({ id, patch: { title: "x" } })),
+    });
+
+    expect(result.applied).toEqual(ids);
+    expect(result.proposed).toBeNull();
+    expect(await rows(client, "pending")).toHaveLength(0);
+    expect(await titleOf(client, ids[1]!)).toBe("x");
   });
 
   it("validate: true returns each verdict and writes nothing", async () => {

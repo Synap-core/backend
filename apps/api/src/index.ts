@@ -360,7 +360,7 @@ app.get("/health", async (c) => {
     //
     // DO NOT gate a deploy check on this field: it is not derived from the
     // running build, so it looks identical whether or not a deploy landed.
-    apiTypesVersion: "1.32.0",
+    apiTypesVersion: "1.33.1",
     mode: "multi-user",
     auth: "ory-stack",
     // Git SHA the running image was built from (see deploy/Dockerfile ARG
@@ -1894,7 +1894,7 @@ try {
               await import("@synap/jobs/workers/session-recap.js");
             const { registerSignalRouter } =
               await import("@synap/jobs/utils/proactive-post.js");
-            const { registerSessionCloser } =
+            const { registerSessionCloser, registerStoppedSessionStaler } =
               await import("@synap/jobs/utils/session-close.js");
             const { registerStageAdvancer } =
               await import("@synap/jobs/utils/stage-advance.js");
@@ -1929,6 +1929,12 @@ try {
             // invariant outright). They now call completeFocusSession through
             // this slot.
             registerSessionCloser((input) => api.completeFocusSession(input));
+            // ONE stopped-session door (decision E1): the hourly reaper stales
+            // a session no agent moved for 7 days whose only owed items are
+            // its agent's confirm / choose asks, and those asks end with it.
+            registerStoppedSessionStaler((input) =>
+              api.staleStoppedSession(input)
+            );
             // ONE stage-advance door: the automation `session_update` output
             // wrote `focus_sessions.current_stage` with a raw UPDATE and resolved
             // no stage gate, so an automation could advance a run straight past a

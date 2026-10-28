@@ -1,20 +1,25 @@
 /**
- * `query` step executor — queries entities by profile slug with the shared
- * query-DSL filter/orderBy.
+ * `query` step executor — queries entities by profile slug and/or role
+ * category with the shared query-DSL filter/orderBy.
  */
 import {
   db,
-  eq,
   and,
   asc,
   desc,
   entities,
   drizzleSql,
   listableEntityWhere,
+  profileScopeConditions,
+  profileSlugRows,
+  profileSlugScopeConditionFromRows,
+  profilesByRoleCategory,
 } from "@synap/database";
+import type { SQL } from "@synap/database";
 import { entityQueryVisibilityWhere } from "../entity-query-scope.js";
 import {
   resolveQueryProfileSlug,
+  resolveQueryRoleCategory,
   parseQueryFilterConditions,
   parseQueryOrderBy,
   queryConditionSql,
@@ -23,12 +28,22 @@ import {
 import type { StepContext } from "../automation-executor-types.js";
 
 /**
- * Execute a query step: queries entities by profile slug with optional
- * filter + orderBy.
+ * Execute a query step: queries entities by profile slug and/or role category,
+ * with optional filter + orderBy.
+ *
+ * Both selectors go through the pod's polymorphic profile scope, the doors
+ * `entity.query` and views use: a slug that names a ROLE (`proof-point`)
+ * selects the entities wearing it (facet-EXISTS), a kind keeps the plain
+ * `entities.type` match; a role category selects every entity wearing any
+ * role tagged with it. Until 2026-10-28 the step matched `entities.type`
+ * only, so a role could never be queried: the weekly announcement flow
+ * (automation bdb99e5d, `roleCategory: announcement-material`) failed on its
+ * first step and never drafted a post (finding 1c2dfe3d).
  */
 export async function executeQueryStep(
   data: {
     profileSlug?: string;
+    roleCategory?: string;
     filter?: string | Record<string, unknown>;
     limit: number;
     scope?: string;
@@ -46,9 +61,39 @@ export async function executeQueryStep(
   ruleProjectId?: string | null
 ): Promise<Record<string, unknown>> {
   const profileSlug = resolveQueryProfileSlug(data, context);
+  const roleCategory = resolveQueryRoleCategory(data, context);
   const limit = Math.min(Math.max(Number(data.limit ?? 20), 1), 100);
 
-  if (!profileSlug) throw new Error("query node: profileSlug is required");
+  if (!profileSlug && !roleCategory)
+    throw new Error("query node: profileSlug or roleCategory is required");
+  // An unreadable filter fails the step before anything is read (it throws).
+  const filterConditions = parseQueryFilterConditions(data.filter, context);
+
+  // Facets are read under the automation's own space and owner (the facet
+  // lens + owner floor, `facetVisibilityConditions`). No owner = only
+  // space facets pass: it fails closed, never open.
+  const facetScope = { userId: ownerId ?? "", workspaceId };
+  const scope: SQL[] = [];
+  if (profileSlug) {
+    scope.push(
+      profileSlugScopeConditionFromRows(
+        db,
+        profileSlug,
+        await profileSlugRows(db, profileSlug),
+        facetScope
+      )
+    );
+  }
+  if (roleCategory) {
+    const roleScope = profileScopeConditions(
+      db,
+      await profilesByRoleCategory(db, roleCategory),
+      facetScope
+    );
+    // No profile carries the category: an honest empty cohort, not a failure.
+    if (!roleScope) return { entities: [], count: 0 };
+    scope.push(roleScope);
+  }
 
   // Visibility lens = this workspace's rows ∪ pod-wide rows (owner-floored).
   // Pod-scoped kinds (company/person/bookmark…) live at `workspace_id IS NULL`,
@@ -58,7 +103,7 @@ export async function executeQueryStep(
   // (packages/api/src/utils/project-scope.ts); see that file for the SSOT.
   // scope "pod" narrows to ONLY pod-wide rows.
   const conditions = [
-    eq(entities.type, profileSlug),
+    ...scope,
     entityQueryVisibilityWhere({
       workspaceId,
       ownerId,
@@ -70,7 +115,7 @@ export async function executeQueryStep(
     listableEntityWhere({ revealSampleOf: ruleProjectId }),
   ];
 
-  for (const condition of parseQueryFilterConditions(data.filter, context)) {
+  for (const condition of filterConditions) {
     conditions.push(queryConditionSql(condition));
   }
 

@@ -71,7 +71,7 @@ pnpm lint                                    # eslint
 pnpm format                                  # prettier --check (pnpm format:fix rewrites)
 pnpm typecheck                               # turbo: tsc in every package
 pnpm build                                   # turbo: build every package
-pnpm --filter @synap/api gen-types:check     # generated API types are up to date
+pnpm --filter @synap/api gen-types:check     # generated API types are up to date (fix: pnpm --filter @synap/api gen-types, commit the file)
 pnpm tripwires                               # every architectural tripwire test
 ```
 

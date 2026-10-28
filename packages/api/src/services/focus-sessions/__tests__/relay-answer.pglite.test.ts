@@ -223,7 +223,15 @@ async function seed(
     [
       sessionId,
       OWNER,
-      JSON.stringify(opts.outputs ?? [{ kind: "document", label: LABEL }]),
+      JSON.stringify(
+        opts.outputs ?? [
+          {
+            kind: "document",
+            label: LABEL,
+            unblocks: "The billing switch-over",
+          },
+        ]
+      ),
       [AGENT],
       channelId,
       opts.workspaceId ?? null,

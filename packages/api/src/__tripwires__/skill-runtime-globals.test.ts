@@ -132,6 +132,36 @@ describe("skill runtime global scan — tripwire", () => {
     ).not.toThrow();
   });
 
+  it("(2d) code that only defines a function is refused: the runner calls the body, never the function", () => {
+    // Live (skill dogfood_echo, run 12b2997a, 2026-10-28): approved, delivered,
+    // and every run returned undefined.
+    const liveEcho = `async (args, context) => {
+  const text = typeof args.text === "string" ? args.text : "";
+  return { echoed: text, length: text.length, at: new Date().toISOString() };
+}`;
+    expect(() => assertSkillCodeAllowed("code", liveEcho)).toThrow(
+      /only defines a function[\s\S]*return/
+    );
+    expect(() =>
+      assertSkillCodeAllowed("code", `function probe() { return "x"; }`)
+    ).toThrow(/only defines a function/);
+    expect(scanSkillGlobals(liveEcho).onlyDefinesFunctions).toBe(true);
+
+    // Rows a looser rule would wrongly refuse: a helper beside a top-level
+    // return ("first statement is a function"); a function value that is
+    // called; code with side effects and no return ("no return ⇒ refuse").
+    for (const ok of [
+      `function helper(x) { return x; }\nreturn helper(args.text);`,
+      `const run = async () => args.text;\nreturn await run();`,
+      `(function warm() {});\nreturn 1;`,
+      `await propose({ summary: String(args.text) });`,
+    ]) {
+      expect(() => assertSkillCodeAllowed("code", ok), ok).not.toThrow();
+    }
+    // A box script runs on the person's computer, not as the isolate body.
+    expect(() => assertSkillCodeAllowed("code", liveEcho, "box")).not.toThrow();
+  });
+
   it("(2c) an update is scanned as the kind it WRITES: an instruction skill keeps its kind unless one is given", () => {
     const js = "return await fetch('https://x');";
     const markdown = "# Advisor\n\nAdvise on scope.";

@@ -720,8 +720,10 @@ export interface ContinuationPacket {
   /**
    * GATES — every gated stage of the session's process and its state, DERIVED
    * FROM PROPOSAL ROWS only (`session-gates.ts`), plus `deploy`: the newest
-   * `dev.deploy_approval` a PERSON approved. "Is commit X approved to ship by a
-   * human?" is `deploy?.commitSha` prefix-matching X.
+   * `dev.deploy_approval` a PERSON approved, and `ownerDeploys`: the ones a
+   * person approved on any of the owner's sessions. "Is commit X approved to
+   * ship by a human?" is `deploy?.commitSha`, or any `ownerDeploys[].commitSha`,
+   * prefix-matching X.
    */
   gates: PacketGatesSection;
   /**
@@ -1389,7 +1391,8 @@ function workUnitUrl(slot: ExpectedOutput): string | null {
  * `retiredAt`), never a guess about the PR.
  */
 export function workUnitsSection(
-  all: ExpectedOutput[]
+  all: ExpectedOutput[],
+  opts: { uncapped?: boolean } = {}
 ): PacketSection<PacketWorkUnitItem> {
   const keys = deriveSlotKeys(all);
   const items = all.flatMap((slot, i): PacketWorkUnitItem[] => {
@@ -1416,7 +1419,28 @@ export function workUnitsSection(
       },
     ];
   });
-  return section(items);
+  return opts.uncapped
+    ? { status: "ok", total: items.length, items }
+    : section(items);
+}
+
+/**
+ * EVERY work unit the session recorded, each PR with its state: the session
+ * page's "Show all" of its pull requests and branches. The packet carries the
+ * first {@link PACKET_TOP_N} ({@link ContinuationPacket.workUnits}); this is
+ * the SAME rule (`workUnitsSection`) and the SAME state read
+ * (`withPullRequestStates`) over all of them, never a second derivation. The
+ * row must already be read through `sessionReadableWhere` by the door.
+ */
+export async function readAllWorkUnits(
+  row: SessionRow,
+  ctx: ProjectContinuationPacketCtx
+): Promise<PacketSection<PacketWorkUnitItem>> {
+  return withPullRequestStates(
+    workUnitsSection(slots(row), { uncapped: true }),
+    { userId: ctx.userId, roster: ctx.roster },
+    ctx.database ?? db
+  );
 }
 
 /**
@@ -2540,11 +2564,13 @@ export async function projectContinuationPacket(
     readSessionGates(database, {
       id: row.id,
       playbookId: row.playbookId ?? null,
+      userId: row.userId,
     })
-      .then(({ items, deploy }): ContinuationPacket["gates"] => ({
+      .then(({ items, deploy, ownerDeploys }): ContinuationPacket["gates"] => ({
         status: "ok",
         items,
         deploy,
+        ownerDeploys,
       }))
       .catch(
         unavailable(row.id, "gates", "This session's gates could not be read.")

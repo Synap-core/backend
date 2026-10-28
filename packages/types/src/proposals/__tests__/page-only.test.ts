@@ -11,9 +11,10 @@
  *  - no `kind` with blank code is not: rules out "a code key means code";
  *  - a skill UPDATE and a tool create with code are not executable: rules out
  *    reading the payload without the verb or the target;
- *  - an instruction skill create, a skill update and a composite carrying a
- *    skill, automation or rule act on their own; a composite of records does
- *    not: rules out "only code needs the page" and "every composite";
+ *  - an instruction skill create, a skill update, a composite carrying a
+ *    skill, automation or rule, and a `capability.enable` act on their own; a
+ *    composite of records and a capability install do not: rules out "only
+ *    code needs the page", "every composite" and "every capability row";
  *  - a pending-proposal twin is not page-only, a record twin is: rules out
  *    "any duplicate answer".
  */
@@ -218,6 +219,29 @@ describe("acts_on_its_own", () => {
         data: { data: { operations: ops } },
       })
     ).toBe("acts_on_its_own");
+  });
+
+  it("a request to turn skills or tools on (`capability.enable`), whatever it names", () => {
+    for (const data of [
+      { containerId: null, skillIds: ["s-1"], skillId: "s-1" },
+      { containerId: "c-1", skillIds: [], toolIds: ["t-1"] },
+    ]) {
+      expect(
+        proposalPageOnlyReason({
+          targetType: "capability",
+          proposalType: "capability.enable",
+          data,
+        })
+      ).toBe("acts_on_its_own");
+    }
+    // Rules out "every capability proposal": an install is decided elsewhere.
+    expect(
+      proposalPageOnlyReason({
+        targetType: "capability",
+        proposalType: "capability.install",
+        data: { packageSlug: "crm" },
+      })
+    ).toBeNull();
   });
 
   it("a composite of records only, and a skill delete, may be batched", () => {

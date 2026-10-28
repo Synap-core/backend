@@ -110,8 +110,6 @@ export interface ConnectionBroker {
   /** A provider 4xx/5xx comes back as a status; a broker fault throws. */
   proxyRequest(params: BrokerProxyParams): Promise<BrokerProxyResult>;
   probe(): Promise<BrokerProbeResult>;
-  /** Keep the newest un-scoped (user, provider) connection; revoke older dups. */
-  dedupeConnections(userId: string, provider: string): Promise<string[]>;
   /** Public Connect URL for browser use, when the broker exposes one. */
   getConnectUrl(): string | null;
   /**

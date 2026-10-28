@@ -28,6 +28,14 @@ export interface SessionLiveFacts {
   turnInFlight: boolean;
   /** The newest recorded activity; null when nothing has happened yet. */
   lastAt: Date | string | null;
+  /**
+   * The newest AGENT evidence of work: the needs-you rule's Working clock
+   * (`lastAgentWorkAt`, `needsYouAgentWorking`), which leaves out the asking
+   * itself and every human act. `lastAt` does not: an agent that asks and
+   * stops, or a person approving a proposal, moves it. The card's
+   * `agentAtWork` reads this one. Absent = an older pod.
+   */
+  lastAgentWorkAt?: Date | string | null;
 }
 
 function timeOf(value: Date | string | null | undefined): number | null {

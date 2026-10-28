@@ -74,8 +74,10 @@ export function SectionCard({
         className ?? "",
       ].join(" ")}
     >
-      <CardHeader className="flex items-baseline justify-between gap-3 px-5 pt-4 pb-2">
-        <div className="flex flex-col gap-0.5 min-w-0">
+      {/* The title keeps at least 10rem: on a narrow card the actions wrap
+          under it instead of squeezing it to an ellipsis. */}
+      <CardHeader className="flex flex-wrap items-baseline justify-between gap-3 px-5 pt-4 pb-2">
+        <div className="flex min-w-0 flex-1 basis-40 flex-col gap-0.5">
           <h3 className="text-[14px] font-medium tracking-tight text-foreground truncate">
             {title}
           </h3>
@@ -84,7 +86,7 @@ export function SectionCard({
           )}
         </div>
         {actions && (
-          <div className="flex items-center gap-1 shrink-0">{actions}</div>
+          <div className="flex max-w-full items-center gap-1">{actions}</div>
         )}
       </CardHeader>
       <CardBody className="px-5 pb-5 pt-0">{children}</CardBody>

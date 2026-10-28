@@ -69,11 +69,13 @@ describe("console nav", () => {
     expect(bad).toEqual([]);
   });
 
-  it("gives members Home and Review only", () => {
+  it("gives members Home, Review and Settings only", () => {
     const memberIds = NAV_ITEMS.filter((i) => i.audience === "member").map(
       (i) => i.id
     );
-    expect(memberIds.every((id) => ["home", "review"].includes(id))).toBe(true);
+    expect(
+      memberIds.every((id) => ["home", "review", "settings"].includes(id))
+    ).toBe(true);
   });
 
   it("turns every legacy entry into a redirect", () => {

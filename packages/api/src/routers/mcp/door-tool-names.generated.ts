@@ -160,6 +160,10 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "pod-mcp": "synap_get_work_graph",
     "cp-connector": "pod__get_work_graph",
   },
+  synap_get_work_release: {
+    "pod-mcp": "synap_get_work_release",
+    "cp-connector": null,
+  },
   synap_governance: {
     "pod-mcp": "synap_governance",
     "cp-connector": "pod__governance",
@@ -232,6 +236,7 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "pod-mcp": "synap_move_entities",
     "cp-connector": "pod__move_entities",
   },
+  synap_needs_you: { "pod-mcp": "synap_needs_you", "cp-connector": null },
   synap_organize_library: {
     "pod-mcp": "synap_organize_library",
     "cp-connector": "pod__organize_library",
