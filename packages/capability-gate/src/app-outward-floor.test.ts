@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 /**
  * Intent actions, decision 4A (founder, 2026-10-28): a run requested through a
@@ -13,7 +15,9 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
  *  - an auto grant widening an app run past it           → "app agent key with an auto grant";
  *  - the floor swallowing reads                          → "a read intent … runs";
  *  - an unknown intent read as safe                      → "no declared intent … proposes";
- *  - the floor outranking the approval floor             → "an unapproved verb is still denied".
+ *  - the floor outranking the approval floor             → "an unapproved verb is still denied";
+ *  - edit_video seeded as a read (its effect is read out of migration 0370,
+ *    not typed here)                                      → "edit_video … proposes".
  *
  * `@synap/database` is mocked: the request's grant (`getRequestGrant`) and the
  * `capability_intents` row are the two inputs the floor reads.
@@ -22,9 +26,21 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const grantMock = vi.fn();
 const findCapabilityGrantMock = vi.fn();
 const resolveGovernanceRuleMock = vi.fn();
+/** edit_video's effect as migration 0370 seeds it (decision ac1ba2b6). */
+const EDIT_VIDEO_EFFECT = readFileSync(
+  fileURLToPath(
+    new URL(
+      "../../database/migrations/0370_edit_video_intent.sql",
+      import.meta.url
+    )
+  ),
+  "utf8"
+).match(/\(\s*'edit_video'\s*,\s*'(read|write|act)'/)?.[1];
+
 const intentRows = new Map<string, { effect: string }>([
   ["publish_post", { effect: "write" }],
   ["list_records", { effect: "read" }],
+  ["edit_video", { effect: EDIT_VIDEO_EFFECT ?? "missing" }],
 ]);
 const skillRows = new Map<string, { intent: string | null }>();
 
@@ -182,6 +198,14 @@ describe("gateCapabilityExecution — an app's outward run always proposes (4A)"
       decision: "propose",
       reasonCode: "APP_OUTWARD_INTENT",
     });
+  });
+
+  it("edit_video (sends the person's video out, spends money) proposes for any app", async () => {
+    expect(EDIT_VIDEO_EFFECT).toBeDefined();
+    grantMock.mockReturnValue(APP_GRANT);
+    expect(
+      await gateCapabilityExecution(personRun("edit_video"))
+    ).toMatchObject({ decision: "propose", reasonCode: "APP_OUTWARD_INTENT" });
   });
 
   it("an unapproved verb is still denied (the approval floor comes first)", async () => {
