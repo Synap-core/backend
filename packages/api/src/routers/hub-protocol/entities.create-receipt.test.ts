@@ -7,8 +7,9 @@
  *    SAME id, where the caller's own live row comes back instead of a twin
  *    (that branch is `entities.create`'s own, at the top of its mutation);
  *  - ticket d39eb826 — the door names where the row lives
- *    (`entityWorkspaceId`, `null` = pod-wide), beside the governance lens it
- *    has always echoed as `workspaceId`.
+ *    (`entityWorkspaceId`, `null` = pod-wide) and, for a pod-wide row, the
+ *    space it is filed for (`entityHomeWorkspaceId`, 0355), beside the
+ *    governance lens it has always echoed as `workspaceId`.
  *
  * The REAL hub procedure; the regular `entities.create` is replaced by its
  * answer, and records the input it was handed.
@@ -18,6 +19,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const h = vi.hoisted(() => ({
   answer: {} as Record<string, unknown>,
   inputs: [] as Array<Record<string, unknown>>,
+  contexts: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock("../../middleware/api-key-auth.js", async (importOriginal) => {
@@ -29,16 +31,21 @@ vi.mock("../../middleware/api-key-auth.js", async (importOriginal) => {
 });
 vi.mock("./utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./utils.js")>()),
-  createHubProtocolCallerContext: async (userId: string) => ({ userId }),
+  createHubProtocolCallerContext: async (
+    userId: string,
+    _scopes: string[],
+    workspaceId?: string | null
+  ) => ({ userId, workspaceId: workspaceId ?? null }),
 }));
 vi.mock("../../utils/chat-realtime-broadcast.js", () => ({
   emitChatEvent: vi.fn(),
 }));
 vi.mock("../entities.js", () => ({
   entitiesRouter: {
-    createCaller: () => ({
+    createCaller: (ctx: Record<string, unknown>) => ({
       create: async (input: Record<string, unknown>) => {
         h.inputs.push(input);
+        h.contexts.push(ctx);
         return h.answer;
       },
     }),
@@ -69,6 +76,7 @@ const createAs = (userId: string, extra: Record<string, unknown> = {}) =>
 
 beforeEach(() => {
   h.inputs = [];
+  h.contexts = [];
   h.answer = { status: "created", id: ENTITY, entity: { workspaceId: null } };
 });
 
@@ -103,7 +111,27 @@ describe("hub createEntity — where the row lives (d39eb826)", () => {
   it("a pod-wide row reads null, beside the lens it was governed under", async () => {
     const out = await createAs(USER);
     expect(out.entityWorkspaceId).toBeNull();
+    expect(out.entityHomeWorkspaceId).toBeNull();
     expect(out.workspaceId).toBe(SPACE);
+  });
+
+  it("a pod-wide row filed for the lens names that home", async () => {
+    h.answer = {
+      status: "created",
+      id: ENTITY,
+      entity: { workspaceId: null, homeWorkspaceId: SPACE },
+    };
+    const out = await createAs(USER);
+    expect(out.entityWorkspaceId).toBeNull();
+    expect(out.entityHomeWorkspaceId).toBe(SPACE);
+  });
+
+  it("the ambient lens reaches entities.create as the caller's workspace, never as a pin", async () => {
+    // The home is set by entities.create from ctx.workspaceId (0355); a
+    // targetWorkspaceId would pin the pod-wide kind INTO the space instead.
+    await createAs(USER);
+    expect(h.inputs[0]).not.toHaveProperty("targetWorkspaceId");
+    expect(h.contexts[0]).toMatchObject({ workspaceId: SPACE });
   });
 
   it("a row in a space reads that space", async () => {
@@ -122,12 +150,17 @@ describe("hub createEntity — where the row lives (d39eb826)", () => {
       proposedEntityId: ENTITY,
       entity: null,
       effectiveWorkspaceId: null,
+      effectiveHomeWorkspaceId: SPACE,
     };
-    expect((await createAs(USER)).entityWorkspaceId).toBeNull();
+    const out = await createAs(USER);
+    expect(out.entityWorkspaceId).toBeNull();
+    expect(out.entityHomeWorkspaceId).toBe(SPACE);
   });
 
   it("no row named: no claim about one", async () => {
     h.answer = { status: "created", id: ENTITY, entity: null };
-    expect(await createAs(USER)).not.toHaveProperty("entityWorkspaceId");
+    const out = await createAs(USER);
+    expect(out).not.toHaveProperty("entityWorkspaceId");
+    expect(out).not.toHaveProperty("entityHomeWorkspaceId");
   });
 });

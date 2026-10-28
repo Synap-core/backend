@@ -394,12 +394,23 @@ export const entitiesRouter = router({
       // pod-scope kind ignores: a caller told only that one reads its entity
       // as filed in a space it is not in (ticket d39eb826).
       const landed = resultShape.entity as
-        { workspaceId?: string | null } | null | undefined;
+        | { workspaceId?: string | null; homeWorkspaceId?: string | null }
+        | null
+        | undefined;
       const entityWorkspaceId: string | null | undefined =
         result.status === "proposed"
           ? (resultShape.effectiveWorkspaceId as string | null | undefined)
           : landed
             ? (landed.workspaceId ?? null)
+            : undefined;
+      // …and, for a pod-wide row, the space it is filed FOR (0355): the
+      // ambient lens above becomes its home, so that space's members see it
+      // in that space's lists — no second move (ticket d39eb826).
+      const entityHomeWorkspaceId: string | null | undefined =
+        result.status === "proposed"
+          ? (resultShape.effectiveHomeWorkspaceId as string | null | undefined)
+          : landed
+            ? (landed.homeWorkspaceId ?? null)
             : undefined;
       // A slot claim naming no output of the session: said, never silent
       // (ticket 228ebe4b) — the entity is created either way.
@@ -453,6 +464,9 @@ export const entitiesRouter = router({
         // Where the entity itself lives (above). Omitted when the door named
         // no row (a join gate that kept nothing).
         ...(entityWorkspaceId !== undefined ? { entityWorkspaceId } : {}),
+        ...(entityHomeWorkspaceId !== undefined
+          ? { entityHomeWorkspaceId }
+          : {}),
         ...(slotClaimWarning ? { warnings: [slotClaimWarning] } : {}),
         // Kind + Facets: the roles attached in this call (empty/omitted when none
         // were requested or the create was proposal-gated).

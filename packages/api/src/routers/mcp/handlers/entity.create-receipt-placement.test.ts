@@ -4,15 +4,18 @@
  *
  * The live case: 69 notes created with a `workspaceId`. Every receipt said
  * `effectiveWorkspaceId: <that space>`, but `note` is a pod-wide kind, so each
- * row sat at `workspaceId: null` and the agent learnt it only by reading one
- * back. The receipt echoed the GOVERNANCE lens, not the placement. Placement is
- * unchanged here (a pending decision): only the receipt tells the truth now,
- * and says why the space was not applied.
+ * row sat at `workspaceId: null` and the agent moved every one by hand. The
+ * founder's answer: a pod-wide kind stays pod-wide and is filed FOR the space
+ * asked for (its home, 0355), so it shows there with no move; the receipt
+ * says so, and says when the space was NOT applied (a space the caller is not
+ * a member of, which the adapter drops as a lens).
  *
  * Driven through the real handler and the real receipt builder; only the hub
- * caller (its answer is the `entityWorkspaceId` the hub door reads off the row,
- * pinned in `hub-protocol/entities.create-receipt.test.ts`) and the name
- * resolver (DB reads) are faked.
+ * caller (its answer is the `entityWorkspaceId` / `entityHomeWorkspaceId` the
+ * hub door reads off the row, pinned in
+ * `hub-protocol/entities.create-receipt.test.ts`; the home itself is set by
+ * `entities.create`, pinned in `entities.create-home-workspace.pglite.test.ts`)
+ * and the name resolver (DB reads) are faked.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -74,42 +77,93 @@ beforeEach(() => {
 });
 
 describe("synap_create_entity — the receipt names where the entity lives (d39eb826)", () => {
-  it("THE LIVE CASE: a pod-wide note created with a workspaceId reads pod-wide, and says why", async () => {
+  it("THE LIVE CASE: a pod-wide note created with a workspaceId is filed for that space, no move needed", async () => {
     h.answer = {
       status: "created",
       id: ID,
       workspaceId: SPACE, // the hub's lens echo
-      entityWorkspaceId: null, // where the row is
+      entityWorkspaceId: null, // the row stays pod-wide…
+      entityHomeWorkspaceId: SPACE, // …filed for the space asked for
     };
     const out = await create(
-      { profileSlug: "note", title: "Call notes" },
+      { profileSlug: "note", title: "Call notes", workspaceId: SPACE },
       SPACE
     );
     expect(out.effectiveWorkspaceId).toBeNull();
     expect(out.writeReceipt.effectiveWorkspaceId).toBeNull();
     expect(out.placement).toMatchObject({
       workspaceId: null,
+      homeWorkspaceId: SPACE,
+      requestedWorkspaceId: SPACE,
+      applied: true,
+    });
+    expect(out.placement.note).toMatch(/note is a pod-wide kind/);
+    expect(out.placement.note).toMatch(/No synap_move_entities needed/);
+  });
+
+  it("a space the caller is not a member of: dropped as a lens, and said", async () => {
+    h.answer = {
+      status: "created",
+      id: ID,
+      entityWorkspaceId: null,
+      entityHomeWorkspaceId: null,
+    };
+    // The adapter dropped the lens (no `lensWorkspaceId`): the requested id
+    // survives only in the args.
+    const out = await create({
+      profileSlug: "note",
+      title: "Call notes",
+      workspaceId: OTHER,
+    });
+    expect(out.effectiveWorkspaceId).toBeNull();
+    expect(out.placement).toMatchObject({
+      workspaceId: null,
+      requestedWorkspaceId: OTHER,
+      applied: false,
+    });
+    expect(out.placement).not.toHaveProperty("homeWorkspaceId");
+    expect(out.placement.note).toMatch(/not a space you are a member of/);
+    expect(out.placement.note).toMatch(/readable by you only/);
+  });
+
+  it("a pod-wide row filed for no space says the space only governed the write", async () => {
+    h.answer = {
+      status: "created",
+      id: ID,
+      workspaceId: SPACE,
+      entityWorkspaceId: null,
+      entityHomeWorkspaceId: null,
+    };
+    const out = await create(
+      { profileSlug: "note", title: "Call notes" },
+      SPACE
+    );
+    expect(out.placement).toMatchObject({
+      workspaceId: null,
       requestedWorkspaceId: SPACE,
       applied: false,
     });
-    expect(out.placement.note).toMatch(/note is a pod-wide kind/);
-    expect(out.placement.note).toMatch(/synap_move_entities/);
+    expect(out.placement.note).toMatch(/filed for no space/);
   });
 
-  it("a proposal says where it WILL land", async () => {
+  it("a proposal says where it WILL be filed", async () => {
     h.answer = {
       status: "proposed",
       proposalId: "prop-1",
       proposedEntityId: ID,
       workspaceId: SPACE,
       entityWorkspaceId: null,
+      entityHomeWorkspaceId: SPACE,
     };
     const out = await create(
       { profileSlug: "note", title: "Call notes" },
       SPACE
     );
     expect(out.effectiveWorkspaceId).toBeNull();
-    expect(out.placement?.applied).toBe(false);
+    expect(out.placement).toMatchObject({
+      homeWorkspaceId: SPACE,
+      applied: true,
+    });
   });
 
   it("a kind placed elsewhere names that space", async () => {

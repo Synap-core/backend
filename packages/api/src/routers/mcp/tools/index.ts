@@ -1248,6 +1248,11 @@ export const tools = {
               description:
                 "Optional project id to file the created entity into — stamps belongs_to_project membership.",
             },
+            workspaceId: {
+              type: "string",
+              description:
+                "Optional: the space this entity is for (defaults to the connection's). A pod-wide kind (note, person, decision…) stays pod-wide and is filed for that space, so it shows there for its members: no synap_move_entities afterwards. A space you are not a member of is ignored. The reply's `placement` says what happened.",
+            },
             sessionId: {
               type: "string",
               description:
