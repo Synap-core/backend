@@ -11512,7 +11512,7 @@
           },
           "code": {
             "type": "string",
-            "description": "Optional executable source (runs sandboxed). Present ⇒ the skill is runnable; absent ⇒ it is a teaching skill."
+            "description": "Optional executable source (runs sandboxed). Present ⇒ the skill is runnable; absent ⇒ it is a teaching skill. It is the BODY of `async function(args, context)`: read inputs from `args` and `return` the result. Not a function of its own: `async (args) => { … }` is refused, since nothing would call it."
           },
           "body": {
             "type": "string",
