@@ -27,6 +27,7 @@
 
 import { z } from "@hono/zod-openapi";
 
+import { jsonGoverned } from "../proposal-response.js";
 import { executeCapability } from "../../../services/capabilities/execute-capability.js";
 import { CapabilityExecuteInput } from "../../../contracts/capability-execute.js";
 import {
@@ -413,21 +414,20 @@ export function registerCapabilitiesExecuteRoutes(app: HubHono): void {
             200
           );
         case "proposed":
-          return c.json(
-            {
-              // `status` says what happened in one field, as every write door
-              // does (`applied` / `proposed`); `proposed` stays for callers
-              // that read it.
-              status: "proposed" as const,
-              proposed: true as const,
-              proposalId: outcome.proposalId,
-              reviewUrl: outcome.reviewUrl,
-              // Idempotency receipt — tells the caller whether this proposal was
-              // queued now or is the replay of a prior submission.
-              ackState: outcome.ackState,
-            },
-            202
-          );
+          // The 202-on-proposed rule lives in `jsonGoverned`, not here
+          // (proposal-response.parity.tripwire).
+          return jsonGoverned(c, {
+            // `status` says what happened in one field, as every write door
+            // does (`applied` / `proposed`); `proposed` stays for callers
+            // that read it.
+            status: "proposed" as const,
+            proposed: true as const,
+            proposalId: outcome.proposalId,
+            reviewUrl: outcome.reviewUrl,
+            // Idempotency receipt — tells the caller whether this proposal was
+            // queued now or is the replay of a prior submission.
+            ackState: outcome.ackState,
+          });
         case "run":
           return c.json(
             {
