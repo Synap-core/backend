@@ -191,6 +191,31 @@ describe("webhook trigger ingress → run creation", () => {
     });
   });
 
+  it("carries the stored delivery's id onto the run (trigger.payload.inboundDeliveryId)", async () => {
+    selectResults = [
+      [],
+      [
+        {
+          id: "auto-webhook",
+          triggerConfig: { webhookSubscriptionId: SUB_ID },
+          workspaceId: "ws-1",
+        },
+      ],
+    ];
+
+    await handleAutomationTriggerMatch({
+      data: {
+        ...WEBHOOK_EVENT,
+        data: { ...WEBHOOK_EVENT.data, inboundDeliveryId: "row-1" },
+      },
+    });
+
+    const runValues = insertValues.mock.calls[0][0] as {
+      triggerPayload: Record<string, unknown>;
+    };
+    expect(runValues.triggerPayload.inboundDeliveryId).toBe("row-1");
+  });
+
   it("creates no run when no webhook automation is bound to the subscription", async () => {
     selectResults = [
       [], // event-typed: none

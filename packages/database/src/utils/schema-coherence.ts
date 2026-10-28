@@ -1809,6 +1809,24 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "delivered",
     addedBy: "0324_lifecycle_transition_outbox.sql",
   },
+  // Inbound deliveries + observation keys (0372). Absence means every inbound
+  // webhook answers 500 (the door stores the delivery before it answers) and
+  // every dev-loop fact with a key is refused (the door claims the key first).
+  {
+    table: "inbound_deliveries",
+    column: "delivered",
+    addedBy: "0372_inbound_deliveries_and_observation_keys.sql",
+  },
+  {
+    table: "inbound_deliveries",
+    column: "claimed_until",
+    addedBy: "0372_inbound_deliveries_and_observation_keys.sql",
+  },
+  {
+    table: "observation_keys",
+    column: "event_id",
+    addedBy: "0372_inbound_deliveries_and_observation_keys.sql",
+  },
 
   // session_runners — who holds a session's change-feed wait (0342). Absence
   // means every wait named by a conversation would fail its runner stamp

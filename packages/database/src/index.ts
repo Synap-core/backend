@@ -432,6 +432,22 @@ export {
   type ClaimedTransition,
 } from "./services/lifecycle/transition-outbox.js";
 export {
+  recordInboundDelivery,
+  claimInboundDelivery,
+  settleInboundDelivery,
+  listDueInboundDeliveries,
+  pruneInboundDeliveries,
+  INBOUND_DELIVERY_MAX_ATTEMPTS,
+  type RecordInboundDeliveryInput,
+} from "./services/inbound-delivery-outbox.js";
+export {
+  claimObservationKey,
+  settleObservationKey,
+  releaseObservationKey,
+  OBSERVATION_KEY_LEASE_SECONDS,
+  type ObservationKeyClaim,
+} from "./services/observation-keys.js";
+export {
   LifecycleDefChangeError,
   LIFECYCLE_DEF_PROTECTED,
   checkLifecycleDefUpdate,

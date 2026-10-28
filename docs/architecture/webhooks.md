@@ -39,6 +39,20 @@ deliveryId? }`, so an automation can trigger on it
   `X-Synap-Delivery-Id` / `X-GitHub-Delivery`) and absent otherwise. A signed
   `ping` event (the handshake GitHub sends when a hook is created) is answered
   200 and fires nothing.
+- **Generic inbound is stored before it is answered** (0372). The sender
+  treats a 2xx as delivered and GitHub never redelivers by itself, so the
+  handler writes the delivery to `inbound_deliveries` first and answers 500 if
+  it cannot. The event above is fanned out from the stored row
+  (`dispatchInboundDelivery`, `packages/events/src/inbound-delivery.ts`); a
+  fan-out that does not reach the queue stays owed and the
+  `inbound-delivery-sweeper` cron (every minute) retries it with a backoff. A
+  delivery id is unique per subscription: a redelivery is answered
+  `{ received: true, deduped: true }` and fires nothing again, and the trigger
+  matcher's fingerprint is that id (`<subscriptionId>:delivery:<id>`). The
+  runs a delivery starts carry its row id at `trigger.payload.inboundDeliveryId`.
+  Delivered rows are kept 14 days. Not covered: a run that fails after it
+  started is not re-run (its earlier steps may have written), and an
+  automation that was paused when the delivery came is not replayed.
 - **Token-path providers** (`:token`): the token selects the provider's config on
   its tool (`metadata.<provider>.webhook`); an unknown token is a 404. Cal.com
   and Fireflies dedup on their own ids, and a backfill poller recovers events a

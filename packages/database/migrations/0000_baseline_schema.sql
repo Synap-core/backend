@@ -5436,3 +5436,38 @@ CREATE INDEX IF NOT EXISTS "idx_api_usage_buckets_key_time"
 
 CREATE INDEX IF NOT EXISTS "idx_api_usage_buckets_time"
   ON "api_usage_buckets" ("bucket_start");
+
+-- 0372: inbound deliveries stored before the 200, and one key per observed
+-- fact (the events hypertable cannot hold that unique index). Mirrors
+-- 0372_inbound_deliveries_and_observation_keys.sql.
+CREATE TABLE IF NOT EXISTS "inbound_deliveries" (
+  "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "subscription_id" uuid NOT NULL REFERENCES "webhook_subscriptions"("id") ON DELETE CASCADE,
+  "user_id" text NOT NULL,
+  "workspace_id" uuid,
+  "delivery_id" text,
+  "event" text,
+  "payload" jsonb NOT NULL,
+  "delivered" text[] NOT NULL DEFAULT '{}'::text[],
+  "attempts" integer NOT NULL DEFAULT 0,
+  "last_error" text,
+  "claimed_until" timestamptz,
+  "dispatched_at" timestamptz,
+  "received_at" timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS "inbound_deliveries_delivery_uq"
+  ON "inbound_deliveries" ("subscription_id", "delivery_id")
+  WHERE "delivery_id" IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS "inbound_deliveries_pending_idx"
+  ON "inbound_deliveries" ("received_at") WHERE "dispatched_at" IS NULL;
+
+CREATE INDEX IF NOT EXISTS "inbound_deliveries_user_idx"
+  ON "inbound_deliveries" ("user_id", "received_at" DESC);
+
+CREATE TABLE IF NOT EXISTS "observation_keys" (
+  "key" text PRIMARY KEY,
+  "event_id" uuid,
+  "claimed_at" timestamptz NOT NULL DEFAULT now()
+);
