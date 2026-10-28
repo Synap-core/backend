@@ -22,6 +22,8 @@ export interface SkillListRow {
   slug?: string | null;
   kind: string;
   executionMode?: string | null;
+  /** `pod` (everyone's) · `user` (one person's) · `workspace` (one space's). */
+  scope?: string | null;
   workspaceId?: string | null;
   description?: string | null;
   body?: string | null;
@@ -36,6 +38,8 @@ export interface SkillRow {
   /** The ref agents load it by (`rules/start-here`), when it has one. */
   slug: string | null;
   kind: string;
+  /** Who it applies to, as the pod scopes it. */
+  scope: "pod" | "user" | "workspace";
   workspaceId: string | null;
   createdAt: string;
   /** Instructions kept in a document instead of inline. */
@@ -60,6 +64,12 @@ export function skillRow(s: SkillListRow): SkillRow {
     name: s.name,
     slug: s.slug?.trim() || null,
     kind: s.kind,
+    scope:
+      s.scope === "user" || s.scope === "workspace"
+        ? s.scope
+        : s.workspaceId
+          ? "workspace"
+          : "pod",
     workspaceId: s.workspaceId ?? null,
     createdAt: isoOf(s.createdAt),
     bodyDocumentId: s.bodyDocumentId ?? null,

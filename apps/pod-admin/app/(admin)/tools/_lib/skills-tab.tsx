@@ -75,14 +75,18 @@ export function SkillsTab() {
 
   const spaceName = useMemo(() => {
     const byId = new Map((spaces.data ?? []).map((s) => [s.id, s.name]));
-    return (id: string | null) =>
-      id ? (byId.get(id) ?? "A space") : "Whole pod";
+    return (row: SkillRow) =>
+      row.scope === "user"
+        ? "Only you"
+        : row.workspaceId
+          ? (byId.get(row.workspaceId) ?? "A space")
+          : "Whole pod";
   }, [spaces.data]);
   const secondary = (row: SkillRow): string =>
     [
       humanizeToken(row.kind),
       row.slug,
-      spaceName(row.workspaceId),
+      spaceName(row),
       `added ${formatRelative(row.createdAt, { empty: "" })}`,
     ]
       .filter(Boolean)

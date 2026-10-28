@@ -38,6 +38,13 @@ describe("skillRow — how a skill that is off is turned on", () => {
     expect(row.turnOn).toBeNull();
     expect(row.record).toBeNull();
   });
+  it("a skill with no space is the whole pod's only when scoped so (wrong rule: no space = whole pod)", () => {
+    expect(skillRow(skill({ scope: "user" })).scope).toBe("user");
+    expect(skillRow(skill({ scope: "pod" })).scope).toBe("pod");
+    expect(skillRow(skill({ workspaceId: "w1", scope: null })).scope).toBe(
+      "workspace"
+    );
+  });
   it("instructions kept in a document say where they are", () => {
     const row = skillRow(skill({ body: null, bodyDocumentId: "d1" }));
     expect(row.turnOn).toBe("here");
