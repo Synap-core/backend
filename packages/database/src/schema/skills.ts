@@ -139,16 +139,18 @@ export type SkillInputMapValue = string | { const: unknown };
  * of the same tool that lists them, and which field of each listed record is
  * its id, its label and its provider.
  */
-export interface SkillInputMapAccounts {
+export type SkillInputMapAccounts = {
   verb: string;
   id: string;
   label: string;
   provider?: string;
-}
-export interface SkillInputMap {
+};
+// Type aliases, not interfaces: a JSON bag the skills router and the
+// definition applier pass as `Record<string, unknown>` must accept the map.
+export type SkillInputMap = {
   params: Record<string, SkillInputMapValue>;
   accounts?: SkillInputMapAccounts;
-}
+};
 
 export const skills = pgTable(
   "skills",
