@@ -70,7 +70,8 @@ const PROBE_TYPE = "status_door_probe";
 
 /** The #427 shape: applies, reports success, never touches the status. */
 registerProposalExecutor({
-  key: `${PROBE_TYPE}/noop`,
+  // A probe key, not a real proposal type (the precedent: app-person-token).
+  key: `${PROBE_TYPE}/noop` as never,
   async execute() {
     h.probeRuns++;
     return { success: true };
