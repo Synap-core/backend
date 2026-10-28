@@ -107,7 +107,7 @@ function resolvesRunParameters(text: string): boolean {
 
 const files = sourceFiles(SRC);
 const calls = files.flatMap((f) =>
-  callsIn(relative(SRC, f), stripComments(readFileSync(f, "utf8")))
+  callsIn(relative(SRC, f), stripComments(readFileSync(f, "utf8"), "ts"))
 );
 const previews = calls.filter((c) => /\bdryRun\s*:\s*true\b/.test(c.args));
 const runs = calls.filter((c) => !previews.includes(c));
@@ -155,7 +155,7 @@ describe("pod files reach every run door resolved", () => {
       .filter(
         (c) =>
           parametersArg(c) !== "runParameters" ||
-          !resolvesRunParameters(stripComments(text.get(c.file)!))
+          !resolvesRunParameters(stripComments(text.get(c.file)!, "ts"))
       )
       .map((c) => `${c.file}: ${c.callee}(… ${parametersArg(c)} …)`);
     expect(
