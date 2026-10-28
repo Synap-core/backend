@@ -70,6 +70,63 @@ export class StorageUploadUnavailableError extends Error {
   }
 }
 
+/** Options for {@link IFileStorage.downloadStream}. */
+export interface DownloadStreamOptions {
+  /**
+   * Refuse an object larger than this many bytes with
+   * {@link StorageObjectTooLargeError}: before any byte is read when the store
+   * reports the object's length, and again as the bytes pass (a length that
+   * lied still cannot get more than `maxBytes` through).
+   */
+  maxBytes?: number;
+}
+
+/** An object opened for reading, by {@link IFileStorage.downloadStream}. */
+export interface DownloadStream {
+  /**
+   * The object's bytes, read on demand. Iterate it once. Throws
+   * {@link StorageObjectTooLargeError} past `maxBytes`.
+   */
+  body: AsyncIterable<Uint8Array>;
+  /** The object's length as the store reported it; null when it did not say. */
+  size: number | null;
+  /** The stored MIME type (`application/octet-stream` when none is stored). */
+  contentType: string;
+  /**
+   * Release the connection or file handle without reading the body (the
+   * caller decided not to send it). Idempotent; harmless after a full read.
+   */
+  cancel(): void;
+}
+
+/** The object does not exist (a definite "not there", never a network failure). */
+export class StorageObjectNotFoundError extends Error {
+  readonly code = "STORAGE_OBJECT_NOT_FOUND";
+  constructor(readonly path: string) {
+    super(`File not found: ${path}`);
+    this.name = "StorageObjectNotFoundError";
+  }
+}
+
+/**
+ * The object is larger than the reader allowed. `size` is the stored length
+ * when the refusal came before reading, else the bytes seen when the cap
+ * passed.
+ */
+export class StorageObjectTooLargeError extends Error {
+  readonly code = "STORAGE_OBJECT_TOO_LARGE";
+  constructor(
+    readonly path: string,
+    readonly size: number,
+    readonly maxBytes: number
+  ) {
+    super(
+      `File ${path} is ${size} bytes, over the ${maxBytes}-byte limit for this read`
+    );
+    this.name = "StorageObjectTooLargeError";
+  }
+}
+
 /**
  * Storage provider interface
  *
@@ -149,6 +206,21 @@ export interface IFileStorage {
    * ```
    */
   downloadBuffer(path: string): Promise<Buffer>;
+
+  /**
+   * Open a file for reading as a STREAM: the bytes are never held whole in
+   * memory (a 100 MB video goes chunk by chunk to wherever the caller pipes
+   * it).
+   *
+   * @param path - Storage path/key
+   * @param options - `maxBytes`: refuse a larger object (typed)
+   * @throws {@link StorageObjectNotFoundError} when the object does not exist
+   * @throws {@link StorageObjectTooLargeError} when it is over `maxBytes`
+   */
+  downloadStream(
+    path: string,
+    options?: DownloadStreamOptions
+  ): Promise<DownloadStream>;
 
   /**
    * Delete a file from storage

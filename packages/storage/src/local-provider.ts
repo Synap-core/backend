@@ -13,7 +13,7 @@
  */
 
 import fs from "node:fs/promises";
-import { createWriteStream } from "node:fs";
+import { createReadStream, createWriteStream } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -25,8 +25,15 @@ import type {
   UploadOptions,
   FileInfo,
   SignedUploadOptions,
+  DownloadStream,
+  DownloadStreamOptions,
 } from "./interface.js";
-import { StorageUploadUnavailableError } from "./interface.js";
+import {
+  StorageObjectNotFoundError,
+  StorageObjectTooLargeError,
+  StorageUploadUnavailableError,
+} from "./interface.js";
+import { capBytes } from "./s3-stream-download.js";
 import { buildEntityPath } from "./utils.js";
 import { fileChecksum } from "./checksum.js";
 
@@ -144,6 +151,35 @@ export class LocalStorageProvider implements IFileStorage {
       }
       throw err;
     }
+  }
+
+  async downloadStream(
+    storagePath: string,
+    options?: DownloadStreamOptions
+  ): Promise<DownloadStream> {
+    const absPath = this.resolve(storagePath);
+    const maxBytes = options?.maxBytes;
+    let size: number;
+    try {
+      size = (await fs.stat(absPath)).size;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        throw new StorageObjectNotFoundError(storagePath);
+      }
+      throw err;
+    }
+    if (maxBytes !== undefined && size > maxBytes) {
+      throw new StorageObjectTooLargeError(storagePath, size, maxBytes);
+    }
+    const stream = createReadStream(absPath);
+    return {
+      body: capBytes(stream, storagePath, maxBytes),
+      size,
+      contentType: "application/octet-stream",
+      cancel: () => {
+        stream.destroy();
+      },
+    };
   }
 
   async delete(storagePath: string): Promise<void> {
