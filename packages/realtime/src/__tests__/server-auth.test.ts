@@ -21,11 +21,25 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // ─── Mock the DB layer the validator imports ────────────────────────────────
+// The legacy-row (bcrypt) query; the sha256 lookup query (`.limit(1)`) finds
+// nothing here, so every test below exercises the bcrypt fallback.
+// (api-key-auth.pglite.test.ts covers the lookup path on a real table.)
 const mockSelect = vi.fn();
+const mockLookup = vi.fn(async () => [] as unknown[]);
 
 vi.mock("@synap/database", () => ({
   db: {
-    select: () => ({ from: () => ({ where: mockSelect }) }),
+    select: () => ({
+      from: () => ({
+        where: () => ({
+          limit: () => mockLookup(),
+          then: (
+            ok: (rows: unknown) => unknown,
+            ko: (err: unknown) => unknown
+          ) => (mockSelect() as Promise<unknown>).then(ok, ko),
+        }),
+      }),
+    }),
     update: () => ({ set: () => ({ where: () => Promise.resolve() }) }),
   },
   and: (...args: unknown[]) => args,
@@ -41,6 +55,7 @@ vi.mock("@synap/database/schema", () => ({
     isActive: "is_active",
     expiresAt: "expires_at",
     keyHash: "key_hash",
+    keyLookupHash: "key_lookup_hash",
     id: "id",
     scope: "scope",
     lastUsedAt: "last_used_at",
