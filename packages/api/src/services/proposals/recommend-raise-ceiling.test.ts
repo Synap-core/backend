@@ -8,7 +8,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
  * DB-free: `db.select(...)` is a per-table FIFO queue (mirror of the tighten
  * test); `resolveDailyWriteCeiling` is mocked to a fixed limit so the qualify
  * math is deterministic. With ceiling=10: atCeilingThreshold=ceil(10*0.8)=8,
- * proposedLimit=ceil(10*1.5)=15.
+ * proposedLimit=ceil(10*1.5)=15. `null` = no ceiling row (no daily limit, the
+ * default): nothing to raise.
  */
 
 const {
@@ -150,6 +151,26 @@ describe("recommendRaiseCeilingForAllAgents", () => {
     expect(data.currentLimit).toBe(10);
     expect(data.proposedLimit).toBe(15);
     expect(data.evidence.daysAtCeiling).toBe(3);
+  });
+
+  it("no ceiling row (no daily limit, the default) files nothing and reads no day counts", async () => {
+    mockResolveDailyWriteCeiling.mockResolvedValue(null);
+    queues.users.push([agentRow("agent-1")]);
+    queues.events.push([
+      dayCount("2026-08-01", 900),
+      dayCount("2026-08-02", 900),
+      dayCount("2026-08-03", 900),
+    ]);
+
+    const result = await recommendRaiseCeilingForAllAgents();
+
+    expect(result.proposalsFiled).toBe(0);
+    expect(mockInsertPendingProposal).not.toHaveBeenCalled();
+    expect(mockResolveDailyWriteCeiling).toHaveBeenCalledWith(
+      expect.objectContaining({ agentUserId: "agent-1" })
+    );
+    // The day counts were never read: no limit, nothing to compare them to.
+    expect(queues.events).toHaveLength(1);
   });
 
   it("below MIN_DAYS_AT_CEILING (only 2 days >= threshold) files nothing", async () => {
