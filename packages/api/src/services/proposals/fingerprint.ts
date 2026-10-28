@@ -23,6 +23,7 @@
  * runs at write time and is unaffected by anything in this file.
  */
 
+import type { NeedsYouProposalClass } from "@synap-core/types/needs-you/rule";
 import { decodeHtmlEntities } from "@synap-core/types/text";
 import { heldWritesPackName } from "@synap-core/types/proposals/deferred-writes";
 import type { PROPOSE_REASON } from "@synap/governance-policy";
@@ -31,6 +32,11 @@ import {
   proposalClassFields,
   type ProposalClass,
 } from "./proposal-class.js";
+import {
+  reviewPackageOfRow,
+  type ReviewPackage,
+} from "./review-package-of-row.js";
+import { reviewPackageRank } from "@synap-core/types/proposals/review-package";
 
 /**
  * The minimum a proposal row must expose to be fingerprinted. Mirrors the
@@ -238,6 +244,12 @@ export interface ClusterInputRow extends ProposalFingerprintInput {
    * one or the other, never a mix.
    */
   reviewLater?: boolean;
+  /**
+   * THE needs-you rule's class for this pending member
+   * (`classifyPendingProposal`, decision E), when the groups read classified
+   * it. Members SPLIT on it like `reviewLater`, so a cluster has one class.
+   */
+  needsYouClass?: NeedsYouProposalClass | null;
 }
 
 /**
@@ -316,6 +328,8 @@ export interface ProposalCluster {
    * cluster is out of the needs-you headline and drawn in its own fold.
    */
   reviewLater: boolean;
+  /** Every member's needs-you class (see `ClusterInputRow.needsYouClass`). */
+  needsYouClass?: NeedsYouProposalClass;
   count: number;
   /** Up to `sampleCap` member proposal ids (newest-first as fed). */
   sampleProposalIds: string[];
@@ -341,6 +355,14 @@ export interface ProposalCluster {
    * "from X" (`signalFromCluster`).
    */
   agent: ProposalClusterAgent | null;
+  /**
+   * The REVIEW PACKAGE the cluster files under — the decision it asks
+   * (`reviewPackageOfRow`, founder B-1). Decided over EVERY member and the
+   * highest-stakes one wins: members share proposalType × targetType, but a
+   * create's kind, a held-writes pack's writes or a person author can lift one
+   * member into a higher package, and the cluster is never filed below it.
+   */
+  package: ReviewPackage;
   /**
    * Member count per `governance_reason`, so a card can render its composition
    * ("152 routine · 2 destructive · 1 untrusted origin") instead of a bare
@@ -399,6 +421,7 @@ interface ClusterAccumulator {
   /** A capability run's verb — one per cluster (runs cluster on the verb's skill id). */
   runVerbId: string | null;
   reviewLater: boolean;
+  needsYouClass: NeedsYouProposalClass | null;
   targetLabel: string;
   count: number;
   sampleProposalIds: string[];
@@ -414,6 +437,8 @@ interface ClusterAccumulator {
   agentLabel: string | null;
   reasonCounts: Record<string, number>;
   attentionFloorCount: number;
+  /** The highest-stakes member's review package so far. */
+  package: ReviewPackage;
 }
 
 /** The single agent every member of a cluster was filed by, or `null`. */
@@ -460,10 +485,13 @@ export function collapseProposalsToClusters(
   for (const row of rows) {
     const fingerprint = computeProposalFingerprint(row);
     const reviewLater = row.reviewLater === true;
+    const needsYouClass = row.needsYouClass ?? null;
     const key =
       (opts?.splitBySession
         ? `${fingerprint}${SEP}${row.sessionId ?? ""}`
-        : fingerprint) + (reviewLater ? `${SEP}review-later` : "");
+        : fingerprint) +
+      (reviewLater ? `${SEP}review-later` : "") +
+      (needsYouClass ? `${SEP}${needsYouClass}` : "");
     let acc = byFingerprint.get(key);
     if (!acc) {
       acc = {
@@ -472,6 +500,7 @@ export function collapseProposalsToClusters(
         targetType: row.targetType,
         runVerbId: capabilityRunVerbId(row.data),
         reviewLater,
+        needsYouClass,
         targetLabel: resolveTargetLabel(row),
         count: 0,
         sampleProposalIds: [],
@@ -484,8 +513,13 @@ export function collapseProposalsToClusters(
         agentLabel: null,
         reasonCounts: {},
         attentionFloorCount: 0,
+        package: reviewPackageOfRow(row),
       };
       byFingerprint.set(key, acc);
+    } else {
+      const pkg = reviewPackageOfRow(row);
+      if (reviewPackageRank(pkg) < reviewPackageRank(acc.package))
+        acc.package = pkg;
     }
 
     acc.count += 1;
@@ -536,6 +570,7 @@ export function collapseProposalsToClusters(
     targetLabel: acc.targetLabel,
     ...proposalClassFields(acc.proposalType, acc.targetType, acc.runVerbId),
     reviewLater: acc.reviewLater,
+    ...(acc.needsYouClass ? { needsYouClass: acc.needsYouClass } : {}),
     count: acc.count,
     sampleProposalIds: acc.sampleProposalIds,
     sources: acc.sources,
@@ -545,6 +580,7 @@ export function collapseProposalsToClusters(
     agent: oneAgentOf(acc),
     reasonCounts: acc.reasonCounts,
     attentionFloorCount: acc.attentionFloorCount,
+    package: acc.package,
   }));
   clusters.sort((a, b) => b.latestAt.getTime() - a.latestAt.getTime());
   return clusters;

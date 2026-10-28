@@ -10,16 +10,100 @@
  */
 
 import { z } from "zod";
-import { router, workspaceProcedure, podProcedure } from "../trpc.js";
+import {
+  router,
+  workspaceProcedure,
+  podProcedure,
+  assertPodAdmin,
+} from "../trpc.js";
 import { TRPCError } from "@trpc/server";
-import { db, eq, desc, or, and, verifyPermission } from "@synap/database";
+import { db, eq, ne, desc, or, and, verifyPermission } from "@synap/database";
 import { agents } from "@synap/database/schema";
 import { ownAdjunctFilter } from "../services/agent-identity-service.js";
+import { isPodAdmin } from "../utils/workspace-role.js";
 import { randomUUID } from "crypto";
 
+/** The slug every chat fallback resolves to; never a user-owned agent's. */
+const ORCHESTRATOR_SLUG = "orchestrator";
+
 /**
- * List visible agents — public listing (Pod Procedure).
- * Auth: optional (works for anonymous discovery of marketplace agents).
+ * What a caller may READ in the catalog: the shared built-ins
+ * (system / provider) and their OWN user-owned adjuncts. The same predicate
+ * `getById` and `workspaceList` apply.
+ */
+function visibleAgentFilter(userId: string) {
+  return or(
+    eq(agents.ownerType, "system"),
+    eq(agents.ownerType, "provider"),
+    ownAdjunctFilter(userId)
+  );
+}
+
+/**
+ * Load the agent row a caller may WRITE (audit 2026-10-28, pod-routers F1).
+ *
+ * `agents` rows are POD-GLOBAL (no workspace column), so the caller's
+ * "manage" role in the header workspace says nothing about a row. The writer
+ * is the person whose adjunct it is (`ownAdjunctFilter`), or a pod admin for
+ * everything else: the shared system / provider rows (the orchestrator among
+ * them) and rows with no owner. Another person's private adjunct reads as
+ * NOT_FOUND (it is not visible to them); a shared row as FORBIDDEN.
+ */
+async function loadWritableAgent(userId: string, id: string) {
+  const [own] = await db
+    .select()
+    .from(agents)
+    .where(and(eq(agents.id, id), ownAdjunctFilter(userId)))
+    .limit(1);
+  if (own) return own;
+
+  const existing = await db.query.agents.findFirst({
+    where: eq(agents.id, id),
+  });
+  const shared =
+    existing?.ownerType === "system" || existing?.ownerType === "provider";
+  if (!existing || (!shared && !(await isPodAdmin(userId)))) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: `Agent ${id} not found`,
+    });
+  }
+  await assertPodAdmin(userId);
+  return existing;
+}
+
+/**
+ * A slug is held by at most ONE active agent, whatever its owner: chat paths
+ * resolve a slug with `.limit(1)` and no order (`resolveSlugToAgentId`), so a
+ * second holder makes the resolution nondeterministic. `orchestrator` is
+ * reserved to the row that already holds it.
+ */
+async function assertSlugFree(slug: string, exceptId?: string) {
+  if (slug === ORCHESTRATOR_SLUG) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message: `Agent slug '${slug}' is reserved`,
+    });
+  }
+  const holder = await db.query.agents.findFirst({
+    where: and(
+      eq(agents.slug, slug),
+      eq(agents.active, true),
+      exceptId ? ne(agents.id, exceptId) : undefined
+    ),
+    columns: { id: true },
+  });
+  if (holder) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message: `Agent slug '${slug}' already exists`,
+    });
+  }
+}
+
+/**
+ * List visible agents (signed-in caller): the shared system / provider
+ * agents and the caller's own adjuncts, never another person's.
  */
 export const agentsRouter = router({
   list: podProcedure
@@ -30,8 +114,11 @@ export const agentsRouter = router({
         active: z.boolean().optional(),
       })
     )
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
+      // Never another person's private adjunct (audit F2): the same floor
+      // getById / workspaceList apply, AND-ed with the caller's filters.
       const conditions = [
+        visibleAgentFilter(ctx.userId),
         input.intelligenceServiceId
           ? eq(agents.intelligenceServiceId, input.intelligenceServiceId)
           : undefined,
@@ -44,7 +131,7 @@ export const agentsRouter = router({
       return db
         .select()
         .from(agents)
-        .where(conditions.length > 0 ? and(...conditions) : undefined)
+        .where(and(...conditions))
         .orderBy(desc(agents.createdAt));
     }),
 
@@ -101,16 +188,7 @@ export const agentsRouter = router({
       const [agent] = await db
         .select()
         .from(agents)
-        .where(
-          and(
-            eq(agents.id, input.id),
-            or(
-              eq(agents.ownerType, "system"),
-              eq(agents.ownerType, "provider"),
-              ownAdjunctFilter(ctx.userId)
-            )
-          )
-        )
+        .where(and(eq(agents.id, input.id), visibleAgentFilter(ctx.userId)))
         .limit(1);
 
       if (!agent) {
@@ -154,20 +232,7 @@ export const agentsRouter = router({
         });
       }
 
-      const existing = await db.query.agents.findFirst({
-        where: and(
-          eq(agents.slug, input.slug),
-          eq(agents.ownerType, "user"),
-          eq(agents.active, true)
-        ),
-      });
-
-      if (existing) {
-        throw new TRPCError({
-          code: "CONFLICT",
-          message: `Agent slug '${input.slug}' already exists`,
-        });
-      }
+      await assertSlugFree(input.slug);
 
       const [agent] = await db
         .insert(agents)
@@ -220,15 +285,9 @@ export const agentsRouter = router({
         });
       }
 
-      const existing = await db.query.agents.findFirst({
-        where: eq(agents.id, input.id),
-      });
-
-      if (!existing) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: `Agent ${input.id} not found`,
-        });
+      const existing = await loadWritableAgent(ctx.userId, input.id);
+      if (input.slug !== undefined && input.slug !== existing.slug) {
+        await assertSlugFree(input.slug, existing.id);
       }
 
       const updates: Record<string, unknown> = {};
@@ -274,16 +333,7 @@ export const agentsRouter = router({
         });
       }
 
-      const existing = await db.query.agents.findFirst({
-        where: eq(agents.id, input.id),
-      });
-
-      if (!existing) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: `Agent ${input.id} not found`,
-        });
-      }
+      const existing = await loadWritableAgent(ctx.userId, input.id);
 
       if (existing.ownerType !== "user") {
         throw new TRPCError({
@@ -292,7 +342,7 @@ export const agentsRouter = router({
         });
       }
 
-      if (existing.slug === "orchestrator") {
+      if (existing.slug === ORCHESTRATOR_SLUG) {
         throw new TRPCError({
           code: "FORBIDDEN",
           message: "Cannot delete the orchestrator agent",

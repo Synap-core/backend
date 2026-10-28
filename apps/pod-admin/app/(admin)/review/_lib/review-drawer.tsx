@@ -89,7 +89,7 @@ interface ReviewFrameProps {
   onAskSettled: () => void;
 }
 
-type DetailProps = Omit<ReviewFrameProps, "open"> & { open: OpenReview };
+export type DetailProps = Omit<ReviewFrameProps, "open"> & { open: OpenReview };
 
 /** Below `lg`: the decision in a modal drawer over the list. */
 export function ReviewDrawer({ open, ...rest }: ReviewFrameProps) {
@@ -140,6 +140,15 @@ export function ReviewDock({ open, ...rest }: ReviewFrameProps) {
       </div>
     </aside>
   );
+}
+
+/**
+ * The decision drawn in place — no frame. How things work's "Diff" layout
+ * reads a rule's change beside its list with it (founder B-1): the same
+ * `ReviewDetail` the dock and drawer draw, never a copy.
+ */
+export function ReviewInline(props: DetailProps) {
+  return <ReviewDetail {...props} />;
 }
 
 function ReviewDetail({

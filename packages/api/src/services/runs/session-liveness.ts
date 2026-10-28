@@ -24,6 +24,14 @@
  *   asks      — owed slots handed back (`owedSince`), off the row itself.
  *   notes     — agent messages posted in the room.
  *
+ * ── The agent's own clock (`lastAgentWorkAt`) ──────────────────────────────
+ * `lastAt` is ANY activity: a person approving a proposal, or the agent's own
+ * question, moves it. The card's "an agent is at work" must be the needs-you
+ * rule's Working clock instead (`sessionLastAgentWorkSql`, the SQL twin's own
+ * measure: agent evidence of work, never the asking, never a human act), so
+ * the card and the rule's Working fold can never disagree (rv-be-needs M6).
+ * It is measured over the session's whole history: `since` does not bound it.
+ *
  * ── EMPTY vs FAILED ────────────────────────────────────────────────────────
  * A session with no activity reads `{ turnInFlight: false, lastAt: null }`. A
  * read that THROWS reads `null` for every session it covered — never a quiet
@@ -46,6 +54,8 @@ import {
   messages,
   MessageAuthorType,
   proposals,
+  focusSessions,
+  sessionLastAgentWorkSql,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import type { SessionActivityLive } from "@synap-core/types/run-activity";
@@ -136,7 +146,7 @@ export async function loadSessionLiveness(
   ];
 
   try {
-    const [turnRows, runningRows, eventRows, proposalRows, noteRows] =
+    const [turnRows, runningRows, eventRows, proposalRows, noteRows, workRows] =
       await Promise.all([
         channelIds.length
           ? db
@@ -230,6 +240,15 @@ export async function loadSessionLiveness(
               )
               .groupBy(messages.channelId)
           : Promise.resolve([]),
+        db
+          .select({
+            sessionId: focusSessions.id,
+            at: sql<
+              Date | string | null
+            >`${sessionLastAgentWorkSql("focus_sessions")}`,
+          })
+          .from(focusSessions)
+          .where(inArray(focusSessions.id, ids)),
       ]);
 
     const byChannel = (rows: Array<{ channelId: string; at: unknown }>) =>
@@ -248,6 +267,7 @@ export async function loadSessionLiveness(
     const noteAt = byChannel(noteRows);
     const eventAt = bySession(eventRows);
     const proposalAt = bySession(proposalRows);
+    const workAt = bySession(workRows);
 
     for (const s of sessions) {
       const running = s.channelId
@@ -263,11 +283,13 @@ export async function loadSessionLiveness(
         newestAsk(s),
       ].filter((t): t is number => typeof t === "number");
       const last = candidates.length ? Math.max(...candidates) : null;
+      const work = workAt.get(s.id);
       out.set(s.id, {
         turnInFlight: !!running,
         turnId: running?.id ?? null,
         since: running?.startedAt ?? null,
         lastAt: last === null ? null : new Date(last),
+        lastAgentWorkAt: work == null ? null : new Date(work),
       });
     }
   } catch (err) {

@@ -141,6 +141,15 @@ import {
   sessionReadableWhere,
 } from "../access/session-visibility.js";
 import { redactUnreadableSessionTargets } from "../services/proposals/session-content-redaction.js";
+import {
+  REVIEW_PACKAGES,
+  reviewPackageOfRow,
+} from "../services/proposals/review-package-of-row.js";
+import {
+  classifyPendingProposals,
+  clusterFoldCounts,
+} from "../services/proposals/proposal-needs-you.js";
+import { isNeedsYou } from "@synap-core/types/needs-you/rule";
 export { buildProposalChanges } from "./proposals/changes.js";
 import {
   planProposalRevert,
@@ -382,6 +391,9 @@ function pageOnlyFailureFields(error: unknown): {
     : {};
 }
 
+/** Rows a `package` filter on `list` scans (the `groups` default scan). */
+const PACKAGE_SCAN_LIMIT = 1000;
+
 export const proposalsRouter = router({
   /**
    * List proposals (Inbox)
@@ -466,6 +478,14 @@ export const proposalsRouter = router({
          */
         automationId: z.string().uuid().optional(),
         /**
+         * Stamp each PENDING item with THE needs-you rule's class
+         * (`needsYouClass`, decision E6) — the SAME `classifyPendingProposals`
+         * call `groups` makes, so a page of proposals and the Inbox's clusters
+         * fold one proposal the same way. Absent ⇒ no class (the review queue:
+         * every pending proposal is its to decide).
+         */
+        classifyNeedsYou: z.boolean().optional(),
+        /**
          * `validated` = approved ∪ auto_approved (the applied set, kept for its
          * existing readers). `auto_approved` = ONLY the writes that executed
          * without anyone deciding them — the "notice" tier of
@@ -483,6 +503,14 @@ export const proposalsRouter = router({
           .default("pending"),
         /** Cursor-based pagination: ISO timestamp of the last item's createdAt */
         cursor: z.string().optional(),
+        /**
+         * Only proposals of this REVIEW PACKAGE — the decision they ask
+         * (`reviewPackageOf`, founder B-1). Decided per row (a create's kind,
+         * a held-writes pack's writes), so it filters a bounded scan of the
+         * newest {@link PACKAGE_SCAN_LIMIT} matching rows; `nextCursor` goes on
+         * past a scan that filled no page. Every row also carries `package`.
+         */
+        package: z.enum(REVIEW_PACKAGES).optional(),
       })
     )
     .query(async ({ input, ctx }) => {
@@ -597,12 +625,34 @@ export const proposalsRouter = router({
         conditions.push(lt(proposals.createdAt, new Date(input.cursor)));
       }
 
-      const pageRows = await db.query.proposals.findMany({
-        where: conditions.length > 0 ? and(...conditions) : undefined,
-        orderBy: [desc(proposals.createdAt), desc(proposals.id)],
-        limit: input.limit + 1,
-        offset: input.cursor ? 0 : input.offset,
-      });
+      // A package filter scans, then pages over the matches (see `package`).
+      let scanCursor: string | undefined;
+      let pageRows: Array<typeof proposals.$inferSelect>;
+      if (input.package) {
+        const scanned = await db.query.proposals.findMany({
+          where: conditions.length > 0 ? and(...conditions) : undefined,
+          orderBy: [desc(proposals.createdAt), desc(proposals.id)],
+          limit: PACKAGE_SCAN_LIMIT,
+        });
+        const start = input.cursor ? 0 : input.offset;
+        pageRows = scanned
+          .filter((r) => reviewPackageOfRow(r) === input.package)
+          .slice(start, start + input.limit + 1);
+        // The scan stopped at its cap before the page filled: there may be
+        // more past it, so the page says so and the cursor resumes there.
+        if (
+          scanned.length >= PACKAGE_SCAN_LIMIT &&
+          pageRows.length <= input.limit
+        )
+          scanCursor = scanned[scanned.length - 1]!.createdAt.toISOString();
+      } else {
+        pageRows = await db.query.proposals.findMany({
+          where: conditions.length > 0 ? and(...conditions) : undefined,
+          orderBy: [desc(proposals.createdAt), desc(proposals.id)],
+          limit: input.limit + 1,
+          offset: input.cursor ? 0 : input.offset,
+        });
+      }
 
       // SUBJECT ⇒ the CREATING proposal is PINNED on the first page, whatever
       // the limit: newest-first paging otherwise drops the one row Lineage's
@@ -701,17 +751,34 @@ export const proposalsRouter = router({
           })
         );
       }
+      // THE needs-you rule per pending row (decision E6): the groups door's
+      // own call, on the UNREDACTED rows (the waits read floors sessions).
+      const needsYouClasses = input.classifyNeedsYou
+        ? await classifyPendingProposals(rows, {
+            userId: reviewerId,
+            roster: rosterReadFor(ctx),
+          })
+        : null;
       const itemsWithPermission = items.map((it) => {
         const verdict = reviewVerdicts.get(it.id);
         const viewerCanReview = verdict?.viewerCanReview ?? false;
         const viewerCanReviewReason =
           verdict?.viewerCanReviewReason ?? "not-authorized";
         const revertable = revertableById.get(it.id) ?? false;
-        return { ...it, viewerCanReview, viewerCanReviewReason, revertable };
+        const needsYouClass = needsYouClasses?.get(it.id);
+        return {
+          ...it,
+          viewerCanReview,
+          viewerCanReviewReason,
+          revertable,
+          package: reviewPackageOfRow(it),
+          ...(needsYouClass ? { needsYouClass } : {}),
+        };
       });
 
-      const nextCursor =
-        pagination.hasMore && itemsWithPermission.length > 0
+      const nextCursor = scanCursor
+        ? (itemsWithPermission.at(-1)?.createdAt.toISOString() ?? scanCursor)
+        : pagination.hasMore && itemsWithPermission.length > 0
           ? itemsWithPermission[
               itemsWithPermission.length - 1
             ]!.createdAt.toISOString()
@@ -719,7 +786,11 @@ export const proposalsRouter = router({
 
       return {
         items: itemsWithPermission,
-        pagination: { ...pagination, nextCursor },
+        pagination: {
+          ...pagination,
+          hasMore: pagination.hasMore || scanCursor !== undefined,
+          nextCursor,
+        },
         /** @deprecated Use `items` instead */
         proposals: itemsWithPermission,
       };
@@ -793,6 +864,22 @@ export const proposalsRouter = router({
          * that session's block; `distinct` then counts the parts.
          */
         splitBySession: z.boolean().optional(),
+        /**
+         * Only clusters of this REVIEW PACKAGE — the decision they ask
+         * (`reviewPackageOf`, founder B-1). A cluster's package is its
+         * highest-stakes member's, decided in the collapse; `distinct` counts
+         * the clusters of that package.
+         */
+        package: z.enum(REVIEW_PACKAGES).optional(),
+        /**
+         * Class every pending member by THE needs-you rule
+         * (`classifyPendingProposal`, decision E6): only a proposal something
+         * waits on stays in the headline; the rest are Review later or
+         * Changes to review (`reviewLater` on the cluster, `needsYouClass`
+         * names which). The needs-you union passes it; the review queue does
+         * not (every pending proposal is its to decide).
+         */
+        classifyNeedsYou: z.boolean().optional(),
       })
     )
     .query(async ({ input, ctx }) => {
@@ -846,6 +933,7 @@ export const proposalsRouter = router({
       const rows = await db
         .select({
           id: proposals.id,
+          status: proposals.status,
           proposalType: proposals.proposalType,
           targetType: proposals.targetType,
           targetId: proposals.targetId,
@@ -957,23 +1045,40 @@ export const proposalsRouter = router({
         userId,
         roster: rosterReadFor(ctx),
       });
-      const clusterRows: ClusterInputRow[] = readableRows.map((r) => ({
-        id: r.id,
-        proposalType: r.proposalType,
-        targetType: r.targetType,
-        targetId: r.targetId,
-        data: r.data,
-        createdAt: r.createdAt,
-        workspaceId: r.workspaceId ?? null,
-        agentLabel: agentLabelOf(r),
-        agentUserId: r.agentUserId ?? null,
-        sessionId: r.sessionId ?? null,
-        automationId: r.stepRunId
-          ? (automationByStepRun.get(r.stepRunId) ?? null)
-          : null,
-        governanceReason: r.governanceReason ?? null,
-        reviewLater: r.reviewLater === true,
-      }));
+      // THE needs-you rule, per pending member (decision E6). Read on the
+      // UNREDACTED rows: the waits read applies the session floor itself.
+      const needsYouClasses =
+        input.classifyNeedsYou && input.status === "pending"
+          ? await classifyPendingProposals(rows, {
+              userId,
+              roster: rosterReadFor(ctx),
+            })
+          : null;
+      const clusterRows: ClusterInputRow[] = readableRows.map((r) => {
+        const needsYouClass = needsYouClasses?.get(r.id) ?? null;
+        return {
+          id: r.id,
+          proposalType: r.proposalType,
+          targetType: r.targetType,
+          targetId: r.targetId,
+          data: r.data,
+          createdAt: r.createdAt,
+          workspaceId: r.workspaceId ?? null,
+          agentLabel: agentLabelOf(r),
+          agentUserId: r.agentUserId ?? null,
+          sessionId: r.sessionId ?? null,
+          automationId: r.stepRunId
+            ? (automationByStepRun.get(r.stepRunId) ?? null)
+            : null,
+          governanceReason: r.governanceReason ?? null,
+          // Classified ⇒ out of the headline is the rule's answer, not the
+          // durable-work clock alone.
+          reviewLater: needsYouClass
+            ? !isNeedsYou({ needsYouClass })
+            : r.reviewLater === true,
+          needsYouClass,
+        };
+      });
 
       let clusters = collapseProposalsToClusters(clusterRows, {
         splitBySession: input.splitBySession === true,
@@ -994,6 +1099,10 @@ export const proposalsRouter = router({
         }
       }
 
+      if (input.package) {
+        clusters = clusters.filter((c) => c.package === input.package);
+      }
+
       const groups = clusters.slice(0, limit);
       // `groups.length` is a page size (`limit`), and the flat list runs no
       // COUNT — so the distinct count and the row total are only knowable here.
@@ -1008,6 +1117,11 @@ export const proposalsRouter = router({
          * are the oldest, so the slice drops them first.
          */
         reviewLater: clusters.filter((c) => c.reviewLater).length,
+        /**
+         * Of `reviewLater`, by the rule's fold (`classifyNeedsYou` only):
+         * Working, Review later, Changes to review. Before the slice too.
+         */
+        folds: clusterFoldCounts(clusters),
         /** Pending rows actually scanned — the row total while not truncated. */
         scanned: rows.length,
         /** The scan hit `scanLimit`: `distinct`/`scanned` are FLOORS, not totals. */

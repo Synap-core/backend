@@ -204,7 +204,7 @@ exit 0
   assert.doesNotMatch(readLog(sb), /^age /m);
 });
 
-test("a legacy plaintext archive still restores (no age involved)", () => {
+test("a legacy plaintext archive restores only with the operator's opt-in (no age involved)", () => {
   const sb = sandbox();
   // A real tar.gz the way pre-D15 archive-pod.sh made one (no db, no volumes).
   const src = path.join(sb.dir, "src");
@@ -230,6 +230,9 @@ exit 0
       // It holds no files (a legacy archive): restoring the database alone is
       // an explicit operator choice (ARCHIVE_WITHOUT_FILES otherwise).
       RESTORE_ALLOW_NO_FILES: "1",
+      // Not encrypted: refused unless the operator opts in on the host
+      // (ARCHIVE_NOT_ENCRYPTED otherwise; archive-restore-failure.test.sh).
+      RESTORE_ALLOW_PLAINTEXT: "1",
       RESTORE_HEALTH_TRIES: "1",
       RESTORE_HEALTH_INTERVAL: "0",
     }

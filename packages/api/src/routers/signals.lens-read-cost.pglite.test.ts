@@ -96,6 +96,7 @@ import {
   chatTurns,
   automationRuns,
   automationStepRuns,
+  playbookRuns,
 } from "@synap/database";
 import { needsYouRows } from "@synap-core/types/needs-you";
 import { signalsRouter } from "./signals.js";
@@ -171,9 +172,12 @@ async function session(
 }
 
 async function proposal(sessionId: string, projectId: string, name: string) {
+  // A plan GATE: something waits on it, so it stays in the headline under
+  // the needs-you rule (decision E6 — a proposal nothing waits on is a
+  // change to review, out of the headline).
   await q(
     `insert into proposals (id, proposal_type, target_type, target_id, data, status, session_id, project_id, created_by, created_at, updated_at)
-     values ($1, 'create', 'entity', null, $2::jsonb, 'pending', $3, $4, $5, now() - interval '1 minute', now())`,
+     values ($1, 'dev.plan_approval', 'entity', null, $2::jsonb, 'pending', $3, $4, $5, now() - interval '1 minute', now())`,
     [randomUUID(), JSON.stringify({ name }), sessionId, projectId, USER]
   );
 }
@@ -269,6 +273,8 @@ beforeAll(async () => {
     chatTurns,
     automationRuns,
     automationStepRuns,
+    // The needs-you rule's facts (agent evidence, proposal waits).
+    playbookRuns,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }

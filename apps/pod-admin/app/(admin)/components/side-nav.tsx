@@ -45,6 +45,7 @@ import {
   Plug,
   RefreshCw,
   ScrollText,
+  SlidersHorizontal,
   Search,
   Shapes,
   ShieldCheck,
@@ -100,6 +101,7 @@ const NAV_ICONS: Record<NavIconName, LucideIcon> = {
   HardDrive,
   RefreshCw,
   ScrollText,
+  SlidersHorizontal,
 };
 
 const BADGE_PILL: Record<BadgeTone, string> = {

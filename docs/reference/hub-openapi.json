@@ -27381,6 +27381,11 @@
                           ]
                         },
                         "why": { "type": "string", "maxLength": 500 },
+                        "unblocks": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
                         "ref": {
                           "anyOf": [
                             {
@@ -27909,6 +27914,11 @@
                           ]
                         },
                         "why": { "type": "string", "maxLength": 500 },
+                        "unblocks": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
                         "owedSince": { "type": "string" },
                         "attestedBy": { "type": "string" },
                         "attestedAt": { "type": "string" },
@@ -29987,6 +29997,11 @@
                           ]
                         },
                         "why": { "type": "string", "maxLength": 500 },
+                        "unblocks": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
                         "ref": {
                           "anyOf": [
                             {
@@ -30515,6 +30530,11 @@
                           ]
                         },
                         "why": { "type": "string", "maxLength": 500 },
+                        "unblocks": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
                         "owedSince": { "type": "string" },
                         "attestedBy": { "type": "string" },
                         "attestedAt": { "type": "string" },
@@ -32456,6 +32476,11 @@
                     ]
                   },
                   "why": { "type": "string", "maxLength": 500 },
+                  "unblocks": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
                   "ref": {
                     "anyOf": [
                       {
@@ -34396,6 +34421,100 @@
         "responses": {
           "200": {
             "description": "Count",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": {}
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown kind / track",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "412": {
+            "description": "The kind declares no lifecycle",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/needs-you": {
+      "get": {
+        "tags": ["Attention"],
+        "summary": "What really needs the person, and where everything else went",
+        "description": "`signals.needsYou` — THE needs-you rule (decision E): `rows.needs_you` is the headline; `rows.working` (an agent is on it), `rows.stopped` (no agent for 7 days; one row per ask, `needsYouRows` draws one per session), `rows.review_later`, `rows.from_system` (no real asker) and `rows.changes_to_review` (pending proposals nothing waits on) are its folds. `count` is `signals.count` over the same read, with `count.folds`. Read this instead of re-deriving needs-you from session reads.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string" },
+            "required": false,
+            "name": "workspaceId",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string" },
+            "required": false,
+            "name": "projectId",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string" },
+            "required": false,
+            "name": "trackId",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string" },
+            "required": false,
+            "name": "sessionId",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "integer", "minimum": 1, "maximum": 200 },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Rows by fold + the count",
             "content": {
               "application/json": {
                 "schema": {

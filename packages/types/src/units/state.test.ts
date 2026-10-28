@@ -57,6 +57,31 @@ describe("resolveUnitState — precedence", () => {
     ).toBe("needs_review");
   });
 
+  it("an agent MEASURED at work outranks the asks it left (decision E2)", () => {
+    // Its asks read "asks you when you can", not "waiting on you".
+    expect(
+      resolveUnitState({ ...base, owedFromYou: 2, agentAtWork: true }).state
+    ).toBe("working");
+    expect(
+      resolveUnitState({ ...base, pendingDecisions: 1, agentAtWork: true })
+        .state
+    ).toBe("working");
+    // The lifecycle reading `running` (an older pod's "open") is not an agent
+    // at work: the ask stays the person's turn.
+    expect(
+      resolveUnitState({ ...base, owedFromYou: 2, running: true }).state
+    ).toBe("needs_you");
+  });
+
+  it("a gate or a parked run still outranks the agent at work", () => {
+    expect(
+      resolveUnitState({ ...base, checkGate: true, agentAtWork: true }).state
+    ).toBe("needs_you");
+    expect(
+      resolveUnitState({ ...base, waitingOnYou: true, agentAtWork: true }).state
+    ).toBe("needs_you");
+  });
+
   it("being blocked outranks the agent running", () => {
     expect(
       resolveUnitState({ ...base, blockedBy: "Legal", running: true }).state

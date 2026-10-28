@@ -10,6 +10,9 @@ import {
   protectedProcedure,
   publicProcedure,
   workspaceProcedure,
+  podAdminProcedure,
+  requireFreshAuthentication,
+  assertPodAdmin,
 } from "../trpc.js";
 import {
   db,
@@ -30,11 +33,16 @@ import { createLogger } from "@synap-core/core";
 import { randomUUID } from "crypto";
 import { encryptServiceKey } from "@synap/database";
 import { scopedProcedure } from "../middleware/api-key-auth.js";
+import { assertSafeServiceUrl } from "../utils/intelligence-service-url.js";
 import {
   setDefaultIntelligenceService,
   selectPodDefaultService,
 } from "../utils/intelligence-routing.js";
 import { SecretsVaultRepository } from "@synap/database";
+import {
+  publicServiceMetadata,
+  publicServiceRow,
+} from "../utils/intelligence-service-projection.js";
 import {
   encryptConfig,
   decryptConfig,
@@ -106,15 +114,42 @@ const UpdateServiceSchema = z.object({
   metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
+/*
+ * WHO MAY WRITE A SERVICE ROW: a pod admin, and nobody else.
+ *
+ * An `intelligence_services` row is POD-WIDE. Its `webhookUrl` is where the
+ * resolver sends chat turns (every user's, when the row is the pod default or a
+ * space's pin), with the row's stored API key and a per-turn delegation token
+ * the pod signs for the person whose turn it is. Hub auth accepts that token
+ * when its audience is the origin of ANY active row
+ * (`isIntelligenceServiceOrigin`), and then acts as that person. So writing a
+ * row's URL, key, status or default flag is a pod-level act: the same floor the
+ * Hub Protocol door already holds (`hub-protocol/services.ts` register: "Only a
+ * pod admin or the Intelligence Service"). Before this, these five doors read
+ * no `ctx` at all, so any invited member could point the pod default at their
+ * own server and receive every user's turns plus tokens acting as them.
+ *
+ * `register`, `update` (can move `webhookUrl`, i.e. where the key and the
+ * tokens go) and `rotateKey` set where a credential goes or the credential
+ * itself, so they also take the credential-door step-up
+ * (`requireFreshAuthentication`).
+ *
+ * `register` and `update` also refuse a `webhookUrl` the SSRF guard refuses
+ * (`assertSafeServiceUrl`), as the Hub Protocol door does: downstream fetches
+ * trust the stored value.
+ */
 export const intelligenceRegistryRouter = router({
   /**
    * Register a new intelligence service
    *
-   * This allows external intelligence services to register with the Data Pod
+   * This allows external intelligence services to register with the Data Pod.
+   * Pod admin only (see above).
    */
-  register: protectedProcedure
+  register: podAdminProcedure
+    .use(requireFreshAuthentication)
     .input(RegisterServiceSchema)
     .mutation(async ({ input }) => {
+      assertSafeServiceUrl(input.webhookUrl, "webhookUrl");
       logger.info(
         { serviceId: input.serviceId },
         "Registering intelligence service"
@@ -163,14 +198,14 @@ export const intelligenceRegistryRouter = router({
         "Intelligence service registered"
       );
 
-      return service;
+      return publicServiceRow(service);
     }),
 
   /**
    * Switch the pod's default intelligence service — flips the `is_default` flag
    * the resolver picks when no workspace/user preference applies.
    */
-  setDefault: protectedProcedure
+  setDefault: podAdminProcedure
     .input(z.object({ serviceId: z.string() }))
     .mutation(async ({ input }) => {
       await setDefaultIntelligenceService(input.serviceId);
@@ -221,8 +256,9 @@ export const intelligenceRegistryRouter = router({
         capabilities: s.capabilities,
         pricing: s.pricing,
         providerType: s.providerType,
-        /** Agent-system kind lives in metadata.kind (synap | remote | local) */
-        metadata: s.metadata,
+        /** Agent-system kind lives in metadata.kind (synap | remote | local).
+         *  Secret-shaped keys (managementToken, pendingConfig…) are stripped. */
+        metadata: publicServiceMetadata(s.metadata),
         status: s.status,
         enabled: s.enabled,
         /** The pod default: what a space with no pinned service routes to. */
@@ -249,20 +285,21 @@ export const intelligenceRegistryRouter = router({
         });
       }
 
-      // Don't expose API key
-      const safe = Object.fromEntries(
-        Object.entries(service).filter(([k]) => k !== "_apiKey")
-      ) as typeof service;
-      return safe;
+      // Never the API key cell, never a secret-shaped metadata key.
+      return publicServiceRow(service);
     }),
 
   /**
    * Update an intelligence service
    */
-  update: protectedProcedure
+  update: podAdminProcedure
+    .use(requireFreshAuthentication)
     .input(UpdateServiceSchema)
     .mutation(async ({ input }) => {
       const { id, ...updates } = input;
+      if (updates.webhookUrl !== undefined) {
+        assertSafeServiceUrl(updates.webhookUrl, "webhookUrl");
+      }
 
       const [updated] = await db
         .update(intelligenceServices)
@@ -285,13 +322,13 @@ export const intelligenceRegistryRouter = router({
         "Intelligence service updated"
       );
 
-      return updated;
+      return publicServiceRow(updated);
     }),
 
   /**
    * Unregister an intelligence service
    */
-  unregister: protectedProcedure
+  unregister: podAdminProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ input }) => {
       await db
@@ -308,7 +345,8 @@ export const intelligenceRegistryRouter = router({
    *
    * Separate from update() to make key rotation an explicit, auditable action.
    */
-  rotateKey: protectedProcedure
+  rotateKey: podAdminProcedure
+    .use(requireFreshAuthentication)
     .input(
       z.object({
         id: z.string(),
@@ -507,20 +545,16 @@ export const intelligenceRegistryRouter = router({
    * Once approved, the service's mcpEndpoint is injected into LLM requests for
    * this workspace, allowing the AI to call tools exposed by the service.
    *
-   * Only workspace owners and admins can approve MCP tools — this is an explicit
-   * security decision, not a default. Services registered via Hub Protocol (control
-   * plane provisioning) are auto-approved at registration time.
+   * Pod admin only: `mcpApproved` is a column of the POD-WIDE service row, so
+   * approving it turns tool injection on for every space that routes to the
+   * service, not just the caller's. A space editor could flip it before.
+   * Services registered via Hub Protocol (control plane provisioning) are
+   * auto-approved at registration time.
    */
   approveMcp: workspaceProcedure
     .input(z.object({ serviceId: z.string().min(1) }))
     .mutation(async ({ input, ctx }) => {
-      // Require editor+ role to approve MCP tools
-      if (!["editor", "admin", "owner"].includes(ctx.workspaceRole ?? "")) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "Editor role or higher required to approve MCP tools",
-        });
-      }
+      await assertPodAdmin(ctx.userId);
 
       const service = await db.query.intelligenceServices.findFirst({
         where: eq(intelligenceServices.serviceId, input.serviceId),
@@ -575,12 +609,8 @@ export const intelligenceRegistryRouter = router({
   revokeMcp: workspaceProcedure
     .input(z.object({ serviceId: z.string().min(1) }))
     .mutation(async ({ input, ctx }) => {
-      if (!["editor", "admin", "owner"].includes(ctx.workspaceRole ?? "")) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "Editor role or higher required to revoke MCP approval",
-        });
-      }
+      // Pod admin only, like approveMcp: the flag is pod-wide.
+      await assertPodAdmin(ctx.userId);
 
       await db
         .update(intelligenceServices)

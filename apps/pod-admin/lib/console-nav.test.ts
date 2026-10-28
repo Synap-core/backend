@@ -53,10 +53,10 @@ describe("navHref", () => {
 });
 
 describe("navForRole", () => {
-  it("shows members only Home and Review, in one group", () => {
+  it("shows members only Home, Review and Settings, in one group", () => {
     const groups = navForRole("member");
     expect(groups.map((g) => g.items.map((i) => i.id))).toEqual([
-      ["home", "review"],
+      ["home", "review", "settings"],
     ]);
   });
 

@@ -18,6 +18,7 @@ import {
   needsYouCountsLabel,
   needsYouReasonOf,
   repeatLabel,
+  STOPPED_SESSION_VERB,
   type GroupableSignal,
   type NeedsYouAccessRequest,
   type NeedsYouInvite,
@@ -127,6 +128,12 @@ export interface LensRow {
    * grey prose in the reason slot). Absent = none.
    */
   detail?: string | null;
+  /**
+   * WHAT MOVES when the person answers — an owed slot's "Unblocks …" line
+   * (decision E; the pod's `Signal.unblocks`, `effectiveSlotUnblocks`).
+   * Absent = nothing says; draw nothing.
+   */
+  unblocks?: string;
   /**
    * The KIND of ask, as a glyph key (`needsYouReasonOf`: decision · ask ·
    * review · failure · an owed slot's blocker) — drawn as the row's reason
@@ -252,6 +259,8 @@ function iso(at: string | Date | null | undefined): string | null {
 
 /** The fields of a needs-you `Signal` a lens row reads (structural). */
 export interface LensNeedsYouSignal extends GroupableSignal {
+  /** `owed-slot`: what the answer unblocks (`Signal.unblocks`). */
+  unblocks?: string | null;
   title: string;
   category?: string | null;
   /** Notification registry type — `placeSignal` reads it for the banner rule. */
@@ -603,6 +612,9 @@ export function lensRowOfNeedsYou<T extends LensNeedsYouSignal>(
       // An owed slot's title and detail are the ask card's (`askCardView`):
       // the question once, and its `why` only when it adds.
       ...(card?.context ? { detail: card.context } : {}),
+      ...(s.kind === "owed-slot" && s.unblocks?.trim()
+        ? { unblocks: s.unblocks.trim() }
+        : {}),
       reasonKind: needsYouReasonOf(s),
       repeat: repeatLabel(s),
       source: row.session
@@ -625,6 +637,25 @@ export function lensRowOfNeedsYou<T extends LensNeedsYouSignal>(
         s.category === AGENT_CATEGORY &&
         !isFailureSignal(s),
       expiresAt: expiresAt(s.occurredAt, s.lifetimeHours),
+    };
+  }
+  // A STOPPED session (decision E1, `needsYouRows().folds.stopped`): no agent
+  // moved it for 7 days. Its row is the SESSION, never one of its asks — the
+  // quiet mark, and its one verb "Resume or close", which opens it.
+  if (row.verbs?.length) {
+    return {
+      key: row.key,
+      cls,
+      state: { idle: true, everStarted: true },
+      objectKind: "session",
+      title: row.title ?? "",
+      reason: needsYouCountsLabel(row.counts),
+      repeat: null,
+      source: null,
+      occurredAt: iso(row.newestAt),
+      verb: verb(STOPPED_SESSION_VERB),
+      door: { kind: "session", id: row.sessionId },
+      count: row.items.length,
     };
   }
   const owed = row.items.filter((s) => s.kind === "owed-slot").length;
@@ -805,8 +836,10 @@ export function lensRowOfSession(input: LensSessionInput): LensRow {
   const blockedBy = input.blockedBy?.trim() || null;
   const state = sessionUnitInput({
     status,
-    owedFromYou: facts ? facts.owedFromYou : null,
-    pendingDecisions: facts ? (facts.pendingDecisions ?? null) : null,
+    // No facts on the row = the list did not read them (asked without
+    // `nextMove`), not a failed read: `undefined`, never `null`.
+    owedFromYou: facts?.owedFromYou,
+    pendingDecisions: facts?.pendingDecisions,
     progress: input.progress ?? null,
     blockedBy,
     ...(input.live !== undefined ? { live: input.live } : {}),
