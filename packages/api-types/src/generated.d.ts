@@ -36347,7 +36347,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: void;
 			meta: object;
 			output: {
-				services: {
+				services: (Omit<{
 					agentListSyncEnabled: boolean;
 					capabilities: string[];
 					createdAt: Date;
@@ -36368,7 +36368,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					updatedAt: Date;
 					version: string | null;
 					webhookUrl: string;
-				}[];
+				}, "apiKey" | "metadata"> & {
+					metadata: Record<string, unknown>;
+				})[];
 			};
 		}>;
 		listRuns: import("@trpc/server").TRPCQueryProcedure<{
@@ -36677,7 +36679,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 			};
 			meta: object;
-			output: {
+			output: Omit<{
 				agentListSyncEnabled: boolean;
 				apiKey: string;
 				capabilities: string[];
@@ -36699,6 +36701,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				updatedAt: Date;
 				version: string | null;
 				webhookUrl: string;
+			}, "apiKey" | "metadata"> & {
+				metadata: Record<string, unknown>;
 			};
 		}>;
 		getMcpStatus: import("@trpc/server").TRPCQueryProcedure<{
@@ -36729,7 +36733,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				enabled: boolean;
 				id: string;
 				isDefault: boolean;
-				metadata: Record<string, unknown> | null;
+				metadata: Record<string, unknown>;
 				name: string;
 				pricing: string | null;
 				providerType: string | null;
@@ -36753,7 +36757,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				webhookUrl: string;
 			};
 			meta: object;
-			output: {
+			output: Omit<{
 				agentListSyncEnabled: boolean;
 				apiKey: string;
 				capabilities: string[];
@@ -36775,6 +36779,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				updatedAt: Date;
 				version: string | null;
 				webhookUrl: string;
+			}, "apiKey" | "metadata"> & {
+				metadata: Record<string, unknown>;
 			};
 		}>;
 		revokeMcp: import("@trpc/server").TRPCMutationProcedure<{
@@ -36840,7 +36846,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				webhookUrl?: string | undefined;
 			};
 			meta: object;
-			output: {
+			output: Omit<{
 				agentListSyncEnabled: boolean;
 				apiKey: string;
 				capabilities: string[];
@@ -36862,6 +36868,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				updatedAt: Date;
 				version: string | null;
 				webhookUrl: string;
+			}, "apiKey" | "metadata"> & {
+				metadata: Record<string, unknown>;
 			};
 		}>;
 	}>>;

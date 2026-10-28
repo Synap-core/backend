@@ -316,6 +316,8 @@ export type SubmitSyncGraphInput = {
   userId: string;
   workspaceId: string | null;
   operations: CompositeProposalOperation[];
+  /** `separate` per created ref (`separateSyncCreates`), applied at approval. */
+  proposedIdentityResolutionByRef?: Record<string, { verb: "separate" }>;
   summary: string;
   /** `proposal.data.connectionSync` — read by the approval hook (K3). */
   connectionSync: {
@@ -352,6 +354,12 @@ export async function submitSyncGraphToImport(
         source: IMPORT_SOURCE,
         sourceId: targetId,
         workspaceId: input.workspaceId,
+        ...(input.proposedIdentityResolutionByRef
+          ? {
+              proposedIdentityResolutionByRef:
+                input.proposedIdentityResolutionByRef,
+            }
+          : {}),
       }),
       connectionSync: input.connectionSync,
     },
