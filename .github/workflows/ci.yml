@@ -448,7 +448,9 @@ jobs:
           failed=""
           # One vitest run per owning package, under that package's config.
           for dir in $(for f in $FILES; do echo "$f" | grep -oE '^(packages|apps)/[^/]+' || echo .; done | sort -u); do
-            rel=$(for f in $FILES; do case "$f" in "$dir"/*) echo "${f#"$dir"/}";; esac; [ "$dir" = . ] && ! echo "$f" | grep -qE '^(packages|apps)/' && echo "$f"; done)
+            # `|| true`: for any package dir the loop's last test is false, and
+            # under `bash -e` that failed substitution ended the step before vitest.
+            rel=$(for f in $FILES; do case "$f" in "$dir"/*) echo "${f#"$dir"/}";; esac; [ "$dir" = . ] && ! echo "$f" | grep -qE '^(packages|apps)/' && echo "$f"; done) || true
             echo "::group::$dir: $rel"
             (cd "$dir" && npx vitest run $rel) || failed="$failed $dir"
             echo "::endgroup::"

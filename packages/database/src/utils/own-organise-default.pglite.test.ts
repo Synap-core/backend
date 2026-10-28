@@ -94,6 +94,7 @@ beforeAll(async () => {
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       agent_user_id text,
       is_agent boolean,
+      ceiling_exempt boolean,
       proposal_id uuid,
       timestamp timestamptz NOT NULL DEFAULT now()
     );
