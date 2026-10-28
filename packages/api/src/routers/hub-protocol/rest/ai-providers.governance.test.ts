@@ -58,6 +58,13 @@ const h = vi.hoisted(() => ({
   } as Record<string, unknown>,
   gateVerdict: { granted: true } as Record<string, unknown>,
   gateCalls: [] as Array<Record<string, unknown>>,
+  /** Who is a pod admin (the role the tRPC provider door requires). */
+  podAdmins: new Set<string>(),
+}));
+
+vi.mock("../../../utils/workspace-role.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  isPodAdmin: vi.fn(async (userId: string) => h.podAdmins.has(userId)),
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -125,6 +132,7 @@ import type { HubHono, HubVariables } from "./_shared.js";
 
 const USER = "11111111-1111-4111-8111-111111111111";
 const AGENT = "22222222-2222-4222-8222-222222222222";
+const MEMBER = "33333333-3333-4333-8333-333333333333";
 
 function buildApp(vars: Partial<HubVariables> = {}): HubHono {
   const app: HubHono = new OpenAPIHono<{ Variables: HubVariables }>();
@@ -161,6 +169,7 @@ beforeEach(() => {
   h.existingRow = null;
   h.gateVerdict = { granted: true };
   h.gateCalls.length = 0;
+  h.podAdmins = new Set([USER]);
 });
 
 describe("scope narrowing", () => {
@@ -266,6 +275,62 @@ describe("governance", () => {
     expect(res.status).toBe(200);
     expect(h.dbWrites).toBe(1);
     expect(h.isPushes).toBe(1);
+  });
+});
+
+/**
+ * F7 (pre-launch audit, 2026-10-28): the tRPC provider door is
+ * `podAdminProcedure`, but this REST door asked only for `providers.write`,
+ * which any member could mint for themselves. The scope now also needs the
+ * human the key acts for to be a pod admin. Negative control: drop the
+ * pod-admin half of `providerWriteRefusal` and every case here fails.
+ */
+describe("pod-admin role — the same as the tRPC door", () => {
+  it("a MEMBER's key holding providers.write is refused and writes nothing", async () => {
+    h.existingRow = { providerId: "freellmapi", encryptedApiKey: "enc:old" };
+    const app = buildApp({ userId: MEMBER });
+    const res = await app.request("/ai-providers", post(VALID_BODY));
+
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({
+      error: expect.stringContaining("pod admin"),
+    });
+    expect(h.dbWrites).toBe(0);
+    expect(h.isPushes).toBe(0);
+    expect(h.gateCalls).toHaveLength(0);
+  });
+
+  it.each([
+    ["POST", "/ai-providers/x/enable"],
+    ["POST", "/ai-providers/x/disable"],
+    ["POST", "/ai-providers/x/probe"],
+    ["POST", "/ai-providers/sync"],
+    ["DELETE", "/ai-providers/x"],
+  ])("refuses a member's %s %s", async (method, path) => {
+    h.existingRow = { providerId: "x", encryptedApiKey: "enc:old" };
+    const app = buildApp({ userId: MEMBER });
+    const res = await app.request(path, { method });
+    expect(res.status).toBe(403);
+    expect(h.dbWrites).toBe(0);
+    expect(h.isPushes).toBe(0);
+  });
+
+  it("an agent acting for a member files nothing", async () => {
+    h.gateVerdict = { proposalId: "prop-1" };
+    const app = buildApp({ agentUserId: AGENT, linkedUserId: MEMBER });
+    const res = await app.request("/ai-providers", post(VALID_BODY));
+
+    expect(res.status).toBe(403);
+    expect(h.gateCalls).toHaveLength(0);
+  });
+
+  it("control: the same request from a pod admin executes", async () => {
+    h.podAdmins = new Set([MEMBER]);
+    const app = buildApp({ userId: MEMBER });
+    const res = await app.request("/ai-providers", post(VALID_BODY));
+
+    expect(res.status).toBe(200);
+    expect(h.dbWrites).toBe(1);
   });
 });
 

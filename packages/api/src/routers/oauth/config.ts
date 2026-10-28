@@ -11,7 +11,11 @@ import {
   TrustedIssuerService,
   type TrustedIssuer,
 } from "@synap/database";
-import { isValidScope, type ApiKeyScope } from "@synap/database/schema";
+import {
+  isPrivilegedMintScope,
+  isValidScope,
+  type ApiKeyScope,
+} from "@synap/database/schema";
 import { resolveFirstPartyClientName } from "@synap-core/types/vocabulary";
 
 import {
@@ -285,6 +289,14 @@ export const MCP_CONNECT_DEFAULT_SCOPES: readonly ApiKeyScope[] = [
  * `hub-protocol.*` scope). Unknown/invalid scopes are dropped; an empty result
  * falls back to the functional default set.
  *
+ * A privileged scope (`PRIVILEGED_MINT_SCOPES`: `setup.agent`,
+ * `providers.write`, …) is dropped too. These scopes are requested by the
+ * CLIENT (an OAuth `scope` parameter, a consent code's stored scopes), and an
+ * MCP connection is data access: operator authority is minted only by a pod
+ * admin's own session (`services/privileged-mint.ts`). Before this, any DCR
+ * client could ask for `setup.agent` and get it on the consenting person's
+ * key (pre-launch audit F7, 2026-10-28).
+ *
  * Shared by both mint doors: `/token` (this AS) and the legacy `/mcp/redeem`.
  */
 export function mapCpScopesToPodScopes(
@@ -296,7 +308,8 @@ export function mapCpScopesToPodScopes(
   for (const s of raw) {
     // CP grammar separates with ':' (mcp:read); pod grammar uses '.' (mcp.read).
     const normalized = s.replace(/:/g, ".").trim();
-    if (isValidScope(normalized)) mapped.add(normalized);
+    if (isValidScope(normalized) && !isPrivilegedMintScope(normalized))
+      mapped.add(normalized);
   }
 
   // An MCP grant needs the matching hub-protocol scope to function (tool dispatch
