@@ -51,7 +51,8 @@ vi.mock("../../../access/guest-containment.js", async (importOriginal) => ({
 vi.mock("../../../access/pod-access.js", () => ({
   reportNoPodAccess: vi.fn(async () => undefined),
 }));
-vi.mock("../tool-access.js", () => ({
+vi.mock("../tool-access.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../tool-access.js")>()),
   loadKeyToolAccess: vi.fn(async () => ({ profile: "full" })),
 }));
 vi.mock("../tools/index.js", async (importOriginal) => {
