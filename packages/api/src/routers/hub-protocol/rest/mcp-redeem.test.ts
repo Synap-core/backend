@@ -25,6 +25,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { Hono } from "hono";
+import { CONTROL_PLANE_ISSUER_SCOPES } from "@synap/database/schema";
 
 // ─── Mocks ──────────────────────────────────────────────────────────────────
 
@@ -41,7 +42,10 @@ const revokeDb: {
 } = { apiKeyRow: null, userRow: null };
 const apiKeyRepoRevokeSpy = vi.fn((..._args: unknown[]) => Promise.resolve());
 
-vi.mock("@synap/database", () => {
+vi.mock("@synap/database", async () => {
+  // The real CP scope set, read by the real `controlPlaneIssuerScopes()`.
+  const { CONTROL_PLANE_ISSUER_SCOPES } =
+    await import("@synap/database/schema");
   const update = vi.fn(() => ({
     set: (payload: unknown) => {
       setSpy(payload);
@@ -86,6 +90,7 @@ vi.mock("@synap/database", () => {
     },
     EventRepository: class {},
     sql: {},
+    CONTROL_PLANE_ISSUER_SCOPES,
   };
 });
 
@@ -374,5 +379,61 @@ describe("POST /mcp/revoke — idempotent / security floor", () => {
       "agent-user-1", // revokedBy = the key's own owner (no human actor here)
       expect.any(String)
     );
+  });
+});
+
+// ─── (g) only the Control Plane issuer (audit 2026-10-28 F4) ──────────────────
+
+/**
+ * A registry with two APPROVED issuers, applying the door's own rule
+ * (`verifyTrustedIssuerJwt`: every required scope must be in the row's
+ * `allowedScopes`): the pod's Control Plane, holding the CP scope set, and a
+ * partner approved for `setup.agent` only. Before the fix both routes asked
+ * for no scope, so the partner's validly signed assertion passed.
+ */
+function issuerRegistryVerifier(
+  allowedScopes: readonly string[],
+  claims: Record<string, unknown>
+) {
+  verifyCpSpy.mockImplementation(async (_token, opts) => {
+    const required = (opts as { requiredScope?: string | readonly string[] })
+      .requiredScope;
+    const scopes =
+      required === undefined
+        ? []
+        : typeof required === "string"
+          ? [required]
+          : [...required];
+    return scopes.every((s) => allowedScopes.includes(s)) ? claims : null;
+  });
+}
+
+describe("POST /mcp/redeem + /mcp/revoke — only the Control Plane issuer", () => {
+  const PARTNER_SCOPES = ["setup.agent"];
+
+  it("revoke: a partner issuer's assertion is refused 401 and revokes nothing", async () => {
+    issuerRegistryVerifier(PARTNER_SCOPES, { mcp_revoke: true });
+    revokeDb.apiKeyRow = CLAUDE_WEB_KEY_ROW;
+    revokeDb.userRow = CLAUDE_WEB_OWNER;
+    const res = await postRevoke(buildApp(), { keyId: "podkey-1" });
+    expect(res.status).toBe(401);
+    expect(apiKeyRepoRevokeSpy).not.toHaveBeenCalled();
+  });
+
+  it("redeem: a partner issuer's assertion is refused 401 and claims no code", async () => {
+    issuerRegistryVerifier(PARTNER_SCOPES, { mcp_redeem: true });
+    const res = await postRedeem(buildApp(), { code: "consent-code" });
+    expect(res.status).toBe(401);
+    expect(setSpy).not.toHaveBeenCalled();
+    expect(provisionSpy).not.toHaveBeenCalled();
+  });
+
+  it("revoke: the Control Plane issuer still gets through (positive control)", async () => {
+    issuerRegistryVerifier(CONTROL_PLANE_ISSUER_SCOPES, { mcp_revoke: true });
+    revokeDb.apiKeyRow = CLAUDE_WEB_KEY_ROW;
+    revokeDb.userRow = CLAUDE_WEB_OWNER;
+    const res = await postRevoke(buildApp(), { keyId: "podkey-1" });
+    expect(res.status).toBe(200);
+    expect(apiKeyRepoRevokeSpy).toHaveBeenCalledTimes(1);
   });
 });
