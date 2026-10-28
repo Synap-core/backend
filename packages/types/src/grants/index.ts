@@ -14,6 +14,8 @@
  *  - `algebra`  — cover, meet and containment of grants, exact against `permits`.
  *  - `key-uses` — where a key is used, and the scopes derived from it.
  *  - `key-draft`— the New key page's model: sections, review, validation, mint.
+ *  - `access-levels` — families (Records, Content, Work, Activity, Decide) at one level.
+ *  - `key-steps` — where a key acts, who holds it, which templates work there.
  *
  * Pure and dependency-free: browser, Electron, landing, Node and CLI.
  */
@@ -29,3 +31,5 @@ export * from "./listed.js";
 export * from "./algebra.js";
 export * from "./key-uses.js";
 export * from "./key-draft.js";
+export * from "./access-levels.js";
+export * from "./key-steps.js";

@@ -93,12 +93,14 @@ describe("describeKey", () => {
         permissions: ["proposal.approve", "view.delete", "entity.note"],
       })
     );
+    // Delete is its own mark (decision 68d37853, answer 24: Edit includes it).
     expect(powerful.marks).toEqual([
       {
         code: "powerful-actions",
-        label: "Powerful actions: Approve, Delete",
-        verbs: ["approve", "delete"],
+        label: "Powerful actions: Approve",
+        verbs: ["approve"],
       },
+      { code: "can-delete", label: "Can delete" },
     ]);
   });
 
