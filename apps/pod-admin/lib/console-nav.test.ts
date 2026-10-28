@@ -87,6 +87,8 @@ describe("consoleRedirects", () => {
       ["/audit", "section=queue", "/review", false],
       ["/audit", "section=proposals", "/review", false],
       ["/trust-keys", "section=api-keys", "/keys", false],
+      ["/marketplace", "tab=installed", "/tools?tab=installed", false],
+      ["/marketplace", "tab=tools", "/tools?tab=actions", false],
       ["/trust-keys", "section=secrets", "/security?section=secrets", false],
       ["/overview", null, "/home", false],
       ["/origins", null, "/applications", false],
