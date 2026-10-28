@@ -40,6 +40,7 @@ vi.mock(
           unfinishedOutputs: 0,
           expiredEphemerals: 0,
           retiredSlots: 0,
+          closedQuestions: 0,
         },
         warnings: [],
       }),

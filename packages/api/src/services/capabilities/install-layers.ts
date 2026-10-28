@@ -41,11 +41,17 @@ import type { InstallLayerReport } from "@synap/database";
  *     one per bag, so the bag key alone already identifies them.
  * Both are read below; a new bag must add its identifier field here too.
  */
-interface AppliedItem {
+export interface AppliedItem {
   status?: unknown;
   message?: unknown;
   name?: unknown;
   key?: unknown;
+  /**
+   * An `error` item that waits on the person, not on a retry: a capability
+   * whose key or account was not given (`SetupRequiredError`), or an
+   * automation that runs its verbs. Still not landed.
+   */
+  needsSetup?: unknown;
 }
 
 function isErrorItem(value: unknown): value is AppliedItem {
@@ -57,7 +63,7 @@ function isErrorItem(value: unknown): value is AppliedItem {
 }
 
 /** `<bagKey>[:<item name>]: <message>` — enough for an operator to act on. */
-function describe(bagKey: string, item: AppliedItem): string {
+export function describeLayerItem(bagKey: string, item: AppliedItem): string {
   const identifier =
     typeof item.name === "string" && item.name
       ? item.name
@@ -89,10 +95,10 @@ export function summarizePostWorkspaceLayers(
   for (const [key, value] of Object.entries(bag)) {
     if (Array.isArray(value)) {
       for (const item of value) {
-        if (isErrorItem(item)) failures.push(describe(key, item));
+        if (isErrorItem(item)) failures.push(describeLayerItem(key, item));
       }
     } else if (isErrorItem(value)) {
-      failures.push(describe(key, value));
+      failures.push(describeLayerItem(key, value));
     }
   }
   if (failures.length === 0) return [];

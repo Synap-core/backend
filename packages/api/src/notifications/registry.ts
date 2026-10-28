@@ -1527,12 +1527,14 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
   {
     /**
      * An agent spent its allowed automatic attempts on a REQUIRED criterion and
-     * still could not pass it, so the grade is now the founder's to make.
+     * still could not pass it, and the session was evaluated
+     * (`evaluate_session`, founder decision E3), so the grade is now the
+     * founder's to make.
      *
-     * Producer: `recordSessionEvaluation` (`evaluations/record.ts`), in the same
-     * `if (outcome.escalate)` block that files the owed slot — so the slot in
-     * the needs-you tray and the notification can never disagree about whether
-     * an escalation happened.
+     * Producer: `escalateFailingCriteria` (`evaluations/record.ts`), in the
+     * same branch that files the owed slots — so the slot in the needs-you
+     * tray and the notification can never disagree about whether an
+     * escalation happened.
      *
      * Category `ai`, not `governance`: nothing is being APPROVED here. The
      * governance category is the proposal lane (approve/reject an AI's write);

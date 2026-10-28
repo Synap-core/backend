@@ -168,7 +168,7 @@ There is **no local publish**. Every npm package ships from GitHub Actions.
 
 | What | Workflow (repo) | Trigger |
 |---|---|---|
-| `@synap-core/types`, `@synap-core/api-types` | `publish-types.yml` (synap-backend) | push to `main` touching routers/types, **or** the *Run workflow* button |
+| `@synap-core/types`, `@synap-core/api-types` | `publish-types.yml` (synap-backend) | a `v*` release tag, **or** the *Run workflow* button on `main` |
 | Other `@synap-core/*` (app internals) | `changeset.yml` (synap-app) | a version PR merges (changesets opens it on every `main` push) |
 | `@synap-core/sdk`, `sdk-realtime`, `react` | `publish-packages.yml` (synap-app) | push to `main` touching those paths, or the button |
 | `@synap-core/cli` | `publish-cli.yml` (synap-cli) | *Run workflow* button only |

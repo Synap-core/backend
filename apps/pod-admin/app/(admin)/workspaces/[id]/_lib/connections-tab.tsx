@@ -30,6 +30,7 @@ import {
   type ConnectionType,
 } from "./service-group-card";
 import { AddConnectionModal } from "./add-connection-modal";
+import { WebhookSourcesCard } from "./webhook-sources-card";
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -247,6 +248,8 @@ export function ConnectionsTab({ workspaceId }: { workspaceId: string }) {
           </div>
         )}
       </SectionCard>
+
+      <WebhookSourcesCard workspaceId={workspaceId} />
 
       {/* How it works */}
       <div className="rounded-xl ring-1 ring-inset ring-foreground/[0.08] bg-foreground/[0.01] overflow-hidden">

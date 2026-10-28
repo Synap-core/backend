@@ -39,9 +39,11 @@ const API_SRC = join(HERE, ".."); // packages/api/src
 const DB_SRC = join(HERE, "..", "..", "..", "database", "src"); // packages/database/src
 const read = (abs: string) => readFileSync(abs, "utf8");
 
-const OBSERVATIONS = read(
-  join(API_SRC, "routers/hub-protocol/observations.ts")
-);
+// The door AND the one writer it calls (`recordObservation`, shared with the
+// pod's own facts): every property below holds for both together.
+const OBSERVATIONS =
+  read(join(API_SRC, "routers/hub-protocol/observations.ts")) +
+  read(join(API_SRC, "services/observations/record-observation.ts"));
 
 // OBSERVATION_NAMESPACES is DECLARED in @synap-core/types (events/unified.ts) and
 // only re-exported by the door — the automation authoring door's

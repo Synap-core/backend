@@ -25,6 +25,7 @@ import { openIn } from "../../../../lib/open-in";
 import {
   ExitFallback,
   ExitLink,
+  useAppOpenAttempt,
   usePlacedExit,
 } from "../../../../lib/exit-link";
 import { kindIcon } from "../../../_lib/object/kind-icon";
@@ -225,8 +226,12 @@ function TidySection({
   onRetire: (item: TidyItem) => void;
 }) {
   // `null` on a phone: the mobile app cannot open the desktop Data app, so the
-  // row offers no dead link and the line beneath the list says why.
-  const appHref = usePlacedExit(DATA_APP).href;
+  // row offers no dead link and the line beneath the list says why. Every row
+  // opens the same Data app, so one attempt covers them: a click that opened
+  // nothing offers the download once, beneath the list.
+  const appPlaced = usePlacedExit(DATA_APP);
+  const appOpen = useAppOpenAttempt(appPlaced);
+  const appHref = appPlaced.href;
   if (loading)
     return (
       <SectionCard title="Needs tidying">
@@ -302,6 +307,7 @@ function TidySection({
                   <Button
                     as="a"
                     href={appHref}
+                    onPress={appOpen.onOpen}
                     size="sm"
                     variant="flat"
                     radius="md"
@@ -322,8 +328,9 @@ function TidySection({
         })}
       </ul>
       {anyInApp && (
-        <div className="pt-2 text-[12px]">
+        <div className="pt-2 text-[12px] empty:hidden">
           <ExitFallback exit={DATA_APP} />
+          {appOpen.offer}
         </div>
       )}
     </SectionCard>

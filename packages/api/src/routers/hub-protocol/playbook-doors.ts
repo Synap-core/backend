@@ -239,6 +239,11 @@ export async function runPlaybookDoor(
     trackId?: string;
     /** The stage of that track (0274); absent ⇒ its current stage. */
     trackStage?: string;
+    /**
+     * Hand the run to this agent (`RunPlaybookInput.handToAgentId`). Refused
+     * by name by `playbooks.run` when nobody could take it; never a fallback.
+     */
+    handToAgentId?: string;
     /** Provenance label of the door (`mcp`, `hub-rest`). */
     source: string;
   }
@@ -352,6 +357,7 @@ export async function runPlaybookDoor(
     ...(input.trackId && input.trackStage
       ? { trackStage: input.trackStage }
       : {}),
+    ...(input.handToAgentId ? { handToAgentId: input.handToAgentId } : {}),
     source: input.source,
     reasoning: input.reasoning,
     agentUserId: identity.agentUserId,
@@ -360,11 +366,14 @@ export async function runPlaybookDoor(
     // Absent (no bound session) ⇒ no edge, never a guess.
     ...(identity.sessionId ? { parentSessionId: identity.sessionId } : {}),
     // HEADLESS DOOR — MCP, Raycast, the Hub REST run endpoint. There is no
-    // form to put in front of anybody, so an unanswered required param files
-    // an OWED SLOT on the run rather than refusing it (or, as before this
-    // existed, rendering `""` into the agent's instruction and calling it a
+    // form to put in front of anybody. An AGENT that launched the run gets the
+    // missing param back as a refusal (founder decision E3, 2026-10-27): it was
+    // given the job of supplying it, so it never becomes a slot in the
+    // person's Needs you (`param-slots.ts`). A person's own headless call still
+    // files an OWED SLOT on the run rather than refusing it (or, as before
+    // this existed, rendering `""` into the instruction and calling it a
     // success). See `InstantiateInput.onMissingRequired`.
-    onMissingRequired: "owe",
+    onMissingRequired: identity.agentUserId ? "refuse" : "owe",
   });
   return { kind: "result", result: withReviewUrl(result) };
 }

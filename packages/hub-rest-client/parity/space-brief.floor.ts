@@ -8,10 +8,10 @@
  * `rootDir`, and a relative import of another package's source is refused
  * there (TS6059). Run by `pnpm typecheck` (tsconfig.parity.json).
  *
- * Two checks, because each alone has a hole (recorded in the brief door's
- * floor, space-brief-door.ts): mutual ASSIGNABILITY catches a type change,
- * but not an optional key present on one side only; KEYOF equality catches
- * that. Both are applied to every nested shape.
+ * Two checks, because each alone has a hole (each negative-controlled on the
+ * brief door's former floor, 2026-09-28): mutual ASSIGNABILITY catches a type
+ * change, but not an optional key present on one side only; KEYOF equality
+ * catches that. Both are applied to every nested shape.
  */
 import type {
   SpaceBrief,

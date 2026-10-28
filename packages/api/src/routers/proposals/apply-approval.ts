@@ -34,9 +34,9 @@ import {
   createGuideline,
   type GovernanceScope,
   type GovernanceTarget,
-  getActingAgentUserId,
 } from "@synap/database";
 import { proposals } from "@synap/database/schema";
+import { resolveDailyWriteCeiling } from "@synap/database/agent-governance";
 import { markProposalNotificationsActioned } from "../../notifications/mark-proposal-notifications-actioned.js";
 import type { PropertyDecisionMap } from "@synap/database";
 import { isPodWideConnectionSyncApproval } from "@synap/database";
@@ -77,9 +77,9 @@ import { assertAppSignInMayApprove } from "../../services/app-sign-in-policy.js"
 import {
   assertMayDecideProposal,
   assertMayDecideProposalAt,
-  isAgentPrincipal,
   refuseAgentProposalApprover,
 } from "./review-authority.js";
+import { personIsApproving } from "../../services/capabilities/skill-born-approved.js";
 import {
   applyGovConfigChange,
   type SettingsUpdateProposalData,
@@ -399,9 +399,13 @@ export interface GovernanceWidenLaneProposalData {
   workspaceId?: string | null;
   verdict: "auto";
   evidence: {
+    /** Agent-wide: rows in the window. Per-motif: the motif's human decisions. */
     total: number;
     approveRate: number;
     duplicateRate: number;
+    /** Which gate qualified it (absent on rows filed before per-motif widening). */
+    basis?: "agent" | "motif";
+    motif?: { targetType: string; proposalType: string };
   };
 }
 
@@ -1079,18 +1083,15 @@ async function applyProposalApprovalInner(
             workspaceId: compositeCtx.workspaceId,
             auditSource: "rule_loop_approval",
             // The proposal's author (the actor `compositeCtx` already
-            // carries), and whether a PERSON is approving: the same three
-            // facts the `skill/create` executor reads (`executors/skill.ts`),
-            // so an agent's skill is born approved only by a person's
-            // approval of the batch that carries it. Read only when the
-            // batch creates a skill.
+            // carries), and whether a PERSON is approving (`personIsApproving`,
+            // the reading the `skill/create` executor uses too), so an agent's
+            // skill is born approved only by a person's approval of the batch
+            // that carries it. Read only when the batch creates a skill.
             skillAuthor: {
               agentUserId: compositeCtx.agentUserId,
               personApproved:
                 reconciledOperations.some((op) => op.op === "create_skill") &&
-                !ctx?.agentUserId &&
-                !getActingAgentUserId() &&
-                !(await isAgentPrincipal(userId)),
+                (await personIsApproving(ctx, userId)),
             },
           }),
           // Per-op link idempotency keyed by THIS proposal (client-stable): a
@@ -1971,6 +1972,14 @@ async function applyProposalApprovalInner(
   // ceiling on that SAME axis so exactly one is effective. Mirrors the ceilings
   // router's `.create` insert shape. Floor-safe: a ceiling can only downgrade
   // execute→propose at rung 2.56 — raising one never widens a floor.
+  //
+  // A RAISE NEVER LOWERS (daily_write_count): the daily ceiling is opt-in since
+  // 2026-10-27 (no row ⇒ no limit). A raise filed while a lower limit was in
+  // force may be approved after it went away (no row any more, or a higher
+  // pod-wide row): writing the proposed limit then would IMPOSE or LOWER a
+  // ceiling under the name of a raise. So when the limit in force for the agent
+  // is none, or already at/above the proposed one, nothing is written and the
+  // receipt says why.
   if (proposal.proposalType === "governance.raise_ceiling") {
     const raiseData = payload as GovernanceRaiseCeilingProposalData | null;
     if (
@@ -1988,6 +1997,17 @@ async function applyProposalApprovalInner(
       });
     }
     const axis = raiseData.axis ?? "daily_write_count";
+    const limitInForce =
+      axis === "daily_write_count"
+        ? await resolveDailyWriteCeiling({
+            db,
+            agentUserId: raiseData.agentUserId,
+            workspaceId: null,
+          })
+        : undefined;
+    const nothingToRaise =
+      axis === "daily_write_count" &&
+      (limitInForce == null || limitInForce >= raiseData.proposedLimit);
 
     // Supersede the agent's prior active pod-scoped ceiling ON THIS AXIS (if
     // any) so the new one is the single effective row — same soft-revoke the
@@ -1995,33 +2015,37 @@ async function applyProposalApprovalInner(
     // EVIDENCE (storage engine): the supersede UPDATE and the new-ceiling
     // INSERT each RETURN their rows; `rows` is their sum. A supersede that
     // matched nothing (no prior ceiling) is legal and shows as 1, not 2.
-    const supersededCeilings = await db
-      .update(governanceCeilings)
-      .set({ revokedAt: new Date() })
-      .where(
-        and(
-          eq(governanceCeilings.axis, axis),
-          eq(governanceCeilings.principalKind, "agent"),
-          eq(governanceCeilings.agentUserId, raiseData.agentUserId),
-          eq(governanceCeilings.scopeKind, "pod"),
-          isNull(governanceCeilings.revokedAt)
-        )
-      )
-      .returning({ id: governanceCeilings.id });
+    const supersededCeilings = nothingToRaise
+      ? []
+      : await db
+          .update(governanceCeilings)
+          .set({ revokedAt: new Date() })
+          .where(
+            and(
+              eq(governanceCeilings.axis, axis),
+              eq(governanceCeilings.principalKind, "agent"),
+              eq(governanceCeilings.agentUserId, raiseData.agentUserId),
+              eq(governanceCeilings.scopeKind, "pod"),
+              isNull(governanceCeilings.revokedAt)
+            )
+          )
+          .returning({ id: governanceCeilings.id });
 
-    const insertedCeilings = await db
-      .insert(governanceCeilings)
-      .values({
-        axis,
-        principalKind: "agent",
-        agentUserId: raiseData.agentUserId,
-        scopeKind: "pod",
-        workspaceId: null,
-        limitValue: raiseData.proposedLimit,
-        sourceProposalId: proposal.id,
-        createdBy: userId,
-      })
-      .returning({ id: governanceCeilings.id });
+    const insertedCeilings = nothingToRaise
+      ? []
+      : await db
+          .insert(governanceCeilings)
+          .values({
+            axis,
+            principalKind: "agent",
+            agentUserId: raiseData.agentUserId,
+            scopeKind: "pod",
+            workspaceId: null,
+            limitValue: raiseData.proposedLimit,
+            sourceProposalId: proposal.id,
+            createdBy: userId,
+          })
+          .returning({ id: governanceCeilings.id });
 
     await db
       .update(proposals)
@@ -2050,6 +2074,21 @@ async function applyProposalApprovalInner(
       "approved",
       userId
     );
+    if (nothingToRaise) {
+      return {
+        success: true,
+        effect: {
+          applied: "none",
+          reason:
+            limitInForce == null
+              ? "This agent has no daily write limit (none is set, the " +
+                "default), so there is nothing to raise: no ceiling was written."
+              : `This agent's daily write limit is already ${limitInForce}, ` +
+                `at or above the proposed ${raiseData.proposedLimit}, so ` +
+                "nothing was lowered: no ceiling was written.",
+        },
+      };
+    }
     return {
       success: true,
       effect: {

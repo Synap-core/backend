@@ -9,8 +9,9 @@
  * Both previously hand-copied these constants and the agent-policy precedence
  * ladder. Because `@synap/api` depends on `@synap/jobs`, the jobs side could not
  * import the canonical gate without a cycle, so it kept a forked MIRROR with an
- * explicit "DRIFT RISK" TODO. This package is that lower, dependency-free home —
- * it removes the fork.
+ * explicit "DRIFT RISK" TODO. This package is that lower home — it removes the
+ * fork. Its one dependency is the pure, published `@synap-core/types` (the
+ * grant grammar and the reason sentences are declared there).
  *
  * It contains NO database / event / proposal side effects — ONLY the decision.
  * Each caller still: runs RBAC, fetches the agent + workspace rows, then calls
@@ -56,7 +57,9 @@
  *                                    axis daily_write_count), so a would-be-auto
  *                                    write is downgraded execute→propose. Same
  *                                    placement class as 2.55 — below the floors,
- *                                    above every auto path. Never denies.
+ *                                    above every auto path. Never denies. OFF by
+ *                                    default: only a stored ceiling row sets a
+ *                                    limit (DEFAULT_DAILY_WRITE_CEILING = null).
  *   2.6 user_observation by KIND  → INFERENCE propose / EXPLICIT execute
  *                                    (governs by the observation's nature, NOT
  *                                     the routing workspace — see below)
@@ -84,6 +87,7 @@
 // Constants — the policy values (formerly duplicated in both gates)
 // ---------------------------------------------------------------------------
 
+import { GOVERNANCE_POLICY_SENTENCES } from "@synap-core/types/proposals";
 import { GRANT_ACTIONS, patternMatches } from "./grants.js";
 
 /**
@@ -256,13 +260,24 @@ export const DESTRUCTIVE_ACTIONS: readonly string[] = [
 
 /**
  * The ONE SOURCE of the default daily auto-execute write ceiling (rung 2.56 —
- * governance_ceilings axis `daily_write_count`). Consulted by the resolver
- * (`resolveDailyWriteCeiling` in @synap/database) when NO `governance_ceilings`
- * row matches the acting (agent, scope) tuple — the same "absence → code floor"
- * shape `DEFAULT_AUTO_APPROVE` (rung 8) uses. A stored ceiling row always sets
- * its own `limit_value`; this is only the fallback. The DB column deliberately
- * carries NO default so this constant stays the single source (see the 0236
- * migration + governance-ceilings.ts header).
+ * governance_ceilings axis `daily_write_count`): `null`, NO CEILING. Consulted
+ * by the resolver (`resolveDailyWriteCeiling` in @synap/database) when NO
+ * `governance_ceilings` row matches the acting (agent, scope) tuple, so by
+ * default rung 2.56 never holds a write: an agent that is trusted to write
+ * automatically is not stopped after N writes a day (founder, 2026-10-27 — on
+ * that day one agent identity shared by ~20 sessions made 1,116 automatic
+ * writes, and the old 500/day default held 83 of them for review). The
+ * mechanism stays OPT-IN: a stored row (per agent, per space or pod-wide) sets
+ * its own finite `limit_value` and rung 2.56 enforces it exactly as before.
+ * The DB column deliberately carries NO default so this constant stays the
+ * single source (see the 0236 migration + governance-ceilings.ts header).
+ *
+ * `null`, never `Infinity`: a limit is stored in an integer column and sent as
+ * JSON, and neither holds an infinity.
+ *
+ * Not touched by this default: the floors (rungs 2, 2.1, 2.5, 2.6), the
+ * pending-proposal cap (`pending_proposal_cap`) and the irreversible-send cap
+ * (`worker_irreversible_sends_daily`, tighten-only).
  *
  * NOTE — distinct from the pod-hygiene near-dup scanner's
  * `MAX_PROPOSALS_PER_USER_PER_DAY` (packages/jobs): that caps how many MERGE
@@ -271,7 +286,7 @@ export const DESTRUCTIVE_ACTIONS: readonly string[] = [
  * executed), principal (user vs agent), and axis — NOT the same concept, so they
  * are deliberately NOT consolidated.
  */
-export const DEFAULT_DAILY_WRITE_CEILING = 500;
+export const DEFAULT_DAILY_WRITE_CEILING: number | null = null;
 
 /**
  * The SYSTEM ceiling on irreversible sends (`messaging.external.send`,
@@ -292,12 +307,13 @@ export const WORKER_IRREVERSIBLE_DAILY_CEILING = 50;
  * THE CAPS FOLD (agent routing W1c, 0330): the fallback value of every
  * `governance_ceilings` axis, in ONE table. A stored row overrides it for its
  * (subject, principal, scope); `resolveCeiling` (@synap/database) is the one
- * reader. `@synap/database` pins this table's key set to the axis enum at
+ * reader. `null` = no limit unless a row sets one (`daily_write_count`). `@synap/database` pins this table's key set to the axis enum at
  * compile time (a new axis with no default does not build), and an api
  * tripwire pins the published copies in `@synap-core/types`
  * (`AI_DISPATCH_GUARDRAILS`, `DEFAULT_WORKER_MAX_PENDING_APPROVALS`) equal.
  */
 export const CEILING_DEFAULTS = {
+  /** No ceiling by default: opt-in per agent / space / pod (a stored row). */
   daily_write_count: DEFAULT_DAILY_WRITE_CEILING,
   /** Base pending-proposal cap; the api multiplies it for a trusted agent. */
   pending_proposal_cap: 10,
@@ -1105,6 +1121,12 @@ const GRANT_ACTION_FOLDS: Readonly<Record<string, string>> = {
   // move its status. The status door still governs each move — expectedStatus,
   // humanOnly options, the ladder (`services/lifecycle/move-status.ts`).
   "entity/transition": "update",
+  // Putting a role on a record CREATES its facet row; taking it off DELETES it
+  // (D1, #134; founder decision 812ee060, 2026-10-28). An app is granted
+  // `facet.create` / `facet.delete`; a grant naming the door (`facet.attach`)
+  // keeps permitting it (`grantRequestKeys`).
+  "facet/attach": "create",
+  "facet/detach": "delete",
 };
 
 /** `relationDef` → `relation_def`, `renderer.set` → `renderer_set`. */
@@ -1545,47 +1567,11 @@ export type AgentPolicyVerdict =
 
 /**
  * The sentence a person reads for each reason code, written for them: what
- * will happen and why, in one sentence. Mirrored in `@synap-core/types`
- * (`GOVERNANCE_POLICY_SENTENCES`); a tripwire keeps the two equal.
+ * will happen and why, in one sentence. Declared ONCE, as
+ * `GOVERNANCE_POLICY_SENTENCES` in `@synap-core/types/proposals` (where the
+ * review surfaces read it and its short labels), under the engine's name here.
  */
-export const PROPOSE_REASON = {
-  ADMIN: "This changes how your pod is run, so it waits for you.",
-  WRITES_REQUIRE_PROPOSAL: "This agent asks before every change.",
-  AGENT_OWNED_DESTRUCTIVE:
-    "This removes something from an agent's workspace, so it waits for you.",
-  CHANNEL_PROPOSE:
-    "In this channel a teammate can suggest changes, but only you can apply them.",
-  USER_OBSERVATION_INFERENCE:
-    "The AI guessed this about you, so it is only saved if you confirm it.",
-  CAPABILITY_PROPOSE: "Running this tool needs your OK first.",
-  SCOPE_IDENTITY_CHANGE:
-    "This changes what the record is or where it shows, so it waits for you.",
-  PROJECT_FILING:
-    "Filing these into a project shows them to its members, so you approve it.",
-  CRITERIA_CHANGE:
-    "An agent wants to change the criteria its own work is checked against, so you decide.",
-  POSSIBLE_DUPLICATE:
-    "This looks like something you already have or that is already waiting for review, so you decide whether to keep both.",
-  DESTRUCTIVE_HARD_FLOOR:
-    "This deletes, archives, purges or merges something, so it always waits for you.",
-  GOVERNANCE_RULE: "One of your rules says to ask you first.",
-  UNTRUSTED_ORIGIN:
-    "This came from outside, such as an external app or a bridge, so nothing is applied until you approve it.",
-  DAILY_WRITE_CEILING:
-    "This agent used up today's automatic writes, so the rest wait for you.",
-  HUMAN_GATE: "This is a decision only you can make, and no rule can skip it.",
-  ARBITRARY_EXECUTION:
-    "This runs a shell command on your pod, so it always waits for you.",
-  POD_ADMIN_SCHEMA_CHANGE:
-    "This adds a required field or a default to a built-in kind and changes every workspace, so a pod admin must approve it.",
-  AGENT_SCHEMA_DEFINITION:
-    "An agent wants to define a new kind of thing for your pod, so you approve it, and no rule can skip that.",
-  HUMAN_ONLY_STATUS: "Only you can move this into that status.",
-  LIFECYCLE_TERMINAL:
-    "An agent wants to close this (done or lost), so it waits for you unless you have said otherwise.",
-  AGENT_STRUCTURE_WRITE:
-    "An agent wants to create or switch on a workspace, cell, playbook or automation, which changes what your pod does, so you approve it, and no rule can skip that.",
-} as const;
+export const PROPOSE_REASON = GOVERNANCE_POLICY_SENTENCES;
 
 /**
  * Rung 2.1's reason for a FORCED write whose door forces it for a reason other
@@ -1830,7 +1816,9 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
   // daily_write_count). When the acting agent has already reached its resolved
   // per-UTC-day auto-execute write limit, the next would-be-auto write is
   // downgraded to a reviewable proposal — daily backpressure against a runaway
-  // agent (a stuck loop, a fan-out cron) silently auto-writing all day.
+  // agent (a stuck loop, a fan-out cron) silently auto-writing all day. OPT-IN:
+  // with no `governance_ceilings` row there is no limit and this never fires
+  // (`DEFAULT_DAILY_WRITE_CEILING` is null).
   //
   // PLACEMENT (same class as 2.55 — proof it never weakens a floor):
   //   • BELOW the three floors (2 ADMIN, 2.1 forcePropose, 2.5 DESTRUCTIVE),
@@ -2443,7 +2431,7 @@ export const GATE_WRITE_DOORS = {
   "document/section_update": "gate",
   "document/session_narrative_update": "gate",
   // The document patch door (`applyDocumentPatch`) for anything that is not a
-  // section-only patch: `replace_text` / `append` / `replace_all`, and the
+  // section-only patch: `replace_text` / `append` / `replace_all` / `set_title`, and the
   // full-replace aliases (REST PATCH, MCP update_entity.content, IS
   // update_document). Deliberately NOT in DEFAULT_AUTO_APPROVE: an agent's edit
   // is a proposal unless a `governance_rules` row says otherwise (D-gov), and an

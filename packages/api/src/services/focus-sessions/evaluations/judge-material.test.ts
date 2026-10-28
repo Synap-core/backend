@@ -119,7 +119,7 @@ vi.mock("./record.js", async (importOriginal) => {
     listSessionEvaluations: vi.fn(async () => h.evalRows),
     recordSessionEvaluation: vi.fn(async () => ({
       status: "recorded",
-      escalated: false,
+      exhausted: false,
     })),
   };
 });

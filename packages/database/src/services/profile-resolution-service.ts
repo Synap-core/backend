@@ -21,6 +21,7 @@ import {
   type RendererSurface,
 } from "../schema/renderer-bindings.js";
 import type { Profile, PropertyDef } from "../schema/index.js";
+import type { RendererRef } from "@synap-core/types/renderer-ref";
 import { profileProperties } from "../schema/profile-properties.js";
 import { propertyDefs } from "../schema/property-defs.js";
 import { readStoredEnumOptions } from "../utils/property-enum.js";
@@ -91,87 +92,17 @@ function effectiveLifecycleOf(
 }
 
 /**
- * RendererRef / DeclarativeBlock — MIRROR of `@synap-core/types/renderer-ref`.
- *
- * The canonical declaration (and its docs) lives in that module, which every
- * surface that draws a renderer reads. The pod keeps this structural copy, and
- * `packages/database/src/wire-parity/renderer-ref.ts` holds the two EXACTLY
- * equal at compile time. Change both, in the same commit. (This package may
- * now import `@synap-core/types`; collapsing the copy is a follow-up.)
+ * RendererRef / DeclarativeBlock — declared ONCE in
+ * `@synap-core/types/renderer-ref` (with its docs), which every surface that
+ * draws a renderer reads; re-exported here.
  *
  * Stored as JSONB on `profiles.default_renderers`, `renderer_bindings.ref` and
  * inside `workspaces.settings.profileRenderers[slug]`.
  */
-export type DeclarativeBlock =
-  | { type: "heading"; text: string; level?: 1 | 2 | 3 }
-  | { type: "text"; text: string }
-  | { type: "stat"; label: string; value: string | number; hint?: string }
-  | { type: "list"; items: string[]; ordered?: boolean }
-  | {
-      type: "button";
-      label: string;
-      /** A capability verb key or a route the browser knows how to open. */
-      action: string;
-      params?: Record<string, unknown>;
-    };
-
-export type RendererRef =
-  | {
-      kind: "cell";
-      cellKey: string;
-      props: Record<string, unknown>;
-      title?: string;
-      displayMode?: string;
-      rendererHint?: Record<string, unknown>;
-    }
-  | {
-      kind: "view";
-      viewId: string;
-      title?: string;
-      displayMode?: string;
-    }
-  | {
-      kind: "iframe-srcdoc";
-      appId: string;
-      srcdoc: string;
-      title?: string;
-      props?: Record<string, unknown>;
-    }
-  | {
-      kind: "external-app";
-      appId: string;
-      url: string;
-      title?: string;
-      props?: Record<string, unknown>;
-    }
-  | {
-      kind: "url";
-      url: string;
-      external?: boolean;
-      title?: string;
-    }
-  | {
-      kind: "view-adapter";
-      adapterKey: string;
-      props?: Record<string, unknown>;
-      title?: string;
-    }
-  | {
-      kind: "declarative";
-      schema: DeclarativeBlock[];
-      title?: string;
-      props?: Record<string, unknown>;
-      displayMode?: string;
-    }
-  | {
-      /**
-       * "Open where it lives" (Places). Carries no url: the concrete target is
-       * resolved per ENTITY on the pod from its `entity_external_links` row
-       * (`resolveEntityOpenTarget`), so the binding only records the choice.
-       */
-      kind: "source-app";
-      title?: string;
-    };
+export type {
+  DeclarativeBlock,
+  RendererRef,
+} from "@synap-core/types/renderer-ref";
 
 /**
  * The content kinds a profile assigns a renderer to. Canonical taxonomy that

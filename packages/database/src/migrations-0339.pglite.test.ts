@@ -48,8 +48,11 @@ const BASELINE_APPS = slice("-- apps (0309)", "-- 0319: lifecycle columns");
  * PGlite fixture never creates). End of file when there is none.
  */
 const NEWER_BLOCK = (() => {
-  const i = BASELINE.search(/\n-- 03(4[1-9]|[5-9][0-9]):/);
-  return i === -1 ? undefined : i + 1;
+  // Searched from the 0339 block on: a newer migration's comment can sit
+  // earlier in the file, inside an older table (0362 in webhook_subscriptions).
+  const from = BASELINE.indexOf("-- 0339: a pod app's rotating");
+  const i = BASELINE.slice(from).search(/\n-- 03(4[1-9]|[5-9][0-9]):/);
+  return i === -1 ? undefined : from + i + 1;
 })();
 /** The baseline's own 0339 block (and 0340's): from its comment to the next block. */
 const BASELINE_REFRESH = BASELINE.slice(

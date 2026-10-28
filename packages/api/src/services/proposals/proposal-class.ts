@@ -96,7 +96,7 @@ export type ProposalClass = (typeof PROPOSAL_CLASSES)[number];
  * far more destructive and is NOT here. It is "does approving this hand a
  * principal (a person, an agent, or the public) a right it did not have".
  */
-const ACCESS_DOORS: ReadonlySet<string> = new Set([
+export const ACCESS_DOORS: ReadonlySet<string> = new Set([
   // Workspace membership. `workspace/join` is the live one: an agent that is
   // not yet a member files this instead of being hard-denied, and approving it
   // inserts the workspace_members row at the role the payload names.

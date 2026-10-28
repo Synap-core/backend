@@ -103,12 +103,20 @@ export function registerDocumentExecutors(): void {
         return {
           success: true,
           primaryId: applied.documentId,
-          effect: {
-            applied: "verified",
-            rows: 1,
-            ids: [applied.versionId],
-            subject: "document_versions+documents",
-          },
+          // A rename-only patch writes the document row and cuts no version.
+          effect: applied.versionId
+            ? {
+                applied: "verified",
+                rows: 1,
+                ids: [applied.versionId],
+                subject: "document_versions+documents",
+              }
+            : {
+                applied: "verified",
+                rows: 1,
+                ids: [applied.documentId],
+                subject: "documents",
+              },
         };
       },
     });

@@ -8,9 +8,14 @@
  *                       R6: never isolated-vm inside the API process).
  *
  * Chosen by `SKILL_RUNNER` (`process` | `inline`); the pool's size by
- * `SKILL_RUNNER_PROCESSES`, `SKILL_RUNNER_ISOLATES_PER_PROCESS` and
- * `SKILL_RUNNER_QUEUE_MAX`. Only reached when the pod runs code skills itself
- * (`SANDBOX_LOCAL=1`); otherwise they run on the Intelligence Service.
+ * `SKILL_RUNNER_PROCESSES`, `SKILL_RUNNER_ISOLATES_PER_PROCESS`,
+ * `SKILL_RUNNER_QUEUE_MAX` and `SKILL_RUNNER_PER_REQUESTER_MAX` (forwarded by
+ * `deploy/docker-compose.yml`, held by `deploy/__tests__/skill-runtime-deploy.test.sh`).
+ *
+ * WHO runs code skills is `skillRuntime()`: the pod, by default since R2
+ * (code-runtime plan v2), or the Intelligence Service only as a rollback
+ * (`SKILL_RUNTIME=is`) until W6 deletes that path. The one door that picks is
+ * `services/skills/run-skill.ts`.
  */
 import { createLogger } from "@synap-core/core";
 import {
@@ -19,6 +24,7 @@ import {
   type ProcessPoolConfig,
   type ProcessPoolHealth,
   type ProcessSkillPool,
+  type SkillRunOptions,
 } from "./process-pool.js";
 import type { SkillBridges, SkillJob } from "./protocol.js";
 import { evaluateSkill } from "./skill-isolate.js";
@@ -26,6 +32,7 @@ import { evaluateSkill } from "./skill-isolate.js";
 export {
   SkillRuntimeError,
   type SkillRuntimeErrorCode,
+  type SkillRunOptions,
 } from "./process-pool.js";
 export type { SkillBridges, SkillJob } from "./protocol.js";
 export { SKILL_BRIDGE_NAMES } from "./protocol.js";
@@ -34,12 +41,18 @@ const logger = createLogger({ module: "skill-runner" });
 
 export interface SkillRunner {
   readonly kind: "inline" | "process";
-  run(job: SkillJob, bridges: SkillBridges): Promise<unknown>;
+  run(
+    job: SkillJob,
+    bridges: SkillBridges,
+    options?: SkillRunOptions
+  ): Promise<unknown>;
 }
 
 export const inlineSkillRunner: SkillRunner = {
   kind: "inline",
-  run: evaluateSkill,
+  // No pool, so no per-requester count; evaluateSkill's third argument is its
+  // abort signal, never the options.
+  run: (job, bridges) => evaluateSkill(job, bridges),
 };
 
 export type SkillRuntimeHealth =
@@ -54,12 +67,33 @@ function intFromEnv(name: string, fallback: number): number {
 }
 
 export function poolConfigFromEnv(): ProcessPoolConfig {
+  const isolatesPerProcess = intFromEnv("SKILL_RUNNER_ISOLATES_PER_PROCESS", 4);
   return {
     processes: intFromEnv("SKILL_RUNNER_PROCESSES", 2),
-    isolatesPerProcess: intFromEnv("SKILL_RUNNER_ISOLATES_PER_PROCESS", 4),
+    isolatesPerProcess,
     queueMax: intFromEnv("SKILL_RUNNER_QUEUE_MAX", 32),
+    // One runner's worth by default: a burst from one agent leaves the other
+    // runner's slots and the queue to everyone else.
+    perRequesterMax: intFromEnv(
+      "SKILL_RUNNER_PER_REQUESTER_MAX",
+      isolatesPerProcess
+    ),
     watchdogGraceMs: 5_000,
+    startTimeoutMs: 10_000,
   };
+}
+
+/** Where code skills run on this pod. */
+export type SkillRuntimeName = "pod" | "intelligence-service";
+
+/**
+ * The pod runs code skills (R2). `SKILL_RUNTIME=is` sends them back to the
+ * Intelligence Service: a rollback switch, never a fallback — a pod runtime
+ * that cannot start fails the run (`SKILL_RUNTIME_UNAVAILABLE`), it does not
+ * quietly move to the IS.
+ */
+export function skillRuntime(): SkillRuntimeName {
+  return process.env.SKILL_RUNTIME === "is" ? "intelligence-service" : "pod";
 }
 
 const INLINE_REFUSED =
@@ -91,7 +125,7 @@ export function getSkillRunner(): SkillRunner {
 
 /** `/health`'s `skillRuntime`: where code skills run and whether they can. */
 export function skillRuntimeHealth(): SkillRuntimeHealth {
-  if (process.env.SANDBOX_LOCAL !== "1")
+  if (skillRuntime() === "intelligence-service")
     return { runner: "intelligence-service" };
   if (process.env.SKILL_RUNNER === "inline") {
     return process.env.NODE_ENV === "production"
@@ -107,7 +141,7 @@ export function skillRuntimeHealth(): SkillRuntimeHealth {
  * the first skill run. Never throws; a failure is logged and read on /health.
  */
 export async function warmSkillRuntime(): Promise<void> {
-  if (process.env.SANDBOX_LOCAL !== "1") return;
+  if (skillRuntime() === "intelligence-service") return;
   if (process.env.SKILL_RUNNER === "inline") return;
   await processPool().warm();
   const health = processPool().health();

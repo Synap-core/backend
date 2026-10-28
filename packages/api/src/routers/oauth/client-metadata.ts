@@ -18,7 +18,7 @@
  *   - `resolvePublicIssuerEndpoint` refuses local hostnames and any DNS answer
  *     that is not publicly routable, and `pinnedHttpsGet` connects to the IP it
  *     checked (no second lookup, no rebinding window);
- *   - no redirect followed, 5 s for the whole exchange, 5 KB, application/json;
+ *   - no redirect followed, 5 s for the whole exchange, 8 KB, application/json;
  *   - at most one fetch in flight per client_id, and the validated document is
  *     cached in `oauth_clients` (fresh for its Cache-Control, floored at 5 min,
  *     capped at 24 h);
@@ -63,7 +63,12 @@ import {
 /** See the `: any` rationale in hub-protocol/rest/_shared.ts (TS2742). */
 const logger: any = createLogger({ module: "pod-oauth-cimd" });
 
-export const CIMD_MAX_BYTES = 5 * 1024;
+/**
+ * 8 KB, raised from 5 KB with the request cap (32 → 48, founder 2026-10-27):
+ * Content Studio's document measured 3.6 KB at 32 requests and 5.1 KB at 48
+ * (~98 bytes a request), so 5 KB no longer held a 48-request app.
+ */
+export const CIMD_MAX_BYTES = 8 * 1024;
 export const CIMD_TIMEOUT_MS = 5_000;
 /** Fresh window bounds for a cached document. */
 export const CIMD_MIN_TTL_MS = 5 * 60 * 1000;
@@ -80,7 +85,8 @@ export const CIMD_FETCH_WINDOW_MS = 10 * 60 * 1000;
 
 const CIMD_MAX_REDIRECT_URIS = 8;
 const CIMD_MAX_CLIENT_NAME_LENGTH = 100;
-const CIMD_MAX_REQUESTS = 32;
+/** 48 (founder 2026-10-27; was 32, which Content Studio filled). Mirrored by the SDK's `MAX_REQUESTS`. */
+const CIMD_MAX_REQUESTS = 48;
 const CIMD_MAX_REASON_LENGTH = 200;
 const CIMD_MAX_TEMPLATES = 8;
 /** A Contract B workspace-template slug (`ensureTemplate`). */
@@ -434,7 +440,7 @@ function headerValue(v: string | string[] | undefined): string | undefined {
 /**
  * Fetch the document over the SSRF-safe channel. Throws a
  * `ClientMetadataFetchError` for anything that is not a 200 application/json
- * body of at most 5 KB delivered within 5 s.
+ * body of at most `CIMD_MAX_BYTES` (8 KB) delivered within 5 s.
  */
 export async function fetchClientMetadata(
   url: URL,

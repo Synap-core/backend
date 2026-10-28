@@ -70,6 +70,11 @@ export function describeQueue(queue: AskQueueBlock): string {
           : "")
     );
   }
+  if (!("status" in pr) && pr.reviewLater) {
+    parts.push(
+      `${plural(pr.reviewLater, "older proposal", "older proposals")} in Review later`
+    );
+  }
 
   const owed = queue.owedByPerson;
   if ("status" in owed) unread.push("the owed answers");

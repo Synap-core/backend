@@ -131,6 +131,11 @@ beforeAll(async () => {
   );
   const byName = new Map(tables.map((t) => [getTableConfig(t).name, t]));
   for (const t of byName.values()) await h.client!.exec(ddlFor(t));
+  // 0362's default (the generic DDL carries none): every row here is a
+  // delivery target, and both producers select `direction = 'outbound'`.
+  await h.client!.exec(
+    `alter table webhook_subscriptions alter column direction set default 'outbound'`
+  );
 
   await q(`insert into users (id, email) values ($1,'a@example.test')`, [A]);
   for (const ws of [WS1, WS2]) {

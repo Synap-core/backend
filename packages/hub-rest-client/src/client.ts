@@ -178,6 +178,8 @@ import type {
   HubFocusSession,
   ListFocusSessionsOptions,
   HubFocusSessionListItem,
+  GetWorkGraphOptions,
+  HubWorkGraph,
   GetFocusSessionOptions,
   HubFocusSessionWithContinuation,
   UpdateFocusSessionInput,
@@ -2215,6 +2217,27 @@ export class HubRestClient {
     return this.request<HubFocusSessionListItem[]>(
       "GET",
       `/api/hub/focus-sessions?${params}`
+    );
+  }
+
+  /**
+   * The work graph — every open session, every session settled in the last
+   * `windowHours`, and the far end of every edge, in one read. Wraps
+   * GET /api/hub/focus-sessions/graph. Pod-wide unless a lens is passed (the
+   * client's own `workspaceId` is NOT applied: a graph is pod-wide by default).
+   */
+  async getWorkGraph(options?: GetWorkGraphOptions): Promise<HubWorkGraph> {
+    const params = new URLSearchParams();
+    if (options?.workspaceId) params.set("workspaceId", options.workspaceId);
+    if (options?.projectId) params.set("projectId", options.projectId);
+    if (options?.windowHours !== undefined)
+      params.set("windowHours", String(options.windowHours));
+    if (options?.kind) params.set("kind", options.kind);
+    if (options?.lens) params.set("lens", options.lens);
+    const qs = params.toString() ? `?${params}` : "";
+    return this.request<HubWorkGraph>(
+      "GET",
+      `/api/hub/focus-sessions/graph${qs}`
     );
   }
 

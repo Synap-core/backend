@@ -18,10 +18,12 @@
  * the capability actually lives.
  *
  * `exit` comes from `openIn()` — the one door. When it resolves to a
- * `synap://` link the fallback is rendered automatically, because a desktop
- * link that does not resolve fails silently and would strand the reader.
- * On a phone that cannot follow it, the button is not drawn at all: the line
- * beneath says so, with the web page that covers it when there is one.
+ * `synap://` link the button stands alone, and the download is offered in its
+ * row automatically once a click did not open the app (`useAppOpenAttempt`),
+ * because a desktop link that does not resolve fails silently and would
+ * strand the reader. On a phone that cannot follow it, the button is not
+ * drawn at all: the line beneath says so, with the web page that covers it
+ * when there is one.
  */
 
 import { Button } from "@heroui/react";
@@ -30,6 +32,7 @@ import type { Exit } from "../../../lib/open-in";
 import {
   PlacedFallback,
   externalProps,
+  useAppOpenAttempt,
   usePlacedExit,
 } from "../../../lib/exit-link";
 
@@ -53,6 +56,7 @@ export function HandoffCard({
   icon: Icon,
 }: HandoffCardProps) {
   const placed = usePlacedExit(exit);
+  const open = useAppOpenAttempt(placed);
   return (
     <div className="flex flex-col gap-3 rounded-lg bg-content2/40 px-4 py-4 ring-1 ring-inset ring-foreground/[0.06]">
       <div className="flex items-start gap-3">
@@ -81,6 +85,7 @@ export function HandoffCard({
             as="a"
             href={placed.href}
             {...externalProps(placed.href)}
+            onPress={open.onOpen}
             size="sm"
             radius="sm"
             variant="flat"
@@ -92,8 +97,11 @@ export function HandoffCard({
         )}
 
         {/* A `synap://` href does nothing at all when the app isn't installed —
-            the browser shows no error. This is the way out of that silence. */}
+            the browser shows no error. The offer, after a click that opened
+            nothing, is the way out of that silence; the phone's lines sit
+            here at rest. */}
         <PlacedFallback placed={placed} />
+        {open.offer}
       </div>
     </div>
   );

@@ -29,6 +29,7 @@ import { db, and, inArray } from "@synap/database";
 import { focusSessions } from "@synap/database/schema";
 import { isLikelyUUID } from "@synap-core/types/proposals";
 import { resolvePrivateObjectLabel } from "@synap-core/types/vocabulary";
+import { HELD_WRITES_PROPOSAL_TYPE } from "../../utils/held-writes-pack.js";
 import {
   sessionReadableWhere,
   type SessionReader,
@@ -113,9 +114,18 @@ export function proposalSessionIds(row: {
   targetType: string;
   targetId: string | null;
   sessionId: string | null;
+  proposalType?: string | null;
 }): string[] {
   const ids = targetSessionIds([row]);
-  if (row.sessionId && isLikelyUUID(row.sessionId)) ids.push(row.sessionId);
+  if (
+    row.sessionId &&
+    isLikelyUUID(row.sessionId) &&
+    // A held-writes pack spans every session its agent wrote in that day; a
+    // `session_id` on one (packs filed before the fix carry the first write's)
+    // names none of them, so it never gates the pack.
+    row.proposalType !== HELD_WRITES_PROPOSAL_TYPE
+  )
+    ids.push(row.sessionId);
   return [...new Set(ids)];
 }
 
@@ -167,6 +177,7 @@ export async function unreadableProposalSessionIds(
     targetType: string;
     targetId: string | null;
     sessionId: string | null;
+    proposalType?: string | null;
   }[],
   reader: SessionReader
 ): Promise<Set<string>> {

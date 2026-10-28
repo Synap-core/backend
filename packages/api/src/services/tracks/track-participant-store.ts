@@ -33,13 +33,7 @@ import {
   trackParticipants,
   users,
 } from "@synap/database";
-import type {
-  ProjectTrack,
-  TrackCommitmentStateKey,
-  TrackParticipantRoleKey,
-  TrackParticipantRow,
-  TrackPrincipalKindKey,
-} from "@synap/database/schema";
+import type { ProjectTrack, TrackParticipantRow } from "@synap/database/schema";
 import { actorDisplayName } from "../../routers/proposals/helper-functions.js";
 import { loadActorRows } from "../activity/activity-actors.js";
 import {
@@ -48,22 +42,9 @@ import {
   goalOwner,
   isOpenCommitment,
   trackStatusCategory,
-  type TrackCommitmentState,
   type TrackParticipant,
   type TrackParticipantRole,
-  type TrackPrincipalKind,
 } from "@synap-core/types/units";
-
-// The DB mirror (`@synap/database`) and the shared sets
-// (`@synap-core/types/units`) name EXACTLY the same values: a role, kind or
-// state added on one side only stops the build.
-type _Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
-const _sameRoles: _Same<TrackParticipantRoleKey, TrackParticipantRole> = true;
-const _sameKinds: _Same<TrackPrincipalKindKey, TrackPrincipalKind> = true;
-const _sameStates: _Same<TrackCommitmentStateKey, TrackCommitmentState> = true;
-void _sameRoles;
-void _sameKinds;
-void _sameStates;
 
 /** The stored rows of ONE goal — read only AFTER the goal's own floor passed. */
 export async function goalParticipantRows(
@@ -128,6 +109,44 @@ export async function loadGoalOwner(
   track: Pick<ProjectTrack, "id" | "userId">
 ): Promise<string> {
   return goalOwner(await goalParticipantRows(track.id), track);
+}
+
+/**
+ * THE agent a goal's next run is handed to (plan v5 T2: "goals name who works
+ * them") — an AGENT delegate whose commitment is still open: one that
+ * ACCEPTED first, else the one asked first (`proposed` / `countered`). Never a
+ * delegate who declined, reported the work impossible or is done. `null` when
+ * no agent is on the goal. Pure.
+ */
+export function goalWorkerAgent(
+  rows: ReadonlyArray<
+    Pick<
+      TrackParticipantRow,
+      "role" | "principalKind" | "principalId" | "commitmentState" | "createdAt"
+    >
+  >
+): string | null {
+  const open = rows
+    .filter(
+      (r) =>
+        r.role === "delegate" &&
+        r.principalKind === "agent" &&
+        isOpenCommitment(r.commitmentState)
+    )
+    .sort(
+      (a, b) =>
+        Number(b.commitmentState === "accepted") -
+          Number(a.commitmentState === "accepted") ||
+        a.createdAt.getTime() - b.createdAt.getTime()
+    );
+  return open[0]?.principalId ?? null;
+}
+
+/** THE agent `track`'s next run is handed to — {@link goalWorkerAgent}. */
+export async function loadGoalWorkerAgent(
+  track: Pick<ProjectTrack, "id">
+): Promise<string | null> {
+  return goalWorkerAgent(await goalParticipantRows(track.id));
 }
 
 /** A person's display name, for a sentence — `null` when they have none. */

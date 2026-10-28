@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { computeAgentScorecard } from "./agent-scorecard.js";
+import {
+  computeAgentScorecard,
+  DUPLICATE_SAMPLE_LIMIT,
+} from "./agent-scorecard.js";
 import type { ScorecardProposalRow } from "./agent-scorecard.js";
 import {
   capabilityVerbListing,
@@ -186,6 +189,33 @@ describe("computeAgentScorecard", () => {
       pendingCount: 0,
     });
     expect(card.rates.duplicateRate).toBeCloseTo(0.75, 5);
+  });
+
+  it("reads the duplicate rate from the newest DUPLICATE_SAMPLE_LIMIT rows and divides by the sample", () => {
+    // 600 rows: the newest 500 are 250 same-shape pairs, the oldest 100 are
+    // all distinct. Over the sample every row is a duplicate (rate 1); over
+    // the window total it would read 500/600.
+    const t0 = Date.parse("2026-10-27T12:00:00Z");
+    const rows: ScorecardProposalRow[] = Array.from({ length: 600 }, (_, i) =>
+      proposalRow({
+        targetId: `x${i}`,
+        data: { name: i < 500 ? `pair-${Math.floor(i / 2)}` : `solo-${i}` },
+        createdAt: new Date(t0 - i * 60_000),
+      })
+    );
+    const card = computeAgentScorecard(rows, {
+      agentId: "a",
+      agentName: null,
+      agentType: null,
+      pendingCount: 0,
+    });
+    expect(card.counts.total).toBe(600);
+    expect(card.duplicateSample).toEqual({
+      size: DUPLICATE_SAMPLE_LIMIT,
+      limit: DUPLICATE_SAMPLE_LIMIT,
+    });
+    expect(DUPLICATE_SAMPLE_LIMIT).toBe(500);
+    expect(card.rates.duplicateRate).toBe(1);
   });
 
   it("is safe on an empty history (no NaN rates)", () => {

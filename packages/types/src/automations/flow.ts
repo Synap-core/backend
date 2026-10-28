@@ -8,6 +8,8 @@
  * code, nothing from the database package.
  */
 
+import type { WorkerSize } from "../workers/index.js";
+
 // ── Flow definition types ───────────────────────────────────────────────────
 
 /**
@@ -68,6 +70,14 @@ export interface AutomationTriggerConfig {
   // ── webhook trigger ────────────────────────────────────────────────────
   /** Webhook subscription ID to listen on */
   webhookSubscriptionId?: string;
+  /**
+   * The inbound webhook source this automation listens to, BY NAME — what a
+   * package declares (a row id is one pod's own). The create and update doors
+   * and a template install bind it to the space's source of that name when a
+   * person has created one, and set `webhookSubscriptionId`; they never create
+   * a source. Created later, the source binds this automation then.
+   */
+  webhookSource?: { name: string };
 
   // ── rule scope (entity + project) ──────────────────────────────────────
   /**
@@ -280,6 +290,11 @@ export interface OutputNodeDef extends AutomationNodeBase {
     label: string;
     outputType:
       | "notification"
+      // Record an outside fact as an observation (`dev.pr_merged`), through
+      // the observation door's own checks. Config: `type`, `subjectId`,
+      // `subjectType?`, `data`, `occurredAt?`. (A line comment, not JSDoc:
+      // the api-types generator would carry a JSDoc into the generated union.)
+      | "record_observation"
       | "entity_create"
       | "entity_update"
       | "facet_attach"
@@ -289,6 +304,14 @@ export interface OutputNodeDef extends AutomationNodeBase {
       | "webhook"
       | "channel_message"
       | "session_update"
+      // Session outcome verbs (plan v5 T2, decision V4), governed like every
+      // write: complete one outcome, post evidence for criteria, re-grade
+      // criteria. Config: `sessionId` | `subjectEntityId`, then `outcomeKey` /
+      // `evidence` / `criterionKeys`. (A line comment, not JSDoc: the api-types
+      // generator would carry a JSDoc into the generated union.)
+      | "complete_outcome"
+      | "post_evidence"
+      | "reevaluate_criterion"
       | "set_state";
     config: Record<string, unknown>;
   };
@@ -800,7 +823,7 @@ export interface PlaybookRunNodeDef extends AutomationNodeBase {
 export interface PlaybookRunWorkerSpec {
   /** The activator's key within its playbook (`activatorKey`). */
   key: string;
-  size: "per_thing" | "per_moment";
+  size: WorkerSize;
   /** The subject kind or role the worker works on. */
   profileSlug: string;
   /** The status its things sit in (enters_status / count / schedule). */

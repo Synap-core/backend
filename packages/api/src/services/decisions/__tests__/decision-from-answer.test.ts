@@ -3,6 +3,7 @@ import type { SlotAnswer } from "@synap/playbooks";
 import { buildAskSnapshot } from "@synap-core/types/ask";
 import {
   decisionFromAnswer,
+  decisionUpdateFromAnswer,
   askFilesDecision,
   CONFIRM_OPTIONS,
 } from "../decision-from-answer.js";
@@ -143,4 +144,159 @@ it("lookedAt edges skip non-endpoint kinds (view)", () => {
     "entity:e1:about",
     "document:doc1:about",
   ]);
+});
+
+describe("decisionFromAnswer — relay provenance", () => {
+  const pick = {
+    type: "chip" as const,
+    chip: { label: "EU account", value: "eu" },
+  };
+  const fileFor = (answer: SlotAnswer) =>
+    decisionFromAnswer({
+      slot: { label: "Stripe account", ask: CHOOSE },
+      answer,
+      sessionId: "s1",
+    })!.properties;
+
+  it("a tap carries none of it", () => {
+    const p = fileFor(answerTo(CHOOSE, pick, "EU account"));
+    expect(p.answeredVia).toBeUndefined();
+    expect(p.relayedBy).toBeUndefined();
+    expect(p.relayQuote).toBeUndefined();
+  });
+
+  it("a relayed answer says so, with who carried which words", () => {
+    const p = fileFor({
+      ...answerTo(CHOOSE, pick, "EU account"),
+      via: "relayed",
+      relayedBy: "agent-7",
+      quote: "the EU one",
+    });
+    expect(p).toMatchObject({
+      answeredVia: "relayed",
+      relayedBy: "agent-7",
+      relayQuote: "the EU one",
+    });
+  });
+
+  it("a CONFIRMED relay reads tap, and keeps the relay", () => {
+    const p = fileFor({
+      ...answerTo(CHOOSE, pick, "EU account"),
+      via: "tap",
+      relayedBy: "agent-7",
+      quote: "the EU one",
+      confirmedAt: "2026-10-26T10:00:00.000Z",
+    });
+    expect(p).toMatchObject({
+      answeredVia: "tap",
+      relayedBy: "agent-7",
+      relayQuote: "the EU one",
+    });
+  });
+});
+
+describe("decisionUpdateFromAnswer — an EXISTING decision (slot.decisionId)", () => {
+  const slot = { label: "Stripe account", ask: CHOOSE, decisionId: "d1" };
+  const pick = (value: string, label: string, text = label) =>
+    answerTo(CHOOSE, { type: "chip", chip: { label, value } }, text);
+  const draftOf = (answer: SlotAnswer) =>
+    decisionFromAnswer({ slot, answer, sessionId: "s1" })!;
+
+  it("writes what was decided, never the person's summary, options or rationale", () => {
+    const answer = pick(
+      "us",
+      "US account",
+      "US account — the US entity invoices"
+    );
+    const u = decisionUpdateFromAnswer({
+      draft: draftOf(answer),
+      previous: null,
+      existing: {
+        summary: "Bill EU customers from one account",
+        decisionOptions: [{ label: "Theirs" }],
+        rationale: "Tax is simpler.",
+      },
+      answer,
+    });
+    expect(u).toMatchObject({
+      decisionStatus: "accepted",
+      chosenOption: "us",
+      recommendedOption: "eu",
+      followedRecommendation: false,
+      sourceSessionId: "s1",
+      rationale: "Tax is simpler.\n\nWhen deciding: the US entity invoices",
+    });
+    for (const key of ["summary", "decisionOptions", "alternatives"]) {
+      expect(u).not.toHaveProperty(key);
+    }
+  });
+
+  it("no note ⇒ the rationale is not touched at all", () => {
+    const answer = pick("eu", "EU account");
+    const u = decisionUpdateFromAnswer({
+      draft: draftOf(answer),
+      previous: null,
+      existing: { rationale: "Tax is simpler." },
+      answer,
+    });
+    expect(u).not.toHaveProperty("rationale");
+  });
+
+  it("a re-answer revises the words the PREVIOUS answer wrote, and only those", () => {
+    const first = draftOf(pick("eu", "EU account"));
+    const answer = pick("us", "US account");
+    const u = decisionUpdateFromAnswer({
+      draft: draftOf(answer),
+      previous: first,
+      existing: { ...first.properties },
+      answer,
+    });
+    expect(u.summary).toBe("US account");
+    expect(u.alternatives).toBe("- EU account — bills in EUR (recommended)");
+
+    const edited = decisionUpdateFromAnswer({
+      draft: draftOf(answer),
+      previous: first,
+      existing: { ...first.properties, summary: "My own words" },
+      answer,
+    });
+    expect(edited).not.toHaveProperty("summary");
+  });
+});
+
+describe("decisionFromAnswer — a pick through a follow-up (the decision tree)", () => {
+  const TREE = {
+    mode: "choose" as const,
+    options: [
+      {
+        label: "Ship it",
+        followUp: {
+          prompt: "Which environment?",
+          options: [{ label: "Staging" }, { label: "Production" }],
+        },
+      },
+      { label: "Wait" },
+    ],
+  };
+  const why = "Release the billing fix?";
+  const value = {
+    type: "chip" as const,
+    chip: { label: "Ship it" },
+    then: { label: "Production" },
+  };
+  const d = decisionFromAnswer({
+    slot: { label: "Release", ask: TREE, why },
+    answer: answerTo(
+      TREE,
+      value,
+      "Ship it → Production — after the freeze",
+      why
+    ),
+    sessionId: "s1",
+  })!;
+
+  it("the summary is the whole path, and the note survives it", () => {
+    expect(d.properties.summary).toBe("Ship it → Production");
+    expect(d.properties.rationale).toMatch(/^after the freeze/);
+  });
 });

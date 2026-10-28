@@ -18,13 +18,23 @@
  * review offers to "what else from this session waits for you". From
  * `lg` up the decision docks beside the list; below, it opens in a drawer.
  * An agent's question is answered in the same place (`ask-answer.tsx`);
- * once it is, the detail closes and focus moves to the next row.
+ * once it is, the detail closes and focus moves to the next row. What waited
+ * more than 7 days sits in a "Review later" fold under the list, out of the
+ * counts (`review-rows.ts`).
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Alert, Button, Checkbox, Textarea, addToast } from "@heroui/react";
-import { ArrowUpRight, Check, Lock, MessageSquare, X } from "lucide-react";
+import {
+  ArrowUpRight,
+  Check,
+  ChevronRight,
+  Lock,
+  MessageSquare,
+  X,
+} from "lucide-react";
+import { FATE_COPY } from "@synap-core/types/proposals/fate";
 import { trpc } from "../../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
 import { formatRelative, isUuid } from "../../../../lib/format";
@@ -35,6 +45,7 @@ import {
   ExitFallback,
   externalProps,
   rowHref,
+  useAppOpenAttempt,
   usePlacedExit,
 } from "../../../../lib/exit-link";
 import { PageHeader, PageShell } from "../../components/page-header";
@@ -48,11 +59,13 @@ import {
   ResourceRowSkeleton,
 } from "../../components/resource-row";
 import { kindIcon, kindLabel } from "../../../_lib/object/kind-icon";
+import { lensRowExpiry } from "@synap-core/types/lens";
 import {
   batchOf,
   exitOf,
   focusedRow,
   liveAskSlot,
+  reviewChipCounts,
   reviewCounts,
   reviewFilterOf,
   reviewRows,
@@ -137,8 +150,17 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
     () => reviewRows(signals.data?.signals ?? [], facts),
     [signals.data, facts]
   );
-  const counts = reviewCounts(rows);
-  const visible = filter === "history" ? [] : rowsInView(rows, filter);
+  // Narrowed to a session, the pod-wide count says nothing about its rows.
+  const counts = reviewChipCounts(
+    rows,
+    sessionId ? null : (count.data ?? null)
+  );
+  const view =
+    filter === "history"
+      ? { headline: [], reviewLater: [] }
+      : rowsInView(rows, filter);
+  const visible = view.headline;
+  const [laterOpen, setLaterOpen] = useState(false);
 
   // ── The drawer, and the `?focus=` receiver ────────────────────────────────
   const [open, setOpen] = useState<OpenReview | null>(null);
@@ -149,6 +171,7 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
       return;
     handledFocus.current = focusId;
     const row = focusedRow(rows, focusId);
+    if (row?.reviewLater) setLaterOpen(true);
     const opened = row ? openOf(row) : null;
     if (opened) {
       setOpen(opened);
@@ -173,8 +196,9 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
     open?.detail.kind === "ask" ? liveAskSlot(rows, open.detail) : null;
   function askSettled() {
     const answered = open ? detailKey(open.detail) : null;
-    const keys = visible.map((r) => r.key);
-    const at = visible.find(
+    const shown = laterOpen ? [...visible, ...view.reviewLater] : visible;
+    const keys = shown.map((r) => r.key);
+    const at = shown.find(
       (r) =>
         r.detail && r.detail.kind !== "open" && detailKey(r.detail) === answered
     );
@@ -281,12 +305,14 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
     .find((e): e is Exit => !!e?.isDesktopLink);
   // The pod-wide count says nothing about one session's rows: narrowed, the
   // page says only that its read hit the limit.
+  // The headline rows the read carried (Review later is folded out of the count).
+  const headlineShown = reviewCounts(rows).all;
   const shownOfTotal = sessionId
     ? rows.length >= NEEDS_YOU_PAGE_LIMIT
       ? `Showing the newest ${rows.length} from this session.`
       : null
-    : count.data && count.data.needsYou > rows.length
-      ? `Showing the newest ${rows.length} of ${count.data.truncated ? "more than " : ""}${count.data.needsYou}.`
+    : count.data && count.data.needsYou > headlineShown
+      ? `Showing the newest ${headlineShown} of ${count.data.truncated ? "more than " : ""}${count.data.needsYou}.`
       : null;
 
   const activeKey = open ? detailKey(open.detail) : null;
@@ -414,11 +440,15 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
             ) : visible.length === 0 ? (
               <ResourceRowEmpty
                 message={
-                  sessionId
-                    ? "Nothing from this session waits for you."
-                    : filter === "all"
-                      ? "Nothing is waiting on you."
-                      : "Nothing waiting here."
+                  // "Nothing is waiting" would be false over a fold that
+                  // holds rows: nothing NEW is, the rest wait below.
+                  view.reviewLater.length > 0
+                    ? FATE_COPY.nothingNewWaiting
+                    : sessionId
+                      ? "Nothing from this session waits for you."
+                      : filter === "all"
+                        ? "Nothing is waiting on you."
+                        : "Nothing waiting here."
                 }
               />
             ) : (
@@ -445,6 +475,65 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
               ))
             )}
           </section>
+
+          {view.reviewLater.length > 0 && (
+            <div className="mt-3">
+              <Button
+                size="sm"
+                variant="light"
+                radius="md"
+                className="-ml-2 text-foreground/75"
+                aria-expanded={laterOpen}
+                aria-controls="review-later"
+                startContent={
+                  <ChevronRight
+                    className={`h-3.5 w-3.5 transition-transform duration-150 ${laterOpen ? "rotate-90" : ""}`}
+                    aria-hidden
+                  />
+                }
+                onPress={() => setLaterOpen((o) => !o)}
+              >
+                <span className="tabular-nums">
+                  {FATE_COPY.reviewLaterFold(view.reviewLater.length)}
+                </span>
+              </Button>
+              {laterOpen && (
+                <p className="mt-1 text-[12px] text-foreground/55">
+                  {FATE_COPY.reviewLaterCaption}
+                </p>
+              )}
+              {laterOpen && (
+                <section
+                  id="review-later"
+                  aria-label={FATE_COPY.reviewLaterPile}
+                  className="mt-1 divide-y divide-foreground/[0.05] rounded-lg bg-foreground/[0.02] ring-1 ring-inset ring-foreground/10"
+                >
+                  {view.reviewLater.map((row) => (
+                    <ReviewListRow
+                      key={row.key}
+                      // Never batched: "Approve N" is the headline's.
+                      row={{ ...row, batchIds: null }}
+                      active={
+                        activeKey !== null &&
+                        row.detail !== null &&
+                        row.detail.kind !== "open" &&
+                        detailKey(row.detail) === activeKey
+                      }
+                      selectable={selectable}
+                      selected={false}
+                      onToggle={() => undefined}
+                      onOpen={() => {
+                        const opened = openOf(row);
+                        if (opened) setOpen(opened);
+                      }}
+                      onApprove={() => void approveRows([row])}
+                      approving={busy}
+                    />
+                  ))}
+                </section>
+              )}
+            </div>
+          )}
 
           {filter !== "history" && (desktopExit || shownOfTotal) && (
             <div className="mt-2 flex flex-wrap items-center justify-between gap-2 px-1 text-[12px] text-foreground/65">
@@ -505,9 +594,9 @@ function openOf(row: ReviewRow): OpenReview | null {
   if (!detail || detail.kind === "open") return null;
   return {
     detail,
-    // The question itself is the detail's heading; the frame names the job.
-    title: detail.kind === "ask" ? "Answer the agent" : row.title,
-    occurredAt: row.occurredAt,
+    // An ask's row title is its question (`askCardView`), so the frame
+    // names the question once and the detail does not repeat it.
+    title: row.title,
   };
 }
 
@@ -532,28 +621,33 @@ function detailKey(detail: Exclude<ReviewDetail, { kind: "open" }>): string {
  */
 function DoorButton({ exit }: { exit: Exit }) {
   const placed = usePlacedExit(exit);
+  const open = useAppOpenAttempt(placed);
   const href = rowHref(placed);
   if (href === null) return null;
   return (
-    <Button
-      as="a"
-      href={href}
-      {...externalProps(href)}
-      size="sm"
-      variant="flat"
-      radius="md"
-      endContent={
-        placed.href !== null && placed.isDesktopLink ? (
-          <ArrowUpRight className="h-3 w-3" strokeWidth={1.75} aria-hidden />
-        ) : undefined
-      }
-    >
-      Review
-    </Button>
+    <>
+      <Button
+        as="a"
+        href={href}
+        {...externalProps(href)}
+        onPress={open.onOpen}
+        size="sm"
+        variant="flat"
+        radius="md"
+        endContent={
+          placed.href !== null && placed.isDesktopLink ? (
+            <ArrowUpRight className="h-3 w-3" strokeWidth={1.75} aria-hidden />
+          ) : undefined
+        }
+      >
+        Review
+      </Button>
+      {open.offer}
+    </>
   );
 }
 
-/** "Agent · Claude · Synap · 3 grouped · expires in 20m · 2h ago" */
+/** "Agent · Claude · Synap · 3 grouped · Expires in 20m · 2h ago" */
 function secondaryLine(row: ReviewRow): string {
   return [
     kindLabel(row.nounKind),
@@ -561,7 +655,7 @@ function secondaryLine(row: ReviewRow): string {
     row.where,
     row.reason,
     row.count > 1 ? `${row.count} grouped` : null,
-    row.expiresAt ? `expires ${formatRelative(row.expiresAt)}` : null,
+    lensRowExpiry(row)?.label ?? null,
     formatRelative(row.occurredAt, { empty: "" }),
   ]
     .filter(Boolean)

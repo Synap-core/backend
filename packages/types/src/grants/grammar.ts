@@ -39,11 +39,8 @@
  * Pure — no I/O. Shared by the backend, the UI and the CLI.
  *
  * HOME: `@synap-core/types/grants` (synap-backend/packages/types/src/grants/
- * grammar.ts). `@synap/governance-policy/grants` is a BYTE-IDENTICAL MIRROR,
- * not a re-export: governance-policy cannot depend on @synap-core/types —
- * types →(dev) @synap/database → governance-policy → types is a build cycle
- * turbo refuses. `governance-policy/src/grants-mirror.tripwire.test.ts` fails
- * on any drift: edit the types copy, then copy the file over verbatim.
+ * grammar.ts). `@synap/governance-policy/grants` re-exports it — one
+ * declaration, so the engine and every door read the same grammar.
  */
 
 /** Subjects whose request key carries a kind qualifier (the profile slug). */

@@ -46,6 +46,7 @@ import { createLogger } from "@synap-core/core";
 import type {
   ExpectedOutput,
   SlotAnswer,
+  SlotAnswerProvenance,
   SlotAnswerValue,
 } from "@synap/playbooks";
 import {
@@ -107,6 +108,26 @@ export interface AnswerExpectedOutputParams {
    * would make that discharge impossible. Default `true`.
    */
   handBack?: boolean;
+  /**
+   * WHERE the answer came from (`@synap-core/types/ask` `AnswerProvenance`),
+   * stamped on `answer` as given. Set by the relay door (`via: 'relayed'`) and
+   * by the person's Confirm of a relay (`via: 'tap'` + `confirmedAt`); absent
+   * on every plain tap, which reads `tap`.
+   */
+  provenance?: SlotAnswerProvenance;
+  /**
+   * A RELAY speaks only to a question still open: the slot owed to the
+   * person, unanswered, with no relay waiting for their tap. Re-checked under
+   * the lock, so a tap landing between the relay door's read and this write
+   * wins (`not_open`) instead of being archived under the agent's words.
+   */
+  requireOpenAsk?: boolean;
+  /**
+   * The person's Confirm of a relay: the `relayedAt` of the relay they were
+   * shown. Under the lock the slot must still carry THAT relay — a "Not what
+   * I said" or a re-ask in between refuses (`no_pending_relay`).
+   */
+  confirmsRelayAt?: string;
   now?: Date;
 }
 
@@ -118,6 +139,10 @@ export type AnswerExpectedOutputResult =
   | { status: "empty_answer" }
   /** The slot's ask is no longer the one the answer was given against. */
   | { status: "ask_changed" }
+  /** `requireOpenAsk`: the person answered it, or it is no longer theirs. */
+  | { status: "not_open" }
+  /** `confirmsRelayAt`: the relay the person confirmed is no longer there. */
+  | { status: "no_pending_relay" }
   | {
       status: "answered";
       /** The DECLARED label (the slot's own casing). */
@@ -189,10 +214,13 @@ export function stampAnswered(
   // prior answer (`answer-pickup.ts`).
   const { answerPickedUpAt: _stale, ...fresh } = handedBack;
   // A SECOND answer archives the first instead of overwriting it.
+  // …and a recorded answer settles any relay that waited for the person's
+  // tap: confirmed, or overtaken by their own words.
+  const { pendingRelay: _settled, ...unpended } = fresh;
   const answerHistory = archivedAnswerHistory(slot);
   return outputs.map((o, i) =>
     i === index
-      ? { ...fresh, ...(answerHistory ? { answerHistory } : {}), answer }
+      ? { ...unpended, ...(answerHistory ? { answerHistory } : {}), answer }
       : o
   );
 }
@@ -236,6 +264,18 @@ export async function answerExpectedOutput(
       // so the fingerprint, the snapshot and the decision filed below all see
       // that confirm. Words from the room (no value) stay a legacy answer.
       const stored = current[chosen.index]!;
+      if (
+        params.requireOpenAsk &&
+        (stored.owner !== "human" || !!stored.answer || !!stored.pendingRelay)
+      ) {
+        return { status: "not_open" };
+      }
+      if (
+        params.confirmsRelayAt !== undefined &&
+        stored.pendingRelay?.relayedAt !== params.confirmsRelayAt
+      ) {
+        return { status: "no_pending_relay" };
+      }
       const shownAsk = params.value ? effectiveSlotAsk(stored) : stored.ask;
       const before: ExpectedOutput = shownAsk
         ? { ...stored, ask: shownAsk }
@@ -261,6 +301,7 @@ export async function answerExpectedOutput(
           ? { question: question.slice(0, SLOT_ANSWER_TEXT_MAX) }
           : {}),
         ...(params.value ? { value: params.value } : {}),
+        ...params.provenance,
         // The ask AS POSED — the hand-back below clears `ask`/`why`, and with
         // them the options, the recommendation and what the agent looked at.
         ...(before.ask
@@ -419,6 +460,10 @@ function slotAnsweredEventData(
     // durable record of "the AI said X, the person chose Y". `null` when the
     // slot carried no ask.
     askSnapshot: answer.askSnapshot ?? null,
+    // A relayed answer says so in its history row (`via` absent = a tap).
+    ...(answer.via ? { via: answer.via } : {}),
+    ...(answer.relayedBy ? { relayedBy: answer.relayedBy } : {}),
+    ...(answer.confirmedAt ? { confirmedAt: answer.confirmedAt } : {}),
     ...(slot.decisionId ? { decisionId: slot.decisionId } : {}),
   };
 }

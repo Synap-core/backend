@@ -38,7 +38,7 @@ export type ToolKind =
 export type ToolVerbKind = "read" | "write" | "action";
 
 // ⚠️ `AbstractVerb` USED TO BE RE-DECLARED HERE and was DELETED (2026-10-01).
-// It was a fourth, TYPE-only copy of the intent vocabulary, and it had gone
+// It was a TYPE-only copy of the intent vocabulary, and it had gone
 // STALE: 13 slugs, missing `publish_post` (migration 0284). Worse, it was
 // DEAD — a whole-repo scan (every repo, `src/`, `dist/`, and generated `.d.ts`)
 // found ZERO importers of `AbstractVerb` from this package, so nothing could
@@ -52,25 +52,22 @@ export type ToolVerbKind = "read" | "write" | "action";
 // stale, and it would be stale in the one direction that is invisible — nothing
 // here consumes it, so no typecheck fails when a row is added.
 //
-// THE VOCABULARY'S THREE REMAINING MIRRORS, and why each must stay:
-//   - `ABSTRACT_VERBS` (runtime, 13-slug seed) — @synap/database
-//     `schema/tools.ts`. Cannot import `@synap-core/types` (types devDepends on
-//     database ⇒ build cycle). Guarded by
-//     `src/utils/intent-vocabulary-parity.test.ts` (migration SQL).
+// THE VOCABULARY'S TWO REMAINING MIRRORS, and why each must stay:
 //   - `ABSTRACT_INTENTS` + `REGISTERED_EXTRAS` + `CAPABILITY_INTENTS` —
 //     @synap-core/types `src/capability-intents/`, a LEAF subpath (pure, no
-//     generated dep) because the barrel re-exports `@synap/database` types and
-//     a VALUE import from a barrel crashes Hermes. Linked by synap-app +
-//     @synap/api. Guarded by its own `parity.test.ts` (migration SQL).
+//     generated dep) because a VALUE import from a barrel crashes Hermes.
+//     Linked by synap-app + @synap/api, and read by the pod: @synap/database
+//     `schema/tools.ts` re-exports `ABSTRACT_INTENTS` as `ABSTRACT_VERBS` (a
+//     copy until 2026-10-26). Guarded by its own `parity.test.ts` (migration SQL).
 //   - `ABSTRACT_VERBS` + `REGISTERED_EXTRAS` + `CAPABILITY_INTENTS` —
 //     synap-control-plane-api `src/seeds/capability-intent-vocabulary.ts`. A
 //     SEPARATE DEPLOY TARGET with its OWN lockfile; it resolves neither
 //     `@synap-core/types` nor the pod's packages (verified: `require.resolve`
 //     → MODULE_NOT_FOUND). Guarded inside `capability-provides.test.ts`.
-// A fourth copy with no importers was not a mirror — it was a comment that
-// looked like a contract.
+// A copy with no importers was not a mirror — it was a comment that looked
+// like a contract.
 //
-// To add a slug: write the migration, then all three mirrors. Every guard
+// To add a slug: write the migration, then both mirrors. Every guard
 // re-derives from the migration SQL, so a missed mirror is a RED BUILD, never a
 // silent divergence. See `skills/intent-vocabulary-ssot` for the full procedure.
 
@@ -186,7 +183,8 @@ import {
  * here — reconcile owns this object and would wipe them.
  */
 export type PinnedFallback = {
-  filter?: Record<string, unknown>;
+  /** As stored. The query DSL parser reads it, or refuses it: never dropped. */
+  filter?: unknown;
   orderBy?: string;
   orderDir?: "asc" | "desc";
 };
@@ -283,6 +281,16 @@ export const OUTPUT_RETIRED_REASONS = [
   // `synap_update_session`) — the one removal verb, since an agent's
   // `expectedOutputs` list only adds and updates (api `update-session.ts`).
   "withdrawn",
+  // The session ENDED with an agent-need ask (`confirm` / `choose`) still
+  // owed: the agent's question is moot once its session is gone. A person's
+  // deliverable (`act` / `provide` / `form`) stays owed instead — founder
+  // default, 2026-10-26, stamped by the close door (`completeFocusSession`).
+  "session_ended",
+  // Nobody asked: a `proposed` decision a PERSON wrote raised an ask with no
+  // agent behind it (founder, 2026-10-26). Only an agent-authored
+  // proposed decision asks; the asks raised before that rule retire here
+  // (api `services/decisions/retire-unasked-decision-asks.ts`).
+  "not_asked",
 ] as const;
 
 export type OutputRetiredReason = (typeof OUTPUT_RETIRED_REASONS)[number];
@@ -502,6 +510,12 @@ export interface ExpectedOutput {
   /** WHY it was retired — one of {@link OUTPUT_RETIRED_REASONS}. */
   retiredReason?: OutputRetiredReason;
   /**
+   * KEPT-OWED receipt — the closing agent left this ask owed past the end of
+   * its session (`questionDispositions` `keep_as_owed`), so it no longer ends
+   * with the session: stamped by the close door only.
+   */
+  keptOwedAt?: string;
+  /**
    * WHERE to go for this deliverable — see {@link OutputRef}.
    *
    * The reason it exists: an agent that declares an owed slot, or blocks one on
@@ -598,6 +612,13 @@ export interface ExpectedOutput {
    */
   answerPickedUpAt?: string;
   /**
+   * A relayed answer to a `commitment` ask, waiting for the person's tap — see
+   * {@link SlotPendingRelay}. SERVER-STAMPED by the relay door only; the
+   * slot stays owed (`owner: 'human'`) while it is here, and the person's
+   * Confirm / "Not what I said" clears it.
+   */
+  pendingRelay?: SlotPendingRelay;
+  /**
    * HOW the person can answer this slot — see {@link SlotAsk}. DECLARED by the
    * agent (with `owner: 'human'` + `blockedReason` + `why`), never stamped:
    * `blockedReason` says WHY it is blocked, `why`/`ref` WHAT and WHERE, and
@@ -613,6 +634,23 @@ export interface ExpectedOutput {
    * answer; the answer's `question` keeps what was asked.
    */
   ask?: SlotAsk | null;
+  /**
+   * WHO asked — the agent user that handed this slot to the person (or posed
+   * its current ask). SERVER-STAMPED from the acting door's verified auth
+   * context, the same agent the `slot_asked` event records; never authored by
+   * a client. Present only while the slot is owed (cleared with `owedSince`),
+   * and ABSENT when the person handed it to themselves or no agent can be
+   * named — a card then names the {@link askCause}, or nobody.
+   */
+  askedBy?: string;
+  /**
+   * WHAT raised the ask when no agent did — see {@link SlotAskCause}.
+   * SERVER-STAMPED by the system producer that wrote the owed slot (the
+   * decision-ask reactor, a run's turn end, an external agent's approval),
+   * cleared with `owedSince`. A card names it as a door ("From your decision
+   * note · 29 Sep") instead of inventing an agent.
+   */
+  askCause?: SlotAskCause;
   /**
    * The relation type written OUTPUT → SUBJECT when this slot is satisfied
    * (e.g. `made_for`, `derived_from`). DECLARED by the playbook author (or the
@@ -704,12 +742,24 @@ export interface PlaybookStageOnFail {
  * MUTUALLY assignable at compile time — a drift on either side stops the build.
  */
 export type SlotAsk = (
-  | { mode: "confirm"; prompt?: string }
-  | { mode: "choose"; options: SlotAskOption[]; allowOther?: boolean }
+  | {
+      mode: "confirm";
+      prompt?: string;
+      yes?: SlotAskConfirmAnswer;
+      no?: SlotAskConfirmAnswer;
+    }
+  | { mode: "choose"; options: SlotAskChooseOption[]; allowOther?: boolean }
   | { mode: "form"; form: SlotAskFormSpec }
   | { mode: "act"; url?: string; steps?: string[] }
   | { mode: "provide"; provide: SlotAskProvide }
 ) & {
+  /**
+   * What answering COMMITS the person to — mirrors `AskStakes`
+   * (`@synap-core/types/ask`). Absent reads `routine`. The pod only ever
+   * RAISES it (`effectiveAskStakes`): a relayed answer to a `commitment`
+   * waits for the person's tap.
+   */
+  stakes?: SlotAskStakes;
   /**
    * "What I looked at" (trust ladder rung 1, a PREPARED question): at most 8
    * objects the agent read before asking. Stored as `{kind, id}` — the agent's
@@ -718,7 +768,12 @@ export type SlotAsk = (
    * the viewer's access floor; a ref the viewer cannot see is dropped there.
    */
   lookedAt?: SlotAskLookedAt[];
+  /** How much is at stake: high and medium draw a mark, low draws nothing. */
+  risk?: "high" | "medium" | "low";
 };
+
+/** Mirrors `ASK_STAKES` (@synap-core/types/ask). */
+export type SlotAskStakes = "routine" | "commitment";
 
 /** One object an ask cites as read. Mirrors `AskLookedAtRef` (@synap-core/types/ask). */
 export interface SlotAskLookedAt {
@@ -735,6 +790,27 @@ export type SlotAskLookedAtKind = Extract<
 >;
 
 /** One offered answer (capture's chip minus its apply fields). */
+/**
+ * What raised a system ask (no agent asked). STRUCTURAL MIRROR of `AskCause`
+ * (`@synap-core/types/ask`), pinned mutual by `update-session.ts`.
+ */
+export interface SlotAskCause {
+  kind: SlotAskCauseKind;
+  /** The object the cause is (the decision, the run, the session). */
+  ref?: { kind: string; id: string };
+  /** ISO — when the cause happened (the decision note's date). */
+  at?: string;
+}
+export type SlotAskCauseKind =
+  "decision" | "gate" | "run" | "external_approval" | "param" | "criterion";
+
+/** One side of a confirm — mirror of `AskConfirmAnswer`. At most ONE recommended. */
+export interface SlotAskConfirmAnswer {
+  label?: string;
+  description?: string;
+  recommended?: boolean;
+}
+
 export interface SlotAskOption {
   label: string;
   /** Absent ⇒ the label IS the value. */
@@ -744,7 +820,20 @@ export interface SlotAskOption {
   recommended?: boolean;
   /** One-line imperative consequence of choosing it. */
   description?: string;
+  /** One short fact to weigh before picking it ("Skips 1,284 tests"). */
+  caution?: string;
 }
+
+/** The question a choose option opens once picked: ONE level, 2–4 options. */
+export interface SlotAskFollowUp {
+  prompt: string;
+  options: SlotAskOption[];
+}
+
+/** A choose ask's option: may open ONE follow-up. Mirrors `AskChooseOption`. */
+export type SlotAskChooseOption = SlotAskOption & {
+  followUp?: SlotAskFollowUp;
+};
 
 /** A FLAT form (no nested fields). */
 export interface SlotAskFormSpec {
@@ -784,15 +873,54 @@ export type SlotProvideRef =
 export type SlotAnswerValue =
   | { type: "text" }
   | { type: "confirm"; confirmed: boolean }
-  | { type: "chip"; chip: SlotAskOption }
+  | {
+      type: "chip";
+      chip: SlotAskOption;
+      /** The picked follow-up option, when the picked option opens one. */
+      then?: SlotAskOption;
+    }
   | { type: "form"; values: Record<string, unknown> }
   | { type: "provide"; ref: SlotProvideRef };
 
 /**
- * A person's answer to an agent's question about one slot. Server-stamped as a
- * unit; never authored by a client (it sits in `SERVER_STAMPED_OUTPUT_FIELDS`).
+ * WHERE an answer came from — STRUCTURAL MIRROR of `AnswerProvenance`
+ * (`@synap-core/types/ask`), pinned mutually assignable in api
+ * `update-session.ts`. All absent = a tap recorded before relays existed;
+ * `answerVia` there reads it.
  */
-export interface SlotAnswer {
+export interface SlotAnswerProvenance {
+  /** `tap` = the person answered in the pod; `relayed` = an agent carried their chat words. */
+  via?: "tap" | "relayed";
+  /** The relaying agent's user id. */
+  relayedBy?: string;
+  /** Where the words were said (`claude-code`). */
+  relaySurface?: string;
+  /** The person's own words, verbatim. */
+  quote?: string;
+  /** The person confirmed a relayed answer (set with `via: 'tap'` only). */
+  confirmedAt?: string;
+}
+
+/**
+ * A relayed answer to a `commitment` ask, held until the person taps — mirror
+ * of `PendingRelayedAnswer` (`@synap-core/types/ask`), which says why it sits
+ * beside `answer` rather than on it.
+ */
+export interface SlotPendingRelay {
+  text: string;
+  value?: SlotAnswerValue;
+  relayedBy: string;
+  relaySurface?: string;
+  quote?: string;
+  relayedAt: string;
+}
+
+/**
+ * A person's answer to an agent's question about one slot. Server-stamped as a
+ * unit; never authored by a client (it sits in `SERVER_STAMPED_OUTPUT_FIELDS`)
+ * — its provenance fields included.
+ */
+export interface SlotAnswer extends SlotAnswerProvenance {
   /** What the person said. */
   text: string;
   /**
@@ -840,9 +968,11 @@ export interface SlotAskSnapshot {
   mode: SlotAsk["mode"];
   prompt?: string;
   why?: string;
-  options?: SlotAskOption[];
+  options?: SlotAskChooseOption[];
   /** `askOptionKey` of the pick; `"yes"`/`"no"` for a confirm; else null. */
   chosenKey: string | null;
+  /** `askOptionKey` of the picked follow-up option, when the pick opened one. */
+  thenKey?: string;
   recommendedKey: string | null;
   /** null when there was no recommendation (or the pick is unknown). */
   followedRecommendation: boolean | null;

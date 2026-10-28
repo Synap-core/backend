@@ -44,6 +44,14 @@ import {
   type ProposalClassFields,
 } from "../../services/proposals/proposal-class.js";
 import {
+  proposalFateFields,
+  supersededByFields,
+} from "../../services/proposals/proposal-fate.js";
+import {
+  proposalWaitsFields,
+  resolveProposalWaits,
+} from "../../services/proposals/proposal-waits.js";
+import {
   proposalSetupFields,
   redactSecretParams,
   resolveProposalSetups,
@@ -63,6 +71,14 @@ import {
   sessionReadableWhere,
 } from "../../access/session-visibility.js";
 import { redactUnreadableSessionTargets } from "../../services/proposals/session-content-redaction.js";
+import {
+  flowReach,
+  readRequiredToolNames,
+  readStepSkillLookups,
+  skillReach,
+  type StepSkillLookup,
+} from "../../services/proposals/part-reach.js";
+import { readEnableTurnsOn } from "../../services/proposals/enable-turns-on.js";
 import type { EventRecord } from "@synap/database";
 import type {
   ProposalRemoval,
@@ -72,6 +88,10 @@ import type {
   StoredProposalData,
 } from "@synap-core/types";
 import { resolveProposalAttention } from "@synap-core/types/proposals/attention";
+import type {
+  ProposalFate,
+  ProposalWaits,
+} from "@synap-core/types/proposals/fate";
 import { isSessionStartChange } from "@synap-core/types/proposals/intent";
 import { revertableForRow } from "./revert.js";
 import {
@@ -107,6 +127,7 @@ import type {
   CompositeCreateEntityOp,
   CompositeCreateRelationOp,
   CompositeUpdateOperation,
+  ProposalPartReach,
 } from "@synap-core/types/proposals";
 import type { FlowDefinition } from "@synap/database";
 import { type proposals } from "@synap/database";
@@ -457,6 +478,12 @@ type DisplayEnrichedProposal = ProposalRow &
      * never rendered.
      */
     governanceRuleId?: string;
+    /** What happens on silence — PENDING rows only (`proposalFateFields`). */
+    fate?: ProposalFate;
+    /** Does an agent wait on it — and why (`resolveProposalWaits`). */
+    waits: ProposalWaits;
+    /** A withdrawn row replaced by a newer version: that proposal's id. */
+    supersededBy?: string;
     review: ProposalReviewModel;
   };
 
@@ -754,6 +781,7 @@ export async function enrichProposalsForDisplay(
     removalRelationCounts,
     setups,
     receiptRuleRows,
+    waitsByProposal,
   ] = await Promise.all([
     entityIds.length > 0
       ? db
@@ -1160,6 +1188,9 @@ export async function enrichProposalsForDisplay(
     // The rules behind this page's auto-approved receipts (names resolved
     // below, from the loaded users first).
     readReceiptRules(rows, userId),
+    // WAITING ON IT: gate / owed slot / parked run — two batched
+    // reads for the page, through the same session read rule as the titles.
+    resolveProposalWaits(rows, { userId, roster: opts.roster ?? false }),
   ]);
   const relationCountByEntityId = countRelationsByEntity(
     removalRelationCounts,
@@ -1226,6 +1257,18 @@ export async function enrichProposalsForDisplay(
   );
   const documentTitleById = new Map(
     documentRows.map((row) => [row.id, row.title])
+  );
+  const skillTargetById = await readSkillUpdateTargets(rows, userId);
+  // What the automations of a pending mixed proposal can reach: the skills
+  // their steps would run, read through the run door's rule.
+  const stepSkillsFor = await readStepSkillLookups(
+    rows.filter((row) => isLiveProposalStatus(row.status)),
+    userId
+  );
+  // What a pending enable request would turn on, each skill whole.
+  const turnsOnById = await readEnableTurnsOn(
+    rows.filter((row) => isLiveProposalStatus(row.status)),
+    userId
   );
   // NEW: Populate batch-joined lookup maps
   const playbookById = new Map<
@@ -1530,6 +1573,10 @@ export async function enrichProposalsForDisplay(
       // "playbook"); the id is the one `referencedNameIds` batch-joined.
       (row.targetType === "playbook"
         ? playbookById.get(row.targetId)?.name
+        : undefined) ??
+      // A skill rewrite carries `name` only when it renames.
+      (row.targetType === "skill"
+        ? skillTargetById.get(row.targetId)?.name
         : undefined) ??
       entityMeta?.title ??
       entityMeta?.preview ??
@@ -1867,6 +1914,13 @@ export async function enrichProposalsForDisplay(
         row.targetType,
         capabilityRunVerbId(row.data)
       ),
+      // FATE on silence (pending only) and who WAITS on it:
+      // the context card's "If you ignore it" and "Waiting on it" lines.
+      ...proposalFateFields(row),
+      ...proposalWaitsFields(row.id, waitsByProposal),
+      // REPLACED (supersede, `insertPendingProposal`): the newer proposal's id,
+      // the door "Replaced by a newer version" opens. Withdrawn rows only.
+      ...supersededByFields(row),
       // SETUP — the manifest-derived gap, plus the SAME row payload with every
       // secret param value stripped. ONE door: `proposalSetupFields`. Spread
       // AFTER `projectProposalRowForViewer(row)` so its `data` override wins.
@@ -1984,12 +2038,133 @@ export async function enrichProposalsForDisplay(
           : undefined,
         resolveEntityTitle: resolveEntityTitleScoped,
         existingRolesByEntityId,
+        ...skillUpdateReads(row, skillTargetById),
+        ...(isLiveProposalStatus(row.status)
+          ? { stepSkills: stepSkillsFor(row.workspaceId) }
+          : {}),
+        turnsOn: turnsOnById.get(row.id),
         events: request.correlationId
           ? (traceByCorrelationId.get(request.correlationId) ?? [])
           : [],
       }),
     };
   });
+}
+
+/** A skill as an update's review reads it: its name and its values now. */
+type SkillTargetRead = {
+  name: string;
+  values: Record<string, unknown>;
+  /** The tools it declares it calls (`requires`), for its reach. */
+  requiredTools?: string[];
+};
+
+/** `skill.update` (stored `update`) on a skill row. */
+function isSkillUpdateRow(row: ProposalRow): boolean {
+  return (
+    row.targetType === "skill" &&
+    row.proposalType.slice(row.proposalType.lastIndexOf(".") + 1) === "update"
+  );
+}
+
+/**
+ * The skills the page's updates rewrite — a `skill.update`'s target and a
+ * composite's `update_skill` ops — read once, floored by the skill read rule
+ * (`visibleSkillsWhere`, per proposal workspace) so the review never names or
+ * quotes a skill the viewer cannot read. Columns are the ones a skill update
+ * may patch (`skills.update`'s input), keyed as the patch names them.
+ */
+async function readSkillUpdateTargets(
+  rows: readonly ProposalRow[],
+  userId: string
+): Promise<Map<string, SkillTargetRead>> {
+  const ids = uniqueStrings(
+    rows.flatMap((row) => {
+      if (isSkillUpdateRow(row)) return [row.targetId];
+      const data = row.data as StoredProposalData | null | undefined;
+      if (!isCompositeProposalData(data)) return [];
+      return data.operations.flatMap((op) =>
+        isUpdateOperation(op) && op.op === "update_skill"
+          ? [updateOperationTargetId(op)]
+          : []
+      );
+    })
+  ).filter(isLikelyUUID);
+  if (ids.length === 0) return new Map();
+  const workspaceIds = uniqueStrings(rows.map((row) => row.workspaceId)).filter(
+    isLikelyUUID
+  );
+  const found = await db
+    .select({
+      id: skills.id,
+      name: skills.name,
+      kind: skills.kind,
+      scope: skills.scope,
+      agentTypes: skills.agentTypes,
+      description: skills.description,
+      body: skills.body,
+      code: skills.code,
+      providerSpec: skills.providerSpec,
+      parameters: skills.parameters,
+      category: skills.category,
+      executionMode: skills.executionMode,
+      timeoutSeconds: skills.timeoutSeconds,
+      metadata: skills.metadata,
+    })
+    .from(skills)
+    .where(
+      and(
+        inArray(skills.id, ids),
+        or(
+          visibleSkillsWhere(userId, undefined, { includeExpired: true }),
+          ...workspaceIds.map((ws) =>
+            visibleSkillsWhere(userId, ws, { includeExpired: true })
+          )
+        )
+      )
+    );
+  const required = await readRequiredToolNames(
+    userId,
+    found.map((row) => row.id)
+  );
+  return new Map(
+    found.map(({ id, ...values }) => [
+      id,
+      { name: values.name, values, requiredTools: required.get(id) },
+    ])
+  );
+}
+
+/**
+ * What a row's review reads of the skills it rewrites: the values NOW only
+ * while it is still pending (once applied, the row holds the proposed value).
+ */
+function skillUpdateReads(
+  row: ProposalRow,
+  skillById: ReadonlyMap<string, SkillTargetRead>
+): {
+  resolveUpdateTarget?: UpdateTargetResolver;
+  targetBefore?: Readonly<Record<string, unknown>>;
+} {
+  if (skillById.size === 0) return {};
+  const live = isLiveProposalStatus(row.status);
+  if (isSkillUpdateRow(row)) {
+    const skill = skillById.get(row.targetId);
+    return live && skill ? { targetBefore: skill.values } : {};
+  }
+  return {
+    resolveUpdateTarget: (kind, targetId) => {
+      const skill = kind === "skill" ? skillById.get(targetId) : undefined;
+      if (!skill) return undefined;
+      if (!live) return { name: skill.name };
+      // What the skill it rewrites can reach (the patch never changes it).
+      const reach = skillReach({
+        ...skill.values,
+        requiredTools: skill.requiredTools,
+      });
+      return reach ? { ...skill, reach } : skill;
+    },
+  };
 }
 
 function buildProposalReviewModel(params: {
@@ -2015,6 +2190,14 @@ function buildProposalReviewModel(params: {
     string,
     Array<{ profileSlug: string; status?: string | null }>
   >;
+  /** The rows a composite's `update_*` ops rewrite, as read now. */
+  resolveUpdateTarget?: UpdateTargetResolver;
+  /** A pending non-entity update: its target's values now (a skill's). */
+  targetBefore?: Readonly<Record<string, unknown>>;
+  /** Pending only: the skills an automation's steps would run, for its reach. */
+  stepSkills?: StepSkillLookup;
+  /** A pending `capability.enable` only: what it would turn on. */
+  turnsOn?: ProposalReviewModel["turnsOn"];
   events: Awaited<ReturnType<EventRepository["getCorrelatedEvents"]>>;
 }): ProposalReviewModel {
   const {
@@ -2026,6 +2209,10 @@ function buildProposalReviewModel(params: {
     removal,
     resolveEntityTitle,
     existingRolesByEntityId,
+    resolveUpdateTarget,
+    targetBefore,
+    stepSkills,
+    turnsOn,
     events,
   } = params;
   const requestData =
@@ -2034,7 +2221,13 @@ function buildProposalReviewModel(params: {
   // the flat `changes` model can't express. Detect and build a `graph` instead.
   const rawData = row.data as StoredProposalData | null | undefined;
   const graph = isCompositeProposalData(rawData)
-    ? buildProposalGraph(rawData, resolveEntityTitle, existingRolesByEntityId)
+    ? buildProposalGraph(
+        rawData,
+        resolveEntityTitle,
+        existingRolesByEntityId,
+        resolveUpdateTarget,
+        stepSkills
+      )
     : undefined;
   // Durable before-snapshot captured at proposal-creation time (entity updates).
   // Preferred over the live `current` entity so the diff survives approval and
@@ -2084,10 +2277,11 @@ function buildProposalReviewModel(params: {
       previousData,
       // Drift is a question about a proposal NOT YET applied: once applied,
       // the live row holds the proposed value by construction.
-      { measureDrift: isLiveProposalStatus(row.status) }
+      { measureDrift: isLiveProposalStatus(row.status), targetBefore }
     ),
     ...(graph ? { graph } : {}),
     ...(removal ? { removal } : {}),
+    ...(turnsOn ? { turnsOn } : {}),
     events: reviewEvents,
   };
 }
@@ -2128,7 +2322,10 @@ export function buildProposalGraph(
   existingRolesByEntityId?: Map<
     string,
     Array<{ profileSlug: string; status?: string | null }>
-  >
+  >,
+  resolveUpdateTarget?: UpdateTargetResolver,
+  /** The skills an automation's steps would run; absent ⇒ reach not drawn. */
+  stepSkills?: StepSkillLookup
 ): ProposalReviewGraph {
   const refToTitle = new Map<string, string>();
   // Every ref alias ($opN / op `ref` / $primary / a linked entity's UUID) → the
@@ -2262,7 +2459,12 @@ export function buildProposalGraph(
   // this on `isPlanBatch` (as the plan builder is) would leave exactly that
   // batch unrendered — and unrendered means the refusal below throws for the
   // whole page.
-  const config = buildConfigReviewItems(data, renderedOpIndexes);
+  const config = buildConfigReviewItems(
+    data,
+    renderedOpIndexes,
+    resolveUpdateTarget,
+    stepSkills
+  );
 
   // REFUSE a composite whose ops this pipeline cannot fully render — no member
   // may reach a reviewer invisibly (and then apply undeniably).
@@ -2303,9 +2505,38 @@ export function buildProposalGraph(
  */
 const SKILL_BODY_EXCERPT_CHARS = 280;
 
+type UpdateReviewKind = NonNullable<
+  ProposalReviewGraph["updates"]
+>[number]["kind"];
+
+/** What the pod read of the row an `update_*` op rewrites, for this viewer. */
+export interface UpdateTargetRead {
+  name?: string;
+  /** The row's values now, keyed as the op's `patch` names them. */
+  values?: Readonly<Record<string, unknown>>;
+  /** What the row can reach outside the pod, when it runs something. */
+  reach?: ProposalPartReach;
+}
+
+export type UpdateTargetResolver = (
+  kind: UpdateReviewKind,
+  targetId: string
+) => UpdateTargetRead | undefined;
+
+/** A field value as review text, cut to the excerpt length. */
+function excerptOf(value: unknown): { text: string; truncated: boolean } {
+  const text = typeof value === "string" ? value : JSON.stringify(value);
+  return {
+    text: text.slice(0, SKILL_BODY_EXCERPT_CHARS),
+    truncated: text.length > SKILL_BODY_EXCERPT_CHARS,
+  };
+}
+
 function buildConfigReviewItems(
   data: CompositeProposalData,
-  renderedOpIndexes: Set<number>
+  renderedOpIndexes: Set<number>,
+  resolveUpdateTarget?: UpdateTargetResolver,
+  stepSkills?: StepSkillLookup
 ): Partial<ProposalReviewGraph> {
   const skills: NonNullable<ProposalReviewGraph["skills"]> = [];
   const automations: NonNullable<ProposalReviewGraph["automations"]> = [];
@@ -2317,20 +2548,33 @@ function buildConfigReviewItems(
   data.operations.forEach((op, index) => {
     if (isUpdateOperation(op)) {
       renderedOpIndexes.add(index);
+      const kind = UPDATE_REVIEW_KIND[op.op];
+      const targetId = updateOperationTargetId(op);
+      // A rewrite names the row it rewrites and what each field holds now.
+      const target = resolveUpdateTarget?.(kind, targetId);
       updates.push({
         ref: op.ref,
         op: op.op,
-        kind: UPDATE_REVIEW_KIND[op.op],
-        targetId: updateOperationTargetId(op),
+        kind,
+        targetId,
+        ...(target?.name ? { targetName: target.name } : {}),
+        ...(target?.reach ? { reach: target.reach } : {}),
         fields: Object.entries((op.patch ?? {}) as Record<string, unknown>)
           .filter(([, value]) => value !== undefined)
           .map(([key, value]) => {
-            const text =
-              typeof value === "string" ? value : JSON.stringify(value);
+            const after = excerptOf(value);
+            const now = target?.values?.[key];
+            const before =
+              now === undefined || now === null || now === ""
+                ? null
+                : excerptOf(now);
             return {
               key,
-              value: text.slice(0, SKILL_BODY_EXCERPT_CHARS),
-              truncated: text.length > SKILL_BODY_EXCERPT_CHARS,
+              value: after.text,
+              truncated: after.truncated,
+              ...(before
+                ? { before: before.text, beforeTruncated: before.truncated }
+                : {}),
             };
           }),
       });
@@ -2359,6 +2603,9 @@ function buildConfigReviewItems(
           triggerType: op.triggerType,
           // Forced false at materialization — see CompositeCreateAutomationOp.
           bornEnabled: false,
+          ...(stepSkills
+            ? { reach: flowReach(op.flowDefinition, stepSkills) }
+            : {}),
         });
         return;
       case "create_rule":

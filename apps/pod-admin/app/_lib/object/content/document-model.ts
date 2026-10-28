@@ -7,6 +7,10 @@
  * pod admin what the pod itself would not.
  */
 
+import {
+  CELL_FRAME_MAX_BYTES,
+  htmlByteLength,
+} from "@synap-core/types/cell-bridge";
 import type { TrpcErrorLike } from "../load-failure";
 import {
   contentHref,
@@ -23,6 +27,8 @@ export interface DocumentReadAnswer {
     storageUrl?: string | null;
     /** The stored file's type (`documents.mime_type`). */
     mimeType?: string | null;
+    /** The space it lives in: the lens a running page reads through. */
+    workspaceId?: string | null;
   };
   content: string;
 }
@@ -42,6 +48,20 @@ export type DocumentContent =
   | { kind: "link"; href: string | null; label: string }
   | { kind: "empty" }
   | { kind: "content"; prepared: PreparedContent }
+  /**
+   * A stored HTML page: run in the isolated frame (`html-frame`), with its
+   * escaped source one toggle away. `tooLarge` past the 2 MB the console
+   * runs (`CELL_FRAME_MAX_BYTES`): source only, and the page says why.
+   */
+  | {
+      kind: "page";
+      html: string;
+      bytes: number;
+      tooLarge: boolean;
+      /** The page's space — the lens its reads are stamped with. */
+      workspaceId: string | null;
+      source: PreparedContent;
+    }
   | { kind: "error" };
 
 /** A stored type whose bytes read as text (markdown, CSV, JSON, code). */
@@ -74,8 +94,9 @@ export function documentFormat(
       return "text";
     case "code":
       return "code";
-    // Shown as its source, never as HTML: the console has no sanitizer and
-    // no CSP behind one.
+    // Its SOURCE form. A document page runs it instead, in the isolated
+    // frame (`documentContent` → `page`): never inlined into the console's
+    // own DOM, which has no sanitizer.
     case "html":
       return "source";
     default:
@@ -115,5 +136,16 @@ export function documentContent(
     };
   }
   if (!content.trim()) return { kind: "empty" };
+  if (document.type === "html") {
+    const bytes = htmlByteLength(content);
+    return {
+      kind: "page",
+      html: content,
+      bytes,
+      tooLarge: bytes > CELL_FRAME_MAX_BYTES,
+      workspaceId: document.workspaceId ?? null,
+      source: prepareContent(content, format),
+    };
+  }
   return { kind: "content", prepared: prepareContent(content, format) };
 }

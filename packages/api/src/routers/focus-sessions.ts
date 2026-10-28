@@ -19,19 +19,12 @@ import {
   drizzleSql,
   eq,
   focusSessions,
-  inArray,
   links,
   vaultGrants,
 } from "@synap/database";
 import type { FocusSession } from "@synap/database/schema";
-import {
-  withParentSessionId,
-  attachParentSessionIds,
-} from "../services/focus-sessions/parent-lineage.js";
-import {
-  sessionListConditions,
-  type SessionListQuery,
-} from "../services/focus-sessions/session-list-conditions.js";
+import { withParentSessionId } from "../services/focus-sessions/parent-lineage.js";
+import { sessionListConditions } from "../services/focus-sessions/session-list-conditions.js";
 import {
   resolveSessionSubject,
   sessionSubjectInputSchema,
@@ -54,7 +47,6 @@ import {
 import {
   closedRunRefusal,
   isTerminalSessionStatus,
-  OPEN_SESSION_STATUSES,
   SESSION_STATUSES,
   UPDATABLE_SESSION_STATUSES,
 } from "../services/focus-sessions/session-statuses.js";
@@ -73,10 +65,6 @@ import {
 import { readSessionUsage } from "../services/focus-sessions/session-usage.js";
 import { loadSessionActivity } from "../services/runs/session-activity.js";
 import {
-  loadSessionLiveness,
-  type LivenessReader,
-} from "../services/runs/session-liveness.js";
-import {
   SESSION_WORKING_WINDOW_MS,
   type SessionActivityLive,
 } from "@synap-core/types/run-activity";
@@ -94,9 +82,11 @@ import {
 } from "../services/focus-sessions/block-output.js";
 import { BLOCKED_REASONS } from "@synap/playbooks";
 import {
+  answerDoorInputIssue,
   answerGrantWrite,
   answerSessionSlot,
   attestSessionSlot,
+  correctRelayedAnswer,
   describeAnswerRefusal,
   type AttestSessionSlotResult,
 } from "../services/focus-sessions/session-answer.js";
@@ -143,13 +133,11 @@ import {
 import {
   acceptFromTriage,
   discardFromTriage,
-  attachTriage,
   projectTriage,
   type TriageProjection,
 } from "../services/focus-sessions/triage.js";
 import {
   SESSION_KINDS,
-  attachSessionKind,
   projectSessionKind,
   type SessionKind,
 } from "../services/focus-sessions/session-kind.js";
@@ -189,10 +177,19 @@ import {
   type SessionViewerRole,
 } from "../services/focus-sessions/viewer-role.js";
 import {
-  attachSessionParticipants,
   withSessionParticipants,
   type SessionParticipants,
 } from "../services/focus-sessions/participants.js";
+import {
+  attachSessionLiveness,
+  projectSessionRows,
+  queryUserSessions,
+} from "../services/focus-sessions/session-list-rows.js";
+import {
+  buildWorkGraph,
+  WORK_GRAPH_DEFAULT_WINDOW_HOURS,
+  WORK_GRAPH_MAX_WINDOW_HOURS,
+} from "../services/focus-sessions/work-graph.js";
 
 // ── Shared input fragment ──────────────────────────────────────────────────
 
@@ -282,7 +279,8 @@ function slotOwnershipResult(
 const AnswerOutputInputSchema = z
   .object({
     sessionId: z.string().uuid(),
-    expectedLabel: z.string().min(1).max(500),
+    /** Required, except on a "Not what I said" that names `questionId`. */
+    expectedLabel: z.string().min(1).max(500).optional(),
     text: z.string().max(SLOT_ANSWER_TEXT_MAX).optional(),
     value: AskAnswerValueSchema.optional(),
     askFingerprint: z.string().min(1).max(64).optional(),
@@ -291,9 +289,23 @@ const AnswerOutputInputSchema = z
      * agent the person was told will read it. No read for anyone else.
      */
     expectedGranteeId: z.string().min(1).max(200).optional(),
+    /**
+     * The one-tap Confirm of a relay waiting on the slot (`pendingRelay`):
+     * the relayed answer becomes the person's. Send no `text` / `value`.
+     */
+    confirmRelayed: z.literal(true).optional(),
+    /**
+     * "Not what I said": drop what an agent relayed (a pending relay, or a
+     * relayed answer nobody confirmed) and give the question back to the
+     * person (`correctRelayedAnswer`).
+     */
+    rejectRelayed: z.literal(true).optional(),
+    /** With `rejectRelayed`: a slotless room question (its message id). */
+    questionId: z.string().uuid().optional(),
   })
-  .refine((v) => v.value !== undefined || !!v.text?.trim(), {
-    message: "An answer needs `text` or `value`.",
+  .superRefine((v, ctx) => {
+    const issue = answerDoorInputIssue(v);
+    if (issue) ctx.addIssue({ code: z.ZodIssueCode.custom, message: issue });
   });
 
 // DERIVED from the ONE status vocabulary (`@synap-core/types/focus-sessions`),
@@ -418,29 +430,6 @@ const sessionLinksRouter = router({
 // ── Shared read body ─────────────────────────────────────────────────────────
 
 /**
- * THE one query body for the focus-sessions read door. focus_sessions is
- * user-owned (`userId`), so the floor is `eq(userId)` — every door starts there.
- * The lenses then only NARROW within the user's own rows:
- *   - workspace lens: `null` → pod-personal (workspaceId IS NULL); `"<id>"` →
- *     that workspace; `string[]` (non-empty) → that SET; `undefined`/`[]` → no
- *     narrow (the floor — all the user's sessions across workspaces).
- *   - project lens: `"<id>"`/`string[]` narrows on the session's own projectId
- *     column (sessions carry projectId directly — a simple eq/inArray, NOT
- *     exposureLensWhere); `null`/`undefined`/`[]` → no narrow.
- * An empty array never narrows (never matches-zero); a lens can only restrict.
- */
-/**
- * `list`: newest-started first, capped. Unchanged ordering for its consumers.
- *
- * `order: "open_first"` puts every OPEN session ahead of every settled one,
- * then newest-started within each — so a long-running open session can no
- * longer be pushed off the capped page by newer rows that have already
- * settled. That was the work map's vanishing-bar bug: `status: "all"`,
- * `limit: 50`, newest-started first, and a week-old blocked session was simply
- * not on the page. Pair it with an open-status set + `statusSince` to read
- * "everything open, plus what settled recently".
- */
-/**
  * `includeTrackedRuns` widens the `work` population, so it is a caller error
  * with any other kind — one refusal for `list` and `browse`.
  */
@@ -455,90 +444,6 @@ function assertTrackedRunsKind(input: {
         'includeTrackedRuns widens the "work" population; it cannot combine with another kind',
     });
   }
-}
-
-function queryUserSessions(
-  query: SessionListQuery,
-  limit: number,
-  order: "started" | "open_first" = "started"
-) {
-  const base = db
-    .select()
-    .from(focusSessions)
-    .where(and(...sessionListConditions(query)));
-  return (
-    order === "open_first"
-      ? base.orderBy(
-          desc(inArray(focusSessions.status, [...OPEN_SESSION_STATUSES])),
-          desc(focusSessions.startedAt),
-          desc(focusSessions.id)
-        )
-      : base.orderBy(desc(focusSessions.startedAt))
-  ).limit(limit);
-}
-
-/**
- * The derived fields EVERY session list row carries — lineage, triage, kind and
- * participants — applied in one place so `list` and `browse` return the same row
- * shape. Written once when `browse` arrived: a projection added to one door and
- * not the other is how a field ends up "present on the wire, populated by
- * nobody" on half the surfaces.
- */
-async function projectSessionRows(
-  sessions: FocusSession[],
-  userId: string | null | undefined
-) {
-  // Derived lineage for the whole page in ONE query (never N+1, never a
-  // second store) — mirrors `synap_list_sessions` (mcp/handlers/session.ts).
-  const withLineage = await attachParentSessionIds(sessions);
-  // `triage` is projected onto EVERY row in EVERY lens (it is pure — no
-  // query), so no consumer ever re-derives the predicate from origin +
-  // metadata + status. That re-derivation is exactly how a second, drifting
-  // copy of a rule gets written.
-  const withTriage = attachTriage(withLineage);
-  // `kind` rides along on EVERY row in EVERY lens, same contract as
-  // `triage`: pure, no query, and the one place the predicate is decided.
-  const withKind = attachSessionKind(withTriage);
-  // WHO worked here — one shared derivation with `get` (see
-  // `services/focus-sessions/participants.ts`), so a list row and a detail
-  // page can never name different agents for the same session.
-  //
-  // UNCONDITIONAL, not behind a flag like `edges`. The cost is two indexed
-  // reads for the whole page (`idx_proposals_session_id`, then one
-  // `users` lookup that is SKIPPED when the page has no participants), and
-  // the alternative is worse in kind rather than in degree: an opt-in flag
-  // leaves the DEFAULT answer wrong, which is exactly why every consumer
-  // reached past this door for the raw `agentIds` invite list instead. A
-  // field present on the type and populated only under a flag nobody sets
-  // is the "declared on the wire, populated by nobody" shape this codebase
-  // keeps paying for. `triage`, `kind` and `parentSessionId` ride along the
-  // same way and for the same reason.
-  const withParticipants = await attachSessionParticipants(
-    withKind,
-    requireUserId(userId)
-  );
-  // The grade against the session's criteria — `verdict` present only on rows
-  // that declare criteria. One batched read for the page (see
-  // `attachSessionVerdicts`), same unconditional contract as participants.
-  const { attachSessionVerdicts } =
-    await import("../services/focus-sessions/evaluations/record.js");
-  return attachSessionVerdicts(withParticipants);
-}
-
-/**
- * `live` on every row — ONE batched liveness read for the page (the same
- * function behind `focusSessions.activity`'s `live`). A failed read is `null`
- * on each row, never a quiet session.
- */
-async function attachSessionLiveness<
-  R extends FocusSession & { live?: SessionActivityLive | null },
->(
-  rows: R[],
-  reader: LivenessReader,
-  opts: { since?: Date } = {}
-): Promise<R[]> {
-  const live = await loadSessionLiveness(reader, rows, opts);
-  return rows.map((r) => ({ ...r, live: live.get(r.id) ?? null }));
 }
 
 // ── Router ─────────────────────────────────────────────────────────────────
@@ -625,9 +530,17 @@ export const focusSessionsRouter = router({
          *   - DERIVED — `waitsOnOutputs` / `outputsWaitedOnBy`, from
          *     `targets` ∩ `produced` over the same entity
          *     (`session-output-edges.ts`). No edge type of its own.
-         * Opt-in because most callers do not draw them, and it is a projection
-         * on THIS door rather than a `graph` procedure of its own: a second
-         * door would be a second shape to keep in lockstep.
+         * Opt-in because most callers do not draw them. This was once the
+         * reason there was no `graph` procedure ("a second door would be a
+         * second shape to keep in lockstep"). The founder overruled that on
+         * 2026-10-26 (decision 1 A): four readers on three transports needed
+         * the WHOLE graph, and a 50-row newest-first page cannot be one (the
+         * pod-wide map held 14 of 49 open sessions; the devbox map paid one
+         * call per card). `graph` below is that door. The lockstep risk is
+         * answered by construction rather than by care: it reads through the
+         * same WHERE and projects through the same helpers as this door
+         * (`services/focus-sessions/work-graph.ts`), pinned by
+         * `work-graph-one-where.test.ts`.
          */
         edges: z.boolean().optional(),
         /**
@@ -763,6 +676,40 @@ export const focusSessionsRouter = router({
         ctx.userId
       );
       return withDeps.map((r) => withViewerRole(r, viewer));
+    }),
+  /**
+   * THE WORK GRAPH — open work, plus work settled in the last `windowHours`,
+   * plus the far end of every edge, as `{ nodes, edges, sections, window }`
+   * (`services/focus-sessions/work-graph.ts`). Same floor as `list` (owner,
+   * plus the room roster on this human door), same WHERE, same row
+   * projection; edges flat. At most 500 window sessions, and `window` says
+   * when it cut. Same defaults as `list`: `kind: "work"`, `lens: "default"`.
+   */
+  graph: protectedProcedure
+    .input(
+      z.object({
+        workspaceId: ScopeFilterShape.workspaceId,
+        projectId: ScopeFilterShape.projectId,
+        windowHours: z
+          .number()
+          .int()
+          .min(1)
+          .max(WORK_GRAPH_MAX_WINDOW_HOURS)
+          .default(WORK_GRAPH_DEFAULT_WINDOW_HOURS),
+        kind: sessionKindFilterSchema,
+        lens: sessionLensSchema,
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      return buildWorkGraph({
+        userId: requireUserId(ctx.userId),
+        scope: resolveScope(ctx, input),
+        windowHours: input.windowHours,
+        kind: input.kind,
+        lens: input.lens,
+        // Shared sessions (human roster of the room) too, as `list` — decision C.
+        roster: rosterReadFor(ctx),
+      });
     }),
   /**
    * BROWSE — the full, searchable, paged session list behind "See all".
@@ -1568,6 +1515,37 @@ export const focusSessionsRouter = router({
     }),
 
   /**
+   * EVERY pull request and branch a session recorded, each PR with its state:
+   * the session page's "Show all" (its packet carries the first few). The same
+   * rule and state read as the packet's `workUnits` (`readAllWorkUnits`),
+   * under the same read floor as `get`.
+   */
+  workUnits: protectedProcedure
+    .input(z.object({ sessionId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const roster = rosterReadFor(ctx);
+      const row = await db.query.focusSessions.findFirst({
+        where: and(
+          eq(focusSessions.id, input.sessionId),
+          sessionReadableWhere({ userId: requireUserId(ctx.userId), roster })
+        ),
+      });
+      if (!row) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Focus session ${input.sessionId} not found`,
+        });
+      }
+      const { readAllWorkUnits } =
+        await import("../services/focus-sessions/continuation-packet.js");
+      return readAllWorkUnits(row, {
+        database: db,
+        userId: requireUserId(ctx.userId),
+        roster,
+      });
+    }),
+
+  /**
    * Get a single focus session by ID.
    * Scoped to the authenticated user — cannot read another user's session.
    *
@@ -1713,6 +1691,9 @@ export const focusSessionsRouter = router({
         sessionId: input.sessionId,
         userId: requireUserId(ctx.userId),
         evidence: input.evidence,
+        // The person evaluating their own session: a criterion the agent
+        // could not pass is theirs to grade now (E3).
+        escalate: true,
       });
       if (result.status === "not_found") {
         throw new TRPCError({
@@ -2847,6 +2828,20 @@ export const focusSessionsRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      // The person's "Not mine". An agent key handing the slot back to itself
+      // would drop the person's turn with no answer and no record; an agent
+      // whose need is gone withdraws its question (`synap_relay_answer`
+      // `disposition: 'withdrawn'`), or relays the answer it got in a chat.
+      if (ctx.agentUserId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            "Only the person can hand a slot back — an agent key cannot.",
+        });
+      }
+      // A person-only door still bounds a scoped key by its grant: the
+      // session's own space + project, as on the answer doors.
+      await assertKeyMayWrite(await answerGrantWrite(input.sessionId));
       const result = await unblockExpectedOutput({
         sessionId: input.sessionId,
         userId: ctx.userId,
@@ -2937,18 +2932,34 @@ export const focusSessionsRouter = router({
       }
       // The session's own space + project name the key's reach (D3).
       await assertKeyMayWrite(await answerGrantWrite(input.sessionId));
+      const label = input.expectedLabel ?? "";
+      if (input.rejectRelayed) {
+        const corrected = await correctRelayedAnswer({
+          sessionId: input.sessionId,
+          userId: requireUserId(ctx.userId),
+          expectedLabel: input.expectedLabel,
+          questionId: input.questionId,
+        });
+        if (corrected.status === "corrected") {
+          return { ok: true as const, ...corrected };
+        }
+        throw new TRPCError(
+          describeAnswerRefusal(corrected, label, input.sessionId)
+        );
+      }
       const result = await answerSessionSlot({
         sessionId: input.sessionId,
         userId: requireUserId(ctx.userId),
-        expectedLabel: input.expectedLabel,
+        expectedLabel: label,
         text: input.text,
         value: input.value,
         askFingerprint: input.askFingerprint,
         expectedGranteeId: input.expectedGranteeId,
+        confirmRelayed: input.confirmRelayed,
       });
       if (result.status === "answered") return { ok: true as const, ...result };
       throw new TRPCError(
-        describeAnswerRefusal(result, input.expectedLabel, input.sessionId)
+        describeAnswerRefusal(result, label, input.sessionId)
       );
     }),
 

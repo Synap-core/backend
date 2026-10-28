@@ -15,12 +15,25 @@
  *   human      — left unmeasured until the owner grades it.
  *
  * "Pending" = not already passing, not human-graded, attempts remaining. Every
- * row goes through `recordSessionEvaluation`, which owns the retry bound and the
- * escalation — this function only decides WHAT to record.
+ * row goes through `recordSessionEvaluation`, which owns the retry bound — this
+ * function decides WHAT to record, and what a spent criterion becomes:
+ *
+ *   `escalate` (the `evaluate_session` doors) — every required criterion the
+ *                agent could not pass is handed to the person
+ *                (`escalateFailingCriteria`);
+ *   otherwise  (the evidence door, a stage gate's check) — it stays the
+ *                agent's work, and the room gets the news (founder decision E3,
+ *                2026-10-27: a failed self-grade is not a person's ask until
+ *                the session is evaluated).
  */
 
 import { db, focusSessions, and, eq, drizzleSql } from "@synap/database";
-import { readCriteria, type SessionCriterion } from "@synap/playbooks";
+import {
+  readCriteria,
+  type ExpectedOutput,
+  type SessionCriterion,
+} from "@synap/playbooks";
+import { deriveSlotKeys } from "../slot-keys.js";
 import {
   isJudgeRequestRefused,
   judgeSessionCriteria,
@@ -35,6 +48,8 @@ import {
 } from "../../playbooks/stage-gate.js";
 import {
   MAX_NON_HUMAN_ATTEMPTS,
+  criterionExhaustedNews,
+  escalateFailingCriteria,
   listSessionEvaluations,
   recordSessionEvaluation,
   summarizeEvaluations,
@@ -70,6 +85,19 @@ export interface EvaluateSessionParams {
    * posting evidence never spends an LLM call or runs a capability.
    */
   kinds?: ReadonlyArray<SessionCriterion["check"]["kind"]>;
+  /**
+   * Restrict to the criteria a fact is ABOUT: a criterion whose key, or whose
+   * evidence key, is listed. The event re-check (`dev-loop/recheck-criteria.ts`)
+   * passes the outcome keys a fact just moved, so a merge re-grades the
+   * criteria on that PR and never the rest of the session.
+   */
+  criterionKeys?: ReadonlyArray<string>;
+  /**
+   * Hand the person every required criterion the agent could not pass. Only
+   * the `evaluate_session` doors (MCP, Hub REST `/evaluate`, the person's
+   * tRPC `evaluate`) set it; absent ⇒ a spent criterion stays the agent's work.
+   */
+  escalate?: boolean;
 }
 
 export interface CriterionRunOutcome {
@@ -142,6 +170,31 @@ export function capabilityVerdict(
   };
 }
 
+/**
+ * The outcome a criterion checks, as a capability parameter: the session's
+ * slot with the criterion's key, `{ outcome: {key, kind, label, ref?} }`, or
+ * nothing when there is none. Pure.
+ */
+export function outcomeParameter(
+  expectedOutputs: unknown,
+  criterionKey: string
+): { outcome?: { key: string; kind: string; label: string; ref?: unknown } } {
+  const slots = Array.isArray(expectedOutputs)
+    ? (expectedOutputs as ExpectedOutput[])
+    : [];
+  const index = deriveSlotKeys(slots).indexOf(criterionKey);
+  const slot = index === -1 ? undefined : slots[index];
+  if (!slot) return {};
+  return {
+    outcome: {
+      key: criterionKey,
+      kind: slot.kind,
+      label: slot.label,
+      ...(slot.ref ? { ref: slot.ref } : {}),
+    },
+  };
+}
+
 export async function evaluateSession(
   params: EvaluateSessionParams
 ): Promise<EvaluateSessionResult> {
@@ -162,10 +215,16 @@ export async function evaluateSession(
   const pending = pendingCriteria(criteria, rows, before.evaluations).filter(
     (c) =>
       (params.stageKey === undefined || c.stageKey === params.stageKey) &&
-      (params.kinds === undefined || params.kinds.includes(c.check.kind))
+      (params.kinds === undefined || params.kinds.includes(c.check.kind)) &&
+      (params.criterionKeys === undefined ||
+        params.criterionKeys.includes(c.key) ||
+        (c.check.kind === "evidence" &&
+          c.check.evidenceKey !== undefined &&
+          params.criterionKeys.includes(c.check.evidenceKey)))
   );
 
   const results: CriterionRunOutcome[] = [];
+  const exhausted: SessionCriterion[] = [];
   const record = async (
     c: SessionCriterion,
     verdict: EvaluationVerdict,
@@ -184,9 +243,10 @@ export async function evaluateSession(
       evaluatorKind: c.check.kind,
       ...extra,
     });
+    if (out.status === "recorded" && out.exhausted) exhausted.push(c);
     results.push(
       out.status === "recorded"
-        ? { key: c.key, status: "recorded", verdict, escalated: out.escalated }
+        ? { key: c.key, status: "recorded", verdict, escalated: false }
         : {
             key: c.key,
             status: "skipped",
@@ -216,7 +276,14 @@ export async function evaluateSession(
     } else if (c.check.kind === "capability") {
       const run = await executeCapability({
         verbId: c.check.capability,
-        parameters: { sessionId, criterionKey: c.key },
+        parameters: {
+          sessionId,
+          criterionKey: c.key,
+          // The outcome this criterion checks (same key), with its `ref`, so
+          // a verb that reads the world (a GitHub PR read) can find WHAT to
+          // check without a second lookup (plan v5 T2).
+          ...outcomeParameter(session.expectedOutputs, c.key),
+        },
         workspaceId: session.workspaceId,
         userId,
         agentUserId,
@@ -345,6 +412,15 @@ export async function evaluateSession(
     }
   }
 
+  if (params.escalate) {
+    const escalated = new Set(
+      await escalateFailingCriteria({ sessionId, userId })
+    );
+    for (const r of results) if (escalated.has(r.key)) r.escalated = true;
+  } else if (exhausted.length > 0 && session.channelId) {
+    await postExhaustedNews(session.channelId, session.userId, exhausted);
+  }
+
   const after = summarizeEvaluations(
     session.criteria,
     await listSessionEvaluations({ sessionId, userId })
@@ -355,6 +431,34 @@ export async function evaluateSession(
     summary: after,
   });
   return { status: "evaluated", results, resumed, ...after };
+}
+
+/**
+ * The room's news about spent criteria: a POD notice (role system), never an
+ * ask. Never throws: the grades are recorded; a failed post only loses the news.
+ */
+async function postExhaustedNews(
+  channelId: string,
+  userId: string,
+  criteria: readonly SessionCriterion[]
+): Promise<void> {
+  try {
+    // Loaded on use: the messaging door pulls the room-question graph, which
+    // this module must not drag into every importer at init.
+    const { postChannelMessage } =
+      await import("../../messaging/post-message.js");
+    await postChannelMessage({
+      channelId,
+      content: criteria.map(criterionExhaustedNews).join("\n"),
+      userId,
+      role: "system",
+    });
+  } catch (err) {
+    logger.warn(
+      { channelId, err: err instanceof Error ? err.message : String(err) },
+      "could not post the spent-criterion news to the session room"
+    );
+  }
 }
 
 /**

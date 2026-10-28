@@ -14,10 +14,11 @@
  */
 
 import { createLogger } from "@synap-core/core";
-import type { ExpectedOutput } from "@synap/playbooks";
+import type { ExpectedOutput, SlotAskCause } from "@synap/playbooks";
 import { askFingerprint } from "@synap-core/types/ask";
 import { logEvent } from "../../lib/event-helpers.js";
 import { normalizeExpectedLabel } from "./expected-label.js";
+import { isOwedSlot } from "./owed-outputs.js";
 import {
   FOCUS_SESSION_SUBJECT_TYPE,
   FOCUS_SESSION_SLOT_ASKED_EVENT_TYPE,
@@ -40,6 +41,59 @@ export function newlyAskedSlots(
     const was = prior.get(normalizeExpectedLabel(o.label) ?? "");
     if (!was || was.owner !== "human" || !was.ask) return true;
     return askFingerprint(was.ask) !== askFingerprint(o.ask);
+  });
+}
+
+/**
+ * WHO asked a write's newly posed slots — the acting door's verified agent, or
+ * the system cause a producer no agent drives names. Both absent ⇒ the person
+ * handed it to themselves, and the card names nobody.
+ */
+export interface AskProvenance {
+  askedBy?: string | null;
+  askCause?: SlotAskCause | null;
+}
+
+/**
+ * Stamp `askedBy` / `askCause` on every slot this write newly POSED to the
+ * person: newly owed, or still owed with a changed ask (the `slot_asked`
+ * rule, {@link newlyAskedSlots}, widened to an ask-less hand-off — "Claude
+ * Code handed you this" is as true without a typed ask). A slot posed anew is
+ * stamped from THIS write only: an earlier asker never rides onto a question
+ * it did not ask. Every other slot keeps what it carried (the merge carries
+ * the stamp, `reconcileOwedSince` drops it with the ownership). Pure.
+ *
+ * The ONE stamp for every door that hands a slot to the person
+ * (`blockExpectedOutput`, `applyOutputMutations`, the room question, the
+ * system producers), so the asker the card names is the agent the event
+ * records.
+ */
+export function stampAskProvenance(
+  before: readonly ExpectedOutput[],
+  after: readonly ExpectedOutput[],
+  provenance: AskProvenance
+): ExpectedOutput[] {
+  const prior = new Map<string, ExpectedOutput>();
+  for (const o of before) {
+    const key = normalizeExpectedLabel(o?.label);
+    if (key && !prior.has(key)) prior.set(key, o);
+  }
+  const askedBy = provenance.askedBy?.trim() || undefined;
+  const askCause = provenance.askCause ?? undefined;
+  return after.map((o) => {
+    if (!o || typeof o !== "object" || !isOwedSlot(o)) return o;
+    const was = prior.get(normalizeExpectedLabel(o.label) ?? "");
+    const posed =
+      !was ||
+      !isOwedSlot(was) ||
+      askFingerprint(was.ask ?? null) !== askFingerprint(o.ask ?? null);
+    if (!posed) return o;
+    const { askedBy: _was, askCause: _wasCause, ...rest } = o;
+    return {
+      ...rest,
+      ...(askedBy ? { askedBy } : {}),
+      ...(askCause ? { askCause } : {}),
+    };
   });
 }
 

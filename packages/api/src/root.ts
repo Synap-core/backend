@@ -100,6 +100,7 @@ import { onboardingRouter } from "./routers/onboarding.js";
 import { diagnoseRouter } from "./routers/diagnose.js";
 import { signalRouter } from "./routers/signal.js";
 import { signalsRouter } from "./routers/signals.js";
+import { workReleaseRouter } from "./routers/work-release.js";
 import { typesenseRouter } from "./routers/typesense.js";
 import { n8nActionsRouter } from "./routers/n8n/actions.js";
 import { usersRouter } from "./routers/users.js";
@@ -217,6 +218,8 @@ export const coreRouter = router({
   diagnose: diagnoseRouter,
   signal: signalRouter,
   signals: signalsRouter,
+  // Work › Ship — the release read (dev.repo_snapshot facts, folded).
+  workRelease: workReleaseRouter,
   typesense: typesenseRouter,
   n8nActions: n8nActionsRouter,
   users: usersRouter,

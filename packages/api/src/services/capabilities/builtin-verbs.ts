@@ -20,6 +20,7 @@
  */
 
 import { z } from "zod";
+import { vaultSecretIdOf } from "@synap-core/types/vault";
 import { playbookParamsInputSchema } from "../../schemas/playbook-definition.js";
 import { TRPCError } from "@trpc/server";
 // Static, NOT part of the dynamic `submit-capture-graph` import below: it is a
@@ -2557,6 +2558,43 @@ const marketScaffoldHandler: BuiltinVerbHandler = async (params, ctx) => {
 };
 
 /**
+ * capability.rotate_key — replace the key an installed capability's tools use
+ * with a secret the person handed over (a provide-secret ask's `vault://<id>`).
+ * The agent never holds the value: the pod copies it into the key the tools
+ * already point at, in place, and removes the handed-over row
+ * (`rotateCapabilityKeyFromSecret`, the capability-credential service — the
+ * same writer the CLI's `cap connect --reconnect` reaches through
+ * `PATCH /capabilities/:id/credentials/:id`). A WRITE: it flows through the
+ * full capability gate (an agent's run proposes unless granted).
+ */
+const capabilityRotateKeyParams = z
+  .object({
+    capabilityId: z.string().uuid(),
+    vaultRef: z.string(),
+    credentialId: z.string().uuid().optional(),
+  })
+  .strict();
+
+const capabilityRotateKeyHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = capabilityRotateKeyParams.parse(params);
+  const sourceSecretId = vaultSecretIdOf(input.vaultRef);
+  if (!sourceSecretId) {
+    throw new Error(
+      "vaultRef must be a vault://<id> reference — the one a provide-secret answer gives you."
+    );
+  }
+  const { rotateCapabilityKeyFromSecret } =
+    await import("./capability-connections.js");
+  return rotateCapabilityKeyFromSecret({
+    capabilityId: input.capabilityId,
+    actorUserId: ctx.userId,
+    sourceSecretId,
+    agentUserId: ctx.agentUserId ?? null,
+    ...(input.credentialId ? { credentialId: input.credentialId } : {}),
+  });
+};
+
+/**
  * connector.health_check — probe a connector for a provider and, if its OAuth
  * connection is dead (refresh token expired / never connected), emit the operator
  * reconnect nudge — so a CONFIG feed nudges instead of going SILENTLY dead on an
@@ -3977,6 +4015,9 @@ export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {
   // Connection health — probe a connector + nudge the operator if it's dead, so
   // a config feed doesn't go silently dead on an expired token.
   "connector.health_check": connectorHealthCheckHandler,
+  // Key rotation — copy a handed-over secret into the key a capability's
+  // tools already use, in place.
+  "capability.rotate_key": capabilityRotateKeyHandler,
   // Inbound sink — record a generic inbound message onto its external channel
   // via the shared recordInboundMessage (the one composition seam so provider
   // ingest can be driven from outside the pod as config/automation).
@@ -4069,6 +4110,7 @@ export const BUILTIN_VERB_PARAM_SCHEMAS: Record<
   "market.scaffold": marketScaffoldParams,
   "tool.request": toolRequestParams,
   "connector.health_check": connectorHealthCheckParams,
+  "capability.rotate_key": capabilityRotateKeyParams,
   "channel.ingest": channelIngestParams,
   "messaging.send": messagingSendParams,
   "governance.recommend_tighten": governanceRecommendTightenParams,

@@ -1,6 +1,6 @@
 {
   "name": "@synap-core/api-types",
-  "version": "1.32.0",
+  "version": "1.33.1",
   "description": "Type definitions for Synap API Router - tRPC types for frontend",
   "type": "module",
   "main": "./dist/index.js",
@@ -17,7 +17,7 @@
     "src"
   ],
   "scripts": {
-    "build": "rm -rf dist && tsc && cp src/generated.d.ts dist/generated.d.ts",
+    "build": "rm -rf dist && tsc && cp src/generated.d.ts dist/generated.d.ts && node scripts/write-schema-hash.mjs",
     "clean": "rm -rf dist",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",

@@ -495,3 +495,52 @@ describe("(2) a proposal filed in a session is decided only by its readers", () 
     expect(got.data.data?.title).toBe("Acme follow-up");
   });
 });
+
+// A held-writes pack is one agent's writes for a whole day, across sessions:
+// the `session_id` it carries (packs filed before the fix stamped the first
+// write's conversation session) names none of them and must not gate it.
+// Founder, 2026-10-27: a pack refused "Only people in this session can
+// approve" because its first write came from a session only the agent owned.
+describe("(2) a held-writes pack is not gated by the session it was stamped with", () => {
+  async function fileHeldWritesPack(): Promise<string> {
+    const id = randomUUID();
+    await q(
+      `insert into proposals (id, status, proposal_type, target_type, target_id, workspace_id, session_id, data, revision_history, created_at, updated_at)
+       values ($1, 'pending', 'held_writes', 'agent', $2, $3, $4, $5::jsonb, '[]'::jsonb, now(), now())`,
+      [
+        id,
+        randomUUID(),
+        WS,
+        T,
+        JSON.stringify({
+          day: "2026-10-27",
+          deferredWrites: [],
+          source: "agent",
+        }),
+      ]
+    );
+    return id;
+  }
+
+  it("an editor who cannot read that session may decide the pack", async () => {
+    const id = await fileHeldWritesPack();
+    const got = (await caller(human(COLLEAGUE)).get({ proposalId: id })) as {
+      viewerCanReview: boolean;
+      viewerCanReviewReason: string;
+    };
+    expect(got.viewerCanReviewReason).not.toBe("session-only");
+    expect(got.viewerCanReview).toBe(true);
+    await caller(human(COLLEAGUE)).approve({ proposalId: id });
+    expect(h.applied).toEqual([id]);
+  });
+
+  it("…while an ordinary proposal filed in that same session stays refused", async () => {
+    const id = await fileInSessionProposal();
+    await expect(
+      caller(human(COLLEAGUE)).approve({ proposalId: id })
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: expect.stringContaining("Only people in this session"),
+    });
+  });
+});

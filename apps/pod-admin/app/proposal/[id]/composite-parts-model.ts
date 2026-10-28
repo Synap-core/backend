@@ -25,7 +25,12 @@
  */
 
 import { ruleThenWords, ruleWhenWords } from "@synap-core/types/automations";
-import type { ProposalReviewGraph } from "@synap-core/types/proposals";
+import {
+  partReachWords,
+  type ProposalPartReach,
+  type ProposalReviewGraph,
+  type ProposalTurnsOn,
+} from "@synap-core/types/proposals";
 import {
   formatFieldLabel,
   type EffectivePropertyDef,
@@ -35,10 +40,12 @@ import {
   humanizeToken,
   resolveObjectNoun,
   resolveStatusLabel,
+  resolveVerbStepLabel,
 } from "@synap-core/types/vocabulary";
 import {
   codeValue,
   graphRecords,
+  proseChanges,
   type ProposedRecord,
   type RecordField,
   type RecordValue,
@@ -109,6 +116,15 @@ function tags(items: readonly string[] | null | undefined): RecordValue | null {
   return clean.length ? { kind: "tags", items: clean } : null;
 }
 
+/**
+ * What a part that acts on its own can reach, in the words every surface
+ * says (`partReachWords`). Not measured (an older pod) ⇒ no fact: never
+ * "nothing" for "not read".
+ */
+function reach(value: ProposalPartReach | undefined): RecordValue | null {
+  return value ? text(partReachWords(value)) : null;
+}
+
 function status(raw: string): RecordValue {
   return { kind: "status", label: resolveStatusLabel(raw), raw };
 }
@@ -153,9 +169,10 @@ function flowRuns(flow: unknown): RecordValue | null {
     .filter((n) => n?.type !== "trigger")
     .map((n) => {
       const d = n.data ?? {};
+      const verbId = str(d.verbId);
       const name =
         str(d.skillName) ??
-        str(d.verbId) ??
+        (verbId ? resolveVerbStepLabel(verbId) : null) ??
         str(d.playbookName) ??
         str(d.name) ??
         str(d.label);
@@ -199,6 +216,7 @@ const DRAWERS = {
           text(ruleWhenWords(a.triggerType, flow?.triggerConfig ?? null).text)
         ),
         ...field("runs", flowRuns(flow)),
+        ...field("canReach", reach(a.reach)),
         ...field("description", text(a.description)),
       ]);
     }),
@@ -298,28 +316,51 @@ const DRAWERS = {
       const patch = (opByRef.get(u.ref)?.patch ?? {}) as Op;
       const fields = u.fields.flatMap((f) => {
         const whole = patch[f.key];
+        // What it holds now (the pod reads it while pending): a short
+        // instruction read whole becomes its changes; else before → after.
+        const rewrite =
+          f.key === "body" && f.before !== undefined && !f.beforeTruncated
+            ? proseChanges(f.before, whole)
+            : null;
         const value =
-          typeof whole === "string"
+          rewrite ??
+          (typeof whole === "string"
             ? f.key === "body" || f.key === "code"
               ? codeValue(whole)
               : text(whole)
-            : text(f.truncated ? `${f.value}…` : f.value);
-        return value
-          ? [{ ...field(f.key, value)[0]!, op: "change" as const }]
-          : [];
+            : text(f.truncated ? `${f.value}…` : f.value));
+        if (!value) return [];
+        const before =
+          rewrite || f.before === undefined
+            ? undefined
+            : text(f.beforeTruncated ? `${f.before}…` : f.before);
+        const base = field(f.key, value)[0]!;
+        return [
+          {
+            ...base,
+            op: "change" as const,
+            before,
+            wide: base.wide || before !== undefined,
+          },
+        ];
       });
       return record(
         "updates",
         u.ref,
         u.kind,
-        buildObjectActionTitle({ action: "update", objectKind: u.kind }),
+        buildObjectActionTitle({
+          action: "update",
+          objectKind: u.kind,
+          objectName: u.targetName,
+        }),
         [
           ...field("target", {
             kind: "ref",
             objectKind: u.kind,
             id: u.targetId,
-            name: resolveObjectNoun(u.kind),
+            name: u.targetName ?? resolveObjectNoun(u.kind),
           }),
+          ...field("canReach", reach(u.reach)),
           ...fields,
         ],
         "update"
@@ -401,4 +442,35 @@ export function compositeItems(
   return (Object.keys(DRAWERS) as GraphItemKey[]).flatMap((key) =>
     (DRAWERS[key] as Drawer)(ctx)
   );
+}
+
+/**
+ * What a `capability.enable` turns on (`review.turnsOn`): one record per
+ * skill, drawn whole, so the person switching it on reads the code or the
+ * instructions it runs and what it can reach, never only its name. A box
+ * script shows its own declaration: it runs on the person's computer, not in
+ * the pod's sandbox, so the pod reads no reach for it.
+ */
+export function turnOnRecords(turnsOn: ProposalTurnsOn): ProposedRecord[] {
+  return turnsOn.skills.map((s) => {
+    const instruction = s.kind === "instruction";
+    return {
+      ref: `turn-on:${s.id}`,
+      title: s.name,
+      kind: "skill",
+      op: "update",
+      fields: [
+        ...field("code", codeValue(s.code)),
+        ...field(
+          instruction ? "instructions" : "description",
+          instruction ? codeValue(s.body) : text(s.body)
+        ),
+        ...field(
+          "declaration",
+          s.box ? codeValue(JSON.stringify(s.box, null, 2)) : null
+        ),
+        ...field("canReach", reach(s.reach)),
+      ],
+    };
+  });
 }

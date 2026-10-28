@@ -49,6 +49,8 @@ const base = {
   owedSlots: [] as OwedSlotSignalInput[],
   owedTruncated: false,
   openQuestionSessionIds: new Set<string>(),
+  // The asks' clock: an owed ask 7+ days old is in Review later.
+  now: new Date("2026-09-28T00:00:00.000Z"),
 };
 
 describe("draft-asks signal", () => {

@@ -1,9 +1,10 @@
 /**
  * Agent-quality scorecard — the ALWAYS-ON, agent-system-AGNOSTIC tier.
  *
- * Pure SQL over `proposals` keyed by `proposals.agentUserId`: approve/reject/
- * revise rates, a rejection-reason histogram, and a duplicate rate derived from
- * the SAME structural fingerprint the review inbox uses. It describes an agent's
+ * Pure SQL over `proposals` keyed by `proposals.agentUserId`, over the last 7
+ * days (`scorecardWindow`): approve/reject/revise rates, a rejection-reason
+ * histogram, and a duplicate rate derived from the SAME structural fingerprint
+ * the review inbox uses (read from a bounded sample, which the card names). It describes an agent's
  * *behaviour* from governance data the pod already owns — never its
  * implementation, so there is NO `switch(agentType)` and NO Intelligence-Service
  * coupling (root CLAUDE.md: `agentType ⟂ intelligenceServiceId`).
@@ -17,6 +18,7 @@ import {
   db,
   and,
   eq,
+  gte,
   or,
   desc,
   drizzleSql,
@@ -82,10 +84,116 @@ export function isHumanRevision(
   return !r.actingAgentUserId && !!r.by && r.by !== subjectAgentId;
 }
 
+/** The window the per-agent card counts over (`AgentScorecard.window`). */
+export interface ScorecardWindow {
+  from: string;
+  to: string;
+  days: number;
+}
+
 /**
- * PURE scorecard math over a set of an agent's proposals. DB-free so it is
- * unit-testable: hand it rows, get back counts + rates + the rejection
- * histogram + a duplicate rate (share of rows in a same-shape cluster > 1).
+ * The card's window ending at `now`: the last {@link RECENT_WRITES_WINDOW_DAYS}
+ * days, the same 7 days the Agents page counts its "writes · 7d" over, so the
+ * two numbers on that page describe one period.
+ */
+export function scorecardWindow(now: Date): ScorecardWindow {
+  const days = RECENT_WRITES_WINDOW_DAYS;
+  return {
+    from: new Date(now.getTime() - days * 24 * 60 * 60 * 1000).toISOString(),
+    to: now.toISOString(),
+    days,
+  };
+}
+
+/**
+ * How many of the window's newest proposals the duplicate rate clusters.
+ * The ONLY bounded number on the card: clustering needs each payload, so it
+ * reads a sample and says so (`AgentScorecard.duplicateSample`). Every count
+ * and the other rates are SQL counts over the whole window — a cap on THOSE
+ * is what hid a day's rejections from a card that saw only the newest 500 (a
+ * busy agent files 500 proposals in about 3 hours).
+ */
+export const DUPLICATE_SAMPLE_LIMIT = 500;
+
+/** One fingerprint-shaped row of the duplicate sample. */
+export type ScorecardSampleRow = Omit<ClusterInputRow, "id">;
+
+/**
+ * What the card is folded from. The DB tier fills it with SQL aggregates over
+ * the window; {@link scorecardAggregatesFromRows} fills it from raw rows (the
+ * pure tests). Either way the RULES — partial apply, human revision, reason
+ * bucket, duplicate fingerprint — are applied once, in {@link foldAgentScorecard}.
+ */
+export interface ScorecardAggregates {
+  /** `count(*)` per status over the window — every proposal, never capped. */
+  statusCounts: ReadonlyArray<{ status: string; count: number }>;
+  /**
+   * `data` of each APPLIED (approved / auto-approved) proposal that may be a
+   * partial apply. A superset is fine (the DB tier sends every applied row
+   * carrying a `dispositions` key): `isPartiallyApprovedData` decides.
+   */
+  appliedData: ReadonlyArray<unknown>;
+  /**
+   * `revisionHistory` of each proposal that has one. A superset is fine:
+   * `isHumanRevision` decides.
+   */
+  revisionHistories: ReadonlyArray<unknown>;
+  /** `count(*)` per (reasonCode, rejectionReason) pair. */
+  reasonCounts: ReadonlyArray<{
+    reasonCode: string | null;
+    rejectionReason: string | null;
+    count: number;
+  }>;
+  /** The newest proposals of the window, at most `DUPLICATE_SAMPLE_LIMIT`. */
+  duplicateSample: ReadonlyArray<ScorecardSampleRow>;
+}
+
+const isApplied = (status: string) =>
+  status === ProposalStatus.APPROVED || status === ProposalStatus.AUTO_APPROVED;
+
+/**
+ * Raw rows → the aggregates the DB tier computes in SQL. The reference
+ * derivation: a test seeds the same rows in Postgres and the two must agree.
+ */
+export function scorecardAggregatesFromRows(
+  rows: readonly ScorecardProposalRow[]
+): ScorecardAggregates {
+  const statusCounts = new Map<string, number>();
+  const reasonCounts = new Map<
+    string,
+    { reasonCode: string | null; rejectionReason: string | null; count: number }
+  >();
+  for (const r of rows) {
+    statusCounts.set(r.status, (statusCounts.get(r.status) ?? 0) + 1);
+    const key = JSON.stringify([r.reasonCode, r.rejectionReason]);
+    const hit = reasonCounts.get(key);
+    if (hit) hit.count += 1;
+    else
+      reasonCounts.set(key, {
+        reasonCode: r.reasonCode,
+        rejectionReason: r.rejectionReason,
+        count: 1,
+      });
+  }
+  return {
+    statusCounts: [...statusCounts].map(([status, count]) => ({
+      status,
+      count,
+    })),
+    appliedData: rows.filter((r) => isApplied(r.status)).map((r) => r.data),
+    revisionHistories: rows.map((r) => r.revisionHistory),
+    reasonCounts: [...reasonCounts.values()],
+    duplicateSample: [...rows]
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      .slice(0, DUPLICATE_SAMPLE_LIMIT),
+  };
+}
+
+/**
+ * PURE scorecard math over raw rows: {@link scorecardAggregatesFromRows} then
+ * {@link foldAgentScorecard}. DB-free so the rules are unit-testable: hand it
+ * rows, get back counts + rates + the rejection histogram + a duplicate rate
+ * (share of the sample in a same-shape cluster > 1).
  */
 export function computeAgentScorecard(
   rows: ScorecardProposalRow[],
@@ -95,70 +203,88 @@ export function computeAgentScorecard(
     agentType: string | null;
     pendingCount: number;
     cap?: number;
+    /** Defaults to the window ending now. */
+    window?: ScorecardWindow;
+  }
+): AgentScorecard {
+  return foldAgentScorecard(scorecardAggregatesFromRows(rows), {
+    ...opts,
+    window: opts.window ?? scorecardWindow(new Date()),
+  });
+}
+
+/** Fold the window's aggregates into the card. The one place the rules apply. */
+export function foldAgentScorecard(
+  agg: ScorecardAggregates,
+  opts: {
+    agentId: string;
+    agentName: string | null;
+    agentType: string | null;
+    pendingCount: number;
+    cap?: number;
+    window: ScorecardWindow;
   }
 ): AgentScorecard {
   const cap = opts.cap ?? AGENT_PENDING_PROPOSAL_CAP;
-  const total = rows.length;
 
+  let total = 0;
   let pending = 0;
-  let approved = 0;
-  let partiallyApproved = 0;
+  let applied = 0;
   let rejected = 0;
-  let revised = 0;
-  const reasonHist = new Map<string, number>();
+  for (const { status, count } of agg.statusCounts) {
+    total += count;
+    switch (status) {
+      case ProposalStatus.PENDING:
+      case ProposalStatus.APPROVAL_FAILED:
+        pending += count;
+        break;
+      case ProposalStatus.APPROVED:
+      case ProposalStatus.AUTO_APPROVED:
+        applied += count;
+        break;
+      case ProposalStatus.REJECTED:
+        rejected += count;
+        break;
+      default:
+        break;
+    }
+  }
+
+  // PARTIAL APPLY is not an endorsement. Per-item dispositions let a reviewer
+  // deny items inside a composite and approve the rest; the row still stores
+  // plain `"approved"` (no new status enum). Counting that as a full approval
+  // scores "1 of 30 kept" identically to "30 of 30" — so split it out. Mirrors
+  // how `withdrawn` is treated in `AgentStanding`: a non-endorsement gets its
+  // own bucket rather than being rounded up into `approved`.
+  const partiallyApproved = agg.appliedData.filter((d) =>
+    isPartiallyApprovedData(d)
+  ).length;
+  const approved = applied - partiallyApproved;
+
+  const revised = agg.revisionHistories.filter(
+    (h) =>
+      Array.isArray(h) && h.some((rev) => isHumanRevision(rev, opts.agentId))
+  ).length;
+
   // Bucket key precedence lives in ONE place — `proposalReasonBucket`, shared
   // with the tighten recommender's classifier. This histogram and that
   // classifier MUST agree on what a rejection means; two copies of the rule
   // would drift, which is the defect the scattered dedup implementations
   // already cost us once.
-
-  for (const r of rows) {
-    switch (r.status) {
-      case ProposalStatus.PENDING:
-      case ProposalStatus.APPROVAL_FAILED:
-        pending += 1;
-        break;
-      case ProposalStatus.APPROVED:
-      case ProposalStatus.AUTO_APPROVED:
-        // PARTIAL APPLY is not an endorsement. Per-item dispositions let a
-        // reviewer deny items inside a composite and approve the rest; the row
-        // still stores plain `"approved"` (no new status enum). Counting that
-        // as a full approval scores "1 of 30 kept" identically to "30 of 30" —
-        // so split it out. Mirrors how `withdrawn` is treated in
-        // `AgentStanding`: a non-endorsement gets its own bucket rather than
-        // being rounded up into `approved`.
-        if (isPartiallyApprovedData(r.data)) partiallyApproved += 1;
-        else approved += 1;
-        break;
-      case ProposalStatus.REJECTED:
-        rejected += 1;
-        break;
-      default:
-        break;
-    }
-    if (
-      Array.isArray(r.revisionHistory) &&
-      r.revisionHistory.some((rev) => isHumanRevision(rev, opts.agentId))
-    ) {
-      revised += 1;
-    }
+  const reasonHist = new Map<string, number>();
+  for (const r of agg.reasonCounts) {
     const bucket = proposalReasonBucket(r.reasonCode, r.rejectionReason);
-    if (bucket) reasonHist.set(bucket, (reasonHist.get(bucket) ?? 0) + 1);
+    if (bucket) reasonHist.set(bucket, (reasonHist.get(bucket) ?? 0) + r.count);
   }
 
   // Duplicate rate — reuse the EXACT structural fingerprint the review inbox
   // clusters on, so "duplicate" means the same thing everywhere. A row counts
   // as a duplicate if it shares its fingerprint with at least one sibling.
-  const clusterRows: ClusterInputRow[] = rows.map((r, i) => ({
-    id: String(i),
-    proposalType: r.proposalType,
-    targetType: r.targetType,
-    targetId: r.targetId,
-    data: r.data,
-    createdAt: r.createdAt,
-    workspaceId: r.workspaceId,
-  }));
-  const clusters = collapseProposalsToClusters(clusterRows);
+  // Its denominator is the SAMPLE, not the window total.
+  const sampleSize = agg.duplicateSample.length;
+  const clusters = collapseProposalsToClusters(
+    agg.duplicateSample.map((r, i) => ({ ...r, id: String(i) }))
+  );
   const inDuplicateCluster = clusters
     .filter((c) => c.count > 1)
     .reduce((sum, c) => sum + c.count, 0);
@@ -176,13 +302,18 @@ export function computeAgentScorecard(
     agentName: opts.agentName,
     agentType: opts.agentType,
     sampled: total,
+    window: opts.window,
+    duplicateSample: { size: sampleSize, limit: DUPLICATE_SAMPLE_LIMIT },
     counts: { total, pending, approved, partiallyApproved, rejected, revised },
     rates: {
       approveRate: rate(approved),
       partialApproveRate: rate(partiallyApproved),
       rejectRate: rate(rejected),
       reviseRate: rate(revised),
-      duplicateRate: rate(inDuplicateCluster),
+      duplicateRate:
+        sampleSize > 0
+          ? Number((inDuplicateCluster / sampleSize).toFixed(4))
+          : 0,
     },
     rejectionReasons,
     dailyCap: {
@@ -212,13 +343,10 @@ export async function agentReadableBy(
   return viewer.signedInPerson && isPodAdmin(userId);
 }
 
-/** Cap on proposals scanned to build a scorecard (bounds a chatty agent). */
-const SCORECARD_SCAN_LIMIT = 500;
-
 /**
- * DB tier: fetch an agent-user's proposals (USER-floored) + its today-count,
- * then hand them to the pure `computeAgentScorecard`. Returns an error object
- * when `agentId` is not an agent-user visible to the caller.
+ * DB tier: count an agent-user's proposals (USER-floored) over the card's
+ * window, then hand the aggregates to the pure `foldAgentScorecard`. Returns an
+ * error object when `agentId` is not an agent-user visible to the caller.
  */
 export async function agentScorecard(params: {
   userId: string;
@@ -255,62 +383,132 @@ export async function agentScorecard(params: {
     return { error: `No agent-user found for id ${agentId}` };
   }
 
-  // "How has this agent behaved?" — keyed on the agent, floored to what the
-  // CALLER can see: LENS **or** OWNERSHIP. An owner sees its writes everywhere
-  // they can see (on the lens alone the agent's writes in an unjoinable
-  // workspace vanished from its own card); a pod admin reading someone else's
-  // agent sees its writes in the spaces the admin can see — the admin floor
-  // widens WHO may read the card, never which proposals it counts.
-  const rows = await db
-    .select({
-      proposalType: proposals.proposalType,
-      targetType: proposals.targetType,
-      targetId: proposals.targetId,
-      data: proposals.data,
-      status: proposals.status,
-      rejectionReason: proposals.rejectionReason,
-      reasonCode: proposals.reasonCode,
-      revisionHistory: proposals.revisionHistory,
-      createdAt: proposals.createdAt,
-      workspaceId: proposals.workspaceId,
-    })
-    .from(proposals)
-    .where(
-      and(
-        eq(proposals.agentUserId, agentId),
-        or(
-          userVisibleWhere(proposals.workspaceId, userId),
-          authoredByUser(userId)
+  const window = scorecardWindow(new Date());
+
+  // "How has this agent behaved?" — keyed on the agent, inside the window,
+  // floored to what the CALLER can see: LENS **or** OWNERSHIP. An owner sees
+  // its writes everywhere they can see (on the lens alone the agent's writes
+  // in an unjoinable workspace vanished from its own card); a pod admin
+  // reading someone else's agent sees its writes in the spaces the admin can
+  // see — the admin floor widens WHO may read the card, never which proposals
+  // it counts. Every query below shares this one predicate, so the parts of
+  // the card cannot count different sets.
+  const inScope = and(
+    eq(proposals.agentUserId, agentId),
+    gte(proposals.createdAt, new Date(window.from)),
+    or(userVisibleWhere(proposals.workspaceId, userId), authoredByUser(userId))
+  );
+
+  // Counts are SQL aggregates over the WHOLE window — never a scan of the
+  // newest N rows. Only the duplicate rate reads payloads, and it says it is a
+  // sample. The partial-apply and human-revision reads fetch only rows that
+  // CAN match (a `dispositions` key / a non-empty revision history) and let
+  // the one JS rule decide, rather than restating that rule in SQL.
+  const [
+    statusCounts,
+    appliedRows,
+    revisionRows,
+    reasonCounts,
+    duplicateSample,
+    pendingCount,
+    cap,
+  ] = await Promise.all([
+    db
+      .select({
+        status: proposals.status,
+        count: drizzleSql<number>`count(*)::int`,
+      })
+      .from(proposals)
+      .where(inScope)
+      .groupBy(proposals.status),
+    db
+      .select({
+        dispositions: drizzleSql<unknown>`${proposals.data} -> 'dispositions'`,
+      })
+      .from(proposals)
+      .where(
+        and(
+          inScope,
+          inArray(proposals.status, [
+            ProposalStatus.APPROVED,
+            ProposalStatus.AUTO_APPROVED,
+          ]),
+          drizzleSql`(${proposals.data} -> 'dispositions') is not null`
+        )
+      ),
+    db
+      .select({ revisionHistory: proposals.revisionHistory })
+      .from(proposals)
+      .where(
+        and(
+          inScope,
+          drizzleSql`jsonb_typeof(${proposals.revisionHistory}) = 'array'`,
+          drizzleSql`${proposals.revisionHistory} <> '[]'::jsonb`
+        )
+      ),
+    db
+      .select({
+        reasonCode: proposals.reasonCode,
+        rejectionReason: proposals.rejectionReason,
+        count: drizzleSql<number>`count(*)::int`,
+      })
+      .from(proposals)
+      .where(
+        and(
+          inScope,
+          or(
+            isNotNull(proposals.reasonCode),
+            isNotNull(proposals.rejectionReason)
+          )
         )
       )
-    )
-    .orderBy(desc(proposals.createdAt))
-    .limit(SCORECARD_SCAN_LIMIT);
-
-  // Daily-cap posture: the cap is per-AGENT (not shared across the owner's
-  // roster) and scales with this agent's own trust (base 10, x3 for a proven
-  // agent) — see `agentProposalCap()`, the same helper `createProposal`
-  // enforces against.
-  //
-  // Both halves of the posture are now the ENFORCER's own functions, called —
-  // not re-derived. This query used to be a hand-copied
-  // `createdBy = <human> AND agentUserId = <agent>`, the same overloaded-column
-  // pair that made the cap inert (see `countPendingAgentProposals`); a reported
-  // posture computed by a second copy of the predicate can drift from what the
-  // membrane actually enforces, and did. Keying on `agentUserId` alone also
-  // matches the `rows` query above, so this file's two proposal reads agree.
-  const [pendingCount, cap] = await Promise.all([
+      .groupBy(proposals.reasonCode, proposals.rejectionReason),
+    db
+      .select({
+        proposalType: proposals.proposalType,
+        targetType: proposals.targetType,
+        targetId: proposals.targetId,
+        data: proposals.data,
+        createdAt: proposals.createdAt,
+        workspaceId: proposals.workspaceId,
+      })
+      .from(proposals)
+      .where(inScope)
+      .orderBy(desc(proposals.createdAt))
+      .limit(DUPLICATE_SAMPLE_LIMIT),
+    // Daily-cap posture: the cap is per-AGENT (not shared across the owner's
+    // roster) and scales with this agent's own trust (base 10, x3 for a
+    // proven agent) — see `agentProposalCap()`, the same helper
+    // `createProposal` enforces against.
+    //
+    // Both halves of the posture are the ENFORCER's own functions, called —
+    // not re-derived. This query used to be a hand-copied
+    // `createdBy = <human> AND agentUserId = <agent>`, the same
+    // overloaded-column pair that made the cap inert (see
+    // `countPendingAgentProposals`); a reported posture computed by a second
+    // copy of the predicate can drift from what the membrane actually
+    // enforces, and did.
     countPendingAgentProposals(agentId),
     agentProposalCap(agentId),
   ]);
 
-  return computeAgentScorecard(rows, {
-    agentId,
-    agentName: agent.name ?? agent.email ?? null,
-    agentType: agent.agentType ?? null,
-    pendingCount,
-    cap,
-  });
+  return foldAgentScorecard(
+    {
+      statusCounts,
+      appliedData: appliedRows.map((r) => ({ dispositions: r.dispositions })),
+      revisionHistories: revisionRows.map((r) => r.revisionHistory),
+      reasonCounts,
+      duplicateSample,
+    },
+    {
+      agentId,
+      agentName: agent.name ?? agent.email ?? null,
+      agentType: agent.agentType ?? null,
+      pendingCount,
+      cap,
+      window,
+    }
+  );
 }
 
 /** One agent's standing in the pod-wide trust grid — REAL lifetime totals. */

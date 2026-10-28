@@ -3,19 +3,27 @@ name: CI
 on:
   pull_request:
     branches: ["main", "develop"]
+    # ready_for_review: a draft runs the Release gate only (see `changes`); the
+    # suites start when it is marked ready.
+    types: [opened, synchronize, reopened, ready_for_review]
+  # The merge queue tests each PR once against the real next main.
+  merge_group:
   push:
     # release/** : a release is cut from a branch (a verified main commit plus
     # chosen fixes) and tagged; CI must gate THAT exact commit. A pull_request
     # run would test the branch merged into today's main instead.
     branches: ["main", "develop", "release/**"]
 
-# A pull request keeps only its newest run. A push to main, develop or a
-# release branch gets a group per commit, so every merged commit finishes its
-# run: with one group per branch, each merge cancelled the previous main run
-# and the combined main was never measured (26 Oct: no main run finished
-# between 08:44 and 18:00).
+# A pull request keeps only its newest run (cancel-in-progress). A push to
+# main, develop or a release branch never cancels a RUNNING run: with
+# cancel-in-progress off, GitHub keeps the running one and only the NEWEST
+# waiting one per branch, so every run that starts finishes and the latest main
+# is always measured. (26 Oct, cancel-in-progress on: no main run finished
+# between 08:44 and 18:00. 27 Oct, one group per commit: 14 full main runs
+# queued behind each other after a merge wave, ahead of every PR.) A merge
+# queue entry gets a group per commit: each one must report.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'merge_group' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Least privilege: jobs that need more declare it themselves.
@@ -32,9 +40,50 @@ permissions:
 # They run in parallel and set up through ONE composite action
 # (.github/actions/monorepo-setup) so they can never set up differently.
 
+# WHAT RUNS (2026-10-27, pod document "Backend CI: where the 2 hours per PR
+# go"): the `changes` job reads what a pull request touched and turns off what
+# it cannot affect — a draft runs no suites, a negctl/* branch runs only its own
+# test files ("Targeted tests"), a docs-only change runs nothing, and the Docker
+# build + deploy tests run only when an image-relevant path changed. Push to
+# main, release branches and the merge queue always run everything. FAIL-SAFE:
+# every job also runs when `changes` itself fails (`needs.changes.result !=
+# 'success'`), and a job skipped by its `if:` reports success to the required
+# check, so a skip must only ever come from a positive decision.
+# The Full suite runs as 4 shard jobs and one judge job named "Full suite"
+# (the required check); see scripts/test-ratchet-shards.mjs.
+
 jobs:
+  changes:
+    name: What changed
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      gate: ${{ steps.decide.outputs.gate }}
+      image: ${{ steps.decide.outputs.image }}
+      suites: ${{ steps.decide.outputs.suites }}
+      negctl: ${{ steps.decide.outputs.negctl }}
+      negctl_tests: ${{ steps.decide.outputs.negctl_tests }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # `git diff base...head` needs the merge base.
+          fetch-depth: 0
+
+      - name: Decide which checks this change needs
+        id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          HEAD_REF: ${{ github.head_ref }}
+          DRAFT: ${{ github.event.pull_request.draft }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/ci-changes.mjs
+
   release-gate:
     name: Release gate
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.gate == 'true') }}
     runs-on: ubuntu-latest
     # ~1.5x the slower of two measured runs (15.5 min in 39176917085, 21 min
     # in 39179071834 — runner speed varies).
@@ -100,6 +149,7 @@ jobs:
       # door must run the placement guard first, and backups must land on the
       # host. They guard what a release DOES to a pod, so they gate releases.
       - name: Deploy safety tests
+        if: ${{ needs.changes.result != 'success' || needs.changes.outputs.image == 'true' }}
         run: |
           python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
           # EVERY deploy/__tests__/*.test.sh, derived by glob: a new test joins
@@ -127,7 +177,12 @@ jobs:
 
       # Fail if the generated API-types contract is stale (router changed but
       # @synap-core/api-types/generated.d.ts wasn't regenerated). The frontends
-      # consume this artifact, so drift is a silent type-safety hole.
+      # consume this artifact, so drift is a silent type-safety hole. The file
+      # stays COMMITTED: synap-app, browser and relay read it from a backend
+      # checkout that never builds @synap/api. In the merge queue this checks
+      # the PR merged with the next main, so a combined file the generator
+      # would not produce never lands; nothing regenerates it after a merge.
+      # Fix when red: the hint the check prints (scripts/gen-types.mjs).
       - name: Verify generated API types are up to date
         run: pnpm --filter @synap/api gen-types:check
 
@@ -179,11 +234,23 @@ jobs:
         env:
           BASE_URL: http://localhost:4000
 
+      # The booted bundle serves the hash of the committed generated.d.ts: the
+      # hash is baked in by tsup's `define`, never read from a committed file.
+      # gen-types:check above proved the file current, so this is the contract
+      # the pod really implements.
+      - name: Health serves the derived schema hash
+        run: |
+          want=$(node --input-type=module -e 'import { schemaHashOfFile } from "./packages/api/scripts/schema-hash.mjs"; console.log(schemaHashOfFile())')
+          got=$(curl -sf http://localhost:4000/api/hub/health | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).schemaHash))')
+          echo "generated.d.ts: $want  /api/hub/health: $got"
+          [ -n "$want" ] && [ "$got" = "$want" ] || { echo "::error::/api/hub/health schemaHash ($got) is not the hash of packages/api-types/src/generated.d.ts ($want)"; exit 1; }
+
       # The image smoke: in the BUILT image, the code-skill sandbox's native
       # addon loads and runs an isolate. isolated-vm is resolved from @synap/api
       # (the package that imports it), with the flag its README requires on
       # Node >= 20, and the image's CMD must carry that flag too.
       - name: Test Docker Build
+        if: ${{ needs.changes.result != 'success' || needs.changes.outputs.image == 'true' }}
         run: |
           docker build -t synap-backend:test -f deploy/Dockerfile .
           docker run --rm synap-backend:test node --version
@@ -200,12 +267,28 @@ jobs:
           cmd=$(docker inspect --format '{{json .Config.Cmd}}' synap-backend:test)
           echo "CMD: $cmd"
           echo "$cmd" | grep -q -- '--no-node-snapshot' || { echo "::error::deploy/Dockerfile CMD lacks --no-node-snapshot (isolated-vm requires it on Node >= 20)"; exit 1; }
+          # The runner the API's pool starts carries the Node permission model,
+          # runs a skill under it, and is refused a file write, a process and
+          # the API's environ (review F12; no suite runs the BUILT runner).
+          docker run --rm -v "$PWD/scripts/skill-runner-sandbox-smoke.mjs:/smoke/skill-runner-sandbox-smoke.mjs:ro" \
+            synap-backend:test node --no-node-snapshot /smoke/skill-runner-sandbox-smoke.mjs
           docker rmi synap-backend:test
 
-  full-suite:
-    name: Full suite
+  # The Full suite: 4 shard jobs run the tests, one judge job ("Full suite", the
+  # required check) reads their reports and applies the ratchet once. Measured
+  # 2026-10-27: one job took 65 min, of which packages/api (1,950 files) was
+  # ~38 min of critical path; split 4 ways it is ~10 min per shard. The other
+  # packages and the root tripwires run in shard 1 (scripts/test-ratchet-shards.mjs).
+  full-suite-shard:
+    name: Full suite (shard ${{ matrix.shard }}/4)
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.suites == 'true') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
 
     services:
       postgres:
@@ -240,29 +323,21 @@ jobs:
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/synap_test
 
-      # ONE run of every suite, judged PER FILE against a committed baseline of
-      # known-red files (scripts/test-ratchet-baseline.txt, each with an owner
-      # and a cause). Red when a file outside the baseline fails, when a baseline
-      # file passes or stops running (the list may only shrink), when a suite
-      # crashes or runs vacuously, when a package drops below its floor in
-      # scripts/test-floors.json, or when a discovered tripwire ran nowhere.
-      # This replaces three steps that each re-ran the suites: `pnpm test`
-      # (turbo), `pnpm test:floor` (its vacuity and floor checks now live here,
-      # a file that collects nothing counts as red) and `pnpm tripwires` (every
-      # tripwire is run by its package, or by the ratchet where no package runs
-      # it, and must appear in a report). Read scripts/test-ratchet.mjs's header.
-      # @synap-core/core's `test` script is an echo stub (circular dependency
-      # on @synap/database); the ratchet lists it as not run.
-      - name: Test (ratchet against the known-red baseline)
-        timeout-minutes: 90
-        run: node scripts/test-ratchet.mjs
+      # This shard's part of ONE run of every suite (read
+      # scripts/test-ratchet.mjs's header for what the ratchet judges). A shard
+      # judges nothing: it writes its vitest JSON reports, the judge job below
+      # reads all four. @synap-core/core's `test` script is an echo stub
+      # (circular dependency on @synap/database); the ratchet lists it as not run.
+      - name: Test (shard ${{ matrix.shard }}/4)
+        timeout-minutes: 45
+        run: node scripts/test-ratchet.mjs --shard=${{ matrix.shard }}/4
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/synap_test
           NODE_ENV: test
           TEST_RATCHET_CONCURRENCY: "2"
 
       - name: Security Audit
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && matrix.shard == 1 }}
         timeout-minutes: 5
         run: pnpm audit --prod --audit-level=high
 
@@ -272,7 +347,7 @@ jobs:
       # check-publish-freshness.mjs's header. Network-degrades to a warning;
       # only a genuine version/range drift fails.
       - name: Check @synap-core/api-types publish freshness (drift tripwire)
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && matrix.shard == 1 }}
         timeout-minutes: 5
         run: node scripts/check-publish-freshness.mjs
         working-directory: packages/api-types
@@ -281,13 +356,111 @@ jobs:
           SYNAP_APP_REPO: Synap-core/app-bases
           CROSS_REPO_TOKEN: ${{ steps.setup.outputs.token }}
 
-      - name: Upload Coverage
+      - name: Upload this shard's reports
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: coverage
-          path: coverage/
+          name: ratchet-shard-${{ matrix.shard }}
+          path: coverage/test-ratchet/
           retention-days: 7
+
+  full-suite:
+    name: Full suite
+    needs: [changes, full-suite-shard]
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.suites == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # The ratchet's judge reads the workspace's package.json files, the
+      # baseline and the tripwire files: a checkout, no install.
+      - name: Checkout Repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: ".node-version"
+
+      - name: Collect the shards' reports
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: ratchet-shard-*
+          path: ${{ runner.temp }}/ratchet
+          merge-multiple: true
+
+      # A missing shard report is `no-report` (red), never a partial green.
+      - name: Test ratchet (all shards, against the known-red baseline)
+        run: node scripts/test-ratchet.mjs --reports="$RUNNER_TEMP/ratchet" --shards=4
+
+      # A shard can also fail outside its reports (setup, the audit, the
+      # publish-freshness tripwire): that fails the Full suite too.
+      - name: Every shard job succeeded
+        if: ${{ !cancelled() }}
+        run: |
+          [ "${{ needs.full-suite-shard.result }}" = "success" ] || {
+            echo "::error::a Full suite shard job ended '${{ needs.full-suite-shard.result }}' — open the shard jobs for the failing step"
+            exit 1
+          }
+
+  # A negctl/* branch exists to watch a test go RED with its fix reverted. It
+  # runs only its own test files (changed in the branch, or beside a changed
+  # source file), not the 65-min suite. Not a required check: negctl PRs never
+  # merge. Expected result: red.
+  targeted-tests:
+    name: Targeted tests
+    needs: changes
+    if: ${{ needs.changes.outputs.negctl == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: timescale/timescaledb-ha:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: synap_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Monorepo layout + dependencies
+        uses: ./.github/actions/monorepo-setup
+        with:
+          app-id: ${{ vars.SYNAP_READER_APP_ID }}
+          app-key: ${{ secrets.SYNAP_READER_APP_KEY }}
+          cross-repo-token: ${{ secrets.CROSS_REPO_TOKEN }}
+
+      - name: Migrate the test database
+        run: pnpm --filter @synap/database migrate
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/synap_test
+
+      - name: Run the branch's test files
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/synap_test
+          NODE_ENV: test
+          FILES: ${{ needs.changes.outputs.negctl_tests }}
+        run: |
+          [ -n "$FILES" ] || { echo "::error::this negctl branch changes no test file and no source file with a test beside it: nothing to run"; exit 1; }
+          failed=""
+          # One vitest run per owning package, under that package's config.
+          for dir in $(for f in $FILES; do echo "$f" | grep -oE '^(packages|apps)/[^/]+' || echo .; done | sort -u); do
+            # `|| true`: for any package dir the loop's last test is false, and
+            # under `bash -e` that failed substitution ended the step before vitest.
+            rel=$(for f in $FILES; do case "$f" in "$dir"/*) echo "${f#"$dir"/}";; esac; [ "$dir" = . ] && ! echo "$f" | grep -qE '^(packages|apps)/' && echo "$f"; done) || true
+            echo "::group::$dir: $rel"
+            (cd "$dir" && npx vitest run $rel) || failed="$failed $dir"
+            echo "::endgroup::"
+          done
+          [ -z "$failed" ] || { echo "::error::red in:$failed (expected for a negative control)"; exit 1; }
 
   # The @synap/test-e2e suites drive a RUNNING API over HTTP (127.0.0.1:4000,
   # NODE_ENV=test, which accepts the suites' mock session cookies; Kratos is
@@ -298,6 +471,8 @@ jobs:
   # (scripts/test-ratchet-baseline.txt, entries under packages/test-e2e/).
   api-e2e:
     name: API e2e
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.suites == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
