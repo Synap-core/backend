@@ -16129,6 +16129,19 @@ export interface SynthesisSource {
 	title: string;
 }
 /**
+ * A retrieved record that was REPLACED (`properties.supersededBy` set, read by
+ * the one predicate `supersededByOf`). It is not fed to the answer and not
+ * listed in `sources`: a replaced fact presented as current is how an agent
+ * reported a stale cause as today's diagnosis. It does not vanish either: it
+ * is listed here with the id of its replacement, the door to the current
+ * record (`synap_get_entity` on `supersededBy`), and the context tells the
+ * model it was left out and by what it was replaced.
+ */
+export interface SupersededSource extends SynthesisSource {
+	/** The id of the record that replaced this one. */
+	supersededBy: string;
+}
+/**
  * What the context budget left OUT — and, crucially, WHICH items.
  *
  * `omitted`/`total` alone told a caller only that its answer was partial, with
@@ -37109,6 +37122,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				routedTo: string[];
 				sources: SynthesisSource[];
 				spaces: AskSpacesHint | undefined;
+				superseded: SupersededSource[] | undefined;
 				synthesisFailed: boolean;
 				truncated: SynthesisTruncation | undefined;
 				verdict: RetrievalVerdict;

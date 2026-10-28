@@ -2854,6 +2854,16 @@
         },
         "required": ["substrate", "id", "title"]
       },
+      "KnowledgeAnswerSupersededSource": {
+        "type": "object",
+        "properties": {
+          "substrate": { "type": "string" },
+          "id": { "type": "string" },
+          "title": { "type": "string" },
+          "supersededBy": { "type": "string" }
+        },
+        "required": ["substrate", "id", "title", "supersededBy"]
+      },
       "Command": {
         "type": "object",
         "properties": {
@@ -18934,6 +18944,12 @@
                       "type": "array",
                       "items": {
                         "$ref": "#/components/schemas/KnowledgeAnswerSource"
+                      }
+                    },
+                    "superseded": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/KnowledgeAnswerSupersededSource"
                       }
                     },
                     "routedTo": {
