@@ -20779,6 +20779,60 @@ export type ChangeTrackParticipantsResult = {
 	status: "updated";
 	trackId: string;
 } | ProposedOutcome;
+declare const START_STEP_IDS: readonly [
+	"start:intent",
+	"start:views",
+	"start:path",
+	"start:setup",
+	"start:agent",
+	"start:first-work",
+	"start:done"
+];
+export type StartStepId = (typeof START_STEP_IDS)[number];
+export interface StartStepState {
+	id: StartStepId;
+	done: boolean;
+}
+declare const startDeclarationSchema: z.ZodObject<{
+	example: z.ZodDefault<z.ZodArray<z.ZodRecord<z.ZodString, z.ZodUnknown>>>;
+	firstSession: z.ZodOptional<z.ZodObject<{
+		goal: z.ZodString;
+		title: z.ZodString;
+	}, z.core.$strip>>;
+	label: z.ZodString;
+	order: z.ZodNumber;
+	profile: z.ZodString;
+	promise: z.ZodString;
+	starters: z.ZodDefault<z.ZodArray<z.ZodString>>;
+	suggestFor: z.ZodDefault<z.ZodArray<z.ZodString>>;
+	views: z.ZodArray<z.ZodString>;
+}, z.core.$strip>;
+export interface StartCard extends z.infer<typeof startDeclarationSchema> {
+	/** The template slug: the start's identity. */
+	slug: string;
+	icon: string;
+}
+declare const answersSchema: z.ZodObject<{
+	answeredAt: z.ZodOptional<z.ZodString>;
+	identity: z.ZodOptional<z.ZodArray<z.ZodString>>;
+	start: z.ZodOptional<z.ZodString>;
+	tools: z.ZodOptional<z.ZodArray<z.ZodString>>;
+	workingOn: z.ZodOptional<z.ZodString>;
+}, z.core.$strip>;
+export type CloudAnswers = z.infer<typeof answersSchema>;
+export type CloudState = {
+	answers: CloudAnswers;
+	experiments: Record<string, string> | null;
+	status: "ok";
+} | {
+	status: "empty";
+} | {
+	status: "not-linked";
+} | {
+	reason: CloudFailure;
+	status: "failed";
+};
+export type CloudFailure = "credential" | "invalid" | "link-unreadable" | "not-enrolled" | "refused" | "server-error" | "unknown-pod" | "unreachable";
 export interface ActionDescriptor {
 	id: string;
 	kind: "browse_marketplace" | "capture" | "connect_source" | "import_data" | "link_website" | "open_primary_surface" | "resume_guided_setup" | "start_empty" | "start_guided_setup";
@@ -38974,6 +39028,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				userId: string;
 			} | null;
 		}>;
+		listStarts: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			meta: object;
+			output: StartCard[];
+		}>;
 		pauseJourney: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				lens: {
@@ -38995,6 +39054,42 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					values?: Record<string, unknown> | undefined;
 				} | undefined;
 				templateVersion?: string | undefined;
+			};
+			meta: object;
+			output: {
+				completedAt: string | null;
+				createdAt: string;
+				dismissedAt: string | null;
+				evidence: OnboardingJourneyEvidenceRecord;
+				id: string;
+				lens: {
+					kind: "pod";
+				} | {
+					kind: "workspace";
+					workspaceId: string;
+				} | {
+					kind: "project";
+					projectId: string;
+				} | {
+					kind: "project_workspace";
+					projectId: string;
+					workspaceId: string;
+				};
+				lensKey: string;
+				offeredAt: string;
+				pausedAt: string | null;
+				progress: OnboardingJourneyProgressRecord;
+				startedAt: string | null;
+				status: OnboardingJourneyStatus;
+				templateVersion: string;
+				updatedAt: string;
+				userId: string;
+			} | null;
+		}>;
+		recordStartStep: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				patch: Record<string, unknown>;
+				step: string;
 			};
 			meta: object;
 			output: {
@@ -39295,6 +39390,50 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				updatedAt: string;
 				userId: string;
 			} | null;
+		}>;
+		startState: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			meta: object;
+			output: {
+				cloud: CloudState | null;
+				counts: {
+					done: number;
+					total: number;
+				};
+				due: boolean;
+				journey: {
+					completedAt: string | null;
+					createdAt: string;
+					dismissedAt: string | null;
+					evidence: OnboardingJourneyEvidenceRecord;
+					id: string;
+					lens: {
+						kind: "pod";
+					} | {
+						kind: "workspace";
+						workspaceId: string;
+					} | {
+						kind: "project";
+						projectId: string;
+					} | {
+						kind: "project_workspace";
+						projectId: string;
+						workspaceId: string;
+					};
+					lensKey: string;
+					offeredAt: string;
+					pausedAt: string | null;
+					progress: OnboardingJourneyProgressRecord;
+					startedAt: string | null;
+					status: OnboardingJourneyStatus;
+					templateVersion: string;
+					updatedAt: string;
+					userId: string;
+				} | null;
+				next: "start:agent" | "start:done" | "start:first-work" | "start:intent" | "start:path" | "start:setup" | "start:views" | null;
+				starts: StartCard[] | undefined;
+				steps: StartStepState[];
+			};
 		}>;
 	}>>;
 	outputs: import("@trpc/server").TRPCBuiltRouter<{
