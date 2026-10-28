@@ -14,6 +14,10 @@
 import { splitMarkdownBlocks } from "@synap-core/markdown-core/diff";
 import { isMarkerHref } from "@synap-core/markdown-core/markers";
 import {
+  CELL_FRAME_MAX_BYTES,
+  htmlByteLength,
+} from "@synap-core/types/cell-bridge";
+import {
   resolveEntityMedia,
   type MediaRef,
 } from "@synap-core/types/presentation";
@@ -272,5 +276,88 @@ export function entityEmbedRead(query: {
     state: "ready",
     title: title || "Untitled",
     ...(primary.via === "none" ? {} : { media: primary }),
+  };
+}
+
+/**
+ * What a document's cell embed may draw, from the reader's own
+ * `widgetDefinitions.get` (the viewer's floor; it answers `null` for a cell
+ * that is not visible to them or no longer exists).
+ *
+ *   page        an HTML page: it runs in the isolated frame (`html-frame`)
+ *   app         a cell only the app runs (a sandboxed React module)
+ *   hidden      not visible to you, or gone — the pod does not say which
+ *   failed      a broken read, retryable — never "hidden", never an empty frame
+ *   unresolved  this surface reads no cells
+ */
+export type EmbedCellRead =
+  | { state: "unresolved" }
+  | { state: "loading" }
+  | {
+      state: "page";
+      html: string;
+      bytes: number;
+      tooLarge: boolean;
+      /** The cell's own space: the lens its reads are stamped with. */
+      workspaceId: string | null;
+    }
+  | { state: "app" }
+  | { state: "hidden" }
+  | { state: "failed"; retry?: () => void };
+
+const DOCUMENT_START = /^\uFEFF?\s*<(?:!doctype\b|html\b)/i;
+
+/**
+ * Whether a stored cell IS an HTML page. The stored mechanism decides
+ * (`widget_definitions.renderer_type`): `iframe` is a raw HTML document.
+ * `frame` is not proof of React: it is what every agent door writes whatever
+ * the source (`defineCell` defaults to it; MCP `synap_create_cell` and Hub
+ * `POST /cells/define` pass no mechanism), so a `frame` row whose source opens
+ * as a document (`<!doctype` / `<html`) is a page too — an ES module can never
+ * start that way. The desktop reads a source the same way
+ * (`looksLikeFullHtmlDocument`, synap-app `cell-runtime/generated-app-srcdoc`).
+ */
+export function cellIsHtmlPage(def: {
+  rendererType?: unknown;
+  rendererSource?: unknown;
+}): boolean {
+  const source =
+    typeof def.rendererSource === "string" ? def.rendererSource : "";
+  if (!source.trim()) return false;
+  if (def.rendererType === "iframe") return true;
+  return def.rendererType === "frame" && DOCUMENT_START.test(source);
+}
+
+export function cellEmbedRead(query: {
+  isLoading: boolean;
+  error: { data?: { code?: string | null } | null } | null | undefined;
+  data: unknown;
+  retry?: () => void;
+}): EmbedCellRead {
+  if (query.error) {
+    const code = query.error.data?.code;
+    return code && HIDDEN_CODES.has(code)
+      ? { state: "hidden" }
+      : { state: "failed", ...(query.retry ? { retry: query.retry } : {}) };
+  }
+  if (query.isLoading) return { state: "loading" };
+  const def = query.data as
+    | {
+        rendererType?: unknown;
+        rendererSource?: unknown;
+        workspaceId?: unknown;
+      }
+    | null
+    | undefined;
+  if (!def) return { state: "hidden" };
+  if (!cellIsHtmlPage(def)) return { state: "app" };
+  const html = def.rendererSource as string;
+  const bytes = htmlByteLength(html);
+  return {
+    state: "page",
+    html,
+    bytes,
+    tooLarge: bytes > CELL_FRAME_MAX_BYTES,
+    workspaceId: typeof def.workspaceId === "string" ? def.workspaceId : null,
   };
 }
