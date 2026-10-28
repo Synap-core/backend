@@ -42,7 +42,10 @@ import {
   playbookRuns,
   drizzleSql,
   liveRunStatusWhere,
+  getRequestGrant,
 } from "@synap/database";
+import { sessionReadableWhere } from "../../../access/session-visibility.js";
+import { sessionPacketReadable } from "../../../access/grant-door-fence.js";
 import {
   checkPermissionOrPropose,
   proposedMessageFor,
@@ -59,7 +62,12 @@ import {
   titleSourcePatch,
 } from "@synap-core/types/focus-sessions";
 import { AskAnswerValueSchema, AskSchema } from "@synap-core/types/ask";
-import { completeFocusSession } from "../../../services/focus-sessions/complete-session.js";
+import {
+  completeFocusSession,
+  isOpenQuestionsAtCloseError,
+  openQuestionsRefusal,
+} from "../../../services/focus-sessions/complete-session.js";
+import { CLOSE_QUESTION_DISPOSITIONS } from "../../../services/messaging/room-post-kind.js";
 import { sessionGoalPayload } from "../../../services/focus-sessions/session-update-goal.js";
 import {
   gateSessionFiling,
@@ -67,6 +75,13 @@ import {
   type SessionFilingDecision,
 } from "../../../services/focus-sessions/session-filing-gate.js";
 import { sessionListConditions } from "../../../services/focus-sessions/session-list-conditions.js";
+import {
+  buildWorkGraph,
+  WORK_GRAPH_EDGE_KINDS,
+  WORK_GRAPH_MAX_WINDOW_HOURS,
+} from "../../../services/focus-sessions/work-graph.js";
+import { listNeedsYouOwed } from "../../../services/signals/needs-you-owed.js";
+import { sessionStarterNames } from "../../../services/focus-sessions/draft-asks.js";
 import { withoutServerOwnedSessionMetadata } from "../../../services/focus-sessions/session-metadata.js";
 import {
   resolveSessionSubject,
@@ -94,10 +109,15 @@ import type { FollowOutcome } from "../../../services/focus-sessions/follow-play
 import { refuseAgentGateBypass } from "../../../services/focus-sessions/gate-bypass-floor.js";
 import { delegateExpectedOutput } from "../../../services/focus-sessions/delegate-output.js";
 import {
+  answerDoorInputIssue,
   answerGrantWrite,
   answerSessionSlot,
+  correctRelayedAnswer,
   describeAnswerRefusal,
-  type AnswerSessionSlotResult,
+  describeRelayRefusal,
+  relaySessionAnswer,
+  RelaySessionAnswerInputSchema,
+  type SlotDoorRefusal,
 } from "../../../services/focus-sessions/session-answer.js";
 import { SLOT_ANSWER_TEXT_MAX } from "../../../services/focus-sessions/answer-slot.js";
 import {
@@ -134,9 +154,11 @@ import {
   droppedAskWarnings,
   criteriaDiffer,
 } from "../../../services/focus-sessions/update-session.js";
+import { restatedAskHints } from "../../../services/focus-sessions/ask-text.js";
 import { ErrorSchema, uuidParam, uuidQueryParam } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import {
+  confineWorkspaceOrForbidden,
   errCode,
   hasScope,
   httpStatusForTrpcError,
@@ -202,6 +224,52 @@ const FocusSessionWireSchema = z.object({
    * out on this schema — a pre-existing doc gap, named rather than widened.)
    */
   kind: z.enum(SESSION_KINDS).optional(),
+});
+
+const WorkGraphSectionWireSchema = z.object({
+  status: z.enum(["ok", "unavailable"]),
+  reason: z.string().optional(),
+});
+
+/** `GET /focus-sessions/graph` — `WorkGraph` (`services/focus-sessions/work-graph.ts`). */
+const WorkGraphWireSchema = z.object({
+  /** A list row (`focusSessions.list({ nextMove: true })`'s projection) + `inWindow`. */
+  nodes: z.array(
+    FocusSessionWireSchema.extend({
+      parentSessionId: z.string().nullable(),
+      triage: z.unknown(),
+      kind: z.enum(SESSION_KINDS),
+      nextMove: z.unknown(),
+      unitFacts: z.unknown(),
+      live: z.unknown().nullable(),
+      viewerRole: z.enum(["owner", "member"]),
+      /** false = only the far end of an edge of a window session. */
+      inWindow: z.boolean(),
+    })
+  ),
+  edges: z.array(
+    z.object({
+      kind: z.enum(WORK_GRAPH_EDGE_KINDS),
+      from: z.string(),
+      to: z.string(),
+      entityId: z.string().optional(),
+      count: z.number().optional(),
+      lastAt: z.string().nullable().optional(),
+    })
+  ),
+  sections: z.object({
+    blockedBy: WorkGraphSectionWireSchema,
+    waitsOnOutputs: WorkGraphSectionWireSchema,
+    interactions: WorkGraphSectionWireSchema,
+    farEnds: WorkGraphSectionWireSchema,
+  }),
+  window: z.object({
+    since: z.string(),
+    hours: z.number(),
+    ceiling: z.number(),
+    truncated: z.boolean(),
+    omitted: z.number(),
+  }),
 });
 
 const CreateBodySchema = z
@@ -471,7 +539,8 @@ const UnblockOutputBodySchema = z.object({
 /** The person's answer to what an agent asked about a slot. */
 const AnswerOutputBodySchema = z
   .object({
-    expectedLabel: z.string().min(1).max(500),
+    // Required, except on a "Not what I said" that names `questionId`.
+    expectedLabel: z.string().min(1).max(500).optional(),
     text: z.string().max(SLOT_ANSWER_TEXT_MAX).optional(),
     // The tRPC twin's schema (`focusSessions.answerOutput`): parsed and
     // redacted at the door, never `z.custom` (see `ask` above).
@@ -479,10 +548,24 @@ const AnswerOutputBodySchema = z
     askFingerprint: z.string().min(1).max(64).optional(),
     // A secret answer: the agent `provideOptions` named as the reader.
     expectedGranteeId: z.string().min(1).max(200).optional(),
+    // The one-tap Confirm of a relay waiting on the slot (`pendingRelay`).
+    confirmRelayed: z.literal(true).optional(),
+    // "Not what I said" (`correctRelayedAnswer`).
+    rejectRelayed: z.literal(true).optional(),
+    // With `rejectRelayed`: a slotless room question (its message id).
+    questionId: z.string().uuid().optional(),
   })
-  .refine((v) => v.value !== undefined || !!v.text?.trim(), {
-    message: "An answer needs `text` or `value`.",
+  .superRefine((v, ctx) => {
+    const issue = answerDoorInputIssue(v);
+    if (issue) ctx.addIssue({ code: z.ZodIssueCode.custom, message: issue });
   });
+
+/**
+ * An agent RELAYS the person's chat words to the question it asked — the
+ * Hub twin of MCP `synap_relay_answer`; the ONE schema lives beside the
+ * service (`relaySessionAnswer`).
+ */
+const RelayAnswerBodySchema = RelaySessionAnswerInputSchema;
 
 /** The long-poll's query: the poll cursor, plus a bounded wait (V1 G4). */
 const SessionAnswersWaitQuerySchema = z.object({
@@ -533,7 +616,7 @@ const SessionAnswersQuerySchema = z.object({
 
 /** The answer door's refusals, named — the `answered` arm is the only success. */
 function answerRefusal(
-  result: Exclude<AnswerSessionSlotResult, { status: "answered" }>,
+  result: SlotDoorRefusal,
   expectedLabel: string,
   sessionId: string
 ): { status: 400 | 404 | 409; error: string } {
@@ -564,6 +647,18 @@ const CompleteBodySchema = z.object({
   // the MCP door — which both close through here — could record only success.
   // Derived from the SSOT so a fourth terminal status is accepted by default.
   terminalStatus: z.enum(TERMINAL_SESSION_STATUSES).optional(),
+  // The calling agent's word on each of its still-open room questions; the
+  // MCP door's twin (`synap_complete_session`).
+  questionDispositions: z
+    .array(
+      z.object({
+        messageId: z.string().uuid(),
+        disposition: z.enum(CLOSE_QUESTION_DISPOSITIONS),
+        note: z.string().max(500).optional(),
+      })
+    )
+    .max(100)
+    .optional(),
 });
 
 // ── Registration ───────────────────────────────────────────────────────────
@@ -588,6 +683,55 @@ function patchAsksForMore(
   );
 }
 
+/**
+ * The SUBJECT lens of a session read, from its query (`subjectEntityId` OR
+ * `subjectProfileSlug`), resolved through the one subject predicate
+ * (`session-subject.ts`). Shared by the list door and the owed door so "on
+ * this thing" is parsed one way. An unknown slug is a 404 ("no such
+ * vocabulary"), never an empty list.
+ */
+async function subjectFromQuery(c: {
+  req: { query: (key: string) => string | undefined };
+}): Promise<
+  { subject: SessionSubject | undefined } | { error: string; status: 400 | 404 }
+> {
+  const subjectEntityId = c.req.query("subjectEntityId") || undefined;
+  const subjectProfileSlug = c.req.query("subjectProfileSlug") || undefined;
+  if (subjectEntityId && subjectProfileSlug) {
+    return {
+      error: "Pass subjectEntityId or subjectProfileSlug, not both",
+      status: 400,
+    };
+  }
+  if (subjectEntityId && !isUuid(subjectEntityId)) {
+    return {
+      error: `subjectEntityId is not a valid id: ${subjectEntityId}`,
+      status: 400,
+    };
+  }
+  try {
+    return {
+      subject: subjectEntityId
+        ? await resolveSessionSubject({ entityIds: [subjectEntityId] })
+        : subjectProfileSlug
+          ? await resolveSessionSubject({ profileSlug: subjectProfileSlug })
+          : undefined,
+    };
+  } catch (err) {
+    if (errCode(err) === "NOT_FOUND") {
+      return {
+        error: err instanceof Error ? err.message : "Not found",
+        status: 404,
+      };
+    }
+    throw err;
+  }
+}
+
+/** `GET /focus-sessions/owed`'s page: 1–200 slots, default 50 (tRPC `owed`). */
+const OWED_DOOR_DEFAULT_LIMIT = 50;
+const OWED_DOOR_MAX_LIMIT = 200;
+
 export function registerFocusSessionsRoutes(app: HubHono): void {
   // ── OpenAPI metadata ─────────────────────────────────────────────────────
 
@@ -600,7 +744,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       "Scope by `workspaceId` (membership-checked), `projectId` (the project " +
       "must be visible to the caller — `loadVisibleProject`, the same floor " +
       "every project read and filing write uses), or both. At least one is " +
-      "required. Rows are always floored at the sessions the caller can read.",
+      "required, except for a workspace-bound key, which reads its own " +
+      "workspace when it names none (another `workspaceId` is a 403). Rows " +
+      "are always floored at the sessions the caller can read.",
     request: {
       query: z.object({
         workspaceId: uuidQueryParam.optional(),
@@ -643,6 +789,91 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
 
   registerOpenApi(app, {
     method: "get",
+    path: "/focus-sessions/graph",
+    tags: ["FocusSessions"],
+    summary: "The work graph: open work, recently settled work, every edge",
+    description:
+      "One read for a whole map (`services/focus-sessions/work-graph.ts`): " +
+      "every OPEN session, plus every session settled in the last " +
+      "`windowHours` (default 72), plus the far end of every edge of those, " +
+      "with the edges flat (`blocked_by`, `spawned_from`, `waits_on_output`, " +
+      "`triggered`, `updated`). For an unbound key, pod-wide when neither " +
+      "`workspaceId` nor `projectId` is given. A workspace-bound key reads " +
+      "its own workspace, far ends included, and another `workspaceId` is a " +
+      "403. Floored at the sessions the caller can read, " +
+      "like the list. At most 500 window sessions, open first: " +
+      "`window.truncated` / `window.omitted` say when it cut. A failed edge " +
+      "read is `sections.<name>.status: unavailable`, never an empty list.",
+    request: {
+      query: z.object({
+        workspaceId: uuidQueryParam.optional(),
+        projectId: uuidQueryParam.optional(),
+        windowHours: z.coerce
+          .number()
+          .int()
+          .min(1)
+          .max(WORK_GRAPH_MAX_WINDOW_HOURS)
+          .optional(),
+        // Same vocabularies and agent-door defaults as the list: `all`.
+        kind: z.enum([...SESSION_KINDS, "all"]).optional(),
+        lens: z.enum(["default", "triage", "all"]).optional(),
+      }),
+    },
+    responses: {
+      200: { description: "Work graph", schema: WorkGraphWireSchema },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      404: { description: "Project not found", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  registerOpenApi(app, {
+    method: "get",
+    path: "/focus-sessions/owed",
+    tags: ["FocusSessions"],
+    summary: "What waits on you: the asks owed to the caller",
+    description:
+      "THE needs-you owed read (`listNeedsYouOwed`, the predicate the Inbox " +
+      "count and list read): every human-owned, unfinished slot on a session " +
+      "the caller owns, whatever the session's status (a slot outlives its " +
+      "session); on an undecided agent draft, only the slots that ask. Oldest " +
+      "first. Narrow by `workspaceId` / `projectId` and by the thing the " +
+      "sessions are on (`subjectEntityId` or `subjectProfileSlug`). Each slot " +
+      "carries its session's `subjectEntityId` and `agentName` (the first " +
+      "agent on the session's roster, null when none). A scoped key reads " +
+      "only its grant's sessions. `truncated` = the page hit `limit`.",
+    request: {
+      query: z.object({
+        workspaceId: uuidQueryParam.optional(),
+        projectId: uuidQueryParam.optional(),
+        subjectEntityId: z.string().uuid().optional(),
+        subjectProfileSlug: z.string().min(1).optional(),
+        limit: z.coerce
+          .number()
+          .int()
+          .min(1)
+          .max(OWED_DOOR_MAX_LIMIT)
+          .optional(),
+      }),
+    },
+    responses: {
+      200: {
+        description: "Owed slots",
+        schema: z.object({
+          slots: z.array(z.object({}).passthrough()),
+          truncated: z.boolean(),
+        }),
+      },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      404: { description: "Project or kind not found", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  registerOpenApi(app, {
+    method: "get",
     path: "/focus-sessions/:id",
     tags: ["FocusSessions"],
     summary: "Get a focus session by ID",
@@ -667,6 +898,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     description:
       "Lifecycle close via completeFocusSession — stamps closed, finishes any " +
       "running playbook_run, returns pendingProposals + counts + warnings. " +
+      "Every still-open room question is stamped closed (session ended). An " +
+      "agent's closed/failed close is refused (409 OPEN_QUESTIONS) while a " +
+      "question it asked is open, unless questionDispositions settles each. " +
       "Distinct from POST .../complete-run (playbook run only).",
     request: {
       params: z.object({ id: z.string().uuid() }),
@@ -680,6 +914,11 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       400: { description: "Bad request", schema: ErrorSchema },
       403: { description: "Forbidden or proposed", schema: ErrorSchema },
       404: { description: "Not found", schema: ErrorSchema },
+      409: {
+        description:
+          "Refused: the calling agent's own room questions are still open (openQuestions[])",
+        schema: z.object({}).passthrough(),
+      },
       500: { description: "Internal error", schema: ErrorSchema },
     },
   });
@@ -719,6 +958,11 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       400: { description: "Bad request", schema: ErrorSchema },
       403: { description: "Forbidden", schema: ErrorSchema },
       404: { description: "Not found", schema: ErrorSchema },
+      409: {
+        description:
+          "Refused: a terminal status, and the calling agent's own room questions are still open (openQuestions[], as /complete)",
+        schema: z.object({}).passthrough(),
+      },
       500: { description: "Internal error", schema: ErrorSchema },
     },
   });
@@ -791,7 +1035,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       "Stamps `owner: 'human'` + `blockedReason` + `why` + `owedSince` on the " +
       "named slot. The slot stays `pending` — declaring that you cannot do the " +
       "work is the opposite of having done it. When a standing guideline " +
-      "covers this kind of block, `blockGuidelines` carries its text.",
+      "covers this kind of block, `blockGuidelines` carries its text. A " +
+      "confirm prompt that only repeats the label comes back as a `hint`.",
     request: {
       params: z.object({ id: z.string().uuid() }),
       body: BlockOutputBodySchema,
@@ -804,6 +1049,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           expectedLabel: z.string(),
           kind: z.string(),
           blockGuidelines: z.unknown().optional(),
+          hint: z.string().optional(),
         }),
       },
       400: { description: "Bad request", schema: ErrorSchema },
@@ -817,10 +1063,12 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     method: "post",
     path: "/focus-sessions/:id/outputs/unblock",
     tags: ["FocusSessions"],
-    summary: "Reclaim a deliverable handed to the human",
+    summary: "Hand a deliverable back from the human (people only)",
     description:
       "Clears `owner`, `blockedReason`, `why` and `owedSince` together. The " +
-      "deliverable itself is unchanged and still owed.",
+      "deliverable itself is unchanged and still owed. Refused (403) for an " +
+      "agent key: an agent whose need is gone withdraws its question " +
+      "(`POST /focus-sessions/:id/answers/relay`, `disposition: 'withdrawn'`).",
     request: {
       params: z.object({ id: z.string().uuid() }),
       body: UnblockOutputBodySchema,
@@ -854,26 +1102,91 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       "`focus_session.slot_answered.completed`. Refused (403) for an agent key. " +
       "A slot with a typed `ask` takes `value` (validated against it; 400 " +
       "`ask_invalid:` when it does not fit, 409 `ask_changed:` when " +
-      "`askFingerprint` no longer matches the slot's ask).",
+      "`askFingerprint` no longer matches the slot's ask). `confirmRelayed` " +
+      "confirms the relay waiting on the slot (`pendingRelay`) as the " +
+      'person\'s answer; `rejectRelayed` ("Not what I said") drops what an ' +
+      "agent relayed and gives the question back — on a slot, or on a " +
+      "slotless room question named by `questionId` — and emits " +
+      "`focus_session.relay_corrected.completed`.",
     request: {
       params: z.object({ id: z.string().uuid() }),
       body: AnswerOutputBodySchema,
     },
     responses: {
       200: {
-        description: "Answered",
+        description: "Answered, or (`rejectRelayed`) corrected",
+        schema: z.union([
+          z.object({
+            ok: z.boolean(),
+            expectedLabel: z.string(),
+            kind: z.string(),
+            answer: z.unknown(),
+            handedBack: z.boolean(),
+            messageId: z.string().nullable(),
+            questionId: z.string().nullable(),
+            wokeAgentType: z.string().nullable(),
+            triggered: z.boolean(),
+            // The decision an answered confirm/choose filed or updated;
+            // `{status:'failed'}` = the answer stands, the decision did not land.
+            decision: z.unknown().optional(),
+          }),
+          z.object({
+            ok: z.boolean(),
+            status: z.literal("corrected"),
+            dropped: z.enum(["pending", "answer"]),
+            expectedLabel: z.string().nullable(),
+            questionId: z.string().nullable(),
+            relayedBy: z.string(),
+            reopened: z.boolean(),
+          }),
+        ]),
+      },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      404: { description: "Not found", schema: ErrorSchema },
+      409: {
+        description: "The slot's ask changed (`ask_changed:`)",
+        schema: ErrorSchema,
+      },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  registerOpenApi(app, {
+    method: "post",
+    path: "/focus-sessions/:id/answers/relay",
+    tags: ["FocusSessions"],
+    summary: "Relay the person's answer from a chat (agents only)",
+    description:
+      "The person answered your question in a chat (Claude Code, claude.ai): " +
+      "relay their words here. Name the EXACT question — `messageId` (your " +
+      "room question) and/or `slotLabel` — never the newest open one; only " +
+      "the agent that asked a room question may relay it (a slot with no room " +
+      "question: an agent on the session). `disposition: 'answered'` needs " +
+      "`quote`, the person's words verbatim (never a paraphrase); `value` is " +
+      "the typed pick you read in them. A routine ask is answered " +
+      "(`status: 'relayed'`, marked relayed by you). A commitment — `stakes: " +
+      "'commitment'`, an approval card, a grade, a hand-over (`provide`) — " +
+      "is NOT answered: it waits for the person's own tap (`status: " +
+      "'awaiting_tap'`). `disposition: 'withdrawn'` + `note` closes your own " +
+      "question as overtaken and hands its slot back to you. Refused (403) " +
+      "for a person's key.",
+    request: {
+      params: z.object({ id: z.string().uuid() }),
+      body: RelayAnswerBodySchema,
+    },
+    responses: {
+      200: {
+        description: "Relayed, awaiting the person's tap, or withdrawn",
         schema: z.object({
           ok: z.boolean(),
-          expectedLabel: z.string(),
-          kind: z.string(),
-          answer: z.unknown(),
-          handedBack: z.boolean(),
-          messageId: z.string().nullable(),
+          status: z.enum(["relayed", "awaiting_tap", "withdrawn"]),
+          stakes: z.enum(["routine", "commitment"]).optional(),
           questionId: z.string().nullable(),
-          wokeAgentType: z.string().nullable(),
-          triggered: z.boolean(),
-          // The decision an answered confirm/choose filed or updated;
-          // `{status:'failed'}` = the answer stands, the decision did not land.
+          expectedLabel: z.string().nullable(),
+          answer: z.unknown().optional(),
+          pendingRelay: z.unknown().optional(),
+          handedBack: z.boolean().optional(),
           decision: z.unknown().optional(),
         }),
       },
@@ -881,7 +1194,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       403: { description: "Forbidden", schema: ErrorSchema },
       404: { description: "Not found", schema: ErrorSchema },
       409: {
-        description: "The slot's ask changed (`ask_changed:`)",
+        description: "The question moved on (answered, closed, re-asked)",
         schema: ErrorSchema,
       },
       500: { description: "Internal error", schema: ErrorSchema },
@@ -984,7 +1297,14 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
     }
 
-    const workspaceIdParam = c.req.query("workspaceId") || undefined;
+    // A workspace-bound key is pinned to its workspace (403 on another one),
+    // and a bound key that names none reads its own, never the pod.
+    const confined = confineWorkspaceOrForbidden(
+      c,
+      c.req.query("workspaceId") || undefined
+    );
+    if (!confined.ok) return c.json({ error: confined.error }, 403);
+    const workspaceIdParam = confined.workspaceId ?? undefined;
     const projectIdParam = c.req.query("projectId") || undefined;
     if (!workspaceIdParam && !projectIdParam) {
       return c.json({ error: "workspaceId or projectId is required" }, 400);
@@ -1057,37 +1377,11 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     // on every thing of a kind/role (an intent surface). ONE predicate with
     // the tRPC door (`session-subject.ts`): the subject anchor OR a worker's
     // target link.
-    const subjectEntityId = c.req.query("subjectEntityId") || undefined;
-    const subjectProfileSlug = c.req.query("subjectProfileSlug") || undefined;
-    if (subjectEntityId && subjectProfileSlug) {
-      return c.json(
-        { error: "Pass subjectEntityId or subjectProfileSlug, not both" },
-        400
-      );
+    const subjectQuery = await subjectFromQuery(c);
+    if ("error" in subjectQuery) {
+      return c.json({ error: subjectQuery.error }, subjectQuery.status);
     }
-    if (subjectEntityId && !isUuid(subjectEntityId)) {
-      return c.json(
-        { error: `subjectEntityId is not a valid id: ${subjectEntityId}` },
-        400
-      );
-    }
-    let subject: SessionSubject | undefined;
-    try {
-      subject = subjectEntityId
-        ? await resolveSessionSubject({ entityIds: [subjectEntityId] })
-        : subjectProfileSlug
-          ? await resolveSessionSubject({ profileSlug: subjectProfileSlug })
-          : undefined;
-    } catch (err) {
-      // An unknown slug is "no such vocabulary", never an empty list.
-      if (errCode(err) === "NOT_FOUND") {
-        return c.json(
-          { error: err instanceof Error ? err.message : "Not found" },
-          404
-        );
-      }
-      throw err;
-    }
+    const { subject } = subjectQuery;
 
     try {
       // The SAME WHERE clause the tRPC door builds. This door used to hand-write
@@ -1125,11 +1419,195 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
   });
 
   /**
+   * GET /focus-sessions/graph?workspaceId=&projectId=&windowHours=&kind=&lens=
+   *
+   * The work graph (`buildWorkGraph`). STATIC, so it is registered before
+   * `/focus-sessions/:id` (Hono is first-match). Unlike the list, neither lens
+   * is required: a pod-wide graph is the point. Owner-floored on the acting
+   * person: agent doors read no roster (`rosterReadFor`).
+   */
+  app.get("/focus-sessions/graph", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+    }
+    // A workspace-bound key is pinned to its workspace (403 on another one),
+    // and a bound key that names none reads its own, never the pod.
+    const confined = confineWorkspaceOrForbidden(
+      c,
+      c.req.query("workspaceId") || undefined
+    );
+    if (!confined.ok) return c.json({ error: confined.error }, 403);
+    const workspaceIdParam = confined.workspaceId ?? undefined;
+    const projectIdParam = c.req.query("projectId") || undefined;
+    // Membership check when a workspace is named, and the acting person.
+    const acting = await resolveActingContext(c, {
+      workspaceId: workspaceIdParam,
+    });
+    if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+    if (projectIdParam) {
+      if (!isUuid(projectIdParam)) {
+        return c.json(
+          { error: `projectId is not a valid id: ${projectIdParam}` },
+          400
+        );
+      }
+      // The ONE project visibility floor, as the list: a project the caller
+      // cannot see is an honest 404, not a calm empty graph.
+      if (!(await loadVisibleProject(db, projectIdParam, acting.userId))) {
+        return c.json(
+          { error: `No project ${projectIdParam} you can access` },
+          404
+        );
+      }
+    }
+    const hoursRaw = c.req.query("windowHours");
+    const windowHours =
+      hoursRaw === undefined ? undefined : Number.parseInt(hoursRaw, 10);
+    if (
+      windowHours !== undefined &&
+      (!Number.isFinite(windowHours) ||
+        windowHours < 1 ||
+        windowHours > WORK_GRAPH_MAX_WINDOW_HOURS)
+    ) {
+      return c.json(
+        {
+          error: `windowHours must be an integer from 1 to ${WORK_GRAPH_MAX_WINDOW_HOURS}`,
+        },
+        400
+      );
+    }
+    const kindRaw = c.req.query("kind") ?? "all";
+    if (
+      !(SESSION_KINDS as readonly string[]).includes(kindRaw) &&
+      kindRaw !== "all"
+    ) {
+      return c.json(
+        {
+          error: `Unknown kind '${kindRaw}'. Valid: ${SESSION_KINDS.join(", ")}, all.`,
+        },
+        400
+      );
+    }
+    const kind = kindRaw as (typeof SESSION_KINDS)[number] | "all";
+    const lensRaw = c.req.query("lens") ?? "all";
+    if (lensRaw !== "default" && lensRaw !== "triage" && lensRaw !== "all") {
+      return c.json(
+        { error: `Unknown lens '${lensRaw}'. Valid: default, triage, all.` },
+        400
+      );
+    }
+    const lens = lensRaw;
+
+    try {
+      const graph = await buildWorkGraph({
+        userId: acting.userId,
+        scope: { workspaceLens: workspaceIdParam, projectLens: projectIdParam },
+        windowHours,
+        kind,
+        lens,
+        // An agent door reads owner-only, as `GET /focus-sessions` does
+        // (decision C v1: `rosterReadFor` is false for every Hub caller).
+        roster: false,
+        boundWorkspaceId: c.get("keyWorkspaceId") ?? undefined,
+      });
+      return c.json(graph);
+    } catch (err) {
+      logger.error({ err }, "focus-sessions.graph failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        httpStatusForTrpcError(err) as never
+      );
+    }
+  });
+
+  /**
+   * GET /focus-sessions/owed — what waits on the caller (a STATIC route:
+   * before `/focus-sessions/:id`, Hono is first-match).
+   *
+   * Thin over `listNeedsYouOwed`, the ONE needs-you owed predicate — never a
+   * second one. NOT composed over the list door above: that one is capped at
+   * 50 sessions in SQL, while owed slots accumulate on old and closed
+   * sessions (`owed-outputs.ts` header). Read-only; owner-only (what YOU
+   * owe); a scoped key is bounded by its grant (`sessionReadableWhere`).
+   */
+  app.get("/focus-sessions/owed", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+    }
+    const workspaceIdParam = c.req.query("workspaceId") || undefined;
+    const projectIdParam = c.req.query("projectId") || undefined;
+    for (const [name, value] of [
+      ["workspaceId", workspaceIdParam],
+      ["projectId", projectIdParam],
+    ] as const) {
+      if (value && !isUuid(value)) {
+        return c.json({ error: `${name} is not a valid id: ${value}` }, 400);
+      }
+    }
+    const limitRaw = parseInt(
+      c.req.query("limit") ?? String(OWED_DOOR_DEFAULT_LIMIT),
+      10
+    );
+    const limit = Number.isFinite(limitRaw)
+      ? Math.min(Math.max(limitRaw, 1), OWED_DOOR_MAX_LIMIT)
+      : OWED_DOOR_DEFAULT_LIMIT;
+
+    const acting = await resolveActingContext(c, {
+      workspaceId: workspaceIdParam,
+    });
+    if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+    if (
+      projectIdParam &&
+      !(await loadVisibleProject(db, projectIdParam, acting.userId))
+    ) {
+      return c.json(
+        { error: `No project ${projectIdParam} you can access` },
+        404
+      );
+    }
+    const subjectQuery = await subjectFromQuery(c);
+    if ("error" in subjectQuery) {
+      return c.json({ error: subjectQuery.error }, subjectQuery.status);
+    }
+
+    try {
+      const slots = await listNeedsYouOwed({
+        userId: acting.userId,
+        scope: { workspaceLens: workspaceIdParam, projectLens: projectIdParam },
+        limit,
+        ...(subjectQuery.subject ? { subject: subjectQuery.subject } : {}),
+      });
+      const agents = await sessionStarterNames(
+        acting.userId,
+        slots.map((s) => s.sessionId)
+      );
+      return c.json({
+        slots: slots.map((s) => ({
+          ...s,
+          agentName: agents.get(s.sessionId) ?? null,
+        })),
+        truncated: slots.length >= limit,
+      });
+    } catch (err) {
+      logger.error({ err }, "focus-sessions.owed failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        httpStatusForTrpcError(err) as never
+      );
+    }
+  });
+
+  /**
    * GET /focus-sessions/:id?workspaceId=...
    *
    * workspaceId is optional. When provided: membership check + workspace floor
    * (legacy callers). When omitted: owner/user floor only — same as MCP
    * synap_get_session — so project-scoped sessions (workspaceId NULL) resolve.
+   *
+   * A scoped key reads the row through its grant (`sessionReadableWhere`, the
+   * list door's floor). It gets the packet (continuation, outcomes, criteria)
+   * only when it reads every subject in it (`sessionPacketReadable`); else
+   * the row in the list door's shape, with `packet: {status: "withheld"}`.
    */
   app.get("/focus-sessions/:id", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
@@ -1155,7 +1633,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     try {
       const conditions = [
         eq(focusSessions.id, id),
-        eq(focusSessions.userId, acting.userId),
+        sessionReadableWhere({ userId: acting.userId }),
       ];
       if (workspaceIdParam) {
         conditions.push(eq(focusSessions.workspaceId, workspaceIdParam));
@@ -1167,6 +1645,17 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
 
       if (!row) {
         return c.json({ error: `Focus session ${id} not found` }, 404);
+      }
+
+      if (!sessionPacketReadable(getRequestGrant())) {
+        return c.json({
+          ...attachSessionKind(attachTriage([row]))[0],
+          packet: {
+            status: "withheld",
+            reason:
+              "This key does not read everything a session's packet holds (its room, outcomes, links and more): only the session itself is shown.",
+          },
+        });
       }
 
       // Same projection as tRPC `focusSessions.get` and MCP `synap_get_session`:
@@ -1801,6 +2290,10 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
             return c.json({ error: `Focus session ${id} not found` }, 404);
           }
         } catch (err) {
+          // The same refusal `/complete` answers: the agent is handed the list.
+          if (isOpenQuestionsAtCloseError(err)) {
+            return c.json(openQuestionsRefusal(err), 409);
+          }
           const code = (err as { code?: string }).code;
           const message = err instanceof Error ? err.message : String(err);
           return c.json({ error: message }, code === "FORBIDDEN" ? 403 : 409);
@@ -2032,12 +2525,19 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       // as the MCP door (`updateSession` → `warnings`).
       const warnings =
         patch.expectedOutputs !== undefined
-          ? droppedAskWarnings(
-              patch.expectedOutputs as Parameters<typeof droppedAskWarnings>[0],
-              (updated.expectedOutputs ?? []) as Parameters<
-                typeof droppedAskWarnings
-              >[1]
-            )
+          ? [
+              ...droppedAskWarnings(
+                patch.expectedOutputs as Parameters<
+                  typeof droppedAskWarnings
+                >[0],
+                (updated.expectedOutputs ?? []) as Parameters<
+                  typeof droppedAskWarnings
+                >[1]
+              ),
+              ...restatedAskHints(
+                patch.expectedOutputs as Parameters<typeof restatedAskHints>[0]
+              ),
+            ]
           : [];
 
       return c.json({
@@ -2194,7 +2694,12 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           userId: acting.userId,
           agentUserId: (c.get("agentUserId") as string | undefined) ?? null,
           evidence: parsed.data.evidence,
-          ...(onlyEvidence ? { kinds: ["evidence"] as const } : {}),
+          // The evidence door is a mid-session self-grade: a spent criterion
+          // stays the agent's work. `/evaluate` (evaluate_session) hands the
+          // person what the agent could not pass (E3).
+          ...(onlyEvidence
+            ? { kinds: ["evidence"] as const }
+            : { escalate: true }),
         });
         if (result.status === "not_found") {
           return c.json({ error: `Focus session ${id} not found` }, 404);
@@ -2261,6 +2766,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         summary: parsed.data.summary,
         verificationReport: parsed.data.verificationReport,
         terminalStatus: parsed.data.terminalStatus,
+        questionDispositions: parsed.data.questionDispositions,
       });
 
       if (!result) {
@@ -2289,6 +2795,10 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         ...(nudges ? { nudges } : {}),
       });
     } catch (err) {
+      // The calling agent left its own questions open: nothing closed.
+      if (isOpenQuestionsAtCloseError(err)) {
+        return c.json(openQuestionsRefusal(err), 409);
+      }
       const code = (err as { code?: unknown })?.code;
       if (code === "FORBIDDEN") {
         const e = err as {
@@ -2950,7 +3460,24 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
         return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
       }
+      // The tRPC twin's floor (`focusSessions.unblockOutput`): handing a slot
+      // back is the person's "Not mine"; an agent withdraws its question
+      // through the relay door instead.
+      if (path === "unblock" && c.get("agentUserId")) {
+        return c.json(
+          {
+            error:
+              "Only the person can hand a slot back — an agent key cannot.",
+          },
+          403
+        );
+      }
       const id = c.req.param("id");
+      if (path === "unblock") {
+        // The tRPC twin's grant rung: the session's own space + project.
+        const denial = await grantWriteDenial(await answerGrantWrite(id));
+        if (denial) return c.json({ error: denial }, 403);
+      }
       if (!isUuid(id)) {
         return c.json({ error: `Focus session ${id} not found` }, 404);
       }
@@ -3009,6 +3536,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
               ...(result.blockGuidelines
                 ? { blockGuidelines: result.blockGuidelines }
                 : {}),
+              ...("hint" in result && result.hint ? { hint: result.hint } : {}),
             });
         }
       } catch (err) {
@@ -3089,17 +3617,32 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     try {
       const acting = await resolveActingContext(c, {});
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+      const label = parsed.data.expectedLabel ?? "";
+      if (parsed.data.rejectRelayed) {
+        const corrected = await correctRelayedAnswer({
+          sessionId: id,
+          userId: acting.userId,
+          expectedLabel: parsed.data.expectedLabel,
+          questionId: parsed.data.questionId,
+        });
+        if (corrected.status !== "corrected") {
+          const refusal = answerRefusal(corrected, label, id);
+          return c.json({ error: refusal.error }, refusal.status);
+        }
+        return c.json({ ok: true as const, ...corrected });
+      }
       const result = await answerSessionSlot({
         sessionId: id,
         userId: acting.userId,
-        expectedLabel: parsed.data.expectedLabel,
+        expectedLabel: label,
         text: parsed.data.text,
         value: parsed.data.value,
         askFingerprint: parsed.data.askFingerprint,
         expectedGranteeId: parsed.data.expectedGranteeId,
+        confirmRelayed: parsed.data.confirmRelayed,
       });
       if (result.status !== "answered") {
-        const refusal = answerRefusal(result, parsed.data.expectedLabel, id);
+        const refusal = answerRefusal(result, label, id);
         return c.json({ error: refusal.error }, refusal.status);
       }
       return c.json({
@@ -3117,6 +3660,82 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       });
     } catch (err) {
       logger.error({ err, id }, "focus-sessions.answerOutput failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        httpStatusForTrpcError(err) as never
+      );
+    }
+  });
+
+  /**
+   * POST /focus-sessions/:id/answers/relay
+   *
+   * An AGENT relays what the person said in a chat to the question it asked —
+   * the Hub twin of MCP `synap_relay_answer`, the same service
+   * (`relaySessionAnswer`, which documents who may relay what, and the stakes
+   * rule). A PERSON's key is refused (403): a person answers through
+   * `/outputs/answer`, and a relay with no agent to name would be a tap with
+   * a forged label. Owner-floored by the service (the acting person).
+   */
+  app.post("/focus-sessions/:id/answers/relay", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const agentUserId = c.get("agentUserId") as string | undefined;
+    if (!agentUserId) {
+      return c.json(
+        {
+          error:
+            "Only an agent relays an answer — a person answers through /outputs/answer.",
+        },
+        403
+      );
+    }
+    const id = c.req.param("id");
+    // The grant rung runs inside the service (`relaySessionAnswer`), so the
+    // MCP twin cannot skip it.
+    if (!isUuid(id)) {
+      return c.json({ error: `Focus session ${id} not found` }, 404);
+    }
+    const raw = await c.req.json().catch(() => null);
+    const parsed = RelayAnswerBodySchema.safeParse(raw);
+    if (!parsed.success) {
+      return c.json(
+        { error: "Invalid request body", details: parsed.error.flatten() },
+        400
+      );
+    }
+    try {
+      const acting = await resolveActingContext(c, {});
+      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+      const result = await relaySessionAnswer({
+        sessionId: id,
+        userId: acting.userId,
+        agentUserId,
+        ...parsed.data,
+      });
+      if (
+        result.status !== "relayed" &&
+        result.status !== "awaiting_tap" &&
+        result.status !== "withdrawn"
+      ) {
+        const refusal = describeRelayRefusal(result, {
+          sessionId: id,
+          slotLabel: parsed.data.slotLabel,
+        });
+        const status =
+          refusal.code === "NOT_FOUND"
+            ? 404
+            : refusal.code === "CONFLICT"
+              ? 409
+              : refusal.code === "FORBIDDEN"
+                ? 403
+                : 400;
+        return c.json({ error: refusal.message }, status);
+      }
+      return c.json({ ok: true as const, ...result });
+    } catch (err) {
+      logger.error({ err, id }, "focus-sessions.relayAnswer failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
         httpStatusForTrpcError(err) as never

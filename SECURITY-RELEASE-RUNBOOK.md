@@ -51,9 +51,8 @@ the `CROSS_REPO_TOKEN` secret: a fine-grained personal access token with
 
 Delete `CROSS_REPO_TOKEN` from a repository only once that repository's
 workflows mint a Reader App token and a run shows the mint step succeeding.
-Today only this repository reads `SYNAP_READER_APP_*`; the others still read
-`SYNAP_RELEASE_APP_*` for their cross-repo reads (§5.4), so they keep
-`CROSS_REPO_TOKEN` until they are switched.
+As of 2026-10-27 no repository other than this one has had such a run (their
+Actions are paused), so every repository keeps `CROSS_REPO_TOKEN` (§5.4).
 
 ## 5. The two GitHub Apps (organization owner)
 
@@ -93,16 +92,18 @@ revoke the old key there.
 Name `Synap CI Reader`, **Contents: Read-only**. Install it (App page →
 **Install App** → `Synap-core` → **Only select repositories**) on:
 
-| Repository          | Read by                               |
-| ------------------- | ------------------------------------- |
-| `backend`           | app-bases, synap-cli and relay-app CI |
-| `control-plane-api` | backend, app-bases and relay-app CI   |
-| `app-bases`         | backend and relay-app CI              |
-| `browser`           | app-bases and relay-app CI            |
-| `relay-app`         | app-bases CI                          |
-| `synap-cli`         | relay-app CI                          |
+| Repository          | Read by                                     |
+| ------------------- | ------------------------------------------- |
+| `backend`           | app-bases, synap-cli and relay-app CI       |
+| `control-plane-api` | backend, app-bases and relay-app CI         |
+| `app-bases`         | backend, control-plane-api and relay-app CI |
+| `browser`           | app-bases and relay-app CI                  |
+| `relay-app`         | app-bases CI                                |
+| `synap-cli`         | relay-app CI                                |
 
-Then, for this repository:
+Then set its ID and key as repository-level values in every repository whose
+CI reads a sibling: `backend`, `app-bases`, `relay-app`, `synap-cli` and
+`control-plane-api` (all five set on 2026-10-27). For this repository:
 
 ```bash
 gh variable set SYNAP_READER_APP_ID -R Synap-core/backend --body "<Reader App ID>"
@@ -153,23 +154,33 @@ given and holds `SYNAP_RELEASE_APP_KEY`, and the key is **not** also a
 repository secret. A failed read (auth, network) stops the script with its
 error; it is never taken for "not set".
 
-### 5.4 Owed in the other repositories
+### 5.4 The other repositories
 
-These workflows still read `vars.SYNAP_RELEASE_APP_ID` /
-`secrets.SYNAP_RELEASE_APP_KEY`:
+Once the pull requests below merge, their cross-repo reads mint with
+`vars.SYNAP_READER_APP_ID` / `secrets.SYNAP_READER_APP_KEY` (Contents: read,
+scoped to the repositories each step checks out), with `CROSS_REPO_TOKEN` as
+the fallback:
 
-- cross-repo reads: app-bases (`ci.yml`, `changeset.yml`,
-  `publish-packages.yml`, `publish-official-templates.yml`, the
-  `sibling-repos` action), synap-cli (`publish-cli.yml`), relay-app
-  (`ci.yml`). Each must switch to `SYNAP_READER_APP_*`.
-- a write: browser (`browser-release.yml`) mints Contents: write on
-  `browser-exec` for its desktop release uploads. It needs its own write App
-  installed on `browser-exec` only, with its key in that workflow's protected
-  environment.
+| Repository          | Workflows                                                                                                       | Pull request         |
+| ------------------- | --------------------------------------------------------------------------------------------------------------- | -------------------- |
+| `app-bases`         | `ci.yml`, `changeset.yml`, `publish-packages.yml`, `publish-official-templates.yml`, the `sibling-repos` action | app-bases#108        |
+| `relay-app`         | `ci.yml`                                                                                                        | relay-app#51         |
+| `synap-cli`         | `publish-cli.yml`                                                                                               | synap-cli#24         |
+| `control-plane-api` | `ci.yml` (read `app-bases` with `CROSS_REPO_TOKEN` only; now mints first)                                       | control-plane-api#33 |
+
+Until then those workflows read the Release App names, which are not set in
+those repositories, so they run on `CROSS_REPO_TOKEN`. No run has proved a
+Reader mint in any of them yet (their Actions are paused): keep
+`CROSS_REPO_TOKEN` in each (§4).
+
+Still owed: browser (`browser-release.yml`) mints Contents: **write** on
+`browser-exec` for its desktop release uploads, under the Release App names.
+The Reader App cannot write, so it is not switched. It needs its own write App
+installed on `browser-exec` only, with its key in that workflow's protected
+environment. Until then it uses `BROWSER_RELEASE_TOKEN`.
 
 **Never set `SYNAP_RELEASE_APP_KEY` in those repositories**: it would put the
-key that can push to backend's `main` in reach of their workflows. Until each
-one is switched, it keeps `CROSS_REPO_TOKEN` (§4).
+key that can push to backend's `main` in reach of their workflows.
 
 ## 6. The `main` ruleset
 

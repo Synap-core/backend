@@ -10,6 +10,17 @@
  */
 
 import type { AiPosture } from "../profiles/ai-posture.js";
+import type {
+  SpaceBrief,
+  SpaceBriefAnchor,
+  SpaceBriefCollectTarget,
+  SpaceBriefExpertise,
+  SpaceBriefFetchHint,
+  SpaceBriefRuleRef,
+  SpaceBriefSkillRef,
+  SpaceSkillMode,
+  SpaceTemplateRule,
+} from "../space-brief/index.js";
 
 /** Where the last template apply on a space stands. */
 export type TemplateApplyStateName =
@@ -19,7 +30,7 @@ export type TemplateApplyStateName =
   | "active"
   /** Layer 2 only filed proposals (nothing failed). */
   | "awaiting-approval"
-  /** A layer-2 item errored. */
+  /** A layer-2 item errored, or waits on the person's setup (`needsSetup`). */
   | "partial"
   /** This door ran layer 1 only; the living layers were never applied. */
   | "layer-2-not-run"
@@ -56,7 +67,14 @@ export interface TemplateState {
   /** Layer-1 resume ledger. */
   completedSteps?: string[];
   proposals?: string[];
+  /** Layer-2 items that errored, one line each: `<layer>:<name>: <reason>`. */
   failures?: string[];
+  /**
+   * Layer-2 items that wait on the PERSON, same line shape: a capability whose
+   * key or account was not given, an automation that runs its verbs. Not a
+   * retry: health tells the person what to set up.
+   */
+  needsSetup?: string[];
   packs?: TemplatePackEntry[];
   /**
    * The template data changes (conversion opKeys) the last stamp is HELD for
@@ -545,79 +563,25 @@ export interface PublicProjectionSettings {
   fields: string[];
 }
 
-// ─── Space brief (settings.onboarding) — MIRROR of @synap-core/types ──────────
+// ─── Space brief (settings.onboarding) ──────────────────────────────────────
 //
-// The canonical `SpaceBrief` lives in `@synap-core/types/space-brief`, which
-// this package cannot import (`@synap-core/types` already depends on
-// `@synap/database` — a build cycle; see entity-body-service.ts). This is the
-// ONE database-side declaration: `package-definition.ts` and the definition
-// input alias it. `@synap/api` compiles a MUTUAL-ASSIGNABILITY floor between
-// the two (services/space-brief-door.ts), so a field added on one side and
-// not the other stops the api build.
+// The brief is declared ONCE, as `SpaceBrief` in `@synap-core/types/space-brief`.
+// The `WorkspaceSpace*` names below are aliases the database side has always
+// used (`schema/workspaces.ts`, `package-definition.ts`, the definition input);
+// they are not a second declaration.
 
-export interface WorkspaceSpaceBriefCollectTarget {
-  profileSlug: string;
-  what: string;
-  cardinality?: "one" | "few" | "several";
-  keyFields?: string[];
-  min?: number;
-}
-
-export interface WorkspaceSpaceBriefExpertise {
-  starters?: string[];
-  blindSpots?: string[];
-  bar?: string;
-}
-
-export interface WorkspaceSpaceBriefAnchor {
-  profileSlug: string;
-  role: "root" | "context";
-  seedRef?: string;
-  entityId?: string;
-  limit?: number;
-}
-
-export interface WorkspaceSpaceBriefFetchHint {
-  profileSlug?: string;
-  query?: string;
-  note?: string;
-}
-
-export interface WorkspaceSpaceBriefRuleRef {
-  key: string;
-  ruleId?: string;
-}
-
-/** A skill mode — mirror of `SpaceSkillMode`. */
-export type WorkspaceSpaceSkillMode = "always" | "on-demand";
-
-/** A declared skill as stored in the brief — mirror of `SpaceBriefSkillRef`. */
-export interface WorkspaceSpaceBriefSkillRef {
-  slug: string;
-  mode: WorkspaceSpaceSkillMode;
-  when?: string;
-}
-
-export interface WorkspaceSpaceBrief {
-  purpose?: string;
-  goal?: string;
-  framing?: string;
-  expertise?: WorkspaceSpaceBriefExpertise;
-  collect?: WorkspaceSpaceBriefCollectTarget[];
-  openingQuestions?: string[];
-  doneWhen?: string;
-  anchors?: WorkspaceSpaceBriefAnchor[];
-  rules?: WorkspaceSpaceBriefRuleRef[];
-  skills?: WorkspaceSpaceBriefSkillRef[];
-  fetch?: WorkspaceSpaceBriefFetchHint[];
-}
-
-/** A template-declared rule (package `rules[]`) — mirror of `SpaceTemplateRule`. */
-export interface WorkspaceSpaceTemplateRule {
-  key: string;
-  intent: string;
-  sentence?: unknown;
-}
+export type WorkspaceSpaceBriefCollectTarget = SpaceBriefCollectTarget;
+export type WorkspaceSpaceBriefExpertise = SpaceBriefExpertise;
+export type WorkspaceSpaceBriefAnchor = SpaceBriefAnchor;
+export type WorkspaceSpaceBriefFetchHint = SpaceBriefFetchHint;
+export type WorkspaceSpaceBriefRuleRef = SpaceBriefRuleRef;
+/** A skill mode — `SpaceSkillMode`. */
+export type WorkspaceSpaceSkillMode = SpaceSkillMode;
+/** A declared skill as stored in the brief — `SpaceBriefSkillRef`. */
+export type WorkspaceSpaceBriefSkillRef = SpaceBriefSkillRef;
+export type WorkspaceSpaceBrief = SpaceBrief;
+/** A template-declared rule (package `rules[]`) — `SpaceTemplateRule`. */
+export type WorkspaceSpaceTemplateRule = SpaceTemplateRule;
 
 /** `settings.onboardingSeed` — per-field hashes of what the reconcile wrote. */
 export interface SpaceBriefSeed {
@@ -667,9 +631,8 @@ export interface WorkspaceSettings {
   workspaceSubtype?: string;
   /**
    * THE SPACE BRIEF — how an agent works in this space (key kept as
-   * `onboarding`; the interview fields are its onboarding mode). Canonical
-   * type: `@synap-core/types/space-brief` `SpaceBrief`; this is its mirror —
-   * see {@link WorkspaceSpaceBrief}.
+   * `onboarding`; the interview fields are its onboarding mode). Its type is
+   * `@synap-core/types/space-brief` `SpaceBrief`.
    */
   onboarding?: WorkspaceSpaceBrief;
   /**

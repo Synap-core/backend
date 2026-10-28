@@ -21,8 +21,10 @@
  *
  * The second rule: **a desktop link always carries a web fallback.** Not every
  * visitor has the app installed, and a `synap://` href that does not resolve
- * fails silently — the browser simply does nothing. `fallback` is what the UI
- * offers next to it so the click is never a dead end.
+ * fails silently — the browser simply does nothing. `fallback` is the download
+ * the UI offers in the link's place once a click did not open the app
+ * (`useAppOpenAttempt`, `exit-link.tsx`), so the click is never a dead end —
+ * and "Open in app" stands alone until then (founder, 2026-10-27).
  *
  * The third rule: **a phone is a different receiver.** There `synap://` opens
  * the mobile app (Relay), which opens fewer things than the desktop app and
@@ -153,8 +155,8 @@ export interface Exit {
   href: string;
   /**
    * True when `href` uses the `synap://` scheme, which silently does nothing
-   * if the desktop app is not installed. The UI MUST render `fallback`
-   * alongside any exit where this is true.
+   * if the desktop app is not installed. The UI MUST offer `fallback` when a
+   * click on such an exit did not open the app (`placeExit` → `ifNotOpened`).
    */
   isDesktopLink: boolean;
   /** Always present when `isDesktopLink` — never leave a click with no way out. */
@@ -194,14 +196,18 @@ export type PhoneExit = { opens: "relay" | "nowhere"; web?: ConsoleCover };
 
 /**
  * The one place the "you need the app" escape hatch is spelled. Not exported:
- * it rides on every desktop `Exit`, and a list that offers it once beneath its
- * rows renders `ExitFallback` with one of those exits — so the hatch can never
- * drift from where the row links point, or from the device (`placeExit`).
+ * it rides on every desktop `Exit`, and `placeExit` hands it on as
+ * `ifNotOpened`, offered only where a click on that very link did not open
+ * the app — so the hatch can never drift from where the link points, or from
+ * the device.
  */
 const DESKTOP_FALLBACK = {
   href: `${WEB_BASE}/download/browser`,
   label: "Get the desktop app",
 } as const;
+
+/** Said before the download, where a click on a desktop link opened nothing. */
+export const DESKTOP_NOT_OPENED_NOTE = "Synap didn't open.";
 
 /**
  * The phone's install hatch, for a link Relay can open. Same landing origin;
@@ -470,8 +476,17 @@ export function pairExit(podUrl: string, email?: string): Exit | null {
 export interface PlacedExit {
   href: string | null;
   isDesktopLink: boolean;
-  /** The install hatch for this device's app. Only with a `synap://` href. */
+  /**
+   * The mobile app's install hatch, shown beside a `synap://` link on a phone.
+   * The desktop's hatch is never here: it waits in `ifNotOpened`.
+   */
   fallback?: { href: string; label: string };
+  /**
+   * Off a phone, with a `synap://` href: the desktop download, offered only
+   * once a click on the link did not open the app (`useAppOpenAttempt`) —
+   * never beside the link at rest.
+   */
+  ifNotOpened?: { href: string; label: string };
   /**
    * On a phone, beside a link the mobile app opens: the console page that
    * covers the same object, as a second way in.
@@ -484,19 +499,27 @@ export interface PlacedExit {
 export const PHONE_UNAVAILABLE_NOTE = "Open this on your computer.";
 
 /**
- * Resolve an exit for the device and the viewer's console `role`. Desktop (and
- * the server render) get the exit exactly as `openIn` built it; a phone keeps
- * web exits, keeps a Relay-openable `synap://` link with the MOBILE install
- * hatch, and turns everything else into an `unavailable` note — never a link
- * that lands on Relay's "not found". Either way the console page that covers
- * it comes along only when `role` may open it.
+ * Resolve an exit for the device and the viewer's console `role`. Web exits
+ * come back exactly as `openIn` built them, on every device. Desktop (and the
+ * server render) get the `synap://` link alone, its download held back as
+ * `ifNotOpened`; a phone keeps a Relay-openable `synap://` link with the
+ * MOBILE install hatch, and turns everything else into an `unavailable` note —
+ * never a link that lands on Relay's "not found". Either way the console page
+ * that covers it comes along only when `role` may open it.
  */
 export function placeExit(
   exit: Exit,
   onPhone: boolean,
   role: ConsoleAudience
 ): PlacedExit {
-  if (!onPhone || !exit.isDesktopLink || !exit.phone) return exit;
+  if (!exit.isDesktopLink) return exit;
+  if (!onPhone || !exit.phone) {
+    return {
+      href: exit.href,
+      isDesktopLink: true,
+      ...(exit.fallback ? { ifNotOpened: exit.fallback } : {}),
+    };
+  }
   const web = webAlternativeFor(exit.phone.web, role);
   if (exit.phone.opens === "relay") {
     return {

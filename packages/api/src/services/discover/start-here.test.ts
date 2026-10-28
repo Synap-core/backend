@@ -126,6 +126,18 @@ vi.mock("../library/search.js", () => ({
   },
 }));
 
+// `openGoals` reads through its own door, pinned on PGlite in
+// `open-goals.pglite.test.ts`.
+vi.mock("./open-goals.js", () => ({
+  readOpenGoals: async () => ({
+    count: 0,
+    countIsLowerBound: false,
+    lens: "pod",
+    items: [],
+    howTo: "file work into a goal with trackId",
+  }),
+}));
+
 import { buildStartHere } from "./start-here.js";
 
 const caller = {
@@ -179,6 +191,7 @@ describe("startHere", () => {
       count: 4,
       oldestDays: 6,
       oldestId: "prop-old",
+      reviewLater: 0,
     });
     expect(Object.keys(s)).toEqual([
       "pendingReview",
@@ -189,6 +202,8 @@ describe("startHere", () => {
       // What the PERSON owes, before the agent's own work.
       "owedByPerson",
       "openSessions",
+      // The goals that work serves, right after it (plan v5 T1).
+      "openGoals",
       // Right after the agent's open work: the part of it still ungraded.
       "sessionsOwingGrade",
       "topKinds",
@@ -211,7 +226,12 @@ describe("startHere", () => {
   });
 
   it("carries the Library's health; an unreadable Library is unavailable, not zero", async () => {
-    const ok = await build({ status: "ok", count: 0, oldestDays: 0 });
+    const ok = await build({
+      status: "ok",
+      count: 0,
+      oldestDays: 0,
+      reviewLater: 0,
+    });
     expect(ok.library).toEqual({
       unread: 3,
       groupsWaiting: 1,
@@ -219,11 +239,30 @@ describe("startHere", () => {
     });
     h.libraryThrow = true;
     try {
-      const failed = await build({ status: "ok", count: 0, oldestDays: 0 });
+      const failed = await build({
+        status: "ok",
+        count: 0,
+        oldestDays: 0,
+        reviewLater: 0,
+      });
       expect(failed.library).toEqual({ status: "unavailable" });
     } finally {
       h.libraryThrow = false;
     }
+  });
+
+  it("names Review later beside the headline, never inside it", async () => {
+    const s = await build({
+      status: "ok",
+      count: 0,
+      oldestDays: 0,
+      reviewLater: 3,
+    });
+    expect(s.pendingReview).toEqual({
+      count: 0,
+      lens: "authored",
+      reviewLater: 3,
+    });
   });
 
   it("an unreadable pending queue is unavailable, not zero", async () => {
@@ -237,7 +276,12 @@ describe("startHere", () => {
       goal: i === 0 ? "Ship W4" : null,
       startedAt: new Date("2026-09-14T08:00:00Z"),
     }));
-    const s = await build({ status: "ok", count: 0, oldestDays: 0 });
+    const s = await build({
+      status: "ok",
+      count: 0,
+      oldestDays: 0,
+      reviewLater: 0,
+    });
     expect(s.openSessions).toMatchObject({
       count: 10,
       countIsLowerBound: true,
@@ -247,12 +291,22 @@ describe("startHere", () => {
 
   it("a failed sessions read is unavailable — never '0 open'", async () => {
     h.sessionsThrow = true;
-    const s = await build({ status: "ok", count: 0, oldestDays: 0 });
+    const s = await build({
+      status: "ok",
+      count: 0,
+      oldestDays: 0,
+      reviewLater: 0,
+    });
     expect(s.openSessions).toEqual({ status: "unavailable" });
   });
 
   it("top kinds exclude roles and unused kinds, and keep the listing rank", async () => {
-    const s = await build({ status: "ok", count: 0, oldestDays: 0 });
+    const s = await build({
+      status: "ok",
+      count: 0,
+      oldestDays: 0,
+      reviewLater: 0,
+    });
     expect(s.topKinds).toEqual([
       {
         slug: "task",
@@ -265,7 +319,12 @@ describe("startHere", () => {
   });
 
   it("actions: count + three examples + the lens they were read at; failure is unavailable", async () => {
-    const s = await build({ status: "ok", count: 0, oldestDays: 0 });
+    const s = await build({
+      status: "ok",
+      count: 0,
+      oldestDays: 0,
+      reviewLater: 0,
+    });
     expect(s.actions).toEqual({
       count: 4,
       examples: ["Send email", "Search web", "List events"],
@@ -273,14 +332,20 @@ describe("startHere", () => {
     });
     h.capsThrow = true;
     expect(
-      (await build({ status: "ok", count: 0, oldestDays: 0 })).actions
+      (await build({ status: "ok", count: 0, oldestDays: 0, reviewLater: 0 }))
+        .actions
     ).toEqual({
       status: "unavailable",
     });
   });
 
   it("sessionsOwingGrade states its lens; a failed read is unavailable, never 0", async () => {
-    const s = await build({ status: "ok", count: 0, oldestDays: 0 });
+    const s = await build({
+      status: "ok",
+      count: 0,
+      oldestDays: 0,
+      reviewLater: 0,
+    });
     expect(s.sessionsOwingGrade).toMatchObject({
       count: 1,
       lens: "owned-open",
@@ -288,13 +353,18 @@ describe("startHere", () => {
     });
     h.owingThrow = true;
     expect(
-      (await build({ status: "ok", count: 0, oldestDays: 0 }))
+      (await build({ status: "ok", count: 0, oldestDays: 0, reviewLater: 0 }))
         .sessionsOwingGrade
     ).toEqual({ status: "unavailable" });
   });
 
   it("an empty queue still states its lens", async () => {
-    const s = await build({ status: "ok", count: 0, oldestDays: 0 });
+    const s = await build({
+      status: "ok",
+      count: 0,
+      oldestDays: 0,
+      reviewLater: 0,
+    });
     expect(s.pendingReview).toEqual({ count: 0, lens: "authored" });
   });
 
@@ -313,7 +383,12 @@ describe("startHere", () => {
         ask: { mode: "choose" },
       },
     ];
-    const ok = await build({ status: "ok", count: 0, oldestDays: 0 });
+    const ok = await build({
+      status: "ok",
+      count: 0,
+      oldestDays: 0,
+      reviewLater: 0,
+    });
     expect(ok.owedByPerson).toMatchObject({
       count: 1,
       items: [
@@ -326,7 +401,12 @@ describe("startHere", () => {
       ],
     });
     h.owedThrow = true;
-    const down = await build({ status: "ok", count: 0, oldestDays: 0 });
+    const down = await build({
+      status: "ok",
+      count: 0,
+      oldestDays: 0,
+      reviewLater: 0,
+    });
     expect(down.owedByPerson).toEqual({ status: "unavailable" });
   });
 });

@@ -118,6 +118,11 @@ export interface StartHere {
          * an agent they own. The user's review queue may hold more from others.
          */
         lens: "authored";
+        /**
+         * Untouched durable proposals (7+ days) moved to Review later — NOT in
+         * `count`. Absent when none.
+         */
+        reviewLater?: number;
       }
     | StartHereUnavailable;
   /**
@@ -166,6 +171,31 @@ export interface StartHere {
         /** True when `count` hit the read cap — "at least this many". */
         countIsLowerBound: boolean;
         newest?: { id: string; goal: string | null; startedAt: string | null };
+      }
+    | StartHereUnavailable;
+  /**
+   * The OPEN GOALS (tracks in a live status) the caller can see — the
+   * project's when orient is scoped to one (`lens: "project"`), else pod-wide.
+   * Newest activity first; `items` names the first few, `count` is capped
+   * (`countIsLowerBound`). Work that serves one is filed into it with
+   * `trackId` (`howTo`).
+   */
+  openGoals:
+    | {
+        count: number;
+        countIsLowerBound: boolean;
+        lens: "project" | "pod";
+        items: Array<{
+          id: string;
+          name: string;
+          status: string;
+          projectId: string;
+          /** What "done" looks like — `null` when unsaid. */
+          endState: string | null;
+          /** How many criteria it declares (0 = a lasting goal). */
+          criteria: number;
+        }>;
+        howTo: string;
       }
     | StartHereUnavailable;
   /**
@@ -470,7 +500,7 @@ interface DiscoverResult {
    * is invisible to recall AND to dedup: unreviewed work reads as missing and
    * gets duplicated, and a pending template update keeps its capabilities off.
    */
-  pendingReview?: { count: number; oldestDays: number };
+  pendingReview?: { count: number; oldestDays: number; reviewLater: number };
   note: string;
   /**
    * Internal team for the pinned / sample workspace. Omitted when empty.
@@ -553,7 +583,8 @@ function lensConceptNote(projectCount: number): string {
 function buildNote(
   projectCount: number,
   workspaceCount: number,
-  pending: { count: number; oldestDays: number } | undefined,
+  pending:
+    { count: number; oldestDays: number; reviewLater: number } | undefined,
   opts: { light: boolean; hiddenEmpty: number; explain: boolean }
 ): string {
   // ── THE REVIEW QUEUE, SURFACED AT THE ONE CALL EVERY SESSION MAKES ─────────
@@ -580,6 +611,12 @@ function buildNote(
         `pending proposals with whichever proposal-listing tool this door exposes ` +
         `to you, and offer to walk the queue before doing more work. `
       : "";
+  // Review later is out of the headline on purpose (founder default
+  // 2026-10-26): named, never pushed.
+  const later =
+    pending && pending.reviewLater > 0
+      ? `${pending.reviewLater} older proposal(s) wait in Review later (untouched 7+ days; they never expire). `
+      : "";
   // NOTE — do NOT name a concrete tool here. This is a RUNTIME RESPONSE
   // STRING, not a tool description: the Control Plane rewrites `synap_x` ->
   // `pod__x` only in tool DESCRIPTIONS, so a tool name baked into a response
@@ -598,6 +635,7 @@ function buildNote(
     : ``;
   return (
     queue +
+    later +
     light +
     `Domain map: ${projectCount} project(s), ${workspaceCount} domain app(s). ` +
     (opts.explain
@@ -980,8 +1018,13 @@ export async function discover(
   // number computed over a different set than the count printed beside it.
   const pendingState: PendingReviewState = await readPendingReviewState(userId);
   const pendingSummary =
-    pendingState.status === "ok" && pendingState.count > 0
-      ? { count: pendingState.count, oldestDays: pendingState.oldestDays }
+    pendingState.status === "ok" &&
+    (pendingState.count > 0 || pendingState.reviewLater > 0)
+      ? {
+          count: pendingState.count,
+          oldestDays: pendingState.oldestDays,
+          reviewLater: pendingState.reviewLater,
+        }
       : undefined;
 
   // Who the user IS — the one thing orient never carried. Best-effort, same
@@ -1005,6 +1048,7 @@ export async function discover(
       userId,
       agentUserId: params.agentUserId ?? null,
       workspaceId,
+      projectId,
       pending: pendingState,
       learnMoreSkill: ORIENT_LEARN_MORE_SKILL,
       ranked,

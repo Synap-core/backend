@@ -63,6 +63,7 @@ import {
   type HubHono,
   readJsonBody,
   requireUuidParam,
+  isUuid,
 } from "./_shared.js";
 
 // ── Local OpenAPI schemas (not in user-WIP _codecs/misc.ts) ────────────────
@@ -150,6 +151,7 @@ export function registerVaultRoutes(app: HubHono): void {
       purpose: string;
       accessLevel?: string;
       ttl?: number;
+      secretId?: string;
     };
 
     if (!body.secretType || !body.service || !body.purpose) {
@@ -157,6 +159,14 @@ export function registerVaultRoutes(app: HubHono): void {
         { error: "secretType, service, and purpose are required" },
         400
       );
+    }
+    // Named secret: a uuid only. Whose it is, is checked at approval (only the
+    // approver's own secrets can be granted — `vault/vault.request` executor).
+    if (
+      body.secretId !== undefined &&
+      (typeof body.secretId !== "string" || !isUuid(body.secretId))
+    ) {
+      return c.json({ error: "secretId must be a secret's uuid" }, 400);
     }
 
     // The acting HUMAN comes from auth, never the body. The body used to pick
@@ -219,6 +229,7 @@ export function registerVaultRoutes(app: HubHono): void {
           purpose: body.purpose,
           accessLevel,
           ttl,
+          ...(body.secretId ? { secretId: body.secretId } : {}),
           requestedBy: "ai",
           source: "agent",
           sourceId: actorId,

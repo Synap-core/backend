@@ -264,11 +264,19 @@ export const DOCUMENT_PATCH_PROPOSAL_TYPES = [
 export type DocumentPatchProposalType =
   (typeof DOCUMENT_PATCH_PROPOSAL_TYPES)[number];
 
-/** …plus `ai_edit`, the full-replace type filed before the patch door (still pending on some pods). */
-const DOCUMENT_EDIT_PROPOSAL_TYPES: ReadonlySet<string> = new Set([
+/**
+ * …plus `ai_edit`, the full-replace type filed before the patch door (still
+ * pending on some pods). Exported as a list for the pod's SQL twin of the
+ * session-bound-draft rule (api `proposal-fate.ts`), which cannot call a
+ * predicate.
+ */
+export const DOCUMENT_EDIT_PROPOSAL_TYPES = [
   ...DOCUMENT_PATCH_PROPOSAL_TYPES,
   "ai_edit",
-]);
+] as const;
+const DOCUMENT_EDIT_PROPOSAL_TYPE_SET: ReadonlySet<string> = new Set(
+  DOCUMENT_EDIT_PROPOSAL_TYPES
+);
 
 /**
  * Does this proposal edit an existing document's content? The pair matters:
@@ -280,7 +288,7 @@ export function isDocumentEditProposal(p: {
 }): boolean {
   return (
     p.targetType === "document" &&
-    DOCUMENT_EDIT_PROPOSAL_TYPES.has(p.proposalType ?? "")
+    DOCUMENT_EDIT_PROPOSAL_TYPE_SET.has(p.proposalType ?? "")
   );
 }
 

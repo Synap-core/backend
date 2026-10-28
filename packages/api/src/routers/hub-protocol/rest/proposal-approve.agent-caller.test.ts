@@ -95,6 +95,13 @@ const post = async (who: Who, path: string, body: unknown = {}) =>
 
 const DOORS = [
   { door: "approve", path: `/proposals/${ID}/approve`, body: {} },
+  // F3: "approve and allow today" raises the agent's ceiling — the same
+  // human-only door, refused before the body is even read.
+  {
+    door: "approve + allowToday",
+    path: `/proposals/${ID}/approve`,
+    body: { allowToday: true },
+  },
   { door: "revert", path: `/proposals/${ID}/revert`, body: {} },
   {
     door: "import/apply (proposalId)",
@@ -162,6 +169,19 @@ describe("the canonical approve floor refuses an agent caller", () => {
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
     expect(reached).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { who: "ctx.agentUserId", ctx: { agentUserId: AGENT } },
+    { who: "an is_internal ctx", ctx: { keyType: "is_internal" } },
+  ])(
+    "proposals.approve with allowToday (F3) and $who → FORBIDDEN, nothing read",
+    async (t) => {
+      await expect(
+        callerFor(t.ctx).approve({ proposalId: ID, allowToday: true })
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      expect(reached).not.toHaveBeenCalled();
+    }
+  );
 
   it("proposals.approve under an acting agent (ALS) → FORBIDDEN, nothing read", async () => {
     await expect(

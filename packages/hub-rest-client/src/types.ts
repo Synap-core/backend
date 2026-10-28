@@ -1031,7 +1031,12 @@ export interface FocusSessionExpectedOutput {
    */
   retiredAt?: string;
   /** Mirrored from `OUTPUT_RETIRED_REASONS` (@synap/playbooks). */
-  retiredReason?: "session_cancelled" | "decision_resolved" | "withdrawn";
+  retiredReason?:
+    | "session_cancelled"
+    | "decision_resolved"
+    | "withdrawn"
+    | "session_ended"
+    | "not_asked";
   /**
    * WHERE to go for this deliverable — an in-pod object or an external link.
    * ONE union, two arms; nothing else (free text is `why`).
@@ -1082,6 +1087,18 @@ export interface FocusSessionExpectedOutput {
    * `answer` without it = answered, still waiting for the agent.
    */
   answerPickedUpAt?: string;
+  /**
+   * A relayed answer to a `commitment` ask, waiting for the person's tap
+   * (pod-stamped; the slot stays owed while it is here).
+   */
+  pendingRelay?: {
+    text: string;
+    value?: HubSlotAnswerValue;
+    relayedBy: string;
+    relaySurface?: string;
+    quote?: string;
+    relayedAt: string;
+  };
   /** Prior answers, oldest first (pod-stamped; a re-ask archives, never drops). */
   answerHistory?: HubSlotAnswer[];
   /**
@@ -1107,7 +1124,13 @@ export interface FocusSessionExpectedOutput {
  * `ASK_PROVIDE_KINDS`.
  */
 export type HubSlotAsk = (
-  | { mode: "confirm"; prompt?: string }
+  | {
+      mode: "confirm";
+      prompt?: string;
+      /** Each answer's words, consequence and (at most one) recommendation. */
+      yes?: { label?: string; description?: string; recommended?: boolean };
+      no?: { label?: string; description?: string; recommended?: boolean };
+    }
   | { mode: "choose"; options: HubSlotAskOption[]; allowOther?: boolean }
   | {
       mode: "form";
@@ -1144,6 +1167,12 @@ export type HubSlotAsk = (
    * through the access floor, on the owed-slot read).
    */
   lookedAt?: HubSlotAskLookedAt[];
+  /**
+   * What answering commits the person to. `commitment` (deploy, spend,
+   * publish, delete) makes a relayed answer wait for their tap. Absent =
+   * `routine`; the pod can only raise it.
+   */
+  stakes?: "routine" | "commitment";
 };
 
 /** One object an ask cites as read. Mirrors `AskLookedAtRef` (@synap-core/types/ask). */
@@ -1208,6 +1237,16 @@ export interface HubSlotAnswer {
     followedRecommendation: boolean | null;
     lookedAt?: Array<{ kind: string; id: string }>;
   };
+  /** `tap` (absent on older answers) or `relayed` by an agent from a chat. */
+  via?: "tap" | "relayed";
+  /** The relaying agent's user id. */
+  relayedBy?: string;
+  /** Where the words were said (`claude-code`). */
+  relaySurface?: string;
+  /** The person's own words, verbatim. */
+  quote?: string;
+  /** The person confirmed a relayed answer. */
+  confirmedAt?: string;
 }
 
 /**
@@ -1330,6 +1369,68 @@ export interface HubFocusSessionListItem extends HubFocusSession {
     pending: boolean;
     acceptedAt: string | null;
     acceptedBy: string | null;
+  };
+}
+
+/** Options for GET /api/hub/focus-sessions/graph. Every field optional: no lens = pod-wide. */
+export interface GetWorkGraphOptions {
+  workspaceId?: string;
+  projectId?: string;
+  /** Settled sessions from this many hours back (1–720, default 72). Open ones whatever their age. */
+  windowHours?: number;
+  /** Population of the window. Default here is `"all"` (the agent-door default). */
+  kind?: FocusSessionKind | "all";
+  /** Triage lens of the window. Default here is `"all"`. */
+  lens?: "default" | "triage" | "all";
+}
+
+/** One edge of the work graph, flat. `blocked_by` runs from the waiter to its blocker. */
+export interface HubWorkGraphEdge {
+  kind:
+    "blocked_by" | "spawned_from" | "waits_on_output" | "triggered" | "updated";
+  from: string;
+  to: string;
+  entityId?: string;
+  count?: number;
+  lastAt?: string | null;
+}
+
+/** `unavailable` = the read FAILED: no edge of that kind was drawn, which is not "none". */
+export type HubWorkGraphSection =
+  { status: "ok" } | { status: "unavailable"; reason: string };
+
+/** A list row plus the graph's own projections. */
+export interface HubWorkGraphNode extends HubFocusSessionListItem {
+  parentSessionId: string | null;
+  nextMove: {
+    kind: string;
+    actor: "user" | "ai" | "none";
+    label: string;
+    reason: string;
+  };
+  unitFacts: unknown;
+  live: unknown | null;
+  viewerRole: "owner" | "member";
+  /** false = only the far end of an edge of a window session. */
+  inWindow: boolean;
+}
+
+/** GET /api/hub/focus-sessions/graph. */
+export interface HubWorkGraph {
+  nodes: HubWorkGraphNode[];
+  edges: HubWorkGraphEdge[];
+  sections: {
+    blockedBy: HubWorkGraphSection;
+    waitsOnOutputs: HubWorkGraphSection;
+    interactions: HubWorkGraphSection;
+    farEnds: HubWorkGraphSection;
+  };
+  window: {
+    since: string;
+    hours: number;
+    ceiling: number;
+    truncated: boolean;
+    omitted: number;
   };
 }
 
@@ -1503,6 +1604,16 @@ export interface CompleteFocusSessionInput {
   verificationReport?: Record<string, unknown>;
   /** Which terminal state to land in. Defaults to `"closed"` server-side. */
   terminalStatus?: "closed" | "cancelled" | "failed";
+  /**
+   * What becomes of each question the calling agent asked in the room that is
+   * still open. An agent's `closed` / `failed` close without one for each is
+   * refused (409, `reasonCode: "OPEN_QUESTIONS"`, `openQuestions[]`).
+   */
+  questionDispositions?: Array<{
+    messageId: string;
+    disposition: "withdrawn" | "keep_as_owed";
+    note?: string;
+  }>;
 }
 
 /** One proposal in the close pack (`pendingProposals`). */
@@ -1542,6 +1653,8 @@ export type CompleteFocusSessionResult =
         unfinishedOutputs: number;
         expiredEphemerals: number;
         retiredSlots: number;
+        /** Room questions still open at the end, stamped closed (session ended). */
+        closedQuestions: number;
       };
       warnings: string[];
       /** What closed still owed — never a refusal of the close. */
@@ -2976,6 +3089,12 @@ export interface RunPlaybookInput {
   agentIds?: string[];
   reasoning?: string;
   agentUserId?: string;
+  /**
+   * Hand the run to this agent (an agent user id): it does the work and the
+   * playbook's own executor is not started. Refused by name when the agent is
+   * unknown, paused or acts for someone else.
+   */
+  handToAgentId?: string;
 }
 
 /** One request to enable a pack a blocked playbook depends on. */

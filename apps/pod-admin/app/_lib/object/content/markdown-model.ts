@@ -14,9 +14,14 @@
 import { splitMarkdownBlocks } from "@synap-core/markdown-core/diff";
 import { isMarkerHref } from "@synap-core/markdown-core/markers";
 import {
+  CELL_FRAME_MAX_BYTES,
+  htmlByteLength,
+} from "@synap-core/types/cell-bridge";
+import {
   resolveEntityMedia,
   type MediaRef,
 } from "@synap-core/types/presentation";
+import { isHtmlPageSource } from "@synap-core/types/renderables";
 import { openIn } from "../../../../lib/open-in";
 import { parseOpenParams } from "../../../open/open-params";
 
@@ -272,5 +277,87 @@ export function entityEmbedRead(query: {
     state: "ready",
     title: title || "Untitled",
     ...(primary.via === "none" ? {} : { media: primary }),
+  };
+}
+
+/**
+ * What a document's cell embed may draw, from the reader's own
+ * `widgetDefinitions.get` (the viewer's floor; it answers `null` for a cell
+ * that is not visible to them or no longer exists).
+ *
+ *   page        an HTML page: it runs in the isolated frame (`html-frame`)
+ *   app         a cell only the app runs (a sandboxed React module)
+ *   hidden      not visible to you, or gone — the pod does not say which
+ *   failed      a broken read, retryable — never "hidden", never an empty frame
+ *   unresolved  this surface reads no cells
+ */
+export type EmbedCellRead =
+  | { state: "unresolved" }
+  | { state: "loading" }
+  | {
+      state: "page";
+      html: string;
+      bytes: number;
+      tooLarge: boolean;
+      /** The cell's own space: the lens its reads are stamped with. */
+      workspaceId: string | null;
+    }
+  | { state: "app" }
+  | { state: "hidden" }
+  | { state: "failed"; retry?: () => void };
+
+/**
+ * Whether a stored cell IS an HTML page. The stored mechanism decides
+ * (`widget_definitions.renderer_type`): `iframe` is a raw HTML document.
+ * `frame` is not proof of React: until `defineCell` derived the mechanism
+ * from the source (migration 0366 moved the rows written before), every agent
+ * door stored a page as `frame`, so a `frame` row whose source IS a page is a
+ * page too. "Is a page" is the ONE classifier, `isHtmlPageSource`
+ * (`@synap-core/types/renderables`): the first character after whitespace is
+ * `<`, which an ES module never is. Not a doctype test: the founder's report
+ * opens with `<title>` (document 6aa8d140).
+ */
+export function cellIsHtmlPage(def: {
+  rendererType?: unknown;
+  rendererSource?: unknown;
+}): boolean {
+  const source =
+    typeof def.rendererSource === "string" ? def.rendererSource : "";
+  if (!source.trim()) return false;
+  if (def.rendererType === "iframe") return true;
+  return def.rendererType === "frame" && isHtmlPageSource(source);
+}
+
+export function cellEmbedRead(query: {
+  isLoading: boolean;
+  error: { data?: { code?: string | null } | null } | null | undefined;
+  data: unknown;
+  retry?: () => void;
+}): EmbedCellRead {
+  if (query.error) {
+    const code = query.error.data?.code;
+    return code && HIDDEN_CODES.has(code)
+      ? { state: "hidden" }
+      : { state: "failed", ...(query.retry ? { retry: query.retry } : {}) };
+  }
+  if (query.isLoading) return { state: "loading" };
+  const def = query.data as
+    | {
+        rendererType?: unknown;
+        rendererSource?: unknown;
+        workspaceId?: unknown;
+      }
+    | null
+    | undefined;
+  if (!def) return { state: "hidden" };
+  if (!cellIsHtmlPage(def)) return { state: "app" };
+  const html = def.rendererSource as string;
+  const bytes = htmlByteLength(html);
+  return {
+    state: "page",
+    html,
+    bytes,
+    tooLarge: bytes > CELL_FRAME_MAX_BYTES,
+    workspaceId: typeof def.workspaceId === "string" ? def.workspaceId : null,
   };
 }

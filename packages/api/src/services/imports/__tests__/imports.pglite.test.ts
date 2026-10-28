@@ -136,7 +136,6 @@ import {
   db,
   documents,
   and,
-  IMPORT_AWAITING_CURATION,
   notStagedImportItemWhere,
   notLibraryItemWhere,
 } from "@synap/database";
@@ -242,12 +241,6 @@ beforeEach(async () => {
   await h.client!.exec(
     `delete from document_versions; delete from documents; delete from focus_sessions; delete from proposals; delete from skills;`
   );
-});
-
-describe("the staged marker", () => {
-  it("is the same token in the pod predicate and the client contract", () => {
-    expect(IMPORT_AWAITING_CURATION).toBe(IMPORT_STAGED_MARKER);
-  });
 });
 
 describe("an import is a RUN, never the ambient work session", () => {

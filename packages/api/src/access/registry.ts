@@ -41,6 +41,7 @@ import {
   messagingAccounts,
   sourceConfigs,
   sourceSubscriptions,
+  boxRuns,
   userPreferences,
   userResourceState,
   libraryGroups,
@@ -564,6 +565,20 @@ registerVisibility({
     kind: "workspaceOwned",
     workspaceColumn: sourceSubscriptions.workspaceId,
     userColumn: sourceSubscriptions.userId,
+    nullWorkspaceMeans: "ownerPrivate",
+  },
+});
+// A box run (0356) is its REQUESTER's: the script, its parameters and its
+// evidence. A NULL workspace is a pod-wide run that stays owner-private. The
+// computer that leases it never reads through here — the lease routes floor on
+// the computer's own person (services/box-runs).
+registerVisibility({
+  table: boxRuns,
+  query: () => db.query.boxRuns,
+  rule: {
+    kind: "workspaceOwned",
+    workspaceColumn: boxRuns.workspaceId,
+    userColumn: boxRuns.userId,
     nullWorkspaceMeans: "ownerPrivate",
   },
 });

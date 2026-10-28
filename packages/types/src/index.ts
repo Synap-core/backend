@@ -83,6 +83,10 @@ export type {
   EventPattern,
 } from "./events/unified.js";
 
+// The dev loop event contract (dev.pr_merged, ci.finished, dev.deployed …)
+export * from "./events/dev-loop.js";
+export * from "./events/pr-state.js";
+
 // Automations (workflow DAGs)
 export * from "./automations/index.js";
 

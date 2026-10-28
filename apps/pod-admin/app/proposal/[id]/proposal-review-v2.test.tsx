@@ -103,6 +103,13 @@ vi.mock("../../../lib/trpc", () => ({
       },
     },
     entities: { get: { useQuery: () => ({ data: undefined }) } },
+    // A decided (or expired) proposal's page offers the next door from
+    // Review's rows: nothing waits here.
+    signals: {
+      list: {
+        useQuery: () => ({ data: undefined, isLoading: true, error: null }),
+      },
+    },
     workspaces: { get: { useQuery: () => ({ data: undefined }) } },
     governanceRules: {
       create: { useMutation: () => ({ mutate() {}, isPending: false }) },
@@ -334,6 +341,27 @@ describe("a create with no twin", () => {
   });
 });
 
+describe("the approve is bound to the revision this page drew", () => {
+  it("sends the length of the revision history it rendered", () => {
+    // An agent revised it twice before the page loaded; a third revise after
+    // it drew makes the pod refuse this approve (CONFLICT) instead of
+    // approving what the person never read.
+    const at = new Date().toISOString();
+    state.proposal = {
+      ...personCreate(null),
+      revisionHistory: [
+        { at, by: null, before: {}, patch: {} },
+        { at, by: null, before: {}, patch: {} },
+      ],
+    };
+    render();
+    press("Approve");
+    expect(approveCalls).toEqual([
+      { proposalId: ids.PROPOSAL, expectedRevision: 2 },
+    ]);
+  });
+});
+
 describe("a capture graph with a twin", () => {
   it("draws one card per new item, the choice inside its item's card", () => {
     state.proposal = graphCapture();
@@ -454,5 +482,160 @@ describe("why, the note and undo", () => {
     );
     // The requester's own words still show; only the class chip is gone.
     expect(text(html)).toContain("Note from Claude-code");
+  });
+});
+
+/** An agent's rewrite of a skill's instructions: it acts on its own. */
+function skillUpdate() {
+  const before = "## Creative director\n\nKeep the brand voice.";
+  const after =
+    "## Creative director\n\nWrite every caption in the brief's words.";
+  const request = { id: ids.NEW, body: after };
+  return {
+    ...personCreate(null),
+    targetType: "skill",
+    targetName: "creative-director",
+    proposalType: "update",
+    governanceReason: null,
+    data: { data: request, changeType: "update", targetType: "skill" },
+    request: { targetType: "skill", changeType: "update", data: request },
+    review: {
+      reasoning: undefined,
+      changes: [
+        { path: "body", label: "Body", operation: "update", before, after },
+      ],
+    },
+  };
+}
+
+describe("a skill rewrite (acts on its own)", () => {
+  it("names the skill, and reads the rewrite as what changes", () => {
+    state.proposal = skillUpdate();
+    const seen = text(render());
+    expect(seen).toContain("creative-director");
+    // Drawn word by word or paragraph by paragraph: either way both sides
+    // are named and both are there.
+    expect(seen).toContain("Removed");
+    expect(seen).toMatch(/\bbrand\b/);
+    expect(seen).toContain("Added");
+    expect(seen).toMatch(/\bcaption\b/);
+  });
+
+  it("offers Approve, never 'Approve & always…' beside it", () => {
+    state.proposal = skillUpdate();
+    const seen = text(render());
+    expect(presses.has("Approve")).toBe(true);
+    expect(seen).not.toContain("Approve & always");
+    // A plain change keeps the split.
+    state.proposal = personCreate(null);
+    expect(text(render())).toContain("Approve & always");
+  });
+});
+
+describe("a proposal whose moment passed", () => {
+  it("is history: Expired, and no Approve", () => {
+    state.proposal = { ...personCreate(null), lifetimeHours: 1 };
+    const seen = text(render());
+    expect(seen).toContain("Expired");
+    expect(presses.has("Approve")).toBe(false);
+    expect(seen).not.toContain("Approve & always");
+  });
+
+  it("inside its lifetime it is still a decision", () => {
+    state.proposal = { ...personCreate(null), lifetimeHours: 24 };
+    render();
+    expect(presses.has("Approve")).toBe(true);
+  });
+});
+
+describe("a long capture", () => {
+  function bigCapture(n: number) {
+    const data = {
+      operations: Array.from({ length: n }, (_, i) => ({
+        op: "create_entity",
+        ref: `e${i}`,
+        profileSlug: "person",
+        title: `Person ${i}`,
+      })),
+    };
+    return {
+      ...graphCapture(),
+      governanceReason: null,
+      data,
+      request: { targetType: "entity", changeType: "create", data },
+    };
+  }
+
+  it("caps each kind, then 'Show all N'", () => {
+    state.proposal = bigCapture(8);
+    const html = render();
+    expect(html.match(/data-proposed-record=/g)).toHaveLength(5);
+    expect(text(html)).toMatch(/Show all 8 /);
+  });
+
+  it("pins the decision bar to the window, on an opaque ground", () => {
+    state.proposal = bigCapture(8);
+    const html = render();
+    const bar = html.slice(html.indexOf("data-review-decision"));
+    const cls = bar.slice(bar.indexOf('class="'), bar.indexOf(">"));
+    expect(cls).toContain("sticky");
+    expect(cls).toContain("bottom-0");
+    expect(cls).toContain("bg-background");
+  });
+});
+
+describe("a request to turn an agent's skill on (capability.enable)", () => {
+  const SKILL = "66666666-6666-4666-8666-666666666666";
+  const CODE = [
+    "async function run(args) {",
+    '  return callProvider("gmail", "send", { to: args.to });',
+    "}",
+  ].join("\n");
+  function turnOnRequest(unreadSkills: number) {
+    const data = { skillIds: [SKILL], targetName: "mail_digest" };
+    return {
+      ...personCreate(null),
+      proposalType: "capability.enable",
+      targetType: "skill",
+      targetId: SKILL,
+      targetName: "mail_digest",
+      governanceReason: null,
+      data,
+      request: { targetType: "skill", changeType: "update", data },
+      review: {
+        reasoning: "I wrote this skill; it turns on only when you say so.",
+        changes: [],
+        turnsOn: {
+          skills: [
+            {
+              id: SKILL,
+              name: "mail_digest",
+              kind: "code",
+              executionMode: "sandbox",
+              code: CODE,
+              body: "Sends the morning digest.",
+              reach: { hosts: [], connections: ["Gmail"], unreadSteps: 0 },
+            },
+          ],
+          unreadSkills,
+        },
+      },
+    };
+  }
+
+  it("draws the skill's whole code and what it can reach", () => {
+    state.proposal = turnOnRequest(0);
+    const page = text(render());
+    for (const line of CODE.split("\n")) expect(page).toContain(line.trim());
+    expect(page).toContain("Can reach");
+    expect(page).toContain("your existing Gmail connection");
+    expect(page).not.toMatch(/cannot read/);
+  });
+
+  it("counts a skill in the request the reader cannot read", () => {
+    state.proposal = turnOnRequest(1);
+    expect(text(render())).toContain(
+      "It also turns on 1 skill you cannot read."
+    );
   });
 });

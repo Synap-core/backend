@@ -730,15 +730,28 @@ export function registerFocusSessionExecutors(): void {
       if (isTerminalSessionStatus(requestedStatus)) {
         const terminalStatus: TerminalSessionStatus = requestedStatus;
         // Terminal path: human approve executes complete without re-entering
-        // agent governance (no agentUserId from the original proposal).
+        // agent governance (no agentUserId from the original proposal). The
+        // closing agent's word on its own questions rides on the proposal and
+        // is applied (`approvedCloseOf`), never dropped.
         try {
           const { completeFocusSession } =
             await import("../../../services/focus-sessions/complete-session.js");
+          const { readCloseQuestionDispositions } =
+            await import("../../../services/messaging/room-post-kind.js");
+          const dispositions = readCloseQuestionDispositions(
+            innerData.questionDispositions
+          );
           const result = await completeFocusSession({
             sessionId,
             // Scope by session owner so the service's userId floor resolves.
             userId: session.userId,
             terminalStatus,
+            ...(proposal.agentUserId
+              ? {
+                  approvedCloseOf: proposal.agentUserId,
+                  questionDispositions: dispositions,
+                }
+              : {}),
             summary:
               typeof innerData.sessionSummary === "string"
                 ? innerData.sessionSummary
@@ -937,7 +950,10 @@ export function registerFocusSessionExecutors(): void {
           // An AGENT's list adds and updates, never deletes (C6): live,
           // approving an agent's `expectedOutputs: []` beside a rename deleted
           // every declared deliverable of session 9dc5da0c.
-          { keepUnlisted: !!proposal.agentUserId }
+          {
+            keepUnlisted: !!proposal.agentUserId,
+            askedBy: proposal.agentUserId ?? null,
+          }
         );
         if (goalChange.refusal) outputRefusals.push(goalChange.refusal);
 
@@ -1054,6 +1070,51 @@ export function registerFocusSessionExecutors(): void {
             // leave the proposal pending after a partial write.
             outputRefusals.push(
               "reason" in followed ? followed.reason : "follow refused"
+            );
+          }
+        }
+
+        // GRADING an automation proposed (`post_evidence` /
+        // `reevaluate_criterion`, plan v5 T2): applied through the SAME doors a
+        // granted automation reaches (`dev-loop/session-outcome-door.ts`), on
+        // the session's OWN owner — after the field write, so a criteria change
+        // in the same patch is the one graded. A grading failure is REPORTED,
+        // never thrown: the rest of the approved patch landed.
+        const evidence =
+          innerData.evidence && typeof innerData.evidence === "object"
+            ? (innerData.evidence as Record<
+                string,
+                { passed: boolean; detail?: string }
+              >)
+            : undefined;
+        const reevaluate = Array.isArray(innerData.reevaluateCriteria)
+          ? innerData.reevaluateCriteria.filter(
+              (k): k is string => typeof k === "string"
+            )
+          : [];
+        if (evidence || reevaluate.length > 0) {
+          const outcomeDoor =
+            await import("../../../services/dev-loop/session-outcome-door.js");
+          try {
+            if (evidence) {
+              await outcomeDoor.postEvidence({
+                sessionId,
+                userId: session.userId,
+                agentUserId: proposal.agentUserId ?? null,
+                evidence,
+              });
+            }
+            if (reevaluate.length > 0) {
+              await outcomeDoor.reevaluateCriteria({
+                sessionId,
+                userId: session.userId,
+                agentUserId: proposal.agentUserId ?? null,
+                criterionKeys: reevaluate,
+              });
+            }
+          } catch (err) {
+            outputRefusals.push(
+              `The criteria could not be graded: ${err instanceof Error ? err.message : String(err)}`
             );
           }
         }
@@ -1287,6 +1348,9 @@ async function instantiateApprovedPlaybook(args: {
     // a person already said yes, and refusing here would leave an approved row
     // that never materialized. The question becomes an owed slot instead.
     onMissingRequired: "owe",
+    // The proposer's own words, as the direct door stores them.
+    ownTitle: storedTitle(innerData.title),
+    ownGoal: typeof innerData.goal === "string" ? innerData.goal : null,
     ...(typeof innerData.prompt === "string" && innerData.prompt.trim()
       ? { goalOverride: innerData.prompt }
       : {}),
@@ -1314,7 +1378,7 @@ async function applyProposedOutputMutations(
   sessionId: string,
   innerData: Record<string, unknown>,
   ownerUserId: string,
-  opts: { keepUnlisted: boolean }
+  opts: { keepUnlisted: boolean; askedBy: string | null }
 ): Promise<string[]> {
   const expectedOutputs = z
     .array(expectedOutputWireSchema)

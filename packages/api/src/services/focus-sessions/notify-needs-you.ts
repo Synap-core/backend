@@ -21,13 +21,34 @@
  * needs-you read uses) whose label was NOT owed in `before`. An echoed array
  * that merely repeats an old block is not a new hand-off.
  *
+ * A RELAY WAITING FOR THE TAP (`reason.kind === 'relay'`, the relay door) is
+ * news of its own: the person answered in a chat, the answer is a commitment,
+ * and the agent is stopped until they tap Confirm. It is keyed per SLOT
+ * ({@link relayAwaitsTapGroupKey}), so the push that asked the question —
+ * still unread inside the window, most likely — does not swallow it.
+ *
  * Side effect only: never throws, never gates the write it follows, never
  * touches governance (`NotificationService.create` is itself non-fatal).
  */
-import { db, focusSessions, eq } from "@synap/database";
+import {
+  db,
+  focusSessions,
+  notifications,
+  users,
+  eq,
+  and,
+  ne,
+  drizzleSql,
+  focusSessionWaitsOnPersonWhere,
+} from "@synap/database";
 import type { ExpectedOutput } from "@synap/playbooks";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
-import type { Ask } from "@synap-core/types/ask";
+import {
+  ASK_COPY,
+  askCardSlotOf,
+  askCardView,
+  type Ask,
+} from "@synap-core/types/ask";
 import {
   blockingAskTarget,
   quickAnswerFor,
@@ -52,6 +73,11 @@ export const SESSION_NEEDS_YOU_NOTIFICATION_TYPE = notificationType;
 /** The session is the identity: one push per session per dedupe window. */
 export function sessionNeedsYouGroupKey(sessionId: string): string {
   return `${SESSION_NEEDS_YOU_NOTIFICATION_TYPE}:${sessionId}`;
+}
+
+/** One relay-awaiting-tap push per slot per window. */
+function relayAwaitsTapGroupKey(sessionId: string, label: string): string {
+  return `${sessionNeedsYouGroupKey(sessionId)}:relay:${normalizeExpectedLabel(label) ?? label}`;
 }
 
 /** Longest `why` / question quoted in the notification body. */
@@ -141,7 +167,9 @@ export function needsYouPush(
 
 type Reason =
   | { kind: "slots"; before: unknown; after: unknown }
-  | { kind: "question"; text: string; channelId: string };
+  | { kind: "question"; text: string; channelId: string }
+  /** A commitment's relay, stamped on `slot.pendingRelay`, awaiting the tap. */
+  | { kind: "relay"; slot: ExpectedOutput };
 
 /**
  * Tell the session's owner the session needs them. Returns true when a
@@ -170,7 +198,28 @@ export async function notifySessionNeedsYou(p: {
     let summary: string;
     let slotCount = 0;
     let fresh: ExpectedOutput[] = [];
-    if (p.reason.kind === "slots") {
+    let groupKey: string | null = null;
+    if (p.reason.kind === "relay") {
+      const { slot } = p.reason;
+      const relay = slot.pendingRelay;
+      if (!relay) return false;
+      const [agent] = await db
+        .select({ name: users.name })
+        .from(users)
+        .where(eq(users.id, relay.relayedBy))
+        .limit(1);
+      fresh = [slot];
+      slotCount = 1;
+      const quote = relay.quote?.trim();
+      // The card's heading, not the raw label: the question as every surface
+      // draws it ("Decide:" stripped, a confirm's prompt), so the lock screen
+      // and the card it opens say the same thing.
+      const { heading } = askCardView(askCardSlotOf(slot));
+      summary = clip(
+        `${heading} · ${ASK_COPY.awaitingYourTap(agent?.name ?? null)}${quote ? ` · ${ASK_COPY.youSaid(quote)}` : ""}`
+      );
+      groupKey = relayAwaitsTapGroupKey(p.sessionId, slot.label);
+    } else if (p.reason.kind === "slots") {
       fresh = newlyOwedSlots(
         Array.isArray(p.reason.before)
           ? (p.reason.before as ExpectedOutput[])
@@ -199,7 +248,15 @@ export async function notifySessionNeedsYou(p: {
     });
     if (!session) return false;
 
-    const push = fresh.length > 0 ? needsYouPush(session.id, fresh) : null;
+    const asked = fresh.length > 0 ? needsYouPush(session.id, fresh) : null;
+    // A relay's push says the relay and asks for the tap: the ask's own quick
+    // answer (Yes / No) would record the person's answer over the relayed one,
+    // and its body would hide that an agent relayed it. It still lands on the
+    // ask, where Confirm is.
+    const push =
+      asked && p.reason.kind === "relay"
+        ? { ...asked, quickAnswer: null, body: undefined }
+        : asked;
 
     const id = await NotificationService.create({
       type: SESSION_NEEDS_YOU_NOTIFICATION_TYPE,
@@ -210,7 +267,7 @@ export async function notifySessionNeedsYou(p: {
       // The SESSION is the destination (the registry's navigate-object action
       // and the push tap both read `sourceId` as the object id).
       sourceId: session.id,
-      groupKey: sessionNeedsYouGroupKey(session.id),
+      groupKey: groupKey ?? sessionNeedsYouGroupKey(session.id),
       // The push lands on the ASK when one slot is owed (the in-app row keeps
       // its registry action: open the session). A room question keeps the
       // session target the registry derives.
@@ -244,5 +301,40 @@ export async function notifySessionNeedsYou(p: {
       "session.needs_you notification failed"
     );
     return false;
+  }
+}
+
+/**
+ * The session's `session.needs_you` rows leave the bell once it no longer
+ * waits on the person (no owed slot, no open question). Called by the close
+ * door, after it stamped what the end of a session settles: the needs-you
+ * read already drops such a row by reading the session's state
+ * (`dedupeNotifications`), so this only stops the bell keeping it unread
+ * forever. One SQL statement, so the state it reads is the state it acts on.
+ * Never throws.
+ */
+export async function settleSessionNeedsYou(sessionId: string): Promise<void> {
+  try {
+    await db
+      .update(notifications)
+      .set({ status: "actioned", readAt: new Date() })
+      .where(
+        and(
+          eq(notifications.type, SESSION_NEEDS_YOU_NOTIFICATION_TYPE),
+          eq(notifications.sourceType, "session"),
+          eq(notifications.sourceId, sessionId),
+          ne(notifications.status, "actioned"),
+          drizzleSql`NOT EXISTS (
+            SELECT 1 FROM ${focusSessions}
+            WHERE ${focusSessions.id} = ${sessionId}
+              AND ${focusSessionWaitsOnPersonWhere()}
+          )`
+        )
+      );
+  } catch (err) {
+    logger.warn(
+      { err, sessionId },
+      "session.needs_you rows not settled (the close stands)"
+    );
   }
 }

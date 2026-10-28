@@ -17,12 +17,12 @@ import {
   desc,
   inArray,
   getActingAgentUserId,
-  isDelegationHeaders,
   userVisibleWhere,
   type SQL,
 } from "@synap/database";
 import { skills, tools } from "@synap/database/schema";
 import type { ProviderVerbSpec } from "@synap/database/schema";
+import type { CapabilityEnableOffer } from "../services/capabilities/propose-capability-enable.js";
 import {
   getLinksFor,
   createLinks,
@@ -46,10 +46,14 @@ import {
 import { gateCapabilityExecution } from "../services/capabilities/gate-capability-execution.js";
 import {
   allowedHostsChanged,
+  boxDeclarationChanged,
   readOnlyWidened,
   skillExecFieldsChanged,
 } from "../services/capabilities/skill-exec-fields.js";
 import { CAPABILITY_RUN_PROPOSAL_TYPE } from "../services/proposals/proposal-class.js";
+import { parseBoxDeclaration } from "../services/box-runs/box-spec.js";
+import { declaredReadOnly } from "../services/capabilities/capability-drift.js";
+import { isQueuedBoxRunResult } from "../services/box-runs/box-runs.js";
 import { auditLog } from "../utils/audit-log.js";
 import { setSkillApproved } from "../services/capabilities/set-skill-approved.js";
 import { skillBornApproved } from "../services/capabilities/skill-born-approved.js";
@@ -57,7 +61,7 @@ import { emitSideEffects } from "@synap/events";
 import { randomUUID } from "crypto";
 import { parseSkillMd } from "../skills/skill-md-parser.js";
 import { parseSkillToml } from "../skills/skill-toml-parser.js";
-import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
+import { runSkill } from "../services/skills/run-skill.js";
 import * as acorn from "acorn";
 import * as acornWalk from "acorn-walk";
 import {
@@ -244,10 +248,58 @@ export function scanSkillGlobals(code: string): {
  */
 export function assertSkillCodeAllowed(
   kind: string | null | undefined,
-  code: string | undefined | null
+  code: string | undefined | null,
+  /**
+   * A `box` skill's code is a Python or Node script that runs on the person's
+   * computer, never in the isolate: the isolate's globals do not apply.
+   */
+  executionMode?: string | null
 ): void {
-  if (kind !== "code") return;
+  if (kind !== "code" || executionMode === "box") return;
   assertSkillGlobalsAllowed(code);
+}
+
+/**
+ * "Read-only" makes every approved run automatic at the gate. A script with
+ * packages and network has no such meaning, so a box skill never carries it:
+ * each agent run of it is reviewed.
+ */
+export function assertBoxNotReadOnly(
+  metadata: Record<string, unknown> | undefined
+): void {
+  if (declaredReadOnly(metadata) === true) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "A box skill cannot be read-only: a script with packages and network is reviewed on every agent run. Remove readOnly.",
+    });
+  }
+}
+
+/**
+ * The ONE box rule for a skill write (0356): a `box` skill is a code skill
+ * with a valid `metadata.box` declaration and no `readOnly`. Returns the
+ * metadata bag to store (the declaration normalised by `parseBoxDeclaration`),
+ * or throws in words. A non-box write passes its metadata through untouched.
+ */
+export function boxSkillMetadata(input: {
+  executionMode: string | undefined;
+  kind: string;
+  metadata: Record<string, unknown> | undefined;
+}): Record<string, unknown> | undefined {
+  if (input.executionMode !== "box") return input.metadata;
+  if (input.kind !== "code") {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "A box skill is a script: send its code.",
+    });
+  }
+  assertBoxNotReadOnly(input.metadata);
+  const parsed = parseBoxDeclaration(input.metadata?.box);
+  if (!parsed.ok) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: parsed.error });
+  }
+  return { ...(input.metadata ?? {}), box: parsed.box };
 }
 
 /**
@@ -421,7 +473,15 @@ export type InsertSkillGovernedInput = typeof skills.$inferInsert & {
 };
 
 export type InsertSkillGovernedResult =
-  | { status: "installed"; skill: typeof skills.$inferSelect }
+  | {
+      status: "installed";
+      skill: typeof skills.$inferSelect;
+      /**
+       * An agent's skill no person reviewed, born off: the "turn this on?"
+       * request filed for the person (`requestAgentSkillTurnOn`).
+       */
+      turnOnRequest?: CapabilityEnableOffer;
+    }
   | { status: "proposed"; proposalId: string }
   | { status: "denied"; reason: string };
 
@@ -446,7 +506,7 @@ export async function insertSkillGoverned(
   // do NOT call this function) — this is not a double-scan of the same code
   // path, it closes the gap for callers that construct a `kind: "code"` skill
   // without going through those two mutations.
-  assertSkillCodeAllowed(values.kind, values.code);
+  assertSkillCodeAllowed(values.kind, values.code, values.executionMode);
 
   const perm = await checkPermissionOrPropose({
     userId: values.userId,
@@ -470,11 +530,20 @@ export async function insertSkillGoverned(
     return { status: "proposed", proposalId: perm.proposalId };
   }
 
+  const authorAgentUserId = agentUserId ?? skillAuthor?.agentUserId;
+  const personApprovedProposal =
+    !agentUserId && skillAuthor?.personApproved === true;
   const approved = skillBornApproved({
     kind: values.kind,
-    agentUserId: agentUserId ?? skillAuthor?.agentUserId,
-    personApprovedProposal:
-      !agentUserId && skillAuthor?.personApproved === true,
+    code: values.code,
+    providerSpec: values.providerSpec,
+    agentUserId: authorAgentUserId,
+    personApprovedProposal,
+    executionMode: values.executionMode,
+    metadata: values.metadata,
+    // No door through here declares `requires` tools (the `skill/create`
+    // executor writes them after, and re-decides with them).
+    requiredTools: [],
   });
 
   const [skill] = await db
@@ -505,7 +574,23 @@ export async function insertSkillGoverned(
     workspaceId: values.workspaceId ?? undefined,
   });
 
-  return { status: "installed", skill };
+  // Dynamic, like the other enable-request imports here: the proposer's module
+  // graph stays out of this router's load.
+  const { requestAgentSkillTurnOn } =
+    await import("../services/capabilities/request-skill-turn-on.js");
+  const turnOnRequest = await requestAgentSkillTurnOn({
+    skill,
+    authorAgentUserId,
+    personReviewed: personApprovedProposal,
+    userId: values.userId,
+    workspaceId: values.workspaceId ?? null,
+  });
+
+  return {
+    status: "installed",
+    skill,
+    ...(turnOnRequest ? { turnOnRequest } : {}),
+  };
 }
 
 /**
@@ -1189,7 +1274,9 @@ export const skillsRouter = router({
         providerSpec: z.record(z.string(), z.unknown()).optional(),
         parameters: z.record(z.string(), z.unknown()).optional(),
         category: z.string().optional(),
-        executionMode: z.enum(["sync", "async"]).default("sync"),
+        /** `box` (0356): a script run on the person's computer; needs
+         *  `metadata.box` (language, packages, hosts, limits). */
+        executionMode: z.enum(["sync", "async", "box"]).default("sync"),
         timeoutSeconds: z.number().min(1).max(300).default(30),
         /**
          * The tools this skill `requires` (its `callProvider` targets), written
@@ -1258,6 +1345,18 @@ export const skillsRouter = router({
       // input.kind still honored). A skill must carry documentation or code.
       const hasCode = !!input.code?.trim();
       const kind = input.kind ?? (hasCode ? "code" : "instruction");
+      // An instruction skill's text is its `body`; `code` is what the runtime
+      // evaluates. An `instruction` label on code would skip the code scan
+      // and read as prose on every review while it runs as JavaScript.
+      // Only the definition applier keeps the catalog's older shape, an
+      // instruction skill's Markdown in `code` (it is born unapproved there).
+      if (kind === "instruction" && hasCode && !isDefinitionApplier(ctx)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            'An instruction skill carries no code: put its text in `body`, or create it with kind "code".',
+        });
+      }
       // `declarative` (providerSpec) and `builtin` (in-process handler) carry no
       // body/code, so they are exempt from the documentation-or-code requirement.
       if (
@@ -1285,7 +1384,14 @@ export const skillsRouter = router({
       // BEFORE it persists — the single funnel every code-skill create hits
       // (human UI, AI via /agent-skills/executable → this create). The author/AI
       // learns the gap now, not the reviewer at approval or the run at execution.
-      assertSkillCodeAllowed(kind, input.code);
+      assertSkillCodeAllowed(kind, input.code, input.executionMode);
+      // A box skill carries its declaration in `metadata.box`, normalised
+      // here so the proposal, the review and the stored row read ONE shape.
+      const metadata = boxSkillMetadata({
+        executionMode: input.executionMode,
+        kind,
+        metadata: input.metadata,
+      });
 
       // A declared tool must exist and be visible to the author NOW — a
       // proposal naming a tool nobody can see would approve a scope that
@@ -1352,6 +1458,9 @@ export const skillsRouter = router({
           ...(requiredToolIds.length
             ? { requiredToolIds, requiredToolNames }
             : {}),
+          // A box skill's declaration (packages, hosts, limits) IS what the
+          // person approves with the code, and what the approved row runs.
+          ...(input.executionMode === "box" && metadata ? { metadata } : {}),
         },
         agentUserId: input.agentUserId,
       });
@@ -1412,11 +1521,17 @@ export const skillsRouter = router({
             : {}),
           // Persist the caller-supplied metadata bag (e.g. the marketplace
           // source-link); omitted → the column default `{}` applies.
-          ...(input.metadata ? { metadata: input.metadata } : {}),
+          ...(metadata ? { metadata } : {}),
           status: "active",
           approved: skillBornApproved({
             kind,
+            code: input.code,
+            providerSpec: input.providerSpec,
             agentUserId: input.agentUserId,
+            executionMode: input.executionMode,
+            metadata,
+            // Declared now, linked just below: the rule must see them.
+            requiredTools: requiredToolIds,
           }),
         })
         .returning();
@@ -1449,9 +1564,25 @@ export const skillsRouter = router({
         workspaceId: input.workspaceId,
       });
 
+      // 5. An agent's skill born off with no person reviewing it (a rule
+      //    granted the create): ONE "turn this on?" request for the person.
+      const { requestAgentSkillTurnOn } =
+        await import("../services/capabilities/request-skill-turn-on.js");
+      const turnOnRequest = await requestAgentSkillTurnOn({
+        skill,
+        authorAgentUserId: input.agentUserId,
+        personReviewed: false,
+        userId,
+        workspaceId: input.workspaceId ?? null,
+        sessionId: ctx.sessionId ?? null,
+      });
+
       return {
         id: skill.id,
         status: "created" as const,
+        approved: skill.approved,
+        // Present only when one was filed (undefined never reaches the wire).
+        turnOnRequest: turnOnRequest ?? undefined,
       };
     }),
 
@@ -1537,7 +1668,18 @@ export const skillsRouter = router({
       // crypto/…) is the same ReferenceError-at-run bug the create scan closes.
       // Judged on the kind the UPDATE WRITES (the same value, below).
       const writtenKind = skillKindAfterUpdate(input, existingSkill.kind);
-      assertSkillCodeAllowed(writtenKind, input.code);
+      const writtenMode = input.executionMode ?? existingSkill.executionMode;
+      assertSkillCodeAllowed(writtenKind, input.code, writtenMode);
+      // A box declaration edit is parsed by the same rule as create, and a
+      // box skill is never made read-only.
+      if (writtenMode === "box") assertBoxNotReadOnly(metadataPatch);
+      if (metadataPatch && "box" in metadataPatch && writtenMode === "box") {
+        metadataPatch.box = boxSkillMetadata({
+          executionMode: "box",
+          kind: writtenKind,
+          metadata: { box: metadataPatch.box },
+        })?.box;
+      }
 
       // The acting agent, derived exactly as `delete` derives it: the ambient
       // ALS value first (set server-side at every key-auth entry point, so an
@@ -1629,6 +1771,12 @@ export const skillsRouter = router({
         readOnlyWidened(
           metadataPatch as Record<string, unknown> | undefined,
           existingSkill.metadata as Record<string, unknown> | null
+        ) ||
+        // A box skill's packages, hosts and limits were approved with its
+        // code; a change is new code or a wider egress allowlist.
+        boxDeclarationChanged(
+          metadataPatch as Record<string, unknown> | undefined,
+          existingSkill.metadata as Record<string, unknown> | null
         );
 
       // The column is typed `ProviderVerbSpec`; the input accepts the open
@@ -1690,6 +1838,22 @@ export const skillsRouter = router({
           existingSkill.slug,
           updateData.body
         );
+      }
+
+      // 6. An agent's change switched the skill off (a rule granted the edit,
+      //    so no person reviewed it): ONE "turn this on?" request for the
+      //    person, so an edited skill never sits off unseen either.
+      if (execChanged && actingAgentUserId && _updated && !_updated.approved) {
+        const { requestAgentSkillTurnOn } =
+          await import("../services/capabilities/request-skill-turn-on.js");
+        await requestAgentSkillTurnOn({
+          skill: _updated,
+          authorAgentUserId: actingAgentUserId,
+          personReviewed: false,
+          userId,
+          workspaceId: existingSkill.workspaceId ?? null,
+          sessionId: ctx.sessionId ?? null,
+        });
       }
 
       return {
@@ -1803,8 +1967,8 @@ export const skillsRouter = router({
   /**
    * Execute a skill by ID
    *
-   * Delegates execution to the Intelligence Hub which has the sandboxed
-   * executor. Updates execution metadata (count + lastTestedAt) on success.
+   * Runs through the one skill door (`runSkill`): the pod's sandbox unless
+   * SKILL_RUNTIME=is. Updates execution metadata (count + lastTestedAt) on success.
    */
   execute: protectedProcedure
     .input(
@@ -1917,42 +2081,26 @@ export const skillsRouter = router({
       }
       // decision === "run" → fall through to execute.
 
-      // Resolve the intelligence service from DB (workspace pref → user pref → default)
-      const { endpoint: hubUrl, serviceApiKey: hubApiKey } =
-        await resolveIntelligenceService({
-          userId,
-          workspaceId: skill.workspaceId ?? undefined,
-        });
-
+      // The ONE skill door (R2): the pod runs it unless SKILL_RUNTIME=is. The
+      // person's own run carries no agent and no verb act: an in-skill write is
+      // the person's, gated as theirs.
       let result: {
         success: boolean;
         result?: unknown;
         error?: string;
         executionTimeMs: number;
       };
-
       try {
-        const response = await fetch(`${hubUrl}/api/skills/execute`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-API-Key": hubApiKey,
-            // D4: the skill's hub calls run as `userId` on a per-run token.
-            ...isDelegationHeaders({ isUrl: hubUrl, operatorUserId: userId }),
-          },
-          body: JSON.stringify({
-            skillId: input.id,
-            userId,
-            parameters: input.input ?? {},
-          }),
+        const envelope = await runSkill({
+          skillId: input.id,
+          userId,
+          parameters: input.input ?? {},
+          workspaceId: skill.workspaceId ?? null,
         });
-
-        if (!response.ok) {
-          const text = await response.text().catch(() => "");
-          throw new Error(`Hub returned ${response.status}: ${text}`);
-        }
-
-        result = (await response.json()) as typeof result;
+        result = {
+          ...envelope,
+          executionTimeMs: envelope.executionTimeMs ?? 0,
+        };
       } catch (err) {
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
@@ -1960,8 +2108,9 @@ export const skillsRouter = router({
         });
       }
 
-      // Update execution metadata on success
-      if (result.success) {
+      // Update execution metadata on success. A box script is only queued
+      // here (`runSkill`): it has not run yet.
+      if (result.success && !isQueuedBoxRunResult(result.result)) {
         const currentMeta =
           (skill.metadata as Record<string, unknown> | null) ?? {};
         const execCount =

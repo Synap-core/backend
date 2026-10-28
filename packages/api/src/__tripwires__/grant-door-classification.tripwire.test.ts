@@ -62,7 +62,9 @@ describe("MCP read-tool classification (derived from the live tool list)", () =>
         ? d.subjects
         : d.bound === "person"
           ? [d.subject]
-          : [];
+          : d.bound === "narrowed"
+            ? [d.subject, ...d.full]
+            : [];
     const unknown = doors.flatMap(([n, d]) =>
       declared(d)
         .filter((s) => !known.has(s))

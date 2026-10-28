@@ -751,6 +751,13 @@ export function registerPlaybookExecutors(): void {
           inner.agentType.trim() !== ""
             ? { agentType: inner.agentType }
             : {}),
+          // The agent the run was asked to be HANDED to. Without it an
+          // approved run would start the playbook's own executor (the
+          // built-in AI) instead of the agent the person approved.
+          ...(typeof inner.handToAgentId === "string" &&
+          inner.handToAgentId.trim() !== ""
+            ? { handToAgentId: inner.handToAgentId.trim() }
+            : {}),
         });
       let batch: BatchRunReceipt | undefined;
       // What this approval started — EVERY approval, not only a batch: the

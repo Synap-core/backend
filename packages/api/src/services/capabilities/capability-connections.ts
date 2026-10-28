@@ -17,8 +17,25 @@
 
 import { invalidateUrlReaderCache } from "./url-reader-cache.js";
 import { randomUUID } from "node:crypto";
-import { encryptServerSide, db, and, eq, isNull, asc } from "@synap/database";
-import { secrets, secretAuditLog, secretUsages } from "@synap/database/schema";
+import {
+  encryptServerSide,
+  decryptServerSide,
+  db,
+  and,
+  eq,
+  isNull,
+  asc,
+  drizzleSql,
+} from "@synap/database";
+import {
+  secrets,
+  secretAuditLog,
+  secretUsages,
+  links,
+  tools,
+  vaultGrants,
+} from "@synap/database/schema";
+import { makeVaultReference, vaultSecretIdOf } from "@synap-core/types/vault";
 
 import { requirePodAdmin, isPodAdmin } from "../../utils/workspace-role.js";
 import { resolveBroker } from "../../connectors/index.js";
@@ -597,6 +614,162 @@ export async function updateCredential(
   }
 
   return persistedRowToView(row, null);
+}
+
+// ── rotate from a handed-over secret ───────────────────────────────────────────
+
+/**
+ * Replace the key an installed capability's tools use with the value of a
+ * secret the person handed over (a session ask's `provide {kind:'secret'}`
+ * answer, a `vault://<id>`). The agent that asked never holds the value, so it
+ * cannot rotate through `updateCredential({ value })`; the pod copies it
+ * server-side, through that same writer.
+ *
+ * IN PLACE: the value lands on the secret the tools' `vault://<id>` already
+ * names, so every reference keeps resolving and none moves. The handed-over row
+ * is then soft-deleted, so a rotation leaves exactly one secret — never a second
+ * one nothing points at (unipile-linkedin, 2026-10-27).
+ *
+ * Refused, with nothing written, when the capability's tools point at no vault
+ * key or at several (name one with `credentialId`); when the source is not the
+ * actor's, is server-unreadable, or is already some capability's or tool's key
+ * (consuming it would break that one); and when an AGENT names a secret no one
+ * handed it (no vault grant to that agent — a person's other secrets are not
+ * raw material for an agent's rotation).
+ */
+export async function rotateCapabilityKeyFromSecret(input: {
+  capabilityId: string;
+  actorUserId: string;
+  sourceSecretId: string;
+  /** The acting agent, when an agent runs it. */
+  agentUserId?: string | null;
+  /** Which key, when the capability's tools use more than one. */
+  credentialId?: string;
+}): Promise<{
+  status: "rotated" | "unchanged";
+  credential: CapabilityCredentialView | null;
+}> {
+  const { capabilityId, actorUserId, sourceSecretId } = input;
+
+  // The keys the capability's tools read: their `vault://<id>` refs.
+  const memberTools = await db
+    .select({ credentialRef: tools.credentialRef })
+    .from(links)
+    .innerJoin(tools, drizzleSql`${tools.id}::text = ${links.fromId}`)
+    .where(
+      and(
+        eq(links.fromType, "tool"),
+        eq(links.linkType, "member_of"),
+        eq(links.toType, "capability"),
+        eq(links.toId, capabilityId)
+      )
+    );
+  const linked = [
+    ...new Set(
+      memberTools
+        .map((t) => vaultSecretIdOf(t.credentialRef))
+        .filter((id): id is string => !!id)
+    ),
+  ];
+  if (linked.length === 0) {
+    throw new Error(
+      "This capability's tools use no vault key, so there is no key to replace."
+    );
+  }
+  const targetId =
+    input.credentialId ?? (linked.length === 1 ? linked[0]! : null);
+  if (!targetId) {
+    throw new Error(
+      `This capability's tools use ${linked.length} keys; say which one to replace (credentialId: ${linked.join(", ")}).`
+    );
+  }
+  if (!linked.includes(targetId)) {
+    throw new Error(
+      "Credential not found for this capability: its tools do not use that key."
+    );
+  }
+  if (targetId === sourceSecretId)
+    return { status: "unchanged", credential: null };
+
+  const [source] = await db
+    .select()
+    .from(secrets)
+    .where(and(eq(secrets.id, sourceSecretId), isNull(secrets.deletedAt)))
+    .limit(1);
+  if (!source || source.userId !== actorUserId) {
+    throw new Error("The new key's secret was not found in your vault.");
+  }
+  const [sourceTool] = await db
+    .select({ id: tools.id })
+    .from(tools)
+    .where(eq(tools.credentialRef, makeVaultReference(sourceSecretId)))
+    .limit(1);
+  if (source.capabilityId || sourceTool) {
+    throw new Error(
+      "That secret is already the key of another capability or tool; hand over the new key as its own secret."
+    );
+  }
+  if (source.encryptionMode !== "server") {
+    throw new Error(
+      "That secret is encrypted on your device, so the pod cannot copy it into the capability. Store the new key again from the vault."
+    );
+  }
+  if (input.agentUserId) {
+    const [handedOver] = await db
+      .select({ id: vaultGrants.id })
+      .from(vaultGrants)
+      .where(
+        and(
+          eq(vaultGrants.grantableType, "secret"),
+          eq(vaultGrants.grantableId, sourceSecretId),
+          eq(vaultGrants.grantedTo, input.agentUserId)
+        )
+      )
+      .limit(1);
+    if (!handedOver) {
+      throw new Error(
+        "That secret was not handed to you. Ask the person for the new key with a provide-secret ask, then use the reference their answer gives you."
+      );
+    }
+  }
+
+  const value = decryptServerSide(
+    {
+      encryptedData: source.encryptedData,
+      iv: source.iv,
+      authTag: source.authTag,
+    },
+    { column: "secrets.encrypted_data", rowId: source.id }
+  );
+  // The one writer: owner-gated, and refuses a key not stamped as this
+  // capability's credential.
+  const credential = await updateCredential({
+    capabilityId,
+    credentialId: targetId,
+    actorUserId,
+    value,
+  });
+
+  await db
+    .update(secrets)
+    .set({
+      deletedAt: new Date(),
+      deletedBy: actorUserId,
+      updatedAt: new Date(),
+    })
+    .where(eq(secrets.id, source.id));
+  await db.insert(secretAuditLog).values({
+    secretId: source.id,
+    userId: actorUserId,
+    action: "deleted",
+    metadata: {
+      via: "capability-connections",
+      capabilityId,
+      copiedInto: targetId,
+    },
+  });
+
+  return { status: "rotated", credential };
 }
 
 // ── remove ─────────────────────────────────────────────────────────────────────

@@ -31,9 +31,12 @@ import {
 import { apiKeys, grants as grantRows, users } from "@synap/database/schema";
 import { MACHINE_AGENT_TYPE } from "@synap-core/types/agents";
 import {
+  KEY_USES,
   MAX_GRANT_PERMISSIONS,
   meetScope,
   pinningWithin,
+  scopesForKey,
+  type KeyUseId,
 } from "@synap-core/types/grants";
 import { revokeApiKeys } from "@synap/database/api-key-revocation";
 import {
@@ -72,6 +75,55 @@ export const ExpiresInDaysSchema = z
   .max(36_500)
   .nullable()
   .optional();
+
+/**
+ * `uses` on a person's mint: where the key is used (`KEY_USES` ids). The door
+ * derives the key's scopes from them (`deriveKeyScopes`); a client's scope
+ * list is never what a page sends (keys plan Decision 2).
+ */
+export const KeyUsesSchema = z
+  .array(z.enum(KEY_USES.map((u) => u.id) as [KeyUseId, ...KeyUseId[]]))
+  .min(1)
+  .max(KEY_USES.length);
+
+/**
+ * The scopes a key made for `uses` carries, derived HERE, server-side, from
+ * the grant it will hold: a write scope only when the grant writes. Never
+ * `data.*` or a privileged scope (`KEY_SCOPES_NOT_DERIVED`).
+ */
+export function deriveKeyScopes(
+  uses: readonly KeyUseId[],
+  grant: Pick<GrantInput, "permissions">
+): string[] {
+  const scope = scopesForKey({ uses, permissions: grant.permissions });
+  if (scope.length === 0)
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Say where the key is used: pick at least one use.",
+    });
+  return scope;
+}
+
+/**
+ * A key minted for ONE space is confined to it (D-3): its grant is pinned to
+ * `workspaceId` when it names no space, and refused when it names another.
+ * Without a `workspaceId` the grant is unchanged.
+ */
+export function pinGrantToWorkspace(
+  grant: GrantInput,
+  workspaceId: string | undefined
+): GrantInput {
+  if (!workspaceId) return grant;
+  const named = grant.workspaceIds ?? [];
+  if (named.length === 0) return { ...grant, workspaceIds: [workspaceId] };
+  if (named.some((id) => id !== workspaceId))
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "This key is made for one space; its access cannot name another space.",
+    });
+  return { ...grant, workspaceIds: [workspaceId] };
+}
 
 /** Validate patterns at the door (400), before anything is minted. */
 export function assertGrantInput(grant: GrantInput | undefined): void {

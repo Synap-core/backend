@@ -564,3 +564,176 @@ describe("applyDocumentPatch — one title on a whole-body replace", () => {
     expect((await row(id)).content).toBe("# Plan B\n\nAnother plan.\n");
   });
 });
+
+// RENAME (set_title): no governed agent door could rename a document — pod
+// document deb1a133 stayed "Untitled". `set_title` is one more op of THE patch
+// door: the same apply-or-propose gate, the same base guard, the same approval
+// half. The assertion is on the stored `documents.title`.
+async function named(id: string) {
+  const { rows } = await q<{
+    title: string;
+    content_revision: number;
+    current_version: number;
+  }>(
+    `select title, content_revision, current_version from documents where id = $1`,
+    [id]
+  );
+  const versions = await q<{ n: number }>(
+    `select count(*)::int as n from document_versions where document_id = $1`,
+    [id]
+  );
+  return { ...rows[0]!, versions: versions.rows[0]!.n };
+}
+
+describe("applyDocumentPatch — set_title renames the document", () => {
+  it("an agent's rename is PROPOSED under document.update; the approval renames, content untouched", async () => {
+    const id = await newDocument();
+    const res = await applyDocumentPatch({
+      userId: USER,
+      agentUserId: AGENT,
+      documentId: id,
+      ops: [{ op: "set_title", title: "Launch plan" }],
+    });
+    expect(res.status).toBe("proposed");
+    expect(res.rename).toEqual({ before: "Plan", after: "Launch plan" });
+    expect(h.gate.map((g) => g.action)).toEqual(["update"]);
+    expect(h.gate[0]!.data.rename).toEqual({
+      before: "Plan",
+      after: "Launch plan",
+    });
+    // Proposed: nothing moved yet.
+    expect((await named(id)).title).toBe("Plan");
+
+    const applied = await applyApprovedDocumentPatch(
+      {
+        targetId: id,
+        agentUserId: AGENT,
+        createdBy: AGENT,
+        data: h.gate[0]!.data,
+      },
+      USER
+    );
+    const after = await named(id);
+    expect(after.title).toBe("Launch plan");
+    // A rename is not a content write: no revision claimed, no version cut.
+    expect(after.content_revision).toBe(1);
+    expect(after.versions).toBe(1);
+    expect(applied.versionId).toBeNull();
+    expect((await row(id)).content).toBe(BODY);
+    expect(h.replaced).toEqual([]);
+  });
+
+  it("a person's rename applies directly", async () => {
+    const id = await newDocument();
+    const res = await applyDocumentPatch({
+      userId: USER,
+      documentId: id,
+      ops: [{ op: "set_title", title: "  Launch plan  " }],
+    });
+    expect(res).toMatchObject({
+      status: "applied",
+      revision: 1,
+      rename: { before: "Plan", after: "Launch plan" },
+    });
+    expect(res.status === "applied" && res.undo).toBeFalsy();
+    expect((await named(id)).title).toBe("Launch plan");
+  });
+
+  it("an agent's rename a governance rule auto-approves applies directly", async () => {
+    const id = await newDocument();
+    h.agentAutoApply = true;
+    const res = await applyDocumentPatch({
+      userId: USER,
+      agentUserId: AGENT,
+      documentId: id,
+      baseRevision: 1,
+      ops: [{ op: "set_title", title: "Launch plan" }],
+    });
+    expect(res.status).toBe("applied");
+    expect(h.gate[0]!.forcePropose).toBeUndefined();
+    expect((await named(id)).title).toBe("Launch plan");
+  });
+
+  it("a rename with a rewrite: one write, and the one-title rule strips the NEW name's heading", async () => {
+    const id = await newDocument("Old body.\n");
+    const res = await applyDocumentPatch({
+      userId: USER,
+      documentId: id,
+      baseRevision: 1,
+      ops: [
+        { op: "replace_all", content: "# Launch plan\n\nNew body.\n" },
+        { op: "set_title", title: "Launch plan" },
+      ],
+    });
+    expect(res.status).toBe("applied");
+    const after = await named(id);
+    expect(after.title).toBe("Launch plan");
+    expect(after.content_revision).toBe(2);
+    expect((await row(id)).content).toBe("New body.\n");
+  });
+
+  it("a stale base is a CONFLICT and renames nothing", async () => {
+    const id = await newDocument();
+    await expect(
+      applyDocumentPatch({
+        userId: USER,
+        documentId: id,
+        baseRevision: 0,
+        ops: [{ op: "set_title", title: "Launch plan" }],
+      })
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    expect((await named(id)).title).toBe("Plan");
+  });
+
+  it("an approval over a name a person changed since is a CONFLICT — never overwritten", async () => {
+    const id = await newDocument();
+    await applyDocumentPatch({
+      userId: USER,
+      agentUserId: AGENT,
+      documentId: id,
+      ops: [{ op: "set_title", title: "Launch plan" }],
+    });
+    await q(`update documents set title = 'Q3 plan' where id = $1`, [id]);
+    await expect(
+      applyApprovedDocumentPatch(
+        {
+          targetId: id,
+          agentUserId: AGENT,
+          createdBy: AGENT,
+          data: h.gate[0]!.data,
+        },
+        USER
+      )
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    expect((await named(id)).title).toBe("Q3 plan");
+  });
+
+  it("a machine label is refused before the gate (titles are derived, never machine labels)", async () => {
+    const id = await newDocument();
+    for (const title of [randomUUID(), "local-b88d021b7d74", "Document"]) {
+      await expect(
+        applyDocumentPatch({
+          userId: USER,
+          agentUserId: AGENT,
+          documentId: id,
+          ops: [{ op: "set_title", title }],
+        })
+      ).rejects.toThrow(/not a name a person would read/);
+    }
+    expect(h.gate).toEqual([]);
+    expect((await named(id)).title).toBe("Plan");
+  });
+
+  it("renaming to the name it already has files nothing", async () => {
+    const id = await newDocument();
+    await expect(
+      applyDocumentPatch({
+        userId: USER,
+        agentUserId: AGENT,
+        documentId: id,
+        ops: [{ op: "set_title", title: "Plan" }],
+      })
+    ).rejects.toThrow(/already named "Plan"/);
+    expect(h.gate).toEqual([]);
+  });
+});

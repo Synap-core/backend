@@ -945,6 +945,7 @@ export const buildHandlers: McpHandlerMap = {
       reasoning: args.reasoning as string | undefined,
       projectId: trimmed(args.projectId),
       trackId: trimmed(args.trackId),
+      handToAgentId: trimmed(args.handToAgentId),
       source: "mcp",
     });
     return renderPlaybookDoorOutcome(outcome, userId);
@@ -1035,6 +1036,25 @@ export const buildHandlers: McpHandlerMap = {
         requiredToolIds.push(tool.id);
       }
     }
+    // A box script (0356): the declaration is parsed by the router's one box
+    // rule (`boxSkillMetadata`), which refuses a bad one in words.
+    let executionMode: "sync" | "box" | undefined;
+    if (args.executionMode !== undefined) {
+      if (args.executionMode !== "sync" && args.executionMode !== "box") {
+        return ok({ error: "executionMode must be 'sync' or 'box'." });
+      }
+      executionMode = args.executionMode;
+    }
+    if (executionMode === "box" && !skillCode) {
+      return ok({ error: "A box skill is a script: send its code." });
+    }
+    const box =
+      args.box && typeof args.box === "object" && !Array.isArray(args.box)
+        ? (args.box as Record<string, unknown>)
+        : undefined;
+    if (box && executionMode !== "box") {
+      return ok({ error: "`box` needs executionMode: 'box'." });
+    }
     const skillsCtx = await createHubProtocolCallerContext(
       userId,
       apiKeyScopes,
@@ -1062,8 +1082,31 @@ export const buildHandlers: McpHandlerMap = {
       parameters: args.parameters as Record<string, unknown> | undefined,
       ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
       ...(requiredToolIds?.length ? { requiredToolIds } : {}),
+      ...(executionMode ? { executionMode } : {}),
+      ...(executionMode === "box" ? { metadata: { box: box ?? {} } } : {}),
       agentUserId: agentUserId ?? undefined,
     });
+    // Created but switched off, with a "turn this on?" request filed for the
+    // person (a rule granted the create; no person reviewed it): say so in
+    // words, never a bare `created` the agent reads as "it runs".
+    if (result.status === "created" && result.turnOnRequest) {
+      const { turnOnRequest, ...created } = result;
+      const { turnOnRequestMessage } =
+        await import("../../../services/capabilities/request-skill-turn-on.js");
+      return ok({
+        ...created,
+        waitingFor: "person",
+        ...(turnOnRequest.status === "proposed"
+          ? {
+              turnOnRequest: {
+                proposalId: turnOnRequest.proposalId,
+                reviewUrl: turnOnRequest.reviewUrl,
+              },
+            }
+          : {}),
+        message: turnOnRequestMessage(args.name.trim(), turnOnRequest),
+      });
+    }
     return ok(result);
   },
   synap_update_skill: async (ctx: McpToolContext): Promise<CallToolResult> => {

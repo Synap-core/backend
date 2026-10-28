@@ -33,7 +33,10 @@
 
 import type { WorkspaceSettings } from "@synap/database";
 import { createLogger } from "@synap-core/core";
-import { postWorkspaceLayersConverged } from "./capabilities/install-layers.js";
+import {
+  describeLayerItem,
+  postWorkspaceLayersConverged,
+} from "./capabilities/install-layers.js";
 import {
   declaredLayerTwoKinds,
   type LayerTwoKey,
@@ -160,26 +163,32 @@ export interface FinishTemplateApplyResult {
   held?: DataChangeHold;
 }
 
-/** What did not land, read from the layer-2 bag: proposal ids and error lines. */
+/** The longest reason a recorded line keeps (the sentence lists several). */
+const REASON_MAX = 300;
+
+/**
+ * What did not land, read from the layer-2 bag: proposal ids, and one line per
+ * errored item WITH its reason (`<layer>:<name>: <message>`, the same line
+ * `layers[]` reports). An item that waits on the person's setup goes to
+ * `needsSetup`, every other error to `failures`: the next step differs (set
+ * it up, or retry), so health words them apart.
+ */
 function notLanded(bag: Record<string, unknown>): {
   proposals: string[];
   failures: string[];
+  needsSetup: string[];
 } {
   const proposals: string[] = [];
   const failures: string[] = [];
+  const needsSetup: string[] = [];
   for (const [key, value] of Object.entries(bag)) {
     const items = Array.isArray(value) ? value : [value];
     for (const item of items) {
       if (!item || typeof item !== "object") continue;
       const it = item as Record<string, unknown>;
       if (it.status === "error") {
-        const name =
-          typeof it.name === "string"
-            ? it.name
-            : typeof it.key === "string"
-              ? it.key
-              : "";
-        failures.push(name ? `${key}:${name}` : key);
+        const line = describeLayerItem(key, it).slice(0, REASON_MAX);
+        (it.needsSetup === true ? needsSetup : failures).push(line);
       }
       if (it.status === "proposed") {
         if (typeof it.proposalId === "string") proposals.push(it.proposalId);
@@ -197,7 +206,7 @@ function notLanded(bag: Record<string, unknown>): {
       }
     }
   }
-  return { proposals: [...new Set(proposals)], failures };
+  return { proposals: [...new Set(proposals)], failures, needsSetup };
 }
 
 export async function finishTemplateApply(
@@ -248,12 +257,14 @@ export async function finishTemplateApply(
       : null;
   let held: DataChangeHold | undefined;
   let versionWasHeld = false;
-  const { proposals, failures } =
-    !converged && post ? notLanded(post) : { proposals: [], failures: [] };
+  const { proposals, failures, needsSetup } =
+    !converged && post
+      ? notLanded(post)
+      : { proposals: [], failures: [], needsSetup: [] };
   const recordState: TemplateApplyRecord["state"] =
     post === null
       ? "layer-2-not-run"
-      : failures.length > 0
+      : failures.length > 0 || needsSetup.length > 0
         ? "partial"
         : "awaiting-approval";
 
@@ -325,6 +336,7 @@ export async function finishTemplateApply(
         pendingVersion: pendingVersionStamp ?? pendingPack?.version ?? null,
         proposals: proposals.length > 0 ? proposals : null,
         failures: failures.length > 0 ? failures : null,
+        needsSetup: needsSetup.length > 0 ? needsSetup : null,
       };
     },
     { userId }

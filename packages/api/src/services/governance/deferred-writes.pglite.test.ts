@@ -32,6 +32,8 @@ const h = vi.hoisted(() => ({
     door: string;
     input: Record<string, unknown>;
     actingAgent: string | undefined;
+    /** `ctx.userId` of the door's caller: who the written row belongs to. */
+    callerUserId: unknown;
     sessionId: unknown;
     isMember: boolean;
   }>,
@@ -99,6 +101,7 @@ async function recordDoor(
     door,
     input,
     actingAgent: getActingAgentUserId(),
+    callerUserId: ctx?.userId ?? null,
     sessionId: ctx?.sessionId ?? null,
     isMember: rows[0]!.n > 0,
   });
@@ -544,6 +547,75 @@ describe("join approval — membership, then replay as the agent", () => {
     const result = await approveJoin(r.proposalId);
     expect(result.effect).toMatchObject({ applied: "verified", rows: 0 });
     expect(h.doorCalls).toHaveLength(1);
+  });
+
+  it("a kept document is replayed for its PERSON, not the agent (held-writes 4a021e44)", async () => {
+    // Filed exactly as the document door files it: the gate call names the
+    // AGENT as userId and the person rides in data.userId
+    // (routers/hub-protocol/documents.ts). The shared helper above names the
+    // person, which is why the first test never saw this.
+    const r = (await checkPermissionOrPropose({
+      userId: AGENT,
+      agentUserId: AGENT,
+      workspaceId: WS,
+      subjectType: "document",
+      action: "create",
+      data: {
+        id: randomUUID(),
+        title: "Plan v3",
+        type: "markdown",
+        content: "# Plan",
+        workspaceId: WS,
+        userId: HUMAN,
+      },
+      reasoning: "the plan for the founder",
+    } as Parameters<typeof checkPermissionOrPropose>[0])) as {
+      proposalId: string;
+    };
+    const [join] = await joinRows();
+    const [kept] = join!.data.deferredWrites as Array<{ userId: string }>;
+    expect(kept!.userId).toBe(AGENT);
+
+    await approveJoin(r.proposalId);
+
+    expect(h.doorCalls.map((c) => c.door)).toEqual(["document/create"]);
+    // The document door owns its row by ctx.userId: the person, or the
+    // replayed document belongs to the agent and the person cannot open it.
+    expect(h.doorCalls[0]!.callerUserId).toBe(HUMAN);
+    expect(h.doorCalls[0]!.actingAgent).toBe(AGENT);
+    expect(h.doorCalls[0]!.input).toMatchObject({
+      userId: HUMAN,
+      agentUserId: AGENT,
+      title: "Plan v3",
+    });
+  });
+
+  it("a kept document is replayed under the id the agent was handed (held-writes d50550c2)", async () => {
+    // Live 2026-10-27: the agent was told documentId 4203118d, the replay
+    // landed the document as fc52a02e, and every link to the first id broke.
+    const handed = randomUUID();
+    const r = (await checkPermissionOrPropose({
+      userId: AGENT,
+      agentUserId: AGENT,
+      workspaceId: WS,
+      subjectType: "document",
+      action: "create",
+      data: {
+        id: handed,
+        title: "State of the work",
+        type: "markdown",
+        content: "Five lines.",
+        workspaceId: WS,
+        userId: HUMAN,
+      },
+    } as Parameters<typeof checkPermissionOrPropose>[0])) as {
+      proposalId: string;
+    };
+
+    await approveJoin(r.proposalId);
+
+    expect(h.doorCalls.map((c) => c.door)).toEqual(["document/create"]);
+    expect(h.doorCalls[0]!.input).toMatchObject({ proposedDocumentId: handed });
   });
 
   it("a rejected join records `rejected` for every kept write — nothing replays", async () => {

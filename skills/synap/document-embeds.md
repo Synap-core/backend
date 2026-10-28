@@ -202,7 +202,9 @@ Never rewrite a whole document to change part of it. Read it, then patch it:
      count;
    - `append {body}`;
    - `replace_all {content}` — the whole body; needs `baseRevision` and is
-     always reviewed.
+     always reviewed;
+   - `set_title {title}` — renames the document (its one title). A human name,
+     never an id or a slug; the content is left as it is.
 
 Refused, whatever the op: changing a section whose `owner` is `human` (the AI
 never rewrites a person's words — write a new section), and removing an embed

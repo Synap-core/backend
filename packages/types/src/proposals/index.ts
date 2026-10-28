@@ -6,6 +6,7 @@
 
 import type { EventAction } from "../events/unified.js";
 import { isLikelyUUID } from "./proposal-utils.js";
+import type { ProposalPartReach } from "./reach.js";
 export { isLikelyUUID };
 
 // Governance grant-option derivation (pure, browser-safe) — the SSOT the
@@ -29,6 +30,9 @@ export * from "./duplicate-review.js";
 // Which proposals only their own page may approve: the one rule every surface
 // and the pod's batch door read.
 export * from "./page-only.js";
+// What a part that acts on its own can reach, and the words for it (the
+// marketplace preflight says the same).
+export * from "./reach.js";
 
 /**
  * The pod's cap on one batch decision (`proposals.batchApprove` /
@@ -558,6 +562,12 @@ export interface ProposalReviewGraph {
      * assume it starts firing.
      */
     bornEnabled: false;
+    /**
+     * What its steps can reach outside the pod once it runs, read the way the
+     * runtime resolves each step (a verb → the skill that answers it).
+     * Absent = not measured (draw nothing, never "nothing").
+     */
+    reach?: ProposalPartReach;
   }>;
   rules?: Array<{
     ref: string;
@@ -608,7 +618,29 @@ export interface ProposalReviewGraph {
     op: CompositeUpdateOperation["op"];
     kind: "skill" | "automation" | "rule" | "playbook" | "view" | "entity";
     targetId: string;
-    fields: Array<{ key: string; value: string; truncated: boolean }>;
+    /**
+     * The row's name, when the pod read it for this viewer (a skill today):
+     * a rewrite names WHICH skill it rewrites. Absent = not read.
+     */
+    targetName?: string;
+    fields: Array<{
+      key: string;
+      value: string;
+      truncated: boolean;
+      /**
+       * What the field holds NOW, excerpted like `value`: read from the live
+       * row while the proposal is still pending (a skill today). Absent =
+       * not read, or empty now.
+       */
+      before?: string;
+      beforeTruncated?: boolean;
+    }>;
+    /**
+     * What the row it rewrites can reach outside the pod (a skill that runs:
+     * code, a provider verb, a builtin), read while the proposal is pending.
+     * Absent = not read, or it runs nothing (an instruction).
+     */
+    reach?: ProposalPartReach;
   }>;
 }
 
@@ -634,7 +666,45 @@ export interface ProposalReviewModel {
   graph?: ProposalReviewGraph;
   /** Present ONLY for delete proposals — see {@link ProposalRemoval}. */
   removal?: ProposalRemoval;
+  /**
+   * Present ONLY for a pending `capability.enable`: what approving it turns
+   * on — see {@link ProposalTurnsOn}.
+   */
+  turnsOn?: ProposalTurnsOn;
   events: ProposalReviewEvent[];
+}
+
+/**
+ * What a `capability.enable` would turn on, read NOW (while it is pending)
+ * under the viewer's skill read rule: each skill whole, so the person reads
+ * the code or prose they are switching on and where it can reach. A skill the
+ * viewer cannot read is COUNTED in `unreadSkills`, never dropped silently.
+ */
+export interface ProposalTurnsOn {
+  skills: ProposalTurnOnSkill[];
+  /** Skills in the request this viewer could not read (or that are gone). */
+  unreadSkills: number;
+}
+
+export interface ProposalTurnOnSkill {
+  id: string;
+  name: string;
+  /** `code` | `instruction` | `declarative` | `builtin`. */
+  kind: string;
+  /** `box` = a script run on the person's computer, not in the pod. */
+  executionMode: string;
+  /** The whole code it would run; never excerpted. */
+  code?: string;
+  /** Its whole documentation, or an instruction skill's prose. */
+  body?: string;
+  /** A box script's declaration (packages, hosts, limits), as stored. */
+  box?: Record<string, unknown>;
+  /**
+   * What it can reach outside the pod, read like every "Can reach" fact.
+   * Absent for an instruction (it runs nothing) and for a box script (its
+   * declaration says what it reaches, not the pod's sandbox).
+   */
+  reach?: ProposalPartReach;
 }
 
 /**
@@ -1205,6 +1275,24 @@ export function isPlanOperation(
   op: CompositeProposalOperation
 ): op is CompositePlanOperation {
   return (PLAN_OPERATION_KINDS as readonly string[]).includes(op.op);
+}
+
+/**
+ * The op kinds that set up something that ACTS ON ITS OWN once approved: a
+ * skill an agent loads or runs, an automation that fires, a rule an agent
+ * follows. Read by the page-only rule (`proposalPageOnlyReason`).
+ */
+export const ACTING_OPERATION_KINDS = [
+  "create_skill",
+  "create_automation",
+  "create_rule",
+  "update_skill",
+  "update_automation",
+  "update_rule",
+] as const;
+
+export function isActingOperation(op: CompositeProposalOperation): boolean {
+  return (ACTING_OPERATION_KINDS as readonly string[]).includes(op.op);
 }
 
 /** True when the batch carries any plan op — it then applies all-or-none. */
