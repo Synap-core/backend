@@ -21,6 +21,15 @@
  * `{ const }` is a literal. No expressions, no conditionals, no defaults — a
  * verb that needs more declares no map and is not offered to apps.
  *
+ * RECIPIENT. `$to.<address>` reads an address of the person or company the
+ * app names in its input `to` (an entity id), for the account the action
+ * targets: `email`, `phone`, `linkedin.providerId`,
+ * `linkedin.publicIdentifier`, `chat` (a conversation the pod already holds
+ * with them on that account) or `attendee` (their id on that account's
+ * provider). The POD resolves it (`intent-recipient.ts`), never the app: a
+ * provider id never leaves the pod, and the person's review names the
+ * recipient. A map that reads `$to` makes `to` part of the action's input.
+ *
  * ACCOUNTS. When a tool reaches several accounts through ONE pod connection
  * (a Postiz key → several social channels), the map names an account source:
  * a READ verb of the same tool that lists them, and which field of each
@@ -35,14 +44,15 @@
  * (`intent-registry.ts`), the map off the skill row.
  */
 import { z } from "zod";
+import { humanizeToken } from "@synap-core/types/vocabulary";
 import type {
   SkillInputMap,
   SkillInputMapAccounts,
   SkillInputMapValue,
 } from "@synap/database/schema";
 
-/** `$.field`, `$.field.sub` (the app's input) or `$account.field`. */
-const PATH_RE = /^\$(account)?(\.[A-Za-z_][A-Za-z0-9_]*)+$/;
+/** `$.field`, `$.field.sub` (the app's input), `$account.field` or `$to.address`. */
+const PATH_RE = /^\$(account|to)?(\.[A-Za-z_][A-Za-z0-9_]*)+$/;
 const NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 /** The fields of an account a map may read (`$account.<field>`). */
@@ -63,6 +73,32 @@ const isConst = (v: unknown): v is { const: unknown } =>
   isRecord(v) && Object.keys(v).length === 1 && "const" in v;
 
 const isAccountPath = (source: string) => source.startsWith("$account.");
+
+/** The addresses of a recipient a map may read (`$to.<address>`). */
+export const RECIPIENT_ADDRESSES = [
+  "email",
+  "phone",
+  "linkedin.providerId",
+  "linkedin.publicIdentifier",
+  "chat",
+  "attendee",
+] as const;
+export type RecipientAddress = (typeof RECIPIENT_ADDRESSES)[number];
+
+/** The input field naming the recipient, which `$to` reads from. */
+export const RECIPIENT_INPUT_FIELD = "to";
+
+const isRecipientPath = (source: string) => source.startsWith("$to.");
+
+/** The address a `$to.<address>` path reads (`$to.linkedin.providerId` → `linkedin.providerId`). */
+const recipientAddressOf = (source: string) => source.slice("$to.".length);
+
+/** The app input field a path reads, or null for an account path. */
+function inputFieldOf(source: string): string | null {
+  if (isAccountPath(source)) return null;
+  if (isRecipientPath(source)) return RECIPIENT_INPUT_FIELD;
+  return source.split(".")[1]!;
+}
 
 /** The account source's own problems (its shape only). */
 function accountsShapeProblems(raw: unknown): string[] {
@@ -146,13 +182,29 @@ export function inputMapProblems(
     if (isConst(source)) continue;
     if (typeof source !== "string" || !PATH_RE.test(source)) {
       problems.push(
-        `inputMap.params.${param}: use "$.<input field>", "$account.<field>" or { "const": <value> }`
+        `inputMap.params.${param}: use "$.<input field>", "$account.<field>", "$to.<address>" or { "const": <value> }`
       );
       continue;
     }
     const segs = source.split(".");
     const field = segs[1]!;
-    if (!isAccountPath(source)) {
+    if (isRecipientPath(source)) {
+      if (
+        !(RECIPIENT_ADDRESSES as readonly string[]).includes(
+          recipientAddressOf(source)
+        )
+      )
+        problems.push(
+          `inputMap.params.${param}: a recipient has only ${RECIPIENT_ADDRESSES.join(", ")}`
+        );
+      else if (
+        opts.inputFields &&
+        !opts.inputFields.includes(RECIPIENT_INPUT_FIELD)
+      )
+        problems.push(
+          `inputMap.params.${param}: "$to" needs the intent's input to have a field "${RECIPIENT_INPUT_FIELD}"`
+        );
+    } else if (!isAccountPath(source)) {
       if (opts.inputFields && !opts.inputFields.includes(field))
         problems.push(
           `inputMap.params.${param}: the intent's input has no field "${field}"`
@@ -258,13 +310,23 @@ export function readInputMap(raw: unknown): SkillInputMap | null {
     : null;
 }
 
-/** The top-level input fields a map reads (`$.text` → `text`). */
+/** The top-level input fields a map reads (`$.text` → `text`, `$to.email` → `to`). */
 export function inputFieldsRead(map: SkillInputMap): string[] {
   const fields = new Set<string>();
-  for (const source of Object.values(map.params))
-    if (typeof source === "string" && !isAccountPath(source))
-      fields.add(source.split(".")[1]!);
+  for (const source of Object.values(map.params)) {
+    const field = typeof source === "string" ? inputFieldOf(source) : null;
+    if (field) fields.add(field);
+  }
   return [...fields];
+}
+
+/** The recipient addresses a map reads (`$to.email` → `email`), in map order. */
+export function recipientAddressesRead(map: SkillInputMap): RecipientAddress[] {
+  const addresses = new Set<RecipientAddress>();
+  for (const source of Object.values(map.params))
+    if (typeof source === "string" && isRecipientPath(source))
+      addresses.add(recipientAddressOf(source) as RecipientAddress);
+  return [...addresses];
 }
 
 function readPath(input: Record<string, unknown>, path: string): unknown {
@@ -276,30 +338,38 @@ function readPath(input: Record<string, unknown>, path: string): unknown {
   return value;
 }
 
+/** A recipient's addresses, as the pod resolved them for one action. */
+export type RecipientAddresses = Partial<Record<RecipientAddress, string>>;
+
 function sourceValue(
   source: SkillInputMapValue,
   input: Record<string, unknown>,
-  account: IntentAccount | null
+  account: IntentAccount | null,
+  recipient: RecipientAddresses | null
 ): unknown {
   if (typeof source !== "string") return source.const;
   if (isAccountPath(source))
     return account?.[source.split(".")[1] as AccountField] ?? undefined;
+  if (isRecipientPath(source))
+    return recipient?.[recipientAddressOf(source) as RecipientAddress];
   return readPath(input, source);
 }
 
 /**
- * The verb's parameters for this input and the account the action targets
- * (null = the action has none). A param whose source is absent is left out
- * (the verb's own default, or its own "missing required" refusal, applies).
+ * The verb's parameters for this input, the account the action targets
+ * (null = the action has none) and the recipient's addresses the pod
+ * resolved (null = none). A param whose source is absent is left out (the
+ * verb's own default, or its own "missing required" refusal, applies).
  */
 export function mapIntentInput(
   map: SkillInputMap,
   input: Record<string, unknown>,
-  account: IntentAccount | null = null
+  account: IntentAccount | null = null,
+  recipient: RecipientAddresses | null = null
 ): Record<string, unknown> {
   const params: Record<string, unknown> = {};
   for (const [param, source] of Object.entries(map.params)) {
-    const value = sourceValue(source, input, account);
+    const value = sourceValue(source, input, account, recipient);
     if (value !== undefined) params[param] = value;
   }
   return params;
@@ -361,13 +431,11 @@ export function actionInputSchema(
     Object.entries(s.properties ?? {}).filter(([k]) => read.has(k))
   );
   const fedRequired = Object.entries(map.params)
-    .filter(
-      ([param, source]) =>
-        verbRequires.includes(param) &&
-        typeof source === "string" &&
-        !isAccountPath(source)
+    .filter(([param]) => verbRequires.includes(param))
+    .map(([, source]) =>
+      typeof source === "string" ? inputFieldOf(source) : null
     )
-    .map(([, source]) => (source as string).split(".")[1]!);
+    .filter((field): field is string => field !== null);
   const required = [
     ...new Set([
       ...(s.required ?? []).filter((k) => read.has(k)),
@@ -418,4 +486,26 @@ export function validateInput(
       message: i.message,
     })),
   };
+}
+
+/**
+ * What an app's intent run does, in the words the person reviews it by: the
+ * action's label, the recipient by name, the account it goes from — "Send
+ * message to Marie Dupont from Antoine Servant on LinkedIn". Never an id.
+ */
+export function describeIntentRun(ask: {
+  label: string;
+  account: IntentAccount | null;
+  recipient?: { name: string } | null;
+}): string {
+  let words = ask.label;
+  if (ask.recipient) words += ` to ${ask.recipient.name}`;
+  if (ask.account) words += ` from ${ask.account.label}`;
+  const provider = ask.account?.provider;
+  if (provider) {
+    const named = humanizeToken(provider);
+    if (!words.toLowerCase().includes(named.toLowerCase()))
+      words += ` on ${named}`;
+  }
+  return words;
 }

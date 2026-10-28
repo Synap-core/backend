@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url";
  *  - an auto grant widening an app run past it           → "app agent key with an auto grant";
  *  - the floor swallowing reads                          → "a read intent … runs";
  *  - an unknown intent read as safe                      → "no declared intent … proposes";
+ *  - an agent's intent action auto-running past it       → "an intent action with no app …";
  *  - the floor outranking the approval floor             → "an unapproved verb is still denied";
  *  - edit_video seeded as a read (its effect is read out of migration 0370,
  *    not typed here)                                      → "edit_video … proposes".
@@ -198,6 +199,32 @@ describe("gateCapabilityExecution — an app's outward run always proposes (4A)"
       decision: "propose",
       reasonCode: "APP_OUTWARD_INTENT",
     });
+  });
+
+  it("an intent action with no app (an agent's key, the person's own) proposes too", async () => {
+    grantMock.mockReturnValue(undefined);
+    expect(
+      await gateCapabilityExecution(
+        personRun("publish_post", { intentRun: true })
+      )
+    ).toMatchObject({ decision: "propose", reasonCode: "INTENT_OUTWARD" });
+    findCapabilityGrantMock.mockResolvedValue({ ok: true, execMode: "auto" });
+    resolveGovernanceRuleMock.mockResolvedValue({ verdict: "auto" });
+    expect(
+      await gateCapabilityExecution(
+        personRun("publish_post", {
+          actorUserId: "agent-1",
+          agentUserId: "agent-1",
+          intentRun: true,
+        })
+      )
+    ).toMatchObject({ decision: "propose", reasonCode: "INTENT_OUTWARD" });
+    // A read intent action keeps its posture.
+    expect(
+      await gateCapabilityExecution(
+        personRun("list_records", { intentRun: true })
+      )
+    ).toEqual({ decision: "run" });
   });
 
   it("edit_video (sends the person's video out, spends money) proposes for any app", async () => {

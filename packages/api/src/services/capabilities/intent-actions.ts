@@ -24,6 +24,13 @@
  *
  * Re-listing is how a run re-resolves its action: an account that is gone, or
  * a verb that lost its map or its approval, is no longer listed (404).
+ *
+ * RECIPIENT (CRM consolidation, Lane 2). A map that reads `$to.<address>`
+ * sends to the person or company the input's `to` names; the pod finds the
+ * address for each action's account (`intent-recipient.ts`). Listed for a
+ * subject, each action says whether it can reach them (`reach`) and the list
+ * is ranked: reachable first, then the channel last used with them, then the
+ * order the pod lists tools in.
  */
 import { createHash } from "node:crypto";
 import { db, skills, and, inArray } from "@synap/database";
@@ -44,10 +51,20 @@ import {
   actionInputSchema,
   mapIntentInput,
   readInputMap,
+  recipientAddressesRead,
+  RECIPIENT_INPUT_FIELD,
   validateInput,
   type InputIssue,
   type IntentAccount,
+  type RecipientAddresses,
 } from "./intent-input.js";
+import {
+  lastUsedWith,
+  loadRecipient,
+  resolveRecipient,
+  type IntentRecipient,
+  type RecipientTarget,
+} from "./intent-recipient.js";
 
 const logger = createLogger({ module: "intent-actions" });
 
@@ -66,6 +83,11 @@ export interface IntentActionView {
   intent: string;
   /** The JSON Schema of the ONE input this action accepts. */
   input: Record<string, unknown>;
+  /**
+   * Listed for a subject only: can this action reach them? `why` is one
+   * plain sentence when it cannot ("No email on file for Marie Dupont.").
+   */
+  reach?: { ok: boolean; why?: string };
 }
 
 /** An action and what running it needs (server side only). */
@@ -77,6 +99,12 @@ export interface ResolvedIntentAction {
   account: IntentAccount | null;
   connectionSelector: ConnectionSelector | null;
 }
+
+/** The account and provider an action reaches, as the recipient resolver reads it. */
+const targetOf = (a: ResolvedIntentAction): RecipientTarget => ({
+  account: a.account,
+  provider: a.view.connection?.provider ?? null,
+});
 
 export interface IntentActionsContext {
   userId: string;
@@ -157,9 +185,52 @@ async function listConnections(
 
 /**
  * Every action this intent offers the caller in this space, or null when the
- * intent is unknown. An intent with no input shape offers none.
+ * intent is unknown. An intent with no input shape offers none. With a
+ * `subject` (a recipient the caller may read), each action carries its
+ * `reach` and the list is ranked for that person.
  */
 export async function listIntentActions(
+  ctx: IntentActionsContext,
+  intent: string,
+  opts: { subject?: IntentRecipient } = {}
+): Promise<{ row: IntentInputRow; actions: ResolvedIntentAction[] } | null> {
+  const listed = await listUnranked(ctx, intent);
+  if (!listed || !opts.subject) return listed;
+  return { row: listed.row, actions: rankFor(opts.subject, listed.actions) };
+}
+
+/**
+ * Each action's reach for this recipient, and the list ranked: reachable
+ * first, then the one last used with them (newest first), then as listed
+ * (`Array.prototype.sort` is stable). An action whose map names no
+ * recipient reaches them trivially and has no "last used".
+ */
+function rankFor(
+  subject: IntentRecipient,
+  actions: ResolvedIntentAction[]
+): ResolvedIntentAction[] {
+  const scored = actions.map((a) => {
+    const addresses = recipientAddressesRead(a.map);
+    const target = targetOf(a);
+    const resolved = resolveRecipient(subject, addresses, target);
+    const reach = resolved.ok ? { ok: true } : { ok: false, why: resolved.why };
+    return {
+      action: { ...a, view: { ...a.view, reach } },
+      ok: resolved.ok,
+      last: addresses.length ? lastUsedWith(subject, addresses, target) : null,
+    };
+  });
+  scored.sort((x, y) => {
+    if (x.ok !== y.ok) return x.ok ? -1 : 1;
+    if (x.last === y.last) return 0;
+    if (x.last === null) return 1;
+    if (y.last === null) return -1;
+    return y.last - x.last;
+  });
+  return scored.map((s) => s.action);
+}
+
+async function listUnranked(
   ctx: IntentActionsContext,
   intent: string
 ): Promise<{ row: IntentInputRow; actions: ResolvedIntentAction[] } | null> {
@@ -287,6 +358,10 @@ export type IntentRunResolution =
   | { kind: "not_found" }
   | { kind: "intent_mismatch" }
   | { kind: "invalid_input"; issues: InputIssue[] }
+  /** `to` names nothing the caller may read. */
+  | { kind: "subject_not_readable" }
+  /** The pod has no address for `to` on this action's account. */
+  | { kind: "recipient_unreachable"; why: string }
   | {
       kind: "ok";
       effect: string;
@@ -305,6 +380,8 @@ export interface IntentRequestRecord {
   tool: string;
   label: string;
   account: IntentAccount | null;
+  /** Who it goes to, by name (the input's `to`), when the action names one. */
+  recipient: { id: string; name: string } | null;
   /** The app's input, as validated — the exact words it asked to send. */
   input: Record<string, unknown>;
 }
@@ -312,7 +389,9 @@ export interface IntentRequestRecord {
 /**
  * Resolve an app's ask: the action (re-listed, so a gone account is a 404),
  * the input checked against what that action accepts (a field it does not
- * map is refused, never dropped), then mapped onto the verb's parameters.
+ * map is refused, never dropped), then mapped onto the verb's parameters. A
+ * recipient's addresses are resolved here, at run time, from the pod's own
+ * rows: never from anything the app sent but the entity id.
  */
 export async function resolveIntentRun(
   ctx: IntentActionsContext,
@@ -328,12 +407,32 @@ export async function resolveIntentRun(
   }
   const checked = validateInput(found.view.input, ask.input);
   if (!checked.ok) return { kind: "invalid_input", issues: checked.issues };
+
+  const addresses = recipientAddressesRead(found.map);
+  let recipient: IntentRecipient | null = null;
+  let resolvedAddresses: RecipientAddresses | null = null;
+  if (addresses.length > 0) {
+    // The action's input schema requires `to` whenever its map reads `$to`
+    // (the intent requires it); a missing one never reaches here.
+    const to = checked.value[RECIPIENT_INPUT_FIELD];
+    recipient = typeof to === "string" ? await loadRecipient(ctx, to) : null;
+    if (!recipient) return { kind: "subject_not_readable" };
+    const resolved = resolveRecipient(recipient, addresses, targetOf(found));
+    if (!resolved.ok)
+      return { kind: "recipient_unreachable", why: resolved.why };
+    resolvedAddresses = resolved.addresses;
+  }
   return {
     kind: "ok",
     effect: listed.row.effect,
     skillId: found.skillId,
     verbId: found.verbId,
-    parameters: mapIntentInput(found.map, checked.value, found.account),
+    parameters: mapIntentInput(
+      found.map,
+      checked.value,
+      found.account,
+      resolvedAddresses
+    ),
     connectionSelector: found.connectionSelector,
     intentRequest: {
       intent: ask.intent,
@@ -341,6 +440,7 @@ export async function resolveIntentRun(
       tool: found.view.tool,
       label: found.view.label,
       account: found.account,
+      recipient: recipient ? { id: recipient.id, name: recipient.name } : null,
       input: checked.value,
     },
   };

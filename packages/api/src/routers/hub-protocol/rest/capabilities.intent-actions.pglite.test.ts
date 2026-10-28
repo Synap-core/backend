@@ -24,7 +24,11 @@
  *    account that is gone still running (404);
  *  - a raw body (`verbId`/`parameters`) accepted from an app;
  *  - the per-key, per-intent cap missing (429 + retryAfter);
- *  - an unfenced operator, or an existing `capability.run` grant, changed.
+ *  - an unfenced operator, or an existing `capability.run` grant, changed;
+ *  - an agent's key (no app) unable to ask for the intent form, or its
+ *    outward intent run (or the person's own) running instead of proposing;
+ *  - a LinkedIn id sent through an Instagram account;
+ *  - the sends to one person not findable from their page (`recipient`).
  *
  * Mocked: the key lookup, the guest check, the sub-token mapping, the audit
  * log, the event log, the person-token classification (the identity a mint
@@ -37,6 +41,8 @@
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { Hono } from "hono";
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const h = vi.hoisted(() => ({
@@ -49,6 +55,8 @@ const h = vi.hoisted(() => ({
   registry: [] as unknown[],
   /** The channels Postiz lists right now. */
   channels: [] as Array<Record<string, unknown>>,
+  /** The accounts Unipile lists right now. */
+  accounts: [] as Array<Record<string, unknown>>,
   /** Every provider call (method, params) — a post must never be among them. */
   calls: [] as Array<{ method: string; params: Record<string, unknown> }>,
   noopEvents: () =>
@@ -129,13 +137,15 @@ vi.mock(
   async (importOriginal) => ({
     ...(await importOriginal<Record<string, unknown>>()),
     executeProviderVerb: async (
-      spec: { method: string },
+      spec: { method: string; pathTemplate?: string },
       params: Record<string, unknown>
     ) => {
       h.calls.push({ method: spec.method, params });
-      return spec.method === "GET"
-        ? { channels: h.channels }
-        : [{ postId: "p-1", integration: params.integrationId }];
+      if (spec.method === "GET")
+        return spec.pathTemplate === "/accounts"
+          ? { items: h.accounts }
+          : { channels: h.channels };
+      return [{ postId: "p-1", integration: params.integrationId }];
     },
   })
 );
@@ -187,6 +197,7 @@ import { hubAuthMiddleware } from "../_middleware/auth.js";
 import { intentActionId } from "../../../services/capabilities/intent-actions.js";
 import { registerCapabilitiesActionsRoutes } from "./capabilities-actions.js";
 import { registerCapabilitiesExecuteRoutes } from "./capabilities-execute.js";
+import { registerProposalsRoutes } from "./proposals.js";
 import type { HubHono, HubVariables } from "./_shared.js";
 
 const BASIC =
@@ -304,8 +315,22 @@ const KEYS = {
   messenger: app(["capability.send_message.run"]),
   /** An app with no tool run at all. */
   reader: app(["entity.*.read"]),
+  /** The CRM: send messages and connection requests, read the people in CRM. */
+  crm: app([
+    "capability.send_message.run",
+    "capability.request_connection.run",
+    "entity.*.read",
+  ]),
   /** A poster used only to exhaust the per-intent cap. */
   busy: app(["capability.publish_post.run"]),
+  /** The CRM reading its sends waiting for approval. */
+  crmReview: app([
+    "capability.send_message.run",
+    "entity.*.read",
+    "proposal.read",
+  ]),
+  /** An agent's own key (no app): unbounded, acting for the person. */
+  agent: app(["*"], { workspaceIds: null, clientId: null }),
   /** The person's own unbounded key: not limited to spaces, no app. */
   operator: app(["*"], {
     workspaceIds: null,
@@ -509,6 +534,7 @@ function hubApp() {
   hub.use("/*", hubAuthMiddleware as never);
   registerCapabilitiesActionsRoutes(hub);
   registerCapabilitiesExecuteRoutes(hub);
+  registerProposalsRoutes(hub);
   const root = new Hono();
   root.route("/api/hub", hub);
   return root;
@@ -901,5 +927,655 @@ describe("an app asks one action to run: it is proposed, never run", () => {
         params: expect.objectContaining({ content: "By hand" }),
       }),
     ]);
+  });
+});
+
+// ─── A recipient: the pod finds the address, ranks the channels ───────────
+//
+// CRM consolidation plan, Lane 2 (founder 2026-10-28: the POD resolves the
+// recipient, the POD ranks channels). Unipile reaches two accounts through
+// one key (LinkedIn, Instagram); a mail tool reaches one inbox. The app names
+// a person by entity id and never sees an address or a provider id.
+
+describe("an app sends to a person it names: the pod finds the address", () => {
+  const UNIPILE = randomUUID();
+  const MAIL = randomUUID();
+  const ACCOUNTS = randomUUID(); // unipile_list_accounts
+  const REPLY = randomUUID(); // unipile_send_message: the chat with them
+  const FIRST = randomUUID(); // linkedin_send_first_message: by attendee
+  const INVITE = randomUUID(); // linkedin_send_invite: request_connection
+  const MAIL_SEND = randomUUID(); // mail_send: by email
+  const MARIE = randomUUID(); // in CRM: email, LinkedIn id, a LinkedIn chat
+  const PAUL = randomUUID(); // in CRM: no address at all
+  const HIDDEN = randomUUID(); // in Brand: outside the CRM's grant
+  const LI = { id: "acc-li", name: "Antoine Servant", type: "LINKEDIN" };
+  const IG = { id: "acc-ig", name: "antoiinesrvt", type: "INSTAGRAM" };
+  const ACCOUNT_SOURCE = {
+    verb: "unipile_list_accounts",
+    id: "id",
+    label: "name",
+    provider: "type",
+  };
+
+  beforeAll(async () => {
+    // The intents' real input shapes: migration 0369, run as shipped.
+    await q(
+      `update capability_intents set input_schema = null where slug = 'send_message'`
+    );
+    await q(
+      `insert into capability_intents (slug, effect, statement, synonyms) values ('request_connection','write','Ask a person to connect','{}')`
+    );
+    await h.client!.exec(
+      readFileSync(
+        fileURLToPath(
+          new URL(
+            "../../../../../database/migrations/0369_intent_input_send_message.sql",
+            import.meta.url
+          )
+        ),
+        "utf8"
+      )
+    );
+    for (const [id, name] of [
+      [UNIPILE, "unipile_linkedin"],
+      [MAIL, "mail"],
+    ] as const)
+      await q(
+        `insert into tools (id, name, kind, approved, created_by, workspace_id) values ($1,$2,'api',true,$3,null)`,
+        [id, name, OWNER]
+      );
+    const skill = async (
+      id: string,
+      tool: string,
+      name: string,
+      intent: string,
+      inputMap: unknown,
+      parameters: unknown,
+      providerSpec: unknown,
+      metadata: unknown
+    ) => {
+      await q(
+        `insert into skills (id, user_id, name, kind, scope, status, approved, intent, input_map, parameters, provider_spec, metadata)
+         values ($1,$2,$3,'declarative','pod','active',true,$4,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb)`,
+        [
+          id,
+          OWNER,
+          name,
+          intent,
+          inputMap === null ? null : JSON.stringify(inputMap),
+          JSON.stringify(parameters),
+          JSON.stringify(providerSpec),
+          JSON.stringify(metadata),
+        ]
+      );
+      await q(
+        `insert into links (id, from_type, from_id, to_type, to_id, link_type) values ($1,'skill',$2,'tool',$3,'requires')`,
+        [randomUUID(), id, tool]
+      );
+    };
+    const post = (path: string) => ({
+      tool: "unipile_linkedin",
+      method: "POST",
+      pathTemplate: path,
+    });
+    await skill(
+      ACCOUNTS,
+      UNIPILE,
+      "unipile_list_accounts",
+      "list_records",
+      null,
+      {},
+      {
+        tool: "unipile_linkedin",
+        method: "GET",
+        pathTemplate: "/accounts",
+        responseShape: {
+          collectionPath: "items",
+          item: { id: "id", name: "name", type: "type" },
+        },
+      },
+      { readOnly: true }
+    );
+    await skill(
+      REPLY,
+      UNIPILE,
+      "unipile_send_message",
+      "send_message",
+      {
+        params: {
+          accountId: "$account.id",
+          threadId: "$to.chat",
+          text: "$.text",
+        },
+        accounts: ACCOUNT_SOURCE,
+      },
+      { accountId: "string", threadId: "string", text: "string" },
+      post("/chats/{threadId}/messages"),
+      { verbType: "write" }
+    );
+    await skill(
+      FIRST,
+      UNIPILE,
+      "linkedin_send_first_message",
+      "send_message",
+      {
+        params: {
+          accountId: "$account.id",
+          attendeeId: "$to.attendee",
+          text: "$.text",
+        },
+        accounts: ACCOUNT_SOURCE,
+      },
+      { accountId: "string", attendeeId: "string", text: "string" },
+      post("/chats"),
+      { verbType: "write" }
+    );
+    await skill(
+      INVITE,
+      UNIPILE,
+      "linkedin_send_invite",
+      "request_connection",
+      {
+        params: {
+          accountId: "$account.id",
+          providerId: "$to.linkedin.providerId",
+          message: "$.text",
+        },
+        accounts: ACCOUNT_SOURCE,
+      },
+      { accountId: "string", providerId: "string", message: "string?" },
+      post("/users/invite"),
+      { verbType: "write" }
+    );
+    await skill(
+      MAIL_SEND,
+      MAIL,
+      "mail_send",
+      "send_message",
+      { params: { to: "$to.email", subject: "$.subject", body: "$.text" } },
+      { to: "string", subject: "string?", body: "string" },
+      { tool: "mail", method: "POST", pathTemplate: "/send" },
+      { verbType: "write" }
+    );
+    const tool = (id: string, name: string, verbs: unknown[]) => ({
+      kind: "tool",
+      id,
+      name,
+      description: name,
+      enabled: true,
+      governance: "auto",
+      catalogOnly: false,
+      verbs,
+    });
+    h.registry = [
+      ...h.registry,
+      tool(UNIPILE, "unipile_linkedin", [
+        verb("unipile_list_accounts", "List accounts", "list_records", "read"),
+        verb(
+          "unipile_send_message",
+          "Reply in the chat",
+          "send_message",
+          "write"
+        ),
+        verb(
+          "linkedin_send_first_message",
+          "Send a first message",
+          "send_message",
+          "write"
+        ),
+        verb(
+          "linkedin_send_invite",
+          "Send a connection request",
+          "request_connection",
+          "write"
+        ),
+      ]),
+      tool(MAIL, "mail", [
+        verb("mail_send", "Send an email", "send_message", "write"),
+      ]),
+    ];
+
+    const person = (id: string, ws: string, title: string, props: unknown) =>
+      q(
+        `insert into entities (id, user_id, workspace_id, type, title, properties) values ($1,$2,$3,'person',$4,$5::jsonb)`,
+        [id, OWNER, ws, title, JSON.stringify(props)]
+      );
+    await person(MARIE, CRM, "Marie Dupont", {
+      email: "marie@example.test",
+      linkedinProviderId: "ACoAAMarie",
+    });
+    await person(PAUL, CRM, "Paul Martin", {});
+    await person(HIDDEN, BRAND, "Someone in Brand", {
+      email: "brand@example.test",
+    });
+    // The LinkedIn chat the pod holds with Marie, on the LinkedIn account,
+    // last used yesterday.
+    await q(
+      `insert into channels (id, user_id, workspace_id, channel_type, title, context_object_type, context_object_id, external_source, external_channel_id, external_id, metadata)
+       values ($1,$2,$3,'external','Marie Dupont','entity',$4,'linkedin','chat-marie','chat-marie',$5::jsonb)`,
+      [
+        randomUUID(),
+        OWNER,
+        CRM,
+        MARIE,
+        JSON.stringify({
+          accountId: "acc-li",
+          lastMessageAt: "2026-10-27T10:00:00Z",
+        }),
+      ]
+    );
+    // An email to Marie went out last week: older than the LinkedIn chat.
+    const touch = randomUUID();
+    await q(
+      `insert into entities (id, user_id, workspace_id, type, title, properties, status) values ($1,$2,$3,'outreach-touch','First email',$4::jsonb,'sent')`,
+      [
+        touch,
+        OWNER,
+        CRM,
+        JSON.stringify({ channel: "email", sentDate: "2026-10-20" }),
+      ]
+    );
+    await q(
+      `insert into relations (id, user_id, workspace_id, source_entity_id, target_entity_id, type) values ($1,$2,$3,$4,$5,'sent_to')`,
+      [randomUUID(), OWNER, CRM, touch, MARIE]
+    );
+  }, 120_000);
+
+  beforeEach(() => {
+    h.accounts = [LI, IG];
+  });
+
+  const forMarie = async (intent = "send_message", subject = MARIE) => {
+    const res = await list(
+      "crm",
+      `workspaceId=${CRM}&intent=${intent}&subject=${subject}`
+    );
+    const body = await json(res);
+    expect(res.status, JSON.stringify(body)).toBe(200);
+    return body.actions as Array<
+      ActionView & { reach?: { ok: boolean; why?: string } }
+    >;
+  };
+  const named = (a: ActionView) =>
+    `${a.label} · ${a.connection?.account ?? a.tool}`;
+
+  it("lists each action with its reach, ranked: reachable, then the channel last used with her", async () => {
+    const actions = await forMarie();
+    expect(actions.map((a) => [named(a), a.reach])).toEqual([
+      // The LinkedIn chat (yesterday), then her email (last week), then the
+      // reachable ones never used with her, in the pod's order.
+      ["Reply in the chat · Antoine Servant", { ok: true }],
+      ["Send a first message · Antoine Servant", { ok: true }],
+      ["Send an email · Mail", { ok: true }],
+      ["Send a direct message · Postiz", { ok: true }],
+      [
+        "Reply in the chat · antoiinesrvt",
+        {
+          ok: false,
+          why: "No conversation with Marie Dupont on antoiinesrvt yet.",
+        },
+      ],
+      [
+        "Send a first message · antoiinesrvt",
+        { ok: false, why: "No Instagram id on file for Marie Dupont." },
+      ],
+    ]);
+    // Never an address, a provider id or a chat id on the app's side.
+    const wire = JSON.stringify(actions);
+    for (const secret of ["marie@example.test", "ACoAAMarie", "chat-marie"])
+      expect(wire).not.toContain(secret);
+    // An action that sends to someone asks for `to`.
+    const mail = actions.find((a) => a.tool === "Mail")!;
+    expect(Object.keys(mail.input.properties).sort()).toEqual([
+      "subject",
+      "text",
+      "to",
+    ]);
+    expect(mail.input.required.sort()).toEqual(["text", "to"]);
+  });
+
+  it("without a subject, the list is as before: no reach, no ranking", async () => {
+    const res = await list("crm", `workspaceId=${CRM}&intent=send_message`);
+    const actions = (await json(res)).actions as Array<Record<string, unknown>>;
+    expect(res.status).toBe(200);
+    expect(actions.every((a) => !("reach" in a))).toBe(true);
+  });
+
+  it("someone with no address on file is reachable by nothing that needs one", async () => {
+    const actions = await forMarie("send_message", PAUL);
+    expect(
+      actions.filter((a) => a.tool !== "Postiz").map((a) => a.reach?.ok)
+    ).toEqual([false, false, false, false, false]);
+    expect(actions.find((a) => a.tool === "Mail")!.reach).toEqual({
+      ok: false,
+      why: "No email on file for Paul Martin.",
+    });
+  });
+
+  it.each([
+    ["outside the key's grant", "crm", HIDDEN],
+    ["that does not exist", "crm", randomUUID()],
+    ["that is not an id", "crm", "marie"],
+    ["when the key reads no entities", "messenger", MARIE],
+  ] as const)(
+    "refuses a subject %s (SUBJECT_NOT_READABLE)",
+    async (_why, key, subject) => {
+      const res = await list(
+        key,
+        `workspaceId=${CRM}&intent=send_message&subject=${subject}`
+      );
+      const body = await json(res);
+      expect(res.status, JSON.stringify(body)).toBe(403);
+      expect(body.code).toBe("SUBJECT_NOT_READABLE");
+      expect(body.actions).toBeUndefined();
+    }
+  );
+
+  it("a send is proposed with the address the POD resolved, and reviewed by name", async () => {
+    const reply = (await forMarie())[0]!;
+    const res = await run("crm", {
+      workspaceId: CRM,
+      intent: "send_message",
+      actionId: reply.id,
+      input: { to: MARIE, text: "Bonjour Marie" },
+    });
+    const body = await json(res);
+    expect(res.status, JSON.stringify(body)).toBe(202);
+    const row = await proposalRow(String(body.proposalId));
+    expect(row).toMatchObject({
+      target_id: REPLY,
+      governance_reason: "APP_OUTWARD_INTENT",
+    });
+    expect(row.data).toMatchObject({
+      parameters: {
+        accountId: "acc-li",
+        threadId: "chat-marie",
+        text: "Bonjour Marie",
+      },
+      summary:
+        "Reply in the chat to Marie Dupont from Antoine Servant on LinkedIn",
+      intentRequest: {
+        recipient: { id: MARIE, name: "Marie Dupont" },
+        account: {
+          id: "acc-li",
+          label: "Antoine Servant",
+          provider: "LINKEDIN",
+        },
+        input: { to: MARIE, text: "Bonjour Marie" },
+      },
+    });
+    expect(posts()).toEqual([]);
+  });
+
+  it("an email goes to the address on file, with its subject", async () => {
+    const mail = (await forMarie()).find((a) => a.tool === "Mail")!;
+    const res = await run("crm", {
+      workspaceId: CRM,
+      intent: "send_message",
+      actionId: mail.id,
+      input: { to: MARIE, text: "Hello", subject: "Our call" },
+    });
+    const body = await json(res);
+    expect(res.status, JSON.stringify(body)).toBe(202);
+    const row = await proposalRow(String(body.proposalId));
+    expect(row.data).toMatchObject({
+      parameters: {
+        to: "marie@example.test",
+        subject: "Our call",
+        body: "Hello",
+      },
+      summary: "Send an email to Marie Dupont",
+    });
+  });
+
+  it("a connection request goes to her LinkedIn id", async () => {
+    const actions = await forMarie("request_connection");
+    const li = actions.find(
+      (a) => a.connection?.account === "Antoine Servant"
+    )!;
+    expect(li.reach).toEqual({ ok: true });
+    const res = await run("crm", {
+      workspaceId: CRM,
+      intent: "request_connection",
+      actionId: li.id,
+      input: { to: MARIE },
+    });
+    const body = await json(res);
+    expect(res.status, JSON.stringify(body)).toBe(202);
+    expect((await proposalRow(String(body.proposalId))).data).toMatchObject({
+      parameters: { accountId: "acc-li", providerId: "ACoAAMarie" },
+    });
+  });
+
+  it("a LinkedIn invitation never goes through her Instagram account", async () => {
+    const ig = (await forMarie("request_connection")).find(
+      (a) => a.connection?.account === "antoiinesrvt"
+    )!;
+    expect(ig.reach).toEqual({
+      ok: false,
+      why: "Instagram can't reach Marie Dupont on LinkedIn.",
+    });
+    const before = (await q(`select id from proposals`)).rows.length;
+    const res = await run("crm", {
+      workspaceId: CRM,
+      intent: "request_connection",
+      actionId: ig.id,
+      input: { to: MARIE },
+    });
+    const body = await json(res);
+    expect(res.status, JSON.stringify(body)).toBe(400);
+    expect(body.code).toBe("RECIPIENT_UNREACHABLE");
+    expect((await q(`select id from proposals`)).rows.length).toBe(before);
+  });
+
+  it("refuses a send the pod cannot address (RECIPIENT_UNREACHABLE), and files nothing", async () => {
+    const mail = (await forMarie()).find((a) => a.tool === "Mail")!;
+    const before = (await q(`select id from proposals`)).rows.length;
+    const res = await run("crm", {
+      workspaceId: CRM,
+      intent: "send_message",
+      actionId: mail.id,
+      input: { to: PAUL, text: "Hello" },
+    });
+    const body = await json(res);
+    expect(res.status, JSON.stringify(body)).toBe(400);
+    expect(body).toMatchObject({
+      code: "RECIPIENT_UNREACHABLE",
+      why: "No email on file for Paul Martin.",
+    });
+    expect((await q(`select id from proposals`)).rows.length).toBe(before);
+  });
+
+  it.each([
+    ["outside the key's grant", HIDDEN],
+    ["that does not exist", randomUUID()],
+  ])(
+    "refuses to send to someone %s (SUBJECT_NOT_READABLE), and files nothing",
+    async (_why, to) => {
+      const mail = (await forMarie()).find((a) => a.tool === "Mail")!;
+      const before = (await q(`select id from proposals`)).rows.length;
+      const res = await run("crm", {
+        workspaceId: CRM,
+        intent: "send_message",
+        actionId: mail.id,
+        input: { to, text: "Hello" },
+      });
+      const body = await json(res);
+      expect(res.status, JSON.stringify(body)).toBe(403);
+      expect(body.code).toBe("SUBJECT_NOT_READABLE");
+      expect((await q(`select id from proposals`)).rows.length).toBe(before);
+    }
+  );
+
+  it("never takes an address from the app: a field the action does not read is refused", async () => {
+    const mail = (await forMarie()).find((a) => a.tool === "Mail")!;
+    const res = await run("crm", {
+      workspaceId: CRM,
+      intent: "send_message",
+      actionId: mail.id,
+      input: { to: PAUL, text: "Hello", email: "someone@else.test" },
+    });
+    expect(res.status).toBe(400);
+    expect((await json(res)).code).toBe("INVALID_INPUT");
+  });
+
+  // ── An agent drafting for the person (decision 790baeb5: the AI proposes
+  //    sends, the person approves them whenever). Its key is not an app's: it
+  //    asks for the intent form, and its outward run still files a proposal.
+
+  it("an agent's key reads the raw projection unless it asks for the intent form", async () => {
+    const raw = await list("agent", `workspaceId=${CRM}&intent=send_message`);
+    const rawBody = await json(raw);
+    expect(raw.status, JSON.stringify(rawBody)).toBe(200);
+    expect((rawBody.actions as unknown[]).length).toBeGreaterThan(0);
+    expect(
+      (rawBody.actions as Array<Record<string, unknown>>).every(
+        (a) => typeof a.verbId === "string"
+      )
+    ).toBe(true);
+
+    const asked = await list(
+      "agent",
+      `workspaceId=${CRM}&intent=send_message&form=intent`
+    );
+    const askedBody = await json(asked);
+    expect(asked.status, JSON.stringify(askedBody)).toBe(200);
+    const views = askedBody.actions as Array<Record<string, unknown>>;
+    expect(views.length).toBeGreaterThan(0);
+    for (const v of views) {
+      expect(v).not.toHaveProperty("verbId");
+      expect(v).not.toHaveProperty("reach");
+      expect(typeof v.id).toBe("string");
+    }
+
+    expect(
+      (await list("agent", `workspaceId=${CRM}&intent=send_message&form=raw`))
+        .status
+    ).toBe(400);
+  });
+
+  it("an agent's key listing for a subject gets her reach and ranking", async () => {
+    const res = await list(
+      "agent",
+      `workspaceId=${CRM}&intent=send_message&subject=${MARIE}`
+    );
+    const body = await json(res);
+    expect(res.status, JSON.stringify(body)).toBe(200);
+    const actions = body.actions as Array<
+      ActionView & { reach?: { ok: boolean; why?: string } }
+    >;
+    expect(actions.map((a) => [named(a), a.reach]).slice(0, 2)).toEqual([
+      ["Reply in the chat · Antoine Servant", { ok: true }],
+      ["Send a first message · Antoine Servant", { ok: true }],
+    ]);
+    expect(JSON.stringify(actions)).not.toContain("ACoAAMarie");
+  });
+
+  it("an agent's send is proposed for the person, never run", async () => {
+    const res0 = await list(
+      "agent",
+      `workspaceId=${CRM}&intent=send_message&subject=${MARIE}`
+    );
+    const reply = ((await json(res0)).actions as ActionView[])[0]!;
+    const res = await run("agent", {
+      workspaceId: CRM,
+      intent: "send_message",
+      actionId: reply.id,
+      input: { to: MARIE, text: "Bonjour Marie, from the agent" },
+    });
+    const body = await json(res);
+    expect(res.status, JSON.stringify(body)).toBe(202);
+    const row = (
+      await q<{
+        governance_reason: string | null;
+        agent_user_id: string | null;
+        app_id: string | null;
+        data: Record<string, unknown>;
+      }>(
+        `select governance_reason, agent_user_id, app_id, data from proposals where id = $1`,
+        [String(body.proposalId)]
+      )
+    ).rows[0]!;
+    expect(row).toMatchObject({
+      governance_reason: "INTENT_OUTWARD",
+      agent_user_id: AGENT,
+      app_id: null,
+    });
+    expect(row.data).toMatchObject({
+      parameters: { accountId: "acc-li", threadId: "chat-marie" },
+      intentRequest: { recipient: { id: MARIE, name: "Marie Dupont" } },
+    });
+    expect(posts()).toEqual([]);
+  });
+
+  it("an intent action asked for with the person's own key is proposed too (no owner bypass)", async () => {
+    const res0 = await list(
+      "operator",
+      `workspaceId=${CRM}&intent=send_message&subject=${MARIE}`
+    );
+    const mail = ((await json(res0)).actions as ActionView[]).find(
+      (a) => a.tool === "Mail"
+    )!;
+    const res = await run("operator", {
+      workspaceId: CRM,
+      intent: "send_message",
+      actionId: mail.id,
+      input: { to: MARIE, text: "By the person, through the intent form" },
+    });
+    const body = await json(res);
+    expect(res.status, JSON.stringify(body)).toBe(202);
+    expect((await proposalRow(String(body.proposalId))).governance_reason).toBe(
+      "INTENT_OUTWARD"
+    );
+    expect(posts()).toEqual([]);
+  });
+
+  it("an agent's run body is told apart by its actionId: a raw body stays raw", async () => {
+    const res = await run("agent", {
+      workspaceId: CRM,
+      intent: "send_message",
+      actionId: "x.y",
+      input: { to: MARIE, text: "Hi" },
+      verbId: "mail_send",
+    });
+    const body = await json(res);
+    expect(res.status, JSON.stringify(body)).toBe(400);
+    expect(body.code).toBe("INVALID_REQUEST");
+  });
+
+  // ── "Sends waiting for your approval" on a lead: the proposals of the
+  //    intent actions sent to her, and only those.
+
+  it("lists the sends proposed to one person (GET /proposals?recipient=)", async () => {
+    const sentTo = async (key: KeyName, who: string) => {
+      const res = await send(
+        key,
+        "GET",
+        `/proposals?status=pending&limit=200&recipient=${who}`
+      );
+      const body = await json(res);
+      expect(res.status, JSON.stringify(body)).toBe(200);
+      return body.proposals as Array<{
+        id: string;
+        data: { intentRequest?: { recipient?: { id: string } } };
+      }>;
+    };
+    const all = await q<{ id: string }>(
+      `select id from proposals where status = 'pending'`
+    );
+    const toMarie = await sentTo("operator", MARIE);
+    // The app's sends and the agent's, and nothing else of the queue.
+    expect(toMarie.length).toBeGreaterThanOrEqual(4);
+    expect(toMarie.length).toBeLessThan(all.rows.length);
+    for (const p of toMarie)
+      expect(p.data.intentRequest?.recipient?.id).toBe(MARIE);
+    expect(await sentTo("operator", PAUL)).toEqual([]);
+    // An app that reads proposals in its space sees the same list.
+    expect((await sentTo("crmReview", MARIE)).map((p) => p.id).sort()).toEqual(
+      toMarie.map((p) => p.id).sort()
+    );
+    expect(
+      (await send("operator", "GET", "/proposals?recipient=marie")).status
+    ).toBe(400);
   });
 });
