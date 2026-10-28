@@ -79,10 +79,11 @@ export type ProjectableCapability = Capability & { enabled: boolean };
 
 /**
  * The projection, with each action paired to the registry row that produced it
- * — so a caller can attribute a runnable verb to its container without a second
- * rule. `projectRunnableActions` is exactly this, minus the source.
+ * — so a caller can attribute a runnable verb to its container (or its tool row,
+ * the intent actions door) without a second rule. `projectRunnableActions` is
+ * exactly this, minus the source.
  */
-function projectWithSource(
+export function projectWithSource(
   capabilities: ProjectableCapability[]
 ): Array<{ action: RunnableCapabilityAction; source: Capability }> {
   const actions: Array<{
