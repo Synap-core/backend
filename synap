@@ -768,6 +768,9 @@ generate_and_create_env() {
     VAULT_SERVER_KEY=$(openssl rand -hex 32)
     HUB_PROTOCOL_API_KEY=$(openssl rand -hex 32)
     HUB_JWT_SECRET=$(openssl rand -hex 32)
+    local BRIDGE_SECRET GRAFANA_PASSWORD
+    BRIDGE_SECRET=$(openssl rand -hex 32)
+    GRAFANA_PASSWORD=$(openssl rand -hex 32)
     
     # Placeholder until the image step pins the release block (SYNAP_IMAGE_*,
     # BACKEND_VERSION=<release id>) — never `latest`.
@@ -825,6 +828,8 @@ PROVISIONING_TOKEN=${PROVISIONING_TOKEN}
 VAULT_SERVER_KEY=${VAULT_SERVER_KEY}
 HUB_PROTOCOL_API_KEY=${HUB_PROTOCOL_API_KEY}
 HUB_JWT_SECRET=${HUB_JWT_SECRET}
+BRIDGE_SECRET=${BRIDGE_SECRET}
+GRAFANA_PASSWORD=${GRAFANA_PASSWORD}
 
 # Realtime CORS + links (compose defaults are dev values: * and localhost)
 FRONTEND_URL=https://${domain}
@@ -1591,6 +1596,22 @@ _bootstrap_token_backfill() {
         SYNAP_ENV_FILE=.env envcfg_write_raw S PROVISIONING_TOKEN "$(openssl rand -hex 32)"
         echo -e "${YELLOW}⚠️  Added missing PROVISIONING_TOKEN to .env${NC}"
     fi
+}
+
+# Secrets nothing generated before the audit of 2026-10-28, written once when
+# empty and never rotated (the update that writes one recreates its services):
+#   BRIDGE_SECRET    the backend's key to realtime (/bridge/emit,
+#                    /yjs/:room/state|restore); empty, realtime took those calls
+#                    from anything on the compose network
+#   GRAFANA_PASSWORD the optional monitoring profile's admin; compose fell back
+#                    to "admin" (Grafana keeps the password of its FIRST start)
+_generated_secrets_backfill() {
+    local key
+    for key in BRIDGE_SECRET GRAFANA_PASSWORD; do
+        [ -n "$(_ue_env_get "$key")" ] && continue
+        SYNAP_ENV_FILE=.env envcfg_write_raw S "$key" "$(openssl rand -hex 32)" || return 1
+        echo -e "${BLUE}ℹ️  Generated ${key} into .env${NC}"
+    done
 }
 
 # "needed" (no owner yet) | "ready" | "unknown" — the pod's own answer.
@@ -3129,6 +3150,7 @@ EOF
         update_env_value "VAULT_SERVER_KEY" "$(openssl rand -hex 32)"
         echo -e "${BLUE}ℹ️  Backfilled VAULT_SERVER_KEY into .env${NC}"
     fi
+    _generated_secrets_backfill
 
     # Explicit choices from flags land in .env through the one writer, before
     # anything reads them (_ue_edge, should_start_pod_agent, compose).
@@ -5225,6 +5247,7 @@ USAGE
         echo -e "${YELLOW}⚠️  Added missing SYNAP_SERVICE_ENCRYPTION_KEY to .env${NC}"
     fi
     _bootstrap_token_backfill
+    _generated_secrets_backfill
 
     echo -e "${BLUE}🔄 Updating Synap (${mode}${ref:+: $ref})...${NC}"
     synap_update_engine "$mode" "$ref" "$force"

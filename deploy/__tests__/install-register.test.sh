@@ -236,6 +236,8 @@ run_install "${REG[@]}"; rc=$?
 [ "$(env_of ADMIN_BOOTSTRAP_MODE)" = token ] && ok "happy: admin bootstrap = token (never open /registration)" || bad "happy: ADMIN_BOOTSTRAP_MODE=$(env_of ADMIN_BOOTSTRAP_MODE)"
 [ "$(env_of LETSENCRYPT_EMAIL)" = "ops@synap.live" ] && ok "happy: ACME contact defaults for a registered pod" || bad "happy: LETSENCRYPT_EMAIL=$(env_of LETSENCRYPT_EMAIL)"
 [ -n "$(env_of VAULT_SERVER_KEY)" ] && [ -n "$(env_of HUB_JWT_SECRET)" ] && ok "happy: VAULT_SERVER_KEY (compose-required) + hub secrets generated" || bad "happy: VAULT_SERVER_KEY/HUB_JWT_SECRET missing"
+[[ "$(env_of BRIDGE_SECRET)" =~ ^[0-9a-f]{64}$ ]] && [[ "$(env_of GRAFANA_PASSWORD)" =~ ^[0-9a-f]{64}$ ]] \
+  && ok "happy: BRIDGE_SECRET and GRAFANA_PASSWORD generated" || bad "happy: BRIDGE_SECRET/GRAFANA_PASSWORD missing or malformed"
 [ "$(env_of SYNAP_RELEASE_ID)" = "$REL" ] && ok "happy: release block pinned to $REL" || bad "happy: SYNAP_RELEASE_ID=$(env_of SYNAP_RELEASE_ID)"
 # the register request
 [ "$(req pods_register '.body|fromjson|.token')" = "$TOKEN" ] && [ "$(req pods_register '.body|fromjson|.name')" = lab1 ] \
