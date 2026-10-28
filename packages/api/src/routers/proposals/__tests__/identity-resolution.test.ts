@@ -650,7 +650,9 @@ describe("composite materialize: one answer for every twin (identityResolutionFo
       id: `rel-${input.sourceEntityId}`,
     })),
   };
-  beforeEach(() => relationCaller.create.mockClear());
+  beforeEach(() => {
+    relationCaller.create.mockClear();
+  });
 
   /** A create door whose same-name gate refuses "Ada" (the twins given). */
   function gateOn(twinIds: string[]) {
