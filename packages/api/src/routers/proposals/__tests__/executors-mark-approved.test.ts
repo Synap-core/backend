@@ -20,9 +20,13 @@ const { updates, emitted } = vi.hoisted(() => ({
 
 vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@synap/database")>();
+  const rows = () => {
+    const found = Promise.resolve([{ status: "pending", systemData: {} }]);
+    return Object.assign(found, { limit: () => found });
+  };
   const chain = {
     from: () => chain,
-    where: async () => [{ status: "pending" }],
+    where: rows,
     set: (v: Record<string, unknown>) => {
       updates.push(v);
       return { where: async () => undefined };
@@ -30,6 +34,7 @@ vi.mock("@synap/database", async (importOriginal) => {
   };
   return {
     ...actual,
+    getWorkspaceMembership: async () => ({ role: "owner" }),
     db: {
       select: () => chain,
       update: () => ({ set: chain.set }),
@@ -45,6 +50,13 @@ vi.mock("../../../utils/push-providers-to-is.js", () => ({
 const { skillUpdates } = vi.hoisted(() => ({
   skillUpdates: [] as unknown[],
 }));
+vi.mock("../../playbooks.js", () => ({
+  playbooksRouter: {
+    createCaller: () => ({
+      archive: async () => ({ success: true, status: "archived" }),
+    }),
+  },
+}));
 vi.mock("../../skills.js", () => ({
   skillsRouter: {
     createCaller: () => ({
@@ -59,16 +71,21 @@ vi.mock("../../skills.js", () => ({
 import { proposalExecRegistry } from "../execution-registry.js";
 import { registerAiProviderExecutors } from "../executors/ai-provider.js";
 import { registerSkillExecutors } from "../executors/skill.js";
+import { registerPlaybookExecutors } from "../executors/playbook.js";
+import { registerEntityExecutors } from "../executors/entity.js";
 import { ProposalStatus } from "@synap/database/schema";
 import { stripComments } from "../../../../../../scripts/strip-comments.mjs";
 
 registerAiProviderExecutors();
 registerSkillExecutors();
+registerPlaybookExecutors();
+registerEntityExecutors();
 
 function run(
   key: string,
   data: Record<string, unknown>,
-  targetType = "aiProvider"
+  targetType = "aiProvider",
+  workspaceId: string | null = null
 ) {
   const ex = proposalExecRegistry.resolve(key, key.split("/")[1]);
   expect(ex, key).toBeDefined();
@@ -78,7 +95,7 @@ function run(
       targetType,
       targetId: "t1",
       proposalType: key.split("/")[1]!,
-      workspaceId: null,
+      workspaceId,
       sessionId: null,
       projectId: null,
       agentUserId: "agent-1",
@@ -145,6 +162,28 @@ describe("skill/update marks the proposal approved", () => {
       reviewedBy: "human-1",
     });
     expect(emitted).toContainEqual(["p1", null, "approved", "human-1"]);
+  });
+});
+
+// Same defect, same blind spot: entity.ts and playbook.ts set APPROVED in
+// other executors, so the file-level convention passed these two.
+describe("playbook/archive and entity/renderer.set mark the proposal approved", () => {
+  it.each([
+    ["playbook/archive", "playbook", "ws-1", { id: "pb-1" }],
+    [
+      "entity/renderer.set",
+      "entity",
+      null,
+      { data: { entityId: "e-1", ref: { kind: "cell", cellKey: "k" } } },
+    ],
+  ] as const)("%s flips status, attributed to the approver", async (key, type, ws, data) => {
+    await run(key, { ...data }, type, ws);
+    const flip = updates.find((u) => u.status === ProposalStatus.APPROVED);
+    expect(flip).toMatchObject({
+      status: ProposalStatus.APPROVED,
+      reviewedBy: "human-1",
+    });
+    expect(emitted).toContainEqual(["p1", ws, "approved", "human-1"]);
   });
 });
 
