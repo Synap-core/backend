@@ -24,9 +24,10 @@ import {
   previewTemplateApply,
   type TemplateApplyResult,
 } from "../../../services/template-apply/index.js";
-import { installedTemplateSpace } from "../../../services/installed-template-space.js";
-import { summarizePackageContents } from "../../../services/package-contents-summary.js";
-import { checkOneSpacePerDomain } from "../../../services/workspace-creation-service.js";
+import {
+  admitTemplateApply,
+  proposeTemplateApply,
+} from "../../../services/template-apply/propose.js";
 import type { DependencySeedOutcome } from "../../../services/package-dependency-resolver.js";
 import { resolvePreflightComposeTarget } from "../../../services/preflight-compose-target.js";
 import {
@@ -56,7 +57,6 @@ import {
   CONTENT_KINDS,
   PACKAGE_CELL_RENDERER_TYPES,
 } from "@synap/database/schema";
-import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
 import { auditLog } from "../../../utils/audit-log.js";
 import { workspacePrimarySurfaceSchema } from "../../../schemas/workspace-primary-surface.js";
 import { packagePlaybookDefinitionSchema } from "../../../schemas/playbook-definition.js";
@@ -695,55 +695,21 @@ export function registerPackagesRoutes(app: HubHono): void {
     const idempotencyKey = packageSlug;
     const workspaceName = body.workspaceName;
 
-    // ── One space per domain — BEFORE governance, so a second space of a
-    // domain is refused (typed `exists`), never filed as a proposal — for
-    // every caller. `targetWorkspaceId` installs onto an existing space —
-    // nothing new is minted, so there is nothing to check.
-    if (!body.targetWorkspaceId) {
-      const verdict = await checkOneSpacePerDomain({
-        userId,
-        packageSlug,
-        idempotencyKey,
-        workspaceName,
-      });
+    // ── Refused BEFORE governance, for every caller ──────────────────────
+    // One space per domain (a second space of a domain is a typed `exists`,
+    // never a proposal), then the LIVE preflight against the pod catalog (a
+    // structural conflict `force` never bypasses). The same checks every
+    // filing door runs: `admitTemplateApply` (services/template-apply/propose).
+    const admission = await admitTemplateApply({ userId, body });
+    if (!admission.ok && admission.refusal === "one-space-per-domain") {
       // `error` too: every Hub client (IS, CLI) surfaces a 4xx through it.
-      if (verdict.action === "refuse") {
-        return c.json({ ...verdict.reply, error: verdict.reply.guidance }, 409);
-      }
+      return c.json(
+        { ...admission.reply, error: admission.reply.guidance },
+        409
+      );
     }
-
-    // ── LIVE preflight gate ───────────────────────────────────────────────
-    // Run the write-free create-path resolver against the LIVE pod catalog
-    // BEFORE governance/materialize. `preflightWorkspaceFromDefinition.ok` is
-    // false ONLY on a structural/integrity failure — a duplicate/invalid slug
-    // (`validationErrors`) or a profileKind conflict with an existing pod
-    // profile (`profiles.conflicts`), plus their downstream unresolved
-    // entityLinks / scope-orphaned views. These are pod-integrity invariants, so
-    // `force` does NOT bypass them (a re-applied same-kind template resolves as
-    // `reused`, never a conflict — so a legitimate reinstall never trips this).
-    // Advisory findings (deferred / scopeConflicts) never flip `ok`, so they
-    // never block here; the wave-2 PURE `validateTemplate` lint is where `force`
-    // will actually bypass advice.
-    //
-    // TODO(wave2): also run the PURE validateTemplate(def) from
-    // @synap-core/workspace-templates once that export is republished into
-    // node_modules — return 400/422 on !ok (bypassable by `force` for ADVISORY
-    // lint only, never for a structural conflict). Not imported now: the export
-    // isn't in this repo's installed package version yet, so importing it breaks
-    // typecheck.
-    // A COMPOSE apply (`--onto`, or a declared compose base) resolves slugs its
-    // base contributes — the preflight must see the same target materialize
-    // will reconcile onto, or an overlay linking to its base's kinds 422s.
-    const preflight = await preflightWorkspaceFromDefinition({
-      definition: body as unknown as WorkspaceDefinitionInput,
-      userId,
-      composeTarget: await resolvePreflightComposeTarget({
-        definition: body,
-        userId,
-        targetWorkspaceId: body.targetWorkspaceId,
-      }),
-    });
-    if (!preflight.ok) {
+    if (!admission.ok) {
+      const { preflight } = admission;
       return c.json(
         {
           error: "Preflight validation failed",
@@ -812,70 +778,18 @@ export function registerPackagesRoutes(app: HubHono): void {
     }
 
     // ── Permission check ──────────────────────────────────────────────────
-    // Store the FULL package body as `definition` so the workspace/create
-    // approve executor can re-run materializeWorkspaceCore on approval.
-    // Name-only data was the Phase-0 bug: approve had nothing to materialize.
-    // Installing ONTO an existing workspace (targetWorkspaceId) is an UPDATE
-    // of that specific workspace, not a fresh "create" — pass its workspaceId
-    // so RBAC (`verifyPermission`) actually checks the caller's role on THAT
-    // row (a bare "create" check has no workspace lens to check against).
-    // `composeOntoBaseWorkspace` (reached below) still re-gates via
-    // `assertWorkspaceWrite` as defense in depth — this is the governance
-    // layer in front of it, same as every other write door.
-    //
-    // A slug some space already holds is a template UPDATE of that space: the
-    // proposal targets it (`id` → the proposal's targetId) under its real name,
-    // as `operation: "template_update"`, which the `workspace/update` executor
-    // approves through the same body as `workspace/create` (idempotent re-hit
-    // → layer 1 → layer 2 → stamp). Same `workspaceId: null` lens as a create,
-    // so RBAC is unchanged; `workspace.update` is an ADMIN action, so an agent
-    // always proposes it.
-    const existingSpace =
-      !body.targetWorkspaceId && packageSlug
-        ? await installedTemplateSpace(packageSlug, userId)
-        : null;
-    const perm = await checkPermissionOrPropose({
-      userId,
-      agentUserId,
-      workspaceId: body.targetWorkspaceId ?? null,
-      subjectType: "workspace",
-      action: body.targetWorkspaceId || existingSpace ? "update" : "create",
-      data: {
-        name:
-          existingSpace?.name ??
-          workspaceName ??
-          body._meta?.slug ??
-          "untitled",
-        ...(existingSpace
-          ? { id: existingSpace.id, operation: "template_update" }
-          : {}),
-        definition: body,
-        // What layer 2 brings (playbooks, automations + status, capabilities,
-        // MCP servers) — so the approval card shows it, not just a name.
-        contents: summarizePackageContents(body),
-        workspaceName,
-        templateId: body._meta?.slug,
-        packageSlug: body._meta?.slug,
-        packageVersion: body._meta?.version,
-        workspaceType: body.workspaceType,
-        proposalId: idempotencyKey,
-        createdBy: "provisioning",
-        source: "packages.apply",
-        ...(body.targetWorkspaceId
-          ? { targetWorkspaceId: body.targetWorkspaceId }
-          : {}),
-      },
-    });
-    if ("denied" in perm && perm.denied)
-      return c.json({ error: perm.reason }, 403);
-    if (
-      "proposalId" in perm &&
-      perm.proposalId &&
-      !("granted" in perm && perm.granted)
-    )
+    // The ONE filing door (`proposeTemplateApply`): the full body stored as
+    // the proposal's `definition` (the approve executor re-applies it), a
+    // slug already installed filed as a template UPDATE of that space, and
+    // `targetWorkspaceId` as an update of THAT space so RBAC checks the
+    // caller's role on it. `composeOntoBaseWorkspace` (reached below) still
+    // re-gates via `assertWorkspaceWrite` as defense in depth.
+    const filed = await proposeTemplateApply({ userId, agentUserId, body });
+    if (filed.kind === "denied") return c.json({ error: filed.reason }, 403);
+    if (filed.kind === "proposed")
       return jsonGoverned(c, {
         status: "proposed",
-        proposalId: perm.proposalId,
+        proposalId: filed.proposalId,
       });
 
     // ── Step 0: the consented data changes, BEFORE the template apply ──────
