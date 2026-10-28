@@ -133,7 +133,7 @@ export function intentRunRateLimit(
   } catch (err) {
     if (errCode(err) !== "TOO_MANY_REQUESTS") throw err;
     const retryAfter =
-      (err.cause as { resetIn?: number } | undefined)?.resetIn ??
+      (err as { cause?: { resetIn?: number } }).cause?.resetIn ??
       Math.ceil(INTENT_RUN_LIMIT.windowMs / 1000);
     return refusal(
       429,
