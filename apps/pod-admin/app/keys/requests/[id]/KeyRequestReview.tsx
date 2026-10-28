@@ -6,7 +6,8 @@
  * command), what approving does; then the same sections as New key, locked
  * to the request: the person may narrow the key, never widen it
  * (`validateKeyDraft` with the request's ceiling, re-checked by the pod).
- * One primary, Create key; Deny beside it.
+ * One primary, the approve action; Decline beside it (the vocabulary's negative
+ * answer to a request for access, as on the app connect card).
  */
 
 import {
@@ -26,7 +27,10 @@ import {
   type KeyCeiling,
   type KeyDraft,
 } from "@synap-core/types/grants";
-import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
+import {
+  buildObjectActionTitle,
+  resolveActionLabel,
+} from "@synap-core/types/vocabulary";
 import { trpc } from "../../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
 import { formatRelative } from "../../../../lib/format";
@@ -346,7 +350,7 @@ export function KeyRequestReview({
               isDisabled={busy !== null}
               onPress={() => void send("deny")}
             >
-              Deny
+              {resolveActionLabel("decline")}
             </Button>
           }
         />
