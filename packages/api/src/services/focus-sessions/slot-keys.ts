@@ -157,7 +157,7 @@ export function unmatchedSlotClaimWarning(
     .filter((s): s is string => !!s);
   return named.length > 0
     ? `No output named "${sent}" on this session (outputs: ${named.join("; ")}): this write fills none of them. Name one by its key or its label.`
-    : `No output named "${sent}" on this session: it declares none, so this write fills none.`;
+    : `No output named "${sent}" on this session: it declares none. This write fills nothing.`;
 }
 
 /**

@@ -166,7 +166,7 @@ describe("create doors record the space a pod-wide entity was filed for", () => 
     const res = (await caller(W).create({
       profileSlug: "decision",
       title: "Ship it",
-    } as never)) as {
+    } as never)) as unknown as {
       id: string;
       entity: { workspaceId: unknown; homeWorkspaceId: unknown };
     };
