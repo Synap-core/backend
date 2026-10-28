@@ -1399,7 +1399,8 @@ async function executeAutomationFlow(params: {
                             body: string;
                           },
                           context,
-                          ownerId
+                          ownerId,
+                          { workspaceId, producerAgentUserId }
                         );
                         break;
                       case "transform":
@@ -1496,7 +1497,10 @@ async function executeAutomationFlow(params: {
                 headers: Record<string, string>;
                 body: string;
               };
-              output = await executeFetchStep(data, context, ownerId);
+              output = await executeFetchStep(data, context, ownerId, {
+                workspaceId,
+                producerAgentUserId,
+              });
               break;
             }
 
