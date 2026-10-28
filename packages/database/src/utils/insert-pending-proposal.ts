@@ -24,6 +24,7 @@ import {
   type StoredProposalData,
 } from "@synap-core/types/proposals";
 import { isUniqueViolation } from "./pg-errors.js";
+import { transitionProposal } from "./proposal-transition.js";
 import {
   callingKeyAttribution,
   isDerivedSession,
@@ -771,25 +772,22 @@ async function supersedeEarlierVersions(
   });
   // `reviewedAt` like the person's withdraw: the row was decided, now.
   const at = new Date();
-  const replaced = await tx
-    .update(proposals)
-    .set({
-      status: ProposalStatus.WITHDRAWN,
+  const replaced = await transitionProposal(tx, {
+    to: ProposalStatus.WITHDRAWN,
+    set: {
       reviewedAt: at,
       updatedAt: at,
       data: drizzleSql`COALESCE(${proposals.data}, '{}'::jsonb) || ${stamp}::jsonb`,
-    })
-    .where(
-      and(
-        inArray(proposals.id, covered),
-        eq(proposals.status, ProposalStatus.PENDING)
-      )
-    )
-    .returning({
-      id: proposals.id,
-      workspaceId: proposals.workspaceId,
-      data: proposals.data,
-    });
+    },
+    where: and(
+      inArray(proposals.id, covered),
+      eq(proposals.status, ProposalStatus.PENDING)
+    ),
+  }).returning({
+    id: proposals.id,
+    workspaceId: proposals.workspaceId,
+    data: proposals.data,
+  });
   if (replaced.length > 0) {
     await actionProposalNotifications(
       replaced.map((r) => r.id),

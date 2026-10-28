@@ -9,9 +9,10 @@
 import { eq, and, desc } from "drizzle-orm";
 import { proposals } from "../schema/index.js";
 import { type ProposalStatus } from "../schema/proposals.js";
+import { transitionProposal } from "../utils/proposal-transition.js";
 
 export interface UpdateProposalInput {
-  status?: string;
+  status?: ProposalStatus;
   reviewedBy?: string;
   reviewedAt?: Date;
   rejectionReason?: string;
@@ -28,14 +29,31 @@ export class ProposalRepository {
    * NO EVENT EMISSION
    */
   async update(id: string, data: UpdateProposalInput): Promise<any> {
-    const [proposal] = await this.db
-      .update(proposals)
-      .set({
-        ...data,
-        updatedAt: new Date(),
-      })
-      .where(eq(proposals.id, id))
-      .returning();
+    // Named columns, never a spread: the status moves only through the
+    // status door (`transitionProposal`, tripwire proposal-status-one-door).
+    const [proposal] = data.status
+      ? await transitionProposal(this.db, {
+          to: data.status,
+          set: {
+            reviewedBy: data.reviewedBy,
+            reviewedAt: data.reviewedAt,
+            rejectionReason: data.rejectionReason,
+            reasonCode: data.reasonCode,
+            updatedAt: new Date(),
+          },
+          where: eq(proposals.id, id),
+        }).returning()
+      : await this.db
+          .update(proposals)
+          .set({
+            reviewedBy: data.reviewedBy,
+            reviewedAt: data.reviewedAt,
+            rejectionReason: data.rejectionReason,
+            reasonCode: data.reasonCode,
+            updatedAt: new Date(),
+          })
+          .where(eq(proposals.id, id))
+          .returning();
 
     if (!proposal) {
       throw new Error("Proposal not found");

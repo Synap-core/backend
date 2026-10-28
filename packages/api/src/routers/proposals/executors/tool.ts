@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { db, proposals, eq, tools } from "@synap/database";
+import { db, proposals, eq, tools, transitionProposal } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 import { emitSideEffects } from "@synap/events";
@@ -104,15 +104,15 @@ export function registerToolExecutors(): void {
         ...(wsLens ? { workspaceId: wsLens } : {}),
       });
 
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
 
       reportApproved(deps, proposal, input.proposalId);
 
@@ -195,15 +195,15 @@ export function registerToolExecutors(): void {
       // The replay must APPLY, never re-propose — see `assertApplied`.
       assertApplied(await toolCaller.delete({ id: toolId }));
 
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
 
       reportApproved(deps, proposal, input.proposalId);
 
@@ -298,15 +298,15 @@ export function registerToolExecutors(): void {
         })
       );
 
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
 
       reportApproved(deps, proposal, input.proposalId);
 

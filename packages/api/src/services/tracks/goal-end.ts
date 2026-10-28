@@ -28,6 +28,7 @@ import {
   notifications,
   proposals,
   trackParticipants,
+  transitionProposal,
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
@@ -114,17 +115,17 @@ export async function settleEndedGoal(input: {
         )
       );
 
-    const expired = await db
-      .update(proposals)
-      .set({ status: ProposalStatus.EXPIRED, updatedAt: now })
-      .where(
-        and(
-          eq(proposals.status, ProposalStatus.PENDING),
-          eq(proposals.createdBy, GOAL_LOOP_AUTHOR),
-          drizzleSql`${proposals.data}->'data'->>'goalLoopOf' = ${trackId}`
-        )
-      )
-      .returning({ id: proposals.id, data: proposals.data });
+    const expired = await transitionProposal(db, {
+      to: ProposalStatus.EXPIRED,
+      set: {
+        updatedAt: now,
+      },
+      where: and(
+        eq(proposals.status, ProposalStatus.PENDING),
+        eq(proposals.createdBy, GOAL_LOOP_AUTHOR),
+        drizzleSql`${proposals.data}->'data'->>'goalLoopOf' = ${trackId}`
+      ),
+    }).returning({ id: proposals.id, data: proposals.data });
     // A terminal proposal state discards its staged source blob (the
     // terminal-discard tripwire) — a loop's run carries none; the door is
     // the expiry scanners' own.

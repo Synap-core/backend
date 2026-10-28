@@ -8,6 +8,7 @@ import {
   eq,
   inArray,
   getWorkspaceMembership,
+  transitionProposal,
 } from "@synap/database";
 // `createLinks` is the ONE link door and it lives in @synap/api, not
 // @synap/database — the database package's `ensure-external-channel.ts` says so
@@ -193,15 +194,15 @@ export function registerPlaybookExecutors(): void {
       );
       assertApplied(created);
 
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
 
       // Report to IS telemetry (fire-and-forget — never blocks)
       reportApproved(deps, proposal, input.proposalId);
@@ -319,15 +320,15 @@ export function registerPlaybookExecutors(): void {
         )
       );
 
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
 
       reportApproved(deps, proposal, input.proposalId);
 
@@ -390,15 +391,15 @@ export function registerPlaybookExecutors(): void {
         promoteArgs as Parameters<typeof playbookCaller.promote>[0]
       );
 
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
 
       // Report to IS telemetry (fire-and-forget — never blocks)
       reportApproved(deps, proposal, input.proposalId);
@@ -491,15 +492,15 @@ export function registerPlaybookExecutors(): void {
 
       // The registry does not flip the row: without this an applied archive
       // stayed `pending` forever.
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
 
       reportApproved(deps, proposal, input.proposalId);
       deps.emitProposalReviewed(
@@ -810,10 +811,9 @@ export function registerPlaybookExecutors(): void {
       // written by `onApprovalFailed`) would otherwise sit on an APPROVED
       // row and read "Couldn't apply" beside the session it did create.
       const { failure: _staleFailure, ...rawWithoutFailure } = raw;
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
@@ -825,8 +825,9 @@ export function registerPlaybookExecutors(): void {
           data: receipt
             ? { ...rawWithoutFailure, runResult: receipt }
             : rawWithoutFailure,
-        })
-        .where(eq(proposals.id, input.proposalId));
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
 
       reportApproved(deps, proposal, input.proposalId);
 
@@ -971,15 +972,15 @@ export function registerPlaybookExecutors(): void {
         }
       }
 
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
 
       reportApproved(deps, proposal, input.proposalId);
 

@@ -8,6 +8,7 @@ import {
   users,
   workspaceMembers,
   workspaces,
+  transitionProposal,
 } from "@synap/database";
 import { readDeferredWrites } from "@synap-core/types/proposals/deferred-writes";
 import { ProposalStatus } from "@synap/database/schema";
@@ -209,10 +210,9 @@ async function markApproved(
   userId: string,
   applied: TemplateApplyResult
 ): Promise<void> {
-  await db
-    .update(proposals)
-    .set({
-      status: ProposalStatus.APPROVED,
+  await transitionProposal(db, {
+    to: ProposalStatus.APPROVED,
+    set: {
       data: {
         ...((proposal.data as Record<string, unknown> | null | undefined) ??
           {}),
@@ -233,8 +233,9 @@ async function markApproved(
       reviewedBy: userId,
       reviewedAt: new Date(),
       updatedAt: new Date(),
-    })
-    .where(eq(proposals.id, proposalId));
+    },
+    where: eq(proposals.id, proposalId),
+  });
 }
 
 /**
@@ -408,10 +409,9 @@ export function registerWorkspaceExecutors(): void {
           .values({ workspaceId: targetWorkspaceId, userId: agentUserId, role })
           .onConflictDoNothing()
           .returning({ id: workspaceMembers.id });
-        const [approved] = await tx
-          .update(proposals)
-          .set({
-            status: ProposalStatus.APPROVED,
+        const [approved] = await transitionProposal(tx, {
+          to: ProposalStatus.APPROVED,
+          set: {
             // MERGED into the row, never the copy read above: a write kept
             // (or an item the reviewer dropped) since then must survive.
             ...(validatedEvent
@@ -422,9 +422,9 @@ export function registerWorkspaceExecutors(): void {
             reviewedBy: userId,
             reviewedAt: new Date(),
             updatedAt: new Date(),
-          })
-          .where(eq(proposals.id, input.proposalId))
-          .returning({ data: proposals.data });
+          },
+          where: eq(proposals.id, input.proposalId),
+        }).returning({ data: proposals.data });
         return { rows, approved };
       });
 
@@ -528,15 +528,15 @@ export function registerWorkspaceExecutors(): void {
       // Apply as the APPROVER — the same door the granted/direct path calls.
       await mergeWorkspaceSourceEdges(workspaceId, parsed.data, userId);
 
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
 
       // Report to IS telemetry (fire-and-forget — never blocks)
       reportApproved(deps, proposal, input.proposalId);
@@ -609,15 +609,15 @@ export function registerWorkspaceExecutors(): void {
       // Apply as the APPROVER — the same door the granted/direct path calls.
       await setWorkspacePublicProjection(workspaceId, parsed.data, userId);
 
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
 
       // Report to IS telemetry (fire-and-forget — never blocks)
       reportApproved(deps, proposal, input.proposalId);
@@ -746,15 +746,15 @@ export function registerWorkspaceExecutors(): void {
           })
         );
 
-        await db
-          .update(proposals)
-          .set({
-            status: ProposalStatus.APPROVED,
+        await transitionProposal(db, {
+          to: ProposalStatus.APPROVED,
+          set: {
             reviewedBy: userId,
             reviewedAt: new Date(),
             updatedAt: new Date(),
-          })
-          .where(eq(proposals.id, input.proposalId));
+          },
+          where: eq(proposals.id, input.proposalId),
+        });
 
         reportApproved(deps, proposal, input.proposalId);
         deps.emitProposalReviewed(
@@ -793,15 +793,15 @@ export function registerWorkspaceExecutors(): void {
         }
         await applySpaceBriefPatchNow(targetWorkspaceId, patch.data, userId);
 
-        await db
-          .update(proposals)
-          .set({
-            status: ProposalStatus.APPROVED,
+        await transitionProposal(db, {
+          to: ProposalStatus.APPROVED,
+          set: {
             reviewedBy: userId,
             reviewedAt: new Date(),
             updatedAt: new Date(),
-          })
-          .where(eq(proposals.id, input.proposalId));
+          },
+          where: eq(proposals.id, input.proposalId),
+        });
 
         reportApproved(deps, proposal, input.proposalId);
         deps.emitProposalReviewed(
@@ -827,15 +827,15 @@ export function registerWorkspaceExecutors(): void {
           userId,
         });
 
-        await db
-          .update(proposals)
-          .set({
-            status: ProposalStatus.APPROVED,
+        await transitionProposal(db, {
+          to: ProposalStatus.APPROVED,
+          set: {
             reviewedBy: userId,
             reviewedAt: new Date(),
             updatedAt: new Date(),
-          })
-          .where(eq(proposals.id, input.proposalId));
+          },
+          where: eq(proposals.id, input.proposalId),
+        });
 
         reportApproved(deps, proposal, input.proposalId);
         deps.emitProposalReviewed(
@@ -907,15 +907,15 @@ export function registerWorkspaceExecutors(): void {
           })
         );
 
-        await db
-          .update(proposals)
-          .set({
-            status: ProposalStatus.APPROVED,
+        await transitionProposal(db, {
+          to: ProposalStatus.APPROVED,
+          set: {
             reviewedBy: userId,
             reviewedAt: new Date(),
             updatedAt: new Date(),
-          })
-          .where(eq(proposals.id, input.proposalId));
+          },
+          where: eq(proposals.id, input.proposalId),
+        });
 
         reportApproved(deps, proposal, input.proposalId);
         deps.emitProposalReviewed(
@@ -948,15 +948,15 @@ export function registerWorkspaceExecutors(): void {
           userId
         );
 
-        await db
-          .update(proposals)
-          .set({
-            status: ProposalStatus.APPROVED,
+        await transitionProposal(db, {
+          to: ProposalStatus.APPROVED,
+          set: {
             reviewedBy: userId,
             reviewedAt: new Date(),
             updatedAt: new Date(),
-          })
-          .where(eq(proposals.id, input.proposalId));
+          },
+          where: eq(proposals.id, input.proposalId),
+        });
 
         reportApproved(deps, proposal, input.proposalId);
         deps.emitProposalReviewed(
@@ -1113,16 +1113,16 @@ export function registerWorkspaceExecutors(): void {
           : {}),
       };
 
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
           data: updatedData,
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
 
       // Report to IS telemetry (fire-and-forget — never blocks)
       reportApproved(deps, proposal, input.proposalId);
@@ -1214,15 +1214,15 @@ export function registerWorkspaceExecutors(): void {
       // The replay must APPLY, never re-propose — see `assertApplied`.
       assertApplied(await workspaceCaller.delete({ id: workspaceId }));
 
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
 
       reportApproved(deps, proposal, input.proposalId);
 
@@ -1297,15 +1297,15 @@ export function registerWorkspaceExecutors(): void {
         });
         assertApplied(result);
 
-        await db
-          .update(proposals)
-          .set({
-            status: ProposalStatus.APPROVED,
+        await transitionProposal(db, {
+          to: ProposalStatus.APPROVED,
+          set: {
             reviewedBy: userId,
             reviewedAt: new Date(),
             updatedAt: new Date(),
-          })
-          .where(eq(proposals.id, input.proposalId));
+          },
+          where: eq(proposals.id, input.proposalId),
+        });
 
         reportApproved(deps, proposal, input.proposalId);
         deps.emitProposalReviewed(
@@ -1393,15 +1393,15 @@ export function registerWorkspaceExecutors(): void {
         })
       );
 
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
 
       reportApproved(deps, proposal, input.proposalId);
 
@@ -1500,15 +1500,15 @@ export function registerWorkspaceExecutors(): void {
         })
       );
 
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
 
       reportApproved(deps, proposal, input.proposalId);
 
@@ -1651,15 +1651,15 @@ export function registerWorkspaceExecutors(): void {
       });
       assertApplied(minted);
 
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
 
       reportApproved(deps, proposal, input.proposalId);
 
@@ -1750,15 +1750,15 @@ export function registerWorkspaceExecutors(): void {
       });
       assertApplied(rotated);
 
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
 
       reportApproved(deps, proposal, input.proposalId);
 
@@ -1903,15 +1903,15 @@ export function registerWorkspaceExecutors(): void {
       Parameters<typeof registerProposalExecutor>[0]["execute"]
     >[0]["proposal"]
   ): Promise<void> {
-    await db
-      .update(proposals)
-      .set({
-        status: ProposalStatus.APPROVED,
+    await transitionProposal(db, {
+      to: ProposalStatus.APPROVED,
+      set: {
         reviewedBy: userId,
         reviewedAt: new Date(),
         updatedAt: new Date(),
-      })
-      .where(eq(proposals.id, input.proposalId));
+      },
+      where: eq(proposals.id, input.proposalId),
+    });
 
     reportApproved(deps, proposalRow, input.proposalId);
 

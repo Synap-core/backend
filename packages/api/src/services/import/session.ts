@@ -5,6 +5,7 @@ import {
   ProposalStatus,
   eq,
   and,
+  transitionProposal,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import type { CsvTablePlan } from "../../import/import-adapters.js";
@@ -230,20 +231,18 @@ export async function closeImportProposalOnApply(
     }
   }
   try {
-    await db
-      .update(proposals)
-      .set({
-        status: ProposalStatus.APPROVED,
+    await transitionProposal(db, {
+      to: ProposalStatus.APPROVED,
+      set: {
         reviewedBy,
         reviewedAt: new Date(),
         updatedAt: new Date(),
-      })
-      .where(
-        and(
-          eq(proposals.id, proposalId),
-          eq(proposals.status, ProposalStatus.PENDING)
-        )
-      );
+      },
+      where: and(
+        eq(proposals.id, proposalId),
+        eq(proposals.status, ProposalStatus.PENDING)
+      ),
+    });
   } catch (err) {
     logger.warn(
       { err, proposalId },

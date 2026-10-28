@@ -33,6 +33,7 @@ import {
   isNotNull,
   like,
   lt,
+  transitionProposal,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { discardProposalSourceBlob } from "../../utils/store-entity-source-blob.js";
@@ -319,16 +320,16 @@ export async function expireLapsedProposals(
   const actionedIds: string[] = [];
   for (let i = 0; i < lapsed.length; i += CHUNK) {
     const batch = lapsed.slice(i, i + CHUNK);
-    const rows = await db
-      .update(proposals)
-      .set({ status: ProposalStatus.EXPIRED, updatedAt: now })
-      .where(
-        and(
-          inArray(proposals.id, batch),
-          eq(proposals.status, ProposalStatus.PENDING)
-        )
-      )
-      .returning({ id: proposals.id });
+    const rows = await transitionProposal(db, {
+      to: ProposalStatus.EXPIRED,
+      set: {
+        updatedAt: now,
+      },
+      where: and(
+        inArray(proposals.id, batch),
+        eq(proposals.status, ProposalStatus.PENDING)
+      ),
+    }).returning({ id: proposals.id });
     for (const r of rows) actionedIds.push(r.id);
     expired += rows.length;
   }
@@ -392,16 +393,16 @@ export async function expireSessionEphemerals(
       .map((p) => p.id);
     if (ids.length === 0) return 0;
 
-    const rows = await db
-      .update(proposals)
-      .set({ status: ProposalStatus.EXPIRED, updatedAt: now })
-      .where(
-        and(
-          inArray(proposals.id, ids),
-          eq(proposals.status, ProposalStatus.PENDING)
-        )
-      )
-      .returning({ id: proposals.id });
+    const rows = await transitionProposal(db, {
+      to: ProposalStatus.EXPIRED,
+      set: {
+        updatedAt: now,
+      },
+      where: and(
+        inArray(proposals.id, ids),
+        eq(proposals.status, ProposalStatus.PENDING)
+      ),
+    }).returning({ id: proposals.id });
     // Expired = no longer decidable: its bell rows leave with it (one door with approve/reject).
     markProposalNotificationsActioned(rows.map((r) => r.id));
     await discardExpiredSourceBlobs(

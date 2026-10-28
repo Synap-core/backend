@@ -23,6 +23,7 @@ import {
   isDomainHomeWorkspace,
   DOMAIN_INTO_NON_DOMAIN_HOME_MESSAGE,
   expirePendingCreatesOfLandedRecord,
+  transitionProposal,
 } from "@synap/database";
 import { isSpaceWriteRole } from "@synap-core/types/workspaces";
 import { ProposalStatus } from "@synap/database/schema";
@@ -557,16 +558,16 @@ export function registerEntityExecutors(): void {
         await deps.stampProjectMembership(proposal, [createdEntity.id], userId);
       }
 
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
           data: createPayload,
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
 
       // The record landed: the agent's other pending copies of the SAME record
       // can only fail the same-name gate now, and each still counts toward its
@@ -674,15 +675,15 @@ export function registerEntityExecutors(): void {
 
       // The registry does not flip the row: without this an applied renderer
       // change stayed `pending` forever.
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
 
       reportApproved(deps, proposal, input.proposalId);
       deps.emitProposalReviewed(
@@ -735,15 +736,15 @@ export function registerEntityExecutors(): void {
             message: `Approval could not move the entity: ${failure?.error ?? "nothing was moved"}.`,
           });
         }
-        await db
-          .update(proposals)
-          .set({
-            status: ProposalStatus.APPROVED,
+        await transitionProposal(db, {
+          to: ProposalStatus.APPROVED,
+          set: {
             reviewedBy: userId,
             reviewedAt: new Date(),
             updatedAt: new Date(),
-          })
-          .where(eq(proposals.id, input.proposalId));
+          },
+          where: eq(proposals.id, input.proposalId),
+        });
         reportApproved(deps, proposal, input.proposalId);
         deps.emitProposalReviewed(
           input.proposalId,
@@ -783,11 +784,13 @@ export function registerEntityExecutors(): void {
         propertyDecisions: input.propertyDecisions,
       });
 
-      const approvedSet = {
-        status: ProposalStatus.APPROVED,
-        reviewedBy: userId,
-        reviewedAt: new Date(),
-        updatedAt: new Date(),
+      const approved = {
+        to: ProposalStatus.APPROVED,
+        set: {
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        },
       };
       if (undoBefore && undoAfter) {
         // One statement: the status flip and the undo record land together.
@@ -797,15 +800,15 @@ export function registerEntityExecutors(): void {
           before: undoBefore,
           after: undoAfter,
           baseData: (proposal.data ?? null) as Record<string, unknown> | null,
-          set: approvedSet,
+          transition: approved,
         });
       } else {
         // No before read, or the door did not report a write. Approve anyway,
         // unstamped — revert then says so.
-        await db
-          .update(proposals)
-          .set(approvedSet)
-          .where(eq(proposals.id, input.proposalId));
+        await transitionProposal(db, {
+          ...approved,
+          where: eq(proposals.id, input.proposalId),
+        });
       }
 
       // Report to IS telemetry (fire-and-forget — never blocks)
@@ -941,15 +944,15 @@ export function registerEntityExecutors(): void {
       } as unknown as Context);
       await entityCaller.delete({ id: entityId, source: "system" });
 
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
 
       // Report to IS telemetry (fire-and-forget — never blocks)
       reportApproved(deps, proposal, input.proposalId);
@@ -1186,16 +1189,16 @@ export function registerEntityExecutors(): void {
         },
       };
 
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
           data: nextData as unknown as Record<string, unknown>,
-        })
-        .where(eq(proposals.id, input.proposalId));
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
 
       // Search/embeddings/realtime — mergeEntities is data-plane only.
       const governanceWorkspaceId = proposal.workspaceId ?? null;
@@ -1278,15 +1281,15 @@ export function registerEntityExecutors(): void {
         source: "system",
       });
 
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
 
       // Report to IS telemetry (fire-and-forget — never blocks)
       reportApproved(deps, proposal, input.proposalId);
@@ -1343,15 +1346,15 @@ export function registerEntityExecutors(): void {
         source: "system",
       });
 
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
 
       // Report to IS telemetry (fire-and-forget — never blocks)
       reportApproved(deps, proposal, input.proposalId);
@@ -1401,15 +1404,15 @@ export function registerEntityExecutors(): void {
       } as unknown as Context);
       await entityCaller.detachFacet({ facetId, source: "system" });
 
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
 
       // Report to IS telemetry (fire-and-forget — never blocks)
       reportApproved(deps, proposal, input.proposalId);
@@ -1516,15 +1519,15 @@ export function registerEntityExecutors(): void {
         })
       );
 
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
 
       reportApproved(deps, proposal, input.proposalId);
 
@@ -1636,15 +1639,15 @@ export function registerEntityExecutors(): void {
         })
       );
 
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
 
       reportApproved(deps, proposal, input.proposalId);
 

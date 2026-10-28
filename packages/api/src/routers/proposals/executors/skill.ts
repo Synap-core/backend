@@ -1,5 +1,12 @@
 import { TRPCError } from "@trpc/server";
-import { db, proposals, eq, skills, tools } from "@synap/database";
+import {
+  db,
+  proposals,
+  eq,
+  skills,
+  tools,
+  transitionProposal,
+} from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 // Type-only (erased at compile) so it can't trip the skills.ts circular-import
@@ -263,15 +270,15 @@ export function registerSkillExecutors(): void {
         }
       }
 
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
 
       // Report to IS telemetry (fire-and-forget — never blocks)
       reportApproved(deps, proposal, input.proposalId);
@@ -359,15 +366,15 @@ export function registerSkillExecutors(): void {
       // The replay must APPLY, never re-propose — see `assertApplied`.
       assertApplied(await skillCaller.delete({ id: skillId }));
 
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
 
       reportApproved(deps, proposal, input.proposalId);
 
@@ -443,15 +450,15 @@ export function registerSkillExecutors(): void {
       // The registry does not flip the row: without this, an applied update
       // stayed `pending` forever (proposal bf90d6a2, approved twice, still
       // pending with reviewedBy null).
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
 
       reportApproved(deps, proposal, input.proposalId);
 

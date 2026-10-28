@@ -1,5 +1,11 @@
 import { TRPCError } from "@trpc/server";
-import { db, proposals, eq, getWorkspaceMembership } from "@synap/database";
+import {
+  db,
+  proposals,
+  eq,
+  getWorkspaceMembership,
+  transitionProposal,
+} from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import type { RendererRef, RendererSurface } from "@synap/database";
 import { profilesRouter } from "../../profiles.js";
@@ -31,15 +37,15 @@ async function alreadyApproved(proposalId: string): Promise<boolean> {
 }
 
 async function markApproved(proposalId: string, userId: string) {
-  await db
-    .update(proposals)
-    .set({
-      status: ProposalStatus.APPROVED,
+  await transitionProposal(db, {
+    to: ProposalStatus.APPROVED,
+    set: {
       reviewedBy: userId,
       reviewedAt: new Date(),
       updatedAt: new Date(),
-    })
-    .where(eq(proposals.id, proposalId));
+    },
+    where: eq(proposals.id, proposalId),
+  });
 }
 
 /** Register the profile/* approve executors. */
@@ -255,10 +261,9 @@ export function registerProfileExecutors(): void {
         }
       }
 
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
           ...(fieldOutcomes.length > 0
             ? {
                 data: {
@@ -270,8 +275,9 @@ export function registerProfileExecutors(): void {
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
 
       // Report to IS telemetry (fire-and-forget — never blocks)
       reportApproved(deps, proposal, input.proposalId);
@@ -357,15 +363,15 @@ export function registerProfileExecutors(): void {
         sourceProposalId: input.proposalId,
       });
 
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
 
       // Report to IS telemetry (fire-and-forget — never blocks)
       reportApproved(deps, proposal, input.proposalId);

@@ -9,6 +9,7 @@ import {
   playbooks,
   playbookRuns,
   liveRunStatusWhere,
+  transitionProposal,
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import {
@@ -232,15 +233,15 @@ async function applyDevApproval(
     subject: "focus_session",
   };
 
-  await db
-    .update(proposals)
-    .set({
-      status: ProposalStatus.APPROVED,
+  await transitionProposal(db, {
+    to: ProposalStatus.APPROVED,
+    set: {
       reviewedBy: userId,
       reviewedAt: approvedAt,
       updatedAt: approvedAt,
-    })
-    .where(eq(proposals.id, input.proposalId));
+    },
+    where: eq(proposals.id, input.proposalId),
+  });
 
   reportApproved(deps, proposal, input.proposalId);
   deps.emitProposalReviewed(

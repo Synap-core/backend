@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { db, proposals, eq } from "@synap/database";
+import { db, proposals, eq, transitionProposal } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { registerProposalExecutor } from "../execution-registry.js";
 import { assertApplied, reportApproved } from "./shared.js";
@@ -157,10 +157,9 @@ export function registerRuleExecutors(): void {
       // filed a SECOND proposal instead of applying the first.
       assertApplied(result);
 
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
@@ -181,8 +180,9 @@ export function registerRuleExecutors(): void {
                   : (innerData.automationIds ?? []),
             },
           },
-        })
-        .where(eq(proposals.id, input.proposalId));
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
 
       reportApproved(deps, proposal, input.proposalId);
       deps.emitProposalReviewed(
@@ -321,10 +321,9 @@ export function registerRuleExecutors(): void {
       // a SECOND proposal instead of applying the first.
       assertApplied(result);
 
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
@@ -339,8 +338,9 @@ export function registerRuleExecutors(): void {
               draft: result.status === "updated" ? result.draft : undefined,
             },
           },
-        })
-        .where(eq(proposals.id, input.proposalId));
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
 
       void payload;
       reportApproved(deps, proposal, input.proposalId);

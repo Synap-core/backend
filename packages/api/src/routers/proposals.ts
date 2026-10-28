@@ -12,6 +12,7 @@
  * verbatim) plus re-exports of everything an external importer needs.
  */
 
+import { resolveStatusLabel } from "@synap-core/types/vocabulary";
 import { readLatestApprovalRun } from "../services/proposals/approval-runs.js";
 import { reviewLaterProposalWhere } from "../services/proposals/proposal-fate.js";
 import { z } from "zod";
@@ -40,6 +41,7 @@ import {
   unmergeEntities,
   drizzleSql,
   type MergeMaterializedStamp,
+  transitionProposal,
 } from "@synap/database";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import { readItemPackRefs } from "@synap-core/types/proposals/item-pack";
@@ -2142,6 +2144,8 @@ export const proposalsRouter = router({
         where: eq(proposals.id, input.proposalId),
         columns: {
           subjectUserId: true,
+          // The refusal below names the decision a rejection would overwrite.
+          status: true,
           sourceMessageId: true,
           agentUserId: true,
           targetType: true,
@@ -2184,10 +2188,9 @@ export const proposalsRouter = router({
         });
       }
 
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.REJECTED,
+      const rejected = await transitionProposal(db, {
+        to: ProposalStatus.REJECTED,
+        set: {
           rejectionReason: input.reason,
           // Structured cause (0232) persisted ALONGSIDE the free-text reason —
           // null when the caller omits it (back-compat).
@@ -2195,8 +2198,18 @@ export const proposalsRouter = router({
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
+        },
+        where: eq(proposals.id, input.proposalId),
+      }).returning({ id: proposals.id });
+      // The status door matched nothing: the proposal was already approved,
+      // withdrawn, expired or reverted. A rejection used to overwrite that
+      // decision; now it is refused, before any side effect below.
+      if (proposal && rejected.length === 0) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: `This proposal was already decided (${resolveStatusLabel(proposal.status)}), so it cannot be rejected.`,
+        });
+      }
       // Same door the approve path uses — a rejected proposal's notification
       // used to stay unread forever (Approve/Reject still offered on a decided row).
       markProposalNotificationsActioned([input.proposalId]);
@@ -2539,16 +2552,16 @@ export const proposalsRouter = router({
         roster: rosterReadFor(ctx),
       });
 
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.PENDING,
+      await transitionProposal(db, {
+        to: ProposalStatus.PENDING,
+        set: {
           rejectionReason: null,
           reviewedBy: null,
           reviewedAt: null,
           updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
 
       // Realtime-only refresh (no approve/reject side effects — see helper): moves
       // the proposal from the rejected list back into the pending queue everywhere.
@@ -2673,10 +2686,9 @@ export const proposalsRouter = router({
         });
       }
 
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.WITHDRAWN,
+      await transitionProposal(db, {
+        to: ProposalStatus.WITHDRAWN,
+        set: {
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
@@ -2688,8 +2700,9 @@ export const proposalsRouter = router({
                 data: drizzleSql`COALESCE(${proposals.data}, '{}'::jsonb) || jsonb_build_object('withdrawReason', ${input.reason}::text)`,
               }
             : {}),
-        })
-        .where(eq(proposals.id, input.proposalId));
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
 
       // WITHDRAWN is terminal, and it is PENDING-only — so no reject can ever
       // follow to clean up after it. A staged source blob left here is orphaned
@@ -2847,10 +2860,9 @@ export const proposalsRouter = router({
       // guards the double-reopen race by only matching a still-REVERTED row.
       if (isRevertedReopen) {
         const reopenedAt = new Date();
-        const flipped = await db
-          .update(proposals)
-          .set({
-            status: ProposalStatus.PENDING,
+        const flipped = await transitionProposal(db, {
+          to: ProposalStatus.PENDING,
+          set: {
             reviewedBy: null,
             reviewedAt: null,
             // Same rule as the approved→reopen tail below: the entity-update
@@ -2859,14 +2871,12 @@ export const proposalsRouter = router({
             // `data` is never overwritten by this row's stale copy.
             data: drizzleSql`case when jsonb_typeof(${proposals.data} #> '{materialized,propertyDiffs}') = 'array' then jsonb_set(${proposals.data}, '{materialized,propertyDiffs}', '[]'::jsonb) else ${proposals.data} end`,
             updatedAt: reopenedAt,
-          })
-          .where(
-            and(
-              eq(proposals.id, input.proposalId),
-              eq(proposals.status, ProposalStatus.REVERTED)
-            )
-          )
-          .returning({ id: proposals.id });
+          },
+          where: and(
+            eq(proposals.id, input.proposalId),
+            eq(proposals.status, ProposalStatus.REVERTED)
+          ),
+        }).returning({ id: proposals.id });
 
         if (flipped.length === 0) {
           // A concurrent reopen already moved it back to the queue — idempotent.
@@ -2982,41 +2992,45 @@ export const proposalsRouter = router({
                   )
                 : outcome.remaining;
             liveLeft = recordSize(record);
-            const flipped = await tx
-              .update(proposals)
-              .set({
-                data: {
-                  ...opData,
-                  materialized: record,
-                  revertedMaterialized: mergeMaterializedRecords(
-                    (
-                      opData as {
-                        revertedMaterialized?: CompleteMaterializedRecord;
-                      }
-                    ).revertedMaterialized,
-                    outcome.undone
-                  ),
-                } as unknown as StoredProposalData,
-                ...(liveLeft === 0
-                  ? {
-                      status: ProposalStatus.REVERTED,
+            const nextData = {
+              ...opData,
+              materialized: record,
+              revertedMaterialized: mergeMaterializedRecords(
+                (
+                  opData as {
+                    revertedMaterialized?: CompleteMaterializedRecord;
+                  }
+                ).revertedMaterialized,
+                outcome.undone
+              ),
+            } as unknown as StoredProposalData;
+            const stillApplied = and(
+              eq(proposals.id, input.proposalId),
+              proposalUnchangedSince(proposal.updatedAt),
+              inArray(proposals.status, [
+                ProposalStatus.APPROVED,
+                ProposalStatus.AUTO_APPROVED,
+              ])
+            );
+            // The last live item undone reverts the proposal (status door);
+            // otherwise only its record moves.
+            const flipped =
+              liveLeft === 0
+                ? await transitionProposal(tx, {
+                    to: ProposalStatus.REVERTED,
+                    set: {
+                      data: nextData,
                       reviewedBy: userId,
                       reviewedAt: at,
-                    }
-                  : {}),
-                updatedAt: at,
-              })
-              .where(
-                and(
-                  eq(proposals.id, input.proposalId),
-                  proposalUnchangedSince(proposal.updatedAt),
-                  inArray(proposals.status, [
-                    ProposalStatus.APPROVED,
-                    ProposalStatus.AUTO_APPROVED,
-                  ])
-                )
-              )
-              .returning({ id: proposals.id });
+                      updatedAt: at,
+                    },
+                    where: stillApplied,
+                  }).returning({ id: proposals.id })
+                : await tx
+                    .update(proposals)
+                    .set({ data: nextData, updatedAt: at })
+                    .where(stillApplied)
+                    .returning({ id: proposals.id });
             if (flipped.length === 0) {
               throw new TRPCError({
                 code: "CONFLICT",
@@ -3446,29 +3460,24 @@ export const proposalsRouter = router({
       // re-accept re-materializes everything, and clear the review stamp so it
       // re-surfaces as actionable — while still recording revertedBy/revertedAt
       // in `data` for audit (which does NOT block re-acceptance).
-      const flipped = await db
-        .update(proposals)
-        .set({
-          status: input.reopen
-            ? ProposalStatus.PENDING
-            : ProposalStatus.REVERTED,
+      const flipped = await transitionProposal(db, {
+        to: input.reopen ? ProposalStatus.PENDING : ProposalStatus.REVERTED,
+        set: {
           data: revertedPayload,
           ...(input.reopen
             ? { reviewedBy: null, reviewedAt: null }
             : { reviewedBy: userId, reviewedAt: revertedAt }),
           updatedAt: revertedAt,
-        })
-        .where(
-          and(
-            eq(proposals.id, input.proposalId),
-            proposalUnchangedSince(proposal.updatedAt),
-            inArray(proposals.status, [
-              ProposalStatus.APPROVED,
-              ProposalStatus.AUTO_APPROVED,
-            ])
-          )
-        )
-        .returning({ id: proposals.id });
+        },
+        where: and(
+          eq(proposals.id, input.proposalId),
+          proposalUnchangedSince(proposal.updatedAt),
+          inArray(proposals.status, [
+            ProposalStatus.APPROVED,
+            ProposalStatus.AUTO_APPROVED,
+          ])
+        ),
+      }).returning({ id: proposals.id });
 
       if (flipped.length === 0) {
         // Two causes, told apart by the row as it stands. Still applied ⇒
@@ -3939,10 +3948,9 @@ export const proposalsRouter = router({
           roster: rosterReadFor(ctx),
         });
 
-        const [updated] = await db
-          .update(proposals)
-          .set({
-            status: ProposalStatus.REJECTED,
+        const [updated] = await transitionProposal(db, {
+          to: ProposalStatus.REJECTED,
+          set: {
             rejectionReason: input.reason,
             // Structured cause (0232) — MUST mirror the single `reject` door.
             // This input already accepted `reasonCode` and already emitted it on
@@ -3955,14 +3963,12 @@ export const proposalsRouter = router({
             reviewedBy: userId,
             reviewedAt: new Date(),
             updatedAt: new Date(),
-          })
-          .where(
-            and(
-              eq(proposals.id, proposalId),
-              eq(proposals.status, ProposalStatus.PENDING)
-            )
-          )
-          .returning({ workspaceId: proposals.workspaceId });
+          },
+          where: and(
+            eq(proposals.id, proposalId),
+            eq(proposals.status, ProposalStatus.PENDING)
+          ),
+        }).returning({ workspaceId: proposals.workspaceId });
 
         if (updated) {
           // Collected, not fired here: one UPDATE per item turned a 50-item

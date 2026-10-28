@@ -7,6 +7,7 @@ import {
   isNull,
   drizzleSql,
   assertGrantScoped,
+  transitionProposal,
 } from "@synap/database";
 import { secrets, ProposalStatus } from "@synap/database/schema";
 import {
@@ -138,16 +139,16 @@ export function registerVaultExecutors(): void {
       });
 
       const vaultRef = makeVaultReference(secret.id);
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
           data: drizzleSql`coalesce(data, '{}'::jsonb) || jsonb_build_object('vaultRef', ${vaultRef}::text, 'secretId', ${secret.id}::text, 'approvedAt', ${new Date().toISOString()}::text, 'grantId', ${grant.grantId}::text, 'scope', ${grant.scope}::text, 'expiresAt', ${grant.expiresAt}::text)`,
-        })
-        .where(eq(proposals.id, input.proposalId));
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
 
       reportApproved(deps, proposal, input.proposalId);
       deps.emitProposalReviewed(
@@ -209,15 +210,15 @@ export function registerVaultExecutors(): void {
         createdBy: userId,
       });
 
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
 
       reportApproved(deps, proposal, input.proposalId);
       deps.emitProposalReviewed(

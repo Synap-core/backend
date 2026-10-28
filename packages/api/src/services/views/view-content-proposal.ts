@@ -6,7 +6,15 @@
  * touches — the same split as `services/trusted-issuers/scope-request-proposal.ts`.
  */
 
-import { db, and, eq, proposals, ProposalStatus, views } from "@synap/database";
+import {
+  db,
+  and,
+  eq,
+  proposals,
+  ProposalStatus,
+  views,
+  transitionProposal,
+} from "@synap/database";
 
 /** The view an approved content update targets — its workspace comes from HERE. */
 export async function loadViewContentTarget(
@@ -33,18 +41,16 @@ export async function markViewContentProposalApproved(
   proposalId: string,
   userId: string
 ): Promise<void> {
-  await db
-    .update(proposals)
-    .set({
-      status: ProposalStatus.APPROVED,
+  await transitionProposal(db, {
+    to: ProposalStatus.APPROVED,
+    set: {
       reviewedBy: userId,
       reviewedAt: new Date(),
       updatedAt: new Date(),
-    })
-    .where(
-      and(
-        eq(proposals.id, proposalId),
-        eq(proposals.status, ProposalStatus.PENDING)
-      )
-    );
+    },
+    where: and(
+      eq(proposals.id, proposalId),
+      eq(proposals.status, ProposalStatus.PENDING)
+    ),
+  });
 }

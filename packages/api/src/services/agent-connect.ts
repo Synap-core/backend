@@ -37,6 +37,7 @@ import {
   proposals,
   users,
   GrantRepository,
+  transitionProposal,
 } from "@synap/database";
 import { agentDisplayName } from "@synap-core/types/agents";
 import { resolveServiceMark } from "@synap-core/types/service-marks";
@@ -535,23 +536,19 @@ async function settleProposal(
   status: "approved" | "rejected",
   reviewerId: string
 ): Promise<void> {
-  await db
-    .update(proposals)
-    .set({
-      status:
-        status === "approved"
-          ? ProposalStatus.APPROVED
-          : ProposalStatus.REJECTED,
+  await transitionProposal(db, {
+    to:
+      status === "approved" ? ProposalStatus.APPROVED : ProposalStatus.REJECTED,
+    set: {
       reviewedBy: reviewerId,
       reviewedAt: new Date(),
       updatedAt: new Date(),
-    })
-    .where(
-      and(
-        eq(proposals.id, proposalId),
-        eq(proposals.status, ProposalStatus.PENDING)
-      )
-    );
+    },
+    where: and(
+      eq(proposals.id, proposalId),
+      eq(proposals.status, ProposalStatus.PENDING)
+    ),
+  });
 }
 
 /**

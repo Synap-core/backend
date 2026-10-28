@@ -1,5 +1,11 @@
 import { TRPCError } from "@trpc/server";
-import { db, proposals, eq, artifacts } from "@synap/database";
+import {
+  db,
+  proposals,
+  eq,
+  artifacts,
+  transitionProposal,
+} from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { registerProposalExecutor } from "../execution-registry.js";
 import { reportApproved } from "./shared.js";
@@ -114,15 +120,15 @@ export function registerArtifactExecutors(): void {
         // Swallowed deliberately — see above.
       }
 
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
 
       reportApproved(deps, proposal, input.proposalId);
 

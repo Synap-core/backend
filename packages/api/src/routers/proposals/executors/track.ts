@@ -30,7 +30,13 @@
  */
 
 import { TRPCError } from "@trpc/server";
-import { db, proposals, eq, workUnitActorOf } from "@synap/database";
+import {
+  db,
+  proposals,
+  eq,
+  transitionProposal,
+  workUnitActorOf,
+} from "@synap/database";
 import {
   PROJECT_TRACK_STATUSES,
   ProposalStatus,
@@ -86,15 +92,15 @@ export async function alreadyApproved(proposalId: string): Promise<boolean> {
 }
 
 export async function markApproved(proposalId: string, userId: string) {
-  await db
-    .update(proposals)
-    .set({
-      status: ProposalStatus.APPROVED,
+  await transitionProposal(db, {
+    to: ProposalStatus.APPROVED,
+    set: {
       reviewedBy: userId,
       reviewedAt: new Date(),
       updatedAt: new Date(),
-    })
-    .where(eq(proposals.id, proposalId));
+    },
+    where: eq(proposals.id, proposalId),
+  });
 }
 
 export function registerTrackExecutors(): void {
