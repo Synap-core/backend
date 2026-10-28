@@ -387,8 +387,10 @@ describe("A KEY LIMITED TO SPACES rewords its own proposal, never what it runs",
     clientId: "crm-app",
   };
   const FULL_KEY = { scopes: [{ permissions: ["*"] }], clientId: null };
-  const asKey = (grant: typeof CRM_KEY | typeof FULL_KEY, fn: () => Promise<void>) =>
-    runWithActingAgent(AGENT, () => runWithGrant(grant as never, fn));
+  const asKey = (
+    grant: typeof CRM_KEY | typeof FULL_KEY,
+    fn: () => Promise<void>
+  ) => runWithActingAgent(AGENT, () => runWithGrant(grant as never, fn));
 
   it("a payload patch, a re-target of space or project: FORBIDDEN, nothing written", async () => {
     for (const change of [
