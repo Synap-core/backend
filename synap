@@ -1606,11 +1606,11 @@ _bootstrap_token_backfill() {
 #   GRAFANA_PASSWORD the optional monitoring profile's admin; compose fell back
 #                    to "admin" (Grafana keeps the password of its FIRST start)
 _generated_secrets_backfill() {
-    local key
-    for key in BRIDGE_SECRET GRAFANA_PASSWORD; do
-        [ -n "$(_ue_env_get "$key")" ] && continue
-        SYNAP_ENV_FILE=.env envcfg_write_raw S "$key" "$(openssl rand -hex 32)" || return 1
-        echo -e "${BLUE}ℹ️  Generated ${key} into .env${NC}"
+    local gen   # not `key`: config-door.test.sh reads cmd_update's `for key in` list
+    for gen in BRIDGE_SECRET GRAFANA_PASSWORD; do
+        [ -n "$(_ue_env_get "$gen")" ] && continue
+        SYNAP_ENV_FILE=.env envcfg_write_raw S "$gen" "$(openssl rand -hex 32)" || return 1
+        echo -e "${BLUE}ℹ️  Generated ${gen} into .env${NC}"
     done
 }
 
@@ -2409,8 +2409,8 @@ cmd_policy() {
                 *) false ;;
             esac || { _policy_err "usage: synap policy ${action} <command>  (one of: ${SYNAP_POLICY_COMMANDS})"; exit 1; }
             cur="$(_policy_current)" || exit 1
-            _policy_write "$(echo "$cur" | jq -c --arg c "$c" --arg a "$action" --argjson def "$SYNAP_POLICY_SELF_HOSTED_DEFAULT" '
-                (if has("refuse") then .refuse elif .mode == "managed" then [] else $def end) as $r
+            _policy_write "$(echo "$cur" | jq -c --arg c "$c" --arg a "$action" --argjson dflt "$SYNAP_POLICY_SELF_HOSTED_DEFAULT" '
+                (if has("refuse") then .refuse elif .mode == "managed" then [] else $dflt end) as $r
                 | .mode = (.mode // "self-hosted")
                 | .refuse = (if $a == "refuse" then (if ($r | index($c)) then $r else $r + [$c] end) else ($r | map(select(. != $c))) end)')" \
                 || { _policy_err "could not write ${SYNAP_POLICY_FILE}"; exit 1; }

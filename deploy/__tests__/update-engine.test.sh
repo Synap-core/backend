@@ -837,7 +837,7 @@ run_update --release "$R2"; rc=$?
   && ok "eve-unpinned: refused with the SYNAP_EDGE hint, nothing changed" || { bad "eve-unpinned: rc=$rc"; show; }
 [ "$(last status)" = aborted ] && [[ "$(last reason)" == *SYNAP_EDGE* ]] && ok "eve-unpinned: the refusal is recorded (aborted)" || bad "eve-unpinned: no outcome record: $(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"
 ( cd "$S"; PATH="$TMP/bin:$PATH" SYNAP_DEPLOY_DIR="$DEPLOY" SYNAP_RELEASE_BASE_URL=https://rel.test SYNAP_SKIP_EDGE=1 \
-  SYNAP_HEALTH_INTERVAL=0 SYNAP_UPDATE_HEALTH_TRIES=2 SYNAP_UPDATE_MIN_FREE_MB=1 bash "$REPO/synap" update --release "$R2" ) >"$S/out" 2>&1 </dev/null; rc=$?
+  SYNAP_HEALTH_INTERVAL=0 SYNAP_UPDATE_HEALTH_TRIES=2 SYNAP_UPDATE_MIN_FREE_MB=1 SYNAP_RELEASE_VERIFY=warn bash "$REPO/synap" update --release "$R2" ) >"$S/out" 2>&1 </dev/null; rc=$?
 [ "$rc" = 0 ] && [ "$(grep -c '^SYNAP_EDGE=traefik' "$DEPLOY/.env")" = 1 ] && ! grep -qE " up .*caddy" "$FAKE/log" \
   && ok "skip-edge: eve's SYNAP_SKIP_EDGE=1 pins SYNAP_EDGE=traefik once and skips caddy" || { bad "skip-edge: rc=$rc"; show; }
 

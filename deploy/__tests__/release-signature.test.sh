@@ -202,7 +202,7 @@ stub_cosign() { printf '#!/usr/bin/env bash\necho "$*" >> "%s/cosign.log"\necho 
   for mode in enforce "" warn skipflag; do
     setup "sig-${mode:-default}" r1; publish "$R2" 0012_new.sql
     echo '{"bundle":"fake"}' > "$TMP/rel/$R2/release.json.sigstore.json"; : > "$TMP/cosign.log"
-    if [ "$mode" = skipflag ]; then SYNAP_RELEASE_VERIFY= run_update --release "$R2" --insecure-skip-verify; rc=$?
+    if [ "$mode" = skipflag ]; then SYNAP_RELEASE_VERIFY='' run_update --release "$R2" --insecure-skip-verify; rc=$?
     else SYNAP_RELEASE_VERIFY=$mode run_update --release "$R2"; rc=$?; fi
     reached=$([ -s "$TMP/cosign.log" ] && echo y || echo n)
     pulled=$(grep -q '^pull ' "$FAKE/log" && echo y || echo n)
