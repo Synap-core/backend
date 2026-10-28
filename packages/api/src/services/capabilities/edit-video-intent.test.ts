@@ -38,7 +38,7 @@ describe("edit_video — the one input an app sends", () => {
     });
   });
 
-  it.each([
+  it.each<[unknown, string]>([
     [{}, "no video"],
     [{ video: 42 }, "not a string"],
     [{ video: "http://files.example.com/take-3.mp4" }, "http"],
