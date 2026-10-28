@@ -720,8 +720,10 @@ export interface ContinuationPacket {
   /**
    * GATES — every gated stage of the session's process and its state, DERIVED
    * FROM PROPOSAL ROWS only (`session-gates.ts`), plus `deploy`: the newest
-   * `dev.deploy_approval` a PERSON approved. "Is commit X approved to ship by a
-   * human?" is `deploy?.commitSha` prefix-matching X.
+   * `dev.deploy_approval` a PERSON approved, and `ownerDeploys`: the ones a
+   * person approved on any of the owner's sessions. "Is commit X approved to
+   * ship by a human?" is `deploy?.commitSha`, or any `ownerDeploys[].commitSha`,
+   * prefix-matching X.
    */
   gates: PacketGatesSection;
   /**
@@ -2562,11 +2564,13 @@ export async function projectContinuationPacket(
     readSessionGates(database, {
       id: row.id,
       playbookId: row.playbookId ?? null,
+      userId: row.userId,
     })
-      .then(({ items, deploy }): ContinuationPacket["gates"] => ({
+      .then(({ items, deploy, ownerDeploys }): ContinuationPacket["gates"] => ({
         status: "ok",
         items,
         deploy,
+        ownerDeploys,
       }))
       .catch(
         unavailable(row.id, "gates", "This session's gates could not be read.")
