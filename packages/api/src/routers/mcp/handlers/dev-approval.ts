@@ -66,6 +66,7 @@ export const devApprovalHandlers: McpHandlerMap = {
           gateReport: args.gateReport,
           targetHost: args.targetHost,
           deployCommand: args.deployCommand,
+          step: args.step,
         },
         // The HUMAN reviews; the agent is attribution (see the Hub route).
         userId,
