@@ -379,6 +379,13 @@ beforeAll(async () => {
     `insert into workspace_members (id, workspace_id, user_id, role) values (gen_random_uuid(), $1, $2, 'owner')`,
     [WS, USER]
   );
+  // The agent works in the space: a non-member agent's write files a JOIN
+  // request instead (`maybeCreateWorkspaceJoinProposal`), which is not the
+  // agent ladder these tests read.
+  await q(
+    `insert into workspace_members (id, workspace_id, user_id, role) values (gen_random_uuid(), $1, $2, 'editor')`,
+    [WS, AGENT]
+  );
   await q(
     `insert into profiles (id, slug, display_name, profile_kind, scope, entity_scope, workspace_id, is_active, ui_hints, created_at, updated_at)
      values ($1, 'content', 'Content', 'kind', 'system', 'workspace', null, true, '{}'::jsonb, now(), now())`,
