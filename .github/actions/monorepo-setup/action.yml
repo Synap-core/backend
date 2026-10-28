@@ -1,7 +1,8 @@
 name: Monorepo layout + dependencies
 description: >
   Lays out ../synap-control-plane-api and ../synap-app beside this checkout
-  (the cross-repo tripwires read them), then sets up Node + pnpm and installs.
+  (the cross-repo tripwires read them) through the layout resolver
+  (scripts/layout/layout.mjs), then sets up Node + pnpm and installs.
   Shared by ci.yml's release-gate and full-suite jobs so the two can never set
   up differently. The repository itself must already be checked out.
 
@@ -45,42 +46,36 @@ runs:
           app-bases
         permission-contents: read
 
+    # Runs ONLY when there is no token. The step header echoes its script on
+    # every run, so an always-run step printed this error text in every green
+    # log too, and readers took it for the cause of red runs (finding 3b354d79).
     - name: Require a control-plane-api read token
+      if: ${{ steps.app-token.outputs.token == '' && inputs.cross-repo-token == '' }}
       shell: bash
-      env:
-        CROSS_REPO_TOKEN: ${{ steps.app-token.outputs.token || inputs.cross-repo-token }}
       run: |
-        if [ -z "$CROSS_REPO_TOKEN" ]; then
-          echo "::error::No token to read Synap-core/control-plane-api. Set the repo variable SYNAP_READER_APP_ID and secret SYNAP_READER_APP_KEY (SECURITY-RELEASE-RUNBOOK.md §5.1), or, until then, the CROSS_REPO_TOKEN secret (a fine-grained PAT with Contents: read on Synap-core/control-plane-api and app-bases: gh secret set CROSS_REPO_TOKEN -R Synap-core/backend)."
-          exit 1
-        fi
+        echo "::error::No token to read Synap-core/control-plane-api. Set the repo variable SYNAP_READER_APP_ID and secret SYNAP_READER_APP_KEY (SECURITY-RELEASE-RUNBOOK.md §5.1), or, until then, the CROSS_REPO_TOKEN secret (a fine-grained PAT with Contents: read on Synap-core/control-plane-api and app-bases: gh secret set CROSS_REPO_TOKEN -R Synap-core/backend)."
+        exit 1
 
-    # actions/checkout refuses a `path:` outside $GITHUB_WORKSPACE, and the
-    # sibling location is its parent — so check out inside, then move.
-    - name: Checkout Control Plane API (cross-repo parity tripwire)
-      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      with:
-        repository: Synap-core/control-plane-api
-        token: ${{ steps.app-token.outputs.token || inputs.cross-repo-token }}
-        path: .cp-checkout
-
-    - name: Checkout synap-app (cross-repo tripwires)
-      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      with:
-        repository: Synap-core/app-bases
-        token: ${{ steps.app-token.outputs.token || inputs.cross-repo-token }}
-        path: .app-checkout
-
-    # The CP directory must be named `synap-control-plane-api` and the app
-    # `synap-app`; this checkout is reachable as `../synap-backend` (a symlink —
-    # the runner names it after the repo, `backend`).
+    # The siblings beside this checkout, through the ONE layout resolver
+    # (scripts/layout/layout.mjs, layout "backend-ci" of layout.json): the CP
+    # as ../synap-control-plane-api, the app as ../synap-app, and this checkout
+    # reachable as ../synap-backend (a symlink: the runner names it after the
+    # repo, `backend`). Each sibling is a shallow checkout of main or, when this
+    # PR's body has a `Depends-On:` line for it that has not landed, of that
+    # dependency's test ref (GitHub's test merge of the PR, or the commit): the
+    # change is tested WITH what it depends on. A merge-queue or main run has no
+    # PR body, so every sibling is at main. Plain node before setup-node: the
+    # resolver needs no install. The token reaches git as a per-command header,
+    # never a remote URL, and is not persisted in the siblings' .git/config.
     - name: Lay out the monorepo beside this checkout
       shell: bash
+      env:
+        LAYOUT_TOKEN: ${{ steps.app-token.outputs.token || inputs.cross-repo-token }}
+        PR_BODY: ${{ github.event.pull_request.body }}
       run: |
         set -euo pipefail
-        mv "${GITHUB_WORKSPACE}/.cp-checkout" "${GITHUB_WORKSPACE}/../synap-control-plane-api"
-        mv "${GITHUB_WORKSPACE}/.app-checkout" "${GITHUB_WORKSPACE}/../synap-app"
-        ln -sfn "${GITHUB_WORKSPACE}" "${GITHUB_WORKSPACE}/../synap-backend"
+        node "${GITHUB_WORKSPACE}/scripts/layout/layout.mjs" materialize backend-ci \
+          --root "${GITHUB_WORKSPACE}/.." --self-path "${GITHUB_WORKSPACE}" --body-env PR_BODY
         test -f "${GITHUB_WORKSPACE}/../synap-control-plane-api/src/routes/packages.ts"
         test -d "${GITHUB_WORKSPACE}/../synap-app/packages/workspace-templates/src"
         test -f "${GITHUB_WORKSPACE}/../synap-backend/packages/api/package.json"

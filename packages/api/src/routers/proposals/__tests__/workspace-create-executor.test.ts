@@ -52,7 +52,15 @@ describe("workspace/create approve executor registration", () => {
 });
 
 describe("packages.apply gate data shape (Phase 0 contract)", () => {
-  const src = readSrc("routers/hub-protocol/rest/packages.ts");
+  // The filing block moved to the ONE filing door (onboarding A6), which the
+  // Hub route calls: the gate's data shape is pinned there.
+  const src = readSrc("services/template-apply/propose.ts");
+
+  it("the Hub /packages/apply route files through the one filing door", () => {
+    const route = readSrc("routers/hub-protocol/rest/packages.ts");
+    expect(route).toContain("proposeTemplateApply({");
+    expect(route).not.toContain("checkPermissionOrPropose({");
+  });
 
   it("stores full definition body on the gate, not name-only", () => {
     // Regression of the Phase-0 bug: data: { name: ... } only — approve cannot recreate.
@@ -73,7 +81,7 @@ describe("packages.apply gate data shape (Phase 0 contract)", () => {
     // The old buggy shape was exactly: data: { name: body.workspaceName ?? ... }
     // on a single-field object. Ensure definition appears in the same data bag.
     const permBlock = src.slice(
-      src.indexOf("checkPermissionOrPropose"),
+      src.indexOf("checkPermissionOrPropose({"),
       src.indexOf('if ("denied"')
     );
     expect(permBlock).toContain("definition: body");

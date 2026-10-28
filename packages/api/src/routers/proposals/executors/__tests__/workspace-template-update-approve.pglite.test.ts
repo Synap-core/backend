@@ -640,6 +640,13 @@ describe("layer 2 from the agent's own body keeps the agent's governance", () =>
     });
 
     expect(data.contents).toEqual({
+      spaces: [{ slug, name: "Dev", role: "self" }],
+      kinds: [],
+      views: [],
+      // The inline capability declares no credentialed tool: it waits on
+      // nothing. `github` is a template the pod's cache does not hold: unread.
+      waitsOn: [],
+      waitsOnUnread: ["github"],
       playbooks: [{ name: EXISTING.name }],
       automations: [
         { name: PING.name, status: "active", triggerType: "manual" },

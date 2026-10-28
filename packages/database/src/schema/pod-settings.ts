@@ -294,6 +294,11 @@ export interface PodSettingsBlob {
   intelligenceDefaults?: PodIntelligenceDefaults;
   proactiveDefaults?: PodProactiveDefaults;
   catalogSyncStamps?: Record<string, CatalogSyncStamp>;
+  /**
+   * Search collection → the index version this pod last fully reindexed at
+   * (`@synap/search` `SEARCH_INDEX_VERSIONS`). Behind ⇒ the jobs boot reindexes.
+   */
+  searchIndexVersions?: Record<string, number>;
   federationOidcClient?: FederationOidcClient;
   governanceRulesBackfill?: GovernanceBackfillMarker;
   marketplaceSources?: MarketplaceSourceSetting[];
