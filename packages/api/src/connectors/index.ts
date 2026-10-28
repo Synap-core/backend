@@ -6,6 +6,7 @@ import type { ConnectionBroker } from "./ConnectionBroker.js";
 import { ApifyProvider } from "./ApifyProvider.js";
 import { ApolloProvider } from "./ApolloProvider.js";
 import { UnipileConnector } from "./UnipileConnector.js";
+import { resolveUnipileConnection } from "./unipile-connection.js";
 import { StalwartConnector } from "./StalwartConnector.js";
 import { DiscordConnector } from "./DiscordConnector.js";
 import { ProtonConnector } from "./ProtonConnector.js";
@@ -157,28 +158,15 @@ registerMessagingType("proton", async () => {
   return new ProtonConnector();
 });
 
-registerMessagingType("unipile", async ({ ownerId, settings }) => {
-  if (ownerId) {
-    const vaultCfg = await getServiceSecret("messaging-connector", ownerId);
-    if (vaultCfg?.dsn && vaultCfg?.apiKey) {
-      return new UnipileConnector({
-        dsn: vaultCfg.dsn,
-        apiKey: vaultCfg.apiKey,
-        webhookSecret: vaultCfg.webhookSecret,
-      });
-    }
-  }
-  // Fall back to workspace.settings.messaging
-  const cfg = ((settings as Record<string, unknown>)?.messaging ??
-    {}) as Record<string, unknown>;
-  const dsn = (cfg.unipileDsn as string | undefined) || process.env.UNIPILE_DSN;
-  const apiKey =
-    (cfg.unipileApiKey as string | undefined) || process.env.UNIPILE_API_KEY;
-  const webhookSecret =
-    (cfg.unipileWebhookSecret as string | undefined) ||
-    process.env.UNIPILE_WEBHOOK_SECRET;
-  if (!dsn || !apiKey) return null;
-  return new UnipileConnector({ dsn, apiKey, webhookSecret });
+registerMessagingType("unipile", async () => {
+  // ONE connection: the installed Unipile v2 capability's vaulted key — the
+  // same secret its tools send (`unipile-connection.ts`). Not installed / no
+  // key → null (the 409 MESSAGING_NOT_CONFIGURED); a key that exists but
+  // cannot be read is a fault and throws.
+  const conn = await resolveUnipileConnection();
+  if (conn.ok) return new UnipileConnector({ apiKey: conn.apiKey });
+  if (conn.problem === "unreadable") throw new Error(conn.error);
+  return null;
 });
 
 // ── ONE Nango resolver ──────────────────────────────────────────────────────
@@ -193,8 +181,7 @@ registerMessagingType("unipile", async ({ ownerId, settings }) => {
  * Resolve a configured `NangoConnector`. Returns null when nothing configures a
  * secret key (pod must use CP-managed Nango).
  *
- * Precedence — VAULT → env → `workspace.settings.nango`, mirroring the Unipile
- * messaging resolver above:
+ * Precedence — VAULT → env → `workspace.settings.nango`:
  *   1. Vault (server-encrypted, serviceId='nango-connector', keyed by the
  *      workspace ownerId) — where `saveNangoConfig` now writes.
  *   2. NANGO_* env vars (the registry's shared instance is env-configured).
@@ -668,11 +655,10 @@ export async function migrateNangoEnvToVault(): Promise<{
  *                  Discord bridge holds the token and delivers (no token here)
  *   - "proton"   → agnostic egress: reads the reply envelope from the DB, enqueues
  *                  to the channel_egress outbox; the Proton bridge delivers
- *   - anything else / undefined → Unipile, reading credentials from:
- *       1. Vault (server-encrypted secret with serviceId='messaging-connector')
- *       2. workspace.settings.messaging (set via Settings UI)
- *       3. UNIPILE_* env vars (server-managed deployments)
- * Returns null when no source is configured.
+ *   - anything else / undefined → Unipile v2, through the installed
+ *     `unipile-linkedin` capability's key (`unipile-connection.ts`).
+ * Returns null when the selected type is not set up. A failed lookup throws:
+ * it is not "not set up".
  *
  * The param is optional so existing no-arg callers keep Unipile behaviour
  * unchanged; the send path passes the channel's provider to route correctly.
@@ -680,31 +666,25 @@ export async function migrateNangoEnvToVault(): Promise<{
 export async function getMessagingConnector(
   provider?: string
 ): Promise<MessagingConnector | null> {
-  try {
-    const ws = await db.query.workspaces.findFirst({
-      columns: { settings: true, ownerId: true },
-    });
+  const ws = await db.query.workspaces.findFirst({
+    columns: { settings: true, ownerId: true },
+  });
 
-    // Registry lookup: pick the descriptor for the
-    // requested type, falling back to the default (Unipile) when the provider
-    // is unset or not a registered messaging type.
-    const type =
-      provider && connectorRegistry.get(provider)?.kind === "messaging"
-        ? provider
-        : DEFAULT_MESSAGING_TYPE;
-    const descriptor = connectorRegistry.get(type) as
-      MessagingConnectorDescriptor | undefined;
-    if (!descriptor) return null;
+  // Registry lookup: pick the descriptor for the
+  // requested type, falling back to the default (Unipile) when the provider
+  // is unset or not a registered messaging type.
+  const type =
+    provider && connectorRegistry.get(provider)?.kind === "messaging"
+      ? provider
+      : DEFAULT_MESSAGING_TYPE;
+  const descriptor = connectorRegistry.get(type) as
+    MessagingConnectorDescriptor | undefined;
+  if (!descriptor) return null;
 
-    return await descriptor.resolve({
-      ownerId: ws?.ownerId ?? undefined,
-      settings: (ws?.settings as Record<string, unknown>) ?? undefined,
-    });
-  } catch {
-    // DB not ready yet — fall back to env-only Unipile.
-    const connector = new UnipileConnector();
-    return connector.isConfigured() ? connector : null;
-  }
+  return await descriptor.resolve({
+    ownerId: ws?.ownerId ?? undefined,
+    settings: (ws?.settings as Record<string, unknown>) ?? undefined,
+  });
 }
 
 export { syncConnectorRegistry, enrichmentProviderRegistry };

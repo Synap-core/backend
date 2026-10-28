@@ -18850,6 +18850,15 @@ export type SyncConnectionToImportResult = {
 	recordCount: number;
 	source: typeof IMPORT_SOURCE;
 };
+export type UnipileConnectionProblem = "no-key" | "not-installed" | "unreadable";
+/** The messaging service's connection state, as the settings screens read it. */
+export interface MessagingServiceState {
+	configured: boolean;
+	capabilityKey: string;
+	capabilityId: string | null;
+	problem: UnipileConnectionProblem | null;
+	message: string | null;
+}
 export interface EnrichmentResult {
 	source: string;
 	confidence: number;
@@ -29762,17 +29771,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			}[];
 		}>;
 		getMessagingConfig: import("@trpc/server").TRPCQueryProcedure<{
-			input: {
-				workspaceId?: string | undefined;
-			} | undefined;
+			input: void;
 			meta: object;
-			output: {
-				configured: boolean;
-				fromEnv: boolean;
-				hasApiKey: boolean;
-				hasDsn: boolean;
-				hasWebhookSecret: boolean;
-			};
+			output: MessagingServiceState;
 		}>;
 		getNangoConfig: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
@@ -29841,17 +29842,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				apifyToken?: string | undefined;
 				apolloApiKey?: string | undefined;
-			};
-			meta: object;
-			output: {
-				success: boolean;
-			};
-		}>;
-		saveMessagingConfig: import("@trpc/server").TRPCMutationProcedure<{
-			input: {
-				unipileApiKey?: string | undefined;
-				unipileDsn?: string | undefined;
-				unipileWebhookSecret?: string | undefined;
 			};
 			meta: object;
 			output: {

@@ -516,11 +516,9 @@ export const GRANT_OWNER_WIDE_REST_DOORS: readonly RegExp[] = [
  *    member.
  *  - `DELETE /messaging/accounts/:id` (disconnects the person's messaging
  *    account at the provider), `POST /messaging/accounts/sync` (rewrites the
- *    person's account mirror, registers provider webhooks), `POST
- *    /messaging/service-config[/migrate]` (replaces the pod's messaging
- *    connector credentials). The send through an account is NOT here: it
- *    checks `messaging.send` in the conversation's space
- *    (`sendExternalMessage`).
+ *    person's account mirror, registers provider webhooks). The send through
+ *    an account is NOT here: it checks `messaging.send` in the conversation's
+ *    space (`sendExternalMessage`).
  *  - `/memory` writes (`POST /memory`, `/memory/turns|sessions|writes`,
  *    `DELETE /memory/:id`; S5 2026-10-20): `knowledge_facts` about the
  *    person, recalled in EVERY workspace, written directly — no grant narrows
@@ -542,7 +540,6 @@ export const GRANT_OWNER_WIDE_REST_WRITES: readonly RegExp[] = [
   /^\/connectors\/disconnect\/?$/,
   /^\/connectors\/(?:connect|session)\/?$/,
   /^\/messaging\/accounts\/[^/]+\/?$/,
-  /^\/messaging\/service-config(?:\/migrate)?\/?$/,
   /^\/memory(?:\/(?!search\/?$)[^/]+)?\/?$/,
   /^\/knowledge\/(?!(?:search|ask|answer)\/?$)[^/]+\/?$/,
 ];
