@@ -476,7 +476,7 @@ describe("an agent's edit that switches its skill off", () => {
 
     await agentUpdates({
       id: reply.id,
-      code: `async (args) => { const r = await callProvider("gmail_api", "GET", "/x"); return r; }`,
+      code: `const r = await callProvider("gmail_api", "GET", "/x");\nreturn r;`,
     });
 
     expect(await approvedOf(reply.id)).toBe(false);
