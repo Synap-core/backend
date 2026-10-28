@@ -163,15 +163,16 @@ function useOpenFolds() {
   };
 }
 
+type Shown<T> =
+  | { kind: "row"; row: T; index: number }
+  | { kind: "fold"; count: number; from: number };
+
 /** Rows with their folds, an opened fold drawn as its rows. */
 function unfold<T>(
   folded: readonly Folded<T>[],
   isOpen: (from: number) => boolean
-): Array<
-  | { kind: "row"; row: T; index: number }
-  | { kind: "fold"; count: number; from: number }
-> {
-  return folded.flatMap((f) =>
+): Shown<T>[] {
+  return folded.flatMap((f): Shown<T>[] =>
     f.kind === "row"
       ? [f]
       : isOpen(f.from)
