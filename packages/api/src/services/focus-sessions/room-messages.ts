@@ -30,7 +30,7 @@
  * external-agent wake use) for a reader that puts room text into a prompt.
  */
 
-import { db, MessageAuthorType, MessageRole } from "@synap/database";
+import { type db, MessageAuthorType, MessageRole } from "@synap/database";
 import { queryChannelMessages } from "../../utils/query-channel-messages.js";
 import { fenceUntrustedData } from "../agent-dispatch/binding-call.js";
 

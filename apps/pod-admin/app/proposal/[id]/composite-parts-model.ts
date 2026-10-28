@@ -29,6 +29,7 @@ import {
   partReachWords,
   type ProposalPartReach,
   type ProposalReviewGraph,
+  type ProposalTurnsOn,
 } from "@synap-core/types/proposals";
 import {
   formatFieldLabel,
@@ -441,4 +442,35 @@ export function compositeItems(
   return (Object.keys(DRAWERS) as GraphItemKey[]).flatMap((key) =>
     (DRAWERS[key] as Drawer)(ctx)
   );
+}
+
+/**
+ * What a `capability.enable` turns on (`review.turnsOn`): one record per
+ * skill, drawn whole, so the person switching it on reads the code or the
+ * instructions it runs and what it can reach, never only its name. A box
+ * script shows its own declaration: it runs on the person's computer, not in
+ * the pod's sandbox, so the pod reads no reach for it.
+ */
+export function turnOnRecords(turnsOn: ProposalTurnsOn): ProposedRecord[] {
+  return turnsOn.skills.map((s) => {
+    const instruction = s.kind === "instruction";
+    return {
+      ref: `turn-on:${s.id}`,
+      title: s.name,
+      kind: "skill",
+      op: "update",
+      fields: [
+        ...field("code", codeValue(s.code)),
+        ...field(
+          instruction ? "instructions" : "description",
+          instruction ? codeValue(s.body) : text(s.body)
+        ),
+        ...field(
+          "declaration",
+          s.box ? codeValue(JSON.stringify(s.box, null, 2)) : null
+        ),
+        ...field("canReach", reach(s.reach)),
+      ],
+    };
+  });
 }

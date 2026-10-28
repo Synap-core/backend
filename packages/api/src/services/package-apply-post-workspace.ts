@@ -911,20 +911,20 @@ export async function applyPackagePostWorkspace(
             // the stamp rule reads (`postWorkspaceLayersConverged`). Reported
             // as plain "reused", the version was stamped over a playbook still
             // holding the old definition.
-            const unconverged = reused.reconcile?.error
-              ? { status: "error", message: reused.reconcile.error }
-              : reused.reconcile?.kind === "proposed"
-                ? {
-                    status: "proposed",
-                    ...(reused.reconcile.proposalId
-                      ? { proposalId: reused.reconcile.proposalId }
-                      : {}),
-                  }
-                : null;
             pbs.push({
               name: p.name,
-              status: "reused",
-              ...unconverged,
+              // One `status` per branch: a leading `status: "reused"` beside
+              // this spread is TS2783 (specified more than once).
+              ...(reused.reconcile?.error
+                ? { status: "error", message: reused.reconcile.error }
+                : reused.reconcile?.kind === "proposed"
+                  ? {
+                      status: "proposed",
+                      ...(reused.reconcile.proposalId
+                        ? { proposalId: reused.reconcile.proposalId }
+                        : {}),
+                    }
+                  : { status: "reused" }),
               playbookId: existing.id,
               // `session` | `project` — see the created branch below.
               scope: reused.scope,

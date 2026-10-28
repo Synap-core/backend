@@ -8713,7 +8713,43 @@ export interface ProposalReviewModel {
 	graph?: ProposalReviewGraph;
 	/** Present ONLY for delete proposals — see {@link ProposalRemoval}. */
 	removal?: ProposalRemoval;
+	/**
+	 * Present ONLY for a pending `capability.enable`: what approving it turns
+	 * on — see {@link ProposalTurnsOn}.
+	 */
+	turnsOn?: ProposalTurnsOn;
 	events: ProposalReviewEvent[];
+}
+/**
+ * What a `capability.enable` would turn on, read NOW (while it is pending)
+ * under the viewer's skill read rule: each skill whole, so the person reads
+ * the code or prose they are switching on and where it can reach. A skill the
+ * viewer cannot read is COUNTED in `unreadSkills`, never dropped silently.
+ */
+export interface ProposalTurnsOn {
+	skills: ProposalTurnOnSkill[];
+	/** Skills in the request this viewer could not read (or that are gone). */
+	unreadSkills: number;
+}
+export interface ProposalTurnOnSkill {
+	id: string;
+	name: string;
+	/** `code` | `instruction` | `declarative` | `builtin`. */
+	kind: string;
+	/** `box` = a script run on the person's computer, not in the pod. */
+	executionMode: string;
+	/** The whole code it would run; never excerpted. */
+	code?: string;
+	/** Its whole documentation, or an instruction skill's prose. */
+	body?: string;
+	/** A box script's declaration (packages, hosts, limits), as stored. */
+	box?: Record<string, unknown>;
+	/**
+	 * What it can reach outside the pod, read like every "Can reach" fact.
+	 * Absent for an instruction (it runs nothing) and for a box script (its
+	 * declaration says what it reaches, not the pod's sandbox).
+	 */
+	reach?: ProposalPartReach;
 }
 export interface CompositeCreateEntityOp {
 	op: "create_entity";
@@ -13228,6 +13264,19 @@ export interface ApprovalRunView {
 	finishedAt: string | null;
 	updatedAt: string;
 }
+/** What "allow today" raised the agent's daily write ceiling to. */
+export interface AllowedToday {
+	ceilingId: string;
+	agentUserId: string;
+	/** The limit in force for the rest of the UTC day. */
+	limit: number;
+	/** The limit it was raised from (what applies again from `expiresAt`). */
+	previousLimit: number;
+	/** ISO time the raise ends: the next 00:00 UTC. */
+	expiresAt: string;
+	/** True when an earlier "allow today" had already raised it for today. */
+	alreadyAllowed: boolean;
+}
 /**
  * The complete created-rows record. Extends the shared
  * `ProposalMaterializedRecord` (`@synap-core/types`) with the fields only the
@@ -13997,6 +14046,18 @@ export interface EmbeddingPipelineHealth {
 	recentFailed: number;
 	recentCompleted: number;
 	windowMinutes: number;
+}
+export interface InboundWebhookSource {
+	id: string;
+	name: string;
+	workspaceId: string;
+	active: boolean;
+	createdAt: Date;
+	lastTriggeredAt: Date | null;
+	/** The door's path, always known. */
+	inboundPath: string;
+	/** The full payload URL, or null when the pod has no `PUBLIC_URL`. */
+	inboundUrl: string | null;
 }
 declare const CAPTURE_STATUSES: readonly [
 	"structured",
@@ -14863,11 +14924,21 @@ export interface PacketDeployApproval {
 	repo: string | null;
 	targetHost: string | null;
 	approvedAt: string | null;
+	/** The session it was approved on; set on `ownerDeploys` entries. */
+	sessionId?: string;
 }
 export type PacketGatesSection = {
 	deploy: PacketDeployApproval | null;
 	/** In the process's stage order. Not capped: one entry per gated stage. */
 	items: PacketGateItem[];
+	/**
+	 * Every `dev.deploy_approval` a PERSON approved on ANY session of this
+	 * session's owner in the last 14 days, newest first (at most 20). An
+	 * approval belongs to the work and its commit, not to the session or
+	 * agent that asked (founder, 2026-10-28): a deploy gate accepts a commit
+	 * any of these covers.
+	 */
+	ownerDeploys: PacketDeployApproval[];
 	status: "ok";
 } | {
 	reason: string;
@@ -15446,8 +15517,10 @@ export interface ContinuationPacket {
 	/**
 	 * GATES — every gated stage of the session's process and its state, DERIVED
 	 * FROM PROPOSAL ROWS only (`session-gates.ts`), plus `deploy`: the newest
-	 * `dev.deploy_approval` a PERSON approved. "Is commit X approved to ship by a
-	 * human?" is `deploy?.commitSha` prefix-matching X.
+	 * `dev.deploy_approval` a PERSON approved, and `ownerDeploys`: the ones a
+	 * person approved on any of the owner's sessions. "Is commit X approved to
+	 * ship by a human?" is `deploy?.commitSha`, or any `ownerDeploys[].commitSha`,
+	 * prefix-matching X.
 	 */
 	gates: PacketGatesSection;
 	/**
@@ -15987,6 +16060,38 @@ export interface CapabilityGrantRow {
 	createdAt: string;
 	active: boolean;
 }
+/** A skill or tool row. `kind` absent = skill (the execute door's shape). */
+export interface CapabilityRef {
+	kind?: "skill" | "tool";
+	id: string;
+	name: string;
+}
+/**
+ * What the caller hands back. `originalActionRan: false` is a literal on BOTH
+ * arms: the refused action did not run, whether or not the request was filed.
+ */
+export type CapabilityEnableOffer = {
+	message: string;
+	originalActionRan: false;
+	proposalId: string;
+	reviewUrl: string;
+	skills: CapabilityRef[];
+	status: "proposed";
+	title: string;
+} | {
+	error: string;
+	message: string;
+	originalActionRan: false;
+	status: "failed";
+};
+declare function proposeCapabilityEnable(input: {
+	/** The acting agent; `null` = filed on behalf of the owner (unattended run). */
+	agentUserId: string | null;
+	refused: CapabilityRef[];
+	sessionId?: string | null;
+	userId: string;
+	workspaceId: string | null;
+}): Promise<CapabilityEnableOffer[]>;
 /**
  * Intent classification for the WRITE side of the Rule Loop — the sibling of
  * `classify.ts`.
@@ -16778,38 +16883,6 @@ export interface SyncConnectorConnection {
 	 */
 	hasError?: boolean;
 }
-/** A skill or tool row. `kind` absent = skill (the execute door's shape). */
-export interface CapabilityRef {
-	kind?: "skill" | "tool";
-	id: string;
-	name: string;
-}
-/**
- * What the caller hands back. `originalActionRan: false` is a literal on BOTH
- * arms: the refused action did not run, whether or not the request was filed.
- */
-export type CapabilityEnableOffer = {
-	message: string;
-	originalActionRan: false;
-	proposalId: string;
-	reviewUrl: string;
-	skills: CapabilityRef[];
-	status: "proposed";
-	title: string;
-} | {
-	error: string;
-	message: string;
-	originalActionRan: false;
-	status: "failed";
-};
-declare function proposeCapabilityEnable(input: {
-	/** The acting agent; `null` = filed on behalf of the owner (unattended run). */
-	agentUserId: string | null;
-	refused: CapabilityRef[];
-	sessionId?: string | null;
-	userId: string;
-	workspaceId: string | null;
-}): Promise<CapabilityEnableOffer[]>;
 /**
  * ARGUMENT VALIDATION AT THE PROPOSE MOMENT — check the call against the verb's
  * DECLARED schema before a human is asked to approve it.
@@ -24088,6 +24161,34 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				message: string;
 				proposalId: string | null;
 				status: "created";
+				webhookSource: {
+					bound: true;
+					id: string;
+					inboundPath: string;
+					inboundUrl: string | null;
+					name: string;
+					next?: undefined;
+					secret: string;
+				};
+			} | {
+				id: string | null;
+				message: string;
+				proposalId: string | null;
+				status: "created";
+				webhookSource: {
+					bound: false;
+					id?: undefined;
+					inboundPath?: undefined;
+					inboundUrl?: undefined;
+					name: string;
+					next: string;
+					secret?: undefined;
+				};
+			} | {
+				id: string | null;
+				message: string;
+				proposalId: string | null;
+				status: "created";
 			};
 		}>;
 		delete: import("@trpc/server").TRPCMutationProcedure<{
@@ -25099,19 +25200,23 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				};
 				meta: object;
 				output: {
+					approved?: undefined;
 					id: `${string}-${string}-${string}-${string}-${string}`;
 					proposalId: string;
 					status: "proposed";
 					toolId: string;
 					toolName: string;
+					turnOnRequest?: undefined;
 					verbName: string;
 					wiring: WireCreatedVerbResult;
 				} | {
+					approved: boolean;
 					id: string;
 					proposalId?: undefined;
 					status: "created";
 					toolId: string;
 					toolName: string;
+					turnOnRequest: CapabilityEnableOffer | undefined;
 					verbName: string;
 					wiring: WireCreatedVerbResult;
 				};
@@ -33676,7 +33781,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: {
 				count: number;
-				limit: number;
+				limit: number | null;
 			};
 		}>;
 	}>>;
@@ -35173,16 +35278,29 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					active: boolean;
 					apiKeyId: string | null;
 					createdAt: Date;
+					direction: "inbound" | "outbound";
 					eventTypes: string[];
 					id: string;
 					lastTriggeredAt: Date | null;
 					name: string;
 					retryConfig: unknown;
 					secret: string;
-					url: string;
+					url: string | null;
 					userId: string;
 					workspaceId: string | null;
 				};
+			};
+		}>;
+		adminCreateInboundSource: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				name: string;
+				workspaceId: string;
+			};
+			meta: object;
+			output: {
+				boundAutomations: number;
+				secret: string;
+				source: InboundWebhookSource;
 			};
 		}>;
 		adminDeleteForWorkspace: import("@trpc/server").TRPCMutationProcedure<{
@@ -35204,16 +35322,35 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				active: boolean;
 				apiKeyId: string | null;
 				createdAt: Date;
+				direction: "inbound" | "outbound";
 				eventTypes: string[];
 				id: string;
 				lastTriggeredAt: Date | null;
 				name: string;
 				retryConfig: unknown;
 				secret: string;
-				url: string;
+				url: string | null;
 				userId: string;
 				workspaceId: string | null;
 			}[];
+		}>;
+		adminListInboundSources: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				workspaceId: string;
+			};
+			meta: object;
+			output: InboundWebhookSource[];
+		}>;
+		adminRotateInboundSourceSecret: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				workspaceId: string;
+			};
+			meta: object;
+			output: {
+				secret: string;
+				source: InboundWebhookSource;
+			};
 		}>;
 		adminToggleForWorkspace: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
@@ -35226,12 +35363,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				active: boolean;
 				apiKeyId: string | null;
 				createdAt: Date;
+				direction: "inbound" | "outbound";
 				eventTypes: string[];
 				id: string;
 				lastTriggeredAt: Date | null;
 				name: string;
 				retryConfig: unknown;
-				url: string;
+				url: string | null;
 				userId: string;
 				workspaceId: string | null;
 			};
@@ -35250,13 +35388,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					active: boolean;
 					apiKeyId: string | null;
 					createdAt: Date;
+					direction: "inbound" | "outbound";
 					eventTypes: string[];
 					id: string;
 					lastTriggeredAt: Date | null;
 					name: string;
 					retryConfig: unknown;
 					secret: string;
-					url: string;
+					url: string | null;
 					userId: string;
 					workspaceId: string | null;
 				};
@@ -35275,13 +35414,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					active: boolean;
 					apiKeyId: string | null;
 					createdAt: Date;
+					direction: "inbound" | "outbound";
 					eventTypes: string[];
 					id: string;
 					lastTriggeredAt: Date | null;
 					name: string;
 					retryConfig: unknown;
 					secret: string;
-					url: string;
+					url: string | null;
 					userId: string;
 					workspaceId: string | null;
 				};
@@ -35344,13 +35484,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				active: boolean;
 				apiKeyId: string | null;
 				createdAt: Date;
+				direction: "inbound" | "outbound";
 				eventTypes: string[];
 				id: string;
 				lastTriggeredAt: Date | null;
 				name: string;
 				retryConfig: unknown;
 				secret: string;
-				url: string;
+				url: string | null;
 				userId: string;
 				workspaceId: string | null;
 			}[];
@@ -35362,13 +35503,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				active: boolean;
 				apiKeyId: string | null;
 				createdAt: Date;
+				direction: "inbound" | "outbound";
 				eventTypes: string[];
 				id: string;
 				lastTriggeredAt: Date | null;
 				name: string;
 				retryConfig: unknown;
 				secret: string;
-				url: string;
+				url: string | null;
 				userId: string;
 				workspaceId: string | null;
 			}[];
@@ -35383,12 +35525,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				active: boolean;
 				apiKeyId: string | null;
 				createdAt: Date;
+				direction: "inbound" | "outbound";
 				eventTypes: string[];
 				id: string;
 				lastTriggeredAt: Date | null;
 				name: string;
 				retryConfig: unknown;
-				url: string;
+				url: string | null;
 				userId: string;
 				workspaceId: string | null;
 			};
@@ -35406,12 +35549,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				active: boolean;
 				apiKeyId: string | null;
 				createdAt: Date;
+				direction: "inbound" | "outbound";
 				eventTypes: string[];
 				id: string;
 				lastTriggeredAt: Date | null;
 				name: string;
 				retryConfig: unknown;
-				url: string;
+				url: string | null;
 				userId: string;
 				workspaceId: string | null;
 			};
@@ -41919,6 +42063,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		approve: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
+				allowToday?: boolean | undefined;
 				comment?: string | undefined;
 				dispositions?: Record<string, {
 					edits?: Record<string, unknown> | undefined;
@@ -41962,7 +42107,24 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				proposalId: string;
 			};
 			meta: object;
-			output: ProposalExecutorResult;
+			output: ProposalExecutorResult | {
+				allowedToday: AllowedToday;
+				alreadyApproved?: boolean;
+				approvalRun?: ApprovalRunView;
+				created?: number;
+				effect?: ProposalEffect;
+				identities?: Array<IdentityReceipt & {
+					ref: string;
+				}>;
+				identity?: IdentityReceipt;
+				joined?: boolean;
+				linked?: number;
+				primaryId?: string;
+				queued?: true;
+				refusals?: string[];
+				relationsFailed?: MaterializeRelationFailure[];
+				success: boolean;
+			};
 		}>;
 		askAi: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
@@ -44379,13 +44541,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: {
+				approved?: undefined;
 				id: `${string}-${string}-${string}-${string}-${string}`;
 				proposalId: string;
 				status: "proposed";
+				turnOnRequest?: undefined;
 			} | {
+				approved: boolean;
 				id: string;
 				proposalId?: undefined;
 				status: "created";
+				turnOnRequest: CapabilityEnableOffer | undefined;
 			};
 		}>;
 		createRule: import("@trpc/server").TRPCMutationProcedure<{

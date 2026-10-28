@@ -26,9 +26,10 @@
  */
 
 import {
-  db,
+  type db,
   proposals,
   users,
+  focusSessions,
   and,
   eq,
   desc,
@@ -47,6 +48,10 @@ import { DEV_DEPLOY_APPROVAL_TYPE } from "../proposals/dev-approval.js";
 
 /** Rows read per session. A session files a handful; the cap only bounds a runaway. */
 const GATE_ROWS_CAP = 200;
+
+/** How far back, and how many, of the owner's approved deploys a session reads. */
+const OWNER_DEPLOYS_DAYS = 14;
+const OWNER_DEPLOYS_CAP = 20;
 
 const GATE_PROPOSAL_TYPES: readonly string[] = [
   ...STAGE_GATE_PROPOSAL_TYPES,
@@ -91,6 +96,8 @@ export interface PacketDeployApproval {
   repo: string | null;
   targetHost: string | null;
   approvedAt: string | null;
+  /** The session it was approved on; set on `ownerDeploys` entries. */
+  sessionId?: string;
 }
 
 export type PacketGatesSection =
@@ -99,6 +106,14 @@ export type PacketGatesSection =
       /** In the process's stage order. Not capped: one entry per gated stage. */
       items: PacketGateItem[];
       deploy: PacketDeployApproval | null;
+      /**
+       * Every `dev.deploy_approval` a PERSON approved on ANY session of this
+       * session's owner in the last 14 days, newest first (at most 20). An
+       * approval belongs to the work and its commit, not to the session or
+       * agent that asked (founder, 2026-10-28): a deploy gate accepts a commit
+       * any of these covers.
+       */
+      ownerDeploys: PacketDeployApproval[];
     }
   | { status: "unavailable"; reason: string };
 
@@ -259,14 +274,68 @@ async function readGateProposals(
   return rows as GateProposalRow[];
 }
 
+/** The deploys a PERSON approved on any session `ownerId` owns, newest first. */
+async function readOwnerDeploys(
+  database: typeof db,
+  ownerId: string
+): Promise<PacketDeployApproval[]> {
+  const rows = await database
+    .select({
+      id: proposals.id,
+      sessionId: proposals.targetId,
+      commitSha: drizzleSql<string | null>`${proposals.data} ->> 'commitSha'`,
+      branch: drizzleSql<string | null>`${proposals.data} ->> 'branch'`,
+      repo: drizzleSql<string | null>`${proposals.data} ->> 'repo'`,
+      targetHost: drizzleSql<string | null>`${proposals.data} ->> 'targetHost'`,
+      reviewedAt: proposals.reviewedAt,
+      updatedAt: proposals.updatedAt,
+    })
+    .from(proposals)
+    .innerJoin(users, eq(users.id, proposals.reviewedBy))
+    .innerJoin(
+      focusSessions,
+      drizzleSql`${focusSessions.id}::text = ${proposals.targetId}`
+    )
+    .where(
+      and(
+        eq(proposals.targetType, "focus_session"),
+        eq(proposals.proposalType, DEV_DEPLOY_APPROVAL_TYPE),
+        eq(proposals.status, ProposalStatus.APPROVED),
+        eq(users.userType, "human"),
+        eq(focusSessions.userId, ownerId),
+        drizzleSql`${proposals.data} ->> 'commitSha' IS NOT NULL`,
+        drizzleSql`${proposals.reviewedAt} >= now() - (${OWNER_DEPLOYS_DAYS}::int * interval '1 day')`
+      )
+    )
+    .orderBy(desc(proposals.reviewedAt))
+    .limit(OWNER_DEPLOYS_CAP);
+  return rows.map((r) => ({
+    proposalId: r.id,
+    commitSha: r.commitSha!,
+    branch: r.branch,
+    repo: r.repo,
+    targetHost: r.targetHost,
+    approvedAt: iso(r.reviewedAt ?? r.updatedAt) ?? null,
+    sessionId: r.sessionId,
+  }));
+}
+
 /** The gates section. Throws on a failed read; the packet makes it `unavailable`. */
 export async function readSessionGates(
   database: typeof db,
-  row: { id: string; playbookId: string | null }
-): Promise<{ items: PacketGateItem[]; deploy: PacketDeployApproval | null }> {
-  const [sessionProcess, rows] = await Promise.all([
+  row: { id: string; playbookId: string | null; userId: string }
+): Promise<{
+  items: PacketGateItem[];
+  deploy: PacketDeployApproval | null;
+  ownerDeploys: PacketDeployApproval[];
+}> {
+  const [sessionProcess, rows, ownerDeploys] = await Promise.all([
     loadSessionProcess({ sessionId: row.id, playbookId: row.playbookId }),
     readGateProposals(database, row.id),
+    readOwnerDeploys(database, row.userId),
   ]);
-  return deriveSessionGates(sessionProcess?.stages ?? [], rows);
+  return {
+    ...deriveSessionGates(sessionProcess?.stages ?? [], rows),
+    ownerDeploys,
+  };
 }

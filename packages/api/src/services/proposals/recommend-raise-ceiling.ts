@@ -11,7 +11,8 @@
  * work per day than its cap allows generates a steady trickle of ceiling-forced
  * proposals, and the fix is to raise the cap — a human decision, so this
  * recommender FILES it as a `governance.raise_ceiling` proposal rather than
- * writing the ceiling directly.
+ * writing the ceiling directly. The ceiling is opt-in (no row ⇒ no limit), so
+ * an agent with no ceiling row is never recommended a raise.
  *
  * NEVER silent + never a direct ceiling write: like tighten/widen, the ONLY
  * side effect is a PENDING proposal via the one door `insertPendingProposal`,
@@ -211,17 +212,20 @@ async function recommendRaiseCeilingForAgent(
 ): Promise<string[]> {
   if (!agent.createdByUserId) return [];
 
-  const since = new Date(Date.now() - LOOKBACK_DAYS * 24 * 60 * 60 * 1000);
-  const dailyCounts = await loadAgentDailyWriteCounts(agent.id, since);
-  if (dailyCounts.length === 0) return [];
-
   // Resolve the ceiling the agent keeps hitting — the SAME resolver rung 2.56
-  // enforces. Pod-wide per-agent budget, so no workspace dimension.
+  // enforces. Pod-wide per-agent budget, so no workspace dimension. No ceiling
+  // row ⇒ no limit (the default): nothing to hit, nothing to raise, and the
+  // day counts are not even read.
   const currentLimit = await resolveDailyWriteCeiling({
     db,
     agentUserId: agent.id,
     workspaceId: undefined,
   });
+  if (currentLimit === null) return [];
+
+  const since = new Date(Date.now() - LOOKBACK_DAYS * 24 * 60 * 60 * 1000);
+  const dailyCounts = await loadAgentDailyWriteCounts(agent.id, since);
+  if (dailyCounts.length === 0) return [];
 
   const atCeilingThreshold = Math.ceil(currentLimit * CEILING_UTILIZATION);
   const atCeilingDays = dailyCounts.filter((d) => d.n >= atCeilingThreshold);
