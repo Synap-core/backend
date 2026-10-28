@@ -3950,21 +3950,46 @@ _ue_migration_level() {
 # builder sort them) — never the locale's collation, which `[[ < ]]` uses.
 _ue_name_lt() { [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | LC_ALL=C sort | head -n 1)" = "$1" ]; }
 
-# 0 when release <a> is OLDER than release <b>: both stable ids vX.Y.Z, compared
-# number by number. Anything else (main-<sha>, local-<sha>, adopted-…, a
-# pre-release, an unknown id) has no order: never older. The control plane
-# never orders such a downgrade, by the same rule (isOlderRelease).
-_ue_release_older() {
-    local a="$1" b="$2" i x y
-    [[ "$a" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] || return 1
-    local -a av=("${BASH_REMATCH[@]:1}")
-    [[ "$b" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] || return 1
-    local -a bv=("${BASH_REMATCH[@]:1}")
-    for i in 0 1 2; do
-        x=$((10#${av[$i]})); y=$((10#${bv[$i]}))
-        [ "$x" -lt "$y" ] && return 0
-        [ "$x" -gt "$y" ] && return 1
-    done
+# 0 when release <a> is OLDER than the running release <b>. Three orders, any
+# one is enough:
+#   1. both stable ids vX.Y.Z, compared number by number;
+#   2. [<a's manifest> <b's record>] the signed manifests' createdAt (CI's build
+#      time, ISO-8601 UTC, compared as text), when both are registry releases —
+#      a from-source build's createdAt is the host's clock, an adopted pod has
+#      none;
+#   3. the target's newest migration is behind the running release's: its code
+#      would run on a schema it never knew.
+# Before 2026-10-28 only (1) existed, so any older main-<sha> (a signed,
+# superseded build) was applied without --force. An id with none of these
+# (adopted-…, a manifest without the fields) has no order: never older. The
+# control plane never orders a stable downgrade (isOlderRelease, rule 1).
+_ue_release_older() { # <a> <b> [<a manifest> <b record>]
+    local a="$1" b="$2" ma="${3:-}" mb="${4:-}" i x y ta tb la lb semver=0
+    local sv='^v([0-9]+)\.([0-9]+)\.([0-9]+)$'
+    if [[ "$a" =~ $sv ]]; then
+        local -a av=("${BASH_REMATCH[@]:1}")
+        if [[ "$b" =~ $sv ]]; then
+            local -a bv=("${BASH_REMATCH[@]:1}")
+            semver=1
+            for i in 0 1 2; do
+                x=$((10#${av[$i]})); y=$((10#${bv[$i]}))
+                [ "$x" -lt "$y" ] && return 0
+                [ "$x" -gt "$y" ] && break
+            done
+        fi
+    fi
+    [ -s "$ma" ] && [ -s "$mb" ] || return 1
+    # Two stable ids are ordered by number only: a backport tag (v1.2.5) can be
+    # built after a newer one (v1.3.0), and moving up to v1.3.0 is not a downgrade.
+    if [ "$semver" = 0 ]; then
+        local iso='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'
+        ta="$(jq -r 'if (.source // false) == true then empty else (.createdAt // empty | strings) end' "$ma" 2>/dev/null || true)"
+        tb="$(jq -r 'if (.source // false) == true then empty else (.createdAt // empty | strings) end' "$mb" 2>/dev/null || true)"
+        if [[ "$ta" =~ $iso ]] && [[ "$tb" =~ $iso ]] && _ue_name_lt "$ta" "$tb"; then return 0; fi
+    fi
+    la="$(jq -r '.migrations.last // empty | strings' "$ma" 2>/dev/null || true)"
+    lb="$(jq -r '.migrations.last // empty | strings' "$mb" 2>/dev/null || true)"
+    [ -n "$la" ] && [ -n "$lb" ] && _ue_name_lt "$la" "$lb" && return 0
     return 1
 }
 
@@ -4822,7 +4847,7 @@ synap_update_engine() {
     # A downgrade is never applied by accident (a channel pointer moved back, a
     # mistyped --release): the older release's code would run on a schema and
     # deploy files it never knew. A failed update's rollback is not this path.
-    if [ "$force" != 1 ] && _ue_release_older "$UE_TO" "$UE_FROM"; then
+    if [ "$force" != 1 ] && _ue_release_older "$UE_TO" "$UE_FROM" "$m" state/current-release.json; then
         _ue_err "release ${UE_TO} is older than the running ${UE_FROM} — refusing to downgrade. Nothing was changed."
         _ue_err "To apply it anyway: synap update --release ${UE_TO} --force"
         _ue_record aborted "$UE_FROM" "$UE_TO" "older than the running release ${UE_FROM}" false

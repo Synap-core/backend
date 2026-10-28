@@ -891,6 +891,27 @@ run_update --release v1.10.0; rc=$?
 setup noorder r1; asrel v9.0.0; publish "$R2" 0012_new.sql
 run_update --release "$R2"; rc=$?
 [ "$rc" = 0 ] && [ "$(cur_id)" = "$R2" ] && ok "downgrade: v9.0.0 → $R2 has no order and is not refused" || { bad "noorder: rc=$rc record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
+# A main-<sha> build is ordered by its signed manifest's createdAt (audit
+# 2026-10-28: any superseded, signed main build used to apply without --force).
+ascreated() { jq --arg t "$2" '.createdAt = $t' "$1" > "$TMP/x" && mv "$TMP/x" "$1"; }
+setup mainolder r1; publish "$R2" 0012_new.sql; ascreated "$TMP/rel/$R2/release.json" 2026-10-01T00:00:00Z
+run_update --release "$R2"; rc=$?
+[ "$rc" != 0 ] && [ "$(last status)" = aborted ] && [ "$(last reason)" = "older than the running release $R1" ] && [ "$(cur_id)" = "$R1" ] \
+  && ! grep -qE "^pull |pg_dump" "$FAKE/log" && cmp -s "$DEPLOY/.env" "$S/env.orig" \
+  && ok "downgrade: an older main build ($R1 → $R2 built earlier) is refused before anything changes" || { bad "mainolder: rc=$rc record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
+run_update --release "$R2" --force; rc=$?
+[ "$rc" = 0 ] && [ "$(cur_id)" = "$R2" ] && ok "downgrade: --force applies the older main build" || { bad "mainolder --force: rc=$rc current=$(cur_id)"; show; }
+# A target whose newest migration is behind the running release's is older,
+# whatever its id or build time says.
+setup migbehind r1; publish "$R2" 0012_new.sql
+jq '.migrations.last = "0336_y.sql"' "$DEPLOY/state/current-release.json" > "$TMP/x" && mv "$TMP/x" "$DEPLOY/state/current-release.json"
+run_update --release "$R2"; rc=$?
+[ "$rc" != 0 ] && [ "$(last reason)" = "older than the running release $R1" ] && ! grep -qE "^pull |pg_dump" "$FAKE/log" \
+  && ok "downgrade: a release behind the running migrations (0336 → 0012) is refused" || { bad "migbehind: rc=$rc record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
+# Two stable ids are ordered by number only: a backport tag built later is not newer.
+setup backport r1; asrel v1.2.5; ascreated "$DEPLOY/state/current-release.json" 2026-10-09T00:00:00Z; publish v1.3.0 0012_new.sql
+run_update --release v1.3.0; rc=$?
+[ "$rc" = 0 ] && [ "$(cur_id)" = v1.3.0 ] && ok "downgrade: v1.2.5 (built later) → v1.3.0 is an upgrade" || { bad "backport: rc=$rc record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
 
 # ── 9d. pg_dump's stderr: TimescaleDB's catalog warnings are not the operator's ─
 # A FULL dump of a TimescaleDB database always warns about the circular foreign
