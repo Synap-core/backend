@@ -1,0 +1,81 @@
+name: Depends-On
+
+# The "Dependencies merged" check (R8 option C2b, wave e902fc95). A PR body
+# line `Depends-On: <repo>#<n>` (or `Depends-On: <repo>@<sha>` for a commit of
+# a direct-commit repo) HOLDS the PR until that dependency is on its repo's
+# main: the check stays "in progress" until then, so `--auto` and the merge
+# queue wait for it, and every PR of a cross-repo change can be enqueued at
+# once. Grammar and "landed" rules: scripts/layout/layout.mjs. The poster:
+# scripts/layout/hold.mjs.
+#
+# It lives in its own file, beside ci.yml: it needs no install, and ci.yml's
+# change-aware skips (scripts/ci-changes.mjs) must never skip it.
+#
+# pull_request_target, never pull_request: the job runs the DEFAULT BRANCH's
+# copy of this file and of hold.mjs, and never checks out or runs the PR's
+# code, so a PR cannot rewrite the check that holds it. It reads only the PR's
+# body (data) through the API. A side effect: a change to this file or to
+# hold.mjs takes effect only once it is on main (try one with HOLD_DRY_RUN=1).
+#
+# The sweep (push to main, every 30 min, or the Run workflow button) releases
+# a held PR once its dependency lands, and gives an open PR that has no check
+# yet its first one: a required check that never reports would hold it forever.
+
+on:
+  pull_request_target:
+    types: [opened, edited, reopened, synchronize, ready_for_review]
+  merge_group:
+  push:
+    branches: ["main"]
+  schedule:
+    - cron: "7,37 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  checks: write
+  pull-requests: read
+
+concurrency:
+  # One judge per PR (the newest event wins), one per queue commit, one sweep.
+  group: depends-on-${{ github.event.pull_request.number || github.event.merge_group.head_sha || 'sweep' }}
+  cancel-in-progress: true
+
+jobs:
+  hold:
+    # Not the required check's name: the job posts "Dependencies merged" itself.
+    name: Depends-On hold
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # The default branch's scripts only (pull_request_target's default ref).
+      - name: Checkout the resolver
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: scripts/layout
+          persist-credentials: false
+
+      # A dependency may live in a PRIVATE repo (app-bases, control-plane-api):
+      # the Synap Reader App reads it (contents: read: enough for a `<repo>@<sha>`
+      # line; whether the App may read a private repo's PULL REQUESTS is not
+      # verified). Without a token such a dependency reads as "could not read"
+      # and stays HELD, never landed.
+      - name: Mint the private-repo read token (GitHub App)
+        id: app-token
+        if: ${{ vars.SYNAP_READER_APP_ID != '' }}
+        continue-on-error: true
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        with:
+          app-id: ${{ vars.SYNAP_READER_APP_ID }}
+          private-key: ${{ secrets.SYNAP_READER_APP_KEY }}
+          owner: Synap-core
+          repositories: |
+            control-plane-api
+            app-bases
+          permission-contents: read
+
+      - name: Judge the dependencies
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          LAYOUT_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: node scripts/layout/hold.mjs
