@@ -52,6 +52,9 @@ const FROZEN: Record<string, number> = {
   // Layer-2 dedup queries `event` by (start-window, title) — `event` is a pure
   // PRIMARY kind (no role/facet wearers), the sanctioned literal-kind case.
   "packages/api/src/services/event-sync/run-gcal-import.ts": 1,
+  // The duplicate door keeps a same-name EVENT only on the same start: it reads
+  // `event` rows by title — the same sanctioned primary-kind read (backend#422).
+  "packages/api/src/services/duplicates/find-duplicate-candidates.ts": 1,
   "packages/api/src/utils/assert-known-profile-slug.ts": 1, // JSDoc: names the row-blind fallback it deliberately preserves, not code
   "packages/api/src/utils/user-scoped.ts": 1, // JSDoc example, not code
   "packages/database/src/repositories/entity-repository.ts": 1,
