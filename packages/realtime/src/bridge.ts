@@ -71,6 +71,29 @@ export function recordYjsPersistFailure(): void {
   persistFailureCount += 1;
 }
 
+/** The Socket.IO request path (server.ts `path`, shared by /presence and /yjs). */
+const SOCKET_IO_PATH = "/socket.io/";
+
+/**
+ * Who answers an HTTP request to the realtime port: the bridge (its own
+ * endpoints and the health checks), Socket.IO (its path), or nobody (404).
+ */
+export function routeHttpRequest(
+  url: string
+): "bridge" | "socket.io" | "not-found" {
+  const path = url.split("?")[0];
+  if (
+    path.startsWith("/bridge/") ||
+    path.startsWith("/yjs/") ||
+    path === "/health" ||
+    path === "/health/yjs"
+  ) {
+    return "bridge";
+  }
+  if (path.startsWith(SOCKET_IO_PATH)) return "socket.io";
+  return "not-found";
+}
+
 /**
  * Setup Socket.IO bridge HTTP endpoint
  */
@@ -92,30 +115,26 @@ export function setupBridge(
   httpServer.on(
     "request",
     async (req: IncomingMessage, res: ServerResponse) => {
-      const url = req.url || "";
+      const route = routeHttpRequest(req.url || "");
 
-      // Handle bridge endpoints
-      if (url.startsWith("/bridge/")) {
+      if (route === "bridge") {
         await handleBridgeRequest(io, req, res);
         return;
       }
 
-      // Handle Yjs endpoints
-      if (url.startsWith("/yjs/")) {
-        await handleBridgeRequest(io, req, res);
+      if (route === "socket.io") {
+        // Pass through to original handlers (Socket.IO)
+        for (const listener of originalListeners) {
+          listener(req, res);
+        }
         return;
       }
 
-      // Handle health check at root
-      if (url === "/health" && req.method === "GET") {
-        await handleBridgeRequest(io, req, res);
-        return;
-      }
-
-      // Pass through to original handlers (Socket.IO)
-      for (const listener of originalListeners) {
-        listener(req, res);
-      }
+      // Anything else used to be handed to Socket.IO, which ignores paths
+      // outside its own and never answered: the request hung until the client
+      // gave up (Caddy's /realtime/* route did exactly that).
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Not found" }));
     }
   );
 
