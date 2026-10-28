@@ -163,6 +163,10 @@ export const SkillDefSchema = z.object({
    * the valid set named.
    */
   intent: z.string().regex(INTENT_SLUG_RE).optional(),
+  // How the verb's parameters are read from its intent's one input (0368).
+  // Shape-checked by the applier (`inputMapProblems`), which names every
+  // problem at once — a Zod shape here would report only the first.
+  inputMap: z.record(z.string(), z.unknown()).optional(),
   executionMode: z.enum(["sync", "async"]).optional(),
   timeoutSeconds: z.number().min(1).max(300).optional(),
   requires: z.array(z.string()).optional(),

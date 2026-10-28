@@ -126,6 +126,30 @@ export type ProviderVerbSpec = {
  */
 export type SkillScope = "pod" | "user" | "workspace";
 
+/**
+ * `skills.input_map` (0368): a verb parameter ← `"$.<path>"` (the app's input,
+ * validated against the intent's input schema), `"$account.<id|label|provider>"`
+ * (the account the action targets) or `{ const: <value> }`. Validated by
+ * `services/capabilities/intent-input.ts` before it is stored.
+ */
+export type SkillInputMapValue = string | { const: unknown };
+/**
+ * Where a verb's ACCOUNTS come from when they live inside the tool, not in
+ * pod connections (a Postiz key reaches several social channels): a READ verb
+ * of the same tool that lists them, and which field of each listed record is
+ * its id, its label and its provider.
+ */
+export interface SkillInputMapAccounts {
+  verb: string;
+  id: string;
+  label: string;
+  provider?: string;
+}
+export interface SkillInputMap {
+  params: Record<string, SkillInputMapValue>;
+  accounts?: SkillInputMapAccounts;
+}
+
 export const skills = pgTable(
   "skills",
   {
@@ -252,6 +276,17 @@ export const skills = pgTable(
      * guessed into a bucket.
      */
     intent: text("intent"),
+
+    /**
+     * How this verb's parameters are read from its intent's ONE input
+     * (`capability_intents.input_schema`, 0368; decision 5B 2026-10-28):
+     * `{ params: { <verb param>: "$.<input field>" | "$account.<field>" |
+     * { const } }, accounts?: { verb, id, label, provider? } }`. Path copy and
+     * constants only — no expressions. Written by the definition applier
+     * alone, from an approved template's skill `inputMap`; a RE_APPROVAL
+     * field. NULL = the verb is not offered to pod apps for its intent.
+     */
+    inputMap: jsonb("input_map").$type<SkillInputMap | null>(),
 
     /**
      * The URLs a READER verb reads — the catalog skill's `urls`, projected by

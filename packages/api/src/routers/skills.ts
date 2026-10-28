@@ -21,7 +21,7 @@ import {
   type SQL,
 } from "@synap/database";
 import { skills, tools } from "@synap/database/schema";
-import type { ProviderVerbSpec } from "@synap/database/schema";
+import type { ProviderVerbSpec, SkillInputMap } from "@synap/database/schema";
 import type { CapabilityEnableOffer } from "../services/capabilities/propose-capability-enable.js";
 import {
   getLinksFor,
@@ -1358,6 +1358,14 @@ export const skillsRouter = router({
          * that changes what a reader receives (a RE_APPROVAL field).
          */
         urlPatterns: z.array(z.string().min(1).max(300)).max(64).optional(),
+        /**
+         * How the verb's parameters are read from its intent's one input
+         * (`skills.input_map`, 0368), already validated by the applier
+         * (`inputMapProblems`). Applier-only, like `intent`, and not on
+         * `update`: a definition re-apply is the one thing that changes what
+         * an app's input becomes (a RE_APPROVAL field).
+         */
+        inputMap: z.record(z.string(), z.unknown()).optional(),
         /** The acting AGENT identity, when this create is agent-initiated
          *  (e.g. via an MCP tool) — mirrors entities.ts's createEntity input.
          *  Threaded into checkPermissionOrPropose below so an agent-created
@@ -1378,13 +1386,15 @@ export const skillsRouter = router({
       // decides which kept links a verb receives, so a member-authored skill
       // must never declare one through this door (only a definition does).
       if (
-        (input.intent !== undefined || input.urlPatterns !== undefined) &&
+        (input.intent !== undefined ||
+          input.urlPatterns !== undefined ||
+          input.inputMap !== undefined) &&
         !isDefinitionApplier(ctx)
       ) {
         throw new TRPCError({
           code: "FORBIDDEN",
           message:
-            "intent and urlPatterns come only from a capability definition; install or update its package instead.",
+            "intent, urlPatterns and inputMap come only from a capability definition; install or update its package instead.",
         });
       }
 
@@ -1500,6 +1510,9 @@ export const skillsRouter = router({
           ...(input.urlPatterns?.length
             ? { urlPatterns: input.urlPatterns }
             : {}),
+          ...(input.inputMap
+            ? { inputMap: input.inputMap as SkillInputMap }
+            : {}),
           // Replayed by the `skill/create` executor through the same
           // `replaceSkillRequiredTools` once the skill row exists.
           ...(requiredToolIds.length
@@ -1565,6 +1578,11 @@ export const skillsRouter = router({
           // The reader's declared URLs (applier-only); omitted → NULL, not a reader.
           ...(input.urlPatterns?.length
             ? { urlPatterns: input.urlPatterns }
+            : {}),
+          // The intent input map (applier-only); omitted → NULL, not offered
+          // to apps for the intent.
+          ...(input.inputMap
+            ? { inputMap: input.inputMap as SkillInputMap }
             : {}),
           // Persist the caller-supplied metadata bag (e.g. the marketplace
           // source-link); omitted → the column default `{}` applies.

@@ -172,8 +172,9 @@ export interface KeyGrant {
   readonly scopes: readonly GrantScope[];
   /**
    * The APPLICATION this credential acts as (`grants.client_id` = the app's
-   * `public_id`), or null for a bare key. Attribution only — never an
-   * enforcement input.
+   * `public_id`), or null for a bare key. Attribution, and never a widening:
+   * the one place it is enforced TIGHTENS — an app's run of an outward verb
+   * always proposes (`@synap/capability-gate`, decision 4A).
    */
   readonly clientId: string | null;
 }
