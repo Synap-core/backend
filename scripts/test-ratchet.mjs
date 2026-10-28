@@ -57,6 +57,12 @@
  *   node scripts/test-ratchet.mjs --record        rewrite the baseline from this
  *                                                 run (keeps owner/cause/note of
  *                                                 surviving entries)
+ *   node scripts/test-ratchet.mjs --shard=2/4     run shard 2 of 4 and write its
+ *                                                 reports; judges nothing (see
+ *                                                 test-ratchet-shards.mjs)
+ *   node scripts/test-ratchet.mjs --reports=DIR --shards=4
+ *                                                 judge the reports of 4 shards
+ *                                                 as one run
  *   TEST_RATCHET_CONCURRENCY=2                    packages run at once
  * Reports land in coverage/test-ratchet/ (CI uploads coverage/).
  */
@@ -72,6 +78,13 @@ import {
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { discoverTripwires } from "./tripwire-discovery.mjs";
+import {
+  SHARDED_DIRS,
+  mergeShardReports,
+  parseShard,
+  runsForShard,
+  shardReportId,
+} from "./test-ratchet-shards.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const BASELINE_PATH = join(REPO_ROOT, "scripts", "test-ratchet-baseline.txt");
@@ -90,6 +103,10 @@ const RECORD = args.includes("--record");
 const REPORTS_IN = flag("reports");
 const ONLY = flag("only")?.split(",").filter(Boolean);
 const SCRIPT = flag("script") ?? "test";
+const SHARD = parseShard(flag("shard"));
+const SHARDS = flag("shards") ? Number(flag("shards")) : null;
+if (SHARD && (REPORTS_IN || RECORD))
+  throw new Error("--shard runs one shard; it cannot judge or --record");
 const CONCURRENCY = Number(process.env.TEST_RATCHET_CONCURRENCY ?? 2);
 const IN_CI = process.env.GITHUB_ACTIONS === "true";
 
@@ -286,6 +303,21 @@ function readReport(dir, id) {
   }
 }
 
+// A sharded package's report is its N shard reports merged; one missing shard
+// makes the whole package a `no-report`.
+function readRunReport(dir, run) {
+  if (SHARDS && SHARDED_DIRS.includes(run.dir))
+    return mergeShardReports(
+      Array.from({ length: SHARDS }, (_, i) =>
+        readReport(dir, shardReportId(run.id, i + 1))
+      )
+    );
+  return readReport(dir, run.id);
+}
+
+const tripwireOwner = (file) =>
+  file.match(/^((?:packages|apps)\/[^/]+)\//)?.[1] ?? ".";
+
 // ── main ─────────────────────────────────────────────────────────────────────
 const inScope = (path) =>
   !ONLY || ONLY.some((d) => path === d || path.startsWith(`${d}/`));
@@ -295,28 +327,64 @@ const reportsDir = REPORTS_IN ? resolve(REPORTS_IN) : DEFAULT_REPORTS;
 mkdirSync(reportsDir, { recursive: true });
 
 if (!REPORTS_IN) {
+  const toRun = runsForShard(runs, SHARD);
   console.log(
-    `test-ratchet: ${runs.length} package suite(s), ${CONCURRENCY} at a time`
+    `test-ratchet: ${toRun.length} package suite(s)${SHARD ? ` (shard ${SHARD.k}/${SHARD.n})` : ""}, ${CONCURRENCY} at a time`
   );
   for (const s of skipped) console.log(`  not run: ${s}`);
   // Longest first, so the slowest suite never starts last.
-  const order = [...runs].sort((a, b) =>
+  const order = [...toRun].sort((a, b) =>
     a.dir === "packages/api" ? -1 : b.dir === "packages/api" ? 1 : 0
   );
   await pool(order, CONCURRENCY, (r) =>
-    runVitest(r, reportFile(reportsDir, r.id))
+    runVitest(r, reportFile(reportsDir, r.reportId ?? r.id))
   );
+}
+
+// A shard only runs and writes reports; the "Full suite" job judges them all.
+// Shard 1 also runs the tripwires no package owns (the repo root's), under the
+// same report ids the judge derives (`tripwires:<dir>`). The judge derives that
+// set from what the merged reports reached; a package config that EXCLUDES its
+// own tripwire would make the judge expect a report shard 1 never wrote, and it
+// goes red as `no-report` — loud, never silently green.
+if (SHARD) {
+  if (SHARD.k === 1) {
+    const owned = new Set(allRuns.map((r) => r.dir));
+    const byDir = new Map();
+    for (const t of discoverTripwires(REPO_ROOT)
+      .map((f) => relative(REPO_ROOT, f))
+      .filter(inScope)) {
+      const dir = tripwireOwner(t);
+      if (owned.has(dir)) continue;
+      if (!byDir.has(dir)) byDir.set(dir, []);
+      byDir.get(dir).push(dir === "." ? t : t.slice(dir.length + 1));
+    }
+    await pool(
+      [...byDir].map(([dir, files]) => ({
+        id: `tripwires:${dir}`,
+        dir,
+        args: files,
+      })),
+      CONCURRENCY,
+      (r) => runVitest(r, reportFile(reportsDir, r.id))
+    );
+  }
+  console.log(
+    `\ntest-ratchet: shard ${SHARD.k}/${SHARD.n} done; reports in ${relative(REPO_ROOT, reportsDir)}. The "Full suite" job judges them.`
+  );
+  process.exit(0);
 }
 
 const problems = [];
 const results = new Map(); // repo-relative file → { ok, reason }
 const perRun = [];
 const collect = (run) => {
-  const report = readReport(reportsDir, run.id);
+  const report = readRunReport(reportsDir, run);
   if (!report) {
+    const sharded = SHARDS && SHARDED_DIRS.includes(run.dir);
     problems.push({
       kind: "no-report",
-      detail: `${run.id}: the runner produced no parseable JSON — the suite crashed before reporting. Reproduce: cd ${run.dir} && npx vitest run ${run.args.join(" ")}`,
+      detail: `${run.id}: ${sharded ? `at least one of its ${SHARDS} shard reports is missing — a shard crashed or never ran` : "the runner produced no parseable JSON — the suite crashed before reporting"}. Reproduce: cd ${run.dir} && npx vitest run ${run.args.join(" ")}`,
     });
     return;
   }
@@ -356,8 +424,7 @@ if (!ONLY && tripwires.length < 100) {
 const unreached = new Map();
 for (const t of tripwires) {
   if (results.has(t)) continue;
-  const m = t.match(/^((?:packages|apps)\/[^/]+)\//);
-  const dir = m ? m[1] : ".";
+  const dir = tripwireOwner(t);
   if (!unreached.has(dir)) unreached.set(dir, []);
   unreached.get(dir).push(dir === "." ? t : t.slice(dir.length + 1));
 }
