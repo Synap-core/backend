@@ -146,8 +146,23 @@ export interface AgentScorecard {
   agentId: string;
   agentName: string | null;
   agentType: string | null;
-  /** Proposals scanned to build this card (capped). */
+  /**
+   * Proposals counted on this card: every one the agent filed inside
+   * `window` (the same number as `counts.total`). Counted in SQL, never capped.
+   */
   sampled: number;
+  /**
+   * The period every count and rate on this card covers: the last
+   * `days` days, from `from` to `to` (ISO timestamps). The same 7 days as the
+   * Agents page's "N writes · 7d".
+   */
+  window: { from: string; to: string; days: number };
+  /**
+   * `rates.duplicateRate` alone is a SAMPLE: clustering needs every payload, so
+   * it reads the newest `size` proposals of the window (at most `limit`). When
+   * `size` < `counts.total`, older proposals of the window are not in it.
+   */
+  duplicateSample: { size: number; limit: number };
   counts: {
     total: number;
     pending: number;
@@ -172,7 +187,7 @@ export interface AgentScorecard {
     rejectRate: number;
     /** share of proposals a human revised before it resolved */
     reviseRate: number;
-    /** share of proposals landing in a same-shape cluster (size > 1) */
+    /** share of the `duplicateSample` landing in a same-shape cluster (size > 1) */
     duplicateRate: number;
   };
   /** Top rejection reasons, most frequent first. */

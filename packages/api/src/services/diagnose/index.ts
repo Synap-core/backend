@@ -1091,6 +1091,18 @@ async function diagnoseClass(
             name: card.agentName,
             agentType: card.agentType,
             total: card.counts.total,
+            // The period every number on this row covers, and the sample the
+            // duplicate rate was read from — without them a reader cannot tell
+            // "0 rejected" over a week from "0 rejected" over the newest page.
+            window: card.window,
+            duplicateSample: card.duplicateSample,
+            // The absolute buckets. They used to be dropped as "recoverable
+            // from total x rate", which held only while a 500-row scan capped
+            // `total` below the rate's 4-decimal resolution; a 7-day window of
+            // a busy agent exceeds 10 000, so round(total x rate) can be off.
+            approved: card.counts.approved,
+            rejected: card.counts.rejected,
+            revised: card.counts.revised,
             // Still OPEN, not yet resolved — the backlog half of the roster's
             // job. Unlike the other buckets this one is not recoverable from a
             // rate (there is no pendingRate), so dropping it made a queue

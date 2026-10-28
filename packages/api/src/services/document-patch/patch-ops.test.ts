@@ -12,6 +12,7 @@ import {
   previewPatch,
   removedEmbeds,
   renderDocumentPatch,
+  resolvePatchTitle,
   type PatchWriter,
 } from "./patch-ops.js";
 
@@ -323,5 +324,45 @@ describe("previewPatch — what the reviewer sees, per section", () => {
 
   it("no change, no preview", () => {
     expect(previewPatch(DOC, DOC)).toEqual([]);
+  });
+});
+
+describe("set_title — the name, never the body", () => {
+  it("parses a trimmed one-line title and refuses a blank or multi-line one", () => {
+    expect(
+      DocumentPatchOpsSchema.parse([{ op: "set_title", title: "  Plan  " }])
+    ).toEqual([{ op: "set_title", title: "Plan" }]);
+    for (const title of ["   ", "Line one\nLine two"]) {
+      expect(
+        DocumentPatchOpsSchema.safeParse([{ op: "set_title", title }]).success
+      ).toBe(false);
+    }
+  });
+
+  it("leaves the content as it is (an agent rename passes every floor)", () => {
+    const doc = `Intro.\n\n${human("notes", "Mine.")}\n`;
+    const out = renderDocumentPatch(
+      doc,
+      [{ op: "set_title", title: "Launch plan" }],
+      { writer: AGENT, now: NOW }
+    );
+    expect(out.markdown).toBe(doc);
+    expect(out.previews).toEqual([]);
+  });
+
+  it("the last set_title wins; the current name is no rename", () => {
+    expect(
+      resolvePatchTitle("Plan", [
+        { op: "set_title", title: "A plan" },
+        { op: "set_title", title: "Launch plan" },
+      ])
+    ).toEqual({ before: "Plan", after: "Launch plan" });
+    expect(
+      resolvePatchTitle("Plan", [
+        { op: "append", body: "x" },
+        { op: "set_title", title: "Plan" },
+      ])
+    ).toBeNull();
+    expect(resolvePatchTitle("Plan", [{ op: "append", body: "x" }])).toBeNull();
   });
 });

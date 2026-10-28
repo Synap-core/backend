@@ -28,8 +28,11 @@
  * An applied patch writes through `claimDocumentRevision` (the ONE content-write
  * door: compare-and-set, author-switch checkpoints, the upload), tells open
  * editors (`document:content-replaced`), re-indexes, and stores its
- * diagnostics stamped with the revision it wrote. A proposed one carries
- * `{ops, baseRevision, preview, diagnostics}`; `applyApprovedDocumentPatch`
+ * diagnostics stamped with the revision it wrote. A `set_title` op renames the
+ * document in the same transaction; a patch that ONLY renames writes the name
+ * under the same compare-and-set on the base (and on the name it renames
+ * from) and cuts no content version. A proposed one carries
+ * `{ops, baseRevision, preview, diagnostics, rename}`; `applyApprovedDocumentPatch`
  * re-renders it against the document AS IT IS AT APPROVAL and re-diagnoses.
  */
 
@@ -42,6 +45,7 @@ import {
   drizzleSql,
   claimDocumentRevision,
   emitDocumentContentReplaced,
+  DocumentRevisionConflictError,
 } from "@synap/database";
 import { storage } from "@synap/storage";
 import { emitSideEffects } from "@synap/events";
@@ -65,11 +69,15 @@ import {
   DocumentPatchOpsSchema,
   isSectionOnlyPatch,
   renderDocumentPatch,
+  resolvePatchTitle,
   type DocumentPatchOp,
+  type PatchRename,
   type PatchWriter,
   type SectionPreview,
 } from "./patch-ops.js";
 import {
+  DOCUMENT_DIAGNOSTICS_CHECKER,
+  RUN_TIME_DIAGNOSTIC_CODES,
   diagnoseDocument,
   podEmbedResolver,
   type DocumentDiagnostic,
@@ -129,11 +137,22 @@ export async function readPatchDocumentContent(
 
 // ─── Diagnostics storage ─────────────────────────────────────────────────────
 
-/** `documents.metadata.diagnostics` — what was checked, and at which revision. */
+/** `documents.metadata.diagnostics` — what was checked, at which revision, by which checker. */
 export interface StoredDocumentDiagnostics {
   revision: number;
+  /**
+   * `DOCUMENT_DIAGNOSTICS_CHECKER` when stamped. Absent on every stamp written
+   * before checkers were versioned: such a stamp is stale, never current.
+   */
+  checker?: number;
   checkedAt: string;
   items: DocumentDiagnostic[];
+}
+
+function storedStamp(metadata: unknown): StoredDocumentDiagnostics | null {
+  const d = (metadata as { diagnostics?: StoredDocumentDiagnostics } | null)
+    ?.diagnostics;
+  return d && Array.isArray(d.items) ? d : null;
 }
 
 /**
@@ -148,6 +167,7 @@ export async function storeDocumentDiagnostics(
 ): Promise<boolean> {
   const stored: StoredDocumentDiagnostics = {
     revision,
+    checker: DOCUMENT_DIAGNOSTICS_CHECKER,
     checkedAt: new Date().toISOString(),
     items,
   };
@@ -164,16 +184,41 @@ export async function storeDocumentDiagnostics(
   return rows.length > 0;
 }
 
-/** The stored diagnostics, when they describe `revision`; otherwise null (never stale ones). */
+/**
+ * The stored diagnostics, when they describe `revision` AND were judged by the
+ * current checker; otherwise null (never stale ones), so the caller re-checks.
+ * A same-revision stamp from an older checker is stale too: its text did not
+ * change, but what counts as broken did (a snapshot chart once read as missing
+ * its `profileSlug`, and kept telling agents to invent one).
+ */
 export function readStoredDiagnostics(
   metadata: unknown,
   revision: number
 ): DocumentDiagnostic[] | null {
-  const d = (metadata as { diagnostics?: StoredDocumentDiagnostics } | null)
-    ?.diagnostics;
-  return d && d.revision === revision && Array.isArray(d.items)
+  const d = storedStamp(metadata);
+  return d &&
+    d.revision === revision &&
+    d.checker === DOCUMENT_DIAGNOSTICS_CHECKER
     ? d.items
     : null;
+}
+
+const RUN_TIME_CODES: ReadonlySet<string> = new Set(RUN_TIME_DIAGNOSTIC_CODES);
+
+/**
+ * The stamp's RUN-TIME items (`RUN_TIME_DIAGNOSTIC_CODES`) when it describes
+ * `revision`, whichever checker wrote it. Content cannot re-derive them (a
+ * flow learned them while writing), so a re-check that replaces a stale stamp
+ * of the same revision adds them back; at another revision they are gone.
+ */
+export function storedRunTimeDiagnostics(
+  metadata: unknown,
+  revision: number
+): DocumentDiagnostic[] {
+  const d = storedStamp(metadata);
+  return d && d.revision === revision
+    ? d.items.filter((i) => RUN_TIME_CODES.has(i.code))
+    : [];
 }
 
 /**
@@ -227,9 +272,75 @@ export type PatchBase =
 export interface AppliedPatchWrite {
   revision: number;
   version: number;
-  versionId: string;
-  /** The version row holding the content from before this write. */
-  undoVersionId: string;
+  /** The checkpoint row cut for the new content; null for a rename-only patch. */
+  versionId: string | null;
+  /** The version row holding the content from before this write; null for a rename-only patch. */
+  undoVersionId: string | null;
+}
+
+/** The name moved after the rename was drafted: a CONFLICT, nothing written. */
+function renameConflict(rename: PatchRename): DocumentRevisionConflictError {
+  return new DocumentRevisionConflictError(
+    `This document was renamed after the edit was drafted (drafted against "${rename.before}"). Nothing was applied — reload the document and draft the edit again.`
+  );
+}
+
+/**
+ * A rename-only patch: the name moves, the content does not, so no content
+ * revision is claimed and no version row is cut. Compare-and-set on the base
+ * the writer read AND on the name they renamed from — a rename drafted against
+ * an older revision, or over a name someone changed since, is a CONFLICT and
+ * writes nothing.
+ */
+async function writeRenameOnly(args: {
+  doc: PatchDocumentRow;
+  base: PatchBase;
+  rename: PatchRename;
+}): Promise<AppliedPatchWrite> {
+  const { doc, base, rename } = args;
+  const [renamed] = await db
+    .update(documents)
+    .set({ title: rename.after, updatedAt: new Date() })
+    .where(
+      and(
+        eq(documents.id, doc.id),
+        eq(documents.title, rename.before),
+        base.revision !== undefined
+          ? eq(documents.contentRevision, base.revision)
+          : eq(documents.currentVersion, base.version)
+      )
+    )
+    .returning({
+      contentRevision: documents.contentRevision,
+      currentVersion: documents.currentVersion,
+      workspaceId: documents.workspaceId,
+    });
+  if (!renamed) {
+    const [now] = await db
+      .select({ title: documents.title })
+      .from(documents)
+      .where(eq(documents.id, doc.id))
+      .limit(1);
+    if (now && now.title !== rename.before) throw renameConflict(rename);
+    throw new DocumentRevisionConflictError(
+      "This document changed after the rename was drafted. Nothing was applied — reload the document and draft it again."
+    );
+  }
+  // Re-index under the new name.
+  void emitSideEffects({
+    subjectType: "document",
+    action: "update",
+    subjectId: doc.id,
+    userId: doc.userId,
+    workspaceId: renamed.workspaceId,
+    data: { id: doc.id, title: rename.after },
+  });
+  return {
+    revision: renamed.contentRevision,
+    version: renamed.currentVersion,
+    versionId: null,
+    undoVersionId: null,
+  };
 }
 
 async function writePatch(args: {
@@ -240,10 +351,26 @@ async function writePatch(args: {
   author: { kind: "ai" | "system" | "user"; id: string };
   message: string;
   diagnostics: DiagnosticsOutcome;
+  rename: PatchRename | null;
 }): Promise<AppliedPatchWrite> {
-  const { doc, base, baseContent, newContent, author, message } = args;
-  const claimed = await db.transaction((tx) =>
-    claimDocumentRevision(
+  const { doc, base, baseContent, newContent, author, message, rename } = args;
+  if (rename && newContent === baseContent) {
+    return writeRenameOnly({ doc, base, rename });
+  }
+  const claimed = await db.transaction(async (tx) => {
+    // The name first: compare-and-set on the name renamed from (row-locking
+    // it), so a refusal lands BEFORE the claim uploads any content.
+    if (rename) {
+      const [renamed] = await tx
+        .update(documents)
+        .set({ title: rename.after })
+        .where(
+          and(eq(documents.id, doc.id), eq(documents.title, rename.before))
+        )
+        .returning({ id: documents.id });
+      if (!renamed) throw renameConflict(rename);
+    }
+    return claimDocumentRevision(
       tx,
       doc.id,
       base.revision,
@@ -255,8 +382,8 @@ async function writePatch(args: {
         mimeType: doc.mimeType || "text/markdown",
         checkpoint: { message },
       }
-    )
-  );
+    );
+  });
   // A checkpointed claim always cuts (or reuses) the pre-image and cuts the
   // new row; their absence would be a broken door, not an empty result.
   if (!claimed.checkpointVersionId || !claimed.undoVersionId) {
@@ -297,7 +424,7 @@ async function writePatch(args: {
     subjectId: doc.id,
     userId: doc.userId,
     workspaceId: claimed.workspaceId,
-    data: { id: doc.id, title: doc.title },
+    data: { id: doc.id, title: rename?.after ?? doc.title },
   });
   return {
     revision: claimed.revision,
@@ -355,6 +482,8 @@ export interface ApplyDocumentPatchInput {
 
 interface PatchResultCommon {
   documentId: string;
+  /** The document's name before and after, when the patch renames it (`set_title`). */
+  rename?: PatchRename;
   /** What changed, per section — the same preview a reviewer sees. */
   preview: SectionPreview[];
   /** Advisory: what will not render. Never a refusal. `null` = could not be checked. */
@@ -370,7 +499,8 @@ export type ApplyDocumentPatchResult =
       version: number;
       /** Section ids an `upsert_section` replaced in place (vs appended). */
       replacedSections: string[];
-      undo: { documentId: string; versionId: string };
+      /** The content before this write. Absent when the patch only renamed the document. */
+      undo?: { documentId: string; versionId: string };
       autoApprovedProposalId?: string;
     })
   | (PatchResultCommon & {
@@ -396,6 +526,8 @@ export interface DocumentPatchProposalData {
   diagnostics: DocumentDiagnostic[] | null;
   diagnosticsError?: string;
   allowRemovingEmbeds: boolean;
+  /** The rename the ops make (`set_title`), as drafted — what a reviewer is shown. */
+  rename?: PatchRename;
   /** Section stamps: the author written onto sections, and the session state. */
   author: string;
   sessionState?: string;
@@ -468,7 +600,10 @@ export async function applyDocumentPatch(
     await loadEditableDocument(input.userId, input.documentId);
   }
   const doc = await loadPatchDocument(input.documentId);
-  const ops = withoutTitleHeading(parsedOps, doc.title);
+  // The name the document will carry, so the one-title rule strips a heading
+  // equal to the NEW name when a patch renames and rewrites together.
+  const rename = resolvePatchTitle(doc.title, parsedOps);
+  const ops = withoutTitleHeading(parsedOps, rename?.after ?? doc.title);
 
   // 2. The base the writer read.
   const hasReplaceAll = ops.some((op) => op.op === "replace_all");
@@ -537,6 +672,7 @@ export async function applyDocumentPatch(
     preview: rendered.previews,
     ...diagnosticsFields(diagnostics),
     allowRemovingEmbeds: input.allowRemovingEmbeds === true,
+    ...(rename ? { rename } : {}),
     author: writer.author,
     ...(writer.sessionState ? { sessionState: writer.sessionState } : {}),
     ...(systemAuthor ? { systemAuthor } : {}),
@@ -580,6 +716,7 @@ export async function applyDocumentPatch(
       reviewPath: perm.reviewPath,
       reviewUrl: perm.reviewUrl,
       ...(perm.deduped ? { deduped: true } : {}),
+      ...(rename ? { rename } : {}),
       preview: rendered.previews,
       ...diagnosticsFields(diagnostics),
     };
@@ -597,6 +734,7 @@ export async function applyDocumentPatch(
         : { kind: "user", id: input.userId },
     message: checkpointMessage(ops, false),
     diagnostics,
+    rename,
   });
   return {
     status: "applied",
@@ -604,7 +742,10 @@ export async function applyDocumentPatch(
     revision: applied.revision,
     version: applied.version,
     replacedSections: rendered.replacedSections,
-    undo: { documentId: doc.id, versionId: applied.undoVersionId },
+    ...(applied.undoVersionId
+      ? { undo: { documentId: doc.id, versionId: applied.undoVersionId } }
+      : {}),
+    ...(rename ? { rename } : {}),
     preview: rendered.previews,
     ...diagnosticsFields(diagnostics),
     ...("autoApprovedProposalId" in perm && perm.autoApprovedProposalId
@@ -635,6 +776,7 @@ export async function suggestDocumentPatch(input: {
   const ops = parseOps(input.ops);
   await loadEditableDocument(input.userId, input.documentId);
   const doc = await loadPatchDocument(input.documentId);
+  const rename = resolvePatchTitle(doc.title, ops);
   const baseRevision = input.baseRevision ?? doc.contentRevision;
   assertDocumentBaseRevision(baseRevision, doc.contentRevision);
   const writer = writerOf({
@@ -660,6 +802,7 @@ export async function suggestDocumentPatch(input: {
     preview: rendered.previews,
     ...diagnosticsFields(diagnostics),
     allowRemovingEmbeds: false,
+    ...(rename ? { rename } : {}),
     author: writer.author,
   };
   const { proposal } = await createEventBackedProposal({
@@ -781,6 +924,14 @@ export async function applyApprovedDocumentPatch(
   }
 
   const doc = await loadPatchDocument(proposal.targetId);
+  // The rename as DRAFTED (what the reviewer approved): the write compares
+  // its `before` with the name as it is now, so a name changed since is a
+  // CONFLICT, never silently overwritten.
+  const drafted = inner.rename as Partial<PatchRename> | undefined;
+  const rename = resolvePatchTitle(
+    typeof drafted?.before === "string" ? drafted.before : doc.title,
+    ops
+  );
   const base: PatchBase =
     baseRevision !== undefined
       ? { revision: baseRevision }
@@ -825,6 +976,7 @@ export async function applyApprovedDocumentPatch(
         : { kind: "user", id: humanAuthor },
     message: checkpointMessage(ops, true),
     diagnostics,
+    rename,
   });
   return { ...applied, documentId: doc.id, diagnostics };
 }

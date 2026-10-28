@@ -27,3 +27,4 @@ export * from "./chart-shapers.js";
 export * from "./fences.js";
 export * from "./embed-model.js";
 export * from "./chart-geometry.js";
+export * from "./html-page-source.js";

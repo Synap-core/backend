@@ -29,6 +29,7 @@ import {
   ExitFallback,
   PlacedFallback,
   rowHref,
+  useAppOpenAttempt,
   usePlacedExit,
 } from "../../../lib/exit-link";
 import { kindIcon } from "../../_lib/object/kind-icon";
@@ -338,6 +339,7 @@ function DoorButton({
   children: ReactNode;
 }) {
   const placed = usePlacedExit(exit);
+  const open = useAppOpenAttempt(placed);
   const href = rowHref(placed);
   // HeroUI types `ref` for the button it renders by default; with `as="a"`
   // the node is an anchor, so a callback ref takes it as an HTMLElement.
@@ -347,19 +349,23 @@ function DoorButton({
   }, [focus]);
   if (href === null) return <PlacedFallback placed={placed} />;
   return (
-    <Button
-      as="a"
-      ref={(node: HTMLElement | null) => {
-        ref.current = node;
-      }}
-      href={href}
-      data-review-next={marker}
-      color="primary"
-      variant="flat"
-      className="min-h-10 max-w-full justify-start self-start"
-      endContent={<ArrowRight aria-hidden size={16} />}
-    >
-      <span className="truncate">{children}</span>
-    </Button>
+    <>
+      <Button
+        as="a"
+        ref={(node: HTMLElement | null) => {
+          ref.current = node;
+        }}
+        href={href}
+        onPress={open.onOpen}
+        data-review-next={marker}
+        color="primary"
+        variant="flat"
+        className="min-h-10 max-w-full justify-start self-start"
+        endContent={<ArrowRight aria-hidden size={16} />}
+      >
+        <span className="truncate">{children}</span>
+      </Button>
+      {open.offer}
+    </>
   );
 }

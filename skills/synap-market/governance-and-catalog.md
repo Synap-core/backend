@@ -60,4 +60,4 @@ wired at every install site). The browser UI is **display-only**: it threads
 `requiredTier` through to a "requires <tier>" badge but does NOT hard-block, and
 its lock/upgrade CTA only engages once a host wires a billing destination — so
 don't add a UI-side gate expecting it to enforce anything, and don't rebuild the
-badge thread (it exists). Full current-state: repo `TEMPLATE-DEV-GUIDE.md`.
+badge thread (it exists). Full current-state: the catalog README (`synap-app/packages/workspace-templates/README.md`).

@@ -364,7 +364,7 @@ app.get("/health", async (c) => {
     //
     // DO NOT gate a deploy check on this field: it is not derived from the
     // running build, so it looks identical whether or not a deploy landed.
-    apiTypesVersion: "1.32.0",
+    apiTypesVersion: "1.33.1",
     mode: "multi-user",
     auth: "ory-stack",
     // Git SHA the running image was built from (see deploy/Dockerfile ARG
@@ -1870,6 +1870,8 @@ try {
               await import("@synap/jobs/workers/entity-media-copy-worker.js");
             const { registerDevLoopRunner } =
               await import("@synap/jobs/workers/dev-loop-worker.js");
+            const { registerObservationDoor } =
+              await import("@synap/jobs/utils/observation-door.js");
             const { registerEventSyncRunner } =
               await import("@synap/jobs/workers/event-sync-cron.js");
             const { registerConnectionSyncRunner } =
@@ -1979,6 +1981,13 @@ try {
             // pod acts on (`dev.pr_merged`); the api-side runner moves the
             // sessions it is about (the merge sweeper).
             registerDevLoopRunner((input) => api.runDevLoopObservation(input));
+            // ONE observation writer: an automation's `record_observation`
+            // step records an outside fact (a GitHub webhook read into
+            // `dev.pr_merged`) through the observation door's own checks.
+            // Fail-closed: unregistered, the step throws.
+            registerObservationDoor((input) =>
+              api.recordObservationFromAutomation(input)
+            );
             // The Discord mirror pass. Google Calendar events reach it as Synap
             // `event` entities landed by the connection sync — never straight
             // to Discord.
@@ -2184,6 +2193,23 @@ void startupHooksSettled
     apiLogger.warn(
       { err },
       "Document title backfill failed (non-fatal; resumes next boot)"
+    )
+  );
+
+// Decision asks NOBODY ASKED: open asks the old reactor raised on a person's
+// own proposed decision retire `not_asked`, and the Decide sessions it opened
+// for them close through the one close door. Runs ONCE (a pod_settings
+// marker, written only after a pass with no failure); later boots return at
+// the marker. Off the boot path.
+void startupHooksSettled
+  .then(async () => {
+    const { retireUnaskedDecisionAsks } = await import("@synap/api");
+    await retireUnaskedDecisionAsks();
+  })
+  .catch((err) =>
+    apiLogger.warn(
+      { err },
+      "Retiring unasked decision asks failed (non-fatal; resumes next boot)"
     )
   );
 

@@ -17,6 +17,7 @@ vi.mock("@synap/database", () => ({
   and: vi.fn(),
   desc: vi.fn(),
   isNull: vi.fn(),
+  ne: vi.fn(),
   ProposalStatus: {
     PENDING: "pending",
     APPROVED: "approved",

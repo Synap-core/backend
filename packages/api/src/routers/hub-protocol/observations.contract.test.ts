@@ -718,3 +718,75 @@ describe("observations.append — exactly-once survives a re-posted fact", () =>
     expect(appended[0].data.ingestedAt).toBeDefined();
   });
 });
+
+describe("observations.append — dev.repo_snapshot (the Work › Ship fact)", () => {
+  const snapshot = {
+    repo: "Synap-core/backend",
+    observedAt: "2026-10-27T21:00:00.000Z",
+    visibility: "public",
+    main: {
+      sha: "abc1234",
+      health: "red",
+      source: "github-checks",
+      fixedBy: { repo: "Synap-core/backend", number: 363 },
+    },
+    prs: [
+      {
+        number: 363,
+        title: "main typecheck fix",
+        url: "https://github.com/Synap-core/backend/pull/363",
+        headSha: "def5678",
+        draft: false,
+        author: "Antoinesrvt",
+        updatedAt: "2026-10-27T20:30:00Z",
+        mergeable: "blocked",
+        checks: "queued",
+        autoMerge: true,
+      },
+    ],
+    mergedToday: [],
+  };
+
+  it("RECORDS a valid snapshot and REFUSES a malformed one, per item", async () => {
+    appended.length = 0;
+    triggerSends.length = 0;
+    const res = await callAppend([
+      {
+        type: "dev.repo_snapshot",
+        subjectId: "Synap-core/backend",
+        data: {
+          ...snapshot,
+          // a PR of ANOTHER repo filed under this one: the fold would draw it
+          // in the wrong lane.
+          prs: [
+            {
+              ...snapshot.prs[0],
+              url: "https://github.com/Synap-core/browser/pull/363",
+            },
+          ],
+        },
+      },
+      {
+        type: "dev.repo_snapshot",
+        subjectId: "Synap-core/backend",
+        data: snapshot,
+      },
+    ]);
+    expect(res.results[0]).toMatchObject({ ok: false, index: 0 });
+    expect(res.results[0].error).toMatch(/dev\.repo_snapshot: prs\.0\.url/);
+    expect(res.results[1]).toMatchObject({ ok: true, index: 1 });
+    expect(appended).toHaveLength(1);
+    expect(appended[0].type).toBe("dev.repo_snapshot");
+    expect(appended[0].data.main.fixedBy).toEqual({
+      repo: "Synap-core/backend",
+      number: 363,
+    });
+    // A snapshot fires automations, and moves no session by itself.
+    expect(triggerSends.some(([q]) => q === "automation-trigger-match")).toBe(
+      true
+    );
+    expect(triggerSends.some(([q]) => q === "dev-loop-observation")).toBe(
+      false
+    );
+  });
+});

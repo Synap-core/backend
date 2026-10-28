@@ -40,6 +40,18 @@ vi.mock("../../decisions/decision-entity-door.js", () => ({
   ) => {
     if (h.failCreate) throw new Error("entity door down");
     h.creates.push({ scope, input });
+    // The row the real door writes: a later answer reads it back.
+    await h.client!.query(
+      `insert into entities (id, user_id, type, title, properties, created_at, updated_at)
+       values ($1, $2, 'decision', $3, $4::jsonb, now(), now())
+       on conflict (id) do update set properties = excluded.properties`,
+      [
+        "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        scope.userId,
+        input.title,
+        JSON.stringify(input.properties),
+      ]
+    );
     return "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
   },
   updateDecisionEntity: async (
@@ -66,7 +78,10 @@ vi.mock("@synap/database", async (importOriginal) => {
   return {
     ...actual,
     db: drizzle(client, {
-      schema: { focusSessions: actual.focusSessions as never },
+      schema: {
+        focusSessions: actual.focusSessions as never,
+        entities: actual.entities as never,
+      },
     }),
     eventRepository: { append: async () => undefined },
   };
@@ -101,7 +116,7 @@ vi.mock("../assert-output-ref-visible.js", () => ({
 }));
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
-import { focusSessions } from "@synap/database";
+import { entities, focusSessions } from "@synap/database";
 import { answerExpectedOutput } from "../answer-slot.js";
 import { stampBlocked } from "../block-output.js";
 
@@ -170,7 +185,9 @@ const pick = (sessionId: string, value: string, label: string) =>
 
 describe("answer → decision (W2)", () => {
   beforeAll(async () => {
-    await h.client!.exec(ddlFor(focusSessions as unknown as PgTable));
+    for (const t of [focusSessions, entities]) {
+      await h.client!.exec(ddlFor(t as unknown as PgTable));
+    }
   }, 120_000);
   afterAll(async () => h.client?.close());
   beforeEach(() => {
@@ -240,6 +257,8 @@ describe("answer → decision (W2)", () => {
     expect(h.updates[0]!.properties).toMatchObject({
       chosenOption: "eu",
       followedRecommendation: true,
+      // The summary the FIRST answer wrote is revised; nobody else's words.
+      summary: "EU account",
     });
     expect((r as { decision?: unknown }).decision).toEqual({
       status: "updated",

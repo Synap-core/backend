@@ -5,6 +5,7 @@
 
 // Export PostgreSQL clients
 export { sql, db, getDb } from "./client-pg.js";
+export { withAdvisoryLock } from "./advisory-lock.js";
 
 // Export RLS functions
 export {
@@ -79,6 +80,7 @@ export * from "./utils/emit-message-event.js";
 export * from "./utils/open-run-session.js";
 export * from "./utils/owed-slot-predicate.js";
 export * from "./utils/open-room-question.js";
+export * from "./utils/awaited-gate-wait.js";
 export * from "./utils/live-run-status.js";
 export * from "./utils/worker-enablement.js";
 export * from "./utils/worker-target-result.js";
@@ -106,6 +108,7 @@ export * from "./utils/agent-turn-overrides.js";
 export * from "./utils/workspace-client-projection.js";
 export * from "./utils/workspace-identity.js";
 export * from "./utils/pg-errors.js";
+export * from "./utils/webhook-source-declaration.js";
 export * from "./utils/backfill-governance-rules.js";
 export * from "./utils/floor-covered-actions.js";
 export * from "./utils/governance-rule-provenance.js";

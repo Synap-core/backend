@@ -2166,7 +2166,7 @@ describe("checkPermissionOrPropose — anonymous principal routed through decide
   // ── rung 2.56 DAILY WRITE CEILING — DELIBERATELY DEFERRED ───────────────
 
   it("rung 2.56 does NOT fire for the anonymous principal — no write count is taken and the write still auto-executes", async () => {
-    // PINNED ON PURPOSE. `DEFAULT_DAILY_WRITE_CEILING` is 500 and one bulk
+    // PINNED ON PURPOSE. A stored daily ceiling is a finite limit and one bulk
     // capture auto-approves ~1,600 `entity.create` rows, so adopting this rung
     // here would silently start queueing proposals mid-capture. The ceiling is
     // also keyed on an AGENT ID, which does not exist on this path.
@@ -2548,8 +2548,7 @@ describe("checkPermissionOrPropose — human-proposer (insufficient-role member)
 // Tests: agentProposalCap — direct unit tests (not via checkPermissionOrPropose)
 //
 // Locks the branch logic in isolation: given the RECENT-WINDOW rows the query
-// returns (ordered by createdAt desc, capped at CAP_TRUST_WINDOW — the same
-// window agent-scorecard.ts's SCORECARD_SCAN_LIMIT scans), does the trust
+// returns (ordered by createdAt desc, capped at CAP_TRUST_WINDOW), does the trust
 // threshold (>=100 in-window, >=95% in-window approve rate) correctly gate the
 // 3x (30 pending) ceiling vs the flat 10-pending base cap.
 //
@@ -2557,9 +2556,9 @@ describe("checkPermissionOrPropose — human-proposer (insufficient-role member)
 // silently disagree with the scorecard's displayed recent-500 approve rate
 // (dogfood context: `diagnose type:agent` showed a scorecard approveRate of
 // 0.974 sampled over the recent 500 but a dailyCap of 10, not 30 — the two
-// numbers looked contradictory to a reviewer). Scoring the SAME window as the
-// scorecard makes trust earnable back / lost on recent conduct, and the two
-// numbers can no longer visibly disagree.
+// numbers looked contradictory to a reviewer). A recent window makes trust
+// earnable back / lost on recent conduct. (The scorecard itself now counts its
+// last 7 days, not the newest 500: see CAP_TRUST_WINDOW.)
 // ---------------------------------------------------------------------------
 
 describe("agentProposalCap", () => {

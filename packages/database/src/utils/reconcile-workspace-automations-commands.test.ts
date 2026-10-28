@@ -24,6 +24,8 @@ type Row = Record<string, unknown> | undefined;
 let existingAutomation: Row = undefined;
 let existingCommandTitles: string[] = [];
 let existingRelationDefSlugs: string[] = [];
+/** The space's inbound webhook sources the binder's lookup returns. */
+let inboundSources: Array<Record<string, unknown>> = [];
 const captured: {
   inserts: Array<Record<string, unknown>>;
   updates: Array<Record<string, unknown>>;
@@ -45,6 +47,10 @@ vi.mock("../client-pg.js", () => {
       },
       views: { findMany: async () => [] },
     },
+    // The webhook source binder's lookup (webhook-source-declaration.ts).
+    select: () => ({
+      from: () => ({ where: () => ({ limit: async () => inboundSources }) }),
+    }),
     // `.values(v)` is awaited directly by the automations/commands steps AND
     // chained with `.returning()` by RelationDefRepository — support both: a
     // thenable that also carries a `.returning()` method.
@@ -128,6 +134,7 @@ beforeEach(() => {
   existingAutomation = undefined;
   existingCommandTitles = [];
   existingRelationDefSlugs = [];
+  inboundSources = [];
   captured.inserts = [];
   captured.updates = [];
 });
@@ -226,6 +233,54 @@ describe("reconcile: automations (version-aware)", () => {
   it("the seed hash changes when the flow (or description) changes", () => {
     const other = { ...AUTO, description: "a different description" };
     expect(seedHashOf(other)).not.toBe(seedHashOf(AUTO));
+  });
+});
+
+// ── 0362: a template's automation declaring an inbound webhook source ────────
+// binds like the API's automation insert door does (webhook-source-
+// declaration.ts): to the space's source of that name when a person created
+// one, never creating one; a malformed declaration is refused and reported.
+describe("reconcile: a declared inbound webhook source binds at install", () => {
+  const SOURCE_ID = "5a5a5a5a-5a5a-4a5a-8a5a-5a5a5a5a5a5a";
+  const HOOK = {
+    ...AUTO,
+    name: "Record GitHub PRs",
+    triggerType: "webhook" as const,
+    triggerConfig: { webhookSource: { name: "GitHub" } },
+  };
+
+  it("the space has the source → inserted bound to it, the declaration kept", async () => {
+    inboundSources = [{ id: SOURCE_ID, name: "GitHub", workspaceId: "ws-1" }];
+    const report = await runWith({ flowAutomations: [HOOK] });
+    expect(report.automations.created).toEqual(["Record GitHub PRs"]);
+    expect(captured.inserts[0]!.triggerConfig).toEqual({
+      webhookSource: { name: "GitHub" },
+      webhookSubscriptionId: SOURCE_ID,
+    });
+  });
+
+  it("no such source yet → inserted as declared (a person creating it binds it then)", async () => {
+    const report = await runWith({ flowAutomations: [HOOK] });
+    expect(report.automations.created).toEqual(["Record GitHub PRs"]);
+    expect(captured.inserts[0]!.triggerConfig).toEqual({
+      webhookSource: { name: "GitHub" },
+    });
+  });
+
+  it("a malformed declaration is refused and reported, never inserted", async () => {
+    const report = await runWith({
+      flowAutomations: [
+        { ...HOOK, triggerConfig: { webhookSource: { name: "" } } },
+      ],
+    });
+    expect(captured.inserts).toHaveLength(0);
+    expect(report.automations.created).toEqual([]);
+    expect(report.automations.rejected).toEqual([
+      {
+        name: "Record GitHub PRs",
+        error: expect.stringMatching(/webhookSource must be/),
+      },
+    ]);
   });
 });
 

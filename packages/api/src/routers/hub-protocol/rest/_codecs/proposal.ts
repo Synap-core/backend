@@ -13,6 +13,8 @@ import {
   proposalClassFields,
 } from "../../../../services/proposals/proposal-class.js";
 import { projectProposalRowForViewer } from "../../../proposals/failure-projection.js";
+import { proposalFateFields } from "../../../../services/proposals/proposal-fate.js";
+import { PROPOSAL_WAIT_REASONS } from "@synap-core/types/proposals/fate";
 import { uuidQueryParam } from "./_openapi.js";
 
 /**
@@ -101,6 +103,43 @@ const proposalClassShape = {
       "Hours this proposal stays answerable once its context is gone. " +
         "`null` for every class that never expires; only `ephemeral` has one."
     ),
+} as const;
+
+/**
+ * FATE on silence + who WAITS on it — the context card's
+ * "If you ignore it" and "Waiting on it" lines. `fate` is DERIVED here, on
+ * every pending row (`proposalFateFields`); `waits` needs two reads, so it is
+ * FORWARDED from the list door that resolves it (`resolveProposalWaits`), the
+ * way `setup` is. Both optional: absent `fate` = not pending; absent `waits` =
+ * this door did not resolve it, never "nothing waits".
+ */
+export const ProposalFateSchema = z
+  .discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("expires"),
+      expiresAt: z.string(),
+      orSessionEnd: z.boolean(),
+    }),
+    z.object({ kind: z.literal("dies_with_session") }),
+    z.object({ kind: z.literal("until_decided") }),
+    z.object({ kind: z.literal("review_later"), since: z.string() }),
+  ])
+  .openapi("ProposalFate");
+
+export const ProposalWaitsSchema = z
+  .object({
+    waits: z.boolean(),
+    reason: z.enum(PROPOSAL_WAIT_REASONS).optional(),
+  })
+  .openapi("ProposalWaits");
+
+const proposalFateShape = {
+  fate: ProposalFateSchema.optional().describe(
+    "What happens if nobody decides — pending rows only."
+  ),
+  waits: ProposalWaitsSchema.optional().describe(
+    "Whether an agent waits on this decision, and why (gate / owed_slot / parked_run)."
+  ),
 } as const;
 
 /**
@@ -209,7 +248,11 @@ const proposalSetupShape = {
  */
 export function withProposalClass<T extends Record<string, unknown>>(
   row: T
-): T & { class: string; lifetimeHours: number | null } {
+): T & {
+  class: string;
+  lifetimeHours: number | null;
+  fate?: z.infer<typeof ProposalFateSchema>;
+} {
   return {
     // AGENT-ONLY FAILURE FIELDS are stripped HERE, at the producer every
     // `view=full` door passes its rows through — `data.failure.detail` is the
@@ -221,7 +264,22 @@ export function withProposalClass<T extends Record<string, unknown>>(
       String(row.targetType ?? ""),
       capabilityRunVerbId(row.data)
     ),
+    ...fateOf(row),
   };
+}
+
+/** `fate` off a raw row — pending only, and only when the row says when it was born. */
+function fateOf(row: Record<string, unknown>) {
+  const createdAt = row.createdAt;
+  if (!(createdAt instanceof Date) && typeof createdAt !== "string") return {};
+  return proposalFateFields({
+    proposalType: String(row.proposalType ?? ""),
+    targetType: String(row.targetType ?? ""),
+    data: row.data,
+    createdAt,
+    sessionId: (row.sessionId ?? null) as string | null,
+    status: (row.status ?? null) as string | null,
+  });
 }
 
 /** Wire shape of a proposal row. */
@@ -246,6 +304,7 @@ export const WireProposalSchema = z
     sessionId: z.string().nullable().optional(),
     ...proposalClassShape,
     ...proposalSetupShape,
+    ...proposalFateShape,
   })
   .openapi("Proposal");
 
@@ -329,6 +388,7 @@ export const ProposalBasicSchema = z
     // only learn it after fetching the full payload cannot triage a queue — and
     // the MCP list is exactly the door that cannot afford the full payload.
     ...proposalSetupShape,
+    ...proposalFateShape,
   })
   .openapi("ProposalBasic");
 
@@ -434,6 +494,10 @@ export function toProposalBasic(row: Record<string, unknown>): ProposalBasic {
     // is fine, provided the door actually forwards it — which is what the
     // `proposal-setup-reaches-read-doors` tripwire drives end to end.
     ...(row.setup ? { setup: row.setup as ProposalBasic["setup"] } : {}),
+    ...fateOf(row),
+    // FORWARDED like `setup`: produced by `resolveProposalWaits` at the list
+    // door that feeds this projection.
+    ...(row.waits ? { waits: row.waits as ProposalBasic["waits"] } : {}),
   };
 }
 

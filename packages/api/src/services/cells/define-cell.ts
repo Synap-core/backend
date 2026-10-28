@@ -8,7 +8,15 @@
  * widget_definition change so connected browsers refresh live.
  */
 
-import { getDb, and, eq, isNull, getActingAgentUserId } from "@synap/database";
+import {
+  getDb,
+  and,
+  eq,
+  isNull,
+  getActingAgentUserId,
+  drizzleSql,
+} from "@synap/database";
+import { isHtmlPageSource } from "@synap-core/types/renderables";
 import { execFieldsChanged } from "../capabilities/skill-exec-fields.js";
 import { widgetDefinitions } from "@synap/database/schema";
 import type { ContentKind } from "@synap/database/schema";
@@ -64,8 +72,12 @@ export interface DefineCellInput {
   defaultSize?: { w: number; h: number };
   deps?: Record<string, string>;
   /**
-   * Rendering MECHANISM. Defaults to `"frame"` — the sandboxed React cell every
-   * agent/package door writes.
+   * Rendering MECHANISM. Omitted ⇒ DERIVED from the source being written:
+   * `"iframe"` when it is an HTML page (`isHtmlPageSource`,
+   * `@synap-core/types/renderables`), else `"frame"` — the sandboxed ES-module
+   * React cell. No agent door names a mechanism (MCP `synap_create_cell`, Hub
+   * `POST /cells/define`, a package without one), and an HTML page stored as
+   * `frame` is run as a module and fails (document 6aa8d140, 2026-10-28).
    *
    * An EXPLICIT parameter rather than a hardcode because the Cell Studio door
    * (tRPC `widgetDefinitions.upsert`, which now delegates here) legitimately
@@ -78,8 +90,12 @@ export interface DefineCellInput {
    * NATIVE_RENDERER_REJECTED; leaving it out of this union means no delegating
    * door can smuggle it past them. DO-NOT-REVIVE-AS-IS.
    *
-   * Same omit-is-silence rule as `viewTypes`: undefined on an upsert of an
-   * EXISTING row leaves the stored mechanism untouched.
+   * On an upsert of an EXISTING row, omitted is silence EXCEPT between the two
+   * mechanisms that describe a source: a stored `frame` or `iframe` row is
+   * re-derived from the source this call writes (the mechanism describes the
+   * source, so a re-push of a page onto a `frame` row makes it `iframe` and a
+   * module onto an `iframe` row makes it `frame`). A stored `builtin` /
+   * `mcp-app` row keeps its mechanism, and an explicit value always wins.
    */
   rendererType?: "builtin" | "iframe" | "frame" | "mcp-app";
   /**
@@ -337,14 +353,22 @@ export async function defineCell(
   const versionUpdate =
     input.version === undefined ? {} : { version: input.version };
 
+  // The mechanism this source calls for, when the caller names none.
+  const derivedRendererType = isHtmlPageSource(input.rendererSource)
+    ? ("iframe" as const)
+    : ("frame" as const);
+
   // The fields that used to be HARDCODED here and were the reason a second
   // write door existed. Each is now an explicit parameter carrying its own
   // omit-is-silence rule, so the doors' genuinely-different INTENT survives the
   // consolidation instead of being flattened into one wrong value.
   const presentationUpdate = {
-    ...(input.rendererType === undefined
-      ? {}
-      : { rendererType: input.rendererType }),
+    // Omitted ⇒ re-derive between frame and iframe only, in the same statement
+    // as the write (no read-then-write race); `builtin` / `mcp-app` rows keep
+    // their mechanism. See `DefineCellInput.rendererType`.
+    rendererType:
+      input.rendererType ??
+      drizzleSql<string>`CASE WHEN ${widgetDefinitions.rendererType} IN ('frame', 'iframe') THEN ${derivedRendererType}::text ELSE ${widgetDefinitions.rendererType} END`,
     ...(input.category === undefined ? {} : { category: input.category }),
     ...(input.icon === undefined ? {} : { icon: input.icon }),
     ...(input.configSchema === undefined
@@ -406,10 +430,11 @@ export async function defineCell(
     workspaceId,
     name: input.name,
     description: input.description ?? null,
-    // INSERT defaults preserve exactly what this door hardcoded before it
-    // became the only door — see `DefineCellInput.category` / `.rendererType`.
+    // INSERT defaults: `category` is what this door hardcoded before it became
+    // the only door; `rendererType` is derived from the source — see
+    // `DefineCellInput.category` / `.rendererType`.
     category: input.category ?? "installed",
-    rendererType: input.rendererType ?? "frame",
+    rendererType: input.rendererType ?? derivedRendererType,
     icon: input.icon ?? null,
     rendererSource: input.rendererSource,
     deps: (input.deps ?? {}) as Record<string, string>,

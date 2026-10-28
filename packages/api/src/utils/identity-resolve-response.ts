@@ -43,12 +43,15 @@ export async function buildIdentityResolveResponse(
   entityKind?: string;
   candidates: Array<{ entityId: string; title: string | null; kind: string }>;
   /**
-   * Same-title entities of a DIFFERENT kind (e.g. a `question` and a `research`
-   * sharing a title). ADVISORY ONLY — `match` stays "none" because title
-   * similarity must never auto-merge; strong signals (email/phone/url) remain
-   * the only automatic path. Present so a caller stops treating "none" as
-   * "safe to create" and can propose a LINK instead of minting a duplicate.
-   * A subset of `candidates`, so it inherits the same caller-scoping.
+   * Entities of a DIFFERENT kind that look like the same subject: the same
+   * title (a `question` and a `research` sharing one), or one of the strong
+   * signals (a company owning the website a person carries — a strong match
+   * never crosses kinds). ADVISORY ONLY — title similarity must never
+   * auto-merge, and strong signals (email/phone/url) merge only within the
+   * requested kind. Present so a caller stops treating "none" as "safe to
+   * create" and can propose a LINK instead of minting a duplicate. Both
+   * sources are floored by the resolver's `userScope`, so they carry the same
+   * caller-scoping as `candidates`.
    */
   crossKindCandidates: Array<{
     entityId: string;

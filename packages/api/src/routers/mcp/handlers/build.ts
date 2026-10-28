@@ -945,6 +945,7 @@ export const buildHandlers: McpHandlerMap = {
       reasoning: args.reasoning as string | undefined,
       projectId: trimmed(args.projectId),
       trackId: trimmed(args.trackId),
+      handToAgentId: trimmed(args.handToAgentId),
       source: "mcp",
     });
     return renderPlaybookDoorOutcome(outcome, userId);
@@ -1085,6 +1086,27 @@ export const buildHandlers: McpHandlerMap = {
       ...(executionMode === "box" ? { metadata: { box: box ?? {} } } : {}),
       agentUserId: agentUserId ?? undefined,
     });
+    // Created but switched off, with a "turn this on?" request filed for the
+    // person (a rule granted the create; no person reviewed it): say so in
+    // words, never a bare `created` the agent reads as "it runs".
+    if (result.status === "created" && result.turnOnRequest) {
+      const { turnOnRequest, ...created } = result;
+      const { turnOnRequestMessage } =
+        await import("../../../services/capabilities/request-skill-turn-on.js");
+      return ok({
+        ...created,
+        waitingFor: "person",
+        ...(turnOnRequest.status === "proposed"
+          ? {
+              turnOnRequest: {
+                proposalId: turnOnRequest.proposalId,
+                reviewUrl: turnOnRequest.reviewUrl,
+              },
+            }
+          : {}),
+        message: turnOnRequestMessage(args.name.trim(), turnOnRequest),
+      });
+    }
     return ok(result);
   },
   synap_update_skill: async (ctx: McpToolContext): Promise<CallToolResult> => {

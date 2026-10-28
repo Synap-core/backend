@@ -176,6 +176,11 @@ export const VaultRequestRequestSchema = z
       .number()
       .optional()
       .describe("Minutes the grant lives. Defaults to 60."),
+    secretId: uuidQueryParam
+      .optional()
+      .describe(
+        "The saved secret to grant, when the agent knows it (the id in its vault:// reference). Omitted: the person's one secret matching service and secretType."
+      ),
   })
   .openapi("VaultRequestRequest");
 

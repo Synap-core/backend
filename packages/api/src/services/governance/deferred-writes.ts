@@ -82,10 +82,18 @@ function defined<T extends Record<string, unknown>>(o: T): Partial<T> {
 const str = (v: unknown): string | undefined =>
   typeof v === "string" ? v : undefined;
 
-/** The hub caller context the agent's own doors run under. */
-function agentCallerContext(w: DeferredWrite, workspaceId: string | null) {
+/**
+ * The hub caller context the agent's own doors run under. `personId` is the
+ * person the agent wrote for: a door that owns its row by `ctx.userId` (the
+ * document door) must get the person here, never the agent.
+ */
+function agentCallerContext(
+  w: DeferredWrite,
+  workspaceId: string | null,
+  personId: string = w.userId
+) {
   return createHubProtocolCallerContext(
-    w.userId,
+    personId,
     ["hub-protocol.read", "hub-protocol.write"],
     workspaceId,
     w.sourceMessageId ?? null,
@@ -179,15 +187,22 @@ const REPLAY_DOORS: Record<ReplayableDeferredPair, ReplayDoor> = {
   },
   "document/create": async (w, workspaceId) => {
     const d = w.data;
+    // The document door gates as the agent (so `w.userId` is the agent) and
+    // carries its person in data. It owns the row by `ctx.userId`, so the
+    // caller is the person: with the agent there, the replayed document
+    // belonged to the agent and its person could not open it.
+    const personId = str(d.userId) ?? w.userId;
     const caller = documentsRouter.createCaller(
-      (await agentCallerContext(w, workspaceId)) as unknown as Context
+      (await agentCallerContext(w, workspaceId, personId)) as unknown as Context
     );
     return caller.createDocument({
-      // The document door gates as the agent and carries its person in data.
-      userId: str(d.userId) ?? w.userId,
+      userId: personId,
       workspaceId: str(d.workspaceId) ?? workspaceId,
       title: String(d.title ?? ""),
       ...defined({
+        // The id the door handed the agent when it held the write: the
+        // replay lands under it, so the agent's `documentId` resolves.
+        proposedDocumentId: str(d.id),
         content: str(d.content),
         type: d.type as "markdown" | undefined,
         url: str(d.url),
