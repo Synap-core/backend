@@ -40328,6 +40328,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					defaultView?: "grid" | "list" | "timeline" | undefined;
 					entityOpenMode?: "floating" | "modal" | "side" | undefined;
 					fontSize?: string | undefined;
+					kindViews?: Record<string, {
+						at: string;
+						source: "onboarding" | "settings";
+						type: string;
+						view: string;
+					}> | undefined;
 					lastActiveView?: string | undefined;
 					panelPositions?: Record<string, {
 						x: number;
