@@ -4,7 +4,8 @@ on:
   pull_request:
     branches: ["main", "develop"]
     # ready_for_review: a draft runs the Release gate only (see `changes`); the
-    # suites start when it is marked ready.
+    # suites start when it is marked ready. Until then "Full suite" and "API
+    # e2e" report red ("suites not run: draft"), never a skip that reads green.
     types: [opened, synchronize, reopened, ready_for_review]
   # The merge queue tests each PR once against the real next main.
   merge_group:
@@ -63,6 +64,7 @@ jobs:
       suites: ${{ steps.decide.outputs.suites }}
       negctl: ${{ steps.decide.outputs.negctl }}
       negctl_tests: ${{ steps.decide.outputs.negctl_tests }}
+      draft_hold: ${{ steps.decide.outputs.draft_hold }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -367,10 +369,21 @@ jobs:
   full-suite:
     name: Full suite
     needs: [changes, full-suite-shard]
-    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.suites == 'true') }}
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.suites == 'true' || needs.changes.outputs.draft_hold == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      # A draft: this required check FAILS instead of being skipped, because
+      # GitHub counts a job skipped by its `if:` as passed ("A job that is
+      # skipped will report its status as Success. It will not prevent a pull
+      # request from merging, even if it is a required check."). backend#382
+      # and #394 merged on a draft run's skipped suites. See ci-changes.mjs.
+      - name: Suites not run (draft)
+        if: ${{ needs.changes.outputs.draft_hold == 'true' }}
+        run: |
+          echo "::error::Suites not run: this run is for a draft. Mark the PR ready to run them. Already ready? A draft run superseded the ready run: run 'gh pr ready --undo <n>' then 'gh pr ready <n>', or push."
+          exit 1
+
       # The ratchet's judge reads the workspace's package.json files, the
       # baseline and the tripwire files: a checkout, no install.
       - name: Checkout Repository
@@ -394,7 +407,7 @@ jobs:
       # A shard can also fail outside its reports (setup, the audit, the
       # publish-freshness tripwire): that fails the Full suite too.
       - name: Every shard job succeeded
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && needs.changes.outputs.draft_hold != 'true' }}
         run: |
           [ "${{ needs.full-suite-shard.result }}" = "success" ] || {
             echo "::error::a Full suite shard job ended '${{ needs.full-suite-shard.result }}' — open the shard jobs for the failing step"
@@ -472,13 +485,16 @@ jobs:
   api-e2e:
     name: API e2e
     needs: changes
-    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.suites == 'true') }}
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.suites == 'true' || needs.changes.outputs.draft_hold == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
+    # A draft starts no service ("If jobs.<job_id>.services.<service_id>.image
+    # is assigned an empty string, the service will not start."): its one step
+    # fails at once.
     services:
       postgres:
-        image: timescale/timescaledb-ha:pg16
+        image: ${{ needs.changes.outputs.draft_hold != 'true' && 'timescale/timescaledb-ha:pg16' || '' }}
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -494,7 +510,7 @@ jobs:
       # (deploy/docker-compose.yml). A service container takes no command line,
       # so the server is configured through its TYPESENSE_* environment.
       typesense:
-        image: typesense/typesense:0.25.2
+        image: ${{ needs.changes.outputs.draft_hold != 'true' && 'typesense/typesense:0.25.2' || '' }}
         env:
           TYPESENSE_DATA_DIR: /tmp
           TYPESENSE_API_KEY: ci-typesense
@@ -502,6 +518,17 @@ jobs:
           - 8108:8108
 
     steps:
+      # A draft: this required check FAILS instead of being skipped, because
+      # GitHub counts a job skipped by its `if:` as passed ("A job that is
+      # skipped will report its status as Success. It will not prevent a pull
+      # request from merging, even if it is a required check."). backend#382
+      # and #394 merged on a draft run's skipped suites. See ci-changes.mjs.
+      - name: Suites not run (draft)
+        if: ${{ needs.changes.outputs.draft_hold == 'true' }}
+        run: |
+          echo "::error::Suites not run: this run is for a draft. Mark the PR ready to run them. Already ready? A draft run superseded the ready run: run 'gh pr ready --undo <n>' then 'gh pr ready <n>', or push."
+          exit 1
+
       - name: Checkout Repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 

@@ -4,7 +4,8 @@
  * list that can go stale: the docs-only paths, which must be paths no test reads.
  */
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -73,9 +74,9 @@ describe("ci-changes: every check runs unless a narrow match says otherwise", ()
     }
   });
 
-  it("a draft runs the Release gate, not the suites", () => {
+  it("a draft runs the Release gate, not the suites, and holds the suite checks red", () => {
     const d = pr(["packages/api/src/x.ts"], { draft: true });
-    expect([d.gate, d.suites]).toEqual([true, false]);
+    expect([d.gate, d.suites, d.draftHold]).toEqual([true, false, true]);
   });
 
   it("docs only skips everything; one non-doc file brings it back", () => {
@@ -168,5 +169,114 @@ describe("ci-changes guard: no test reads a docs-only path", () => {
     expect(hits.filter((h) => !(h in CHECKED_NOT_ROOT))).toEqual([]);
     // Self-check: the scan still sees a literal sample of what it hunts.
     expect(hits).toContain(Object.keys(CHECKED_NOT_ROOT)[0]);
+  });
+});
+
+describe("ci-changes: a draft's skipped suites never read as passed", () => {
+  // GitHub counts a job skipped by its `if:` as a PASSED required check, so a
+  // draft run that SKIPS "Full suite" and "API e2e" let backend#382 and #394
+  // merge on marking ready. A draft must hold them red instead. Each row rules
+  // out a looser rule: "hold = draft" fails the negctl, docs-only, push and
+  // merge-queue rows; "hold = !suites" fails the negctl and docs-only rows.
+  const src = ["packages/api/src/x.ts"];
+  it.each([
+    ["a draft", { draft: true, files: src }, true],
+    ["a ready PR", { draft: false, files: src }, false],
+    [
+      "a draft negctl branch",
+      { draft: true, files: src, headRef: "negctl/x" },
+      false,
+    ],
+    [
+      "a draft docs-only PR",
+      { draft: true, files: ["docs/DEVELOPER.md"] },
+      false,
+    ],
+    ["a draft, changed files unknown", { draft: true, files: null }, false],
+    ["a push", { event: "push", draft: true, files: src }, false],
+    [
+      "a merge-queue run",
+      { event: "merge_group", draft: true, files: src },
+      false,
+    ],
+  ])("%s", (_label, extra, hold) => {
+    const d = pr(extra.files, extra);
+    expect(d.draftHold).toBe(hold);
+    // A hold only ever stands in for suites that did not run.
+    if (d.draftHold) expect(d.suites).toBe(false);
+  });
+
+  it("the decision reaches the job outputs (the script's own GITHUB_OUTPUT)", () => {
+    const outputs = (draft: string) => {
+      const file = join(mkdtempSync(join(tmpdir(), "ci-changes-")), "out");
+      // HEAD...HEAD: an empty diff, so no history is needed (CI is shallow).
+      execFileSync("node", ["scripts/ci-changes.mjs"], {
+        cwd: REPO,
+        env: {
+          ...process.env,
+          EVENT: "pull_request",
+          HEAD_REF: "fix/x",
+          DRAFT: draft,
+          BASE_SHA: "HEAD",
+          HEAD_SHA: "HEAD",
+          GITHUB_OUTPUT: file,
+        },
+      });
+      return readFileSync(file, "utf8").split("\n");
+    };
+    expect(outputs("true")).toEqual(
+      expect.arrayContaining(["suites=false", "draft_hold=true"])
+    );
+    expect(outputs("false")).toEqual(
+      expect.arrayContaining(["suites=true", "draft_hold=false"])
+    );
+  });
+
+  // ci.yml read as text: the jobs block, split per job at two-space indent.
+  const ci = readFileSync(join(REPO, ".github/workflows/ci.yml"), "utf8");
+  const jobs = ci
+    .slice(ci.indexOf("\njobs:\n"))
+    .split(/\n(?= {2}[A-Za-z0-9_-]+:\s*\n)/)
+    .slice(1)
+    .map((block) => ({
+      name: /^ {4}name: (.+)$/m.exec(block)?.[1] ?? "",
+      if: /^ {4}if: (.+)$/m.exec(block)?.[1] ?? "",
+      matrix: /^ {6}matrix:/m.test(block),
+      steps: (block.split(/^ {4}steps:\n/m)[1] ?? "")
+        .split(/^ {6}- /m)
+        .slice(1),
+      block,
+    }));
+  const HOLD = "needs.changes.outputs.draft_hold == 'true'";
+
+  it("the changes job exports draft_hold", () => {
+    const changes = jobs.find((j) => j.name === "What changed");
+    expect(changes?.block).toContain(
+      "draft_hold: ${{ steps.decide.outputs.draft_hold }}"
+    );
+  });
+
+  // DERIVED: every job the suites decision turns off, except the matrix shards
+  // (the "Full suite" judge reports for them). A new suite job joins by
+  // existing and must hold too.
+  const suiteJobs = jobs.filter(
+    (j) => j.if.includes("needs.changes.outputs.suites == 'true'") && !j.matrix
+  );
+
+  it("the scan finds the two required suite checks", () => {
+    expect(jobs.length).toBeGreaterThan(5);
+    expect(suiteJobs.map((j) => j.name).sort()).toEqual([
+      "API e2e",
+      "Full suite",
+    ]);
+  });
+
+  it("every suite job runs on a draft hold and its FIRST step fails", () => {
+    for (const j of suiteJobs) {
+      expect(j.if, j.name).toContain(HOLD);
+      const first = j.steps[0] ?? "";
+      expect(first, j.name).toContain(`if: \${{ ${HOLD} }}`);
+      expect(first, j.name).toMatch(/\n\s+exit 1\n/);
+    }
   });
 });

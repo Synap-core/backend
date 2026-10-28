@@ -21,6 +21,8 @@
  *   suites        Full suite + API e2e run    false: draft, negctl, docs-only
  *   negctl        a negctl/* branch           true: run "Targeted tests" only
  *   negctl_tests  the test files a negctl runs (space-separated, repo-relative)
+ *   draft_hold    a draft: "Full suite" and "API e2e" run one step that FAILS
+ *                 instead of their suites (see decide())
  *   reason        one line for the job log
  *
  * Usage (ci.yml): node scripts/ci-changes.mjs
@@ -73,6 +75,7 @@ export function decide({ event, headRef, draft, files, siblingTests }) {
     suites: true,
     negctl: false,
     negctlTests: [],
+    draftHold: false,
   };
   if (event !== "pull_request")
     return { ...all, reason: `${event}: every check runs` };
@@ -89,6 +92,7 @@ export function decide({ event, headRef, draft, files, siblingTests }) {
       suites: false,
       negctl: true,
       negctlTests: [...tests].sort(),
+      draftHold: false,
       reason: `negctl branch: only its ${tests.size} test file(s) run`,
     };
   }
@@ -100,6 +104,7 @@ export function decide({ event, headRef, draft, files, siblingTests }) {
       suites: false,
       negctl: false,
       negctlTests: [],
+      draftHold: false,
       reason: `docs only (${files.length} file(s)): no check needs to run`,
     };
 
@@ -110,10 +115,19 @@ export function decide({ event, headRef, draft, files, siblingTests }) {
     suites: !draft,
     negctl: false,
     negctlTests: [],
+    // A draft skips the suites, and GitHub counts a job skipped by its `if:`
+    // as a PASSED required check. backend#382 and #394 (28 Oct) merged the
+    // moment they were marked ready, on the draft run's skipped "Full suite"
+    // and "API e2e", before the ready run reported. So on a draft those two
+    // jobs run and fail ("suites not run: draft"): the latest result of each
+    // required check on the head commit is red until a ready run replaces it.
+    // The suites themselves still do not run. Docs-only and negctl return
+    // above: their skip does not change when the PR is marked ready.
+    draftHold: !!draft,
     reason:
       [
         draft
-          ? "draft: Release gate only (suites start when marked ready)"
+          ? "draft: Release gate only; Full suite and API e2e report red (suites not run) until it is marked ready"
           : "",
         image
           ? ""
@@ -161,6 +175,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     `suites=${d.suites}`,
     `negctl=${d.negctl}`,
     `negctl_tests=${d.negctlTests.join(" ")}`,
+    `draft_hold=${d.draftHold}`,
     `reason=${d.reason}`,
   ];
   console.log(out.join("\n"));
