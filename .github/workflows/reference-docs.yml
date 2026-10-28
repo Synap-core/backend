@@ -16,7 +16,7 @@ name: Reference docs
 
 on:
   pull_request:
-    branches: ["main", "develop"]
+    # Any base: a stacked PR (base not main) must not skip this check either.
   push:
     branches: ["main", "develop"]
   # The merge queue needs every required check reported on its run.
@@ -33,11 +33,19 @@ permissions:
 jobs:
   check:
     name: Reference docs are current
-    # A negctl/* branch never merges and runs only its own tests (ci.yml).
-    if: ${{ !startsWith(github.head_ref, 'negctl/') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      # A negctl/* branch never merges and runs only its own tests (ci.yml).
+      # This required check reports red for it instead of being skipped: a job
+      # skipped by its `if:` reports success, so a negctl PR to main could
+      # merge on a green skip.
+      - name: Never merges (negctl)
+        if: ${{ startsWith(github.head_ref, 'negctl/') }}
+        run: |
+          echo "::error::A negctl/* branch never merges: this required check reports red on purpose."
+          exit 1
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0

@@ -21,10 +21,16 @@
  *   suites        Full suite + API e2e run    false: draft, negctl, docs-only
  *   negctl        a negctl/* branch           true: run "Targeted tests" only
  *   negctl_tests  the test files a negctl runs (space-separated, repo-relative)
+ *   hold          why a required check reports RED instead of being skipped:
+ *                 "draft" | "negctl" | "stacked" | "" (see decide())
+ *   draft_hold    hold == "draft" (kept for readers of the old output)
+ *   dependents    the "Dependent repos" job runs: shared types changed (or the
+ *                 job's own files), so app-bases, browser and relay-app are
+ *                 checked out and typechecked against this head
  *   reason        one line for the job log
  *
  * Usage (ci.yml): node scripts/ci-changes.mjs
- *   env EVENT, HEAD_REF, DRAFT ("true"/"false"), BASE_SHA, HEAD_SHA
+ *   env EVENT, HEAD_REF, BASE_REF, DRAFT ("true"/"false"), BASE_SHA, HEAD_SHA
  */
 
 import { execFileSync } from "node:child_process";
@@ -57,6 +63,18 @@ const IMAGE_NEUTRAL = [
 
 const TEST_FILE = /\.test\.(ts|tsx|mts|mjs|js)$/;
 
+// Paths the other repos link by source (app-bases, browser and relay-app read
+// @synap-core/types, api-types and markdown-core from this checkout; #372 broke
+// an app repo with backend CI green), plus the job's own files so a change to
+// the job runs it.
+const SHARED_FOR_DEPENDENTS = [
+  /^packages\/(types|api-types|markdown-core)\//,
+  /^scripts\/ci\/dependent-root\//,
+  /^\.github\/workflows\/ci\.yml$/,
+];
+export const touchesDependents = (files) =>
+  files.some((f) => SHARED_FOR_DEPENDENTS.some((re) => re.test(f)));
+
 export const isDocsOnly = (path) => DOCS_ONLY.some((re) => re.test(path));
 export const isImageNeutral = (path) =>
   isDocsOnly(path) || IMAGE_NEUTRAL.some((re) => re.test(path));
@@ -66,30 +84,56 @@ export const isImageNeutral = (path) =>
  * when it could not be read (then everything runs).
  * `siblingTests(path)` lists test files beside a changed source file.
  */
-export function decide({ event, headRef, draft, files, siblingTests }) {
+// Bases a pull request may land on through the ruleset. Any other base is a
+// stack: nothing checks it before it reaches main as one big PR (#372).
+const LANDING_BASES = ["main", "develop"];
+
+export function decide({
+  event,
+  headRef,
+  baseRef,
+  draft,
+  files,
+  siblingTests,
+}) {
   const all = {
     gate: true,
     image: true,
     suites: true,
     negctl: false,
     negctlTests: [],
+    draftHold: false,
+    hold: "",
+    dependents: false,
   };
   if (event !== "pull_request")
     return { ...all, reason: `${event}: every check runs` };
   if (!files)
-    return { ...all, reason: "changed files unknown: every check runs" };
+    return {
+      ...all,
+      dependents: true,
+      reason: "changed files unknown: every check runs",
+    };
 
   if (headRef?.startsWith("negctl/")) {
     const tests = new Set(files.filter((f) => TEST_FILE.test(f)));
     for (const f of files)
       if (!TEST_FILE.test(f)) for (const t of siblingTests(f)) tests.add(t);
+    // A negctl branch never merges. Its skipped Release gate, suites and
+    // Reference docs would read as PASSED required checks (a job skipped by its
+    // `if:` reports success), so a negctl PR to main could merge on green
+    // skips: only its title said "NEVER MERGE". Every required check holds red
+    // instead; "Targeted tests" still runs its files.
     return {
       gate: false,
       image: false,
       suites: false,
       negctl: true,
       negctlTests: [...tests].sort(),
-      reason: `negctl branch: only its ${tests.size} test file(s) run`,
+      draftHold: false,
+      hold: "negctl",
+      dependents: false,
+      reason: `negctl branch: only its ${tests.size} test file(s) run; every required check reports red (a negctl branch never merges)`,
     };
   }
 
@@ -100,21 +144,43 @@ export function decide({ event, headRef, draft, files, siblingTests }) {
       suites: false,
       negctl: false,
       negctlTests: [],
+      draftHold: false,
+      hold: "",
+      dependents: false,
       reason: `docs only (${files.length} file(s)): no check needs to run`,
     };
 
   const image = !files.every(isImageNeutral);
+  // A base other than main/develop is a stack. It gets the Release gate (a
+  // typecheck and build, so a stack is not entirely unchecked), and the suites
+  // hold red: they run when the PR is retargeted to main. Docs-only returned
+  // above. A stacked draft holds as "stacked".
+  const stacked = !!baseRef && !LANDING_BASES.includes(baseRef);
+  const hold = stacked ? "stacked" : draft ? "draft" : "";
   return {
     gate: true,
     image,
-    suites: !draft,
+    suites: !draft && !stacked,
     negctl: false,
     negctlTests: [],
+    // A draft skips the suites, and GitHub counts a job skipped by its `if:`
+    // as a PASSED required check. backend#382 and #394 (28 Oct) merged the
+    // moment they were marked ready, on the draft run's skipped "Full suite"
+    // and "API e2e", before the ready run reported. So on a draft those two
+    // jobs run and fail ("suites not run: draft"): the latest result of each
+    // required check on the head commit is red until a ready run replaces it.
+    // The suites themselves still do not run. Docs-only and negctl return
+    // above: their skip does not change when the PR is marked ready.
+    draftHold: hold === "draft",
+    hold,
+    dependents: touchesDependents(files),
     reason:
       [
-        draft
-          ? "draft: Release gate only (suites start when marked ready)"
-          : "",
+        stacked
+          ? `base is ${baseRef}, not main: Release gate only; Full suite and API e2e report red (suites not run) until the PR targets main`
+          : draft
+            ? "draft: Release gate only; Full suite and API e2e report red (suites not run) until it is marked ready"
+            : "",
         image
           ? ""
           : "no image-relevant path: Docker build and deploy tests skipped",
@@ -151,6 +217,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const d = decide({
     event: process.env.EVENT,
     headRef: process.env.HEAD_REF,
+    baseRef: process.env.BASE_REF,
     draft: process.env.DRAFT === "true",
     files: changedFiles(process.env.BASE_SHA, process.env.HEAD_SHA),
     siblingTests,
@@ -161,6 +228,9 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     `suites=${d.suites}`,
     `negctl=${d.negctl}`,
     `negctl_tests=${d.negctlTests.join(" ")}`,
+    `draft_hold=${d.draftHold}`,
+    `hold=${d.hold}`,
+    `dependents=${d.dependents}`,
     `reason=${d.reason}`,
   ];
   console.log(out.join("\n"));
