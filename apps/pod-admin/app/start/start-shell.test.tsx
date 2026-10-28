@@ -220,7 +220,8 @@ describe("/start reopens the step the person is at", () => {
       "onboarding.startState",
       "onboarding.listStarts",
     ]);
-    expect(html).toMatch(/value="content-os" checked=""/);
+    // React's server renderer writes `checked` before `value` on an <input>.
+    expect(html).toMatch(/checked="" value="content-os"/);
     expect(html).toContain("Step 1 of 7");
   });
 
@@ -314,7 +315,7 @@ describe("S1 as rendered", () => {
   it("cloud: one 'From synap.live' mark, on the checked card, and 'You said:'", () => {
     const html = render(cloudOk("crm", "We sell branding retainers."));
     expect(html.split("From synap.live").length - 1).toBe(1);
-    expect(html).toMatch(/value="crm" checked=""/);
+    expect(html).toMatch(/checked="" value="crm"/);
     expect(html).toContain("You said:");
     expect(html).toContain("We sell branding retainers.");
   });
