@@ -16,7 +16,7 @@ on:
       - "packages/types/src/**"
       - "packages/api/src/routers/**"
       - "packages/api/src/root.ts"
-      # A PR that commits a regenerated surface (gen-types, the regen bot) or a
+      # A PR that commits a regenerated surface (gen-types) or a
       # hand version bump must publish too: neither touches the paths above.
       - "packages/api-types/src/generated.d.ts"
       - "packages/api-types/package.json"
