@@ -1,6 +1,7 @@
 /**
  * THE ceiling resolver (the caps fold, W1c / 0330), on real Postgres (PGlite):
- *   - migration 0330 runs inside ONE transaction, twice;
+ *   - migration 0330 (and 0369, D7's ask axis) runs inside ONE transaction,
+ *     twice;
  *   - no row ⇒ CEILING_DEFAULTS[axis], source "default" — for the daily write
  *     count that is null: NO limit (opt-in, founder 2026-10-27);
  *   - most specific row wins: subject (+8) > principal > scope, newest on a tie;
@@ -25,6 +26,11 @@ import {
 const HERE = dirname(fileURLToPath(import.meta.url));
 const M0330 = readFileSync(
   resolve(HERE, "../../migrations/0330_governance_ceiling_axes_fold.sql"),
+  "utf8"
+);
+// D7: the daily ask budget's axis.
+const M0369 = readFileSync(
+  resolve(HERE, "../../migrations/0369_governance_ceiling_daily_ask_count.sql"),
   "utf8"
 );
 
@@ -64,6 +70,7 @@ beforeAll(async () => {
   // As the migrator runs it: one transaction — and a second time, idempotent.
   for (let i = 0; i < 2; i++) {
     await pg.exec(`BEGIN; ${M0330} COMMIT;`);
+    await pg.exec(`BEGIN; ${M0369} COMMIT;`);
   }
   await pg.query(
     `INSERT INTO users (id, agent_type) VALUES ($1, 'claude-code'), ($2, 'codex')`,
@@ -108,7 +115,7 @@ async function row(p: {
 const subject = { type: "automation", id: AUTOMATION };
 
 describe("resolveCeiling", () => {
-  it("migration 0330 added the four axes and the subject columns", async () => {
+  it("migrations 0330 and 0369 added every axis and the subject columns", async () => {
     const axes = await pg.query<{ v: string }>(
       `SELECT unnest(enum_range(NULL::governance_ceiling_axis))::text AS v`
     );

@@ -147,25 +147,25 @@ export async function askBudget(
   now: Date = new Date()
 ): Promise<AskBudget> {
   const day = startOfUtcDay(now);
-  const [limit, rows] = await Promise.all([
-    dailyAskLimit(userId),
-    db
-      .select({
-        id: notifications.id,
-        type: notifications.type,
-        sourceType: notifications.sourceType,
-        sourceId: notifications.sourceId,
-        createdAt: notifications.createdAt,
-      })
-      .from(notifications)
-      .where(
-        and(
-          eq(notifications.userId, userId),
-          inArray(notifications.type, [...ASK_NOTIFICATION_TYPES]),
-          gte(notifications.createdAt, day)
-        )
-      ),
-  ]);
+  // Sequential on purpose: two reads, and a failed one must reject THIS call
+  // (the caller logs it), never leave the other promise unhandled.
+  const limit = await dailyAskLimit(userId);
+  const rows = await db
+    .select({
+      id: notifications.id,
+      type: notifications.type,
+      sourceType: notifications.sourceType,
+      sourceId: notifications.sourceId,
+      createdAt: notifications.createdAt,
+    })
+    .from(notifications)
+    .where(
+      and(
+        eq(notifications.userId, userId),
+        inArray(notifications.type, [...ASK_NOTIFICATION_TYPES]),
+        gte(notifications.createdAt, day)
+      )
+    );
 
   const proposalIds = [
     ...new Set(
