@@ -37,12 +37,17 @@
  * `@synap/api` because `@synap/jobs` cannot import api (api → jobs already, a cycle).
  */
 
-import { getDb, eq, findCapabilityGrant } from "@synap/database";
+import {
+  getDb,
+  eq,
+  findCapabilityGrant,
+  getRequestGrant,
+} from "@synap/database";
 import {
   resolveGovernanceRule,
   resolveOriginTrust,
 } from "@synap/database/agent-governance";
-import { tools, skills } from "@synap/database/schema";
+import { tools, skills, capabilityIntents } from "@synap/database/schema";
 import {
   capabilityVerbAllowsRuleWiden,
   decideAgentPolicy,
@@ -79,6 +84,12 @@ export interface GateSkillRow {
    * `GateToolRow.name`). Optional for the same pre-load reason.
    */
   name?: string | null;
+  /**
+   * The intent the verb serves (`skills.intent`, the authority). Read by the
+   * app outward floor only; absent (not pre-loaded) → the gate reads it when
+   * that floor needs it, `null` = the verb declares none.
+   */
+  intent?: string | null;
 }
 
 export interface GateCapabilityExecutionInput {
@@ -365,6 +376,17 @@ export async function gateCapabilityExecution(
     return { decision: "run" };
   }
 
+  // ── 0.9 APP OUTWARD FLOOR (decision 4A, founder 2026-10-28) — a run asked
+  //       for through a POD APP's credential on a verb that reaches outside the
+  //       pod ALWAYS files a proposal: the person's approval in their pod is the
+  //       confirmation, for every app. It precedes the owner bypass on purpose:
+  //       a `synap_acts_as: person` token resolves as the person (no
+  //       agentUserId), so the bypass below would run a publish with no review.
+  //       Tighten-only; a declared read returned above.
+  if (await appRunMustPropose(input)) {
+    return buildProposeDecision(input, APP_OUTWARD_INTENT);
+  }
+
   // ── 1. Owner bypass — only a GENUINE human owner run (no agentUserId) skips the
   //       grant. An agent acting under the owner's identity is grant-gated.
   const isOwnerRun =
@@ -481,6 +503,43 @@ export async function gateCapabilityExecution(
     input,
     verdict.reasonCode ?? "CAPABILITY_PROPOSE"
   );
+}
+
+/** `proposals.governance_reason` of a run the app outward floor proposed. */
+export const APP_OUTWARD_INTENT = "APP_OUTWARD_INTENT";
+
+/**
+ * Must this run be proposed because a pod app asked for it and it reaches
+ * outside the pod? The app is the request's grant `clientId` (an app's public
+ * id; null for a bare key), set by the key-auth doors for an app's agent key
+ * AND a person token alike — so the person's own use in the pod (no grant) and
+ * a personal key never meet this floor.
+ *
+ * Outward = the verb's intent has an effect other than `read` in
+ * `capability_intents` (a write or an act changes, sends or spends something
+ * the pod cannot call back). Fail closed: a verb with no intent, an intent
+ * with no row, and a raw tool call (no verb, so no intent) are outward.
+ */
+async function appRunMustPropose(
+  input: GateCapabilityExecutionInput
+): Promise<boolean> {
+  if (!getRequestGrant()?.clientId) return false;
+  if (input.capabilityKind !== "skill") return true;
+  let intent = input.skill?.intent;
+  const db = await getDb();
+  if (intent === undefined) {
+    const [row] = await db
+      .select({ intent: skills.intent })
+      .from(skills)
+      .where(eq(skills.id, input.capabilityId));
+    intent = row?.intent ?? null;
+  }
+  if (!intent) return true;
+  const [declared] = await db
+    .select({ effect: capabilityIntents.effect })
+    .from(capabilityIntents)
+    .where(eq(capabilityIntents.slug, intent));
+  return declared?.effect !== "read";
 }
 
 /**

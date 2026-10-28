@@ -547,6 +547,8 @@ export async function executeCapability(input: {
       // copies it verbatim). Read by `checkVerbParameters` before a proposal is
       // filed. Absent = cannot validate, never "no arguments allowed".
       parameters: skills.parameters,
+      // The intent the verb serves: the gate's app outward floor reads it.
+      intent: skills.intent,
     })
     .from(skills)
     .where(

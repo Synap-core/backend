@@ -20,6 +20,8 @@
  *   entity.merge            = entity.*.merge (a known gate verb, every kind)
  *   proposal.approve        approve proposals (a gate verb, named)
  *   document.read           a subject with no qualifier
+ *   capability.publish_post.run  run the person's tools for ONE intent
+ *   capability.run          = capability.*.run (run tools for any intent)
  *
  * Matching is segment-wise and PREFIX-based: a pattern matches a request when
  * each of its segments equals the request's segment or is `*`, and it has no
@@ -33,8 +35,15 @@
  * Only the lone `*` covers every verb.
  *
  * The REQUEST is always derived server-side (subject/action from the door,
- * qualifier = the entity's profile slug). A credential never names its own
- * request key.
+ * qualifier = the entity's profile slug, or the intent of the verb a
+ * capability run resolved to). A credential never names its own request key.
+ *
+ * `capability` is qualified by INTENT (decision 2A, 2026-10-28): an app is
+ * granted `capability.publish_post.run`, never every tool. Its two-segment
+ * spelling stays a VERB on every intent (`capability.run`,
+ * `capability.attach`, `capability.renderer_set` — the AI preset holds the
+ * last two): an intent only ever appears in the three-segment form, so no
+ * grant minted before the qualifier changed meaning.
  *
  * Pure — no I/O. Shared by the backend, the UI and the CLI.
  *
@@ -43,8 +52,17 @@
  * declaration, so the engine and every door read the same grammar.
  */
 
-/** Subjects whose request key carries a kind qualifier (the profile slug). */
-export const QUALIFIED_GRANT_SUBJECTS = ["entity"] as const;
+/**
+ * Subjects whose request key carries a qualifier: `entity` (the kind, a profile
+ * slug) and `capability` (the intent a run serves).
+ */
+export const QUALIFIED_GRANT_SUBJECTS = ["entity", "capability"] as const;
+
+/**
+ * Qualified subjects whose two-segment spelling is ALWAYS `<subject>.<verb>`:
+ * their qualifier is only ever written in the three-segment form.
+ */
+const VERB_FIRST_SUBJECTS: readonly string[] = ["capability"];
 
 /**
  * The verbs a bare subject or kind covers. Every other verb (a governance gate
@@ -126,7 +144,8 @@ function isGrantAction(action: string): boolean {
 /**
  * Parse a pattern into its segments, normalising the governance spelling
  * `entity.read` / `entity.merge` (a qualified subject + a GRANT_ACTIONS or
- * GRANT_GATE_ACTIONS verb) to `entity.*.read` / `entity.*.merge`.
+ * GRANT_GATE_ACTIONS verb) to `entity.*.read` / `entity.*.merge`, and every
+ * two-segment `capability.<verb>` to `capability.*.<verb>`.
  * Throws InvalidPermissionError on a malformed pattern.
  */
 export function parsePermission(pattern: string): string[] {
@@ -147,7 +166,8 @@ export function parsePermission(pattern: string): string[] {
     segs.length === 2 &&
     isQualified(segs[0]) &&
     (isGrantAction(segs[1]) ||
-      (GRANT_GATE_ACTIONS as readonly string[]).includes(segs[1]))
+      (GRANT_GATE_ACTIONS as readonly string[]).includes(segs[1]) ||
+      VERB_FIRST_SUBJECTS.includes(segs[0]))
   ) {
     return [segs[0], "*", segs[1]];
   }

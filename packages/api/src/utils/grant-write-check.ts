@@ -22,6 +22,10 @@
  *               kind it converts TO (S7). A create (no row yet) uses
  *               data.profileSlug / data.type. A kind CONVERT (stored kind ≠
  *               data.profileSlug) must ALSO be permitted on the target kind.
+ *               For a `capability` RUN: data.intent, the intent the DOOR
+ *               read off the verb it resolved (`capability.publish_post.run`);
+ *               a run with no intent (the raw provider proxy) has none, so
+ *               only a grant on every intent permits it.
  *   workspace = the gate's workspaceId
  *   entity    = data.id / data.entityId
  *   projects  = the gate's projectId / data.projectId (unknown → a
@@ -72,6 +76,10 @@ export async function grantRequestsForWrite(
     qualifier = stored ?? requestedKind;
     if (stored && requestedKind && requestedKind !== stored)
       convertsTo = requestedKind;
+  } else if (subject === "capability" && action === "run") {
+    // Only a RUN is qualified by intent; a create/attach body's `intent` is
+    // the caller's data, never the request key.
+    qualifier = str(data.intent);
   }
   const projectId = str(input.projectId) ?? str(data.projectId);
   const req: GrantRequest = {

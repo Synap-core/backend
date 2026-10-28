@@ -176,3 +176,34 @@ export function deriveProvidedIntents(
   }
   return [...seen];
 }
+
+/**
+ * What granting `capability.<intent>.run` lets an app do, in the person's
+ * words — the consent screen's line for it (decision 2A, 2026-10-28). Every
+ * slug of the vocabulary has its own sentence (`run-labels.test.ts`); a slug
+ * added on a pod before this list learns it still reads as a sentence.
+ */
+const INTENT_RUN_LABELS: Readonly<Record<string, string>> = {
+  search_external: "Search outside sources with your tools",
+  find_people: "Find people and companies with your tools",
+  enrich_entity: "Add facts to your records with your tools",
+  fetch_record: "Fetch outside records with your tools",
+  list_records: "List outside records with your tools",
+  send_message: "Send messages with your tools",
+  request_connection: "Send connection requests with your tools",
+  schedule_event: "Schedule events with your tools",
+  manage_file: "Manage files with your tools",
+  generate_media: "Make images, video and audio with your tools",
+  capture_into_pod: "Bring outside data into your pod with your tools",
+  run_external_job: "Run outside jobs with your tools",
+  connect_account: "Connect accounts with your tools",
+  publish_post: "Publish posts with your tools",
+  delegate_agent_task: "Hand tasks to your agents",
+  read_webpage: "Read web pages with your tools",
+};
+
+export function intentRunLabel(slug: CapabilityIntentSlug): string {
+  return (
+    INTENT_RUN_LABELS[slug] ?? `Run your tools to ${slug.replace(/_/g, " ")}`
+  );
+}

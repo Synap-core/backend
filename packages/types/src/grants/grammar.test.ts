@@ -189,6 +189,85 @@ describe("allowedQualifiers — the SQL kind clause", () => {
   });
 });
 
+describe("capability — qualified by the INTENT a run serves", () => {
+  const runPost: GrantRequest = {
+    subject: "capability",
+    qualifier: "publish_post",
+    action: "run",
+  };
+  const runSend: GrantRequest = { ...runPost, qualifier: "send_message" };
+  // A run with no intent (the raw provider proxy, `/connectors/tool-execute`).
+  const runAny: GrantRequest = { subject: "capability", action: "run" };
+  const attach: GrantRequest = { subject: "capability", action: "attach" };
+  const create: GrantRequest = { subject: "capability", action: "create" };
+
+  it("parses the intent spelling capability.<intent>.run", () => {
+    expect(parsePermission("capability.publish_post.run")).toEqual([
+      "capability",
+      "publish_post",
+      "run",
+    ]);
+  });
+  // Rules out: `capability.attach` / `capability.renderer_set` (held by EVERY
+  // AI-preset key) read as the intents "attach" / "renderer_set" — a grant on
+  // nothing. A two-segment capability pattern always names a verb.
+  it.each(["run", "attach", "renderer_set", "create", "read", "install"])(
+    "keeps capability.%s a verb on every intent",
+    (verb) => {
+      expect(parsePermission(`capability.${verb}`)).toEqual([
+        "capability",
+        "*",
+        verb,
+      ]);
+    }
+  );
+  it.each([
+    ["capability.publish_post.run", runPost, true],
+    ["capability.publish_post.run", runSend, false], // rules out "ignore intent"
+    ["capability.publish_post.run", runAny, false], // an intent grant never opens the raw proxy
+    ["capability.publish_post.run", attach, false],
+    ["capability.*.run", runPost, true],
+    ["capability.*.run", runAny, true],
+    // An existing capability.run grant still matches, with or without intent.
+    ["capability.run", runPost, true],
+    ["capability.run", runSend, true],
+    ["capability.run", runAny, true],
+    ["capability.run", attach, false],
+    ["capability.attach", attach, true],
+    ["capability.create", create, true],
+    ["capability", create, true],
+    // A bare subject / intent never runs: a gate verb must be named.
+    ["capability", runPost, false],
+    ["capability.*", runPost, false],
+    ["capability.publish_post", runPost, false],
+    ["*", runPost, true],
+  ] as const)("%s vs %j → %s", (pattern, req, expected) => {
+    expect(patternMatches(pattern, req)).toBe(expected);
+  });
+  it("permits an intent run only in the grant's workspaces", () => {
+    const g = {
+      permissions: ["capability.publish_post.run"],
+      workspaceIds: ["ws-a"],
+    };
+    expect(permits(g, { ...runPost, workspaceId: "ws-a" })).toBe(true);
+    expect(permits(g, { ...runPost, workspaceId: "ws-b" })).toBe(false);
+    expect(permits(g, runPost)).toBe(false);
+  });
+  it.each([
+    [["capability.publish_post.run"], ["publish_post"]],
+    [
+      ["capability.publish_post.run", "capability.send_message.run"],
+      ["publish_post", "send_message"],
+    ],
+    [["capability.run"], "all"],
+    [["capability"], []],
+    [["entity.note.read"], []],
+  ] as const)("%j → %j intents for capability.run", (perms, expected) => {
+    const got = allowedQualifiers({ permissions: perms }, "capability", "run");
+    expect(Array.isArray(got) ? [...got].sort() : got).toEqual(expected);
+  });
+});
+
 describe("assertPermissions", () => {
   it("refuses an empty grant (a key with nothing is not a key)", () => {
     expect(() => assertPermissions([])).toThrow(InvalidPermissionError);
