@@ -22,6 +22,7 @@ import { events } from "../schema/events.js";
 import { channels, ChannelType } from "../schema/channels.js";
 import { entities } from "../schema/entities.js";
 import { profiles } from "../schema/profiles.js";
+import { focusSessions } from "../schema/focus-sessions.js";
 import {
   decideAgentPolicy,
   governanceLaneFor,
@@ -1238,14 +1239,16 @@ export interface ResolveDailyWriteCeilingInput {
  * `limit_value`, ranked EXACTLY like `resolveGovernanceRule`: principal
  * (agent=2, any=0) + scope (workspace=2, pod=0), ties broken by newest
  * `created_at`. Returns `DEFAULT_DAILY_WRITE_CEILING` (@synap/governance-policy —
- * the ONE source of the fallback) when no row matches.
+ * the ONE source of the fallback) when no row matches: `null`, NO LIMIT. The
+ * ceiling is opt-in; every caller treats `null` as "nothing to enforce, raise
+ * or recommend".
  *
  * Mirrors `findRedeemableGrant`'s active predicate: `revoked_at IS NULL AND
  * (expires_at IS NULL OR expires_at > now())`.
  */
 export async function resolveDailyWriteCeiling(
   input: ResolveDailyWriteCeilingInput
-): Promise<number> {
+): Promise<number | null> {
   return (
     await resolveCeiling({
       db: input.db,
@@ -1284,24 +1287,35 @@ export interface ResolveCeilingInput {
   subject?: { type: string; id: string } | null;
 }
 
-export interface ResolvedCeiling {
-  value: number;
+export interface ResolvedCeiling<V extends number | null = number> {
+  /** `null` only for an axis whose default is "no limit" and no row decided. */
+  value: V;
   /** `row` — a stored ceiling decided it; `default` — `CEILING_DEFAULTS`. */
   source: "row" | "default";
   ceilingId: string | null;
 }
 
 /**
+ * The value type an axis resolves to: `number | null` for an axis whose
+ * default is "no limit" (`CEILING_DEFAULTS[axis]` is null — `daily_write_count`),
+ * `number` for every axis with a numeric default. Derived from the table, so a
+ * caller of a numeric axis never has to handle a null it cannot get.
+ */
+export type CeilingValue<A extends GovernanceCeilingAxis> =
+  null extends (typeof CEILING_DEFAULTS)[A] ? number | null : number;
+
+/**
  * THE reader of every numeric governance limit. The most specific ACTIVE row
  * wins: subject match (+8) > principal (agent 2 · class 1 · any 0) > scope
  * (workspace 2 · pod 0), newest `created_at` breaking ties — the same ranking
  * `resolveGovernanceRule` uses, with the subject on top. A row naming another
- * subject never applies. No row ⇒ `CEILING_DEFAULTS[axis]`. A tighten-only
- * axis (`TIGHTEN_ONLY_CEILING_AXES`) never resolves above its default.
+ * subject never applies. No row ⇒ `CEILING_DEFAULTS[axis]` (`null` = no limit,
+ * for an opt-in axis). A tighten-only axis (`TIGHTEN_ONLY_CEILING_AXES`) never
+ * resolves above its default.
  */
-export async function resolveCeiling(
-  input: ResolveCeilingInput
-): Promise<ResolvedCeiling> {
+export async function resolveCeiling<A extends GovernanceCeilingAxis>(
+  input: ResolveCeilingInput & { axis: A }
+): Promise<ResolvedCeiling<CeilingValue<A>>> {
   const { db, axis, agentUserId, workspaceId, subject } = input;
   const candidates = (await db
     .select({
@@ -1367,13 +1381,23 @@ export async function resolveCeiling(
     }
   }
 
-  const fallback: number = CEILING_DEFAULTS[axis];
-  if (!best) return { value: fallback, source: "default", ceilingId: null };
+  const fallback: number | null = CEILING_DEFAULTS[axis];
+  // The casts below only restate `CeilingValue<A>`: `fallback` is null only
+  // for an axis whose CeilingValue admits null.
+  if (!best) {
+    return {
+      value: fallback as CeilingValue<A>,
+      source: "default",
+      ceilingId: null,
+    };
+  }
   const tightenOnly = (
     TIGHTEN_ONLY_CEILING_AXES as ReadonlyArray<GovernanceCeilingAxis>
   ).includes(axis);
   return {
-    value: tightenOnly ? Math.min(best.limitValue, fallback) : best.limitValue,
+    value: (tightenOnly && fallback !== null
+      ? Math.min(best.limitValue, fallback)
+      : best.limitValue) as CeilingValue<A>,
     source: "row",
     ceilingId: best.id,
   };
@@ -1477,10 +1501,87 @@ export async function countAgentWritesTodayUtc(
         eq(events.agentUserId, agentUserId),
         eq(events.isAgent, true),
         isNull(events.proposalId),
+        // F2 (0365): the agent's bookkeeping of its OWN session is stamped at
+        // write time (`isOwnSessionBookkeeping`) and is not work: it does not
+        // spend the day's budget. NULL (every row before 0365) still counts.
+        sql`${events.ceilingExempt} IS NOT TRUE`,
         gte(events.timestamp, startOfUtcDay())
       )
     );
   return row?.n ?? 0;
+}
+
+/** The session doors whose writes are bookkeeping, when the session is the caller's own. */
+const OWN_SESSION_BOOKKEEPING_ACTIONS: ReadonlySet<string> = new Set([
+  "create",
+  "update",
+]);
+
+export interface OwnSessionBookkeepingInput {
+  /** The person the agent acts for (the session's owner). */
+  userId: string | null | undefined;
+  /** The acting agent. */
+  agentUserId: string | null | undefined;
+  subjectType: string;
+  action: string;
+  /** The session id (`focus_session`) or its room's channel id (`channel`). */
+  subjectId: string | null | undefined;
+}
+
+/**
+ * F2 (founder, 2026-10-27) — is this write the acting agent's bookkeeping of
+ * its OWN focus session: starting it, updating it (status, progress, an
+ * outcome claimed or completed), or a write on that session's own room?
+ *
+ * Such a write still goes through every governance rung; it only does not
+ * count toward, nor wait on, the daily write ceiling (rung 2.56): the work
+ * rules require it and it touches nothing but the agent's own session.
+ *
+ * Proven from the pod's records, never from the caller: the session's owner
+ * is `userId` AND the agent is on its roster (`agent_ids`). A session start
+ * passes before the row exists: its id is minted by the create door, which
+ * makes the caller the owner and puts the agent on the roster, so an id with
+ * no row yet is the caller's own new session. An id that names an EXISTING
+ * session is judged by that row, like an update. Every other subject, action
+ * or a missing agent/owner is not bookkeeping.
+ */
+export async function isOwnSessionBookkeeping(
+  db: DbHandle,
+  input: OwnSessionBookkeepingInput
+): Promise<boolean> {
+  const { userId, agentUserId, subjectType, action, subjectId } = input;
+  if (!userId || !agentUserId || !subjectId) return false;
+  if (!OWN_SESSION_BOOKKEEPING_ACTIONS.has(action)) return false;
+  if (subjectType === "focus_session") {
+    const [session] = await db
+      .select({
+        userId: focusSessions.userId,
+        agentIds: focusSessions.agentIds,
+      })
+      .from(focusSessions)
+      .where(eq(focusSessions.id, subjectId))
+      .limit(1);
+    if (!session) return action === "create";
+    return (
+      session.userId === userId &&
+      (session.agentIds ?? []).includes(agentUserId)
+    );
+  }
+  if (subjectType === "channel") {
+    const [session] = await db
+      .select({ id: focusSessions.id })
+      .from(focusSessions)
+      .where(
+        and(
+          eq(focusSessions.channelId, subjectId),
+          eq(focusSessions.userId, userId),
+          sql`${agentUserId} = ANY(${focusSessions.agentIds})`
+        )
+      )
+      .limit(1);
+    return !!session;
+  }
+  return false;
 }
 
 /** How strict a resolution is — the host step keeps the stricter one. */
@@ -1510,12 +1611,26 @@ function strictness(r: AgentGovernanceResolution): number {
 export async function resolveAgentGovernanceDecision(
   input: ResolveAgentGovernanceInput
 ): Promise<AgentGovernanceResolution> {
-  const own = await resolveForPrincipal(input);
+  // F2: proven once, for the ACTING agent (the session's roster names it, not
+  // its computer), and only when rung 2.56 would otherwise read the count.
+  let ownBookkeeping: Promise<boolean> | undefined;
+  const principalInput: PrincipalInput = {
+    ...input,
+    ownSessionBookkeeping: () =>
+      (ownBookkeeping ??= isOwnSessionBookkeeping(input.db, {
+        userId: input.userId,
+        agentUserId: input.agentUserId,
+        subjectType: input.subjectType,
+        action: input.action,
+        subjectId: input.subjectEntityId,
+      })),
+  };
+  const own = await resolveForPrincipal(principalInput);
   if (own.resolution.decision === "not-agent" || !own.hostUserId) {
     return own.resolution;
   }
   const host = await resolveForPrincipal({
-    ...input,
+    ...principalInput,
     agentUserId: own.hostUserId,
   });
   if (host.resolution.decision === "not-agent") return own.resolution;
@@ -1524,9 +1639,12 @@ export async function resolveAgentGovernanceDecision(
     : own.resolution;
 }
 
-async function resolveForPrincipal(
-  input: ResolveAgentGovernanceInput
-): Promise<{
+/** The resolver's per-principal input: the proven F2 answer rides along. */
+type PrincipalInput = ResolveAgentGovernanceInput & {
+  ownSessionBookkeeping?: () => Promise<boolean>;
+};
+
+async function resolveForPrincipal(input: PrincipalInput): Promise<{
   resolution: AgentGovernanceResolution;
   hostUserId: string | null;
 }> {
@@ -1673,14 +1791,22 @@ async function resolveForPrincipal(
   // rung the single decision site (no verdict is synthesised here). The replay
   // of a held-writes pack a person approved is not counted: the person already
   // answered the ceiling for those writes.
-  if (decision.verdict === "execute" && !getHeldWritesApprovedBy()) {
+  // No ceiling row for this agent ⇒ no limit (the default, opt-in axis): the
+  // count is not even taken.
+  if (
+    decision.verdict === "execute" &&
+    !getHeldWritesApprovedBy() &&
+    !(await input.ownSessionBookkeeping?.())
+  ) {
     const limit = await resolveDailyWriteCeiling({
       db,
       agentUserId,
       workspaceId,
     });
-    const writesToday = await countAgentWritesTodayUtc(db, agentUserId);
-    if (writesToday >= limit) {
+    if (
+      limit !== null &&
+      (await countAgentWritesTodayUtc(db, agentUserId)) >= limit
+    ) {
       decision = decideAgentPolicy({
         ...basePolicyInput,
         ceilingVerdict: "propose",

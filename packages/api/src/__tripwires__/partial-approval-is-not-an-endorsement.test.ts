@@ -115,6 +115,8 @@ describe("partial approval is not an endorsement — widening gate (source)", ()
     // Exactly two consumers of the predicate: computeQualification's numerator
     // and computeDominantMotif's evidence set.
     expect(scanner.match(/rows\.filter\(isFullApproval\)/g)).toHaveLength(2);
+    // ...and the per-motif gate's numerator (F5), over the motif's decisions.
+    expect(scanner.match(/decided\.filter\(isFullApproval\)/g)).toHaveLength(1);
   });
 
   it("no status-only approval test survives in the scanner", () => {

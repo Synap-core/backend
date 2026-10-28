@@ -288,9 +288,9 @@ function renderNode(node: MdastNode): ReactNode {
 
 /**
  * `source` drawn read-only. Embeds arrive as directive nodes and are drawn by
- * `EmbedBlock` (a snapshot chart from its numbers; a record, a view or a cell
- * as a door or a named chip — the console runs no cells). A body already in
- * its readable form simply has no embeds left. Object markers
+ * `EmbedBlock` (a snapshot chart from its numbers; an HTML cell running in
+ * its isolated frame; a record, a view or any other cell as a door). A body
+ * already in its readable form simply has no embeds left. Object markers
  * (`[[entity:id|Ana]]`) become their console pages; the rest follows
  * `renderNode`.
  */

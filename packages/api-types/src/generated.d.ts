@@ -781,7 +781,7 @@ export type TemplateApplyStateName =
  | "active"
 /** Layer 2 only filed proposals (nothing failed). */
  | "awaiting-approval"
-/** A layer-2 item errored. */
+/** A layer-2 item errored, or waits on the person's setup (`needsSetup`). */
  | "partial"
 /** This door ran layer 1 only; the living layers were never applied. */
  | "layer-2-not-run"
@@ -816,7 +816,14 @@ export interface TemplateState {
 	/** Layer-1 resume ledger. */
 	completedSteps?: string[];
 	proposals?: string[];
+	/** Layer-2 items that errored, one line each: `<layer>:<name>: <reason>`. */
 	failures?: string[];
+	/**
+	 * Layer-2 items that wait on the PERSON, same line shape: a capability whose
+	 * key or account was not given, an automation that runs its verbs. Not a
+	 * retry: health tells the person what to set up.
+	 */
+	needsSetup?: string[];
 	packs?: TemplatePackEntry[];
 	/**
 	 * The template data changes (conversion opKeys) the last stamp is HELD for
@@ -1939,6 +1946,16 @@ export interface AutomationTriggerConfig {
 	/** Webhook subscription ID to listen on */
 	webhookSubscriptionId?: string;
 	/**
+	 * The inbound webhook source this automation listens to, BY NAME — what a
+	 * package declares (a row id is one pod's own). The create and update doors
+	 * and a template install bind it to the space's source of that name when a
+	 * person has created one, and set `webhookSubscriptionId`; they never create
+	 * a source. Created later, the source binds this automation then.
+	 */
+	webhookSource?: {
+		name: string;
+	};
+	/**
 	 * Only fire for events ABOUT this entity. Enforced by the trigger matcher
 	 * (`matchRuleScopeFilters`) on the event families in
 	 * `RULE_SCOPE_EVENT_PREFIXES.entityId`; on any other family a rule carrying
@@ -2087,7 +2104,7 @@ export interface OutputNodeDef extends AutomationNodeBase {
 	data: {
 		config: Record<string, unknown>;
 		label: string;
-		outputType: "channel_message" | "complete_outcome" | "entity_create" | "entity_update" | "facet_attach" | "facet_detach" | "facet_update" | "notification" | "post_evidence" | "reevaluate_criterion" | "relation_create" | "session_update" | "set_state" | "webhook";
+		outputType: "channel_message" | "complete_outcome" | "entity_create" | "entity_update" | "facet_attach" | "facet_detach" | "facet_update" | "notification" | "post_evidence" | "record_observation" | "reevaluate_criterion" | "relation_create" | "session_update" | "set_state" | "webhook";
 	};
 }
 export interface LoopNodeDef extends AutomationNodeBase {
@@ -6731,6 +6748,7 @@ export interface EventRecord {
 	proposalId?: string;
 	sessionId?: string;
 	appId?: string;
+	ceilingExempt?: boolean;
 }
 /**
  * One bucket of agent-run spend — a UTC day, or the whole window (`total`).
@@ -7064,6 +7082,147 @@ export interface WorkspacePreflightReport {
 }
 export type PackageDependencyKind = "automation" | "capability" | "cell" | "skill" | "view" | "workflow" | "workspace";
 export type PackageDependencyRelation = "compose" | "require";
+/**
+ * Why a handed-over secret came with no read for the agent.
+ *   `agent_unknown`  — the pod cannot tell which agent asked.
+ *   `not_grantable`  — a legacy client-encrypted secret the pod cannot read.
+ *   `key_not_allowed` — the key that answered may not grant vault access.
+ *   `agent_changed`  — the agent asking now is not the one the person was
+ *                      shown (`expectedGranteeId` on the answer).
+ */
+export type ProvideSecretGrantRefusal = "agent_changed" | "agent_unknown" | "key_not_allowed" | "not_grantable";
+/** What a secret answer did about the asking agent's access to it. */
+export type ProvideSecretGrant = {
+	agentName: string;
+	agentUserId: string;
+	/** ISO; `null` when an existing grant with no end already covered it. */
+	expiresAt: string | null;
+	status: "granted";
+} | {
+	reason: ProvideSecretGrantRefusal;
+	status: "refused";
+}
+/** The read could not be written; the hand-over stands. */
+ | {
+	status: "failed";
+};
+/**
+ * What `provideOptions` says a secret hand-over WILL do, before the person
+ * presses: the agent it will grant a read to, or why none will be granted.
+ */
+export type ProvideSecretGrantOffer = {
+	agentName: string;
+	/** Sent back on the answer as `expectedGranteeId`. */
+	agentUserId: string;
+	minutes: number;
+	status: "will_grant";
+} | {
+	reason: ProvideSecretGrantRefusal;
+	status: "no_grant";
+};
+/** Why a new connection can't be started from this pod. */
+export type ProvideConnectUnavailableReason = "no_broker" | "not_offered" | "unreadable";
+declare const SECRET_TYPES: readonly [
+	"password",
+	"api_key",
+	"credential",
+	"note",
+	"card",
+	"identity",
+	"ssh_key",
+	"certificate",
+	"env_variable",
+	"database",
+	"oauth"
+];
+export type SecretType = (typeof SECRET_TYPES)[number];
+/** Kind of thing that consumes/uses a secret. */
+export type SecretConsumerType = "automation" | "capability" | "connection" | "entity" | "tool" | "url";
+/**
+ * One "this secret is used by X" record — surfaced in the Connections face.
+ * Backed by the `secret_usages` join (falls back to `capability_id`/context).
+ */
+export interface SecretUsage {
+	id: string;
+	secretId: string;
+	consumerType: SecretConsumerType;
+	consumerId: string;
+	consumerLabel: string;
+	contextType?: string | null;
+	contextId?: string | null;
+	workspaceId?: string | null;
+}
+/**
+ * A single grant of access to a secret (which agent/workspace can use it) —
+ * surfaced in the Access face. Backed by `vault_grants`. This is the ONE
+ * canonical shape: `listGrants`, `listAllGrants`, and `getDetailBundle.grants`
+ * all return it. `secretName`/`secretType`/`granteeLabel`/`granteeType` are
+ * only populated by `listAllGrants` (which spans multiple secrets and resolves
+ * grantee identity); they are `null` from the per-secret endpoints.
+ */
+export interface SecretGrantView {
+	grantId: string;
+	grantedTo: string;
+	scope: string;
+	expiresAt?: string | null;
+	/** Uses remaining: null = unlimited; clamped at 0 when exhausted. */
+	usesRemaining?: number | null;
+	workspaceId?: string | null;
+	revokedAt?: string | null;
+	/** True when not revoked, not expired, and uses remain. */
+	active: boolean;
+	/** Populated by `listAllGrants` only; null elsewhere. */
+	secretName?: string | null;
+	secretType?: SecretType | null;
+	granteeLabel?: string | null;
+	granteeType?: "agent" | "user" | "workspace" | null;
+}
+/**
+ * A single audit event for a secret (created/revealed/copied/updated/shared) —
+ * surfaced in the Activity face. Backed by `secret_audit_log`.
+ */
+export interface SecretActivityEvent {
+	id: string;
+	action: string;
+	actorType: "agent" | "user";
+	actorLabel?: string | null;
+	createdAt: string;
+}
+/**
+ * The full four-faces bundle for a secret detail view — identity metadata plus
+ * where it is used, who can access it, and its recent activity. Fetched in one
+ * call to reduce detail round-trips.
+ */
+export interface SecretDetailBundle {
+	id: string;
+	name: string;
+	type: SecretType;
+	category?: string | null;
+	url?: string | null;
+	description?: string | null;
+	isFavorite: boolean;
+	createdAt: string;
+	updatedAt: string;
+	usages: SecretUsage[];
+	grants: SecretGrantView[];
+	recentActivity: SecretActivityEvent[];
+}
+declare const AskCauseSchema: z.ZodObject<{
+	at: z.ZodOptional<z.ZodString>;
+	kind: z.ZodEnum<{
+		criterion: "criterion";
+		decision: "decision";
+		external_approval: "external_approval";
+		gate: "gate";
+		param: "param";
+		run: "run";
+	}>;
+	ref: z.ZodOptional<z.ZodObject<{
+		id: z.ZodString;
+		kind: z.ZodString;
+	}, z.core.$strip>>;
+}, z.core.$strip>;
+export type AskCause = z.infer<typeof AskCauseSchema>;
 export type RecordSessionSpawnResult = {
 	linked: true;
 	suspendedIntentRecorded: boolean;
@@ -7786,131 +7945,6 @@ export interface Context {
 	 * exempt entities from the edit check.
 	 */
 	revertPass?: RevertPass;
-}
-/**
- * Why a handed-over secret came with no read for the agent.
- *   `agent_unknown`  — the pod cannot tell which agent asked.
- *   `not_grantable`  — a legacy client-encrypted secret the pod cannot read.
- *   `key_not_allowed` — the key that answered may not grant vault access.
- *   `agent_changed`  — the agent asking now is not the one the person was
- *                      shown (`expectedGranteeId` on the answer).
- */
-export type ProvideSecretGrantRefusal = "agent_changed" | "agent_unknown" | "key_not_allowed" | "not_grantable";
-/** What a secret answer did about the asking agent's access to it. */
-export type ProvideSecretGrant = {
-	agentName: string;
-	agentUserId: string;
-	/** ISO; `null` when an existing grant with no end already covered it. */
-	expiresAt: string | null;
-	status: "granted";
-} | {
-	reason: ProvideSecretGrantRefusal;
-	status: "refused";
-}
-/** The read could not be written; the hand-over stands. */
- | {
-	status: "failed";
-};
-/**
- * What `provideOptions` says a secret hand-over WILL do, before the person
- * presses: the agent it will grant a read to, or why none will be granted.
- */
-export type ProvideSecretGrantOffer = {
-	agentName: string;
-	/** Sent back on the answer as `expectedGranteeId`. */
-	agentUserId: string;
-	minutes: number;
-	status: "will_grant";
-} | {
-	reason: ProvideSecretGrantRefusal;
-	status: "no_grant";
-};
-/** Why a new connection can't be started from this pod. */
-export type ProvideConnectUnavailableReason = "no_broker" | "not_offered" | "unreadable";
-declare const SECRET_TYPES: readonly [
-	"password",
-	"api_key",
-	"credential",
-	"note",
-	"card",
-	"identity",
-	"ssh_key",
-	"certificate",
-	"env_variable",
-	"database",
-	"oauth"
-];
-export type SecretType = (typeof SECRET_TYPES)[number];
-/** Kind of thing that consumes/uses a secret. */
-export type SecretConsumerType = "automation" | "capability" | "connection" | "entity" | "tool" | "url";
-/**
- * One "this secret is used by X" record — surfaced in the Connections face.
- * Backed by the `secret_usages` join (falls back to `capability_id`/context).
- */
-export interface SecretUsage {
-	id: string;
-	secretId: string;
-	consumerType: SecretConsumerType;
-	consumerId: string;
-	consumerLabel: string;
-	contextType?: string | null;
-	contextId?: string | null;
-	workspaceId?: string | null;
-}
-/**
- * A single grant of access to a secret (which agent/workspace can use it) —
- * surfaced in the Access face. Backed by `vault_grants`. This is the ONE
- * canonical shape: `listGrants`, `listAllGrants`, and `getDetailBundle.grants`
- * all return it. `secretName`/`secretType`/`granteeLabel`/`granteeType` are
- * only populated by `listAllGrants` (which spans multiple secrets and resolves
- * grantee identity); they are `null` from the per-secret endpoints.
- */
-export interface SecretGrantView {
-	grantId: string;
-	grantedTo: string;
-	scope: string;
-	expiresAt?: string | null;
-	/** Uses remaining: null = unlimited; clamped at 0 when exhausted. */
-	usesRemaining?: number | null;
-	workspaceId?: string | null;
-	revokedAt?: string | null;
-	/** True when not revoked, not expired, and uses remain. */
-	active: boolean;
-	/** Populated by `listAllGrants` only; null elsewhere. */
-	secretName?: string | null;
-	secretType?: SecretType | null;
-	granteeLabel?: string | null;
-	granteeType?: "agent" | "user" | "workspace" | null;
-}
-/**
- * A single audit event for a secret (created/revealed/copied/updated/shared) —
- * surfaced in the Activity face. Backed by `secret_audit_log`.
- */
-export interface SecretActivityEvent {
-	id: string;
-	action: string;
-	actorType: "agent" | "user";
-	actorLabel?: string | null;
-	createdAt: string;
-}
-/**
- * The full four-faces bundle for a secret detail view — identity metadata plus
- * where it is used, who can access it, and its recent activity. Fetched in one
- * call to reduce detail round-trips.
- */
-export interface SecretDetailBundle {
-	id: string;
-	name: string;
-	type: SecretType;
-	category?: string | null;
-	url?: string | null;
-	description?: string | null;
-	isFavorite: boolean;
-	createdAt: string;
-	updatedAt: string;
-	usages: SecretUsage[];
-	grants: SecretGrantView[];
-	recentActivity: SecretActivityEvent[];
 }
 /**
  * Capture routing — the ONE mapping from a `capture.structure` result to the
@@ -10917,6 +10951,39 @@ export interface NeedsYouInvite {
 	spaceName: string | null;
 }
 /**
+ *   `expires`          — an ephemeral ask with a lifetime: lapses at
+ *                        `expiresAt`. `orSessionEnd` when it is bound to a
+ *                        session too: closing the session retires it as well,
+ *                        so it goes at the EARLIER of the two.
+ *   `dies_with_session` — a session-bound draft: retired when its session ends.
+ *   `review_later`     — objectWork untouched for 7 days: out of the headline
+ *                        count, kept in the Review later pile `since` then.
+ *   `until_decided`    — waits for a decision, with no deadline.
+ */
+export type ProposalFate = {
+	expiresAt: string;
+	kind: "expires";
+	orSessionEnd: boolean;
+} | {
+	kind: "dies_with_session";
+} | {
+	kind: "until_decided";
+} | {
+	kind: "review_later";
+	since: string;
+};
+declare const PROPOSAL_WAIT_REASONS: readonly [
+	"gate",
+	"owed_slot",
+	"parked_run"
+];
+export type ProposalWaitReason = (typeof PROPOSAL_WAIT_REASONS)[number];
+export interface ProposalWaits {
+	waits: boolean;
+	/** Present only when `waits`. */
+	reason?: ProposalWaitReason;
+}
+/**
  * CONNECTION EVENT LINES — the ONE rule that turns a connection's lifecycle
  * event into a human line.
  *
@@ -11098,7 +11165,9 @@ export type BlockedReason = (typeof BLOCKED_REASONS)[number];
 declare const OUTPUT_RETIRED_REASONS: readonly [
 	"session_cancelled",
 	"decision_resolved",
-	"withdrawn"
+	"withdrawn",
+	"session_ended",
+	"not_asked"
 ];
 export type OutputRetiredReason = (typeof OUTPUT_RETIRED_REASONS)[number];
 declare const OUTPUT_REF_KINDS: readonly [
@@ -11298,6 +11367,12 @@ export interface ExpectedOutput {
 	/** WHY it was retired — one of {@link OUTPUT_RETIRED_REASONS}. */
 	retiredReason?: OutputRetiredReason;
 	/**
+	 * KEPT-OWED receipt — the closing agent left this ask owed past the end of
+	 * its session (`questionDispositions` `keep_as_owed`), so it no longer ends
+	 * with the session: stamped by the close door only.
+	 */
+	keptOwedAt?: string;
+	/**
 	 * WHERE to go for this deliverable — see {@link OutputRef}.
 	 *
 	 * The reason it exists: an agent that declares an owed slot, or blocks one on
@@ -11394,6 +11469,13 @@ export interface ExpectedOutput {
 	 */
 	answerPickedUpAt?: string;
 	/**
+	 * A relayed answer to a `commitment` ask, waiting for the person's tap — see
+	 * {@link SlotPendingRelay}. SERVER-STAMPED by the relay door only; the
+	 * slot stays owed (`owner: 'human'`) while it is here, and the person's
+	 * Confirm / "Not what I said" clears it.
+	 */
+	pendingRelay?: SlotPendingRelay;
+	/**
 	 * HOW the person can answer this slot — see {@link SlotAsk}. DECLARED by the
 	 * agent (with `owner: 'human'` + `blockedReason` + `why`), never stamped:
 	 * `blockedReason` says WHY it is blocked, `why`/`ref` WHAT and WHERE, and
@@ -11409,6 +11491,23 @@ export interface ExpectedOutput {
 	 * answer; the answer's `question` keeps what was asked.
 	 */
 	ask?: SlotAsk | null;
+	/**
+	 * WHO asked — the agent user that handed this slot to the person (or posed
+	 * its current ask). SERVER-STAMPED from the acting door's verified auth
+	 * context, the same agent the `slot_asked` event records; never authored by
+	 * a client. Present only while the slot is owed (cleared with `owedSince`),
+	 * and ABSENT when the person handed it to themselves or no agent can be
+	 * named — a card then names the {@link askCause}, or nobody.
+	 */
+	askedBy?: string;
+	/**
+	 * WHAT raised the ask when no agent did — see {@link SlotAskCause}.
+	 * SERVER-STAMPED by the system producer that wrote the owed slot (the
+	 * decision-ask reactor, a run's turn end, an external agent's approval),
+	 * cleared with `owedSince`. A card names it as a door ("From your decision
+	 * note · 29 Sep") instead of inventing an agent.
+	 */
+	askCause?: SlotAskCause;
 	/**
 	 * The relation type written OUTPUT → SUBJECT when this slot is satisfied
 	 * (e.g. `made_for`, `derived_from`). DECLARED by the playbook author (or the
@@ -11461,7 +11560,9 @@ export interface SlotSubjectEdge {
  */
 export type SlotAsk = ({
 	mode: "confirm";
+	no?: SlotAskConfirmAnswer;
 	prompt?: string;
+	yes?: SlotAskConfirmAnswer;
 } | {
 	allowOther?: boolean;
 	mode: "choose";
@@ -11487,7 +11588,16 @@ export type SlotAsk = ({
 	lookedAt?: SlotAskLookedAt[];
 	/** How much is at stake: high and medium draw a mark, low draws nothing. */
 	risk?: "high" | "low" | "medium";
+	/**
+	 * What answering COMMITS the person to — mirrors `AskStakes`
+	 * (`@synap-core/types/ask`). Absent reads `routine`. The pod only ever
+	 * RAISES it (`effectiveAskStakes`): a relayed answer to a `commitment`
+	 * waits for the person's tap.
+	 */
+	stakes?: SlotAskStakes;
 };
+/** Mirrors `ASK_STAKES` (@synap-core/types/ask). */
+export type SlotAskStakes = "commitment" | "routine";
 /** One object an ask cites as read. Mirrors `AskLookedAtRef` (@synap-core/types/ask). */
 export interface SlotAskLookedAt {
 	kind: SlotAskLookedAtKind;
@@ -11498,6 +11608,27 @@ export interface SlotAskLookedAt {
 /** Mirrors `ASK_LOOKED_AT_KINDS` — a subset of {@link OUTPUT_REF_KINDS}. */
 export type SlotAskLookedAtKind = Extract<OutputRefKind, "automation" | "document" | "entity" | "playbook" | "view">;
 /** One offered answer (capture's chip minus its apply fields). */
+/**
+ * What raised a system ask (no agent asked). STRUCTURAL MIRROR of `AskCause`
+ * (`@synap-core/types/ask`), pinned mutual by `update-session.ts`.
+ */
+export interface SlotAskCause {
+	kind: SlotAskCauseKind;
+	/** The object the cause is (the decision, the run, the session). */
+	ref?: {
+		id: string;
+		kind: string;
+	};
+	/** ISO — when the cause happened (the decision note's date). */
+	at?: string;
+}
+export type SlotAskCauseKind = "criterion" | "decision" | "external_approval" | "gate" | "param" | "run";
+/** One side of a confirm — mirror of `AskConfirmAnswer`. At most ONE recommended. */
+export interface SlotAskConfirmAnswer {
+	label?: string;
+	description?: string;
+	recommended?: boolean;
+}
 export interface SlotAskOption {
 	label: string;
 	/** Absent ⇒ the label IS the value. */
@@ -11581,10 +11712,42 @@ export type SlotAnswerValue = {
 	type: "provide";
 };
 /**
- * A person's answer to an agent's question about one slot. Server-stamped as a
- * unit; never authored by a client (it sits in `SERVER_STAMPED_OUTPUT_FIELDS`).
+ * WHERE an answer came from — STRUCTURAL MIRROR of `AnswerProvenance`
+ * (`@synap-core/types/ask`), pinned mutually assignable in api
+ * `update-session.ts`. All absent = a tap recorded before relays existed;
+ * `answerVia` there reads it.
  */
-export interface SlotAnswer {
+export interface SlotAnswerProvenance {
+	/** `tap` = the person answered in the pod; `relayed` = an agent carried their chat words. */
+	via?: "relayed" | "tap";
+	/** The relaying agent's user id. */
+	relayedBy?: string;
+	/** Where the words were said (`claude-code`). */
+	relaySurface?: string;
+	/** The person's own words, verbatim. */
+	quote?: string;
+	/** The person confirmed a relayed answer (set with `via: 'tap'` only). */
+	confirmedAt?: string;
+}
+/**
+ * A relayed answer to a `commitment` ask, held until the person taps — mirror
+ * of `PendingRelayedAnswer` (`@synap-core/types/ask`), which says why it sits
+ * beside `answer` rather than on it.
+ */
+export interface SlotPendingRelay {
+	text: string;
+	value?: SlotAnswerValue;
+	relayedBy: string;
+	relaySurface?: string;
+	quote?: string;
+	relayedAt: string;
+}
+/**
+ * A person's answer to an agent's question about one slot. Server-stamped as a
+ * unit; never authored by a client (it sits in `SERVER_STAMPED_OUTPUT_FIELDS`)
+ * — its provenance fields included.
+ */
+export interface SlotAnswer extends SlotAnswerProvenance {
 	/** What the person said. */
 	text: string;
 	/**
@@ -11846,9 +12009,11 @@ export interface PostChannelMessageResult {
 	 * `failed`). A slot the session does not declare, or a room with no
 	 * session, is REFUSED before posting (`checkRoomQuestionSlot`), so
 	 * `unknown_label` / `no_session` only reach here on a race. Absent for
-	 * every other post.
+	 * every other post. `hint` when the ask's prompt only repeats the slot's
+	 * label (`ask-text.ts`): filed anyway, said back.
 	 */
 	slot?: {
+		hint?: string;
 		status: string;
 	};
 }
@@ -12730,6 +12895,11 @@ export interface ProposalCluster {
 	class: ProposalClass;
 	/** Hours this class stays answerable; `null` when it never expires. */
 	lifetimeHours: number | null;
+	/**
+	 * Every member is in Review later (see `ClusterInputRow.reviewLater`): the
+	 * cluster is out of the needs-you headline and drawn in its own fold.
+	 */
+	reviewLater: boolean;
 	count: number;
 	/** Up to `sampleCap` member proposal ids (newest-first as fed). */
 	sampleProposalIds: string[];
@@ -13057,6 +13227,19 @@ export interface ApprovalRunView {
 	startedAt: string | null;
 	finishedAt: string | null;
 	updatedAt: string;
+}
+/** What "allow today" raised the agent's daily write ceiling to. */
+export interface AllowedToday {
+	ceilingId: string;
+	agentUserId: string;
+	/** The limit in force for the rest of the UTC day. */
+	limit: number;
+	/** The limit it was raised from (what applies again from `expiresAt`). */
+	previousLimit: number;
+	/** ISO time the raise ends: the next 00:00 UTC. */
+	expiresAt: string;
+	/** True when an earlier "allow today" had already raised it for today. */
+	alreadyAllowed: boolean;
 }
 /**
  * The complete created-rows record. Extends the shared
@@ -13828,6 +14011,18 @@ export interface EmbeddingPipelineHealth {
 	recentCompleted: number;
 	windowMinutes: number;
 }
+export interface InboundWebhookSource {
+	id: string;
+	name: string;
+	workspaceId: string;
+	active: boolean;
+	createdAt: Date;
+	lastTriggeredAt: Date | null;
+	/** The door's path, always known. */
+	inboundPath: string;
+	/** The full payload URL, or null when the pod has no `PUBLIC_URL`. */
+	inboundUrl: string | null;
+}
 declare const CAPTURE_STATUSES: readonly [
 	"structured",
 	"saved_without_ai",
@@ -14262,12 +14457,48 @@ export interface OwedSlot {
 	 * floor; a ref the reader cannot see is dropped (`looked-at.ts`).
 	 */
 	ask?: SlotAsk;
+	/**
+	 * A relayed answer waiting for the person's tap (`ExpectedOutput.
+	 * pendingRelay`, a `commitment` an agent relayed from a chat) — carried so
+	 * the row is a one-tap Confirm / "Not what I said" in place.
+	 */
+	pendingRelay?: SlotPendingRelay;
+	/**
+	 * WHO asked (`ExpectedOutput.askedBy`, the agent user) and its display
+	 * NAME, resolved by {@link listOwedSlots} in one batched read — the same
+	 * `actorDisplayName` the session roster shows. The name is absent when the
+	 * pod cannot name the asker; a card then names the cause, or nobody.
+	 */
+	askedBy?: string;
+	askedByName?: string;
+	/**
+	 * WHAT raised it when no agent did (`effectiveAskCause`: the stamped cause,
+	 * else a criterion / param slot's own) — the card's door.
+	 */
+	askCause?: AskCause;
+	/**
+	 * The close door's receipt that the closing agent kept this ask owed past
+	 * its session (`ExpectedOutput.keptOwedAt`) — the card's fate then never
+	 * says it ends with the session.
+	 */
+	keptOwedAt?: string;
+	/**
+	 * A param slot's param (`ExpectedOutput.paramName`): what it asks the
+	 * person to set. Its cause is already on `askCause`; the name travels so a
+	 * surface hands the whole row to the card adapter (`askCardSlotOf`).
+	 */
+	paramName?: string;
 }
 /** Where the person finds a session's asks in their Inbox. */
 export type OwedInbox = "needs-you" | "proposed";
 export interface OwedByPerson {
-	/** Owed slots across every session (both lenses). */
+	/** Owed slots across every session (both lenses), Review later excluded. */
 	count: number;
+	/**
+	 * Needs-you asks owed for more than 7 days — in Review later, out of the
+	 * headline (`isAskReviewLater`, the predicate the needs-you count reads).
+	 */
+	reviewLater: number;
 	/** Sessions holding at least one. */
 	sessions: number;
 	/** True when a lens hit its read cap — "at least this many". */
@@ -14657,11 +14888,21 @@ export interface PacketDeployApproval {
 	repo: string | null;
 	targetHost: string | null;
 	approvedAt: string | null;
+	/** The session it was approved on; set on `ownerDeploys` entries. */
+	sessionId?: string;
 }
 export type PacketGatesSection = {
 	deploy: PacketDeployApproval | null;
 	/** In the process's stage order. Not capped: one entry per gated stage. */
 	items: PacketGateItem[];
+	/**
+	 * Every `dev.deploy_approval` a PERSON approved on ANY session of this
+	 * session's owner in the last 14 days, newest first (at most 20). An
+	 * approval belongs to the work and its commit, not to the session or
+	 * agent that asked (founder, 2026-10-28): a deploy gate accepts a commit
+	 * any of these covers.
+	 */
+	ownerDeploys: PacketDeployApproval[];
 	status: "ok";
 } | {
 	reason: string;
@@ -14930,6 +15171,28 @@ export interface PacketQuestionItem {
 	askedAt: string | null;
 }
 /**
+ * An agent's question in the session's ROOM still waiting on the person —
+ * `post_message kind:'question'`, slot or not. What an agent addresses when
+ * it relays the person's chat answer (`synap_relay_answer` `messageId`).
+ */
+export interface PacketRoomQuestionItem {
+	/** The question's message id — the relay door's exact address. */
+	messageId: string;
+	/** `Q-` + the id's first 8 characters: how an agent names it in a chat. */
+	shortId: string;
+	text: string;
+	askedAt: string | null;
+	/** The agent that asked (`messages.routed_teammate_id`). */
+	askedBy: string | null;
+	/** The output it is about, when it names one. */
+	slotLabel?: string;
+	/**
+	 * `open`, or `awaiting_your_tap` when an agent relayed a commitment's answer
+	 * and the person's Confirm is still owed (`questionDisposition`).
+	 */
+	disposition: "awaiting_your_tap" | "open";
+}
+/**
  * Work that already landed — "do not redo". `source` names the ledger:
  *  - `output`: a produced object that is not in progress or swept;
  *  - `deliverable`: a declared slot stamped done (approved or attested) with no
@@ -15105,6 +15368,13 @@ export interface ContinuationPacket {
 	/** Capture clarification questions still open in this session's room, oldest first. */
 	openQuestions: PacketSection<PacketQuestionItem>;
 	/**
+	 * AGENT questions still open in this session's room, oldest first — read
+	 * through the ONE open-question predicate (`openRoomQuestionConditions`,
+	 * `@synap/database`), the rule needs-you and the answer loop read. Distinct
+	 * from `openQuestions` (capture clarifications).
+	 */
+	openRoomQuestions: PacketSection<PacketRoomQuestionItem>;
+	/**
 	 * THE STAGE BRIEF — what the EARLIER stages of this session's track produced,
 	 * so a stage starts from pod references, never from the previous chat.
 	 * DERIVED, no edge: the sessions filed (`track_stage`) at a stage before this
@@ -15211,8 +15481,10 @@ export interface ContinuationPacket {
 	/**
 	 * GATES — every gated stage of the session's process and its state, DERIVED
 	 * FROM PROPOSAL ROWS only (`session-gates.ts`), plus `deploy`: the newest
-	 * `dev.deploy_approval` a PERSON approved. "Is commit X approved to ship by a
-	 * human?" is `deploy?.commitSha` prefix-matching X.
+	 * `dev.deploy_approval` a PERSON approved, and `ownerDeploys`: the ones a
+	 * person approved on any of the owner's sessions. "Is commit X approved to
+	 * ship by a human?" is `deploy?.commitSha`, or any `ownerDeploys[].commitSha`,
+	 * prefix-matching X.
 	 */
 	gates: PacketGatesSection;
 	/**
@@ -15318,6 +15590,11 @@ export interface StartHere {
 		oldestDays?: number;
 		/** Deep link to the OLDEST pending proposal (the one to review first). */
 		oldestLink?: string;
+		/**
+		 * Untouched durable proposals (7+ days) moved to Review later — NOT in
+		 * `count`. Absent when none.
+		 */
+		reviewLater?: number;
 	} | StartHereUnavailable;
 	/**
 	 * Open BLOCKER-class `finding` entities — known defects in Synap itself the
@@ -16103,8 +16380,30 @@ export interface AgentScorecard {
 	agentId: string;
 	agentName: string | null;
 	agentType: string | null;
-	/** Proposals scanned to build this card (capped). */
+	/**
+	 * Proposals counted on this card: every one the agent filed inside
+	 * `window` (the same number as `counts.total`). Counted in SQL, never capped.
+	 */
 	sampled: number;
+	/**
+	 * The period every count and rate on this card covers: the last
+	 * `days` days, from `from` to `to` (ISO timestamps). The same 7 days as the
+	 * Agents page's "N writes · 7d".
+	 */
+	window: {
+		days: number;
+		from: string;
+		to: string;
+	};
+	/**
+	 * `rates.duplicateRate` alone is a SAMPLE: clustering needs every payload, so
+	 * it reads the newest `size` proposals of the window (at most `limit`). When
+	 * `size` < `counts.total`, older proposals of the window are not in it.
+	 */
+	duplicateSample: {
+		limit: number;
+		size: number;
+	};
 	counts: {
 		/** FULLY approved — every item of the package was applied. */
 		approved: number;
@@ -16123,7 +16422,7 @@ export interface AgentScorecard {
 	rates: {
 		/** FULLY approved (incl. auto) / total — partial applies excluded. */
 		approveRate: number;
-		/** share of proposals landing in a same-shape cluster (size > 1) */
+		/** share of the `duplicateSample` landing in a same-shape cluster (size > 1) */
 		duplicateRate: number;
 		/** partially approved / total */
 		partialApproveRate: number;
@@ -19300,6 +19599,14 @@ export type AnswerExpectedOutputResult = {
 /** The slot's ask is no longer the one the answer was given against. */
  | {
 	status: "ask_changed";
+}
+/** `requireOpenAsk`: the person answered it, or it is no longer theirs. */
+ | {
+	status: "not_open";
+}
+/** `confirmsRelayAt`: the relay the person confirmed is no longer there. */
+ | {
+	status: "no_pending_relay";
 } | {
 	answer: SlotAnswer;
 	/** The slot as it stood BEFORE the answer — who it was delegated to, etc. */
@@ -20906,6 +21213,26 @@ export interface Signal {
 	 */
 	ask?: SlotAsk;
 	/**
+	 * A relayed answer to an `owed-slot` waiting for the person's tap
+	 * (`ExpectedOutput.pendingRelay`) — the row's one-tap Confirm / "Not what I
+	 * said" (`focusSessions.answerOutput` `confirmRelayed` / `rejectRelayed`).
+	 * Absent when no relay waits, and on every other kind.
+	 */
+	pendingRelay?: SlotPendingRelay;
+	/**
+	 * An `owed-slot` the closing agent kept owed past its session
+	 * (`ExpectedOutput.keptOwedAt`) — its fate is no longer "ends with the
+	 * session". Absent otherwise, and on every other kind.
+	 */
+	keptOwedAt?: string;
+	/**
+	 * A param slot's param (`ExpectedOutput.paramName`) — carried so a surface
+	 * hands the whole row to the one card adapter (`askCardSlotOf`) and names
+	 * the cause the same way the session page does. Absent on every other slot
+	 * and kind.
+	 */
+	paramName?: string;
+	/**
 	 * Decision CLASS of a `proposal-cluster` signal, carried straight off the
 	 * cluster (which derives it through `proposalClassFields`, the one door) —
 	 * and `access` on an `access-request`, which is the same decision (who may
@@ -20931,6 +21258,15 @@ export interface Signal {
 	 */
 	lifetimeHours?: number | null;
 	/**
+	 * A `proposal-cluster` whose members all sat untouched for 7 days
+	 * (`ProposalCluster.reviewLater`, the ONE count predicate), or an
+	 * `owed-slot` owed for more than 7 days (`isAskReviewLater`, the same
+	 * clock — founder, 2026-10-26): drawn in the Review later fold, OUT of
+	 * the headline — `countNeedsYou` counts it as `reviewLater`, never in
+	 * `needsYou`. Absent on every other row.
+	 */
+	reviewLater?: true;
+	/**
 	 * WHERE the row came from — the small provenance door (lens grammar §5: a
 	 * source is shown only when it differs from the page's scope; the client
 	 * decides that with `visibleSource`, `@synap-core/types/lens`). The most
@@ -20941,15 +21277,23 @@ export interface Signal {
 	source?: SignalSource;
 	/**
 	 * WHO asked — the ONE agent that filed it, as a door to the agent's page
-	 * ("from Claude Code"). `proposal-cluster` only, and only when EVERY member
+	 * ("from Claude Code"). On a `proposal-cluster` only when EVERY member
 	 * came from that agent (`ProposalCluster.agent`); several agents, or a
-	 * member a person filed, sends none rather than a guessed one.
+	 * member a person filed, sends none rather than a guessed one. On an
+	 * `owed-slot`, the agent that asked it (`ExpectedOutput.askedBy`), only
+	 * when the pod can name it.
 	 */
 	by?: {
 		id: string;
 		kind: "agent";
 		label: string;
 	};
+	/**
+	 * `owed-slot` only: WHAT raised the ask when no agent did (the decision
+	 * note, the run, the gate…) — the card names it as a door instead of
+	 * inventing "an agent" (`askCardView`, `@synap-core/types/ask`).
+	 */
+	askCause?: AskCause;
 	/** `live-session` only: the liveness facts the "working now" rule read. */
 	live?: SessionActivityLive;
 	/**
@@ -23776,6 +24120,34 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				message: string;
 				proposalId: string;
 				status: "proposed";
+			} | {
+				id: string | null;
+				message: string;
+				proposalId: string | null;
+				status: "created";
+				webhookSource: {
+					bound: true;
+					id: string;
+					inboundPath: string;
+					inboundUrl: string | null;
+					name: string;
+					next?: undefined;
+					secret: string;
+				};
+			} | {
+				id: string | null;
+				message: string;
+				proposalId: string | null;
+				status: "created";
+				webhookSource: {
+					bound: false;
+					id?: undefined;
+					inboundPath?: undefined;
+					inboundUrl?: undefined;
+					name: string;
+					next: string;
+					secret?: undefined;
+				};
 			} | {
 				id: string | null;
 				message: string;
@@ -30750,6 +31122,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				agentUserId?: string;
 				appId?: string;
 				causationId?: string;
+				ceilingExempt?: boolean;
 				correlationId?: string;
 				costUsd?: number | null;
 				data: Record<string, unknown>;
@@ -31001,8 +31374,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		answerOutput: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				askFingerprint?: string | undefined;
+				confirmRelayed?: true | undefined;
 				expectedGranteeId?: string | undefined;
-				expectedLabel: string;
+				expectedLabel?: string | undefined;
+				questionId?: string | undefined;
+				rejectRelayed?: true | undefined;
 				sessionId: string;
 				text?: string | undefined;
 				value?: {
@@ -31047,6 +31423,22 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: {
+				decision?: {
+					decisionId: string;
+					status: "reopened";
+				} | {
+					decisionId: string;
+					reason: string;
+					status: "failed";
+				};
+				dropped: "answer" | "pending";
+				expectedLabel: string | null;
+				ok: true;
+				questionId: string | null;
+				relayedBy: string;
+				reopened: boolean;
+				status: "corrected";
+			} | {
 				answer: Extract<AnswerExpectedOutputResult, {
 					status: "answered";
 				}>["answer"];
@@ -31163,8 +31555,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						kind: "automation" | "document" | "entity" | "playbook" | "view";
 					}[] | undefined;
 					mode: "confirm";
+					no?: {
+						description?: string | undefined;
+						label?: string | undefined;
+						recommended?: boolean | undefined;
+					} | undefined;
 					prompt?: string | undefined;
 					risk?: "high" | "low" | "medium" | undefined;
+					stakes?: "commitment" | "routine" | undefined;
+					yes?: {
+						description?: string | undefined;
+						label?: string | undefined;
+						recommended?: boolean | undefined;
+					} | undefined;
 				} | {
 					allowOther?: boolean | undefined;
 					lookedAt?: {
@@ -31192,6 +31595,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						value?: string | undefined;
 					}[];
 					risk?: "high" | "low" | "medium" | undefined;
+					stakes?: "commitment" | "routine" | undefined;
 				} | {
 					form: {
 						fields: {
@@ -31216,6 +31620,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					}[] | undefined;
 					mode: "form";
 					risk?: "high" | "low" | "medium" | undefined;
+					stakes?: "commitment" | "routine" | undefined;
 				} | {
 					lookedAt?: {
 						id: string;
@@ -31223,6 +31628,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					}[] | undefined;
 					mode: "act";
 					risk?: "high" | "low" | "medium" | undefined;
+					stakes?: "commitment" | "routine" | undefined;
 					steps?: string[] | undefined;
 					url?: string | undefined;
 				} | {
@@ -31242,6 +31648,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						name: string;
 					};
 					risk?: "high" | "low" | "medium" | undefined;
+					stakes?: "commitment" | "routine" | undefined;
 				} | null | undefined;
 				blockedReason: "capability" | "credential" | "decision" | "permission" | "physical" | "policy";
 				expectedLabel: string;
@@ -31347,6 +31754,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				alreadyClosed: boolean;
 				cancel: SessionCancelRecord | null;
 				counts: {
+					closedQuestions: number;
 					expiredEphemerals: number;
 					pending: number;
 					retiredSlots: number;
@@ -31464,8 +31872,270 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							thenKey?: string | undefined;
 							why?: string | undefined;
 						} | undefined;
+						confirmedAt?: string | undefined;
 						messageId: string | null;
 						question?: string | undefined;
+						quote?: string | undefined;
+						relaySurface?: string | undefined;
+						relayedBy?: string | undefined;
+						text: string;
+						value?: {
+							type: "text";
+						} | {
+							confirmed: boolean;
+							type: "confirm";
+						} | {
+							chip: {
+								caution?: string | undefined;
+								description?: string | undefined;
+								icon?: string | undefined;
+								label: string;
+								recommended?: boolean | undefined;
+								value?: string | undefined;
+							};
+							then?: {
+								caution?: string | undefined;
+								description?: string | undefined;
+								icon?: string | undefined;
+								label: string;
+								recommended?: boolean | undefined;
+								value?: string | undefined;
+							} | undefined;
+							type: "chip";
+						} | {
+							type: "form";
+							values: Record<string, unknown>;
+						} | {
+							ref: {
+								kind: "secret";
+								vaultRef: string;
+							} | {
+								connectionId: string;
+								kind: "connection";
+							} | {
+								fileId: string;
+								kind: "file";
+							};
+							type: "provide";
+						} | undefined;
+						via?: "relayed" | "tap" | undefined;
+					} | undefined;
+					answerHistory?: {
+						answeredAt: string;
+						answeredBy: string;
+						askSnapshot?: {
+							chosenKey: string | null;
+							followedRecommendation: boolean | null;
+							lookedAt?: {
+								id: string;
+								kind: "automation" | "document" | "entity" | "playbook" | "view";
+							}[] | undefined;
+							mode: "act" | "choose" | "confirm" | "form" | "provide";
+							options?: {
+								caution?: string | undefined;
+								description?: string | undefined;
+								followUp?: {
+									options: {
+										caution?: string | undefined;
+										description?: string | undefined;
+										icon?: string | undefined;
+										label: string;
+										recommended?: boolean | undefined;
+										value?: string | undefined;
+									}[];
+									prompt: string;
+								} | undefined;
+								icon?: string | undefined;
+								label: string;
+								recommended?: boolean | undefined;
+								value?: string | undefined;
+							}[] | undefined;
+							prompt?: string | undefined;
+							recommendedKey: string | null;
+							thenKey?: string | undefined;
+							why?: string | undefined;
+						} | undefined;
+						confirmedAt?: string | undefined;
+						messageId: string | null;
+						question?: string | undefined;
+						quote?: string | undefined;
+						relaySurface?: string | undefined;
+						relayedBy?: string | undefined;
+						text: string;
+						value?: {
+							type: "text";
+						} | {
+							confirmed: boolean;
+							type: "confirm";
+						} | {
+							chip: {
+								caution?: string | undefined;
+								description?: string | undefined;
+								icon?: string | undefined;
+								label: string;
+								recommended?: boolean | undefined;
+								value?: string | undefined;
+							};
+							then?: {
+								caution?: string | undefined;
+								description?: string | undefined;
+								icon?: string | undefined;
+								label: string;
+								recommended?: boolean | undefined;
+								value?: string | undefined;
+							} | undefined;
+							type: "chip";
+						} | {
+							type: "form";
+							values: Record<string, unknown>;
+						} | {
+							ref: {
+								kind: "secret";
+								vaultRef: string;
+							} | {
+								connectionId: string;
+								kind: "connection";
+							} | {
+								fileId: string;
+								kind: "file";
+							};
+							type: "provide";
+						} | undefined;
+						via?: "relayed" | "tap" | undefined;
+					}[] | undefined;
+					answerPickedUpAt?: string | undefined;
+					ask?: {
+						lookedAt?: {
+							id: string;
+							kind: "automation" | "document" | "entity" | "playbook" | "view";
+						}[] | undefined;
+						mode: "confirm";
+						no?: {
+							description?: string | undefined;
+							label?: string | undefined;
+							recommended?: boolean | undefined;
+						} | undefined;
+						prompt?: string | undefined;
+						risk?: "high" | "low" | "medium" | undefined;
+						stakes?: "commitment" | "routine" | undefined;
+						yes?: {
+							description?: string | undefined;
+							label?: string | undefined;
+							recommended?: boolean | undefined;
+						} | undefined;
+					} | {
+						allowOther?: boolean | undefined;
+						lookedAt?: {
+							id: string;
+							kind: "automation" | "document" | "entity" | "playbook" | "view";
+						}[] | undefined;
+						mode: "choose";
+						options: {
+							caution?: string | undefined;
+							description?: string | undefined;
+							followUp?: {
+								options: {
+									caution?: string | undefined;
+									description?: string | undefined;
+									icon?: string | undefined;
+									label: string;
+									recommended?: boolean | undefined;
+									value?: string | undefined;
+								}[];
+								prompt: string;
+							} | undefined;
+							icon?: string | undefined;
+							label: string;
+							recommended?: boolean | undefined;
+							value?: string | undefined;
+						}[];
+						risk?: "high" | "low" | "medium" | undefined;
+						stakes?: "commitment" | "routine" | undefined;
+					} | {
+						form: {
+							fields: {
+								constraints?: {
+									enum?: string[] | undefined;
+									max?: number | undefined;
+									min?: number | undefined;
+									pattern?: string | undefined;
+								} | undefined;
+								help?: string | undefined;
+								key: string;
+								label: string;
+								required?: boolean | undefined;
+								type: string;
+							}[];
+							note?: string | undefined;
+							title?: string | undefined;
+						};
+						lookedAt?: {
+							id: string;
+							kind: "automation" | "document" | "entity" | "playbook" | "view";
+						}[] | undefined;
+						mode: "form";
+						risk?: "high" | "low" | "medium" | undefined;
+						stakes?: "commitment" | "routine" | undefined;
+					} | {
+						lookedAt?: {
+							id: string;
+							kind: "automation" | "document" | "entity" | "playbook" | "view";
+						}[] | undefined;
+						mode: "act";
+						risk?: "high" | "low" | "medium" | undefined;
+						stakes?: "commitment" | "routine" | undefined;
+						steps?: string[] | undefined;
+						url?: string | undefined;
+					} | {
+						lookedAt?: {
+							id: string;
+							kind: "automation" | "document" | "entity" | "playbook" | "view";
+						}[] | undefined;
+						mode: "provide";
+						provide: {
+							kind: "connection";
+							service: string;
+						} | {
+							accept?: string[] | undefined;
+							kind: "file";
+						} | {
+							kind: "secret";
+							name: string;
+						};
+						risk?: "high" | "low" | "medium" | undefined;
+						stakes?: "commitment" | "routine" | undefined;
+					} | null | undefined;
+					askCause?: {
+						at?: string | undefined;
+						kind: "criterion" | "decision" | "external_approval" | "gate" | "param" | "run";
+						ref?: {
+							id: string;
+							kind: string;
+						} | undefined;
+					} | undefined;
+					askedBy?: string | undefined;
+					attestedAt?: string | undefined;
+					attestedBy?: string | undefined;
+					blockedReason?: "capability" | "credential" | "decision" | "permission" | "physical" | "policy" | undefined;
+					claimedDone?: boolean | undefined;
+					criterionKey?: string | undefined;
+					decisionId?: string | undefined;
+					delegatedAt?: string | undefined;
+					delegatedTo?: string | undefined;
+					icon?: string | undefined;
+					keptOwedAt?: string | undefined;
+					key?: string | undefined;
+					kind: string;
+					label: string;
+					optional?: boolean | undefined;
+					owedSince?: string | undefined;
+					owner?: "agent" | "human" | undefined;
+					paramName?: string | undefined;
+					pendingRelay?: {
+						quote?: string | undefined;
+						relaySurface?: string | undefined;
+						relayedAt: string;
+						relayedBy: string;
 						text: string;
 						value?: {
 							type: "text";
@@ -31507,187 +32177,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							type: "provide";
 						} | undefined;
 					} | undefined;
-					answerHistory?: {
-						answeredAt: string;
-						answeredBy: string;
-						askSnapshot?: {
-							chosenKey: string | null;
-							followedRecommendation: boolean | null;
-							lookedAt?: {
-								id: string;
-								kind: "automation" | "document" | "entity" | "playbook" | "view";
-							}[] | undefined;
-							mode: "act" | "choose" | "confirm" | "form" | "provide";
-							options?: {
-								caution?: string | undefined;
-								description?: string | undefined;
-								followUp?: {
-									options: {
-										caution?: string | undefined;
-										description?: string | undefined;
-										icon?: string | undefined;
-										label: string;
-										recommended?: boolean | undefined;
-										value?: string | undefined;
-									}[];
-									prompt: string;
-								} | undefined;
-								icon?: string | undefined;
-								label: string;
-								recommended?: boolean | undefined;
-								value?: string | undefined;
-							}[] | undefined;
-							prompt?: string | undefined;
-							recommendedKey: string | null;
-							thenKey?: string | undefined;
-							why?: string | undefined;
-						} | undefined;
-						messageId: string | null;
-						question?: string | undefined;
-						text: string;
-						value?: {
-							type: "text";
-						} | {
-							confirmed: boolean;
-							type: "confirm";
-						} | {
-							chip: {
-								caution?: string | undefined;
-								description?: string | undefined;
-								icon?: string | undefined;
-								label: string;
-								recommended?: boolean | undefined;
-								value?: string | undefined;
-							};
-							then?: {
-								caution?: string | undefined;
-								description?: string | undefined;
-								icon?: string | undefined;
-								label: string;
-								recommended?: boolean | undefined;
-								value?: string | undefined;
-							} | undefined;
-							type: "chip";
-						} | {
-							type: "form";
-							values: Record<string, unknown>;
-						} | {
-							ref: {
-								kind: "secret";
-								vaultRef: string;
-							} | {
-								connectionId: string;
-								kind: "connection";
-							} | {
-								fileId: string;
-								kind: "file";
-							};
-							type: "provide";
-						} | undefined;
-					}[] | undefined;
-					answerPickedUpAt?: string | undefined;
-					ask?: {
-						lookedAt?: {
-							id: string;
-							kind: "automation" | "document" | "entity" | "playbook" | "view";
-						}[] | undefined;
-						mode: "confirm";
-						prompt?: string | undefined;
-						risk?: "high" | "low" | "medium" | undefined;
-					} | {
-						allowOther?: boolean | undefined;
-						lookedAt?: {
-							id: string;
-							kind: "automation" | "document" | "entity" | "playbook" | "view";
-						}[] | undefined;
-						mode: "choose";
-						options: {
-							caution?: string | undefined;
-							description?: string | undefined;
-							followUp?: {
-								options: {
-									caution?: string | undefined;
-									description?: string | undefined;
-									icon?: string | undefined;
-									label: string;
-									recommended?: boolean | undefined;
-									value?: string | undefined;
-								}[];
-								prompt: string;
-							} | undefined;
-							icon?: string | undefined;
-							label: string;
-							recommended?: boolean | undefined;
-							value?: string | undefined;
-						}[];
-						risk?: "high" | "low" | "medium" | undefined;
-					} | {
-						form: {
-							fields: {
-								constraints?: {
-									enum?: string[] | undefined;
-									max?: number | undefined;
-									min?: number | undefined;
-									pattern?: string | undefined;
-								} | undefined;
-								help?: string | undefined;
-								key: string;
-								label: string;
-								required?: boolean | undefined;
-								type: string;
-							}[];
-							note?: string | undefined;
-							title?: string | undefined;
-						};
-						lookedAt?: {
-							id: string;
-							kind: "automation" | "document" | "entity" | "playbook" | "view";
-						}[] | undefined;
-						mode: "form";
-						risk?: "high" | "low" | "medium" | undefined;
-					} | {
-						lookedAt?: {
-							id: string;
-							kind: "automation" | "document" | "entity" | "playbook" | "view";
-						}[] | undefined;
-						mode: "act";
-						risk?: "high" | "low" | "medium" | undefined;
-						steps?: string[] | undefined;
-						url?: string | undefined;
-					} | {
-						lookedAt?: {
-							id: string;
-							kind: "automation" | "document" | "entity" | "playbook" | "view";
-						}[] | undefined;
-						mode: "provide";
-						provide: {
-							kind: "connection";
-							service: string;
-						} | {
-							accept?: string[] | undefined;
-							kind: "file";
-						} | {
-							kind: "secret";
-							name: string;
-						};
-						risk?: "high" | "low" | "medium" | undefined;
-					} | null | undefined;
-					attestedAt?: string | undefined;
-					attestedBy?: string | undefined;
-					blockedReason?: "capability" | "credential" | "decision" | "permission" | "physical" | "policy" | undefined;
-					claimedDone?: boolean | undefined;
-					criterionKey?: string | undefined;
-					decisionId?: string | undefined;
-					delegatedAt?: string | undefined;
-					delegatedTo?: string | undefined;
-					icon?: string | undefined;
-					key?: string | undefined;
-					kind: string;
-					label: string;
-					optional?: boolean | undefined;
-					owedSince?: string | undefined;
-					owner?: "agent" | "human" | undefined;
-					paramName?: string | undefined;
 					ref?: {
 						id: string;
 						kind: "automation" | "cell" | "document" | "entity" | "playbook" | "view";
@@ -31696,7 +32185,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					} | null | undefined;
 					relationToSubject?: string | undefined;
 					retiredAt?: string | undefined;
-					retiredReason?: "decision_resolved" | "session_cancelled" | "withdrawn" | undefined;
+					retiredReason?: "decision_resolved" | "not_asked" | "session_cancelled" | "session_ended" | "withdrawn" | undefined;
 					returnedAt?: string | undefined;
 					returnedReason?: string | undefined;
 					satisfiedByEvidence?: {
@@ -32463,8 +32952,270 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							thenKey?: string | undefined;
 							why?: string | undefined;
 						} | undefined;
+						confirmedAt?: string | undefined;
 						messageId: string | null;
 						question?: string | undefined;
+						quote?: string | undefined;
+						relaySurface?: string | undefined;
+						relayedBy?: string | undefined;
+						text: string;
+						value?: {
+							type: "text";
+						} | {
+							confirmed: boolean;
+							type: "confirm";
+						} | {
+							chip: {
+								caution?: string | undefined;
+								description?: string | undefined;
+								icon?: string | undefined;
+								label: string;
+								recommended?: boolean | undefined;
+								value?: string | undefined;
+							};
+							then?: {
+								caution?: string | undefined;
+								description?: string | undefined;
+								icon?: string | undefined;
+								label: string;
+								recommended?: boolean | undefined;
+								value?: string | undefined;
+							} | undefined;
+							type: "chip";
+						} | {
+							type: "form";
+							values: Record<string, unknown>;
+						} | {
+							ref: {
+								kind: "secret";
+								vaultRef: string;
+							} | {
+								connectionId: string;
+								kind: "connection";
+							} | {
+								fileId: string;
+								kind: "file";
+							};
+							type: "provide";
+						} | undefined;
+						via?: "relayed" | "tap" | undefined;
+					} | undefined;
+					answerHistory?: {
+						answeredAt: string;
+						answeredBy: string;
+						askSnapshot?: {
+							chosenKey: string | null;
+							followedRecommendation: boolean | null;
+							lookedAt?: {
+								id: string;
+								kind: "automation" | "document" | "entity" | "playbook" | "view";
+							}[] | undefined;
+							mode: "act" | "choose" | "confirm" | "form" | "provide";
+							options?: {
+								caution?: string | undefined;
+								description?: string | undefined;
+								followUp?: {
+									options: {
+										caution?: string | undefined;
+										description?: string | undefined;
+										icon?: string | undefined;
+										label: string;
+										recommended?: boolean | undefined;
+										value?: string | undefined;
+									}[];
+									prompt: string;
+								} | undefined;
+								icon?: string | undefined;
+								label: string;
+								recommended?: boolean | undefined;
+								value?: string | undefined;
+							}[] | undefined;
+							prompt?: string | undefined;
+							recommendedKey: string | null;
+							thenKey?: string | undefined;
+							why?: string | undefined;
+						} | undefined;
+						confirmedAt?: string | undefined;
+						messageId: string | null;
+						question?: string | undefined;
+						quote?: string | undefined;
+						relaySurface?: string | undefined;
+						relayedBy?: string | undefined;
+						text: string;
+						value?: {
+							type: "text";
+						} | {
+							confirmed: boolean;
+							type: "confirm";
+						} | {
+							chip: {
+								caution?: string | undefined;
+								description?: string | undefined;
+								icon?: string | undefined;
+								label: string;
+								recommended?: boolean | undefined;
+								value?: string | undefined;
+							};
+							then?: {
+								caution?: string | undefined;
+								description?: string | undefined;
+								icon?: string | undefined;
+								label: string;
+								recommended?: boolean | undefined;
+								value?: string | undefined;
+							} | undefined;
+							type: "chip";
+						} | {
+							type: "form";
+							values: Record<string, unknown>;
+						} | {
+							ref: {
+								kind: "secret";
+								vaultRef: string;
+							} | {
+								connectionId: string;
+								kind: "connection";
+							} | {
+								fileId: string;
+								kind: "file";
+							};
+							type: "provide";
+						} | undefined;
+						via?: "relayed" | "tap" | undefined;
+					}[] | undefined;
+					answerPickedUpAt?: string | undefined;
+					ask?: {
+						lookedAt?: {
+							id: string;
+							kind: "automation" | "document" | "entity" | "playbook" | "view";
+						}[] | undefined;
+						mode: "confirm";
+						no?: {
+							description?: string | undefined;
+							label?: string | undefined;
+							recommended?: boolean | undefined;
+						} | undefined;
+						prompt?: string | undefined;
+						risk?: "high" | "low" | "medium" | undefined;
+						stakes?: "commitment" | "routine" | undefined;
+						yes?: {
+							description?: string | undefined;
+							label?: string | undefined;
+							recommended?: boolean | undefined;
+						} | undefined;
+					} | {
+						allowOther?: boolean | undefined;
+						lookedAt?: {
+							id: string;
+							kind: "automation" | "document" | "entity" | "playbook" | "view";
+						}[] | undefined;
+						mode: "choose";
+						options: {
+							caution?: string | undefined;
+							description?: string | undefined;
+							followUp?: {
+								options: {
+									caution?: string | undefined;
+									description?: string | undefined;
+									icon?: string | undefined;
+									label: string;
+									recommended?: boolean | undefined;
+									value?: string | undefined;
+								}[];
+								prompt: string;
+							} | undefined;
+							icon?: string | undefined;
+							label: string;
+							recommended?: boolean | undefined;
+							value?: string | undefined;
+						}[];
+						risk?: "high" | "low" | "medium" | undefined;
+						stakes?: "commitment" | "routine" | undefined;
+					} | {
+						form: {
+							fields: {
+								constraints?: {
+									enum?: string[] | undefined;
+									max?: number | undefined;
+									min?: number | undefined;
+									pattern?: string | undefined;
+								} | undefined;
+								help?: string | undefined;
+								key: string;
+								label: string;
+								required?: boolean | undefined;
+								type: string;
+							}[];
+							note?: string | undefined;
+							title?: string | undefined;
+						};
+						lookedAt?: {
+							id: string;
+							kind: "automation" | "document" | "entity" | "playbook" | "view";
+						}[] | undefined;
+						mode: "form";
+						risk?: "high" | "low" | "medium" | undefined;
+						stakes?: "commitment" | "routine" | undefined;
+					} | {
+						lookedAt?: {
+							id: string;
+							kind: "automation" | "document" | "entity" | "playbook" | "view";
+						}[] | undefined;
+						mode: "act";
+						risk?: "high" | "low" | "medium" | undefined;
+						stakes?: "commitment" | "routine" | undefined;
+						steps?: string[] | undefined;
+						url?: string | undefined;
+					} | {
+						lookedAt?: {
+							id: string;
+							kind: "automation" | "document" | "entity" | "playbook" | "view";
+						}[] | undefined;
+						mode: "provide";
+						provide: {
+							kind: "connection";
+							service: string;
+						} | {
+							accept?: string[] | undefined;
+							kind: "file";
+						} | {
+							kind: "secret";
+							name: string;
+						};
+						risk?: "high" | "low" | "medium" | undefined;
+						stakes?: "commitment" | "routine" | undefined;
+					} | null | undefined;
+					askCause?: {
+						at?: string | undefined;
+						kind: "criterion" | "decision" | "external_approval" | "gate" | "param" | "run";
+						ref?: {
+							id: string;
+							kind: string;
+						} | undefined;
+					} | undefined;
+					askedBy?: string | undefined;
+					attestedAt?: string | undefined;
+					attestedBy?: string | undefined;
+					blockedReason?: "capability" | "credential" | "decision" | "permission" | "physical" | "policy" | undefined;
+					claimedDone?: boolean | undefined;
+					criterionKey?: string | undefined;
+					decisionId?: string | undefined;
+					delegatedAt?: string | undefined;
+					delegatedTo?: string | undefined;
+					icon?: string | undefined;
+					keptOwedAt?: string | undefined;
+					key?: string | undefined;
+					kind: string;
+					label: string;
+					optional?: boolean | undefined;
+					owedSince?: string | undefined;
+					owner?: "agent" | "human" | undefined;
+					paramName?: string | undefined;
+					pendingRelay?: {
+						quote?: string | undefined;
+						relaySurface?: string | undefined;
+						relayedAt: string;
+						relayedBy: string;
 						text: string;
 						value?: {
 							type: "text";
@@ -32506,187 +33257,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							type: "provide";
 						} | undefined;
 					} | undefined;
-					answerHistory?: {
-						answeredAt: string;
-						answeredBy: string;
-						askSnapshot?: {
-							chosenKey: string | null;
-							followedRecommendation: boolean | null;
-							lookedAt?: {
-								id: string;
-								kind: "automation" | "document" | "entity" | "playbook" | "view";
-							}[] | undefined;
-							mode: "act" | "choose" | "confirm" | "form" | "provide";
-							options?: {
-								caution?: string | undefined;
-								description?: string | undefined;
-								followUp?: {
-									options: {
-										caution?: string | undefined;
-										description?: string | undefined;
-										icon?: string | undefined;
-										label: string;
-										recommended?: boolean | undefined;
-										value?: string | undefined;
-									}[];
-									prompt: string;
-								} | undefined;
-								icon?: string | undefined;
-								label: string;
-								recommended?: boolean | undefined;
-								value?: string | undefined;
-							}[] | undefined;
-							prompt?: string | undefined;
-							recommendedKey: string | null;
-							thenKey?: string | undefined;
-							why?: string | undefined;
-						} | undefined;
-						messageId: string | null;
-						question?: string | undefined;
-						text: string;
-						value?: {
-							type: "text";
-						} | {
-							confirmed: boolean;
-							type: "confirm";
-						} | {
-							chip: {
-								caution?: string | undefined;
-								description?: string | undefined;
-								icon?: string | undefined;
-								label: string;
-								recommended?: boolean | undefined;
-								value?: string | undefined;
-							};
-							then?: {
-								caution?: string | undefined;
-								description?: string | undefined;
-								icon?: string | undefined;
-								label: string;
-								recommended?: boolean | undefined;
-								value?: string | undefined;
-							} | undefined;
-							type: "chip";
-						} | {
-							type: "form";
-							values: Record<string, unknown>;
-						} | {
-							ref: {
-								kind: "secret";
-								vaultRef: string;
-							} | {
-								connectionId: string;
-								kind: "connection";
-							} | {
-								fileId: string;
-								kind: "file";
-							};
-							type: "provide";
-						} | undefined;
-					}[] | undefined;
-					answerPickedUpAt?: string | undefined;
-					ask?: {
-						lookedAt?: {
-							id: string;
-							kind: "automation" | "document" | "entity" | "playbook" | "view";
-						}[] | undefined;
-						mode: "confirm";
-						prompt?: string | undefined;
-						risk?: "high" | "low" | "medium" | undefined;
-					} | {
-						allowOther?: boolean | undefined;
-						lookedAt?: {
-							id: string;
-							kind: "automation" | "document" | "entity" | "playbook" | "view";
-						}[] | undefined;
-						mode: "choose";
-						options: {
-							caution?: string | undefined;
-							description?: string | undefined;
-							followUp?: {
-								options: {
-									caution?: string | undefined;
-									description?: string | undefined;
-									icon?: string | undefined;
-									label: string;
-									recommended?: boolean | undefined;
-									value?: string | undefined;
-								}[];
-								prompt: string;
-							} | undefined;
-							icon?: string | undefined;
-							label: string;
-							recommended?: boolean | undefined;
-							value?: string | undefined;
-						}[];
-						risk?: "high" | "low" | "medium" | undefined;
-					} | {
-						form: {
-							fields: {
-								constraints?: {
-									enum?: string[] | undefined;
-									max?: number | undefined;
-									min?: number | undefined;
-									pattern?: string | undefined;
-								} | undefined;
-								help?: string | undefined;
-								key: string;
-								label: string;
-								required?: boolean | undefined;
-								type: string;
-							}[];
-							note?: string | undefined;
-							title?: string | undefined;
-						};
-						lookedAt?: {
-							id: string;
-							kind: "automation" | "document" | "entity" | "playbook" | "view";
-						}[] | undefined;
-						mode: "form";
-						risk?: "high" | "low" | "medium" | undefined;
-					} | {
-						lookedAt?: {
-							id: string;
-							kind: "automation" | "document" | "entity" | "playbook" | "view";
-						}[] | undefined;
-						mode: "act";
-						risk?: "high" | "low" | "medium" | undefined;
-						steps?: string[] | undefined;
-						url?: string | undefined;
-					} | {
-						lookedAt?: {
-							id: string;
-							kind: "automation" | "document" | "entity" | "playbook" | "view";
-						}[] | undefined;
-						mode: "provide";
-						provide: {
-							kind: "connection";
-							service: string;
-						} | {
-							accept?: string[] | undefined;
-							kind: "file";
-						} | {
-							kind: "secret";
-							name: string;
-						};
-						risk?: "high" | "low" | "medium" | undefined;
-					} | null | undefined;
-					attestedAt?: string | undefined;
-					attestedBy?: string | undefined;
-					blockedReason?: "capability" | "credential" | "decision" | "permission" | "physical" | "policy" | undefined;
-					claimedDone?: boolean | undefined;
-					criterionKey?: string | undefined;
-					decisionId?: string | undefined;
-					delegatedAt?: string | undefined;
-					delegatedTo?: string | undefined;
-					icon?: string | undefined;
-					key?: string | undefined;
-					kind: string;
-					label: string;
-					optional?: boolean | undefined;
-					owedSince?: string | undefined;
-					owner?: "agent" | "human" | undefined;
-					paramName?: string | undefined;
 					ref?: {
 						id: string;
 						kind: "automation" | "cell" | "document" | "entity" | "playbook" | "view";
@@ -32695,7 +33265,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					} | null | undefined;
 					relationToSubject?: string | undefined;
 					retiredAt?: string | undefined;
-					retiredReason?: "decision_resolved" | "session_cancelled" | "withdrawn" | undefined;
+					retiredReason?: "decision_resolved" | "not_asked" | "session_cancelled" | "session_ended" | "withdrawn" | undefined;
 					returnedAt?: string | undefined;
 					returnedReason?: string | undefined;
 					satisfiedByEvidence?: {
@@ -32746,8 +33316,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								kind: "automation" | "document" | "entity" | "playbook" | "view";
 							}[] | undefined;
 							mode: "confirm";
+							no?: {
+								description?: string | undefined;
+								label?: string | undefined;
+								recommended?: boolean | undefined;
+							} | undefined;
 							prompt?: string | undefined;
 							risk?: "high" | "low" | "medium" | undefined;
+							stakes?: "commitment" | "routine" | undefined;
+							yes?: {
+								description?: string | undefined;
+								label?: string | undefined;
+								recommended?: boolean | undefined;
+							} | undefined;
 						} | {
 							allowOther?: boolean | undefined;
 							lookedAt?: {
@@ -32775,6 +33356,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								value?: string | undefined;
 							}[];
 							risk?: "high" | "low" | "medium" | undefined;
+							stakes?: "commitment" | "routine" | undefined;
 						} | {
 							form: {
 								fields: {
@@ -32799,6 +33381,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[] | undefined;
 							mode: "form";
 							risk?: "high" | "low" | "medium" | undefined;
+							stakes?: "commitment" | "routine" | undefined;
 						} | {
 							lookedAt?: {
 								id: string;
@@ -32806,6 +33389,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[] | undefined;
 							mode: "act";
 							risk?: "high" | "low" | "medium" | undefined;
+							stakes?: "commitment" | "routine" | undefined;
 							steps?: string[] | undefined;
 							url?: string | undefined;
 						} | {
@@ -32825,6 +33409,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								name: string;
 							};
 							risk?: "high" | "low" | "medium" | undefined;
+							stakes?: "commitment" | "routine" | undefined;
 						} | null | undefined;
 						relationToSubject?: string | undefined;
 						optional?: boolean | undefined;
@@ -33156,7 +33741,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: {
 				count: number;
-				limit: number;
+				limit: number | null;
 			};
 		}>;
 	}>>;
@@ -34653,16 +35238,29 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					active: boolean;
 					apiKeyId: string | null;
 					createdAt: Date;
+					direction: "inbound" | "outbound";
 					eventTypes: string[];
 					id: string;
 					lastTriggeredAt: Date | null;
 					name: string;
 					retryConfig: unknown;
 					secret: string;
-					url: string;
+					url: string | null;
 					userId: string;
 					workspaceId: string | null;
 				};
+			};
+		}>;
+		adminCreateInboundSource: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				name: string;
+				workspaceId: string;
+			};
+			meta: object;
+			output: {
+				boundAutomations: number;
+				secret: string;
+				source: InboundWebhookSource;
 			};
 		}>;
 		adminDeleteForWorkspace: import("@trpc/server").TRPCMutationProcedure<{
@@ -34684,16 +35282,35 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				active: boolean;
 				apiKeyId: string | null;
 				createdAt: Date;
+				direction: "inbound" | "outbound";
 				eventTypes: string[];
 				id: string;
 				lastTriggeredAt: Date | null;
 				name: string;
 				retryConfig: unknown;
 				secret: string;
-				url: string;
+				url: string | null;
 				userId: string;
 				workspaceId: string | null;
 			}[];
+		}>;
+		adminListInboundSources: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				workspaceId: string;
+			};
+			meta: object;
+			output: InboundWebhookSource[];
+		}>;
+		adminRotateInboundSourceSecret: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				workspaceId: string;
+			};
+			meta: object;
+			output: {
+				secret: string;
+				source: InboundWebhookSource;
+			};
 		}>;
 		adminToggleForWorkspace: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
@@ -34706,12 +35323,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				active: boolean;
 				apiKeyId: string | null;
 				createdAt: Date;
+				direction: "inbound" | "outbound";
 				eventTypes: string[];
 				id: string;
 				lastTriggeredAt: Date | null;
 				name: string;
 				retryConfig: unknown;
-				url: string;
+				url: string | null;
 				userId: string;
 				workspaceId: string | null;
 			};
@@ -34730,13 +35348,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					active: boolean;
 					apiKeyId: string | null;
 					createdAt: Date;
+					direction: "inbound" | "outbound";
 					eventTypes: string[];
 					id: string;
 					lastTriggeredAt: Date | null;
 					name: string;
 					retryConfig: unknown;
 					secret: string;
-					url: string;
+					url: string | null;
 					userId: string;
 					workspaceId: string | null;
 				};
@@ -34755,13 +35374,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					active: boolean;
 					apiKeyId: string | null;
 					createdAt: Date;
+					direction: "inbound" | "outbound";
 					eventTypes: string[];
 					id: string;
 					lastTriggeredAt: Date | null;
 					name: string;
 					retryConfig: unknown;
 					secret: string;
-					url: string;
+					url: string | null;
 					userId: string;
 					workspaceId: string | null;
 				};
@@ -34824,13 +35444,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				active: boolean;
 				apiKeyId: string | null;
 				createdAt: Date;
+				direction: "inbound" | "outbound";
 				eventTypes: string[];
 				id: string;
 				lastTriggeredAt: Date | null;
 				name: string;
 				retryConfig: unknown;
 				secret: string;
-				url: string;
+				url: string | null;
 				userId: string;
 				workspaceId: string | null;
 			}[];
@@ -34842,13 +35463,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				active: boolean;
 				apiKeyId: string | null;
 				createdAt: Date;
+				direction: "inbound" | "outbound";
 				eventTypes: string[];
 				id: string;
 				lastTriggeredAt: Date | null;
 				name: string;
 				retryConfig: unknown;
 				secret: string;
-				url: string;
+				url: string | null;
 				userId: string;
 				workspaceId: string | null;
 			}[];
@@ -34863,12 +35485,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				active: boolean;
 				apiKeyId: string | null;
 				createdAt: Date;
+				direction: "inbound" | "outbound";
 				eventTypes: string[];
 				id: string;
 				lastTriggeredAt: Date | null;
 				name: string;
 				retryConfig: unknown;
-				url: string;
+				url: string | null;
 				userId: string;
 				workspaceId: string | null;
 			};
@@ -34886,12 +35509,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				active: boolean;
 				apiKeyId: string | null;
 				createdAt: Date;
+				direction: "inbound" | "outbound";
 				eventTypes: string[];
 				id: string;
 				lastTriggeredAt: Date | null;
 				name: string;
 				retryConfig: unknown;
-				url: string;
+				url: string | null;
 				userId: string;
 				workspaceId: string | null;
 			};
@@ -38302,8 +38926,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
 						}[] | undefined;
 						mode: "confirm";
+						no?: {
+							description?: string | undefined;
+							label?: string | undefined;
+							recommended?: boolean | undefined;
+						} | undefined;
 						prompt?: string | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
+						stakes?: "commitment" | "routine" | undefined;
+						yes?: {
+							description?: string | undefined;
+							label?: string | undefined;
+							recommended?: boolean | undefined;
+						} | undefined;
 					} | {
 						allowOther?: boolean | undefined;
 						lookedAt?: {
@@ -38331,6 +38966,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							value?: string | undefined;
 						}[];
 						risk?: "high" | "low" | "medium" | undefined;
+						stakes?: "commitment" | "routine" | undefined;
 					} | {
 						form: {
 							fields: {
@@ -38355,6 +38991,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						}[] | undefined;
 						mode: "form";
 						risk?: "high" | "low" | "medium" | undefined;
+						stakes?: "commitment" | "routine" | undefined;
 					} | {
 						lookedAt?: {
 							id: string;
@@ -38362,6 +38999,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						}[] | undefined;
 						mode: "act";
 						risk?: "high" | "low" | "medium" | undefined;
+						stakes?: "commitment" | "routine" | undefined;
 						steps?: string[] | undefined;
 						url?: string | undefined;
 					} | {
@@ -38381,6 +39019,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							name: string;
 						};
 						risk?: "high" | "low" | "medium" | undefined;
+						stakes?: "commitment" | "routine" | undefined;
 					} | null | undefined;
 					relationToSubject?: string | undefined;
 					optional?: boolean | undefined;
@@ -38428,8 +39067,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								kind: "automation" | "document" | "entity" | "playbook" | "view";
 							}[] | undefined;
 							mode: "confirm";
+							no?: {
+								description?: string | undefined;
+								label?: string | undefined;
+								recommended?: boolean | undefined;
+							} | undefined;
 							prompt?: string | undefined;
 							risk?: "high" | "low" | "medium" | undefined;
+							stakes?: "commitment" | "routine" | undefined;
+							yes?: {
+								description?: string | undefined;
+								label?: string | undefined;
+								recommended?: boolean | undefined;
+							} | undefined;
 						} | {
 							allowOther?: boolean | undefined;
 							lookedAt?: {
@@ -38457,6 +39107,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								value?: string | undefined;
 							}[];
 							risk?: "high" | "low" | "medium" | undefined;
+							stakes?: "commitment" | "routine" | undefined;
 						} | {
 							form: {
 								fields: {
@@ -38481,6 +39132,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[] | undefined;
 							mode: "form";
 							risk?: "high" | "low" | "medium" | undefined;
+							stakes?: "commitment" | "routine" | undefined;
 						} | {
 							lookedAt?: {
 								id: string;
@@ -38488,6 +39140,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[] | undefined;
 							mode: "act";
 							risk?: "high" | "low" | "medium" | undefined;
+							stakes?: "commitment" | "routine" | undefined;
 							steps?: string[] | undefined;
 							url?: string | undefined;
 						} | {
@@ -38507,6 +39160,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								name: string;
 							};
 							risk?: "high" | "low" | "medium" | undefined;
+							stakes?: "commitment" | "routine" | undefined;
 						} | null | undefined;
 						relationToSubject?: string | undefined;
 						optional?: boolean | undefined;
@@ -38929,6 +39583,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				agentType?: string | undefined;
 				agentUserId?: string | undefined;
 				goalOverride?: string | undefined;
+				handToAgentId?: string | undefined;
 				onMissingRequired?: "owe" | "refuse" | undefined;
 				params?: Record<string, unknown> | undefined;
 				parentSessionId?: string | undefined;
@@ -39146,8 +39801,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
 						}[] | undefined;
 						mode: "confirm";
+						no?: {
+							description?: string | undefined;
+							label?: string | undefined;
+							recommended?: boolean | undefined;
+						} | undefined;
 						prompt?: string | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
+						stakes?: "commitment" | "routine" | undefined;
+						yes?: {
+							description?: string | undefined;
+							label?: string | undefined;
+							recommended?: boolean | undefined;
+						} | undefined;
 					} | {
 						allowOther?: boolean | undefined;
 						lookedAt?: {
@@ -39175,6 +39841,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							value?: string | undefined;
 						}[];
 						risk?: "high" | "low" | "medium" | undefined;
+						stakes?: "commitment" | "routine" | undefined;
 					} | {
 						form: {
 							fields: {
@@ -39199,6 +39866,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						}[] | undefined;
 						mode: "form";
 						risk?: "high" | "low" | "medium" | undefined;
+						stakes?: "commitment" | "routine" | undefined;
 					} | {
 						lookedAt?: {
 							id: string;
@@ -39206,6 +39874,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						}[] | undefined;
 						mode: "act";
 						risk?: "high" | "low" | "medium" | undefined;
+						stakes?: "commitment" | "routine" | undefined;
 						steps?: string[] | undefined;
 						url?: string | undefined;
 					} | {
@@ -39225,6 +39894,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							name: string;
 						};
 						risk?: "high" | "low" | "medium" | undefined;
+						stakes?: "commitment" | "routine" | undefined;
 					} | null | undefined;
 					relationToSubject?: string | undefined;
 					optional?: boolean | undefined;
@@ -39264,8 +39934,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								kind: "automation" | "document" | "entity" | "playbook" | "view";
 							}[] | undefined;
 							mode: "confirm";
+							no?: {
+								description?: string | undefined;
+								label?: string | undefined;
+								recommended?: boolean | undefined;
+							} | undefined;
 							prompt?: string | undefined;
 							risk?: "high" | "low" | "medium" | undefined;
+							stakes?: "commitment" | "routine" | undefined;
+							yes?: {
+								description?: string | undefined;
+								label?: string | undefined;
+								recommended?: boolean | undefined;
+							} | undefined;
 						} | {
 							allowOther?: boolean | undefined;
 							lookedAt?: {
@@ -39293,6 +39974,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								value?: string | undefined;
 							}[];
 							risk?: "high" | "low" | "medium" | undefined;
+							stakes?: "commitment" | "routine" | undefined;
 						} | {
 							form: {
 								fields: {
@@ -39317,6 +39999,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[] | undefined;
 							mode: "form";
 							risk?: "high" | "low" | "medium" | undefined;
+							stakes?: "commitment" | "routine" | undefined;
 						} | {
 							lookedAt?: {
 								id: string;
@@ -39324,6 +40007,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[] | undefined;
 							mode: "act";
 							risk?: "high" | "low" | "medium" | undefined;
+							stakes?: "commitment" | "routine" | undefined;
 							steps?: string[] | undefined;
 							url?: string | undefined;
 						} | {
@@ -39343,6 +40027,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								name: string;
 							};
 							risk?: "high" | "low" | "medium" | undefined;
+							stakes?: "commitment" | "routine" | undefined;
 						} | null | undefined;
 						relationToSubject?: string | undefined;
 						optional?: boolean | undefined;
@@ -41338,6 +42023,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		approve: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
+				allowToday?: boolean | undefined;
 				comment?: string | undefined;
 				dispositions?: Record<string, {
 					edits?: Record<string, unknown> | undefined;
@@ -41381,7 +42067,24 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				proposalId: string;
 			};
 			meta: object;
-			output: ProposalExecutorResult;
+			output: ProposalExecutorResult | {
+				allowedToday: AllowedToday;
+				alreadyApproved?: boolean;
+				approvalRun?: ApprovalRunView;
+				created?: number;
+				effect?: ProposalEffect;
+				identities?: Array<IdentityReceipt & {
+					ref: string;
+				}>;
+				identity?: IdentityReceipt;
+				joined?: boolean;
+				linked?: number;
+				primaryId?: string;
+				queued?: true;
+				refusals?: string[];
+				relationsFailed?: MaterializeRelationFailure[];
+				success: boolean;
+			};
 		}>;
 		askAi: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
@@ -41477,6 +42180,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				dedupHash: string | null;
 				expiresAt: Date | null;
 				externalDispatchedAt: Date | null;
+				fate?: ProposalFate;
 				formId?: string;
 				governanceReason: string | null;
 				governanceRule?: ProposalGovernanceRule;
@@ -41519,6 +42223,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					kind: string | null;
 					name: string | null;
 				}>;
+				supersededBy?: string;
 				targetId: string;
 				targetName?: string;
 				targetType: string;
@@ -41527,6 +42232,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				updatedAt: Date;
 				viewerCanReview: boolean;
 				viewerCanReviewReason: string;
+				waits: ProposalWaits;
 				workspaceId: string | null;
 				workspaceName?: string;
 			};
@@ -41553,6 +42259,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				distinct: number;
 				groups: ProposalCluster[];
+				reviewLater: number;
 				scanTruncated: boolean;
 				scanned: number;
 			};
@@ -41609,6 +42316,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					dedupHash: string | null;
 					expiresAt: Date | null;
 					externalDispatchedAt: Date | null;
+					fate?: ProposalFate;
 					formId?: string;
 					governanceReason: string | null;
 					governanceRule?: ProposalGovernanceRule;
@@ -41651,6 +42359,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						kind: string | null;
 						name: string | null;
 					}>;
+					supersededBy?: string;
 					targetId: string;
 					targetName?: string;
 					targetType: string;
@@ -41659,6 +42368,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					updatedAt: Date;
 					viewerCanReview: boolean;
 					viewerCanReviewReason: string;
+					waits: ProposalWaits;
 					workspaceId: string | null;
 					workspaceName?: string;
 				}[];
@@ -41695,6 +42405,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					dedupHash: string | null;
 					expiresAt: Date | null;
 					externalDispatchedAt: Date | null;
+					fate?: ProposalFate;
 					formId?: string;
 					governanceReason: string | null;
 					governanceRule?: ProposalGovernanceRule;
@@ -41737,6 +42448,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						kind: string | null;
 						name: string | null;
 					}>;
+					supersededBy?: string;
 					targetId: string;
 					targetName?: string;
 					targetType: string;
@@ -41745,6 +42457,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					updatedAt: Date;
 					viewerCanReview: boolean;
 					viewerCanReviewReason: string;
+					waits: ProposalWaits;
 					workspaceId: string | null;
 					workspaceName?: string;
 				}[];
@@ -43616,6 +44329,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				notifications: number;
 				requests: number;
 				review: number;
+				reviewLater: number;
 				suggestions: number;
 				truncated: boolean;
 			};
@@ -43641,6 +44355,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					notifications: number;
 					requests: number;
 					review: number;
+					reviewLater: number;
 					suggestions: number;
 					truncated: boolean;
 				};
@@ -43670,6 +44385,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					notifications: number;
 					requests: number;
 					review: number;
+					reviewLater: number;
 					suggestions: number;
 					truncated: boolean;
 				};
@@ -48248,8 +48964,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 									kind: "automation" | "document" | "entity" | "playbook" | "view";
 								}[] | undefined;
 								mode: "confirm";
+								no?: {
+									description?: string | undefined;
+									label?: string | undefined;
+									recommended?: boolean | undefined;
+								} | undefined;
 								prompt?: string | undefined;
 								risk?: "high" | "low" | "medium" | undefined;
+								stakes?: "commitment" | "routine" | undefined;
+								yes?: {
+									description?: string | undefined;
+									label?: string | undefined;
+									recommended?: boolean | undefined;
+								} | undefined;
 							} | {
 								allowOther?: boolean | undefined;
 								lookedAt?: {
@@ -48277,6 +49004,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 									value?: string | undefined;
 								}[];
 								risk?: "high" | "low" | "medium" | undefined;
+								stakes?: "commitment" | "routine" | undefined;
 							} | {
 								form: {
 									fields: {
@@ -48301,6 +49029,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								}[] | undefined;
 								mode: "form";
 								risk?: "high" | "low" | "medium" | undefined;
+								stakes?: "commitment" | "routine" | undefined;
 							} | {
 								lookedAt?: {
 									id: string;
@@ -48308,6 +49037,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								}[] | undefined;
 								mode: "act";
 								risk?: "high" | "low" | "medium" | undefined;
+								stakes?: "commitment" | "routine" | undefined;
 								steps?: string[] | undefined;
 								url?: string | undefined;
 							} | {
@@ -48327,6 +49057,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 									name: string;
 								};
 								risk?: "high" | "low" | "medium" | undefined;
+								stakes?: "commitment" | "routine" | undefined;
 							} | null | undefined;
 							relationToSubject?: string | undefined;
 							optional?: boolean | undefined;
@@ -48375,8 +49106,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 										kind: "automation" | "document" | "entity" | "playbook" | "view";
 									}[] | undefined;
 									mode: "confirm";
+									no?: {
+										description?: string | undefined;
+										label?: string | undefined;
+										recommended?: boolean | undefined;
+									} | undefined;
 									prompt?: string | undefined;
 									risk?: "high" | "low" | "medium" | undefined;
+									stakes?: "commitment" | "routine" | undefined;
+									yes?: {
+										description?: string | undefined;
+										label?: string | undefined;
+										recommended?: boolean | undefined;
+									} | undefined;
 								} | {
 									allowOther?: boolean | undefined;
 									lookedAt?: {
@@ -48404,6 +49146,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 										value?: string | undefined;
 									}[];
 									risk?: "high" | "low" | "medium" | undefined;
+									stakes?: "commitment" | "routine" | undefined;
 								} | {
 									form: {
 										fields: {
@@ -48428,6 +49171,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 									}[] | undefined;
 									mode: "form";
 									risk?: "high" | "low" | "medium" | undefined;
+									stakes?: "commitment" | "routine" | undefined;
 								} | {
 									lookedAt?: {
 										id: string;
@@ -48435,6 +49179,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 									}[] | undefined;
 									mode: "act";
 									risk?: "high" | "low" | "medium" | undefined;
+									stakes?: "commitment" | "routine" | undefined;
 									steps?: string[] | undefined;
 									url?: string | undefined;
 								} | {
@@ -48454,6 +49199,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 										name: string;
 									};
 									risk?: "high" | "low" | "medium" | undefined;
+									stakes?: "commitment" | "routine" | undefined;
 								} | null | undefined;
 								relationToSubject?: string | undefined;
 								optional?: boolean | undefined;

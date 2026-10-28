@@ -22,6 +22,9 @@ import type { ExpectedOutput } from "@synap/playbooks";
 import {
   mergeExpectedOutputs,
   expectedOutputWireSchema,
+  personsSlotsHandedAway,
+  droppedRelayLabels,
+  reconcileOwedSince,
 } from "../update-session.js";
 
 const stored = (): ExpectedOutput[] => [
@@ -174,5 +177,94 @@ describe("expectedOutputWireSchema", () => {
         status: "in_progress",
       })
     ).toThrow();
+  });
+});
+
+/**
+ * The person's turn is not the agent's to take back through its list, and a
+ * relay waiting for their tap only confirms the ask it was relayed against.
+ * Each row is the input where a merge that only carried stamps would hand the
+ * slot back silently, or keep a relay that Confirms a question nobody answered.
+ */
+describe("the person's turn on a slot, through an agent's list", () => {
+  const RELAY = {
+    text: "Yes",
+    value: { type: "confirm", confirmed: true },
+    relayedBy: "agent-1",
+    quote: "yes ship it",
+    relayedAt: "2026-10-26T10:00:00.000Z",
+  };
+  const asked = (): ExpectedOutput[] => [
+    {
+      kind: "decision",
+      label: "Deploy",
+      owner: "human",
+      blockedReason: "decision",
+      owedSince: "2026-10-26T09:00:00.000Z",
+      ask: {
+        mode: "confirm",
+        prompt: "Deploy to staging?",
+        stakes: "commitment",
+      },
+      pendingRelay: RELAY,
+    } as ExpectedOutput,
+  ];
+
+  it("an agent's list handing a person's slot to anyone else is refused", () => {
+    const sent = [{ kind: "decision", label: "Deploy", owner: "agent" }];
+    expect(personsSlotsHandedAway(asked(), sent as ExpectedOutput[])).toEqual([
+      "Deploy",
+    ]);
+    expect(() =>
+      mergeExpectedOutputs(asked(), sent as ExpectedOutput[], {
+        keepUnlisted: true,
+      })
+    ).toThrow(/synap_relay_answer/);
+  });
+
+  it("silence about the owner, or the same owner, is not a hand-back", () => {
+    const silent = [{ kind: "decision", label: "Deploy", pendingRelay: RELAY }];
+    expect(
+      personsSlotsHandedAway(asked(), silent as unknown as ExpectedOutput[])
+    ).toEqual([]);
+    const kept = mergeExpectedOutputs(
+      asked(),
+      silent as unknown as ExpectedOutput[],
+      { keepUnlisted: true }
+    );
+    expect(kept[0]!.owner).toBe("human");
+    // Same ask, still the person's: the relay stays for their tap.
+    expect(kept[0]!.pendingRelay).toEqual(RELAY);
+  });
+
+  it("a re-ask through the list drops the relay read against the old question", () => {
+    const reasked = [
+      {
+        kind: "decision",
+        label: "Deploy",
+        owner: "human",
+        ask: {
+          mode: "confirm",
+          prompt: "Deploy to prod?",
+          stakes: "commitment",
+        },
+        pendingRelay: RELAY,
+      },
+    ];
+    const after = mergeExpectedOutputs(
+      asked(),
+      reasked as unknown as ExpectedOutput[],
+      { keepUnlisted: true }
+    );
+    expect(after[0]!.pendingRelay).toBeUndefined();
+    expect(droppedRelayLabels(asked(), after)).toEqual(["Deploy"]);
+  });
+
+  it("a slot that stops being the person's carries no relay", () => {
+    const { pendingRelay } = reconcileOwedSince({
+      ...asked()[0]!,
+      owner: "agent",
+    } as ExpectedOutput);
+    expect(pendingRelay).toBeUndefined();
   });
 });

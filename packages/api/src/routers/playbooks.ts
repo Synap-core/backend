@@ -126,7 +126,10 @@ import {
   PlaybookParamsError,
   promoteSessionToPlaybook,
 } from "../services/playbooks/playbook-lifecycle.js";
-import { runPlaybook } from "../services/playbooks/run-playbook.js";
+import {
+  runPlaybook,
+  resolveRunHandOff,
+} from "../services/playbooks/run-playbook.js";
 import { resolvePlaybookRunWriteWorkspace } from "../services/playbooks/resolve-playbook-name.js";
 import { computePlaybookScorecard } from "@synap/jobs/utils/playbook-scorecard.js";
 import {
@@ -2682,6 +2685,15 @@ export const playbooksRouter = router({
          * the executor, never silently swaps agents.
          */
         agentType: z.string().trim().min(1).max(120).optional(),
+        /**
+         * HAND-OFF — the agent user id (`synap_list_agents`) this run is
+         * handed to: that agent does the work and the playbook's own executor
+         * is not dispatched (`RunPlaybookInput.handToAgentId`). An unknown,
+         * paused, foreign or pod-run agent is refused by name before anything
+         * is proposed or run, never swapped for the built-in AI. Carried on
+         * the proposal `data` so an approved run is handed too.
+         */
+        handToAgentId: z.string().uuid().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -2843,6 +2855,17 @@ export const playbooksRouter = router({
         }
       }
 
+      // HAND-OFF — refuse an agent nobody could hand this run to BEFORE a
+      // proposal is filed (same placement as FILING above), with exactly the
+      // arguments `runPlaybook` resolves it with again when the run starts.
+      if (input.handToAgentId) {
+        await resolveRunHandOff({
+          userId: ctx.userId,
+          agentUserId: input.agentUserId,
+          handToAgentId: input.handToAgentId,
+        });
+      }
+
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,
         // The approver's own check on an approved replay (see `approvedReplay`);
@@ -2897,6 +2920,10 @@ export const playbooksRouter = router({
           // A gated run keeps the goal + agent it was asked with.
           ...(input.goalOverride ? { goalOverride: input.goalOverride } : {}),
           ...(input.agentType ? { agentType: input.agentType } : {}),
+          // A gated run is handed to the agent it was asked to be handed to.
+          ...(input.handToAgentId
+            ? { handToAgentId: input.handToAgentId }
+            : {}),
         },
       });
       if ("denied" in perm && perm.denied) {
@@ -2944,6 +2971,7 @@ export const playbooksRouter = router({
           ? { goalTemplateOverride: input.goalOverride }
           : {}),
         ...(input.agentType ? { agentType: input.agentType } : {}),
+        ...(input.handToAgentId ? { handToAgentId: input.handToAgentId } : {}),
       }).catch((err: unknown) => {
         if (err instanceof PlaybookParamsError) {
           throw new TRPCError({ code: "BAD_REQUEST", message: err.message });

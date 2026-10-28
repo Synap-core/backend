@@ -57,7 +57,9 @@
  *                                    axis daily_write_count), so a would-be-auto
  *                                    write is downgraded execute→propose. Same
  *                                    placement class as 2.55 — below the floors,
- *                                    above every auto path. Never denies.
+ *                                    above every auto path. Never denies. OFF by
+ *                                    default: only a stored ceiling row sets a
+ *                                    limit (DEFAULT_DAILY_WRITE_CEILING = null).
  *   2.6 user_observation by KIND  → INFERENCE propose / EXPLICIT execute
  *                                    (governs by the observation's nature, NOT
  *                                     the routing workspace — see below)
@@ -258,13 +260,24 @@ export const DESTRUCTIVE_ACTIONS: readonly string[] = [
 
 /**
  * The ONE SOURCE of the default daily auto-execute write ceiling (rung 2.56 —
- * governance_ceilings axis `daily_write_count`). Consulted by the resolver
- * (`resolveDailyWriteCeiling` in @synap/database) when NO `governance_ceilings`
- * row matches the acting (agent, scope) tuple — the same "absence → code floor"
- * shape `DEFAULT_AUTO_APPROVE` (rung 8) uses. A stored ceiling row always sets
- * its own `limit_value`; this is only the fallback. The DB column deliberately
- * carries NO default so this constant stays the single source (see the 0236
- * migration + governance-ceilings.ts header).
+ * governance_ceilings axis `daily_write_count`): `null`, NO CEILING. Consulted
+ * by the resolver (`resolveDailyWriteCeiling` in @synap/database) when NO
+ * `governance_ceilings` row matches the acting (agent, scope) tuple, so by
+ * default rung 2.56 never holds a write: an agent that is trusted to write
+ * automatically is not stopped after N writes a day (founder, 2026-10-27 — on
+ * that day one agent identity shared by ~20 sessions made 1,116 automatic
+ * writes, and the old 500/day default held 83 of them for review). The
+ * mechanism stays OPT-IN: a stored row (per agent, per space or pod-wide) sets
+ * its own finite `limit_value` and rung 2.56 enforces it exactly as before.
+ * The DB column deliberately carries NO default so this constant stays the
+ * single source (see the 0236 migration + governance-ceilings.ts header).
+ *
+ * `null`, never `Infinity`: a limit is stored in an integer column and sent as
+ * JSON, and neither holds an infinity.
+ *
+ * Not touched by this default: the floors (rungs 2, 2.1, 2.5, 2.6), the
+ * pending-proposal cap (`pending_proposal_cap`) and the irreversible-send cap
+ * (`worker_irreversible_sends_daily`, tighten-only).
  *
  * NOTE — distinct from the pod-hygiene near-dup scanner's
  * `MAX_PROPOSALS_PER_USER_PER_DAY` (packages/jobs): that caps how many MERGE
@@ -273,7 +286,7 @@ export const DESTRUCTIVE_ACTIONS: readonly string[] = [
  * executed), principal (user vs agent), and axis — NOT the same concept, so they
  * are deliberately NOT consolidated.
  */
-export const DEFAULT_DAILY_WRITE_CEILING = 500;
+export const DEFAULT_DAILY_WRITE_CEILING: number | null = null;
 
 /**
  * The SYSTEM ceiling on irreversible sends (`messaging.external.send`,
@@ -294,12 +307,13 @@ export const WORKER_IRREVERSIBLE_DAILY_CEILING = 50;
  * THE CAPS FOLD (agent routing W1c, 0330): the fallback value of every
  * `governance_ceilings` axis, in ONE table. A stored row overrides it for its
  * (subject, principal, scope); `resolveCeiling` (@synap/database) is the one
- * reader. `@synap/database` pins this table's key set to the axis enum at
+ * reader. `null` = no limit unless a row sets one (`daily_write_count`). `@synap/database` pins this table's key set to the axis enum at
  * compile time (a new axis with no default does not build), and an api
  * tripwire pins the published copies in `@synap-core/types`
  * (`AI_DISPATCH_GUARDRAILS`, `DEFAULT_WORKER_MAX_PENDING_APPROVALS`) equal.
  */
 export const CEILING_DEFAULTS = {
+  /** No ceiling by default: opt-in per agent / space / pod (a stored row). */
   daily_write_count: DEFAULT_DAILY_WRITE_CEILING,
   /** Base pending-proposal cap; the api multiplies it for a trusted agent. */
   pending_proposal_cap: 10,
@@ -1796,7 +1810,9 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
   // daily_write_count). When the acting agent has already reached its resolved
   // per-UTC-day auto-execute write limit, the next would-be-auto write is
   // downgraded to a reviewable proposal — daily backpressure against a runaway
-  // agent (a stuck loop, a fan-out cron) silently auto-writing all day.
+  // agent (a stuck loop, a fan-out cron) silently auto-writing all day. OPT-IN:
+  // with no `governance_ceilings` row there is no limit and this never fires
+  // (`DEFAULT_DAILY_WRITE_CEILING` is null).
   //
   // PLACEMENT (same class as 2.55 — proof it never weakens a floor):
   //   • BELOW the three floors (2 ADMIN, 2.1 forcePropose, 2.5 DESTRUCTIVE),
@@ -2409,7 +2425,7 @@ export const GATE_WRITE_DOORS = {
   "document/section_update": "gate",
   "document/session_narrative_update": "gate",
   // The document patch door (`applyDocumentPatch`) for anything that is not a
-  // section-only patch: `replace_text` / `append` / `replace_all`, and the
+  // section-only patch: `replace_text` / `append` / `replace_all` / `set_title`, and the
   // full-replace aliases (REST PATCH, MCP update_entity.content, IS
   // update_document). Deliberately NOT in DEFAULT_AUTO_APPROVE: an agent's edit
   // is a proposal unless a `governance_rules` row says otherwise (D-gov), and an

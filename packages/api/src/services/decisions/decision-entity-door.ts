@@ -69,10 +69,16 @@ export async function createDecisionEntity(
 export async function updateDecisionEntity(
   scope: DecisionDoorScope,
   id: string,
-  properties: Record<string, unknown>
+  properties: Record<string, unknown>,
+  /** Properties to REMOVE (`entities.update` merges `properties`). */
+  deleteProperties: string[] = []
 ): Promise<void> {
   const c = await caller(scope);
-  const res = (await c.update({ id, properties } as never)) as {
+  const res = (await c.update({
+    id,
+    properties,
+    ...(deleteProperties.length > 0 ? { deleteProperties } : {}),
+  } as never)) as {
     status?: string;
   };
   if (res && res.status && res.status !== "updated") {

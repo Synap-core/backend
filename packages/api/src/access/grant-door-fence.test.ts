@@ -411,6 +411,32 @@ describe("connection status door (decision 3): the person's accounts, by a named
   });
 });
 
+describe("agent roster door: the person's agents, by a named read", () => {
+  const app = (...permissions: string[]) =>
+    key({ permissions, workspaceIds: ["w1"] });
+  it.each([
+    [["agent.read"], true],
+    [["agent"], true],
+    [["*"], true],
+    [["entity.lead.update"], false], // a write in one space is not enough
+    [["messaging.read"], false], // another person door's read
+    [[], false], // deny-all (a revoked or expired grant)
+  ] as const)("a pinned key holding %j → %s", (permissions, ok) => {
+    expect(restDoorAllowed("GET", "/agent-users", app(...permissions))).toBe(
+      ok
+    );
+  });
+  it("opens the roster only, never an agent's own doors", () => {
+    const READER = app("agent.read");
+    expect(restDoorAllowed("GET", "/agent-users/", READER)).toBe(true);
+    for (const path of [
+      "/agent-users/7455fd94-e6bc-4da4-ad98-6a75e021634d",
+      "/agent-users/7455fd94-e6bc-4da4-ad98-6a75e021634d/keys",
+    ])
+      expect(restDoorAllowed("GET", path, READER), path).toBe(false);
+  });
+});
+
 describe("owner-wide doors (webhooks)", () => {
   const FULL = key({ permissions: ["*"] });
   const STAR_ONE_WS = key({ permissions: ["*"], workspaceIds: ["w1"] });

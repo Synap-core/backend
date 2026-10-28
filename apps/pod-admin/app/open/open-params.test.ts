@@ -46,6 +46,20 @@ describe("parseOpenParams", () => {
     });
   });
 
+  it("takes a cell's type key, colon and all, encoded or not", () => {
+    // A document's cell chip links `/open/cell/<key>` (`objectPage`): a
+    // `generated:` key that failed here made every such chip a dead link.
+    const bounce = {
+      status: "bounce",
+      type: "cell",
+      id: "generated:weekly-pulse",
+    };
+    expect(parseOpenParams("cell", "generated:weekly-pulse")).toEqual(bounce);
+    expect(parseOpenParams("cell", "generated%3Aweekly-pulse")).toEqual(bounce);
+    expect(parseOpenParams("cell", "generated:<x>").status).toBe("invalid-id");
+    expect(parseOpenParams("cell", "generated:a/b").status).toBe("invalid-id");
+  });
+
   it("returns not-found for an unknown type", () => {
     expect(parseOpenParams("widget", UUID)).toEqual({
       status: "not-found",

@@ -17,8 +17,12 @@
  *   entity          a record reference (identity is fetched by the surface)
  *   view            a saved view
  *   cell-frame      an installed or generated cell (`cell:…`, `generated:…`)
- *                   or a cell instance: sandboxed HTML, drawn ONLY by the
- *                   desktop's cell frame
+ *                   or a cell instance: sandboxed HTML, MOUNTED inside a
+ *                   body only by the desktop's cell frame. Elsewhere it is a
+ *                   named chip. (The pod console RUNS a stored HTML
+ *                   DOCUMENT on that document's own page, in the isolated
+ *                   frame of `@synap-core/types/cell-bridge` — never inline
+ *                   in another body.)
  *   cell-builtin    any other catalog widget, named by the catalog
  *   broken          the directive names nothing (no id / key) — malformed
  *   unknown         a `synap-*` kind or cell key this catalog does not know

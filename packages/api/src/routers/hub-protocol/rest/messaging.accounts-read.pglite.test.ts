@@ -11,7 +11,10 @@
  *  - the live status wins over the stored one, and a disconnected account is
  *    not listed;
  *  - a failed live read is an error (503), never the stored rows: those carry
- *    the LAST known status, so a dead read used to answer "connected".
+ *    the LAST known status, so a dead read used to answer "connected";
+ *  - a pod with no messaging service set up says so (409
+ *    MESSAGING_NOT_CONFIGURED), apart from a failed read: it was a 503 whose
+ *    body the pod redacts, so apps told people to try again for good.
  *
  * Through the REAL route on PGlite; the connector is a stub.
  */
@@ -25,6 +28,7 @@ const h = vi.hoisted(() => ({
   },
   db: null as unknown,
   live: [] as Array<Record<string, unknown>> | Error,
+  configured: true,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -38,12 +42,15 @@ vi.mock("@synap/database", async (importOriginal) => {
   return { ...actual, db: h.db, getDb: async () => h.db };
 });
 vi.mock("../../../connectors/index.js", () => ({
-  getMessagingConnector: async () => ({
-    getAccounts: async () => {
-      if (h.live instanceof Error) throw h.live;
-      return h.live;
-    },
-  }),
+  getMessagingConnector: async () =>
+    h.configured
+      ? {
+          getAccounts: async () => {
+            if (h.live instanceof Error) throw h.live;
+            return h.live;
+          },
+        }
+      : null,
 }));
 
 import { is } from "drizzle-orm";
@@ -127,6 +134,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  h.configured = true;
   h.live = [
     {
       id: "live-li",
@@ -182,6 +190,15 @@ describe("GET /messaging/accounts — what an app learns about connected account
     expect(res.status).toBe(503);
     const body = (await res.json()) as Record<string, unknown>;
     expect(body.error).toMatch(/could not read/i);
+    expect(Array.isArray(body)).toBe(false);
+  });
+
+  it("no messaging service set up is a 409 with its code, never the outage 503", async () => {
+    h.configured = false;
+    const res = await read();
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.code).toBe("MESSAGING_NOT_CONFIGURED");
     expect(Array.isArray(body)).toBe(false);
   });
 });

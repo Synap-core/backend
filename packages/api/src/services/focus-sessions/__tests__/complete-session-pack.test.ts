@@ -30,6 +30,7 @@ describe("completeFocusSession pack types", () => {
         unfinishedOutputs: 2,
         expiredEphemerals: 0,
         retiredSlots: 0,
+        closedQuestions: 0,
       },
       warnings: [
         "2 expected output(s) still not marked done — session closed anyway (warn-only).",

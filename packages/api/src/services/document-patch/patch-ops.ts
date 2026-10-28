@@ -3,13 +3,16 @@
  * ops against a document's markdown and enforce the floors, with no database,
  * storage or governance in sight.
  *
- * Four ops, applied in order to the evolving content:
+ * Five ops, applied in order to the evolving content:
  *   - `upsert_section {id, title, body}` — one `::::synap-section` block by id
  *     (replace in place, or append), the session-document door's op;
  *   - `replace_text {old, new}` — str_replace: `old` must occur EXACTLY ONCE,
  *     otherwise the edit is refused with the count so the writer can widen it;
  *   - `append {body}` — markdown at the end;
- *   - `replace_all {content}` — the whole body.
+ *   - `replace_all {content}` — the whole body;
+ *   - `set_title {title}` — the document's NAME (`documents.title`, its one
+ *     title). It leaves the content alone; `resolvePatchTitle` reads it, and
+ *     the last one in the list wins.
  *
  * FLOORS, checked against the RESULT of every op together (so no op order can
  * slip past them), and refused BEFORE anything is written or proposed:
@@ -29,6 +32,7 @@
 
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
+import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
 import type { Embed } from "@synap-core/markdown-core/embeds";
 import { locateEmbeds } from "@synap-core/markdown-core/readable";
 import {
@@ -69,6 +73,15 @@ export const DocumentPatchOpSchema = z.discriminatedUnion("op", [
   z.object({
     op: z.literal("replace_all"),
     content: z.string().max(1_000_000),
+  }),
+  z.object({
+    op: z.literal("set_title"),
+    title: z
+      .string()
+      .trim()
+      .min(1, "set_title: the title cannot be empty")
+      .max(500)
+      .regex(/^[^\r\n]+$/, "set_title: a title is one line"),
   }),
 ]);
 export type DocumentPatchOp = z.infer<typeof DocumentPatchOpSchema>;
@@ -276,6 +289,9 @@ function applyOp(
     }
     case "replace_all":
       return op.content;
+    case "set_title":
+      // The name, not the body: `resolvePatchTitle` reads it.
+      return content;
   }
 }
 
@@ -437,6 +453,60 @@ export function renderDocumentPatch(
     previews: previewPatch(content, markdown),
     replacedSections,
   };
+}
+
+// ─── The name ────────────────────────────────────────────────────────────────
+
+/** A rename a patch carries: the document's name before and after. */
+export interface PatchRename {
+  before: string;
+  after: string;
+}
+
+/**
+ * The rename `ops` make to a document named `currentTitle`, or null when they
+ * leave the name as it is. The LAST `set_title` wins (ops apply in order).
+ * Refused, before anything is written or proposed:
+ *   - a name the title door would drop (TITLES ARE DERIVED, NEVER MACHINE
+ *     LABELS — vocabulary.md): a UUID, a build tag, the bare noun or verb. The
+ *     test IS `buildObjectActionTitle`, so the two can never disagree;
+ *   - a patch whose only ops are `set_title` and that changes nothing — an
+ *     empty edit is never filed for a person to review.
+ */
+export function resolvePatchTitle(
+  currentTitle: string,
+  ops: readonly DocumentPatchOp[]
+): PatchRename | null {
+  let next: string | null = null;
+  for (const op of ops) {
+    if (op.op === "set_title") next = op.title;
+  }
+  if (next === null) return null;
+  const head = buildObjectActionTitle({
+    action: "update",
+    objectKind: "document",
+  });
+  const named = buildObjectActionTitle({
+    action: "update",
+    objectKind: "document",
+    objectName: next,
+  });
+  if (named === head) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `set_title: "${next}" is not a name a person would read (an id, a build tag or a bare word like "Document"). Give the document a human title.`,
+    });
+  }
+  if (next === currentTitle) {
+    if (ops.every((op) => op.op === "set_title")) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: `set_title: the document is already named "${currentTitle}". Nothing to change.`,
+      });
+    }
+    return null;
+  }
+  return { before: currentTitle, after: next };
 }
 
 /** Is every op a section write? Governance files those under the section keys. */
