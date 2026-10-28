@@ -30,7 +30,11 @@
  *    changes where the person shows: it needs `facet.create` / `facet.delete`
  *    in EVERY space the role is granted to, founder decision 812ee060 — the
  *    role-write suite, entities.app-role-write.pglite.test.ts, covers it);
- *  - not a lead facet on a person stored in another space (rv-security B-1);
+ *  - not a lead facet on a person stored in another space (rv-security B-1),
+ *    while a person STORED in CRM is CRM's: its lead stage moves (a member of
+ *    CRM sees that role);
+ *  - an ask-first agent's move through the status door is filed in CRM, the
+ *    space the grant was checked in (the shared facet row names no space).
  *  - not with the same permissions pinned to Marketing instead.
  *
  * NOT COVERED: the hub HTTP door and the S7 tRPC fence (their own suites);
@@ -571,6 +575,45 @@ describe("Part 2 — a CRM key works the lead stage of a pod-wide person", () =>
       )
     ).rejects.toMatchObject(GRANT_DENIED);
     expect((await facetRow(lead))?.deleted_at).toBeNull();
+  });
+
+  it("moves the lead stage of a person STORED in CRM", async () => {
+    const person = await seedPerson(CRM);
+    const lead = await seedFacet(person, LEAD);
+    const res = await asKey(CRM_KEY, AGENT, () =>
+      entitiesAs(AGENT).updateFacet({
+        facetId: lead,
+        status: "qualified",
+        expectedStatus: "new",
+      } as never)
+    );
+    expect(res).toMatchObject({
+      status: "updated",
+      statusMove: { status: "moved" },
+    });
+    expect((await facetRow(lead))?.status).toBe("qualified");
+  });
+
+  it("an ask-first agent's lead-stage move through the status door is proposed, filed in CRM", async () => {
+    const person = await seedPerson(null);
+    const lead = await seedFacet(person, LEAD);
+    const res = await asKey(CRM_KEY, ASK, () =>
+      moveStatus({
+        entityId: person,
+        facetId: lead,
+        to: "qualified",
+        expectedFrom: "new",
+        actor: { kind: "agent", userId: USER, agentUserId: ASK },
+        sessionId: WORK,
+      })
+    );
+    expect(res.status, JSON.stringify(res)).toBe("proposed");
+    const { rows } = await q<{ workspace_id: string | null }>(
+      `select workspace_id from proposals where id = $1`,
+      [(res as { proposalId: string }).proposalId]
+    );
+    expect(rows[0]?.workspace_id).toBe(CRM);
+    expect((await facetRow(lead))?.status).toBe("new");
   });
 
   it("does not move a lead stage on a person stored in another space", async () => {
