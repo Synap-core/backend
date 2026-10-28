@@ -8,7 +8,7 @@
  * Procedures used:
  *   • trpc.apiKeys.adminListAll      — pod-admin, all keys
  *   • trpc.apiKeys.listSystemKeys    — pod-admin, system/hub-internal keys
- *   • trpc.apiKeys.create            — protectedProcedure (any user)
+ *   (New key is a page, `/keys/new`; this list is its door.)
  *   • trpc.apiKeys.revoke            — keyId + reason
  *   • trpc.apiKeys.rotate            — keyId → new plaintext key (shown ONCE)
  *   • trpc.apiKeys.adminDeleteRevoked — permanent delete of revoked key
@@ -57,9 +57,11 @@ import {
   type KeyCategory,
   type UnifiedKey,
 } from "./key-model";
-import { CreateKeyModal, RevealKeyModal } from "./key-modals";
+import { RevealKeyModal } from "./key-modals";
+import { newKeyHref } from "./key-form-model";
 
 export function ApiKeysSection() {
+  const router = useRouter();
   const operatorKeys = trpc.apiKeys.adminListAll.useQuery(undefined, {
     staleTime: 30_000,
   });
@@ -90,7 +92,6 @@ export function ApiKeysSection() {
   const utils = trpc.useUtils();
 
   const [tab, setTab] = useState<"active" | "revoked">("active");
-  const [createOpen, setCreateOpen] = useState(false);
   const [revokeTarget, setRevokeTarget] = useState<UnifiedKey | null>(null);
   const [revokeReason, setRevokeReason] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<UnifiedKey | null>(null);
@@ -99,60 +100,6 @@ export function ApiKeysSection() {
     plaintext: string;
     note: "created" | "rotated";
   } | null>(null);
-
-  const create = trpc.apiKeys.create.useMutation({
-    onSuccess: (res) => {
-      void utils.apiKeys.adminListAll.invalidate();
-      void utils.apiKeys.listSystemKeys.invalidate();
-      if (res && "key" in res && typeof res.key === "string" && res.key) {
-        setRevealedKey({
-          keyName: "New key",
-          plaintext: res.key,
-          note: "created",
-        });
-      } else if (res && "proposalId" in res && res.proposalId) {
-        addToast({
-          title: "Approval required",
-          description: "Key creation submitted as a proposal.",
-          color: "default",
-        });
-      }
-    },
-    onError: (err) => {
-      if (redirectToLoginIfUnauthorized(err)) return;
-      addToast({
-        title: "Create failed",
-        description: err.message,
-        color: "danger",
-      });
-    },
-  });
-
-  const createSystem = trpc.apiKeys.createSystemKey.useMutation({
-    onSuccess: (res: {
-      key: string;
-      id: string;
-      keyPrefix: string;
-      status: string;
-      message: string;
-    }) => {
-      void utils.apiKeys.adminListAll.invalidate();
-      void utils.apiKeys.listSystemKeys.invalidate();
-      if (res.key) {
-        setRevealedKey({
-          keyName: "New system key",
-          plaintext: res.key,
-          note: "created",
-        });
-      }
-    },
-    onError: (err: { message: string }) =>
-      addToast({
-        title: "Create failed",
-        description: err.message,
-        color: "danger",
-      }),
-  });
 
   const revoke = trpc.apiKeys.revoke.useMutation({
     onSuccess: () => {
@@ -244,7 +191,7 @@ export function ApiKeysSection() {
             radius="md"
             color="primary"
             startContent={<Plus className="h-3.5 w-3.5" />}
-            onPress={() => setCreateOpen(true)}
+            onPress={() => router.push(newKeyHref())}
           >
             New key
           </Button>
@@ -327,50 +274,6 @@ export function ApiKeysSection() {
           </div>
         )}
       </SectionCard>
-
-      {createOpen && (
-        <CreateKeyModal
-          isPending={create.isPending || createSystem.isPending}
-          onClose={() => setCreateOpen(false)}
-          onConfirm={async (input) => {
-            if (input.kind === "system") {
-              const res = await createSystem.mutateAsync({
-                keyName: input.keyName,
-                scope: input.scope,
-                // A system key with no lifetime never expires.
-                expiresInDays: input.expiresInDays ?? undefined,
-              });
-              if (res.key) {
-                setRevealedKey({
-                  keyName: input.keyName,
-                  plaintext: res.key,
-                  note: "created",
-                });
-              }
-            } else if (input.grant) {
-              const res = await create.mutateAsync({
-                keyName: input.keyName,
-                scope: input.scope,
-                expiresInDays: input.expiresInDays,
-                grant: input.grant,
-              });
-              if (
-                res &&
-                "key" in res &&
-                typeof res.key === "string" &&
-                res.key
-              ) {
-                setRevealedKey({
-                  keyName: input.keyName,
-                  plaintext: res.key,
-                  note: "created",
-                });
-              }
-            }
-            setCreateOpen(false);
-          }}
-        />
-      )}
 
       <ConfirmModal
         isOpen={revokeTarget !== null}

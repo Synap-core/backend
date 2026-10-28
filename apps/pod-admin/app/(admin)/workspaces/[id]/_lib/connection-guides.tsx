@@ -77,91 +77,10 @@ export function Collapsible({
 
 // ─── Guide payloads ───────────────────────────────────────────────────────────
 
-export interface CreatedKey {
-  plaintext: string;
-  scopes: string[];
-}
-
 export interface CreatedWebhook {
   url: string;
   events: string[];
   secret: string;
-}
-
-// ─── REST API guide ───────────────────────────────────────────────────────────
-
-export function RestGuide({
-  podUrl,
-  createdKey,
-}: {
-  podUrl: string;
-  createdKey: CreatedKey;
-}) {
-  const [open, setOpen] = useState(false);
-  const curl = `curl -X POST ${podUrl}/trpc/entities.list \\
-  -H "Authorization: Bearer ${createdKey.plaintext}" \\
-  -H "Content-Type: application/json" \\
-  -d '{}'`;
-
-  return (
-    <div className="flex flex-col gap-3">
-      <SaveOnceBanner />
-      <LabeledSnippet label="API key" value={createdKey.plaintext} />
-      <LabeledSnippet label="Base URL" value={`${podUrl}/trpc`} />
-      <p className="text-[11.5px] text-foreground/65">
-        Scopes granted:{" "}
-        <span className="font-mono">{createdKey.scopes.join(", ")}</span>
-      </p>
-      <Collapsible
-        open={open}
-        onToggle={() => setOpen((v) => !v)}
-        label="How to use"
-      >
-        <pre className="overflow-x-auto rounded-md border border-foreground/[0.06] bg-foreground/[0.03] px-3 py-2.5 font-mono text-[10.5px] text-foreground/70 whitespace-pre-wrap break-all">
-          {curl}
-        </pre>
-      </Collapsible>
-    </div>
-  );
-}
-
-// ─── Hub Protocol guide ───────────────────────────────────────────────────────
-
-export function HubGuide({
-  podUrl,
-  createdKey,
-}: {
-  podUrl: string;
-  createdKey: CreatedKey;
-}) {
-  const [open, setOpen] = useState(false);
-  const curl = `curl -X POST ${podUrl}/api/hub/memory \\
-  -H "Authorization: Bearer ${createdKey.plaintext}" \\
-  -H "Content-Type: application/json" \\
-  -d '{"content":"...","tags":[]}'`;
-
-  return (
-    <div className="flex flex-col gap-3">
-      <SaveOnceBanner />
-      <LabeledSnippet label="API key" value={createdKey.plaintext} />
-      <LabeledSnippet label="Hub base URL" value={`${podUrl}/api/hub`} />
-      <p className="text-[11.5px] text-foreground/65">
-        Full API reference:{" "}
-        <code className="font-mono text-[11px]">
-          {podUrl}/api/hub/openapi.json
-        </code>
-      </p>
-      <Collapsible
-        open={open}
-        onToggle={() => setOpen((v) => !v)}
-        label="How to use"
-      >
-        <pre className="overflow-x-auto rounded-md border border-foreground/[0.06] bg-foreground/[0.03] px-3 py-2.5 font-mono text-[10.5px] text-foreground/70 whitespace-pre-wrap break-all">
-          {curl}
-        </pre>
-      </Collapsible>
-    </div>
-  );
 }
 
 // ─── Webhook guide ────────────────────────────────────────────────────────────

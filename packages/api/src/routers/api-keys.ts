@@ -43,9 +43,10 @@ import {
   assertGrantInput,
   deriveKeyScopes,
   pinGrantToWorkspace,
-  attachFullAccessGrant,
+  FULL_ACCESS_GRANT_LABEL,
   attachGrantOrRevoke,
   clipHostedAgentGrants,
+  type GrantInput,
 } from "../services/key-grant.js";
 import {
   apiKeys,
@@ -97,6 +98,60 @@ const APPROVE_COMPUTER_SIGNED_IN = "Approve a computer while signed in.";
 
 /** A key request is decided by its person, signed in — never by a key. */
 const APPROVE_KEY_REQUEST_SIGNED_IN = "Approve a key request while signed in.";
+
+/** A key's doors: `uses` (scopes derived here), or a legacy raw `scope`. */
+const scopeOrUses = (v: { scope?: unknown; uses?: unknown }) =>
+  (v.scope ? 1 : 0) + (v.uses ? 1 : 0) === 1;
+const SCOPE_OR_USES = {
+  message: "Send `uses` (where the key is used), or a legacy `scope`.",
+  path: ["uses"],
+};
+
+/**
+ * A system or service key (pod admins). Same lifetime rule as a person's key
+ * (D-4): omitted = 90 days, a number = that many, `null` = never. Same doors
+ * rule (Decision 2): `uses`, or a legacy `scope`. It takes a grant (D-2);
+ * omitted, it is its holder's full reach, an explicit `*` as before.
+ */
+const ServiceKeyInputSchema = z.object({
+  keyName: z.string().min(1).max(100),
+  /** LEGACY: raw scopes, for callers made before `uses`. */
+  scope: z
+    .array(z.enum([...API_KEY_SCOPES] as [string, ...string[]]))
+    .min(1)
+    .optional(),
+  uses: KeyUsesSchema.optional(),
+  /** "Where you kept it" — stored as the key's description. */
+  note: z.string().trim().max(400).optional(),
+  expiresInDays: ExpiresInDaysSchema,
+  grant: GrantInputSchema.optional(),
+});
+
+/**
+ * The scopes and grant a system or service key is minted with. A grant given
+ * is validated, and pinned to the key's space when it has one (D-3); scopes
+ * are derived from `uses` against that grant (or, without a grant, against
+ * full access).
+ */
+function serviceKeyAccess(
+  input: z.infer<typeof ServiceKeyInputSchema>,
+  workspaceId?: string
+): { scope: string[]; grant: GrantInput | undefined } {
+  assertGrantInput(input.grant);
+  const grant = input.grant
+    ? pinGrantToWorkspace(input.grant, workspaceId)
+    : undefined;
+  const scope = input.uses
+    ? deriveKeyScopes(input.uses, grant ?? { permissions: ["*"] })
+    : input.scope!;
+  return { scope, grant };
+}
+
+/** The grant a system or service key holds: the one given, else full access. */
+const FULL_ACCESS_GRANT: GrantInput = {
+  permissions: ["*"],
+  label: FULL_ACCESS_GRANT_LABEL,
+};
 
 /**
  * The authorize parameters pod-admin's consent screen round-trips.
@@ -1010,24 +1065,15 @@ export const apiKeysRouter = router({
    */
   createSystemKey: podAdminProcedure
     .use(requireFreshAuthentication)
-    .input(
-      z.object({
-        keyName: z.string().min(1).max(100),
-        scope: z
-          .array(z.enum([...API_KEY_SCOPES] as [string, ...string[]]))
-          .min(1),
-        expiresInDays: z.number().int().min(1).max(365).optional(),
-      })
-    )
+    .input(ServiceKeyInputSchema.refine(scopeOrUses, SCOPE_OR_USES))
     .mutation(async ({ input, ctx }) => {
+      const { scope, grant } = serviceKeyAccess(input);
       const keyPrefix =
         process.env.NODE_ENV === "production"
           ? "synap_hub_live_"
           : "synap_hub_test_";
       const key = generateApiKey(keyPrefix);
-      const expiresAt = input.expiresInDays
-        ? new Date(Date.now() + input.expiresInDays * 24 * 60 * 60 * 1000)
-        : undefined;
+      const expiresAt = resolveKeyExpiry(input.expiresInDays);
 
       const database = await getDb();
       const eventRepo = new EventRepository(sql);
@@ -1038,18 +1084,20 @@ export const apiKeysRouter = router({
           keyName: input.keyName,
           keyPrefix,
           key,
-          scope: input.scope,
-          expiresAt,
+          scope,
+          expiresAt: expiresAt ?? undefined,
           userId: ctx.userId,
           keyType: "system",
+          ...(input.note ? { description: input.note } : {}),
         },
         ctx.userId
       );
-      await attachFullAccessGrant({
+      await attachGrantOrRevoke({
         apiKeyId: apiKey.id,
         principalUserId: ctx.userId,
         onBehalfOf: ctx.userId,
-        expiresAt: expiresAt ?? null,
+        grant: grant ?? FULL_ACCESS_GRANT,
+        expiresAt,
         createdBy: ctx.userId,
       });
 
@@ -1078,24 +1126,19 @@ export const apiKeysRouter = router({
   adminCreateServiceKey: podAdminProcedure
     .use(requireFreshAuthentication)
     .input(
-      z.object({
-        keyName: z.string().min(1).max(100),
-        scope: z
-          .array(z.enum([...API_KEY_SCOPES] as [string, ...string[]]))
-          .min(1),
-        workspaceId: z.string().uuid(),
-        expiresInDays: z.number().int().min(1).max(365).optional(),
-      })
+      ServiceKeyInputSchema.extend({ workspaceId: z.string().uuid() }).refine(
+        scopeOrUses,
+        SCOPE_OR_USES
+      )
     )
     .mutation(async ({ input, ctx }) => {
+      const { scope, grant } = serviceKeyAccess(input, input.workspaceId);
       const keyPrefix =
         process.env.NODE_ENV === "production"
           ? "synap_hub_live_"
           : "synap_hub_test_";
       const key = generateApiKey(keyPrefix);
-      const expiresAt = input.expiresInDays
-        ? new Date(Date.now() + input.expiresInDays * 24 * 60 * 60 * 1000)
-        : undefined;
+      const expiresAt = resolveKeyExpiry(input.expiresInDays);
 
       const database = await getDb();
       const eventRepo = new EventRepository(sql);
@@ -1106,19 +1149,21 @@ export const apiKeysRouter = router({
           keyName: input.keyName,
           keyPrefix,
           key,
-          scope: input.scope,
-          expiresAt,
+          scope,
+          expiresAt: expiresAt ?? undefined,
           userId: ctx.userId,
           keyType: "hub_inbound",
           workspaceId: input.workspaceId,
+          ...(input.note ? { description: input.note } : {}),
         },
         ctx.userId
       );
-      await attachFullAccessGrant({
+      await attachGrantOrRevoke({
         apiKeyId: apiKey.id,
         principalUserId: ctx.userId,
         onBehalfOf: ctx.userId,
-        expiresAt: expiresAt ?? null,
+        grant: grant ?? FULL_ACCESS_GRANT,
+        expiresAt,
         createdBy: ctx.userId,
       });
 
@@ -1164,9 +1209,12 @@ export const apiKeysRouter = router({
         strategy: z
           .enum(["create_new", "replace_existing"])
           .default("create_new"),
+        /** What it may touch (D-2); omitted = the person's full reach. */
+        grant: GrantInputSchema.optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
+      assertGrantInput(input.grant);
       const flowId = randomUUID();
       const id = randomUUID();
 
@@ -1258,11 +1306,13 @@ export const apiKeysRouter = router({
         ctx.userId
       );
       const { apiKey, plainKey } = registration;
-      // The person's own CLI/integration: their full reach, explicit.
-      await attachFullAccessGrant({
+      // The person's own CLI/integration: the grant asked for, else their
+      // full reach, explicit.
+      await attachGrantOrRevoke({
         apiKeyId: apiKey.id,
         principalUserId: ctx.userId,
         onBehalfOf: ctx.userId,
+        grant: input.grant ?? FULL_ACCESS_GRANT,
         expiresAt: apiKey.expiresAt ?? null,
         createdBy: ctx.userId,
       });

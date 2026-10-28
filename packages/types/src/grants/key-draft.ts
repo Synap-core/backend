@@ -15,6 +15,7 @@ import { GRANT_ACTIONS, parsePermission } from "./grammar.js";
 import { grantActionLabel, isQualifiedGrantSubject } from "./catalog.js";
 import {
   EMPTY_GRANT_DRAFT,
+  MAX_KEY_TTL_DAYS,
   grantLifetime,
   isFullAccess,
   toGrantMintInput,
@@ -272,7 +273,9 @@ export function validateKeyDraft(
       problems.push({ code: "grant", problem });
   const { ceiling } = opts;
   if (ceiling) {
-    if (!scopeWithin(draft.grant, ceiling.grant))
+    // A malformed permission is already a problem above; the ceiling can only
+    // be compared on a grant that parses.
+    if (grant.ok && !scopeWithin(draft.grant, ceiling.grant))
       problems.push({ code: "wider-than-ceiling", axis: "permissions" });
     if (!draft.uses.every((u) => ceiling.uses.includes(u)))
       problems.push({ code: "wider-than-ceiling", axis: "uses" });
@@ -280,6 +283,48 @@ export function validateKeyDraft(
       problems.push({ code: "wider-than-ceiling", axis: "lifetime" });
   }
   return problems.length === 0 ? { ok: true } : { ok: false, problems };
+}
+
+/**
+ * Where a problem is fixed, and how it reads there: ONE wording for every
+ * host (the New key page, the request Review page, the approval door's
+ * refusal). `section` is the section the person goes back to.
+ */
+export function describeKeyProblem(p: KeyDraftProblem): {
+  readonly section: KeyDraftSectionId;
+  readonly text: string;
+} {
+  switch (p.code) {
+    case "no-name":
+      return { section: "name", text: "Name the key." };
+    case "no-uses":
+      return { section: "uses", text: "Pick at least one place it is used." };
+    case "unknown-use":
+      return {
+        section: "uses",
+        text: `"${p.use}" is not a place a key can be used.`,
+      };
+    case "wider-than-ceiling":
+      return {
+        section: p.axis === "permissions" ? "access" : p.axis,
+        text: "Wider than the request allows. Narrow it, or ask for a new request.",
+      };
+    case "grant":
+      switch (p.problem.code) {
+        case "no-permissions":
+          return {
+            section: "access",
+            text: "Pick at least one thing it may touch.",
+          };
+        case "invalid-lifetime":
+          return {
+            section: "lifetime",
+            text: `Pick a lifetime from 1 to ${MAX_KEY_TTL_DAYS} days.`,
+          };
+        default:
+          return { section: "access", text: p.problem.message };
+      }
+  }
 }
 
 // ── the mint wire shape ────────────────────────────────────────────────────
