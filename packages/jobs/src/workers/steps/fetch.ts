@@ -6,7 +6,7 @@ import {
   resolveVaultReferences,
   isVaultReference,
 } from "../../utils/vault-resolver.js";
-import { validateExternalUrl, safeExternalFetch } from "@synap/shared-utils";
+import { validateExternalUrl, safePublicFetch } from "@synap/shared-utils";
 import type { StepContext } from "../automation-executor-types.js";
 
 export async function executeFetchStep(
@@ -52,8 +52,12 @@ export async function executeFetchStep(
   if (!resolvedUrl) throw new Error("fetch node: url is required");
 
   // SSRF guard: the URL is content/template-derived, so an untrusted source
-  // could otherwise steer it at an internal address.
-  const fetchUrlCheck = validateExternalUrl(resolvedUrl);
+  // could otherwise steer it at an internal address. `safePublicFetch` then
+  // resolves the name, refuses a private answer and pins the address it
+  // vetted. Any port: the author names it (a self-hosted n8n on :5678).
+  const fetchUrlCheck = validateExternalUrl(resolvedUrl, {
+    allowedPorts: "any",
+  });
   if (!fetchUrlCheck.valid) {
     throw new Error(`fetch node blocked: ${fetchUrlCheck.reason}`);
   }
@@ -62,12 +66,17 @@ export async function executeFetchStep(
   const timer = setTimeout(() => controller.abort(), 30_000);
 
   try {
-    const response = await safeExternalFetch(resolvedUrl, {
-      method: data.method ?? "GET",
-      headers: finalHeaders,
-      body: bodyPayload,
-      signal: controller.signal,
-    });
+    const response = await safePublicFetch(
+      resolvedUrl,
+      {
+        method: data.method ?? "GET",
+        headers: finalHeaders,
+        body: bodyPayload,
+        signal: controller.signal,
+      },
+      0,
+      { allowedPorts: "any" }
+    );
     clearTimeout(timer);
 
     // Collect response headers as a plain record

@@ -41,7 +41,7 @@
  * Concurrent first calls share ONE in-flight sign-in.
  */
 import { createHash } from "node:crypto";
-import { safeExternalFetch, validateExternalUrl } from "@synap/shared-utils";
+import { safePublicFetch, validateExternalUrl } from "@synap/shared-utils";
 
 export interface SessionAuthConfig {
   type: "session";
@@ -238,9 +238,10 @@ async function signIn(
 
   let res: Response;
   try {
-    res = await safeExternalFetch(config.signIn.url, {
+    res = await safePublicFetch(config.signIn.url, {
       method: config.signIn.method,
       headers: { Authorization: `Basic ${basic}` },
+      signal: AbortSignal.timeout(30_000),
     });
   } catch (err) {
     return {

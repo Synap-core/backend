@@ -96,8 +96,11 @@ export const servicesRouter = router({
         });
       }
 
-      // SSRF guard on webhookUrl
-      const webhookCheck = validateExternalUrl(input.webhookUrl);
+      // SSRF guard on webhookUrl. A registered service names its own port;
+      // its host must be a public name or address (never a Docker service).
+      const webhookCheck = validateExternalUrl(input.webhookUrl, {
+        allowedPorts: "any",
+      });
       if (!webhookCheck.valid) {
         throw new TRPCError({
           code: "BAD_REQUEST",
@@ -107,7 +110,9 @@ export const servicesRouter = router({
 
       // SSRF guard on mcpEndpoint if provided
       if (input.mcpEndpoint) {
-        const mcpCheck = validateExternalUrl(input.mcpEndpoint);
+        const mcpCheck = validateExternalUrl(input.mcpEndpoint, {
+          allowedPorts: "any",
+        });
         if (!mcpCheck.valid) {
           throw new TRPCError({
             code: "BAD_REQUEST",

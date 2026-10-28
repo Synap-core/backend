@@ -6,19 +6,29 @@
  * (chat stream, OpenAI-compat, MCP, health checks) that trust the stored
  * value. So the URL is refused at the door that WRITES it, with the same
  * guard the Hub Protocol `services.register` door uses: `validateExternalUrl`
- * (scheme + loopback / private / link-local / metadata / internal Docker
- * service names). Deliberately not the DNS-pinned `safePublicFetch`: an
- * operator's own intelligence service may resolve to a private address on
- * the Docker network (`pinned-fetch.ts` says why).
+ * (scheme, a literal private / loopback / link-local / metadata address, a
+ * single-label Docker service name such as `kratos` or `backend`, a trailing
+ * dot). A registered service names its own port, so any port is allowed.
+ *
+ * The probes the registering doors send (`intelligence.ts`
+ * `testCustomServiceConnection` / `registerCustomService`) go through the
+ * pinned door `safePublicFetch` with {@link SERVICE_URL_FETCH}: a public name
+ * that resolves to a private address is refused there too.
  *
  * Returns nothing: callers keep the URL as typed (`new URL()` would add a
  * trailing slash that `${url}/api/...` then doubles).
  */
 import { TRPCError } from "@trpc/server";
-import { validateExternalUrl } from "@synap/shared-utils";
+import {
+  validateExternalUrl,
+  type SafePublicFetchDeps,
+} from "@synap/shared-utils";
+
+/** A registered service URL names its own port (`https://is.example.com:3001`). */
+export const SERVICE_URL_FETCH: SafePublicFetchDeps = { allowedPorts: "any" };
 
 export function assertSafeServiceUrl(raw: string, field: string): void {
-  const check = validateExternalUrl(raw);
+  const check = validateExternalUrl(raw, { allowedPorts: "any" });
   if (!check.valid) {
     throw new TRPCError({
       code: "BAD_REQUEST",

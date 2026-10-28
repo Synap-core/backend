@@ -26,6 +26,25 @@ const h = vi.hoisted(() => ({
   toolRows: [] as unknown[],
   inserted: [] as unknown[],
   gate: { decision: "propose" as string },
+  door: [] as Array<{ url: string; maxRedirects?: number; deps?: unknown }>,
+}));
+
+// The pinned door speaks node:http, not `fetch` (it streams an AsyncIterable
+// body chunked itself: `pinned-fetch.test.ts`). Record what each request asked
+// of the door, then hand it (minus the timeout signal) to the recorded global
+// `fetch` below, so every assertion still sees the exact outbound request.
+vi.mock("@synap/shared-utils", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  safePublicFetch: (
+    url: string,
+    init: RequestInit = {},
+    maxRedirects?: number,
+    deps?: unknown
+  ) => {
+    h.door.push({ url, maxRedirects, deps });
+    const { signal: _signal, ...rest } = init;
+    return fetch(url, rest);
+  },
 }));
 
 vi.mock("@synap/storage", () => ({
@@ -115,6 +134,7 @@ beforeEach(() => {
   h.objects.clear();
   h.opened.length = 0;
   h.inserted.length = 0;
+  h.door.length = 0;
   __resetSessionCacheForTests();
   h.mockFindFirst.mockResolvedValue({
     userId: "owner-1",
@@ -224,7 +244,21 @@ describe("vault:// with a multipart file body", () => {
       "Content-Type": ct,
       "X-API-KEY": "s3cret-static",
     });
-    expect((c.init as { duplex?: string }).duplex).toBe("half");
+    // Streamed through the pinned door, never buffered: the body handed to it
+    // is the lazy file stream; no redirect is followed (the key is a header);
+    // the tool's configured baseUrl may name its own port (13111).
+    expect(
+      typeof (c.init.body as unknown as AsyncIterable<Uint8Array>)[
+        Symbol.asyncIterator
+      ]
+    ).toBe("function");
+    expect(h.door).toEqual([
+      {
+        url: "https://api1.unipile.com:13111/api/v1/posts",
+        maxRedirects: 0,
+        deps: { allowedPorts: "any" },
+      },
+    ]);
     expect(c.init.method).toBe("POST");
     expect(
       (c.sent as Buffer).equals(
@@ -308,7 +342,7 @@ describe("vault:// with a base64 file body", () => {
     expect(r.success).toBe(true);
     const c = calls[0]!;
     expect(headersOf(c)["Content-Type"]).toBe("application/json");
-    expect((c.init as { duplex?: string }).duplex).toBeUndefined();
+    expect(typeof c.init.body).toBe("string");
     expect(JSON.parse(c.sent as string)).toEqual({
       title: "Brief",
       file: { name: "d.pdf", data: pdf.toString("base64") },
@@ -330,7 +364,7 @@ describe("vault:// with a base64 file body", () => {
 });
 
 describe("vault:// default JSON body — unchanged", () => {
-  it("no file body: the exact request of before (no duplex, JSON string)", async () => {
+  it("no file body: the exact request of before (a JSON string, no redirect)", async () => {
     await runVault(UNIPILE, { path: "/posts", body: { text: "hi" } });
     expect(calls[0]!.init).toEqual({
       method: "POST",
@@ -340,8 +374,8 @@ describe("vault:// default JSON body — unchanged", () => {
         "X-API-KEY": "s3cret-static",
       },
       body: JSON.stringify({ text: "hi" }),
-      redirect: "manual",
     });
+    expect(h.door[0]).toMatchObject({ maxRedirects: 0 });
     expect(h.opened).toEqual([]);
   });
 });

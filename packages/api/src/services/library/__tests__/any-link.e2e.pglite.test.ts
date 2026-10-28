@@ -34,8 +34,8 @@
  *                  Library (`imageFromLibraryCopy`) — the CDN is never asked
  *                  again, the reader never runs again.
  *
- * Faked, and only at their seams: the network (`safePublicFetch` /
- * `safeExternalFetch` — a URL table serving real PNG / MP4 magic bytes, every
+ * Faked, and only at their seams: the network (`safePublicFetch`: a URL
+ * table serving real PNG / MP4 magic bytes, every
  * request counted), the Apify verb run (`executeCapability`), the IS
  * (transcript, summary, structurer — remote services), the search index
  * (Typesense: a fake index fed by the real `search-index` jobs, matching the
@@ -162,7 +162,7 @@ vi.mock("@synap/shared-utils", async (importOriginal) => {
       },
     });
   };
-  return { ...actual, safePublicFetch: serve, safeExternalFetch: serve };
+  return { ...actual, safePublicFetch: serve };
 });
 
 // THE APIFY VERB RUN: the reader verb's execution (the vendor) is faked.

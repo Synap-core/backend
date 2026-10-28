@@ -55,7 +55,7 @@ import {
   resolveWakeAgentType,
   wakeAgentAtMessage,
 } from "../../utils/agent-wake.js";
-import { validateExternalUrl, safeExternalFetch } from "@synap/shared-utils";
+import { validateExternalUrl, safePublicFetch } from "@synap/shared-utils";
 import { deepResolveTemplates } from "../template-resolve.js";
 import { resolveSingleReferenceParam } from "./reference-param.js";
 import { dispatchOutputVerb } from "../capability-dispatch.js";
@@ -635,7 +635,11 @@ export async function executeOutputStep(
 
       // SSRF guard: reject internal/reserved targets BEFORE resolving any
       // vault secrets into headers (never leak a secret to a private address).
-      const webhookUrlCheck = validateExternalUrl(url);
+      // The author names the port (a self-hosted n8n on :5678); the pinned
+      // door below still refuses a name that resolves inside.
+      const webhookUrlCheck = validateExternalUrl(url, {
+        allowedPorts: "any",
+      });
       if (!webhookUrlCheck.valid) {
         throw new Error(`webhook output blocked: ${webhookUrlCheck.reason}`);
       }
@@ -650,16 +654,23 @@ export async function executeOutputStep(
       const timer = setTimeout(() => controller.abort(), 30_000);
 
       try {
-        const response = await safeExternalFetch(url, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...headers,
+        const response = await safePublicFetch(
+          url,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...headers,
+            },
+            body: JSON.stringify(body),
+            signal: controller.signal,
           },
-          body: JSON.stringify(body),
-          signal: controller.signal,
-        });
+          0,
+          { allowedPorts: "any" }
+        );
         clearTimeout(timer);
+        // Only the status is read: release the connection.
+        await response.body?.cancel().catch(() => undefined);
 
         return {
           status: response.ok ? "sent" : "error",

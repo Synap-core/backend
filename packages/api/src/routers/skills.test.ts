@@ -77,7 +77,7 @@ vi.mock("../utils/user-visible-where.js", () => ({
 }));
 vi.mock("@synap/shared-utils", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@synap/shared-utils")>()),
-  safeExternalFetch: vi.fn(),
+  safePublicFetch: vi.fn(),
 }));
 vi.mock("../services/capabilities/gate-capability-execution.js", () => ({
   gateCapabilityExecution: vi.fn(),

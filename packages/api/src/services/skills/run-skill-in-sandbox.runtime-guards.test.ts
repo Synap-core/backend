@@ -69,7 +69,7 @@ vi.mock("./runner/index.js", async (importOriginal) => ({
 }));
 vi.mock("@synap/shared-utils", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@synap/shared-utils")>()),
-  safeExternalFetch: (...a: unknown[]) => h.fetch(...a),
+  safePublicFetch: (...a: unknown[]) => h.fetch(...a),
 }));
 
 const { runSkillInSandbox, buildSkillBridges } =

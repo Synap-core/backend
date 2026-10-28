@@ -32,6 +32,12 @@ const h = vi.hoisted(() => {
   };
 });
 
+// The pinned door speaks node:http: hand its request to the recorded `fetch`.
+vi.mock("@synap/shared-utils", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/shared-utils")>()),
+  safePublicFetch: (url: string, init: RequestInit) => fetch(url, init),
+}));
+
 vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@synap/database")>();
   return {
