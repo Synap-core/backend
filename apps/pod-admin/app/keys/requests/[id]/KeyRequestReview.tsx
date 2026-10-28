@@ -9,7 +9,14 @@
  * One primary, Create key; Deny beside it.
  */
 
-import { Accordion, AccordionItem, Button, Chip } from "@heroui/react";
+import {
+  Accordion,
+  AccordionItem,
+  Button,
+  CardBody,
+  Chip,
+} from "@heroui/react";
+import { ChevronRight } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import {
   describeKey,
@@ -151,10 +158,12 @@ export function KeyRequestReview({
 
   if (request.isLoading || (data && !draft)) {
     return (
-      <ReceiverShell podHost={podHost} identity={identity} width="sm">
-        <p role="status" className="text-[13px] text-foreground/65">
-          Loading the request…
-        </p>
+      <ReceiverShell podHost={podHost} identity={identity} width="md">
+        <CardBody className="px-7 py-6">
+          <p role="status" className="text-[13px] text-foreground/65">
+            Loading the request…
+          </p>
+        </CardBody>
       </ReceiverShell>
     );
   }
@@ -162,8 +171,8 @@ export function KeyRequestReview({
   if (request.isError || !data || !draft) {
     const missing = request.error?.data?.code === "NOT_FOUND";
     return (
-      <ReceiverShell podHost={podHost} identity={identity} width="sm">
-        <div className="flex flex-col gap-2">
+      <ReceiverShell podHost={podHost} identity={identity} width="md">
+        <CardBody className="gap-2 px-7 py-6">
           <h1 className="font-heading text-[18px] font-medium">
             {missing ? "No such request" : "Couldn't load this request"}
           </h1>
@@ -183,7 +192,7 @@ export function KeyRequestReview({
               </Button>
             </div>
           ) : null}
-        </div>
+        </CardBody>
       </ReceiverShell>
     );
   }
@@ -203,12 +212,20 @@ export function KeyRequestReview({
         podHost={podHost}
         identity={identity}
         requested={requested}
-        width="sm"
+        width="md"
       >
-        <div className="flex flex-col gap-2">
+        <CardBody className="gap-2 px-7 py-6">
           <h1 className="font-heading text-[18px] font-medium">{out.title}</h1>
           <p className="text-[13px] text-foreground/70">{out.body}</p>
-        </div>
+          {data.status === "approved" || data.status === "consumed" ? (
+            <a
+              href="/keys"
+              className="text-[13px] text-primary underline-offset-2 hover:underline"
+            >
+              See your keys
+            </a>
+          ) : null}
+        </CardBody>
       </ReceiverShell>
     );
   }
@@ -224,7 +241,7 @@ export function KeyRequestReview({
       width="md"
       pinsBar
     >
-      <div className="flex flex-col gap-4">
+      <CardBody className="gap-4 px-7 py-8">
         <header className="flex flex-col gap-1">
           <h1 className="font-heading text-[18px] font-medium">
             {requester} asks for a key
@@ -279,6 +296,8 @@ export function KeyRequestReview({
           <AccordionItem
             key="narrow"
             aria-label="Narrow it"
+            // A closed disclosure points the way it opens: right, then down.
+            indicator={<ChevronRight aria-hidden className="h-4 w-4" />}
             title={<span className="text-[13px] font-medium">Narrow it</span>}
             subtitle={
               <span className="text-[12px] text-foreground/60">
@@ -311,7 +330,7 @@ export function KeyRequestReview({
           draft={draft}
           validation={validation}
           primaryLabel={buildObjectActionTitle({
-            action: "create",
+            action: "approve",
             objectKind: "api_key",
           })}
           onPrimary={() => void send("approve")}
@@ -331,7 +350,7 @@ export function KeyRequestReview({
             </Button>
           }
         />
-      </div>
+      </CardBody>
     </ReceiverShell>
   );
 }

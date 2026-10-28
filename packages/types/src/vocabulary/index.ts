@@ -1983,7 +1983,9 @@ export function resolveSignInWayLabel(
  * the scopes it opens, and the mint door derives them (`scopesForKey`).
  */
 export const KEY_USE_LABELS = {
-  hub: "A website or app (Hub API)",
+  // Every program that calls the pod's Hub REST: a site, a CLI, a script, a computer's producer.
+  // "A website or app" read wrong on a key request from the devbox (founder, 2026-10-28).
+  hub: "A program, script or site (Hub API)",
   mcp: "An AI client over MCP",
   n8n: "n8n",
   "n8n-analyze": "AI analysis in n8n",
