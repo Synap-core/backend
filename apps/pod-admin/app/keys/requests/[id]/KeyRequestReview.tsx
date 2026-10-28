@@ -94,7 +94,7 @@ export function KeyRequestReview({
 
   const kinds = useMemo(
     () =>
-      (profilesQuery.data ?? []).map((p) => ({
+      (profilesQuery.data?.profiles ?? []).map((p) => ({
         slug: p.slug,
         name: p.displayName || p.slug,
       })),
@@ -137,7 +137,12 @@ export function KeyRequestReview({
       );
       await utils.apiKeys.getKeyRequest.invalidate({ requestId });
     } catch (err) {
-      if (redirectToLoginIfUnauthorized(err)) return;
+      if (
+        redirectToLoginIfUnauthorized(
+          err as { data?: { code?: string | null } | null } | null
+        )
+      )
+        return;
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(null);
