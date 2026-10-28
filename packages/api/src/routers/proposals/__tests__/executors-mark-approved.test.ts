@@ -42,21 +42,40 @@ vi.mock("@synap/database", async (importOriginal) => {
 vi.mock("../../../utils/push-providers-to-is.js", () => ({
   pushProvidersToIS: vi.fn(async () => undefined),
 }));
+const { skillUpdates } = vi.hoisted(() => ({
+  skillUpdates: [] as unknown[],
+}));
+vi.mock("../../skills.js", () => ({
+  skillsRouter: {
+    createCaller: () => ({
+      update: async (input: unknown) => {
+        skillUpdates.push(input);
+        return { status: "applied" };
+      },
+    }),
+  },
+}));
 
 import { proposalExecRegistry } from "../execution-registry.js";
 import { registerAiProviderExecutors } from "../executors/ai-provider.js";
+import { registerSkillExecutors } from "../executors/skill.js";
 import { ProposalStatus } from "@synap/database/schema";
 import { stripComments } from "../../../../../../scripts/strip-comments.mjs";
 
 registerAiProviderExecutors();
+registerSkillExecutors();
 
-function run(key: string, data: Record<string, unknown>) {
+function run(
+  key: string,
+  data: Record<string, unknown>,
+  targetType = "aiProvider"
+) {
   const ex = proposalExecRegistry.resolve(key, key.split("/")[1]);
   expect(ex, key).toBeDefined();
   return ex!.execute({
     proposal: {
       id: "p1",
-      targetType: "aiProvider",
+      targetType,
       targetId: "t1",
       proposalType: key.split("/")[1]!,
       workspaceId: null,
@@ -80,6 +99,7 @@ function run(key: string, data: Record<string, unknown>) {
 beforeEach(() => {
   updates.length = 0;
   emitted.length = 0;
+  skillUpdates.length = 0;
 });
 
 describe("aiProvider executors mark the proposal approved", () => {
@@ -105,6 +125,26 @@ describe("aiProvider executors mark the proposal approved", () => {
     expect(updates.some((u) => u.status === ProposalStatus.APPROVED)).toBe(
       true
     );
+  });
+});
+
+// The file-level convention below cannot see this one: skill.ts sets APPROVED
+// in its create and delete executors, so a missing flip in `skill/update`
+// passed it (proposal bf90d6a2 stayed pending after two approvals).
+describe("skill/update marks the proposal approved", () => {
+  it("replays the update AND flips status, attributed to the approver", async () => {
+    await run(
+      "skill/update",
+      { data: { id: "skill-1", body: "new body" } },
+      "skill"
+    );
+    expect(skillUpdates).toEqual([{ id: "skill-1", body: "new body" }]);
+    const flip = updates.find((u) => u.status === ProposalStatus.APPROVED);
+    expect(flip).toMatchObject({
+      status: ProposalStatus.APPROVED,
+      reviewedBy: "human-1",
+    });
+    expect(emitted).toContainEqual(["p1", null, "approved", "human-1"]);
   });
 });
 
