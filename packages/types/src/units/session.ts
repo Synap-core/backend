@@ -43,6 +43,7 @@ import {
   isSessionWorkingNow,
   type SessionLiveFacts,
 } from "../run-activity/live.js";
+import { needsYouAgentWorking } from "../needs-you/rule.js";
 import {
   resolveUnitState,
   type UnitStateInput,
@@ -69,10 +70,12 @@ export interface SessionUnitFacts {
   /** The pod's own `focus_sessions.status`. */
   status: string;
   /**
-   * Slots this session owes THE PERSON. REQUIRED: `null` means the owed read
-   * FAILED, which is not zero.
+   * Slots this session owes THE PERSON. REQUIRED, three-valued like `live`:
+   * `null` means the owed read FAILED, which is not zero; `undefined` means
+   * the caller did not read it (a list asked without its facts) — no claim
+   * either way, so the lifecycle reading stands.
    */
-  owedFromYou: number | null;
+  owedFromYou: number | null | undefined;
   /** Pending proposals filed under this session. See the header. */
   pendingDecisions?: number | null;
   /** Title of the session this one waits on, when it is blocked. */
@@ -104,9 +107,12 @@ export function sessionUnitInput(facts: SessionUnitFacts): UnitStateInput {
   // done (orchestrator decision 2026-10-04, same rule as `sessionRowInput`):
   // the derivation checks `terminal` BEFORE `owedFromYou`, so a terminal flag
   // here would read done on a session Home lists as "needs you". `null` (a
-  // failed read) claims nothing owed, so it stays terminal.
+  // failed read) is NOT "nothing owed": a closed session whose count could
+  // not be read claims no Done either, and reads `unmeasured`.
   const owesYou =
     (facts.owedFromYou ?? 0) > 0 || (facts.pendingDecisions ?? 0) > 0;
+  const countUnread =
+    facts.owedFromYou === null || facts.pendingDecisions === null;
   const open = RUNNING_SESSION_STATUSES.has(facts.status);
   // D1: with liveness in hand, an open session is working only while the ONE
   // rule says so; without it (older pod), the lifecycle reading stands.
@@ -119,11 +125,17 @@ export function sessionUnitInput(facts: SessionUnitFacts): UnitStateInput {
   return {
     failed: facts.status === "failed",
     // `failed` is terminal too, but the derivation checks `failed` first.
-    terminal: isTerminalSessionStatus(facts.status) && !owesYou,
+    terminal: isTerminalSessionStatus(facts.status) && !owesYou && !countUnread,
     owedFromYou: facts.owedFromYou,
     pendingDecisions: facts.pendingDecisions,
     blockedBy: facts.blockedBy ?? null,
     running: working,
+    // E2: MEASURED at work — its owed asks and decisions then read
+    // "working". The needs-you rule's own clock when the pod sends it
+    // (`lastAgentWorkAt`: never the asking itself, never a human act), so
+    // the card and the rule's Working fold cannot fork; the D1 liveness for
+    // an older pod; never the lifecycle reading.
+    agentAtWork: open && agentAtWork(facts.live, facts.now ?? Date.now()),
     idle: open && !working && !liveUnread,
     schedule: cadence,
     unreadable: facts.status === "stale" || (open && liveUnread),
@@ -132,6 +144,22 @@ export function sessionUnitInput(facts: SessionUnitFacts): UnitStateInput {
         ? { done: Math.max(0, Math.min(100, facts.progress)), total: 100 }
         : null,
   };
+}
+
+function agentAtWork(
+  live: SessionLiveFacts | null | undefined,
+  now: number
+): boolean {
+  if (!live) return false;
+  return live.lastAgentWorkAt === undefined
+    ? isSessionWorkingNow(live, now)
+    : needsYouAgentWorking(
+        {
+          turnInFlight: live.turnInFlight,
+          lastAgentWorkAt: live.lastAgentWorkAt,
+        },
+        now
+      );
 }
 
 // ─── A project, as an aggregate over its sessions ──────────────────────────
@@ -190,6 +218,19 @@ export function aggregateNeedsYou(
     : session.nextMoveActor === "user";
 }
 
+/**
+ * The session's needs-you count could not be read: its `unitFacts` say a
+ * part FAILED (`needsYouItems` → null). A draft never needs you, so it is
+ * never unread. Legacy `nextMoveActor` rows carry no count to fail.
+ */
+function needsYouUnread(session: ProjectAggregateSessionFact): boolean {
+  return (
+    !session.draft &&
+    session.unitFacts !== undefined &&
+    needsYouItems(session.unitFacts) === null
+  );
+}
+
 export interface ProjectAggregateStateInput {
   sessions: readonly ProjectAggregateSessionFact[];
   /** True when the sessions read FAILED — not merely empty. */
@@ -227,7 +268,9 @@ export function projectAggregateInput(
   const progress = { done: closed, total };
 
   if (needsYou > 0) return { owedFromYou: needsYou, progress };
-  if (closed === total) return { terminal: true, progress };
+  // A closed session whose needs-you count FAILED may still owe you: no Done.
+  const unread = input.sessions.some(needsYouUnread);
+  if (closed === total && !unread) return { terminal: true, progress };
   // D1: an open session is "working" only by the ONE rule when its liveness
   // was read; a session without liveness (older pod) keeps the lifecycle
   // reading. Working anywhere ⇒ running; else a FAILED liveness read ⇒
@@ -239,7 +282,10 @@ export function projectAggregateInput(
       (s.live !== null && isSessionWorkingNow(s.live, s.now ?? Date.now()))
   );
   if (working) return { running: true, everStarted: true, progress };
-  if (open.some((s) => s.live === null)) return { unreadable: true, progress };
+  // A failed needs-you count is not "nothing owed": never a calm "quiet".
+  if (unread || open.some((s) => s.live === null)) {
+    return { unreadable: true, progress };
+  }
   return { idle: true, everStarted: true, progress };
 }
 
@@ -269,7 +315,9 @@ export function sessionRowInput(session: SessionRowFact): UnitStateInput {
   const needsYou = aggregateNeedsYou(session);
   const input = sessionUnitInput({
     status: session.status,
-    owedFromYou: needsYou ? 1 : 0,
+    // A failed count stays FAILED (`null` → unmeasured), never a measured 0:
+    // otherwise an unreadable row reads the same calm state as an empty one.
+    owedFromYou: needsYou ? 1 : needsYouUnread(session) ? null : 0,
     blockedBy: session.blockedBy ?? null,
     ...(session.live !== undefined ? { live: session.live } : {}),
     ...(session.now !== undefined ? { now: session.now } : {}),

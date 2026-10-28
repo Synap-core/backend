@@ -205,6 +205,7 @@ describe("the ask is kept when answered (W1)", () => {
       blockedReason: "decision",
       why: "Which account?",
       ask: CHOOSE as never,
+      unblocks: "The billing switch-over",
       agentUserId: "agent-1",
     });
     expect(r.status).toBe("blocked");

@@ -45,6 +45,8 @@ const PRESERVES: Record<string, string> = {
     "stamps `done` / attestation onto a spread of the chosen stored slot",
   "services/focus-sessions/complete-session.ts":
     "retirement stamps `retiredAt` onto a spread of each stored slot",
+  "services/focus-sessions/stale-stopped-session.ts":
+    "the stopped-session reaper's retirement stamps `retiredAt` onto a spread of each stored slot (`stampRetired`)",
   "services/focus-sessions/answer-slot.ts":
     "the answer door stamps `answer` onto a spread of the stored slot",
   "services/playbooks/run-playbook.ts":

@@ -23,9 +23,13 @@
  */
 import {
   and,
+  asc,
   desc,
+  drizzleSql,
   eq,
+  ilike,
   inArray,
+  isNull,
   entities,
   proposals,
   ProposalStatus,
@@ -50,6 +54,12 @@ import {
 import type { CompositeProposalOperation } from "@synap-core/types/proposals";
 import { createLogger } from "@synap-core/core";
 import { authoredByUser } from "../agent-identity-service.js";
+import {
+  EVENT_KIND,
+  eventStartOf,
+  sameEventStart,
+  type EventStart,
+} from "./event-identity.js";
 
 const logger = createLogger({ module: "duplicate-door" });
 
@@ -58,6 +68,13 @@ type IdentityResolution = Awaited<ReturnType<typeof resolveIdentity>>;
 
 /** How many of the caller's newest pending rows the pending leg reads. */
 const PENDING_SCAN_LIMIT = 200;
+
+/**
+ * How many same-title events the record leg reads to find the one on the same
+ * start. A recurring event repeats its title once per date, so the weak path's
+ * few oldest same-name rows would miss the one that matters.
+ */
+const EVENT_TWIN_SCAN_LIMIT = 500;
 
 /** Composite proposal types whose `operations[]` carry create_entity ops. */
 const GRAPH_PROPOSAL_TYPES = ["capture.graph", "import.graph"] as const;
@@ -78,6 +95,8 @@ export interface PendingCreate {
   nameKey: string;
   /** `type:value` of every normalized strong identity atom it carries. */
   signalKeys: Set<string>;
+  /** An event's start: part of its identity (`event-identity.ts`). */
+  eventStart?: EventStart | null;
 }
 
 /** Same name, the way the door compares names: trimmed, spaces collapsed, case-folded. */
@@ -128,6 +147,9 @@ function entityCreate(
         { kind: profileSlug }
       )
     ),
+    ...(profileSlug === EVENT_KIND
+      ? { eventStart: eventStartOf(asRecord(properties)) }
+      : {}),
   };
 }
 
@@ -286,6 +308,12 @@ export type DuplicateQuery =
       title: string | null | undefined;
       signals: IdentitySignal[];
       /**
+       * The create's properties, read only where a kind's identity is more
+       * than its name: an event's start (`event-identity.ts`). Absent ⇒ the
+       * name alone, as for every other kind.
+       */
+      properties?: Record<string, unknown> | null;
+      /**
        * Rows of OTHER kinds that count as the same thing — a role create's
        * applicable kinds (the role sits on them). Same kind only otherwise.
        */
@@ -333,6 +361,51 @@ async function pendingLeg(
 }
 
 /**
+ * The record leg's same-name rows for an EVENT: same kind, same title (exact,
+ * case-insensitive, like the weak path), and the same start. A row with no
+ * readable start stays a possible twin: nothing says it is another date.
+ */
+async function sameStartEvents(
+  database: Db,
+  query: {
+    title: string | null | undefined;
+    start: EventStart;
+    recordScope: SQL;
+  }
+): Promise<Array<{ id: string; title: string | null; type: string }>> {
+  const name = query.title?.trim();
+  if (!name) return [];
+  const rows = await database
+    .select({
+      id: entities.id,
+      title: entities.title,
+      type: entities.type,
+      startDate: drizzleSql<
+        string | null
+      >`${entities.properties}->>'startDate'`,
+      isAllDay: drizzleSql<string | null>`${entities.properties}->>'isAllDay'`,
+    })
+    .from(entities)
+    .where(
+      and(
+        eq(entities.type, EVENT_KIND),
+        isNull(entities.deletedAt),
+        ilike(entities.title, name.replace(/([%_\\])/g, "\\$1")),
+        query.recordScope
+      )
+    )
+    .orderBy(asc(entities.createdAt))
+    .limit(EVENT_TWIN_SCAN_LIMIT);
+  return rows.filter((row) => {
+    const start = eventStartOf({
+      startDate: row.startDate,
+      isAllDay: row.isAllDay,
+    });
+    return !start || sameEventStart(query.start, start);
+  });
+}
+
+/**
  * THE door. Every create door calls it at file time; see the file header for
  * what each answer means. Never throws for a failed lookup: a failed leg
  * reports `unchecked` (logged), so a hiccup never blocks a write and never
@@ -368,6 +441,8 @@ export async function findDuplicateCandidates(
           ...(query.title ? { forTitle: query.title } : {}),
         }
       : {};
+    const eventStart =
+      query.profileSlug === EVENT_KIND ? eventStartOf(query.properties) : null;
     let identity: IdentityResolution | null = null;
     try {
       identity = await resolveIdentity(database, {
@@ -431,9 +506,16 @@ export async function findDuplicateCandidates(
         }
       }
       if (identity.match !== "strong") {
-        const sameKind = identity.candidates.filter(
-          (c) => c.type === query.profileSlug
-        );
+        // An event is the same event only on the same start: its same-title
+        // rows on other dates are other events, never twins.
+        const sameKind =
+          eventStart && query.recordScope
+            ? await sameStartEvents(database, {
+                title: query.title,
+                start: eventStart,
+                recordScope: query.recordScope,
+              })
+            : identity.candidates.filter((c) => c.type === query.profileSlug);
         const otherKinds = query.alsoKinds?.length
           ? identity.crossKindCandidates.filter((c) =>
               query.alsoKinds!.includes(c.type)
@@ -487,7 +569,13 @@ export async function findDuplicateCandidates(
           const sameIdentity = [...p.signalKeys].some((k) =>
             wantedSignals.has(k)
           );
-          const sameName = wantedName.length > 0 && p.nameKey === wantedName;
+          const sameName =
+            wantedName.length > 0 &&
+            p.nameKey === wantedName &&
+            // Two events are one only on the same start (`event-identity.ts`).
+            (!eventStart ||
+              !p.eventStart ||
+              sameEventStart(eventStart, p.eventStart));
           if (!sameIdentity && !sameName) continue;
           candidates.push({
             ref: "proposal",

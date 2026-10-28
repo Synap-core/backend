@@ -567,6 +567,7 @@ describe("loadSessionLiveness — the facts behind 'working right now' (D1)", ()
       turnId: null,
       since: null,
       lastAt: null,
+      lastAgentWorkAt: null,
     });
   });
 

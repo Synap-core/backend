@@ -87,6 +87,7 @@ import {
   entityFacets,
   profiles,
   links,
+  playbookRuns,
 } from "@synap/database";
 import { signalsRouter } from "./signals.js";
 
@@ -193,6 +194,8 @@ beforeAll(async () => {
     entityFacets,
     profiles,
     links,
+    // The needs-you rule's facts (agent evidence, proposal waits).
+    playbookRuns,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }
@@ -239,13 +242,20 @@ beforeAll(async () => {
 
 describe("signals — the intent lens (profileSlug)", () => {
   it("count: decisions on the kind's things (target · create · filed in a session on one), their owed slots, no notification", async () => {
+    // Under the needs-you rule (decision E) none of these is in the headline:
+    // each session's room has a turn running (Working), and nothing waits on
+    // any proposal (Changes to review). The lens narrows the POPULATION, so it
+    // is read off the folds, where every row lands — never dropped.
     const lead = await caller().count({ profileSlug: "lead" });
-    expect(lead).toMatchObject({ decisions: 3, blocked: 1, notifications: 0 });
+    expect(lead).toMatchObject({ decisions: 0, blocked: 0, notifications: 0 });
+    expect(lead.folds).toMatchObject({ working: 1, changesToReview: 3 });
     const note = await caller().count({ profileSlug: "note" });
-    expect(note).toMatchObject({ decisions: 1, blocked: 1, notifications: 0 });
+    expect(note).toMatchObject({ decisions: 0, blocked: 0, notifications: 0 });
+    expect(note.folds).toMatchObject({ working: 1, changesToReview: 1 });
     // Non-vacuity: unlensed, everything counts — including the notification.
     const all = await caller().count({});
-    expect(all).toMatchObject({ decisions: 4, blocked: 2, notifications: 1 });
+    expect(all).toMatchObject({ decisions: 0, blocked: 0, notifications: 1 });
+    expect(all.folds).toMatchObject({ working: 2, changesToReview: 4 });
   });
 
   it("the review half is handed the resolved subject", async () => {
@@ -287,7 +297,9 @@ describe("signals — the intent lens (profileSlug)", () => {
       ["note", "ok"],
       ["nope", "unavailable"],
     ]);
-    expect(rows[0]).toMatchObject({ count: { decisions: 3, blocked: 1 } });
+    expect(rows[0]).toMatchObject({
+      count: { folds: { working: 1, changesToReview: 3 } },
+    });
   });
 
   it("an unknown slug throws on a single read; lenses that cannot follow a thing refuse it", async () => {

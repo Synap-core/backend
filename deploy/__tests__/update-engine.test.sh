@@ -243,7 +243,7 @@ NEW_DIGEST="$(D64 d)"
 export NEW_DIGEST OLD_SHA NEW_SHA FAKE_REL="$TMP/rel"
 
 base_env() { # legacy|r1
-  printf 'DOMAIN=pod.example.com\nCOMPOSE_PROJECT_NAME=synap-backend\nPOSTGRES_PASSWORD=x\nJWT_SECRET=x\nKRATOS_SECRETS_COOKIE=x\nSYNAP_SERVICE_ENCRYPTION_KEY=x\nPROVISIONING_TOKEN=x\nADMIN_BOOTSTRAP_MODE=token\nPUBLIC_URL=https://pod.example.com\nPOD_ADMIN_URL=https://pod-admin.example.com\nPOD_ADMIN_DOMAIN=pod-admin.example.com\n'
+  printf 'DOMAIN=pod.example.com\nCOMPOSE_PROJECT_NAME=synap-backend\nPOSTGRES_PASSWORD=x\nJWT_SECRET=x\nKRATOS_SECRETS_COOKIE=x\nSYNAP_SERVICE_ENCRYPTION_KEY=x\nPROVISIONING_TOKEN=x\nBRIDGE_SECRET=x\nGRAFANA_PASSWORD=x\nADMIN_BOOTSTRAP_MODE=token\nPUBLIC_URL=https://pod.example.com\nPOD_ADMIN_URL=https://pod-admin.example.com\nPOD_ADMIN_DOMAIN=pod-admin.example.com\n'
   [ "$1" = legacy ] && echo "BACKEND_VERSION=local"
   [ "$1" = r1 ] && { echo "# >>> synap release — managed by \`synap update\`; do not edit by hand >>>"; echo "SYNAP_RELEASE_ID=$R1"; echo "BACKEND_VERSION=$R1"
     jq -r 'to_entries[] | "\(.key)=\(.value)"' <<<"$(images_json a)"; echo "# <<< synap release <<<"; }
@@ -297,17 +297,22 @@ publish() { # <id> <last-migration> [bundle|bundle-caddy|bundle-same]
   fi
   manifest "$1" "$NEW_SHA" d "$2" "$asset" "$bsha" > "$TMP/rel/$1/release.json"
 }
+# Signatures are release-signature.test.sh's question: an UNSET mode runs as warn
+# here (no bundle is published), a caller's explicit mode (even empty) wins.
 run_update() { # <args...>
   ( cd "$S"; PATH="$TMP/bin:$PATH" SYNAP_DEPLOY_DIR="$DEPLOY" SYNAP_RELEASE_BASE_URL=https://rel.test \
     SYNAP_HEALTH_INTERVAL=0 SYNAP_UPDATE_HEALTH_TRIES=2 SYNAP_UPDATE_MIN_FREE_MB=1 SYNAP_UPDATE_MIN_FREE_SOURCE_MB=1 SYNAP_ASSUME_YES=1 \
     SYNAP_UPDATE_HEALTHY_WAIT=0 SYNAP_UPDATE_HEALTHY_INTERVAL=0 SYNAP_KRATOS_READY_TRIES=2 SYNAP_KRATOS_READY_INTERVAL=0 \
-    SYNAP_UPDATE_EDGE_TRIES=2 SYNAP_UPDATE_EDGE_INTERVAL=0 \
-    SYNAP_UPDATE_NOTIFY_CMD="cat >> '$S/notified'" bash "$REPO/synap" update "$@" ) >"$S/out" 2>&1 </dev/null
+    SYNAP_UPDATE_EDGE_TRIES=2 SYNAP_UPDATE_EDGE_INTERVAL=0 SYNAP_RELEASE_VERIFY="${SYNAP_RELEASE_VERIFY-warn}" \
+    SYNAP_UPDATE_NOTIFY_CMD="touch '$S/hook-ran'" bash "$REPO/synap" update "$@" ) >"$S/out" 2>&1 </dev/null
 }
 cur_id()  { jq -r .id "$DEPLOY/state/current-release.json" 2>/dev/null; }
 last()    { jq -r ".$1" "$DEPLOY/state/last-update.json" 2>/dev/null; }
 envpin()  { grep "^$1=" "$DEPLOY/.env" | tail -1 | cut -d= -f2-; }
-notified(){ [ -s "$S/notified" ] && jq -e --arg s "$1" 'select(.status == $s)' "$S/notified" >/dev/null 2>&1; }
+# The outcome reaches state/events.jsonl. No hook runs: SYNAP_UPDATE_NOTIFY_CMD
+# (set above, as an old .env or a configure could) ran through `sh -c` as root
+# and was retired (audit 2026-10-28) — `hook-ran` must never appear.
+notified(){ [ ! -e "$S/hook-ran" ] && [ -s "$DEPLOY/state/events.jsonl" ] && jq -e --arg s "$1" 'select(.kind == "pod.update" and .status == $s)' "$DEPLOY/state/events.jsonl" >/dev/null 2>&1; }
 restores(){ [ -f "$FAKE/restores" ] && wc -l < "$FAKE/restores" | tr -d ' ' || echo 0; }
 show()    { echo "      --- tail of output ---"; tail -15 "$S/out" | sed 's/^/      /'; }
 
@@ -334,6 +339,7 @@ p=$(grep -n "^pull " "$FAKE/log" | tail -1 | cut -d: -f1)
 grep -q "pull .*@sha256:$NEW_DIGEST" "$FAKE/log" && ! grep -qE "^pull [^@]*$" "$FAKE/log" && ok "happy: every pull is by digest" || bad "happy: a pull was not by digest: $(grep '^pull' "$FAKE/log")"
 [ "$(last status)" = succeeded ] && notified succeeded && ok "happy: success recorded + notified" || bad "happy: record=$(last status)"
 grep -q '^SYNAP_EVENT {' "$S/out" && ok "happy: SYNAP_EVENT line emitted" || bad "happy: no SYNAP_EVENT line"
+[ ! -e "$S/hook-ran" ] && ok "happy: SYNAP_UPDATE_NOTIFY_CMD is never run (retired)" || bad "happy: the retired notify hook ran"
 [ "$(restores)" = 0 ] && ok "happy: no DB restore" || bad "happy: DB restored on success"
 [ -s "$REPO/kratos/kratos.yml.good" ] && cmp -s "$REPO/kratos/kratos.yml" "$REPO/kratos/kratos.yml.good" \
   && ok "happy: the verified kratos.yml is kept as kratos.yml.good" || bad "happy: no kratos.yml.good after a verified update"
@@ -831,7 +837,7 @@ run_update --release "$R2"; rc=$?
   && ok "eve-unpinned: refused with the SYNAP_EDGE hint, nothing changed" || { bad "eve-unpinned: rc=$rc"; show; }
 [ "$(last status)" = aborted ] && [[ "$(last reason)" == *SYNAP_EDGE* ]] && ok "eve-unpinned: the refusal is recorded (aborted)" || bad "eve-unpinned: no outcome record: $(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"
 ( cd "$S"; PATH="$TMP/bin:$PATH" SYNAP_DEPLOY_DIR="$DEPLOY" SYNAP_RELEASE_BASE_URL=https://rel.test SYNAP_SKIP_EDGE=1 \
-  SYNAP_HEALTH_INTERVAL=0 SYNAP_UPDATE_HEALTH_TRIES=2 SYNAP_UPDATE_MIN_FREE_MB=1 bash "$REPO/synap" update --release "$R2" ) >"$S/out" 2>&1 </dev/null; rc=$?
+  SYNAP_HEALTH_INTERVAL=0 SYNAP_UPDATE_HEALTH_TRIES=2 SYNAP_UPDATE_MIN_FREE_MB=1 SYNAP_RELEASE_VERIFY=warn bash "$REPO/synap" update --release "$R2" ) >"$S/out" 2>&1 </dev/null; rc=$?
 [ "$rc" = 0 ] && [ "$(grep -c '^SYNAP_EDGE=traefik' "$DEPLOY/.env")" = 1 ] && ! grep -qE " up .*caddy" "$FAKE/log" \
   && ok "skip-edge: eve's SYNAP_SKIP_EDGE=1 pins SYNAP_EDGE=traefik once and skips caddy" || { bad "skip-edge: rc=$rc"; show; }
 
@@ -856,6 +862,19 @@ grep -v '^JWT_SECRET=' "$DEPLOY/.env" > "$S/x" && cp "$S/x" "$DEPLOY/.env"
 run_update --release "$R2"; rc=$?
 [ "$rc" != 0 ] && [ "$(last status)" = aborted ] && [[ "$(last reason)" == *"missing critical secrets: JWT_SECRET"* ]] \
   && ok "secrets: a .env missing critical secrets is refused AND recorded" || { bad "secrets: rc=$rc record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
+# BRIDGE_SECRET (backend → realtime) is written once when empty, never rotated
+# (audit 2026-10-28: nothing generated it, so realtime's bridge took any caller).
+setup bridge r1; publish "$R2" 0012_new.sql
+grep -v '^BRIDGE_SECRET=\|^GRAFANA_PASSWORD=' "$DEPLOY/.env" > "$S/x" && cp "$S/x" "$DEPLOY/.env"; echo "BRIDGE_SECRET=" >> "$DEPLOY/.env"
+run_update --release "$R2"; rc=$?
+b1="$(grep '^BRIDGE_SECRET=' "$DEPLOY/.env" | tail -1 | cut -d= -f2-)"
+g1="$(grep '^GRAFANA_PASSWORD=' "$DEPLOY/.env" | tail -1 | cut -d= -f2-)"
+[ "$rc" = 0 ] && [[ "$b1" =~ ^[0-9a-f]{64}$ ]] && [[ "$g1" =~ ^[0-9a-f]{64}$ ]] && [ "$(grep -c '^BRIDGE_SECRET=' "$DEPLOY/.env")" = 1 ] \
+  && ! grep -q "$b1" "$S/out" && ! grep -q "$g1" "$S/out" \
+  && ok "secrets: an empty BRIDGE_SECRET and an absent GRAFANA_PASSWORD are generated by the update (one line each, never printed)" || { bad "secrets: rc=$rc bridge='$b1' grafana='$g1'"; show; }
+run_update --release "$R2" --force; rc=$?
+[ "$(grep '^BRIDGE_SECRET=' "$DEPLOY/.env" | tail -1 | cut -d= -f2-)" = "$b1" ] && [ "$(grep '^GRAFANA_PASSWORD=' "$DEPLOY/.env" | tail -1 | cut -d= -f2-)" = "$g1" ] \
+  && ok "secrets: existing ones are never rotated" || bad "secrets: rotated on the next update"
 mkdir -p "$TMP/cosignok"; printf '#!/usr/bin/env bash\nexit 0\n' > "$TMP/cosignok/cosign"; chmod +x "$TMP/cosignok/cosign"
 setup noopreq r1; publish "$R1" 0011_old.sql
 echo '{"bundle":"fake"}' > "$TMP/rel/$R1/release.json.sigstore.json"
@@ -885,6 +904,27 @@ run_update --release v1.10.0; rc=$?
 setup noorder r1; asrel v9.0.0; publish "$R2" 0012_new.sql
 run_update --release "$R2"; rc=$?
 [ "$rc" = 0 ] && [ "$(cur_id)" = "$R2" ] && ok "downgrade: v9.0.0 → $R2 has no order and is not refused" || { bad "noorder: rc=$rc record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
+# A main-<sha> build is ordered by its signed manifest's createdAt (audit
+# 2026-10-28: any superseded, signed main build used to apply without --force).
+ascreated() { jq --arg t "$2" '.createdAt = $t' "$1" > "$TMP/x" && mv "$TMP/x" "$1"; }
+setup mainolder r1; publish "$R2" 0012_new.sql; ascreated "$TMP/rel/$R2/release.json" 2026-10-01T00:00:00Z
+run_update --release "$R2"; rc=$?
+[ "$rc" != 0 ] && [ "$(last status)" = aborted ] && [ "$(last reason)" = "older than the running release $R1" ] && [ "$(cur_id)" = "$R1" ] \
+  && ! grep -qE "^pull |pg_dump" "$FAKE/log" && cmp -s "$DEPLOY/.env" "$S/env.orig" \
+  && ok "downgrade: an older main build ($R1 → $R2 built earlier) is refused before anything changes" || { bad "mainolder: rc=$rc record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
+run_update --release "$R2" --force; rc=$?
+[ "$rc" = 0 ] && [ "$(cur_id)" = "$R2" ] && ok "downgrade: --force applies the older main build" || { bad "mainolder --force: rc=$rc current=$(cur_id)"; show; }
+# A target whose newest migration is behind the running release's is older,
+# whatever its id or build time says.
+setup migbehind r1; publish "$R2" 0012_new.sql
+jq '.migrations.last = "0336_y.sql"' "$DEPLOY/state/current-release.json" > "$TMP/x" && mv "$TMP/x" "$DEPLOY/state/current-release.json"
+run_update --release "$R2"; rc=$?
+[ "$rc" != 0 ] && [ "$(last reason)" = "older than the running release $R1" ] && ! grep -qE "^pull |pg_dump" "$FAKE/log" \
+  && ok "downgrade: a release behind the running migrations (0336 → 0012) is refused" || { bad "migbehind: rc=$rc record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
+# Two stable ids are ordered by number only: a backport tag built later is not newer.
+setup backport r1; asrel v1.2.5; ascreated "$DEPLOY/state/current-release.json" 2026-10-09T00:00:00Z; publish v1.3.0 0012_new.sql
+run_update --release v1.3.0; rc=$?
+[ "$rc" = 0 ] && [ "$(cur_id)" = v1.3.0 ] && ok "downgrade: v1.2.5 (built later) → v1.3.0 is an upgrade" || { bad "backport: rc=$rc record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
 
 # ── 9d. pg_dump's stderr: TimescaleDB's catalog warnings are not the operator's ─
 # A FULL dump of a TimescaleDB database always warns about the circular foreign

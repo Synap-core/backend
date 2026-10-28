@@ -72,6 +72,7 @@ export const outcomeDeclarationSchema = z
     blockedReason: z.enum(BLOCKED_REASONS).optional(),
     why: z.string().max(500).optional(),
     // The same wire shapes the slot doors parse — one schema per field.
+    unblocks: expectedOutputWireSchema.shape.unblocks,
     ref: expectedOutputWireSchema.shape.ref,
     ask: expectedOutputWireSchema.shape.ask,
   })
@@ -118,6 +119,7 @@ function slotOf(o: OutcomeDeclaration): ExpectedOutput {
     ...(o.owner ? { owner: o.owner } : {}),
     ...(o.blockedReason ? { blockedReason: o.blockedReason } : {}),
     ...(o.why ? { why: o.why } : {}),
+    ...(o.unblocks ? { unblocks: o.unblocks } : {}),
     ...(o.ref ? { ref: o.ref } : {}),
     ...(o.ask ? { ask: o.ask } : {}),
   };

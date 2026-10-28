@@ -324,6 +324,11 @@ async function loadAgentOpenQuestions(
 const KEPT_WHY_MAX = 500;
 /** A new slot's label: the question's first words. */
 const KEPT_LABEL_MAX = 120;
+/**
+ * What a question kept owed past its session's close unblocks (decision E):
+ * the session is over, so the answer only goes back to the agent that asked.
+ */
+const KEPT_QUESTION_UNBLOCKS = "The answer goes back to the agent that asked";
 
 /**
  * Hand a question the agent keeps owed to the person, through the slot doors
@@ -347,6 +352,7 @@ async function keepQuestionOwed(p: {
       channelId: p.channelId,
       slotLabel: question.slotLabel,
       question: question.text,
+      unblocks: KEPT_QUESTION_UNBLOCKS,
       agentUserId: p.agentUserId,
       userId: p.userId,
     });
@@ -375,6 +381,7 @@ async function keepQuestionOwed(p: {
       owner: "human",
       blockedReason: "decision",
       why,
+      unblocks: KEPT_QUESTION_UNBLOCKS,
     },
   });
   if (added.status === "updated") return { label: label || question.shortId };

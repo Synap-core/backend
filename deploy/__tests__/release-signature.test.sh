@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
-# Tripwire: release.json signature verification (D12, WARN mode first).
+# Tripwire: release.json signature verification (D12, enforce by default).
 #
 # The REAL `_ue_verify_manifest_sig` (+ the helpers it calls) is cut out of
 # `synap` and run against a stub `cosign` and a stub `curl` on PATH — never the
 # network, never a real cosign. Covers:
-#   1. warn (default): no cosign / no bundle / a bad signature each WARN, exit 0
-#   2. enforce: each of those refuses (exit 1); `off` skips cosign entirely
+#   1. enforce (default, and an unknown mode): no cosign / no bundle / a bad
+#      signature each refuse (exit 1); warn (opt-in) warns, exit 0
+#   2. enforce, explicitly; through docker when no host cosign; `off` skips
 #   3. the verify call carries the identity regexp + GitHub OIDC issuer, and the
 #      regexp accepts only docker-publish.yml on main or a v* tag of this repo
 #   4. the REAL `synap update` and `synap install` (their own test harnesses):
-#      enforce aborts before any pull, warn warns and carries on; CI signs +
+#      enforce and the default abort before any pull, warn and
+#      `--insecure-skip-verify` warn and carry on; CI signs +
 #      publishes the bundle on the release AND the pointer
 set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -102,13 +104,18 @@ expect() { # <label> <want-rc> <want-substring>
   else bad "$1 — got: $(tr '\n' ' ' < "$TMP/out")"; fi
 }
 
-# ── 1. warn mode (the default) never blocks ──────────────────────────────────
-run nocosign ""            ; expect "warn: no cosign binary → warning, continues"      0 "cosign is not installed"
-run bin ""      0          ; expect "warn: no published bundle → warning, continues"  0 "no signature (release.json.sigstore.json)"
-run bin ""      1 fail     ; expect "warn: bad signature → warning, continues"        0 "does not verify as Synap CI"
-grep -qF "none of the expected identities" "$TMP/out" && ok "warn: cosign's own reason is surfaced" || bad "cosign reason not surfaced"
-run bin ""      1 ok       ; expect "a good signature → verified"                      0 "signature verified"
-run bin bogus   1 fail     ; expect "an unknown mode falls back to warn"               0 "using warn"
+# ── 1. the default is enforce: a missing or bad signature refuses ────────────
+run nocosign ""            ; expect "default: no cosign, no docker → refused"            1 "refused: cosign is not installed"
+run bin ""      0          ; expect "default: no published bundle → refused"             1 "refused: no signature (release.json.sigstore.json)"
+run bin ""      1 fail     ; expect "default: bad signature → refused"                   1 "refused: the signature does not verify as Synap CI"
+grep -qF "none of the expected identities" "$TMP/out" && ok "default: cosign's own reason is surfaced" || bad "cosign reason not surfaced"
+grep -qF -- "--insecure-skip-verify" "$TMP/out" && ok "a refusal names the one-run way past it" || bad "the refusal does not name --insecure-skip-verify"
+run bin ""      1 ok       ; expect "a good signature → verified"                        0 "signature verified"
+run bin bogus   1 fail     ; expect "an unknown mode falls back to enforce"              1 "using enforce"
+# warn is opt-in, and never blocks
+run nocosign warn          ; expect "warn: no cosign binary → warning, continues"        0 "cosign is not installed"
+run bin warn    0          ; expect "warn: no published bundle → warning, continues"    0 "NOT signature-verified: no signature"
+run bin warn    1 fail     ; expect "warn: bad signature → warning, continues"          0 "NOT signature-verified: the signature does not verify"
 
 # ── 2. enforce refuses, off skips ────────────────────────────────────────────
 run nocosign enforce       ; expect "enforce: no cosign → refused"                     1 "refused: cosign is not installed"
@@ -137,7 +144,7 @@ for drc in 125 126 127; do
   expect "enforce: docker exits $drc → refused as 'could not run the signature check'" 1 "refused: could not run the signature check (docker exited $drc"
   grep -q "does not verify" "$TMP/out" && bad "docker $drc reported as a bad signature" || ok "docker $drc is not called a bad signature"
 done
-STUB_DOCKER_RC=125 run dockeronly "" 1 ok; expect "warn: docker exits 125 → warning, continues" 0 "NOT signature-verified: could not run the signature check"
+STUB_DOCKER_RC=125 run dockeronly warn 1 ok; expect "warn: docker exits 125 → warning, continues" 0 "NOT signature-verified: could not run the signature check"
 # A host cosign wins over docker: only cosign runs.
 run bin enforce 1 ok
 [ -s "$TMP/args" ] && [ ! -e "$TMP/dargs" ] && ok "a host cosign is used, docker run is never called" || bad "precedence: cosign args=$([ -s "$TMP/args" ] && echo y || echo n), docker called=$([ -e "$TMP/dargs" ] && echo y || echo n)"
@@ -147,7 +154,7 @@ img_ver="$(sed -n 's/^SYNAP_COSIGN_IMAGE="ghcr\.io\/sigstore\/cosign\/cosign:\(v
 [ -n "$ci_ver" ] && [ "$ci_ver" = "$img_ver" ] && ok "CI cosign-release ($ci_ver) = SYNAP_COSIGN_IMAGE tag ($img_ver)" || bad "CI cosign-release '$ci_ver' != SYNAP_COSIGN_IMAGE tag '$img_ver'"
 grep -qE '^SYNAP_COSIGN_IMAGE="ghcr\.io/sigstore/cosign/cosign:v[0-9.]+@sha256:[0-9a-f]{64}"$' "$HERE/synap" \
   && ok "the cosign image is pinned by digest" || bad "SYNAP_COSIGN_IMAGE is not pinned by a sha256 digest"
-run bin off     1 fail     ; expect "off: skipped"                                     0 "rc=0"
+run bin off     1 fail     ; expect "off: skipped, and the skip is printed"            0 "NOT signature-checked"
 [ ! -e "$TMP/args" ] && ok "off: cosign is never called" || bad "off still ran cosign"
 # deploy/.env is the founder's switch, like SYNAP_EDGE
 ( w="$TMP/work"; rm -rf "$w"; mkdir -p "$w"; echo "SYNAP_RELEASE_VERIFY=enforce" > "$w/.env"
@@ -191,21 +198,23 @@ stub_cosign() { printf '#!/usr/bin/env bash\necho "$*" >> "%s/cosign.log"\necho 
 ( eval "$(harness update-engine.test.sh '# ── 1. happy path')"
   declare -F setup publish run_update >/dev/null || { echo "FAIL - update harness not loaded (marker moved?)"; exit 1; }
   stub_cosign "$TMP"
-  for mode in enforce warn; do
-    setup "sig-$mode" r1; publish "$R2" 0012_new.sql
+  # "" = unset in the engine's view (the harness defaults only an UNSET mode to warn)
+  for mode in enforce "" warn skipflag; do
+    setup "sig-${mode:-default}" r1; publish "$R2" 0012_new.sql
     echo '{"bundle":"fake"}' > "$TMP/rel/$R2/release.json.sigstore.json"; : > "$TMP/cosign.log"
-    SYNAP_RELEASE_VERIFY=$mode run_update --release "$R2"; rc=$?
+    if [ "$mode" = skipflag ]; then SYNAP_RELEASE_VERIFY='' run_update --release "$R2" --insecure-skip-verify; rc=$?
+    else SYNAP_RELEASE_VERIFY=$mode run_update --release "$R2"; rc=$?; fi
     reached=$([ -s "$TMP/cosign.log" ] && echo y || echo n)
     pulled=$(grep -q '^pull ' "$FAKE/log" && echo y || echo n)
-    if [ "$mode" = enforce ]; then
+    if [ "$mode" = enforce ] || [ -z "$mode" ]; then
       [ "$rc" != 0 ] && [ "$reached" = y ] && [ "$pulled" = n ] && grep -q "refused: the signature does not verify" "$S/out" \
         && cmp -s "$DEPLOY/.env" "$S/env.orig" && [ "$(last status)" = aborted ] \
-        && ok "update/enforce: cosign rejects → aborted before any pull, .env untouched" \
-        || { bad "update/enforce: rc=$rc cosign=$reached pulled=$pulled status=$(last status)"; show; }
+        && ok "update/${mode:-default (enforce)}: cosign rejects → aborted before any pull, .env untouched" \
+        || { bad "update/${mode:-default}: rc=$rc cosign=$reached pulled=$pulled status=$(last status)"; show; }
     else
       [ "$rc" = 0 ] && [ "$reached" = y ] && [ "$pulled" = y ] && grep -q "NOT signature-verified: the signature does not verify" "$S/out" \
-        && ok "update/warn: cosign rejects → warning, update carries on and succeeds" \
-        || { bad "update/warn: rc=$rc cosign=$reached pulled=$pulled"; show; }
+        && ok "update/$mode: cosign rejects → warning, update carries on and succeeds" \
+        || { bad "update/$mode: rc=$rc cosign=$reached pulled=$pulled"; show; }
     fi
   done
   exit $fail ) || fail=1
@@ -214,16 +223,16 @@ stub_cosign() { printf '#!/usr/bin/env bash\necho "$*" >> "%s/cosign.log"\necho 
   declare -F setup run_install >/dev/null || { echo "FAIL - install harness not loaded (marker moved?)"; exit 1; }
   stub_cosign "$TMP"
   echo '{"bundle":"fake"}' > "$TMP/srv/rel/$REL/release.json.sigstore.json"
-  for mode in enforce warn; do
-    setup "sig-$mode"; : > "$FAKE/docker.log"; : > "$TMP/cosign.log"
+  for mode in enforce "" warn; do
+    setup "sig-${mode:-default}"; : > "$FAKE/docker.log"; : > "$TMP/cosign.log"
     SYNAP_RELEASE_VERIFY=$mode run_install --non-interactive --release "$REL" --domain pod.example.org --email ops@example.org; rc=$?
     reached=$([ -s "$TMP/cosign.log" ] && echo y || echo n)
     pulled=$(grep -q '^pull ' "$FAKE/docker.log" && echo y || echo n)
-    if [ "$mode" = enforce ]; then
+    if [ "$mode" != warn ]; then
       [ "$rc" != 0 ] && [ "$reached" = y ] && [ "$pulled" = n ] && grep -q "refused: the signature does not verify" "$S/out" \
         && ! grep -qE '^compose .* up ' "$FAKE/docker.log" \
-        && ok "install/enforce: cosign rejects → aborted before any pull or start" \
-        || { bad "install/enforce: rc=$rc cosign=$reached pulled=$pulled"; show; }
+        && ok "install/${mode:-default (enforce)}: cosign rejects → aborted before any pull or start" \
+        || { bad "install/${mode:-default}: rc=$rc cosign=$reached pulled=$pulled"; show; }
     else
       [ "$rc" = 0 ] && [ "$reached" = y ] && [ "$pulled" = y ] && grep -q "NOT signature-verified: the signature does not verify" "$S/out" \
         && ok "install/warn: cosign rejects → warning, install carries on and succeeds" \

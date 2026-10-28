@@ -201,7 +201,9 @@ async function seed(
   const sessionId = randomUUID();
   const slots = [
     opts.blocked === false
-      ? { kind: "document", label: LABEL }
+      ? // What its answer unblocks (decision E): an agent's question about a
+        // slot that does not say it is refused before posting.
+        { kind: "document", label: LABEL, unblocks: "The billing switch-over" }
       : {
           kind: "document",
           label: LABEL,
@@ -209,6 +211,7 @@ async function seed(
           blockedReason: opts.blockedReason ?? "decision",
           why: WHY,
           owedSince: "2026-09-25T09:00:00.000Z",
+          unblocks: "The billing switch-over",
         },
     { kind: "document", label: "DNS record" },
   ];
@@ -608,6 +611,9 @@ describe("the answer loop", () => {
             blockedReason: "decision",
             why: "Approve running github.push_files?",
             owedSince: "2026-10-08T09:00:00.000Z",
+            // As the poller stamps it (`oweAgentApprovalSlot`): the cause
+            // says what the answer unblocks.
+            askCause: { kind: "external_approval" },
             ask: {
               mode: "confirm",
               prompt: "Approve running github.push_files?",

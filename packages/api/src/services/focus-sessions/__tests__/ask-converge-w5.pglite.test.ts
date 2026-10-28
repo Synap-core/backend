@@ -135,6 +135,7 @@ import {
   PARAM_SLOT_KIND,
   CRITERION_SLOT_KIND,
 } from "@synap-core/types/focus-sessions";
+import { ASK_UNBLOCKS_DEFAULT } from "@synap-core/types/ask";
 import { answerSessionSlot, attestSessionSlot } from "../session-answer.js";
 import { paramOwedSlots } from "../param-slots.js";
 import { selectSlotToAttest } from "../satisfy-expected-output.js";
@@ -688,7 +689,13 @@ describe("param / criterion / provide / room question on the ONE answer door", (
       body: JSON.stringify({ role: "assistant", userId: OWNER, ...body }),
     });
 
-  const AGENT_SLOT = { kind: "document", label: "Region" };
+  // Says what its answer unblocks (decision E): a question about a slot that
+  // does not is advised, with the default line (`unblocks.test.ts`).
+  const AGENT_SLOT = {
+    kind: "document",
+    label: "Region",
+    unblocks: "The EU invoice run",
+  };
   const CONFIRM = { mode: "confirm" };
 
   it("Hub: an agent's question about a slot is filed ON it — owner human, why = the question, ask = the one passed", async () => {
@@ -782,6 +789,79 @@ describe("param / criterion / provide / room question on the ONE answer door", (
     }
     expect(await roomMessages(channelId)).toHaveLength(0);
     expect((await slotOf(sessionId, "Region")).owner).toBeUndefined();
+  });
+
+  /**
+   * WHAT IT UNBLOCKS (decision E): a question that newly hands a slot to the
+   * person should say what moves on the answer. ADVISED, never refused
+   * (rv-be-needs F1): at both doors the question posts, the slot is filed
+   * with `ASK_UNBLOCKS_DEFAULT`, and the reply's `slot.warnings` says so. A
+   * follow-up on a slot already the person's, with the same ask, poses
+   * nothing new and carries no warning.
+   */
+  it("a question newly posing a slot that says nothing it unblocks posts at both doors — with the default line and a warning", async () => {
+    const SILENT = { kind: "document", label: "Region" };
+    const { sessionId, channelId } = await seed([SILENT]);
+    const hubRes = await hubPost(channelId, {
+      content: "Bill the EU entity?",
+      kind: "question",
+      slotLabel: "Region",
+      ask: CONFIRM,
+    });
+    expect(hubRes.status).toBe(200);
+    const hubSlot = (
+      (await hubRes.json()) as {
+        slot?: { status: string; warnings?: string[] };
+      }
+    ).slot;
+    expect(hubSlot?.status).toBe("blocked");
+    expect(hubSlot?.warnings?.join(" ")).toContain(ASK_UNBLOCKS_DEFAULT);
+    expect(await roomMessages(channelId)).toHaveLength(1);
+    expect(await slotOf(sessionId, "Region")).toMatchObject({
+      owner: "human",
+      unblocks: ASK_UNBLOCKS_DEFAULT,
+    });
+
+    const mcp = await seed([SILENT]);
+    const posted = await postChannelMessage({
+      channelId: mcp.channelId,
+      content: "Which region should we bill?",
+      role: "assistant",
+      triggerAI: false,
+      kind: "question",
+      slotLabel: "region",
+      userId: OWNER,
+      agentUserId: IS_AGENT,
+    });
+    expect(posted.slot?.status).toBe("blocked");
+    expect(posted.slot?.warnings?.join(" ")).toContain(ASK_UNBLOCKS_DEFAULT);
+    expect(await roomMessages(mcp.channelId)).toHaveLength(1);
+    expect((await slotOf(mcp.sessionId, "Region")).unblocks).toBe(
+      ASK_UNBLOCKS_DEFAULT
+    );
+
+    // Already the person's, same ask: a follow-up poses nothing new.
+    const held = await seed([
+      {
+        ...SILENT,
+        owner: "human",
+        blockedReason: "decision",
+        why: "Bill the EU entity?",
+        ask: CONFIRM,
+        owedSince: new Date().toISOString(),
+      },
+    ]);
+    const again = await hubPost(held.channelId, {
+      content: "Still need this one: bill the EU entity?",
+      kind: "question",
+      slotLabel: "Region",
+    });
+    expect(again.status).toBe(200);
+    expect(
+      ((await again.json()) as { slot?: { warnings?: string[] } }).slot
+        ?.warnings
+    ).toBeUndefined();
+    expect(await roomMessages(held.channelId)).toHaveLength(1);
   });
 
   it("Hub: an ask without a slot question is refused before anything is written", async () => {

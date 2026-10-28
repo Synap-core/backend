@@ -630,6 +630,8 @@ export const createProcs = {
           profileSlug,
           title: input.title ?? null,
           signals: dedupSignals,
+          // An event's start is part of its identity (title + start).
+          properties: input.properties ?? null,
           alsoKinds: roleApplicableKinds ?? undefined,
           recordScope: ownerPrivateVisibleWhere(
             entities.workspaceId,
