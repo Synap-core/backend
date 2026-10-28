@@ -100,7 +100,6 @@ function ddlFor(table: PgTable): string {
   return `create table "${cfg.name}" (${columns.join(", ")});`;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 let db: any;
 const OWNER = randomUUID();
 
