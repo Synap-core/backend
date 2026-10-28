@@ -14,8 +14,10 @@ import type { ExpectedOutput } from "@synap/playbooks";
 import { projectSessionOutcomes } from "@synap-core/types/units";
 import {
   carrySlotKeys,
+  findClaimedSlotIndex,
   findSlotIndex,
   readProposalExpectedKey,
+  unmatchedSlotClaimWarning,
 } from "../slot-keys.js";
 import {
   applyOutputMutations,
@@ -192,5 +194,59 @@ describe("joins prefer the key, label is the alias (rules out R3)", () => {
     expect(readProposalExpectedKey({ expectedKey: "  " })).toBeUndefined();
     expect(readProposalExpectedKey({ expectedKey: 4 })).toBeUndefined();
     expect(readProposalExpectedKey(null)).toBeUndefined();
+  });
+});
+
+describe("a create door's slot claim may be a KEY sent as the label (228ebe4b)", () => {
+  // Label ≠ key on purpose (the live case: key "claude-brief", label "Claude
+  // brief"): where they are equal the label rung alone already matches, and
+  // the fixture could not tell the old rule from the new one.
+  const slots = [
+    { kind: "document", label: "Spec", key: "spec" },
+    { kind: "document", label: "Claude brief", key: "claude-brief" },
+  ] as unknown as ExpectedOutput[];
+
+  it("findClaimedSlotIndex: the label rung first, then the label as a key", () => {
+    expect(findSlotIndex(slots, { label: "claude-brief" })).toBe(-1);
+    expect(findClaimedSlotIndex(slots, { label: "claude-brief" })).toBe(1);
+    expect(findClaimedSlotIndex(slots, { label: "Claude brief" })).toBe(1);
+    // An explicit key is authoritative: no fallback behind it.
+    expect(
+      findClaimedSlotIndex(slots, { key: "nope", label: "claude-brief" })
+    ).toBe(-1);
+    // The predicate still floors the key rung.
+    expect(
+      findClaimedSlotIndex(slots, { label: "claude-brief" }, (_, i) => i !== 1)
+    ).toBe(-1);
+  });
+
+  it("a label equal to ANOTHER slot's key still names its own slot", () => {
+    const tricky = [
+      { kind: "document", label: "Other", key: "deck" },
+      { kind: "document", label: "Deck", key: "deck-2" },
+    ];
+    expect(findClaimedSlotIndex(tricky, { label: "deck" })).toBe(1);
+  });
+
+  it("the artifact ledger and the approval stamp both resolve it", () => {
+    expect(resolveArtifactSlotClaim(slots, { label: "claude-brief" })).toEqual({
+      key: "claude-brief",
+      label: "Claude brief",
+    });
+    expect(
+      selectOutputToSatisfy(slots, "document", "claude-brief", null, null)
+    ).toBe(1);
+  });
+
+  it("a claim naming no output is SAID, with the outputs it could name", () => {
+    expect(unmatchedSlotClaimWarning(slots, "claude-brief")).toBeUndefined();
+    expect(unmatchedSlotClaimWarning(slots, "Spec")).toBeUndefined();
+    expect(unmatchedSlotClaimWarning(slots, undefined)).toBeUndefined();
+    expect(unmatchedSlotClaimWarning(slots, "brief")).toBe(
+      'No output named "brief" on this session (outputs: spec — Spec; claude-brief — Claude brief): this write fills none of them. Name one by its key or its label.'
+    );
+    expect(unmatchedSlotClaimWarning([], "brief")).toMatch(
+      /^No output named "brief" on this session: it declares none\./
+    );
   });
 });

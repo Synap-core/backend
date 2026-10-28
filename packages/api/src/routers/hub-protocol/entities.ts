@@ -30,6 +30,8 @@ import {
   UpdateEntitiesInputSchema,
   updateEntities,
 } from "../../services/entities/update-entities.js";
+import { deterministicUuidFromKey } from "../../utils/write-door-idempotency.js";
+import { sessionSlotClaimWarning } from "../../services/focus-sessions/record-session-artifact.js";
 
 export const entitiesRouter = router({
   /**
@@ -259,10 +261,21 @@ export const entitiesRouter = router({
          * guessed when absent.
          */
         expectedLabel: z.string().optional(),
+        /**
+         * Caller idempotency key (ticket 13a82f38): a retry of a create whose
+         * answer was lost (a timeout, a 502) returns the first create instead
+         * of writing a twin. Keyed on the ROW id, the `post_message` way: the
+         * key derives the id the entity lands under (`proposedEntityId`), and
+         * `entities.create` returns the caller's own live row under that id
+         * rather than writing a second one. A pending proposal is matched by
+         * the proposal door's own hash dedup.
+         */
+        idempotencyKey: z.string().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
       const agentUserId = await actingAgentUserId(ctx, input.agentUserId);
+      const idempotencyKey = input.idempotencyKey?.trim();
       // Use the real user (input.userId), not ctx.userId (API key owner).
       //
       // `ambientWorkspaceId` is the caller's governance/ambient workspace — it
@@ -330,6 +343,14 @@ export const entitiesRouter = router({
         // identity signal so a repeat create with the same provider id dedups.
         ...(input.externalId ? { externalId: input.externalId } : {}),
         ...(input.expectedLabel ? { expectedLabel: input.expectedLabel } : {}),
+        // Scoped to the owner: two people's keys never derive one id.
+        ...(idempotencyKey
+          ? {
+              proposedEntityId: deterministicUuidFromKey(
+                `create_entity:${input.userId}:${idempotencyKey}`
+              ),
+            }
+          : {}),
       });
       // Emit session event so whiteboards in ambient mode can mirror new entities.
       if (result.status === "created" && result.id) {
@@ -367,6 +388,25 @@ export const entitiesRouter = router({
       // everything it doesn't name, so this must be lifted explicitly; the
       // regular `entities.create` procedure forwards it at the TOP LEVEL.
       const resultShape = result as Record<string, unknown>;
+      // WHERE THE ROW LANDED — or will land, on a proposal (the door's own
+      // `effectiveWorkspaceId`, its materialize target); `null` = pod-wide.
+      // The `workspaceId` echoed below is the governance lens, which a
+      // pod-scope kind ignores: a caller told only that one reads its entity
+      // as filed in a space it is not in (ticket d39eb826).
+      const landed = resultShape.entity as
+        { workspaceId?: string | null } | null | undefined;
+      const entityWorkspaceId: string | null | undefined =
+        result.status === "proposed"
+          ? (resultShape.effectiveWorkspaceId as string | null | undefined)
+          : landed
+            ? (landed.workspaceId ?? null)
+            : undefined;
+      // A slot claim naming no output of the session: said, never silent
+      // (ticket 228ebe4b) — the entity is created either way.
+      const slotClaimWarning = await sessionSlotClaimWarning(
+        ctx.sessionId,
+        input.expectedLabel
+      );
       const rawUnmodeled = resultShape.unmodeled;
       const unmodeled = Array.isArray(rawUnmodeled)
         ? (rawUnmodeled as Array<{ key: string; didYouMean?: string }>)
@@ -410,6 +450,10 @@ export const entitiesRouter = router({
         // pod-scope kind lands at workspaceId=null even though the ambient lens
         // is non-null. The authoritative placement is on the returned entity.
         workspaceId: ambientWorkspaceId ?? null,
+        // Where the entity itself lives (above). Omitted when the door named
+        // no row (a join gate that kept nothing).
+        ...(entityWorkspaceId !== undefined ? { entityWorkspaceId } : {}),
+        ...(slotClaimWarning ? { warnings: [slotClaimWarning] } : {}),
         // Kind + Facets: the roles attached in this call (empty/omitted when none
         // were requested or the create was proposal-gated).
         ...(attachedFacets.length ? { facets: attachedFacets } : {}),

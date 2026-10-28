@@ -119,7 +119,10 @@ import {
   satisfyExpectedOutputs,
   slotMatchesChangeKind,
 } from "../services/focus-sessions/satisfy-expected-output.js";
-import { slotKeyAt } from "../services/focus-sessions/slot-keys.js";
+import {
+  findClaimedSlotIndex,
+  slotKeyAt,
+} from "../services/focus-sessions/slot-keys.js";
 import { reviveSessionForWrite } from "../services/focus-sessions/revive-stale-session.js";
 import { normalizeExpectedLabel } from "../services/focus-sessions/expected-label.js";
 import { logEvent } from "../lib/event-helpers.js";
@@ -398,14 +401,14 @@ function resolveSessionSlotClaimIndex(
   // FIRST-of-kind guess — documents created in order 2,1,3,4 stamped slot 1
   // with document 2 and vice versa, and the lineage then outranked the
   // artifact's own claim in the outputs join. Same trust as rung 1 (the agent
-  // chooses its title too) and the same floors.
-  const declared = normalizeExpectedLabel(declaredLabel);
-  if (declared) {
-    const named = expectedOutputs.findIndex(
-      (o) =>
-        normalizeExpectedLabel(o.label) === declared &&
-        ofKind(o) &&
-        notTheHumans(o)
+  // chooses its title too) and the same floors. A declared label that is a
+  // slot's KEY names that slot too (`findClaimedSlotIndex`, ticket 228ebe4b):
+  // agents hold keys, and a key matched as a label named nothing.
+  if (normalizeExpectedLabel(declaredLabel)) {
+    const named = findClaimedSlotIndex(
+      expectedOutputs,
+      { label: declaredLabel },
+      (o) => ofKind(o) && notTheHumans(o)
     );
     if (named !== -1) return named;
   }
