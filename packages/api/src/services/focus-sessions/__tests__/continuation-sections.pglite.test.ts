@@ -102,6 +102,7 @@ const S = {
   gated: randomUUID(), // a playbook with every gate kind
   rejected: randomUUID(), // same playbook, review gate rejected
   plain: randomUUID(), // no playbook, no room
+  others: randomUUID(), // ANOTHER person's session, with a deploy they approved
   idle: randomUUID(), // an agent spoke 10 minutes ago
 };
 const CH = {
@@ -131,6 +132,8 @@ const P = {
   rejectedReview: randomUUID(),
   phantomStage: randomUUID(),
   otherSessionDeploy: randomUUID(),
+  othersDeploy: randomUUID(),
+  staleDeploy: randomUUID(),
 };
 
 const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000);
@@ -142,6 +145,7 @@ async function session(
     playbookId?: string | null;
     currentStage?: string | null;
     expectedOutputs?: unknown[];
+    userId?: string;
   } = {}
 ) {
   await q(
@@ -149,7 +153,7 @@ async function session(
      values ($1, $2, null, null, $3, $4, 'active', $5::jsonb, '{}'::jsonb, 'human', $6, $7, $8, now(), now(), now())`,
     [
       id,
-      OWNER,
+      opts.userId ?? OWNER,
       `Session ${id.slice(0, 4)}`,
       "Ship it",
       JSON.stringify(opts.expectedOutputs ?? []),
@@ -384,6 +388,7 @@ beforeAll(async () => {
   });
   await session(S.rejected, { playbookId: PLAYBOOK, currentStage: "review" });
   await session(S.plain);
+  await session(S.others, { userId: OTHER });
 
   const deploy = (sha: string) => ({
     sessionId: S.gated,
@@ -455,6 +460,24 @@ beforeAll(async () => {
     reviewedBy: OWNER,
     data: { ...deploy("ddddddd4"), sessionId: S.plain },
     createdAt: minutesAgo(5),
+  });
+  // Approved by a person, but on ANOTHER person's session: never this owner's.
+  await proposal(P.othersDeploy, {
+    sessionId: S.others,
+    type: "dev.deploy_approval",
+    status: "approved",
+    reviewedBy: OTHER,
+    data: { ...deploy("eeeeeee5"), sessionId: S.others },
+    createdAt: minutesAgo(2),
+  });
+  // This owner's, approved by a person, but 20 days ago: past the window.
+  await proposal(P.staleDeploy, {
+    sessionId: S.plain,
+    type: "dev.deploy_approval",
+    status: "approved",
+    reviewedBy: OWNER,
+    data: { ...deploy("fffffff6"), sessionId: S.plain },
+    createdAt: minutesAgo(20 * 24 * 60),
   });
 
   // ── outputs (identity) ─────────────────────────────────────────────────
@@ -636,6 +659,25 @@ describe("continuation packet — gates", () => {
       decidedByHuman: false,
     });
     expect(gates.deploy).toBeNull();
+  });
+
+  it("ownerDeploys: what a person approved on ANY of the owner's sessions, newest first; never an agent's, an auto-approval, another person's or a stale one", async () => {
+    // An approval belongs to the work and its commit, not to the session that asked
+    // (founder, 2026-10-28): S.rejected has no deploy of its own, and still reads both.
+    const { gates } = await packetFor(S.rejected);
+    if (gates.status !== "ok") throw new Error("gates unavailable");
+    expect(gates.deploy).toBeNull();
+    expect(
+      gates.ownerDeploys.map((d) => [d.proposalId, d.commitSha, d.sessionId])
+    ).toEqual([
+      [P.otherSessionDeploy, "ddddddd4", S.plain],
+      [P.deployHuman, "aaaaaaa1", S.gated],
+    ]);
+    expect(gates.ownerDeploys[1]).toMatchObject({
+      repo: "synap-backend",
+      targetHost: "pod-prod",
+      approvedAt: expect.any(String),
+    });
   });
 
   it("a session with no process has no gates (ok, not unavailable)", async () => {
