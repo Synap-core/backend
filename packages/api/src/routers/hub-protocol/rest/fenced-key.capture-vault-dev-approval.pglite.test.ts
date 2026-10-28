@@ -332,6 +332,12 @@ beforeAll(async () => {
        ($2,'company','Company','kind','system','pod',true,'{}'::jsonb,null)`,
     [PERSON_KIND, COMPANY_KIND]
   );
+  // The link the graphs below name: a pod-wide def, so the plan validator
+  // accepts it and only the grant decides.
+  await q(
+    `insert into relation_defs (id, slug, display_name, user_id) values ($1,'works_at','Works at',$2)`,
+    [randomUUID(), OWNER]
+  );
   for (const [id, ws, title] of [
     [IN_CRM, CRM, "Mia CRM"],
     [IN_BRAND, BRAND, "Rhea Brand"],
