@@ -115,14 +115,16 @@ const query = (data: Record<string, unknown>) =>
 
 beforeAll(async () => {
   await h.init();
-  const tables = Object.values(schema).filter((t): t is PgTable => {
-    try {
-      getTableConfig(t as PgTable);
-      return true;
-    } catch {
-      return false;
+  const tables = (Object.values(schema) as unknown[]).filter(
+    (t): t is PgTable => {
+      try {
+        getTableConfig(t as PgTable);
+        return true;
+      } catch {
+        return false;
+      }
     }
-  });
+  );
   const byName = new Map(tables.map((t) => [getTableConfig(t).name, t]));
   for (const t of byName.values()) await h.client!.exec(ddlFor(t));
 

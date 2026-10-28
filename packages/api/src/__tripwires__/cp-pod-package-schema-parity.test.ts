@@ -171,6 +171,14 @@ const CP_ONLY: Record<string, string> = {
   // sha256 the CP mirrors into the package row's `version` column. The pod
   // receives the version through `_meta.version`, not through the definition.
   contentHash: "CP row-version derivation; pod reads _meta.version instead",
+  // The onboarding START a template declares (`meta.start`, compiled to the top
+  // level; control-plane-api 50925d65, A4). The CP only carries it and lists it
+  // at GET /api/onboarding/starts; the pod pulls starts from that listing and
+  // never receives one through packages/apply (a start is not a workspace
+  // layer). If the pod ever applies it, slot it and delete this entry: the
+  // stale-entry check below will say so.
+  start:
+    "onboarding START carried by CP, served at /api/onboarding/starts; not applied by packages/apply",
 };
 
 /**

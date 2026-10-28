@@ -265,7 +265,9 @@ async function readGateProposals(
       repo: drizzleSql<string | null>`${proposals.data} ->> 'repo'`,
       targetHost: drizzleSql<string | null>`${proposals.data} ->> 'targetHost'`,
       step: drizzleSql<string | null>`${proposals.data} ->> 'step'`,
-      deployCommand: drizzleSql<string | null>`${proposals.data} ->> 'deployCommand'`,
+      deployCommand: drizzleSql<
+        string | null
+      >`${proposals.data} ->> 'deployCommand'`,
       reviewerType: users.userType,
       reviewedAt: proposals.reviewedAt,
       updatedAt: proposals.updatedAt,
@@ -298,7 +300,9 @@ async function readOwnerDeploys(
       repo: drizzleSql<string | null>`${proposals.data} ->> 'repo'`,
       targetHost: drizzleSql<string | null>`${proposals.data} ->> 'targetHost'`,
       step: drizzleSql<string | null>`${proposals.data} ->> 'step'`,
-      deployCommand: drizzleSql<string | null>`${proposals.data} ->> 'deployCommand'`,
+      deployCommand: drizzleSql<
+        string | null
+      >`${proposals.data} ->> 'deployCommand'`,
       reviewedAt: proposals.reviewedAt,
       updatedAt: proposals.updatedAt,
     })
