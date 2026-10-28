@@ -46,6 +46,7 @@ export type FencedReadDoor =
       readonly bound: "narrowed";
       readonly subject: string;
       readonly full: readonly string[];
+      readonly action: string;
     }
   | { readonly bound: "refused"; readonly reason: string };
 
@@ -73,16 +74,21 @@ const PERSON = (subject: string): FencedReadDoor => ({
  * not reach is a 404), and the parts that read `full` are added only when one
  * scope reads every one of them unbounded (`READS(...full)`); otherwise the
  * route says they were withheld, never an empty section. Admitted when one
- * live scope grants `<subject>.read`, pinned or not: an app, whose grant is
- * always pinned to spaces, reads the row the list door already gives it.
+ * live scope grants `<subject>.<action>` (`read` unless named), pinned or not:
+ * an app, whose grant is always pinned to spaces, reads the row the list door
+ * already gives it. For a QUALIFIED subject any one qualifier suffices
+ * (`capability.publish_post.run` admits a `capability … run` door): the route
+ * then checks the qualifier and the space it was asked about.
  */
 const NARROWED = (
   subject: string,
-  full: readonly string[]
+  full: readonly string[],
+  action = "read"
 ): FencedReadDoor => ({
   bound: "narrowed",
   subject,
   full,
+  action,
 });
 const REFUSED = (reason: string): FencedReadDoor => ({
   bound: "refused",
@@ -96,6 +102,28 @@ function grantReadsSubject(grant: KeyGrant, subject: string): boolean {
       patternMatches(p, { subject, action: "read" })
     )
   );
+}
+
+/**
+ * Does one live scope grant `<subject>.<action>`, whatever it is pinned to?
+ * For a qualified subject, on at least one qualifier (an intent, a kind).
+ */
+function grantHoldsAction(
+  grant: KeyGrant,
+  subject: string,
+  action: string
+): boolean {
+  const qualified = (QUALIFIED_GRANT_SUBJECTS as readonly string[]).includes(
+    subject
+  );
+  return grant.scopes.some((scope) => {
+    if (!qualified)
+      return scope.permissions.some((p) =>
+        patternMatches(p, { subject, action })
+      );
+    const allowed = allowedQualifiers(scope, subject, action);
+    return allowed === "all" || allowed.length > 0;
+  });
 }
 
 /** Does ONE scope read `subject` everywhere (every kind, no narrowing)? */
@@ -115,8 +143,9 @@ export function grantBoundsDoor(
 ): boolean {
   if (!door || door.bound === "refused") return false;
   if (door.bound === "seamed") return true;
-  if (door.bound === "person" || door.bound === "narrowed")
-    return grantReadsSubject(grant, door.subject);
+  if (door.bound === "person") return grantReadsSubject(grant, door.subject);
+  if (door.bound === "narrowed")
+    return grantHoldsAction(grant, door.subject, door.action);
   // A deny-all scope (`permissions: []`) reads nothing — `every` over a door
   // that declares no subject would otherwise let it through.
   return grant.scopes.some(
@@ -320,6 +349,13 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
       "track"
     ),
   ],
+  // Intent actions (decision 3A, 2026-10-28): which of the person's tools can
+  // do ONE intent, for a key holding `capability.<intent>.run`. The route
+  // narrows itself (`capabilities-intent.ts`): `intent` and `workspaceId`
+  // are required, the grant must permit that intent in that space, and only
+  // that intent's actions come back, each with the intent's input — never a
+  // verb's raw parameters. The labels are the pod's own.
+  [/^\/capabilities\/actions\/?$/, NARROWED("capability", [], "run")],
   // `readWorkRelease` (services/dev-loop/work-release.ts): `dev.repo_snapshot`
   // events, the sessions the PRs belong to, and their liveness (chat turns,
   // events, proposals, room notes). Same as MCP `synap_get_work_release`.
@@ -356,10 +392,12 @@ export const GRANT_REST_POST_READS: ReadonlyArray<
   // and never installed over (fence1).
   [/^\/workspaces\/ensure-template\/?$/, SEAMED],
   [/^\/diagnose\/?$/, REFUSED("Pod internals across every subject.")],
-  [
-    /^\/capabilities\/execute\/?$/,
-    REFUSED("Runs arbitrary capability code: its reads cannot be declared."),
-  ],
+  // Runs a capability. A key the fence bounds may only run an INTENT action
+  // (decision 3A, 2026-10-28): the route refuses any other body for it, checks
+  // `capability.<intent>.run` on the verb's own intent in the named space, and
+  // an app's outward run always files a proposal (the capability gate). So it
+  // is admitted only for a key holding some `capability … run`.
+  [/^\/capabilities\/execute\/?$/, NARROWED("capability", [], "run")],
 ];
 
 /**
