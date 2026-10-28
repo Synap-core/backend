@@ -22778,7 +22778,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					roleId?: string | undefined;
 				};
 				name: string;
-				scopes: string[];
+				note?: string | undefined;
+				scopes?: string[] | undefined;
+				templateId?: string | undefined;
+				uses?: ("chat" | "hub" | "mcp" | "n8n" | "n8n-analyze" | "realtime" | "skills")[] | undefined;
 			};
 			meta: object;
 			output: {
@@ -34196,7 +34199,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				name: string;
 				stored: true;
 				updatedAt: Date;
-				uses?: string[] | undefined;
+				uses?: ("chat" | "hub" | "mcp" | "n8n" | "n8n-analyze" | "realtime" | "skills")[] | undefined;
 			};
 		}>;
 		list: import("@trpc/server").TRPCQueryProcedure<{
@@ -34227,7 +34230,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				name: string;
 				stored: true;
 				updatedAt: Date;
-				uses?: string[] | undefined;
+				uses?: ("chat" | "hub" | "mcp" | "n8n" | "n8n-analyze" | "realtime" | "skills")[] | undefined;
 			}[];
 		}>;
 		update: import("@trpc/server").TRPCMutationProcedure<{
@@ -34270,7 +34273,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				name: string;
 				stored: true;
 				updatedAt: Date;
-				uses?: string[] | undefined;
+				uses?: ("chat" | "hub" | "mcp" | "n8n" | "n8n-analyze" | "realtime" | "skills")[] | undefined;
 			};
 		}>;
 	}>>;
