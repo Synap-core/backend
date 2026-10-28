@@ -181,7 +181,7 @@ setup() {
   cp "$HERE/synap" "$REPO/synap"
   cp "$HERE/deploy/"*.sh "$HERE/deploy/docker-compose.yml" "$HERE/deploy/env.schema" "$DEPLOY/"
   cp -R "$HERE/deploy/systemd" "$DEPLOY/systemd"
-  printf 'DOMAIN=pod.example.com\nCOMPOSE_PROJECT_NAME=synap-backend\nPOSTGRES_PASSWORD=x\nJWT_SECRET=x\nKRATOS_SECRETS_COOKIE=x\nSYNAP_SERVICE_ENCRYPTION_KEY=x\nPROVISIONING_TOKEN=x\nADMIN_BOOTSTRAP_MODE=token\nPUBLIC_URL=https://pod.example.com\nPOD_ADMIN_URL=https://pod-admin.example.com\nPOD_ADMIN_DOMAIN=pod-admin.example.com\nBACKEND_VERSION=main-2222222\n' > "$DEPLOY/.env"
+  printf 'DOMAIN=pod.example.com\nCOMPOSE_PROJECT_NAME=synap-backend\nPOSTGRES_PASSWORD=x\nJWT_SECRET=x\nKRATOS_SECRETS_COOKIE=x\nSYNAP_SERVICE_ENCRYPTION_KEY=x\nPROVISIONING_TOKEN=x\nBRIDGE_SECRET=x\nGRAFANA_PASSWORD=x\nADMIN_BOOTSTRAP_MODE=token\nPUBLIC_URL=https://pod.example.com\nPOD_ADMIN_URL=https://pod-admin.example.com\nPOD_ADMIN_DOMAIN=pod-admin.example.com\nBACKEND_VERSION=main-2222222\n' > "$DEPLOY/.env"
   manifest main-2222222 2 | jq --arg b "$DEPLOY/backups/postgres/20261001T000000Z-pre-update" '. + {preUpdateBackup: $b}' > "$DEPLOY/state/current-release.json"
   manifest main-1111111 1 > "$DEPLOY/state/previous-release.json"
   : > "$FAKE/log"; : > "$FAKE/violations"; : > "$FAKE/containers.tsv"

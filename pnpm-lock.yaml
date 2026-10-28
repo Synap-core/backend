@@ -434,12 +434,6 @@ importers:
       '@types/ws':
         specifier: ^8.18.1
         version: 8.18.1
-      acorn:
-        specifier: ^8.17.0
-        version: 8.17.0
-      acorn-walk:
-        specifier: ^8.3.5
-        version: 8.3.5
       bcrypt:
         specifier: ^6.0.0
         version: 6.0.0
@@ -1205,6 +1199,12 @@ importers:
 
   packages/types:
     dependencies:
+      acorn:
+        specifier: ^8.17.0
+        version: 8.18.0
+      acorn-walk:
+        specifier: ^8.3.5
+        version: 8.3.5
       drizzle-orm:
         specifier: ^0.45.2
         version: 0.45.2(@cloudflare/workers-types@4.20260113.0)(@electric-sql/pglite@0.5.8)(@opentelemetry/api@1.9.0)(@types/pg@8.16.0)(pg@8.16.3)(postgres@3.4.8)

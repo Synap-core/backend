@@ -1690,16 +1690,41 @@ export interface WorkspaceSettings {
 		localTerminalEnabled?: boolean;
 	};
 }
+declare const REVIEW_PACKAGES: readonly [
+	"questions",
+	"access",
+	"releases",
+	"how-things-work",
+	"data-changes",
+	"hand-offs",
+	"knowledge",
+	"bookkeeping"
+];
+export type ReviewPackage = (typeof REVIEW_PACKAGES)[number];
+declare const REVIEW_GROUP_BYS: readonly [
+	"package",
+	"work",
+	"agent",
+	"time"
+];
+export type ReviewGroupBy = (typeof REVIEW_GROUP_BYS)[number];
+declare const REVIEW_LAYOUTS: readonly [
+	"list",
+	"cards",
+	"diff",
+	"gallery",
+	"by-agent",
+	"by-session"
+];
+export type ReviewLayout = (typeof REVIEW_LAYOUTS)[number];
 /**
- * User preferences on the wire — the `user_preferences` row and the shapes of
- * its JSONB columns.
- *
- * The JSONB shapes are declared HERE, once: `@synap/database` imports them to
- * type its columns and re-exports them. The row itself is inferred from the
- * drizzle table on the pod side; it is declared here and the database proves
- * it equal (`packages/database/src/wire-parity/preferences.ts`). Pure types:
- * nothing from the database package.
+ * The person's saved review settings (`uiPreferences.review`). `layouts`
+ * holds only the packages the person changed.
  */
+export interface ReviewPreferences {
+	groupBy: ReviewGroupBy;
+	layouts?: Partial<Record<ReviewPackage, ReviewLayout>>;
+}
 export interface CustomTheme {
 	colors?: {
 		accent?: string;
@@ -1751,6 +1776,12 @@ export interface UIPreferences {
 	defaultView?: "grid" | "list" | "timeline";
 	/** Where to open entity detail: floating panel (default), side panel, or modal */
 	entityOpenMode?: EntityOpenMode;
+	/**
+	 * How the person reviews what agents propose (founder B-4): the grouping and
+	 * each package's layout. Absent = never chosen — Review opens by package and
+	 * the onboarding step offers the choice once.
+	 */
+	review?: ReviewPreferences;
 }
 export interface GraphPreferences {
 	forceSettings?: {
@@ -6185,12 +6216,6 @@ export interface GoalLoopSettings {
 	/** Who set it last: the person (the approver, for an agent's proposal). */
 	by: string | null;
 }
-declare const GOAL_CONVERTIBLE_KINDS: readonly [
-	"goal",
-	"objective",
-	"okr"
-];
-export type GoalConvertibleKind = (typeof GOAL_CONVERTIBLE_KINDS)[number];
 /** One counted day. `date` is the viewer's calendar day, `YYYY-MM-DD`. */
 export interface ActivityDay {
 	date: string;
@@ -8378,7 +8403,8 @@ export interface ProposalReviewChange {
 	label: string;
 	operation: "create" | "delete" | "set" | "update";
 	/**
-	 * The value before this change, on UPDATE rows only.
+	 * The value before this change: on an UPDATE row, the value it replaces;
+	 * on a DELETE row, the value it removes (a delete row has no `after`).
 	 *
 	 *   - `null`      — RECORDED empty: the propose-time snapshot read this
 	 *     field and it had no value ("was empty");
@@ -11062,6 +11088,39 @@ export type UndoPromotePropertyToBodyResult = {
 	status: "refused";
 };
 /**
+ *   `expires`          — an ephemeral ask with a lifetime: lapses at
+ *                        `expiresAt`. `orSessionEnd` when it is bound to a
+ *                        session too: closing the session retires it as well,
+ *                        so it goes at the EARLIER of the two.
+ *   `dies_with_session` — a session-bound draft: retired when its session ends.
+ *   `review_later`     — objectWork untouched for 7 days: out of the headline
+ *                        count, kept in the Review later pile `since` then.
+ *   `until_decided`    — waits for a decision, with no deadline.
+ */
+export type ProposalFate = {
+	expiresAt: string;
+	kind: "expires";
+	orSessionEnd: boolean;
+} | {
+	kind: "dies_with_session";
+} | {
+	kind: "until_decided";
+} | {
+	kind: "review_later";
+	since: string;
+};
+declare const PROPOSAL_WAIT_REASONS: readonly [
+	"gate",
+	"owed_slot",
+	"parked_run"
+];
+export type ProposalWaitReason = (typeof PROPOSAL_WAIT_REASONS)[number];
+export interface ProposalWaits {
+	waits: boolean;
+	/** Present only when `waits`. */
+	reason?: ProposalWaitReason;
+}
+/**
  * WHO is asking for access, on an `access-request` row — a pod-level request
  * that is not a proposal: an external service asking to be a TRUSTED ISSUER
  * (it would sign identity tokens this pod accepts), or an APPLICATION asking
@@ -11100,69 +11159,6 @@ export interface NeedsYouInvite {
 	scope: "pod" | "workspace";
 	/** The space's name; null for a pod-wide invite or an unnamed space. */
 	spaceName: string | null;
-}
-/**
- * One entity of a retired goal kind (Life OS `goal`, Enterprise `objective`,
- * Project Management `okr`) that was never made a goal, on the
- * `convertible-goals` card (founder decision D-3, 2026-10-26).
- */
-export interface NeedsYouConvertibleGoal {
-	entityId: string;
-	/** The entity's title; null when it has none (the host names its kind). */
-	title: string | null;
-	kind: GoalConvertibleKind;
-	/** The space it lives in; null for a pod-wide entity or an unnamed space. */
-	spaceName: string | null;
-	/**
-	 * The projects it is filed in that the viewer can see (`belongs_to_project`)
-	 * — where its goal lands by default, as "Make it a goal" does.
-	 */
-	projectIds: string[];
-}
-/**
- * The pod's ONE "Make them goals" card (founder decision D-3, 2026-10-26): the
- * entities of a retired goal kind the viewer can read that were never made a
- * goal (no `promoted_to` edge to a track). The person reviews them and makes
- * them goals, each through the one convert door; nothing converts on its own.
- */
-export interface NeedsYouConvertibleGoals {
-	/** Newest first, at most the pod's scan cap. */
-	entities: NeedsYouConvertibleGoal[];
-	/** The scan hit its cap: there are more than `entities.length`. */
-	truncated: boolean;
-}
-/**
- *   `expires`          — an ephemeral ask with a lifetime: lapses at
- *                        `expiresAt`. `orSessionEnd` when it is bound to a
- *                        session too: closing the session retires it as well,
- *                        so it goes at the EARLIER of the two.
- *   `dies_with_session` — a session-bound draft: retired when its session ends.
- *   `review_later`     — objectWork untouched for 7 days: out of the headline
- *                        count, kept in the Review later pile `since` then.
- *   `until_decided`    — waits for a decision, with no deadline.
- */
-export type ProposalFate = {
-	expiresAt: string;
-	kind: "expires";
-	orSessionEnd: boolean;
-} | {
-	kind: "dies_with_session";
-} | {
-	kind: "until_decided";
-} | {
-	kind: "review_later";
-	since: string;
-};
-declare const PROPOSAL_WAIT_REASONS: readonly [
-	"gate",
-	"owed_slot",
-	"parked_run"
-];
-export type ProposalWaitReason = (typeof PROPOSAL_WAIT_REASONS)[number];
-export interface ProposalWaits {
-	waits: boolean;
-	/** Present only when `waits`. */
-	reason?: ProposalWaitReason;
 }
 /**
  * CONNECTION EVENT LINES — the ONE rule that turns a connection's lifecycle
@@ -13106,6 +13102,14 @@ export interface ProposalCluster {
 	 * "from X" (`signalFromCluster`).
 	 */
 	agent: ProposalClusterAgent | null;
+	/**
+	 * The REVIEW PACKAGE the cluster files under — the decision it asks
+	 * (`reviewPackageOfRow`, founder B-1). Decided over EVERY member and the
+	 * highest-stakes one wins: members share proposalType × targetType, but a
+	 * create's kind, a held-writes pack's writes or a person author can lift one
+	 * member into a higher package, and the cluster is never filed below it.
+	 */
+	package: ReviewPackage;
 	/**
 	 * Member count per `governance_reason`, so a card can render its composition
 	 * ("152 routine · 2 destructive · 1 untrusted origin") instead of a bare
@@ -21316,15 +21320,7 @@ export type SignalKind =
  * app — Accept on the row, Decline beside it. No door (not a member yet);
  * what the two verbs act on rides in `invite`.
  */
- | "space-invite"
-/**
- * The pod's ONE "Make them goals" card (`convertible-goals.ts`; founder
- * decision D-3, 2026-10-26): the viewer's readable `goal` / `objective` /
- * `okr` entities never made a goal. Its verb opens a review; each entity
- * converts through the one convert door, by the person's act only. The
- * entities ride in `convertible`.
- */
- | "convertible-goals";
+ | "space-invite";
 /** One row in either lens. Deliberately identical in both, so the tray and the
  *  history feed render from ONE shape. */
 export interface Signal {
@@ -21564,17 +21560,20 @@ export interface Signal {
 	 */
 	invite?: NeedsYouInvite;
 	/**
-	 * `convertible-goals` only: the entities the card reviews, newest first,
-	 * each with the projects its goal may land in (`NeedsYouConvertibleGoals`).
-	 */
-	convertible?: NeedsYouConvertibleGoals;
-	/**
 	 * `proposal-cluster` only: the member proposal ids the cluster sampled
 	 * (`sampleProposalIds`, capped at 20 — `count` may exceed it). What a batch
 	 * decision over the row acts on; a surface batches a cluster only when
 	 * `proposalIds.length === count`, never a sample standing for more.
 	 */
 	proposalIds?: string[];
+	/**
+	 * The REVIEW PACKAGE — the decision this row asks (`reviewPackageOf`,
+	 * `@synap-core/types/proposals/review-package`, founder B-1): what a Review
+	 * page groups by. Stamped on every NEEDS-YOU row ({@link unionNeedsYou}); a
+	 * cluster carries its members' highest-stakes package. Absent on the
+	 * history lens, which is not reviewed.
+	 */
+	package?: ReviewPackage;
 	/**
 	 * WHICH block this row belongs to on a needs-you page. `session:<id>` for
 	 * everything a session owes the person (its owed slots, its draft-asks row,
@@ -21673,7 +21672,7 @@ export interface LensPagePicks {
 	unreadable: string[];
 }
 /** A sub-read's name — what `unreadable` reports. */
-export type SignalSubRead = "activity" | "app-requests" | "captures" | "convertible-goals" | "drafts" | "events" | "invites" | "issuers" | "liveness" | "notifications" | "outputs" | "owed" | "proposals" | "review";
+export type SignalSubRead = "activity" | "app-requests" | "captures" | "drafts" | "events" | "invites" | "issuers" | "liveness" | "notifications" | "outputs" | "owed" | "proposals" | "review";
 /** One class of the lens page. */
 export interface LensClassWire {
 	/** The first `cap` rows, in the class's own order. */
@@ -22919,9 +22918,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		adminCreateServiceKey: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				expiresInDays?: number | undefined;
+				expiresInDays?: number | null | undefined;
+				grant?: {
+					entityIds?: string[] | undefined;
+					label?: string | undefined;
+					permissions: string[];
+					projectIds?: string[] | undefined;
+					roleId?: string | undefined;
+					workspaceIds?: string[] | undefined;
+				} | undefined;
 				keyName: string;
-				scope: string[];
+				note?: string | undefined;
+				scope?: string[] | undefined;
+				uses?: ("chat" | "hub" | "mcp" | "n8n" | "n8n-analyze" | "realtime" | "skills")[] | undefined;
 				workspaceId: string;
 			};
 			meta: object;
@@ -22998,6 +23007,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		connectIntegration: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
+				grant?: {
+					entityIds?: string[] | undefined;
+					label?: string | undefined;
+					permissions: string[];
+					projectIds?: string[] | undefined;
+					roleId?: string | undefined;
+					workspaceIds?: string[] | undefined;
+				} | undefined;
 				integration: "cli" | "custom" | "openclaw" | "raycast";
 				strategy?: "create_new" | "replace_existing" | undefined;
 				workspaceId?: string | undefined;
@@ -23091,9 +23108,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		createSystemKey: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				expiresInDays?: number | undefined;
+				expiresInDays?: number | null | undefined;
+				grant?: {
+					entityIds?: string[] | undefined;
+					label?: string | undefined;
+					permissions: string[];
+					projectIds?: string[] | undefined;
+					roleId?: string | undefined;
+					workspaceIds?: string[] | undefined;
+				} | undefined;
 				keyName: string;
-				scope: string[];
+				note?: string | undefined;
+				scope?: string[] | undefined;
+				uses?: ("chat" | "hub" | "mcp" | "n8n" | "n8n-analyze" | "realtime" | "skills")[] | undefined;
 			};
 			meta: object;
 			output: {
@@ -36246,7 +36273,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: void;
 			meta: object;
 			output: {
-				services: {
+				services: (Omit<{
 					agentListSyncEnabled: boolean;
 					capabilities: string[];
 					createdAt: Date;
@@ -36267,7 +36294,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					updatedAt: Date;
 					version: string | null;
 					webhookUrl: string;
-				}[];
+				}, "apiKey" | "metadata"> & {
+					metadata: Record<string, unknown>;
+				})[];
 			};
 		}>;
 		listRuns: import("@trpc/server").TRPCQueryProcedure<{
@@ -36576,7 +36605,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 			};
 			meta: object;
-			output: {
+			output: Omit<{
 				agentListSyncEnabled: boolean;
 				apiKey: string;
 				capabilities: string[];
@@ -36598,6 +36627,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				updatedAt: Date;
 				version: string | null;
 				webhookUrl: string;
+			}, "apiKey" | "metadata"> & {
+				metadata: Record<string, unknown>;
 			};
 		}>;
 		getMcpStatus: import("@trpc/server").TRPCQueryProcedure<{
@@ -36628,7 +36659,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				enabled: boolean;
 				id: string;
 				isDefault: boolean;
-				metadata: Record<string, unknown> | null;
+				metadata: Record<string, unknown>;
 				name: string;
 				pricing: string | null;
 				providerType: string | null;
@@ -36652,7 +36683,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				webhookUrl: string;
 			};
 			meta: object;
-			output: {
+			output: Omit<{
 				agentListSyncEnabled: boolean;
 				apiKey: string;
 				capabilities: string[];
@@ -36674,6 +36705,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				updatedAt: Date;
 				version: string | null;
 				webhookUrl: string;
+			}, "apiKey" | "metadata"> & {
+				metadata: Record<string, unknown>;
 			};
 		}>;
 		revokeMcp: import("@trpc/server").TRPCMutationProcedure<{
@@ -36739,7 +36772,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				webhookUrl?: string | undefined;
 			};
 			meta: object;
-			output: {
+			output: Omit<{
 				agentListSyncEnabled: boolean;
 				apiKey: string;
 				capabilities: string[];
@@ -36761,6 +36794,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				updatedAt: Date;
 				version: string | null;
 				webhookUrl: string;
+			}, "apiKey" | "metadata"> & {
+				metadata: Record<string, unknown>;
 			};
 		}>;
 	}>>;
@@ -40710,6 +40745,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						x: number;
 						y: number;
 					}> | undefined;
+					review?: {
+						groupBy: "agent" | "package" | "time" | "work";
+						layouts?: {
+							access?: "by-agent" | "by-session" | "cards" | "diff" | "gallery" | "list" | undefined;
+							bookkeeping?: "by-agent" | "by-session" | "cards" | "diff" | "gallery" | "list" | undefined;
+							"data-changes"?: "by-agent" | "by-session" | "cards" | "diff" | "gallery" | "list" | undefined;
+							"hand-offs"?: "by-agent" | "by-session" | "cards" | "diff" | "gallery" | "list" | undefined;
+							"how-things-work"?: "by-agent" | "by-session" | "cards" | "diff" | "gallery" | "list" | undefined;
+							knowledge?: "by-agent" | "by-session" | "cards" | "diff" | "gallery" | "list" | undefined;
+							questions?: "by-agent" | "by-session" | "cards" | "diff" | "gallery" | "list" | undefined;
+							releases?: "by-agent" | "by-session" | "cards" | "diff" | "gallery" | "list" | undefined;
+						} | undefined;
+					} | undefined;
 					sidebarCollapsed?: boolean | undefined;
 				} | undefined;
 			};
@@ -40736,6 +40784,37 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					[x: string]: string;
 				};
 				success: boolean;
+			};
+		}>;
+		updateReview: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				groupBy: "agent" | "package" | "time" | "work";
+				layouts?: {
+					access?: "by-agent" | "by-session" | "cards" | "diff" | "gallery" | "list" | undefined;
+					bookkeeping?: "by-agent" | "by-session" | "cards" | "diff" | "gallery" | "list" | undefined;
+					"data-changes"?: "by-agent" | "by-session" | "cards" | "diff" | "gallery" | "list" | undefined;
+					"hand-offs"?: "by-agent" | "by-session" | "cards" | "diff" | "gallery" | "list" | undefined;
+					"how-things-work"?: "by-agent" | "by-session" | "cards" | "diff" | "gallery" | "list" | undefined;
+					knowledge?: "by-agent" | "by-session" | "cards" | "diff" | "gallery" | "list" | undefined;
+					questions?: "by-agent" | "by-session" | "cards" | "diff" | "gallery" | "list" | undefined;
+					releases?: "by-agent" | "by-session" | "cards" | "diff" | "gallery" | "list" | undefined;
+				} | undefined;
+			};
+			meta: object;
+			output: {
+				review: {
+					groupBy: "agent" | "package" | "time" | "work";
+					layouts?: {
+						access?: "by-agent" | "by-session" | "cards" | "diff" | "gallery" | "list" | undefined;
+						bookkeeping?: "by-agent" | "by-session" | "cards" | "diff" | "gallery" | "list" | undefined;
+						"data-changes"?: "by-agent" | "by-session" | "cards" | "diff" | "gallery" | "list" | undefined;
+						"hand-offs"?: "by-agent" | "by-session" | "cards" | "diff" | "gallery" | "list" | undefined;
+						"how-things-work"?: "by-agent" | "by-session" | "cards" | "diff" | "gallery" | "list" | undefined;
+						knowledge?: "by-agent" | "by-session" | "cards" | "diff" | "gallery" | "list" | undefined;
+						questions?: "by-agent" | "by-session" | "cards" | "diff" | "gallery" | "list" | undefined;
+						releases?: "by-agent" | "by-session" | "cards" | "diff" | "gallery" | "list" | undefined;
+					} | undefined;
+				};
 			};
 		}>;
 		updateTheme: import("@trpc/server").TRPCMutationProcedure<{
@@ -42621,6 +42700,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				automationId?: string | undefined;
 				excludeDraftSessions?: boolean | undefined;
 				limit?: number | undefined;
+				package?: "access" | "bookkeeping" | "data-changes" | "hand-offs" | "how-things-work" | "knowledge" | "questions" | "releases" | undefined;
 				profileSlug?: string | undefined;
 				projectId?: string | undefined;
 				scanLimit?: number | undefined;
@@ -42651,6 +42731,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				excludeBookkeeping?: boolean | undefined;
 				limit?: number | undefined;
 				offset?: number | undefined;
+				package?: "access" | "bookkeeping" | "data-changes" | "hand-offs" | "how-things-work" | "knowledge" | "questions" | "releases" | undefined;
 				profileSlug?: string | undefined;
 				projectId?: string | undefined;
 				proposalIds?: string[] | undefined;
@@ -42704,6 +42785,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					objectRefs?: Record<string, ProposalObjectRef>;
 					onBehalfOfName?: string;
 					originChannelName?: string;
+					package: "access" | "bookkeeping" | "data-changes" | "hand-offs" | "how-things-work" | "knowledge" | "questions" | "releases";
 					playbookName?: string;
 					policyReason?: string;
 					principal?: ProposalPrincipal;
@@ -42793,6 +42875,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					objectRefs?: Record<string, ProposalObjectRef>;
 					onBehalfOfName?: string;
 					originChannelName?: string;
+					package: "access" | "bookkeeping" | "data-changes" | "hand-offs" | "how-things-work" | "knowledge" | "questions" | "releases";
 					playbookName?: string;
 					policyReason?: string;
 					principal?: ProposalPrincipal;
@@ -44697,7 +44780,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				blocked: number;
 				captures: number;
-				convertible: number;
 				decisions: number;
 				distinct: number;
 				drafts: number;
@@ -44724,7 +44806,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				count: {
 					blocked: number;
 					captures: number;
-					convertible: number;
 					decisions: number;
 					distinct: number;
 					drafts: number;
@@ -44755,7 +44836,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				count: {
 					blocked: number;
 					captures: number;
-					convertible: number;
 					decisions: number;
 					distinct: number;
 					drafts: number;
@@ -44788,7 +44868,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					proposed?: number | undefined;
 				} | undefined;
 				cursor?: string | undefined;
-				kinds?: ("access-request" | "activity" | "capture" | "convertible-goals" | "draft-asks" | "event" | "live-session" | "notification" | "output" | "owed-slot" | "proposal-cluster" | "rule-run" | "session-review" | "space-invite")[] | undefined;
+				kinds?: ("access-request" | "activity" | "capture" | "draft-asks" | "event" | "live-session" | "notification" | "output" | "owed-slot" | "proposal-cluster" | "rule-run" | "session-review" | "space-invite")[] | undefined;
 				lens?: "happening" | "history" | "needs-you" | "page" | "produced" | "proposed" | "suggestions" | undefined;
 				limit?: number | undefined;
 				picks?: boolean | undefined;

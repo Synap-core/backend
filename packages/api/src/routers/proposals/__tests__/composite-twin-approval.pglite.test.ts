@@ -91,6 +91,7 @@ import * as schema from "@synap/database/schema";
 const USER = randomUUID();
 const AGENT = randomUUID();
 const PERSON_PROFILE = randomUUID();
+const EVENT_PROFILE = randomUUID();
 let client: PGlite;
 
 function ddlFor(table: PgTable): string {
@@ -209,6 +210,25 @@ async function pendingCapture(
   return id;
 }
 
+/** A connection sync's pending import, the shape `submitSyncGraphToImport` files. */
+async function pendingSyncImport(
+  operations: Array<Record<string, unknown>>,
+  extra: Record<string, unknown> = {}
+): Promise<string> {
+  const id = randomUUID();
+  await q(
+    `insert into proposals (id, status, proposal_type, target_type, target_id, data, created_by, subject_user_id)
+     values ($1,'pending','capture.graph','entity',$2,$3::jsonb,$4,$4)`,
+    [
+      id,
+      randomUUID(),
+      JSON.stringify({ operations, source: "connector_sync", ...extra }),
+      USER,
+    ]
+  );
+  return id;
+}
+
 /** Loaded in `beforeAll`: its cold import is the whole approval graph. */
 let proposalsRouter: (typeof import("../../proposals.js"))["proposalsRouter"];
 
@@ -249,8 +269,9 @@ beforeAll(async () => {
   );
   await q(
     `insert into profiles (id, slug, display_name, profile_kind, scope, entity_scope, workspace_id, is_active, ui_hints)
-     values ($1,'person','Person','kind','system','pod',null,true,'{}'::jsonb)`,
-    [PERSON_PROFILE]
+     values ($1,'person','Person','kind','system','pod',null,true,'{}'::jsonb),
+            ($2,'event','Event','kind','system','pod',null,true,'{}'::jsonb)`,
+    [PERSON_PROFILE, EVENT_PROFILE]
   );
   holder.db = drizzle(client, { schema });
   // Import the router here, under the setup's budget: inside the first test
@@ -364,5 +385,75 @@ describe("approving a capture that names an existing record (BLOCKER-2)", () => 
     expect(await countTitled("R. Real")).toBe(0);
     expect(await countTitled("Rhea Real")).toBe(1);
     expect(rhea).toBeTruthy();
+  });
+});
+
+describe("approving a connection sync's import (Google reconnect, 2026-10-28)", () => {
+  it("a recurring event approves: the same title on other dates is not a twin", async () => {
+    // Live: proposal 328f3d77 refused on its FIRST op — a "Laver ses cheveux"
+    // of 2 Aug met the one of 5 Jul already in the pod, by title alone.
+    await q(
+      `insert into entities (id, user_id, workspace_id, type, profile_id, title, properties, created_at)
+       values (gen_random_uuid(),$1,null,'event',$2,'Laver ses cheveux',
+               '{"startDate":"2026-07-05T00:00:00.000Z","isAllDay":true}'::jsonb, now() - interval '1 day')`,
+      [USER, EVENT_PROFILE]
+    );
+    const occurrence = (date: string) => ({
+      op: "create_entity",
+      ref: `event:laver_${date}`,
+      profileSlug: "event",
+      title: "Laver ses cheveux",
+      properties: { startDate: date, isAllDay: true },
+    });
+    const proposalId = await pendingSyncImport([
+      occurrence("2026-08-02"),
+      occurrence("2026-08-09"),
+    ]);
+    const res = await approve(proposalId);
+    expect(res.success).toBe(true);
+    expect(await countTitled("Laver ses cheveux")).toBe(3);
+
+    // CONTROL: the same title on the SAME day is the same event — with no
+    // verb on it, the approval still asks the reviewer.
+    const sameDay = await pendingSyncImport([occurrence("2026-07-05")]);
+    await expect(approve(sameDay)).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(await countTitled("Laver ses cheveux")).toBe(3);
+  });
+
+  it("a sync's own `separate` stamp lets a same-name record through: the rest of the import lands", async () => {
+    // A person the pod has by name only; the sync knows them by an email the
+    // pod has never seen, so the build pinned no match.
+    await person("Sander");
+    const operations = [
+      {
+        op: "create_entity",
+        ref: "person:sander@elevate.test",
+        profileSlug: "person",
+        title: "Sander",
+        properties: { email: "sander@elevate.test" },
+      },
+      {
+        op: "create_entity",
+        ref: "event:bounty_1",
+        profileSlug: "event",
+        title: "Bounty review",
+        properties: { startDate: "2026-08-05T07:00:00Z" },
+      },
+      {
+        op: "create_relation",
+        type: "attended_by",
+        sourceRef: "event:bounty_1",
+        targetRef: "person:sander@elevate.test",
+      },
+    ];
+    const { separateSyncCreates } =
+      await import("../../../services/event-sync/sync-graph.js");
+    const proposalId = await pendingSyncImport(operations, {
+      proposedIdentityResolutionByRef: separateSyncCreates(operations as never),
+    });
+    const res = await approve(proposalId);
+    expect(res.success).toBe(true);
+    expect(await countTitled("Sander")).toBe(2);
+    expect(await countTitled("Bounty review")).toBe(1);
   });
 });

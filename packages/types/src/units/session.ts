@@ -43,6 +43,7 @@ import {
   isSessionWorkingNow,
   type SessionLiveFacts,
 } from "../run-activity/live.js";
+import { needsYouAgentWorking } from "../needs-you/rule.js";
 import {
   resolveUnitState,
   type UnitStateInput,
@@ -124,6 +125,12 @@ export function sessionUnitInput(facts: SessionUnitFacts): UnitStateInput {
     pendingDecisions: facts.pendingDecisions,
     blockedBy: facts.blockedBy ?? null,
     running: working,
+    // E2: MEASURED at work — its owed asks and decisions then read
+    // "working". The needs-you rule's own clock when the pod sends it
+    // (`lastAgentWorkAt`: never the asking itself, never a human act), so
+    // the card and the rule's Working fold cannot fork; the D1 liveness for
+    // an older pod; never the lifecycle reading.
+    agentAtWork: open && agentAtWork(facts.live, facts.now ?? Date.now()),
     idle: open && !working && !liveUnread,
     schedule: cadence,
     unreadable: facts.status === "stale" || (open && liveUnread),
@@ -132,6 +139,22 @@ export function sessionUnitInput(facts: SessionUnitFacts): UnitStateInput {
         ? { done: Math.max(0, Math.min(100, facts.progress)), total: 100 }
         : null,
   };
+}
+
+function agentAtWork(
+  live: SessionLiveFacts | null | undefined,
+  now: number
+): boolean {
+  if (!live) return false;
+  return live.lastAgentWorkAt === undefined
+    ? isSessionWorkingNow(live, now)
+    : needsYouAgentWorking(
+        {
+          turnInFlight: live.turnInFlight,
+          lastAgentWorkAt: live.lastAgentWorkAt,
+        },
+        now
+      );
 }
 
 // ─── A project, as an aggregate over its sessions ──────────────────────────

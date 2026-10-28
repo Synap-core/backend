@@ -26,9 +26,11 @@
 # `synap install --help`). Flags of the retired installer are mapped below, or
 # refused with their new spelling — never silently ignored.
 #
-# SYNAP_RELEASE_VERIFY=warn|enforce|off (default warn): the release manifest's
+# SYNAP_RELEASE_VERIFY=enforce|warn|off (default enforce): the release manifest's
 # cosign signature (Synap CI, keyless) is checked before its bundle is trusted.
-# warn only reports a missing cosign/signature or a failed check; enforce refuses.
+# enforce refuses a missing signature or a failed check; warn only reports them;
+# off skips the check (a private mirror with no signatures). With no cosign on
+# the host, sigstore's own image runs it through Docker (installed in step 1).
 # ==============================================================================
 
 set -euo pipefail
@@ -43,7 +45,7 @@ info() { echo "→  $*"; }
 warn() { echo "⚠  $*" >&2; }
 
 usage() {
-  sed -n '2,33p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//' || true
+  sed -n '2,35p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//' || true
   exit 0
 }
 
@@ -123,36 +125,60 @@ sha256() {
 
 # D12 — CI signs every release.json keyless (docker-publish.yml publish-release)
 # on the release AND on the channel pointer. This is the SAME rule `synap`
-# applies in `_ue_verify_manifest_sig` (update/install): the two identity
-# constants below are byte-for-byte copies of the ones in `synap`, pinned equal
-# by deploy/__tests__/install-manifest-signature.test.sh — change both or neither.
-# warn (default): a missing cosign, missing bundle or failed check WARNS and the
-# install goes on; enforce: any of them refuses; off: skip (a private mirror).
+# applies in `_ue_verify_manifest_sig` (update/install): the identity constants
+# and the cosign image below are byte-for-byte copies of the ones in `synap`,
+# pinned equal by deploy/__tests__/install-manifest-signature.test.sh — change
+# both or neither. enforce (default, and what an unknown value means): a missing
+# signature or a failed check refuses, before the bundle is downloaded; warn:
+# they warn and the install goes on; off: skip (a private mirror). The default
+# was warn until the audit of 2026-10-28, and nothing installed cosign on a host.
 SYNAP_RELEASE_SIGNER_RE='^https://github\.com/(?i:synap-core/backend)/\.github/workflows/docker-publish\.yml@refs/(heads/main|tags/v[0-9][0-9A-Za-z.+-]*)$'
 SYNAP_RELEASE_OIDC_ISSUER="https://token.actions.githubusercontent.com"
+SYNAP_COSIGN_IMAGE="ghcr.io/sigstore/cosign/cosign:v2.5.3@sha256:f1946d0f30fc8e3777b02f2201e02efdba9fe38f4918162f937052fac98e083f"
+
+# <manifest> <bundle in the same directory> — cosign's verdict. A host cosign
+# wins; otherwise the pinned image runs read-only with no capabilities, the
+# manifest's directory bind-mounted read-only (same flags as `synap`).
+cosign_verify() {
+  local args=(verify-blob --certificate-identity-regexp "$SYNAP_RELEASE_SIGNER_RE"
+              --certificate-oidc-issuer "$SYNAP_RELEASE_OIDC_ISSUER")
+  if command -v cosign >/dev/null 2>&1; then
+    cosign "${args[@]}" --bundle "$2" "$1"
+  else
+    local dir; dir="$(cd "$(dirname "$1")" && pwd)" || return 1
+    docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges \
+      --tmpfs /home/nonroot:uid=65532,gid=65532 \
+      --mount "type=bind,src=${dir},dst=/release,readonly" "$SYNAP_COSIGN_IMAGE" \
+      "${args[@]}" --bundle "/release/$(basename "$2")" "/release/$(basename "$1")"
+  fi
+}
 
 verify_manifest_sig() { # <release> <manifest> — non-zero only under enforce
-  local mode="${SYNAP_RELEASE_VERIFY:-warn}" bundle="$2.sigstore.json" why="" out
+  local mode="${SYNAP_RELEASE_VERIFY:-enforce}" bundle="$2.sigstore.json" why="" out rc=0
   case "$mode" in
     warn|enforce) ;;
-    off) return 0 ;;
-    *) warn "SYNAP_RELEASE_VERIFY=${mode} is not warn|enforce|off — using warn"; mode=warn ;;
+    off) warn "release manifest for '$1' is NOT signature-checked (SYNAP_RELEASE_VERIFY=off)"; return 0 ;;
+    *) warn "SYNAP_RELEASE_VERIFY=${mode} is not warn|enforce|off — using enforce"; mode=enforce ;;
   esac
   rm -f "$bundle"
-  if ! command -v cosign >/dev/null 2>&1; then
-    why="cosign is not installed"
+  if ! command -v cosign >/dev/null 2>&1 && ! command -v docker >/dev/null 2>&1; then
+    why="cosign is not installed (and no docker to run it)"
   elif ! fetch "$(manifest_url "$1" release.json.sigstore.json)" "$bundle" 2>/dev/null; then
     why="no signature (release.json.sigstore.json) is published for '$1'"
-  elif ! out="$(cosign verify-blob --bundle "$bundle" \
-          --certificate-identity-regexp "$SYNAP_RELEASE_SIGNER_RE" \
-          --certificate-oidc-issuer "$SYNAP_RELEASE_OIDC_ISSUER" "$2" 2>&1)"; then
-    why="the signature does not verify as Synap CI ($(printf '%s' "$out" | tail -1))"
   else
-    info "release manifest signature verified (Synap CI, keyless)"
-    return 0
+    out="$(cosign_verify "$2" "$bundle" 2>&1)" || rc=$?
+    if [ "$rc" = 0 ]; then
+      info "release manifest signature verified (Synap CI, keyless)"
+      return 0
+    elif ! command -v cosign >/dev/null 2>&1 && [ "$rc" -ge 125 ] && [ "$rc" -le 127 ]; then
+      why="could not run the signature check (docker exited ${rc}: $(printf '%s' "$out" | tail -1))"
+    else
+      why="the signature does not verify as Synap CI ($(printf '%s' "$out" | tail -1))"
+    fi
   fi
   if [ "$mode" = enforce ]; then
     echo "✗  release manifest for '$1' refused: ${why} (SYNAP_RELEASE_VERIFY=enforce)" >&2
+    echo "✗  To go on unverified, this run only: SYNAP_RELEASE_VERIFY=warn in the environment" >&2
     return 1
   fi
   warn "release manifest for '$1' is NOT signature-verified: ${why} — continuing (SYNAP_RELEASE_VERIFY=warn)"
