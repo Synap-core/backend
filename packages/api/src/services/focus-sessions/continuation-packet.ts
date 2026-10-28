@@ -2561,11 +2561,15 @@ export async function projectContinuationPacket(
     loadSessionLiveness({ userId: ctx.userId, roster: !!ctx.roster }, [row])
       .then((m) => m.get(row.id) ?? null)
       .catch(() => null),
-    readSessionGates(database, {
-      id: row.id,
-      playbookId: row.playbookId ?? null,
-      userId: row.userId,
-    })
+    readSessionGates(
+      database,
+      {
+        id: row.id,
+        playbookId: row.playbookId ?? null,
+        userId: row.userId,
+      },
+      ctx.userId
+    )
       .then(({ items, deploy, ownerDeploys }): ContinuationPacket["gates"] => ({
         status: "ok",
         items,
