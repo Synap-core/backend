@@ -158,6 +158,8 @@ export const CONSOLE_OBJECT_PAGES = {
   application: { audience: "admin" },
   /** Approving an app's connection request is a pod-admin act. */
   connectionRequest: { audience: "admin" },
+  /** A key request is decided by its own person, admin or not. */
+  keyRequest: { audience: "member" },
 } as const satisfies Record<string, { audience: ConsoleAudience }>;
 
 export type ConsoleTarget =
@@ -167,7 +169,8 @@ export type ConsoleTarget =
   | { page: "computer"; id: string }
   | { page: "space"; id: string }
   | { page: "application"; via: ConsoleAppVia; id: string }
-  | { page: "connectionRequest"; id: string };
+  | { page: "connectionRequest"; id: string }
+  | { page: "keyRequest"; id: string };
 
 // ─── The origin ──────────────────────────────────────────────────────────────
 
@@ -237,6 +240,10 @@ export function consolePath(target: ConsoleTarget): string | null {
       const id = nonEmpty(t.id);
       return id ? `/connection-requests/${encodeURIComponent(id)}` : null;
     }
+    case "keyRequest": {
+      const id = nonEmpty(t.id);
+      return id ? `/keys/requests/${encodeURIComponent(id)}` : null;
+    }
   }
   if (!isPageId(t.page)) return null;
   const page: ConsolePage = CONSOLE_PAGES[t.page];
@@ -269,8 +276,8 @@ export function consoleHref(
 
 /**
  * A needs-you access-request row's `target` → where it is decided: a pending
- * trusted issuer in Review's Access view, an app's connection request on its
- * own page. null for any other kind.
+ * trusted issuer in Review's Access view, an app's connection request or a
+ * key request on its own page. null for any other kind.
  */
 export function accessRequestConsoleTarget(
   target: { kind: string; id: string } | null | undefined
@@ -281,6 +288,9 @@ export function accessRequestConsoleTarget(
   }
   if (target.kind === "connection-request") {
     return { page: "connectionRequest", id: target.id };
+  }
+  if (target.kind === "key-request") {
+    return { page: "keyRequest", id: target.id };
   }
   return null;
 }
@@ -310,7 +320,11 @@ export function consoleTargetVisibleTo(
 }
 
 export function consoleVerb(target: ConsoleTarget): ConsoleVerb {
-  if (target.page === "review" || target.page === "connectionRequest") {
+  if (
+    target.page === "review" ||
+    target.page === "connectionRequest" ||
+    target.page === "keyRequest"
+  ) {
     return "review";
   }
   if (!isPageId(target.page)) return "manage";

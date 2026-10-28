@@ -51,6 +51,7 @@ vi.mock("../services/signals/access-requests.js", async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
   listPendingIssuers: async () => ({ rows: [], truncated: false }),
   listPendingAppRequests: async () => ({ rows: [], truncated: false }),
+  listPendingKeyRequests: async () => ({ rows: [], truncated: false }),
 }));
 // The viewer's open space invites: pinned by their own PGlite suite
 // (`space-invites.pglite.test.ts`); none here.

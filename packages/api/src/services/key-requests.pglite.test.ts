@@ -66,6 +66,7 @@ import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
 import { GrantRepository } from "@synap/database";
 import {
+  KEY_REQUEST_TTL_SECONDS,
   collectKeyRequest,
   createKeyRequest,
   decideKeyRequest,
@@ -74,6 +75,8 @@ import {
   listRequestedKeys,
   revokeRequestedKey,
 } from "./key-requests.js";
+import { listPendingKeyRequests } from "./signals/access-requests.js";
+import { signalFromKeyRequest } from "./signals/needs-you-union.js";
 
 const PERSON = "kr-person";
 const OTHER_PERSON = "kr-other";
@@ -425,5 +428,114 @@ describe("what can be requested", () => {
     await expect(
       request({ templateId: rows[0]!.id, personUserId: OTHER_PERSON })
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  // ── K2 (decision 68d37853, answers 25 and 26) ────────────────────────────
+
+  it("a request waits 24 hours", async () => {
+    expect(KEY_REQUEST_TTL_SECONDS).toBe(86_400);
+    const req = await request({ name: "ttl poster" });
+    expect(req.expires_in).toBe(86_400);
+    const { rows } = await h.client!.query<{ s: number }>(
+      `select extract(epoch from (expires_at - created_at))::int as s
+         from key_requests where id = $1`,
+      [req.request_id]
+    );
+    expect(rows[0]!.s).toBeGreaterThan(86_390);
+  });
+
+  // Rules out: a new request and a new link each time a computer re-asks
+  // (finding 214947f7: the devbox re-filed every 15 minutes).
+  it("asking the same again returns the request already waiting, with a new code", async () => {
+    const first = await request({ name: "same ask" });
+    const again = await request({ name: "same ask" });
+    expect(again.request_id).toBe(first.request_id);
+    expect(again.review_url).toBe(first.review_url);
+    expect(again.request_code).not.toBe(first.request_code);
+    expect(again.expires_in).toBeLessThanOrEqual(first.expires_in);
+    // Only the newest code collects (only a hash is kept).
+    expect(await collect(first.request_code)).toMatchObject({
+      ok: false,
+      error: "invalid_grant",
+    });
+    expect(await collect(again.request_code)).toMatchObject({
+      ok: false,
+      error: "authorization_pending",
+    });
+    // A different ask is a different request.
+    const other = await request({ name: "another ask" });
+    expect(other.request_id).not.toBe(first.request_id);
+  });
+
+  it("once decided, the same ask files a new request", async () => {
+    const first = await request({ name: "decided ask" });
+    await decideKeyRequest({
+      requestId: first.request_id,
+      personUserId: PERSON,
+      decision: "deny",
+    });
+    const again = await request({ name: "decided ask" });
+    expect(again.request_id).not.toBe(first.request_id);
+  });
+
+  // Rules out: a project-scoped poster that is refused on every event
+  // (finding 8809cc21), and a project key that keeps Activity (answer 26).
+  it("at a project: a poster is refused; a reader keeps everything but Activity", async () => {
+    const P = randomUUID();
+    await expect(
+      request({ name: "project poster", projectId: P })
+    ).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: expect.stringMatching(/needs the whole pod or a space/),
+    });
+    const reader = await request({
+      templateId: "read-only",
+      name: "project reader",
+      projectId: P,
+    });
+    const view = await getKeyRequest({
+      requestId: reader.request_id,
+      personUserId: PERSON,
+    });
+    expect(view.draft.grant.projectIds).toEqual([P]);
+    expect(view.draft.grant.permissions).toContain("document.read");
+    expect(
+      view.draft.grant.permissions.some((p) => p.startsWith("event"))
+    ).toBe(false);
+  });
+
+  it("pending requests reach needs-you for their person only", async () => {
+    const req = await request({ name: "needs you poster" });
+    const mine = await listPendingKeyRequests({ personUserId: PERSON });
+    const row = mine.rows.find((r) => r.id === req.request_id);
+    expect(row).toMatchObject({
+      requestedName: "needs you poster",
+      requesterName: "ada-laptop",
+    });
+    expect(
+      (await listPendingKeyRequests({ personUserId: OTHER_PERSON })).rows.some(
+        (r) => r.id === req.request_id
+      )
+    ).toBe(false);
+    const signal = signalFromKeyRequest(row!);
+    expect(signal).toMatchObject({
+      id: `access:key:${req.request_id}`,
+      kind: "access-request",
+      title: 'Create API key "needs you poster"',
+      target: { kind: "key-request", id: req.request_id },
+      access: { subject: "api_key", from: "ada-laptop" },
+    });
+    expect(signal.lifetimeHours).toBeCloseTo(24, 1);
+    // A decided request is no longer an ask.
+    await decideKeyRequest({
+      requestId: req.request_id,
+      personUserId: PERSON,
+      decision: "deny",
+    });
+    expect(
+      (await listPendingKeyRequests({ personUserId: PERSON })).rows.some(
+        (r) => r.id === req.request_id
+      )
+    ).toBe(false);
   });
 });
