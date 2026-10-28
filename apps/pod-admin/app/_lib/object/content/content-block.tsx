@@ -9,8 +9,11 @@
 import dynamic from "next/dynamic";
 import { useMemo, type ReactNode } from "react";
 import { SectionCard } from "../../../(admin)/components/section-card";
+import { ResourceRowError } from "../../../(admin)/components/resource-row";
 import type { DocumentContent } from "./document-model";
 import { EmbedHostContext, type EmbedHost } from "./embed-context";
+import { HtmlPageSection } from "./html-frame";
+import { useEmbedCell } from "./use-embed-cell";
 import { useEmbedEntity } from "./use-embed-entity";
 import {
   EXTERNAL_REL,
@@ -100,10 +103,10 @@ export function ContentBlock({
   openInApp?: ReactNode;
   measure?: ContentMeasure;
 }) {
-  // Embeds read a record on the viewer's own floor and offer the object's
-  // own "Open in app" (`embed-view`).
+  // Embeds read a record or a cell on the viewer's own floor and offer the
+  // object's own "Open in app" (`embed-view`).
   const host = useMemo<EmbedHost>(
-    () => ({ useEntity: useEmbedEntity, openInApp }),
+    () => ({ useEntity: useEmbedEntity, useCell: useEmbedCell, openInApp }),
     [openInApp]
   );
   return (
@@ -123,21 +126,49 @@ export function ContentBlock({
 
 /**
  * A document's body in a section, every state worded: loading, nothing
- * visible, a file only the app opens, an outside link, empty, failed.
- * `hidden` says so in one line — the page around it is the title card.
+ * visible, a file only the app opens, an outside link, empty, failed (with
+ * its retry, when the page can ask again). `hidden` says so in one line —
+ * the page around it is the title card. A stored HTML page RUNS, in its
+ * isolated frame (`html-frame`), its source a toggle away.
  */
 export function DocumentContentSection({
   title,
   content,
   openInApp,
   measure,
+  onRetry,
 }: {
   title: string;
   /** `null` while it loads. */
   content: DocumentContent | null;
   openInApp?: ReactNode;
   measure?: ContentMeasure;
+  /** Read it again — offered in the failed state. */
+  onRetry?: () => void;
 }) {
+  if (content?.kind === "page") {
+    return (
+      <HtmlPageSection
+        title={title}
+        html={content.html}
+        bytes={content.bytes}
+        tooLarge={content.tooLarge}
+        workspaceId={content.workspaceId}
+        source={content.source}
+        sourceBody={(prepared) => (
+          <ContentBody prepared={prepared} measure={measure} />
+        )}
+        footer={(view) =>
+          view === "source" && content.source.truncated ? (
+            <TruncatedNote
+              shownPercent={content.source.shownPercent}
+              openInApp={openInApp}
+            />
+          ) : null
+        }
+      />
+    );
+  }
   if (content?.kind === "content") {
     return (
       <ContentBlock
@@ -152,6 +183,11 @@ export function DocumentContentSection({
     <SectionCard variant="flat" title={title}>
       {content === null ? (
         <ContentSkeleton />
+      ) : content.kind === "error" && onRetry ? (
+        <ResourceRowError
+          message="The content couldn’t be loaded."
+          onRetry={onRetry}
+        />
       ) : (
         <ContentNote content={content} />
       )}
@@ -191,6 +227,7 @@ function ContentNote({ content }: { content: DocumentContent }) {
         note("This points to an address outside the pod.")
       );
     case "content":
+    case "page":
       return null;
   }
 }

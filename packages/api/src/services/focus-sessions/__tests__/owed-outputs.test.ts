@@ -12,6 +12,13 @@ import { PgDialect } from "drizzle-orm/pg-core";
 import type { ExpectedOutput } from "@synap/playbooks";
 import { deliverableOwedBy } from "@synap-core/types/units";
 import {
+  askCardSlotOf,
+  askCardView,
+  askFate,
+  type AskCardSlot,
+} from "@synap-core/types/ask";
+import { signalFromOwedSlot } from "../../signals/needs-you-union.js";
+import {
   OWED_SLOT_CLAUSES,
   isOwedSlot,
   MISSING_OWED_SINCE,
@@ -232,6 +239,131 @@ describe("retirementForClose — which exit ends the obligation", () => {
 
   it("FAILED leaves them owed too", () => {
     expect(retirementForClose(outputs, "failed")).toBeNull();
+  });
+
+  // The agent's own asks end with the session, the person's deliverables do
+  // not (founder, 2026-10-26). The rows are the inputs where "retire on
+  // cancel only" and "retire every owed slot" disagree with the rule.
+  const ASKS: ExpectedOutput[] = [
+    { ...OWED, label: "confirm", ask: { mode: "confirm" } },
+    { ...OWED, label: "choose", ask: { mode: "choose", options: [] } as never },
+    // No ask on a decision slot IS a confirm (`effectiveSlotAsk`).
+    { ...OWED, label: "bare decision", blockedReason: "decision" },
+    { ...OWED, label: "act", ask: { mode: "act" } },
+    { ...OWED, label: "form", ask: { mode: "form" } as never },
+    { ...OWED, label: "provide", ask: { mode: "provide" } as never },
+    OWED,
+  ];
+
+  it.each(["closed", "failed"] as const)(
+    "%s retires the confirm/choose asks as session_ended and keeps the rest owed",
+    (status) => {
+      const result = retirementForClose(ASKS, status)!;
+      expect(result.retiredSlots).toBe(3);
+      const reasons = result.outputs.map((o) => [o.label, o.retiredReason]);
+      expect(reasons).toEqual([
+        ["confirm", "session_ended"],
+        ["choose", "session_ended"],
+        ["bare decision", "session_ended"],
+        ["act", undefined],
+        ["form", undefined],
+        ["provide", undefined],
+        [OWED.label, undefined],
+      ]);
+    }
+  );
+
+  it("a criterion grade outlives the close: its choose is the person's verdict, not the agent's need", () => {
+    const grade: ExpectedOutput = {
+      ...OWED,
+      kind: "criterion",
+      label: "Tests pass",
+      criterionKey: "tests-pass",
+      ask: {
+        mode: "choose",
+        options: [
+          { label: "Pass", value: "pass" },
+          { label: "Fail", value: "fail" },
+        ],
+      } as never,
+    };
+    for (const status of ["closed", "failed"] as const) {
+      expect(retirementForClose([grade], status)).toBeNull();
+    }
+    // Cancel still ends every obligation.
+    expect(retirementForClose([grade], "cancelled")?.retiredSlots).toBe(1);
+  });
+
+  it("a slot the closing agent kept owed is never retired, on any exit", () => {
+    const keep = new Set(["confirm"]);
+    expect(
+      retirementForClose(ASKS, "closed", new Date(), keep)!.outputs.find(
+        (o) => o.label === "confirm"
+      )!.retiredAt
+    ).toBeUndefined();
+    expect(
+      retirementForClose(ASKS, "cancelled", new Date(), keep)!.outputs.find(
+        (o) => o.label === "confirm"
+      )!.retiredAt
+    ).toBeUndefined();
+  });
+
+  it("a kept slot is matched like every slot door matches a label, and its fate stops claiming the session's end", () => {
+    // The stored label as the agent typed it; the close names it as the
+    // slot door returned it (case and spacing folded).
+    const asks: ExpectedOutput[] = [
+      {
+        ...OWED,
+        label: "  Ship it?  ",
+        ask: { mode: "confirm" },
+        owedSince: "2026-10-26T10:00:00.000Z",
+      },
+    ];
+    const now = new Date("2026-10-27T10:00:00.000Z");
+    const result = retirementForClose(
+      asks,
+      "closed",
+      now,
+      new Set(["ship it?"])
+    )!;
+    const kept = result.outputs[0]!;
+    expect(kept.retiredAt).toBeUndefined();
+    expect(kept.keptOwedAt).toBe(now.toISOString());
+    expect(result.retiredSlots).toBe(0);
+    // The card's fate reads the stamp: no longer "ends with the session".
+    expect(askFate(kept as AskCardSlot, now).kind).toBe("until_decided");
+    expect(
+      askFate({ ...kept, keptOwedAt: undefined } as AskCardSlot, now).kind
+    ).toBe("ends_with_session");
+    // And the needs-you row carries it to every surface.
+    const [row] = projectOwedSlots({
+      id: "s1",
+      goal: "Ship",
+      status: "closed",
+      workspaceId: null,
+      projectId: null,
+      expectedOutputs: result.outputs,
+    });
+    expect(row!.keptOwedAt).toBe(now.toISOString());
+    expect(signalFromOwedSlot(row!, now).keptOwedAt).toBe(now.toISOString());
+  });
+
+  it("a param slot's param reaches the needs-you row, and the one card adapter names its cause", () => {
+    const [row] = projectOwedSlots({
+      id: "s1",
+      goal: "Ship",
+      status: "active",
+      workspaceId: null,
+      projectId: null,
+      expectedOutputs: [{ ...OWED, label: "Channel", paramName: "channel" }],
+    });
+    expect(row!.paramName).toBe("channel");
+    const signal = signalFromOwedSlot(row!);
+    expect(signal.paramName).toBe("channel");
+    expect(askCardView(askCardSlotOf(signal)).asker).toMatchObject({
+      kind: "cause",
+      cause: { kind: "param" },
+    });
   });
 
   it("is a no-op when nothing was owed", () => {

@@ -22,6 +22,11 @@ import type {
   TerminalSessionStatus,
 } from "../../../services/focus-sessions/session-statuses.js";
 import { sessionListConditions } from "../../../services/focus-sessions/session-list-conditions.js";
+import {
+  CLOSE_QUESTION_DISPOSITIONS,
+  readCloseQuestionDispositions,
+  type CloseQuestionDisposition,
+} from "../../../services/messaging/room-post-kind.js";
 import type { ExpectedOutput, SessionCriterion } from "@synap/playbooks";
 import { requestClientKey } from "../../../services/focus-sessions/resolve-work-session.js";
 import { refuseUndeclaredArgs } from "../undeclared-args.js";
@@ -30,6 +35,11 @@ import {
   waitForSessionChanges,
 } from "../../../services/focus-sessions/wait-for-answers.js";
 import { parseSessionChangeKinds } from "../../../services/focus-sessions/session-changes.js";
+import {
+  describeRelayRefusal,
+  relaySessionAnswer,
+  RelaySessionAnswerInputSchema,
+} from "../../../services/focus-sessions/session-answer.js";
 import { readAgentsForHandoff } from "../../../services/agent-dispatch/agents-for-handoff.js";
 import { WORK_GRAPH_MAX_WINDOW_HOURS } from "../../../services/focus-sessions/work-graph-window.js";
 import type { UpdateFocusSessionParams } from "../../../services/focus-sessions/update-session.js";
@@ -372,6 +382,61 @@ export const sessionHandlers: McpHandlerMap = {
     return ok(result);
   },
 
+  /**
+   * The person answered in THIS chat: relay their words to the question the
+   * agent asked in the pod (`relaySessionAnswer`, which owns who may relay
+   * what and the stakes rule). Agent keys only — the relay is labelled with
+   * the agent that carried it.
+   */
+  synap_relay_answer: async (ctx: McpToolContext): Promise<CallToolResult> => {
+    const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
+    requireScope(apiKeyScopes, "mcp.write", toolName);
+    if (!agentUserId) {
+      return ok({
+        error:
+          "Only an agent relays an answer — this key acts as the person, who answers in Synap.",
+      });
+    }
+    const sessionId =
+      typeof args.sessionId === "string" ? args.sessionId.trim() : "";
+    if (!UUID_RE.test(sessionId)) {
+      return ok({ error: `Focus session ${sessionId || "(none)"} not found` });
+    }
+    // The ONE relay schema, as on the Hub door — never a hand check.
+    const parsed = RelaySessionAnswerInputSchema.safeParse(args);
+    if (!parsed.success) {
+      const issue = parsed.error.issues[0];
+      return ok({
+        error: `${issue?.path.join(".") || "input"}: ${issue?.message ?? "invalid relay"}`,
+      });
+    }
+    const slotLabel = parsed.data.slotLabel;
+    const result = await relaySessionAnswer({
+      sessionId,
+      userId,
+      agentUserId,
+      ...parsed.data,
+    });
+    if (
+      result.status === "relayed" ||
+      result.status === "awaiting_tap" ||
+      result.status === "withdrawn"
+    ) {
+      return ok({
+        ...result,
+        next:
+          result.status === "awaiting_tap"
+            ? "Recorded as waiting for the person's tap: it is a commitment. Do not act on it yet — synap_wait_for_answer until they confirm."
+            : result.status === "relayed"
+              ? "Recorded as the person's answer, marked relayed by you. Go on with it."
+              : "Withdrawn. The slot, if any, is yours again.",
+      });
+    }
+    return ok({
+      error: describeRelayRefusal(result, { sessionId, slotLabel }).message,
+    });
+  },
+
   synap_start_session: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
@@ -545,22 +610,54 @@ export const sessionHandlers: McpHandlerMap = {
   ): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
-    const { completeFocusSession } =
-      await import("../../../services/focus-sessions/complete-session.js");
-    const result = await completeFocusSession({
-      sessionId: args.sessionId as string,
-      userId,
-      agentUserId,
-      summary: args.summary as string | undefined,
-      verificationReport: args.verificationReport as
-        Record<string, unknown> | undefined,
-      // Every lifecycle exit, not just `closed`. The service has accepted this
-      // since it was written; this door never forwarded it, so an agent could
-      // record "I finished" but never "I abandoned" or "I could not" — and the
-      // tRPC / Hub PATCH doors could. Validated by the tool schema's enum,
-      // which derives from TERMINAL_SESSION_STATUSES.
-      terminalStatus: args.terminalStatus as TerminalSessionStatus | undefined,
-    });
+    const {
+      completeFocusSession,
+      isOpenQuestionsAtCloseError,
+      openQuestionsRefusal,
+    } = await import("../../../services/focus-sessions/complete-session.js");
+    // The executor's reader, refusing what it would drop: a word that is not
+    // `withdrawn` / `keep_as_owed` is never read as either.
+    const rawDispositions = args.questionDispositions;
+    let questionDispositions: CloseQuestionDisposition[] | undefined;
+    if (rawDispositions !== undefined) {
+      questionDispositions = readCloseQuestionDispositions(rawDispositions);
+      if (
+        !Array.isArray(rawDispositions) ||
+        questionDispositions.length !== rawDispositions.length
+      ) {
+        return ok({
+          error: `questionDispositions: each is {messageId, disposition: ${CLOSE_QUESTION_DISPOSITIONS.map((d) => `'${d}'`).join(" | ")}, note?}.`,
+        });
+      }
+    }
+    let result: Awaited<ReturnType<typeof completeFocusSession>>;
+    try {
+      result = await completeFocusSession({
+        sessionId: args.sessionId as string,
+        userId,
+        agentUserId,
+        summary: args.summary as string | undefined,
+        verificationReport: args.verificationReport as
+          Record<string, unknown> | undefined,
+        // Every lifecycle exit, not just `closed`. The service has accepted this
+        // since it was written; this door never forwarded it, so an agent could
+        // record "I finished" but never "I abandoned" or "I could not" — and the
+        // tRPC / Hub PATCH doors could. Validated by the tool schema's enum,
+        // which derives from TERMINAL_SESSION_STATUSES.
+        terminalStatus: args.terminalStatus as
+          TerminalSessionStatus | undefined,
+        // The service matches each id against this agent's own open
+        // questions and ignores the rest.
+        questionDispositions,
+      });
+    } catch (err) {
+      // Its own questions are still open: nothing closed, and the agent is
+      // handed the list and the two ways out.
+      if (isOpenQuestionsAtCloseError(err)) {
+        return ok(openQuestionsRefusal(err));
+      }
+      throw err;
+    }
     if (!result) {
       return ok({ error: `Focus session ${args.sessionId} not found` });
     }
@@ -1028,6 +1125,18 @@ export const sessionHandlers: McpHandlerMap = {
       sections: graph.sections,
       window: graph.window,
     });
+  },
+  synap_get_work_release: async (
+    ctx: McpToolContext
+  ): Promise<CallToolResult> => {
+    const { toolName, userId, apiKeyScopes } = ctx;
+    requireScope(apiKeyScopes, "mcp.read", toolName);
+    // Loaded on call, like the work graph: the read pulls the liveness reads,
+    // which this handler module must not load at tool-listing time.
+    const { readWorkRelease } =
+      await import("../../../services/dev-loop/work-release.js");
+    // An agent door reads sessions owner-only (decision C v1, `rosterReadFor`).
+    return ok(await readWorkRelease({ userId, roster: false }));
   },
   synap_update_session: async (
     ctx: McpToolContext

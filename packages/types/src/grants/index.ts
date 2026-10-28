@@ -12,6 +12,8 @@
  *  - `holder`   — what a holder (agent, app, key) may do, in one reading.
  *  - `listed`   — a listed grant back into the editor, keeping its lineage.
  *  - `algebra`  — cover, meet and containment of grants, exact against `permits`.
+ *  - `key-uses` — where a key is used, and the scopes derived from it.
+ *  - `key-draft`— the New key page's model: sections, review, validation, mint.
  *
  * Pure and dependency-free: browser, Electron, landing, Node and CLI.
  */
@@ -25,3 +27,5 @@ export * from "./sections.js";
 export * from "./holder.js";
 export * from "./listed.js";
 export * from "./algebra.js";
+export * from "./key-uses.js";
+export * from "./key-draft.js";

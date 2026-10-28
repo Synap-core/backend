@@ -114,6 +114,33 @@ describe("buildGrantSections", () => {
     expect(rows.map((r) => r.subject).sort()).toEqual(offering.sort());
   });
 
+  it("the event log is its own Activity section, after Work and before Schema", () => {
+    const ids = buildGrantSections({
+      draft: { permissions: [] },
+      catalog: AGENT_GRANT_CATALOG,
+    }).map((s) => s.id);
+    expect(ids).toEqual(["records", "content", "work", "activity", "schema"]);
+    const activity = buildGrantSections({
+      draft: { permissions: ["event.create"] },
+    }).find((s) => s.id === "activity");
+    expect(activity).toMatchObject({ label: "Activity", grantedRows: 1 });
+    expect(activity?.rows).toEqual([
+      expect.objectContaining({
+        key: "event",
+        label: "Activity",
+        description: GRANT_SUBJECT_DESCRIPTIONS.event,
+        actions: ["read", "create"],
+        granted: ["create"],
+      }),
+    ]);
+    // Never under Records (the calendar kind) and never "Other".
+    expect(
+      GRANT_SUBJECT_GROUPS.filter((g) => g.subjects.includes("event")).map(
+        (g) => g.id
+      )
+    ).toEqual(["activity"]);
+  });
+
   it("every catalog subject has a description", () => {
     const subjects = new Set(
       [...GRANT_SUBJECT_CATALOG, ...AGENT_GRANT_CATALOG].map((s) => s.subject)

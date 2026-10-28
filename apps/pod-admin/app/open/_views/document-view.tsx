@@ -14,6 +14,12 @@
  * gets, as is a pdf or Word file — and never an admin read: a pod admin sees what the pod would show
  * them, not more. An uploaded image is drawn by the one image door, signed on
  * the same floor.
+ *
+ * A stored HTML page (`type: "html"` — an agent's report) RUNS here, like an
+ * artifact: its scripts execute in an isolated frame and it may read live
+ * pod objects through the read-only bridge, answered with THIS viewer's
+ * permissions and lensed to the page's own space (`content/html-frame`,
+ * contract `@synap-core/types/cell-bridge`). Source is a toggle away.
  */
 
 import { trpc } from "../../../lib/trpc";
@@ -37,7 +43,7 @@ const TYPE_LABEL: Record<string, string> = {
   markdown: "Text document",
   text: "Plain text",
   code: "Code",
-  html: "Web page source",
+  html: "Web page",
   pdf: "PDF",
   docx: "Word document",
 };
@@ -122,6 +128,7 @@ export function DocumentView({ id }: { id: string }) {
           content={content}
           openInApp={openInApp}
           measure="wide"
+          onRetry={() => void query.refetch()}
         />
       )}
     </OpenObject>

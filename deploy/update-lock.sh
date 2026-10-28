@@ -25,12 +25,67 @@
 # SYNAP_LOCK_IMPL=mkdir forces the fallback (tests exercise both on Linux).
 # ============================================================================
 
-_synap_lock_busy() {
+_synap_lock_busy() { # <operation> <owner text> [mkdir lock dir] [flock file]
+    # A flock is held by every process that inherited fd 9, not only the one
+    # that took it: a `synap update` stopped mid-build leaves its `docker build`
+    # holding the lock, and the owner text names a pid that is gone (27 Oct:
+    # the person could not tell what to stop). When that pid is gone, name the
+    # processes still holding the lock, with the command that stops them.
+    _slb_pid="$(printf '%s' "${2:-}" | sed -n 's/.* pid=\([0-9][0-9]*\).*/\1/p')"
+    if [ -n "${4:-}" ] && [ -n "$_slb_pid" ] && ! _synap_pid_alive "$_slb_pid"; then
+        _slb_left="$(_synap_lock_holders "$4")"
+        if [ -n "$_slb_left" ]; then
+            echo "❌ The update lock is held by processes left over from a stopped operation." >&2
+            echo "   The operation that took it (${2}) is gone; what it started still holds the lock:" >&2
+            printf '%s\n' "$_slb_left" | sed 's/^/     /' >&2
+            echo "   Stop them, then re-run '${1}':  kill $(printf '%s\n' "$_slb_left" | cut -d' ' -f1 | tr '\n' ' ')" >&2
+            return 0
+        fi
+    fi
     echo "❌ Another Synap pod operation is already running against this deploy dir." >&2
     echo "   Holder: ${2:-unknown}" >&2
     echo "   Refusing to start '${1}' concurrently — wait for it to finish, then re-run." >&2
     [ -n "${3:-}" ] && echo "   If no synap / eve process is running, remove ${3} and re-run." >&2
     return 0
+}
+
+# 0 when <pid> runs. A zombie has exited (only its parent has not reaped it),
+# so it does not count; kill -0 alone says it lives.
+_synap_pid_alive() {
+    if [ -r "/proc/$1/stat" ]; then
+        [ "$(sed -n 's/^.*) \([A-Za-z]\) .*/\1/p' "/proc/$1/stat" 2>/dev/null)" != Z ]
+        return
+    fi
+    [ -d /proc/self ] && return 1
+    kill -0 "$1" 2>/dev/null || ps -p "$1" >/dev/null 2>&1
+}
+
+# The processes that hold <file> open (Linux /proc), one "pid command" line
+# each. This shell and everything it forked are left out: they hold fd 9 too
+# (the open that failed to lock), and the scan itself runs in subshells.
+# Prints nothing where /proc has no fd links (macOS dev installs).
+_synap_lock_holders() {
+    [ -d /proc/self/fd ] || return 0
+    _slh_target="$(readlink -f "$1" 2>/dev/null)" || return 0
+    find /proc/[0-9]*/fd -maxdepth 1 -lname "$_slh_target" 2>/dev/null | cut -d/ -f3 | sort -n -u |
+        while read -r _slh_pid; do
+            _synap_pid_is_ours "$_slh_pid" && continue
+            # Gone since the scan (the scan's own short-lived pipeline): skip.
+            _slh_cmd="$( (tr '\0' ' ' < "/proc/$_slh_pid/cmdline") 2>/dev/null | cut -c1-160)"
+            [ -n "$_slh_cmd" ] || continue
+            printf '%s %s\n' "$_slh_pid" "$_slh_cmd"
+        done
+}
+
+# 0 when <pid> is this shell or one of its descendants (a few levels up).
+_synap_pid_is_ours() {
+    _spo_p="$1"; _spo_i=0
+    while [ -n "$_spo_p" ] && [ "$_spo_p" -gt 1 ] && [ "$_spo_i" -lt 8 ]; do
+        [ "$_spo_p" = "$$" ] && return 0
+        _spo_p="$(sed -n 's/^PPid:[[:space:]]*//p' "/proc/$_spo_p/status" 2>/dev/null)"
+        _spo_i=$((_spo_i + 1))
+    done
+    return 1
 }
 
 synap_update_lock() {
@@ -54,7 +109,7 @@ synap_update_lock() {
     if [ "${SYNAP_LOCK_IMPL:-}" != mkdir ] && command -v flock >/dev/null 2>&1; then
         exec 9>>"$_sul_file" || { echo "❌ cannot open $_sul_file" >&2; return 1; }
         if [ "$_sul_wait" -gt 0 ]; then flock -w "$_sul_wait" 9; else flock -n 9; fi || {
-            _synap_lock_busy "$_sul_op" "$(cat "$_sul_file" 2>/dev/null)"
+            _synap_lock_busy "$_sul_op" "$(cat "$_sul_file" 2>/dev/null)" "" "$_sul_file"
             return 1
         }
         printf '%s\n' "$_sul_owner" > "$_sul_file"

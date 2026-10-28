@@ -3,7 +3,9 @@
  * held-writes pack with `allowToday: true` also lifts that agent's daily write
  * ceiling to 2x the limit in force, until the next 00:00 UTC; the next writes
  * that day are not held; the next UTC day falls back to the base limit; an
- * agent key cannot do it.
+ * agent key cannot do it. The daily ceiling is opt-in (no row ⇒ no limit), so
+ * the base limit here is a stored pod-wide row; with NO row there is nothing
+ * to lift and the approval stands as a plain approve.
  *
  * Real: PGlite, the tRPC proposals router (`approve`, its authority ladder and
  * the allow-today refusal order), `allowAgentForRestOfUtcDay`, the ceiling
@@ -14,7 +16,15 @@
  * runs its body on the one PGlite connection.
  */
 
-import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  vi,
+  beforeAll,
+  beforeEach,
+  afterEach,
+} from "vitest";
 import { randomUUID } from "node:crypto";
 
 const h = vi.hoisted(() => ({
@@ -67,7 +77,6 @@ import {
   resolveAgentGovernanceDecision,
   resolveDailyWriteCeiling,
 } from "@synap/database/agent-governance";
-import { DEFAULT_DAILY_WRITE_CEILING } from "@synap/governance-policy";
 import { proposalsRouter } from "../../proposals.js";
 
 const BASIC =
@@ -91,7 +100,9 @@ const q = <T = Record<string, unknown>>(sql: string, params?: unknown[]) =>
 const PERSON = randomUUID();
 const AGENT = randomUUID();
 const POD_ADMIN_WS = randomUUID();
-const BASE = DEFAULT_DAILY_WRITE_CEILING;
+/** The base limit: a stored pod-wide ceiling row (the ceiling is opt-in). */
+const BASE = 500;
+const INT_MAX = 2_147_483_647;
 
 const human = (userId: string) => ({ authenticated: true, userId }) as never;
 const agentKey = (userId: string) =>
@@ -143,6 +154,14 @@ const approve = (ctx: never, proposalId: string, allowToday?: boolean) =>
     .createCaller(ctx)
     .approve({ proposalId, ...(allowToday ? { allowToday } : {}) });
 
+/** A pod-wide "any agent" daily ceiling row, as a person would set one. */
+const podWideLimit = (limit: number) =>
+  q(
+    `insert into governance_ceilings (axis, principal_kind, scope_kind, limit_value, created_by)
+     values ('daily_write_count', 'any', 'pod', $1, $2)`,
+    [limit, PERSON]
+  );
+
 const ceilings = () =>
   q<{ limit_value: number; expires_at: string; source_proposal_id: string }>(
     `select limit_value, expires_at, source_proposal_id from governance_ceilings where agent_user_id = $1`,
@@ -155,10 +174,7 @@ beforeAll(async () => {
       !!v && typeof v === "object" && Symbol.for("drizzle:IsDrizzleTable") in v
   );
   for (const t of tables) await h.client!.exec(ddlFor(t));
-  await q(
-    `insert into users (id, user_type) values ($1, 'human')`,
-    [PERSON]
-  );
+  await q(`insert into users (id, user_type) values ($1, 'human')`, [PERSON]);
   await q(
     `insert into users (id, user_type, created_by_user_id, agent_metadata) values ($1, 'agent', $2, $3::jsonb)`,
     [AGENT, PERSON, JSON.stringify({ autoApproveFor: ["entity.create"] })]
@@ -178,6 +194,7 @@ beforeEach(async () => {
   h.applied = [];
   await q(`delete from governance_ceilings`);
   await q(`delete from proposals`);
+  await podWideLimit(BASE);
 });
 
 afterEach(() => {
@@ -188,7 +205,11 @@ describe("F3 — approve and allow today", () => {
   it("writes an agent ceiling row: 2x the limit in force, expiring at the next 00:00 UTC", async () => {
     const pack = await filePack();
     const out = (await approve(human(PERSON), pack, true)) as {
-      allowedToday?: { limit: number; previousLimit: number; expiresAt: string };
+      allowedToday?: {
+        limit: number;
+        previousLimit: number;
+        expiresAt: string;
+      };
     };
     expect(h.applied).toEqual([pack]);
     const now = new Date();
@@ -274,5 +295,44 @@ describe("F3 — approve and allow today", () => {
     );
     expect(h.applied).toEqual([]);
     expect((await ceilings()).rows).toHaveLength(0);
+  });
+});
+
+describe("F3 — allow today with no daily limit in force (the default)", () => {
+  beforeEach(async () => {
+    await q(`delete from governance_ceilings`);
+  });
+
+  it("the pack is approved, nothing is raised, no ceiling row is written", async () => {
+    const pack = await filePack();
+    const out = (await approve(human(PERSON), pack, true)) as {
+      allowedToday?: unknown;
+    };
+    expect(h.applied).toEqual([pack]);
+    expect(out.allowedToday).toBeUndefined();
+    expect((await q(`select id from governance_ceilings`)).rows).toHaveLength(
+      0
+    );
+    expect(
+      await resolveDailyWriteCeiling({ db: h.db as never, agentUserId: AGENT })
+    ).toBeNull();
+  });
+
+  it("…and the agent's writes past 500 today are not held", async () => {
+    await writesToday(BASE + 100);
+    expect((await nextWrite()).decision).toBe("execute");
+  });
+
+  it("a pod-wide 'unlimited' row (the integer maximum) is not doubled past it", async () => {
+    await podWideLimit(INT_MAX);
+    const out = (await approve(human(PERSON), await filePack(), true)) as {
+      allowedToday?: { limit: number; previousLimit: number };
+    };
+    expect(out.allowedToday).toMatchObject({
+      limit: INT_MAX,
+      previousLimit: INT_MAX,
+    });
+    const { rows } = await ceilings();
+    expect(rows.map((r) => r.limit_value)).toEqual([INT_MAX]);
   });
 });

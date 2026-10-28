@@ -6,6 +6,7 @@ import {
   AskSchema,
   SLOT_MOVED_ON_PHRASES,
   actView,
+  answerProvenanceMark,
   askOptionChips,
   askOptionForChip,
   askRowRegion,
@@ -218,7 +219,8 @@ describe("ASK_COPY", () => {
         : v
     );
     expect(strings.length).toBeGreaterThan(10);
-    for (const s of strings) expect(s).not.toContain("—");
+    // A builder with nothing to show returns null: nothing is drawn.
+    for (const s of strings) if (s != null) expect(s).not.toContain("—");
     expect(ASK_COPY.youAnswered("Yes")).toBe("You answered: Yes");
   });
 
@@ -237,5 +239,91 @@ describe("ASK_COPY", () => {
     expect(ASK_COPY.provideUploadKept("Finance")).toBe(
       "The file was saved in Finance, but it wasn't handed over."
     );
+  });
+});
+
+describe("answerProvenanceMark", () => {
+  it.each([
+    ["open draws nothing", {}, null],
+    [
+      "a tap",
+      { answer: {} },
+      { tone: "success", label: "You answered", disposition: "answered" },
+    ],
+    [
+      "a routine relay names the agent",
+      { answer: { via: "relayed", relayedBy: "a" } },
+      {
+        tone: "ai",
+        label: "Answered in chat · relayed by Claude Code",
+        disposition: "relayed",
+      },
+    ],
+    [
+      // the relay stays visible after the person's own tap
+      "a confirmed relay still says it was relayed",
+      { answer: { via: "tap", relayedBy: "a", confirmedAt: "t" } },
+      {
+        tone: "success",
+        label: "You confirmed what Claude Code relayed",
+        disposition: "answered",
+      },
+    ],
+    [
+      "awaiting the tap",
+      { pendingRelay: { relayedBy: "a" } },
+      {
+        tone: "warning",
+        label: "Relayed by Claude Code · needs your tap",
+        disposition: "awaiting_your_tap",
+      },
+    ],
+    [
+      "withdrawn with its reason",
+      { closed: { reason: "withdrawn", note: "you answered it in the brief" } },
+      {
+        tone: "textMuted",
+        label: "Withdrawn · you answered it in the brief",
+        disposition: "withdrawn",
+      },
+    ],
+    [
+      "withdrawn, no reason",
+      { closed: { reason: "withdrawn" } },
+      { tone: "textMuted", label: "Withdrawn", disposition: "withdrawn" },
+    ],
+    [
+      "closed by the session's end",
+      { closed: { reason: "session_ended" } },
+      {
+        tone: "textMuted",
+        label: "Closed · the session ended",
+        disposition: "closed_session_ended",
+      },
+    ],
+  ] as const)("%s", (_n, input, want) => {
+    expect(answerProvenanceMark(input, { agent: "Claude Code" })).toEqual(want);
+  });
+
+  it("never prints a blank agent name, nor invents 'an agent', and no visible em dash", () => {
+    const mark = answerProvenanceMark({ answer: { via: "relayed" } });
+    expect(mark?.label).toBe("Answered in chat · relayed");
+    expect(
+      answerProvenanceMark({ pendingRelay: { relayedBy: "a" } }, { agent: " " })
+        ?.label
+    ).toBe("Relayed · needs your tap");
+    expect(ASK_COPY.relayConfirmed(null)).toBe(
+      "You confirmed the relayed answer"
+    );
+    for (const v of Object.values(ASK_COPY)) {
+      const text =
+        typeof v === "function" ? (v as (a: string) => string | null)("x") : v;
+      if (text != null) expect(text).not.toContain("—");
+    }
+    expect(ASK_COPY.relayedWords({ quote: " yes go ", text: "Yes" })).toBe(
+      "“yes go”"
+    );
+    expect(ASK_COPY.relayedWords({ text: "Yes" })).toBe("“Yes”");
+    expect(ASK_COPY.relayedWords({ quote: " ", text: null })).toBeNull();
   });
 });

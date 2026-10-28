@@ -192,6 +192,12 @@ export const GRANT_SAFE_REST_READS: readonly RegExp[] = [
   // The caller's own webhook subscriptions: a key lists only those it
   // created (S2) — no row a grant bounds.
   /^\/webhooks\/?$/,
+  // Key requests (keys plan Decision 4): the keys THIS caller requested
+  // (`key_requests.requester_user_id`) and the templates it may request from
+  // (built-ins + the person's own roles) — no row a grant bounds. A computer's
+  // key is fenced, and `synap keys list|templates` must still answer.
+  /^\/keys\/requested\/?$/,
+  /^\/keys\/templates\/?$/,
   /^\/views\/?$/, // hub views.listViews: owner + grantReadPredicate(views)
   /^\/proposals\/?$/, // hub proposals.listProposals: proposalUserFloor (+ grant)
 ];
@@ -261,6 +267,12 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   // set). `messaging` is the subject `messaging_accounts` already reads under
   // (grant-read.ts); the send through one is `messaging.send`.
   [/^\/messaging\/accounts\/?$/, PERSON("messaging")],
+  // Which agents the person has (id, name, agent type, presence; never a
+  // key): an app that hands a run to one of them (`handToAgentId` on
+  // POST /playbooks/:id/run) must name it. The person's own roster, which no
+  // space holds, so it is a PERSON door: the app asks for `agent.read` and the
+  // person ticks it. `agent` is the subject `agent_configs` reads under.
+  [/^\/agent-users\/?$/, PERSON("agent")],
   // The session row, narrowed by the route (`sessionPacketReadable`): the
   // packet is added only for a key that reads all of it.
   [
@@ -306,6 +318,10 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
       "track"
     ),
   ],
+  // `readWorkRelease` (services/dev-loop/work-release.ts): `dev.repo_snapshot`
+  // events, the sessions the PRs belong to, and their liveness (chat turns,
+  // events, proposals, room notes). Same as MCP `synap_get_work_release`.
+  [/^\/work-release\/?$/, READS("event", "session", "channel", "proposal")],
 ];
 
 /**
@@ -411,6 +427,8 @@ export const MCP_READ_TOOL_DOORS: Readonly<Record<string, FencedReadDoor>> = {
   synap_governance: READS("proposal", "agent", "tool"),
   // The roster of agents (+ their computers and dispatch tool) for hand-off.
   synap_list_agents: READS("agent", "tool"),
+  // Same subjects as `GET /work-release` (GRANT_REST_GET_READS).
+  synap_get_work_release: READS("event", "session", "channel", "proposal"),
   synap_export_project_pack: READS(
     "project",
     "entity",

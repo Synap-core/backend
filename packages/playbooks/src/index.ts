@@ -281,6 +281,16 @@ export const OUTPUT_RETIRED_REASONS = [
   // `synap_update_session`) — the one removal verb, since an agent's
   // `expectedOutputs` list only adds and updates (api `update-session.ts`).
   "withdrawn",
+  // The session ENDED with an agent-need ask (`confirm` / `choose`) still
+  // owed: the agent's question is moot once its session is gone. A person's
+  // deliverable (`act` / `provide` / `form`) stays owed instead — founder
+  // default, 2026-10-26, stamped by the close door (`completeFocusSession`).
+  "session_ended",
+  // Nobody asked: a `proposed` decision a PERSON wrote raised an ask with no
+  // agent behind it (founder, 2026-10-26). Only an agent-authored
+  // proposed decision asks; the asks raised before that rule retire here
+  // (api `services/decisions/retire-unasked-decision-asks.ts`).
+  "not_asked",
 ] as const;
 
 export type OutputRetiredReason = (typeof OUTPUT_RETIRED_REASONS)[number];
@@ -500,6 +510,12 @@ export interface ExpectedOutput {
   /** WHY it was retired — one of {@link OUTPUT_RETIRED_REASONS}. */
   retiredReason?: OutputRetiredReason;
   /**
+   * KEPT-OWED receipt — the closing agent left this ask owed past the end of
+   * its session (`questionDispositions` `keep_as_owed`), so it no longer ends
+   * with the session: stamped by the close door only.
+   */
+  keptOwedAt?: string;
+  /**
    * WHERE to go for this deliverable — see {@link OutputRef}.
    *
    * The reason it exists: an agent that declares an owed slot, or blocks one on
@@ -596,6 +612,13 @@ export interface ExpectedOutput {
    */
   answerPickedUpAt?: string;
   /**
+   * A relayed answer to a `commitment` ask, waiting for the person's tap — see
+   * {@link SlotPendingRelay}. SERVER-STAMPED by the relay door only; the
+   * slot stays owed (`owner: 'human'`) while it is here, and the person's
+   * Confirm / "Not what I said" clears it.
+   */
+  pendingRelay?: SlotPendingRelay;
+  /**
    * HOW the person can answer this slot — see {@link SlotAsk}. DECLARED by the
    * agent (with `owner: 'human'` + `blockedReason` + `why`), never stamped:
    * `blockedReason` says WHY it is blocked, `why`/`ref` WHAT and WHERE, and
@@ -611,6 +634,23 @@ export interface ExpectedOutput {
    * answer; the answer's `question` keeps what was asked.
    */
   ask?: SlotAsk | null;
+  /**
+   * WHO asked — the agent user that handed this slot to the person (or posed
+   * its current ask). SERVER-STAMPED from the acting door's verified auth
+   * context, the same agent the `slot_asked` event records; never authored by
+   * a client. Present only while the slot is owed (cleared with `owedSince`),
+   * and ABSENT when the person handed it to themselves or no agent can be
+   * named — a card then names the {@link askCause}, or nobody.
+   */
+  askedBy?: string;
+  /**
+   * WHAT raised the ask when no agent did — see {@link SlotAskCause}.
+   * SERVER-STAMPED by the system producer that wrote the owed slot (the
+   * decision-ask reactor, a run's turn end, an external agent's approval),
+   * cleared with `owedSince`. A card names it as a door ("From your decision
+   * note · 29 Sep") instead of inventing an agent.
+   */
+  askCause?: SlotAskCause;
   /**
    * The relation type written OUTPUT → SUBJECT when this slot is satisfied
    * (e.g. `made_for`, `derived_from`). DECLARED by the playbook author (or the
@@ -702,12 +742,24 @@ export interface PlaybookStageOnFail {
  * MUTUALLY assignable at compile time — a drift on either side stops the build.
  */
 export type SlotAsk = (
-  | { mode: "confirm"; prompt?: string }
+  | {
+      mode: "confirm";
+      prompt?: string;
+      yes?: SlotAskConfirmAnswer;
+      no?: SlotAskConfirmAnswer;
+    }
   | { mode: "choose"; options: SlotAskChooseOption[]; allowOther?: boolean }
   | { mode: "form"; form: SlotAskFormSpec }
   | { mode: "act"; url?: string; steps?: string[] }
   | { mode: "provide"; provide: SlotAskProvide }
 ) & {
+  /**
+   * What answering COMMITS the person to — mirrors `AskStakes`
+   * (`@synap-core/types/ask`). Absent reads `routine`. The pod only ever
+   * RAISES it (`effectiveAskStakes`): a relayed answer to a `commitment`
+   * waits for the person's tap.
+   */
+  stakes?: SlotAskStakes;
   /**
    * "What I looked at" (trust ladder rung 1, a PREPARED question): at most 8
    * objects the agent read before asking. Stored as `{kind, id}` — the agent's
@@ -719,6 +771,9 @@ export type SlotAsk = (
   /** How much is at stake: high and medium draw a mark, low draws nothing. */
   risk?: "high" | "medium" | "low";
 };
+
+/** Mirrors `ASK_STAKES` (@synap-core/types/ask). */
+export type SlotAskStakes = "routine" | "commitment";
 
 /** One object an ask cites as read. Mirrors `AskLookedAtRef` (@synap-core/types/ask). */
 export interface SlotAskLookedAt {
@@ -735,6 +790,27 @@ export type SlotAskLookedAtKind = Extract<
 >;
 
 /** One offered answer (capture's chip minus its apply fields). */
+/**
+ * What raised a system ask (no agent asked). STRUCTURAL MIRROR of `AskCause`
+ * (`@synap-core/types/ask`), pinned mutual by `update-session.ts`.
+ */
+export interface SlotAskCause {
+  kind: SlotAskCauseKind;
+  /** The object the cause is (the decision, the run, the session). */
+  ref?: { kind: string; id: string };
+  /** ISO — when the cause happened (the decision note's date). */
+  at?: string;
+}
+export type SlotAskCauseKind =
+  "decision" | "gate" | "run" | "external_approval" | "param" | "criterion";
+
+/** One side of a confirm — mirror of `AskConfirmAnswer`. At most ONE recommended. */
+export interface SlotAskConfirmAnswer {
+  label?: string;
+  description?: string;
+  recommended?: boolean;
+}
+
 export interface SlotAskOption {
   label: string;
   /** Absent ⇒ the label IS the value. */
@@ -807,10 +883,44 @@ export type SlotAnswerValue =
   | { type: "provide"; ref: SlotProvideRef };
 
 /**
- * A person's answer to an agent's question about one slot. Server-stamped as a
- * unit; never authored by a client (it sits in `SERVER_STAMPED_OUTPUT_FIELDS`).
+ * WHERE an answer came from — STRUCTURAL MIRROR of `AnswerProvenance`
+ * (`@synap-core/types/ask`), pinned mutually assignable in api
+ * `update-session.ts`. All absent = a tap recorded before relays existed;
+ * `answerVia` there reads it.
  */
-export interface SlotAnswer {
+export interface SlotAnswerProvenance {
+  /** `tap` = the person answered in the pod; `relayed` = an agent carried their chat words. */
+  via?: "tap" | "relayed";
+  /** The relaying agent's user id. */
+  relayedBy?: string;
+  /** Where the words were said (`claude-code`). */
+  relaySurface?: string;
+  /** The person's own words, verbatim. */
+  quote?: string;
+  /** The person confirmed a relayed answer (set with `via: 'tap'` only). */
+  confirmedAt?: string;
+}
+
+/**
+ * A relayed answer to a `commitment` ask, held until the person taps — mirror
+ * of `PendingRelayedAnswer` (`@synap-core/types/ask`), which says why it sits
+ * beside `answer` rather than on it.
+ */
+export interface SlotPendingRelay {
+  text: string;
+  value?: SlotAnswerValue;
+  relayedBy: string;
+  relaySurface?: string;
+  quote?: string;
+  relayedAt: string;
+}
+
+/**
+ * A person's answer to an agent's question about one slot. Server-stamped as a
+ * unit; never authored by a client (it sits in `SERVER_STAMPED_OUTPUT_FIELDS`)
+ * — its provenance fields included.
+ */
+export interface SlotAnswer extends SlotAnswerProvenance {
   /** What the person said. */
   text: string;
   /**

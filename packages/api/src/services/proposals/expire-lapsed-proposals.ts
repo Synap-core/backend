@@ -20,7 +20,7 @@
  * keeps paying for.
  */
 
-import { isDocumentEditProposal } from "@synap-core/types/proposals/intent";
+import { isSessionBoundDraft } from "@synap-core/types/proposals/fate";
 import { markProposalNotificationsActioned } from "../../notifications/mark-proposal-notifications-actioned.js";
 import {
   db,
@@ -75,7 +75,9 @@ const logger = createLogger({ module: "expire-lapsed-proposals" });
  * disagree. Keyed on the (targetType, proposalType) PAIR: an entity `update`
  * outlives the session.
  */
-export const isSessionBoundDraft = isDocumentEditProposal;
+// Declared in `@synap-core/types/proposals/fate` (beside the fate rule that
+// reads it), re-exported here for the pod's callers.
+export { isSessionBoundDraft };
 
 /**
  * Does closing a session retire this pending proposal?

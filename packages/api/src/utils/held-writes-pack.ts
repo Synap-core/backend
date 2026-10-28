@@ -4,9 +4,13 @@
  * instead of one proposal each. Filed by `fileHeldWrites`; approved by
  * the `agent/held_writes` executor, which replays each kept write.
  *
- * A leaf: it imports nothing. `permission-check.ts` re-exports it; a module
- * that only needs the pack's identity imports it from here, so it does not
- * pull the whole gate (and, through it, the channel routers) into its graph.
+ * A leaf: it imports only the dependency-free `@synap-core/types` module that
+ * declares the pack's identity once for every surface (the review pages read
+ * it from there too). `permission-check.ts` re-exports it; a module that only
+ * needs the pack's identity imports it from here, so it does not pull the
+ * whole gate (and, through it, the channel routers) into its graph.
  */
-export const HELD_WRITES_TARGET_TYPE = "agent";
-export const HELD_WRITES_PROPOSAL_TYPE = "held_writes";
+export {
+  HELD_WRITES_TARGET_TYPE,
+  HELD_WRITES_PROPOSAL_TYPE,
+} from "@synap-core/types/proposals/deferred-writes";

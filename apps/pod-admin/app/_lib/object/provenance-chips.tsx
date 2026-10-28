@@ -14,7 +14,12 @@
 import type { ReactNode } from "react";
 import { resolveServiceMark } from "@synap-core/types/service-marks";
 import type { Exit } from "../../../lib/open-in";
-import { externalProps, rowHref, usePlacedExit } from "../../../lib/exit-link";
+import {
+  externalProps,
+  rowHref,
+  useAppOpenAttempt,
+  usePlacedExit,
+} from "../../../lib/exit-link";
 
 const PILL =
   "inline-flex h-7 max-w-full items-center gap-1.5 rounded-full bg-foreground/[0.04] px-2.5 text-[12.5px] text-foreground/80 ring-1 ring-inset ring-foreground/10";
@@ -58,7 +63,9 @@ function DoorPill({
   title?: string;
   children: ReactNode;
 }) {
-  const href = rowHref(usePlacedExit(exit));
+  const placed = usePlacedExit(exit);
+  const open = useAppOpenAttempt(placed);
+  const href = rowHref(placed);
   if (href === null) {
     return (
       <span className={PILL} title={title}>
@@ -67,14 +74,18 @@ function DoorPill({
     );
   }
   return (
-    <a
-      href={href}
-      {...externalProps(href)}
-      title={title}
-      className={`${PILL} ${PILL_DOOR}`}
-    >
-      {children}
-    </a>
+    <>
+      <a
+        href={href}
+        {...externalProps(href)}
+        onClick={open.onOpen}
+        title={title}
+        className={`${PILL} ${PILL_DOOR}`}
+      >
+        {children}
+      </a>
+      {open.offer}
+    </>
   );
 }
 

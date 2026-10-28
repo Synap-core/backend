@@ -18,7 +18,9 @@
  * ONE source of the fallback default is the TS constant
  * `DEFAULT_DAILY_WRITE_CEILING` (@synap/governance-policy), consulted by the
  * resolver when NO row matches (the same "absence → code floor" shape
- * governance_rules uses).
+ * governance_rules uses). That default is `null` — NO daily limit (founder,
+ * 2026-10-27): the daily-write ceiling is opt-in, and a row is the only thing
+ * that sets one. A row always holds a finite limit.
  */
 
 import {

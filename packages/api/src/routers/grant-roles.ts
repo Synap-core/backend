@@ -16,10 +16,12 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { db, GrantRoleRepository } from "@synap/database";
 import type { GrantRoleRecord } from "@synap/database/schema";
+import { isKeyUseId } from "@synap-core/types/grants";
 import { router, protectedProcedure } from "../trpc.js";
 import {
   GrantInputSchema,
   ExpiresInDaysSchema,
+  KeyUsesSchema,
   assertGrantInput,
 } from "../services/key-grant.js";
 
@@ -30,10 +32,18 @@ const RoleInputSchema = z.object({
     /** A number of days, null = never, omitted = the role sets no lifetime. */
     expiresInDays: ExpiresInDaysSchema,
   }),
+  /**
+   * Where a key made from it is used (keys plan §3.4: a role used as a key
+   * TEMPLATE). Omitted = the role sets no door.
+   */
+  uses: KeyUsesSchema.optional(),
 });
 
 /** The wire shape — `GrantRole` from `@synap-core/types/grants`, plus dates. */
 function toRole(row: GrantRoleRecord) {
+  // The column is `text[]`; writes go through KeyUsesSchema, so this only
+  // narrows the type (`GrantRole.uses` is `KeyUseId[]`).
+  const uses = (row.uses ?? []).filter(isKeyUseId);
   return {
     id: row.id,
     name: row.name,
@@ -50,6 +60,7 @@ function toRole(row: GrantRoleRecord) {
           ? { expiresInDays: row.expiresInDays }
           : {}),
     },
+    ...(uses.length > 0 ? { uses } : {}),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -82,6 +93,7 @@ export const grantRolesRouter = router({
           description: input.description,
           ...grant,
           expiresInDays,
+          uses: input.uses ?? null,
         })
       );
     }),
@@ -97,6 +109,7 @@ export const grantRolesRouter = router({
         description: input.description,
         ...grant,
         expiresInDays,
+        uses: input.uses ?? null,
       });
       if (!row) throw new TRPCError({ code: "NOT_FOUND" });
       return toRole(row);

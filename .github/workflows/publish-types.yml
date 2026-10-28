@@ -16,6 +16,10 @@ on:
       - "packages/types/src/**"
       - "packages/api/src/routers/**"
       - "packages/api/src/root.ts"
+      # A PR that commits a regenerated surface (gen-types, the regen bot) or a
+      # hand version bump must publish too: neither touches the paths above.
+      - "packages/api-types/src/generated.d.ts"
+      - "packages/api-types/package.json"
 
 # Publishing is not idempotent at the transport layer: killing a run mid-publish
 # can leave a version half-uploaded. Serialise publishes; never cancel.
@@ -162,9 +166,18 @@ jobs:
           # onto a version npm already holds moves on to the next free patch.
           if published "$V"; then
             if [ "$BEFORE" = "$V" ]; then
-              echo "@synap-core/api-types $V is already on npm and unchanged: nothing to publish"
-              echo "bumped=false" >> "$GITHUB_OUTPUT"
-              exit 0
+              # check-and-bump compares with the COMMITTED generated.d.ts, so a
+              # surface a PR committed already regenerated reads "unchanged" to
+              # it and never shipped (1.32.0, 2026-10-28). Compare with npm's.
+              # A failed pack fails the step: unread is not "different".
+              NPM_DIR=$(mktemp -d)
+              (cd "$NPM_DIR" && npm pack "@synap-core/api-types@$V" --silent >/dev/null && tar xzf ./*.tgz)
+              if cmp -s src/generated.d.ts "$NPM_DIR/package/src/generated.d.ts"; then
+                echo "@synap-core/api-types $V is already on npm and unchanged: nothing to publish"
+                echo "bumped=false" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+              echo "committed generated.d.ts differs from npm's $V: publishing the next free patch"
             fi
             while published "$V"; do
               npm version patch --no-git-tag-version >/dev/null
