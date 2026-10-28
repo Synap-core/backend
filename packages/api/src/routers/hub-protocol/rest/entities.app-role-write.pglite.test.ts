@@ -306,6 +306,17 @@ const KEYS = {
     principal: AGENT,
     person: OWNER,
   },
+  /**
+   * Two scopes: reads every record pod-wide, writes roles in CRM only. Its
+   * read reach is wider than CRM's, so the reach clause is what stops it.
+   */
+  crmSplit: {
+    id: randomUUID(),
+    permissions: ["facet.read", "facet.create"],
+    workspaceIds: [CRM],
+    principal: AGENT,
+    person: OWNER,
+  },
   /** The CRM app with no role write at all. */
   crmReadOnly: {
     id: randomUUID(),
@@ -495,6 +506,12 @@ beforeAll(async () => {
       ]
     );
   }
+  // crmSplit's second scope: read every kind, no space limit.
+  await q(
+    `insert into grants (id, api_key_id, principal_user_id, on_behalf_of, permissions, workspace_ids, created_by)
+     values ($1,$2,$3,$4,'{entity.*.read}'::text[],null,$4)`,
+    [randomUUID(), KEYS.crmSplit.id, AGENT, OWNER]
+  );
   // Every app connection starts "ask first": its agent's writes are proposals.
   await applyAgentPosture({
     db: h.db as never,
@@ -917,6 +934,26 @@ describe("the CRM app adds or removes a SHARED role only when every space it is 
       /grant does not allow "facet\.create"/
     );
     expect(await proposalCount()).toBe(before);
+  });
+
+  it("a record the key reads beyond CRM but CRM does not reach: 403, for a shared and a CRM role", async () => {
+    const before = await proposalCount();
+    for (const [slug, ws] of [
+      ["client", undefined],
+      ["lead", CRM],
+    ] as const) {
+      const res = await attach("crmSplit", STRANGER, {
+        profileSlug: slug,
+        ...(ws ? { workspaceId: ws } : {}),
+      });
+      const body = await json(res);
+      expect(res.status, `${slug}: ${JSON.stringify(body)}`).toBe(403);
+      expect(String(body.error)).toMatch(
+        /grant does not allow "facet\.create" on a record outside workspace/
+      );
+    }
+    expect(await proposalCount()).toBe(before);
+    expect(await liveFacets(STRANGER, ROLE_CLIENT)).toEqual([]);
   });
 
   it("removing the shared client role: proposed, still live; removing partner (also Brand's): 403", async () => {
