@@ -15092,6 +15092,10 @@ export interface PacketDeployApproval {
 	branch: string | null;
 	repo: string | null;
 	targetHost: string | null;
+	/** What it lets ship (`DEV_DEPLOY_STEPS`); null when filed without one: read `deployCommand`. */
+	step: string | null;
+	/** The command the person read on the approval card. */
+	deployCommand: string | null;
 	approvedAt: string | null;
 	/** The session it was approved on; set on `ownerDeploys` entries. */
 	sessionId?: string;

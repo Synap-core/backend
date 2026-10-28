@@ -458,7 +458,12 @@ beforeAll(async () => {
     type: "dev.deploy_approval",
     status: "approved",
     reviewedBy: OWNER,
-    data: { ...deploy("ddddddd4"), sessionId: S.plain },
+    data: {
+      ...deploy("ddddddd4"),
+      sessionId: S.plain,
+      step: "push",
+      deployCommand: "git push origin ddddddd4:main",
+    },
     createdAt: minutesAgo(5),
   });
   // Approved by a person, but on ANOTHER person's session: never this owner's.
@@ -642,6 +647,8 @@ describe("continuation packet — gates", () => {
       branch: "feat/x",
       repo: "synap-backend",
       targetHost: "pod-prod",
+      step: null,
+      deployCommand: "deploy",
       approvedAt: expect.any(String),
     });
   });
@@ -672,6 +679,12 @@ describe("continuation packet — gates", () => {
     ).toEqual([
       [P.otherSessionDeploy, "ddddddd4", S.plain],
       [P.deployHuman, "aaaaaaa1", S.gated],
+    ]);
+    // The step and the command the person read travel with each approval: a gate holds an
+    // approval to the step it names (founder, 2026-10-28). None filed: null, read the command.
+    expect(gates.ownerDeploys.map((d) => [d.step, d.deployCommand])).toEqual([
+      ["push", "git push origin ddddddd4:main"],
+      [null, "deploy"],
     ]);
     expect(gates.ownerDeploys[1]).toMatchObject({
       repo: "synap-backend",
