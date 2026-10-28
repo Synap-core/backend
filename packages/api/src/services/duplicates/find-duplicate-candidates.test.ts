@@ -175,6 +175,53 @@ describe("findDuplicateCandidates — pending leg (preloaded queue)", () => {
     ]);
   });
 
+  it("an event is a twin only on the same start: same title on another date is another event", async () => {
+    // A recurring event repeats its title once per date (founder, 2026-10-28).
+    const eventRow = {
+      id: "prop-events",
+      targetType: "entity",
+      proposalType: "capture.graph",
+      data: {
+        operations: [
+          {
+            op: "create_entity",
+            ref: "event:laver_20260802",
+            profileSlug: "event",
+            title: "Laver ses cheveux",
+            properties: { startDate: "2026-08-02", isAllDay: true },
+          },
+        ],
+      },
+    };
+    const pending = await loadOwnPendingCreates(
+      stubDb([eventRow]).db,
+      "user-1"
+    );
+    const ask = (properties?: Record<string, unknown>) =>
+      findDuplicateCandidates({} as never, {
+        subject: "entity",
+        userId: "user-1",
+        profileSlug: "event",
+        title: "Laver ses cheveux",
+        signals: [],
+        ...(properties ? { properties } : {}),
+        recordScope,
+        pending,
+      });
+    const otherDate = await ask({ startDate: "2026-08-09", isAllDay: true });
+    expect(otherDate.check.candidates).toEqual([]);
+    // Same title + same day is the same event, whatever the time format.
+    const sameDay = await ask({ startDate: "2026-08-02T00:00:00.000Z" });
+    expect(sameDay.check.candidates).toEqual([
+      expect.objectContaining({ ref: "proposal", id: "prop-events" }),
+    ]);
+    // No start to compare: the name alone, as before.
+    const noStart = await ask();
+    expect(noStart.check.candidates).toEqual([
+      expect.objectContaining({ ref: "proposal", id: "prop-events" }),
+    ]);
+  });
+
   it("a pending queue longer than the scan is unchecked, never clear (S11)", async () => {
     // 200 = the scan's cap: the queue may hold the twin past the rows read.
     const full = Array.from({ length: 200 }, (_, i) => ({
