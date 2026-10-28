@@ -110,7 +110,7 @@ function fullFacts() {
       status: "approved",
       createdAt: new Date("2026-10-28T09:04:00.000Z"),
       reviewedAt: new Date("2026-10-28T09:10:00.000Z"),
-      undoneAt: null,
+      undoneAt: null as Date | null,
     },
     firstAgentProposalAt: new Date("2026-10-28T09:30:00.000Z"),
     firstAgentApprovalAt: new Date("2026-10-28T09:40:00.000Z"),
