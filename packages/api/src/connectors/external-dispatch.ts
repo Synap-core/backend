@@ -1518,6 +1518,13 @@ function resolveVaultAuthConfig(raw: unknown): VaultAuthConfig {
  *  - POD-WIDE bypass (0211): a pod-wide secret is a SHARED key any member may use
  *    without a per-user vault grant. This removes ONLY the vault-GRANT
  *    requirement; the RUN stays governed by `gateCapabilityExecution`.
+ *  - OWN-CAPABILITY bypass (founder, 2026-10-28): `boundToCallingCapability` =
+ *    the caller established that this key is the owner's connection OF the
+ *    capability whose tool is being dispatched, and that the dispatch already
+ *    passed that capability's gate. Approving the capability is the consent; a
+ *    second vault grant for the same act guards nothing (the key is injected
+ *    server-side into a fixed host and never reaches the agent). Reading the
+ *    VALUE (the vault's redeem door) and any other use stay grant-gated.
  *  - Otherwise: grant-gated, redeemed by the effective actor (never the owner we
  *    decrypt under), atomic consume-after-decrypt inside the resolver.
  */
@@ -1528,6 +1535,8 @@ export async function resolveDirectVaultCredential(args: {
   userId: string;
   agentUserId?: string | null;
   workspaceId?: string | null;
+  /** See OWN-CAPABILITY above. Only `vaultHandler` sets it, after checking it. */
+  boundToCallingCapability?: boolean;
 }): Promise<
   | { ok: true; secret: string }
   | { ok: false; result: TriggerProviderActionResult }
@@ -1537,7 +1546,8 @@ export async function resolveDirectVaultCredential(args: {
   const effectiveActor = args.agentUserId ?? userId;
   const callerIsOwner = ownerUserId === effectiveActor && !args.agentUserId;
   const podWideBypass = secretRow.isPodWide === true;
-  const ungated = callerIsOwner || podWideBypass;
+  const ungated =
+    callerIsOwner || podWideBypass || args.boundToCallingCapability === true;
 
   let secret: string | null;
   try {
@@ -1634,6 +1644,32 @@ export async function resolveMcpServerAuthHeader(
   };
 }
 
+/**
+ * The key is `userId`'s connection of the capability `toolId` is a member of
+ * (secrets.capabilityId = the tool's member_of capability, 0161). Read from the
+ * rows, never from the caller.
+ */
+async function isOwnCapabilityKey(
+  secretRow: { userId: string; capabilityId: string | null },
+  toolId: string,
+  userId: string
+): Promise<boolean> {
+  if (!secretRow.capabilityId || secretRow.userId !== userId) return false;
+  const [capEdge] = await db
+    .select({ capabilityId: links.toId })
+    .from(links)
+    .where(
+      and(
+        eq(links.fromType, "tool"),
+        eq(links.fromId, toolId),
+        eq(links.linkType, "member_of"),
+        eq(links.toType, "capability")
+      )
+    )
+    .limit(1);
+  return capEdge?.capabilityId === secretRow.capabilityId;
+}
+
 const vaultHandler: SchemeHandler = async ({ input, tool }) => {
   const { userId, provider, method, path, body, accountHint } = input;
   void accountHint; // used below in connection-selection
@@ -1651,6 +1687,7 @@ const vaultHandler: SchemeHandler = async ({ input, tool }) => {
       providerIntegrationId: true,
       accountHint: true,
       isPodWide: true,
+      capabilityId: true,
     },
   });
   if (!secretRow) {
@@ -1675,8 +1712,11 @@ const vaultHandler: SchemeHandler = async ({ input, tool }) => {
   }
 
   // (a) Resolve the credential under the ONE vault policy (see
-  //     resolveDirectVaultCredential): owner / pod-wide → ungated; delegated →
-  //     grant-gated with the effective actor as redeemer.
+  //     resolveDirectVaultCredential): owner / pod-wide / own capability →
+  //     ungated; delegated → grant-gated with the effective actor as redeemer.
+  //     Every call reaching a handler already passed the capability gate in
+  //     triggerProviderAction; the key counts as that capability's own when it is
+  //     the run's person's connection of the capability this tool belongs to.
   const resolved = await resolveDirectVaultCredential({
     vaultId,
     secretRow,
@@ -1684,6 +1724,11 @@ const vaultHandler: SchemeHandler = async ({ input, tool }) => {
     userId,
     agentUserId: input.agentUserId,
     workspaceId: input.workspaceId,
+    boundToCallingCapability: await isOwnCapabilityKey(
+      secretRow,
+      tool.id,
+      userId
+    ),
   });
   if (!resolved.ok) return resolved.result;
   const secret = resolved.secret;
