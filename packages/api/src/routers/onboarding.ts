@@ -27,7 +27,8 @@ import type {
   OnboardingJourneyProgressRecord,
   WorkspaceSettings,
 } from "@synap/database";
-import { podProcedure, router } from "../trpc.js";
+import { podAdminProcedure, podProcedure, router } from "../trpc.js";
+import { startFirstSession } from "../services/focus-sessions/first-session.js";
 import { normalizeToolName } from "@synap-core/types/tools";
 import {
   isInterviewBrief,
@@ -1145,6 +1146,17 @@ export const onboardingRouter = router({
         values: input.values,
       })
     ),
+
+  /**
+   * The first session with a goal (start step S6, plan v1 §2.6): one focus
+   * session in the setup's space, with the person's connected agent on it and
+   * every agent write in it proposed. Everything it needs is read from the
+   * pod (`services/focus-sessions/first-session.ts`); an open first session is
+   * handed back, never created twice.
+   */
+  startFirstSession: podAdminProcedure.mutation(({ ctx }) =>
+    startFirstSession({ userId: ctx.userId })
+  ),
 
   recordTools: podProcedure
     .input(
