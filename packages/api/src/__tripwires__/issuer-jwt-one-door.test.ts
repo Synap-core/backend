@@ -44,6 +44,8 @@ const DOOR_FILE = "packages/api/src/utils/jwks-client.ts";
 
 /** Files allowed to call the low-level `verifyIssuerJwt`, and why. */
 const LOW_LEVEL_CALLERS: Record<string, string> = {
+  "packages/api/src/routers/hub-protocol/rest/unknown-issuer.ts":
+    "An issuer NOT in the registry asks to be trusted (/setup/agent, /setup/service). The signature check against its own JWKS is the proof of possession that must pass before a pending row is filed (audit 2026-10-28 F1); it grants no trust and authorizes nothing. Pinned issuer = the token's canonical iss, audience = PUBLIC_URL, run only after the per-source limit.",
   "apps/api/src/routers/federation.ts":
     "Federation bootstrap / identity-link / receipt: each resolves the APPROVED registry entry itself (bootstrap: PROVISIONING_TOKEN + pending→approved), pins it, passes audience = PUBLIC_URL, and persists a durable replay receipt with a replay context (consumeJti: false). The application-connection start hint (verifyRequesterAccountHint) is the one call that persists no receipt: it only records the verified account for the reviewer, authorizes nothing, and leaves the JTI to the completion that spends it.",
 };
