@@ -91,8 +91,14 @@ describe("the device socket sweep", () => {
       .filter((f) =>
         /verifyHandshakeUser\(/.test(readFileSync(join(src, f), "utf8"))
       );
-    expect(callers.sort()).toEqual(["server.ts", "yjs-server.ts"]);
-    for (const f of callers) {
+    // presence-sweep.ts RE-checks a socket a gate already admitted (and
+    // tracked); it admits nothing, so it has no device to track.
+    expect(callers.sort()).toEqual([
+      "presence-sweep.ts",
+      "server.ts",
+      "yjs-server.ts",
+    ]);
+    for (const f of callers.filter((c) => c !== "presence-sweep.ts")) {
       const code = readFileSync(join(src, f), "utf8");
       expect(code, f).toMatch(
         /trackDeviceSocket\(socket, (identity\.)?deviceId\)/

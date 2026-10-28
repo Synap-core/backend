@@ -25,6 +25,7 @@ import {
 } from "@synap/database";
 import { canPrincipalJoinRoom, type RealtimePrincipal } from "./room-authz.js";
 import { firstDeniedHandshakeRoom, handshakeRooms } from "./presence-rooms.js";
+import { startPresenceSweep, type SweptSocket } from "./presence-sweep.js";
 import { realtimeFirstPartyBase } from "./first-party-base.js";
 
 const PORT = parseInt(process.env.REALTIME_PORT || "4001", 10);
@@ -126,10 +127,13 @@ const io = new SocketIOServer(httpServer, {
   allowEIO3: true,
   // Path for Socket.IO (must match Caddy route)
   path: "/socket.io/",
-  // Connection state recovery (helps with reconnections)
+  // Connection state recovery (helps with reconnections). A recovered socket
+  // gets its rooms back, so it must pass the auth middlewares again: with
+  // skipMiddlewares it kept streaming after its session, key or membership
+  // ended. presence-sweep.ts re-checks the sockets that stay open.
   connectionStateRecovery: {
     maxDisconnectionDuration: 2 * 60 * 1000, // 2 minutes
-    skipMiddlewares: true,
+    skipMiddlewares: false,
   },
 });
 
@@ -465,6 +469,11 @@ httpServer.listen(PORT, "0.0.0.0", () => {
 
 // A socket opened with a device token closes when its device ends.
 startDeviceSocketSweep();
+// Every open /presence socket: its credential, handshake rooms and joined
+// rooms are re-checked periodically.
+startPresenceSweep(
+  () => presenceNamespace.sockets.values() as Iterable<SweptSocket>
+);
 
 /**
  * Graceful shutdown
