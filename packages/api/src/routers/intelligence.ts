@@ -23,7 +23,6 @@ import {
   and,
   desc,
   or,
-  like,
   drizzleSql,
   encryptServiceKey,
 } from "@synap/database";
@@ -53,6 +52,7 @@ import {
 import { authoringMisses } from "../utils/template-diagnostics.js";
 import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
 import { requireUserId } from "../utils/user-scoped.js";
+import { publicServiceRow } from "../utils/intelligence-service-projection.js";
 import { scopedDb, accessFor } from "../access/index.js";
 import {
   ensureAgentThread,
@@ -1073,8 +1073,16 @@ export const intelligenceRouter = router({
    *
    * Security model: tokens travel browser → backend (HTTPS + Kratos session)
    * → service (internal Docker network for cloud, direct HTTPS for self-hosted).
-   * Tokens are never stored on Synap servers. If the service is unreachable the
-   * command is stored as `metadata.pendingConfig` and replayed on reconnect.
+   * If the service is unreachable the command is stored as
+   * `metadata.pendingConfig` and replayed on reconnect (stripped from every
+   * read: `utils/intelligence-service-projection.ts`).
+   *
+   * Pod admin only, and the target is ONE registered service named exactly
+   * (audit 2026-10-28, pod-routers F5). The pod authenticates the call with
+   * that service's stored management token, so this is the pod operating a
+   * pod-wide service, not a member's act. Before, any space member could
+   * drive it, and a `LIKE '<id>-%'` prefix match (no producer of such ids
+   * exists) reached other rows, wildcards included.
    */
   relayToService: workspaceProcedure
     .input(
@@ -1089,14 +1097,9 @@ export const intelligenceRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      requireUserId(ctx.userId);
-      // Support both exact match and slug-prefix match (a service registered
-      // as "<slug>-{userId}" is addressed by "<slug>").
+      await assertPodAdmin(requireUserId(ctx.userId));
       const service = await db.query.intelligenceServices.findFirst({
-        where: or(
-          eq(intelligenceServices.serviceId, input.serviceId),
-          like(intelligenceServices.serviceId, `${input.serviceId}-%`)
-        ),
+        where: eq(intelligenceServices.serviceId, input.serviceId),
       });
       if (!service || !service.enabled) {
         throw new TRPCError({
@@ -1145,7 +1148,7 @@ export const intelligenceRouter = router({
         await db
           .update(intelligenceServices)
           .set({ metadata: { ...meta, pendingConfig } })
-          .where(eq(intelligenceServices.serviceId, input.serviceId));
+          .where(eq(intelligenceServices.id, service.id));
         return {
           success: true,
           pending: true,
@@ -1668,7 +1671,7 @@ export const intelligenceRouter = router({
    * listRegisteredServices
    *
    * Returns all IS records registered for the workspace.
-   * apiKey is never returned.
+   * apiKey and secret-shaped metadata (managementToken…) are never returned.
    */
   listRegisteredServices: workspaceProcedure.query(async () => {
     const records = await db.query.intelligenceServices.findMany({
@@ -1676,7 +1679,7 @@ export const intelligenceRouter = router({
         apiKey: false, // never expose
       },
     });
-    return { services: records };
+    return { services: records.map(publicServiceRow) };
   }),
 
   /**

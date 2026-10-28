@@ -39,6 +39,10 @@ import {
 } from "../utils/intelligence-routing.js";
 import { SecretsVaultRepository } from "@synap/database";
 import {
+  publicServiceMetadata,
+  publicServiceRow,
+} from "../utils/intelligence-service-projection.js";
+import {
   encryptConfig,
   decryptConfig,
   isServerVaultAvailable,
@@ -188,7 +192,7 @@ export const intelligenceRegistryRouter = router({
         "Intelligence service registered"
       );
 
-      return service;
+      return publicServiceRow(service);
     }),
 
   /**
@@ -246,8 +250,9 @@ export const intelligenceRegistryRouter = router({
         capabilities: s.capabilities,
         pricing: s.pricing,
         providerType: s.providerType,
-        /** Agent-system kind lives in metadata.kind (synap | remote | local) */
-        metadata: s.metadata,
+        /** Agent-system kind lives in metadata.kind (synap | remote | local).
+         *  Secret-shaped keys (managementToken, pendingConfig…) are stripped. */
+        metadata: publicServiceMetadata(s.metadata),
         status: s.status,
         enabled: s.enabled,
         /** The pod default: what a space with no pinned service routes to. */
@@ -274,11 +279,8 @@ export const intelligenceRegistryRouter = router({
         });
       }
 
-      // Don't expose API key
-      const safe = Object.fromEntries(
-        Object.entries(service).filter(([k]) => k !== "_apiKey")
-      ) as typeof service;
-      return safe;
+      // Never the API key cell, never a secret-shaped metadata key.
+      return publicServiceRow(service);
     }),
 
   /**
@@ -311,7 +313,7 @@ export const intelligenceRegistryRouter = router({
         "Intelligence service updated"
       );
 
-      return updated;
+      return publicServiceRow(updated);
     }),
 
   /**
