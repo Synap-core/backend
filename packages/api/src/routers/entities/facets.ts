@@ -243,7 +243,6 @@ export const facetProcs = {
             facetPlacement.rung === 2 ? facetPlacement.workspaceId : null;
         }
       }
-      const governanceWorkspaceId = facetWorkspaceId ?? ctx.workspaceId ?? null;
 
       // Fast-fail BEFORE governance: a structurally impossible attach (target
       // profile isn't a role, or the role doesn't apply to this kind) must be
@@ -326,6 +325,10 @@ export const facetProcs = {
         profileId: roleProfileId,
         storedWorkspaceId: storedFacetWorkspaceId,
       });
+      // A shared role sent with no lens names no space: its proposal and audit
+      // carry the space the key's grant was checked in.
+      const governanceWorkspaceId =
+        facetWorkspaceId ?? grantWorkspaceId ?? ctx.workspaceId ?? null;
 
       // 1. .requested
       const requestedEvent = await auditLog({
@@ -502,8 +505,6 @@ export const facetProcs = {
           message: `Facet not found: ${input.facetId}`,
         });
       }
-      const governanceWorkspaceId =
-        existing.workspaceId ?? ctx.workspaceId ?? null;
 
       // Best-effort readable label for the parent entity — surfaced on
       // proposal/notification cards (which otherwise show raw entity ids).
@@ -517,6 +518,9 @@ export const facetProcs = {
         profileId: existing.profileId,
         storedWorkspaceId: existing.workspaceId ?? null,
       });
+      // A shared role's row names no space: the space the grant was checked in.
+      const governanceWorkspaceId =
+        existing.workspaceId ?? grantWorkspaceId ?? ctx.workspaceId ?? null;
 
       // LIFECYCLE SPLIT (work model L2): a ROLE's status — `status`, or its
       // lifecycle property — is MOVED through the one door (`moveStatus`:
@@ -750,8 +754,6 @@ export const facetProcs = {
           message: `Facet not found: ${input.facetId}`,
         });
       }
-      const governanceWorkspaceId =
-        existing.workspaceId ?? ctx.workspaceId ?? null;
 
       // Best-effort readable label for the parent entity — surfaced on
       // proposal/notification cards (which otherwise show raw entity ids).
@@ -765,6 +767,9 @@ export const facetProcs = {
         profileId: existing.profileId,
         storedWorkspaceId: existing.workspaceId ?? null,
       });
+      // A shared role's row names no space: the space the grant was checked in.
+      const governanceWorkspaceId =
+        existing.workspaceId ?? grantWorkspaceId ?? ctx.workspaceId ?? null;
 
       // 1. .requested
       const requestedEvent = await auditLog({

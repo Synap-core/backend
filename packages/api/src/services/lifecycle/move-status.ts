@@ -275,7 +275,8 @@ export async function moveStatus(
     const perm = await checkPermissionOrPropose({
       userId: input.actor.userId,
       agentUserId: input.actor.agentUserId ?? undefined,
-      workspaceId: governanceWorkspaceId,
+      // A shared role's row names no space: the space the grant was checked in.
+      workspaceId: governanceWorkspaceId ?? grantWorkspaceId,
       grantWorkspaceId,
       subjectType: "entity",
       action: "transition",

@@ -16,19 +16,26 @@
  *  - A SHARED role (row stored NULL: one row, seen in every space the role is
  *    granted to — a `profile_workspace_access` row or its home space):
  *      · change (update, stage move): checked in ONE key space the role is
- *        granted to, on a live pod-wide record (#239, founder decision 1,
- *        2026-10-26; THE read predicate `podSharedFacetForSpacesWhere`);
+ *        granted to, where the key reads that row (#239, founder decision 1,
+ *        2026-10-26; THE read predicate `sharedRoleRowsInSpacesWhere`: a
+ *        pod-wide record, or one stored in that space), and the record in
+ *        that space's reach;
  *      · add / remove: changes where the record shows, so EVERY space the
  *        role is granted to must be in the grant with the write permitted
  *        there (none at all = refused), and the record readable by the key
- *        and in the reach of the key's spaces. Adding a role never shows a
- *        record in a space the person did not grant the app.
+ *        and in the reach of those spaces, the role's own: never of another
+ *        key space. Adding a role never shows a record in a space the person
+ *        did not grant the app, nor one that space could not see.
  *  - A scope NOT limited to spaces that permits the write at the row's own
- *    workspace passes as before (no reach clause).
+ *    workspace passes with no reach clause.
+ *
+ * Every role write is checked in the role's own space(s) and needs the record
+ * in their reach: a key's other spaces never lend it.
  *
  * The returned `space` is what the governed gate's grant rung re-checks
- * (`grantWorkspaceId`). The record's own fields are never written by a role
- * write, so nothing here places or re-places the entity row. No grant on the
+ * (`grantWorkspaceId`), and the space a proposal is filed in when the role
+ * row names none. The record's own fields are never written by a role write,
+ * so nothing here places or re-places the entity row. No grant on the
  * request (a signed-in session, an approval replayed by the person) = no-op.
  */
 
@@ -40,7 +47,6 @@ import {
   inArray,
   isNull,
   or,
-  podSharedFacetForSpacesWhere,
   type KeyGrant,
 } from "@synap/database";
 import {
@@ -50,7 +56,10 @@ import {
   profileWorkspaceAccess,
 } from "@synap/database/schema";
 import { grantRequestKey } from "@synap/governance-policy";
-import { keyGrantReadClause } from "../access/grant-read.js";
+import {
+  keyGrantReadClause,
+  sharedRoleRowsInSpacesWhere,
+} from "../access/grant-read.js";
 import { grantWriteDenial, type GrantWriteInput } from "./grant-write-check.js";
 import { roleInSpacesWhere } from "./project-scope.js";
 
@@ -109,7 +118,7 @@ export async function roleWriteGrantSpace(
       return { space };
     }
     return {
-      denied: `${denial} A shared role is stored pod-wide: a key limited to spaces may change it only on a pod-wide record, when the role is granted to one of the key's spaces.`,
+      denied: `${denial} A shared role is stored pod-wide: a key limited to spaces may change it only where the role is granted to one of the key's spaces and the record is pod-wide or stored in that space.`,
     };
   }
 
@@ -132,11 +141,8 @@ export async function roleWriteGrantSpace(
       };
     }
   }
-  const keySpaces = [
-    ...new Set(grant.scopes.flatMap((scope) => scope.workspaceIds ?? [])),
-  ];
-  if (!(await inReachOf(target.entityId, keySpaces, grant))) {
-    return { denied: outOfReach(write, keySpaces) };
+  if (!(await inReachOf(target.entityId, spaces, grant))) {
+    return { denied: outOfReach(write, spaces) };
   }
   return { space: spaces[0]! };
 }
@@ -201,7 +207,7 @@ function outOfReach(
 /**
  * The spaces a role is granted to: its `profile_workspace_access` rows and
  * its home space (`profiles.workspace_id`) — the set `grantedRoleIdsForSpaces`
- * reads from the other side. Sorted, so a refusal names the same space twice.
+ * reads from the other side, sorted so the refusal is deterministic.
  */
 async function roleGrantedSpaces(profileId: string): Promise<string[]> {
   const [access, home] = await Promise.all([
@@ -226,9 +232,10 @@ async function roleGrantedSpaces(profileId: string): Promise<string[]> {
 
 /**
  * #239's rule for CHANGING a shared role: the first key space, in the grant's
- * order, where this LIVE pod-wide facet on a live POD-WIDE record has its role
- * granted (THE read predicate `podSharedFacetForSpacesWhere`, as the facets
- * `spaceReach` of access/grant-read.ts) and the grant permits `write`. null
+ * order, that reads this LIVE pod-wide facet on a live record (THE read
+ * predicate `sharedRoleRowsInSpacesWhere`, the facets `spaceReach` of
+ * access/grant-read.ts, for that one space: its role granted there, the record
+ * pod-wide or stored there) and where the grant permits `write`. null
  * otherwise.
  */
 async function reachedFacetGrantSpace(
@@ -248,8 +255,7 @@ async function reachedFacetGrantSpace(
         and(
           eq(entityFacets.id, facetId),
           isNull(entityFacets.deletedAt),
-          podSharedFacetForSpacesWhere([space]),
-          isNull(entities.workspaceId),
+          sharedRoleRowsInSpacesWhere([space]),
           isNull(entities.deletedAt)
         )
       )

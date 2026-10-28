@@ -18,8 +18,11 @@
  * G may add or remove one only when EVERY space the role is granted to is in G
  * with `facet.create` / `facet.delete` there (so it never shows the record in a
  * space the person did not grant the app), and the record is readable by the
- * key and in G's reach. Changing one keeps #239's rule (one of the role's spaces
- * in G, on a pod-wide record).
+ * key and in the reach of the role's own spaces (never of another space of G).
+ * Changing one keeps #239's rule: one of the role's spaces in G, on a record
+ * pod-wide or stored in that space (a member of it reads that row; a record
+ * stored outside G lends nothing, rv-security B-1). Each write files its
+ * proposal in the space the grant was checked in.
  *
  * Rows rule out: the parent's null workspace still refusing (every pod-wide
  * person), a role in another space (Brand) passing, a shared role granted to a
