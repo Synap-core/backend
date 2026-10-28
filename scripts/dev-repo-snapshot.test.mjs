@@ -531,18 +531,47 @@ test("readLive reads the control plane and IS /health: sha + behindBy, unknown -
     assert.equal(l.behindBy, null);
   }
 
-  const is = await readLive(IS, {
-    getJson: health(SHA),
-    commitsBehind: behind,
-  });
-  assert.equal(is.kind, "site");
-  assert.equal(is.sha, SHA);
-  assert.equal(urls.at(-1), "https://intelligence.synap.live/health");
+  // IS: env-only URL; unset is "not configured" (null), never a guessed address
+  delete process.env.SNAPSHOT_IS_HEALTH_URL;
+  const before = urls.length;
   assert.equal(
-    (await readLive(IS, { getJson: health("unknown"), commitsBehind: behind }))
-      .sha,
+    await readLive(IS, { getJson: health(SHA), commitsBehind: behind }),
     null
   );
+  assert.equal(urls.length, before, "no request without a configured URL");
+  process.env.SNAPSHOT_IS_HEALTH_URL = "http://hub.test/health/details";
+  try {
+    const is = await readLive(IS, {
+      getJson: health(SHA),
+      commitsBehind: behind,
+    });
+    assert.equal(is.kind, "site");
+    assert.equal(is.sha, SHA);
+    assert.equal(urls.at(-1), "http://hub.test/health/details");
+    assert.equal(
+      (
+        await readLive(IS, {
+          getJson: health("unknown"),
+          commitsBehind: behind,
+        })
+      ).sha,
+      null
+    );
+  } finally {
+    delete process.env.SNAPSHOT_IS_HEALTH_URL;
+  }
+
+  // the pod's own health goes through the same hex check
+  const pod = await readLive("Synap-core/backend", {
+    getJson: health("unknown"),
+    commitsBehind: behind,
+  });
+  assert.deepEqual(pod, {
+    kind: "pod",
+    sha: null,
+    label: "pod antoinesrvt",
+    behindBy: null,
+  });
 
   await assert.rejects(
     readLive(CP, {

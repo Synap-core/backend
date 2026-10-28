@@ -28,7 +28,7 @@
  * 2 min (devbox-dev-facts.timer), so a change reaches the pod within ~2 min.
  * Env: SYNAP_POD_URL, SYNAP_OBS_KEY (never printed or logged), SNAPSHOT_REPOS (slugs), SNAPSHOT_STATE (state
  *      file), SNAPSHOT_DEVBOX_STATUS (reader command), SNAPSHOT_POD_HEALTH_URL, SNAPSHOT_CP_HEALTH_URL,
- *      SNAPSHOT_IS_HEALTH_URL, SNAPSHOT_TZ (day for
+ *      SNAPSHOT_IS_HEALTH_URL (env-only; the hub's build is on its private /health/details), SNAPSHOT_TZ (day for
  *      mergedToday, default Europe/Paris), SNAPSHOT_DRY=1.
  * A repo whose read fails is SKIPPED this cycle (logged), never posted as empty: an unreadable GitHub is not
  * an empty repo. A pod that refuses the key (401/403, no `event.create` grant) is a warning, exit 0.
@@ -727,6 +727,12 @@ function readCiResult(dir, sha) {
 
 async function commitsBehind(repo, liveSha) {
   try {
+    // GitHub's compare 404s on a short sha: resolve it to the full one first.
+    if (liveSha.length < 40) {
+      liveSha = (
+        await gh(["api", `repos/${repo}/commits/${liveSha}`, "--jq", ".sha"])
+      ).trim();
+    }
     const n = await gh([
       "api",
       `repos/${repo}/compare/${liveSha}...main`,
@@ -772,28 +778,32 @@ export async function readLive(repo, deps = {}) {
     );
   }
   if (repo === "Synap-core/intelligence-hub") {
+    // The hub's public /health carries no build on purpose; /health/details answers only on the private
+    // network, so the URL is env-only (no address in this public file): unset = not configured = unknown.
+    const url = process.env.SNAPSHOT_IS_HEALTH_URL;
+    if (!url) {
+      log(`${repo}: live not configured (SNAPSHOT_IS_HEALTH_URL unset); null`);
+      return null;
+    }
     return liveFromHealth(
       repo,
       "site",
       "intelligence hub",
-      process.env.SNAPSHOT_IS_HEALTH_URL ||
-        "https://intelligence.synap.live/health",
+      url,
       getJson_,
       behind
     );
   }
   if (repo === "Synap-core/backend") {
-    const health = await getJson(
+    return liveFromHealth(
+      repo,
+      "pod",
+      "pod antoinesrvt",
       process.env.SNAPSHOT_POD_HEALTH_URL ||
-        "https://pod.antoinesrvt.synap.live/health"
+        "https://pod.antoinesrvt.synap.live/health",
+      getJson_,
+      behind
     );
-    const sha = typeof health.buildSha === "string" ? health.buildSha : null;
-    return {
-      kind: "pod",
-      sha,
-      label: "pod antoinesrvt",
-      behindBy: sha ? await commitsBehind(repo, sha) : null,
-    };
   }
   if (repo === "Synap-core/app-bases") {
     const versions = await ghJson([
