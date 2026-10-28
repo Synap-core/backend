@@ -79,6 +79,7 @@ vi.mock("../../../utils/domain-event-bridge.js", () => ({
 
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
+import * as schema from "@synap/database/schema";
 import {
   focusSessions,
   users,
@@ -240,6 +241,25 @@ beforeAll(async () => {
   await h.client!.exec(
     `create table session_evaluations (id uuid primary key default gen_random_uuid(), session_id uuid not null)`
   );
+  // Every other table a read can reach (the event floor's workspace and
+  // pod-membership subqueries, the evaluations read): created empty, so a new
+  // change kind that reads one is judged on its result, not on missing DDL.
+  // `session_runners` keeps the migration's real shape (its unique index).
+  for (const t of Object.values(schema) as unknown[]) {
+    if (
+      !t ||
+      typeof t !== "object" ||
+      !(Symbol.for("drizzle:IsDrizzleTable") in t)
+    )
+      continue;
+    if (getTableConfig(t as PgTable).name === "session_runners") continue;
+    await h.client!.exec(
+      ddlFor(t as PgTable).replace(
+        /^create table /,
+        "create table if not exists "
+      )
+    );
+  }
   // The REAL triggers + table: the 0277 session-row trigger (to prove the
   // runner stamp never fires it), 0341 (the owner-message wake), 0342.
   await h.client!.exec(migration("0277_focus_session_changed_notify.sql"));

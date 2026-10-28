@@ -317,7 +317,8 @@ describe("proposedRecord — a skill's instructions are never cut", () => {
     expect(after.length).toBeGreaterThan(9_000);
     // Read paragraph by paragraph: what went, and every character it became.
     expect(field.after?.kind).toBe("changes");
-    const lines = field.after?.kind === "changes" ? field.after.lines : [];
+    const lines =
+      field.after?.kind === "changes" ? field.after.change.lines : [];
     const added = lines
       .flatMap((l) =>
         l.op === "add" ? [l.text] : l.op === "change" ? [l.after] : []
@@ -349,7 +350,7 @@ describe("proposedRecord — a skill's instructions are never cut", () => {
     });
   });
 
-  it("code keeps both sides whole, as code (never a prose diff)", () => {
+  it("code reads as a line diff over the whole code (never a prose diff)", () => {
     const record = proposedRecord({
       action: "update",
       kind: "skill",
@@ -363,15 +364,11 @@ describe("proposedRecord — a skill's instructions are never cut", () => {
         },
       ],
     })!;
-    expect(record.fields[0]!.before).toEqual({
-      kind: "code",
-      text: "return 1;",
-      lines: 1,
-    });
+    expect(record.fields[0]!.before).toBeUndefined();
     expect(record.fields[0]!.after).toEqual({
-      kind: "code",
-      text: "return 2;",
-      lines: 1,
+      kind: "changes",
+      change: { before: "return 1;", after: "return 2;", lines: [] },
+      code: true,
     });
   });
 
@@ -486,6 +483,116 @@ describe("proposedEntityMedia — the upload a create would make", () => {
     ).toBeNull();
     expect(proposedEntityMedia(null)).toBeNull();
     expect(proposedEntityMedia("x")).toBeNull();
+  });
+});
+
+describe("proposedRecord — any long text rewrite reads as the whole text, changed in place", () => {
+  const before =
+    "Follow up on the leads in outreach whose next action date is today.\n\nNever send.";
+  const after =
+    "Follow up on the leads in outreach whose next action date is today or past.\n\nNever send.";
+
+  it("a playbook's goal (a top-level text) is diffed, not drawn as two cards", () => {
+    const record = proposedRecord({
+      action: "update",
+      kind: "playbook",
+      changes: [
+        {
+          path: "goalTemplate",
+          label: "GoalTemplate",
+          operation: "update" as const,
+          before,
+          after,
+        },
+      ],
+    })!;
+    const field = record.fields[0]!;
+    expect(field.before).toBeUndefined();
+    expect(field.after?.kind).toBe("changes");
+    const change = field.after?.kind === "changes" ? field.after.change : null;
+    expect(change?.before).toBe(before);
+    expect(change?.after).toBe(after);
+    expect(change?.lines.map((l) => l.op)).toEqual(["change", "same"]);
+    expect(field.wide).toBe(true);
+  });
+
+  it("a long text property is diffed too", () => {
+    const record = proposedRecord({
+      action: "update",
+      kind: "note",
+      changes: [
+        {
+          path: "properties.content",
+          label: "Content",
+          operation: "update" as const,
+          before,
+          after,
+        },
+      ],
+    })!;
+    expect(record.fields[0]!.after?.kind).toBe("changes");
+  });
+
+  it("a secret is never diffed, however long", () => {
+    const record = proposedRecord({
+      action: "update",
+      kind: "connection",
+      definitions: [
+        { slug: "apiKey", label: "API key", valueType: "secret" } as never,
+      ],
+      changes: [
+        {
+          path: "properties.apiKey",
+          label: "API key",
+          operation: "update" as const,
+          before: "sk-".padEnd(120, "a"),
+          after: "sk-".padEnd(120, "b"),
+        },
+      ],
+    });
+    const after = record?.fields[0]?.after;
+    expect(after?.kind).not.toBe("changes");
+    expect(JSON.stringify(record ?? null)).not.toContain("sk-aaaa");
+  });
+
+  it("a short text keeps its before → after reading", () => {
+    const record = proposedRecord({
+      action: "update",
+      kind: "note",
+      changes: [
+        {
+          path: "title",
+          label: "Title",
+          operation: "update" as const,
+          before: "Old",
+          after: "New",
+        },
+      ],
+    })!;
+    expect(record.fields[0]!.before).toMatchObject({
+      kind: "text",
+      text: "Old",
+    });
+    expect(record.fields[0]!.after).toMatchObject({
+      kind: "text",
+      text: "New",
+    });
+  });
+
+  it("with no before on record, a long text is drawn as written (nothing to diff)", () => {
+    const record = proposedRecord({
+      action: "update",
+      kind: "playbook",
+      changes: [
+        {
+          path: "goalTemplate",
+          label: "GoalTemplate",
+          operation: "update" as const,
+          after,
+        },
+      ],
+    })!;
+    expect(record.fields[0]!.after?.kind).toBe("text");
   });
 });
 

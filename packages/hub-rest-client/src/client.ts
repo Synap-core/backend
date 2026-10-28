@@ -2739,12 +2739,16 @@ export class HubRestClient {
    * Move a track through its lifecycle. Closing (`completed`) or dropping
    * (`archived`) needs `close` (the verdict); both are final — reopen with
    * {@link reopenTrack}. An agent's close always comes back `proposed`.
+   * `expectedStatus` is the status the caller read the track in — an agent
+   * always sends it; if the track moved meanwhile the pod answers 409 and
+   * writes nothing.
    */
   async setTrackStatus(
     trackId: string,
     status: HubTrackStatus,
     reasoning?: string,
-    close?: TrackCloseInput
+    close?: TrackCloseInput,
+    expectedStatus?: HubTrackStatus
   ): Promise<HubTrackWriteResult> {
     return this.request<HubTrackWriteResult>(
       "PATCH",
@@ -2754,6 +2758,7 @@ export class HubRestClient {
         ...(reasoning ? { reasoning } : {}),
         ...(close?.verdict ? { verdict: close.verdict } : {}),
         ...(close?.verdictReason ? { verdictReason: close.verdictReason } : {}),
+        ...(expectedStatus ? { expectedStatus } : {}),
       }
     );
   }

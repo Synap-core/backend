@@ -95,6 +95,10 @@ export interface PacketDeployApproval {
   branch: string | null;
   repo: string | null;
   targetHost: string | null;
+  /** What it lets ship (`DEV_DEPLOY_STEPS`); null when filed without one: read `deployCommand`. */
+  step: string | null;
+  /** The command the person read on the approval card. */
+  deployCommand: string | null;
   approvedAt: string | null;
   /** The session it was approved on; set on `ownerDeploys` entries. */
   sessionId?: string;
@@ -127,6 +131,8 @@ export interface GateProposalRow {
   branch: string | null;
   repo: string | null;
   targetHost: string | null;
+  step: string | null;
+  deployCommand: string | null;
   reviewerType: string | null;
   reviewedAt: Date | null;
   updatedAt: Date | null;
@@ -235,6 +241,8 @@ export function deriveSessionGates(
         branch: shipped.branch,
         repo: shipped.repo,
         targetHost: shipped.targetHost,
+        step: shipped.step,
+        deployCommand: shipped.deployCommand,
         approvedAt: iso(shipped.reviewedAt ?? shipped.updatedAt) ?? null,
       }
     : null;
@@ -256,6 +264,8 @@ async function readGateProposals(
       branch: drizzleSql<string | null>`${proposals.data} ->> 'branch'`,
       repo: drizzleSql<string | null>`${proposals.data} ->> 'repo'`,
       targetHost: drizzleSql<string | null>`${proposals.data} ->> 'targetHost'`,
+      step: drizzleSql<string | null>`${proposals.data} ->> 'step'`,
+      deployCommand: drizzleSql<string | null>`${proposals.data} ->> 'deployCommand'`,
       reviewerType: users.userType,
       reviewedAt: proposals.reviewedAt,
       updatedAt: proposals.updatedAt,
@@ -287,6 +297,8 @@ async function readOwnerDeploys(
       branch: drizzleSql<string | null>`${proposals.data} ->> 'branch'`,
       repo: drizzleSql<string | null>`${proposals.data} ->> 'repo'`,
       targetHost: drizzleSql<string | null>`${proposals.data} ->> 'targetHost'`,
+      step: drizzleSql<string | null>`${proposals.data} ->> 'step'`,
+      deployCommand: drizzleSql<string | null>`${proposals.data} ->> 'deployCommand'`,
       reviewedAt: proposals.reviewedAt,
       updatedAt: proposals.updatedAt,
     })
@@ -315,15 +327,22 @@ async function readOwnerDeploys(
     branch: r.branch,
     repo: r.repo,
     targetHost: r.targetHost,
+    step: r.step,
+    deployCommand: r.deployCommand,
     approvedAt: iso(r.reviewedAt ?? r.updatedAt) ?? null,
     sessionId: r.sessionId,
   }));
 }
 
-/** The gates section. Throws on a failed read; the packet makes it `unavailable`. */
+/**
+ * The gates section. Throws on a failed read; the packet makes it `unavailable`.
+ * `ownerDeploys` is read only for the session's OWNER (`viewerId === row.userId`): someone
+ * seated in this session's room may read the session, never the owner's other sessions.
+ */
 export async function readSessionGates(
   database: typeof db,
-  row: { id: string; playbookId: string | null; userId: string }
+  row: { id: string; playbookId: string | null; userId: string },
+  viewerId: string
 ): Promise<{
   items: PacketGateItem[];
   deploy: PacketDeployApproval | null;
@@ -332,7 +351,9 @@ export async function readSessionGates(
   const [sessionProcess, rows, ownerDeploys] = await Promise.all([
     loadSessionProcess({ sessionId: row.id, playbookId: row.playbookId }),
     readGateProposals(database, row.id),
-    readOwnerDeploys(database, row.userId),
+    viewerId === row.userId
+      ? readOwnerDeploys(database, row.userId)
+      : Promise.resolve([]),
   ]);
   return {
     ...deriveSessionGates(sessionProcess?.stages ?? [], rows),

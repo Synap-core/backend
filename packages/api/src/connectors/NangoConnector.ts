@@ -32,8 +32,10 @@ const NangoRecordsResponseSchema = z.object({
 const NangoConnectionSchema = z.object({
   connection_id: z.string(),
   provider_config_key: z.string(),
-  // `created_at` is absent on some self-hosted list shapes — keep it optional so
-  // a present-but-unfiltered connection still parses.
+  // The creation date: the `GET /connection` list names it `created`, the
+  // one-connection read `created_at`. Both optional, so a connection with
+  // neither still parses (its date is then unknown, never "now").
+  created: z.string().optional(),
   created_at: z.string().optional(),
   last_fetched_at: z.string().optional(),
   // The Connect end-user the connection belongs to. We filter on this
@@ -56,6 +58,22 @@ const NangoConnectionSchema = z.object({
   // otherwise a dead connection only surfaces when a dispatch picks it.
   errors: z.array(z.unknown()).nullable().optional(),
 });
+
+type NangoConnectionRow = z.infer<typeof NangoConnectionSchema>;
+
+function createdAtOf(c: NangoConnectionRow): Date | null {
+  const at = c.created ?? c.created_at;
+  return at ? new Date(at) : null;
+}
+
+/**
+ * Bound to a pod object (`end_user.tags.entityId|projectId`): a deliberate
+ * second account of the provider, never superseded by a reconnect.
+ */
+function isObjectScoped(c: NangoConnectionRow): boolean {
+  const t = c.end_user?.tags;
+  return !!t && (t.entityId != null || t.projectId != null);
+}
 
 const NangoConnectionsResponseSchema = z.object({
   connections: z.array(NangoConnectionSchema),
@@ -276,9 +294,10 @@ export class NangoConnector implements SyncConnector, ConnectionBroker {
         connectionId: c.connection_id,
         provider: c.provider_config_key,
         userId,
-        createdAt: c.created_at ? new Date(c.created_at) : null,
+        createdAt: createdAtOf(c),
         lastSyncAt: c.last_fetched_at ? new Date(c.last_fetched_at) : undefined,
         hasError: Array.isArray(c.errors) && c.errors.length > 0,
+        objectScoped: isObjectScoped(c),
       },
     };
   }
@@ -433,9 +452,10 @@ export class NangoConnector implements SyncConnector, ConnectionBroker {
         connectionId: c.connection_id,
         provider: c.provider_config_key,
         userId,
-        createdAt: c.created_at ? new Date(c.created_at) : null,
+        createdAt: createdAtOf(c),
         lastSyncAt: c.last_fetched_at ? new Date(c.last_fetched_at) : undefined,
         hasError: Array.isArray(c.errors) && c.errors.length > 0,
+        objectScoped: isObjectScoped(c),
       }));
     return { ok: true, connections };
   }
@@ -594,67 +614,11 @@ export class NangoConnector implements SyncConnector, ConnectionBroker {
   }
 
   /**
-   * Idempotency for `(user, provider)`: keep ONE connection, revoke stale dups.
-   *
-   * Reconnecting a provider creates a brand-new Nango connection without clearing
-   * the old one (we saw a user accumulate two `google` connections). This keeps
-   * the MOST RECENT un-scoped connection and revokes the older un-scoped ones —
-   * EXCEPT connections bound to a specific pod object (an `end_user.tags.entityId`
-   * or `.projectId`), which are deliberately preserved (a user may hold several
-   * accounts of the same provider, one per entity/project).
-   *
-   * Returns the connectionIds it revoked.
-   */
-  /**
    * A self-hosted pod brokers its own Nango: there is no control plane to
    * report to, and the failure is already on the pod's own sync status.
    */
   async reportSyncFailure(): Promise<SyncFailureReportResult> {
     return { sent: false, reason: "no-operator" };
-  }
-
-  async dedupeConnections(userId: string, provider: string): Promise<string[]> {
-    const res = await fetch(`${this.host}/connection`, {
-      headers: this.authHeaders(),
-    });
-    if (!res.ok) return [];
-    const parsed = NangoConnectionsResponseSchema.safeParse(await res.json());
-    if (!parsed.success) return [];
-
-    const isObjectScoped = (c: { end_user?: { tags?: unknown } | null }) => {
-      const t = c.end_user?.tags;
-      return (
-        !!t &&
-        typeof t === "object" &&
-        ((t as Record<string, unknown>).entityId != null ||
-          (t as Record<string, unknown>).projectId != null)
-      );
-    };
-
-    // This user's connections for this provider that are NOT object-scoped.
-    const plain = parsed.data.connections
-      .filter(
-        (c) =>
-          c.end_user?.id === userId &&
-          c.provider_config_key === provider &&
-          !isObjectScoped(c)
-      )
-      // Most recent first (created_at may be absent → treat as oldest).
-      .sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? ""));
-
-    // Keep [0] (newest); revoke the rest.
-    const revoked: string[] = [];
-    for (const c of plain.slice(1)) {
-      try {
-        // provider_config_key is required by Nango's delete; every `c` here is
-        // already filtered to `provider`, so pass it.
-        await this.revokeConnection(c.connection_id, provider);
-        revoked.push(c.connection_id);
-      } catch {
-        // Best-effort — a failed revoke must not break the connect flow.
-      }
-    }
-    return revoked;
   }
 
   /**
