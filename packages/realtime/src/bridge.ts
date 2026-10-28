@@ -71,6 +71,29 @@ export function recordYjsPersistFailure(): void {
   persistFailureCount += 1;
 }
 
+/** The Socket.IO request path (server.ts `path`, shared by /presence and /yjs). */
+const SOCKET_IO_PATH = "/socket.io/";
+
+/**
+ * Who answers an HTTP request to the realtime port: the bridge (its own
+ * endpoints and the health checks), Socket.IO (its path), or nobody (404).
+ */
+export function routeHttpRequest(
+  url: string
+): "bridge" | "socket.io" | "not-found" {
+  const path = url.split("?")[0];
+  if (
+    path.startsWith("/bridge/") ||
+    path.startsWith("/yjs/") ||
+    path === "/health" ||
+    path === "/health/yjs"
+  ) {
+    return "bridge";
+  }
+  if (path.startsWith(SOCKET_IO_PATH)) return "socket.io";
+  return "not-found";
+}
+
 /**
  * Setup Socket.IO bridge HTTP endpoint
  */
@@ -92,30 +115,26 @@ export function setupBridge(
   httpServer.on(
     "request",
     async (req: IncomingMessage, res: ServerResponse) => {
-      const url = req.url || "";
+      const route = routeHttpRequest(req.url || "");
 
-      // Handle bridge endpoints
-      if (url.startsWith("/bridge/")) {
+      if (route === "bridge") {
         await handleBridgeRequest(io, req, res);
         return;
       }
 
-      // Handle Yjs endpoints
-      if (url.startsWith("/yjs/")) {
-        await handleBridgeRequest(io, req, res);
+      if (route === "socket.io") {
+        // Pass through to original handlers (Socket.IO)
+        for (const listener of originalListeners) {
+          listener(req, res);
+        }
         return;
       }
 
-      // Handle health check at root
-      if (url === "/health" && req.method === "GET") {
-        await handleBridgeRequest(io, req, res);
-        return;
-      }
-
-      // Pass through to original handlers (Socket.IO)
-      for (const listener of originalListeners) {
-        listener(req, res);
-      }
+      // Anything else used to be handed to Socket.IO, which ignores paths
+      // outside its own and never answered: the request hung until the client
+      // gave up (Caddy's /realtime/* route did exactly that).
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Not found" }));
     }
   );
 
@@ -192,37 +211,30 @@ async function handleBridgeRequest(
 }
 
 /**
- * Validate the bridge secret (if configured).
+ * Validate the bridge secret.
  *
- * Returns true when the request may proceed. On failure it writes the 401 and
- * returns false — the caller must return immediately.
+ * Returns true when the request may proceed. On failure it writes the response
+ * and returns false — the caller must return immediately.
  *
- * When BRIDGE_SECRET is unset the bridge stays local-dev compatible and every
- * request passes, which is the pre-existing behaviour of /bridge/emit.
- */
-/**
- * Warn ONCE, loudly, if the bridge is running unauthenticated in a non-dev env.
+ * In PRODUCTION an empty `BRIDGE_SECRET` fails CLOSED: every request gets a
+ * 503 and the realtime log says why, once. `/bridge/emit` pushes events to
+ * any room, `/yjs/:roomId/state` reads any board and `/yjs/:roomId/restore`
+ * overwrites any board, so "no secret" must never mean "no auth" on a pod
+ * (anything on the compose network could call them). The installer generates
+ * the secret; backend, workers and realtime share it.
  *
- * `BRIDGE_SECRET` is empty by default (`deploy/docker-compose.yml` passes
- * `${BRIDGE_SECRET:-}`), and `bridgeSecretOk` passes everything when it is
- * unset — so on a default deploy `POST /yjs/:roomId/restore`, which can
- * OVERWRITE any board, is open to anything that can reach the port. The
- * loopback bind is what actually contains that today; the auth is opt-in.
- * `ALLOW_INSECURE_YJS` shouts when it weakens the Yjs gate, so this should too.
+ * Outside production an unset secret still passes, so a local dev stack with
+ * no `.env` keeps working.
  */
 let warnedMissingBridgeSecret = false;
-function warnIfBridgeUnauthenticated(): void {
+function warnBridgeSecretMissingOnce(): void {
   if (warnedMissingBridgeSecret) return;
   warnedMissingBridgeSecret = true;
-  if (process.env.NODE_ENV === "production") {
-    console.warn(
-      "[Bridge] ⚠️  BRIDGE_SECRET is not set in production — /bridge/emit and " +
-        "the /yjs/:roomId/{state,restore} endpoints are UNAUTHENTICATED. " +
-        "/restore can overwrite any board. Set BRIDGE_SECRET in .env (it is " +
-        "shared by backend, workers and realtime) and keep the realtime port " +
-        "bound to 127.0.0.1."
-    );
-  }
+  console.error(
+    "[Bridge] BRIDGE_SECRET is not set in production — refusing /bridge/emit " +
+      "and /yjs/:roomId/{state,restore} (503). Set BRIDGE_SECRET in .env (one " +
+      "value shared by backend, workers and realtime) and restart."
+  );
 }
 
 export function bridgeSecretOk(
@@ -231,8 +243,11 @@ export function bridgeSecretOk(
 ): boolean {
   const bridgeSecret = process.env.BRIDGE_SECRET;
   if (!bridgeSecret) {
-    warnIfBridgeUnauthenticated();
-    return true;
+    if (process.env.NODE_ENV !== "production") return true;
+    warnBridgeSecretMissingOnce();
+    res.writeHead(503, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Bridge secret not configured" }));
+    return false;
   }
 
   const provided = req.headers["x-bridge-secret"];
@@ -253,7 +268,6 @@ async function handleEmit(
   res: ServerResponse
 ) {
   try {
-    // Validate bridge secret (if configured)
     if (!bridgeSecretOk(req, res)) return;
 
     // Parse request body

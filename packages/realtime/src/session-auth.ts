@@ -27,7 +27,12 @@ export type HandshakeIdentity =
       /** Set when the token was a device's: the socket lives only as long as it. */
       deviceId?: string;
     }
-  | { ok: false; error: string };
+  | {
+      ok: false;
+      error: string;
+      /** The check could not run (Kratos or the DB unreachable): not a verdict. */
+      unavailable?: true;
+    };
 
 export async function verifyHandshakeUser(
   auth: Record<string, unknown> | undefined
@@ -48,6 +53,7 @@ export async function verifyHandshakeUser(
       return {
         ok: false,
         error: "Realtime auth: session validation unavailable",
+        unavailable: true,
       };
     }
     const identity = matchIdentity(device, userId);
@@ -73,6 +79,7 @@ export async function verifyHandshakeUser(
     return {
       ok: false,
       error: "Realtime auth: session validation unavailable",
+      unavailable: true,
     };
   }
 
