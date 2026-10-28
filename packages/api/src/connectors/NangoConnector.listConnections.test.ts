@@ -38,6 +38,48 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("NangoConnector.listConnectionsResult — the date and scope reach the pod", () => {
+  it("reads the list's `created` date and the object scope from end_user.tags", async () => {
+    // Nango's list names the date `created` (its one-connection read says
+    // `created_at`); read as `created_at` only, every date was null and the
+    // pod could not tell which connection is the newest.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          connections: [
+            {
+              connection_id: "plain",
+              provider_config_key: "google",
+              created: "2026-10-28T10:20:00.000Z",
+              end_user: { id: "user-1" },
+            },
+            {
+              connection_id: "scoped",
+              provider_config_key: "google",
+              created: "2026-09-01T00:00:00.000Z",
+              end_user: { id: "user-1", tags: { entityId: "e-1" } },
+            },
+          ],
+        })
+      )
+    );
+    const r = await connector.listConnectionsResult("user-1");
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(
+      r.connections.map((c) => [
+        c.connectionId,
+        c.createdAt?.toISOString(),
+        c.objectScoped,
+      ])
+    ).toEqual([
+      ["plain", "2026-10-28T10:20:00.000Z", false],
+      ["scoped", "2026-09-01T00:00:00.000Z", true],
+    ]);
+  });
+});
+
 describe("NangoConnector.listConnectionsResult — fault ≠ empty", () => {
   it("HTTP 429 (rate-limit) → ok:false, NOT an empty success", async () => {
     vi.stubGlobal(
