@@ -126,6 +126,26 @@ export function resolveQueryProfileSlug(
 }
 
 /**
+ * The role category a query node selects by, read like `profileSlug` (top
+ * level, or nested in `filter`). A category names every role tagged with it
+ * (`profiles.role_category`, e.g. `announcement-material` on `proof-point`),
+ * so a flow selects "everything wearing an announcement role" without listing
+ * the roles. `""` when the node has none.
+ */
+export function resolveQueryRoleCategory(
+  data: { roleCategory?: unknown; filter?: unknown },
+  context: StepContext
+): string {
+  const filterObj = asQueryFilterObject(data.filter);
+  const raw =
+    (filterObj && typeof filterObj.roleCategory === "string"
+      ? filterObj.roleCategory
+      : undefined) ??
+    (typeof data.roleCategory === "string" ? data.roleCategory : undefined);
+  return raw ? resolveTemplate(raw, context) : "";
+}
+
+/**
  * A query node's filter that is present but does not read as an object: a
  * string that renders empty or is not a JSON object after templating, or a
  * value that is neither an object nor a string.
@@ -230,7 +250,12 @@ export function parseQueryFilterConditions(
   };
 
   for (const [rawKey, rawValue] of Object.entries(filterObj)) {
-    if (rawKey === "profileSlug" || rawValue === undefined || rawValue === null)
+    if (
+      rawKey === "profileSlug" ||
+      rawKey === "roleCategory" ||
+      rawValue === undefined ||
+      rawValue === null
+    )
       continue;
     // Precedence 1+2: an explicit `properties.` prefix pins the key to jsonb;
     // only a BARE name is eligible to resolve to a real column.

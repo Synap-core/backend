@@ -814,6 +814,7 @@ describe("D1 closing a goal is a person's act, whatever the pod's rules", () => 
     const res = await setTrackStatus({
       trackId,
       status: "paused",
+      expectedStatus: "active",
       actor: agent,
     });
     expect(res.status).toBe("updated");
@@ -826,6 +827,7 @@ describe("D1 closing a goal is a person's act, whatever the pod's rules", () => 
       trackId,
       status: "completed",
       verdict: "partly_met",
+      expectedStatus: "active",
       actor: agent,
     });
     expect(res.status).toBe("proposed");
@@ -850,6 +852,7 @@ describe("D1 closing a goal is a person's act, whatever the pod's rules", () => 
           trackId: closing,
           status: "completed",
           verdict: "met",
+          expectedStatus: "active",
           actor: agent,
         })
       ).status
@@ -863,6 +866,7 @@ describe("D1 closing a goal is a person's act, whatever the pod's rules", () => 
           trackId: dropping,
           status: "archived",
           verdict: "no_longer_needed",
+          expectedStatus: "active",
           actor: agent,
         })
       ).status
@@ -881,6 +885,7 @@ describe("D1 closing a goal is a person's act, whatever the pod's rules", () => 
           trackId,
           status: "archived",
           verdict: "mistake",
+          expectedStatus: "active",
           actor: agent,
         })
       ).status

@@ -56,7 +56,10 @@ import {
   SUGGESTIONS_CAP,
   needsYouFoldOf,
   type GroupableSignal,
+  convertibleGoalsTitle,
   type NeedsYouAccessRequest,
+  type NeedsYouConvertibleGoal,
+  type NeedsYouConvertibleGoals,
   type NeedsYouInvite,
 } from "@synap-core/types/needs-you";
 import {
@@ -163,7 +166,15 @@ export type SignalKind =
    * app — Accept on the row, Decline beside it. No door (not a member yet);
    * what the two verbs act on rides in `invite`.
    */
-  | "space-invite";
+  | "space-invite"
+  /**
+   * The pod's ONE "Make them goals" card (`convertible-goals.ts`; founder
+   * decision D-3, 2026-10-26): the viewer's readable `goal` / `objective` /
+   * `okr` entities never made a goal. Its verb opens a review; each entity
+   * converts through the one convert door, by the person's act only. The
+   * entities ride in `convertible`.
+   */
+  | "convertible-goals";
 
 /**
  * Every {@link SignalKind}, as a value — what `signals.list({ kinds })`
@@ -183,6 +194,7 @@ export const SIGNAL_KINDS = [
   "capture",
   "access-request",
   "space-invite",
+  "convertible-goals",
 ] as const satisfies readonly SignalKind[];
 
 type _SignalKindsListed =
@@ -438,6 +450,11 @@ export interface Signal {
    */
   invite?: NeedsYouInvite;
   /**
+   * `convertible-goals` only: the entities the card reviews, newest first,
+   * each with the projects its goal may land in (`NeedsYouConvertibleGoals`).
+   */
+  convertible?: NeedsYouConvertibleGoals;
+  /**
    * `proposal-cluster` only: the member proposal ids the cluster sampled
    * (`sampleProposalIds`, capped at 20 — `count` may exceed it). What a batch
    * decision over the row acts on; a surface batches a cluster only when
@@ -532,6 +549,7 @@ const _KIND_SPECIFIC_SIGNAL_FIELDS = [
   "access",
   "invite",
   "proposalIds",
+  "convertible",
   "package",
 ] as const satisfies ReadonlyArray<keyof Signal>;
 
@@ -1608,6 +1626,51 @@ export function signalsFromSpaceInvites(
     .map((r) => signalFromSpaceInvite(r, now));
 }
 
+/** The viewer's convertible entities, as `listConvertibleGoals` reads them. */
+export interface ConvertibleGoalsSignalInput {
+  rows: readonly NeedsYouConvertibleGoal[];
+  /** The scan hit its cap: there are more entities than `rows`. */
+  truncated: boolean;
+  /** When the newest of them was created — the card's time. */
+  newestAt: Date | null;
+}
+
+/**
+ * The convertible entities → the pod's ONE card, or none when there is no
+ * entity (OMIT). A decision only the person makes (D-3: never converted on
+ * its own), so the `governance` category, like an invite. It never expires.
+ *
+ * Its time is the newest entity's, but it is never folded into "Older": the
+ * card is a standing decision, not news — it stays in view until the person
+ * acts on it (or every entity has become a goal).
+ */
+export function signalsFromConvertibleGoals(
+  input: ConvertibleGoalsSignalInput | undefined,
+  now: Date = new Date()
+): Signal[] {
+  if (!input || input.rows.length === 0) return [];
+  const convertible: NeedsYouConvertibleGoals = {
+    entities: [...input.rows],
+    truncated: input.truncated,
+  };
+  return [
+    {
+      id: "convertible-goals",
+      kind: "convertible-goals",
+      title: convertibleGoalsTitle(convertible),
+      count: 1,
+      occurredAt: input.newestAt ?? now,
+      target: null,
+      category: "governance",
+      lifetimeHours: null,
+      convertible,
+      groupKey: null,
+      ageBucket: "recent",
+      repeatCount: 1,
+    },
+  ];
+}
+
 /** The session ids behind an owed page. */
 export function owedSessionIdsOf(
   owedSlots: readonly OwedSlotSignalInput[]
@@ -1815,6 +1878,8 @@ export function unionNeedsYou(args: {
   accessRequests?: AccessRequestsInput;
   /** Open invites to other spaces of this pod (the viewer's). Absent ⇒ none. */
   spaceInvites?: readonly SpaceInviteSignalInput[];
+  /** The viewer's convertible goal entities (one card). Absent ⇒ none. */
+  convertibleGoals?: ConvertibleGoalsSignalInput;
   /** The clock `ageBucket` is measured against. Absent ⇒ now. */
   now?: Date;
 }): Signal[] {
@@ -1831,6 +1896,7 @@ export function unionNeedsYou(args: {
       ...liveCaptureRows(args).map((r) => signalFromUnfinishedCapture(r, now)),
       ...signalsFromAccessRequests(args.accessRequests, now),
       ...signalsFromSpaceInvites(args.spaceInvites, now),
+      ...signalsFromConvertibleGoals(args.convertibleGoals, now),
       ...args.clusters.map((c) =>
         signalFromCluster(
           c,
@@ -2147,6 +2213,11 @@ export function countNeedsYou(args: {
   spaceInvites?: readonly SpaceInviteSignalInput[];
   /** The invite scan hit its cap, so `invites` is a floor. */
   spaceInvitesTruncated?: boolean;
+  /**
+   * The SAME input `unionNeedsYou` takes — ONE card however many entities, so
+   * a capped entity scan never makes the number a floor.
+   */
+  convertibleGoals?: ConvertibleGoalsSignalInput;
   /** The clock an invite's expiry is read against (the list's). Absent ⇒ now. */
   now?: Date;
   /** The SAME session names `unionNeedsYou` takes — which clusters join a session's card. */
@@ -2193,6 +2264,12 @@ export function countNeedsYou(args: {
    * viewer's own; 0 under any lens (an invite lives in no space they are in).
    */
   invites: number;
+  /**
+   * The "Make them goals" card (`convertible-goals` row): 1 when the viewer
+   * has an entity of a retired goal kind never made a goal, else 0; 0 under
+   * any lens (the card is the pod's, like an invite).
+   */
+  convertible: number;
   /**
    * Undecided agent drafts that owe you something — ONE per draft, exactly
    * the `draft-asks` rows the `proposed` lens returns (the same fold,
@@ -2270,6 +2347,7 @@ export function countNeedsYou(args: {
   // The SAME rows the list renders, counted — never a second rule.
   const requests = signalsFromAccessRequests(args.accessRequests).length;
   const invites = signalsFromSpaceInvites(args.spaceInvites, args.now).length;
+  const convertible = signalsFromConvertibleGoals(args.convertibleGoals).length;
   const drafts = args.draftAsks
     ? signalsFromDraftAsks(args.draftAsks).length
     : 0;
@@ -2281,7 +2359,8 @@ export function countNeedsYou(args: {
     notifications +
     captures +
     requests +
-    invites;
+    invites +
+    convertible;
   const folds: NeedsYouFoldCounts = {
     ...owedFolds,
     // ONE headline number: the folds never state a second one (M5).
@@ -2310,6 +2389,7 @@ export function countNeedsYou(args: {
     captures,
     requests,
     invites,
+    convertible,
     drafts,
     draftsTruncated: args.draftAsksTruncated ?? false,
     suggestions: Math.min(buckets.suggestions.length, SUGGESTIONS_CAP),
