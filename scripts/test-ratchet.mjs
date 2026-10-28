@@ -41,6 +41,15 @@
  * import error or a bad `vi.mock` makes a file test nothing — vitest does not
  * count that as a failed test; see test-floor.mjs class 2).
  *
+ * ── FLAKE RETRY (scripts/test-ratchet-retry.mjs) ─────────────────────────────
+ * Whatever runs the tests (a shard, a full run, the e2e lane) re-runs each NEW
+ * failure (red, not in the baseline) ONCE, in the same job, under its package's
+ * own flags, and writes a `<report id>#retry` report beside the first. The
+ * judge reads both: a file that passed on the retry is `[flaky]` — listed in
+ * the summary (and the CI step summary), never counted, never silently green;
+ * a file that failed twice, or that the retry did not report, is red as before.
+ * More than MAX_RETRY_FILES new failures are not retried (a real break).
+ *
  * ── WHAT IT DOES NOT SEE (measured, not implied) ─────────────────────────────
  * Granularity is the FILE. A baseline file that fails 1 test today and 9
  * tomorrow stays "expected red". Burn the list down; do not grow files in it.
@@ -69,22 +78,34 @@
 
 import { spawn } from "node:child_process";
 import {
+  appendFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
   readdirSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { discoverTripwires } from "./tripwire-discovery.mjs";
 import {
+  API_FILES_REPORT,
   SHARDED_DIRS,
+  loadShardPlan,
   mergeShardReports,
   parseShard,
+  planFits,
   runsForShard,
   shardReportId,
 } from "./test-ratchet-shards.mjs";
+import {
+  MAX_RETRY_FILES,
+  applyRetry,
+  newFailures,
+  retryArgs,
+  retryReportId,
+} from "./test-ratchet-retry.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const BASELINE_PATH = join(REPO_ROOT, "scripts", "test-ratchet-baseline.txt");
@@ -315,6 +336,21 @@ function readRunReport(dir, run) {
   return readReport(dir, run.id);
 }
 
+// The retry reports of a run (one per shard for a sharded package; any may be
+// absent: only the shards with new failures retried). null when there is none.
+function readRetryReport(dir, run) {
+  const ids =
+    SHARDS && SHARDED_DIRS.includes(run.dir)
+      ? Array.from({ length: SHARDS }, (_, i) =>
+          retryReportId(shardReportId(run.id, i + 1))
+        )
+      : [retryReportId(run.id)];
+  const found = ids.map((id) => readReport(dir, id)).filter(Boolean);
+  return found.length
+    ? { testResults: found.flatMap((r) => r.testResults ?? []) }
+    : null;
+}
+
 const tripwireOwner = (file) =>
   file.match(/^((?:packages|apps)\/[^/]+)\//)?.[1] ?? ".";
 
@@ -326,8 +362,113 @@ const runs = allRuns.filter((r) => inScope(r.dir));
 const reportsDir = REPORTS_IN ? resolve(REPORTS_IN) : DEFAULT_REPORTS;
 mkdirSync(reportsDir, { recursive: true });
 
+// The baseline is read before anything runs: the flake retry needs to know
+// which failures are new.
+const baselineText = existsSync(BASELINE_PATH)
+  ? readFileSync(BASELINE_PATH, "utf8")
+  : "";
+const { entries: baseline, problems: parseProblems } =
+  parseBaseline(baselineText);
+
+// A retry report left by an earlier run in the same directory must never
+// vouch for this one: each run deletes its retry report before it starts.
+const clearRetry = (list) => {
+  for (const r of list)
+    rmSync(reportFile(reportsDir, retryReportId(r.reportId ?? r.id)), {
+      force: true,
+    });
+};
+
+// Re-run each NEW failure of the runs just executed, once, under the run's own
+// flags (scripts/test-ratchet-retry.mjs). The judge reads the retry reports.
+async function retryNewFailures(executed) {
+  const plan = [];
+  for (const r of executed) {
+    const id = r.reportId ?? r.id;
+    const report = readReport(reportsDir, id);
+    if (!report) continue;
+    const files = newFailures(classifyReport(report).files, baseline);
+    if (files.length) plan.push({ r, id, files });
+  }
+  const total = plan.reduce((n, p) => n + p.files.length, 0);
+  if (total === 0) return;
+  if (total > MAX_RETRY_FILES) {
+    console.log(
+      `\ntest-ratchet: ${total} new failure(s), more than ${MAX_RETRY_FILES}: not retried (that many at once is a real break, not a flake).`
+    );
+    return;
+  }
+  console.log(
+    `\ntest-ratchet: retrying ${total} new failure(s) once: ${plan.flatMap((p) => p.files).join(", ")}`
+  );
+  await pool(plan, CONCURRENCY, (p) =>
+    runVitest(
+      {
+        id: `${p.id} (retry)`,
+        dir: p.r.dir,
+        args: retryArgs(
+          p.r.args,
+          p.files.map((f) => (p.r.dir === "." ? f : relative(p.r.dir, f)))
+        ),
+      },
+      reportFile(reportsDir, retryReportId(p.id))
+    )
+  );
+}
+
+// Every test file of a package, as vitest itself resolves them (its own
+// include/exclude), relative to the package; null when the listing fails.
+function listVitestFiles(run) {
+  const out = join(
+    reportsDir,
+    `${run.id.replace(/[^a-z0-9]+/gi, "_")}.list.json`
+  );
+  return new Promise((done) => {
+    const child = spawn(
+      "npx",
+      ["vitest", "list", "--filesOnly", `--json=${out}`, ...run.args],
+      { cwd: join(REPO_ROOT, run.dir), env: process.env, stdio: "ignore" }
+    );
+    child.on("error", () => done(null));
+    child.on("close", (code) => {
+      try {
+        if (code !== 0) throw new Error(`exit ${code}`);
+        const base = join(REPO_ROOT, run.dir);
+        const files = JSON.parse(readFileSync(out, "utf8")).map((e) =>
+          relative(base, e.file).replaceAll("\\", "/")
+        );
+        done(files.length ? files.sort() : null);
+      } catch {
+        done(null);
+      }
+    });
+  });
+}
+
+let executed = [];
 if (!REPORTS_IN) {
-  const toRun = runsForShard(runs, SHARD);
+  let shardOpts = {};
+  if (SHARD) {
+    // By measured time when the committed plan fits (test-ratchet-shards.mjs).
+    const plan = loadShardPlan();
+    const apiRun = runs.find((r) => SHARDED_DIRS.includes(r.dir));
+    let apiFiles = null;
+    if (planFits(plan, SHARD.n) && apiRun) {
+      apiFiles = await listVitestFiles(apiRun);
+      if (apiFiles)
+        writeFileSync(
+          join(reportsDir, API_FILES_REPORT),
+          `${JSON.stringify({ dir: apiRun.dir, files: apiFiles })}\n`
+        );
+    }
+    console.log(
+      apiFiles
+        ? `test-ratchet: shard plan of ${plan.generatedAt?.slice(0, 10)} (scripts/ci/shard-plan.json), ${apiFiles.length} ${apiRun.dir} files listed`
+        : `test-ratchet: no usable shard plan${plan ? " (plan does not fit or vitest list failed)" : ""}: vitest --shard=${SHARD.k}/${SHARD.n} by count, other packages in shard 1`
+    );
+    shardOpts = { plan, apiFiles };
+  }
+  const toRun = runsForShard(runs, SHARD, shardOpts);
   console.log(
     `test-ratchet: ${toRun.length} package suite(s)${SHARD ? ` (shard ${SHARD.k}/${SHARD.n})` : ""}, ${CONCURRENCY} at a time`
   );
@@ -336,9 +477,11 @@ if (!REPORTS_IN) {
   const order = [...toRun].sort((a, b) =>
     a.dir === "packages/api" ? -1 : b.dir === "packages/api" ? 1 : 0
   );
+  clearRetry(order);
   await pool(order, CONCURRENCY, (r) =>
     runVitest(r, reportFile(reportsDir, r.reportId ?? r.id))
   );
+  executed = order;
 }
 
 // A shard only runs and writes reports; the "Full suite" job judges them all.
@@ -359,36 +502,48 @@ if (SHARD) {
       if (!byDir.has(dir)) byDir.set(dir, []);
       byDir.get(dir).push(dir === "." ? t : t.slice(dir.length + 1));
     }
-    await pool(
-      [...byDir].map(([dir, files]) => ({
-        id: `tripwires:${dir}`,
-        dir,
-        args: files,
-      })),
-      CONCURRENCY,
-      (r) => runVitest(r, reportFile(reportsDir, r.id))
+    const tripwireShardRuns = [...byDir].map(([dir, files]) => ({
+      id: `tripwires:${dir}`,
+      dir,
+      args: files,
+    }));
+    clearRetry(tripwireShardRuns);
+    await pool(tripwireShardRuns, CONCURRENCY, (r) =>
+      runVitest(r, reportFile(reportsDir, r.id))
     );
+    executed = executed.concat(tripwireShardRuns);
   }
+  await retryNewFailures(executed);
   console.log(
     `\ntest-ratchet: shard ${SHARD.k}/${SHARD.n} done; reports in ${relative(REPO_ROOT, reportsDir)}. The "Full suite" job judges them.`
   );
   process.exit(0);
 }
+if (!REPORTS_IN) await retryNewFailures(executed);
 
 const problems = [];
 const results = new Map(); // repo-relative file → { ok, reason }
 const perRun = [];
+const flaky = []; // { file, firstReason, run } — failed, then passed on the retry
 const collect = (run) => {
   const report = readRunReport(reportsDir, run);
   if (!report) {
     const sharded = SHARDS && SHARDED_DIRS.includes(run.dir);
     problems.push({
       kind: "no-report",
-      detail: `${run.id}: ${sharded ? `at least one of its ${SHARDS} shard reports is missing — a shard crashed or never ran` : "the runner produced no parseable JSON — the suite crashed before reporting"}. Reproduce: cd ${run.dir} && npx vitest run ${run.args.join(" ")}`,
+      detail: `${run.id}: ${sharded ? `at least one of its ${SHARDS} shard reports is missing — a shard crashed or never ran` : "the runner produced no parseable JSON — the suite crashed before reporting"}. Reproduce: cd ${run.dir} && npx vitest run ${run.args.length > 8 ? `<${run.args.length} args>` : run.args.join(" ")}`,
     });
     return;
   }
-  const c = classifyReport(report);
+  const first = classifyReport(report);
+  const retry = readRetryReport(reportsDir, run);
+  const retried = applyRetry(
+    first.files,
+    retry ? classifyReport(retry).files : null,
+    baseline
+  );
+  for (const fl of retried.flaky) flaky.push({ ...fl, run: run.id });
+  const c = { ...first, files: retried.files };
   for (const [f, v] of c.files) results.set(f, v);
   const failedFiles = [...c.files.values()].filter((v) => !v.ok).length;
   perRun.push({
@@ -435,9 +590,11 @@ const tripwireRuns = [...unreached].map(([dir, files]) => ({
   allowEmpty: false,
 }));
 if (!REPORTS_IN && tripwireRuns.length) {
+  clearRetry(tripwireRuns);
   await pool(tripwireRuns, CONCURRENCY, (r) =>
     runVitest(r, reportFile(reportsDir, r.id))
   );
+  await retryNewFailures(tripwireRuns);
 }
 tripwireRuns.forEach(collect);
 const unrun = tripwires.filter((t) => !results.has(t));
@@ -446,6 +603,32 @@ if (unrun.length) {
     kind: "tripwire-unrun",
     detail: `${unrun.length} tripwire file(s) appear in no report (excluded by their package's vitest config?):\n${unrun.map((f) => `      ${f}`).join("\n")}`,
   });
+}
+
+// A planned split must run every file it planned from: a file the plan gave to
+// no shard (or a shard that fell back to another split) is red, never unrun.
+if (SHARDS) {
+  let listed = null;
+  try {
+    listed = JSON.parse(
+      readFileSync(join(reportsDir, API_FILES_REPORT), "utf8")
+    );
+  } catch {
+    // no planned shard wrote a list: the shards split by vitest's own --shard
+  }
+  if (listed) {
+    const unrunApi = listed.files
+      .map((f) => `${listed.dir}/${f}`)
+      .filter((f) => inScope(f) && !results.has(f));
+    if (unrunApi.length)
+      problems.push({
+        kind: "shard-unrun",
+        detail: `${unrunApi.length} ${listed.dir} test file(s) were listed by the shards but appear in no shard report (the shard plan gave them no shard, or a shard fell back to another split):\n${unrunApi
+          .slice(0, 20)
+          .map((f) => `      ${f}`)
+          .join("\n")}`,
+      });
+  }
 }
 
 // Non-vacuity of the whole run.
@@ -483,12 +666,7 @@ for (const e of floors) {
   }
 }
 
-// The ratchet itself.
-const baselineText = existsSync(BASELINE_PATH)
-  ? readFileSync(BASELINE_PATH, "utf8")
-  : "";
-const { entries: baseline, problems: parseProblems } =
-  parseBaseline(baselineText);
+// The ratchet itself (the baseline was read before the runs).
 for (const p of parseProblems)
   problems.push({ kind: "baseline-format", detail: p });
 
@@ -507,7 +685,7 @@ const ownerDir = (file) =>
 const ownedHere = (file) => inScope(file) && ownerDir(file) !== null;
 
 const failing = [...results].filter(([, v]) => !v.ok);
-const newFailures = failing.filter(([f]) => !baseline.has(f));
+const newRed = failing.filter(([f]) => !baseline.has(f));
 const fixed = [];
 const stale = [];
 for (const [f] of baseline) {
@@ -547,10 +725,10 @@ if (RECORD) {
   process.exit(0);
 }
 
-if (newFailures.length) {
+if (newRed.length) {
   problems.push({
     kind: "new-failure",
-    detail: `${newFailures.length} file(s) fail that are not in the baseline. Fix them; the baseline is not a place to park new red:\n${newFailures.map(([f, v]) => `      ${f}\n        ↳ ${v.reason}`).join("\n")}`,
+    detail: `${newRed.length} file(s) fail that are not in the baseline (failed twice where a retry ran). Fix them; the baseline is not a place to park new red:\n${newRed.map(([f, v]) => `      ${f}\n        ↳ ${v.reason}`).join("\n")}`,
   });
 }
 if (fixed.length) {
@@ -573,12 +751,54 @@ for (const r of perRun) {
   );
 }
 console.log(
-  `  ${results.size} files ran, ${failing.length} red, baseline ${baseline.size}, ${tripwires.length} tripwires discovered`
+  `  ${results.size} files ran, ${failing.length} red, baseline ${baseline.size}, ${tripwires.length} tripwires discovered${flaky.length ? `, ${flaky.length} flaky` : ""}`
 );
+
+// Flaky files: red, then green on the retry. Not counted, never hidden: listed
+// here, annotated, and written to the CI step summary so someone owns each one.
+if (flaky.length) {
+  console.log(
+    `\n  [flaky]\n      ${flaky.length} file(s) failed, then passed when re-run alone in the same job. Not counted; own and fix them (file a pod finding, as bf1e2ca6 did):\n${flaky.map((f) => `      ${f.file}\n        ↳ first run: ${f.firstReason}`).join("\n")}`
+  );
+  const server = process.env.GITHUB_SERVER_URL ?? "https://github.com";
+  const repo = process.env.GITHUB_REPOSITORY;
+  const sha = process.env.GITHUB_SHA;
+  const runUrl =
+    repo && process.env.GITHUB_RUN_ID
+      ? `${server}/${repo}/actions/runs/${process.env.GITHUB_RUN_ID}`
+      : null;
+  if (IN_CI)
+    for (const f of flaky)
+      console.log(
+        `::warning file=${f.file},title=Flaky test file::failed, then passed on the retry (not counted). First run: ${f.firstReason}`
+      );
+  if (process.env.GITHUB_STEP_SUMMARY) {
+    const link = (f) =>
+      repo && sha
+        ? `[\`${f}\`](${server}/${repo}/blob/${sha}/${f})`
+        : `\`${f}\``;
+    appendFileSync(
+      process.env.GITHUB_STEP_SUMMARY,
+      [
+        "### Flaky test files (failed, then passed on the retry; not counted)",
+        "",
+        "| file | first run | suite |",
+        "|---|---|---|",
+        ...flaky.map(
+          (f) =>
+            `| ${link(f.file)} | ${f.firstReason.replace(/\|/g, "\\|")} | ${f.run} |`
+        ),
+        "",
+        `Own each one: file a pod \`finding\` with this run${runUrl ? ` (${runUrl})` : ""} as evidence.`,
+        "",
+      ].join("\n")
+    );
+  }
+}
 
 if (problems.length === 0) {
   console.log(
-    "\n✓ test ratchet OK — every red file is a known, owned baseline entry.\n"
+    `\n✓ test ratchet OK — every red file is a known, owned baseline entry${flaky.length ? ` (${flaky.length} flaky file(s) listed above, not counted)` : ""}.\n`
   );
   process.exit(0);
 }
