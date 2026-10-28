@@ -190,8 +190,9 @@ describe("MarkdownView — embeds are drawn from the shared model", () => {
     expect(out).toContain("Prose stays.");
   });
 
-  // Still the rule after the console learned to run HTML: a page runs only on
-  // its own document page (`html-frame.test.tsx`), never inline in a body.
+  // With no reader the renderer asks the pod nothing: the cell's embedded
+  // `props` never run. An HTML cell runs only from its STORED source, in the
+  // isolated frame (`embed-view.test.tsx`).
   it("a generated cell is a named chip — no iframe, no script, no chart", () => {
     const out = html(
       embed(
