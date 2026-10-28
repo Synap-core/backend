@@ -12,10 +12,21 @@ import {
   workspaceProcedure,
   podProcedure,
   podAdminProcedure,
+  requireFreshAuthentication,
+  assertPodAdmin,
 } from "../trpc.js";
 import type { Context } from "../context.js";
 import { TRPCError } from "@trpc/server";
-import { db, eq, and, desc, or, like, drizzleSql } from "@synap/database";
+import {
+  db,
+  eq,
+  and,
+  desc,
+  or,
+  like,
+  drizzleSql,
+  encryptServiceKey,
+} from "@synap/database";
 import {
   intelligenceCommands,
   commandRuns,
@@ -1521,8 +1532,17 @@ export const intelligenceRouter = router({
    *
    * Registers a custom IS endpoint for the workspace.
    * Does NOT auto-activate — use setActiveService to make it active.
+   *
+   * Pod admin only, like every other door that writes an
+   * `intelligence_services` row (`intelligence-registry.ts` says why). The
+   * row is pod-wide, and its origin becomes an audience hub auth accepts
+   * delegation tokens for: a space owner who could add one could route their
+   * space to their own server and receive a token acting as every person who
+   * chats there, with full Hub Protocol reach beyond that space. It sets a
+   * credential, so it also takes the step-up.
    */
   registerCustomService: workspaceProcedure
+    .use(requireFreshAuthentication)
     .input(
       z.object({
         displayName: z.string().min(1).max(80),
@@ -1533,12 +1553,7 @@ export const intelligenceRouter = router({
     .mutation(async ({ ctx, input }) => {
       const { displayName, hubUrl, apiKey } = input;
 
-      if (ctx.workspaceRole !== "owner" && ctx.workspaceRole !== "admin") {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "Only workspace owners and admins can register AI services.",
-        });
-      }
+      await assertPodAdmin(ctx.userId);
 
       // Fetch capabilities to verify connectivity
       let capabilities: string[] = [];
@@ -1590,7 +1605,12 @@ export const intelligenceRouter = router({
         serviceId,
         name: displayName,
         webhookUrl: hubUrl,
-        apiKey,
+        // Enveloped like every other writer of this column (AAD bound to the
+        // row); the resolver reads it through `resolveServiceKey`.
+        apiKey: encryptServiceKey(apiKey, {
+          column: "intelligence_services.api_key",
+          rowId: id,
+        }),
         capabilities,
         metadata: agentManifest
           ? {
