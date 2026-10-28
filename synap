@@ -2289,6 +2289,11 @@ SYNAP_POLICY_FILE="state/pod-agent-policy.json"
 # Same pattern as deploy/pod-agent/policy.js — a recipient the pod-agent would
 # reject must never be written (the whole file would then fail closed).
 SYNAP_AGE_RECIPIENT_RE='^age1[0-9a-z]{20,200}$'
+# What the pod-agent asks the policy about: its COMMANDS (server.js), the
+# pulled `update`, and the two reads. install-policy.test.sh derives server.js's
+# side and pins this list to it. The self-hosted default is policy.js's.
+SYNAP_POLICY_COMMANDS="update agent-update suspend restore restore-archive archive configure read-host-log read-docker-logs"
+SYNAP_POLICY_SELF_HOSTED_DEFAULT='["archive","restore-archive","configure"]'
 
 _policy_log()  { echo -e "${BLUE}[policy] $*${NC}"; }
 _policy_ok()   { echo -e "${GREEN}[policy] ✓ $*${NC}"; }
@@ -2336,6 +2341,7 @@ _policy_seed_from_registration() {
 }
 
 # synap policy show | set-mode <managed|self-hosted> | add-recipient <age1…> | remove-recipient <age1…>
+#              | refuse <command> | allow <command>
 cmd_policy() {
     local deploy_dir
     deploy_dir=$(get_deploy_dir)
@@ -2351,7 +2357,7 @@ cmd_policy() {
             if [ -e "$SYNAP_POLICY_FILE" ]; then echo "file: ${deploy_dir}/${SYNAP_POLICY_FILE}"
             else echo "file: (none — ${deploy_dir}/${SYNAP_POLICY_FILE} is absent, so the default applies)"; fi
             echo "$cur" | jq -r '"mode: \(.mode // "(missing)")",
-                "refuse: \(if has("refuse") then (.refuse | join(", ")) else (if .mode == "managed" then "(nothing)" else "archive, restore-archive, configure" end) + " (mode default)" end)",
+                "refuse: \(if has("refuse") then (if (.refuse | length) == 0 then "(nothing)" else (.refuse | join(", ")) end) else (if .mode == "managed" then "(nothing)" else "archive, restore-archive, configure" end) + " (mode default)" end)",
                 "archiveRecipients: \((.archiveRecipients // []) | if length == 0 then "(none)" else join(", ") end)"' ;;
         set-mode)
             local mode="${1:-}"
@@ -2373,8 +2379,24 @@ cmd_policy() {
                     || { _policy_err "could not write ${SYNAP_POLICY_FILE}"; exit 1; }
                 _policy_ok "archive recipient removed (if it was listed)"
             fi ;;
+        refuse|allow)
+            # The refuse list REPLACES the mode default (policy.js), so the
+            # first edit writes the default out and changes it.
+            local c="${1:-}"
+            case " ${SYNAP_POLICY_COMMANDS} " in
+                *" ${c} "*) [ -n "$c" ] ;;
+                *) false ;;
+            esac || { _policy_err "usage: synap policy ${action} <command>  (one of: ${SYNAP_POLICY_COMMANDS})"; exit 1; }
+            cur="$(_policy_current)" || exit 1
+            _policy_write "$(echo "$cur" | jq -c --arg c "$c" --arg a "$action" --argjson def "$SYNAP_POLICY_SELF_HOSTED_DEFAULT" '
+                (if has("refuse") then .refuse elif .mode == "managed" then [] else $def end) as $r
+                | .mode = (.mode // "self-hosted")
+                | .refuse = (if $a == "refuse" then (if ($r | index($c)) then $r else $r + [$c] end) else ($r | map(select(. != $c))) end)')" \
+                || { _policy_err "could not write ${SYNAP_POLICY_FILE}"; exit 1; }
+            if [ "$action" = refuse ]; then _policy_ok "the pod-agent now refuses \"${c}\" from the Control Plane"
+            else _policy_ok "the pod-agent now accepts \"${c}\" from the Control Plane (a signed order is still required)"; fi ;;
         *)
-            echo "Usage: synap policy show | set-mode <managed|self-hosted> | add-recipient <age1…> | remove-recipient <age1…>"
+            echo "Usage: synap policy show | set-mode <managed|self-hosted> | add-recipient <age1…> | remove-recipient <age1…> | refuse <command> | allow <command>"
             exit 1 ;;
     esac
 }
@@ -7846,7 +7868,7 @@ ${YELLOW}Management:${NC}
   synap doctor [--json]          Read-only health: env drift, compose projects, checkout, release, backups, pgdata
   synap federation <action>      External sign-in: status | connect-cloud | disable
   synap pod-key <action>         This pod's own identity key: ensure | show | enroll --pod-id <id> --code <spr_…>
-  synap policy <action>          What the Control Plane may order on this pod: show | set-mode <managed|self-hosted> | add-recipient <age1…> | remove-recipient <age1…>
+  synap policy <action>          What the Control Plane may order on this pod: show | set-mode <managed|self-hosted> | add-recipient <age1…> | remove-recipient <age1…> | refuse <command> | allow <command>
   synap clean [type]             Clean this pod's Docker leftovers (interactive if no type; never volumes or other stacks')
   synap heal                     Restart this pod's unhealthy containers (budget 3 / 30 min; never postgres)
   synap units <install|status|remove>  systemd timers: heal (2 min), update requests; auto-update opt-in
