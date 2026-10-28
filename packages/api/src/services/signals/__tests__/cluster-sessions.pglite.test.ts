@@ -73,6 +73,7 @@ function cluster(fp: string, sessionId: string): ProposalCluster {
     agent: null,
     reasonCounts: {},
     attentionFloorCount: 0,
+    package: "data-changes",
   } as ProposalCluster;
 }
 
