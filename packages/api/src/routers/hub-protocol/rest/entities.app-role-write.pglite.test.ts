@@ -856,12 +856,15 @@ describe("the CRM app changes a CRM role on a pod-wide person (D1)", () => {
     expect(body.status).toBe("proposed");
   });
 
-  it("the person's role in Brand: 403, nothing filed", async () => {
+  it("the person's role in Brand, outside the grant: 404 (not found, Brand never named), nothing filed", async () => {
     const before = await proposalCount();
     const res = await send("crm", "PATCH", `/facets/${F_LEAD_VIP}`, {
       properties: { source: "app" },
     });
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(404);
+    const error = String((await json(res)).error);
+    expect(error).toBe(`Facet not found: ${F_LEAD_VIP}`);
+    expect(error).not.toContain(BRAND);
     expect(await proposalCount()).toBe(before);
   });
 
@@ -889,9 +892,12 @@ describe("the CRM app takes a CRM role off (D1)", () => {
     expect(await liveFacets(LEAD, ROLE_LEAD)).toHaveLength(1);
   });
 
-  it("a role in another space (Brand): 403, still live", async () => {
+  it("a role in another space (Brand), outside the grant: 404 (not found, Brand never named), still live", async () => {
     const res = await send("crm", "DELETE", `/facets/${F_LEAD_VIP}`);
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(404);
+    const error = String((await json(res)).error);
+    expect(error).toBe(`Facet not found: ${F_LEAD_VIP}`);
+    expect(error).not.toContain(BRAND);
     expect(await liveFacets(LEAD, ROLE_VIP)).toHaveLength(1);
   });
 
@@ -1164,7 +1170,7 @@ describe("a shared role on a record STORED in CRM: the CRM app reads it and move
     );
   });
 
-  it("B-1: the same role on a record stored in OTHER, outside the grant, lends nothing: 403, nothing filed", async () => {
+  it("B-1: the same role on a record stored in OTHER, outside the grant, lends nothing: 404 (not found), nothing filed", async () => {
     const before = await proposalCount();
     for (const patch of [
       { status: "engaged", expectedStatus: "new" },
@@ -1176,8 +1182,10 @@ describe("a shared role on a record STORED in CRM: the CRM app reads it and move
         `/facets/${F_STORED_OTHER}`,
         patch
       );
-      expect(res.status, JSON.stringify(patch)).toBe(403);
+      expect(res.status, JSON.stringify(patch)).toBe(404);
     }
+    const detach = await send("crm", "DELETE", `/facets/${F_STORED_OTHER}`);
+    expect(detach.status).toBe(404);
     expect(await proposalCount()).toBe(before);
     expect((await liveFacets(STORED_OTHER, ROLE_DEAL))[0]!.status).toBe("new");
   });

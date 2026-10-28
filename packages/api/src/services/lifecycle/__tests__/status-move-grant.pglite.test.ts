@@ -24,7 +24,8 @@
  * 2026-10-23). A key pinned to CRM, granted `facet.update` + `entity.person.update`
  * there, may move the `lead` stage of a POD-WIDE person (the lead role is
  * granted to CRM; its facet is stored pod-wide), and nothing else:
- *  - not the stage of a role granted elsewhere (`partner`, Marketing);
+ *  - not the stage of a role granted elsewhere (`partner`, Marketing): a role
+ *    row outside the key's spaces is not found, never refused by name;
  *  - not the person's own (kind) fields;
  *  - not detach without `facet.delete` (adding or removing a shared role
  *    changes where the person shows: it needs `facet.create` / `facet.delete`
@@ -243,6 +244,11 @@ const entitiesAs = (agent: string) =>
 const GRANT_DENIED = {
   code: "FORBIDDEN",
   message: expect.stringMatching(/grant does not allow/),
+};
+/** A role row outside the key's spaces is not found, never refused by name. */
+const NOT_FOUND = {
+  code: "NOT_FOUND",
+  message: expect.stringMatching(/^Facet not found: /),
 };
 
 async function seedTask(status = "todo"): Promise<string> {
@@ -536,7 +542,7 @@ describe("Part 2 — a CRM key works the lead stage of a pod-wide person", () =>
     expect((await facetRow(lead))?.properties).toMatchObject({ score: 7 });
   });
 
-  it("does not move the stage of a role granted elsewhere (partner, Marketing)", async () => {
+  it("does not find the stage of a role granted elsewhere (partner, Marketing): not found", async () => {
     const person = await seedPerson(null);
     const partner = await seedFacet(person, PARTNER);
     await expect(
@@ -547,7 +553,7 @@ describe("Part 2 — a CRM key works the lead stage of a pod-wide person", () =>
           expectedStatus: "new",
         } as never)
       )
-    ).rejects.toMatchObject(GRANT_DENIED);
+    ).rejects.toMatchObject(NOT_FOUND);
     expect((await facetRow(partner))?.status).toBe("new");
   });
 
@@ -616,7 +622,7 @@ describe("Part 2 — a CRM key works the lead stage of a pod-wide person", () =>
     expect((await facetRow(lead))?.status).toBe("new");
   });
 
-  it("does not move a lead stage on a person stored in another space", async () => {
+  it("does not find a lead stage on a person stored in another space: not found", async () => {
     const person = await seedPerson(MKT);
     const lead = await seedFacet(person, LEAD);
     await expect(
@@ -627,11 +633,11 @@ describe("Part 2 — a CRM key works the lead stage of a pod-wide person", () =>
           expectedStatus: "new",
         } as never)
       )
-    ).rejects.toMatchObject(GRANT_DENIED);
+    ).rejects.toMatchObject(NOT_FOUND);
     expect((await facetRow(lead))?.status).toBe("new");
   });
 
-  it("the same permissions pinned to Marketing do not move the lead stage", async () => {
+  it("the same permissions pinned to Marketing do not find the lead stage: not found", async () => {
     const person = await seedPerson(null);
     const lead = await seedFacet(person, LEAD);
     await expect(
@@ -642,7 +648,7 @@ describe("Part 2 — a CRM key works the lead stage of a pod-wide person", () =>
           expectedStatus: "new",
         } as never)
       )
-    ).rejects.toMatchObject(GRANT_DENIED);
+    ).rejects.toMatchObject(NOT_FOUND);
     expect((await facetRow(lead))?.status).toBe("new");
   });
 
