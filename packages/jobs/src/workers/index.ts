@@ -71,10 +71,6 @@ import {
 } from "./lifecycle-transition-sweeper.js";
 import { handleRelationBackfill } from "./relation-backfill.js";
 import {
-  handleVaultGrantExpiry,
-  VAULT_GRANT_EXPIRY_QUEUE,
-} from "./vault-grant-expiry-worker.js";
-import {
   handleNotificationCleanup,
   NOTIFICATION_CLEANUP_QUEUE,
 } from "./notification-cleanup.js";
@@ -336,7 +332,6 @@ const ALL_QUEUES = [
   PLAYBOOK_RUN_REAPER_QUEUE,
   CHAT_TURN_REAPER_QUEUE,
   "relation-backfill",
-  VAULT_GRANT_EXPIRY_QUEUE,
   NOTIFICATION_CLEANUP_QUEUE,
   FEDERATION_RECEIPT_CLEANUP_QUEUE,
   // Phone push hygiene: Expo receipts per send + the daily unused-phone sweep.
@@ -422,6 +417,13 @@ const RETIRED_QUEUES: string[] = [
   // realtime server now persists that cache itself, stamped with the content
   // revision it equals (`working_state_revision`).
   "doc-persistence",
+  // Removed 2026-10-28: relabelled every APPROVED `vault.request` proposal as
+  // "rejected: expired" once `data.ttl` minutes passed. Access never read that
+  // status (the grant row carries its own `expiresAt`, checked at redemption),
+  // and `ttl` is always set (the request defaults it to 60), so a PERMANENT
+  // grant's approval also read "rejected" after an hour, and the agent
+  // scorecard counted each one as a rejection (finding 73ac3ee8).
+  "vault-grant-expiry",
 ];
 
 /**
@@ -768,12 +770,6 @@ export async function registerAllWorkers(): Promise<void> {
     handleRelationBackfill(job)
   );
   logger.info("Registered worker: relation-backfill");
-
-  // Vault grant expiry (cron: every hour — expires TTL-bounded approved vault.request proposals)
-  await boss.work(VAULT_GRANT_EXPIRY_QUEUE, async () =>
-    handleVaultGrantExpiry()
-  );
-  logger.info("Registered worker: vault-grant-expiry");
 
   // Notification cleanup (cron: daily at 2:00 AM UTC)
   await boss.work(NOTIFICATION_CLEANUP_QUEUE, async () =>

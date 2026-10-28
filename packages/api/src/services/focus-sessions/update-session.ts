@@ -1336,7 +1336,8 @@ export function droppedAskWarnings(
  * reviewer — `claimed`.
  *
  * The outcomes must stay tellable apart. `completed` = claim recorded AND
- * verified by evidence; `claimed` = claim recorded, no evidence yet; `refused`
+ * verified by evidence (or the slot was already met: nothing left to verify);
+ * `claimed` = claim recorded, no evidence yet; `refused`
  * is the floor: the slot is the human's and the agent may not close it —
  * actionable, the caller should stop claiming the work is done. `no_match` is
  * the DOCUMENTED contract of this field, not an error — but a caller still has
@@ -1352,7 +1353,7 @@ export type CompleteOutputOutcome = {
    * the evidence verdict closed.)
    */
   completed: number;
-  /** Of `completed`, the slots the evidence verdict stamped done. */
+  /** Of `completed`, the slots that are done: already met, or stamped by the evidence verdict. */
   verified?: number;
   /** Matching slots REFUSED because `owner: 'human'`. */
   refusedHumanOwned: number;
@@ -1382,7 +1383,12 @@ export function withEvidenceVerdict(
   ).length;
   if (verified === 0) return report;
   const { message: _pending, ...rest } = report;
-  return { ...rest, verified, result: "completed" };
+  // Slots the report already counted as met (an earlier verdict) stay counted.
+  return {
+    ...rest,
+    verified: (report.verified ?? 0) + verified,
+    result: "completed",
+  };
 }
 
 /** The outputs array a patch produced, plus the report of what it refused. */
@@ -1395,21 +1401,38 @@ export interface OutputMutationResult {
 }
 
 /**
- * Turn the two match counts into the verdict + its sentence. A recorded claim
+ * Turn the match counts into the verdict + its sentence. A recorded claim
  * reads `claimed` here; {@link withEvidenceVerdict} upgrades it to `completed`
  * once the evidence verdict has run.
+ *
+ * `alreadyDone`: of `completed`, the slots that were ALREADY met (`status:
+ * "done"`, by any door) before this call. When every matched slot is already
+ * met there is no claim left to verify, so the verdict is `completed` now: the
+ * evidence verdict never runs for a done slot, so it could not upgrade a
+ * `claimed` here, and the caller was told "waits for review" about a slot the
+ * same reply showed done (finding 3790d851).
  */
 export function describeCompleteOutput(
   label: string,
   completed: number,
-  refusedHumanOwned: number
+  refusedHumanOwned: number,
+  alreadyDone = 0
 ): CompleteOutputOutcome {
+  if (completed > 0 && alreadyDone === completed) {
+    return {
+      label,
+      completed,
+      refusedHumanOwned,
+      verified: alreadyDone,
+      result: "completed",
+    };
+  }
   if (completed > 0) {
     return {
       label,
       completed,
       refusedHumanOwned,
-      verified: 0,
+      verified: alreadyDone,
       result: "claimed",
       message: `Recorded your claim on "${label}" — a claim is not a verdict. No evidence is attributed to it yet, so it waits for review. Attach evidence and it is verified automatically: produce the object inside this session (record it against this slot's key), or set the slot's \`ref\` to it.`,
     };
@@ -1511,6 +1534,7 @@ export function applyOutputMutations(
     const keys = deriveSlotKeys(next);
     let completed = 0;
     let refused = 0;
+    let alreadyDone = 0;
     next = next.map((o, i) => {
       if (o.label !== label && keys[i] !== label) return o;
       if (o.owner === "human") {
@@ -1519,10 +1543,19 @@ export function applyOutputMutations(
       }
       completed += 1;
       // Already verified (any door) or already claimed: nothing to record.
-      if (o.status === "done" || o.claimedDone === true) return o;
+      if (o.status === "done") {
+        alreadyDone += 1;
+        return o;
+      }
+      if (o.claimedDone === true) return o;
       return { ...o, claimedDone: true };
     });
-    completeOutput = describeCompleteOutput(label, completed, refused);
+    completeOutput = describeCompleteOutput(
+      label,
+      completed,
+      refused,
+      alreadyDone
+    );
   }
 
   // WITHDRAW a slot — the explicit verb an agent's upsert-only list leaves for

@@ -231,6 +231,40 @@ describe("completeOutput — the agent may not close the human's slot", () => {
     ).toBeUndefined();
   });
 
+  it("an ALREADY-met slot reads completed — no claim left, no 'waits for review' (finding 3790d851)", () => {
+    const met: ExpectedOutput[] = [
+      {
+        kind: "document",
+        label: "Launch brief",
+        key: "launch-brief",
+        status: "done",
+        satisfiedByEvidence: {
+          kind: "output",
+          id: "document:doc-1",
+          at: "2026-10-28T12:00:00.000Z",
+        },
+      },
+      { kind: "entity", label: "Signed NDA" },
+    ];
+    for (const ref of ["Launch brief", "launch-brief"]) {
+      const { outputs, completeOutput } = applyOutputMutations(met, {
+        completeOutput: ref,
+      });
+      expect(completeOutput).toEqual({
+        label: ref,
+        completed: 1,
+        verified: 1,
+        refusedHumanOwned: 0,
+        result: "completed",
+      });
+      // Nothing to record on a met slot: no claim stamped over the verdict.
+      expect(outputs[0]).not.toHaveProperty("claimedDone");
+      // The evidence verdict never runs for a done slot; a report it is handed
+      // anyway stays completed.
+      expect(withEvidenceVerdict(completeOutput, [])?.result).toBe("completed");
+    }
+  });
+
   it("claims an unblocked slot once the agent has reclaimed it", () => {
     const blocked = stampBlocked(slots(), "Signed NDA", "physical", "s", AT);
     const reclaimed = stampUnblocked(blocked, "Signed NDA");

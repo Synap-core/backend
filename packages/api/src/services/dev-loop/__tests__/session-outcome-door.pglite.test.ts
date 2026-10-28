@@ -170,6 +170,30 @@ describe("completeOutcome", () => {
     expect(slots[1]!.status ?? "pending").toBe("pending");
   });
 
+  it("an outcome ALREADY met reads completed, never 'waits for review' (finding 3790d851)", async () => {
+    const id = await seed([prSlot(259)]);
+    const first = await completeOutcome({
+      sessionId: id,
+      userId: USER,
+      outcomeKey: "pr-backend-259",
+    });
+    expect(first).toEqual({ result: "completed" });
+    // The merge sweeper, a second session, an agent retrying: the slot is
+    // already done, so there is no claim left to verify. It used to read
+    // `claimed` with "No evidence is attributed to it yet, so it waits for
+    // review" while the same row read done + satisfiedByEvidence.
+    const again = await completeOutcome({
+      sessionId: id,
+      userId: USER,
+      outcomeKey: "pr-backend-259",
+    });
+    expect(again).toEqual({ result: "completed" });
+    expect((await stored(id))[0]).toMatchObject({
+      status: "done",
+      satisfiedByEvidence: { kind: "ref" },
+    });
+  });
+
   it("a slot with no evidence stays a CLAIM", async () => {
     const id = await seed([{ kind: "document", label: "Spec", key: "spec" }]);
     const r = await completeOutcome({

@@ -288,10 +288,6 @@ export async function registerCronSchedules(): Promise<void> {
   // is delivered without waiting for the first tick.
   await sendSafe(boss, LIFECYCLE_TRANSITION_SWEEPER_QUEUE, {});
 
-  // Vault grant expiry (every hour — expires TTL-bounded approved vault.request proposals)
-  await scheduleSafe(boss, "vault-grant-expiry", "0 * * * *", {});
-  logger.info("Registered cron: vault-grant-expiry (every hour)");
-
   // Pod hygiene near-dup scan (daily at 3:15 AM UTC).
   // Files PENDING entity merge proposals only; never auto-merges.
   await scheduleSafe(
