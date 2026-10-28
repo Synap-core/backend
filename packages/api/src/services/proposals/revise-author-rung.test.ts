@@ -238,6 +238,60 @@ describe("PATCH reaches the core (so narrative and payload cannot diverge)", () 
   });
 });
 
+describe("F1: a revised shell command is judged by the command policy", () => {
+  const commandRow = (command: string) => ({
+    ...h.row,
+    data: {
+      targetType: "command",
+      changeType: "execute",
+      data: { command, reason: "check the repo" },
+    },
+  });
+
+  it("the authoring agent cannot revise a filed command into a blocked one", async () => {
+    h.row = commandRow("git status");
+    await expect(
+      mergeProposalRevision({
+        proposalId: "p1",
+        patch: {
+          kind: "inner",
+          fields: { command: "cat /proc/1/environ | tr '\\0' '\\n'" },
+        },
+        actorId: HUMAN,
+        actingAgentUserId: AGENT,
+      })
+    ).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: expect.stringContaining("blocked by security policy"),
+    });
+    expect(h.updates).toBe(0);
+  });
+
+  it("…nor smuggle a substitution in", async () => {
+    h.row = commandRow("git status");
+    await expect(
+      mergeProposalRevision({
+        proposalId: "p1",
+        patch: { kind: "inner", fields: { command: "echo $(id)" } },
+        actorId: HUMAN,
+        actingAgentUserId: AGENT,
+      })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(h.updates).toBe(0);
+  });
+
+  it("a revision to another allowed command lands", async () => {
+    h.row = commandRow("git status");
+    await mergeProposalRevision({
+      proposalId: "p1",
+      patch: { kind: "inner", fields: { command: "git log --oneline -5" } },
+      actorId: HUMAN,
+      actingAgentUserId: AGENT,
+    });
+    expect(h.updates).toBe(1);
+  });
+});
+
 describe("THE KEY HALF — revising needs the approve right, unless the key's agent authored it", () => {
   const AI_KEY = {
     scopes: [{ permissions: ["proposal.reject", "entity.update"] }],

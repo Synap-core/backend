@@ -881,6 +881,13 @@ const REVISED_PAYLOAD_VALIDATORS: Record<
       "update",
       payload
     ),
+  // A revised shell command is judged by the same policy the Hub door files
+  // it under (audit F1): otherwise a revise is a way around the denylist.
+  "command/execute": async (payload) => {
+    const { commandPolicyRefusal } = await import("@synap/governance-policy");
+    const refusal = commandPolicyRefusal(payload.command);
+    if (refusal) throw new Error(refusal);
+  },
 };
 
 async function checkRevisedPayload(

@@ -75,7 +75,12 @@ import {
   type EventPhase,
 } from "../types/unified-events.js";
 import type { SynapEvent } from "@synap-core/core";
-import { createLogger } from "@synap-core/core";
+import { config, createLogger } from "@synap-core/core";
+import { redactSecrets } from "@synap/shared-utils";
+import {
+  commandPolicyRefusal,
+  isPodShellAllowed,
+} from "@synap/governance-policy";
 import { emitSideEffects } from "@synap/events";
 import { isRelationDependencyType } from "@synap-core/types/connections";
 import {
@@ -1406,6 +1411,25 @@ async function materializeCommand(
     logger.error({ subjectId }, "No command in materialization payload");
     return;
   }
+  // The operator switch and the one content check, again, right before the
+  // shell (audit F1/F8): a pending command can be REVISED after filing, and
+  // the switch can be turned off after it was filed. Nothing has run yet, so
+  // refusing here is a clean no-op.
+  if (!isPodShellAllowed(process.env, config.server.localMode === true)) {
+    logger.error(
+      { subjectId, correlationId },
+      "Approved command refused: running commands on the pod host is off"
+    );
+    return;
+  }
+  const refusal = commandPolicyRefusal(command);
+  if (refusal) {
+    logger.error(
+      { subjectId, correlationId, refusal },
+      "Approved command refused by the command policy"
+    );
+    return;
+  }
 
   const workingDir = validateWorkingDir(data.workingDir as string | undefined);
   const timeoutMs = Math.min(Number(data.timeoutMs) || 30_000, 300_000);
@@ -1469,7 +1493,9 @@ async function materializeCommand(
           workingDir,
           exitCode,
           reason: data.reason as string | undefined,
-          stdoutPreview: stdout.slice(0, 500),
+          // Redacted like the direct door's output (audit F8): this event
+          // reaches automations and event readers.
+          stdoutPreview: redactSecrets(stdout).slice(0, 500),
           approvedExecution: true,
         },
       });

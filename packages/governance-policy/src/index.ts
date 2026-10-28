@@ -2948,3 +2948,6 @@ export type ProposalExecutorKey =
  */
 export type GateEventKey<K extends GateWriteDoor = GateWriteDoor> =
   K extends `${infer S}/${infer A}` ? `${S}.${A}` | `${S}s.${A}` : never;
+
+// The one content check + switch for a shell command the pod runs (audit F8).
+export * from "./command-policy.js";
