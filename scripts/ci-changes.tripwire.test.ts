@@ -206,6 +206,50 @@ describe("ci-changes: a draft's skipped suites never read as passed", () => {
     if (d.draftHold) expect(d.suites).toBe(false);
   });
 
+  it("a negctl branch and a stack hold the required checks; main-based PRs do not", () => {
+    // Each row rules out a looser rule: "hold = !gate" holds docs-only;
+    // "hold = base != main" misses negctl on main and holds a develop PR.
+    const rows: [string, object, string][] = [
+      ["negctl to main", { headRef: "negctl/x", baseRef: "main" }, "negctl"],
+      [
+        "negctl to a stack",
+        { headRef: "negctl/x", baseRef: "feat/y" },
+        "negctl",
+      ],
+      ["a stack", { baseRef: "feat/y" }, "stacked"],
+      ["a stacked draft", { baseRef: "feat/y", draft: true }, "stacked"],
+      ["a draft on main", { baseRef: "main", draft: true }, "draft"],
+      ["a PR to main", { baseRef: "main" }, ""],
+      ["a PR to develop", { baseRef: "develop" }, ""],
+      ["base unknown", {}, ""],
+    ];
+    for (const [label, extra, hold] of rows)
+      expect(pr(["packages/api/src/x.ts"], extra).hold, label).toBe(hold);
+    // A stack keeps the Release gate; a negctl runs "Targeted tests" instead.
+    expect(pr(["packages/api/src/x.ts"], { baseRef: "feat/y" }).gate).toBe(
+      true
+    );
+    expect(pr(["packages/api/src/x.ts"], { baseRef: "feat/y" }).suites).toBe(
+      false
+    );
+    expect(pr(["packages/api/src/x.ts"], { headRef: "negctl/x" }).negctl).toBe(
+      true
+    );
+    // Queue entries and pushes never hold.
+    for (const event of ["merge_group", "push"])
+      expect(
+        decide({
+          event,
+          headRef: "negctl/x",
+          baseRef: "feat/y",
+          draft: true,
+          files: ["packages/api/src/x.ts"],
+          siblingTests: none,
+        }).hold,
+        event
+      ).toBe("");
+  });
+
   it("the decision reaches the job outputs (the script's own GITHUB_OUTPUT)", () => {
     const outputs = (draft: string) => {
       const file = join(mkdtempSync(join(tmpdir(), "ci-changes-")), "out");
@@ -247,13 +291,23 @@ describe("ci-changes: a draft's skipped suites never read as passed", () => {
         .slice(1),
       block,
     }));
-  const HOLD = "needs.changes.outputs.draft_hold == 'true'";
+  const HOLD = "needs.changes.outputs.hold != ''";
+  const NEGCTL_HOLD = "needs.changes.outputs.hold == 'negctl'";
 
-  it("the changes job exports draft_hold", () => {
+  it("the changes job exports hold and passes the base ref", () => {
     const changes = jobs.find((j) => j.name === "What changed");
-    expect(changes?.block).toContain(
-      "draft_hold: ${{ steps.decide.outputs.draft_hold }}"
-    );
+    expect(changes?.block).toContain("hold: ${{ steps.decide.outputs.hold }}");
+    expect(changes?.block).toContain("BASE_REF: ${{ github.base_ref }}");
+  });
+
+  it("ci.yml and reference-docs.yml run for a pull request to ANY base", () => {
+    for (const file of ["ci.yml", "reference-docs.yml"]) {
+      const text = readFileSync(join(REPO, ".github/workflows", file), "utf8");
+      const on = text.slice(text.indexOf("\non:\n"), text.indexOf("\njobs:\n"));
+      const prBlock = /^ {2}pull_request:\n((?: {4}.*\n| *#.*\n)*)/m.exec(on);
+      expect(prBlock, file).not.toBeNull();
+      expect(prBlock?.[1], file).not.toMatch(/^ {4}branches:/m);
+    }
   });
 
   // DERIVED: every job the suites decision turns off, except the matrix shards
@@ -271,7 +325,27 @@ describe("ci-changes: a draft's skipped suites never read as passed", () => {
     ]);
   });
 
-  it("every suite job runs on a draft hold and its FIRST step fails", () => {
+  it("the Release gate runs on a negctl hold and its FIRST step fails", () => {
+    const gate = jobs.find((j) => j.name === "Release gate");
+    expect(gate?.if).toContain(NEGCTL_HOLD);
+    const first = gate?.steps[0] ?? "";
+    expect(first).toContain(`if: \${{ ${NEGCTL_HOLD} }}`);
+    expect(first).toMatch(/\n\s+exit 1\n/);
+  });
+
+  it("Reference docs reports red for a negctl branch instead of skipping", () => {
+    const text = readFileSync(
+      join(REPO, ".github/workflows/reference-docs.yml"),
+      "utf8"
+    );
+    // No job-level skip for negctl: a skipped required check reads as passed.
+    expect(text).not.toMatch(/^ {4}if: .*negctl/m);
+    const steps = text.split(/^ {6}- /m).slice(1);
+    expect(steps[0]).toContain("startsWith(github.head_ref, 'negctl/')");
+    expect(steps[0]).toMatch(/\n\s+exit 1\n/);
+  });
+
+  it("every suite job runs on a hold and its FIRST step fails", () => {
     for (const j of suiteJobs) {
       expect(j.if, j.name).toContain(HOLD);
       const first = j.steps[0] ?? "";
