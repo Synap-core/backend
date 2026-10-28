@@ -151,6 +151,26 @@ describe("Group by Package", () => {
     expect(html).not.toContain('data-test-row="book-1"');
   });
 
+  // Finding cf73140d: at 420 px the folded row cut the session name to one
+  // letter: the name was `flex-1 truncate` in a wrapping row, so it shrank to
+  // ~0 before the count and two buttons wrapped. The row is now the canonical
+  // ResourceRow `wrap`: the name may take two lines and, below `sm`, the
+  // actions drop to their own line (`basis-full`). LIMIT: node renders no
+  // layout; this pins the anatomy that gives the name its width, and the
+  // 420 px rendering itself is a NEEDS-DOGFOOD check.
+  it("Bookkeeping keeps the session name's width on a phone: actions drop below it", () => {
+    const folded = html.slice(html.indexOf(">Bookkeeping<"));
+    const name = /<span class="([^"]*)">Session s1<\/span>/.exec(folded);
+    expect(name, "the folded session row names its session").not.toBeNull();
+    expect(name![1]).not.toMatch(/\btruncate\b/);
+    expect(name![1]).toMatch(/\bline-clamp-2\b/);
+    const between = folded.slice(
+      folded.indexOf(">Session s1<"),
+      folded.indexOf("See them")
+    );
+    expect(between).toMatch(/class="[^"]*\bbasis-full\b[^"]*\bsm:basis-auto\b/);
+  });
+
   it("a package switched to List draws its rows", () => {
     const list = render("package", () => "list");
     expect(list).toContain('data-test-row="book-1"');

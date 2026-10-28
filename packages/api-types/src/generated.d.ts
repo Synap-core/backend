@@ -16205,6 +16205,19 @@ export interface SynthesisSource {
 	title: string;
 }
 /**
+ * A retrieved record that was REPLACED (`properties.supersededBy` set, read by
+ * the one predicate `supersededByOf`). It is not fed to the answer and not
+ * listed in `sources`: a replaced fact presented as current is how an agent
+ * reported a stale cause as today's diagnosis. It does not vanish either: it
+ * is listed here with the id of its replacement, the door to the current
+ * record (`synap_get_entity` on `supersededBy`), and the context tells the
+ * model it was left out and by what it was replaced.
+ */
+export interface SupersededSource extends SynthesisSource {
+	/** The id of the record that replaced this one. */
+	supersededBy: string;
+}
+/**
  * What the context budget left OUT — and, crucially, WHICH items.
  *
  * `omitted`/`total` alone told a caller only that its answer was partial, with
@@ -20813,6 +20826,13 @@ export type ChangeTrackParticipantsResult = {
 	status: "updated";
 	trackId: string;
 } | ProposedOutcome;
+export interface StartFirstSessionResult {
+	sessionId: string;
+	/** True when the open first session was handed back, nothing created. */
+	reused: boolean;
+	/** Whether agent writes in the session propose (`propose`) or follow the pod's rules (`default`). */
+	governance: "default" | "propose";
+}
 declare const START_STEP_IDS: readonly [
 	"start:intent",
 	"start:views",
@@ -37266,6 +37286,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				routedTo: string[];
 				sources: SynthesisSource[];
 				spaces: AskSpacesHint | undefined;
+				superseded: SupersededSource[] | undefined;
 				synthesisFailed: boolean;
 				truncated: SynthesisTruncation | undefined;
 				verdict: RetrievalVerdict;
@@ -39369,6 +39390,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				userId: string;
 			} | null;
 		}>;
+		startFirstSession: import("@trpc/server").TRPCMutationProcedure<{
+			input: void;
+			meta: object;
+			output: StartFirstSessionResult;
+		}>;
 		startJourney: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				lens: {
@@ -39464,6 +39490,55 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				next: "start:agent" | "start:done" | "start:first-work" | "start:intent" | "start:path" | "start:setup" | "start:views" | null;
 				starts: StartCard[] | undefined;
 				steps: StartStepState[];
+			};
+		}>;
+	}>>;
+	onboardingMilestones: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		errorShape: {
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: {
+				candidates?: {
+					id: string;
+					title: string | null;
+					type: string;
+				}[] | undefined;
+				captureQuestionStatus?: string | undefined;
+				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
+				currentStatus?: string | null;
+				expectedStatus?: string | null;
+				httpStatus: number;
+				opRef?: string | undefined;
+				path?: string;
+				pendingProposalId?: string | undefined;
+				reasonCode?: string;
+				stack?: string;
+			};
+			message: string;
+		};
+		meta: object;
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		get: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			meta: object;
+			output: {
+				changedAt: string | null;
+				changedBy: string | null;
+				enabled: boolean;
+				linked: boolean;
+			};
+		}>;
+		set: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				enabled: boolean;
+			};
+			meta: object;
+			output: {
+				changedAt: string | null;
+				changedBy: string | null;
+				enabled: boolean;
+				linked: boolean;
 			};
 		}>;
 	}>>;

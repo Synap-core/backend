@@ -596,9 +596,7 @@ describe("approving a capability.run runs only a skill the approver could run", 
   });
 
   it("a skill installed but not enabled: refused, never run", async () => {
-    await expect(execute(SKILL_DISABLED, CRM)).rejects.toThrow(
-      /not enabled/
-    );
+    await expect(execute(SKILL_DISABLED, CRM)).rejects.toThrow(/not enabled/);
     expect(h.runResolvedSkill).not.toHaveBeenCalled();
   });
 
