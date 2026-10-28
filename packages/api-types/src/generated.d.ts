@@ -22630,9 +22630,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		adminCreateServiceKey: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				expiresInDays?: number | undefined;
+				expiresInDays?: number | null | undefined;
+				grant?: {
+					entityIds?: string[] | undefined;
+					label?: string | undefined;
+					permissions: string[];
+					projectIds?: string[] | undefined;
+					roleId?: string | undefined;
+					workspaceIds?: string[] | undefined;
+				} | undefined;
 				keyName: string;
-				scope: string[];
+				note?: string | undefined;
+				scope?: string[] | undefined;
+				uses?: ("chat" | "hub" | "mcp" | "n8n" | "n8n-analyze" | "realtime" | "skills")[] | undefined;
 				workspaceId: string;
 			};
 			meta: object;
@@ -22709,6 +22719,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		connectIntegration: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
+				grant?: {
+					entityIds?: string[] | undefined;
+					label?: string | undefined;
+					permissions: string[];
+					projectIds?: string[] | undefined;
+					roleId?: string | undefined;
+					workspaceIds?: string[] | undefined;
+				} | undefined;
 				integration: "cli" | "custom" | "openclaw" | "raycast";
 				strategy?: "create_new" | "replace_existing" | undefined;
 				workspaceId?: string | undefined;
@@ -22802,9 +22820,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		createSystemKey: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				expiresInDays?: number | undefined;
+				expiresInDays?: number | null | undefined;
+				grant?: {
+					entityIds?: string[] | undefined;
+					label?: string | undefined;
+					permissions: string[];
+					projectIds?: string[] | undefined;
+					roleId?: string | undefined;
+					workspaceIds?: string[] | undefined;
+				} | undefined;
 				keyName: string;
-				scope: string[];
+				note?: string | undefined;
+				scope?: string[] | undefined;
+				uses?: ("chat" | "hub" | "mcp" | "n8n" | "n8n-analyze" | "realtime" | "skills")[] | undefined;
 			};
 			meta: object;
 			output: {
