@@ -24,6 +24,7 @@
  * Design doc: team/platform/playbooks-capability-substrate.mdx
  */
 
+import { fileParameterDeclarationProblems } from "./file-parameters.js";
 import { randomUUID } from "node:crypto";
 import {
   encryptServerSide,
@@ -697,6 +698,18 @@ export async function createCapabilityFromDefinition(
     (def as { tools: unknown[] }).tools = [];
   if (!Array.isArray((def as { skills?: unknown }).skills))
     (def as { skills: unknown[] }).skills = [];
+
+  // POD FILE PARAMETERS (plan e7c3c98e): a verb that takes pod files says how
+  // (`file:url`), never asks for bytes before they are wired, and is never
+  // read-only. Refused before anything is written.
+  for (const s of def.skills) {
+    const problems = fileParameterDeclarationProblems(s);
+    if (problems.length > 0) {
+      throw new Error(
+        `Capability skill "${s.name}" declares invalid file parameters: ${problems.join("; ")}.`
+      );
+    }
+  }
 
   // A skill's `providerSpec` holds RUNTIME `{{param}}` placeholders (maxResults,
   // id, calendarId, …) that `executeProviderVerb` resolves at CALL time from the

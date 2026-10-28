@@ -59,6 +59,11 @@ import {
 import { CAPABILITY_RUN_PROPOSAL_TYPE } from "../services/proposals/proposal-class.js";
 import { parseBoxDeclaration } from "../services/box-runs/box-spec.js";
 import { declaredReadOnly } from "../services/capabilities/capability-drift.js";
+import {
+  checkPodFilesAtAsk,
+  resolvePodFilesAtRun,
+} from "../services/capabilities/file-parameters.js";
+import { describeParameterRepair } from "../services/capabilities/validate-verb-parameters.js";
 import { isQueuedBoxRunResult } from "../services/box-runs/box-runs.js";
 import { auditLog } from "../utils/audit-log.js";
 import { setSkillApproved } from "../services/capabilities/set-skill-approved.js";
@@ -1899,6 +1904,18 @@ export const skillsRouter = router({
         });
       }
 
+      // POD FILES (plan e7c3c98e): the files this run names must be ones the
+      // person can read, before anything is proposed or run.
+      const podFiles = await checkPodFilesAtAsk(skill, input.input, userId);
+      if (!podFiles.ok) {
+        throw new TRPCError({
+          code: podFiles.repair.files?.some((f) => f.problem === "forbidden")
+            ? "FORBIDDEN"
+            : "BAD_REQUEST",
+          message: describeParameterRepair(skill.name, podFiles.repair),
+        });
+      }
+
       // Capability-execution gate (Wave 3b chokepoint) — supersedes the bare
       // `approved` boolean. Owner-bypass: the skill's owner runs their own skill.
       // A non-owner with an UNAPPROVED skill routes to `propose` (don't run); an
@@ -1912,6 +1929,7 @@ export const skillsRouter = router({
         actorUserId: userId,
         workspaceId: skill.workspaceId ?? null,
         issuer: "skills.execute",
+        carriesPodFiles: podFiles.files.length > 0,
       });
 
       if (skillDecision.decision === "deny") {
@@ -1960,6 +1978,8 @@ export const skillsRouter = router({
             capabilityId: skill.id,
             input: input.input ?? {},
             workspaceId: skill.workspaceId,
+            // The pod files it would send, named for the reviewer (ids only).
+            ...(podFiles.files.length > 0 ? { files: podFiles.files } : {}),
           },
           notificationDescription: `Run skill ${skill.name}`,
         });
@@ -1982,6 +2002,21 @@ export const skillsRouter = router({
       // The ONE skill door (R2): the pod runs it unless SKILL_RUNTIME=is. The
       // person's own run carries no agent and no verb act: an in-skill write is
       // the person's, gated as theirs.
+      // POD FILES: read again, a fresh signed URL in place of each id, one
+      // `file.sent` event per file — the same resolution the capability runner
+      // does (`runResolvedSkill`).
+      const filesResolved = await resolvePodFilesAtRun(skill, input.input, {
+        userId,
+        workspaceId: skill.workspaceId ?? null,
+      });
+      if (!filesResolved.ok) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: filesResolved.message,
+        });
+      }
+      const runParameters = filesResolved.parameters ?? {};
+
       let result: {
         success: boolean;
         result?: unknown;
@@ -1992,7 +2027,7 @@ export const skillsRouter = router({
         const envelope = await runSkill({
           skillId: input.id,
           userId,
-          parameters: input.input ?? {},
+          parameters: runParameters,
           workspaceId: skill.workspaceId ?? null,
         });
         result = {

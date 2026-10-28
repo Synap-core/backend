@@ -65,6 +65,8 @@ function row(overrides: Partial<ResolvedSkillRow>): ResolvedSkillRow {
     kind: "code",
     providerSpec: null,
     metadata: null,
+    parameters: null,
+    executionMode: "sync",
     ...overrides,
   };
 }

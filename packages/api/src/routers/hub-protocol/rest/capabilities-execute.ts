@@ -420,13 +420,26 @@ export function registerCapabilitiesExecuteRoutes(app: HubHono): void {
           // by `cross-door-field-parity`, same shape as the `truncated` field
           // that shipped unpopulated.
           if (outcome.repair) {
+            // A pod file the caller cannot read is a 403, an unknown one a
+            // 404 — the split the file URL door makes (`readableFileEntity`).
+            const fileProblems = outcome.repair.files ?? [];
+            const forbidden = fileProblems.some(
+              (f) => f.problem === "forbidden"
+            );
+            const notFound = fileProblems.some(
+              (f) => f.problem === "not_found"
+            );
             return c.json(
               {
                 error: outcome.message,
-                code: "INVALID_PARAMETERS",
+                code: forbidden
+                  ? "FILE_NOT_READABLE"
+                  : notFound
+                    ? "FILE_NOT_FOUND"
+                    : "INVALID_PARAMETERS",
                 repair: outcome.repair,
               },
-              400
+              forbidden ? 403 : notFound ? 404 : 400
             );
           }
           return c.json(

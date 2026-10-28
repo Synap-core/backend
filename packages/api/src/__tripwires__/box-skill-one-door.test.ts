@@ -150,6 +150,8 @@ describe("tripwire: the one skill door handles a box skill", () => {
       kind: "code",
       providerSpec: null,
       metadata: null,
+      parameters: null,
+      executionMode: "box",
     };
     const out = await runResolvedSkill(
       row,

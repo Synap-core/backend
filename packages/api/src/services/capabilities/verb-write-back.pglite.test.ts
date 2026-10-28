@@ -98,6 +98,8 @@ function skill(metadata: unknown): ResolvedSkillRow {
     kind: "code",
     providerSpec: null,
     metadata,
+    parameters: null,
+    executionMode: "sync",
   };
 }
 

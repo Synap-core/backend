@@ -288,6 +288,9 @@ describe("file door read floor — file entities", () => {
       documentId: D_FILE,
       storageKey: keyOf(D_FILE),
       mimeType: "image/webp",
+      title: "Person",
+      size: null,
+      deletedAt: null,
     });
   });
 
@@ -300,11 +303,17 @@ describe("file door read floor — file entities", () => {
       id: E_LEGACY,
       storageKey: undefined,
       mimeType: null,
+      title: "Asset",
+      size: null,
+      deletedAt: null,
     });
     expect(await loadSignableFileEntity(OWNER, E_LEGACY)).toEqual({
       id: E_LEGACY,
       storageKey: undefined,
       mimeType: null,
+      title: "Asset",
+      size: null,
+      deletedAt: null,
     });
   });
 
@@ -313,6 +322,9 @@ describe("file door read floor — file entities", () => {
       id: E_ATTACK,
       storageKey: undefined,
       mimeType: null,
+      title: "Mine",
+      size: null,
+      deletedAt: null,
     });
   });
 });
