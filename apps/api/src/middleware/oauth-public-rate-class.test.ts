@@ -138,7 +138,11 @@ describe("oauth_public — one IP gets one budget across the AS doors", () => {
     process.env.DATABASE_URL ??=
       "postgresql://synap:test@localhost:5432/synap_test";
     ({ rateLimitMiddleware } = await import("./security.js"));
-  });
+    // `security.ts` loads the whole `@synap/api` barrel (security.ts:11): 20-30 s
+    // on a CI runner, against a 30 s default hook timeout (as in
+    // security.request-size-limit.test.ts). The real fix is to stop that import
+    // loading the barrel, not this budget.
+  }, 120_000);
 
   it("classifies /register and /authorize as oauth_public, /token as oauth_token, whatever the method", () => {
     expect(classifyRateLimitPath("/register", "POST")).toBe("oauth_public");
@@ -200,7 +204,11 @@ describe("oauth_token — /token is budgeted per grant, never per shared address
     process.env.DATABASE_URL ??=
       "postgresql://synap:test@localhost:5432/synap_test";
     ({ rateLimitMiddleware } = await import("./security.js"));
-  });
+    // `security.ts` loads the whole `@synap/api` barrel (security.ts:11): 20-30 s
+    // on a CI runner, against a 30 s default hook timeout (as in
+    // security.request-size-limit.test.ts). The real fix is to stop that import
+    // loading the barrel, not this budget.
+  }, 120_000);
 
   it("defaults to 20 per grant and 600 per IP per 10 minutes", () => {
     expect(tokenCfg).toMatchObject({

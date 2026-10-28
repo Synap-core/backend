@@ -21,6 +21,7 @@ import {
   resolveEntityMedia,
   type MediaRef,
 } from "@synap-core/types/presentation";
+import { isHtmlPageSource } from "@synap-core/types/renderables";
 import { openIn } from "../../../../lib/open-in";
 import { parseOpenParams } from "../../../open/open-params";
 
@@ -305,17 +306,16 @@ export type EmbedCellRead =
   | { state: "hidden" }
   | { state: "failed"; retry?: () => void };
 
-const DOCUMENT_START = /^\uFEFF?\s*<(?:!doctype\b|html\b)/i;
-
 /**
  * Whether a stored cell IS an HTML page. The stored mechanism decides
  * (`widget_definitions.renderer_type`): `iframe` is a raw HTML document.
- * `frame` is not proof of React: it is what every agent door writes whatever
- * the source (`defineCell` defaults to it; MCP `synap_create_cell` and Hub
- * `POST /cells/define` pass no mechanism), so a `frame` row whose source opens
- * as a document (`<!doctype` / `<html`) is a page too — an ES module can never
- * start that way. The desktop reads a source the same way
- * (`looksLikeFullHtmlDocument`, synap-app `cell-runtime/generated-app-srcdoc`).
+ * `frame` is not proof of React: until `defineCell` derived the mechanism
+ * from the source (migration 0366 moved the rows written before), every agent
+ * door stored a page as `frame`, so a `frame` row whose source IS a page is a
+ * page too. "Is a page" is the ONE classifier, `isHtmlPageSource`
+ * (`@synap-core/types/renderables`): the first character after whitespace is
+ * `<`, which an ES module never is. Not a doctype test: the founder's report
+ * opens with `<title>` (document 6aa8d140).
  */
 export function cellIsHtmlPage(def: {
   rendererType?: unknown;
@@ -325,7 +325,7 @@ export function cellIsHtmlPage(def: {
     typeof def.rendererSource === "string" ? def.rendererSource : "";
   if (!source.trim()) return false;
   if (def.rendererType === "iframe") return true;
-  return def.rendererType === "frame" && DOCUMENT_START.test(source);
+  return def.rendererType === "frame" && isHtmlPageSource(source);
 }
 
 export function cellEmbedRead(query: {

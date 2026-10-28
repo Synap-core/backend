@@ -24,6 +24,11 @@ export interface GrantRoleInput {
   entityIds?: string[] | null;
   /** A number of days, null = never, undefined = the role sets no lifetime. */
   expiresInDays?: number | null;
+  /**
+   * Where a key made from it is used (`KEY_USES` ids, validated by the door);
+   * null/undefined/[] = the role sets no door.
+   */
+  uses?: string[] | null;
 }
 
 const emptyToNull = (v?: string[] | null) =>
@@ -41,6 +46,7 @@ function columns(input: GrantRoleInput) {
     expiresInDays:
       typeof input.expiresInDays === "number" ? input.expiresInDays : null,
     neverExpires: input.expiresInDays === null,
+    uses: emptyToNull(input.uses),
   };
 }
 

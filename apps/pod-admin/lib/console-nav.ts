@@ -40,7 +40,8 @@ export type NavIconName =
   | "ShieldCheck"
   | "HardDrive"
   | "RefreshCw"
-  | "ScrollText";
+  | "ScrollText"
+  | "SlidersHorizontal";
 
 /**
  * A URL that used to be this page. Emitted as a temporary (307) redirect: 308s
@@ -68,7 +69,7 @@ export interface NavItem {
    * the tripwire, so a registry rename cannot silently fork the nav's word.
    */
   kind?: string;
-  /** Who sees it: members get Home + Review; everything else is admin. */
+  /** Who sees it: members get Home, Review and Settings; the rest is admin. */
   audience: NavAudience;
 }
 
@@ -101,6 +102,15 @@ export const CONSOLE_NAV = [
           { source: "/audit", query: { key: "section", value: "queue" } },
           { source: "/audit", query: { key: "section", value: "proposals" } },
         ],
+        audience: "member",
+      },
+      {
+        // How the person reviews (founder B-3/B-4): grouping, each package's
+        // layout, and the "always allow" rules they set for an agent.
+        id: "settings",
+        href: "/settings/review",
+        label: "Settings",
+        icon: "SlidersHorizontal",
         audience: "member",
       },
     ],

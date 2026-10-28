@@ -67,6 +67,7 @@ import {
   type DuplicateItemChoice,
   type ProposalDuplicateReview,
   type ProposalReviewGraph,
+  type ProposalTurnsOn,
 } from "@synap-core/types/proposals";
 import {
   resolveObjectNoun,
@@ -108,7 +109,11 @@ import {
   RecordGroupList,
 } from "./ProposedRecordCard";
 import { ProposalSessionContext } from "./ProposalSessionContext";
-import { compositeItems, type GraphItemKey } from "./composite-parts-model";
+import {
+  compositeItems,
+  turnOnRecords,
+  type GraphItemKey,
+} from "./composite-parts-model";
 import { recordGroups } from "./record-groups";
 import { proposalHeading } from "./proposal-heading";
 import { proposalProfileSlug } from "./proposal-subject-kind";
@@ -832,6 +837,13 @@ export function ProposalReviewBody({
     reviewGraph && !appConnect && !docChanges && !deferredWrites
       ? compositeItems(reviewGraph, payload, defs.definitionsFor)
       : [];
+  /* A request to turn skills on: each skill drawn whole (its code or
+     instructions, what it can reach), never only the names the payload
+     carries. */
+  const turnsOn =
+    !graph && !appConnect && !docChanges && !deferredWrites
+      ? (p.review as { turnsOn?: ProposalTurnsOn }).turnsOn
+      : undefined;
   const edges = graphItems.flatMap((item) =>
     item.shape === "edge" ? [item.edge] : []
   );
@@ -844,24 +856,26 @@ export function ProposalReviewBody({
               item.shape === "record" ? [item.record] : []
             )
           : graphRecords(payload, defs.definitionsFor)
-        : (() => {
-            const record = proposedRecord({
-              changes: (
-                p.review as { changes?: readonly ProposalChangeInput[] }
-              ).changes,
-              action,
-              targetName: p.targetName ? String(p.targetName) : null,
-              kind:
-                p.targetType === "entity"
-                  ? defs.targetKind
-                  : p.targetType
-                    ? String(p.targetType)
-                    : null,
-              definitions: defs.definitions,
-              objectRefs,
-            });
-            return record ? [record] : [];
-          })();
+        : turnsOn
+          ? turnOnRecords(turnsOn)
+          : (() => {
+              const record = proposedRecord({
+                changes: (
+                  p.review as { changes?: readonly ProposalChangeInput[] }
+                ).changes,
+                action,
+                targetName: p.targetName ? String(p.targetName) : null,
+                kind:
+                  p.targetType === "entity"
+                    ? defs.targetKind
+                    : p.targetType
+                      ? String(p.targetType)
+                      : null,
+                definitions: defs.definitions,
+                objectRefs,
+              });
+              return record ? [record] : [];
+            })();
   // An entity create carrying an upload: the reviewer sees the image itself.
   const recordMedia =
     !graph && action === "create" && p.targetType === "entity"
@@ -925,13 +939,14 @@ export function ProposalReviewBody({
   const twinsUnderCard = flatTwins.length > 0 && records.length === 1;
   /* One group per kind, capped; what acts on its own and what still owes a
      choice are never folded. */
-  const actingRefs = new Set(
-    graphItems.flatMap((item) =>
+  const actingRefs = new Set([
+    ...graphItems.flatMap((item) =>
       item.shape === "record" && ACTING_SOURCES.has(item.source)
         ? [item.record.ref]
         : []
-    )
-  );
+    ),
+    ...(turnsOn ? records.map((r) => r.ref) : []),
+  ]);
   const groups = recordGroups(
     records,
     (record) => actingRefs.has(record.ref) || itemByRef.has(record.ref)
@@ -1029,6 +1044,13 @@ export function ProposalReviewBody({
           ))}
         </div>
       ) : null}
+      {turnsOn && turnsOn.unreadSkills > 0 && (
+        <p className="text-[13px] text-foreground/80">
+          {`It also turns on ${turnsOn.unreadSkills} ${
+            turnsOn.unreadSkills === 1 ? "skill" : "skills"
+          } you cannot read.`}
+        </p>
+      )}
       {edges.length > 0 && <PartEdgeList edges={edges} />}
       {/* A graph item whose card is not drawn still owes its choice: it is
           never sent on a default nobody saw. */}

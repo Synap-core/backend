@@ -6,6 +6,11 @@
  */
 
 import { z } from "zod";
+import {
+  REVIEW_GROUP_BYS,
+  REVIEW_LAYOUTS,
+  type ReviewPackage,
+} from "../proposals/review-package.js";
 
 // ============================================================================
 // UI-SPECIFIC SCHEMAS (Not in database)
@@ -46,6 +51,32 @@ export const CustomThemeSchema = z
   })
   .optional();
 
+/**
+ * `uiPreferences.review` — the person's review grouping and per-package
+ * layouts (`ReviewPreferences`). Its own schema so the merge door
+ * (`preferences.updateReview`) validates exactly this key.
+ */
+const reviewLayout = z.enum(REVIEW_LAYOUTS).optional();
+
+export const ReviewPreferencesSchema = z.object({
+  groupBy: z.enum(REVIEW_GROUP_BYS),
+  // One optional key per package. Spelled out (not built from the list) so
+  // the inferred type stays exact; `satisfies` fails the build when a package
+  // is added without its key here.
+  layouts: z
+    .object({
+      questions: reviewLayout,
+      access: reviewLayout,
+      releases: reviewLayout,
+      "how-things-work": reviewLayout,
+      "data-changes": reviewLayout,
+      "hand-offs": reviewLayout,
+      knowledge: reviewLayout,
+      bookkeeping: reviewLayout,
+    } satisfies Record<ReviewPackage, unknown>)
+    .optional(),
+});
+
 // UI Preferences Schema (nested JSONB validation for UI)
 export const UIPreferencesSchema = z
   .object({
@@ -81,6 +112,8 @@ export const UIPreferencesSchema = z
         })
       )
       .optional(),
+    /** How the person reviews: grouping + per-package layouts. */
+    review: ReviewPreferencesSchema.optional(),
   })
   .optional();
 

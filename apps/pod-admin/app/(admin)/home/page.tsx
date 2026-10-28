@@ -52,7 +52,12 @@ import {
 import Link from "next/link";
 import { useState } from "react";
 
-import { ExitFallback, rowHref, usePlacedExit } from "../../../lib/exit-link";
+import {
+  ExitFallback,
+  rowHref,
+  useAppOpenAttempt,
+  usePlacedExit,
+} from "../../../lib/exit-link";
 import {
   formatRelative,
   humanizeBytes,
@@ -346,25 +351,30 @@ function NeedsYouRowView({ row }: { row: NeedsYouRow }) {
 /**
  * The row's one primary action. A console route navigates in place via
  * `Link`; an `openIn` desktop exit is a plain anchor (the `synap://` handler
- * is the OS's, not Next's), with its fallback offered once beneath the list.
- * A phone that cannot follow it gets the console page that covers it, or no
- * button (the line beneath the list says why).
+ * is the OS's, not Next's), which offers the download beside itself once a
+ * click did not open the app. A phone that cannot follow it gets the console
+ * page that covers it, or no button (the line beneath the list says why).
  */
 function ActionLink({ exit, label }: { exit: Exit; label: string }) {
   const placed = usePlacedExit(exit);
+  const open = useAppOpenAttempt(placed);
   const href = rowHref(placed);
   if (href === null) return null;
   return (
-    <Button
-      as={placed.href !== null && placed.isDesktopLink ? "a" : Link}
-      href={href}
-      size="sm"
-      variant="flat"
-      radius="md"
-      endContent={<ChevronRight className="h-3 w-3" />}
-    >
-      {label}
-    </Button>
+    <span className="inline-flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
+      <Button
+        as={placed.href !== null && placed.isDesktopLink ? "a" : Link}
+        href={href}
+        onPress={open.onOpen}
+        size="sm"
+        variant="flat"
+        radius="md"
+        endContent={<ChevronRight className="h-3 w-3" />}
+      >
+        {label}
+      </Button>
+      {open.offer}
+    </span>
   );
 }
 
@@ -374,13 +384,17 @@ const ITEM_LINK_CLASS =
 
 function ItemLink({ exit, label }: { exit: Exit; label: string }) {
   const placed = usePlacedExit(exit);
+  const open = useAppOpenAttempt(placed);
   const href = rowHref(placed);
   if (href === null)
     return <span className="truncate text-foreground">{label}</span>;
   return placed.href !== null && placed.isDesktopLink ? (
-    <a href={href} className={ITEM_LINK_CLASS}>
-      {label}
-    </a>
+    <>
+      <a href={href} onClick={open.onOpen} className={ITEM_LINK_CLASS}>
+        {label}
+      </a>
+      {open.offer}
+    </>
   ) : (
     <Link href={href} className={ITEM_LINK_CLASS}>
       {label}
@@ -388,7 +402,12 @@ function ItemLink({ exit, label }: { exit: Exit; label: string }) {
   );
 }
 
-/** "Get the desktop app", once, when any row or item hands off to it. */
+/**
+ * The phone's line (the mobile app's install hatch, or "open this on your
+ * computer"), once, when any row or item hands off to the app. Nothing on a
+ * desktop: each row offers the download itself, after a click that did not
+ * open the app.
+ */
 function DesktopFallbackOnce({ rows }: { rows: NeedsYouRow[] }) {
   const desktopExit = rows
     .flatMap((r) => [
@@ -398,7 +417,7 @@ function DesktopFallbackOnce({ rows }: { rows: NeedsYouRow[] }) {
     .find((e): e is Exit => Boolean(e?.isDesktopLink));
   if (!desktopExit) return null;
   return (
-    <div className="mt-1 flex justify-end px-1">
+    <div className="mt-1 flex justify-end px-1 empty:hidden">
       <ExitFallback exit={desktopExit} showWeb={false} />
     </div>
   );

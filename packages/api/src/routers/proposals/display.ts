@@ -73,10 +73,12 @@ import {
 import { redactUnreadableSessionTargets } from "../../services/proposals/session-content-redaction.js";
 import {
   flowReach,
+  readRequiredToolNames,
   readStepSkillLookups,
   skillReach,
   type StepSkillLookup,
 } from "../../services/proposals/part-reach.js";
+import { readEnableTurnsOn } from "../../services/proposals/enable-turns-on.js";
 import type { EventRecord } from "@synap/database";
 import type {
   ProposalRemoval,
@@ -1263,6 +1265,11 @@ export async function enrichProposalsForDisplay(
     rows.filter((row) => isLiveProposalStatus(row.status)),
     userId
   );
+  // What a pending enable request would turn on, each skill whole.
+  const turnsOnById = await readEnableTurnsOn(
+    rows.filter((row) => isLiveProposalStatus(row.status)),
+    userId
+  );
   // NEW: Populate batch-joined lookup maps
   const playbookById = new Map<
     string,
@@ -2035,6 +2042,7 @@ export async function enrichProposalsForDisplay(
         ...(isLiveProposalStatus(row.status)
           ? { stepSkills: stepSkillsFor(row.workspaceId) }
           : {}),
+        turnsOn: turnsOnById.get(row.id),
         events: request.correlationId
           ? (traceByCorrelationId.get(request.correlationId) ?? [])
           : [],
@@ -2044,7 +2052,12 @@ export async function enrichProposalsForDisplay(
 }
 
 /** A skill as an update's review reads it: its name and its values now. */
-type SkillTargetRead = { name: string; values: Record<string, unknown> };
+type SkillTargetRead = {
+  name: string;
+  values: Record<string, unknown>;
+  /** The tools it declares it calls (`requires`), for its reach. */
+  requiredTools?: string[];
+};
 
 /** `skill.update` (stored `update`) on a skill row. */
 function isSkillUpdateRow(row: ProposalRow): boolean {
@@ -2110,8 +2123,15 @@ async function readSkillUpdateTargets(
         )
       )
     );
+  const required = await readRequiredToolNames(
+    userId,
+    found.map((row) => row.id)
+  );
   return new Map(
-    found.map(({ id, ...values }) => [id, { name: values.name, values }])
+    found.map(({ id, ...values }) => [
+      id,
+      { name: values.name, values, requiredTools: required.get(id) },
+    ])
   );
 }
 
@@ -2138,8 +2158,11 @@ function skillUpdateReads(
       if (!skill) return undefined;
       if (!live) return { name: skill.name };
       // What the skill it rewrites can reach (the patch never changes it).
-      const reach = skillReach(skill.values);
-      return reach ? { ...skill, reach: { ...reach, unreadSteps: 0 } } : skill;
+      const reach = skillReach({
+        ...skill.values,
+        requiredTools: skill.requiredTools,
+      });
+      return reach ? { ...skill, reach } : skill;
     },
   };
 }
@@ -2173,6 +2196,8 @@ function buildProposalReviewModel(params: {
   targetBefore?: Readonly<Record<string, unknown>>;
   /** Pending only: the skills an automation's steps would run, for its reach. */
   stepSkills?: StepSkillLookup;
+  /** A pending `capability.enable` only: what it would turn on. */
+  turnsOn?: ProposalReviewModel["turnsOn"];
   events: Awaited<ReturnType<EventRepository["getCorrelatedEvents"]>>;
 }): ProposalReviewModel {
   const {
@@ -2187,6 +2212,7 @@ function buildProposalReviewModel(params: {
     resolveUpdateTarget,
     targetBefore,
     stepSkills,
+    turnsOn,
     events,
   } = params;
   const requestData =
@@ -2255,6 +2281,7 @@ function buildProposalReviewModel(params: {
     ),
     ...(graph ? { graph } : {}),
     ...(removal ? { removal } : {}),
+    ...(turnsOn ? { turnsOn } : {}),
     events: reviewEvents,
   };
 }

@@ -1126,6 +1126,18 @@ export const sessionHandlers: McpHandlerMap = {
       window: graph.window,
     });
   },
+  synap_get_work_release: async (
+    ctx: McpToolContext
+  ): Promise<CallToolResult> => {
+    const { toolName, userId, apiKeyScopes } = ctx;
+    requireScope(apiKeyScopes, "mcp.read", toolName);
+    // Loaded on call, like the work graph: the read pulls the liveness reads,
+    // which this handler module must not load at tool-listing time.
+    const { readWorkRelease } =
+      await import("../../../services/dev-loop/work-release.js");
+    // An agent door reads sessions owner-only (decision C v1, `rosterReadFor`).
+    return ok(await readWorkRelease({ userId, roster: false }));
+  },
   synap_update_session: async (
     ctx: McpToolContext
   ): Promise<CallToolResult> => {

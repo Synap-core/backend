@@ -83,6 +83,7 @@ import {
   ExitLink,
   externalProps,
   rowHref,
+  useAppOpenAttempt,
   usePlacedExit,
 } from "../../../../lib/exit-link";
 import { kindIcon } from "../../../_lib/object/kind-icon";
@@ -593,16 +594,22 @@ function AskerMark({
 
 /** A mark that opens its door, plain text where nothing opens it here. */
 function ExitMark({ exit, children }: { exit: Exit; children: ReactNode }) {
-  const href = rowHref(usePlacedExit(exit));
+  const placed = usePlacedExit(exit);
+  const open = useAppOpenAttempt(placed);
+  const href = rowHref(placed);
   const cls = "inline-flex min-w-0 items-center gap-1 text-foreground/80";
   return href ? (
-    <a
-      href={href}
-      {...externalProps(href)}
-      className={`${cls} rounded-sm underline-offset-2 transition-colors hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40`}
-    >
-      {children}
-    </a>
+    <>
+      <a
+        href={href}
+        {...externalProps(href)}
+        onClick={open.onOpen}
+        className={`${cls} rounded-sm underline-offset-2 transition-colors hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40`}
+      >
+        {children}
+      </a>
+      {open.offer}
+    </>
   ) : (
     <span className={cls}>{children}</span>
   );
@@ -622,6 +629,7 @@ function LookedAtChip({ item }: { item: LookedAtItem }) {
   const placed = usePlacedExit(
     openIn({ kind: "object", objectKind: item.kind, id: item.id })
   );
+  const open = useAppOpenAttempt(placed);
   const href = rowHref(placed);
   const Icon = kindIcon(item.kind);
   const body = (
@@ -633,13 +641,17 @@ function LookedAtChip({ item }: { item: LookedAtItem }) {
   const cls =
     "inline-flex max-w-full items-center gap-1.5 rounded-md bg-foreground/[0.04] px-2 py-1 text-[12.5px] text-foreground/85 ring-1 ring-inset ring-foreground/10";
   return href ? (
-    <a
-      href={href}
-      {...externalProps(href)}
-      className={`${cls} transition-colors hover:bg-foreground/[0.08] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40`}
-    >
-      {body}
-    </a>
+    <>
+      <a
+        href={href}
+        {...externalProps(href)}
+        onClick={open.onOpen}
+        className={`${cls} transition-colors hover:bg-foreground/[0.08] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40`}
+      >
+        {body}
+      </a>
+      {open.offer}
+    </>
   ) : (
     <span className={cls}>{body}</span>
   );
