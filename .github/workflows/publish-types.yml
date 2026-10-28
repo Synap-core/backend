@@ -79,7 +79,7 @@ jobs:
         with:
           # ONE Node for every pipeline, DELIBERATE: an artifact was once
           # published from a laptop's node 22.22.3 while CI pinned node 20, and
-          # broke consumers. ci.yml, this workflow and reference-docs.yml all
+          # broke consumers. ci.yml (Reference docs included) and this workflow
           # read `.node-version`, and deploy/Dockerfile stays on its minor, so
           # what is tested, published and shipped run on the same Node.
           node-version-file: ".node-version"
