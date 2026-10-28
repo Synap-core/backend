@@ -73,11 +73,6 @@ export const isDocsOnly = (path) => DOCS_ONLY.some((re) => re.test(path));
 export const isImageNeutral = (path) =>
   isDocsOnly(path) || IMAGE_NEUTRAL.some((re) => re.test(path));
 
-/**
- * The decision for one run. Pure: `files` is the changed path list, or null
- * when it could not be read (then everything runs).
- * `siblingTests(path)` lists test files beside a changed source file.
- */
 /** The PR a merge-queue branch tests: `refs/heads/gh-readonly-queue/main/pr-402-<sha>` → 402. */
 export function queuePrNumber(queueHeadRef) {
   const m = /gh-readonly-queue\/[^/]+\/pr-(\d+)-/.exec(queueHeadRef ?? "");
@@ -104,6 +99,13 @@ export function suitesPassed(checkRuns) {
   });
 }
 
+/**
+ * The decision for one run. Pure: `files` is the changed path list, or null
+ * when it could not be read (then everything runs).
+ * `siblingTests(path)` lists test files beside a changed source file.
+ * `queue` is a merge-queue entry's evidence ({ pr, headSha, suitesPassed }),
+ * or null.
+ */
 export function decide({
   event,
   headRef,
@@ -219,11 +221,15 @@ async function queueEvidence() {
     const checkRuns = [];
     for (const name of QUEUE_TRUSTED_CHECKS) {
       const q = `?check_name=${encodeURIComponent(name)}&filter=latest&per_page=100`;
-      checkRuns.push(...(await get(`/commits/${headSha}/check-runs${q}`)).check_runs);
+      checkRuns.push(
+        ...(await get(`/commits/${headSha}/check-runs${q}`)).check_runs
+      );
     }
     return { pr, headSha, suitesPassed: suitesPassed(checkRuns) };
   } catch (err) {
-    console.log(`merge queue: could not read #${pr}'s own checks (${err.message}); every check runs`);
+    console.log(
+      `merge queue: could not read #${pr}'s own checks (${err.message}); every check runs`
+    );
     return null;
   }
 }

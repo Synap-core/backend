@@ -174,7 +174,11 @@ describe("ci-changes: every check runs unless a narrow match says otherwise", ()
 });
 
 describe("ci-changes: a queue entry trusts only suites that really ran", () => {
-  const run = (name: string, conclusion: string | null, status = "completed") => ({
+  const run = (
+    name: string,
+    conclusion: string | null,
+    status = "completed"
+  ) => ({
     name,
     status,
     conclusion,
@@ -199,15 +203,34 @@ describe("ci-changes: a queue entry trusts only suites that really ran", () => {
   // green (a draft run reports its suites skipped), so accepting either would
   // let a PR whose suites never ran merge through a light queue run.
   it.each([
-    ["Full suite skipped (a draft run)", [run("Full suite", "skipped"), run("API e2e", "success")]],
-    ["API e2e skipped", [run("Full suite", "success"), run("API e2e", "skipped")]],
+    [
+      "Full suite skipped (a draft run)",
+      [run("Full suite", "skipped"), run("API e2e", "success")],
+    ],
+    [
+      "API e2e skipped",
+      [run("Full suite", "success"), run("API e2e", "skipped")],
+    ],
     ["neutral", [run("Full suite", "neutral"), run("API e2e", "success")]],
     ["failure", [run("Full suite", "failure"), run("API e2e", "success")]],
-    ["still running", [run("Full suite", null, "in_progress"), run("API e2e", "success")]],
+    [
+      "still running",
+      [run("Full suite", null, "in_progress"), run("API e2e", "success")],
+    ],
     ["API e2e missing", [run("Full suite", "success")]],
     ["Full suite missing", [run("API e2e", "success")]],
-    ["a shard is not the judge", [run("Full suite (shard 1/4)", "success"), run("API e2e", "success")]],
-    ["one of two runs red", [run("Full suite", "success"), run("Full suite", "failure"), run("API e2e", "success")]],
+    [
+      "a shard is not the judge",
+      [run("Full suite (shard 1/4)", "success"), run("API e2e", "success")],
+    ],
+    [
+      "one of two runs red",
+      [
+        run("Full suite", "success"),
+        run("Full suite", "failure"),
+        run("API e2e", "success"),
+      ],
+    ],
     ["no runs", []],
   ])("%s: not trusted", (_label, runs) => {
     expect(suitesPassed(runs)).toBe(false);
