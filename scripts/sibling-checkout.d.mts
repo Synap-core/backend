@@ -1,6 +1,15 @@
 /** Types for sibling-checkout.mjs — see that file for the resolution order. */
 
-export type SiblingRepo = "synap-app" | "synap-control-plane-api";
+/** A directory of scripts/layout/layout.json other than synap-backend. */
+export type SiblingRepo =
+  | "synap-app"
+  | "synap-control-plane-api"
+  | "browser"
+  | "relay-app"
+  | "synap-cli"
+  | "synap-landing"
+  | "synap-control-plane-dashboard"
+  | "synap-intelligence-service";
 
 /** The root of THIS checkout (the directory holding `scripts/`). */
 export const BACKEND_ROOT: string;
