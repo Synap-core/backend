@@ -134,8 +134,6 @@ export const AI_GATE_VERBS: readonly string[] = [
   // A lifecycle status move (the moveStatus door): reversible, and the door
   // floors done/lost and humanOnly options on its own.
   "entity.*.transition",
-  // Undo a delete (`entities.restore`): a proposal for an agent by default.
-  "entity.*.restore",
   "facet.attach",
   "facet.detach",
   // Propose how to organise the person's Library (always a proposal).
@@ -192,6 +190,8 @@ export const AI_PRESET_EXCLUSIONS: Readonly<Record<string, string>> = {
   "workspace.update": "Space administration.",
   "workspace.adopt": "Space administration.",
   "workspace.restore": "Space administration.",
+  "entity.restore":
+    "Undo of a delete: the person's Undo, not a verb an AI key asks for.",
   "workspace.declare_source": "Space administration.",
   "workspace.configure_public_projection":
     "Space administration: publishes a space.",
