@@ -302,12 +302,15 @@ run_update() { # <args...>
     SYNAP_HEALTH_INTERVAL=0 SYNAP_UPDATE_HEALTH_TRIES=2 SYNAP_UPDATE_MIN_FREE_MB=1 SYNAP_UPDATE_MIN_FREE_SOURCE_MB=1 SYNAP_ASSUME_YES=1 \
     SYNAP_UPDATE_HEALTHY_WAIT=0 SYNAP_UPDATE_HEALTHY_INTERVAL=0 SYNAP_KRATOS_READY_TRIES=2 SYNAP_KRATOS_READY_INTERVAL=0 \
     SYNAP_UPDATE_EDGE_TRIES=2 SYNAP_UPDATE_EDGE_INTERVAL=0 \
-    SYNAP_UPDATE_NOTIFY_CMD="cat >> '$S/notified'" bash "$REPO/synap" update "$@" ) >"$S/out" 2>&1 </dev/null
+    SYNAP_UPDATE_NOTIFY_CMD="touch '$S/hook-ran'" bash "$REPO/synap" update "$@" ) >"$S/out" 2>&1 </dev/null
 }
 cur_id()  { jq -r .id "$DEPLOY/state/current-release.json" 2>/dev/null; }
 last()    { jq -r ".$1" "$DEPLOY/state/last-update.json" 2>/dev/null; }
 envpin()  { grep "^$1=" "$DEPLOY/.env" | tail -1 | cut -d= -f2-; }
-notified(){ [ -s "$S/notified" ] && jq -e --arg s "$1" 'select(.status == $s)' "$S/notified" >/dev/null 2>&1; }
+# The outcome reaches state/events.jsonl. No hook runs: SYNAP_UPDATE_NOTIFY_CMD
+# (set above, as an old .env or a configure could) ran through `sh -c` as root
+# and was retired (audit 2026-10-28) — `hook-ran` must never appear.
+notified(){ [ ! -e "$S/hook-ran" ] && [ -s "$DEPLOY/state/events.jsonl" ] && jq -e --arg s "$1" 'select(.kind == "pod.update" and .status == $s)' "$DEPLOY/state/events.jsonl" >/dev/null 2>&1; }
 restores(){ [ -f "$FAKE/restores" ] && wc -l < "$FAKE/restores" | tr -d ' ' || echo 0; }
 show()    { echo "      --- tail of output ---"; tail -15 "$S/out" | sed 's/^/      /'; }
 
@@ -334,6 +337,7 @@ p=$(grep -n "^pull " "$FAKE/log" | tail -1 | cut -d: -f1)
 grep -q "pull .*@sha256:$NEW_DIGEST" "$FAKE/log" && ! grep -qE "^pull [^@]*$" "$FAKE/log" && ok "happy: every pull is by digest" || bad "happy: a pull was not by digest: $(grep '^pull' "$FAKE/log")"
 [ "$(last status)" = succeeded ] && notified succeeded && ok "happy: success recorded + notified" || bad "happy: record=$(last status)"
 grep -q '^SYNAP_EVENT {' "$S/out" && ok "happy: SYNAP_EVENT line emitted" || bad "happy: no SYNAP_EVENT line"
+[ ! -e "$S/hook-ran" ] && ok "happy: SYNAP_UPDATE_NOTIFY_CMD is never run (retired)" || bad "happy: the retired notify hook ran"
 [ "$(restores)" = 0 ] && ok "happy: no DB restore" || bad "happy: DB restored on success"
 [ -s "$REPO/kratos/kratos.yml.good" ] && cmp -s "$REPO/kratos/kratos.yml" "$REPO/kratos/kratos.yml.good" \
   && ok "happy: the verified kratos.yml is kept as kratos.yml.good" || bad "happy: no kratos.yml.good after a verified update"

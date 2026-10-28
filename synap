@@ -3680,7 +3680,8 @@ EOF
 # deploy files. It never restores data: the schema stays migrated and the
 # pre-update dump is offered to the operator (_ue_rollback). Every outcome is RECORDED
 # (state/last-update.json + state/events.jsonl + a `SYNAP_EVENT {json}` line)
-# and handed to an optional notify hook (SYNAP_UPDATE_NOTIFY_CMD) — U4.
+# (U4). The notify hook (SYNAP_UPDATE_NOTIFY_CMD) is gone: it ran a .env value
+# through `sh -c` as root, and a configure could set it (audit 2026-10-28).
 #
 # UPDATE THE UPDATER FIRST (H1). A release update used to run entirely in the
 # host's PREVIOUS `synap`: a fix to the kratos render, the recreate list, verify
@@ -4124,8 +4125,8 @@ _ue_backend_healthy() { # waits up to SYNAP_UPDATE_HEALTH_TRIES × SYNAP_HEALTH_
 # pod-agent). The pod can surface it without a new door: the backend container
 # already mounts this deploy dir read-only at /opt/synap/deploy (compose
 # `backend.volumes`), so state/last-update.json is readable in-pod — wiring it
-# into /status/release + notif-center is the wave-2 seam. SYNAP_UPDATE_NOTIFY_CMD
-# (env or .env) receives the JSON on stdin, best-effort.
+# into /status/release + notif-center is the wave-2 seam. No hook command is run
+# (SYNAP_UPDATE_NOTIFY_CMD is retired in env.schema: it ran through `sh -c`).
 # An unattended run started by a request carries the request's `id` as
 # `request` (UE_REQUEST_ID, set by _ue_unattended_plan / _ue_unattended_busy):
 # pod-agent matches it to report the outcome of the order it queued.
@@ -4145,11 +4146,12 @@ _ue_record() { # <status> <from> <to> <reason> <dbRestored true|false> [backup] 
 
 # The ONE host event recorder (update, heal, units): stamps ts + pod onto
 # <json-object>, appends it to state/events.jsonl, prints the `SYNAP_EVENT` line,
-# and with notify=1 pipes it to SYNAP_UPDATE_NOTIFY_CMD. [latest-file] keeps the
+# and runs no command (notify is kept in the signature for callers; the hook
+# was retired 2026-10-28). [latest-file] keeps the
 # newest of that kind (last-update.json is the update outcome only — a heal
 # never overwrites it). cwd = deploy dir.
-_synap_event() { # <json-object> <notify 0|1> [latest-file]
-    local ev hook
+_synap_event() { # <json-object> <notify 0|1, unused> [latest-file]
+    local ev
     ev="$(jq -c --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg pod "$(_ue_env_get DOMAIN)" '{ts:$ts} + . + {pod:$pod}' <<<"$1")"
     mkdir -p state
     if [ -n "${3:-}" ]; then
@@ -4157,11 +4159,6 @@ _synap_event() { # <json-object> <notify 0|1> [latest-file]
     fi
     printf '%s\n' "$ev" >> state/events.jsonl
     echo "SYNAP_EVENT $ev"
-    [ "${2:-0}" = 1 ] || return 0
-    hook="${SYNAP_UPDATE_NOTIFY_CMD:-$(_ue_env_get SYNAP_UPDATE_NOTIFY_CMD)}"
-    if [ -n "$hook" ]; then
-        printf '%s\n' "$ev" | sh -c "$hook" || _ue_warn "notify hook failed (the event is still in state/events.jsonl)"
-    fi
 }
 
 # ── requests (state/requests/<name>.json, watched by synap-<name>.path) ──────
