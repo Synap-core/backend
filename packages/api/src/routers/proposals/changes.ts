@@ -501,6 +501,14 @@ export function buildProposalChanges(
     });
   }
   if (promotedStages) {
+    // A stage's goal now, matched by its key (a pending update whose target
+    // the caller read): the row reads before → after, not only the new goal.
+    const stagesNow = readPromotedStages(targetBeforeFor("stages"));
+    const goalNow = (key: string | undefined): string | undefined => {
+      if (!key || !stagesNow) return undefined;
+      const now = stagesNow.find((s) => s.key === key);
+      return now ? (now.goal ?? now.description) : undefined;
+    };
     promotedStages.forEach((stage, i) => {
       const goal = stage.goal ?? stage.description ?? null;
       changes.push({
@@ -511,7 +519,7 @@ export function buildProposalChanges(
             ? humanizeToken(stage.key)
             : `${labelFromPath("stage")} ${i + 1}`),
         operation,
-        before: undefined,
+        before: goalNow(stage.key),
         after: goal,
         valueType: valueTypeOf(goal),
       });
