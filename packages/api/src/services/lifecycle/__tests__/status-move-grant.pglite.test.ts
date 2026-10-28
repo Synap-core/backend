@@ -34,8 +34,12 @@
  *  - not a lead facet on a person stored in another space (rv-security B-1),
  *    while a person STORED in CRM is CRM's: its lead stage moves (a member of
  *    CRM sees that role);
- *  - an ask-first agent's move through the status door is filed in CRM, the
- *    space the grant was checked in (the shared facet row names no space).
+ *  - an ask-first agent's move through the status door, and its edit of the
+ *    lead's fields, are filed in CRM, the space the grant was checked in (the
+ *    shared facet row names no space) — as the write itself, never a join;
+ *  - filing in CRM changes nothing else: the gate decides on the row's own
+ *    space, as before, so a plain agent (no CRM member) still applies its move,
+ *    with no join, and its receipt is filed in CRM.
  *  - not with the same permissions pinned to Marketing instead.
  *
  * NOT COVERED: the hub HTTP door and the S7 tRPC fence (their own suites);
@@ -614,12 +618,71 @@ describe("Part 2 — a CRM key works the lead stage of a pod-wide person", () =>
       })
     );
     expect(res.status, JSON.stringify(res)).toBe("proposed");
-    const { rows } = await q<{ workspace_id: string | null }>(
-      `select workspace_id from proposals where id = $1`,
+    const { rows } = await q<{
+      workspace_id: string | null;
+      proposal_type: string;
+    }>(`select workspace_id, proposal_type from proposals where id = $1`, [
+      (res as { proposalId: string }).proposalId,
+    ]);
+    // The move itself, never a join: the gate did not decide in CRM.
+    expect(rows[0]).toEqual({ workspace_id: CRM, proposal_type: "transition" });
+    expect((await facetRow(lead))?.status).toBe("new");
+  });
+
+  it("an ask-first agent's edit of the lead's fields is proposed as the edit, filed in CRM", async () => {
+    const person = await seedPerson(null);
+    const lead = await seedFacet(person, LEAD);
+    const res = await asKey(CRM_KEY, ASK, () =>
+      entitiesAs(ASK).updateFacet({
+        facetId: lead,
+        properties: { score: 7 },
+      } as never)
+    );
+    expect(res.status, JSON.stringify(res)).toBe("proposed");
+    const { rows } = await q<{
+      workspace_id: string | null;
+      target_type: string;
+      proposal_type: string;
+    }>(
+      `select workspace_id, target_type, proposal_type from proposals where id = $1`,
       [(res as { proposalId: string }).proposalId]
     );
-    expect(rows[0]?.workspace_id).toBe(CRM);
-    expect((await facetRow(lead))?.status).toBe("new");
+    expect(rows[0]).toEqual({
+      workspace_id: CRM,
+      target_type: "facet",
+      proposal_type: "update",
+    });
+    expect((await facetRow(lead))?.properties).not.toHaveProperty("score");
+  });
+
+  it("filing in CRM changes no decision: a plain agent's move applies, no join, its receipt filed in CRM", async () => {
+    const person = await seedPerson(null);
+    const lead = await seedFacet(person, LEAD);
+    const res = await asKey(CRM_KEY, AGENT, () =>
+      moveStatus({
+        entityId: person,
+        facetId: lead,
+        to: "qualified",
+        expectedFrom: "new",
+        actor: { kind: "agent", userId: USER, agentUserId: AGENT },
+        sessionId: WORK,
+      })
+    );
+    expect(res.status, JSON.stringify(res)).toBe("moved");
+    expect((await facetRow(lead))?.status).toBe("qualified");
+    const { rows } = await q<{
+      status: string;
+      workspace_id: string | null;
+      proposal_type: string;
+    }>(`select status, workspace_id, proposal_type from proposals`);
+    // AGENT is no member of CRM: a gate deciding in CRM would file a join.
+    expect(rows).toEqual([
+      {
+        status: "auto_approved",
+        workspace_id: CRM,
+        proposal_type: "entity.transition",
+      },
+    ]);
   });
 
   it("does not find a lead stage on a person stored in another space: not found", async () => {

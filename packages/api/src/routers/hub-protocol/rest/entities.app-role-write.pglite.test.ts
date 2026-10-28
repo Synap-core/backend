@@ -118,6 +118,11 @@ vi.mock("../../../utils/permission-check.js", async (importOriginal) => {
       if (preview.decision !== "propose")
         return actual.checkPermissionOrPropose(opts);
       const data = (opts.data ?? {}) as Record<string, unknown>;
+      // Filed where the real gate files it (record only, never the decision).
+      const filedIn =
+        opts.proposalWorkspaceId !== undefined
+          ? opts.proposalWorkspaceId
+          : (opts.workspaceId ?? null);
       const uuid = () => globalThis.crypto.randomUUID();
       const id = uuid();
       const subject = opts.subjectType as string;
@@ -129,7 +134,7 @@ vi.mock("../../../utils/permission-check.js", async (importOriginal) => {
         requestId: uuid(),
         source: opts.source ?? "intelligence",
         sourceId: opts.userId,
-        workspaceId: opts.workspaceId ?? null,
+        workspaceId: filedIn,
         targetType,
         targetId,
         changeType: opts.action,
@@ -142,7 +147,7 @@ vi.mock("../../../utils/permission-check.js", async (importOriginal) => {
          values ($1,$2,$3,$4,$5,$6::jsonb,'pending',$7,$7,$8)`,
         [
           id,
-          opts.workspaceId ?? null,
+          filedIn,
           targetType,
           targetId,
           opts.action,

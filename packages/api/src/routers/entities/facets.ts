@@ -326,9 +326,11 @@ export const facetProcs = {
         profileId: roleProfileId,
         storedWorkspaceId: storedFacetWorkspaceId,
       });
+      // The gate decides where it always has: the facet's space, else the lens.
+      const governanceWorkspaceId = facetWorkspaceId ?? ctx.workspaceId ?? null;
       // A shared role sent with no lens names no space: its proposal and audit
-      // carry the space the key's grant was checked in.
-      const governanceWorkspaceId =
+      // are filed in the space the key's grant was checked in. Record only.
+      const filedWorkspaceId =
         facetWorkspaceId ?? grantWorkspaceId ?? ctx.workspaceId ?? null;
 
       // 1. .requested
@@ -339,7 +341,7 @@ export const facetProcs = {
         subjectId: input.entityId,
         userId: ctx.userId,
         agentUserId: actingAgentUserId,
-        workspaceId: governanceWorkspaceId,
+        workspaceId: filedWorkspaceId,
         correlationId,
         data: {
           entityId: input.entityId,
@@ -357,6 +359,7 @@ export const facetProcs = {
         agentUserId: input.agentUserId,
         workspaceId: governanceWorkspaceId,
         grantWorkspaceId,
+        proposalWorkspaceId: filedWorkspaceId,
         subjectType: "facet",
         action: "attach",
         source: input.source,
@@ -523,8 +526,12 @@ export const facetProcs = {
         profileId: existing.profileId,
         storedWorkspaceId: existing.workspaceId ?? null,
       });
-      // A shared role's row names no space: the space the grant was checked in.
+      // The gate decides where it always has: the row's space, else the lens.
       const governanceWorkspaceId =
+        existing.workspaceId ?? ctx.workspaceId ?? null;
+      // A shared role's row names no space: its proposal and audit are filed in
+      // the space the grant was checked in. Record only.
+      const filedWorkspaceId =
         existing.workspaceId ?? grantWorkspaceId ?? ctx.workspaceId ?? null;
 
       // LIFECYCLE SPLIT (work model L2): a ROLE's status — `status`, or its
@@ -631,7 +638,7 @@ export const facetProcs = {
         subjectId: input.facetId,
         userId: ctx.userId,
         agentUserId: input.agentUserId,
-        workspaceId: governanceWorkspaceId,
+        workspaceId: filedWorkspaceId,
         correlationId,
         data: { facetId: input.facetId, status: input.status },
       });
@@ -642,6 +649,7 @@ export const facetProcs = {
         agentUserId: input.agentUserId,
         workspaceId: governanceWorkspaceId,
         grantWorkspaceId,
+        proposalWorkspaceId: filedWorkspaceId,
         subjectType: "facet",
         action: "update",
         source: input.source,
@@ -698,7 +706,7 @@ export const facetProcs = {
         subjectId: facet.id,
         userId: ctx.userId,
         agentUserId: input.agentUserId,
-        workspaceId: governanceWorkspaceId,
+        workspaceId: filedWorkspaceId,
         correlationId,
       });
 
@@ -776,8 +784,12 @@ export const facetProcs = {
         profileId: existing.profileId,
         storedWorkspaceId: existing.workspaceId ?? null,
       });
-      // A shared role's row names no space: the space the grant was checked in.
+      // The gate decides where it always has: the row's space, else the lens.
       const governanceWorkspaceId =
+        existing.workspaceId ?? ctx.workspaceId ?? null;
+      // A shared role's row names no space: its proposal and audit are filed in
+      // the space the grant was checked in. Record only.
+      const filedWorkspaceId =
         existing.workspaceId ?? grantWorkspaceId ?? ctx.workspaceId ?? null;
 
       // 1. .requested
@@ -788,7 +800,7 @@ export const facetProcs = {
         subjectId: input.facetId,
         userId: ctx.userId,
         agentUserId: input.agentUserId,
-        workspaceId: governanceWorkspaceId,
+        workspaceId: filedWorkspaceId,
         correlationId,
         data: { facetId: input.facetId, entityId: existing.entityId },
       });
@@ -799,6 +811,7 @@ export const facetProcs = {
         agentUserId: input.agentUserId,
         workspaceId: governanceWorkspaceId,
         grantWorkspaceId,
+        proposalWorkspaceId: filedWorkspaceId,
         subjectType: "facet",
         action: "detach",
         source: input.source,
@@ -840,7 +853,7 @@ export const facetProcs = {
         subjectId: input.facetId,
         userId: ctx.userId,
         agentUserId: input.agentUserId,
-        workspaceId: governanceWorkspaceId,
+        workspaceId: filedWorkspaceId,
         correlationId,
       });
 

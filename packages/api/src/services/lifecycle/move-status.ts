@@ -275,9 +275,12 @@ export async function moveStatus(
     const perm = await checkPermissionOrPropose({
       userId: input.actor.userId,
       agentUserId: input.actor.agentUserId ?? undefined,
-      // A shared role's row names no space: the space the grant was checked in.
-      workspaceId: governanceWorkspaceId ?? grantWorkspaceId,
+      workspaceId: governanceWorkspaceId,
       grantWorkspaceId,
+      // A shared role's row names no space: its proposal is filed in the space
+      // the grant was checked in. Record only: the decision is unchanged.
+      proposalWorkspaceId:
+        target.workspaceId ?? grantWorkspaceId ?? input.workspaceId ?? null,
       subjectType: "entity",
       action: "transition",
       // An unattributed agent reaches the anonymous AI ladder; never "user".
