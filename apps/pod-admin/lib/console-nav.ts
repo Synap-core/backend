@@ -37,6 +37,7 @@ export type NavIconName =
   | "Plug"
   | "Sparkles"
   | "Store"
+  | "Boxes"
   | "ShieldCheck"
   | "HardDrive"
   | "RefreshCw"
@@ -264,6 +265,30 @@ export const CONSOLE_NAV = [
         href: "/intelligence",
         label: "Intelligence",
         icon: "Sparkles",
+        audience: "admin",
+      },
+      {
+        // What is ON the pod: installed capabilities, their actions (turn them
+        // on or off) and every skill, those waiting to be turned on first.
+        // "Tools" is the user word for capabilities and skills (concepts.md,
+        // founder D2). Marketplace is what can be installed.
+        id: "tools",
+        href: "/tools",
+        label: "Tools",
+        icon: "Boxes",
+        kind: "capability",
+        legacy: [
+          {
+            source: "/marketplace",
+            query: { key: "tab", value: "installed" },
+            destination: "/tools?tab=installed",
+          },
+          {
+            source: "/marketplace",
+            query: { key: "tab", value: "tools" },
+            destination: "/tools?tab=actions",
+          },
+        ],
         audience: "admin",
       },
       {
@@ -499,7 +524,7 @@ export const DIAGNOSE_DESTINATION: Readonly<Record<string, NavId>> = {
   // The approve-rate finding: tuning happens in the app, but the queue it
   // describes is Review's.
   review_queue: "review",
-  capabilities: "marketplace",
+  capabilities: "tools",
   failed_flows: "runs",
   stuck_runs: "sessions",
   agent_activity: "agents",

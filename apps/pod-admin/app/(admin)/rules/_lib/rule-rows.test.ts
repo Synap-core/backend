@@ -122,9 +122,13 @@ describe("ruleRowAction — one act per row", () => {
       ruleRowAction(rule({ status: "error", triggerType: "manual" }), undefined)
     ).toBe("run");
   });
-  it("offers Pause on a working live rule, nothing on a paused one", () => {
+  it("offers Pause on a working live rule", () => {
     expect(ruleRowAction(rule(), ok)).toBe("pause");
-    expect(ruleRowAction(rule({ status: "paused" }), ok)).toBeNull();
+  });
+  it("offers Turn on on a draft and on a paused rule, nothing on an archived one", () => {
+    expect(ruleRowAction(rule({ status: "draft" }), undefined)).toBe("turn_on");
+    expect(ruleRowAction(rule({ status: "paused" }), ok)).toBe("turn_on");
+    expect(ruleRowAction(rule({ status: "archived" }), undefined)).toBeNull();
   });
 });
 
