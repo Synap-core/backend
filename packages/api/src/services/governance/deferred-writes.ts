@@ -167,6 +167,11 @@ const REPLAY_DOORS: Record<ReplayableDeferredPair, ReplayDoor> = {
       workspaceId,
       goal: String(d.goal ?? ""),
       ...defined({
+        // The id the door minted when it held the start (the proposal's
+        // `data.id`): the replay lands under it, so the session the proposal
+        // names exists once approved (live: f151958b held 4f824834, the
+        // replay created 8ba020af).
+        proposedSessionId: str(d.id),
         projectId: w.projectId,
         title: str(d.title),
         templateId: str(d.templateId),

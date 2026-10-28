@@ -618,6 +618,21 @@ describe("join approval — membership, then replay as the agent", () => {
     expect(h.doorCalls[0]!.input).toMatchObject({ proposedDocumentId: handed });
   });
 
+  it("a kept session start is replayed under the id its proposal names (held-writes f151958b)", async () => {
+    // Live 2026-10-27: pack f151958b held a session start as 4f824834 and the
+    // replay created it as 8ba020af, so the id on the proposal named nothing.
+    const handed = randomUUID();
+    const r = (await agentWrite("focus_session", "create", {
+      id: handed,
+      goal: "No AI request reaches DeepSeek before consent",
+    })) as { proposalId: string };
+
+    await approveJoin(r.proposalId);
+
+    expect(h.doorCalls.map((c) => c.door)).toEqual(["focus_session/create"]);
+    expect(h.doorCalls[0]!.input).toMatchObject({ proposedSessionId: handed });
+  });
+
   it("a rejected join records `rejected` for every kept write — nothing replays", async () => {
     await fiveWrites();
     const [join] = await joinRows();
