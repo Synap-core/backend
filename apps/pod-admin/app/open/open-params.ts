@@ -59,6 +59,22 @@ export function isSafeOpenId(value: string): boolean {
   return SAFE_ID_RE.test(value);
 }
 
+/**
+ * A cell is addressed by its type KEY, not a row id (`generated:<slug>`,
+ * `cell:<pkg>:<name>`): the colon is load-bearing. Same charset and length as
+ * Hono's `OPEN_ID_RE` (`apps/api/src/open-dispatch.ts`). A key may arrive
+ * percent-encoded (`objectPage` encodes it) or not.
+ */
+const CELL_KEY_RE = /^[A-Za-z0-9_.:-]{1,128}$/;
+
+function decodedKey(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
 function isHostType(type: string): type is HostType {
   return (HOST_TYPES as readonly string[]).includes(type);
 }
@@ -74,6 +90,13 @@ export function parseOpenParams(type: string, id: string): ParsedOpen {
   if (isHostType(kind)) {
     if (!isUuid(rawId)) return { status: "invalid-id", type: kind, id: rawId };
     return { status: "host", type: kind, id: rawId };
+  }
+
+  if (kind === "cell") {
+    const key = decodedKey(rawId);
+    return CELL_KEY_RE.test(key)
+      ? { status: "bounce", type: kind, id: key }
+      : { status: "invalid-id", type: kind, id: rawId };
   }
 
   if (isBounceType(kind)) {
