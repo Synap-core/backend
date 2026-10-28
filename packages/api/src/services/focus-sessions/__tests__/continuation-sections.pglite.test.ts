@@ -680,6 +680,13 @@ describe("continuation packet — gates", () => {
     });
   });
 
+  it("ownerDeploys is the OWNER's alone: a person seated in the room reads the session, not the owner's other sessions", async () => {
+    // Review 2026-10-28: a room member read the owner's approvals on every session for 14 days.
+    const { gates } = await packetFor(S.rejected, OTHER);
+    if (gates.status !== "ok") throw new Error("gates unavailable");
+    expect(gates.ownerDeploys).toEqual([]);
+  });
+
   it("a session with no process has no gates (ok, not unavailable)", async () => {
     const { gates } = await packetFor(S.plain);
     expect(gates).toMatchObject({ status: "ok", items: [] });

@@ -320,10 +320,15 @@ async function readOwnerDeploys(
   }));
 }
 
-/** The gates section. Throws on a failed read; the packet makes it `unavailable`. */
+/**
+ * The gates section. Throws on a failed read; the packet makes it `unavailable`.
+ * `ownerDeploys` is read only for the session's OWNER (`viewerId === row.userId`): someone
+ * seated in this session's room may read the session, never the owner's other sessions.
+ */
 export async function readSessionGates(
   database: typeof db,
-  row: { id: string; playbookId: string | null; userId: string }
+  row: { id: string; playbookId: string | null; userId: string },
+  viewerId: string
 ): Promise<{
   items: PacketGateItem[];
   deploy: PacketDeployApproval | null;
@@ -332,7 +337,9 @@ export async function readSessionGates(
   const [sessionProcess, rows, ownerDeploys] = await Promise.all([
     loadSessionProcess({ sessionId: row.id, playbookId: row.playbookId }),
     readGateProposals(database, row.id),
-    readOwnerDeploys(database, row.userId),
+    viewerId === row.userId
+      ? readOwnerDeploys(database, row.userId)
+      : Promise.resolve([]),
   ]);
   return {
     ...deriveSessionGates(sessionProcess?.stages ?? [], rows),
