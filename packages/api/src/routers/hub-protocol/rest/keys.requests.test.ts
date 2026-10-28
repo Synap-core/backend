@@ -121,6 +121,20 @@ describe("POST /keys/requests", () => {
     });
   });
 
+  // Rules out: a project the door drops on the way (K5's `--project` would
+  // then file a pod-wide request).
+  it("passes a project through to the request", async () => {
+    const P = "22222222-2222-4222-8222-222222222222";
+    const res = await post(app(), "/keys/requests", {
+      template: "read-only",
+      projectId: P,
+    });
+    expect(res.status).toBe(200);
+    expect(svc.createKeyRequest.mock.calls[0]![0]).toMatchObject({
+      projectId: P,
+    });
+  });
+
   it("a person's own key files as the person", async () => {
     await post(app({ agent: null }), "/keys/requests", {
       template: "read-only",
