@@ -213,6 +213,10 @@ import {
   CP_ENTITLEMENT_SYNC_QUEUE,
 } from "./cp-entitlement-sync.js";
 import {
+  handleOnboardingMilestones,
+  ONBOARDING_MILESTONES_QUEUE,
+} from "./onboarding-milestones.js";
+import {
   ensureSystemProfiles,
   reportEnsureSystemProfilesResult,
   ensureDefaultRelationDefs,
@@ -376,6 +380,7 @@ const ALL_QUEUES = [
   CP_CATALOG_SYNC_QUEUE,
   CP_PROJECT_SYNC_QUEUE,
   CP_ENTITLEMENT_SYNC_QUEUE,
+  ONBOARDING_MILESTONES_QUEUE,
   TOOL_DEMAND_FORWARD_QUEUE,
   // Was MISSING while its worker+schedule existed — pg-boss v10 schedule() FK
   // violated → registerCronSchedules aborted → every cron after cal-backfill
@@ -1053,6 +1058,13 @@ export async function registerAllWorkers(): Promise<void> {
     handleCpEntitlementSync()
   );
   logger.info("Registered worker: cp-entitlement-sync");
+
+  // Onboarding milestones (cron: every 15min + on startup): ids and times of
+  // the owner's start, to the CP, when linked and sharing is on (plan §5).
+  await boss.work(ONBOARDING_MILESTONES_QUEUE, async () =>
+    handleOnboardingMilestones()
+  );
+  logger.info("Registered worker: onboarding-milestones");
 
   await boss.work(CP_PROJECT_SYNC_QUEUE, async () => handleCpProjectSync());
   registerCpProjectSyncTrigger(() => {

@@ -80,6 +80,10 @@
       "types": "./dist/lifecycle/index.d.ts",
       "import": "./dist/lifecycle/index.js"
     },
+    "./onboarding/start": {
+      "types": "./dist/onboarding/index.d.ts",
+      "import": "./dist/onboarding/index.js"
+    },
     "./renderables": {
       "types": "./dist/renderables/index.d.ts",
       "import": "./dist/renderables/index.js"

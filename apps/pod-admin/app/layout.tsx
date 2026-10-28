@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import localFont from "next/font/local";
+// The ochre token SSOT (mirrored; see lib/ochre-theme.ts), before the app CSS.
+import "./synap-tokens.css";
 import "./globals.css";
 import { Providers } from "./providers";
 import { navCollapsedScript } from "../lib/nav-collapsed";
@@ -20,12 +22,14 @@ import { navCollapsedScript } from "../lib/nav-collapsed";
  * Keep `variable` and `display` identical to the previous google-font config —
  * `globals.css` consumes these CSS variables and nothing else changes.
  */
-const dmSans = localFont({
+// Body face: Geist, the ochre token SSOT's `--synap-font-body` (decision
+// 53e110df). The files are synap-app design-tokens' latin subset (OFL, see
+// ./fonts/OFL-Geist.txt); 600 is the heaviest weight the SSOT ships.
+const geist = localFont({
   src: [
-    { path: "./fonts/dm-sans-400.woff2", weight: "400", style: "normal" },
-    { path: "./fonts/dm-sans-500.woff2", weight: "500", style: "normal" },
-    { path: "./fonts/dm-sans-600.woff2", weight: "600", style: "normal" },
-    { path: "./fonts/dm-sans-700.woff2", weight: "700", style: "normal" },
+    { path: "./fonts/geist-400.woff2", weight: "400", style: "normal" },
+    { path: "./fonts/geist-500.woff2", weight: "500", style: "normal" },
+    { path: "./fonts/geist-600.woff2", weight: "600", style: "normal" },
   ],
   variable: "--font-sans",
   display: "swap",
@@ -82,7 +86,7 @@ export default function RootLayout({
     <html
       lang="en"
       suppressHydrationWarning
-      className={`${dmSans.variable} ${fraunces.variable} ${jetMono.variable}`}
+      className={`${geist.variable} ${fraunces.variable} ${jetMono.variable}`}
     >
       <body
         suppressHydrationWarning

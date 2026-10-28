@@ -294,6 +294,18 @@ export interface CreateFocusSessionParams {
    * never a second row; anyone else's row there ⇒ a fresh id.
    */
   proposedSessionId?: string;
+  /**
+   * INTERNAL ONLY — session governance stamped at birth as
+   * `metadata.governance` (a server-owned key, `session-metadata.ts`), which
+   * the gate re-reads on every AI write that carries this session
+   * (`loadSessionGovernanceContext`): `forceProposeWrites` turns each agent
+   * write in the session into a proposal. No public door (tRPC, Hub, MCP)
+   * declares it; `onboarding.startFirstSession` is its caller (plan v1 §2.6).
+   * Written on the DIRECT path only: a `proposed` or `deduped` result carries
+   * no stamp, so the caller must treat those as not done (and pass
+   * `forceCreate`).
+   */
+  governance?: { forceProposeWrites: true };
 }
 
 /**
@@ -1010,6 +1022,7 @@ export async function createFocusSession(
             {
               clientKey,
               adoptedAt: new Date().toISOString(),
+              ...(params.governance ? { governance: params.governance } : {}),
               // What this run was actually given — same key, same meaning as
               // the run funnel's (`RUN_PARAMS_METADATA_KEY`). Only when a
               // playbook resolved; an ad-hoc session has no params to store.
@@ -1049,11 +1062,15 @@ export async function createFocusSession(
           title ||
           derivedTitle ||
           paramResolution ||
+          params.governance ||
           isProbeWriteContext()
             ? {
                 metadata: stampProbeMarker({
                   ...(clientKey
                     ? { clientKey, ...conversationCwdPatch(clientKey) }
+                    : {}),
+                  ...(params.governance
+                    ? { governance: params.governance }
                     : {}),
                   ...(title
                     ? titleSourcePatch(agentUserId ? "agent" : "human")
