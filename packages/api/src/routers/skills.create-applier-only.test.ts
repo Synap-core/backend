@@ -13,6 +13,15 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const h = vi.hoisted(() => ({ gated: [] as Array<Record<string, unknown>> }));
 
+// The caller is a plain member: no skill authority (audit F6), so a create
+// with no scope is the member's own. Keeps this file database-free.
+vi.mock("../services/skills/skill-write-authority.js", () => ({
+  holdsSkillAuthority: async () => false,
+  assertMayChangeSkill: async () => undefined,
+  defaultSkillScope: async () => "user",
+  SKILL_AUTHORITY_MESSAGE: "authority",
+  POD_SKILL_PUBLISH_MESSAGE: "publish",
+}));
 vi.mock("../middleware/read-only-guard.js", async () => {
   const { t } = await import("../init-trpc.js");
   return { readOnlyGuardMiddleware: t.middleware(({ next }) => next()) };

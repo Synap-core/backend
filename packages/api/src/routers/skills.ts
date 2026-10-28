@@ -1394,22 +1394,6 @@ export const skillsRouter = router({
       const userId = requireUserId(ctx.userId);
       const skillId = randomUUID();
 
-      // A pod-wide skill reaches every user's agents (F6): publishing one
-      // needs the approval authority. The capability-definition applier keeps
-      // its own install path (its pod skills are the catalog's).
-      const mayPublishPod =
-        isDefinitionApplier(ctx) ||
-        (await holdsSkillAuthority(userId, {
-          workspaceId: input.workspaceId,
-        }));
-      if (input.scope === "pod" && !mayPublishPod) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: POD_SKILL_PUBLISH_MESSAGE,
-        });
-      }
-      const scope = input.scope ?? (mayPublishPod ? "pod" : "user");
-
       // `intent` and `urlPatterns` are the applier's alone: a reader pattern
       // decides which kept links a verb receives, so a member-authored skill
       // must never declare one through this door (only a definition does).
@@ -1423,6 +1407,23 @@ export const skillsRouter = router({
             "intent and urlPatterns come only from a capability definition; install or update its package instead.",
         });
       }
+
+      // A pod-wide skill reaches every user's agents (F6): publishing one
+      // needs the approval authority. The capability-definition applier keeps
+      // its own install path (its pod skills are the catalog's). After the input-only refusal above, so
+      // a refused call reads nothing.
+      const mayPublishPod =
+        isDefinitionApplier(ctx) ||
+        (await holdsSkillAuthority(userId, {
+          workspaceId: input.workspaceId,
+        }));
+      if (input.scope === "pod" && !mayPublishPod) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: POD_SKILL_PUBLISH_MESSAGE,
+        });
+      }
+      const scope = input.scope ?? (mayPublishPod ? "pod" : "user");
 
       // Documentation + optional Code. Derive `kind` from code presence (explicit
       // input.kind still honored). A skill must carry documentation or code.
