@@ -76,6 +76,11 @@ const FROZEN: Record<string, number> = {
   // tell a sanctioned literal-kind read from row-blind role-slug debt, so this
   // is a false positive, not code to fix.
   "packages/api/src/services/team-roster-context.ts": 1,
+  // find-duplicate-candidates.ts `sameStartEvents` (#422) filters
+  // eq(entities.type, EVENT_KIND): `event` is a pure PRIMARY kind with no
+  // role/facet wearers — the sanctioned literal-kind case, same shape as
+  // event-sync's `event` dedup above. A false positive, not debt.
+  "packages/api/src/services/duplicates/find-duplicate-candidates.ts": 1,
 };
 
 function tsFilesUnderSrc(pkgRoot: string, acc: string[]): void {
