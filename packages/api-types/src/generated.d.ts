@@ -23521,6 +23521,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					workspaceIds?: string[] | undefined;
 				} | undefined;
 				integration: "cli" | "custom" | "openclaw" | "raycast";
+				redirectUri?: string | undefined;
 				strategy?: "create_new" | "replace_existing" | undefined;
 				workspaceId?: string | undefined;
 			};

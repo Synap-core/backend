@@ -15,10 +15,12 @@ import {
   buildConnectDeeplink,
   buildFlowTraceUrl,
   extractFlowId,
-  isAllowedConnectRedirectUri,
-  DEFAULT_CONNECT_REDIRECT_PREFIXES,
   type IntegrationKind,
 } from "@synap-core/external-connect-client";
+import {
+  DEFAULT_CONNECT_REDIRECT_PREFIXES,
+  isAllowedConnectRedirectUri,
+} from "@synap-core/types/external-connect";
 import { ReceiverShell } from "../_lib/receiver-shell";
 import { trpc } from "../../lib/trpc";
 
@@ -80,13 +82,13 @@ export function ConnectForm({
     : info.description;
 
   const hasRedirect = redirectUri.length > 0;
-  // The claude-web callback is an https origin; extend the default allowlist with
-  // the pod-owner-controlled https origins passed from the server (never mutate
-  // the shared DEFAULT_CONNECT_REDIRECT_PREFIXES fork).
-  const allowedPrefixes = [
-    ...DEFAULT_CONNECT_REDIRECT_PREFIXES,
-    ...extraRedirectPrefixes,
-  ];
+  // A plaintext KEY goes only to the default targets (Raycast, the desktop app,
+  // the CLI's loopback callback); the server refuses anything else before it
+  // mints. Only the claude-web consent CODE may go to an https origin: the
+  // pod-owner-controlled prefixes passed from the server.
+  const allowedPrefixes: readonly string[] = isMcpConnect
+    ? [...DEFAULT_CONNECT_REDIRECT_PREFIXES, ...extraRedirectPrefixes]
+    : DEFAULT_CONNECT_REDIRECT_PREFIXES;
   const redirectIsAllowed =
     !hasRedirect || isAllowedConnectRedirectUri(redirectUri, allowedPrefixes);
 
@@ -216,13 +218,20 @@ export function ConnectForm({
       beginMcpConnectMutation.mutate({ agentType: "claude-web" });
       return;
     }
-    connectMutation.mutate({ integration, strategy });
+    // The server re-checks the delivery target before it mints a key.
+    connectMutation.mutate({
+      integration,
+      strategy,
+      ...(hasRedirect ? { redirectUri } : {}),
+    });
   }, [
     connectMutation,
     beginMcpConnectMutation,
     isMcpConnect,
     integration,
     strategy,
+    hasRedirect,
+    redirectUri,
   ]);
 
   const handleCopy = useCallback(async () => {
