@@ -46,15 +46,15 @@ runs:
           app-bases
         permission-contents: read
 
+    # Runs ONLY when there is no token. The step header echoes its script on
+    # every run, so an always-run step printed this error text in every green
+    # log too, and readers took it for the cause of red runs (finding 3b354d79).
     - name: Require a control-plane-api read token
+      if: ${{ steps.app-token.outputs.token == '' && inputs.cross-repo-token == '' }}
       shell: bash
-      env:
-        CROSS_REPO_TOKEN: ${{ steps.app-token.outputs.token || inputs.cross-repo-token }}
       run: |
-        if [ -z "$CROSS_REPO_TOKEN" ]; then
-          echo "::error::No token to read Synap-core/control-plane-api. Set the repo variable SYNAP_READER_APP_ID and secret SYNAP_READER_APP_KEY (SECURITY-RELEASE-RUNBOOK.md §5.1), or, until then, the CROSS_REPO_TOKEN secret (a fine-grained PAT with Contents: read on Synap-core/control-plane-api and app-bases: gh secret set CROSS_REPO_TOKEN -R Synap-core/backend)."
-          exit 1
-        fi
+        echo "::error::No token to read Synap-core/control-plane-api. Set the repo variable SYNAP_READER_APP_ID and secret SYNAP_READER_APP_KEY (SECURITY-RELEASE-RUNBOOK.md §5.1), or, until then, the CROSS_REPO_TOKEN secret (a fine-grained PAT with Contents: read on Synap-core/control-plane-api and app-bases: gh secret set CROSS_REPO_TOKEN -R Synap-core/backend)."
+        exit 1
 
     # The siblings beside this checkout, through the ONE layout resolver
     # (scripts/layout/layout.mjs, layout "backend-ci" of layout.json): the CP
