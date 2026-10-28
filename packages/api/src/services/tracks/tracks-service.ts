@@ -161,6 +161,7 @@ import {
   seedGoalOwner,
 } from "./track-participant-store.js";
 import { activityActorOf, loadActorRows } from "../activity/activity-actors.js";
+import { lifecycleConflictError } from "../lifecycle/conflict.js";
 import {
   assertGoalSource,
   writeGoalLineage,
@@ -1872,8 +1873,29 @@ export async function setTrackStatus(input: {
   verdict?: string | null;
   /** Required for the verdicts `impossible` and `replaced`. */
   verdictReason?: string | null;
+  /**
+   * The status the caller READ the goal in — compare-and-set (work model L2,
+   * D1): a move decided on a stale read (the person paused the goal
+   * meanwhile) is refused, nothing written. Optional for a person; sent, it
+   * is held to the same rule. An agent MUST send it — rolled out in two
+   * steps: today an agent's move without it is logged
+   * (`expectedStatusMissing`) and runs on the status read here; it becomes a
+   * refusal once the shipped callers (synap CLI, IS) send it.
+   */
+  expectedStatus?: ProjectTrackStatus;
   actor: TrackActor;
 }): Promise<SetTrackStatusResult> {
+  if (input.actor.agentUserId && input.expectedStatus === undefined) {
+    logger.warn(
+      {
+        trackId: input.trackId,
+        agentUserId: input.actor.agentUserId,
+        source: input.actor.source,
+        expectedStatusMissing: true,
+      },
+      "agent goal status move without expectedStatus (D1 step 1: allowed, refused next)"
+    );
+  }
   // THE JUDGE'S OWN ENDING (code.md): the judge seat IS the right to close
   // (the owner's or judge's, to drop) — a person who holds it ends the goal
   // with read access alone, never also needing write on the project, and no
@@ -1885,6 +1907,14 @@ export async function setTrackStatus(input: {
   );
   const { track, project } =
     ender ?? (await loadTrackForWrite(input.trackId, input.actor));
+  // A move decided on a belief that is already false is refused before
+  // anything is filed — it could only fail at approval.
+  if (
+    input.expectedStatus !== undefined &&
+    input.expectedStatus !== track.status
+  ) {
+    throw lifecycleConflictError(input.expectedStatus, track.status);
+  }
   if (track.status === input.status) return { status: "unchanged", track };
   const close = {
     verdict: input.verdict ?? null,
@@ -1929,6 +1959,8 @@ export async function setTrackStatus(input: {
       id: track.id,
       name: track.name,
       status: input.status,
+      // The belief the approval replays against (strict compare-and-set).
+      expectedStatus: track.status,
       ...(close.verdict ? { verdict: close.verdict } : {}),
       ...(close.verdictReason ? { verdictReason: close.verdictReason } : {}),
     },
