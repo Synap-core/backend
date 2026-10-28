@@ -18,10 +18,12 @@
  * so no new namespace widens what an agent key may post).
  *
  * Producers: the backend GitHub Actions workflow and the devbox CI watcher
- * (PRs, CI), and the pod itself on a successful update (`dev.deployed`).
+ * (PRs, CI, `dev.repo_snapshot`), and the pod itself on a successful update
+ * (`dev.deployed`).
  * Consumers: the PR sweeper (`dev.pr_merged` into the default branch completes
- * the session outcome that points at the PR, `dev.pr_closed` retires it) and
- * any event automation (`eventPattern` = the type).
+ * the session outcome that points at the PR, `dev.pr_closed` retires it), the
+ * Work › Ship read (`dev.repo_snapshot`, `services/dev-loop/work-release.ts`)
+ * and any event automation (`eventPattern` = the type).
  *
  * PURE and dependency-light (zod only): CLI, devbox scripts and the pod read
  * the same contract.
@@ -36,6 +38,13 @@ export const DEV_LOOP_EVENT_TYPES = {
   prClosed: "dev.pr_closed",
   ciFinished: "ci.finished",
   deployed: "dev.deployed",
+  /**
+   * A repository's whole release state at one instant (its main, what is
+   * live, its open PRs, what merged today): the fact the Work › Ship read
+   * folds (`@synap-core/types/work-release`). Posted by the devbox producer
+   * per repo every few minutes; the newest per repo wins.
+   */
+  repoSnapshot: "dev.repo_snapshot",
 } as const;
 
 export type DevLoopEventType =
@@ -199,12 +208,164 @@ export const deployedEventSchema = z.object({
 });
 export type DeployedEvent = z.infer<typeof deployedEventSchema>;
 
+/** Main's health: `infra` = the check did not run (billing, OOM, config). */
+export const REPO_MAIN_HEALTHS = ["ok", "red", "infra", "unmeasured"] as const;
+export type RepoMainHealth = (typeof REPO_MAIN_HEALTHS)[number];
+
+/** Who measured main: GitHub's checks (public repos) or the devbox baseline. */
+export const REPO_HEALTH_SOURCES = [
+  "github-checks",
+  "devbox-baseline",
+  "none",
+] as const;
+export type RepoHealthSource = (typeof REPO_HEALTH_SOURCES)[number];
+
+export const REPO_LIVE_KINDS = [
+  "pod",
+  "image",
+  "npm",
+  "site",
+  "desktop",
+] as const;
+export type RepoLiveKind = (typeof REPO_LIVE_KINDS)[number];
+
+export const PR_MERGEABLE_STATES = [
+  "clean",
+  "blocked",
+  "dirty",
+  "unknown",
+] as const;
+export type PrMergeableState = (typeof PR_MERGEABLE_STATES)[number];
+
+/**
+ * A PR's checks, as the producer read them. `infra` = they did not run (the
+ * devbox job died OOM, billing blocked Actions): no answer, never a red.
+ */
+export const PR_CHECK_STATES = [
+  "green",
+  "red",
+  "queued",
+  "running",
+  "none",
+  "infra",
+] as const;
+export type PrCheckState = (typeof PR_CHECK_STATES)[number];
+
+const isoSchema = z.string().datetime({ offset: true });
+const prNumberSchema = z.number().int().positive();
+const prRefSchema = z.object({ repo: repoSchema, number: prNumberSchema });
+const sessionIdSchema = z
+  .string()
+  .regex(UUID_RE, "podSessionId must be a uuid");
+/** The bound of every list in a snapshot: a repo with more is not one repo. */
+const SNAPSHOT_LIST_MAX = 300;
+
+/**
+ * `dev.repo_snapshot` — one repository's release state at `observedAt`.
+ * Every PR url must be the snapshot's repo (checked below), so a reader
+ * folding the snapshot never files a PR under the wrong repo.
+ */
+export const repoSnapshotEventSchema = z
+  .object({
+    repo: repoSchema,
+    observedAt: isoSchema,
+    visibility: z.enum(["public", "private"]),
+    main: z.object({
+      sha: shaSchema.nullable(),
+      health: z.enum(REPO_MAIN_HEALTHS),
+      source: z.enum(REPO_HEALTH_SOURCES),
+      redSince: z
+        .object({
+          sha: shaSchema,
+          prNumber: prNumberSchema.optional(),
+          at: isoSchema.optional(),
+        })
+        .nullable()
+        .optional(),
+      /** One line: what is red ("typecheck: proposalType on review rows"). */
+      reason: z.string().max(500).nullable().optional(),
+      /**
+       * The open PR that turns main green again — named by the producer (a
+       * PR whose title or body says it fixes main, or the one the founder
+       * marks), in this repo or another (`browser` main waits on a backend
+       * types PR). Absent or null when nobody named it: never guessed.
+       */
+      fixedBy: prRefSchema.nullable().optional(),
+    }),
+    live: z
+      .object({
+        kind: z.enum(REPO_LIVE_KINDS),
+        sha: shaSchema.nullable(),
+        label: z.string().min(1).max(200),
+        /** Merges on main that the live build does not contain. */
+        behindBy: z.number().int().min(0).nullable().optional(),
+      })
+      .nullable()
+      .optional(),
+    prs: z
+      .array(
+        z.object({
+          number: prNumberSchema,
+          title: z.string().max(512),
+          url: z.string().url(),
+          headSha: shaSchema,
+          /** The head branch, read for the negative-control fold. */
+          branch: z.string().min(1).max(256).optional(),
+          draft: z.boolean(),
+          /** GitHub login; `dependabot[bot]` marks a dependabot PR. */
+          author: z.string().min(1).max(128),
+          updatedAt: isoSchema,
+          mergeable: z.enum(PR_MERGEABLE_STATES),
+          checks: z.enum(PR_CHECK_STATES),
+          /** Every failing check also fails on main (red-vs-main). */
+          redInheritedFromMain: z.boolean().optional(),
+          podSessionId: sessionIdSchema.nullable().optional(),
+          /** "depends on #n" / "after owner/repo#n" in the body. */
+          dependsOn: z.array(prRefSchema).max(20).optional(),
+          autoMerge: z.boolean(),
+        })
+      )
+      .max(SNAPSHOT_LIST_MAX),
+    mergedToday: z
+      .array(
+        z.object({
+          number: prNumberSchema,
+          title: z.string().max(512),
+          url: z.string().url(),
+          mergedAt: isoSchema,
+          podSessionId: sessionIdSchema.nullable().optional(),
+        })
+      )
+      .max(SNAPSHOT_LIST_MAX),
+  })
+  .superRefine((v, ctx) => {
+    const lists = [
+      ["prs", v.prs],
+      ["mergedToday", v.mergedToday],
+    ] as const;
+    for (const [list, rows] of lists) {
+      rows.forEach((row, i) => {
+        const fromUrl = parsePullRequestRef(row.url);
+        const ref = { repo: v.repo, number: row.number };
+        if (!fromUrl || !samePullRequest(fromUrl, ref)) {
+          ctx.addIssue({
+            code: "custom",
+            path: [list, i, "url"],
+            message: `url must be the pull request ${v.repo}#${row.number} (${pullRequestUrl(ref)})`,
+          });
+        }
+      });
+    }
+  });
+export type RepoSnapshotFact = z.infer<typeof repoSnapshotEventSchema>;
+
 const SCHEMA_BY_TYPE: Record<DevLoopEventType, z.ZodTypeAny> = {
   [DEV_LOOP_EVENT_TYPES.prOpened]: pullRequestEventSchema,
   [DEV_LOOP_EVENT_TYPES.prMerged]: pullRequestEventSchema,
   [DEV_LOOP_EVENT_TYPES.prClosed]: pullRequestEventSchema,
   [DEV_LOOP_EVENT_TYPES.ciFinished]: ciFinishedEventSchema,
   [DEV_LOOP_EVENT_TYPES.deployed]: deployedEventSchema,
+  [DEV_LOOP_EVENT_TYPES.repoSnapshot]: repoSnapshotEventSchema,
 };
 
 export type DevLoopPayloadCheck =

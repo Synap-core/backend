@@ -1,7 +1,8 @@
 /**
  * THE ceiling resolver (the caps fold, W1c / 0330), on real Postgres (PGlite):
  *   - migration 0330 runs inside ONE transaction, twice;
- *   - no row ⇒ CEILING_DEFAULTS[axis], source "default";
+ *   - no row ⇒ CEILING_DEFAULTS[axis], source "default" — for the daily write
+ *     count that is null: NO limit (opt-in, founder 2026-10-27);
  *   - most specific row wins: subject (+8) > principal > scope, newest on a tie;
  *   - a row naming ANOTHER subject never applies;
  *   - a tighten-only axis never resolves above its default;
@@ -126,6 +127,33 @@ describe("resolveCeiling", () => {
         ceilingId: null,
       });
     }
+  });
+
+  it("daily writes: no row ⇒ null (no limit); a row ⇒ that row's limit", async () => {
+    expect(CEILING_DEFAULTS.daily_write_count).toBeNull();
+    expect(
+      await resolveDailyWriteCeiling({
+        db,
+        agentUserId: AGENT,
+        workspaceId: WS,
+      })
+    ).toBeNull();
+    await row({ axis: "daily_write_count", limit: 500, agent: AGENT });
+    expect(
+      await resolveDailyWriteCeiling({
+        db,
+        agentUserId: AGENT,
+        workspaceId: WS,
+      })
+    ).toBe(500);
+    // A pod-wide row reaches every agent; another agent's row does not.
+    expect(
+      await resolveDailyWriteCeiling({ db, agentUserId: OTHER_AGENT })
+    ).toBeNull();
+    await row({ axis: "daily_write_count", limit: 2_147_483_647 });
+    expect(
+      await resolveDailyWriteCeiling({ db, agentUserId: OTHER_AGENT })
+    ).toBe(2_147_483_647);
   });
 
   it("a subject row outranks an agent + workspace row", async () => {

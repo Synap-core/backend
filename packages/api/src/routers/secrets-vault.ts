@@ -993,6 +993,7 @@ export const secretsVaultRouter = router({
         where: eq(proposals.id, input.proposalId),
         columns: {
           id: true,
+          status: true,
           data: true,
           createdBy: true,
           agentUserId: true,
@@ -1006,6 +1007,19 @@ export const secretsVaultRouter = router({
           code: "NOT_FOUND",
           message: "Proposal not found",
         });
+      // Only an OPEN request is granted: one decided elsewhere (rejected in
+      // the console, approved on the phone) must not hand the agent a secret
+      // from a card that is still on screen. A failed approval stays open.
+      if (
+        proposalRow.status !== ProposalStatus.PENDING &&
+        proposalRow.status !== ProposalStatus.APPROVAL_FAILED
+      ) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message:
+            "This request was already decided. Ask the agent to request it again.",
+        });
+      }
       // D3: a key bounded to some spaces grants only there.
       assertMayDecideProposalAt("approve", "approve", proposalRow);
 

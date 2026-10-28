@@ -8739,7 +8739,43 @@ export interface ProposalReviewModel {
 	graph?: ProposalReviewGraph;
 	/** Present ONLY for delete proposals — see {@link ProposalRemoval}. */
 	removal?: ProposalRemoval;
+	/**
+	 * Present ONLY for a pending `capability.enable`: what approving it turns
+	 * on — see {@link ProposalTurnsOn}.
+	 */
+	turnsOn?: ProposalTurnsOn;
 	events: ProposalReviewEvent[];
+}
+/**
+ * What a `capability.enable` would turn on, read NOW (while it is pending)
+ * under the viewer's skill read rule: each skill whole, so the person reads
+ * the code or prose they are switching on and where it can reach. A skill the
+ * viewer cannot read is COUNTED in `unreadSkills`, never dropped silently.
+ */
+export interface ProposalTurnsOn {
+	skills: ProposalTurnOnSkill[];
+	/** Skills in the request this viewer could not read (or that are gone). */
+	unreadSkills: number;
+}
+export interface ProposalTurnOnSkill {
+	id: string;
+	name: string;
+	/** `code` | `instruction` | `declarative` | `builtin`. */
+	kind: string;
+	/** `box` = a script run on the person's computer, not in the pod. */
+	executionMode: string;
+	/** The whole code it would run; never excerpted. */
+	code?: string;
+	/** Its whole documentation, or an instruction skill's prose. */
+	body?: string;
+	/** A box script's declaration (packages, hosts, limits), as stored. */
+	box?: Record<string, unknown>;
+	/**
+	 * What it can reach outside the pod, read like every "Can reach" fact.
+	 * Absent for an instruction (it runs nothing) and for a box script (its
+	 * declaration says what it reaches, not the pod's sandbox).
+	 */
+	reach?: ProposalPartReach;
 }
 export interface CompositeCreateEntityOp {
 	op: "create_entity";
@@ -9242,6 +9278,89 @@ declare enum MessageLinkRelationshipType {
 	QUOTES = "quotes",// Message quotes this object
 	CONTEXT = "context"
 }
+declare const repoSnapshotEventSchema: z.ZodObject<{
+	live: z.ZodOptional<z.ZodNullable<z.ZodObject<{
+		behindBy: z.ZodOptional<z.ZodNullable<z.ZodNumber>>;
+		kind: z.ZodEnum<{
+			desktop: "desktop";
+			image: "image";
+			npm: "npm";
+			pod: "pod";
+			site: "site";
+		}>;
+		label: z.ZodString;
+		sha: z.ZodNullable<z.ZodString>;
+	}, z.core.$strip>>>;
+	main: z.ZodObject<{
+		fixedBy: z.ZodOptional<z.ZodNullable<z.ZodObject<{
+			number: z.ZodNumber;
+			repo: z.ZodString;
+		}, z.core.$strip>>>;
+		health: z.ZodEnum<{
+			infra: "infra";
+			ok: "ok";
+			red: "red";
+			unmeasured: "unmeasured";
+		}>;
+		reason: z.ZodOptional<z.ZodNullable<z.ZodString>>;
+		redSince: z.ZodOptional<z.ZodNullable<z.ZodObject<{
+			at: z.ZodOptional<z.ZodString>;
+			prNumber: z.ZodOptional<z.ZodNumber>;
+			sha: z.ZodString;
+		}, z.core.$strip>>>;
+		sha: z.ZodNullable<z.ZodString>;
+		source: z.ZodEnum<{
+			"devbox-baseline": "devbox-baseline";
+			"github-checks": "github-checks";
+			none: "none";
+		}>;
+	}, z.core.$strip>;
+	mergedToday: z.ZodArray<z.ZodObject<{
+		mergedAt: z.ZodString;
+		number: z.ZodNumber;
+		podSessionId: z.ZodOptional<z.ZodNullable<z.ZodString>>;
+		title: z.ZodString;
+		url: z.ZodString;
+	}, z.core.$strip>>;
+	observedAt: z.ZodString;
+	prs: z.ZodArray<z.ZodObject<{
+		author: z.ZodString;
+		autoMerge: z.ZodBoolean;
+		branch: z.ZodOptional<z.ZodString>;
+		checks: z.ZodEnum<{
+			green: "green";
+			infra: "infra";
+			none: "none";
+			queued: "queued";
+			red: "red";
+			running: "running";
+		}>;
+		dependsOn: z.ZodOptional<z.ZodArray<z.ZodObject<{
+			number: z.ZodNumber;
+			repo: z.ZodString;
+		}, z.core.$strip>>>;
+		draft: z.ZodBoolean;
+		headSha: z.ZodString;
+		mergeable: z.ZodEnum<{
+			blocked: "blocked";
+			clean: "clean";
+			dirty: "dirty";
+			unknown: "unknown";
+		}>;
+		number: z.ZodNumber;
+		podSessionId: z.ZodOptional<z.ZodNullable<z.ZodString>>;
+		redInheritedFromMain: z.ZodOptional<z.ZodBoolean>;
+		title: z.ZodString;
+		updatedAt: z.ZodString;
+		url: z.ZodString;
+	}, z.core.$strip>>;
+	repo: z.ZodString;
+	visibility: z.ZodEnum<{
+		private: "private";
+		public: "public";
+	}>;
+}, z.core.$strip>;
+export type RepoSnapshotFact = z.infer<typeof repoSnapshotEventSchema>;
 declare const PULL_REQUEST_STATES: readonly [
 	"open",
 	"merged",
@@ -16070,6 +16189,38 @@ export interface CapabilityGrantRow {
 	createdAt: string;
 	active: boolean;
 }
+/** A skill or tool row. `kind` absent = skill (the execute door's shape). */
+export interface CapabilityRef {
+	kind?: "skill" | "tool";
+	id: string;
+	name: string;
+}
+/**
+ * What the caller hands back. `originalActionRan: false` is a literal on BOTH
+ * arms: the refused action did not run, whether or not the request was filed.
+ */
+export type CapabilityEnableOffer = {
+	message: string;
+	originalActionRan: false;
+	proposalId: string;
+	reviewUrl: string;
+	skills: CapabilityRef[];
+	status: "proposed";
+	title: string;
+} | {
+	error: string;
+	message: string;
+	originalActionRan: false;
+	status: "failed";
+};
+declare function proposeCapabilityEnable(input: {
+	/** The acting agent; `null` = filed on behalf of the owner (unattended run). */
+	agentUserId: string | null;
+	refused: CapabilityRef[];
+	sessionId?: string | null;
+	userId: string;
+	workspaceId: string | null;
+}): Promise<CapabilityEnableOffer[]>;
 /**
  * Intent classification for the WRITE side of the Rule Loop — the sibling of
  * `classify.ts`.
@@ -16861,38 +17012,6 @@ export interface SyncConnectorConnection {
 	 */
 	hasError?: boolean;
 }
-/** A skill or tool row. `kind` absent = skill (the execute door's shape). */
-export interface CapabilityRef {
-	kind?: "skill" | "tool";
-	id: string;
-	name: string;
-}
-/**
- * What the caller hands back. `originalActionRan: false` is a literal on BOTH
- * arms: the refused action did not run, whether or not the request was filed.
- */
-export type CapabilityEnableOffer = {
-	message: string;
-	originalActionRan: false;
-	proposalId: string;
-	reviewUrl: string;
-	skills: CapabilityRef[];
-	status: "proposed";
-	title: string;
-} | {
-	error: string;
-	message: string;
-	originalActionRan: false;
-	status: "failed";
-};
-declare function proposeCapabilityEnable(input: {
-	/** The acting agent; `null` = filed on behalf of the owner (unattended run). */
-	agentUserId: string | null;
-	refused: CapabilityRef[];
-	sessionId?: string | null;
-	userId: string;
-	workspaceId: string | null;
-}): Promise<CapabilityEnableOffer[]>;
 /**
  * ARGUMENT VALIDATION AT THE PROPOSE MOMENT — check the call against the verb's
  * DECLARED schema before a human is asked to approve it.
@@ -21536,6 +21655,115 @@ export interface LensPageWire {
 	 */
 	picks?: LensPagePicks;
 }
+declare const SHIP_STAGES: readonly [
+	"working",
+	"checks",
+	"ready",
+	"on_main"
+];
+export type ShipStage = (typeof SHIP_STAGES)[number];
+declare const CHECK_VERDICTS: readonly [
+	"green",
+	"own_red",
+	"inherited",
+	"infra",
+	"queued",
+	"running",
+	"unmeasured"
+];
+export type CheckVerdict = (typeof CHECK_VERDICTS)[number];
+declare const SHIP_FOLDS: readonly [
+	"draft",
+	"negctl",
+	"dependabot",
+	"stale"
+];
+export type ShipFold = (typeof SHIP_FOLDS)[number] | null;
+export type BlockRef = {
+	kind: "pr";
+	number: number;
+	repo: string;
+} | {
+	kind: "main";
+	repo: string;
+};
+declare const WORK_RELEASE_SOURCE_STATES: {
+	readonly holders: readonly [
+		"ok",
+		"unavailable"
+	];
+	readonly sessions: readonly [
+		"ok",
+		"unavailable"
+	];
+	readonly snapshots: readonly [
+		"ok",
+		"stale",
+		"missing"
+	];
+};
+export interface WorkReleaseSources {
+	/** `stale` = the newest snapshot is older than {@link SNAPSHOT_STALE_MS}. */
+	snapshots: (typeof WORK_RELEASE_SOURCE_STATES.snapshots)[number];
+	sessions: (typeof WORK_RELEASE_SOURCE_STATES.sessions)[number];
+	holders: (typeof WORK_RELEASE_SOURCE_STATES.holders)[number];
+}
+export interface WorkReleaseRepo {
+	/** `owner/name`, as the producer spelled it. */
+	repo: string;
+	/** The name without its owner: `backend`. */
+	label: string;
+	visibility: "private" | "public";
+	main: RepoSnapshotFact["main"];
+	live: NonNullable<RepoSnapshotFact["live"]> | null;
+	snapshotAt: string | null;
+}
+export interface WorkReleaseHolder {
+	/** A session holding the PR is working on it now (`isSessionWorkingNow`). */
+	live: boolean;
+	/** Who holds it: the session's agent, else its owner. */
+	label: string;
+	/** The session's newest activity; null when nothing was recorded. */
+	lastActiveAt: string | null;
+}
+export interface WorkReleasePr {
+	repo: string;
+	number: number;
+	title: string;
+	url: string;
+	stage: ShipStage;
+	verdict: CheckVerdict;
+	fold: ShipFold;
+	sessionId: string | null;
+	sessionTitle: string | null;
+	/** `null` when no session holds it, or the holders read failed (`sources`). */
+	holder: WorkReleaseHolder | null;
+	/** Explicit `dependsOn` still open, then (inherited red) its repo's main. */
+	blockedBy: BlockRef[];
+	/** Auto-merge is armed: green + clean merges it with no one. */
+	autoMerge: boolean;
+	updatedAt: string;
+	mergedAt?: string | null;
+}
+export interface WorkReleaseBlocker {
+	ref: BlockRef;
+	/** Open PRs + mains waiting behind it, transitively. */
+	waiting: number;
+	waitingPrs: number;
+	waitingMains: number;
+	/** A main: its `reason`; a PR: its title. */
+	reason: string | null;
+	/** A main: the PR that fixes it, when named. Absent on a PR. */
+	fixedBy?: BlockRef | null;
+}
+export interface WorkReleaseRead {
+	generatedAt: string;
+	sources: WorkReleaseSources;
+	repos: WorkReleaseRepo[];
+	prs: WorkReleasePr[];
+	/** The blocker with the most waiting behind it, transitively, first. */
+	blockers: WorkReleaseBlocker[];
+}
 /**
  * resolveEntityOpenTarget — WHERE opening this entity should go, decided on the
  * pod so every client (browser, relay) only dispatches.
@@ -25276,19 +25504,23 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				};
 				meta: object;
 				output: {
+					approved?: undefined;
 					id: `${string}-${string}-${string}-${string}-${string}`;
 					proposalId: string;
 					status: "proposed";
 					toolId: string;
 					toolName: string;
+					turnOnRequest?: undefined;
 					verbName: string;
 					wiring: WireCreatedVerbResult;
 				} | {
+					approved: boolean;
 					id: string;
 					proposalId?: undefined;
 					status: "created";
 					toolId: string;
 					toolName: string;
+					turnOnRequest: CapabilityEnableOffer | undefined;
 					verbName: string;
 					wiring: WireCreatedVerbResult;
 				};
@@ -33601,6 +33833,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: SessionUsage;
 		}>;
+		workUnits: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				sessionId: string;
+			};
+			meta: object;
+			output: PacketSection<PacketWorkUnitItem>;
+		}>;
 	}>>;
 	forms: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
@@ -33853,7 +34092,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: {
 				count: number;
-				limit: number;
+				limit: number | null;
 			};
 		}>;
 	}>>;
@@ -44618,13 +44857,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: {
+				approved?: undefined;
 				id: `${string}-${string}-${string}-${string}-${string}`;
 				proposalId: string;
 				status: "proposed";
+				turnOnRequest?: undefined;
 			} | {
+				approved: boolean;
 				id: string;
 				proposalId?: undefined;
 				status: "created";
+				turnOnRequest: CapabilityEnableOffer | undefined;
 			};
 		}>;
 		createRule: import("@trpc/server").TRPCMutationProcedure<{
@@ -48345,6 +48588,38 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				viewRendererViewTypes: string[] | null;
 				workspaceId: string | null;
 			};
+		}>;
+	}>>;
+	workRelease: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		errorShape: {
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: {
+				candidates?: {
+					id: string;
+					title: string | null;
+					type: string;
+				}[] | undefined;
+				captureQuestionStatus?: string | undefined;
+				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
+				currentStatus?: string | null;
+				expectedStatus?: string | null;
+				httpStatus: number;
+				opRef?: string | undefined;
+				path?: string;
+				pendingProposalId?: string | undefined;
+				reasonCode?: string;
+				stack?: string;
+			};
+			message: string;
+		};
+		meta: object;
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		get: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			meta: object;
+			output: WorkReleaseRead;
 		}>;
 	}>>;
 	workers: import("@trpc/server").TRPCBuiltRouter<{

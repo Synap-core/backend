@@ -23,8 +23,9 @@ import {
 } from "../document-patch/apply-document-patch.js";
 import type { DocumentDiagnostic } from "../document-patch/document-diagnostics.js";
 
-/** Codes a flow may stamp — run-time facts only; content codes are derived, never asserted. */
-export const RUN_TIME_DIAGNOSTIC_CODES = ["freeze_failed"] as const;
+// The codes live beside the checker (the stamp reader keeps them across a
+// re-check); re-exported here, where the verb's input schema reads them.
+export { RUN_TIME_DIAGNOSTIC_CODES } from "../document-patch/document-diagnostics.js";
 
 export type StampRunDiagnosticsResult =
   | { status: "stamped"; documentId: string; revision: number; items: number }

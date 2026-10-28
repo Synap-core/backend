@@ -30,6 +30,12 @@ import type { GovernanceRung, MatrixMark } from "../agent-matrix/index.js";
 import type { FilterOperator } from "../views/filters.js";
 import type { NeedsYouBucket } from "../needs-you/buckets.js";
 import type {
+  CheckVerdict,
+  RepoMainHealth,
+  ShipFold,
+  ShipStage,
+} from "../work-release/index.js";
+import type {
   PullRequestChecks,
   PullRequestState,
 } from "../events/pr-state.js";
@@ -1407,6 +1413,45 @@ export const PULL_REQUEST_CHECKS_LABELS: Readonly<
 
 /** A deploy named the PR's merge commit. */
 export const PULL_REQUEST_DEPLOYED_LABEL = "Deployed";
+
+/**
+ * WORK › SHIP marks (`@synap-core/types/work-release`): the columns of the
+ * road to main, a PR's check verdict, the folds and a main's health. Their
+ * own tables: `ready`, `running` and `stale` already mean other things in
+ * {@link STATUS_LABELS}. Keyed by every member, so a new one stops the build.
+ */
+export const SHIP_STAGE_LABELS: Readonly<Record<ShipStage, string>> = {
+  working: "Working",
+  checks: "Checks",
+  ready: "Ready",
+  on_main: "On main",
+};
+
+export const CHECK_VERDICT_LABELS: Readonly<Record<CheckVerdict, string>> = {
+  green: "Green",
+  own_red: "Own red",
+  inherited: "Inherited red",
+  infra: "Did not run",
+  queued: "Queued",
+  running: "Running",
+  unmeasured: "No checks yet",
+};
+
+export const SHIP_FOLD_LABELS: Readonly<Record<NonNullable<ShipFold>, string>> =
+  {
+    draft: "Drafts",
+    negctl: "Negative controls",
+    dependabot: "Dependabot",
+    stale: "Stale",
+  };
+
+export const REPO_MAIN_HEALTH_LABELS: Readonly<Record<RepoMainHealth, string>> =
+  {
+    ok: "Main green",
+    red: "Main red",
+    infra: "Main did not run",
+    unmeasured: "Main not measured",
+  };
 
 export function resolvePullRequestStateLabel(state: PullRequestState): string {
   return PULL_REQUEST_STATE_LABELS[state];

@@ -24,7 +24,11 @@ import {
 } from "@synap-core/types/proposals/deferred-writes";
 import { countedNoun, resolveStatusLabel } from "@synap-core/types/vocabulary";
 import { openIn, type Exit } from "../../../lib/open-in";
-import { rowHref, usePlacedExit } from "../../../lib/exit-link";
+import {
+  rowHref,
+  useAppOpenAttempt,
+  usePlacedExit,
+} from "../../../lib/exit-link";
 import { kindIcon, kindLabel } from "../../_lib/object/kind-icon";
 import { StatusPill } from "../../(admin)/components/status-pill";
 import { statusKindForTone } from "../../(admin)/components/status-tone";
@@ -60,17 +64,23 @@ function RowTitle({ title, exit }: { title: string; exit?: Exit }) {
 }
 
 function DoorTitle({ title, exit }: { title: string; exit: Exit }) {
-  const href = rowHref(usePlacedExit(exit));
+  const placed = usePlacedExit(exit);
+  const open = useAppOpenAttempt(placed);
+  const href = rowHref(placed);
   if (href === null) {
     return <span className="min-w-0 break-words">{title}</span>;
   }
   return (
-    <a
-      href={href}
-      className="min-w-0 break-words underline decoration-foreground/20 underline-offset-2 hover:text-foreground hover:decoration-foreground/60"
-    >
-      {title}
-    </a>
+    <>
+      <a
+        href={href}
+        onClick={open.onOpen}
+        className="min-w-0 break-words underline decoration-foreground/20 underline-offset-2 hover:text-foreground hover:decoration-foreground/60"
+      >
+        {title}
+      </a>
+      {open.offer}
+    </>
   );
 }
 

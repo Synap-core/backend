@@ -6,9 +6,10 @@
  * auto/propose VERDICT, a ceiling stores a numeric LIMIT. First slice ships ONE
  * axis — `daily_write_count`: a per-agent (or pod-wide) cap on how many writes
  * an agent may AUTO-EXECUTE per UTC day. The resolver that *consumes* these rows
- * (rung 2.56 in `decideAgentPolicy`) already exists; without this door no row
- * could be created, so the resolver always fell back to
- * `DEFAULT_DAILY_WRITE_CEILING`. This router lets a ceiling be user-authored.
+ * (rung 2.56 in `decideAgentPolicy`) already exists; with no row it falls back
+ * to `DEFAULT_DAILY_WRITE_CEILING`, which is `null`: NO limit (founder,
+ * 2026-10-27). The ceiling is opt-in, and this router is how a person sets one
+ * (per agent, per space or pod-wide).
  *
  * Scoping and gating MIRROR `governanceRulesRouter` exactly (this is a
  * copy-adapt of that router): a ceiling TIGHTENS governance, so creating or
@@ -216,6 +217,9 @@ export async function assertCanAllowAgentToday(
   });
 }
 
+/** `governance_ceilings.limit_value` is a Postgres `integer`. */
+const LIMIT_VALUE_MAX = 2_147_483_647;
+
 /** The end of the current UTC day: the next 00:00:00.000Z. */
 export function endOfUtcDay(now: Date = new Date()): Date {
   return new Date(
@@ -252,6 +256,12 @@ export interface AllowedToday {
  *
  * Idempotent per day: a second "allow today" while one is in force returns it
  * instead of doubling again.
+ *
+ * NO LIMIT IN FORCE (no ceiling row — the default since 2026-10-27): there is
+ * nothing to lift, so nothing is written and this returns `null`; the pack's
+ * approval stands as a plain approve. Never a made-up row: doubling "no limit"
+ * would invent one. The raised limit is capped at the column's integer maximum
+ * (a pod-wide "unlimited" row is stored as 2147483647; doubling it overflows).
  */
 export async function allowAgentForRestOfUtcDay(input: {
   userId: string;
@@ -262,7 +272,7 @@ export async function allowAgentForRestOfUtcDay(input: {
   /** The held-writes pack this rides on. */
   sourceProposalId: string;
   now?: Date;
-}): Promise<AllowedToday> {
+}): Promise<AllowedToday | null> {
   if (input.actingAgentUserId) {
     throw new TRPCError({
       code: "FORBIDDEN",
@@ -310,6 +320,7 @@ export async function allowAgentForRestOfUtcDay(input: {
     agentUserId: input.agentUserId,
     workspaceId: null,
   });
+  if (previousLimit === null) return null;
   const [row] = await db
     .insert(governanceCeilings)
     .values({
@@ -317,7 +328,7 @@ export async function allowAgentForRestOfUtcDay(input: {
       ...scope,
       principalClass: null,
       workspaceId: null,
-      limitValue: previousLimit * 2,
+      limitValue: Math.min(previousLimit * 2, LIMIT_VALUE_MAX),
       sourceProposalId: input.sourceProposalId,
       createdBy: input.userId,
       expiresAt,
@@ -448,7 +459,8 @@ export const governanceCeilingsRouter = router({
    * The acting agent's current daily-write usage against its resolved ceiling —
    * powers a "N / limit writes today" gauge. Read-only: reuses the SAME resolver
    * functions rung 2.56 uses (`countAgentWritesTodayUtc` +
-   * `resolveDailyWriteCeiling`), never re-deriving the count.
+   * `resolveDailyWriteCeiling`), never re-deriving the count. `limit: null` =
+   * no daily limit for this agent (no ceiling row: the default).
    */
   usageToday: protectedProcedure
     .input(

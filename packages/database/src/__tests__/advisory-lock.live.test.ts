@@ -1,13 +1,14 @@
 /**
  * `withAdvisoryLock` against a REAL Postgres pool (DATABASE_URL): the lock is
  * held while `fn` runs, as another connection sees it, and released after,
- * whether `fn` returns or throws. The leak it replaces (27 Oct 2026) left the
- * lock on an idle pooled connection; "held after" is that defect.
+ * whether `fn` returns or throws, and dropped when the unlock itself throws.
+ * The leak it replaces (27 Oct 2026) left the lock on an idle pooled
+ * connection; "held after" is that defect.
  * Needs a live Postgres (PGlite cannot show it, being one connection): probed
  * once at load, as entities-dedup-gate.test.ts does, so a missing database is
  * reported SKIPPED (with the probe's own test always run), never PASSED.
  */
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { sql } from "../client-pg.js";
 import { withAdvisoryLock } from "../advisory-lock.js";
 
@@ -64,6 +65,37 @@ describe.skipIf(!dbAvailable)("withAdvisoryLock (live pool)", () => {
     });
     expect(out).toBe(42);
     expect(during).toBe(true);
+    expect(await heldElsewhere()).toBe(false);
+  });
+
+  it("drops the lock when the unlock throws (the backend is ended, not pooled)", async () => {
+    // The real reserved connection, with its unlock refused before it reaches
+    // Postgres: the lock is still held there when the door sees the error.
+    const reserve = sql.reserve.bind(sql);
+    let released = false;
+    const spy = vi.spyOn(sql, "reserve").mockImplementationOnce(async () => {
+      const real = await reserve();
+      const conn = ((strings: TemplateStringsArray, ...values: unknown[]) =>
+        strings.join("").includes("pg_advisory_unlock")
+          ? Promise.reject(new Error("unlock lost"))
+          : real(strings, ...(values as never[]))) as unknown as typeof real;
+      conn.release = () => {
+        released = true;
+        real.release();
+      };
+      return conn;
+    });
+    try {
+      await expect(withAdvisoryLock(K1, K2, async () => 1)).rejects.toThrow(
+        "unlock lost"
+      );
+    } finally {
+      spy.mockRestore();
+    }
+    expect(released).toBe(false);
+    // Postgres ends the backend asynchronously; give it a moment.
+    for (let i = 0; i < 20 && (await heldElsewhere()); i++)
+      await new Promise((r) => setTimeout(r, 50));
     expect(await heldElsewhere()).toBe(false);
   });
 
