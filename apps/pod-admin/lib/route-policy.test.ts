@@ -78,6 +78,7 @@ describe("isSelfService (moved verbatim from proxy.ts)", () => {
     "/approve-agents",
     "/approve-agent/x",
     "/device",
+    "/keys/requests/r1",
     "/connection-requests/abc",
     "/proposal/p1",
     "/open/entity/e1",
@@ -97,6 +98,9 @@ describe("isSelfService (moved verbatim from proxy.ts)", () => {
     "/settings",
     "/link-cloud/x",
     "/device/x",
+    "/keys",
+    "/keys/new",
+    "/keys/requests",
     "/proposal",
     "/open",
     "/workspaces",
@@ -107,16 +111,20 @@ describe("isSelfService (moved verbatim from proxy.ts)", () => {
 });
 
 describe("member console", () => {
-  it.each(["/", "/home", "/review"])("%s opens for any member", (path) => {
-    expect(isMemberConsolePath(path)).toBe(true);
-    expect(routeAccess(path)).toBe("signed-in");
-  });
+  it.each(["/", "/home", "/review", "/settings/review"])(
+    "%s opens for any member",
+    (path) => {
+      expect(isMemberConsolePath(path)).toBe(true);
+      expect(routeAccess(path)).toBe("signed-in");
+    }
+  );
 
   it.each([
     "/homepage",
     "/reviews",
     "/home/anything",
     "/review/abc",
+    "/settings/review/x",
     "/members",
     "/workspaces/1",
   ])("%s stays admin", (path) => {
@@ -143,6 +151,7 @@ describe("isBannedAdminPath", () => {
     "/connect",
     "/connection-requests/x",
     "/device",
+    "/keys/requests/x",
     "/my-anything",
     "/settings/security",
     "/link-cloud",
@@ -152,6 +161,7 @@ describe("isBannedAdminPath", () => {
 
   it.each([
     "/keys",
+    "/keys/new",
     "/members",
     "/sources",
     "/security",

@@ -145,6 +145,8 @@ export function scanSkillGlobals(code: string): {
   ok: boolean;
   unknownGlobals: string[];
   parseError?: string;
+  /** The code only DEFINES functions: see {@link onlyDefinesFunctions}. */
+  onlyDefinesFunctions?: boolean;
 } {
   const wrapped = `(async function(args, context){\n${code}\n})`;
   let ast: acorn.Node;
@@ -237,7 +239,41 @@ export function scanSkillGlobals(code: string): {
       (name) => !bound.has(name) && !SKILL_RUNTIME_ALLOWED_GLOBALS.has(name)
     )
     .sort();
-  return { ok: unknownGlobals.length === 0, unknownGlobals };
+  return {
+    ok: unknownGlobals.length === 0,
+    unknownGlobals,
+    onlyDefinesFunctions: onlyDefinesFunctions(ast),
+  };
+}
+
+/**
+ * The runner runs a skill's code as the BODY of `async function(args,
+ * context)` (runner/skill-isolate.ts). Code that is itself a function —
+ * `async (args, context) => { … }` or `function run() { … }` — is defined by
+ * that body and never called: every run returns `undefined` and still reports
+ * success. Live (skill dogfood_echo, run 12b2997a, 2026-10-28): approved,
+ * delivered, no result.
+ */
+function onlyDefinesFunctions(ast: acorn.Node): boolean {
+  const program = ast as unknown as {
+    body: Array<{ expression?: { body?: { body?: acorn.Node[] } } }>;
+  };
+  const statements = program.body[0]?.expression?.body?.body ?? [];
+  return (
+    statements.length > 0 &&
+    statements.every((node) => {
+      const s = node as unknown as {
+        type: string;
+        expression?: { type: string };
+      };
+      return (
+        s.type === "FunctionDeclaration" ||
+        (s.type === "ExpressionStatement" &&
+          (s.expression?.type === "FunctionExpression" ||
+            s.expression?.type === "ArrowFunctionExpression"))
+      );
+    })
+  );
 }
 
 /**
@@ -339,6 +375,17 @@ export function assertSkillGlobalsAllowed(
     throw new TRPCError({
       code: "BAD_REQUEST",
       message: `Skill code has a syntax error: ${scan.parseError}`,
+    });
+  }
+  if (scan.onlyDefinesFunctions) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "Skill code only defines a function, so a run would call nothing and return nothing. " +
+        "The code is the BODY of a function that receives `args` and `context`: " +
+        "write its statements directly and `return` the result " +
+        '(e.g. `const text = String(args.text ?? ""); return { echoed: text };`), ' +
+        "without a wrapper like `async (args, context) => { … }`.",
     });
   }
   if (!scan.ok) {
