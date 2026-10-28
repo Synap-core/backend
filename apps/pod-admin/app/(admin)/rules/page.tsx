@@ -23,6 +23,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { ruleWhenWords } from "@synap-core/types/automations";
+import { resolveActionLabel } from "@synap-core/types/vocabulary";
 import { navHref } from "../../../lib/console-nav";
 import { trpc } from "../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
@@ -72,7 +73,11 @@ export default function RulesPage() {
   );
 }
 
-type PendingAct = { kind: "pause" | "run"; id: string; name: string };
+type PendingAct = {
+  kind: NonNullable<RuleRowAction>;
+  id: string;
+  name: string;
+};
 
 function RulesInner() {
   const searchParams = useSearchParams();
@@ -153,6 +158,7 @@ function RulesInner() {
   };
   const pause = trpc.automations.pause.useMutation();
   const trigger = trpc.automations.trigger.useMutation();
+  const activate = trpc.automations.activate.useMutation();
 
   async function confirmPending() {
     if (!pending) return;
@@ -161,6 +167,16 @@ function RulesInner() {
       if (pending.kind === "pause") {
         await pause.mutateAsync({ id: pending.id });
         addToast({ title: `Paused “${pending.name}”`, color: "default" });
+      } else if (pending.kind === "turn_on") {
+        const result = await activate.mutateAsync({ id: pending.id });
+        addToast({
+          // An agent's key proposes instead of switching it on: said so.
+          title:
+            result.status === "proposed"
+              ? `Sent “${pending.name}” for review`
+              : `${resolveActionLabel("turn_on", "past")} “${pending.name}”`,
+          color: "default",
+        });
       } else {
         const result = await trigger.mutateAsync({ id: pending.id });
         addToast({
@@ -371,7 +387,9 @@ function RulesInner() {
         title={
           pending?.kind === "run"
             ? `Run “${pending.name}” now?`
-            : `Pause “${pending?.name ?? ""}”?`
+            : pending?.kind === "turn_on"
+              ? `${resolveActionLabel("turn_on")} “${pending.name}”?`
+              : `Pause “${pending?.name ?? ""}”?`
         }
         consequence={
           pending?.kind === "run" ? (
@@ -380,16 +398,28 @@ function RulesInner() {
               including anything it sends or changes. If the pod needs someone
               to approve it, it is proposed instead and waits in Review.
             </>
+          ) : pending?.kind === "turn_on" ? (
+            <>
+              From now on it runs on its own each time its trigger happens,
+              including anything it sends or changes. You can pause it here at
+              any time.
+            </>
           ) : (
             <>
-              It won’t start new runs until someone switches it back on (in the
-              app). Nothing it already did is undone.
+              It won’t start new runs until someone turns it back on. Nothing it
+              already did is undone.
             </>
           )
         }
-        confirmLabel={pending?.kind === "run" ? "Run now" : "Pause rule"}
+        confirmLabel={
+          pending?.kind === "run"
+            ? "Run now"
+            : pending?.kind === "turn_on"
+              ? resolveActionLabel("turn_on")
+              : "Pause rule"
+        }
         confirmColor="warning"
-        isPending={pause.isPending || trigger.isPending}
+        isPending={pause.isPending || trigger.isPending || activate.isPending}
       >
         {actError && (
           <p className="text-[12.5px] text-status-down">{actError}</p>
@@ -428,7 +458,11 @@ function RuleActButton({
       className="min-h-9"
       onPress={onPress}
     >
-      {act === "pause" ? "Pause" : "Run now"}
+      {act === "pause"
+        ? "Pause"
+        : act === "turn_on"
+          ? resolveActionLabel("turn_on")
+          : "Run now"}
     </Button>
   );
 }

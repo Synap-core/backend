@@ -37,8 +37,11 @@ import {
   SYSTEM_RELATION_TYPES,
   normalizeDocumentType,
   cellInstances,
+  documents,
+  entities,
 } from "@synap/database";
 import { requireUserId } from "../utils/user-scoped.js";
+import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 
 // ============================================================================
 // SCHEMAS
@@ -104,6 +107,23 @@ export const cellInstancesRouter = router({
             "Workspace ID required. Pass workspaceId or set active workspace (X-Workspace-Id).",
         });
       }
+      // `workspaceProcedure` vetted the HEADER only; the row lands in
+      // `workspaceId`, which the input may name. Editor+ there (audit F10).
+      await assertWorkspaceWrite(db, userId, { workspaceId });
+      if (input.sourceDocumentId) {
+        // The cell renders its source document to everyone who can see the
+        // cell: the creator must be able to read that document themselves.
+        const source = await scopedDb(AccessContext.from(ctx)).findFirst(
+          documents,
+          { where: eq(documents.id, input.sourceDocumentId) }
+        );
+        if (!source) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Source document not found or access denied",
+          });
+        }
+      }
 
       const [row] = await db
         .insert(cellInstances)
@@ -144,6 +164,10 @@ export const cellInstancesRouter = router({
             "Workspace ID required. Pass workspaceId or set active workspace (X-Workspace-Id).",
         });
       }
+
+      // `workspaceProcedure` vetted the HEADER only; the document and the cell
+      // land in `workspaceId`, which the input may name. Editor+ there (F10).
+      await assertWorkspaceWrite(db, userId, { workspaceId });
 
       const title = input.name ?? "HTML Cell";
 
@@ -378,6 +402,27 @@ export const cellInstancesRouter = router({
           code: "BAD_REQUEST",
           message:
             "workspaceId is required (pass in input or set X-Workspace-Id header)",
+        });
+      }
+      // A protectedProcedure: neither the header nor the input workspace was
+      // vetted. The relation is stamped with it, so editor+ there, and both
+      // endpoints must pass their own read floors (audit F10).
+      await assertWorkspaceWrite(db, userId, {
+        workspaceId: effectiveWorkspaceId,
+      });
+      const scoped = scopedDb(AccessContext.from(ctx));
+      const [cell, entity] = await Promise.all([
+        scoped.findFirst(cellInstances, {
+          where: eq(cellInstances.id, input.cellId),
+        }),
+        scoped.findFirst(entities, { where: eq(entities.id, input.entityId) }),
+      ]);
+      if (!cell || !entity) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: !cell
+            ? "Cell instance not found"
+            : "Entity not found or access denied",
         });
       }
 

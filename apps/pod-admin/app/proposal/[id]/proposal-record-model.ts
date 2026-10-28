@@ -47,8 +47,9 @@ import {
 } from "@synap-core/types/presentation";
 import { formatDate, formatTimestamp } from "../../../lib/format";
 import {
+  hasChanges,
   textChanges,
-  type ChangeLine,
+  type TextChange,
 } from "../../_lib/object/content/document-changes-model";
 import type { ProposalChangeInput } from "./proposal-review-model";
 
@@ -68,8 +69,11 @@ export type RecordValue =
   | { kind: "tags"; items: string[] }
   /** Source code, whole: never clipped (the card may fold it, never cut it). */
   | { kind: "code"; text: string; lines: number }
-  /** A rewritten text as its changed paragraphs (instructions before → after). */
-  | { kind: "changes"; lines: ChangeLine[] };
+  /**
+   * A rewritten text, whole, with its changes where they happen (instructions,
+   * a goal, a note's body). `code`: read as source, line by line.
+   */
+  | { kind: "changes"; change: TextChange; code: boolean };
 
 export interface RecordField {
   key: string;
@@ -124,8 +128,17 @@ const WHOLE_TEXT_KEYS: ReadonlySet<string> = new Set([
 const PROSE_TEXT_KEYS: ReadonlySet<string> = new Set(["body", "instructions"]);
 
 /**
- * A rewritten instruction as the paragraphs it changes, or `null` when the
- * two sides are not both text or nothing changed.
+ * The property kinds whose rewrite reads as a diff. Never a secret (the card
+ * never draws one), a link, a date or a choice: those keep their own reading.
+ */
+const DIFFABLE_KINDS: ReadonlySet<PropertyRenderKind> = new Set([
+  "text",
+  "richtext",
+]);
+
+/**
+ * A rewritten text, whole, with its changes in place, or `null` when the two
+ * sides are not both text or nothing changed.
  */
 export function proseChanges(
   before: unknown,
@@ -134,13 +147,33 @@ export function proseChanges(
   if (typeof before !== "string" || typeof after !== "string") return null;
   if (before.trim() === "" || after.trim() === "") return null;
   const lines = textChanges(before, after);
-  return lines.some((l) => l.op !== "unchanged")
-    ? { kind: "changes", lines }
+  return hasChanges(lines)
+    ? { kind: "changes", change: { before, after, lines }, code: false }
     : null;
+}
+
+/** Rewritten code, read line by line, or `null` when it did not change. */
+export function codeChanges(
+  before: unknown,
+  after: unknown
+): RecordValue | null {
+  if (typeof before !== "string" || typeof after !== "string") return null;
+  if (before.trim() === "" || after.trim() === "" || before === after) {
+    return null;
+  }
+  return { kind: "changes", change: { before, after, lines: [] }, code: true };
 }
 
 /** Text past this many characters (or with a line break) takes the card's width. */
 const WIDE_TEXT_CHARS = 80;
+
+/** A text a rewrite of reads as a diff: too long to compare by eye. */
+function isLongText(value: unknown): boolean {
+  return (
+    typeof value === "string" &&
+    (value.trim().length > WIDE_TEXT_CHARS || value.trim().includes("\n"))
+  );
+}
 /** The longest text drawn in a card; the whole value stays in Advanced. */
 const MAX_TEXT_CHARS = 600;
 
@@ -507,11 +540,22 @@ export function proposedRecord(input: RecordInput): ProposedRecord | null {
         : change.operation === "update"
           ? "change"
           : "add";
-    // Rewritten instructions read as what changes, not two whole copies.
+    // A rewritten text reads as the whole text with its changes in place,
+    // never two whole copies: a skill's code line by line, its instructions,
+    // and any long text (a goal, a description, a note's body) as prose.
     const rewrite =
-      fieldOp === "change" && !isProperty && PROSE_TEXT_KEYS.has(key)
-        ? proseChanges(change.before, change.after)
-        : null;
+      fieldOp !== "change"
+        ? null
+        : !isProperty && key === "code"
+          ? codeChanges(change.before, change.after)
+          : (!isProperty && PROSE_TEXT_KEYS.has(key)) ||
+              ((isLongText(change.before) || isLongText(change.after)) &&
+                !(!isProperty && WHOLE_TEXT_KEYS.has(key)) &&
+                DIFFABLE_KINDS.has(
+                  classifyPropertyKind({ slug: key, value: change.after, def })
+                ))
+            ? proseChanges(change.before, change.after)
+            : null;
     const after = rewrite
       ? rewrite
       : fieldOp === "remove"

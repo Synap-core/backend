@@ -493,6 +493,7 @@ describe("server-side reconcile (no live list supplied)", () => {
     expect(await reconcileLiveConnections("user-1")).toEqual({
       ok: true,
       capabilities: 0,
+      superseded: [],
     });
     expect(seen).toEqual(["user-1"]);
   });

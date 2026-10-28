@@ -503,6 +503,7 @@ describe("joinSessionOutputs — a matched slot is projected WHOLE", () => {
     owner: "human",
     blockedReason: "credential",
     why: "The Stripe restricted key for the live account",
+    unblocks: "Live payments start",
     ref: { kind: "document", id: "44444444-4444-4444-4444-444444444444" },
     ask: { mode: "confirm", prompt: "Use the live account?" },
     owedSince: "2026-09-08T09:00:00.000Z",

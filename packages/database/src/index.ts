@@ -79,6 +79,7 @@ export * from "./utils/emit-message-event.js";
 export * from "./utils/open-run-session.js";
 export * from "./utils/owed-slot-predicate.js";
 export * from "./utils/open-room-question.js";
+export * from "./utils/needs-you-predicate.js";
 export * from "./utils/awaited-gate-wait.js";
 export * from "./utils/live-run-status.js";
 export * from "./utils/worker-enablement.js";
@@ -102,6 +103,7 @@ export * from "./utils/cp-relay-credential.js";
 export * from "./utils/pod-identity.js";
 export * from "./utils/pod-cp-auth.js";
 export * from "./utils/control-plane-link.js";
+export * from "./utils/onboarding-milestones.js";
 export * from "./utils/is-delegation.js";
 export * from "./utils/agent-turn-overrides.js";
 export * from "./utils/workspace-client-projection.js";
@@ -478,6 +480,7 @@ export * from "./projectors/index.js";
 
 // Export new multi-level permission system
 export * from "./utils/permissions.js";
+export * from "./utils/automation-owner-access.js";
 export * from "./utils/preferences.js";
 
 // Export sync materializer (shared between API receive + pull worker)

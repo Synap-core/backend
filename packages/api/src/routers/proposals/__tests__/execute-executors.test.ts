@@ -390,15 +390,15 @@ describe("(f) command/execute stays on the catch-all + materializer path", () =>
     // …and re-applies the working-dir + env controls on the approved run.
     expect(materializer).toContain("validateWorkingDir");
     expect(materializer).toContain("buildSafeEnv");
+    // Audit F1/F8: a pending command can be REVISED after filing, so the
+    // approved run re-runs the one content check and the operator switch.
+    expect(materializer).toContain("commandPolicyRefusal(command)");
+    expect(materializer).toContain("isPodShellAllowed(");
   });
 
   it("the direct command door blocks dangerous commands BEFORE proposing", () => {
-    // This is why materializeCommand does not need to re-run the pattern list:
-    // a blocked command never becomes a proposal in the first place.
     const src = readSrc("routers/hub-protocol/rest/commands.ts");
-    const blockIdx = src.indexOf(
-      "for (const pattern of BLOCKED_COMMAND_PATTERNS)"
-    );
+    const blockIdx = src.indexOf("commandPolicyRefusal(command)");
     const gateIdx = src.indexOf("checkPermissionOrPropose");
     expect(blockIdx).toBeGreaterThan(-1);
     expect(gateIdx).toBeGreaterThan(blockIdx);
@@ -406,6 +406,17 @@ describe("(f) command/execute stays on the catch-all + materializer path", () =>
     expect(src.indexOf("checkCommandRateLimit(workspaceId)")).toBeLessThan(
       gateIdx
     );
+  });
+
+  it("the door is shut unless the operator switch is on, before anything is filed (audit F8)", () => {
+    const src = readSrc("routers/hub-protocol/rest/commands.ts");
+    const route = src.slice(src.indexOf('app.post("/commands/execute"'));
+    const switchIdx = route.indexOf(
+      "isPodShellAllowed(process.env, config.server.localMode === true)"
+    );
+    expect(switchIdx).toBeGreaterThan(-1);
+    expect(switchIdx).toBeLessThan(route.indexOf("readJsonBody("));
+    expect(switchIdx).toBeLessThan(route.indexOf("checkPermissionOrPropose"));
   });
 
   it("the materializer has NO 'automation' case — why (b) is required", () => {

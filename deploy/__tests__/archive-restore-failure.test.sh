@@ -7,7 +7,9 @@
 # Override SCRIPT_DIR to point at a different copy (used for the negative control).
 #   D15     : an archive leaves the host ONLY age-encrypted (no recipient refuses
 #             before any service stops); an encrypted archive restores with its
-#             identity and refuses without it; a legacy plaintext one still restores
+#             identity and refuses without it; a plaintext one is refused unless
+#             the operator opts in (RESTORE_ALLOW_PLAINTEXT=1), an http URL always,
+#             and neither refusal stops a service (audit 2026-10-28)
 #   volumes : each volume in ARCHIVE_VOLUMES is found by its compose LABELS
 #             (project + volume key; a same-named volume of another project is
 #             never read), read through a helper container, counted, and listed
@@ -169,7 +171,7 @@ trap 'kill "$HOST_PID" 2>/dev/null; rm -rf "$TMP"' EXIT
 reset() { : > "$CB_LOG"; : > "$UPLOAD_LOG"; : > "$DOCKER_LOG"; rm -f "$UPLOADED"; }
 last_status() { grep -o '"status":"[a-z]*"' "$CB_LOG" | tail -1; }
 run_archive() { reset; ( PATH="$TMP/bin:$PATH"; sh "$D/archive-pod.sh" http://up http://cb jwt ) >"$TMP/out" 2>&1; }
-run_restore() { reset; ( PATH="$TMP/bin:$PATH"; sh "$D/restore-archive-pod.sh" http://arch http://cb jwt ) >"$TMP/out" 2>&1; }
+run_restore() { reset; ( PATH="$TMP/bin:$PATH"; sh "$D/restore-archive-pod.sh" "${RESTORE_URL:-https://arch}" http://cb jwt ) >"$TMP/out" 2>&1; }
 
 # ── archive ──
 DUMP_MODE=ok run_archive; rc=$?
@@ -270,12 +272,12 @@ HEALTH_RC=0 PSQL_MODE=ok run_restore; rc=$?
 mkdir -p "$TMP/t"; rm -rf "$TMP/t"/*; tail -n +3 "$TMP/with-volumes.age" | tar xzf - -C "$TMP/t"
 echo "DROP TABLE users;" | gzip > "$TMP/t/database.sql.gz.x"; cp "$TMP/t/database.sql.gz" "$TMP/t/db.keep"; mv "$TMP/t/database.sql.gz.x" "$TMP/t/database.sql.gz"
 ( cd "$TMP/t" && tar czf "$FAKE_ARCHIVE" manifest.json database.sql.gz volumes )
-HEALTH_RC=0 PSQL_MODE=ok run_restore; rc=$?
+RESTORE_ALLOW_PLAINTEXT=1 HEALTH_RC=0 PSQL_MODE=ok run_restore; rc=$?
 [ $rc -ne 0 ] && grep -q 'database dump: checksum does not match the manifest' "$CB_LOG" && ! grep -q psql "$DOCKER_LOG" \
   && ok "restore[db tampered]: a dump that is not the manifest's is refused before any replay" || bad "restore[db tampered]: rc=$rc cb=$(cat "$CB_LOG")"
 mv "$TMP/t/db.keep" "$TMP/t/database.sql.gz"
 echo tampered | gzip > "$TMP/t/volumes/minio_data.tar.gz"; ( cd "$TMP/t" && tar czf "$FAKE_ARCHIVE" manifest.json database.sql.gz volumes )
-HEALTH_RC=0 PSQL_MODE=ok run_restore; rc=$?
+RESTORE_ALLOW_PLAINTEXT=1 HEALTH_RC=0 PSQL_MODE=ok run_restore; rc=$?
 [ $rc -ne 0 ] && grep -q 'volume minio_data: checksum does not match the manifest' "$CB_LOG" \
   && ok "restore[volumes tampered]: a tarball that does not match the manifest is refused" || bad "restore[volumes tampered]: rc=$rc cb=$(cat "$CB_LOG")"
 pod_vols
@@ -287,8 +289,8 @@ if [ -s "$TMP/encrypted.age" ]; then
   [ $rc -eq 0 ] && [ "$(last_status)" = '"status":"completed"' ] && grep -q "Archive decrypted" "$TMP/out" \
     && ok "restore[encrypted + identity]: decrypted and completed" || bad "restore[encrypted + identity]: rc=$rc status=$(last_status): $(tail -3 "$TMP/out")"
   ( export ARCHIVE_AGE_IDENTITY_FILE="$TMP/no-identity.txt"; HEALTH_RC=0 PSQL_MODE=ok run_restore ); rc=$?
-  [ $rc -ne 0 ] && grep -q ARCHIVE_IDENTITY_MISSING "$CB_LOG" \
-    && ok "restore[encrypted, no identity]: refuses with ARCHIVE_IDENTITY_MISSING" || bad "restore[encrypted, no identity]: rc=$rc cb=$(cat "$CB_LOG")"
+  [ $rc -ne 0 ] && grep -q ARCHIVE_IDENTITY_MISSING "$CB_LOG" && ! grep -q stop "$DOCKER_LOG" \
+    && ok "restore[encrypted, no identity]: refuses with ARCHIVE_IDENTITY_MISSING, nothing stopped" || bad "restore[encrypted, no identity]: rc=$rc cb=$(cat "$CB_LOG") docker=$(tr '\n' '|' < "$DOCKER_LOG")"
 else
   bad "restore[encrypted]: no encrypted archive was produced to restore"
 fi
@@ -297,6 +299,16 @@ fi
 mkdir -p "$TMP/pk"; echo "CREATE ROLE synap;" | gzip > "$TMP/pk/database.sql.gz"
 : > "$TMP/pk/volumes.tar.gz"
 tar czf "$FAKE_ARCHIVE" -C "$TMP/pk" database.sql.gz volumes.tar.gz
+
+# Audit 2026-10-28: the signed command carries only a URL, so a plaintext
+# archive is SQL anyone who can order a restore could have written.
+HEALTH_RC=0 PSQL_MODE=ok run_restore; rc=$?
+[ $rc -ne 0 ] && grep -q ARCHIVE_NOT_ENCRYPTED "$CB_LOG" && ! grep -qE 'psql| stop' "$DOCKER_LOG" && ! grep -q '"completed"' "$CB_LOG" \
+  && ok "restore[plaintext]: refused (ARCHIVE_NOT_ENCRYPTED) before any service stops or the database is touched" || bad "restore[plaintext]: rc=$rc cb=$(cat "$CB_LOG") docker=$(tr '\n' '|' < "$DOCKER_LOG")"
+RESTORE_URL=http://arch HEALTH_RC=0 PSQL_MODE=ok run_restore; rc=$?
+[ $rc -ne 0 ] && grep -q ARCHIVE_URL_NOT_HTTPS "$CB_LOG" && ! grep -qE 'psql| stop' "$DOCKER_LOG" \
+  && ok "restore[http url]: refused (ARCHIVE_URL_NOT_HTTPS), nothing stopped" || bad "restore[http url]: rc=$rc cb=$(cat "$CB_LOG")"
+export RESTORE_ALLOW_PLAINTEXT=1   # the legacy restore the operator opts into, for the cases below
 
 HEALTH_RC=0 PSQL_MODE=ok run_restore; rc=$?
 [ $rc -ne 0 ] && grep -q ARCHIVE_WITHOUT_FILES "$CB_LOG" && ! grep -q psql "$DOCKER_LOG" && ! grep -q '"completed"' "$CB_LOG" \
@@ -327,6 +339,6 @@ HEALTH_RC=0 PSQL_MODE=ok run_restore; rc=$?
 [ $rc -ne 0 ] && ok "restore[legacy volumes]: non-zero exit" || bad "restore[legacy volumes]: exited 0"
 [ "$(last_status)" = '"status":"failed"' ] && grep -q LEGACY_VOLUME_ARCHIVE "$CB_LOG" && ! grep -q psql "$DOCKER_LOG" \
   && ok "restore[legacy volumes]: refused before the database is touched (host paths cannot be written from pod-agent)" || bad "restore[legacy volumes]: cb=$(cat "$CB_LOG")"
-unset RESTORE_ALLOW_NO_FILES
+unset RESTORE_ALLOW_NO_FILES RESTORE_ALLOW_PLAINTEXT
 
 exit $fail

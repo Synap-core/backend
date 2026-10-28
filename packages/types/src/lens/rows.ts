@@ -18,8 +18,10 @@ import {
   needsYouCountsLabel,
   needsYouReasonOf,
   repeatLabel,
+  STOPPED_SESSION_VERB,
   type GroupableSignal,
   type NeedsYouAccessRequest,
+  type NeedsYouConvertibleGoals,
   type NeedsYouInvite,
   type NeedsYouRow,
 } from "../needs-you/index.js";
@@ -127,6 +129,12 @@ export interface LensRow {
    * grey prose in the reason slot). Absent = none.
    */
   detail?: string | null;
+  /**
+   * WHAT MOVES when the person answers — an owed slot's "Unblocks …" line
+   * (decision E; the pod's `Signal.unblocks`, `effectiveSlotUnblocks`).
+   * Absent = nothing says; draw nothing.
+   */
+  unblocks?: string;
   /**
    * The KIND of ask, as a glyph key (`needsYouReasonOf`: decision · ask ·
    * review · failure · an owed slot's blocker) — drawn as the row's reason
@@ -252,6 +260,8 @@ function iso(at: string | Date | null | undefined): string | null {
 
 /** The fields of a needs-you `Signal` a lens row reads (structural). */
 export interface LensNeedsYouSignal extends GroupableSignal {
+  /** `owed-slot`: what the answer unblocks (`Signal.unblocks`). */
+  unblocks?: string | null;
   title: string;
   category?: string | null;
   /** Notification registry type — `placeSignal` reads it for the banner rule. */
@@ -269,6 +279,8 @@ export interface LensNeedsYouSignal extends GroupableSignal {
   access?: NeedsYouAccessRequest | null;
   /** `space-invite`: the invite the row's Accept and Decline act on. */
   invite?: NeedsYouInvite | null;
+  /** `convertible-goals`: the entities the card's "Make them goals" reviews. */
+  convertible?: NeedsYouConvertibleGoals | null;
   /**
    * `proposal-cluster`: the ONE agent that filed every member; `owed-slot`:
    * the agent that asked it, when the pod can name it (the pod's `Signal.by`).
@@ -499,6 +511,17 @@ function itemShape(
           : null,
         verb: verb("accept"),
       };
+    case "convertible-goals":
+      // The pod's one "Make them goals" card (D-3): a decision only the person
+      // makes. The title says how many and from where; the verb opens the
+      // short review list the host draws (one row per entity, a door to each)
+      // — it never converts on its own. No door: the card is not one page.
+      return {
+        state: { pendingDecisions: 1 },
+        objectKind: "track",
+        reason: null,
+        verb: verb("track.make_goals"),
+      };
     case "draft-asks":
       return {
         // Not accepted yet ⇒ nothing has happened in it: `not_started`, never
@@ -603,6 +626,9 @@ export function lensRowOfNeedsYou<T extends LensNeedsYouSignal>(
       // An owed slot's title and detail are the ask card's (`askCardView`):
       // the question once, and its `why` only when it adds.
       ...(card?.context ? { detail: card.context } : {}),
+      ...(s.kind === "owed-slot" && s.unblocks?.trim()
+        ? { unblocks: s.unblocks.trim() }
+        : {}),
       reasonKind: needsYouReasonOf(s),
       repeat: repeatLabel(s),
       source: row.session
@@ -625,6 +651,25 @@ export function lensRowOfNeedsYou<T extends LensNeedsYouSignal>(
         s.category === AGENT_CATEGORY &&
         !isFailureSignal(s),
       expiresAt: expiresAt(s.occurredAt, s.lifetimeHours),
+    };
+  }
+  // A STOPPED session (decision E1, `needsYouRows().folds.stopped`): no agent
+  // moved it for 7 days. Its row is the SESSION, never one of its asks — the
+  // quiet mark, and its one verb "Resume or close", which opens it.
+  if (row.verbs?.length) {
+    return {
+      key: row.key,
+      cls,
+      state: { idle: true, everStarted: true },
+      objectKind: "session",
+      title: row.title ?? "",
+      reason: needsYouCountsLabel(row.counts),
+      repeat: null,
+      source: null,
+      occurredAt: iso(row.newestAt),
+      verb: verb(STOPPED_SESSION_VERB),
+      door: { kind: "session", id: row.sessionId },
+      count: row.items.length,
     };
   }
   const owed = row.items.filter((s) => s.kind === "owed-slot").length;
@@ -805,8 +850,10 @@ export function lensRowOfSession(input: LensSessionInput): LensRow {
   const blockedBy = input.blockedBy?.trim() || null;
   const state = sessionUnitInput({
     status,
-    owedFromYou: facts ? facts.owedFromYou : null,
-    pendingDecisions: facts ? (facts.pendingDecisions ?? null) : null,
+    // No facts on the row = the list did not read them (asked without
+    // `nextMove`), not a failed read: `undefined`, never `null`.
+    owedFromYou: facts?.owedFromYou,
+    pendingDecisions: facts?.pendingDecisions,
     progress: input.progress ?? null,
     blockedBy,
     ...(input.live !== undefined ? { live: input.live } : {}),

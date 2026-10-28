@@ -101,3 +101,47 @@ export async function sessionOwesHuman(sessionId: string): Promise<boolean> {
     .limit(1);
   return !!row;
 }
+
+// ─── A session that stopped on its own asks (decision E1) ───────────────────
+
+/** Structural mirror of api's `StaleStoppedSessionResult` (no import — cycle). */
+export interface StoppedSessionStaleResult {
+  sessionId: string;
+  retiredSlots: number;
+  closedQuestions: number;
+}
+
+/**
+ * The door that stales a session no agent moved for 7 days whose only owed
+ * items are its agent's confirm / choose asks, retiring them `session_ended`
+ * (api `staleStoppedSession`). `null` ⇒ the session no longer matches.
+ */
+export type StoppedSessionStaler = (input: {
+  sessionId: string;
+}) => Promise<StoppedSessionStaleResult | null>;
+
+let stoppedSessionStaler: StoppedSessionStaler | null = null;
+
+export function registerStoppedSessionStaler(fn: StoppedSessionStaler): void {
+  stoppedSessionStaler = fn;
+}
+
+/**
+ * Stale a session that STOPPED ON ITS ASKS through the ONE door. This is the
+ * one exception to "never reap a session that owes the person" above, and it
+ * is narrow by construction: only asks the agent posed to go on end with it —
+ * an act, a form, a provide or plain work keeps the session as it is
+ * (`sessionStoppedOnItsAsksWhere`, @synap/database). THROWS when the slot is
+ * unregistered, like `closeSessionViaDoor`: a stale that silently vanishes
+ * would leave the asks in needs-you forever, the defect this exists to end.
+ */
+export async function staleStoppedSessionViaDoor(input: {
+  sessionId: string;
+}): Promise<StoppedSessionStaleResult | null> {
+  if (!stoppedSessionStaler) {
+    throw new Error(
+      "Stopped-session staler not registered — apps/api must call registerStoppedSessionStaler() at boot"
+    );
+  }
+  return stoppedSessionStaler(input);
+}

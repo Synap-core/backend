@@ -23,6 +23,7 @@ import {
   SOURCE_BLOB_MAX_BYTES,
 } from "../../../utils/store-entity-source-blob.js";
 import { db } from "@synap/database";
+import { grantWriteDenial } from "../../../utils/grant-write-check.js";
 import { createHubProtocolCallerContext } from "../utils.js";
 import { resolveCaptureActorUserId } from "../../../services/capture-agent/resolve-capture-actor.js";
 import { buildCaptureNarrativeSummary } from "../../../services/capture-agent/capture-narrative.js";
@@ -1728,6 +1729,17 @@ export function registerCaptureRoutes(app: HubHono): void {
     const graphRawUrl = rawSource?.success
       ? rawSource.data.sourceUrl
       : undefined;
+    // The staged source is a document written in the graph's space before the
+    // graph is filed. A key's grant bounds it as `document.create` there, as
+    // it bounds every other document write (issue 314a6554 sibling).
+    if (graphRawText || graphRawUrl) {
+      const denial = await grantWriteDenial({
+        subjectType: "document",
+        action: "create",
+        workspaceId: workspaceId ?? null,
+      });
+      if (denial) return c.json({ error: denial }, 403);
+    }
     const graphSources =
       graphRawText || graphRawUrl
         ? await stageCaptureSources({

@@ -37,6 +37,7 @@ vi.mock("../../signals.js", () => ({
     createCaller: () => ({
       list: record("signals.list"),
       count: record("signals.count"),
+      needsYou: record("signals.needsYou"),
     }),
   },
 }));
@@ -72,6 +73,20 @@ describe("Hub REST intent-surface reads", () => {
   beforeEach(() => {
     h.calls = [];
     h.fail = null;
+  });
+
+  it("GET /needs-you: THE rule's read, on the whole floor or narrowed (decision E)", async () => {
+    expect((await app().request(`/needs-you`)).status).toBe(200);
+    await app().request(`/needs-you?projectId=${P}&sessionId=${P}&limit=20`);
+    expect(h.calls).toEqual([
+      { proc: "signals.needsYou", input: {} },
+      {
+        proc: "signals.needsYou",
+        input: { projectId: P, sessionId: P, limit: 20 },
+      },
+    ]);
+    expect((await app().request(`/needs-you?limit=0`)).status).toBe(400);
+    expect((await app([]).request(`/needs-you`)).status).toBe(403);
   });
 
   it("board: the lens, window, paging and workedBy reach lifecycle.board", async () => {

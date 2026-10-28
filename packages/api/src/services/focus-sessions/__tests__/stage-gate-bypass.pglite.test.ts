@@ -840,4 +840,23 @@ describe("synap_request_deploy_approval — an agent FILES the deploy gate, neve
 
     expect(res.error).toMatch(/commitSha/);
   });
+
+  it("keeps the step the approval lets ship, and refuses one that is not push, publish or deploy", async () => {
+    const playbookId = await seedPlaybook();
+    const sessionId = await seedSession(playbookId);
+
+    expect(
+      body(await call({ ...deployArgs(sessionId), step: "publish" }))
+    ).toMatchObject({ status: "proposed" });
+    const rows = (
+      await q<{ data: Record<string, unknown> }>(
+        `select data from proposals where target_id = $1`,
+        [sessionId]
+      )
+    ).rows;
+    expect(rows.map((r) => r.data.step)).toEqual(["publish"]);
+
+    const res = body(await call({ ...deployArgs(sessionId), step: "ship" }));
+    expect(res.error).toMatch(/step/);
+  });
 });

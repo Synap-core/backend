@@ -209,7 +209,13 @@ describe("advance / status / params", () => {
     });
     replies.push({ status: 200, body: { status: "updated", track: TRACK } });
     await client.advanceTrack(TRACK.id, { toStage: "build" });
-    const st = await client.setTrackStatus(TRACK.id, "paused", "waiting");
+    const st = await client.setTrackStatus(
+      TRACK.id,
+      "paused",
+      "waiting",
+      undefined,
+      "active"
+    );
     await client.setTrackParams(TRACK.id, { market: null });
     expect(st).toMatchObject({ status: "proposed", proposalId: "p" });
     expect(calls.map((c) => [c.method, c.url, c.body])).toEqual([
@@ -221,7 +227,7 @@ describe("advance / status / params", () => {
       [
         "PATCH",
         `https://pod.example.test/api/hub/tracks/${TRACK.id}`,
-        { status: "paused", reasoning: "waiting" },
+        { status: "paused", reasoning: "waiting", expectedStatus: "active" },
       ],
       [
         "PATCH",

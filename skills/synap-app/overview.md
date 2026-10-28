@@ -42,8 +42,8 @@ Pin `@^1.0.0` on `sdk`/`react` so you never resolve an old, abandoned `0.x`.
   needed, fetches the release bundle, checks it against the release manifest's
   sha256 and runs `synap install`); see the backend's `deploy/README.md`. It
   also checks the manifest's signature: by default
-  (`SYNAP_RELEASE_VERIFY=warn`) it only warns and carries on when the signature
-  is missing or does not verify; `SYNAP_RELEASE_VERIFY=enforce` refuses.
+  (`SYNAP_RELEASE_VERIFY=enforce`) it refuses a release whose signature is
+  missing or does not verify; `SYNAP_RELEASE_VERIFY=warn` only warns.
 - **Managed (paid):** sign up at synap.live and provision a pod.
 
 You can develop the base app with **no pod at all** using its mock mode

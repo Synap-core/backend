@@ -486,7 +486,20 @@ export function registerPlaybookExecutors(): void {
       } as unknown as Context);
 
       // `archive` is idempotent on its own ("Playbook already archived").
-      await playbookCaller.archive({ id: playbookId });
+      // The replay must APPLY, never re-propose — see `assertApplied`.
+      assertApplied(await playbookCaller.archive({ id: playbookId }));
+
+      // The registry does not flip the row: without this an applied archive
+      // stayed `pending` forever.
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
 
       reportApproved(deps, proposal, input.proposalId);
       deps.emitProposalReviewed(

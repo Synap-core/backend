@@ -223,6 +223,40 @@ export const ASK_COPY = {
   },
 } as const;
 
+/**
+ * What moves on the answer to an ask no agent asked — the line a system
+ * producer's slot reads when it declared none ({@link effectiveSlotUnblocks}).
+ * Product copy, like {@link ASK_CAUSE_WORDS}.
+ */
+const ASK_CAUSE_UNBLOCKS: Record<AskCauseKind, string> = {
+  decision: "The decision is recorded",
+  gate: "The session's next stage starts",
+  run: "The run goes on",
+  external_approval: "The external agent's run goes on",
+  param: "The run starts with your answer",
+  criterion: "The session's check is graded",
+};
+
+/**
+ * The line an agent's hand-over is stamped with when it said nothing about
+ * what the answer unblocks (rv-be-needs F1: ADVISED for one release, never
+ * refused). True of every agent ask: the agent waits on it. The door says so
+ * back (`warnings`), so the agent can name the real next step next time.
+ */
+export const ASK_UNBLOCKS_DEFAULT = "The agent goes on with this work";
+
+/**
+ * WHAT MOVES when the person answers (decision E): the slot's own declared
+ * `unblocks`, else the line its cause implies (a system producer: a run, a
+ * gate, a param…). `null` when neither says — never a guessed line.
+ */
+export function effectiveSlotUnblocks(slot: AskCardSlot): string | null {
+  const own = typeof slot.unblocks === "string" ? slot.unblocks.trim() : "";
+  if (own) return own;
+  const cause = effectiveAskCause(slot);
+  return cause ? (ASK_CAUSE_UNBLOCKS[cause.kind] ?? null) : null;
+}
+
 /** The words of each {@link AskCauseKind}. Product copy, not vocabulary. */
 const ASK_CAUSE_WORDS: Record<AskCauseKind, string> = {
   // Only a decision an AGENT wrote asks (founder, 2026-10-26), so never "your
@@ -605,6 +639,8 @@ export interface AskCardSlot {
   askCause?: AskCause | null;
   criterionKey?: string | null;
   paramName?: string | null;
+  /** What moves on the answer (`ExpectedOutput.unblocks`). */
+  unblocks?: string | null;
   /** A relayed answer waiting for the person's tap — its own clock. */
   pendingRelay?: AskCardPendingRelay | null;
   /** The closing agent kept it owed past its session: it no longer ends with it. */

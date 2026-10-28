@@ -196,6 +196,8 @@ const block = (sessionId: string, label: string, agent: boolean) =>
     expectedLabel: label,
     blockedReason: "credential",
     why: "the live account's restricted key",
+    // What its answer unblocks — required from an agent (decision E).
+    unblocks: "Live payments",
     ...(agent ? { agentUserId: AGENT } : {}),
   });
 
@@ -297,6 +299,7 @@ describe("room-first notifications", () => {
         owner: "human",
         blockedReason: "decision",
         why: "pick monthly or annual",
+        unblocks: "The pricing page",
       },
     });
     expect(r.status).toBe("updated");

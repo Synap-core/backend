@@ -3,6 +3,7 @@ import {
   db,
   proposals,
   eq,
+  and,
   skills,
   knowledgeRepository,
 } from "@synap/database";
@@ -35,10 +36,55 @@ import {
 } from "./shared.js";
 import type { ProposalExecutorArgs } from "../execution-registry.js";
 import { recordApprovedAgentStart } from "../../../services/agent-dispatch/approved-start.js";
+import { answeringSkillsWhere } from "../../../services/capabilities/verb-skill.js";
+import { approvalRefusesRun } from "@synap/capability-gate";
 
 const logger = createLogger({
   module: "proposal-approve-executors-capability",
 });
+
+/**
+ * The skill an approved run may call: one the APPROVER can run through the
+ * direct door — visible to them in the run's lens and active
+ * (`answeringSkillsWhere`, the door's rule) and enabled (`approvalRefusesRun`,
+ * the gate's step 0, which binds the owner too). Approval is not a second
+ * gate, but it must not run what the door would refuse: the proposal's
+ * `skillId` is caller data (issue 314a6554).
+ */
+async function loadApprovedRunnableSkill(
+  skillId: string,
+  userId: string,
+  workspaceId: string | null,
+  label: string
+) {
+  const [skillRow] = await db
+    .select({
+      id: skills.id,
+      name: skills.name,
+      kind: skills.kind,
+      providerSpec: skills.providerSpec,
+      metadata: skills.metadata,
+      approved: skills.approved,
+    })
+    .from(skills)
+    .where(
+      and(answeringSkillsWhere(userId, workspaceId), eq(skills.id, skillId))
+    )
+    .limit(1);
+  if (!skillRow) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: `${label} "${skillId}" not found`,
+    });
+  }
+  if (approvalRefusesRun(skillRow)) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: `${label} "${skillRow.name}" is installed but not enabled. Enable it, then approve again.`,
+    });
+  }
+  return skillRow;
+}
 
 /** Register the capability.run / capability.install / capability.enable / capability/run approve executors. */
 export function registerCapabilityExecutors(): void {
@@ -161,24 +207,14 @@ export function registerCapabilityExecutors(): void {
       // it to the SAME post-gate runner the door + `capability.run` executor
       // use, so this shape can no longer diverge from either. A distinct
       // branch from "tool" above — no shared code path, no double-execute.
-      const [skillRow] = await db
-        .select({
-          id: skills.id,
-          name: skills.name,
-          kind: skills.kind,
-          providerSpec: skills.providerSpec,
-          metadata: skills.metadata,
-        })
-        .from(skills)
-        .where(eq(skills.id, capabilityId))
-        .limit(1);
-
-      if (!skillRow) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: `capability/run ${capabilityKind} "${capabilityId}" not found`,
-        });
-      }
+      const skillRow = await loadApprovedRunnableSkill(
+        capabilityId,
+        userId,
+        (data.workspaceId as string | undefined) ??
+          proposal.workspaceId ??
+          null,
+        `capability/run ${capabilityKind}`
+      );
 
       // At-most-once external dispatch (hybrid policy — see dispatchExternalOnce).
       await dispatchExternalOnce(input.proposalId, async () => {
@@ -263,8 +299,9 @@ export function registerCapabilityExecutors(): void {
   // other capability launcher): approve → run the backing skill through the SAME
   // post-gate runResolvedSkill the door uses (ONE kind-branch, two doors) so an
   // approved declarative/builtin verb routes to its correct tier. The gate
-  // already ran when the proposal was created, so this does NOT re-gate.
-  // Idempotent: skip if already APPROVED.
+  // already ran when the proposal was created, so this does NOT re-gate; it
+  // does re-check the skill is one the approver could run
+  // (`loadApprovedRunnableSkill`). Idempotent: skip if already APPROVED.
   registerProposalExecutor({
     key: "capability.run",
     async execute(args) {
@@ -320,23 +357,12 @@ export function registerCapabilityExecutors(): void {
       // Route through the SAME post-gate runner the door uses, so an approved
       // `declarative`/`builtin` verb is executed by its correct tier instead of
       // being blindly shipped to the IS isolate. Load the row the runner needs.
-      const [skillRow] = await db
-        .select({
-          id: skills.id,
-          name: skills.name,
-          kind: skills.kind,
-          providerSpec: skills.providerSpec,
-          metadata: skills.metadata,
-        })
-        .from(skills)
-        .where(eq(skills.id, skillId))
-        .limit(1);
-      if (!skillRow) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: `capability.run skill "${skillId}" not found`,
-        });
-      }
+      const skillRow = await loadApprovedRunnableSkill(
+        skillId,
+        userId,
+        proposal.workspaceId ?? null,
+        "capability.run skill"
+      );
 
       // At-most-once external dispatch (hybrid policy — see dispatchExternalOnce).
       // not_found / deny are DEFINITE not-run → { delivered: false } releases the

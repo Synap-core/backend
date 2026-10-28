@@ -75,9 +75,43 @@ export function grantSubjectSpec(
   return GRANT_SUBJECT_CATALOG.find((s) => s.subject === subject);
 }
 
+/**
+ * The vocabulary key of a subject the catalog does not offer, when that is not
+ * the subject itself. A facet is a ROLE to the person ("Users see Role, not
+ * Facet"); granted by an explicit pattern (`facet.create`), it still reads as
+ * one.
+ */
+const UNOFFERED_SUBJECT_NOUNS: Readonly<Record<string, string>> = {
+  facet: "role",
+};
+
 /** The vocabulary key a subject is named by (`event` → `activity`). */
 export function grantSubjectNoun(subject: string): string {
-  return grantSubjectSpec(subject)?.noun ?? subject;
+  return (
+    grantSubjectSpec(subject)?.noun ??
+    UNOFFERED_SUBJECT_NOUNS[subject] ??
+    subject
+  );
+}
+
+/**
+ * A door's own spelling of a plain verb, keyed `<subject>.<action>`: putting a
+ * role on a record CREATES its facet row, taking it off DELETES it (#411; the
+ * same fold as governance-policy's GRANT_ACTION_FOLDS). A UI treats and names
+ * the door's spelling as that verb.
+ */
+const PLAIN_ACTION_OF: Readonly<Record<string, GrantAction>> = {
+  "facet.attach": "create",
+  "facet.detach": "delete",
+};
+
+/** The plain verb a subject's action is (`facet`, `attach` → `create`). */
+export function grantPlainAction(
+  subject: string,
+  action: string | null
+): string | null {
+  if (action === null) return null;
+  return PLAIN_ACTION_OF[`${subject}.${action}`] ?? action;
 }
 
 /** "Documents", "Entities", "Activity" — the plural noun, from the vocabulary. */

@@ -166,13 +166,19 @@ xss="$(caddy_sets X-XSS-Protection; api_sets X-XSS-Protection)"
 grep -qE '^[^#]*reverse_proxy[[:space:]]+minio:9001' "$CADDYFILE" \
   && bad "a route reaches the MinIO console (minio:9001)" || ok "no route reaches the MinIO console"
 
-for never in '/internal/*' '/metrics'; do
+# /api/webhooks/kratos*: Kratos calls its hooks on the compose network; from the
+# internet the path only exposes the hooks' shared secret (audit 2026-10-28).
+for never in '/internal/*' '/metrics' '/api/webhooks/kratos*'; do
     for blk in tls http; do
         eval "rt=\"\$$blk\""
         printf '%s\n' "$rt" | grep -qxF "$(printf '%s\t404' "$never")" \
             && ok "$blk block refuses $never" || bad "$blk block lets $never reach the backend"
     done
 done
+
+# /realtime/* reached no realtime route (requests hung): removed, never re-added.
+printf '%s\n' "$tls" "$http" | grep -q '^/realtime/' \
+    && bad "a block routes /realtime/* (realtime serves nothing there)" || ok "no block routes the dead /realtime/* prefix"
 
 while IFS="$(printf '\t')" read -r path up; do
     [ -n "$path" ] || continue

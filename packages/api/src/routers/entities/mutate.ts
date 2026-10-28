@@ -812,6 +812,18 @@ export const mutateProcs = {
           .optional(),
         reasoning: z.string().optional(),
         agentUserId: z.string().uuid().optional(),
+        /**
+         * Host-stamped framed-view identity (NOT a trust assertion), as on
+         * `create` / `update`: trust is re-resolved server-side via
+         * `resolveViewTrust()`, and an untrusted view's delete proposes
+         * (clients audit F2). Absent → legacy behavior.
+         */
+        viewContext: z
+          .object({
+            viewId: z.string().uuid().optional(),
+            typeKey: z.string().optional(),
+          })
+          .optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -836,6 +848,15 @@ export const mutateProcs = {
       }
       const governanceWorkspaceId = existing.workspaceId ?? null;
 
+      // Resolve framed-view trust SERVER-SIDE (never from the request body).
+      const issuer = input.viewContext
+        ? await resolveViewTrust(
+            input.viewContext,
+            ctx.userId,
+            ctx.workspaceId ?? governanceWorkspaceId
+          )
+        : undefined;
+
       // 1. Emit .requested event
       const requestedEvent = await auditLog({
         subjectType: "entity",
@@ -857,6 +878,7 @@ export const mutateProcs = {
         subjectType: "entity",
         action: "delete",
         source: input.source,
+        issuer,
         reasoning: input.reasoning,
         correlationId,
         requestedEventId: requestedEvent?.id,

@@ -28,7 +28,9 @@ import {
   resolveVaultSecret,
   VaultGrantError,
   assertGrantScoped,
+  getRequestGrant,
 } from "@synap/database";
+import { isFencedGrant } from "../../../access/grant-door-fence.js";
 import {
   secrets,
   secretAuditLog,
@@ -193,6 +195,22 @@ export function registerVaultRoutes(app: HubHono): void {
           c.req.header("x-workspace-id") ??
           null
       ) ?? null;
+
+    // Approval grants the secret to this key's agent in `workspaceId`, as the
+    // person. A key limited to spaces may ask only where the governed grant
+    // door (`POST /vault/secrets/:id/grant`) would let it ask: `vault.grant`
+    // in that space (issue 314a6554 sibling). Every other key: unchanged.
+    if (isFencedGrant(getRequestGrant())) {
+      const denial = workspaceId
+        ? await grantWriteDenial({
+            subjectType: "vault",
+            action: "grant",
+            workspaceId,
+            data: body.secretId ? { id: body.secretId } : {},
+          })
+        : "A key limited to spaces asks for a secret in one of its spaces: name the workspaceId.";
+      if (denial) return c.json({ error: denial }, 403);
+    }
 
     const accessLevel = body.accessLevel ?? "read";
     const ttl = body.ttl ?? 60;

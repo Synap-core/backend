@@ -12,7 +12,7 @@
  *    /connectors/disconnect) — revokes the account at the provider and
  *    detaches it from every capability;
  *  - connector connect / session — connects an account to the person, for
- *    every space; the messaging account / service-config writes.
+ *    every space; the messaging account writes.
  *
  * Only a key whose grant is UNBOUNDED full access may use them (the
  * `/webhooks*` rule), WRITES ONLY: the sibling GETs on the same paths
@@ -106,14 +106,12 @@ const ROWS: Array<[Method, string, boolean]> = [
   ["DELETE", "/connectors/connections/conn-1", true],
   ["POST", "/connectors/disconnect", true],
   // Task d890410b (2026-10-26): starting a connection binds an account to the
-  // PERSON (every space); a messaging account's disconnect / mirror rewrite /
-  // the pod's messaging credentials are the person's too.
+  // PERSON (every space); a messaging account's disconnect / mirror rewrite
+  // are the person's too.
   ["POST", "/connectors/connect", true],
   ["POST", "/connectors/session", true],
   ["DELETE", "/messaging/accounts/acc-1", true],
   ["POST", "/messaging/accounts/sync", true],
-  ["POST", "/messaging/service-config", true],
-  ["POST", "/messaging/service-config/migrate", true],
   // The send is bounded INSIDE its door (`messaging.send` in the channel's
   // space, messaging.send-grant.pglite.test.ts) — not this door class.
   ["POST", "/messaging/conversations/t-1/send", false],

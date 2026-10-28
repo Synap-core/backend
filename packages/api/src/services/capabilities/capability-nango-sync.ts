@@ -48,6 +48,7 @@ import type { ConnectionBroker } from "../../connectors/ConnectionBroker.js";
 import { BrokerConnectionNotFoundError } from "../../connectors/CpBrokerConnector.js";
 import type { SyncConnectorConnection } from "../../connectors/SyncConnector.js";
 import { enqueueConnectionSync } from "../event-sync/connection-sync.js";
+import { staleConnectionIds } from "../../connectors/stale-connections.js";
 import { resolveCapabilityNangoProviderKeys } from "./capability-provider-resolution.js";
 
 const logger = createLogger({ module: "capability-nango-sync" });
@@ -388,8 +389,11 @@ export function chooseHealthyDefault(
 }
 
 export type ReconcileLiveOutcome =
-  /** `capabilities` = how many capabilities were reconciled (0 = no provider tool yet). */
-  | { ok: true; capabilities: number }
+  /**
+   * `capabilities` = how many capabilities were reconciled (0 = no provider
+   * tool yet); `superseded` = the stale connections revoked first.
+   */
+  | { ok: true; capabilities: number; superseded: string[] }
   | { ok: false; reason: string; error: string };
 
 /**
@@ -406,6 +410,12 @@ export type ReconcileLiveOutcome =
  *     broker. A broker fault or failed list is `ok:false` — nothing is
  *     reconciled off an unread list.
  *
+ * First it supersedes: a reconnect leaves the old connections behind, so the
+ * stale ones (`staleConnectionIds`: one connection per user and provider) are
+ * revoked and detached before anything is mirrored. Every connect door ends
+ * here (the CLI/agent connect poll, the client's post-OAuth refetch, the CP's
+ * sync trigger), so no door can leave a second connection running.
+ *
  * It does not materialize a missing provider tool (that needs a caller context
  * for the governed template apply): with no tool yet it reconciles nothing and
  * reports `capabilities: 0`.
@@ -414,9 +424,9 @@ export async function reconcileLiveConnections(
   userId: string,
   live?: SyncConnectorConnection[]
 ): Promise<ReconcileLiveOutcome> {
+  const resolved = await resolveBroker("nango");
   let list = live;
   if (!list) {
-    const resolved = await resolveBroker("nango");
     if (!resolved.ok) {
       return { ok: false, reason: resolved.reason, error: resolved.error };
     }
@@ -426,13 +436,20 @@ export async function reconcileLiveConnections(
     }
     list = listed.connections;
   }
+  const superseded = resolved.ok
+    ? await supersedeStaleConnections(resolved.broker, userId, list)
+    : [];
+  if (superseded.length > 0) {
+    const gone = new Set(superseded);
+    list = list.filter((c) => !gone.has(c.connectionId));
+  }
   const refs = [...new Set(list.map((c) => `nango://${c.provider}`))];
-  if (refs.length === 0) return { ok: true, capabilities: 0 };
+  if (refs.length === 0) return { ok: true, capabilities: 0, superseded };
   const toolRows = await db
     .select({ id: tools.id })
     .from(tools)
     .where(inArray(tools.credentialRef, refs));
-  if (toolRows.length === 0) return { ok: true, capabilities: 0 };
+  if (toolRows.length === 0) return { ok: true, capabilities: 0, superseded };
   const edges = await db
     .select({ capabilityId: links.toId })
     .from(links)
@@ -451,7 +468,48 @@ export async function reconcileLiveConnections(
   for (const capabilityId of capabilityIds) {
     await syncNangoConnectionsToRegistry(capabilityId, userId, list);
   }
-  return { ok: true, capabilities: capabilityIds.size };
+  return { ok: true, capabilities: capabilityIds.size, superseded };
+}
+
+/**
+ * Revoke and detach the user's stale connections (`staleConnectionIds`).
+ * Returns the ones that are gone. A revoke that fails leaves its connection in
+ * place, logged, for the next reconcile to retry: it never blocks the mirror.
+ */
+async function supersedeStaleConnections(
+  broker: ConnectionBroker,
+  userId: string,
+  list: readonly SyncConnectorConnection[]
+): Promise<string[]> {
+  const gone: string[] = [];
+  const byId = new Map(list.map((c) => [c.connectionId, c]));
+  for (const connectionId of staleConnectionIds(list)) {
+    try {
+      await broker.revokeConnection(
+        connectionId,
+        byId.get(connectionId)?.provider,
+        userId
+      );
+    } catch (err) {
+      // Already revoked in between is the end state wanted.
+      if (!(err instanceof BrokerConnectionNotFoundError)) {
+        logger.warn(
+          { err, connectionId },
+          "Could not revoke a stale connection; the next reconcile retries it"
+        );
+        continue;
+      }
+    }
+    await detachNangoConnectionRegistry(connectionId);
+    gone.push(connectionId);
+  }
+  if (gone.length > 0) {
+    logger.info(
+      { userId, count: gone.length },
+      "Reconcile revoked connections a reconnect left behind"
+    );
+  }
+  return gone;
 }
 
 /**

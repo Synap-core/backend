@@ -172,7 +172,21 @@ describe("TRIPWIRE: proposal revise goes through the authority path", () => {
       body,
       "the author rung must compare proposals.agentUserId to the acting agent"
     ).toMatch(
-      /const isAuthor = !!params\.actingAgentUserId && existing\.agentUserId === params\.actingAgentUserId;/
+      /const actingAgentUserId = getActingAgentUserId\(\) \?\? params\.actingAgentUserId \?\? null; const isAuthor = !!actingAgentUserId && existing\.agentUserId === actingAgentUserId;/
+    );
+
+    // F1 (audit 2026-10-28): an acting agent that is NOT the author is refused
+    // before the ladder — the ladder judges the agent key's HUMAN, who may
+    // always review, so it cannot be what stops an agent.
+    const refuseAt = body.indexOf(
+      'if (actingAgentUserId && !isAuthor) { throw new TRPCError({ code: "NOT_FOUND"'
+    );
+    expect(
+      refuseAt,
+      "the non-author agent refusal vanished from the revise core"
+    ).toBeGreaterThan(-1);
+    expect(refuseAt).toBeLessThan(
+      body.indexOf("await computeCanReviewApproval(")
     );
 
     // The ladder call must ask about the HUMAN actor and nothing else.

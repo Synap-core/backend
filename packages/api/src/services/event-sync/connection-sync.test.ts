@@ -1542,6 +1542,97 @@ describe("first-import consent on the proposal the user reviews", () => {
   });
 });
 
+describe("the first import's events: one entity per event (title + start)", () => {
+  // Two calendar records of ONE train (same title, same start), and a
+  // recurring all-day event on two dates (same title, other dates).
+  const at = { dateTime: "2026-10-07T20:50:00+02:00" };
+  async function firstImport() {
+    h.sync.kinds = {
+      "email.thread": { enabled: false },
+      contact: { enabled: false },
+    };
+    scriptVerbs({
+      calendar_list: () =>
+        run({
+          calendarId: "primary",
+          count: 4,
+          nextPageToken: null,
+          events: [
+            {
+              id: "tr1",
+              summary: "Train to Paris",
+              start: at,
+              attendees: [{ email: "a@gmail.com" }],
+            },
+            {
+              id: "tr2",
+              summary: "Train to  paris",
+              start: at,
+              attendees: [{ email: "b@gmail.com" }],
+            },
+            { id: "lv1", summary: "Laver", start: { date: "2026-08-02" } },
+            { id: "lv2", summary: "Laver", start: { date: "2026-08-09" } },
+          ],
+        }),
+    });
+    // a@gmail.com is already in the pod: its op links, it is not a create.
+    h.lookup.mockImplementation(async (_p: string, externalId: string) =>
+      externalId === "a@gmail.com" ? "ent-a" : null
+    );
+    await runConnectionSync({ provider: "google", reason: "connect" });
+    expect(h.submit).toHaveBeenCalledTimes(1);
+    return h.submit.mock.calls[0]![0] as {
+      operations: Array<Record<string, unknown>>;
+      proposedIdentityResolutionByRef?: Record<string, unknown>;
+    };
+  }
+
+  it("two records of the same event fold into one op carrying both links; other dates stay", async () => {
+    const input = await firstImport();
+    const events = input.operations.filter(
+      (o) => o.op === "create_entity" && o.profileSlug === "event"
+    );
+    expect(events.map((o) => o.ref).sort()).toEqual([
+      "event:lv1",
+      "event:lv2",
+      "event:tr1",
+    ]);
+    const train = events.find((o) => o.ref === "event:tr1")!;
+    expect(
+      (train.externalLinks as Array<{ externalId: string }>).map(
+        (l) => l.externalId
+      )
+    ).toEqual(["tr1", "tr2"]);
+    // The folded record's attendee is the kept event's attendee.
+    const edges = input.operations.filter((o) => o.op === "create_relation");
+    expect(edges).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          sourceRef: "event:tr1",
+          targetRef: "person:a@gmail.com",
+        }),
+        expect.objectContaining({
+          sourceRef: "event:tr1",
+          targetRef: "person:b@gmail.com",
+        }),
+      ])
+    );
+    expect(JSON.stringify(input.operations)).not.toContain('"event:tr2"');
+  });
+
+  it("every create carries `separate` for the approval; a pinned match does not", async () => {
+    const input = await firstImport();
+    const pinned = input.operations.find((o) => o.ref === "person:a@gmail.com");
+    expect(pinned?.existingEntityId).toBe("ent-a");
+    expect(input.proposedIdentityResolutionByRef).toEqual({
+      "event:tr1": { verb: "separate" },
+      "event:lv1": { verb: "separate" },
+      "event:lv2": { verb: "separate" },
+      "person:b@gmail.com": { verb: "separate" },
+    });
+  });
+});
+
 describe("a read the item limit stops never skips a record", () => {
   const CURSOR = "2026-09-10T00:00:00.000Z";
   beforeEach(() => {

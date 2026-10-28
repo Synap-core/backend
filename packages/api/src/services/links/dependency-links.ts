@@ -82,7 +82,10 @@ import {
   checkLinkEndpointsVisible,
 } from "../../routers/hub-protocol/rest/link-endpoint-visibility.js";
 import { assertWorkspaceWrite } from "../../utils/workspace-write-access.js";
-import { checkPermissionOrPropose } from "../../utils/permission-check.js";
+import {
+  checkPermissionOrPropose,
+  type IssuerTrust,
+} from "../../utils/permission-check.js";
 import { recordDomainMutation } from "../../utils/domain-mutation.js";
 import { stampAutoApprovedCreate } from "../proposals/stamp-materialized.js";
 import { linkProposalTitle } from "./link-proposal-title.js";
@@ -508,6 +511,11 @@ interface GovernedInput {
   metadata?: Record<string, unknown>;
   /** The door, for the undo receipt's log line. */
   door: string;
+  /**
+   * A framed view's server-resolved trust (`resolveViewTrust`), when the
+   * write comes from one. An untrusted view's link proposes (clients F2).
+   */
+  issuer?: IssuerTrust;
 }
 
 async function gate(
@@ -524,6 +532,7 @@ async function gate(
     workspaceId,
     subjectType: "link",
     action,
+    ...(input.issuer ? { issuer: input.issuer } : {}),
     ...(input.sessionId ? { sessionId: input.sessionId } : {}),
     ...(input.reasoning?.trim() ? { reasoning: input.reasoning.trim() } : {}),
     data: {

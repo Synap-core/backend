@@ -20,9 +20,13 @@ const { updates, emitted } = vi.hoisted(() => ({
 
 vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@synap/database")>();
+  const rows = () => {
+    const found = Promise.resolve([{ status: "pending", systemData: {} }]);
+    return Object.assign(found, { limit: () => found });
+  };
   const chain = {
     from: () => chain,
-    where: async () => [{ status: "pending" }],
+    where: rows,
     set: (v: Record<string, unknown>) => {
       updates.push(v);
       return { where: async () => undefined };
@@ -30,6 +34,7 @@ vi.mock("@synap/database", async (importOriginal) => {
   };
   return {
     ...actual,
+    getWorkspaceMembership: async () => ({ role: "owner" }),
     db: {
       select: () => chain,
       update: () => ({ set: chain.set }),
@@ -42,24 +47,55 @@ vi.mock("@synap/database", async (importOriginal) => {
 vi.mock("../../../utils/push-providers-to-is.js", () => ({
   pushProvidersToIS: vi.fn(async () => undefined),
 }));
+const { skillUpdates } = vi.hoisted(() => ({
+  skillUpdates: [] as unknown[],
+}));
+vi.mock("../../playbooks.js", () => ({
+  playbooksRouter: {
+    createCaller: () => ({
+      archive: async () => ({ success: true, status: "archived" }),
+    }),
+  },
+}));
+vi.mock("../../skills.js", () => ({
+  skillsRouter: {
+    createCaller: () => ({
+      update: async (input: unknown) => {
+        skillUpdates.push(input);
+        return { status: "applied" };
+      },
+    }),
+  },
+}));
 
 import { proposalExecRegistry } from "../execution-registry.js";
 import { registerAiProviderExecutors } from "../executors/ai-provider.js";
+import { registerSkillExecutors } from "../executors/skill.js";
+import { registerPlaybookExecutors } from "../executors/playbook.js";
+import { registerEntityExecutors } from "../executors/entity.js";
 import { ProposalStatus } from "@synap/database/schema";
 import { stripComments } from "../../../../../../scripts/strip-comments.mjs";
 
 registerAiProviderExecutors();
+registerSkillExecutors();
+registerPlaybookExecutors();
+registerEntityExecutors();
 
-function run(key: string, data: Record<string, unknown>) {
+function run(
+  key: string,
+  data: Record<string, unknown>,
+  targetType = "aiProvider",
+  workspaceId: string | null = null
+) {
   const ex = proposalExecRegistry.resolve(key, key.split("/")[1]);
   expect(ex, key).toBeDefined();
   return ex!.execute({
     proposal: {
       id: "p1",
-      targetType: "aiProvider",
+      targetType,
       targetId: "t1",
       proposalType: key.split("/")[1]!,
-      workspaceId: null,
+      workspaceId,
       sessionId: null,
       projectId: null,
       agentUserId: "agent-1",
@@ -80,6 +116,7 @@ function run(key: string, data: Record<string, unknown>) {
 beforeEach(() => {
   updates.length = 0;
   emitted.length = 0;
+  skillUpdates.length = 0;
 });
 
 describe("aiProvider executors mark the proposal approved", () => {
@@ -106,6 +143,51 @@ describe("aiProvider executors mark the proposal approved", () => {
       true
     );
   });
+});
+
+// The file-level convention below cannot see this one: skill.ts sets APPROVED
+// in its create and delete executors, so a missing flip in `skill/update`
+// passed it (proposal bf90d6a2 stayed pending after two approvals).
+describe("skill/update marks the proposal approved", () => {
+  it("replays the update AND flips status, attributed to the approver", async () => {
+    await run(
+      "skill/update",
+      { data: { id: "skill-1", body: "new body" } },
+      "skill"
+    );
+    expect(skillUpdates).toEqual([{ id: "skill-1", body: "new body" }]);
+    const flip = updates.find((u) => u.status === ProposalStatus.APPROVED);
+    expect(flip).toMatchObject({
+      status: ProposalStatus.APPROVED,
+      reviewedBy: "human-1",
+    });
+    expect(emitted).toContainEqual(["p1", null, "approved", "human-1"]);
+  });
+});
+
+// Same defect, same blind spot: entity.ts and playbook.ts set APPROVED in
+// other executors, so the file-level convention passed these two.
+describe("playbook/archive and entity/renderer.set mark the proposal approved", () => {
+  it.each([
+    ["playbook/archive", "playbook", "ws-1", { id: "pb-1" }],
+    [
+      "entity/renderer.set",
+      "entity",
+      null,
+      { data: { entityId: "e-1", ref: { kind: "cell", cellKey: "k" } } },
+    ],
+  ] as const)(
+    "%s flips status, attributed to the approver",
+    async (key, type, ws, data) => {
+      await run(key, { ...data }, type, ws);
+      const flip = updates.find((u) => u.status === ProposalStatus.APPROVED);
+      expect(flip).toMatchObject({
+        status: ProposalStatus.APPROVED,
+        reviewedBy: "human-1",
+      });
+      expect(emitted).toContainEqual(["p1", ws, "approved", "human-1"]);
+    }
+  );
 });
 
 describe("convention: every executor file marks APPROVED", () => {
