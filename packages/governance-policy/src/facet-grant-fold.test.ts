@@ -5,6 +5,7 @@
  * a literal `facet.attach` matched, and no app may ask for one.
  */
 import { describe, expect, it } from "vitest";
+import { grantPlainAction } from "@synap-core/types/grants";
 import { agentHasCapability, grantRequestKey } from "./index.js";
 import { permits } from "./grants.js";
 
@@ -48,5 +49,15 @@ describe("facet attach / detach fold onto create / delete", () => {
     expect(agentHasCapability("facet.attach", "facet", ["facet.attach"])).toBe(
       true
     );
+  });
+
+  // The consent screen reads the door's spelling as the verb it folds onto
+  // (`@synap-core/types/grants` grantPlainAction): the two never disagree.
+  it("the UI fold is this fold", () => {
+    for (const action of ["attach", "detach", "create", "update", "delete"]) {
+      expect(grantPlainAction("facet", action), action).toBe(
+        grantRequestKey("facet", action).action
+      );
+    }
   });
 });

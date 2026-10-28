@@ -830,6 +830,21 @@ const ACKNOWLEDGED_GAPS: Gap[] = [
     reason:
       "INTERNAL ONLY — same rule; a model must never file under the owner's name. CHECKABLE: `SERVER_DERIVED_PARAMS` in `contracts/capability-execute.ts`.",
   },
+  // ── `intentRequest`: what a POD APP asked, resolved by the Hub door only ──
+  {
+    service: "execute-capability",
+    param: "intentRequest",
+    door: "routers/capabilities.ts:execute",
+    reason:
+      "INTERNAL ONLY. It is the record of a pod app's intent action (intent, action, tool, account, the app's own input) that the Hub door resolves from an action id before running (`resolveIntentRun`); a proposal carries it so the person's approval screen shows what the app asked. A browser run is the person acting, not an app, so this door has nothing to record — and a client-supplied record would let a caller write the words the reviewer reads. CHECKABLE: it is one of `SERVER_DERIVED_PARAMS` in `contracts/capability-execute.ts`, and the schema-freshness test fails if it ever appears in the published client contract.",
+  },
+  {
+    service: "execute-capability",
+    param: "intentRequest",
+    door: "routers/mcp/handlers/capability.ts:synap_run_capability",
+    reason:
+      "INTERNAL ONLY — same rule; pod apps never hold `mcp.*` (app-connect scopes), and a model-written record would put words in the reviewer's mouth. CHECKABLE: `SERVER_DERIVED_PARAMS` in `contracts/capability-execute.ts`.",
+  },
   // ── Identity: derived from the transport, never from the body ─────────────
   {
     service: "execute-capability",

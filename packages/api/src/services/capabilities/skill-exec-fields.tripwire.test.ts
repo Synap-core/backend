@@ -72,6 +72,7 @@ describe("skillExecFieldsChanged — value semantics", () => {
     executionMode: "sync",
     timeoutSeconds: 30,
     urlPatterns: ["instagram.com/p/*"],
+    inputMap: { params: { content: "$.text", date: "$.when" } },
   };
   const liveRowSameContent = {
     kind: "code",
@@ -82,6 +83,7 @@ describe("skillExecFieldsChanged — value semantics", () => {
     executionMode: "sync",
     timeoutSeconds: 30,
     urlPatterns: ["instagram.com/p/*"],
+    inputMap: { params: { date: "$.when", content: "$.text" } },
     approved: true,
     body: null,
   };
@@ -101,6 +103,8 @@ describe("skillExecFieldsChanged — value semantics", () => {
     ["kind", "declarative"],
     // A reader that now receives MORE urls widens what its vendor sees.
     ["urlPatterns", ["instagram.com/p/*", "*"]],
+    // An app's text re-pointed at another parameter (intent actions, 0368).
+    ["inputMap", { params: { title: "$.text", date: "$.when" } }],
   ])("a changed %s DOES demote", (field, value) => {
     expect(
       skillExecFieldsChanged(

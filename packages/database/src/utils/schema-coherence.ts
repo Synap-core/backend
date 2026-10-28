@@ -2454,6 +2454,19 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "effect",
     addedBy: "0283_capability_intents.sql",
   },
+  // One input per intent (0368): the app intent doors read the intent's
+  // input shape and every verb's map from it; without them every app run of
+  // an intent fails with a SQL error instead of a refusal.
+  {
+    table: "capability_intents",
+    column: "input_schema",
+    addedBy: "0368_intent_input_schema.sql",
+  },
+  {
+    table: "skills",
+    column: "input_map",
+    addedBy: "0368_intent_input_schema.sql",
+  },
 ];
 
 /**

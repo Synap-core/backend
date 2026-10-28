@@ -1193,6 +1193,9 @@ export async function ensureSynapCoreCapability(): Promise<void> {
           // general reconcile's select; omitted, it reads `undefined` and a
           // builtin reader's declared URLs would drift every boot.
           urlPatterns: skills.urlPatterns,
+          // PROJECTED_SKILL_FIELDS.inputMap (0368) — omitted, a template's
+          // new intent input map would diff clean and never land.
+          inputMap: skills.inputMap,
           // PROJECTED_SKILL_FIELDS.metadata reads `allowedHosts` out of this
           // bag. Omit the column and it is `undefined` on every row — a
           // declared egress allowlist would then never be seen as drift.

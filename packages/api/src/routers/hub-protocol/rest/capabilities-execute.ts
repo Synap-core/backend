@@ -27,8 +27,19 @@
 
 import { z } from "@hono/zod-openapi";
 
+import { jsonGoverned } from "../proposal-response.js";
 import { executeCapability } from "../../../services/capabilities/execute-capability.js";
 import { CapabilityExecuteInput } from "../../../contracts/capability-execute.js";
+import {
+  resolveIntentRun,
+  type IntentRequestRecord,
+} from "../../../services/capabilities/intent-actions.js";
+import {
+  admitIntent,
+  intentRunRateLimit,
+  IntentRunRequestSchema,
+  takesIntentForm,
+} from "./capabilities-intent.js";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
@@ -75,6 +86,7 @@ const ExecuteCapabilityResultSchema = z
 
 const ExecuteCapabilityProposedSchema = z
   .object({
+    status: z.literal("proposed"),
     proposed: z.literal(true),
     proposalId: z.string(),
     /** Where the human approves it. The handler has always RETURNED this, but
@@ -100,7 +112,11 @@ export function registerCapabilitiesExecuteRoutes(app: HubHono): void {
       "its skill, runs it through gateCapabilityExecution, and on `run` delegates " +
       "to the IS sandbox executor. Returns 200 with the result (or a dry-run " +
       "preview), 202 with a reviewable proposal when governance requires approval, " +
-      "403 when denied. Requires hub-protocol.write scope.",
+      "403 when denied. Requires hub-protocol.write scope. A key the grant fence " +
+      "bounds (a pod app) sends { workspaceId, intent, actionId, input, " +
+      "idempotencyKey? } instead: an action listed by GET /capabilities/actions, " +
+      "its input checked against that action's input schema, under " +
+      "`capability.<intent>.run`; an outward intent always files a proposal.",
     request: { body: ExecuteCapabilityRequestSchema },
     responses: {
       200: {
@@ -120,6 +136,11 @@ export function registerCapabilitiesExecuteRoutes(app: HubHono): void {
           "Failed dependency — a client-actionable connection failure (auth expired/absent, or a missing target). Body carries errorClass + providerRef so the caller can offer a reconnect path.",
         schema: ErrorSchema,
       },
+      429: {
+        description:
+          "A pod app asked for an outward intent too often (30 per hour per key and intent): `retryAfter` seconds.",
+        schema: ErrorSchema,
+      },
       500: { description: "Internal error", schema: ErrorSchema },
     },
   });
@@ -132,9 +153,9 @@ export function registerCapabilitiesExecuteRoutes(app: HubHono): void {
       );
     }
 
-    let body: z.infer<typeof ExecuteCapabilityRequestSchema>;
+    let raw: unknown;
     try {
-      body = ExecuteCapabilityRequestSchema.parse(await c.req.json());
+      raw = await c.req.json();
     } catch (err) {
       return c.json(
         { error: err instanceof Error ? err.message : "Invalid request body" },
@@ -142,21 +163,138 @@ export function registerCapabilitiesExecuteRoutes(app: HubHono): void {
       );
     }
 
+    // A pod app (a key the grant fence bounds) asks for an INTENT action and
+    // nothing else: the action is resolved, its input checked and mapped
+    // onto the verb's parameters here (`capabilities-intent.ts`), then it
+    // runs through the same core below. Any other body is refused for it.
+    const asApp = takesIntentForm();
+    let body: z.infer<typeof ExecuteCapabilityRequestSchema>;
+    let intentRequest: IntentRequestRecord | null = null;
+    let lens: { userId: string; workspaceId: string | null };
+    if (asApp) {
+      const ask = IntentRunRequestSchema.safeParse(raw);
+      if (!ask.success) {
+        return c.json(
+          {
+            error:
+              "This key may only ask for an intent action: { workspaceId, intent, actionId, input, idempotencyKey? }.",
+            code: "INVALID_REQUEST",
+            issues: ask.error.issues.map((i) => ({
+              path: i.path.join("."),
+              message: i.message,
+            })),
+          },
+          400
+        );
+      }
+      const admitted = await admitIntent(
+        c,
+        ask.data.workspaceId,
+        ask.data.intent
+      );
+      if (!admitted.ok) return c.json(admitted.body, admitted.status);
+      let resolved: Awaited<ReturnType<typeof resolveIntentRun>>;
+      try {
+        resolved = await resolveIntentRun(
+          {
+            userId: admitted.userId,
+            workspaceId: admitted.workspaceId,
+            agentUserId: (c.get("agentUserId") as string | undefined) ?? null,
+          },
+          ask.data
+        );
+      } catch (err) {
+        logger.error({ err }, "POST /capabilities/execute (intent) failed");
+        return c.json(
+          { error: err instanceof Error ? err.message : "Unknown error" },
+          httpStatusForTrpcError(err)
+        );
+      }
+      switch (resolved.kind) {
+        case "unknown_intent":
+          return c.json(
+            { error: "Unknown intent.", code: "UNKNOWN_INTENT" },
+            400
+          );
+        case "not_found":
+          return c.json(
+            {
+              error:
+                "No such action for this intent here: list them again (GET /capabilities/actions).",
+              code: "ACTION_NOT_FOUND",
+            },
+            404
+          );
+        case "intent_mismatch":
+          return c.json(
+            {
+              error: `This action does not serve "${ask.data.intent}".`,
+              code: "INTENT_MISMATCH",
+            },
+            403
+          );
+        case "invalid_input":
+          return c.json(
+            {
+              error: "The input does not match what this action accepts.",
+              code: "INVALID_INPUT",
+              issues: resolved.issues,
+            },
+            400
+          );
+      }
+      if (resolved.effect !== "read") {
+        const limited = intentRunRateLimit(
+          (c.get("apiKeyId") as string | undefined) ?? admitted.userId,
+          admitted.intent
+        );
+        if (limited) {
+          c.header("Retry-After", String(limited.body.retryAfter));
+          return c.json(limited.body, limited.status);
+        }
+      }
+      body = {
+        skillId: resolved.skillId,
+        parameters: resolved.parameters,
+        workspaceId: admitted.workspaceId,
+        ...(resolved.connectionSelector
+          ? { connectionSelector: resolved.connectionSelector }
+          : {}),
+        ...(ask.data.idempotencyKey
+          ? { idempotencyKey: ask.data.idempotencyKey }
+          : {}),
+      };
+      intentRequest = resolved.intentRequest;
+      lens = admitted;
+    } else {
+      try {
+        body = ExecuteCapabilityRequestSchema.parse(raw);
+      } catch (err) {
+        return c.json(
+          {
+            error: err instanceof Error ? err.message : "Invalid request body",
+          },
+          400
+        );
+      }
+      const acting = await resolveActingContext(c, {
+        workspaceId: body.workspaceId,
+      });
+      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+      lens = acting;
+    }
+
     const {
       verbId,
       skillId,
       parameters,
-      workspaceId,
       connectionSelector,
       sourceMessageId,
       sessionId,
       idempotencyKey,
       channelId,
     } = body;
-
-    const acting = await resolveActingContext(c, { workspaceId });
-    if (!acting.ok) return c.json({ error: acting.error }, acting.status);
-    const { userId } = acting;
+    const { userId } = lens;
 
     try {
       // ONE shared core (also used by the MCP `run_capability` tool).
@@ -164,7 +302,7 @@ export function registerCapabilitiesExecuteRoutes(app: HubHono): void {
         verbId,
         skillId,
         parameters,
-        workspaceId: acting.workspaceId,
+        workspaceId: lens.workspaceId,
         userId,
         // Thread the acting agent (agent-key runs set this) so an agent WRITE
         // verb is governed by grant/propose instead of laundering into an
@@ -182,6 +320,8 @@ export function registerCapabilitiesExecuteRoutes(app: HubHono): void {
         // Caller idempotency: makes an external-send verb at-most-once across
         // retries instead of falling back to the derived content-hash window.
         idempotencyKey,
+        // A pod app's intent action: what it asked, for the approval screen.
+        intentRequest,
       });
 
       switch (outcome.kind) {
@@ -274,17 +414,20 @@ export function registerCapabilitiesExecuteRoutes(app: HubHono): void {
             200
           );
         case "proposed":
-          return c.json(
-            {
-              proposed: true as const,
-              proposalId: outcome.proposalId,
-              reviewUrl: outcome.reviewUrl,
-              // Idempotency receipt — tells the caller whether this proposal was
-              // queued now or is the replay of a prior submission.
-              ackState: outcome.ackState,
-            },
-            202
-          );
+          // The 202-on-proposed rule lives in `jsonGoverned`, not here
+          // (proposal-response.parity.tripwire).
+          return jsonGoverned(c, {
+            // `status` says what happened in one field, as every write door
+            // does (`applied` / `proposed`); `proposed` stays for callers
+            // that read it.
+            status: "proposed" as const,
+            proposed: true as const,
+            proposalId: outcome.proposalId,
+            reviewUrl: outcome.reviewUrl,
+            // Idempotency receipt — tells the caller whether this proposal was
+            // queued now or is the replay of a prior submission.
+            ackState: outcome.ackState,
+          });
         case "run":
           return c.json(
             {

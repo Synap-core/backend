@@ -21,6 +21,9 @@ vi.mock("@synap/database", () => ({
   getDb: async () => ({}),
   eq: (a: unknown, b: unknown) => ({ a, b }),
   findCapabilityGrant: (...args: unknown[]) => findCapabilityGrantMock(...args),
+  // No key grant: these runs come from no pod app, so the app outward floor
+  // (app-outward-floor.test.ts) never applies here.
+  getRequestGrant: () => undefined,
 }));
 
 vi.mock("@synap/database/agent-governance", () => ({

@@ -13,6 +13,7 @@
 
 import type { AskAnswer } from "./ask.js";
 import { describeQueue, type AskQueueBlock } from "./queue-question.js";
+import { supersededByOf } from "./superseded.js";
 import { createLogger } from "@synap-core/core";
 import { getDefaultActiveService } from "../../utils/intelligence-routing.js";
 import { isCallBudgetMs } from "@synap/intelligence-client";
@@ -29,6 +30,20 @@ export interface SynthesisSource {
   substrate: string;
   id: string;
   title: string;
+}
+
+/**
+ * A retrieved record that was REPLACED (`properties.supersededBy` set, read by
+ * the one predicate `supersededByOf`). It is not fed to the answer and not
+ * listed in `sources`: a replaced fact presented as current is how an agent
+ * reported a stale cause as today's diagnosis. It does not vanish either: it
+ * is listed here with the id of its replacement, the door to the current
+ * record (`synap_get_entity` on `supersededBy`), and the context tells the
+ * model it was left out and by what it was replaced.
+ */
+export interface SupersededSource extends SynthesisSource {
+  /** The id of the record that replaced this one. */
+  supersededBy: string;
 }
 
 /**
@@ -96,6 +111,12 @@ export interface SynthesisResult {
    * network call — the omission is real whether or not synthesis succeeded).
    */
   truncated?: SynthesisTruncation;
+  /**
+   * Present ONLY when retrieval matched replaced records — see
+   * {@link SupersededSource}. Like `truncated`, it is computed before any
+   * network call, so it rides on every path, `detail: "sources"` included.
+   */
+  superseded?: SupersededSource[];
 }
 
 /**
@@ -136,6 +157,16 @@ const TRUNCATION_NOTICE_MAX_NAMES = 3;
 /** Per-name slice inside the truncation notice — keeps the notice bounded even
  * when a source title is itself very long. */
 const TRUNCATION_NOTICE_TITLE_CHARS = 30;
+/**
+ * Chars reserved for the SUPERSEDED notice, taken from the budget ONLY when a
+ * replaced record was retrieved — so a result with none builds exactly the
+ * context it built before. Room for 3 named pairs (two 30-char titles, or a
+ * title and a 36-char id) plus the newline that joins it; `buildSupersededNotice`
+ * hard-slices to it.
+ */
+const SUPERSEDED_NOTICE_RESERVE = 400;
+/** How many replaced items the superseded notice names before "+N more". */
+const SUPERSEDED_NOTICE_MAX_NAMES = 3;
 /** Per-snippet-field slice — generous enough to carry a real body/verdict/
  * conclusion instead of the old 300-char stub, while MAX_CONTEXT_CHARS still
  * bounds the total context sent to the IS. */
@@ -452,6 +483,55 @@ function bodyExcerpt(body: string, question: string): string {
   );
 }
 
+/** A retrieved item's human name, from whichever field its substrate carries. */
+function itemTitle(rec: Record<string, unknown>, id: string): string {
+  return (
+    (typeof rec.name === "string" && rec.name) ||
+    (typeof rec.title === "string" && rec.title) ||
+    (typeof rec.claim === "string" && rec.claim) ||
+    (typeof rec.fact === "string" && rec.fact) ||
+    (typeof rec.content === "string" && rec.content) ||
+    // Procedural rows (knowledge_keys) carry NONE of the above — their
+    // human name is `key` ("namespace:slug"). Without this they fell all
+    // the way through to the raw UUID, so every runbook source rendered as
+    // an opaque id the reader (and the model) could not identify.
+    (typeof rec.key === "string" && rec.key) ||
+    id ||
+    "(item)"
+  );
+}
+
+/**
+ * Split the replaced records out of the answer blocks, BEFORE anything counts
+ * or ranks them: a replaced record is not a source, does not take the rank-1
+ * protection, and is not an "omitted" item of the truncation notice. Blocks
+ * with no replaced record are returned as the same objects.
+ */
+function splitSuperseded(answers: AskAnswer[]): {
+  current: AskAnswer[];
+  superseded: SupersededSource[];
+} {
+  const superseded: SupersededSource[] = [];
+  const current = answers.map((block) => {
+    if (block.status !== "ok") return block;
+    const items = block.items.filter((item) => {
+      const rec = item as Record<string, unknown>;
+      const supersededBy = supersededByOf(rec);
+      if (!supersededBy) return true;
+      const id = typeof rec.id === "string" ? rec.id : "";
+      superseded.push({
+        substrate: block.substrate,
+        id,
+        title: itemTitle(rec, id),
+        supersededBy,
+      });
+      return false;
+    });
+    return items.length === block.items.length ? block : { ...block, items };
+  });
+  return { current, superseded };
+}
+
 export function buildSynthesisContext(
   answers: AskAnswer[],
   /** The question asked: what a long body's passages are chosen by. */
@@ -461,7 +541,10 @@ export function buildSynthesisContext(
   context: string;
   /** Present only when items were dropped — see `SynthesisResult.truncated`. */
   truncated?: SynthesisTruncation;
+  /** Present only when replaced records matched — see `SupersededSource`. */
+  superseded?: SupersededSource[];
 } {
+  const { current, superseded } = splitSuperseded(answers);
   const sources: SynthesisSource[] = [];
   const contextParts: string[] = [];
   let contextLen = 0;
@@ -484,7 +567,10 @@ export function buildSynthesisContext(
    * `omitted`, so the list and the count can never drift apart.
    */
   const omittedSources: SynthesisSource[] = [];
-  const budget = MAX_CONTEXT_CHARS - TRUNCATION_NOTICE_RESERVE;
+  const budget =
+    MAX_CONTEXT_CHARS -
+    TRUNCATION_NOTICE_RESERVE -
+    (superseded.length > 0 ? SUPERSEDED_NOTICE_RESERVE : 0);
   let totalItems = 0;
   /**
    * Rank-1 protection: the loop below admits by FIT, not RANK, so without this
@@ -532,7 +618,7 @@ export function buildSynthesisContext(
     if (id) omittedSources.push({ substrate, id, title });
   };
 
-  for (const block of answers) {
+  for (const block of current) {
     if (block.status !== "ok") continue;
     const isProcedural = block.substrate === "procedural";
     for (const item of block.items) {
@@ -541,19 +627,7 @@ export function buildSynthesisContext(
 
       const rec = item as Record<string, unknown>;
       const id = typeof rec.id === "string" ? rec.id : "";
-      const title =
-        (typeof rec.name === "string" && rec.name) ||
-        (typeof rec.title === "string" && rec.title) ||
-        (typeof rec.claim === "string" && rec.claim) ||
-        (typeof rec.fact === "string" && rec.fact) ||
-        (typeof rec.content === "string" && rec.content) ||
-        // Procedural rows (knowledge_keys) carry NONE of the above — their
-        // human name is `key` ("namespace:slug"). Without this they fell all
-        // the way through to the raw UUID, so every runbook source rendered as
-        // an opaque id the reader (and the model) could not identify.
-        (typeof rec.key === "string" && rec.key) ||
-        id ||
-        "(item)";
+      const title = itemTitle(rec, id);
 
       if (id) sources.push({ substrate: block.substrate, id, title });
 
@@ -684,6 +758,9 @@ export function buildSynthesisContext(
   // NOTE the loops no longer `break` on the budget: they keep scanning so
   // `omitted` is a true count of what was left out, not "we stopped here".
   // `sources` is unaffected by the budget — the caller still lists every match.
+  if (superseded.length > 0) {
+    contextParts.push(buildSupersededNotice(superseded, sources));
+  }
   if (omitted > 0) {
     contextParts.push(
       buildTruncationNotice(omitted, totalItems, omittedTitles)
@@ -693,6 +770,7 @@ export function buildSynthesisContext(
   return {
     sources,
     context: contextParts.join("\n"),
+    ...(superseded.length > 0 ? { superseded } : {}),
     // Present ONLY when something was actually dropped — same "present only
     // when it happened" convention as `error`/`failureClass`. This field was
     // DECLARED on this return type (and forwarded by all three doors) but never
@@ -736,6 +814,40 @@ function buildTruncationNotice(
     : notice;
 }
 
+/**
+ * The superseded notice: the model learns a replaced record matched and was
+ * left out ON PURPOSE, so it neither presents it as current nor says "nothing
+ * found" when the only match was the old record. Its replacement is named by
+ * title when retrieval matched it too (it is then among `sources`), else by
+ * id. Hard-sliced to `SUPERSEDED_NOTICE_RESERVE`, which the budget set aside.
+ */
+function buildSupersededNotice(
+  superseded: SupersededSource[],
+  sources: SynthesisSource[]
+): string {
+  const titleById = new Map(sources.map((s) => [s.id, s.title]));
+  const cut = (t: string) => `"${t.slice(0, TRUNCATION_NOTICE_TITLE_CHARS)}"`;
+  const shown = superseded.slice(0, SUPERSEDED_NOTICE_MAX_NAMES).map((s) => {
+    const next = titleById.get(s.supersededBy);
+    return `${cut(s.title)} → ${
+      next !== undefined
+        ? cut(next)
+        : `entity ${s.supersededBy} (not retrieved)`
+    }`;
+  });
+  const remaining = superseded.length - shown.length;
+  const notice =
+    `- [NOTICE] SUPERSEDED: ${superseded.length} retrieved item${
+      superseded.length === 1 ? " was" : "s were"
+    } replaced by a newer record and ${superseded.length === 1 ? "is" : "are"} ` +
+    `NOT shown (${shown.join("; ")}${remaining > 0 ? `; +${remaining} more` : ""}). ` +
+    `Never present a replaced item as current.`;
+  // `- 1`: the reserve also pays for the newline that joins this line.
+  return notice.length > SUPERSEDED_NOTICE_RESERVE - 1
+    ? notice.slice(0, SUPERSEDED_NOTICE_RESERVE - 1)
+    : notice;
+}
+
 export async function synthesizeAnswer(
   answers: AskAnswer[],
   question: string,
@@ -772,7 +884,7 @@ export async function synthesizeAnswer(
    */
   queue?: AskQueueBlock
 ): Promise<SynthesisResult> {
-  const { sources, context, truncated } = buildSynthesisContext(
+  const { sources, context, truncated, superseded } = buildSynthesisContext(
     answers,
     question
   );
@@ -782,7 +894,15 @@ export async function synthesizeAnswer(
   // budget drops anything), so nothing is cut and `truncated` would describe a
   // context nobody reads: it is omitted on purpose.
   if (detail === "sources") {
-    return { answer: null, detail: "sources", sources, routedTo };
+    return {
+      answer: null,
+      detail: "sources",
+      sources,
+      routedTo,
+      // Not budget-dependent like `truncated`: a replaced match is left out of
+      // `sources` on this path too, so its replacement must be named here.
+      ...(superseded ? { superseded } : {}),
+    };
   }
 
   // Call the IS "answer" door — one focused LLM call. Resolve the IS endpoint +
@@ -864,6 +984,7 @@ export async function synthesizeAnswer(
       // the prose notice only reaches the reader if the model chooses to repeat
       // it, and it never carries ids at all.
       ...(truncated ? { truncated } : {}),
+      ...(superseded ? { superseded } : {}),
     };
   } catch (err) {
     // Synthesis unavailable — return sources so callers can still show matches.
@@ -882,6 +1003,7 @@ export async function synthesizeAnswer(
       // real whether or not synthesis succeeded — and this is the path where
       // the prose notice is lost entirely.
       ...(truncated ? { truncated } : {}),
+      ...(superseded ? { superseded } : {}),
       error: "synthesis_unavailable",
       failureClass:
         err instanceof EmptySynthesisError

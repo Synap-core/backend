@@ -2313,6 +2313,9 @@ ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "proven_at" timestamptz;
 -- definition declaring `tools: []` (all of Synap Core's builtins) has no tool
 -- row to hang a verb catalog on. See migrations/0292_skills_intent.sql.
 ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "intent" text;
+-- 0368: how this verb's parameters are read from its intent's input (NULL =
+-- not offered to apps for the intent). A RE_APPROVAL field.
+ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "input_map" jsonb;
 -- 0330: the URL patterns a READER verb declares (`urls` in the catalog; grammar
 -- in `@synap-core/types/url-read`). NULL = not a reader. A RE_APPROVAL field.
 ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "url_patterns" text[];
@@ -5028,6 +5031,8 @@ CREATE TABLE IF NOT EXISTS "capability_intents" (
   CONSTRAINT "capability_intents_effect_check" CHECK ("effect" IN ('read', 'write', 'act')),
   CONSTRAINT "capability_intents_slug_check" CHECK ("slug" ~ '^[a-z][a-z0-9_]{0,63}$')
 );
+-- 0368: the ONE input shape of an intent (JSON Schema); its seed is in 0368.
+ALTER TABLE "capability_intents" ADD COLUMN IF NOT EXISTS "input_schema" jsonb;
 
 -- Account recovery codes (0294). Pod-local one-time look-up secrets; only a
 -- scrypt hash is stored. One batch per user; used_at NULL = unused.

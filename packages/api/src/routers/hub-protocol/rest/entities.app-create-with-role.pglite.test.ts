@@ -16,6 +16,10 @@
  *    (the attach's outcome `error`). With `facet.create` too it is `applied`
  *    once facet/attach folds onto create (D1); before D1 no grant could allow
  *    the attach (`facet.attach` is not grantable), so it was `partial` too.
+ *  - a SHARED role (`prospect`, granted to CRM) on a person created IN CRM:
+ *    its row is stored pod-wide, and the CRM app reads it (the entity's
+ *    facets, the list by `facetSlug`) and moves its stage, as a member of CRM
+ *    does (the role is granted to CRM, the person stored there).
  *
  * Same harness as entities.app-role-write.pglite.test.ts (real hub auth door,
  * real routes, real governed doors and approval door on PGlite; the key's
@@ -198,6 +202,8 @@ const AGENT = randomUUID(); // the app's agent (asks first)
 const CRM = randomUUID();
 const PERSON_KIND = randomUUID();
 const ROLE_LEAD = randomUUID();
+const ROLE_PROSPECT = randomUUID(); // shared, granted to CRM; lifecycle `prospectStage`
+const PROSPECT_STAGE = randomUUID();
 
 interface Key {
   id: string;
@@ -214,6 +220,18 @@ const KEYS = {
   personRoles: {
     id: randomUUID(),
     permissions: [...CREATE, "facet.read", "facet.create"],
+    principal: OWNER,
+  },
+  /** The person's own token for a CRM app that also works the roles' stages. */
+  crmApp: {
+    id: randomUUID(),
+    permissions: [
+      ...CREATE,
+      "entity.person.update",
+      "facet.read",
+      "facet.create",
+      "facet.update",
+    ],
     principal: OWNER,
   },
 } satisfies Record<string, Key>;
@@ -254,6 +272,32 @@ beforeAll(async () => {
        ($1,'person','Person','kind','system','pod',true,'{}'::jsonb,null),
        ($2,'lead','Lead','role','workspace','workspace',true,'{}'::jsonb,$3)`,
     [PERSON_KIND, ROLE_LEAD, CRM]
+  );
+  await q(
+    `insert into profiles (id, slug, display_name, profile_kind, scope, entity_scope, is_active, ui_hints, workspace_id) values
+       ($1,'prospect','Prospect','role','shared','pod',true,'{}'::jsonb,null)`,
+    [ROLE_PROSPECT]
+  );
+  await q(
+    `insert into profile_workspace_access (profile_id, workspace_id) values ($1,$2)`,
+    [ROLE_PROSPECT, CRM]
+  );
+  await q(
+    `insert into property_defs (id, slug, value_type, constraints, ui_hints) values ($1,'prospectStage','string',$2::jsonb,'{}'::jsonb)`,
+    [
+      PROSPECT_STAGE,
+      JSON.stringify({
+        enumOptions: [
+          { key: "new", category: "open" },
+          { key: "engaged", category: "active" },
+          { key: "won", category: "done" },
+        ],
+      }),
+    ]
+  );
+  await q(
+    `insert into profile_properties (profile_id, property_def_id, is_lifecycle) values ($1,$2,true)`,
+    [ROLE_PROSPECT, PROSPECT_STAGE]
   );
   for (const k of Object.values(KEYS)) {
     await q(
@@ -309,30 +353,47 @@ function app() {
   return root;
 }
 
-async function create(key: KeyName, title: string) {
-  const json = JSON.stringify({
-    workspaceId: CRM,
-    profileSlug: "person",
-    title,
-    facets: [{ slug: "lead" }],
-  });
-  const res = await app().request(`/api/hub/entities`, {
-    method: "POST",
+async function send(
+  key: KeyName,
+  method: "GET" | "POST" | "PATCH",
+  path: string,
+  payload?: unknown
+) {
+  const json = payload === undefined ? undefined : JSON.stringify(payload);
+  const res = await app().request(`/api/hub${path}`, {
+    method,
     headers: {
       authorization: `Bearer synap_${key}`,
-      "content-type": "application/json",
-      "content-length": String(Buffer.byteLength(json)),
+      ...(json
+        ? {
+            "content-type": "application/json",
+            "content-length": String(Buffer.byteLength(json)),
+          }
+        : {}),
     },
-    body: json,
+    ...(json ? { body: json } : {}),
   });
   const body = (await res.json()) as Record<string, unknown>;
   return { res, body };
 }
 
+const create = (key: KeyName, title: string, role = "lead") =>
+  send(key, "POST", "/entities", {
+    workspaceId: CRM,
+    profileSlug: "person",
+    title,
+    facets: [{ slug: role }],
+  });
+
 const byTitle = (title: string) =>
   q<{ id: string; workspace_id: string | null }>(
     `select id, workspace_id from entities where title = $1 and deleted_at is null`,
     [title]
+  ).then((r) => r.rows);
+const roleFacets = (entityId: string, role: string) =>
+  q<{ id: string; workspace_id: string | null; status: string | null }>(
+    `select id, workspace_id, status from entity_facets where entity_id = $1 and profile_id = $2 and deleted_at is null`,
+    [entityId, role]
   ).then((r) => r.rows);
 const leadFacets = (entityId: string) =>
   q<{ workspace_id: string | null }>(
@@ -400,5 +461,58 @@ describe("person mode: the create applies; the inline attach runs under the key'
     expect((body.writeReceipt as { state: string }).state).toBe("applied");
     const rows = await byTitle("Katherine Johnson");
     expect(await leadFacets(rows[0]!.id)).toEqual([{ workspace_id: CRM }]);
+  });
+});
+
+describe("a person created IN CRM with the SHARED prospect role: the CRM app reads that role and moves its stage", () => {
+  let personId = "";
+  let facetId = "";
+
+  it("person mode: created in CRM, the prospect row stored pod-wide (a shared role's always is)", async () => {
+    const { res, body } = await create("crmApp", "Mary Jackson", "prospect");
+    expect(res.status, JSON.stringify(body)).toBe(200);
+    expect((body.writeReceipt as { state: string }).state).toBe("applied");
+    const rows = await byTitle("Mary Jackson");
+    expect(rows[0]!.workspace_id).toBe(CRM);
+    personId = rows[0]!.id;
+    const facets = await roleFacets(personId, ROLE_PROSPECT);
+    expect(facets.map((f) => f.workspace_id)).toEqual([null]);
+    facetId = facets[0]!.id;
+  });
+
+  it("GET /entities/:id/facets returns the prospect row", async () => {
+    const { res, body } = await send(
+      "crmApp",
+      "GET",
+      `/entities/${personId}/facets`
+    );
+    expect(res.status, JSON.stringify(body)).toBe(200);
+    const facets = body.facets as Array<{ facet: { id: string } }>;
+    expect(facets.map((f) => f.facet.id)).toEqual([facetId]);
+  });
+
+  it("the list by facetSlug (with includeFacets) carries the person and the prospect row", async () => {
+    const res = await app().request(
+      `/api/hub/entities?workspaceId=${CRM}&facetSlug=prospect&includeFacets=true`,
+      { headers: { authorization: "Bearer synap_crmApp" } }
+    );
+    const rows = (await res.json()) as Array<{
+      id: string;
+      facets?: Array<{ facetId: string }>;
+    }>;
+    expect(res.status, JSON.stringify(rows)).toBe(200);
+    expect(rows.map((r) => r.id)).toEqual([personId]);
+    expect(rows[0]!.facets?.map((f) => f.facetId)).toEqual([facetId]);
+  });
+
+  it("its stage moves (PATCH /facets/:id)", async () => {
+    const { res, body } = await send("crmApp", "PATCH", `/facets/${facetId}`, {
+      status: "engaged",
+    });
+    expect(res.status, JSON.stringify(body)).toBe(200);
+    expect(body.status).toBe("updated");
+    expect((await roleFacets(personId, ROLE_PROSPECT))[0]!.status).toBe(
+      "engaged"
+    );
   });
 });

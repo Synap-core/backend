@@ -13,6 +13,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  *   agent under owner's identity → GATED (SEC#1: the owner bypass keys off the
  *                                  effective actor; an agent never inherits it)
  *   pod-wide shared secret       → ungated (0211; the RUN is gated elsewhere)
+ *   the calling capability's own → ungated (founder 2026-10-28; set only by
+ *     key                            vaultHandler after checking the rows)
  *   anyone else                  → gated, redeemed by the effective actor
  *
  * Asserted on the OPTIONS passed to resolveVaultSecret — that argument is the
@@ -91,6 +93,17 @@ describe("resolveDirectVaultCredential — who must hold a grant", () => {
       secretRow: { userId: OWNER, isPodWide: true },
       userId: OWNER,
       agentUserId: AGENT,
+    });
+    expect(optsPassed()).toBeUndefined();
+  });
+
+  it("a key bound to the calling capability is ungated even for an agent (founder, 2026-10-28)", async () => {
+    await resolveDirectVaultCredential({
+      vaultId: "v1",
+      secretRow: { userId: OWNER, isPodWide: false },
+      userId: OWNER,
+      agentUserId: AGENT,
+      boundToCallingCapability: true,
     });
     expect(optsPassed()).toBeUndefined();
   });

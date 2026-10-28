@@ -2156,6 +2156,16 @@ export interface CapabilitySkillDef {
    * it on an approved skill demotes the skill (a RE_APPROVAL field).
    */
   urls?: string[];
+  /**
+   * How this verb's parameters are read from its intent's ONE input
+   * (`capability_intents.input_schema`; intent actions, decision 5B,
+   * 2026-10-28): `{ "params": { "content": "$.text", "type": { "const":
+   * "schedule" } } }` — path copy and constants, no expressions. Lets a pod
+   * app ask the person's tools for the intent without knowing this verb.
+   * Projected onto `skills.input_map` only from an official template, and
+   * validated on install; a RE_APPROVAL field. Absent = not offered to apps.
+   */
+  inputMap?: Record<string, unknown>;
 }
 
 /**

@@ -8,7 +8,7 @@
  *
  * Routing only. Governance still decides on the concrete verb id.
  */
-import { pgTable, text, timestamp } from "drizzle-orm/pg-core";
+import { jsonb, pgTable, text, timestamp } from "drizzle-orm/pg-core";
 
 export const CAPABILITY_INTENT_EFFECTS = ["read", "write", "act"] as const;
 export type CapabilityIntentEffect = (typeof CAPABILITY_INTENT_EFFECTS)[number];
@@ -21,6 +21,13 @@ export const capabilityIntents = pgTable("capability_intents", {
   effect: text("effect", { enum: ["read", "write", "act"] }).notNull(),
   statement: text("statement").notNull(),
   synonyms: text("synonyms").array().notNull().default([]),
+  /**
+   * The ONE input a pod app sends for this intent, as JSON Schema (0368,
+   * decision 5B): `publish_post` = `{ text, media?, link?, when? }`. Each verb
+   * serving the intent reads its parameters from it (`skills.input_map`).
+   * NULL = apps cannot ask for this intent yet.
+   */
+  inputSchema: jsonb("input_schema").$type<Record<string, unknown> | null>(),
   createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
     .defaultNow()
     .notNull(),

@@ -18,6 +18,9 @@
  * instead of the channel's (the other-space row), and a check that refuses a
  * key that holds it or a signed-in person (the CONTROL rows).
  *
+ * A key that holds it and acts for an APP (`clientId`), person token included,
+ * reaches the gate too: the app outward floor proposes every send (decision 4A).
+ *
  * Through the REAL route and the REAL dispatcher on PGlite; the connector, the
  * capability gate and the proposal insert are spies, so a refused send
  * provably never reached the connector or the gate.
@@ -246,10 +249,34 @@ describe("a key's grant bounds a send through the person's account", () => {
     });
   });
 
-  it("CONTROL — a person-acting key holding `messaging.send` here sends", async () => {
+  it("a person-acting APP key holding `messaging.send` here reaches the gate: proposed, not sent (decision 4A)", async () => {
+    // An official app's `synap_acts_as: person` token resolves as the person
+    // (no agent), so the owner branch used to send at once; the app outward
+    // floor sits in the gate, which that branch never called.
     const res = await send({ grant: grant(["messaging.send"]) });
+    expect(res.status).toBe(202);
+    expect(await res.json()).toMatchObject({ status: "proposed" });
+    expect(h.sent).toEqual([]);
+    expect(h.gated).toHaveLength(1);
+    expect(h.gated[0]).toMatchObject({
+      agentUserId: null,
+      actorUserId: ALICE,
+      workspaceId: ALICE_WS,
+    });
+    expect(h.proposals).toHaveLength(1);
+    expect(h.proposals[0]).toMatchObject({
+      userId: ALICE,
+      proposalType: "messaging.external.send",
+    });
+  });
+
+  it("CONTROL — a person's own scoped key (no app) holding `messaging.send` here sends", async () => {
+    const res = await send({
+      grant: { ...grant(["messaging.send"]), clientId: null },
+    });
     expect(res.status).toBe(200);
     expect(h.sent).toEqual([[ACCOUNT, THREAD, "hello"]]);
+    expect(h.gated).toEqual([]);
   });
 
   it("a key that cannot read the conversation does not find it: 404, nothing sent", async () => {
