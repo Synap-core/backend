@@ -457,6 +457,8 @@ export const hubAuthMiddleware = async (
     // bound `service` key to its workspace. Inert for every other key type.
     c.set("keyType", keyRecord.keyType);
     c.set("keyWorkspaceId", keyRecord.workspaceId ?? null);
+    // Which integration minted this key (F10: only the CLI's may review).
+    c.set("keyHubId", keyRecord.hubId ?? null);
     // Agent key identity remap — via the ONE door `resolveKeyIdentity`
     // (access/key-identity.ts). When a key has a linkedUserId (= the human who
     // created the agent), the human owns the entities (effectiveUserId), while the

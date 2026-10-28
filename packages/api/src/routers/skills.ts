@@ -30,6 +30,12 @@ import {
 } from "../services/links/links-service.js";
 import { requireUserId } from "../utils/user-scoped.js";
 import { visibleSkillsWhere } from "../services/skills/visibility.js";
+import {
+  assertMayChangeSkill,
+  defaultSkillScope,
+  holdsSkillAuthority,
+  POD_SKILL_PUBLISH_MESSAGE,
+} from "../services/skills/skill-write-authority.js";
 import { alwaysSkillBudgetWarningsOnEdit } from "../services/skills/template-skills.js";
 import { ruleNotExpiredWhere } from "../services/rules/expiry.js";
 import { ruleSentenceSchema } from "../services/rules/sentence-schema.js";
@@ -331,6 +337,18 @@ export async function insertSkillGoverned(
   // path, it closes the gap for callers that construct a `kind: "code"` skill
   // without going through those two mutations.
   assertSkillCodeAllowed(values.kind, values.code, values.executionMode);
+
+  // A pod-wide skill reaches every user's agents: publishing one needs the
+  // approval authority (F6). The column default is "pod", so an absent scope
+  // counts as pod-wide. Callers pick `defaultSkillScope` when they name none.
+  if (
+    (values.scope ?? "pod") === "pod" &&
+    !(await holdsSkillAuthority(values.userId, {
+      workspaceId: values.workspaceId,
+    }))
+  ) {
+    return { status: "denied", reason: POD_SKILL_PUBLISH_MESSAGE };
+  }
 
   const perm = await checkPermissionOrPropose({
     userId: values.userId,
@@ -1072,7 +1090,9 @@ export const skillsRouter = router({
         kind: z
           .enum(["instruction", "code", "declarative", "builtin"])
           .optional(),
-        scope: z.enum(["pod", "user", "workspace"]).default("pod"),
+        /** Absent: pod-wide for a caller with the authority to publish one
+         *  (`holdsSkillAuthority`), else the caller's own (`user`). */
+        scope: z.enum(["pod", "user", "workspace"]).optional(),
         agentTypes: z.array(z.string()).optional(),
         /** Stable ref `load_skill` resolves by (e.g. "biz/business-plan").
          *  Without one, a documentation skill is authored but unreachable:
@@ -1164,6 +1184,23 @@ export const skillsRouter = router({
             "intent and urlPatterns come only from a capability definition; install or update its package instead.",
         });
       }
+
+      // A pod-wide skill reaches every user's agents (F6): publishing one
+      // needs the approval authority. The capability-definition applier keeps
+      // its own install path (its pod skills are the catalog's). After the input-only refusal above, so
+      // a refused call reads nothing.
+      const mayPublishPod =
+        isDefinitionApplier(ctx) ||
+        (await holdsSkillAuthority(userId, {
+          workspaceId: input.workspaceId,
+        }));
+      if (input.scope === "pod" && !mayPublishPod) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: POD_SKILL_PUBLISH_MESSAGE,
+        });
+      }
+      const scope = input.scope ?? (mayPublishPod ? "pod" : "user");
 
       // Documentation + optional Code. Derive `kind` from code presence (explicit
       // input.kind still honored). A skill must carry documentation or code.
@@ -1258,7 +1295,7 @@ export const skillsRouter = router({
           userId,
           workspaceId: input.workspaceId ?? null,
           kind,
-          scope: input.scope,
+          scope,
           agentTypes: input.agentTypes ?? null,
           slug: input.slug ?? null,
           name: input.name,
@@ -1322,7 +1359,7 @@ export const skillsRouter = router({
           // narrows to one. No workspace context → pod-wide (NULL).
           workspaceId: input.workspaceId ?? null,
           kind,
-          scope: input.scope,
+          scope,
           agentTypes: input.agentTypes ?? null,
           slug: input.slug ?? null,
           name: input.name,
@@ -1486,6 +1523,20 @@ export const skillsRouter = router({
           message: "Skill not found",
         });
       }
+      // Seeing a pod skill is not owning it (F6): a non-author needs the
+      // skill's approval authority to change it.
+      await assertMayChangeSkill(userId, existingSkill);
+      // Moving a skill to pod-wide is publishing it.
+      if (
+        input.scope === "pod" &&
+        existingSkill.scope !== "pod" &&
+        !(await holdsSkillAuthority(userId, existingSkill))
+      ) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: POD_SKILL_PUBLISH_MESSAGE,
+        });
+      }
 
       // Save-time global-reference scan (B1) — same gate as `create`: an EDIT
       // that re-points a skill's code to reference an unprovided global (fetch/
@@ -1577,10 +1628,13 @@ export const skillsRouter = router({
         // take an already-approved instruction skill and rewrite its body while
         // it KEPT `approved: true` — precisely the "hostile fetched content
         // persists itself into the prompt" path the approval gate exists to
-        // stop. A human editing their own skill is unaffected. Deliberately
-        // PRESENCE-based, not value-based: an agent that submits a body must
-        // re-earn approval even in the edge case where the text is unchanged.
-        (updateData.body !== undefined && !!actingAgentUserId) ||
+        // stop. Deliberately PRESENCE-based, not value-based: an agent that
+        // submits a body must re-earn approval even in the edge case where the
+        // text is unchanged. The same holds for a PERSON who is not the
+        // skill's author (F6: a pod admin editing another member's skill):
+        // only the author's own edit keeps the approval it had.
+        (updateData.body !== undefined &&
+          (!!actingAgentUserId || existingSkill.userId !== userId)) ||
         // Widening the sandbox's egress allowlist is an execution change: it is
         // what decides which hosts an approved skill may reach. It cannot ride
         // in `RE_APPROVAL_FIELDS` because `metadata` is peeled off `updateData`
@@ -1729,6 +1783,8 @@ export const skillsRouter = router({
           message: "Skill not found",
         });
       }
+      // A pod skill another person wrote is not the caller's to delete (F6).
+      await assertMayChangeSkill(userId, existingSkill);
 
       // 1. Permission check
       // The acting agent is read AMBIENTLY first. `skillsRouter` is mounted on
@@ -2101,7 +2157,7 @@ export const skillsRouter = router({
         userId,
         workspaceId: input.workspaceId,
         kind: "instruction",
-        scope: "pod",
+        scope: await defaultSkillScope(userId, input.workspaceId),
         name: parsed.name,
         description: parsed.description,
         body: parsed.instructions,
@@ -2181,14 +2237,16 @@ export const skillsRouter = router({
       const skill = await db.query.skills.findFirst({
         where: and(
           eq(skills.id, input.skillId),
-          // Owner floor before editing the skill's `requires` edges — same gate
-          // as getRequiredTools / skills.get. Pod-scoped skills stay editable by
-          // any user (existing model); user-scoped skills are owner-only.
+          // Visibility floor before editing the skill's `requires` edges —
+          // same lookup as getRequiredTools / skills.get.
           or(eq(skills.scope, "pod"), eq(skills.userId, userId))
         ),
       });
       if (!skill)
         throw new TRPCError({ code: "NOT_FOUND", message: "Skill not found" });
+      // Seeing a pod skill is not owning it (F6). The definition applier
+      // re-seeds the catalog's own skills on re-install.
+      if (!isDefinitionApplier(ctx)) await assertMayChangeSkill(userId, skill);
 
       await replaceSkillRequiredTools({
         userId,

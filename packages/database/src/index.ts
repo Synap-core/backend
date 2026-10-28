@@ -480,6 +480,7 @@ export * from "./projectors/index.js";
 
 // Export new multi-level permission system
 export * from "./utils/permissions.js";
+export * from "./utils/automation-owner-access.js";
 export * from "./utils/preferences.js";
 
 // Export sync materializer (shared between API receive + pull worker)

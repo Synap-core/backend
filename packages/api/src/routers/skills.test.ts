@@ -20,6 +20,16 @@ const { mockCheckPermissionOrPropose, mockDbInsert, mockInsertedRow } =
     mockInsertedRow: { current: null as Record<string, unknown> | null },
   }));
 
+// The caller is the pod owner, who holds the skill authority (audit F6:
+// publishing or changing a pod-wide skill needs it). Who is refused is
+// pinned by skills.pod-skill-authority.test.ts; this file tests other things.
+vi.mock("../services/skills/skill-write-authority.js", () => ({
+  holdsSkillAuthority: async () => true,
+  assertMayChangeSkill: async () => undefined,
+  defaultSkillScope: async () => "pod",
+  SKILL_AUTHORITY_MESSAGE: "authority",
+  POD_SKILL_PUBLISH_MESSAGE: "publish",
+}));
 vi.mock("../utils/permission-check.js", () => ({
   checkPermissionOrPropose: mockCheckPermissionOrPropose,
   createPendingProposal: vi.fn(),
