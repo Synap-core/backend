@@ -114,12 +114,14 @@ function mix(from: string, to: string, amount: number): string {
   });
 }
 
+type Shade = 50 | 100 | 200 | 300 | 400 | 500 | 600 | 700 | 800 | 900;
+
 /**
  * A HeroUI 50…900 scale through three tokens: 50 sits near `from` (the page),
  * 500 IS `mid`, 900 IS `to`. In dark the page is dark and the ink light, so the
  * scale inverts by itself, as HeroUI's dark scales do.
  */
-function scale(from: string, mid: string, to: string): Record<string, string> {
+function scale(from: string, mid: string, to: string): Record<Shade, string> {
   return {
     50: mix(from, mid, 0.08),
     100: mix(from, mid, 0.16),
