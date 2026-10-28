@@ -97,17 +97,20 @@ the model.
 
 ## 3. Self-hosting a pod
 
-Synap is open source and self-hostable. The real, supported one-line install
-pulls pre-built Docker images (no source build required):
+Synap is open source and self-hostable. On a Linux host with a domain
+pointing at it, the installer pulls the latest stable release (pre-built
+Docker images, no source build) and starts the stack behind Caddy with
+automatic HTTPS:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Synap-core/backend/main/install.sh | bash
+curl -fsSL https://github.com/synap-core/backend/releases/download/channel-stable/install.sh \
+  | sudo bash -s -- --domain pod.example.com --email you@example.com
 ```
 
-The installer prompts for a **domain** and an **email** (for TLS), writes a
-`docker-compose.yml` next to the install dir, and brings up the stack via
-Caddy with automatic HTTPS. Prerequisites: **Docker** with **Compose v2**,
-`curl`, and `openssl`.
+It installs Docker if needed. To try a pod on your own machine instead, run
+`./synap install --domain localhost` from a clone of the repository, which
+builds from source. Both paths, and the first-admin step, are in
+[`deploy/README.md`](../deploy/README.md).
 
 Your pod is a real PostgreSQL database. Export it with `pg_dump` whenever you
 like — the data is yours.

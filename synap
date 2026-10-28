@@ -2649,6 +2649,12 @@ ${YELLOW}Examples:${NC}
   synap install --domain example.com --tunnel cloudflare --tunnel-token <TOKEN>
   synap install --domain example.com --tunnel cloudflare --tunnel-token-file /path/to/token
 
+${YELLOW}Building from a checkout:${NC}
+  Building from source first syncs the checkout to origin with git reset --hard,
+  and refuses when it holds tracked-file edits or commits origin does not have.
+  ${GREEN}SYNAP_SKIP_GIT_SYNC=1${NC}   Build the checkout as-is, unsynced (not for a deploy pod)
+  ${GREEN}SYNAP_FORCE_GIT_SYNC=1${NC}  Reset anyway, after printing the work it discards
+
 ${YELLOW}After install:${NC}
   This script installs the pod only. Agent connections (Claude Code, Raycast,
   any MCP client) are handled from your laptop with @synap-core/cli:
