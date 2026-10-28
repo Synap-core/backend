@@ -263,6 +263,11 @@ app.use(
       // route returns one-shot keys — never cache either.
       "/setup/device",
       "/setup/device/token",
+      // Key requests: the token route returns a one-shot key — never cache.
+      // The request route returns the poll secret (`request_code`) — never
+      // cache it either.
+      "/keys/requests",
+      "/keys/requests/token",
       // Mint/rotate return the plaintext feed URL once — never cache.
       "/calendar/feed",
       "/calendar/feed/rotate",
@@ -356,7 +361,7 @@ registerOrientRoutes(app); // /orient
 registerPodConfigRoutes(app); // /pod/config
 registerPodAdoptRoutes(app); // /pod/adopt
 registerFederationRoutes(app); // /federation/oidc-config — CP→pod OIDC federation push
-registerKeysRoutes(app); // /keys/rotate-cli
+registerKeysRoutes(app); // /keys/rotate-cli + key requests (/keys/templates, /keys/requests[/token], /keys/requested[/:keyId])
 registerAiProvidersRoutes(app); // /ai-providers
 registerFocusSessionsRoutes(app); // /focus-sessions*
 registerIntentSurfacesRoutes(app); // /lifecycle/{board,throughput}, /attention/{needs-you,count}

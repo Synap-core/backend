@@ -6840,6 +6840,32 @@ declare const OBJECT_ROOM_CONTEXT_TYPES: readonly [
 	"entity"
 ];
 export type ObjectRoomType = (typeof OBJECT_ROOM_CONTEXT_TYPES)[number];
+export interface GrantDraft {
+	/** Permission patterns, `<subject>[.<kind>].<action>`. */
+	readonly permissions: readonly string[];
+	/** null/undefined/[] = any workspace the person can reach. */
+	readonly workspaceIds?: readonly string[] | null;
+	/** null/undefined/[] = no project narrowing. */
+	readonly projectIds?: readonly string[] | null;
+	/** null/undefined/[] = no object pinning. */
+	readonly entityIds?: readonly string[] | null;
+	/** undefined → DEFAULT_KEY_TTL_DAYS; a number → that many days; null → never. */
+	readonly expiresInDays?: number | null;
+	/** What the person calls it ("Portfolio site"); a stored grant may have none. */
+	readonly label?: string | null;
+}
+export interface KeyDraft {
+	/** What the person calls it. Required. */
+	readonly name: string;
+	/** "Where will you keep it?" — stored with the key. */
+	readonly note?: string;
+	/** The template it started from (a built-in id or a stored role's id). */
+	readonly templateId?: string | null;
+	/** Where it is used (`KEY_USES` ids): this decides its scopes. */
+	readonly uses: readonly string[];
+	/** What it may touch, where, and for how long. */
+	readonly grant: GrantDraft;
+}
 /**
  * What a key may touch, as a key list shows it:
  *   - `ungranted` — it never had a grant: it may touch NOTHING (P5);
@@ -13877,6 +13903,26 @@ export interface DeviceRequestView {
 	keyTtlDays: number;
 	/** The reach the computer gets — the preset's name, shown in Details. */
 	accessName: string;
+}
+export type KeyRequestStatusView = "approved" | "consumed" | "denied" | "expired" | "pending";
+export interface KeyRequestView {
+	requestId: string;
+	status: KeyRequestStatusView;
+	/** Who asks: the computer (or the person's own key). */
+	requester: {
+		isComputer: boolean;
+		name: string;
+		userId: string;
+	};
+	template: {
+		description: string;
+		id: string;
+		name: string;
+	} | null;
+	/** The most the key may be: approving unchanged mints exactly this. */
+	draft: KeyDraft;
+	createdAt: Date;
+	expiresAt: Date;
 }
 /** One permission a pod app asks for, and the spaces it may be given in. */
 export interface OAuthAppOfferItem {
@@ -22935,7 +22981,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				};
 				hubId?: string | undefined;
 				keyName: string;
-				scope: string[];
+				note?: string | undefined;
+				scope?: string[] | undefined;
+				templateId?: string | undefined;
+				uses?: ("chat" | "hub" | "mcp" | "n8n" | "n8n-analyze" | "realtime" | "skills")[] | undefined;
 				workspaceId?: string | undefined;
 			};
 			meta: object;
@@ -22945,13 +22994,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				keyPrefix: string;
 				message?: undefined;
 				proposalId: string;
+				scope?: undefined;
 				status: "proposed";
 			} | {
-				id: any;
+				id: string;
 				key: string;
 				keyPrefix: string;
 				message: string;
 				proposalId?: undefined;
+				scope: string[];
 				status: "created";
 			};
 		}>;
@@ -22967,7 +23018,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					roleId?: string | undefined;
 				};
 				name: string;
-				scopes: string[];
+				note?: string | undefined;
+				scopes?: string[] | undefined;
+				templateId?: string | undefined;
+				uses?: ("chat" | "hub" | "mcp" | "n8n" | "n8n-analyze" | "realtime" | "skills")[] | undefined;
 			};
 			meta: object;
 			output: {
@@ -23015,6 +23069,29 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				status: "approved" | "denied";
 			};
 		}>;
+		decideKeyRequest: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				decision: "approve" | "deny";
+				draft?: {
+					grant: {
+						entityIds?: string[] | undefined;
+						expiresInDays?: number | null | undefined;
+						permissions: string[];
+						projectIds?: string[] | undefined;
+						workspaceIds?: string[] | undefined;
+					};
+					name: string;
+					note?: string | undefined;
+					templateId?: string | null | undefined;
+					uses: ("chat" | "hub" | "mcp" | "n8n" | "n8n-analyze" | "realtime" | "skills")[];
+				} | undefined;
+				requestId: string;
+			};
+			meta: object;
+			output: {
+				status: "approved" | "denied";
+			};
+		}>;
 		decideOAuthAuthorization: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				appSignInFingerprint?: string | undefined;
@@ -23046,6 +23123,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: DeviceRequestView;
+		}>;
+		getKeyRequest: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				requestId: string;
+			};
+			meta: object;
+			output: KeyRequestView;
 		}>;
 		getMachineDefaults: import("@trpc/server").TRPCQueryProcedure<{
 			input: void;
@@ -34338,6 +34422,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					workspaceIds?: string[] | undefined;
 				};
 				name: string;
+				uses?: ("chat" | "hub" | "mcp" | "n8n" | "n8n-analyze" | "realtime" | "skills")[] | undefined;
 			};
 			meta: object;
 			output: {
@@ -34365,6 +34450,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				name: string;
 				stored: true;
 				updatedAt: Date;
+				uses?: ("chat" | "hub" | "mcp" | "n8n" | "n8n-analyze" | "realtime" | "skills")[] | undefined;
 			};
 		}>;
 		list: import("@trpc/server").TRPCQueryProcedure<{
@@ -34395,6 +34481,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				name: string;
 				stored: true;
 				updatedAt: Date;
+				uses?: ("chat" | "hub" | "mcp" | "n8n" | "n8n-analyze" | "realtime" | "skills")[] | undefined;
 			}[];
 		}>;
 		update: import("@trpc/server").TRPCMutationProcedure<{
@@ -34409,6 +34496,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				};
 				id: string;
 				name: string;
+				uses?: ("chat" | "hub" | "mcp" | "n8n" | "n8n-analyze" | "realtime" | "skills")[] | undefined;
 			};
 			meta: object;
 			output: {
@@ -34436,6 +34524,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				name: string;
 				stored: true;
 				updatedAt: Date;
+				uses?: ("chat" | "hub" | "mcp" | "n8n" | "n8n-analyze" | "realtime" | "skills")[] | undefined;
 			};
 		}>;
 	}>>;
