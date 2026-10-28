@@ -291,7 +291,28 @@ beforeAll(async () => {
      values (gen_random_uuid(), 'agent', $1, 'pod', 'action', 'skill.create', 'auto', $2, now())`,
     [AGENT, USER]
   );
+  // …and its skill edits, so an agent's code change is granted too.
+  await q(
+    `insert into governance_rules (id, principal_kind, agent_user_id, scope_kind, target_kind, target_pattern, verdict, created_by, created_at)
+     values (gen_random_uuid(), 'agent', $1, 'pod', 'action', 'skill.update', 'auto', $2, now())`,
+    [AGENT, USER]
+  );
 });
+
+/** The agent's own edit, through the router (a rule grants it). */
+const agentUpdates = (input: Record<string, unknown>) =>
+  skillsRouter
+    .createCaller({
+      db: h.db,
+      authenticated: true,
+      userId: USER,
+      user: null,
+      session: null,
+      req: undefined,
+      workspaceId: null,
+      agentUserId: AGENT,
+    } as never)
+    .update({ ...input, agentUserId: AGENT } as never);
 
 describe("an agent's code skill that calls a connection (granted by a rule)", () => {
   it("is born OFF with exactly one turn-on request, and the agent is told so", async () => {
@@ -428,6 +449,22 @@ describe("an agent's code skill is born ON only when it reaches nothing", () => 
       slug: "team/house-rules",
       body: "Always answer in French.",
     });
+    expect(await approvedOf(reply.id)).toBe(false);
+    expect(await enableRequestsFor(reply.id)).toHaveLength(1);
+  });
+});
+
+describe("an agent's edit that switches its skill off", () => {
+  it("files one turn-on request (an edited skill never sits off unseen)", async () => {
+    const reply = await agentCreates({ name: "triple_it", code: PURE });
+    expect(await approvedOf(reply.id)).toBe(true);
+    expect(await enableRequestsFor(reply.id)).toHaveLength(0);
+
+    await agentUpdates({
+      id: reply.id,
+      code: `async (args) => { const r = await callProvider("gmail_api", "GET", "/x"); return r; }`,
+    });
+
     expect(await approvedOf(reply.id)).toBe(false);
     expect(await enableRequestsFor(reply.id)).toHaveLength(1);
   });

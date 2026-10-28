@@ -1840,6 +1840,22 @@ export const skillsRouter = router({
         );
       }
 
+      // 6. An agent's change switched the skill off (a rule granted the edit,
+      //    so no person reviewed it): ONE "turn this on?" request for the
+      //    person, so an edited skill never sits off unseen either.
+      if (execChanged && actingAgentUserId && _updated && !_updated.approved) {
+        const { requestAgentSkillTurnOn } =
+          await import("../services/capabilities/request-skill-turn-on.js");
+        await requestAgentSkillTurnOn({
+          skill: _updated,
+          authorAgentUserId: actingAgentUserId,
+          personReviewed: false,
+          userId,
+          workspaceId: existingSkill.workspaceId ?? null,
+          sessionId: ctx.sessionId ?? null,
+        });
+      }
+
       return {
         status: "updated" as const,
       };
