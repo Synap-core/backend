@@ -468,6 +468,22 @@
           "required": false,
           "description": "'summary' (default) returns one compact row per proposal — id, type, target, provenance, and a one-line summary — which is what a LIST is for. 'full' includes the entire `data` payload of every row: only ask for it when you need to inspect a specific proposal's contents, and pair it with a small `limit`.",
           "enum": ["summary", "full"]
+        },
+        {
+          "name": "package",
+          "type": "enum",
+          "required": false,
+          "description": "Only proposals of this review package — the decision they ask the person: questions, access, releases, how-things-work (skills, rules, playbooks, automations, governance), data-changes, hand-offs, knowledge, bookkeeping (an agent's notes on its own session).",
+          "enum": [
+            "questions",
+            "access",
+            "releases",
+            "how-things-work",
+            "data-changes",
+            "hand-offs",
+            "knowledge",
+            "bookkeeping"
+          ]
         }
       ],
       "inputSchema": {
@@ -503,6 +519,20 @@
             "enum": ["summary", "full"],
             "default": "summary",
             "description": "'summary' (default) returns one compact row per proposal — id, type, target, provenance, and a one-line summary — which is what a LIST is for. 'full' includes the entire `data` payload of every row: only ask for it when you need to inspect a specific proposal's contents, and pair it with a small `limit`."
+          },
+          "package": {
+            "type": "string",
+            "enum": [
+              "questions",
+              "access",
+              "releases",
+              "how-things-work",
+              "data-changes",
+              "hand-offs",
+              "knowledge",
+              "bookkeeping"
+            ],
+            "description": "Only proposals of this review package — the decision they ask the person: questions, access, releases, how-things-work (skills, rules, playbooks, automations, governance), data-changes, hand-offs, knowledge, bookkeeping (an agent's notes on its own session)."
           }
         },
         "required": []

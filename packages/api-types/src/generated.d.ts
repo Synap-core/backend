@@ -1690,16 +1690,41 @@ export interface WorkspaceSettings {
 		localTerminalEnabled?: boolean;
 	};
 }
+declare const REVIEW_PACKAGES: readonly [
+	"questions",
+	"access",
+	"releases",
+	"how-things-work",
+	"data-changes",
+	"hand-offs",
+	"knowledge",
+	"bookkeeping"
+];
+export type ReviewPackage = (typeof REVIEW_PACKAGES)[number];
+declare const REVIEW_GROUP_BYS: readonly [
+	"package",
+	"work",
+	"agent",
+	"time"
+];
+export type ReviewGroupBy = (typeof REVIEW_GROUP_BYS)[number];
+declare const REVIEW_LAYOUTS: readonly [
+	"list",
+	"cards",
+	"diff",
+	"gallery",
+	"by-agent",
+	"by-session"
+];
+export type ReviewLayout = (typeof REVIEW_LAYOUTS)[number];
 /**
- * User preferences on the wire — the `user_preferences` row and the shapes of
- * its JSONB columns.
- *
- * The JSONB shapes are declared HERE, once: `@synap/database` imports them to
- * type its columns and re-exports them. The row itself is inferred from the
- * drizzle table on the pod side; it is declared here and the database proves
- * it equal (`packages/database/src/wire-parity/preferences.ts`). Pure types:
- * nothing from the database package.
+ * The person's saved review settings (`uiPreferences.review`). `layouts`
+ * holds only the packages the person changed.
  */
+export interface ReviewPreferences {
+	groupBy: ReviewGroupBy;
+	layouts?: Partial<Record<ReviewPackage, ReviewLayout>>;
+}
 export interface CustomTheme {
 	colors?: {
 		accent?: string;
@@ -1751,6 +1776,12 @@ export interface UIPreferences {
 	defaultView?: "grid" | "list" | "timeline";
 	/** Where to open entity detail: floating panel (default), side panel, or modal */
 	entityOpenMode?: EntityOpenMode;
+	/**
+	 * How the person reviews what agents propose (founder B-4): the grouping and
+	 * each package's layout. Absent = never chosen — Review opens by package and
+	 * the onboarding step offers the choice once.
+	 */
+	review?: ReviewPreferences;
 }
 export interface GraphPreferences {
 	forceSettings?: {
@@ -13072,6 +13103,14 @@ export interface ProposalCluster {
 	 */
 	agent: ProposalClusterAgent | null;
 	/**
+	 * The REVIEW PACKAGE the cluster files under — the decision it asks
+	 * (`reviewPackageOfRow`, founder B-1). Decided over EVERY member and the
+	 * highest-stakes one wins: members share proposalType × targetType, but a
+	 * create's kind, a held-writes pack's writes or a person author can lift one
+	 * member into a higher package, and the cluster is never filed below it.
+	 */
+	package: ReviewPackage;
+	/**
 	 * Member count per `governance_reason`, so a card can render its composition
 	 * ("152 routine · 2 destructive · 1 untrusted origin") instead of a bare
 	 * total. Terraform's plan rollup is the precedent: never "N changes", always
@@ -21527,6 +21566,14 @@ export interface Signal {
 	 * `proposalIds.length === count`, never a sample standing for more.
 	 */
 	proposalIds?: string[];
+	/**
+	 * The REVIEW PACKAGE — the decision this row asks (`reviewPackageOf`,
+	 * `@synap-core/types/proposals/review-package`, founder B-1): what a Review
+	 * page groups by. Stamped on every NEEDS-YOU row ({@link unionNeedsYou}); a
+	 * cluster carries its members' highest-stakes package. Absent on the
+	 * history lens, which is not reviewed.
+	 */
+	package?: ReviewPackage;
 	/**
 	 * WHICH block this row belongs to on a needs-you page. `session:<id>` for
 	 * everything a session owes the person (its owed slots, its draft-asks row,
@@ -40690,6 +40737,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						x: number;
 						y: number;
 					}> | undefined;
+					review?: {
+						groupBy: "agent" | "package" | "time" | "work";
+						layouts?: {
+							access?: "by-agent" | "by-session" | "cards" | "diff" | "gallery" | "list" | undefined;
+							bookkeeping?: "by-agent" | "by-session" | "cards" | "diff" | "gallery" | "list" | undefined;
+							"data-changes"?: "by-agent" | "by-session" | "cards" | "diff" | "gallery" | "list" | undefined;
+							"hand-offs"?: "by-agent" | "by-session" | "cards" | "diff" | "gallery" | "list" | undefined;
+							"how-things-work"?: "by-agent" | "by-session" | "cards" | "diff" | "gallery" | "list" | undefined;
+							knowledge?: "by-agent" | "by-session" | "cards" | "diff" | "gallery" | "list" | undefined;
+							questions?: "by-agent" | "by-session" | "cards" | "diff" | "gallery" | "list" | undefined;
+							releases?: "by-agent" | "by-session" | "cards" | "diff" | "gallery" | "list" | undefined;
+						} | undefined;
+					} | undefined;
 					sidebarCollapsed?: boolean | undefined;
 				} | undefined;
 			};
@@ -40716,6 +40776,37 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					[x: string]: string;
 				};
 				success: boolean;
+			};
+		}>;
+		updateReview: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				groupBy: "agent" | "package" | "time" | "work";
+				layouts?: {
+					access?: "by-agent" | "by-session" | "cards" | "diff" | "gallery" | "list" | undefined;
+					bookkeeping?: "by-agent" | "by-session" | "cards" | "diff" | "gallery" | "list" | undefined;
+					"data-changes"?: "by-agent" | "by-session" | "cards" | "diff" | "gallery" | "list" | undefined;
+					"hand-offs"?: "by-agent" | "by-session" | "cards" | "diff" | "gallery" | "list" | undefined;
+					"how-things-work"?: "by-agent" | "by-session" | "cards" | "diff" | "gallery" | "list" | undefined;
+					knowledge?: "by-agent" | "by-session" | "cards" | "diff" | "gallery" | "list" | undefined;
+					questions?: "by-agent" | "by-session" | "cards" | "diff" | "gallery" | "list" | undefined;
+					releases?: "by-agent" | "by-session" | "cards" | "diff" | "gallery" | "list" | undefined;
+				} | undefined;
+			};
+			meta: object;
+			output: {
+				review: {
+					groupBy: "agent" | "package" | "time" | "work";
+					layouts?: {
+						access?: "by-agent" | "by-session" | "cards" | "diff" | "gallery" | "list" | undefined;
+						bookkeeping?: "by-agent" | "by-session" | "cards" | "diff" | "gallery" | "list" | undefined;
+						"data-changes"?: "by-agent" | "by-session" | "cards" | "diff" | "gallery" | "list" | undefined;
+						"hand-offs"?: "by-agent" | "by-session" | "cards" | "diff" | "gallery" | "list" | undefined;
+						"how-things-work"?: "by-agent" | "by-session" | "cards" | "diff" | "gallery" | "list" | undefined;
+						knowledge?: "by-agent" | "by-session" | "cards" | "diff" | "gallery" | "list" | undefined;
+						questions?: "by-agent" | "by-session" | "cards" | "diff" | "gallery" | "list" | undefined;
+						releases?: "by-agent" | "by-session" | "cards" | "diff" | "gallery" | "list" | undefined;
+					} | undefined;
+				};
 			};
 		}>;
 		updateTheme: import("@trpc/server").TRPCMutationProcedure<{
@@ -42601,6 +42692,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				automationId?: string | undefined;
 				excludeDraftSessions?: boolean | undefined;
 				limit?: number | undefined;
+				package?: "access" | "bookkeeping" | "data-changes" | "hand-offs" | "how-things-work" | "knowledge" | "questions" | "releases" | undefined;
 				profileSlug?: string | undefined;
 				projectId?: string | undefined;
 				scanLimit?: number | undefined;
@@ -42631,6 +42723,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				excludeBookkeeping?: boolean | undefined;
 				limit?: number | undefined;
 				offset?: number | undefined;
+				package?: "access" | "bookkeeping" | "data-changes" | "hand-offs" | "how-things-work" | "knowledge" | "questions" | "releases" | undefined;
 				profileSlug?: string | undefined;
 				projectId?: string | undefined;
 				proposalIds?: string[] | undefined;
@@ -42684,6 +42777,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					objectRefs?: Record<string, ProposalObjectRef>;
 					onBehalfOfName?: string;
 					originChannelName?: string;
+					package: "access" | "bookkeeping" | "data-changes" | "hand-offs" | "how-things-work" | "knowledge" | "questions" | "releases";
 					playbookName?: string;
 					policyReason?: string;
 					principal?: ProposalPrincipal;
@@ -42773,6 +42867,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					objectRefs?: Record<string, ProposalObjectRef>;
 					onBehalfOfName?: string;
 					originChannelName?: string;
+					package: "access" | "bookkeeping" | "data-changes" | "hand-offs" | "how-things-work" | "knowledge" | "questions" | "releases";
 					playbookName?: string;
 					policyReason?: string;
 					principal?: ProposalPrincipal;

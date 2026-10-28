@@ -12,7 +12,14 @@
  * Members reach this page too (D8): the access requests are read for pod
  * admins only, so a member's Access chip simply holds their own proposals.
  *
- * URL: `?type=access|changes|asks|history` picks the view; `?focus=<id>`
+ * Grouped by the decision each item asks (founder B-1, 27 Oct 2026): eight
+ * packages in a fixed order, each with its count, oldest age, one action and
+ * its own layout (`review-groups.tsx`). "Group by" at the top switches to
+ * Work, Agent or Time (`?group=`).
+ *
+ * URL: `?type=history` shows decided proposals (the older
+ * `access|changes|asks` still narrow the list, for links that name them);
+ * `?group=work|agent|time` picks the grouping; `?focus=<id>`
  * opens that row's decision (a row, its target, or any proposal id);
  * `?session=<id>` narrows every view to one session — the door a proposal's
  * review offers to "what else from this session waits for you". From
@@ -25,42 +32,37 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { Alert, Button, Checkbox, Textarea, addToast } from "@heroui/react";
-import {
-  ArrowUpRight,
-  Check,
-  ChevronRight,
-  Lock,
-  MessageSquare,
-  X,
-} from "lucide-react";
+import { TRPCClientError } from "@trpc/client";
+import { Alert, Button, Textarea, addToast } from "@heroui/react";
+import { Check, ChevronRight, SlidersHorizontal, X } from "lucide-react";
+import { navHref } from "../../../../lib/console-nav";
 import { FATE_COPY } from "@synap-core/types/proposals/fate";
 import { trpc } from "../../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
-import { formatRelative, isUuid } from "../../../../lib/format";
+import { isUuid } from "../../../../lib/format";
 import { useReplaceParams } from "../../../../lib/use-replace-params";
 import { LG_UP, useMediaQuery } from "../../../../lib/use-media-query";
 import type { Exit } from "../../../../lib/open-in";
-import {
-  ExitFallback,
-  externalProps,
-  rowHref,
-  useAppOpenAttempt,
-  usePlacedExit,
-} from "../../../../lib/exit-link";
+import { ExitFallback } from "../../../../lib/exit-link";
 import { PageHeader, PageShell } from "../../components/page-header";
 import { ConfirmModal } from "../../components/confirm-modal";
 import { FilterChips } from "../../components/filter-chips";
 import { useNeedsYouCount } from "../../components/side-nav-badges";
 import {
-  ResourceRow,
   ResourceRowEmpty,
   ResourceRowError,
   ResourceRowSkeleton,
 } from "../../components/resource-row";
-import { kindIcon, kindLabel } from "../../../_lib/object/kind-icon";
-import { lensRowExpiry } from "@synap-core/types/lens";
 import {
+  REVIEW_GROUP_BYS,
+  isReviewGroupBy,
+  type ReviewGroupBy,
+} from "@synap-core/types/proposals/review-package";
+import { resolveReviewGroupByLabel } from "@synap-core/types/vocabulary";
+import {
+  bookkeepingSuggestion,
+  reviewRowMembers,
+  type RowGroup,
   batchOf,
   exitOf,
   focusedRow,
@@ -75,15 +77,21 @@ import {
   summarizeBatch,
   type ProposalFacts,
   type ReviewDetail,
-  type ReviewFilter,
   type ReviewRow,
 } from "./review-rows";
 import {
   ReviewDock,
   ReviewDrawer,
+  ReviewInline,
   type OpenReview,
   type ReviewViewer,
 } from "./review-drawer";
+import { ReviewGroups } from "./review-groups";
+import { ReviewListRow } from "./review-list-row";
+import { useReviewPreferences } from "./review-preferences";
+import { handOffRuleFor } from "./hand-off-rule";
+import { ReviewOnboarding } from "./review-onboarding";
+import { showReviewOnboarding } from "./review-onboarding-model";
 import { ReviewHistory } from "./review-history";
 import { SessionFilter } from "./review-session-filter";
 import { nextRowKey } from "./ask-detail";
@@ -91,13 +99,23 @@ import { nextRowKey } from "./ask-detail";
 const TITLE = "Review";
 const DESCRIPTION = "Everything waiting on your decision, in one place.";
 
-const CHIPS: Array<{ key: ReviewFilter; label: string }> = [
-  { key: "all", label: "All" },
-  { key: "access", label: "Access" },
-  { key: "changes", label: "Changes" },
-  { key: "asks", label: "Asks" },
+/**
+ * What is waiting, or what was decided. The packages replaced the old
+ * Access · Changes · Asks chips (founder B-1); a link naming one of those
+ * still narrows the list and keeps "Waiting" pressed.
+ */
+const CHIPS: Array<{ key: "all" | "history"; label: string }> = [
+  { key: "all", label: "Waiting" },
   { key: "history", label: "History" },
 ];
+
+/**
+ * The grouping: a link's `?group=` wins (it names a view to land on), else
+ * the person's saved choice, else Package (the default, B-4).
+ */
+function groupByOf(param: string | null, saved: ReviewGroupBy): ReviewGroupBy {
+  return isReviewGroupBy(param) ? param : saved;
+}
 
 export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
   const searchParams = useSearchParams();
@@ -105,6 +123,8 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
   const filter = reviewFilterOf(searchParams.get("type"));
   const focusId = searchParams.get("focus");
   const sessionId = reviewSessionOf(searchParams.get("session"));
+  const reviewPrefs = useReviewPreferences();
+  const groupBy = groupByOf(searchParams.get("group"), reviewPrefs.groupBy);
   const utils = trpc.useUtils();
 
   // The pod narrows by session itself (`signals.list`'s session lens, the
@@ -297,6 +317,40 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
     });
   }
 
+  // ── "Always for this agent" (B-3): a governance rule, human door only ─────
+  const [alwaysFor, setAlwaysFor] = useState<RowGroup | null>(null);
+  const createRule = trpc.governanceRules.create.useMutation();
+  const alwaysRule = alwaysFor ? alwaysRuleOf(alwaysFor) : null;
+  async function confirmAlways() {
+    if (!alwaysRule || !alwaysFor) return;
+    try {
+      await createRule.mutateAsync(
+        // The shared draft IS the door's input (AlwaysApproveMenu casts alike).
+        alwaysRule as Parameters<typeof createRule.mutateAsync>[0]
+      );
+      addToast({
+        title: `${alwaysFor.title ?? "This agent"} may take hand-offs`,
+        description:
+          "From now on they apply without asking. Revoke it in Settings › Review.",
+        color: "success",
+      });
+      setAlwaysFor(null);
+    } catch (err) {
+      if (err instanceof TRPCClientError && redirectToLoginIfUnauthorized(err))
+        return;
+      addToast({
+        title: "The rule was not created",
+        description: err instanceof Error ? err.message : undefined,
+        color: "danger",
+      });
+    }
+  }
+
+  const suggestion =
+    groupBy === "package" && filter === "all"
+      ? bookkeepingSuggestion(visible)
+      : null;
+
   const selectable = visible.some((r) => r.batchIds);
   const busy = batchApprove.isPending || batchReject.isPending;
   // An ask whose door is in the desktop app: the install hatch, once, below.
@@ -317,9 +371,74 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
 
   const activeKey = open ? detailKey(open.detail) : null;
 
+  // The one onboarding step (B-4): once, to a person with items waiting who
+  // never chose — never over a link that names a session, view or decision.
+  if (
+    showReviewOnboarding({
+      prefsLoaded: !reviewPrefs.isLoading,
+      prefsFailed: reviewPrefs.isError,
+      hasSavedChoice: reviewPrefs.saved !== null,
+      waiting: rows.length,
+      narrowed:
+        !!sessionId ||
+        !!focusId ||
+        filter !== "all" ||
+        searchParams.get("group") !== null,
+    })
+  ) {
+    return (
+      <PageShell>
+        <ReviewOnboarding
+          rows={rows}
+          saving={reviewPrefs.isSaving}
+          onChoose={(g) =>
+            void reviewPrefs.save({ groupBy: g }).catch(() => {})
+          }
+        />
+      </PageShell>
+    );
+  }
+
   return (
     <PageShell>
-      <PageHeader title={TITLE} description={DESCRIPTION} />
+      <PageHeader
+        title={TITLE}
+        description={DESCRIPTION}
+        actions={
+          filter !== "history" && (
+            <>
+              <span className="text-[12px] font-medium text-foreground/65">
+                Group by
+              </span>
+              <FilterChips
+                ariaLabel="Group by"
+                className=""
+                active={groupBy}
+                chips={REVIEW_GROUP_BYS.map((g) => ({
+                  key: g,
+                  label: resolveReviewGroupByLabel(g),
+                }))}
+                onSelect={(g) => {
+                  // A choice made here is remembered; the link's view is done.
+                  reviewPrefs.setGroupBy(g);
+                  replaceParams((params) => params.delete("group"));
+                }}
+              />
+              <Button
+                as="a"
+                href={navHref("settings")}
+                size="sm"
+                variant="flat"
+                startContent={
+                  <SlidersHorizontal className="h-3.5 w-3.5" aria-hidden />
+                }
+              >
+                Review settings
+              </Button>
+            </>
+          )
+        }
+      />
 
       <div
         className={
@@ -343,15 +462,34 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
           <FilterChips
             param="type"
             defaultKey="all"
-            active={filter}
+            active={filter === "history" ? "history" : "all"}
             chips={CHIPS.map((c) => ({
               ...c,
               count:
-                c.key === "history" || !signals.data
-                  ? undefined
-                  : counts[c.key],
+                c.key === "history" || !signals.data ? undefined : counts.all,
             }))}
           />
+
+          {suggestion && (
+            <Alert
+              color="success"
+              variant="flat"
+              className="mb-3"
+              title="Suggestion"
+              description={`${suggestion.count} items are agents keeping notes on their own ${suggestion.sessions === 1 ? "session" : `${suggestion.sessions} sessions`}. Keep them all as one?`}
+              endContent={
+                <Button
+                  size="sm"
+                  color="success"
+                  variant="flat"
+                  isDisabled={busy}
+                  onPress={() => void approveRows(suggestion.rows)}
+                >
+                  Keep all {suggestion.count}
+                </Button>
+              }
+            />
+          )}
 
           {batch.rows.length >= 2 && (
             <div
@@ -422,59 +560,89 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
             </Alert>
           )}
 
-          <section className="divide-y divide-foreground/[0.05] rounded-lg bg-foreground/[0.02] ring-1 ring-inset ring-foreground/10">
-            {filter === "history" ? (
-              <ReviewHistory
-                sessionId={sessionId}
-                onOpen={(proposalId, title) =>
-                  setOpen({ detail: { kind: "proposal", proposalId }, title })
-                }
-              />
-            ) : signals.isLoading ? (
-              <ResourceRowSkeleton count={5} />
-            ) : signals.isError ? (
-              <ResourceRowError
-                message="Couldn't load what is waiting for you."
-                onRetry={() => void signals.refetch()}
-              />
-            ) : visible.length === 0 ? (
-              <ResourceRowEmpty
-                message={
-                  // "Nothing is waiting" would be false over a fold that
-                  // holds rows: nothing NEW is, the rest wait below.
-                  view.reviewLater.length > 0
-                    ? FATE_COPY.nothingNewWaiting
-                    : sessionId
-                      ? "Nothing from this session waits for you."
-                      : filter === "all"
-                        ? "Nothing is waiting on you."
-                        : "Nothing waiting here."
-                }
-              />
-            ) : (
-              visible.map((row) => (
-                <ReviewListRow
-                  key={row.key}
-                  row={row}
-                  active={
-                    activeKey !== null &&
-                    row.detail !== null &&
-                    row.detail.kind !== "open" &&
-                    detailKey(row.detail) === activeKey
+          {filter !== "history" && visible.length > 0 ? (
+            <ReviewGroups
+              rows={visible}
+              groupBy={groupBy}
+              layoutOf={reviewPrefs.layoutOf}
+              onLayout={reviewPrefs.setLayout}
+              actions={{
+                renderRow: (row, opts) => (
+                  <ReviewListRow
+                    key={row.key}
+                    row={row}
+                    showPackage={opts?.showPackage}
+                    active={
+                      activeKey !== null &&
+                      row.detail !== null &&
+                      row.detail.kind !== "open" &&
+                      detailKey(row.detail) === activeKey
+                    }
+                    selectable={selectable}
+                    selected={selected.has(row.key)}
+                    onToggle={() => toggle(row.key)}
+                    onOpen={() => {
+                      const opened = openOf(row);
+                      if (opened) setOpen(opened);
+                    }}
+                    onApprove={() => void approveRows([row])}
+                    approving={busy}
+                  />
+                ),
+                open: (row) => {
+                  const opened = openOf(row);
+                  if (opened) setOpen(opened);
+                },
+                keep: (picked) => void approveRows(picked),
+                busy,
+                renderInline: (row) => {
+                  const opened = openOf(row);
+                  return opened ? (
+                    <ReviewInline
+                      open={opened}
+                      viewer={viewer}
+                      onClose={refresh}
+                      liveAsk={null}
+                      onAskSettled={refresh}
+                    />
+                  ) : null;
+                },
+                alwaysForAgent: setAlwaysFor,
+              }}
+            />
+          ) : (
+            <section className="divide-y divide-foreground/[0.05] rounded-lg bg-foreground/[0.02] ring-1 ring-inset ring-foreground/10">
+              {filter === "history" ? (
+                <ReviewHistory
+                  sessionId={sessionId}
+                  onOpen={(proposalId, title) =>
+                    setOpen({ detail: { kind: "proposal", proposalId }, title })
                   }
-                  selectable={selectable}
-                  selected={selected.has(row.key)}
-                  onToggle={() => toggle(row.key)}
-                  onOpen={() => {
-                    const opened = openOf(row);
-                    if (opened) setOpen(opened);
-                  }}
-                  onApprove={() => void approveRows([row])}
-                  approving={busy}
                 />
-              ))
-            )}
-          </section>
+              ) : signals.isLoading ? (
+                <ResourceRowSkeleton count={5} />
+              ) : signals.isError ? (
+                <ResourceRowError
+                  message="Couldn't load what is waiting for you."
+                  onRetry={() => void signals.refetch()}
+                />
+              ) : (
+                <ResourceRowEmpty
+                  message={
+                    // "Nothing is waiting" would be false over a fold that
+                    // holds rows: nothing NEW is, the rest wait below.
+                    view.reviewLater.length > 0
+                      ? FATE_COPY.nothingNewWaiting
+                      : sessionId
+                        ? "Nothing from this session waits for you."
+                        : filter === "all"
+                          ? "Nothing is waiting on you."
+                          : "Nothing waiting here."
+                  }
+                />
+              )}
+            </section>
+          )}
 
           {view.reviewLater.length > 0 && (
             <div className="mt-3">
@@ -566,6 +734,16 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
       )}
 
       <ConfirmModal
+        isOpen={alwaysFor !== null}
+        onClose={() => setAlwaysFor(null)}
+        onConfirm={() => void confirmAlways()}
+        title={`Always let ${alwaysFor?.title ?? "this agent"} take hand-offs?`}
+        consequence="From now on, when this agent hands a session to an agent, it applies without asking you. It never covers deletes or access. You can revoke it in Settings › Review."
+        confirmLabel="Always allow"
+        isPending={createRule.isPending}
+      />
+
+      <ConfirmModal
         isOpen={rejectOpen}
         onClose={() => setRejectOpen(false)}
         onConfirm={() => void rejectRows(batch.rows, rejectReason.trim())}
@@ -586,6 +764,13 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
       </ConfirmModal>
     </PageShell>
   );
+}
+
+/** "Always for this agent" over a hand-off block: the one rule (B-3). */
+function alwaysRuleOf(group: RowGroup) {
+  return group.id
+    ? handOffRuleFor(group.id, group.rows.flatMap(reviewRowMembers)[0])
+    : null;
 }
 
 /** What a row opens beside the list, or null when its door leads elsewhere. */
@@ -612,156 +797,4 @@ function detailKey(detail: Exclude<ReviewDetail, { kind: "open" }>): string {
     case "app-request":
       return `app-request:${detail.requestId}`;
   }
-}
-
-/**
- * An ask's "Review" when its door leads out of this page. On a phone a door
- * the mobile app cannot open becomes its web page, or no button — the line
- * beneath the list says why.
- */
-function DoorButton({ exit }: { exit: Exit }) {
-  const placed = usePlacedExit(exit);
-  const open = useAppOpenAttempt(placed);
-  const href = rowHref(placed);
-  if (href === null) return null;
-  return (
-    <>
-      <Button
-        as="a"
-        href={href}
-        {...externalProps(href)}
-        onPress={open.onOpen}
-        size="sm"
-        variant="flat"
-        radius="md"
-        endContent={
-          placed.href !== null && placed.isDesktopLink ? (
-            <ArrowUpRight className="h-3 w-3" strokeWidth={1.75} aria-hidden />
-          ) : undefined
-        }
-      >
-        Review
-      </Button>
-      {open.offer}
-    </>
-  );
-}
-
-/** "Agent · Claude · Synap · 3 grouped · Expires in 20m · 2h ago" */
-function secondaryLine(row: ReviewRow): string {
-  return [
-    kindLabel(row.nounKind),
-    row.who,
-    row.where,
-    row.reason,
-    row.count > 1 ? `${row.count} grouped` : null,
-    lensRowExpiry(row)?.label ?? null,
-    formatRelative(row.occurredAt, { empty: "" }),
-  ]
-    .filter(Boolean)
-    .join(" · ");
-}
-
-function ReviewListRow({
-  row,
-  active,
-  selectable,
-  selected,
-  onToggle,
-  onOpen,
-  onApprove,
-  approving,
-}: {
-  row: ReviewRow;
-  /** Its decision is the one open beside the list. */
-  active: boolean;
-  selectable: boolean;
-  selected: boolean;
-  onToggle: () => void;
-  onOpen: () => void;
-  onApprove: () => void;
-  approving: boolean;
-}) {
-  const exit = row.detail?.kind === "open" ? exitOf(row.detail) : null;
-  const opensHere = row.detail !== null && row.detail.kind !== "open";
-  const isAsk = row.detail?.kind === "ask";
-  const actions = (
-    <div className="flex items-center gap-1.5">
-      {row.inlineApprove && (
-        <Button
-          size="sm"
-          variant="light"
-          radius="md"
-          isDisabled={approving}
-          onPress={onApprove}
-          aria-label={`Approve ${row.title}`}
-        >
-          Approve
-        </Button>
-      )}
-      {opensHere && (
-        <Button
-          size="sm"
-          variant="flat"
-          radius="md"
-          onPress={onOpen}
-          startContent={
-            isAsk ? (
-              <MessageSquare className="h-3.5 w-3.5" aria-hidden />
-            ) : undefined
-          }
-        >
-          {isAsk ? "Answer" : "Review"}
-        </Button>
-      )}
-      {exit && <DoorButton exit={exit} />}
-    </div>
-  );
-  return (
-    <div
-      data-row-id={row.key}
-      aria-current={active ? "true" : undefined}
-      className={[
-        "flex items-center",
-        selected || active ? "bg-primary/[0.06]" : "",
-      ].join(" ")}
-    >
-      {selectable && (
-        <div className="flex w-9 shrink-0 justify-center">
-          {row.batchIds ? (
-            <Checkbox
-              size="sm"
-              isSelected={selected}
-              onValueChange={onToggle}
-              aria-label={`Select ${row.title}`}
-            />
-          ) : row.group === "access" ? (
-            <span title="Access requests are reviewed one at a time">
-              <Lock
-                className="h-3.5 w-3.5 text-foreground/40"
-                aria-label="Access requests are reviewed one at a time"
-              />
-            </span>
-          ) : isAsk ? (
-            <span title="Questions are answered one at a time">
-              <MessageSquare
-                className="h-3.5 w-3.5 text-foreground/40"
-                aria-label="Questions are answered one at a time"
-              />
-            </span>
-          ) : null}
-        </div>
-      )}
-      <div className="min-w-0 flex-1">
-        <ResourceRow
-          Icon={kindIcon(row.nounKind)}
-          primary={row.title}
-          secondary={secondaryLine(row)}
-          wrap
-          onSelect={opensHere ? onOpen : undefined}
-          actions={actions}
-        />
-      </div>
-    </div>
-  );
 }
