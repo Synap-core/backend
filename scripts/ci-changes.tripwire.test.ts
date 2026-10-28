@@ -11,10 +11,13 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 // @ts-expect-error — plain ESM script, no declarations
 import {
+  QUEUE_REUSE_CHECKS,
+  TESTED_STEP,
   decide,
   isDocsOnly,
   isImageNeutral,
   queuePrNumber,
+  reusableRun,
   suitesPassed,
 } from "./ci-changes.mjs";
 
@@ -171,6 +174,159 @@ describe("ci-changes: every check runs unless a narrow match says otherwise", ()
       "packages/api/src/a.test.ts",
       "packages/jobs/src/b.test.ts",
     ]);
+  });
+});
+
+// Same tree: a queue entry whose tree is the tree its PR's all-green run
+// tested re-runs nothing. Each row rules out a looser rule: reuse on a
+// different tree (main moved), on a run where a required check was skipped
+// (GitHub counts that green), or on checks gathered from two runs.
+describe("ci-changes: a same-tree queue entry reuses its PR's all-green run", () => {
+  const T = "a".repeat(40);
+  const U = "b".repeat(40);
+  const url = (id: number) =>
+    `https://github.com/Synap-core/backend/actions/runs/${id}/job/1`;
+  const check = (
+    name: string,
+    conclusion: string | null = "success",
+    runId = 40776509345,
+    status = "completed"
+  ) => ({ name, status, conclusion, details_url: url(runId) });
+  const allGreen = () => QUEUE_REUSE_CHECKS.map((n: string) => check(n));
+  const queued = (reuse: unknown, suitesPassed = true) =>
+    decide({
+      event: "merge_group",
+      headRef: "",
+      draft: false,
+      files: null,
+      siblingTests: none,
+      queue: { pr: 471, headSha: "bc328a622", suitesPassed, reuse },
+    });
+
+  it("all 4 required checks success on one run: that run", () => {
+    expect(reusableRun(allGreen())).toBe(40776509345);
+  });
+
+  it.each([
+    ["a skipped suite (a draft run)", ["Full suite", "skipped"]],
+    ["a neutral check", ["Reference docs are current", "neutral"]],
+    ["a red Release gate", ["Release gate", "failure"]],
+    ["a check still running", ["API e2e", null]],
+  ])("%s: no run to reuse", (_l, [name, conclusion]) => {
+    const runs = allGreen().map((r: { name: string }) =>
+      r.name === name
+        ? check(
+            name,
+            conclusion,
+            40776509345,
+            conclusion ? "completed" : "in_progress"
+          )
+        : r
+    );
+    expect(reusableRun(runs)).toBeNull();
+  });
+
+  it("a missing check, two runs, or no run id: no run to reuse", () => {
+    expect(reusableRun(allGreen().slice(1))).toBeNull();
+    const two = allGreen();
+    two[0] = check(two[0].name, "success", 1);
+    expect(reusableRun(two)).toBeNull();
+    expect(
+      reusableRun(allGreen().map((r: object) => ({ ...r, details_url: "" })))
+    ).toBeNull();
+    expect(reusableRun(null as never)).toBeNull();
+  });
+
+  it("identical tree on an all-green run: nothing re-runs, and it says which run", () => {
+    const d = queued({
+      runId: 40776509345,
+      testedCommit: "0a42579a9" + "0".repeat(31),
+      testedTree: T,
+      queueTree: T,
+    });
+    expect([d.gate, d.image, d.suites, d.reuse]).toEqual([
+      false,
+      false,
+      false,
+      true,
+    ]);
+    expect(d.reason).toContain("40776509345");
+    expect(d.reason).toContain("#471");
+  });
+
+  it("a different tree falls through to the light queue run (Release gate)", () => {
+    const d = queued({
+      runId: 1,
+      testedCommit: "c",
+      testedTree: T,
+      queueTree: U,
+    });
+    expect(d.reuse).not.toBe(true);
+    expect([d.gate, d.suites]).toEqual([true, false]);
+  });
+
+  it("identical tree but no all-green run (a skipped suite): no reuse", () => {
+    // reuseEvidence() returns null when reusableRun() finds no run.
+    const d = queued(null, false);
+    expect(d.reuse).not.toBe(true);
+    expect([d.gate, d.suites]).toEqual([true, true]);
+  });
+
+  it("a malformed or missing tree never matches", () => {
+    for (const reuse of [
+      { runId: 1, testedTree: undefined, queueTree: undefined },
+      { runId: 1, testedTree: "", queueTree: "" },
+      { runId: null, testedTree: T, queueTree: T },
+    ])
+      expect(queued(reuse).reuse, JSON.stringify(reuse)).not.toBe(true);
+  });
+
+  it("only a merge-queue run reuses", () => {
+    const d = decide({
+      event: "push",
+      headRef: "",
+      draft: false,
+      files: null,
+      siblingTests: none,
+      queue: {
+        pr: 471,
+        headSha: "x",
+        suitesPassed: true,
+        reuse: { runId: 1, testedTree: T, queueTree: T },
+      },
+    });
+    expect([d.gate, d.suites, d.reuse]).toEqual([true, true, undefined]);
+  });
+
+  it("the reused checks are the ruleset's required checks", () => {
+    const sh = readFileSync(
+      join(REPO, "scripts/apply-main-protection.sh"),
+      "utf8"
+    );
+    const required = [
+      ...(/^REQUIRED_CHECKS=\((.+)\)$/m.exec(sh)?.[1] ?? "").matchAll(
+        /"([^"]+)"/g
+      ),
+    ].map((m) => m[1]);
+    expect(required.length).toBe(4);
+    expect([...QUEUE_REUSE_CHECKS].sort()).toEqual([...required].sort());
+  });
+
+  it("every run names the commit it tested, in the step the queue reads", () => {
+    const ci = readFileSync(join(REPO, ".github/workflows/ci.yml"), "utf8");
+    const changes = ci.slice(
+      ci.indexOf("\n  changes:\n"),
+      ci.indexOf("\n  preflight:\n")
+    );
+    expect(changes).toContain("- name: Tested commit ${{ github.sha }}");
+    expect(changes).toContain("reuse: ${{ steps.decide.outputs.reuse }}");
+    expect(changes).toContain(
+      "QUEUE_HEAD_SHA: ${{ github.event.merge_group.head_sha }}"
+    );
+    expect(changes).toMatch(/^ {6}actions: read$/m);
+    // the rendered name parses
+    expect(TESTED_STEP.exec(`Tested commit ${T}`)?.[1]).toBe(T);
+    expect(TESTED_STEP.exec("Tested commit ${{ github.sha }}")).toBeNull();
   });
 });
 

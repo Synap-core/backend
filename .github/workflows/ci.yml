@@ -51,7 +51,9 @@ permissions:
 # main and release branches always run everything. A merge queue entry runs the
 # Release gate and takes the Full suite + API e2e from the PR's own run, only
 # when both concluded `success` on the PR's head (founder 2026-10-28, "light
-# queue run"); otherwise it runs everything. FAIL-SAFE:
+# queue run"); otherwise it runs everything. An entry whose TREE is the tree
+# its PR's run tested, with all 4 required checks `success` on that run,
+# re-runs nothing (`reuse`, scripts/ci-changes.mjs "SAME TREE"). FAIL-SAFE:
 # every job also runs when `changes` itself fails (`needs.changes.result !=
 # 'success'`), and a job skipped by its `if:` reports success to the required
 # check, so a skip must only ever come from a positive decision.
@@ -75,11 +77,13 @@ jobs:
     name: What changed
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    # A merge queue entry reads its PR's head and that head's check runs.
+    # A merge queue entry reads its PR's head, that head's check runs, and the
+    # jobs of the PR run it may reuse (actions: read).
     permissions:
       contents: read
       pull-requests: read
       checks: read
+      actions: read
     outputs:
       gate: ${{ steps.decide.outputs.gate }}
       image: ${{ steps.decide.outputs.image }}
@@ -88,7 +92,15 @@ jobs:
       negctl_tests: ${{ steps.decide.outputs.negctl_tests }}
       hold: ${{ steps.decide.outputs.hold }}
       dependents: ${{ steps.decide.outputs.dependents }}
+      reuse: ${{ steps.decide.outputs.reuse }}
     steps:
+      # The commit this run tests (for a pull request, GitHub's test merge),
+      # in a step NAME: the jobs API returns step names, so a merge-queue
+      # entry can compare its tree with the tree this run tested and reuse an
+      # all-green verdict (scripts/ci-changes.mjs, "SAME TREE").
+      - name: Tested commit ${{ github.sha }}
+        run: echo "this run tests ${{ github.sha }}"
+
       - name: Checkout Repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -105,6 +117,7 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           QUEUE_HEAD_REF: ${{ github.event.merge_group.head_ref }}
+          QUEUE_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
           REPO: ${{ github.repository }}
           GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/ci-changes.mjs
@@ -538,7 +551,7 @@ jobs:
   # The public doc site consumes them, so a tool, event or route changed without
   # regenerating would publish a wrong reference. This job regenerates in memory
   # and fails when a committed file differs. It runs for EVERY change (docs-only
-  # too: no `changes` gate): the OpenAPI spec and the tool list are read from the
+  # too), except a same-tree merge-queue entry: the OpenAPI spec and the tool list are read from the
   # imported API, which depends on most of packages/. Until 2026-10-28 it was
   # its own workflow (reference-docs.yml); it moved here to wait for Preflight.
   # Fix when red: build the workspace dependencies (step below), then
@@ -546,8 +559,10 @@ jobs:
   # and commit docs/reference/.
   reference-docs:
     name: Reference docs are current
-    needs: preflight
-    if: ${{ !cancelled() }}
+    needs: [changes, preflight]
+    # Skipped only for a merge-queue entry that reuses its PR's all-green run
+    # on the same tree (`reuse`); a failed `changes` leaves reuse empty: runs.
+    if: ${{ !cancelled() && (needs.preflight.outputs.hold == 'true' || needs.changes.outputs.reuse != 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
