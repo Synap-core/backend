@@ -2483,7 +2483,12 @@ const captureBaseRouter = router({
               const searchResult = await searchService.searchCollection(
                 "entities",
                 entity.title,
-                { userId, workspaceId: workspaceId ?? undefined, limit: 3 }
+                {
+                  userId,
+                  workspaceId: workspaceId ?? undefined,
+                  limit: 3,
+                  titleOnly: true,
+                }
               );
 
               // Score by honest title similarity, not Typesense's raw

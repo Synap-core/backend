@@ -15,6 +15,7 @@ import {
   handleSearchIndex,
   handleBulkIndex,
   handleFullReindex,
+  enqueueSearchReindexIfBehind,
 } from "./search-worker.js";
 import { handleWorkspaceInit } from "./workspace-init.js";
 import { handleCrossChannelNotify } from "./cross-channel-notifier.js";
@@ -594,6 +595,13 @@ export async function registerAllWorkers(): Promise<void> {
   try {
     await collectionService.initializeCollections();
     logger.info("Typesense collections initialized");
+    // An indexer change reaches existing rows only through a full reindex:
+    // queue it once when this pod's index predates the indexer.
+    try {
+      await enqueueSearchReindexIfBehind(boss);
+    } catch (err) {
+      logger.warn({ err }, "Search index version check failed (non-fatal)");
+    }
   } catch (err) {
     logger.warn(
       { err },
