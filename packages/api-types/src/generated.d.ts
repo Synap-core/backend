@@ -8372,7 +8372,8 @@ export interface ProposalReviewChange {
 	label: string;
 	operation: "create" | "delete" | "set" | "update";
 	/**
-	 * The value before this change, on UPDATE rows only.
+	 * The value before this change: on an UPDATE row, the value it replaces;
+	 * on a DELETE row, the value it removes (a delete row has no `after`).
 	 *
 	 *   - `null`      — RECORDED empty: the propose-time snapshot read this
 	 *     field and it had no value ("was empty");
