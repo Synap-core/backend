@@ -121,15 +121,11 @@ export const errorCatchingMiddleware = t.middleware(async ({ next }) => {
       throw mapDbErrorToTRPC(error);
     }
 
-    // Truly unexpected — log will happen in errorFormatter
+    // Truly unexpected — the errorFormatter (`init-trpc.ts`) logs it and, in
+    // production, replaces this message before it leaves the process.
     throw new TRPCError({
       code: "INTERNAL_SERVER_ERROR",
-      message:
-        process.env.NODE_ENV !== "production"
-          ? error instanceof Error
-            ? error.message
-            : String(error)
-          : "An unexpected error occurred",
+      message: error instanceof Error ? error.message : String(error),
       cause: error,
     });
   }
