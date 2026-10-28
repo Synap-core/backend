@@ -1,0 +1,13 @@
+# The slice of the Synap root workspace (the untracked pnpm-workspace.yaml next to
+# the repos on a developer machine and on the devbox) that the "Dependent repos"
+# job in ci.yml needs: browser, relay-app, the app-bases packages and the three
+# backend packages they link. Mirror of the root file; keep the member lists equal.
+packages:
+  - "browser"
+  - "synap-app/packages/*"
+  - "synap-app/apps/*"
+  - "synap-backend/packages/types"
+  - "synap-backend/packages/api-types"
+  - "synap-backend/packages/markdown-core"
+  - "synap-control-plane-api/packages/pricing"
+  - "relay-app"
