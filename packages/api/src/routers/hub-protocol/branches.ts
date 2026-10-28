@@ -222,9 +222,10 @@ export const branchesRouter = router({
         // nothing. The payload already matches field-for-field (`branchId`,
         // `summary`), so this is a rename, not new behaviour.
         //
-        // This pairing is guaranteed to be exercised: merge is on the rung-2.5
-        // DESTRUCTIVE floor, which no rung can widen, so it ALWAYS proposes —
-        // as the comment above already says.
+        // This pairing is guaranteed to be exercised: `merge_branch` is on the
+        // rung-2.5 DESTRUCTIVE floor by its `merge` token (`isDestructiveAction`),
+        // which no rung can widen, so it ALWAYS proposes — as the comment above
+        // already says (`destructive-door-names.test.ts` pins it).
         action: "merge_branch",
         source: "intelligence",
         reasoning:

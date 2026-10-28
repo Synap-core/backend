@@ -259,6 +259,24 @@ export const DESTRUCTIVE_ACTIONS: readonly string[] = [
 ];
 
 /**
+ * Is `action` destructive (the rung-2.5 floor)? A door files either the bare
+ * verb (`delete`) or a compound that names what it acts on (`merge_branch`,
+ * renamed from `merge` so its executor key matched): the action is destructive
+ * when ANY of its `_`/`.`-separated tokens is a {@link DESTRUCTIVE_ACTIONS}
+ * verb. An exact `includes(action)` let `channel.merge_branch` out of every
+ * destructive check (rungs 2.5, 3 and 6, `findUnsafeAutoApproveEntries`), so
+ * a rule, an `autoApproveFor` glob or an agent-owned space executed it.
+ * Every floor and validator reads THIS predicate, never the list directly;
+ * `destructive-door-names.test.ts` runs it over every governed door.
+ */
+export function isDestructiveAction(action: string): boolean {
+  return action
+    .toLowerCase()
+    .split(/[_.]/)
+    .some((token) => DESTRUCTIVE_ACTIONS.includes(token));
+}
+
+/**
  * The ONE SOURCE of the default daily auto-execute write ceiling (rung 2.56 —
  * governance_ceilings axis `daily_write_count`): `null`, NO CEILING. Consulted
  * by the resolver (`resolveDailyWriteCeiling` in @synap/database) when NO
@@ -710,7 +728,7 @@ type DirectProposalEventKey = DirectProposalDoor extends infer K
  * it — so no rung below may ever resolve it to "execute".
  *
  * WHY ITS OWN LIST, not `DESTRUCTIVE_ACTIONS`. That floor (rung 2.5) matches the
- * BARE ACTION VERB (`DESTRUCTIVE_ACTIONS.includes(action)`). Adding `"execute"`
+ * ACTION VERB (`isDestructiveAction(action)`). Adding `"execute"`
  * there would also floor `automation.execute` and `capability.execute` — two
  * real, high-traffic gate doors (`GATE_WRITE_DOORS["automation/execute"]`;
  * `guardProducerEffect` in packages/jobs) — forcing every automation run to a
@@ -1069,7 +1087,7 @@ export function findUnsafeAutoApproveEntries(
     const action = entry.includes(".")
       ? entry.slice(entry.lastIndexOf(".") + 1)
       : entry;
-    return (DESTRUCTIVE_ACTIONS as readonly string[]).includes(action);
+    return isDestructiveAction(action);
   });
 }
 
@@ -1774,7 +1792,7 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
   // "Crazy" mode. Default (absent/false) → always propose.
   // TODO: wire to a first-class Crazy mode instead of a raw boolean.
   if (
-    DESTRUCTIVE_ACTIONS.includes(action) &&
+    isDestructiveAction(action) &&
     input.allowDestructiveAutoApprove !== true
   ) {
     return {
@@ -2003,7 +2021,7 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
   // Ownership is the cleanest trust signal: the agent's memory workspace is its domain.
   // Non-destructive writes execute directly; destructive still propose.
   if (input.isAgentOwnedWorkspace === true) {
-    if (DESTRUCTIVE_ACTIONS.includes(action)) {
+    if (isDestructiveAction(action)) {
       return {
         verdict: "propose",
         reason: PROPOSE_REASON.AGENT_OWNED_DESTRUCTIVE,
@@ -2038,10 +2056,7 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
   // 6. agent-owned workspace mode + destructive → propose.
   // (Distinct from step 3: covers workspaces with governanceMode="agent-owned"
   // where the acting agent is NOT necessarily the owner.)
-  if (
-    input.governanceMode === "agent-owned" &&
-    DESTRUCTIVE_ACTIONS.includes(action)
-  ) {
+  if (input.governanceMode === "agent-owned" && isDestructiveAction(action)) {
     return {
       verdict: "propose",
       reason: PROPOSE_REASON.AGENT_OWNED_DESTRUCTIVE,
@@ -2725,7 +2740,7 @@ export type GovernedWritePair<K extends GateWriteDoor = GateWriteDoor> =
  * work as an opaque `data.operations` composite batch. Every governance floor
  * is a pure function of exactly those two literals — rung 2
  * (`ADMIN_ACTIONS.includes(eventKey)`, strict equality, no globbing), rung 2.5
- * (`DESTRUCTIVE_ACTIONS.includes(action)`), rung 2.6 (by-kind) — so the floors
+ * (`isDestructiveAction(action)`), rung 2.6 (by-kind) — so the floors
  * were evaluating a DECLARATION, not the write. It was safe only by
  * coincidence: capture can emit `create_entity` / `create_relation` and nothing
  * else, so `entity`/`create` happened to be true. The instant a producer emits
@@ -2860,7 +2875,7 @@ function gatePairFloorRank(
 ): number {
   const eventKey = `${pair.subjectType}.${pair.action}`;
   if (ADMIN_ACTIONS.includes(eventKey)) return 3;
-  if (DESTRUCTIVE_ACTIONS.includes(pair.action)) return 2;
+  if (isDestructiveAction(pair.action)) return 2;
   // `isAutoApproved` is the SAME predicate rung 8 runs (it wraps
   // `matchesActionPattern`, so `entity.*` and `*.*` behave identically here and
   // there). Re-implementing the glob would be a second matcher that can drift

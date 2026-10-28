@@ -590,6 +590,9 @@ describe("isRemoval", () => {
     expect(isRemoval({ proposalType: "delete" })).toBe(true);
     expect(isRemoval({ proposalType: "archive" })).toBe(true);
     expect(isRemoval({ proposalType: "create" })).toBe(false);
+    // A compound destructive action (the branch-merge door files `merge_branch`).
+    expect(isRemoval({ proposalType: "merge_branch" })).toBe(true);
+    expect(isRemoval({ proposalType: "create_branch" })).toBe(false);
     expect(
       isRemoval({
         proposalType: "capability.run",

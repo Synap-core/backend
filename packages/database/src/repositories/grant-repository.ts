@@ -36,8 +36,20 @@ export interface AttachGrantInput {
   createdBy: string;
 }
 
-const emptyToNull = (v?: string[] | null) =>
-  v && v.length > 0 ? [...new Set(v)] : null;
+/**
+ * A pinning as stored: null/undefined = not narrowed on that axis. An EMPTY
+ * list is refused: stored as null it would mean "every space" while the grant
+ * grammar (`permits`) reads [] as "nowhere" — a narrowing to nothing must
+ * never widen to everything. The wire refuses it first (`GrantInputSchema`).
+ */
+const pinning = (field: string, v?: string[] | null) => {
+  if (v == null) return null;
+  if (v.length === 0)
+    throw new Error(
+      `A grant's ${field} cannot be empty: name at least one, or leave it unset`
+    );
+  return [...new Set(v)];
+};
 
 const isLive = (
   r: { revokedAt: Date | null; expiresAt: Date | null },
@@ -95,6 +107,11 @@ export class GrantRepository {
       throw new Error("attachMany attaches grants to ONE key");
     }
     for (const input of inputs) assertPermissions(input.permissions);
+    const pinned = inputs.map((input) => ({
+      workspaceIds: pinning("workspaceIds", input.workspaceIds),
+      projectIds: pinning("projectIds", input.projectIds),
+      entityIds: pinning("entityIds", input.entityIds),
+    }));
     return this.db.transaction(async (tx) => {
       await tx
         .update(grants)
@@ -103,14 +120,12 @@ export class GrantRepository {
       return tx
         .insert(grants)
         .values(
-          inputs.map((input) => ({
+          inputs.map((input, i) => ({
             apiKeyId: input.apiKeyId,
             principalUserId: input.principalUserId,
             onBehalfOf: input.onBehalfOf,
             permissions: [...new Set(input.permissions.map((p) => p.trim()))],
-            workspaceIds: emptyToNull(input.workspaceIds),
-            projectIds: emptyToNull(input.projectIds),
-            entityIds: emptyToNull(input.entityIds),
+            ...pinned[i],
             expiresAt: input.expiresAt,
             label: input.label ?? null,
             clientId: input.clientId ?? null,

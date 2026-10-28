@@ -28,7 +28,10 @@
  */
 
 import { proposalSubjectKind } from "../../../proposal/[id]/proposal-subject-kind";
-import { DESTRUCTIVE_ACTIONS } from "@synap/governance-policy";
+import {
+  DESTRUCTIVE_ACTIONS,
+  isDestructiveAction,
+} from "@synap/governance-policy";
 import {
   lensRowOfNeedsYou,
   type LensDoor,
@@ -243,8 +246,10 @@ const REMOVAL_ACTIONS: ReadonlySet<string> = new Set([
 export function isRemoval(
   f: Pick<ProposalFacts, "proposalType" | "data">
 ): boolean {
-  const action = (token: string) =>
-    REMOVAL_ACTIONS.has(token.slice(token.lastIndexOf(".") + 1));
+  const action = (token: string) => {
+    const verb = token.slice(token.lastIndexOf(".") + 1);
+    return REMOVAL_ACTIONS.has(verb) || isDestructiveAction(verb);
+  };
   if (action(f.proposalType)) return true;
   const data = f.data as { verbId?: unknown } | null | undefined;
   return typeof data?.verbId === "string" && action(data.verbId);
