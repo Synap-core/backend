@@ -2506,6 +2506,11 @@
                     "minLength": 1,
                     "maxLength": 2000,
                     "description": "The command the agent will run on approval. DISCLOSURE ONLY — the pod never executes it."
+                  },
+                  "step": {
+                    "type": "string",
+                    "enum": ["push", "publish", "deploy"],
+                    "description": "What the approval lets ship: 'push' (to a protected branch), 'publish' (a package) or 'deploy'. It covers this step only. Optional so older callers keep filing; with none, a reader takes the step from `deployCommand`."
                   }
                 },
                 "required": [
