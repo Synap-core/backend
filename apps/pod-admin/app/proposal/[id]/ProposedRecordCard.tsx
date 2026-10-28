@@ -18,7 +18,7 @@ import { statusPillFor } from "../../(admin)/components/status-tone";
 import { openIn } from "../../../lib/open-in";
 import type { MediaRef } from "@synap-core/types/presentation";
 import { MediaView } from "../../_lib/media/media-view";
-import { ChangeLines } from "../../_lib/object/content/document-changes";
+import { TextDiff } from "../../_lib/object/content/document-changes";
 import { resolveObjectNounPlural } from "@synap-core/types/vocabulary";
 import type { PartEdge } from "./composite-parts-model";
 import type { RecordGroup } from "./record-groups";
@@ -124,7 +124,7 @@ function Value({ value }: { value: RecordValue }) {
     case "changes":
       return (
         <span className="flex w-full min-w-0 flex-col">
-          <ChangeLines lines={value.lines} />
+          <TextDiff change={value.change} code={value.code} />
         </span>
       );
     case "tags":

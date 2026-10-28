@@ -45,6 +45,7 @@ import {
 import {
   codeValue,
   graphRecords,
+  codeChanges,
   proseChanges,
   type ProposedRecord,
   type RecordField,
@@ -319,9 +320,13 @@ const DRAWERS = {
         // What it holds now (the pod reads it while pending): a short
         // instruction read whole becomes its changes; else before → after.
         const rewrite =
-          f.key === "body" && f.before !== undefined && !f.beforeTruncated
-            ? proseChanges(f.before, whole)
-            : null;
+          f.before === undefined || f.beforeTruncated
+            ? null
+            : f.key === "body"
+              ? proseChanges(f.before, whole)
+              : f.key === "code"
+                ? codeChanges(f.before, whole)
+                : null;
         const value =
           rewrite ??
           (typeof whole === "string"
