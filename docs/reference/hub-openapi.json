@@ -2566,6 +2566,7 @@
       "ExecuteCapabilityProposed": {
         "type": "object",
         "properties": {
+          "status": { "type": "string", "enum": ["proposed"] },
           "proposed": { "type": "boolean", "enum": [true] },
           "proposalId": { "type": "string" },
           "reviewUrl": { "type": "string" },
@@ -2574,7 +2575,13 @@
             "enum": ["applied", "proposed", "duplicate-ignored"]
           }
         },
-        "required": ["proposed", "proposalId", "reviewUrl", "ackState"]
+        "required": [
+          "status",
+          "proposed",
+          "proposalId",
+          "reviewUrl",
+          "ackState"
+        ]
       },
       "ExecuteCapabilityRequest": {
         "type": "object",
@@ -12355,6 +12362,10 @@
                               "type": "string",
                               "pattern": "^[a-z][a-z0-9_]{0,63}$"
                             },
+                            "inputMap": {
+                              "type": "object",
+                              "additionalProperties": {}
+                            },
                             "executionMode": {
                               "type": "string",
                               "enum": ["sync", "async"]
@@ -14848,7 +14859,7 @@
       "get": {
         "tags": ["Capabilities"],
         "summary": "List only actions an external AI can execute now",
-        "description": "Projects the shared capability registry into executable actions. Draft, disconnected, teaching-only, and catalog-only entries are omitted. Each action carries its real parameter schema, connection state, approval posture, and effective execution mode. Requires a workspace lens. Pass `intent` (a closed ABSTRACT_VERBS value) to keep only the actions whose verb declares that routing intent — the vendor-independent way to ask \"what can send a message?\". A verb that declares no intent is never matched (the vocabulary is closed; absence is never guessed).",
+        "description": "Projects the shared capability registry into executable actions. Draft, disconnected, teaching-only, and catalog-only entries are omitted. Each action carries its real parameter schema, connection state, approval posture, and effective execution mode. Requires a workspace lens. Pass `intent` (a closed ABSTRACT_VERBS value) to keep only the actions whose verb declares that routing intent — the vendor-independent way to ask \"what can send a message?\". A verb that declares no intent is never matched (the vocabulary is closed; absence is never guessed). A key the grant fence bounds (a pod app) must pass `intent`, needs `capability.<intent>.run` in that workspace, and gets that intent's actions in the pod's words: an opaque id, the verb's label, the tool, the account, and the ONE input the action accepts.",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -14897,47 +14908,88 @@
                     "actions": {
                       "type": "array",
                       "items": {
-                        "type": "object",
-                        "properties": {
-                          "skillId": { "type": "string" },
-                          "verbId": { "type": "string" },
-                          "label": { "type": "string" },
-                          "description": { "type": ["string", "null"] },
-                          "tool": { "type": ["string", "null"] },
-                          "connection": {
+                        "anyOf": [
+                          {
                             "type": "object",
                             "properties": {
-                              "required": { "type": "boolean", "enum": [true] },
-                              "state": {
-                                "type": "string",
-                                "enum": ["connected"]
+                              "skillId": { "type": "string" },
+                              "verbId": { "type": "string" },
+                              "label": { "type": "string" },
+                              "description": { "type": ["string", "null"] },
+                              "tool": { "type": ["string", "null"] },
+                              "connection": {
+                                "type": "object",
+                                "properties": {
+                                  "required": {
+                                    "type": "boolean",
+                                    "enum": [true]
+                                  },
+                                  "state": {
+                                    "type": "string",
+                                    "enum": ["connected"]
+                                  },
+                                  "provider": { "type": "string" }
+                                },
+                                "required": ["required", "state", "provider"]
                               },
-                              "provider": { "type": "string" }
+                              "governance": {
+                                "type": "string",
+                                "enum": ["auto", "propose"]
+                              },
+                              "enabled": { "type": "boolean", "enum": [true] },
+                              "executionMode": { "type": "string" },
+                              "kind": {
+                                "type": "string",
+                                "enum": ["read", "write", "action"]
+                              },
+                              "intent": { "type": "string" },
+                              "parameters": {
+                                "type": "object",
+                                "additionalProperties": {}
+                              }
                             },
-                            "required": ["required", "state", "provider"]
+                            "required": [
+                              "label",
+                              "tool",
+                              "governance",
+                              "enabled",
+                              "parameters"
+                            ]
                           },
-                          "governance": {
-                            "type": "string",
-                            "enum": ["auto", "propose"]
-                          },
-                          "enabled": { "type": "boolean", "enum": [true] },
-                          "executionMode": { "type": "string" },
-                          "kind": {
-                            "type": "string",
-                            "enum": ["read", "write", "action"]
-                          },
-                          "intent": { "type": "string" },
-                          "parameters": {
+                          {
                             "type": "object",
-                            "additionalProperties": {}
+                            "properties": {
+                              "id": { "type": "string" },
+                              "label": { "type": "string" },
+                              "tool": { "type": "string" },
+                              "connection": {
+                                "type": ["object", "null"],
+                                "properties": {
+                                  "provider": { "type": ["string", "null"] },
+                                  "account": { "type": ["string", "null"] }
+                                },
+                                "required": ["provider", "account"]
+                              },
+                              "governance": {
+                                "type": "string",
+                                "enum": ["auto", "propose"]
+                              },
+                              "intent": { "type": "string" },
+                              "input": {
+                                "type": "object",
+                                "additionalProperties": {}
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "label",
+                              "tool",
+                              "connection",
+                              "governance",
+                              "intent",
+                              "input"
+                            ]
                           }
-                        },
-                        "required": [
-                          "label",
-                          "tool",
-                          "governance",
-                          "enabled",
-                          "parameters"
                         ]
                       }
                     }
@@ -14978,7 +15030,7 @@
       "post": {
         "tags": ["Capabilities"],
         "summary": "Execute a registered capability (agnostic capability launcher)",
-        "description": "Resolves a capability verb (verbId = backing skill name) or a skillId to its skill, runs it through gateCapabilityExecution, and on `run` delegates to the IS sandbox executor. Returns 200 with the result (or a dry-run preview), 202 with a reviewable proposal when governance requires approval, 403 when denied. Requires hub-protocol.write scope.",
+        "description": "Resolves a capability verb (verbId = backing skill name) or a skillId to its skill, runs it through gateCapabilityExecution, and on `run` delegates to the IS sandbox executor. Returns 200 with the result (or a dry-run preview), 202 with a reviewable proposal when governance requires approval, 403 when denied. Requires hub-protocol.write scope. A key the grant fence bounds (a pod app) sends { workspaceId, intent, actionId, input, idempotencyKey? } instead: an action listed by GET /capabilities/actions, its input checked against that action's input schema, under `capability.<intent>.run`; an outward intent always files a proposal.",
         "security": [{ "bearerAuth": [] }],
         "requestBody": {
           "content": {
@@ -15036,6 +15088,14 @@
           },
           "424": {
             "description": "Failed dependency — a client-actionable connection failure (auth expired/absent, or a missing target). Body carries errorClass + providerRef so the caller can offer a reconnect path.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "429": {
+            "description": "A pod app asked for an outward intent too often (30 per hour per key and intent): `retryAfter` seconds.",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
