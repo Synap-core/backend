@@ -37,6 +37,7 @@ import { deriveSlotKeys, findSlotIndex } from "./slot-keys.js";
 import type { RoomQuestionSlotCheck } from "./room-question-slot-refusal.js";
 import {
   blockExpectedOutput,
+  type BlockExpectedOutputParams,
   type BlockExpectedOutputResult,
 } from "./block-output.js";
 
@@ -53,6 +54,12 @@ export async function fileRoomQuestionOnSlot(p: {
   question: string;
   /** The typed ask, already parsed (`AskSchema`); absent ⇒ free text. */
   ask?: SlotAsk;
+  /**
+   * What the answer unblocks, when the caller says it here; absent keeps the
+   * slot's declared line. One of the two is required (decision E): the post
+   * door checks it before posting (`checkRoomQuestionSlot`).
+   */
+  unblocks?: string;
   /** The posting agent, from the door's verified auth context. */
   agentUserId: string;
   /**
@@ -66,8 +73,7 @@ export async function fileRoomQuestionOnSlot(p: {
   if (!session) return { status: "no_session" };
   if (session.userId !== p.userId) return { status: "not_found" };
 
-  // Keep a slot's existing blocker class (a credential stays a credential);
-  // an agent-owned slot being asked about is a `decision` the person makes.
+  // The slot as stored: its blocker class is kept (`questionHandOver`).
   const [row] = await db
     .select({ expectedOutputs: focusSessions.expectedOutputs })
     .from(focusSessions)
@@ -85,24 +91,46 @@ export async function fileRoomQuestionOnSlot(p: {
     : [];
   const existing = slots[findSlotIndex(slots, p.slotLabel)];
 
-  const question = p.question.trim();
   return blockExpectedOutput({
     sessionId: session.id,
     userId: session.userId,
     expectedLabel: p.slotLabel,
+    ...questionHandOver(existing, p),
+    agentUserId: p.agentUserId,
+  });
+}
+
+/**
+ * What filing a question hands over. Keeps a slot's existing blocker class (a credential stays a
+ * credential); an agent-owned slot being asked about is a `decision` the
+ * person makes. Pure.
+ */
+function questionHandOver(
+  existing: ExpectedOutput | undefined,
+  p: { question?: string; ask?: SlotAsk; unblocks?: string }
+): Pick<
+  BlockExpectedOutputParams,
+  "blockedReason" | "why" | "ask" | "unblocks"
+> {
+  const question = p.question?.trim();
+  return {
     blockedReason:
       existing?.owner === "human" && existing.blockedReason
         ? existing.blockedReason
         : "decision",
-    why:
-      question.length > WHY_MAX
-        ? `${question.slice(0, WHY_MAX - 1)}…`
-        : question,
+    ...(question !== undefined
+      ? {
+          why:
+            question.length > WHY_MAX
+              ? `${question.slice(0, WHY_MAX - 1)}…`
+              : question,
+        }
+      : {}),
     // `undefined` keeps a stored ask (a plain question re-asked in words does
     // not erase the typed ask it is about); a passed ask replaces it.
     ...(p.ask ? { ask: p.ask } : {}),
-    agentUserId: p.agentUserId,
-  });
+    ...(p.unblocks ? { unblocks: p.unblocks } : {}),
+  };
 }
 
 /**
@@ -131,7 +159,9 @@ export async function checkRoomQuestionSlot(p: {
   const slots = Array.isArray(row?.expectedOutputs)
     ? (row.expectedOutputs as ExpectedOutput[])
     : [];
-  if (findSlotIndex(slots, p.slotLabel) !== -1) return { status: "ok" };
+  // WHAT IT UNBLOCKS (decision E) is ADVISED, never refused (rv-be-needs
+  // F1): the filing (`blockExpectedOutput`) stamps the default and says so.
+  if (slots[findSlotIndex(slots, p.slotLabel)]) return { status: "ok" };
   const keys = deriveSlotKeys(slots);
   return {
     status: "unknown_label",

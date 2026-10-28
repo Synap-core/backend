@@ -399,6 +399,7 @@ export const MCP_READ_TOOL_DOORS: Readonly<Record<string, FencedReadDoor>> = {
   synap_list_proposals: READS("proposal", "entity"),
   synap_get_proposal: READS("proposal", "entity"),
   synap_list_sessions: READS("session", "project"),
+  synap_needs_you: READS("session", "proposal", "channel", "entity"),
   // Same subjects as `GET /focus-sessions/graph` (GRANT_REST_GET_READS).
   synap_get_work_graph: READS(
     "session",

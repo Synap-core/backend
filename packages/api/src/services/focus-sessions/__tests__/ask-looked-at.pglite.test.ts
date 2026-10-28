@@ -185,6 +185,7 @@ async function ask(sessionId: string, lookedAt: unknown[]) {
           owner: "human",
           blockedReason: "decision",
           why: "Which vendor do we sign?",
+          unblocks: "The vendor contract",
           ask: {
             mode: "choose",
             options: [

@@ -2787,6 +2787,11 @@ export const focusSessionsRouter = router({
         /** ONE line naming WHICH thing is missing, not its class. */
         why: z.string().max(500).optional(),
         /**
+         * WHAT MOVES when the person answers (decision E) — the slot wire's
+         * own field. Required from an agent unless the slot already says it.
+         */
+        unblocks: expectedOutputWireSchema.shape.unblocks,
+        /**
          * WHERE to go — the card's title becomes a door. `null` clears a stored
          * pointer; omitted leaves it alone. Refused when it names an object the
          * caller cannot already see (`isOutputRefVisible`, the one floor).
@@ -2809,6 +2814,7 @@ export const focusSessionsRouter = router({
         expectedLabel: input.expectedLabel,
         blockedReason: input.blockedReason,
         why: input.why,
+        unblocks: input.unblocks,
         ref: input.ref,
         ask: input.ask,
       });

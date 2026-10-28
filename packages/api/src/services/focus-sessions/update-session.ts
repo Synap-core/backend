@@ -29,6 +29,7 @@ import {
 import { sessionCriteriaSchema } from "../../schemas/session-criteria.js";
 import { isHttpUrl } from "@synap/shared-utils";
 import {
+  ASK_LIMITS,
   ASK_LOOKED_AT_KINDS,
   AnswerProvenanceSchema,
   AskAnswerValueSchema,
@@ -97,7 +98,13 @@ import {
   type AgentHandOffDecision,
 } from "./agent-hand-off.js";
 import { archivedAnswerHistory } from "./answer-history.js";
-import { logSlotsAsked, stampAskProvenance } from "./slot-asked-event.js";
+import {
+  logSlotsAsked,
+  slotsMissingUnblocks,
+  stampAskProvenance,
+  unblocksAdvisedMessage,
+  withDefaultUnblocks,
+} from "./slot-asked-event.js";
 import type { FollowOutcome } from "./follow-playbook.js";
 import {
   closedRunRefusal,
@@ -131,6 +138,8 @@ export interface UpdateFocusSessionParams {
     owner?: ExpectedOutput["owner"];
     blockedReason?: ExpectedOutput["blockedReason"];
     why?: ExpectedOutput["why"];
+    /** What moves when the person answers — required with `owner: 'human'` from an agent. */
+    unblocks?: ExpectedOutput["unblocks"];
     /**
      * WHERE the deliverable lives / where the person must go. Accepted HERE and
      * not only on the wholesale array because this is the door an agent uses to
@@ -434,6 +443,16 @@ export const expectedOutputWireSchema = z.object({
   owner: z.enum(["human", "agent"]).optional(),
   blockedReason: z.enum(BLOCKED_REASONS).optional(),
   why: z.string().max(500).optional(),
+  // WHAT MOVES on the person's answer — the agent's declaration, like `why`
+  // (decision E). Required when an agent hands a slot over
+  // (`slotsMissingUnblocks`), not at the parse: a wholesale patch may carry a
+  // stored slot that predates it.
+  unblocks: z
+    .string()
+    .trim()
+    .min(1)
+    .max(ASK_LIMITS.unblocksMaxChars)
+    .optional(),
   // Server-stamped alongside `owner: 'human'` (see `reconcileOwedSince`). It is
   // ON the wire only so a caller round-tripping a stored slot does not lose it
   // at the parse — never so a client can author a time it did not observe; the
@@ -604,6 +623,8 @@ export const CLIENT_DECLARABLE_OUTPUT_FIELDS = [
   "owner",
   "blockedReason",
   "why",
+  // What the answer unblocks — the declarer's word, like `why` (decision E).
+  "unblocks",
   // The pointer the declarer supplies. Declaring WHERE something lives is not a
   // claim that it landed, so it closes nothing — same footing as `why`.
   "ref",
@@ -704,6 +725,9 @@ export const SERVER_OWNED_OUTPUT_FIELDS = [
   "owner",
   "blockedReason",
   "why",
+  // Same erasure reason as `why`: renaming a sibling must not drop what the
+  // answer unblocks.
+  "unblocks",
   // Listed for ERASURE, not authority (see the docblock above): a browser that
   // has never heard of `ref` reads the array, renames a sibling, sends it back —
   // and must not silently drop the door the agent put on the card.
@@ -1464,6 +1488,7 @@ export function applyOutputMutations(
           ? { blockedReason: add.blockedReason }
           : {}),
         ...(add.why !== undefined ? { why: add.why } : {}),
+        ...(add.unblocks !== undefined ? { unblocks: add.unblocks } : {}),
         // `null` here is the same CLEAR the wire uses; a brand-new slot has
         // nothing to clear, so it simply carries no key.
         ...(add.ref ? { ref: add.ref } : {}),
@@ -1758,6 +1783,52 @@ export async function updateFocusSession(
           reason: unreachableOutputRefError(unreachable),
         };
       }
+    }
+  }
+
+  // WHAT IT UNBLOCKS (decision E, needs-truth §5): an AGENT that hands the
+  // person a slot says what moves on the answer. Read on the slots this patch
+  // would newly pose (`slotsMissingUnblocks`, the provenance stamp's own
+  // rule), before the membrane. ADVISED, never refused (rv-be-needs F1): a
+  // slot that says nothing lands with `ASK_UNBLOCKS_DEFAULT` and the reply's
+  // `warnings` says so, so the agent can name the real next step next time.
+  let unblocksAdvice: string | null = null;
+  if (
+    params.agentUserId &&
+    (params.expectedOutputs !== undefined || params.addOutput)
+  ) {
+    const stored: OutputItem[] = Array.isArray(existing.expectedOutputs)
+      ? (existing.expectedOutputs as OutputItem[])
+      : [];
+    const missing = slotsMissingUnblocks(
+      stored,
+      applyOutputMutations(
+        stored,
+        {
+          ...(params.expectedOutputs !== undefined
+            ? { expectedOutputs: params.expectedOutputs }
+            : {}),
+          ...(params.addOutput ? { addOutput: params.addOutput } : {}),
+        },
+        { keepUnlisted: true }
+      ).outputs
+    );
+    if (missing.length > 0) {
+      params = {
+        ...params,
+        ...(params.expectedOutputs !== undefined
+          ? {
+              expectedOutputs: withDefaultUnblocks(
+                params.expectedOutputs,
+                missing
+              ),
+            }
+          : {}),
+        ...(params.addOutput
+          ? { addOutput: withDefaultUnblocks([params.addOutput], missing)[0] }
+          : {}),
+      };
+      unblocksAdvice = unblocksAdvisedMessage(missing);
     }
   }
 
@@ -2388,6 +2459,7 @@ export async function updateFocusSession(
     ? [
         ...droppedAskWarnings(declaredOutputs, outputsAfter),
         ...restatedAskHints(declaredOutputs),
+        ...(unblocksAdvice ? [unblocksAdvice] : []),
       ]
     : [];
 

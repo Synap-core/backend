@@ -352,6 +352,11 @@ export interface Signal {
    */
   needsYouClass?: NeedsYouClass;
   /**
+   * `owed-slot`: WHAT MOVES when the person answers — the card's "Unblocks"
+   * line (decision E; `effectiveSlotUnblocks`). Absent when nothing says.
+   */
+  unblocks?: string;
+  /**
    * WHERE the row came from — the small provenance door (lens grammar §5: a
    * source is shown only when it differs from the page's scope; the client
    * decides that with `visibleSource`, `@synap-core/types/lens`). The most
@@ -512,6 +517,7 @@ const _KIND_SPECIFIC_SIGNAL_FIELDS = [
   "lifetimeHours",
   "reviewLater",
   "needsYouClass",
+  "unblocks",
   "source",
   "by",
   "askCause",
@@ -952,6 +958,8 @@ export interface OwedSlotSignalInput {
   askCause?: AskCause;
   /** The rule's class, straight from `listOwedSlots` (`needsYouLens`). */
   needsYouClass?: NeedsYouSlotClass;
+  /** What the answer unblocks, straight from `listOwedSlots`. */
+  unblocks?: string;
 }
 
 /**
@@ -1042,6 +1050,7 @@ const _PROJECTED_OWED_SLOT_FIELDS = [
   "askedByName",
   "askCause",
   "needsYouClass",
+  "unblocks",
   "keptOwedAt",
   "paramName",
 ] as const satisfies ReadonlyArray<keyof OwedSlot>;
@@ -1129,6 +1138,7 @@ const _WITHHELD_DRAFT_ASK_FIELDS = [
   "askedByName",
   "askCause",
   "needsYouClass",
+  "unblocks",
   "keptOwedAt",
   "paramName",
   "sessionStatus",
@@ -1282,6 +1292,7 @@ export function signalFromOwedSlot(
         }
       : {}),
     ...(row.askCause ? { askCause: row.askCause } : {}),
+    ...(row.unblocks ? { unblocks: row.unblocks } : {}),
     ...sessionSource(row.sessionId, row.sessionTitle),
     groupKey: sessionGroupKey(row.sessionId),
     // Review later wins over Older, like a cluster's: a client that predates
