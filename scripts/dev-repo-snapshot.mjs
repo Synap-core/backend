@@ -37,12 +37,7 @@
  */
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import {
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -121,7 +116,8 @@ export function dependsOnFromBody(body, ownRepo, ownNumber) {
       const number = Number(r[2] || r[4]);
       const key = `${repo.toLowerCase()}#${number}`;
       if (!number || seen.has(key)) continue;
-      if (repo.toLowerCase() === ownRepo.toLowerCase() && number === ownNumber) continue;
+      if (repo.toLowerCase() === ownRepo.toLowerCase() && number === ownNumber)
+        continue;
       seen.add(key);
       out.push({ repo, number });
     }
@@ -151,7 +147,8 @@ export function mergeableFrom(mergeStateStatus) {
 export function authorLogin(author) {
   if (!author?.login) return "unknown";
   const login = author.login.replace(/^app\//, "");
-  return (author.is_bot || author.login.startsWith("app/")) && !login.endsWith("[bot]")
+  return (author.is_bot || author.login.startsWith("app/")) &&
+    !login.endsWith("[bot]")
     ? `${login}[bot]`
     : login;
 }
@@ -163,12 +160,14 @@ function classifyCheck(c) {
   if (c.__typename === "StatusContext" || (c.context && !c.name)) {
     const name = c.context;
     if (c.state === "SUCCESS") return { name, kind: "pass" };
-    if (c.state === "FAILURE" || c.state === "ERROR") return { name, kind: "fail" };
+    if (c.state === "FAILURE" || c.state === "ERROR")
+      return { name, kind: "fail" };
     return { name, kind: "queue" };
   }
   const name = c.name;
   if (c.status === "COMPLETED") {
-    if (["SUCCESS", "NEUTRAL", "SKIPPED"].includes(c.conclusion)) return { name, kind: "pass" };
+    if (["SUCCESS", "NEUTRAL", "SKIPPED"].includes(c.conclusion))
+      return { name, kind: "pass" };
     return { name, kind: "fail" };
   }
   if (c.status === "IN_PROGRESS") return { name, kind: "run" };
@@ -182,7 +181,8 @@ function latestPerCheck(rollup) {
     const key = `${c.workflowName ?? ""}\u0000${c.name ?? c.context}`;
     const at = c.startedAt ?? c.completedAt ?? "";
     const prev = byKey.get(key);
-    if (!prev || at >= (prev.startedAt ?? prev.completedAt ?? "")) byKey.set(key, c);
+    if (!prev || at >= (prev.startedAt ?? prev.completedAt ?? ""))
+      byKey.set(key, c);
   }
   return [...byKey.values()];
 }
@@ -192,13 +192,19 @@ function latestPerCheck(rollup) {
  * Any failure is red; else anything running, else anything queued; green needs at least one pass.
  */
 export function checksFromRollup(rollup) {
-  if (!Array.isArray(rollup) || rollup.length === 0) return { checks: "none", failing: [] };
+  if (!Array.isArray(rollup) || rollup.length === 0)
+    return { checks: "none", failing: [] };
   const all = latestPerCheck(rollup).map(classifyCheck);
   const failing = all.filter((c) => c.kind === "fail").map((c) => c.name);
   if (failing.length) return { checks: "red", failing };
-  if (all.some((c) => c.kind === "run")) return { checks: "running", failing: [] };
-  if (all.some((c) => c.kind === "queue")) return { checks: "queued", failing: [] };
-  return { checks: all.some((c) => c.kind === "pass") ? "green" : "none", failing: [] };
+  if (all.some((c) => c.kind === "run"))
+    return { checks: "running", failing: [] };
+  if (all.some((c) => c.kind === "queue"))
+    return { checks: "queued", failing: [] };
+  return {
+    checks: all.some((c) => c.kind === "pass") ? "green" : "none",
+    failing: [],
+  };
 }
 
 /** The named kinds (pass|fail|run|queue) of one rollup, newest run per check. */
@@ -215,7 +221,8 @@ export function mainFailingNames(nodes) {
   const verdict = new Map();
   for (const n of nodes) {
     for (const c of n.checks ?? []) {
-      if ((c.kind === "pass" || c.kind === "fail") && !verdict.has(c.name)) verdict.set(c.name, c.kind);
+      if ((c.kind === "pass" || c.kind === "fail") && !verdict.has(c.name))
+        verdict.set(c.name, c.kind);
     }
   }
   return [...verdict].filter(([, k]) => k === "fail").map(([name]) => name);
@@ -241,18 +248,42 @@ const DECIDED = new Set(["SUCCESS", "FAILURE", "ERROR"]);
 export function mainHealthFromGithub(nodes) {
   const sha = nodes[0]?.oid ?? null;
   if (!nodes.some((n) => n.state)) {
-    return { main: { sha, health: "unmeasured", source: "none", redSince: null, reason: null }, mainFailing: [] };
+    return {
+      main: {
+        sha,
+        health: "unmeasured",
+        source: "none",
+        redSince: null,
+        reason: null,
+      },
+      mainFailing: [],
+    };
   }
   const i0 = nodes.findIndex((n) => DECIDED.has(n.state));
   if (i0 < 0) {
     return {
-      main: { sha, health: "unmeasured", source: "github-checks", redSince: null, reason: "checks still running" },
+      main: {
+        sha,
+        health: "unmeasured",
+        source: "github-checks",
+        redSince: null,
+        reason: "checks still running",
+      },
       mainFailing: [],
     };
   }
   const d0 = nodes[i0];
   if (d0.state === "SUCCESS") {
-    return { main: { sha, health: "ok", source: "github-checks", redSince: null, reason: null }, mainFailing: [] };
+    return {
+      main: {
+        sha,
+        health: "ok",
+        source: "github-checks",
+        redSince: null,
+        reason: null,
+      },
+      mainFailing: [],
+    };
   }
   let since = d0;
   for (const n of nodes.slice(i0 + 1)) {
@@ -264,8 +295,12 @@ export function mainHealthFromGithub(nodes) {
     ...(since.prNumber ? { prNumber: since.prNumber } : {}),
     ...(since.committedDate ? { at: since.committedDate } : {}),
   };
-  const mainFailing = nodes.some((n) => n.checks) ? mainFailingNames(nodes) : d0.failing;
-  const reason = mainFailing.length ? `failing: ${mainFailing.slice(0, 4).join(", ")}` : null;
+  const mainFailing = nodes.some((n) => n.checks)
+    ? mainFailingNames(nodes)
+    : d0.failing;
+  const reason = mainFailing.length
+    ? `failing: ${mainFailing.slice(0, 4).join(", ")}`
+    : null;
   return {
     main: { sha, health: "red", source: "github-checks", redSince, reason },
     mainFailing,
@@ -273,13 +308,18 @@ export function mainHealthFromGithub(nodes) {
 }
 
 const gateId = (g) => g.id ?? "";
-const isBaseline = (r) => typeof r.name === "string" && r.name.startsWith("baseline") && ["red", "green"].includes(r.status);
+const isBaseline = (r) =>
+  typeof r.name === "string" &&
+  r.name.startsWith("baseline") &&
+  ["red", "green"].includes(r.status);
 const doneAt = (r) => r.done ?? r.started ?? "";
 
 /** The gates of one repo in one devbox run. */
 function repoGates(run, dir) {
   const prefixes = BASELINE_GATE_PREFIX[dir] ?? [];
-  return (run.gates ?? []).filter((g) => prefixes.some((p) => gateId(g).startsWith(p)));
+  return (run.gates ?? []).filter((g) =>
+    prefixes.some((p) => gateId(g).startsWith(p))
+  );
 }
 
 /** One set of gates -> "red" | "infra" | "ok" | null (nothing measured). */
@@ -297,7 +337,9 @@ function healthOfGates(gates) {
  * redSince = the oldest main sha, in the contiguous run reaching the newest, where a currently red gate was red.
  */
 export function mainHealthFromBaselines(recent, dir) {
-  const runs = (recent ?? []).filter(isBaseline).sort((a, b) => doneAt(b).localeCompare(doneAt(a)));
+  const runs = (recent ?? [])
+    .filter(isBaseline)
+    .sort((a, b) => doneAt(b).localeCompare(doneAt(a)));
   const latest = new Map();
   let newest = null;
   for (const r of runs) {
@@ -326,7 +368,15 @@ export function mainHealthFromBaselines(recent, dir) {
       const sha = r.repos?.[dir]?.sha;
       if (!g.length || !sha) continue;
       let grp = groups.find((x) => x.sha === sha);
-      if (!grp) groups.push((grp = { sha, at: doneAt(r), subject: r.repos[dir].subject ?? "", gates: [] }));
+      if (!grp)
+        groups.push(
+          (grp = {
+            sha,
+            at: doneAt(r),
+            subject: r.repos[dir].subject ?? "",
+            gates: [],
+          })
+        );
       grp.gates.push(...g);
     }
     let since = null;
@@ -338,11 +388,21 @@ export function mainHealthFromBaselines(recent, dir) {
     }
     if (since) {
       const pr = /pull request #(\d+)/i.exec(since.subject)?.[1];
-      redSince = { sha: since.sha, ...(pr ? { prNumber: Number(pr) } : {}), at: since.at };
+      redSince = {
+        sha: since.sha,
+        ...(pr ? { prNumber: Number(pr) } : {}),
+        at: since.at,
+      };
     }
   }
   return {
-    main: { sha: measured, health, source: "devbox-baseline", redSince, reason },
+    main: {
+      sha: measured,
+      health,
+      source: "devbox-baseline",
+      redSince,
+      reason,
+    },
     measuredSha: measured,
   };
 }
@@ -363,7 +423,10 @@ export function mainHealthFromCiResult(firstLine, sha) {
 // ── pure: PR checks from devbox gate runs ────────────────────────────────────
 
 const shaMatches = (runSha, head) =>
-  typeof runSha === "string" && runSha.length >= 7 && typeof head === "string" && head.startsWith(runSha);
+  typeof runSha === "string" &&
+  runSha.length >= 7 &&
+  typeof head === "string" &&
+  head.startsWith(runSha);
 
 /**
  * The devbox's verdict for a PR head: the newest NON-baseline run of `dir` whose gated commit is the head, else a
@@ -372,19 +435,43 @@ const shaMatches = (runSha, head) =>
  */
 export function checksFromDevbox(status, dir, headSha) {
   const recent = (status?.recent ?? []).filter(
-    (r) => !String(r.name).startsWith("baseline") && r.repo === dir && shaMatches(r.repos?.[dir]?.sha ?? r.ref, headSha)
+    (r) =>
+      !String(r.name).startsWith("baseline") &&
+      r.repo === dir &&
+      shaMatches(r.repos?.[dir]?.sha ?? r.ref, headSha)
   );
   recent.sort((a, b) => doneAt(b).localeCompare(doneAt(a)));
-  const live = [...(status?.running ?? []), ...(status?.queued?.heavy ?? []), ...(status?.queued?.light ?? [])].filter(
-    (j) => j.repo === dir && shaMatches(j.ref, headSha)
-  );
+  const live = [
+    ...(status?.running ?? []),
+    ...(status?.queued?.heavy ?? []),
+    ...(status?.queued?.light ?? []),
+  ].filter((j) => j.repo === dir && shaMatches(j.ref, headSha));
   const done = recent.find((r) => ["red", "green", "done"].includes(r.status));
   if (!done) {
-    if (recent.some((r) => r.status === "running") || live.some((j) => j.started)) {
-      return { checks: "running", failing: [], redInheritedFromMain: undefined, source: "devbox-gate" };
+    if (
+      recent.some((r) => r.status === "running") ||
+      live.some((j) => j.started)
+    ) {
+      return {
+        checks: "running",
+        failing: [],
+        redInheritedFromMain: undefined,
+        source: "devbox-gate",
+      };
     }
-    if (live.length) return { checks: "queued", failing: [], redInheritedFromMain: undefined, source: "devbox-gate" };
-    return { checks: "none", failing: [], redInheritedFromMain: undefined, source: "none" };
+    if (live.length)
+      return {
+        checks: "queued",
+        failing: [],
+        redInheritedFromMain: undefined,
+        source: "devbox-gate",
+      };
+    return {
+      checks: "none",
+      failing: [],
+      redInheritedFromMain: undefined,
+      source: "none",
+    };
   }
   const gates = done.gates ?? [];
   const red = gates.filter((g) => g.status === "red");
@@ -392,16 +479,30 @@ export function checksFromDevbox(status, dir, headSha) {
     return {
       checks: "red",
       failing: red.map(gateId),
-      redInheritedFromMain: red.every((g) => String(g.vs_main ?? "").startsWith("same-as-main")),
+      redInheritedFromMain: red.every((g) =>
+        String(g.vs_main ?? "").startsWith("same-as-main")
+      ),
       source: "devbox-gate",
       run: done.name,
     };
   }
   if (gates.some((g) => g.status === "green")) {
-    return { checks: "green", failing: [], redInheritedFromMain: undefined, source: "devbox-gate", run: done.name };
+    return {
+      checks: "green",
+      failing: [],
+      redInheritedFromMain: undefined,
+      source: "devbox-gate",
+      run: done.name,
+    };
   }
   // only infra gates: the run answered nothing about the code
-  return { checks: "infra", failing: [], redInheritedFromMain: undefined, source: "devbox-gate", run: done.name };
+  return {
+    checks: "infra",
+    failing: [],
+    redInheritedFromMain: undefined,
+    source: "devbox-gate",
+    run: done.name,
+  };
 }
 
 // ── pure: assembly ───────────────────────────────────────────────────────────
@@ -441,7 +542,8 @@ export function buildPr(raw, repo, { mainFailing, devbox }) {
   };
 }
 
-const FIX_MAIN_RE = /\b(?:fix(?:es|ed)?|repairs?|unbreaks?)\s+(?:the\s+)?(?:red\s+)?main\b/i;
+const FIX_MAIN_RE =
+  /\b(?:fix(?:es|ed)?|repairs?|unbreaks?)\s+(?:the\s+)?(?:red\s+)?main\b/i;
 
 /**
  * The open PR that says it fixes main (title or body, outside code), as the contract's `main.fixedBy`; null when none
@@ -449,7 +551,11 @@ const FIX_MAIN_RE = /\b(?:fix(?:es|ed)?|repairs?|unbreaks?)\s+(?:the\s+)?(?:red\
  */
 export function fixedByFromPrs(rawOpen, repo) {
   const hit = rawOpen
-    .filter((p) => !p.isDraft && FIX_MAIN_RE.test(stripCode(`${p.title ?? ""}\n${p.body ?? ""}`)))
+    .filter(
+      (p) =>
+        !p.isDraft &&
+        FIX_MAIN_RE.test(stripCode(`${p.title ?? ""}\n${p.body ?? ""}`))
+    )
     .sort((a, b) => a.number - b.number)[0];
   return hit ? { repo, number: hit.number } : null;
 }
@@ -457,7 +563,9 @@ export function fixedByFromPrs(rawOpen, repo) {
 /** SNAPSHOT_FIXED_BY="Synap-core/browser=Synap-core/backend#278;Synap-core/app-bases=Synap-core/backend#337" -> { repo: {repo, number} }. */
 export function parseFixedByOverrides(text) {
   const out = {};
-  for (const part of String(text ?? "").split(/[;,\s]+/).filter(Boolean)) {
+  for (const part of String(text ?? "")
+    .split(/[;,\s]+/)
+    .filter(Boolean)) {
     const m = /^([\w.-]+\/[\w.-]+)=([\w.-]+\/[\w.-]+)#(\d+)$/.exec(part);
     if (m) out[m[1]] = { repo: m[2], number: Number(m[3]) };
   }
@@ -494,7 +602,14 @@ export function startOfDayMs(now, tz) {
       .formatToParts(new Date(now))
       .map((p) => [p.type, p.value])
   );
-  const localAsUtc = Date.UTC(+parts.year, +parts.month - 1, +parts.day, +parts.hour, +parts.minute, +parts.second);
+  const localAsUtc = Date.UTC(
+    +parts.year,
+    +parts.month - 1,
+    +parts.day,
+    +parts.hour,
+    +parts.minute,
+    +parts.second
+  );
   const offset = localAsUtc - Math.floor(now / 1000) * 1000;
   return Date.UTC(+parts.year, +parts.month - 1, +parts.day) - offset;
 }
@@ -521,13 +636,19 @@ export function snapshotObservation(snapshot) {
 const log = (line) => console.error(`${new Date().toISOString()} ${line}`);
 
 async function gh(args, timeout = 60_000) {
-  const { stdout } = await run("gh", args, { timeout, maxBuffer: 64 * 1024 * 1024 });
+  const { stdout } = await run("gh", args, {
+    timeout,
+    maxBuffer: 64 * 1024 * 1024,
+  });
   return stdout;
 }
 const ghJson = async (args) => JSON.parse((await gh(args)) || "null");
 
 async function getJson(url, timeout = 15_000) {
-  const res = await fetch(url, { signal: AbortSignal.timeout(timeout), headers: { Accept: "application/json" } });
+  const res = await fetch(url, {
+    signal: AbortSignal.timeout(timeout),
+    headers: { Accept: "application/json" },
+  });
   if (!res.ok) throw new Error(`GET ${url} -> HTTP ${res.status}`);
   return res.json();
 }
@@ -540,7 +661,18 @@ const HISTORY_QUERY = `query($o:String!,$n:String!,$k:Int!){repository(owner:$o,
 /** main's newest commits with their check state (one GraphQL call) -> mainHealthFromGithub's input. */
 async function readMainHistory(repo) {
   const [owner, name] = repo.split("/");
-  const out = await ghJson(["api", "graphql", "-f", `query=${HISTORY_QUERY}`, "-F", `o=${owner}`, "-F", `n=${name}`, "-F", `k=${MAIN_HISTORY}`]);
+  const out = await ghJson([
+    "api",
+    "graphql",
+    "-f",
+    `query=${HISTORY_QUERY}`,
+    "-F",
+    `o=${owner}`,
+    "-F",
+    `n=${name}`,
+    "-F",
+    `k=${MAIN_HISTORY}`,
+  ]);
   const nodes = out?.data?.repository?.defaultBranchRef?.target?.history?.nodes;
   if (!Array.isArray(nodes)) throw new Error(`no main history for ${repo}`);
   return nodes.map((n) => {
@@ -560,18 +692,32 @@ async function readMainHistory(repo) {
 
 /** What the devbox status reader says (gate runs, queue, baselines); null + the error when it fails. */
 async function readDevboxStatus() {
-  const cmd = (process.env.SNAPSHOT_DEVBOX_STATUS || `python3 ${join(homedir(), "wt", "devbox-status.py")}`).split(/\s+/);
+  const cmd = (
+    process.env.SNAPSHOT_DEVBOX_STATUS ||
+    `python3 ${join(homedir(), "wt", "devbox-status.py")}`
+  ).split(/\s+/);
   try {
-    const { stdout } = await run(cmd[0], [...cmd.slice(1), "--json"], { timeout: 30_000, maxBuffer: 64 * 1024 * 1024 });
+    const { stdout } = await run(cmd[0], [...cmd.slice(1), "--json"], {
+      timeout: 30_000,
+      maxBuffer: 64 * 1024 * 1024,
+    });
     return { status: JSON.parse(stdout), error: null };
   } catch (e) {
-    return { status: null, error: String(e.message ?? e).split("\n")[0].slice(0, 200) };
+    return {
+      status: null,
+      error: String(e.message ?? e)
+        .split("\n")[0]
+        .slice(0, 200),
+    };
   }
 }
 
 function readCiResult(dir, sha) {
   try {
-    const first = readFileSync(join(homedir(), "wt", "ci", "results", dir, `${sha}.txt`), "utf8").split("\n", 1)[0];
+    const first = readFileSync(
+      join(homedir(), "wt", "ci", "results", dir, `${sha}.txt`),
+      "utf8"
+    ).split("\n", 1)[0];
     return mainHealthFromCiResult(first, sha);
   } catch {
     return null;
@@ -580,7 +726,12 @@ function readCiResult(dir, sha) {
 
 async function commitsBehind(repo, liveSha) {
   try {
-    const n = await gh(["api", `repos/${repo}/compare/${liveSha}...main`, "--jq", ".ahead_by"]);
+    const n = await gh([
+      "api",
+      `repos/${repo}/compare/${liveSha}...main`,
+      "--jq",
+      ".ahead_by",
+    ]);
     const v = Number(n.trim());
     return Number.isFinite(v) ? v : null;
   } catch {
@@ -591,25 +742,55 @@ async function commitsBehind(repo, liveSha) {
 /** What is deployed from this repo, when it can be read; null when it cannot be (the caller keeps the last good). */
 async function readLive(repo) {
   if (repo === "Synap-core/backend") {
-    const health = await getJson(process.env.SNAPSHOT_POD_HEALTH_URL || "https://pod.antoinesrvt.synap.live/health");
+    const health = await getJson(
+      process.env.SNAPSHOT_POD_HEALTH_URL ||
+        "https://pod.antoinesrvt.synap.live/health"
+    );
     const sha = typeof health.buildSha === "string" ? health.buildSha : null;
-    return { kind: "pod", sha, label: "pod antoinesrvt", behindBy: sha ? await commitsBehind(repo, sha) : null };
+    return {
+      kind: "pod",
+      sha,
+      label: "pod antoinesrvt",
+      behindBy: sha ? await commitsBehind(repo, sha) : null,
+    };
   }
   if (repo === "Synap-core/app-bases") {
-    const versions = await ghJson(["api", "/orgs/Synap-core/packages/container/app/versions?per_page=10"]);
+    const versions = await ghJson([
+      "api",
+      "/orgs/Synap-core/packages/container/app/versions?per_page=10",
+    ]);
     for (const v of versions ?? []) {
-      const tag = (v.metadata?.container?.tags ?? []).map((t) => /^(?:main-)?([0-9a-f]{7,40})$/.exec(t)?.[1]).find(Boolean);
+      const tag = (v.metadata?.container?.tags ?? [])
+        .map((t) => /^(?:main-)?([0-9a-f]{7,40})$/.exec(t)?.[1])
+        .find(Boolean);
       if (!tag) continue;
-      const sha = (await gh(["api", `repos/${repo}/commits/${tag}`, "--jq", ".sha"])).trim();
-      return { kind: "image", sha, label: "ghcr app image", behindBy: await commitsBehind(repo, sha) };
+      const sha = (
+        await gh(["api", `repos/${repo}/commits/${tag}`, "--jq", ".sha"])
+      ).trim();
+      return {
+        kind: "image",
+        sha,
+        label: "ghcr app image",
+        behindBy: await commitsBehind(repo, sha),
+      };
     }
-    return { kind: "image", sha: null, label: "ghcr app image", behindBy: null };
+    return {
+      kind: "image",
+      sha: null,
+      label: "ghcr app image",
+      behindBy: null,
+    };
   }
   if (repo === "Synap-core/synap-cli") {
     const doc = await getJson("https://registry.npmjs.org/@synap-core%2fcli");
     const version = doc["dist-tags"]?.latest;
     const sha = version ? (doc.versions?.[version]?.gitHead ?? null) : null;
-    return { kind: "npm", sha, label: `@synap-core/cli ${version ?? ""}`.trim(), behindBy: sha ? await commitsBehind(repo, sha) : null };
+    return {
+      kind: "npm",
+      sha,
+      label: `@synap-core/cli ${version ?? ""}`.trim(),
+      behindBy: sha ? await commitsBehind(repo, sha) : null,
+    };
   }
   return null;
 }
@@ -618,16 +799,44 @@ async function readLive(repo) {
 export async function readRepoSnapshot(repo, { devbox, now, tz, lastLive }) {
   const dir = DEVBOX_DIR[repo];
   const meta = await ghJson(["repo", "view", repo, "--json", "isPrivate"]);
-  const day = new Date(startOfDayMs(now, tz) - 86_400_000).toISOString().slice(0, 10);
+  const day = new Date(startOfDayMs(now, tz) - 86_400_000)
+    .toISOString()
+    .slice(0, 10);
   const [open, merged, history] = await Promise.all([
-    ghJson(["pr", "list", "--repo", repo, "--state", "open", "--limit", String(MAX_PRS), "--json", PR_FIELDS]),
-    ghJson(["pr", "list", "--repo", repo, "--state", "merged", "--search", `merged:>=${day}`, "--limit", "100", "--json", "number,title,url,mergedAt,body"]),
+    ghJson([
+      "pr",
+      "list",
+      "--repo",
+      repo,
+      "--state",
+      "open",
+      "--limit",
+      String(MAX_PRS),
+      "--json",
+      PR_FIELDS,
+    ]),
+    ghJson([
+      "pr",
+      "list",
+      "--repo",
+      repo,
+      "--state",
+      "merged",
+      "--search",
+      `merged:>=${day}`,
+      "--limit",
+      "100",
+      "--json",
+      "number,title,url,mergedAt,body",
+    ]),
     readMainHistory(repo),
   ]);
 
   let { main, mainFailing } = mainHealthFromGithub(history);
   if (main.source === "none" && dir) {
-    const fromBaseline = devbox.status ? mainHealthFromBaselines(devbox.status.recent, dir) : null;
+    const fromBaseline = devbox.status
+      ? mainHealthFromBaselines(devbox.status.recent, dir)
+      : null;
     const fromCi = readCiResult(dir, main.sha);
     if (fromBaseline) {
       main = fromBaseline.main;
@@ -640,7 +849,9 @@ export async function readRepoSnapshot(repo, { devbox, now, tz, lastLive }) {
 
   if (main.health === "red") {
     // the founder's mark (env) wins over a PR that says it fixes main; unknown stays absent
-    const fixedBy = parseFixedByOverrides(process.env.SNAPSHOT_FIXED_BY)[repo] ?? fixedByFromPrs(open, repo);
+    const fixedBy =
+      parseFixedByOverrides(process.env.SNAPSHOT_FIXED_BY)[repo] ??
+      fixedByFromPrs(open, repo);
     if (fixedBy) main = { ...main, fixedBy };
   }
   if (main.reason) main = { ...main, reason: main.reason.slice(0, 500) };
@@ -648,7 +859,10 @@ export async function readRepoSnapshot(repo, { devbox, now, tz, lastLive }) {
   const prs = open.map((raw) =>
     buildPr(raw, repo, {
       mainFailing,
-      devbox: (head) => (dir && devbox.status ? checksFromDevbox(devbox.status, dir, head) : { checks: "none", redInheritedFromMain: undefined }),
+      devbox: (head) =>
+        dir && devbox.status
+          ? checksFromDevbox(devbox.status, dir, head)
+          : { checks: "none", redInheritedFromMain: undefined },
     })
   );
 
@@ -657,7 +871,11 @@ export async function readRepoSnapshot(repo, { devbox, now, tz, lastLive }) {
     live = await readLive(repo);
   } catch (e) {
     live = lastLive ?? null;
-    log(`WARN ${repo}: live unreadable (${String(e.message ?? e).split("\n")[0].slice(0, 160)}); ${lastLive ? "kept the last good" : "null"}`);
+    log(
+      `WARN ${repo}: live unreadable (${String(e.message ?? e)
+        .split("\n")[0]
+        .slice(0, 160)}); ${lastLive ? "kept the last good" : "null"}`
+    );
   }
 
   return {
@@ -674,7 +892,12 @@ export async function readRepoSnapshot(repo, { devbox, now, tz, lastLive }) {
 // ── state + main ─────────────────────────────────────────────────────────────
 
 const STATE_FILE =
-  process.env.SNAPSHOT_STATE || join(process.env.XDG_STATE_HOME || join(homedir(), ".local", "state"), "dev-facts", "snapshots.json");
+  process.env.SNAPSHOT_STATE ||
+  join(
+    process.env.XDG_STATE_HOME || join(homedir(), ".local", "state"),
+    "dev-facts",
+    "snapshots.json"
+  );
 
 function loadState() {
   try {
@@ -700,7 +923,10 @@ function parseArgs(argv) {
   return opts;
 }
 
-const resolveRepo = (r) => DEFAULT_REPOS.find((d) => d.toLowerCase() === r.toLowerCase() || d.split("/")[1] === r) ?? r;
+const resolveRepo = (r) =>
+  DEFAULT_REPOS.find(
+    (d) => d.toLowerCase() === r.toLowerCase() || d.split("/")[1] === r
+  ) ?? r;
 
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
@@ -708,7 +934,9 @@ async function main() {
   const key = process.env.SYNAP_OBS_KEY;
   const dry = opts.dry || process.env.SNAPSHOT_DRY === "1" || !podUrl || !key;
   if (dry && !opts.dry && process.env.SNAPSHOT_DRY !== "1") {
-    log("dry-run: SYNAP_POD_URL / SYNAP_OBS_KEY not set, printing what would be posted");
+    log(
+      "dry-run: SYNAP_POD_URL / SYNAP_OBS_KEY not set, printing what would be posted"
+    );
   }
   const repos = opts.repos.length
     ? opts.repos.map(resolveRepo)
@@ -719,16 +947,28 @@ async function main() {
   const heartbeatMs = Number(process.env.SNAPSHOT_HEARTBEAT_S || 300) * 1000;
   const state = dry ? {} : loadState();
   const devbox = await readDevboxStatus();
-  if (devbox.error) log(`WARN devbox status reader failed: ${devbox.error} (private repos: main unmeasured, PR checks none)`);
+  if (devbox.error)
+    log(
+      `WARN devbox status reader failed: ${devbox.error} (private repos: main unmeasured, PR checks none)`
+    );
 
   let exit = 0;
   for (const repo of repos) {
     const now = Date.now();
     let snapshot;
     try {
-      snapshot = await readRepoSnapshot(repo, { devbox, now, tz, lastLive: state[repo]?.live });
+      snapshot = await readRepoSnapshot(repo, {
+        devbox,
+        now,
+        tz,
+        lastLive: state[repo]?.live,
+      });
     } catch (e) {
-      log(`ERROR ${repo}: not posted, read failed: ${String(e.message ?? e).split("\n")[0].slice(0, 200)}`);
+      log(
+        `ERROR ${repo}: not posted, read failed: ${String(e.message ?? e)
+          .split("\n")[0]
+          .slice(0, 200)}`
+      );
       exit = 1;
       continue;
     }
@@ -747,7 +987,9 @@ async function main() {
       error = `unreachable: ${String(e.message ?? e).slice(0, 200)}`;
     }
     if (isKeyRefusal(error)) {
-      log(`WARN the pod refused the key for ${obs.type} ${repo}: ${error}. Nothing recorded; the key needs hub-protocol.write and the event.create grant.`);
+      log(
+        `WARN the pod refused the key for ${obs.type} ${repo}: ${error}. Nothing recorded; the key needs hub-protocol.write and the event.create grant.`
+      );
       break;
     }
     if (error) {
@@ -757,7 +999,9 @@ async function main() {
     }
     state[repo] = { fp, postedAt: now, live: snapshot.live };
     saveState(state);
-    log(`posted ${obs.type} ${repo} (${snapshot.prs.length} open PRs, main ${snapshot.main.health}${prev && prev.fp !== fp ? ", changed" : ""})`);
+    log(
+      `posted ${obs.type} ${repo} (${snapshot.prs.length} open PRs, main ${snapshot.main.health}${prev && prev.fp !== fp ? ", changed" : ""})`
+    );
   }
   process.exitCode = exit;
 }
