@@ -9,7 +9,11 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-const findFirst = vi.fn(async () => null as null | { id: string });
+// vi.mock factories are hoisted above every top-level const: the mock fn must
+// be hoisted with them, or the module fails to load.
+const { findFirst } = vi.hoisted(() => ({
+  findFirst: vi.fn(async () => null as null | { id: string }),
+}));
 vi.mock("@synap/database", () => ({
   db: { query: { federatedApplicationConnections: { findFirst } } },
   and: (...a: unknown[]) => a,
