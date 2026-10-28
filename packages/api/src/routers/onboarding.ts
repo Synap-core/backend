@@ -29,6 +29,7 @@ import type {
 } from "@synap/database";
 import { podAdminProcedure, podProcedure, router } from "../trpc.js";
 import { startFirstSession } from "../services/focus-sessions/first-session.js";
+import { proposeSetup, undoSetup } from "../services/onboarding/setup.js";
 import { normalizeToolName } from "@synap-core/types/tools";
 import {
   isInterviewBrief,
@@ -1123,6 +1124,75 @@ export const onboardingRouter = router({
    * offered journey becomes active. From settings, the journey's lifecycle and
    * current step are never touched, so recording a tool never reopens onboarding.
    */
+  /**
+   * The setup proposal (start step S4): the chosen start arrives as ONE
+   * `workspace/create` proposal from the person's own agent, carrying what
+   * approving creates (`data.contents`: spaces, kinds, views, what waits on a
+   * connection). A pending setup is handed back, never filed twice.
+   * `services/onboarding/setup.ts`.
+   */
+  proposeSetup: podAdminProcedure
+    .input(
+      z.object({
+        slug: z.string().trim().min(1).max(200),
+        /** The view the space opens on (start step S2). */
+        view: z
+          .object({
+            profile: z.string().trim().min(1).max(200),
+            view: z.string().trim().min(1).max(200),
+          })
+          .optional(),
+      })
+    )
+    .mutation(({ ctx, input }) =>
+      proposeSetup({ userId: ctx.userId, slug: input.slug, view: input.view })
+    ),
+
+  /**
+   * Undo setup: archive the spaces the approved setup created (restorable
+   * from Spaces; the kinds stay), then send the journey back to its first
+   * step (`values.start` keeps only what the pod read for the person: the
+   * cloud answers and experiment arms).
+   */
+  undoSetup: podAdminProcedure.mutation(async ({ ctx }) => {
+    const { workspacesRouter } = await import("./workspaces.js");
+    const workspacesCaller = workspacesRouter.createCaller(
+      ctx as Parameters<typeof workspacesRouter.createCaller>[0]
+    );
+    const result = await undoSetup({
+      userId: ctx.userId,
+      archive: async (workspaceId) => {
+        const done = await workspacesCaller.archive({
+          workspaceId,
+          reasoning: "Undo setup",
+        });
+        return {
+          status: done.status,
+          ...("proposalId" in done && done.proposalId
+            ? { proposalId: done.proposalId }
+            : {}),
+        };
+      },
+    });
+    const journey = await findJourney(ctx.userId, { kind: "pod" }, "1");
+    const start = journey?.progress?.values?.start;
+    if (start && typeof start === "object") {
+      const { cloud, experiments } = start as Record<string, unknown>;
+      await recordJourneyValues({
+        userId: ctx.userId,
+        lens: { kind: "pod" },
+        values: {
+          start: {
+            v: 1,
+            ...(cloud !== undefined ? { cloud } : {}),
+            ...(experiments !== undefined ? { experiments } : {}),
+          },
+        },
+      });
+    }
+    return result;
+  }),
+
   /**
    * Record values on the journey WITHOUT moving it (`recordJourneyValues`):
    * `progress.values` merged one level deep; status, step and evidence
