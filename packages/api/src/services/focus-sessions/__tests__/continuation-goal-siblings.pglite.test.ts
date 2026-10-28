@@ -492,7 +492,9 @@ describe("continuation packet — the WORK UNITS a session recorded", () => {
     const read = await readAllWorkUnits(row!, { database: db, userId: USER });
     expect(read).toMatchObject({ status: "ok", total: PACKET_TOP_N + 3 });
     if (read.status !== "ok") throw new Error(read.status);
-    expect(read.items.map((u) => u.url)).toEqual(prs.map((p) => (p.ref as { url: string }).url));
+    expect(read.items.map((u) => u.url)).toEqual(
+      prs.map((p) => (p.ref as { url: string }).url)
+    );
     const packet = (await packetFor(id)).workUnits;
     expect(packet).toMatchObject({ status: "ok", total: PACKET_TOP_N + 3 });
     expect(packet.status === "ok" && packet.items).toHaveLength(PACKET_TOP_N);
