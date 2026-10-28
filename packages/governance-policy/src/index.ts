@@ -1121,6 +1121,12 @@ const GRANT_ACTION_FOLDS: Readonly<Record<string, string>> = {
   // move its status. The status door still governs each move — expectedStatus,
   // humanOnly options, the ladder (`services/lifecycle/move-status.ts`).
   "entity/transition": "update",
+  // Putting a role on a record CREATES its facet row; taking it off DELETES it
+  // (D1, #134; founder decision 812ee060, 2026-10-28). An app is granted
+  // `facet.create` / `facet.delete`; a grant naming the door (`facet.attach`)
+  // keeps permitting it (`grantRequestKeys`).
+  "facet/attach": "create",
+  "facet/detach": "delete",
 };
 
 /** `relationDef` → `relation_def`, `renderer.set` → `renderer_set`. */

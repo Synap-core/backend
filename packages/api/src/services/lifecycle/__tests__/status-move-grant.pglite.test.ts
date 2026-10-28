@@ -26,7 +26,10 @@
  * granted to CRM; its facet is stored pod-wide), and nothing else:
  *  - not the stage of a role granted elsewhere (`partner`, Marketing);
  *  - not the person's own (kind) fields;
- *  - not attach/detach (D2 kept: they re-share the person);
+ *  - not detach without `facet.delete` (adding or removing a shared role
+ *    changes where the person shows: it needs `facet.create` / `facet.delete`
+ *    in EVERY space the role is granted to, founder decision 812ee060 — the
+ *    role-write suite, entities.app-role-write.pglite.test.ts, covers it);
  *  - not a lead facet on a person stored in another space (rv-security B-1);
  *  - not with the same permissions pinned to Marketing instead.
  *
@@ -559,7 +562,7 @@ describe("Part 2 — a CRM key works the lead stage of a pod-wide person", () =>
     expect(rows[0]?.title).toBe("Ada");
   });
 
-  it("does not detach the lead role (attach/detach re-share the person: D2)", async () => {
+  it("does not detach the lead role without facet.delete (removing a shared role re-shares the person)", async () => {
     const person = await seedPerson(null);
     const lead = await seedFacet(person, LEAD);
     await expect(

@@ -39,7 +39,7 @@ import {
 import { dispatchLifecycleTransition } from "@synap/events";
 import { createLogger } from "@synap-core/core";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
-import { reachedFacetGrantSpace } from "../../utils/grant-write-check.js";
+import { roleWriteGrantSpace } from "../../utils/role-write-grant.js";
 import { ownWorkOrganiseForTaskClose } from "../governance/own-organise.js";
 import { mayWriteStatusTarget } from "./status-write-floor.js";
 import { markProposalNotificationsActioned } from "../../notifications/mark-proposal-notifications-actioned.js";
@@ -249,23 +249,34 @@ export async function moveStatus(
       to,
       reason: input.reason ?? null,
     };
+    // The key's grant is checked on the row's own workspace — a pod-wide
+    // entity is pod-scope, never the caller's lens (S7). A ROLE's move is a
+    // role write: checked where the role lives (THE rule, `roleWriteGrantSpace`
+    // — a stamped role in its space, a shared one in a key space it is granted
+    // to), as `entity.<kind>.update` (a status move is an update, #239).
+    let grantWorkspaceId = target.workspaceId ?? null;
+    if (target.facetId) {
+      const roleGrant = await roleWriteGrantSpace(
+        "update",
+        {
+          entityId: input.entityId,
+          facetId: target.facetId,
+          // Only an add / remove reads the role's spaces.
+          profileId: null,
+          storedWorkspaceId: target.workspaceId ?? null,
+        },
+        { subjectType: "entity", action: "transition", data }
+      );
+      if ("denied" in roleGrant) {
+        return { status: "denied", reason: roleGrant.denied };
+      }
+      grantWorkspaceId = roleGrant.space;
+    }
     const perm = await checkPermissionOrPropose({
       userId: input.actor.userId,
       agentUserId: input.actor.agentUserId ?? undefined,
       workspaceId: governanceWorkspaceId,
-      // The key's grant is checked on the row's own workspace — a pod-wide
-      // entity or role facet is pod-scope, never the caller's lens (S7) —
-      // except a pod-wide ROLE facet the key reaches through a space its
-      // role is granted to: checked in that space (`reachedFacetGrantSpace`).
-      grantWorkspaceId:
-        target.workspaceId ??
-        (target.facetId
-          ? await reachedFacetGrantSpace(target.facetId, {
-              subjectType: "entity",
-              action: "transition",
-              data,
-            })
-          : null),
+      grantWorkspaceId,
       subjectType: "entity",
       action: "transition",
       // An unattributed agent reaches the anonymous AI ladder; never "user".
