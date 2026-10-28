@@ -229,7 +229,8 @@ describe("door — MCP synap_list_proposals detail:'full'", () => {
   });
 
   it("projects before answering, and no longer returns the raw result", () => {
-    expect(src).toContain("projectProposalRowForViewer");
+    // Through the Hub `view=full` door, whose projection is tested above.
+    expect(src).toContain("return ok(rows.map(withProposalClass));");
     // The pre-fix line was a bare passthrough.
     expect(src).not.toContain(
       'if ((args.detail as string) === "full") return ok(result);'

@@ -29,8 +29,9 @@ import type { StepContext } from "@synap/jobs/workers/automation-executor-types.
 import type { PinnedFallback } from "@synap/playbooks";
 
 /**
- * Object filters do not read templates. The empty context exists so the
- * shared parser can be called without an automation run.
+ * Object filters do not read templates, and a stored string filter has no run
+ * to template against. The empty context exists so the shared parser can be
+ * called without an automation run.
  */
 const BARE_CONTEXT: StepContext = {
   trigger: { payload: {}, subject: null },
@@ -114,6 +115,12 @@ export async function findFallbackSubject(args: {
   /** The project the run files into: its demo records may be chosen. */
   projectId?: string | null;
 }): Promise<string | null> {
+  // Parsed before any read: an unreadable filter refuses the pick
+  // (`QueryFilterParseError`), it never widens it.
+  const filterConditions = parseQueryFilterConditions(
+    args.fallback.filter,
+    BARE_CONTEXT
+  );
   const db = await getDb();
   const conditions = [
     // The kind-aware door: a role's wearers carry their primary kind in `type`.
@@ -129,10 +136,7 @@ export async function findFallbackSubject(args: {
     // chosen by id and stay open.)
     listableEntityWhere({ revealSampleOf: args.projectId }),
   ];
-  for (const condition of parseQueryFilterConditions(
-    args.fallback.filter,
-    BARE_CONTEXT
-  )) {
+  for (const condition of filterConditions) {
     conditions.push(queryConditionSql(condition));
   }
 

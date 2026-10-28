@@ -1,10 +1,10 @@
 /**
- * TRIPWIRE — `GOVERNANCE_POLICY_SENTENCES` (@synap-core/types/proposals) is a
- * mirror of `PROPOSE_REASON` (@synap/governance-policy): a reader uses it to
- * stop the policy's sentence being drawn as a proposer's reasoning on rows
- * written before the pod stopped storing it there. A sentence edited on one
- * side only would silently start leaking again — so this compares the two
- * OBJECTS, key for key and word for word, by importing both (no source scan).
+ * TRIPWIRE — the engine's `PROPOSE_REASON` (@synap/governance-policy) IS
+ * `GOVERNANCE_POLICY_SENTENCES` (@synap-core/types/proposals): one declaration
+ * (a mirror until 2026-10-26). A reader uses it to stop the policy's sentence
+ * being drawn as a proposer's reasoning on rows written before the pod stopped
+ * storing it there, so a second copy edited on one side only would silently
+ * start leaking again. This fails the moment the engine holds its own object.
  *
  * WHAT IT CANNOT SEE: both imports resolve to the packages' built `dist`, so an
  * edit to either `src` is compared only after that package is rebuilt.
@@ -16,9 +16,9 @@ import {
   isGovernancePolicySentence,
 } from "@synap-core/types/proposals";
 
-describe("governance policy sentences — the types mirror equals the engine", () => {
-  it("has exactly PROPOSE_REASON's keys and sentences", () => {
-    expect(GOVERNANCE_POLICY_SENTENCES).toEqual(PROPOSE_REASON);
+describe("governance policy sentences — the engine reads the types object", () => {
+  it("PROPOSE_REASON is GOVERNANCE_POLICY_SENTENCES, not a copy", () => {
+    expect(PROPOSE_REASON).toBe(GOVERNANCE_POLICY_SENTENCES);
   });
 
   it("recognises every engine sentence, and not a proposer's words", () => {

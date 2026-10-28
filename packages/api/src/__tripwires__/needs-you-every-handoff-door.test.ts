@@ -54,6 +54,11 @@ const EXEMPT: Record<string, string> = {
   "routers/proposals/executors/focus-session.ts":
     "The approval executor applies a hand-off a HUMAN just approved — they are " +
     "looking at it; a push about their own click is noise.",
+  "services/dev-loop/session-outcome-door.ts":
+    "An automation's `complete_outcome` (plan v5 T2): `applyOutputMutations` " +
+    "with `completeOutput` ONLY claims an existing slot — it never hands one " +
+    "to the person (a person's slot is refused by the same merge), so there " +
+    "is nothing to tell them.",
   "services/focus-sessions/evaluations/record.ts":
     "Files the escalated-criterion slot and raises its OWN push " +
     "(`session.criterion_escalated`, same `if`, session-deduped). A second " +
@@ -68,6 +73,12 @@ const EXEMPT: Record<string, string> = {
     "An APPOINTMENT the person booked themselves (origin 'human').",
   "services/import/session.ts":
     "The person's own import of a session; nothing is handed over by an agent.",
+  "services/focus-sessions/complete-session.ts":
+    'Its `owner: "human"` is the ARGUMENT of a `keep_as_owed` hand-off at ' +
+    "session end, never a write here: the slot is written and announced by " +
+    "`updateFocusSession` (addOutput) or `fileRoomQuestionOnSlot` → " +
+    "`blockExpectedOutput`, both of which notify (and carry the guidance net). " +
+    "A second push from the close door would be two pushes for one hand-off.",
   "services/agent-dispatch/poll-external-agents.ts":
     "The approval card's owed slot is announced by the QUESTION card posted " +
     "right after it as the agent (`postDispatchNotice` kind 'question' → " +

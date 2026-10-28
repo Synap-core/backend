@@ -527,10 +527,12 @@ export async function executePlaybookRun(
     goalTemplateOverride: data.goalOverride,
     chainContext,
     // UNATTENDED: no caller to ask, exactly like `unenabledSkillPreflight`
-    // above. A required param nobody supplied becomes an owed slot on the run
-    // (visible, aging, owned by a person) rather than a refused schedule — or,
-    // as before, `""` silently substituted into the agent's instruction.
-    onMissingRequired: "owe",
+    // above. A required param nobody supplied goes back to the AUTOMATION as a
+    // refusal (founder decision E3, 2026-10-27): this step fails with the
+    // spine's `PlaybookParamsError`, naming the param, in the automation's run
+    // history — never a slot in a person's Needs you for a value the rule was
+    // supposed to supply, and never `""` substituted into the instruction.
+    onMissingRequired: "refuse",
   });
 
   // Nobody was eligible. Do not throw — an empty list is a quiet week, not a

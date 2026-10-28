@@ -22,6 +22,7 @@ export * from "./api-keys.js";
 export * from "./api-key-external-users.js";
 export * from "./mcp-connect-codes.js";
 export * from "./device-auth-requests.js";
+export * from "./key-requests.js";
 export * from "./pod-oauth.js";
 export * from "./webhook_subscriptions.js";
 
@@ -184,6 +185,7 @@ export * from "./session-evaluations.js";
 export * from "./session-runners.js";
 // Proposal apply runs — a large approval applied by a background job (0352)
 export * from "./proposal-apply-runs.js";
+export * from "./box-runs.js";
 
 // DEPRECATED: Agent Skills merged into skills table (migration 0130_merge_agent_skills.sql).
 // The agent-skills.ts table definition is kept for migration reference only.

@@ -17,6 +17,8 @@ import {
   type GrantMintInput,
 } from "./draft.js";
 import { parsePermission } from "./grammar.js";
+import { GRANT_SUBJECT_CATALOG, isQualifiedGrantSubject } from "./catalog.js";
+import type { KeyUseId } from "./key-uses.js";
 
 /**
  * "AI — read & propose" — the limits every NEW AI agent starts with (founder
@@ -27,7 +29,7 @@ import { parsePermission } from "./grammar.js";
  *
  * Built from two subject lists, each pinned to its real source by the api
  * tripwire `__tripwires__/ai-preset.tripwire.test.ts` — this package cannot
- * import them (types → database → governance-policy → types is a build cycle):
+ * import them (it is the published leaf: it depends on no backend package):
  *  - READS: every subject the access layer's read hook knows
  *    (`api/src/access/grant-read.ts` GRANT_READ_SPECS), minus AI_PRESET_EXCLUSIONS.
  *  - WRITES: create/update on every subject a governed write door
@@ -72,6 +74,9 @@ export const AI_READ_SUBJECTS = [
   "role",
   "session",
   "share",
+  // The runs of a box skill (box_runs, grant-read.ts): an agent that writes a
+  // skill reads how its runs went.
+  "skill",
   "source",
   "tool",
   "track",
@@ -224,6 +229,13 @@ export interface GrantRole {
   readonly grant: GrantDraft;
   /** True for a role the person saved (`grantRoles.*`); absent for a preset. */
   readonly stored?: boolean;
+  /**
+   * Where a key made from it is used (`KEY_USES` ids). Absent = the role sets
+   * no door (a role made for an agent's limits, or saved before uses existed):
+   * the person picks them. A role used as a KEY TEMPLATE sets them, and its
+   * lifetime is `grant.expiresInDays` like any role's.
+   */
+  readonly uses?: readonly KeyUseId[];
 }
 
 export const GRANT_PRESETS: readonly GrantRole[] = [
@@ -248,6 +260,83 @@ export const GRANT_PRESETS: readonly GrantRole[] = [
     grant: { permissions: ["*"] },
   },
 ];
+
+/** Every catalog subject, read (`entity.*.read`, `document.read`, …). */
+const READ_EVERY_CATALOG_SUBJECT: readonly string[] = normalizeGrantPermissions(
+  GRANT_SUBJECT_CATALOG.filter((s) => s.actions.includes("read")).map((s) =>
+    isQualifiedGrantSubject(s.subject)
+      ? `${s.subject}.*.read`
+      : `${s.subject}.read`
+  )
+);
+
+/** The template id the dev loop's poster key is made from (CI, devbox). */
+export const DEV_LOOP_POSTER_TEMPLATE_ID = "dev-loop-poster";
+
+/**
+ * KEY TEMPLATES — the built-in starting points of the New key page and of
+ * `synap keys create --template <id>`: a role that also sets the doors
+ * (`uses`) and a lifetime. A person's stored roles are templates too, with
+ * whatever uses and lifetime they saved. Every one is a starting point: the
+ * page edits it, and a CLI request may be narrowed, never widened past it.
+ *
+ * "Full access" stays (some doors refuse a scoped key, `GRANT_WRITE_DOOR_
+ * UNSUPPORTED`), with the shortest lifetime. There is no AI template: an AI
+ * is connected as an agent, with its own limits (`KEY_AGENT_DOOR`).
+ */
+export const KEY_TEMPLATES: readonly GrantRole[] = [
+  {
+    id: DEV_LOOP_POSTER_TEMPLATE_ID,
+    name: "Dev loop poster",
+    description:
+      "Posts what happened (commits, builds, CI results) to the pod's activity. Reads nothing, changes nothing else.",
+    grant: { permissions: ["event.create"], expiresInDays: 90 },
+    uses: ["hub"],
+  },
+  {
+    id: "website-or-pod-app",
+    name: "Website or pod app",
+    description:
+      "A site or app that shows your records, documents and views. Changes nothing.",
+    grant: {
+      permissions: ["entity.*.read", "document.read", "view.read"],
+      expiresInDays: 90,
+    },
+    uses: ["hub"],
+  },
+  {
+    id: "read-only",
+    name: "Read-only",
+    description: "Reads everything a key can be given. Changes nothing.",
+    grant: { permissions: READ_EVERY_CATALOG_SUBJECT, expiresInDays: 90 },
+    uses: ["hub", "mcp"],
+  },
+  {
+    id: "full-access",
+    name: "Full access",
+    description:
+      "Everything you can do yourself, approving and deleting included. For a door a narrower key cannot use yet.",
+    grant: { permissions: ["*"], expiresInDays: 30 },
+    uses: ["hub", "mcp"],
+  },
+];
+
+/** A built-in key template by id. */
+export function keyTemplate(id: string): GrantRole | undefined {
+  return KEY_TEMPLATES.find((t) => t.id === id);
+}
+
+/**
+ * The "AI assistant" card of the New key page: a DOOR, not a key (founder,
+ * 2026-10-27, keys plan Decision 3). A person's key acts as the person; an AI
+ * gets its own principal and limits by being connected as an agent.
+ */
+export const KEY_AGENT_DOOR = {
+  id: "connect-agent",
+  name: "An AI assistant? Connect it as an agent",
+  description:
+    "An agent gets its own limits and its writes follow your review rules. A key would act as you.",
+} as const;
 
 /** Apply a role: its permissions, plus any narrowing/lifetime it sets itself. */
 export function applyGrantRole(draft: GrantDraft, role: GrantRole): GrantDraft {

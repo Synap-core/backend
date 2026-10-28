@@ -45,6 +45,10 @@ import {
   type MediaRef,
 } from "@synap-core/types/presentation";
 import { formatDate, formatTimestamp } from "../../../lib/format";
+import {
+  textChanges,
+  type ChangeLine,
+} from "../../_lib/object/content/document-changes-model";
 import type { ProposalChangeInput } from "./proposal-review-model";
 
 /** An object the pod resolved from an id in the payload (`objectRefs`). */
@@ -62,7 +66,9 @@ export type RecordValue =
   | { kind: "ref"; objectKind: string; id: string; name: string }
   | { kind: "tags"; items: string[] }
   /** Source code, whole: never clipped (the card may fold it, never cut it). */
-  | { kind: "code"; text: string; lines: number };
+  | { kind: "code"; text: string; lines: number }
+  /** A rewritten text as its changed paragraphs (instructions before → after). */
+  | { kind: "changes"; lines: ChangeLine[] };
 
 export interface RecordField {
   key: string;
@@ -91,13 +97,46 @@ export interface ProposedRecord {
 export const RECORD_FIELDS_SHOWN = 9;
 
 /**
- * What approving lets RUN, read before anything else: a skill's code, and the
- * tools it declared it calls (its runs call them with no second review).
- * These lead the card, in this order, so they never sit behind "Show all N
- * fields"; and the code is drawn whole. Approving an agent's skill create
- * turns it on (founder decision 2, 2026-10-25): this page is the one review.
+ * What approving lets RUN or lets an agent READ, before anything else: a
+ * skill's code, its instructions (they land in an agent's system prompt),
+ * and the tools it declared it calls (its runs call them with no second
+ * review). These lead the card, in this order, so they never sit behind
+ * "Show all N fields"; and the code and the instructions are drawn whole.
+ * Approving a skill create turns it on (the one-approval rule): this page is
+ * the one review.
  */
-const MUST_READ_KEYS: readonly string[] = ["code", "requiredToolNames"];
+const MUST_READ_KEYS: readonly string[] = [
+  "code",
+  "body",
+  "instructions",
+  "requiredToolNames",
+];
+
+/** The record's own keys drawn whole, as written: never clipped. */
+const WHOLE_TEXT_KEYS: ReadonlySet<string> = new Set([
+  "code",
+  "body",
+  "instructions",
+]);
+
+/** Whole texts that are prose (markdown): a rewrite reads as its changes. */
+const PROSE_TEXT_KEYS: ReadonlySet<string> = new Set(["body", "instructions"]);
+
+/**
+ * A rewritten instruction as the paragraphs it changes, or `null` when the
+ * two sides are not both text or nothing changed.
+ */
+export function proseChanges(
+  before: unknown,
+  after: unknown
+): RecordValue | null {
+  if (typeof before !== "string" || typeof after !== "string") return null;
+  if (before.trim() === "" || after.trim() === "") return null;
+  const lines = textChanges(before, after);
+  return lines.some((l) => l.op !== "unchanged")
+    ? { kind: "changes", lines }
+    : null;
+}
 
 /** Text past this many characters (or with a line break) takes the card's width. */
 const WIDE_TEXT_CHARS = 80;
@@ -306,9 +345,10 @@ function sideValue(
   if (key === "profileSlug" && typeof value === "string" && value.trim()) {
     return { kind: "text", text: resolveObjectNoun(value), long: false };
   }
-  // The record's own `code` (a skill's), never a property that happens to be
-  // named so.
-  if (!isProperty && key === "code") return codeValue(value);
+  // The record's own code and instructions (a skill's), never a property that
+  // happens to be named so: drawn as written, every line, so the reviewer
+  // reads exactly what will run or what an agent will be told.
+  if (!isProperty && WHOLE_TEXT_KEYS.has(key)) return codeValue(value);
   const renderKind = classifyPropertyKind({ slug: key, value, def });
   return recordValue(renderKind, value, resolved);
 }
@@ -401,12 +441,18 @@ export function proposedRecord(input: RecordInput): ProposedRecord | null {
         : change.operation === "update"
           ? "change"
           : "add";
-    const after =
-      fieldOp === "remove"
+    // Rewritten instructions read as what changes, not two whole copies.
+    const rewrite =
+      fieldOp === "change" && !isProperty && PROSE_TEXT_KEYS.has(key)
+        ? proseChanges(change.before, change.after)
+        : null;
+    const after = rewrite
+      ? rewrite
+      : fieldOp === "remove"
         ? undefined
         : sideValue(key, change.after, def, resolved, isProperty);
     const before =
-      fieldOp === "add"
+      rewrite || fieldOp === "add"
         ? undefined
         : change.before === undefined && fieldOp === "change"
           ? undefined
@@ -418,7 +464,10 @@ export function proposedRecord(input: RecordInput): ProposedRecord | null {
     if (fieldOp === "change" && !after && !before) continue;
 
     const wide = [after, before].some(
-      (v) => (v?.kind === "text" && v.long) || v?.kind === "code"
+      (v) =>
+        (v?.kind === "text" && v.long) ||
+        v?.kind === "code" ||
+        v?.kind === "changes"
     );
     fields.push({
       key: change.path,

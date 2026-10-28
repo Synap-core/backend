@@ -219,10 +219,12 @@ describe("approved playbook instantiate = the direct instantiate row", () => {
     expect(row.expected_outputs).toEqual([
       { kind: "note", label: "Hygiene report", key: "hygiene-report" },
     ]);
-    // `goal` unchanged (the dedup key); the name is written beside it.
+    // The proposal's own goal and title land as filed. A title on a create
+    // proposal is its proposer's (same rule as the ad-hoc branch), so it is
+    // stamped `agent`, never handed to the background titler.
     expect(row.goal).toBe("CRM hygiene for Acme Corp");
     expect(row.title).toBe("CRM hygiene · Acme Corp");
-    expect(row.metadata.titleSource).toBe("derived");
+    expect(row.metadata.titleSource).toBe("agent");
     expect(row.metadata.prompt).toBe("Review stale contacts");
     // The approved path grades against the same criteria as a direct run.
     expect(row.criteria.map((c) => [c.key, c.stageKey ?? null])).toEqual([
@@ -238,6 +240,41 @@ describe("approved playbook instantiate = the direct instantiate row", () => {
         linkType: "instantiated_from",
       })
     );
+  });
+
+  // Live 2026-10-19 (proposal 28da2d3a → session 2c08acb0): an agent's
+  // `synap_start_session({templateId, title, goal})` held for review came back
+  // as "AI Dev Session — 19 Oct" with goal "AI Dev Session" — the proposer's
+  // words dropped on approval, while the direct door keeps both. The payload
+  // below is the one `createFocusSession` files (no `prompt`, no `name`); the
+  // subject-less shape is the one where the derived name and the agent's
+  // title DISAGREE, so it rules the old rule out.
+  it("keeps the proposer's own title and goal (the direct door's row)", async () => {
+    const { targetId } = await execute("focus_session/create", {
+      playbookId: PLAYBOOK,
+      templateId: PLAYBOOK,
+      goal: "Make the Synap bridge public-ready: docs, install, tests",
+      title: "Synap bridge 1.0: public-ready",
+    });
+    const row = await sessionRow(targetId);
+    expect(row.playbook_id).toBe(PLAYBOOK);
+    expect(row.title).toBe("Synap bridge 1.0: public-ready");
+    expect(row.goal).toBe(
+      "Make the Synap bridge public-ready: docs, install, tests"
+    );
+    // The agent named it: the background titler must never rename it.
+    expect(row.metadata.titleSource).toBe("agent");
+  });
+
+  it("with no title, the run is still named by the playbook (derived)", async () => {
+    const { targetId } = await execute("focus_session/create", {
+      playbookId: PLAYBOOK,
+      goal: "Untitled hygiene pass",
+    });
+    const row = await sessionRow(targetId);
+    expect(row.title).toMatch(/^CRM hygiene — \d{1,2} [A-Z][a-z]{2}$/);
+    expect(row.goal).toBe("Untitled hygiene pass");
+    expect(row.metadata.titleSource).toBe("derived");
   });
 
   it("refuses a playbook the proposal's workspace cannot see", async () => {

@@ -17,7 +17,16 @@ import {
   attachParentSessionIds,
 } from "../../../services/focus-sessions/parent-lineage.js";
 import { attachTriage } from "../../../services/focus-sessions/triage.js";
-import type { TerminalSessionStatus } from "../../../services/focus-sessions/session-statuses.js";
+import type {
+  SessionStatus,
+  TerminalSessionStatus,
+} from "../../../services/focus-sessions/session-statuses.js";
+import { sessionListConditions } from "../../../services/focus-sessions/session-list-conditions.js";
+import {
+  CLOSE_QUESTION_DISPOSITIONS,
+  readCloseQuestionDispositions,
+  type CloseQuestionDisposition,
+} from "../../../services/messaging/room-post-kind.js";
 import type { ExpectedOutput, SessionCriterion } from "@synap/playbooks";
 import { requestClientKey } from "../../../services/focus-sessions/resolve-work-session.js";
 import { refuseUndeclaredArgs } from "../undeclared-args.js";
@@ -26,14 +35,18 @@ import {
   waitForSessionChanges,
 } from "../../../services/focus-sessions/wait-for-answers.js";
 import { parseSessionChangeKinds } from "../../../services/focus-sessions/session-changes.js";
+import {
+  describeRelayRefusal,
+  relaySessionAnswer,
+  RelaySessionAnswerInputSchema,
+} from "../../../services/focus-sessions/session-answer.js";
 import { readAgentsForHandoff } from "../../../services/agent-dispatch/agents-for-handoff.js";
+import { WORK_GRAPH_MAX_WINDOW_HOURS } from "../../../services/focus-sessions/work-graph-window.js";
 import type { UpdateFocusSessionParams } from "../../../services/focus-sessions/update-session.js";
 import { SESSION_TITLE_MAX } from "@synap-core/types/focus-sessions";
 import {
   SESSION_KINDS,
   attachSessionKind,
-  sessionKindWhere,
-  sessionAutomationWhere,
 } from "../../../services/focus-sessions/session-kind.js";
 import {
   ok,
@@ -369,6 +382,61 @@ export const sessionHandlers: McpHandlerMap = {
     return ok(result);
   },
 
+  /**
+   * The person answered in THIS chat: relay their words to the question the
+   * agent asked in the pod (`relaySessionAnswer`, which owns who may relay
+   * what and the stakes rule). Agent keys only — the relay is labelled with
+   * the agent that carried it.
+   */
+  synap_relay_answer: async (ctx: McpToolContext): Promise<CallToolResult> => {
+    const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
+    requireScope(apiKeyScopes, "mcp.write", toolName);
+    if (!agentUserId) {
+      return ok({
+        error:
+          "Only an agent relays an answer — this key acts as the person, who answers in Synap.",
+      });
+    }
+    const sessionId =
+      typeof args.sessionId === "string" ? args.sessionId.trim() : "";
+    if (!UUID_RE.test(sessionId)) {
+      return ok({ error: `Focus session ${sessionId || "(none)"} not found` });
+    }
+    // The ONE relay schema, as on the Hub door — never a hand check.
+    const parsed = RelaySessionAnswerInputSchema.safeParse(args);
+    if (!parsed.success) {
+      const issue = parsed.error.issues[0];
+      return ok({
+        error: `${issue?.path.join(".") || "input"}: ${issue?.message ?? "invalid relay"}`,
+      });
+    }
+    const slotLabel = parsed.data.slotLabel;
+    const result = await relaySessionAnswer({
+      sessionId,
+      userId,
+      agentUserId,
+      ...parsed.data,
+    });
+    if (
+      result.status === "relayed" ||
+      result.status === "awaiting_tap" ||
+      result.status === "withdrawn"
+    ) {
+      return ok({
+        ...result,
+        next:
+          result.status === "awaiting_tap"
+            ? "Recorded as waiting for the person's tap: it is a commitment. Do not act on it yet — synap_wait_for_answer until they confirm."
+            : result.status === "relayed"
+              ? "Recorded as the person's answer, marked relayed by you. Go on with it."
+              : "Withdrawn. The slot, if any, is yours again.",
+      });
+    }
+    return ok({
+      error: describeRelayRefusal(result, { sessionId, slotLabel }).message,
+    });
+  },
+
   synap_start_session: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
@@ -472,6 +540,9 @@ export const sessionHandlers: McpHandlerMap = {
       // `null` is the explicit opt-out of template matching; absent = match.
       templateId: readTemplateIdArg(args.templateId),
       matchTemplate: true,
+      // F5/F6: the project's open goals (no trackId named) and the open
+      // sessions on close work — suggestions on the reply, never applied.
+      offerStartContext: true,
       // Answers to the named template's declared params. Free-form on the wire
       // (the playbook owns the shape); validated against the declaration by the
       // service, with the same pure function the run funnel uses.
@@ -539,22 +610,54 @@ export const sessionHandlers: McpHandlerMap = {
   ): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
-    const { completeFocusSession } =
-      await import("../../../services/focus-sessions/complete-session.js");
-    const result = await completeFocusSession({
-      sessionId: args.sessionId as string,
-      userId,
-      agentUserId,
-      summary: args.summary as string | undefined,
-      verificationReport: args.verificationReport as
-        Record<string, unknown> | undefined,
-      // Every lifecycle exit, not just `closed`. The service has accepted this
-      // since it was written; this door never forwarded it, so an agent could
-      // record "I finished" but never "I abandoned" or "I could not" — and the
-      // tRPC / Hub PATCH doors could. Validated by the tool schema's enum,
-      // which derives from TERMINAL_SESSION_STATUSES.
-      terminalStatus: args.terminalStatus as TerminalSessionStatus | undefined,
-    });
+    const {
+      completeFocusSession,
+      isOpenQuestionsAtCloseError,
+      openQuestionsRefusal,
+    } = await import("../../../services/focus-sessions/complete-session.js");
+    // The executor's reader, refusing what it would drop: a word that is not
+    // `withdrawn` / `keep_as_owed` is never read as either.
+    const rawDispositions = args.questionDispositions;
+    let questionDispositions: CloseQuestionDisposition[] | undefined;
+    if (rawDispositions !== undefined) {
+      questionDispositions = readCloseQuestionDispositions(rawDispositions);
+      if (
+        !Array.isArray(rawDispositions) ||
+        questionDispositions.length !== rawDispositions.length
+      ) {
+        return ok({
+          error: `questionDispositions: each is {messageId, disposition: ${CLOSE_QUESTION_DISPOSITIONS.map((d) => `'${d}'`).join(" | ")}, note?}.`,
+        });
+      }
+    }
+    let result: Awaited<ReturnType<typeof completeFocusSession>>;
+    try {
+      result = await completeFocusSession({
+        sessionId: args.sessionId as string,
+        userId,
+        agentUserId,
+        summary: args.summary as string | undefined,
+        verificationReport: args.verificationReport as
+          Record<string, unknown> | undefined,
+        // Every lifecycle exit, not just `closed`. The service has accepted this
+        // since it was written; this door never forwarded it, so an agent could
+        // record "I finished" but never "I abandoned" or "I could not" — and the
+        // tRPC / Hub PATCH doors could. Validated by the tool schema's enum,
+        // which derives from TERMINAL_SESSION_STATUSES.
+        terminalStatus: args.terminalStatus as
+          TerminalSessionStatus | undefined,
+        // The service matches each id against this agent's own open
+        // questions and ignores the rest.
+        questionDispositions,
+      });
+    } catch (err) {
+      // Its own questions are still open: nothing closed, and the agent is
+      // handed the list and the two ways out.
+      if (isOpenQuestionsAtCloseError(err)) {
+        return ok(openQuestionsRefusal(err));
+      }
+      throw err;
+    }
     if (!result) {
       return ok({ error: `Focus session ${args.sessionId} not found` });
     }
@@ -796,52 +899,17 @@ export const sessionHandlers: McpHandlerMap = {
     const { toolName, args, userId, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     const statusArg = (args.status as string | undefined) ?? "open";
-    const conditions = [eq(focusSessions.userId, userId)];
-    if (statusArg === "open") {
-      conditions.push(
-        inArray(focusSessions.status, [...OPEN_SESSION_STATUSES])
-      );
-    } else if (statusArg !== "all") {
-      // MCP schemas are ADVISORY — nothing validates `status` server-side, so
-      // an off-enum value ("done", "completed") would silently match zero rows
-      // instead of telling the agent what it may ask for.
-      if (!(SESSION_STATUSES as readonly string[]).includes(statusArg)) {
-        return ok({
-          error: `Unknown session status '${statusArg}'. Valid values: ${SESSION_STATUSES.join(", ")}, plus 'open' (any non-terminal) and 'all'.`,
-        });
-      }
-      conditions.push(
-        eq(
-          focusSessions.status,
-          statusArg as (typeof focusSessions.$inferSelect)["status"]
-        )
-      );
-    }
-    // The URL lens auto-injects workspaceId/projectId — honoured as filters,
-    // never as an authorization boundary (userId above is the floor).
-    if (typeof args.workspaceId === "string" && args.workspaceId) {
-      conditions.push(eq(focusSessions.workspaceId, args.workspaceId));
-    }
-    if (typeof args.projectId === "string" && args.projectId) {
-      conditions.push(eq(focusSessions.projectId, args.projectId));
-    }
-    if (typeof args.subjectEntityId === "string" && args.subjectEntityId) {
-      conditions.push(eq(focusSessions.subjectEntityId, args.subjectEntityId));
-    }
-    // A track's sessions — the filter the schema never offered, so a caller
-    // that passed `trackId` got every session back, unfiltered.
-    if (typeof args.trackId === "string" && args.trackId) {
-      conditions.push(eq(focusSessions.trackId, args.trackId));
-    }
-    // Flow DEFINITION filters — the same two the tRPC and Hub REST doors take.
-    // Each names a definition, never one execution. Pair with kind 'run' or
-    // 'all': every flow-linked row classifies as a run, so under 'work' either
-    // filter alone returns nothing.
-    if (typeof args.playbookId === "string" && args.playbookId) {
-      conditions.push(eq(focusSessions.playbookId, args.playbookId));
-    }
-    if (typeof args.automationId === "string" && args.automationId) {
-      conditions.push(sessionAutomationWhere(args.automationId));
+    // MCP schemas are ADVISORY — nothing validates `status` server-side, so
+    // an off-enum value ("done", "completed") would silently match zero rows
+    // instead of telling the agent what it may ask for.
+    if (
+      statusArg !== "open" &&
+      statusArg !== "all" &&
+      !(SESSION_STATUSES as readonly string[]).includes(statusArg)
+    ) {
+      return ok({
+        error: `Unknown session status '${statusArg}'. Valid values: ${SESSION_STATUSES.join(", ")}, plus 'open' (any non-terminal) and 'all'.`,
+      });
     }
     // Population lens (`services/focus-sessions/session-kind.ts`). MCP schemas
     // are ADVISORY — nothing validates args server-side — so an off-enum value
@@ -849,16 +917,61 @@ export const sessionHandlers: McpHandlerMap = {
     // Default `all`, like the Hub REST door and unlike tRPC's `work`: an agent
     // listing sessions wants the runs and write receipts it just opened.
     const kindArg = (args.kind as string | undefined) ?? "all";
-    if (kindArg !== "all") {
-      if (!(SESSION_KINDS as readonly string[]).includes(kindArg)) {
-        return ok({
-          error: `Unknown session kind '${kindArg}'. Valid values: ${SESSION_KINDS.join(", ")}, plus 'all'.`,
-        });
-      }
-      conditions.push(
-        sessionKindWhere(kindArg as (typeof SESSION_KINDS)[number])
-      );
+    if (
+      kindArg !== "all" &&
+      !(SESSION_KINDS as readonly string[]).includes(kindArg)
+    ) {
+      return ok({
+        error: `Unknown session kind '${kindArg}'. Valid values: ${SESSION_KINDS.join(", ")}, plus 'all'.`,
+      });
     }
+    const idArg = (v: unknown) => (typeof v === "string" && v ? v : undefined);
+    const subjectEntityId = idArg(args.subjectEntityId);
+    // The subject predicate compares as text, so a malformed id would match
+    // nothing instead of failing: say so.
+    if (subjectEntityId && !UUID_RE.test(subjectEntityId)) {
+      return ok({
+        error: `subjectEntityId is not a valid id: ${subjectEntityId}`,
+      });
+    }
+    // THE session WHERE (`sessionListConditions`), shared with tRPC
+    // `focusSessions.list` and Hub REST `GET /focus-sessions` — this door used
+    // to hand-write its own copy. What differs is only what it passes:
+    //   - the floor: owner-only (`roster: false`), as every agent door reads
+    //     (decision C v1, `rosterReadFor`), now with the key's grant ANDed by
+    //     `sessionReadableWhere` like every other session read;
+    //   - the agent-door defaults: every lens (`lens: "all"` — no triage
+    //     narrow, an agent looks for the drafts it just opened) and kind `all`;
+    //   - the URL lens auto-injects workspaceId/projectId — honoured as
+    //     lenses, never as an authorization boundary.
+    // `subjectEntityId` now reads the ONE subject predicate the Hub door
+    // reads (`sessionSubjectWhere`): sessions whose subject is the thing, or
+    // worker sessions that target it.
+    const conditions = sessionListConditions({
+      userId,
+      scope: {
+        workspaceLens: idArg(args.workspaceId),
+        projectLens: idArg(args.projectId),
+      },
+      status:
+        statusArg === "open"
+          ? [...OPEN_SESSION_STATUSES]
+          : (statusArg as SessionStatus | "all"),
+      lens: "all",
+      kind: kindArg as (typeof SESSION_KINDS)[number] | "all",
+      // Flow DEFINITION filters — the same two the tRPC and Hub REST doors
+      // take. Each names a definition, never one execution. Pair with kind
+      // 'run' or 'all': every flow-linked row classifies as a run.
+      flow: {
+        playbookId: idArg(args.playbookId),
+        automationId: idArg(args.automationId),
+      },
+      trackId: idArg(args.trackId),
+      subject: subjectEntityId
+        ? { kind: "entities", entityIds: [subjectEntityId] }
+        : undefined,
+      roster: false,
+    });
     // PAGING (plan 9992207a, c-paging): `offset` walks past the 50-row page;
     // one row past it tells whether another page exists. `id` breaks ties so
     // two sessions started in the same instant never swap between pages.
@@ -919,10 +1032,117 @@ export const sessionHandlers: McpHandlerMap = {
       ...(hasMore ? { nextOffset: offset + limit } : {}),
     });
   },
+  synap_get_work_graph: async (
+    ctx: McpToolContext
+  ): Promise<CallToolResult> => {
+    const { toolName, args, userId, apiKeyScopes, keyWorkspaceId } = ctx;
+    requireScope(apiKeyScopes, "mcp.read", toolName);
+    // MCP schemas are ADVISORY — nothing validates args server-side — so an
+    // off-vocabulary value is answered with the vocabulary, never silently
+    // read as "nothing matches".
+    const windowHours =
+      args.windowHours === undefined ? undefined : Number(args.windowHours);
+    if (
+      windowHours !== undefined &&
+      (!Number.isInteger(windowHours) ||
+        windowHours < 1 ||
+        windowHours > WORK_GRAPH_MAX_WINDOW_HOURS)
+    ) {
+      return ok({
+        error: `windowHours must be an integer from 1 to ${WORK_GRAPH_MAX_WINDOW_HOURS}.`,
+      });
+    }
+    // Agent-door defaults, as synap_list_sessions: every kind, every lens.
+    const kindArg = (args.kind as string | undefined) ?? "all";
+    if (
+      kindArg !== "all" &&
+      !(SESSION_KINDS as readonly string[]).includes(kindArg)
+    ) {
+      return ok({
+        error: `Unknown session kind '${kindArg}'. Valid values: ${SESSION_KINDS.join(", ")}, plus 'all'.`,
+      });
+    }
+    const lensArg = (args.lens as string | undefined) ?? "all";
+    if (lensArg !== "default" && lensArg !== "triage" && lensArg !== "all") {
+      return ok({
+        error: `Unknown lens '${lensArg}'. Valid values: default, triage, all.`,
+      });
+    }
+    const detailArg = (args.detail as string | undefined) ?? "lean";
+    if (detailArg !== "lean" && detailArg !== "full") {
+      return ok({
+        error: `Unknown detail '${detailArg}'. Valid values: lean (default), full.`,
+      });
+    }
+    // The URL lens auto-injects workspaceId/projectId — honoured as lenses,
+    // never as an authorization boundary (the floor is the owner). The
+    // workspace lens is the CONFINED one (`adapter.ts`): a workspace-bound key
+    // reads its own workspace when it names none, and 403s before here on
+    // another.
+    const lensOf = (v: unknown) => (typeof v === "string" && v ? v : undefined);
+    // Loaded on call, like the continuation packet above: the graph service
+    // pulls the next-move reads, which this handler module must not load at
+    // tool-listing time.
+    const { buildWorkGraph } =
+      await import("../../../services/focus-sessions/work-graph.js");
+    const graph = await buildWorkGraph({
+      userId,
+      scope: {
+        workspaceLens: ctx.confinedWorkspaceId,
+        projectLens: lensOf(args.projectId),
+      },
+      windowHours,
+      kind: kindArg as (typeof SESSION_KINDS)[number] | "all",
+      lens: lensArg,
+      // An agent door reads owner-only (decision C v1, `rosterReadFor`).
+      roster: false,
+      boundWorkspaceId: keyWorkspaceId ?? undefined,
+    });
+    return ok({
+      // `lean` (default): enough to draw and to choose — a full node carries
+      // goal, criteria, stages and metadata (the list measured 62 KB for 50).
+      nodes:
+        detailArg === "full"
+          ? graph.nodes
+          : graph.nodes.map((n) => ({
+              id: n.id,
+              title: n.title,
+              status: n.status,
+              kind: n.kind,
+              parentSessionId: n.parentSessionId,
+              trackId: n.trackId,
+              projectId: n.projectId,
+              workspaceId: n.workspaceId,
+              updatedAt: n.updatedAt,
+              inWindow: n.inWindow,
+              nextMove: {
+                kind: n.nextMove.kind,
+                actor: n.nextMove.actor,
+                label: n.nextMove.label,
+              },
+            })),
+      edges: graph.edges,
+      sections: graph.sections,
+      window: graph.window,
+    });
+  },
+  synap_get_work_release: async (
+    ctx: McpToolContext
+  ): Promise<CallToolResult> => {
+    const { toolName, userId, apiKeyScopes } = ctx;
+    requireScope(apiKeyScopes, "mcp.read", toolName);
+    // Loaded on call, like the work graph: the read pulls the liveness reads,
+    // which this handler module must not load at tool-listing time.
+    const { readWorkRelease } =
+      await import("../../../services/dev-loop/work-release.js");
+    // An agent door reads sessions owner-only (decision C v1, `rosterReadFor`).
+    return ok(await readWorkRelease({ userId, roster: false }));
+  },
   synap_update_session: async (
     ctx: McpToolContext
   ): Promise<CallToolResult> => {
-    const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
+    const { toolName, userId, apiKeyScopes, agentUserId } = ctx;
+    let args = ctx.args;
     requireScope(apiKeyScopes, "mcp.write", toolName);
     /**
      * REFUSE LOUDLY rather than accept and drop.
@@ -960,8 +1180,67 @@ export const sessionHandlers: McpHandlerMap = {
     const undeclared = await refuseUndeclaredArgs("synap_update_session", args);
     if (undeclared) return undeclared;
 
+    /**
+     * NO `sessionId` (F2, plan v5) — the session THIS conversation started,
+     * when it started exactly one that is still open (`resolveClientOpenSession`
+     * — never an auto-opened receipt, never a guess among several). So the PR
+     * hook can say "record it" in one call with no id. Several, none, a shared
+     * key or a failed read: refused in words, with the list when there is one.
+     */
+    let inferredSession: { sessionId: string; title: string } | undefined;
+    if (typeof args.sessionId !== "string" || args.sessionId.trim() === "") {
+      const { resolveClientOpenSession, requestClientKey } =
+        await import("../../../services/focus-sessions/resolve-work-session.js");
+      const found = await resolveClientOpenSession({
+        userId,
+        clientKey: requestClientKey(agentUserId),
+      });
+      switch (found.status) {
+        case "one":
+          args = { ...args, sessionId: found.sessionId };
+          inferredSession = { sessionId: found.sessionId, title: found.title };
+          break;
+        case "several":
+          return ok({
+            error: `sessionId is required: this conversation has ${found.count} open sessions, so none is guessed — NOTHING WAS CHANGED. Send the call again with the sessionId of the one this belongs to.`,
+            sessions: found.sessions,
+          });
+        case "stale":
+          return ok({
+            error: `sessionId is required: this conversation has no open session, and the one it started went quiet (stale) — NOTHING WAS CHANGED. If this belongs to it, send the call again with its sessionId (the write brings it back); otherwise start one with synap_start_session.`,
+            sessions: found.sessions,
+          });
+        case "none":
+          return ok({
+            error:
+              "sessionId is required: this conversation started no session that is still open — NOTHING WAS CHANGED. Start one with synap_start_session, or pass the sessionId of the session this belongs to.",
+          });
+        case "no_client":
+          return ok({
+            error:
+              "sessionId is required: this connection cannot tell your conversation apart from others on the same key — NOTHING WAS CHANGED. Pass the sessionId.",
+          });
+        case "unavailable":
+          return ok({
+            error:
+              "sessionId is required: your open sessions could not be read just now — NOTHING WAS CHANGED. Pass the sessionId.",
+          });
+      }
+    }
+    /**
+     * Said on EVERY reply once the session was resolved for the caller — the
+     * id and title it landed on, refusals included (rv-be-needs S1: teammates
+     * share one client key, so the caller must see WHICH session it was).
+     */
+    const reply = (body: object): CallToolResult =>
+      ok(
+        inferredSession
+          ? { ...body, inferred: true, via: "client", inferredSession }
+          : body
+      );
+
     const blockerEdits = parseBlockerEdits(args);
-    if ("error" in blockerEdits) return ok(blockerEdits);
+    if ("error" in blockerEdits) return reply(blockerEdits);
     const editsBlockers =
       blockerEdits.add.length > 0 || blockerEdits.remove.length > 0;
 
@@ -1018,7 +1297,7 @@ export const sessionHandlers: McpHandlerMap = {
         )
         .limit(1);
       if (!own) {
-        return ok({
+        return reply({
           error: `Focus session ${String(args.sessionId)} not found`,
         });
       }
@@ -1033,7 +1312,7 @@ export const sessionHandlers: McpHandlerMap = {
           !(k === "projectId" && args[k] === own.projectId)
       );
       if (asked.length === 0) {
-        return ok({
+        return reply({
           sessionId: args.sessionId,
           ...(await applyBlockerEdits()),
           message:
@@ -1050,12 +1329,12 @@ export const sessionHandlers: McpHandlerMap = {
       expectedOutputWireSchema,
       addOutputWireSchema,
     });
-    if ("error" in slots) return ok(slots);
+    if ("error" in slots) return reply(slots);
     // `outcomes` (A4): UPSERTED by key onto the stored lists (or onto the
     // wholesale lists this same call sent), then written through the same
     // `expectedOutputs` / `criteria` fields — one merge, one governance path.
     const outcomes = await parseOutcomesArg(args.outcomes);
-    if ("error" in outcomes) return ok(outcomes);
+    if ("error" in outcomes) return reply(outcomes);
     let outcomeLists:
       | { expectedOutputs: ExpectedOutput[]; criteria: SessionCriterion[] }
       | undefined;
@@ -1070,7 +1349,7 @@ export const sessionHandlers: McpHandlerMap = {
         criteria: args.criteria as SessionCriterion[] | undefined,
       });
       if (!resolved) {
-        return ok({
+        return reply({
           error: `Focus session ${String(args.sessionId)} not found`,
         });
       }
@@ -1183,19 +1462,19 @@ export const sessionHandlers: McpHandlerMap = {
       : {};
     switch (result.status) {
       case "not_found":
-        return ok({
+        return reply({
           error: `Focus session ${args.sessionId as string} not found`,
           ...blockersNotApplied,
         });
       case "denied":
         // A filing the pod applied on its own receipt still landed.
-        return ok({
+        return reply({
           error: result.reason,
           ...(result.filing ? { filing: result.filing } : {}),
           ...blockersNotApplied,
         });
       case "proposed":
-        return ok({
+        return reply({
           ...(await applyBlockerEdits()),
           status: "proposed",
           message: proposedMessageFor(
@@ -1226,7 +1505,7 @@ export const sessionHandlers: McpHandlerMap = {
         // of the patch landed. Without it a refused mark is indistinguishable
         // from a completed one — the row simply comes back unchanged and the
         // agent reads that as done.
-        return ok({
+        return reply({
           ...(await applyBlockerEdits()),
           status: "updated",
           session: result.session,

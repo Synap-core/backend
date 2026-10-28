@@ -50,6 +50,8 @@ export interface ComputerLike {
   minKeyTtlDays: number;
   maxKeyTtlDays: number;
   accessName: string | null;
+  /** "Runs scripts" is on: it leases its person's box runs. */
+  runsScripts?: boolean;
   agents: ComputerAgentLike[];
   owner?: { id: string; name: string } | null;
 }
@@ -329,6 +331,10 @@ export function activityLine(
       return typeof data.keyTtlDays === "number"
         ? `Key lifetime set to ${days(data.keyTtlDays)}`
         : "Key lifetime back to the pod default";
+    case "machine_runs_scripts":
+      return data.enabled === true
+        ? "Set to run your scripts"
+        : "Stopped running your scripts";
     case "machine_revoke":
       return typeof data.revokedKeys === "number"
         ? `Revoked — ${data.revokedKeys} key${data.revokedKeys === 1 ? "" : "s"} stopped working`

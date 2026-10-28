@@ -1,19 +1,20 @@
 /**
- * Create UnifiedEvent (local copy to avoid circular dependency with @synap-core/types)
+ * Create UnifiedEvent — the minimal event envelope `BaseRepository` emits.
  *
- * @synap-core/types → @synap/database (relative imports) → @synap-core/core
- * Adding @synap-core/types as a dep of @synap/database would be circular.
+ * `EventPhase` and `EventAction` are `@synap-core/types/events/unified`'s.
+ * `SubjectType` below is NOT that module's `SubjectType`: the two lists have
+ * diverged (this one names `track`; that one names `link` and `agentRun`), so
+ * unifying them is a change to what this repository layer may emit and to a
+ * published type — a decision of its own, not a mechanical collapse.
  *
- * Keep these type definitions in sync with @synap-core/types/src/events/unified.ts.
  * The full Inngest-specific implementation is in @synap/jobs/types/unified-events.ts
  */
 
 import { randomUUID } from "crypto";
 import type { EnhancedEventMetadata } from "@synap-core/core";
+import type { EventAction, EventPhase } from "@synap-core/types/events/unified";
 
-export type EventPhase = "requested" | "validated" | "completed" | "denied";
-export type EventAction =
-  "create" | "update" | "delete" | "archive" | "restore";
+export type { EventAction, EventPhase };
 export type SubjectType =
   | "entity"
   | "document"

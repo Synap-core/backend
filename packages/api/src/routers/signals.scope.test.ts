@@ -597,6 +597,7 @@ describe("signals — the access-request halves (pending issuers, app requests)"
           targetLabel: "Acme",
           class: "objectWork",
           lifetimeHours: null,
+          reviewLater: false,
           count: 1,
           sampleProposalIds: ["p-1"],
           sources: [],

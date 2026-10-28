@@ -94,6 +94,17 @@ function Line({ line }: { line: ChangeLine }): ReactNode {
   }
 }
 
+/** One text's changed paragraphs, what stayed the same folded to a count. */
+export function ChangeLines({ lines }: { lines: readonly ChangeLine[] }) {
+  return (
+    <div className="flex flex-col gap-2">
+      {lines.map((line, i) => (
+        <Line key={i} line={line} />
+      ))}
+    </div>
+  );
+}
+
 export function DocumentChanges({ changes }: { changes: DocumentChange[] }) {
   return (
     <div className="flex flex-col gap-4">

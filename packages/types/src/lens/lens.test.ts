@@ -491,10 +491,10 @@ describe("lensRowOfNeedsYou — one item = one row, through needsYouRows", () =>
   it("an agent-raised ask carries byAgent; a governance one does not", () => {
     // Discriminating pair: same kind, the category alone decides.
     const { recent } = needsYouRows([
-      sig({ id: "o", kind: "owed-slot", category: "ai" }),
+      sig({ id: "o", kind: "session-review", category: "ai" }),
       sig({
         id: "p",
-        kind: "owed-slot",
+        kind: "session-review",
         category: "governance",
         occurredAt: "2026-10-04T09:00:00.000Z",
       }),
@@ -502,6 +502,68 @@ describe("lensRowOfNeedsYou — one item = one row, through needsYouRows", () =>
     const rows = recent.map((r) => lensRowOfNeedsYou(r, "blocking"));
     expect(rows.find((r) => r.key === "o")?.byAgent).toBe(true);
     expect(rows.find((r) => r.key === "p")?.byAgent).toBe(false);
+  });
+  describe("an owed ask names its asker or its cause, never an unnamed 'Asked by AI'", () => {
+    const owed = (over: Partial<LensNeedsYouSignal>) =>
+      lensRowOfNeedsYou(
+        needsYouRows([
+          sig({
+            id: "slot",
+            kind: "owed-slot",
+            category: "ai",
+            groupKey: "session:s1",
+            sessionTitle: "Pricing work",
+            ...over,
+          }),
+        ]).recent[0]!,
+        "blocking"
+      );
+    it("a named agent: the mark opens the session it asked in", () => {
+      const row = owed({ by: { kind: "agent", id: "ag1", label: "Scout" } });
+      expect(row.by).toEqual({
+        kind: "agent",
+        id: "ag1",
+        label: "Scout",
+        door: { kind: "session", id: "s1" },
+      });
+      expect(row.byAgent).toBe(false);
+      expect(row.cause ?? null).toBeNull();
+    });
+    it("no agent asked: the cause, as words and its door", () => {
+      const row = owed({
+        askCause: {
+          kind: "decision",
+          ref: { kind: "entity", id: "d1" },
+        },
+      });
+      expect(row.cause).toEqual({
+        label: "From a proposed decision",
+        door: { kind: "entity", id: "d1" },
+      });
+      expect(row.by ?? null).toBeNull();
+      expect(row.byAgent).toBe(false);
+    });
+    it("nobody can be named: no mark at all", () => {
+      const row = owed({});
+      expect(row.byAgent).toBe(false);
+      expect(row.by ?? null).toBeNull();
+      expect(row.cause ?? null).toBeNull();
+    });
+    it("a proposal cluster that names its agent draws no unnamed mark beside it", () => {
+      const row = lensRowOfNeedsYou(
+        needsYouRows([
+          sig({
+            id: "c",
+            kind: "proposal-cluster",
+            category: "ai",
+            by: { kind: "agent", id: "ag1", label: "Scout" },
+          }),
+        ]).recent[0]!,
+        "blocking"
+      );
+      expect(row.by).toEqual({ kind: "agent", id: "ag1", label: "Scout" });
+      expect(row.byAgent).toBe(false);
+    });
   });
   it("expiresAt = occurredAt + the server's lifetime; none without one", () => {
     const { recent } = needsYouRows([

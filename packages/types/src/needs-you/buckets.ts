@@ -66,6 +66,18 @@ export interface BucketableSignal {
   notificationType?: string | null;
   /** Object-nav address — a decision row's `proposal` target. */
   target?: { kind: string; id: string } | null;
+  /** In the Review later fold, out of the headline (stamped by the pod). */
+  reviewLater?: boolean;
+}
+
+/**
+ * Out of the headline: the pod's Review later stamp — the predicate its badge
+ * count (`countNeedsYou`) reads. Counted in no bucket, batched never.
+ */
+export function inReviewLater(s: object | null | undefined): boolean {
+  // Any signal shape: `{ reviewLater?: boolean }` is a weak type, which
+  // refuses a signal type that does not itself declare the field.
+  return !!s && "reviewLater" in s && s.reviewLater === true;
 }
 
 /** A work-broke notification ({@link FAILURE_NOTIFICATION_TYPES}): a failed run, not an ask. */
@@ -216,8 +228,9 @@ export interface NeedsYouBuckets<T> {
   /** Every row, filed and ordered by what blocks the most. */
   rows: NeedsYouBucketed<T>[];
   /**
-   * Rows per bucket, in BADGE units (one per signal row, a cluster is one) —
-   * so the four add up to `rows.length`, the list's own total.
+   * Rows per bucket, in BADGE units (one per signal row, a cluster is one),
+   * Review later left out as the badge leaves it out — so the four add up to
+   * the headline, the number the badge shows.
    */
   counts: Record<NeedsYouBucket, number>;
 }
@@ -238,7 +251,7 @@ export function needsYouBuckets<T extends BucketableSignal>(
   };
   const filed = signals.map((signal) => {
     const bucket = needsYouBucketOf(signal, opts);
-    counts[bucket] += 1;
+    if (!inReviewLater(signal)) counts[bucket] += 1;
     return { signal, bucket };
   });
   return { rows: orderNeedsYouByBlocking(filed), counts };
@@ -343,19 +356,35 @@ export interface NeedsYouFilterView<R> {
 
 /**
  * One filter over rows already filed and ordered (`needsYouBuckets`): the
- * bucket's rows, and — the only batch — the routine changes. Pure.
+ * bucket's rows, and — the only batch — the routine changes. A routine change
+ * in Review later is never batched: it stays a row, for `needsYouRows` to
+ * fold, so "Approve N" approves only what the headline counts. Pure.
  */
-export function needsYouFilterView<R extends { bucket: NeedsYouBucket }>(
-  rows: readonly R[],
-  filter: NeedsYouFilter
-): NeedsYouFilterView<R> {
+export function needsYouFilterView<
+  R extends { bucket: NeedsYouBucket; signal?: object | null },
+>(rows: readonly R[], filter: NeedsYouFilter): NeedsYouFilterView<R> {
+  const batchable = (r: R) =>
+    r.bucket === "routine" && !inReviewLater(r.signal);
   if (filter === "routine") {
-    return { rows: [], batch: rows.filter((r) => r.bucket === "routine") };
+    return {
+      rows: rows.filter((r) => r.bucket === "routine" && !batchable(r)),
+      batch: rows.filter(batchable),
+    };
   }
   if (filter !== "all") {
     return { rows: rows.filter((r) => r.bucket === filter), batch: [] };
   }
-  const routine = rows.filter((r) => r.bucket === "routine");
+  const routine = rows.filter(batchable);
   if (routine.length < ROUTINE_BATCH_MIN) return { rows: [...rows], batch: [] };
-  return { rows: rows.filter((r) => r.bucket !== "routine"), batch: routine };
+  return { rows: rows.filter((r) => !batchable(r)), batch: routine };
 }
+
+// Compile-time floor: the rows `needsYouBuckets` files reach the filter view
+// whatever their signal declares. A `{ reviewLater?: boolean }` signal bound is
+// a weak type and refused every signal type without that field; a bound like
+// it stops the build here.
+type _SignalWithoutReviewLater = Omit<BucketableSignal, "reviewLater">;
+const _filterTakesFiledRows = (
+  filed: NeedsYouBuckets<_SignalWithoutReviewLater>
+) => needsYouFilterView(filed.rows, "all");
+void _filterTakesFiledRows;

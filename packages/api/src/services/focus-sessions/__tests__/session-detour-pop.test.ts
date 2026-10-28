@@ -38,10 +38,14 @@ const COMPLETE = join(SERVICES, "complete-session.ts");
  * lives in `@synap/database` (`getParentSessionId`/`getParentSessionIds`) and
  * is wrapped by `services/focus-sessions/parent-lineage.ts`
  * (`withParentSessionId`/`attachParentSessionIds`); reaching a parent row
- * requires naming one of them, or the edge itself.
+ * requires naming one of them, or the edge itself. The list projection
+ * (`projectSessionRows`, `session-list-rows.ts`) is a door too: it attaches
+ * lineage, and since the work-graph read shares it, the router's `list` reaches
+ * lineage only through it (pinned below: it really does call the wrapper).
  */
 const LINEAGE =
-  /getParentSessionIds?\s*\(|withParentSessionId\s*\(|attachParentSessionIds\s*\(|parent-lineage|spawned_from/;
+  /getParentSessionIds?\s*\(|withParentSessionId\s*\(|attachParentSessionIds\s*\(|projectSessionRows\s*\(|parent-lineage|spawned_from/;
+const LIST_ROWS = join(SERVICES, "session-list-rows.ts");
 
 /**
  * Slice one tRPC procedure's body out of a router. Procedures are top-level
@@ -171,6 +175,20 @@ describe("detour pop", () => {
     for (const name of ["list", "get"]) {
       expect(reachableSource(src, name), name).toMatch(LINEAGE);
     }
+  });
+
+  it("the list projection the router reaches lineage through really attaches it", () => {
+    // `projectSessionRows` counts as a lineage door in LINEAGE only because it
+    // calls the wrapper. Pin that, or the alias could go stale and the close
+    // checks above would watch a name that no longer reads a parent.
+    const src = readFileSync(LIST_ROWS, "utf8");
+    const body = src.slice(
+      src.indexOf("export async function projectSessionRows")
+    );
+    expect(body.length, "projectSessionRows not found").toBeLessThan(
+      src.length
+    );
+    expect(body).toMatch(/attachParentSessionIds\s*\(/);
   });
 
   it("every focus_sessions status write in the router is keyed on the caller's id", () => {

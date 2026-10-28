@@ -4,6 +4,7 @@
  * Extracted verbatim from proposals.ts (Wave 5 router-decomposition).
  */
 
+import { parseBoxDeclaration } from "../../services/box-runs/box-spec.js";
 import type {
   ProposalFieldDrift,
   ProposalReviewChange,
@@ -124,6 +125,13 @@ export function buildProposalChanges(
      * proposed value and every field would read as "changed since".
      */
     measureDrift?: boolean;
+    /**
+     * A non-entity target's values NOW, keyed as the payload names them (a
+     * skill's `body`, `code`): the before of an update row nothing recorded.
+     * Pass it only for a proposal not yet applied — once applied, the live
+     * row holds the proposed value.
+     */
+    targetBefore?: Readonly<Record<string, unknown>>;
   } = {}
 ): ProposalReviewChange[] {
   // ── Space brief edit (`workspace/update_brief`) ─────────────────────────
@@ -173,6 +181,11 @@ export function buildProposalChanges(
     current?.properties && typeof current.properties === "object"
       ? (current.properties as Record<string, unknown>)
       : {};
+  // A live empty is unknown, never "was empty" (see `ProposalReviewChange.before`).
+  const targetBeforeFor = (key: string): unknown =>
+    operation === "update"
+      ? (options.targetBefore?.[key] ?? undefined)
+      : undefined;
   const beforeFor = (key: string): unknown => {
     if (operation !== "update") return undefined;
     if (previousData) {
@@ -181,7 +194,7 @@ export function buildProposalChanges(
       const snapValue = previousData[key as keyof typeof previousData];
       if (snapValue !== undefined) return snapValue;
     }
-    if (!current) return undefined;
+    if (!current) return targetBeforeFor(key);
     if (key === "title") return current.title ?? undefined;
     if (key === "description") return current.preview ?? undefined;
     if (key === "profileSlug") return current.type ?? undefined;
@@ -309,6 +322,18 @@ export function buildProposalChanges(
       : {}
   )["allowedHosts"];
   const promotesAllowedHosts = Array.isArray(allowedHosts);
+  // A box skill's declaration (0356): its packages and the hosts the script
+  // may reach are what the person approves besides the code — promoted the
+  // same way, parsed by the one box rule (a malformed bag stays raw).
+  const boxDeclaration =
+    data.executionMode === "box"
+      ? parseBoxDeclaration(
+          (data.metadata && typeof data.metadata === "object"
+            ? (data.metadata as Record<string, unknown>)
+            : {})["box"]
+        )
+      : null;
+  const promotesBox = boxDeclaration?.ok === true;
 
   // The playbook STRUCTURE keys, promoted for the same reason (see the block
   // after the allowedHosts promotion): resolved here so the fallback can skip
@@ -336,7 +361,7 @@ export function buildProposalChanges(
     // opaque. When the promotion fires, this blob is a strict duplicate of it
     // plus noise (marketSource baselines, run counters) — the exact thing the
     // promotion exists to displace.
-    if (key === "metadata" && promotesAllowedHosts) continue;
+    if (key === "metadata" && (promotesAllowedHosts || promotesBox)) continue;
     // Promoted below as readable rows; the raw copy would be a duplicate.
     if (key === "stages" && promotedStages) continue;
     if (key === "scope" && promotesScope) continue;
@@ -347,7 +372,7 @@ export function buildProposalChanges(
       before:
         key === "goal" && operation === "update" && "previousGoal" in data
           ? data.previousGoal
-          : undefined,
+          : targetBeforeFor(key),
       after: value,
       valueType: valueTypeOf(value),
     });
@@ -367,11 +392,12 @@ export function buildProposalChanges(
   // `changes.length === 0` false and suppress the fallback entirely, silently
   // erasing every other key of a metadata-carrying payload from the card.
   //
-  // So promote exactly this key, and nothing else in the bag. `before` is
-  // deliberately left undefined — this builder has no skill row to read the
-  // prior list from, and the card renders an unknown previous value honestly
-  // rather than implying the list was empty.
+  // So promote exactly this key, and nothing else in the bag. `before` is the
+  // skill's list now when the caller read the row (`targetBefore`); otherwise
+  // it stays undefined, and the card renders an unknown previous value
+  // honestly rather than implying the list was empty.
   if (promotesAllowedHosts) {
+    const metadataNow = targetBeforeFor("metadata");
     changes.push({
       path: "metadata.allowedHosts",
       // Say what the row IS, not just what it holds. Rendered with the generic
@@ -382,10 +408,73 @@ export function buildProposalChanges(
       // does not apply — there is no domain token here to resolve.
       label: "External hosts (sandbox allowlist)",
       operation,
-      before: undefined,
+      before:
+        metadataNow && typeof metadataNow === "object"
+          ? ((metadataNow as Record<string, unknown>).allowedHosts ?? undefined)
+          : undefined,
       after: allowedHosts,
       valueType: valueTypeOf(allowedHosts),
     });
+  }
+
+  // ── Box declaration: what the script installs and may reach ───────────────
+  // Field labels (not object kinds / actions / statuses), like the allowlist
+  // row above: no vocabulary token to resolve.
+  if (boxDeclaration?.ok) {
+    const box = boxDeclaration.box;
+    const rows: Array<[string, string, unknown]> = [
+      [
+        "metadata.box.runtime",
+        "Runs in a box on your computer",
+        `${box.language}, ${box.entrypoint}, up to ${Math.round(box.limits.wallSeconds / 60)} min, ${box.limits.memoryMb} MB memory`,
+      ],
+      [
+        "metadata.box.packages",
+        "Packages installed in the box",
+        box.packages.length
+          ? box.packages.map((p) => `${p.name}==${p.version}`)
+          : "None",
+      ],
+      [
+        "metadata.box.hosts",
+        "Hosts it may reach (box allowlist)",
+        box.hosts.length ? box.hosts : "None: no network while it runs",
+      ],
+    ];
+    for (const [path, label, after] of rows) {
+      changes.push({
+        path,
+        label,
+        operation,
+        before: undefined,
+        after,
+        valueType: valueTypeOf(after),
+      });
+    }
+  }
+
+  // ── The rest of a promoted bag: one row per key ────────────────────────────
+  // The raw `metadata` row is skipped when a promotion fires, so every other
+  // key it carries (a `readOnly` that makes every agent run automatic, for
+  // one) gets its own row: a promotion displaces the blob, never what is in it.
+  if (promotesAllowedHosts || promotesBox) {
+    const promoted = new Set([
+      ...(promotesAllowedHosts ? ["allowedHosts"] : []),
+      ...(promotesBox ? ["box"] : []),
+    ]);
+    for (const [key, value] of Object.entries(
+      data.metadata as Record<string, unknown>
+    )) {
+      if (promoted.has(key) || value === undefined) continue;
+      changes.push({
+        path: `metadata.${key}`,
+        label: labelFromPath(key),
+        operation,
+        before: undefined,
+        after: value,
+        valueType: valueTypeOf(value),
+      });
+    }
   }
 
   // ── Playbook structure: `scope` and `stages` promoted to their own rows ────

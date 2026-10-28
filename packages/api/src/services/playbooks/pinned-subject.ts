@@ -40,8 +40,11 @@ export function readPinnedStrategy(value: unknown): PinnedStrategy | null {
   }
   const f = raw as Record<string, unknown>;
   const fallback: PinnedFallback = {};
-  if (f.filter && typeof f.filter === "object" && !Array.isArray(f.filter)) {
-    fallback.filter = f.filter as Record<string, unknown>;
+  // Kept whatever its shape: dropping a filter that is not an object would
+  // make the fallback pick from EVERY record of the kind. The query DSL
+  // parser refuses it at run time instead (`findFallbackSubject`).
+  if (f.filter !== undefined && f.filter !== null) {
+    fallback.filter = f.filter;
   }
   if (typeof f.orderBy === "string" && f.orderBy.trim()) {
     fallback.orderBy = f.orderBy.trim();

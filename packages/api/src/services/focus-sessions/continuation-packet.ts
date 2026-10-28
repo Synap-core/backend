@@ -21,6 +21,12 @@
  *   - prior stages    → the track (`getTrack`) + its stage order
  *                        (`deriveTrackStages`), and the outputs join
  *                        (`listOutputsForSessions`) for those stages' sessions
+ *   - goal            → the track (`getTrack`) + its derived facts
+ *                        (`loadTrackGoalFacts` → `toTrackView`): criteria
+ *                        marks, KPI, end state, drop conditions
+ *   - siblings        → the goal's (else the project's) other sessions under
+ *                        the session floor, bucketed parallel / before / next
+ *   - work units      → the row's own PR / branch outcome slots (`ref.url`)
  *   - inbox           → `readSessionInbox` (`session-inbox.ts`), the one
  *                        "addressed to this session" predicate the change
  *                        feed's `session_message` reads too
@@ -51,18 +57,34 @@ import {
   inArray,
   notInArray,
   isNull,
+  isNotNull,
+  not,
+  or,
   count,
   drizzleSql,
   ProposalStatus,
   ownerPrivateVisibleWhere,
+  openRoomQuestionConditions,
 } from "@synap/database";
+import { questionDisposition } from "@synap-core/types/ask";
+import {
+  questionShortId,
+  readRoomPostMeta,
+} from "../messaging/room-post-kind.js";
+import type { SQL } from "@synap/database";
 import {
   buildObjectActionTitle,
   resolveObjectGlyph,
   resolveObjectNoun,
+  resolvePullRequestStateLabel,
   resolveSessionPostIntentLabel,
   resolveStatusLabel,
 } from "@synap-core/types/vocabulary";
+import {
+  parsePullRequestRef,
+  type PullRequestRef,
+  type PullRequestStateFacts,
+} from "@synap-core/types";
 import type { OpenBlocker } from "@synap-core/types/connections";
 import { readDependencyState } from "../links/dependency-links.js";
 import {
@@ -83,13 +105,21 @@ import type {
   SlotAsk,
 } from "@synap/playbooks";
 import { projectOwedSlots, type OwedSlot } from "./owed-outputs.js";
+import { deriveSlotKeys } from "./slot-keys.js";
 import {
   listSessionOutputs,
   listOutputsForSessions,
   type SessionOutput,
 } from "./session-outputs.js";
-import { deriveTrackStages, filedStageKey } from "@synap-core/types/units";
-import { getTrack } from "../tracks/tracks-service.js";
+import {
+  deriveTrackStages,
+  filedStageKey,
+  type GoalCriterionMark,
+  type TrackKpi,
+} from "@synap-core/types/units";
+import { getTrack, toTrackView } from "../tracks/tracks-service.js";
+import { loadTrackGoalFacts } from "../tracks/goal-content.js";
+import { pullRequestKey, readPullRequestStates } from "../dev-loop/pr-state.js";
 import {
   assessRerunAvailability,
   type RerunAvailability,
@@ -103,8 +133,13 @@ import {
 import {
   isTerminalSessionStatus,
   OPEN_SESSION_STATUSES,
+  TERMINAL_SESSION_STATUSES,
 } from "./session-statuses.js";
-import { projectSessionKind, type SessionKind } from "./session-kind.js";
+import {
+  projectSessionKind,
+  sessionKindWhere,
+  type SessionKind,
+} from "./session-kind.js";
 import { createLogger } from "@synap-core/core";
 import {
   sessionReadableWhere,
@@ -264,6 +299,98 @@ export interface PacketResumeSession {
   statusLabel: string;
 }
 
+/**
+ * THE GOAL this session serves — the track it is filed into, read through the
+ * goal's own derivation (`loadTrackGoalFacts` → `toTrackView`), so each
+ * criterion's `mark` is the one every goal surface shows, never re-derived.
+ */
+export interface PacketGoal {
+  id: string;
+  name: string;
+  status: string;
+  statusLabel: string;
+  /** What "done" looks like, in words — `null` when unsaid. */
+  endState: string | null;
+  /** Where it is heading, one line — `null` when unsaid. */
+  direction: string | null;
+  /** Its criteria (none for a lasting goal), each with its DERIVED mark. */
+  criteria: Array<{
+    key: string;
+    statement: string;
+    required: boolean;
+    mark: GoalCriterionMark | null;
+  }>;
+  /** Met / total over the criteria (a lasting goal reads 0 / 0). */
+  criteriaMet: { met: number; total: number };
+  /** The number it steers by — `current` is STATED, never measured. */
+  kpi: TrackKpi | null;
+  /** When to stop — `[]` when none said. */
+  dropConditions: string[];
+}
+
+/** A session beside this one on the same goal (or project) — identity only. */
+export interface PacketSiblingItem extends PacketChildItem {
+  /** The goal step it is filed at — `null` on a stage-less goal or a project sibling. */
+  stageKey: string | null;
+}
+
+/**
+ * The work beside this session, so a fresh agent sees what runs in parallel,
+ * what was done before and what comes next without a second read. Scoped to
+ * the session's GOAL (`trackId`); a session with no goal falls back to its
+ * PROJECT (receipts left out), and `scope` says which.
+ *
+ *  - `parallel` — open siblings (active, paused, forming, stale) not in `next`,
+ *    newest activity first;
+ *  - `before`   — siblings that ended (closed, cancelled, failed), newest first;
+ *  - `next`     — scheduled siblings, and on a staged goal those filed at a
+ *    LATER step than this one, in step order.
+ *
+ * Sessions WAITING on this one are `unblocks`; its own sub-sessions are
+ * `children` and the session it came from is `parent` — not repeated here.
+ */
+export interface PacketSiblings {
+  scope: "goal" | "project";
+  parallel: PacketSection<PacketSiblingItem>;
+  before: PacketSection<PacketSiblingItem>;
+  next: PacketSection<PacketSiblingItem>;
+}
+
+/** Slot kinds that ARE a code work unit (work-units rule: `pr-<repo>-<n>`). */
+export const WORK_UNIT_KINDS = ["pull_request", "branch"] as const;
+
+/** A GitHub PR / branch / commit URL — a work unit whatever the slot's kind. */
+const WORK_UNIT_URL =
+  /^https?:\/\/github\.com\/[^/]+\/[^/]+\/(pull|tree|commit)\//i;
+
+/**
+ * What the pod RECORDED about a PR work unit (`readPullRequestStates`: the
+ * `dev.pr_*`, `ci.finished` and `dev.deployed` facts, folded by
+ * `foldPullRequestState`). `label` is the state's word (vocabulary).
+ */
+export type PacketPullRequestState =
+  | ({ status: "ok"; label: string } & PullRequestStateFacts)
+  | { status: "unavailable"; reason: string };
+
+/**
+ * A pull request or branch this session recorded as an outcome (`ref.url`),
+ * with the OUTCOME's state: `met` (merged / delivered, stamped done), `claimed`
+ * (delivery claimed, not verified), `open`, or `retired` (withdrawn).
+ *
+ * `prState` is the PR's own state, from the dev-loop facts the pod recorded
+ * about it. ABSENT when none was recorded (an older pod, a repo with no
+ * producer) or the unit is not a PR: draw nothing, never a guess. A failed
+ * read is `unavailable`, never absent.
+ */
+export interface PacketWorkUnitItem extends PacketKindIdentity {
+  key: string | null;
+  label: string;
+  kind: string;
+  url: string | null;
+  state: "met" | "claimed" | "open" | "retired";
+  prState?: PacketPullRequestState;
+}
+
 /** A capture clarification question still waiting for the user's answer. */
 export interface PacketQuestionItem {
   /** The question message id. */
@@ -272,6 +399,29 @@ export interface PacketQuestionItem {
   /** One line: what answering changes. */
   why?: string;
   askedAt: string | null;
+}
+
+/**
+ * An agent's question in the session's ROOM still waiting on the person —
+ * `post_message kind:'question'`, slot or not. What an agent addresses when
+ * it relays the person's chat answer (`synap_relay_answer` `messageId`).
+ */
+export interface PacketRoomQuestionItem {
+  /** The question's message id — the relay door's exact address. */
+  messageId: string;
+  /** `Q-` + the id's first 8 characters: how an agent names it in a chat. */
+  shortId: string;
+  text: string;
+  askedAt: string | null;
+  /** The agent that asked (`messages.routed_teammate_id`). */
+  askedBy: string | null;
+  /** The output it is about, when it names one. */
+  slotLabel?: string;
+  /**
+   * `open`, or `awaiting_your_tap` when an agent relayed a commitment's answer
+   * and the person's Confirm is still owed (`questionDisposition`).
+   */
+  disposition: "open" | "awaiting_your_tap";
 }
 
 /**
@@ -472,6 +622,13 @@ export interface ContinuationPacket {
   /** Capture clarification questions still open in this session's room, oldest first. */
   openQuestions: PacketSection<PacketQuestionItem>;
   /**
+   * AGENT questions still open in this session's room, oldest first — read
+   * through the ONE open-question predicate (`openRoomQuestionConditions`,
+   * `@synap/database`), the rule needs-you and the answer loop read. Distinct
+   * from `openQuestions` (capture clarifications).
+   */
+  openRoomQuestions: PacketSection<PacketRoomQuestionItem>;
+  /**
    * THE STAGE BRIEF — what the EARLIER stages of this session's track produced,
    * so a stage starts from pod references, never from the previous chat.
    * DERIVED, no edge: the sessions filed (`track_stage`) at a stage before this
@@ -490,6 +647,26 @@ export interface ContinuationPacket {
    * not derived here.
    */
   priorStages: PacketSection<PacketPriorStageSession> | null;
+  /**
+   * THE GOAL this session serves (see {@link PacketGoal}). `goal: null` = the
+   * session is filed into no goal, or into one the reader cannot see (never
+   * leaked) — a true state. A FAILED read is `unavailable`, never "no goal".
+   */
+  goal:
+    | { status: "ok"; goal: PacketGoal | null }
+    | { status: "unavailable"; reason: string };
+  /**
+   * The work beside this one (see {@link PacketSiblings}). `null` = the
+   * session has neither a goal nor a project, so it has no siblings to name.
+   * A FAILED read is `unavailable`, never "nothing beside it".
+   */
+  siblings: PacketSiblings | { status: "unavailable"; reason: string } | null;
+  /**
+   * The PRs and branches this session recorded as outcomes, declaration
+   * order (see {@link PacketWorkUnitItem}). Derived from the row itself — an
+   * empty list means none was recorded, not that none exists.
+   */
+  workUnits: PacketSection<PacketWorkUnitItem>;
   /** What already landed, newest first — an agent must not redo these. */
   alreadyDone: PacketSection<PacketDoneItem>;
   /** `decision: null` when nothing was ever approved or rejected here. */
@@ -543,8 +720,10 @@ export interface ContinuationPacket {
   /**
    * GATES — every gated stage of the session's process and its state, DERIVED
    * FROM PROPOSAL ROWS only (`session-gates.ts`), plus `deploy`: the newest
-   * `dev.deploy_approval` a PERSON approved. "Is commit X approved to ship by a
-   * human?" is `deploy?.commitSha` prefix-matching X.
+   * `dev.deploy_approval` a PERSON approved, and `ownerDeploys`: the ones a
+   * person approved on any of the owner's sessions. "Is commit X approved to
+   * ship by a human?" is `deploy?.commitSha`, or any `ownerDeploys[].commitSha`,
+   * prefix-matching X.
    */
   gates: PacketGatesSection;
   /**
@@ -591,6 +770,8 @@ export interface PacketEvaluationItem {
 }
 
 type SessionRow = typeof focusSessions.$inferSelect;
+/** The session's track, read once through its own door (`getTrack`). */
+type TrackRead = ReturnType<typeof getTrack>;
 
 export interface ProjectContinuationPacketCtx {
   database?: typeof db;
@@ -900,10 +1081,11 @@ async function readOutboundSessions(
 async function readPriorStages(
   database: typeof db,
   reader: SessionReader,
-  row: SessionRow
+  row: SessionRow,
+  trackRead: TrackRead
 ): Promise<PacketSection<PacketPriorStageSession> | null> {
   if (!row.trackId) return null;
-  const track = await getTrack(row.trackId, { userId: reader.userId });
+  const track = await trackRead;
   if (!track) return null;
   const stages = deriveTrackStages(
     track.definitionSnapshot?.stages,
@@ -1034,6 +1216,295 @@ async function readRecentTrackSessions(
           ? outputsSection(joined.get(r.id)?.outputs ?? [])
           : joined,
     })),
+  };
+}
+
+/**
+ * {@link ContinuationPacket.goal}. The track through its own door (`getTrack`,
+ * project-floored — a goal the reader cannot see reads `null`, never leaked),
+ * its derived facts through `loadTrackGoalFacts` and the projection through
+ * `toTrackView`: the marks are the ones every goal read returns.
+ */
+async function readGoal(
+  reader: SessionReader,
+  row: SessionRow,
+  trackRead: TrackRead
+): Promise<ContinuationPacket["goal"]> {
+  if (!row.trackId) return { status: "ok", goal: null };
+  const track = await trackRead;
+  if (!track) return { status: "ok", goal: null };
+  const facts = await loadTrackGoalFacts([track], reader.userId);
+  const view = toTrackView(track, undefined, undefined, facts.get(track.id));
+  const criteria = view.criteria.map((c) => ({
+    key: c.key,
+    statement: c.statement,
+    required: c.required !== false,
+    mark: c.mark,
+  }));
+  return {
+    status: "ok",
+    goal: {
+      id: view.id,
+      name: view.name,
+      status: view.status,
+      statusLabel: resolveStatusLabel(view.status),
+      endState: view.endState,
+      direction: view.direction,
+      criteria,
+      criteriaMet: {
+        met: criteria.filter((c) => c.mark === "met").length,
+        total: criteria.length,
+      },
+      kpi: view.kpi,
+      dropConditions: view.dropConditions,
+    },
+  };
+}
+
+/**
+ * {@link ContinuationPacket.siblings}. One scope (the goal, else the
+ * project), three buckets, each counted exactly and capped at
+ * {@link PACKET_TOP_N}, all under the session floor.
+ *
+ * SESSION-KIND-LENS-EXEMPT: projects sibling sessions to packet lines (id, title, status, stage) — never a session row; receipts are excluded in the WHERE.
+ */
+async function readSiblings(
+  database: typeof db,
+  reader: SessionReader,
+  row: SessionRow,
+  trackRead: TrackRead
+): Promise<PacketSiblings | null> {
+  let scope: PacketSiblings["scope"];
+  let scopeWhere: SQL;
+  let laterStages: string[] = [];
+  if (row.trackId) {
+    scope = "goal";
+    scopeWhere = eq(focusSessions.trackId, row.trackId);
+    // A staged goal: the steps after this one are "next". Read through the
+    // track's own door and stage rule, as `priorStages` does.
+    if (row.trackStage) {
+      const track = await trackRead;
+      const stages = track
+        ? deriveTrackStages(
+            track.definitionSnapshot?.stages,
+            track.currentStage
+          )
+        : [];
+      const at = stages.findIndex(
+        (s) => s.key === filedStageKey(row.trackStage, stages)
+      );
+      if (at !== -1) laterStages = stages.slice(at + 1).map((s) => s.key);
+    }
+  } else if (row.projectId) {
+    scope = "project";
+    scopeWhere = and(
+      eq(focusSessions.projectId, row.projectId),
+      // A receipt groups an agent's writes; it is not work beside this one.
+      or(sessionKindWhere("work"), sessionKindWhere("run"))
+    ) as SQL;
+  } else {
+    return null;
+  }
+  const base = and(
+    scopeWhere,
+    ne(focusSessions.id, row.id),
+    sessionReadableWhere(reader)
+  ) as SQL;
+  const ended = inArray(focusSessions.status, [...TERMINAL_SESSION_STATUSES]);
+  const scheduled = eq(focusSessions.status, "scheduled");
+  const next: SQL =
+    laterStages.length > 0
+      ? (and(
+          not(ended),
+          // `isNotNull` first: a NULL stage must read false, not NULL, or
+          // `not(next)` would drop it from `parallel` too.
+          or(
+            scheduled,
+            and(
+              isNotNull(focusSessions.trackStage),
+              inArray(focusSessions.trackStage, laterStages)
+            )
+          )
+        ) as SQL)
+      : scheduled;
+  const columns = {
+    id: focusSessions.id,
+    title: focusSessions.title,
+    goal: focusSessions.goal,
+    status: focusSessions.status,
+    trackStage: focusSessions.trackStage,
+  };
+  const bucket = async (
+    w: SQL,
+    order: SQL[]
+  ): Promise<PacketSection<PacketSiblingItem>> => {
+    const where = and(base, w);
+    const [[totalRow], rows] = await Promise.all([
+      database.select({ n: count() }).from(focusSessions).where(where),
+      database
+        .select(columns)
+        .from(focusSessions)
+        .where(where)
+        .orderBy(...order)
+        .limit(PACKET_TOP_N),
+    ]);
+    return {
+      status: "ok",
+      total: Number(totalRow?.n ?? 0),
+      items: rows.map((r) => ({
+        id: r.id,
+        title: resolveSessionTitle(r),
+        status: r.status,
+        statusLabel: resolveStatusLabel(r.status),
+        stageKey: scope === "goal" ? (r.trackStage ?? null) : null,
+      })),
+    };
+  };
+  const stepOrder =
+    laterStages.length > 0
+      ? [
+          asc(
+            drizzleSql`array_position(ARRAY[${drizzleSql.join(
+              laterStages.map((k) => drizzleSql`${k}`),
+              drizzleSql`, `
+            )}]::text[], ${focusSessions.trackStage})`
+          ),
+        ]
+      : [];
+  const [parallel, before, nextSection] = await Promise.all([
+    bucket(and(not(ended), not(next)) as SQL, [desc(focusSessions.updatedAt)]),
+    bucket(ended, [desc(focusSessions.updatedAt)]),
+    bucket(next, [...stepOrder, asc(focusSessions.createdAt)]),
+  ]);
+  return { scope, parallel, before, next: nextSection };
+}
+
+function workUnitUrl(slot: ExpectedOutput): string | null {
+  const ref = slot.ref;
+  return ref && "url" in ref && typeof ref.url === "string" ? ref.url : null;
+}
+
+/**
+ * {@link ContinuationPacket.workUnits} — pure over the row's declared slots:
+ * a slot of a work-unit kind, or one whose `ref.url` is a GitHub PR, branch or
+ * commit. Its state is the outcome's own (`status`, `claimedDone`,
+ * `retiredAt`), never a guess about the PR.
+ */
+export function workUnitsSection(
+  all: ExpectedOutput[],
+  opts: { uncapped?: boolean } = {}
+): PacketSection<PacketWorkUnitItem> {
+  const keys = deriveSlotKeys(all);
+  const items = all.flatMap((slot, i): PacketWorkUnitItem[] => {
+    const url = workUnitUrl(slot);
+    const isUnit =
+      (WORK_UNIT_KINDS as readonly string[]).includes(slot.kind) ||
+      (url !== null && WORK_UNIT_URL.test(url));
+    if (!isUnit) return [];
+    return [
+      {
+        key: keys[i] ?? null,
+        label: slot.label,
+        kind: slot.kind,
+        ...kindIdentity(slot.kind),
+        url,
+        state:
+          slot.retiredAt != null
+            ? "retired"
+            : slot.status === "done"
+              ? "met"
+              : slot.claimedDone === true
+                ? "claimed"
+                : "open",
+      },
+    ];
+  });
+  return opts.uncapped
+    ? { status: "ok", total: items.length, items }
+    : section(items);
+}
+
+/**
+ * EVERY work unit the session recorded, each PR with its state: the session
+ * page's "Show all" of its pull requests and branches. The packet carries the
+ * first {@link PACKET_TOP_N} ({@link ContinuationPacket.workUnits}); this is
+ * the SAME rule (`workUnitsSection`) and the SAME state read
+ * (`withPullRequestStates`) over all of them, never a second derivation. The
+ * row must already be read through `sessionReadableWhere` by the door.
+ */
+export async function readAllWorkUnits(
+  row: SessionRow,
+  ctx: ProjectContinuationPacketCtx
+): Promise<PacketSection<PacketWorkUnitItem>> {
+  return withPullRequestStates(
+    workUnitsSection(slots(row), { uncapped: true }),
+    { userId: ctx.userId, roster: ctx.roster },
+    ctx.database ?? db
+  );
+}
+
+/**
+ * Each PR work unit's {@link PacketWorkUnitItem.prState}, read once for all the
+ * listed units. A failed read marks every PR unit `unavailable`: the units are
+ * the row's own outcomes and stay listed either way.
+ */
+export async function withPullRequestStates(
+  units: PacketSection<PacketWorkUnitItem>,
+  reader: SessionReader,
+  database: typeof db = db
+): Promise<PacketSection<PacketWorkUnitItem>> {
+  if (units.status !== "ok") return units;
+  const refs = new Map<number, PullRequestRef>();
+  units.items.forEach((item, i) => {
+    const ref = item.url ? parsePullRequestRef(item.url) : null;
+    if (ref) refs.set(i, ref);
+  });
+  if (refs.size === 0) return units;
+  let states: Map<string, PullRequestStateFacts>;
+  try {
+    // The session reader's own floor: roster only when it honours one
+    // (`SessionReader.roster` defaults to owner-only).
+    states = await readPullRequestStates(
+      [...refs.values()],
+      {
+        userId: reader.userId,
+        roster: reader.roster ?? false,
+        lens: reader.lens,
+      },
+      database
+    );
+  } catch (err) {
+    logger.warn(
+      { err },
+      "continuation packet: the pull request states could not be read"
+    );
+    const prState: PacketPullRequestState = {
+      status: "unavailable",
+      reason:
+        "What the pod recorded about this pull request could not be read.",
+    };
+    return {
+      ...units,
+      items: units.items.map((item, i) =>
+        refs.has(i) ? { ...item, prState } : item
+      ),
+    };
+  }
+  return {
+    ...units,
+    items: units.items.map((item, i) => {
+      const ref = refs.get(i);
+      const facts = ref ? states.get(pullRequestKey(ref)) : undefined;
+      if (!facts) return item;
+      return {
+        ...item,
+        prState: {
+          status: "ok",
+          label: resolvePullRequestStateLabel(facts.state),
+          ...facts,
+        },
+      };
+    }),
   };
 }
 
@@ -1255,6 +1726,55 @@ async function readOpenQuestions(
       question: part.question,
       ...(part.why ? { why: part.why } : {}),
       askedAt: r.timestamp ? new Date(r.timestamp).toISOString() : null,
+    });
+  }
+  return { status: "ok", total: Number(totalRow?.n ?? 0), items };
+}
+
+/**
+ * Agent questions still open in the session's ROOM (`PacketRoomQuestionItem`).
+ * A session with no room was never asked anything: a true empty.
+ */
+async function readOpenRoomQuestions(
+  database: typeof db,
+  row: SessionRow
+): Promise<PacketSection<PacketRoomQuestionItem>> {
+  if (!row.channelId) return { status: "ok", total: 0, items: [] };
+  const where = and(
+    eq(messages.channelId, row.channelId),
+    ...openRoomQuestionConditions(messages)
+  );
+  const [[totalRow], rows] = await Promise.all([
+    database.select({ n: count() }).from(messages).where(where),
+    database
+      .select({
+        id: messages.id,
+        content: messages.content,
+        metadata: messages.metadata,
+        routedTeammateId: messages.routedTeammateId,
+        timestamp: messages.timestamp,
+      })
+      .from(messages)
+      .where(where)
+      // Oldest first: the question waiting longest is the one to settle.
+      .orderBy(asc(messages.timestamp))
+      .limit(PACKET_TOP_N),
+  ]);
+  const items: PacketRoomQuestionItem[] = [];
+  for (const r of rows) {
+    const meta = readRoomPostMeta(r.metadata);
+    if (!meta) continue;
+    const disposition = questionDisposition(meta);
+    // The SQL predicate is the rule; this only reads which open state it is.
+    if (disposition !== "open" && disposition !== "awaiting_your_tap") continue;
+    items.push({
+      messageId: r.id,
+      shortId: questionShortId(r.id),
+      text: r.content,
+      askedAt: r.timestamp ? new Date(r.timestamp).toISOString() : null,
+      askedBy: r.routedTeammateId ?? null,
+      ...(meta.slotLabel ? { slotLabel: meta.slotLabel } : {}),
+      disposition,
     });
   }
   return { status: "ok", total: Number(totalRow?.n ?? 0), items };
@@ -1834,6 +2354,12 @@ export async function projectContinuationPacket(
   // their own `unavailable` below.
   const allOutputs = readAllOutputs(database, reader, row.id);
   allOutputs.catch(() => undefined);
+  // ONE track read for the three track sections (`priorStages`, `goal`,
+  // `siblings`); a failure makes each its own `unavailable`, as above.
+  const trackRead: TrackRead = row.trackId
+    ? getTrack(row.trackId, { userId: reader.userId })
+    : Promise.resolve(null);
+  trackRead.catch(() => undefined);
 
   const [
     project,
@@ -1845,6 +2371,7 @@ export async function projectContinuationPacket(
     blockedBy,
     unblocks,
     openQuestions,
+    openRoomQuestions,
     alreadyDone,
     lastDecision,
     evaluation,
@@ -1856,6 +2383,9 @@ export async function projectContinuationPacket(
     gates,
     runners,
     inbox,
+    goal,
+    siblings,
+    workUnits,
   ] = await Promise.all([
     readProject(database, ctx.userId, row.projectId ?? null).catch(
       unavailable(
@@ -1924,6 +2454,13 @@ export async function projectContinuationPacket(
         "This session's open questions could not be read."
       )
     ),
+    readOpenRoomQuestions(database, row).catch(
+      unavailable(
+        row.id,
+        "openRoomQuestions",
+        "This session's open room questions could not be read."
+      )
+    ),
     Promise.all([allOutputs, readAppliedProposals(database, row.id, all)])
       .then(([outs, appliedProposals]) =>
         deriveAlreadyDone({
@@ -1985,7 +2522,7 @@ export async function projectContinuationPacket(
           "The agent this session was handed to could not be read."
         )
       ),
-    readPriorStages(database, reader, row).catch(
+    readPriorStages(database, reader, row, trackRead).catch(
       unavailable(
         row.id,
         "priorStages",
@@ -2027,11 +2564,13 @@ export async function projectContinuationPacket(
     readSessionGates(database, {
       id: row.id,
       playbookId: row.playbookId ?? null,
+      userId: row.userId,
     })
-      .then(({ items, deploy }): ContinuationPacket["gates"] => ({
+      .then(({ items, deploy, ownerDeploys }): ContinuationPacket["gates"] => ({
         status: "ok",
         items,
         deploy,
+        ownerDeploys,
       }))
       .catch(
         unavailable(row.id, "gates", "This session's gates could not be read.")
@@ -2056,6 +2595,21 @@ export async function projectContinuationPacket(
         "The messages other sessions sent this one could not be read."
       )
     ),
+    readGoal(reader, row, trackRead).catch(
+      unavailable(
+        row.id,
+        "goal",
+        "The goal this session serves could not be read."
+      )
+    ),
+    readSiblings(database, reader, row, trackRead).catch(
+      unavailable(
+        row.id,
+        "siblings",
+        "The sessions beside this one could not be read."
+      )
+    ),
+    withPullRequestStates(workUnitsSection(all), reader, database),
   ]);
 
   const measuredAt = Date.now();
@@ -2134,7 +2688,11 @@ export async function projectContinuationPacket(
     blockedBy,
     unblocks,
     openQuestions,
+    openRoomQuestions,
     priorStages,
+    goal,
+    siblings,
+    workUnits,
     alreadyDone,
     lastDecision,
     run: manifest

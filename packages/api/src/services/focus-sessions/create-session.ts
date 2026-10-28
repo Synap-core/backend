@@ -53,6 +53,7 @@ import {
   droppedAskWarnings,
   sanitizeDeclaredOutputs,
 } from "./update-session.js";
+import { stampAskProvenance } from "./slot-asked-event.js";
 import { stampSlotKeys } from "./slot-keys.js";
 import {
   guidanceForBlockedSlots,
@@ -75,7 +76,7 @@ import {
   sessionTwinLockKey,
   type SessionTwinCandidate,
 } from "./find-open-session-twin.js";
-import { paramOwedSlots } from "./param-slots.js";
+import { missingParamsRefusal, paramOwedSlots } from "./param-slots.js";
 import { notifySessionNeedsYou } from "./notify-needs-you.js";
 import { enqueueSessionRecall } from "./session-recall.js";
 import {
@@ -84,6 +85,7 @@ import {
   type AgentHandOffDecision,
 } from "./agent-hand-off.js";
 import { attachSessionAgent } from "./attach-session-agent.js";
+import { readStartOffers, type StartOffersRead } from "./start-offers.js";
 import {
   normalizeSessionTitle,
   SESSION_TITLE_MAX,
@@ -267,6 +269,13 @@ export interface CreateFocusSessionParams {
    */
   matchTemplate?: boolean;
   /**
+   * Hand back the START OFFERS (`start-offers.ts`, plan v5 F5/F6): the
+   * project's open goals when no `trackId` was named, and the open sessions on
+   * close work in the same goal or project. Set by the AI start doors only.
+   * NOTHING is applied: no goal is joined, no session adopted.
+   */
+  offerStartContext?: boolean;
+  /**
    * The GOAL whose loop proposes this run (work model W4, `runGoalLoop`):
    * the start is ALWAYS a proposal a person approves (the gate's
    * `forcePropose`, whoever switched the loop on), and the proposal carries
@@ -339,6 +348,13 @@ export type CreateFocusSessionResult =
        * roster until a person approves; `granted` ⇒ it is.
        */
       handOffs?: AgentHandOffDecision[];
+      /**
+       * Present iff `offerStartContext` was set and the session has a project
+       * or a goal: open goals it may serve, open sessions on close work.
+       * Suggestions only — see `start-offers.ts`. `unavailable` when the read
+       * failed: unknown, never "no offers".
+       */
+      offers?: StartOffersRead;
     }
   | {
       /**
@@ -669,6 +685,25 @@ export async function createFocusSession(
     });
   }
 
+  // E3 (founder, 2026-10-27): a required param of the playbook an AGENT
+  // started this session from, left unanswered, goes back to that agent before
+  // the membrane — never a slot in the person's Needs you (`param-slots.ts`).
+  // A person's own session still owes it below. A TRACK's method params are
+  // not the agent's to supply (they are the person's answers on their own
+  // goal, and `startStageSession` takes none), so they still owe.
+  if (agentUserId && playbook) {
+    const { missingRequired } = validatePlaybookParams(
+      readPlaybookParams(playbook.params),
+      params.params
+    );
+    if (missingRequired.length > 0) {
+      throw Object.assign(
+        new Error(missingParamsRefusal(missingRequired, playbook.name)),
+        { code: "BAD_REQUEST" }
+      );
+    }
+  }
+
   const perm = await checkPermissionOrPropose({
     userId,
     agentUserId,
@@ -893,7 +928,10 @@ export async function createFocusSession(
       // the authority on.
       // Keyed at birth (`slot-keys.ts`): every slot's stable identity.
       expectedOutputs: stampSlotKeys([
-        ...sanitizeDeclaredOutputs(expectedOutputs),
+        // An agent declaring a slot the person owes from birth asked it.
+        ...stampAskProvenance([], sanitizeDeclaredOutputs(expectedOutputs), {
+          askedBy: agentUserId,
+        }),
         ...paramSlots,
       ]),
       criteria: sessionCriteria,
@@ -1214,9 +1252,29 @@ export async function createFocusSession(
     }
   }
 
+  // START OFFERS (F5/F6) — a courtesy, never a gate: each part reports its
+  // own failure, and a throw past them reads `unavailable`, never "none".
+  const offers: StartOffersRead | undefined = params.offerStartContext
+    ? await readStartOffers({
+        userId,
+        sessionId: sessionOut.id,
+        projectId: sessionOut.projectId ?? null,
+        trackId: sessionOut.trackId ?? null,
+        title: sessionOut.title ?? null,
+        goal: sessionOut.goal,
+      }).catch((err): StartOffersRead => {
+        logger.warn({ err }, "start offers NOT read — unavailable");
+        return {
+          status: "unavailable",
+          reason: "The goals and sessions near this one could not be read.",
+        };
+      })
+    : undefined;
+
   return {
     status: "created",
     session: sessionOut,
+    ...(offers ? { offers } : {}),
     ...(handOffs.length > 0 ? { handOffs } : {}),
     ...(warnings.length > 0 ? { warnings } : {}),
     ...(blockGuidelines ? { blockGuidelines } : {}),
