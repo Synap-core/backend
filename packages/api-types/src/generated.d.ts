@@ -13254,6 +13254,19 @@ export interface ApprovalRunView {
 	finishedAt: string | null;
 	updatedAt: string;
 }
+/** What "allow today" raised the agent's daily write ceiling to. */
+export interface AllowedToday {
+	ceilingId: string;
+	agentUserId: string;
+	/** The limit in force for the rest of the UTC day. */
+	limit: number;
+	/** The limit it was raised from (what applies again from `expiresAt`). */
+	previousLimit: number;
+	/** ISO time the raise ends: the next 00:00 UTC. */
+	expiresAt: string;
+	/** True when an earlier "allow today" had already raised it for today. */
+	alreadyAllowed: boolean;
+}
 /**
  * The complete created-rows record. Extends the shared
  * `ProposalMaterializedRecord` (`@synap-core/types`) with the fields only the
@@ -14043,6 +14056,18 @@ export interface EmbeddingPipelineHealth {
 	recentFailed: number;
 	recentCompleted: number;
 	windowMinutes: number;
+}
+export interface InboundWebhookSource {
+	id: string;
+	name: string;
+	workspaceId: string;
+	active: boolean;
+	createdAt: Date;
+	lastTriggeredAt: Date | null;
+	/** The door's path, always known. */
+	inboundPath: string;
+	/** The full payload URL, or null when the pod has no `PUBLIC_URL`. */
+	inboundUrl: string | null;
 }
 declare const CAPTURE_STATUSES: readonly [
 	"structured",
@@ -24164,6 +24189,34 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				message: string;
 				proposalId: string;
 				status: "proposed";
+			} | {
+				id: string | null;
+				message: string;
+				proposalId: string | null;
+				status: "created";
+				webhookSource: {
+					bound: true;
+					id: string;
+					inboundPath: string;
+					inboundUrl: string | null;
+					name: string;
+					next?: undefined;
+					secret: string;
+				};
+			} | {
+				id: string | null;
+				message: string;
+				proposalId: string | null;
+				status: "created";
+				webhookSource: {
+					bound: false;
+					id?: undefined;
+					inboundPath?: undefined;
+					inboundUrl?: undefined;
+					name: string;
+					next: string;
+					secret?: undefined;
+				};
 			} | {
 				id: string | null;
 				message: string;
@@ -35259,16 +35312,29 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					active: boolean;
 					apiKeyId: string | null;
 					createdAt: Date;
+					direction: "inbound" | "outbound";
 					eventTypes: string[];
 					id: string;
 					lastTriggeredAt: Date | null;
 					name: string;
 					retryConfig: unknown;
 					secret: string;
-					url: string;
+					url: string | null;
 					userId: string;
 					workspaceId: string | null;
 				};
+			};
+		}>;
+		adminCreateInboundSource: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				name: string;
+				workspaceId: string;
+			};
+			meta: object;
+			output: {
+				boundAutomations: number;
+				secret: string;
+				source: InboundWebhookSource;
 			};
 		}>;
 		adminDeleteForWorkspace: import("@trpc/server").TRPCMutationProcedure<{
@@ -35290,16 +35356,35 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				active: boolean;
 				apiKeyId: string | null;
 				createdAt: Date;
+				direction: "inbound" | "outbound";
 				eventTypes: string[];
 				id: string;
 				lastTriggeredAt: Date | null;
 				name: string;
 				retryConfig: unknown;
 				secret: string;
-				url: string;
+				url: string | null;
 				userId: string;
 				workspaceId: string | null;
 			}[];
+		}>;
+		adminListInboundSources: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				workspaceId: string;
+			};
+			meta: object;
+			output: InboundWebhookSource[];
+		}>;
+		adminRotateInboundSourceSecret: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				workspaceId: string;
+			};
+			meta: object;
+			output: {
+				secret: string;
+				source: InboundWebhookSource;
+			};
 		}>;
 		adminToggleForWorkspace: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
@@ -35312,12 +35397,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				active: boolean;
 				apiKeyId: string | null;
 				createdAt: Date;
+				direction: "inbound" | "outbound";
 				eventTypes: string[];
 				id: string;
 				lastTriggeredAt: Date | null;
 				name: string;
 				retryConfig: unknown;
-				url: string;
+				url: string | null;
 				userId: string;
 				workspaceId: string | null;
 			};
@@ -35336,13 +35422,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					active: boolean;
 					apiKeyId: string | null;
 					createdAt: Date;
+					direction: "inbound" | "outbound";
 					eventTypes: string[];
 					id: string;
 					lastTriggeredAt: Date | null;
 					name: string;
 					retryConfig: unknown;
 					secret: string;
-					url: string;
+					url: string | null;
 					userId: string;
 					workspaceId: string | null;
 				};
@@ -35361,13 +35448,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					active: boolean;
 					apiKeyId: string | null;
 					createdAt: Date;
+					direction: "inbound" | "outbound";
 					eventTypes: string[];
 					id: string;
 					lastTriggeredAt: Date | null;
 					name: string;
 					retryConfig: unknown;
 					secret: string;
-					url: string;
+					url: string | null;
 					userId: string;
 					workspaceId: string | null;
 				};
@@ -35430,13 +35518,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				active: boolean;
 				apiKeyId: string | null;
 				createdAt: Date;
+				direction: "inbound" | "outbound";
 				eventTypes: string[];
 				id: string;
 				lastTriggeredAt: Date | null;
 				name: string;
 				retryConfig: unknown;
 				secret: string;
-				url: string;
+				url: string | null;
 				userId: string;
 				workspaceId: string | null;
 			}[];
@@ -35448,13 +35537,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				active: boolean;
 				apiKeyId: string | null;
 				createdAt: Date;
+				direction: "inbound" | "outbound";
 				eventTypes: string[];
 				id: string;
 				lastTriggeredAt: Date | null;
 				name: string;
 				retryConfig: unknown;
 				secret: string;
-				url: string;
+				url: string | null;
 				userId: string;
 				workspaceId: string | null;
 			}[];
@@ -35469,12 +35559,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				active: boolean;
 				apiKeyId: string | null;
 				createdAt: Date;
+				direction: "inbound" | "outbound";
 				eventTypes: string[];
 				id: string;
 				lastTriggeredAt: Date | null;
 				name: string;
 				retryConfig: unknown;
-				url: string;
+				url: string | null;
 				userId: string;
 				workspaceId: string | null;
 			};
@@ -35492,12 +35583,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				active: boolean;
 				apiKeyId: string | null;
 				createdAt: Date;
+				direction: "inbound" | "outbound";
 				eventTypes: string[];
 				id: string;
 				lastTriggeredAt: Date | null;
 				name: string;
 				retryConfig: unknown;
-				url: string;
+				url: string | null;
 				userId: string;
 				workspaceId: string | null;
 			};
@@ -42005,6 +42097,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		approve: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
+				allowToday?: boolean | undefined;
 				comment?: string | undefined;
 				dispositions?: Record<string, {
 					edits?: Record<string, unknown> | undefined;
@@ -42048,7 +42141,24 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				proposalId: string;
 			};
 			meta: object;
-			output: ProposalExecutorResult;
+			output: ProposalExecutorResult | {
+				allowedToday: AllowedToday;
+				alreadyApproved?: boolean;
+				approvalRun?: ApprovalRunView;
+				created?: number;
+				effect?: ProposalEffect;
+				identities?: Array<IdentityReceipt & {
+					ref: string;
+				}>;
+				identity?: IdentityReceipt;
+				joined?: boolean;
+				linked?: number;
+				primaryId?: string;
+				queued?: true;
+				refusals?: string[];
+				relationsFailed?: MaterializeRelationFailure[];
+				success: boolean;
+			};
 		}>;
 		askAi: import("@trpc/server").TRPCMutationProcedure<{
 			input: {

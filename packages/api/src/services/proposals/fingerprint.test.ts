@@ -406,9 +406,8 @@ describe("F6 — a held-writes pack's title through the proposal title door", ()
   };
 
   it("every door's buildObjectActionTitle(proposalType, targetType, extractProposalName(data)) reads the lead", async () => {
-    const { buildObjectActionTitle } = await import(
-      "@synap-core/types/vocabulary"
-    );
+    const { buildObjectActionTitle } =
+      await import("@synap-core/types/vocabulary");
     for (const mood of ["imperative", "past"] as const) {
       const title = buildObjectActionTitle({
         action: "held_writes",

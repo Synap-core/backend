@@ -19,7 +19,13 @@
  */
 
 import { TRPCError } from "@trpc/server";
-import { db, projects, and, eq, slugifyProjectName } from "@synap/database";
+import {
+  type db,
+  projects,
+  and,
+  eq,
+  slugifyProjectName,
+} from "@synap/database";
 import { ownerPrivateVisibleWhere } from "../../utils/user-visible-where.js";
 
 /**

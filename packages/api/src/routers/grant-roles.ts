@@ -16,6 +16,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { db, GrantRoleRepository } from "@synap/database";
 import type { GrantRoleRecord } from "@synap/database/schema";
+import { isKeyUseId } from "@synap-core/types/grants";
 import { router, protectedProcedure } from "../trpc.js";
 import {
   GrantInputSchema,
@@ -40,6 +41,9 @@ const RoleInputSchema = z.object({
 
 /** The wire shape — `GrantRole` from `@synap-core/types/grants`, plus dates. */
 function toRole(row: GrantRoleRecord) {
+  // The column is `text[]`; writes go through KeyUsesSchema, so this only
+  // narrows the type (`GrantRole.uses` is `KeyUseId[]`).
+  const uses = (row.uses ?? []).filter(isKeyUseId);
   return {
     id: row.id,
     name: row.name,
@@ -56,7 +60,7 @@ function toRole(row: GrantRoleRecord) {
           ? { expiresInDays: row.expiresInDays }
           : {}),
     },
-    ...(row.uses && row.uses.length > 0 ? { uses: row.uses } : {}),
+    ...(uses.length > 0 ? { uses } : {}),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };

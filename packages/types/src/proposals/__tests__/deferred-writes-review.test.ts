@@ -206,12 +206,15 @@ describe("the held-writes pack's title (F6, founder 2026-10-27)", () => {
       "Claude Code, 2026-10-27, 5 items"
     );
     expect(
-      heldWritesPackName({ ...pack, deferredWrites: pack.deferredWrites.slice(0, 1) })
+      heldWritesPackName({
+        ...pack,
+        deferredWrites: pack.deferredWrites.slice(0, 1),
+      })
     ).toBe("2026-10-27, 1 item");
     expect(heldWritesPackName({ deferredWrites: [] })).toBeUndefined();
   });
 
-  it("every door titling it from proposalType + targetType + name reads the lead, never \"Held writes Agent\"", () => {
+  it('every door titling it from proposalType + targetType + name reads the lead, never "Held writes Agent"', () => {
     const title = (mood: "imperative" | "past") =>
       buildObjectActionTitle({
         action: "held_writes",
