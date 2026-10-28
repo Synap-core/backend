@@ -343,3 +343,62 @@ describe("needsYouRows — Older fold + cap", () => {
     expect(cut.hiddenItems).toBe(3);
   });
 });
+
+describe("needsYouRows — the rule's folds (decision E)", () => {
+  it("splits the out-of-headline rows by class; the union stays reviewLater", () => {
+    const out = needsYouRows([
+      row("h", { needsYouClass: "needs_you" }),
+      row("w", { needsYouClass: "working", reviewLater: true }),
+      row("s1", {
+        needsYouClass: "stopped",
+        reviewLater: true,
+        groupKey: "session:S",
+      }),
+      row("s2", {
+        needsYouClass: "stopped",
+        reviewLater: true,
+        groupKey: "session:S",
+      }),
+      row("m", { needsYouClass: "from_system", reviewLater: true }),
+      row("c", { needsYouClass: "changes_to_review", reviewLater: true }),
+      row("old", { reviewLater: true }),
+    ]);
+    expect(shape(out.recent)).toEqual(["item:h"]);
+    expect(shape(out.folds.working)).toEqual(["item:w"]);
+    // Stopped is ONE row per session.
+    expect(shape(out.folds.stopped)).toEqual(["session:S[s1,s2]"]);
+    expect(shape(out.folds.from_system)).toEqual(["item:m"]);
+    expect(shape(out.folds.changes_to_review)).toEqual(["item:c"]);
+    // A row an older pod flagged with no class is Review later.
+    expect(shape(out.folds.review_later)).toEqual(["item:old"]);
+    // Never dropped: every out-of-headline row is in the union.
+    expect(out.reviewLaterCount).toBe(5);
+  });
+
+  it("the class is authoritative: a session shows once per place, never pulled out of its fold", () => {
+    const S = { groupKey: "session:S" };
+    const out = needsYouRows([
+      row("fresh", { ...S, needsYouClass: "needs_you" }),
+      row("old-1", { ...S, needsYouClass: "review_later", reviewLater: true }),
+      row("old-2", { ...S, needsYouClass: "review_later", reviewLater: true }),
+    ]);
+    // The headline carries the session for its fresh ask…
+    expect(shape(out.recent)).toEqual(["item:fresh"]);
+    // …and Review later carries it ONCE for its two old asks (one session row).
+    expect(shape(out.folds.review_later)).toEqual(["session:S[old-1,old-2]"]);
+    // An older pod's unclassed flag still follows the session's freshest row.
+    const legacy = needsYouRows([
+      row("f", { ...S }),
+      row("o", { ...S, reviewLater: true }),
+    ]);
+    expect(shape(legacy.recent)).toEqual(["session:S[f,o]"]);
+    expect(legacy.reviewLaterCount).toBe(0);
+  });
+
+  it("a stamped needs_you class is the headline even if a stale flag says otherwise", () => {
+    const out = needsYouRows([
+      row("h", { needsYouClass: "needs_you", reviewLater: true }),
+    ]);
+    expect(shape(out.recent)).toEqual(["item:h"]);
+  });
+});

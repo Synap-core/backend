@@ -260,6 +260,10 @@ beforeAll(async () => {
   // Owed: W1 on a deal, W2 on nothing. Review: W1 on a deal, W2 on nothing.
   await session({ ws: W1, subject: D1, owes: true });
   await session({ ws: W2, owes: true });
+  // W2's deal count: the create-deal proposal above waits on nothing, so it
+  // is a change to review under the needs-you rule (decision E6), out of the
+  // headline. An owed ask on W2's deal keeps that count non-vacuous.
+  await session({ ws: W2, subject: D2, owes: true });
   await session({ ws: W1, subject: D1, review: true });
   await session({ ws: W2, review: true });
   // Unread notifications in W1 and W2.

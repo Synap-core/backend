@@ -153,6 +153,7 @@ import {
   listUnfinishedCaptures,
   type UnfinishedCapture,
 } from "../services/intake/capture-room.js";
+import { clusterFoldCounts } from "../services/proposals/proposal-needs-you.js";
 import { sessionKindWhere } from "../services/focus-sessions/session-kind.js";
 import { OPEN_SESSION_STATUSES } from "../services/focus-sessions/session-statuses.js";
 import {
@@ -441,6 +442,7 @@ async function readAttention(
         groups: [],
         distinct: 0,
         reviewLater: 0,
+        folds: { working: 0, reviewLater: 0, changesToReview: 0 },
         scanTruncated: false,
         scanned: 0,
       },
@@ -456,6 +458,8 @@ async function readAttention(
           limit: clusterLimit,
           excludeDraftSessions: true,
           splitBySession: true,
+          // THE needs-you rule over proposals (decision E6).
+          classifyNeedsYou: true,
         })
     ),
     // Under a container lens the door narrows IN SQL, before its limit
@@ -669,6 +673,7 @@ function countOf(a: Attention) {
   return countNeedsYou({
     distinctClusters: a.groups.distinct,
     reviewLaterClusters: a.groups.reviewLater,
+    clusterFolds: a.groups.folds,
     clustersTruncated: a.groups.scanTruncated,
     clusters: a.groups.groups,
     clusterSessions: a.clusterSessions,
@@ -1387,6 +1392,7 @@ function narrowAttention(
       groups: clusters,
       distinct: clusters.length,
       reviewLater: clusters.filter((c) => c.reviewLater).length,
+      folds: clusterFoldCounts(clusters),
       scanTruncated: false,
     },
     notifications: scope.kindClusters
@@ -1561,6 +1567,7 @@ export async function countNeedsYouByScope(
               limit: CLUSTER_PAGE_LIMIT,
               excludeDraftSessions: true,
               splitBySession: true,
+              classifyNeedsYou: true,
             }),
             sessionIds.length
               ? db

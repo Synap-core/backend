@@ -59,8 +59,14 @@ import {
   channelMembers,
   events,
   messages,
+  playbookRuns,
 } from "@synap/database";
+import { isNeedsYou } from "@synap-core/types/needs-you/rule";
 import { deliverableCountsOf, getProjectPath } from "./project-path.js";
+import { listNeedsYouOwed } from "../signals/needs-you-owed.js";
+import { owedSlotClassOf } from "../signals/needs-you-union.js";
+import { classifyPendingProposals } from "../proposals/proposal-needs-you.js";
+import { resolveScope } from "../../utils/scope-filter.js";
 import { attachNextMove } from "../focus-sessions/session-path-sections.js";
 import { projectContinuationPacket } from "../focus-sessions/continuation-packet.js";
 import { projectsRouter } from "../../routers/projects.js";
@@ -178,6 +184,9 @@ beforeAll(async () => {
     // events and room messages beside its turns and proposals.
     events,
     messages,
+    // The needs-you counts (`unitFacts`) classify pending proposals through
+    // the waits read, which reads the session's parked runs.
+    playbookRuns,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }
@@ -396,11 +405,13 @@ describe("getProjectPath", () => {
       total: 0,
       owedByYou: 0,
     });
-    // …and the person's count is the SAME number the needs-you facts carry.
+    // …and the needs-you facts count the HEADLINE of those (U1): never more
+    // than the person owes, and measured.
     for (const row of byId.values()) {
       if (row.deliverables.status !== "ok") continue;
-      expect(row.deliverables.owedByYou, row.id).toBe(
-        row.unitFacts.owedFromYou
+      expect(row.unitFacts.owedFromYou, row.id).not.toBeNull();
+      expect(row.unitFacts.owedFromYou!, row.id).toBeLessThanOrEqual(
+        row.deliverables.owedByYou
       );
     }
   });
@@ -454,6 +465,21 @@ describe("getProjectPath", () => {
       database: db,
     });
     expect(out).toHaveLength(rows.length);
+    // The needs-you HEADLINE through the signals readers (U1: one number, one
+    // source): owed asks the rule classes needs_you, proposals likewise.
+    const owedNeedsYou = await listNeedsYouOwed({
+      userId: USER,
+      scope: resolveScope({}, { workspaceId: [] }),
+      sessionIds: rows.map((r) => r.id),
+      limit: Number.MAX_SAFE_INTEGER,
+    });
+    const pendingRows = await db
+      .select()
+      .from(proposals)
+      .where(eq(proposals.status, "pending"));
+    const classes = await classifyPendingProposals(pendingRows, {
+      userId: USER,
+    });
     const kinds = new Set<string>();
     let pendingSeen = 0;
     for (const item of out) {
@@ -465,18 +491,24 @@ describe("getProjectPath", () => {
         packet.nextMove
       );
       // The state mark's counts come from the SAME reads as the packet.
-      const { owedSlots, pendingProposals } = packet.userMustDecide;
+      const { pendingProposals } = packet.userMustDecide;
       expect(item.unitFacts, `unitFacts for ${item.goal}`).toEqual({
-        owedFromYou: owedSlots.status === "ok" ? owedSlots.total : "unread",
-        pendingDecisions:
-          pendingProposals.status === "ok" ? pendingProposals.total : null,
+        owedFromYou: owedNeedsYou.filter(
+          (s) =>
+            s.sessionId === item.id &&
+            isNeedsYou({ needsYouClass: owedSlotClassOf(s) })
+        ).length,
+        pendingDecisions: pendingRows.filter(
+          (p) => p.sessionId === item.id && classes.get(p.id) === "needs_you"
+        ).length,
         // THE needs-you rule's third population, from the SAME packet.
         awaitingReview: packet.nextMove.kind === "ready_to_close",
         draft: false,
       });
       expect(item.blockedBy).toEqual(["list-shape"]);
       kinds.add(item.nextMove.kind);
-      pendingSeen += item.unitFacts.pendingDecisions ?? 0;
+      pendingSeen +=
+        pendingProposals.status === "ok" ? pendingProposals.total : 0;
     }
     // Non-vacuity for the counts: at least one row carries a pending decision.
     expect(pendingSeen).toBeGreaterThan(0);
