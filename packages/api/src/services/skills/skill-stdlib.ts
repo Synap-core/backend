@@ -29,128 +29,19 @@
  *   3. The runtime version (`SKILL_RUNTIME_VERSION`) stamped on every run.
  */
 
-/** Bumped when the installed surface changes in a way skills can observe. */
-export const SKILL_RUNTIME_VERSION = 1 as const;
-
 /**
- * Pure-ECMAScript globals an isolated-vm isolate exposes natively (verified by
- * enumerating `Object.getOwnPropertyNames(globalThis)` in a fresh isolate — see
- * the tripwire). These need no polyfill; they are allow-listed because a skill
- * may legitimately reference them. NOT a security boundary — the isolate itself
- * is the boundary; this list only tells the save-time scan which references
- * resolve at runtime.
+ * The runtime version and the allow-list live in `@synap-core/types/skill-code`
+ * (the one code-skill rule, shared with the catalog validator). Re-exported here
+ * so the bootstrap's callers keep one import.
  */
-export const SKILL_ECMASCRIPT_GLOBALS = [
-  "globalThis",
-  "undefined",
-  "NaN",
-  "Infinity",
-  "eval",
-  "isFinite",
-  "isNaN",
-  "parseFloat",
-  "parseInt",
-  "decodeURI",
-  "decodeURIComponent",
-  "encodeURI",
-  "encodeURIComponent",
-  "escape",
-  "unescape",
-  "Object",
-  "Function",
-  "Boolean",
-  "Symbol",
-  "Error",
-  "AggregateError",
-  "EvalError",
-  "RangeError",
-  "ReferenceError",
-  "SyntaxError",
-  "TypeError",
-  "URIError",
-  "Number",
-  "BigInt",
-  "Math",
-  "Date",
-  "String",
-  "RegExp",
-  "Array",
-  "Int8Array",
-  "Uint8Array",
-  "Uint8ClampedArray",
-  "Int16Array",
-  "Uint16Array",
-  "Int32Array",
-  "Uint32Array",
-  "BigInt64Array",
-  "BigUint64Array",
-  "Float32Array",
-  "Float64Array",
-  "Map",
-  "Set",
-  "WeakMap",
-  "WeakSet",
-  "WeakRef",
-  "FinalizationRegistry",
-  "ArrayBuffer",
-  "SharedArrayBuffer",
-  "DataView",
-  "Atomics",
-  "JSON",
-  "Promise",
-  "Reflect",
-  "Proxy",
-  "Intl",
-  "Iterator",
-  "WebAssembly",
-] as const;
-
-/**
- * Web-standard globals the bootstrap polyfills in pure JS (host objects can't
- * cross the isolate boundary, so these are spec-close JS re-implementations,
- * each smoke-tested for native parity). Ordered as installed.
- */
-export const SKILL_WEB_GLOBALS = [
-  "URLSearchParams",
-  "URL",
-  "TextEncoder",
-  "TextDecoder",
-  "btoa",
-  "atob",
-  "structuredClone",
-] as const;
-
-/**
- * Host bridges the bootstrap installs (backed by `ivm.Reference` callbacks the
- * executor sets before eval). These are the governed doors into the pod/host.
- */
-export const SKILL_HOST_BRIDGES = [
-  "console",
-  "hubProtocol",
-  "secrets",
-  "host",
-  "callProvider",
-  "propose",
-] as const;
-
-/**
- * The two parameters the skill wrapper injects: `execute(args, context)`. They
- * are lexical parameters (not globals) but are allow-listed so a save-time scan
- * of the wrapped body never flags them.
- */
-export const SKILL_WRAPPER_PARAMS = ["args", "context"] as const;
-
-/**
- * THE allow-list: every identifier a skill may reference and have resolve at
- * runtime. The backend save-time global-reference scan rejects any free global
- * reference NOT in this set. Derived — never hand-maintained as a flat list.
- */
-export const SKILL_ALLOWED_GLOBALS: readonly string[] = Object.freeze([
-  ...SKILL_ECMASCRIPT_GLOBALS,
-  ...SKILL_WEB_GLOBALS,
-  ...SKILL_HOST_BRIDGES,
-  ...SKILL_WRAPPER_PARAMS,
-]);
+export {
+  SKILL_RUNTIME_VERSION,
+  SKILL_ECMASCRIPT_GLOBALS,
+  SKILL_WEB_GLOBALS,
+  SKILL_HOST_BRIDGES,
+  SKILL_WRAPPER_PARAMS,
+  SKILL_ALLOWED_GLOBALS,
+} from "@synap-core/types/skill-code";
 
 /**
  * The ONE bootstrap. Evaluated once per skill execution inside the isolate,
