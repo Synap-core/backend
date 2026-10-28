@@ -515,18 +515,20 @@ async function planItems(
   }
 
   // D2 — an agent's batch counts as N writes against its daily ceiling. The
-  // execute-class items past what is left of it join the pack.
+  // execute-class items past what is left of it join the pack. No ceiling row
+  // ⇒ no limit (the default): nothing is counted and every item stays as is.
   if (agentUserId) {
     const executes = planned.filter((p) => p.verdict === "execute");
-    if (executes.length > 0) {
-      const [limit, used] = await Promise.all([
-        resolveDailyWriteCeiling({
-          db,
-          agentUserId,
-          workspaceId: ctx.workspaceId ?? null,
-        }),
-        countAgentWritesTodayUtc(db, agentUserId),
-      ]);
+    const limit =
+      executes.length > 0
+        ? await resolveDailyWriteCeiling({
+            db,
+            agentUserId,
+            workspaceId: ctx.workspaceId ?? null,
+          })
+        : null;
+    if (limit !== null) {
+      const used = await countAgentWritesTodayUtc(db, agentUserId);
       const left = Math.max(0, limit - used);
       for (const p of executes.slice(left)) {
         const row = byId.get(p.id)!;

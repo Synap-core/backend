@@ -3646,6 +3646,10 @@
           "ttl": {
             "type": "number",
             "description": "Minutes the grant lives. Defaults to 60."
+          },
+          "secretId": {
+            "type": "string",
+            "description": "The saved secret to grant, when the agent knows it (the id in its vault:// reference). Omitted: the person's one secret matching service and secretType."
           }
         },
         "required": ["secretType", "service", "purpose"]
@@ -5109,6 +5113,82 @@
           "note": { "type": "string" }
         },
         "required": ["triggered"]
+      },
+      "WorkRelease": {
+        "type": "object",
+        "properties": {
+          "generatedAt": { "type": "string" },
+          "sources": {
+            "type": "object",
+            "properties": {
+              "snapshots": {
+                "type": "string",
+                "enum": ["ok", "stale", "missing"]
+              },
+              "sessions": { "type": "string", "enum": ["ok", "unavailable"] },
+              "holders": { "type": "string", "enum": ["ok", "unavailable"] }
+            },
+            "required": ["snapshots", "sessions", "holders"]
+          },
+          "repos": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": {}
+            }
+          },
+          "prs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": {}
+            }
+          },
+          "blockers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "ref": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": { "type": "string", "enum": ["pr"] },
+                        "repo": { "type": "string" },
+                        "number": { "type": "number" }
+                      },
+                      "required": ["kind", "repo", "number"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": { "type": "string", "enum": ["main"] },
+                        "repo": { "type": "string" }
+                      },
+                      "required": ["kind", "repo"]
+                    }
+                  ]
+                },
+                "waiting": { "type": "number" },
+                "waitingPrs": { "type": "number" },
+                "waitingMains": { "type": "number" },
+                "reason": { "type": ["string", "null"] }
+              },
+              "required": [
+                "ref",
+                "waiting",
+                "waitingPrs",
+                "waitingMains",
+                "reason"
+              ],
+              "additionalProperties": {}
+            }
+          }
+        },
+        "required": ["generatedAt", "sources", "repos", "prs", "blockers"]
       },
       "RoutingHealth": {
         "type": "object",
@@ -10151,7 +10231,7 @@
                   },
                   "allowToday": {
                     "type": "boolean",
-                    "description": "Held-writes packs only (agent/held_writes): also lift the agent's daily write ceiling to 2x the current limit until the next 00:00 UTC, so its next writes today are not held again. A person's act: refused for an agent credential and without the authority to author that ceiling (pod admin). 400 on any other proposal or a pack already decided. The response then carries allowedToday {ceilingId, agentUserId, limit, previousLimit, expiresAt, alreadyAllowed}."
+                    "description": "Held-writes packs only (agent/held_writes): also lift the agent's daily write ceiling to 2x the current limit until the next 00:00 UTC, so its next writes today are not held again. A person's act: refused for an agent credential and without the authority to author that ceiling (pod admin). 400 on any other proposal or a pack already decided. The response then carries allowedToday {ceilingId, agentUserId, limit, previousLimit, expiresAt, alreadyAllowed}. With no daily limit in force (no ceiling row, the default), nothing is raised and allowedToday is absent."
                   }
                 }
               }
@@ -36759,6 +36839,40 @@
           },
           "403": {
             "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/work-release": {
+      "get": {
+        "tags": ["FocusSessions"],
+        "summary": "Work › Ship: can I release, and what blocks it",
+        "description": "The release read (`services/dev-loop/work-release.ts`): the newest `dev.repo_snapshot` per repo (posted by the devbox producer), each PR's stage on the road to main (working, checks, ready, on_main), its check verdict (own red vs red inherited from main), its fold (draft, negctl, dependabot, stale), the session holding it and whether that session is working now, and the blockers ranked by how much waits behind them transitively. `sources` says which read was stale, missing or failed: a failed read is `unavailable`, never an empty list. A workspace-bound key reads its own workspace's facts.",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "Work release",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/WorkRelease" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }

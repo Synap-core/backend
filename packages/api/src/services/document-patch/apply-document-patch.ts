@@ -76,6 +76,8 @@ import {
   type SectionPreview,
 } from "./patch-ops.js";
 import {
+  DOCUMENT_DIAGNOSTICS_CHECKER,
+  RUN_TIME_DIAGNOSTIC_CODES,
   diagnoseDocument,
   podEmbedResolver,
   type DocumentDiagnostic,
@@ -135,11 +137,22 @@ export async function readPatchDocumentContent(
 
 // ─── Diagnostics storage ─────────────────────────────────────────────────────
 
-/** `documents.metadata.diagnostics` — what was checked, and at which revision. */
+/** `documents.metadata.diagnostics` — what was checked, at which revision, by which checker. */
 export interface StoredDocumentDiagnostics {
   revision: number;
+  /**
+   * `DOCUMENT_DIAGNOSTICS_CHECKER` when stamped. Absent on every stamp written
+   * before checkers were versioned: such a stamp is stale, never current.
+   */
+  checker?: number;
   checkedAt: string;
   items: DocumentDiagnostic[];
+}
+
+function storedStamp(metadata: unknown): StoredDocumentDiagnostics | null {
+  const d = (metadata as { diagnostics?: StoredDocumentDiagnostics } | null)
+    ?.diagnostics;
+  return d && Array.isArray(d.items) ? d : null;
 }
 
 /**
@@ -154,6 +167,7 @@ export async function storeDocumentDiagnostics(
 ): Promise<boolean> {
   const stored: StoredDocumentDiagnostics = {
     revision,
+    checker: DOCUMENT_DIAGNOSTICS_CHECKER,
     checkedAt: new Date().toISOString(),
     items,
   };
@@ -170,16 +184,41 @@ export async function storeDocumentDiagnostics(
   return rows.length > 0;
 }
 
-/** The stored diagnostics, when they describe `revision`; otherwise null (never stale ones). */
+/**
+ * The stored diagnostics, when they describe `revision` AND were judged by the
+ * current checker; otherwise null (never stale ones), so the caller re-checks.
+ * A same-revision stamp from an older checker is stale too: its text did not
+ * change, but what counts as broken did (a snapshot chart once read as missing
+ * its `profileSlug`, and kept telling agents to invent one).
+ */
 export function readStoredDiagnostics(
   metadata: unknown,
   revision: number
 ): DocumentDiagnostic[] | null {
-  const d = (metadata as { diagnostics?: StoredDocumentDiagnostics } | null)
-    ?.diagnostics;
-  return d && d.revision === revision && Array.isArray(d.items)
+  const d = storedStamp(metadata);
+  return d &&
+    d.revision === revision &&
+    d.checker === DOCUMENT_DIAGNOSTICS_CHECKER
     ? d.items
     : null;
+}
+
+const RUN_TIME_CODES: ReadonlySet<string> = new Set(RUN_TIME_DIAGNOSTIC_CODES);
+
+/**
+ * The stamp's RUN-TIME items (`RUN_TIME_DIAGNOSTIC_CODES`) when it describes
+ * `revision`, whichever checker wrote it. Content cannot re-derive them (a
+ * flow learned them while writing), so a re-check that replaces a stale stamp
+ * of the same revision adds them back; at another revision they are gone.
+ */
+export function storedRunTimeDiagnostics(
+  metadata: unknown,
+  revision: number
+): DocumentDiagnostic[] {
+  const d = storedStamp(metadata);
+  return d && d.revision === revision
+    ? d.items.filter((i) => RUN_TIME_CODES.has(i.code))
+    : [];
 }
 
 /**

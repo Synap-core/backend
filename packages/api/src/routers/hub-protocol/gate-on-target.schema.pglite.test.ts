@@ -22,7 +22,10 @@
  *  - profiles.setRenderer: a `pod` binding is pod scope;
  *  - profiles.createPropertyDef: a base def is stored pod-wide;
  *  - profiles.updatePropertyDef: the stored def is pod-wide;
- *  - entities.attach/update/detachFacet (D2): the PARENT entity is pod-wide.
+ *  - entities.attach/update/detachFacet (D1, superseding D2): the ROLE's
+ *    space is the target, not the parent's. A pod-wide parent passes when W
+ *    already reaches it (a role in W); one W does not reach, or a role stored
+ *    in another space, is refused.
  */
 
 import { describe, it, expect, beforeAll, vi } from "vitest";
@@ -106,6 +109,8 @@ const OVERLAY_DEF = randomUUID(); // WS overlay property def
 const POD_PARENT_FACET = randomUUID(); // facet row in WS on a pod-wide parent
 const POD_PARENT_FACET_2 = randomUUID();
 const WS_FACET = randomUUID();
+const OTHER_FACET = randomUUID(); // facet row in OTHER_WS on a pod-wide parent
+const POD_NOTE_UNROLED = randomUUID(); // pod-wide, no role anywhere
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -204,8 +209,18 @@ beforeAll(async () => {
      values ($1, $5, 'note', $6, 'pod note', null, '{}'),
             ($2, $5, 'note', $6, 'pod note 2', null, '{}'),
             ($3, $5, 'note', $6, 'ws note', $7, '{}'),
-            ($4, $5, 'note', $6, 'ws note 2', $7, '{}')`,
-    [POD_NOTE, POD_NOTE_2, WS_NOTE, WS_NOTE_2, USER, NOTE_PROFILE, WS]
+            ($4, $5, 'note', $6, 'ws note 2', $7, '{}'),
+            ($8, $5, 'note', $6, 'unroled pod note', null, '{}')`,
+    [
+      POD_NOTE,
+      POD_NOTE_2,
+      WS_NOTE,
+      WS_NOTE_2,
+      USER,
+      NOTE_PROFILE,
+      WS,
+      POD_NOTE_UNROLED,
+    ]
   );
   await q(
     `insert into relations (id, user_id, source_entity_id, target_entity_id, type, workspace_id)
@@ -235,7 +250,8 @@ beforeAll(async () => {
     `insert into entity_facets (id, entity_id, profile_id, user_id, workspace_id, properties, metadata)
      values ($1, $4, $6, $7, $8, '{}', '{}'),
             ($2, $5, $6, $7, $8, '{}', '{}'),
-            ($3, $9, $6, $7, $8, '{}', '{}')`,
+            ($3, $9, $6, $7, $8, '{}', '{}'),
+            ($10, $4, $6, $7, $11, '{}', '{}')`,
     [
       POD_PARENT_FACET,
       POD_PARENT_FACET_2,
@@ -246,6 +262,8 @@ beforeAll(async () => {
       USER,
       WS,
       WS_NOTE,
+      OTHER_FACET,
+      OTHER_WS,
     ]
   );
 });
@@ -433,21 +451,31 @@ describe("property defs gate where the def LIVES (W2a)", () => {
   });
 });
 
-describe("facets gate on the PARENT entity's workspace (W2a, D2)", () => {
-  it("attaching a W role onto a pod-wide entity is refused", async () => {
+describe("facets gate on the ROLE's space; a pod-wide parent must be in its reach (D1, superseding D2)", () => {
+  it("attaching a W role onto a pod-wide entity W does not reach is refused", async () => {
     await expect(
       hub().entities.attachFacet({
         userId: USER,
-        entityId: POD_NOTE_2,
+        entityId: POD_NOTE_UNROLED,
         profileId: ROLE,
         workspaceId: WS,
       })
     ).rejects.toMatchObject(GRANT_DENIED);
     const { rows } = await q(
-      `select id from entity_facets where entity_id = $1 and id <> $2`,
-      [POD_NOTE_2, POD_PARENT_FACET_2]
+      `select id from entity_facets where entity_id = $1`,
+      [POD_NOTE_UNROLED]
     );
     expect(rows).toHaveLength(0);
+  });
+
+  it("D1 — a W role onto a pod-wide entity W already reaches (a role in W) passes the grant", async () => {
+    const res = await hub().entities.attachFacet({
+      userId: USER,
+      entityId: POD_NOTE_2,
+      profileId: ROLE,
+      workspaceId: WS,
+    });
+    expect(res).toMatchObject({ status: "attached" });
   });
 
   it("CONTROL — the same role attaches onto an entity in W", async () => {
@@ -460,33 +488,50 @@ describe("facets gate on the PARENT entity's workspace (W2a, D2)", () => {
     expect(res).toMatchObject({ status: "attached" });
   });
 
-  it("updating a facet whose parent is pod-wide is refused", async () => {
+  it("D1 — updating a W facet whose parent is pod-wide passes the grant", async () => {
+    const res = await hub().entities.updateFacet({
+      userId: USER,
+      facetId: POD_PARENT_FACET,
+      properties: { tier: "gold" },
+    });
+    expect(res).toMatchObject({ status: "updated" });
+  });
+
+  it("updating a facet stored in another workspace is refused", async () => {
     await expect(
       hub().entities.updateFacet({
         userId: USER,
-        facetId: POD_PARENT_FACET,
+        facetId: OTHER_FACET,
         properties: { tier: "gold" },
       })
     ).rejects.toMatchObject(GRANT_DENIED);
     const { rows } = await q<{ properties: Record<string, unknown> }>(
       `select properties from entity_facets where id = $1`,
-      [POD_PARENT_FACET]
+      [OTHER_FACET]
     );
     expect(rows[0]?.properties).toEqual({});
   });
 
-  it("detaching a facet whose parent is pod-wide is refused", async () => {
+  it("detaching a facet stored in another workspace is refused", async () => {
     await expect(
       hub().entities.detachFacet({
         userId: USER,
-        facetId: POD_PARENT_FACET_2,
+        facetId: OTHER_FACET,
       })
     ).rejects.toMatchObject(GRANT_DENIED);
     const { rows } = await q<{ deleted_at: unknown }>(
       `select deleted_at from entity_facets where id = $1`,
-      [POD_PARENT_FACET_2]
+      [OTHER_FACET]
     );
     expect(rows[0]?.deleted_at).toBeNull();
+  });
+
+  it("D1 — detaching a W facet whose parent is pod-wide passes the grant", async () => {
+    const res = await hub().entities.detachFacet({
+      userId: USER,
+      facetId: POD_PARENT_FACET_2,
+    });
+    expect(res).toMatchObject({ status: "detached" });
   });
 
   it("CONTROL — a facet on an entity in W is detached", async () => {

@@ -13,6 +13,7 @@ import type { Exit } from "../../../../lib/open-in";
 import {
   externalProps,
   rowHref,
+  useAppOpenAttempt,
   usePlacedExit,
 } from "../../../../lib/exit-link";
 import { ResourceRow } from "../../components/resource-row";
@@ -28,24 +29,29 @@ import { exitOf, type ReviewRow } from "./review-rows";
  */
 function DoorButton({ exit }: { exit: Exit }) {
   const placed = usePlacedExit(exit);
+  const open = useAppOpenAttempt(placed);
   const href = rowHref(placed);
   if (href === null) return null;
   return (
-    <Button
-      as="a"
-      href={href}
-      {...externalProps(href)}
-      size="sm"
-      variant="flat"
-      radius="md"
-      endContent={
-        placed.href !== null && placed.isDesktopLink ? (
-          <ArrowUpRight className="h-3 w-3" strokeWidth={1.75} aria-hidden />
-        ) : undefined
-      }
-    >
-      Review
-    </Button>
+    <>
+      <Button
+        as="a"
+        href={href}
+        {...externalProps(href)}
+        onPress={open.onOpen}
+        size="sm"
+        variant="flat"
+        radius="md"
+        endContent={
+          placed.href !== null && placed.isDesktopLink ? (
+            <ArrowUpRight className="h-3 w-3" strokeWidth={1.75} aria-hidden />
+          ) : undefined
+        }
+      >
+        Review
+      </Button>
+      {open.offer}
+    </>
   );
 }
 

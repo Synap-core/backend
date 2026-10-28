@@ -666,7 +666,45 @@ export interface ProposalReviewModel {
   graph?: ProposalReviewGraph;
   /** Present ONLY for delete proposals — see {@link ProposalRemoval}. */
   removal?: ProposalRemoval;
+  /**
+   * Present ONLY for a pending `capability.enable`: what approving it turns
+   * on — see {@link ProposalTurnsOn}.
+   */
+  turnsOn?: ProposalTurnsOn;
   events: ProposalReviewEvent[];
+}
+
+/**
+ * What a `capability.enable` would turn on, read NOW (while it is pending)
+ * under the viewer's skill read rule: each skill whole, so the person reads
+ * the code or prose they are switching on and where it can reach. A skill the
+ * viewer cannot read is COUNTED in `unreadSkills`, never dropped silently.
+ */
+export interface ProposalTurnsOn {
+  skills: ProposalTurnOnSkill[];
+  /** Skills in the request this viewer could not read (or that are gone). */
+  unreadSkills: number;
+}
+
+export interface ProposalTurnOnSkill {
+  id: string;
+  name: string;
+  /** `code` | `instruction` | `declarative` | `builtin`. */
+  kind: string;
+  /** `box` = a script run on the person's computer, not in the pod. */
+  executionMode: string;
+  /** The whole code it would run; never excerpted. */
+  code?: string;
+  /** Its whole documentation, or an instruction skill's prose. */
+  body?: string;
+  /** A box script's declaration (packages, hosts, limits), as stored. */
+  box?: Record<string, unknown>;
+  /**
+   * What it can reach outside the pod, read like every "Can reach" fact.
+   * Absent for an instruction (it runs nothing) and for a box script (its
+   * declaration says what it reaches, not the pod's sandbox).
+   */
+  reach?: ProposalPartReach;
 }
 
 /**

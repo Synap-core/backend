@@ -223,6 +223,10 @@ export function registerSkillExecutors(): void {
         providerSpec: materializedSkill.providerSpec,
         agentUserId: proposal.agentUserId,
         personApprovedProposal: approvedByPerson,
+        executionMode: materializedSkill.executionMode,
+        metadata: materializedSkill.metadata,
+        // What the author declared, linked or not: a declared tool is reach.
+        requiredTools: declaredToolIds,
       });
       if (!approved && materializedSkill.approved) {
         await db

@@ -8,7 +8,7 @@
     "group": "Which listing group the tool belongs to: 'entry' tools are listed to every key; other groups are listed to an entry-profile key once unlocked with synap_load_skill('tools:<group>'). A group narrows listing only and is not a permission.",
     "scopes": "Tool definitions declare no required API key scopes. Scope checks (mcp.read / mcp.write) run inside the handlers when a tool is called."
   },
-  "toolCount": 103,
+  "toolCount": 104,
   "entryTools": [
     "synap_orient",
     "synap_ask",
@@ -58,6 +58,7 @@
     "sessions": [
       "synap_list_sessions",
       "synap_get_work_graph",
+      "synap_get_work_release",
       "synap_list_agents",
       "synap_evaluate_session",
       "synap_revert_session",
@@ -6218,6 +6219,19 @@
         },
         "required": []
       }
+    },
+    {
+      "name": "synap_get_work_release",
+      "title": "Get the release state",
+      "group": "sessions",
+      "annotations": {
+        "title": "Get the release state",
+        "readOnlyHint": true,
+        "openWorldHint": false
+      },
+      "description": "Can the work be released, and what blocks it — read-only. Per repo: `main` (health ok | red | infra | unmeasured, `reason`, `fixedBy`) and `live` (what is deployed, `behindBy`). Per PR: `stage` on the road to main (working, checks, ready, on_main), `verdict` (green, own_red, inherited = red only because main is red, infra = did not run, queued, running, unmeasured), `fold` (draft, negctl, dependabot, stale; null = shown), the session holding it and `holder.live` (that session worked in the last 5 min), and `blockedBy`. `blockers` are ranked by how much waits behind each, transitively: the first is the thing to fix. `sources` says when the producer's snapshots are stale or missing, or a read failed (`unavailable` is not an empty list). Facts come from the devbox producer's `dev.repo_snapshot` observations; the pod reads no GitHub itself.",
+      "parameters": [],
+      "inputSchema": { "type": "object", "properties": {}, "required": [] }
     },
     {
       "name": "synap_list_agents",

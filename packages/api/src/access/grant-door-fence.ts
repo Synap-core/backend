@@ -312,6 +312,10 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
       "track"
     ),
   ],
+  // `readWorkRelease` (services/dev-loop/work-release.ts): `dev.repo_snapshot`
+  // events, the sessions the PRs belong to, and their liveness (chat turns,
+  // events, proposals, room notes). Same as MCP `synap_get_work_release`.
+  [/^\/work-release\/?$/, READS("event", "session", "channel", "proposal")],
 ];
 
 /**
@@ -417,6 +421,8 @@ export const MCP_READ_TOOL_DOORS: Readonly<Record<string, FencedReadDoor>> = {
   synap_governance: READS("proposal", "agent", "tool"),
   // The roster of agents (+ their computers and dispatch tool) for hand-off.
   synap_list_agents: READS("agent", "tool"),
+  // Same subjects as `GET /work-release` (GRANT_REST_GET_READS).
+  synap_get_work_release: READS("event", "session", "channel", "proposal"),
   synap_export_project_pack: READS(
     "project",
     "entity",
