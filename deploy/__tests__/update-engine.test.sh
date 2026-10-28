@@ -297,11 +297,13 @@ publish() { # <id> <last-migration> [bundle|bundle-caddy|bundle-same]
   fi
   manifest "$1" "$NEW_SHA" d "$2" "$asset" "$bsha" > "$TMP/rel/$1/release.json"
 }
+# Signatures are release-signature.test.sh's question: an UNSET mode runs as warn
+# here (no bundle is published), a caller's explicit mode (even empty) wins.
 run_update() { # <args...>
   ( cd "$S"; PATH="$TMP/bin:$PATH" SYNAP_DEPLOY_DIR="$DEPLOY" SYNAP_RELEASE_BASE_URL=https://rel.test \
     SYNAP_HEALTH_INTERVAL=0 SYNAP_UPDATE_HEALTH_TRIES=2 SYNAP_UPDATE_MIN_FREE_MB=1 SYNAP_UPDATE_MIN_FREE_SOURCE_MB=1 SYNAP_ASSUME_YES=1 \
     SYNAP_UPDATE_HEALTHY_WAIT=0 SYNAP_UPDATE_HEALTHY_INTERVAL=0 SYNAP_KRATOS_READY_TRIES=2 SYNAP_KRATOS_READY_INTERVAL=0 \
-    SYNAP_UPDATE_EDGE_TRIES=2 SYNAP_UPDATE_EDGE_INTERVAL=0 \
+    SYNAP_UPDATE_EDGE_TRIES=2 SYNAP_UPDATE_EDGE_INTERVAL=0 SYNAP_RELEASE_VERIFY="${SYNAP_RELEASE_VERIFY-warn}" \
     SYNAP_UPDATE_NOTIFY_CMD="touch '$S/hook-ran'" bash "$REPO/synap" update "$@" ) >"$S/out" 2>&1 </dev/null
 }
 cur_id()  { jq -r .id "$DEPLOY/state/current-release.json" 2>/dev/null; }

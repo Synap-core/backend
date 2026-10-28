@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 # Tripwire: the bootstrap `install.sh` verifies the release manifest's cosign
-# signature the SAME way `synap update` / `synap install` do (D12, warn mode).
+# signature the SAME way `synap update` / `synap install` do (D12, enforce).
 #
 # install.sh runs on a bare host BEFORE the bundle (and therefore `synap`) exists,
 # so it cannot source `_ue_verify_manifest_sig`. It carries its own copy of the
 # rule instead, and this test pins the two copies EQUAL:
-#   1. the identity regexp + OIDC issuer are byte-identical in install.sh and synap
-#      (and are the values docker-publish.yml actually signs as: the workflow file
-#      name in the regexp exists under .github/workflows/)
+#   1. the identity regexp, OIDC issuer and cosign image are byte-identical in
+#      install.sh and synap (and the workflow file named in the regexp exists)
 #   2. the REAL `install.sh` (its own CLI, stub curl/cosign/docker on PATH, never
-#      the network): warn (default) — no cosign / no bundle / a bad signature each
-#      WARN and the install carries on to `synap install`; enforce — each of those
-#      refuses BEFORE the bundle is downloaded or unpacked; off — cosign never runs
+#      the network): enforce (default) — no signature / a bad signature / a
+#      docker that cannot run cosign each refuse BEFORE the bundle is downloaded
+#      or unpacked; with no host cosign the pinned image runs through docker;
+#      warn — they warn and the install carries on; off — cosign never runs
 #   3. the cosign call carries exactly that regexp + issuer
 set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -21,7 +21,7 @@ ok()  { echo "ok   - $1"; }
 bad() { echo "FAIL - $1"; fail=1; }
 
 # ── 1. the two copies of the rule are equal ───────────────────────────────────
-for name in SYNAP_RELEASE_SIGNER_RE SYNAP_RELEASE_OIDC_ISSUER; do
+for name in SYNAP_RELEASE_SIGNER_RE SYNAP_RELEASE_OIDC_ISSUER SYNAP_COSIGN_IMAGE; do
   a="$(grep -E "^${name}=" "$HERE/install.sh")"; b="$(grep -E "^${name}=" "$HERE/synap")"
   [ -n "$a" ] && [ "$(printf '%s\n' "$a" | wc -l)" -eq 1 ] && [ "$a" = "$b" ] \
     && ok "pin: $name is byte-identical in install.sh and synap" \
@@ -58,68 +58,98 @@ printf '%s\n' "$@" > "$STUB_COSIGN_ARGS"
 echo "Error: none of the expected identities matched what was in the certificate" >&2
 exit 1
 C
-printf '#!/usr/bin/env bash\nexit 0\n' > "$TMP/bin/docker"
+# docker: `compose version` (step 1) answers ok; `run` is sigstore's image,
+# answering like cosign (or, with STUB_DOCKER_RC, like a daemon that cannot run it).
+cat > "$TMP/bin/docker" <<'C'
+#!/usr/bin/env bash
+[ "$1" = run ] || exit 0
+echo docker-cosign >> "$STUB_LOG"
+printf '%s\n' "$@" > "$STUB_DOCKER_ARGS"
+[ -n "${STUB_DOCKER_RC:-}" ] && { echo "docker: Error response from daemon: pull access denied" >&2; exit "$STUB_DOCKER_RC"; }
+[ "${STUB_COSIGN_RESULT:-ok}" = ok ] && { echo "Verified OK" >&2; exit 0; }
+echo "Error: none of the expected identities matched what was in the certificate" >&2
+exit 1
+C
 chmod +x "$TMP/bin/curl" "$TMP/bin/cosign" "$TMP/bin/docker"
-mkdir -p "$TMP/nocosign"; cp "$TMP/bin/curl" "$TMP/bin/docker" "$TMP/nocosign/"
+mkdir -p "$TMP/dockeronly"; cp "$TMP/bin/curl" "$TMP/bin/docker" "$TMP/dockeronly/"
 SYS_PATH="/usr/bin:/bin"
-PATH="$TMP/nocosign:$SYS_PATH" command -v cosign >/dev/null 2>&1 \
-  && { bad "a real cosign is on $SYS_PATH — the 'no cosign' case cannot be staged"; exit 1; }
+PATH="$TMP/dockeronly:$SYS_PATH" command -v cosign >/dev/null 2>&1 \
+  && { bad "a real cosign is on $SYS_PATH — the 'no host cosign' case cannot be staged"; exit 1; }
 for t in jq tar openssl; do PATH="$SYS_PATH:/opt/homebrew/bin:/usr/local/bin" command -v $t >/dev/null || { bad "$t is required to run this test"; exit 1; }; done
 JQ_DIR="$(dirname "$(command -v jq)")"
 
 # boot <path-dir> <mode|""> <with-bundle 0|1> <cosign-result> → rc in $RC, output in $TMP/out
 boot() {
   local dir="$1" mode="$2" with_bundle="$3" res="$4" d="$TMP/opt"
-  rm -rf "$d" "$TMP/exec-args" "$TMP/args" "$TMP/log"; : > "$TMP/log"
+  rm -rf "$d" "$TMP/exec-args" "$TMP/args" "$TMP/dargs" "$TMP/log"; : > "$TMP/log"
   rm -f "$TMP/rel/channel-stable/release.json.sigstore.json"
   [ "$with_bundle" = 1 ] && echo '{"bundle":"fake"}' > "$TMP/rel/channel-stable/release.json.sigstore.json"
   RC=0
   ( export PATH="$TMP/$dir:$SYS_PATH:$JQ_DIR" STUB_REL="$TMP/rel" STUB_LOG="$TMP/log" STUB_COSIGN_ARGS="$TMP/args" STUB_COSIGN_RESULT="$res" \
+      STUB_DOCKER_ARGS="$TMP/dargs" STUB_DOCKER_RC="${STUB_DOCKER_RC:-}" \
       SYNAP_RELEASE_BASE_URL="https://rel.test" SYNAP_DIR="$d" SYNAP_BIN_DIR="$TMP/binlink"
-    [ -n "$mode" ] && export SYNAP_RELEASE_VERIFY="$mode"
+    unset SYNAP_RELEASE_VERIFY; [ -n "$mode" ] && export SYNAP_RELEASE_VERIFY="$mode"
     mkdir -p "$TMP/binlink"
     bash "$HERE/install.sh" --name lab1 ) > "$TMP/out" 2>&1 </dev/null || RC=$?
 }
 downloaded_bundle() { grep -q 'synap-deploy-v9.9.9.tar.gz' "$TMP/log"; }
 handed_over()       { [ -s "$TMP/exec-args" ] && grep -qx install "$TMP/exec-args"; }
+refused_untouched() { [ "$RC" != 0 ] && ! downloaded_bundle && [ ! -e "$TMP/opt/synap" ] && ! handed_over; }
 
-# warn (the default) never blocks
-boot nocosign "" 0 ok
-[ "$RC" = 0 ] && handed_over && grep -q 'cosign is not installed' "$TMP/out" \
-  && ok "warn: no cosign → warns, install carries on to synap install" || { bad "warn/no cosign: rc=$RC"; cat "$TMP/out"; }
+# enforce (the default) refuses before the bundle is touched
 boot bin "" 0 ok
-[ "$RC" = 0 ] && handed_over && grep -q 'no signature (release.json.sigstore.json)' "$TMP/out" \
-  && ok "warn: no published bundle → warns, carries on" || { bad "warn/no bundle: rc=$RC"; cat "$TMP/out"; }
+refused_untouched && grep -q 'refused: no signature (release.json.sigstore.json)' "$TMP/out" \
+  && ok "default: no published signature → refused before the bundle is downloaded" || { bad "default/no bundle: rc=$RC"; cat "$TMP/out"; }
 boot bin "" 1 bad
-[ "$RC" = 0 ] && handed_over && grep -q 'does not verify as Synap CI' "$TMP/out" \
-  && ok "warn: a bad signature → warns, carries on" || { bad "warn/bad sig: rc=$RC"; cat "$TMP/out"; }
+refused_untouched && grep -q 'refused: the signature does not verify as Synap CI' "$TMP/out" \
+  && ok "default: a bad signature → refused, nothing unpacked, no hand-over" || { bad "default/bad sig: rc=$RC"; cat "$TMP/out"; }
+grep -q 'SYNAP_RELEASE_VERIFY=warn in the environment' "$TMP/out" \
+  && ok "a refusal names the one-run way past it" || bad "the refusal does not say how to go on unverified"
 boot bin "" 1 ok
 [ "$RC" = 0 ] && handed_over && grep -q 'signature verified' "$TMP/out" \
-  && ok "a good signature → verified, carries on" || { bad "good sig: rc=$RC"; cat "$TMP/out"; }
+  && ok "default: a good signature → verified, installs" || { bad "default/good sig: rc=$RC"; cat "$TMP/out"; }
 
-# the cosign call is the shared rule, exactly
+# the cosign call is the shared rule, exactly (args of the run just above)
 RE_SYN="$(sed -n "s/^SYNAP_RELEASE_SIGNER_RE='\(.*\)'$/\1/p" "$HERE/synap")"
 ISS_SYN="$(sed -n 's/^SYNAP_RELEASE_OIDC_ISSUER="\(.*\)"$/\1/p' "$HERE/synap")"
+IMG_SYN="$(sed -n 's/^SYNAP_COSIGN_IMAGE="\(.*\)"$/\1/p' "$HERE/synap")"
 { grep -qxF -- "$RE_SYN" "$TMP/args" && grep -qxF -- "$ISS_SYN" "$TMP/args" && grep -qx 'verify-blob' "$TMP/args" && grep -q 'release.json$' "$TMP/args"; } \
   && ok "cosign verify-blob carries synap's identity regexp + issuer and the fetched manifest" || { bad "cosign args: $(tr '\n' ' ' < "$TMP/args")"; }
+[ ! -e "$TMP/dargs" ] && ok "a host cosign wins: docker run is never called" || bad "docker ran although a host cosign exists"
 
-# enforce refuses, before the bundle is touched
-boot nocosign enforce 0 ok
-[ "$RC" != 0 ] && ! downloaded_bundle && [ ! -e "$TMP/opt/synap" ] && grep -q 'refused: cosign is not installed' "$TMP/out" \
-  && ok "enforce: no cosign → refused before the bundle is downloaded" || { bad "enforce/no cosign: rc=$RC"; cat "$TMP/out"; }
-boot bin enforce 0 ok
-[ "$RC" != 0 ] && ! downloaded_bundle && [ ! -e "$TMP/opt/synap" ] \
-  && ok "enforce: no bundle → refused before the bundle is downloaded" || { bad "enforce/no bundle: rc=$RC"; cat "$TMP/out"; }
-boot bin enforce 1 bad
-[ "$RC" != 0 ] && ! downloaded_bundle && [ ! -e "$TMP/opt/synap" ] && ! handed_over \
-  && ok "enforce: a bad signature → refused, nothing unpacked, no hand-over" || { bad "enforce/bad sig: rc=$RC"; cat "$TMP/out"; }
-boot bin enforce 1 ok
-[ "$RC" = 0 ] && handed_over && ok "enforce: a good signature → installs" || { bad "enforce/good: rc=$RC"; cat "$TMP/out"; }
+# no host cosign (a fresh host): sigstore's pinned image through docker
+boot dockeronly "" 1 ok
+[ "$RC" = 0 ] && handed_over && grep -q 'signature verified' "$TMP/out" \
+  && ok "no host cosign: verified through the pinned cosign image, installs" || { bad "dockeronly/good: rc=$RC"; cat "$TMP/out"; }
+dargs="$(tr '\n' ' ' < "$TMP/dargs" 2>/dev/null)"
+for want in "run --rm" "--read-only" "--cap-drop ALL" "--security-opt no-new-privileges" \
+            ",dst=/release,readonly" "$IMG_SYN" "verify-blob" "--certificate-identity-regexp" \
+            "--certificate-oidc-issuer $ISS_SYN" \
+            "--bundle /release/release.json.sigstore.json /release/release.json"; do
+  grep -qF -- "$want" <<<"$dargs" && ok "docker cosign called with $want" || bad "docker cosign args lack '$want': $dargs"
+done
+boot dockeronly "" 1 bad
+refused_untouched && grep -q 'refused: the signature does not verify' "$TMP/out" \
+  && ok "no host cosign: a bad signature → refused" || { bad "dockeronly/bad: rc=$RC"; cat "$TMP/out"; }
+STUB_DOCKER_RC=125 boot dockeronly "" 1 ok
+refused_untouched && grep -q 'refused: could not run the signature check (docker exited 125' "$TMP/out" \
+  && ! grep -q 'does not verify' "$TMP/out" \
+  && ok "docker cannot run cosign (125) → refused, not called a bad signature" || { bad "dockeronly/125: rc=$RC"; cat "$TMP/out"; }
 
-# off skips cosign entirely; an unknown mode falls back to warn
+# warn (opt-in) carries on
+boot bin warn 0 ok
+[ "$RC" = 0 ] && handed_over && grep -q 'NOT signature-verified: no signature' "$TMP/out" \
+  && ok "warn: no published signature → warns, carries on" || { bad "warn/no bundle: rc=$RC"; cat "$TMP/out"; }
+boot bin warn 1 bad
+[ "$RC" = 0 ] && handed_over && grep -q 'NOT signature-verified: the signature does not verify' "$TMP/out" \
+  && ok "warn: a bad signature → warns, carries on" || { bad "warn/bad sig: rc=$RC"; cat "$TMP/out"; }
+
+# off skips cosign entirely (and says so); an unknown mode means enforce
 boot bin off 1 bad
-[ "$RC" = 0 ] && ! grep -q '^cosign$' "$TMP/log" && ok "off: cosign is never run" || { bad "off: rc=$RC"; cat "$TMP/out"; }
+[ "$RC" = 0 ] && ! grep -q '^cosign$\|^docker-cosign$' "$TMP/log" && grep -q 'NOT signature-checked' "$TMP/out" \
+  && ok "off: cosign is never run, and the skip is printed" || { bad "off: rc=$RC"; cat "$TMP/out"; }
 boot bin bogus 1 bad
-[ "$RC" = 0 ] && grep -q 'not warn|enforce|off — using warn' "$TMP/out" && ok "an unknown SYNAP_RELEASE_VERIFY falls back to warn" || { bad "bogus mode: rc=$RC"; cat "$TMP/out"; }
+refused_untouched && grep -q 'not warn|enforce|off — using enforce' "$TMP/out" \
+  && ok "an unknown SYNAP_RELEASE_VERIFY falls back to enforce" || { bad "bogus mode: rc=$RC"; cat "$TMP/out"; }
 
 [ "$fail" -eq 0 ] && echo "PASS" || { echo "FAILED"; exit 1; }

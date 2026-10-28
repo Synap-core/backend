@@ -171,11 +171,13 @@ setup() {
   echo "$DEPLOY/state/registration-nonce/nonce.json" > "$TMP/nonce-path"
   export FAKE
 }
+# Signatures are release-signature.test.sh's question: an UNSET mode runs as warn
+# here (no bundle is published), a caller's explicit mode (even empty) wins.
 run_install() { # <args...>
   ( cd "$ROOT" || exit; PATH="$TMP/bin:$PATH" SYNAP_DEPLOY_DIR="$DEPLOY" SYNAP_RELEASE_BASE_URL="$BASE/rel" \
     SYNAP_LOCAL_POD_URL="$BASE" SYNAP_METADATA_IP_URL="$BASE/meta/ip" \
     SYNAP_HEALTH_INTERVAL=0 SYNAP_REGISTER_RETRY_SECONDS=0 SYNAP_REGISTER_HEALTH_TRIES=2 \
-    bash "$ROOT/synap" install "$@" ) >"$S/out" 2>&1 </dev/null
+    SYNAP_RELEASE_VERIFY="${SYNAP_RELEASE_VERIFY-warn}" bash "$ROOT/synap" install "$@" ) >"$S/out" 2>&1 </dev/null
 }
 env_of() { grep "^$1=" "$DEPLOY/.env" | tail -1 | cut -d= -f2-; }
 req()    { jq -r "$2" "$TMP/req-$1.json" 2>/dev/null; }
@@ -413,7 +415,7 @@ cp "$TMP/srv/rel/channel-stable/release.json" "$TMP/srv/rel/$BREL/release.json"
 boot() { # <dir> <args...>
   local d="$1"; shift
   PATH="$TMP/bin:$PATH" SYNAP_RELEASE_BASE_URL="$BASE/rel" SYNAP_DIR="$d" SYNAP_BIN_DIR="$B/bin" \
-    bash "$HERE/install.sh" "$@" >"$B/out" 2>&1 </dev/null
+    SYNAP_RELEASE_VERIFY=warn bash "$HERE/install.sh" "$@" >"$B/out" 2>&1 </dev/null   # signatures: install-manifest-signature.test.sh
 }
 for retired in "--provisioning-token x" "--control-plane-url https://cp" "--backend-version v1" "--token x"; do
   # shellcheck disable=SC2086

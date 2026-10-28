@@ -3758,9 +3758,12 @@ _ue_fetch() { # <url> <out>
 # release AND on the channel pointer. Verified against the signing workflow
 # (main via workflow_run, which always runs the default-branch file, or a v* tag)
 # and GitHub's OIDC issuer, so a release written by a token or a fork build fails.
-# SYNAP_RELEASE_VERIFY (env or deploy/.env): warn (default) — a missing cosign,
-# missing bundle or failed check WARNS and the update goes on; enforce — any of
-# them refuses the manifest; off — skip (a private mirror with no signatures).
+# SYNAP_RELEASE_VERIFY (env or deploy/.env): enforce (default, and what an
+# unknown value means) — a missing cosign, missing bundle or failed check
+# refuses the manifest; warn — they WARN and the update goes on (what
+# `synap update --insecure-skip-verify` sets for one run, with a warning); off — skip (a
+# private mirror with no signatures). The default was warn until the audit of
+# 2026-10-28: a manual update applied a manifest whose signature had failed.
 SYNAP_RELEASE_SIGNER_RE='^https://github\.com/(?i:synap-core/backend)/\.github/workflows/docker-publish\.yml@refs/(heads/main|tags/v[0-9][0-9A-Za-z.+-]*)$'
 SYNAP_RELEASE_OIDC_ISSUER="https://token.actions.githubusercontent.com"
 # Nothing installs cosign on a pod host, and the unattended path ENFORCES the
@@ -3805,10 +3808,10 @@ _ue_cosign_verify() {
 
 _ue_verify_manifest_sig() { # <fast|stable|release-id> <manifest> — non-zero only under enforce
     local mode="${SYNAP_RELEASE_VERIFY:-$(_ue_env_get SYNAP_RELEASE_VERIFY)}" bundle="$2.sigstore.json" why="" out via rc=0
-    case "${mode:=warn}" in
+    case "${mode:=enforce}" in
         warn|enforce) ;;
-        off) return 0 ;;
-        *) _ue_warn "SYNAP_RELEASE_VERIFY=${mode} is not warn|enforce|off — using warn"; mode=warn ;;
+        off) _ue_warn "release manifest for '$1' is NOT signature-checked (SYNAP_RELEASE_VERIFY=off)"; return 0 ;;
+        *) _ue_warn "SYNAP_RELEASE_VERIFY=${mode} is not warn|enforce|off — using enforce"; mode=enforce ;;
     esac
     rm -f "$bundle"
     via="$(_ue_cosign_via)"
@@ -3829,6 +3832,7 @@ _ue_verify_manifest_sig() { # <fast|stable|release-id> <manifest> — non-zero o
     fi
     if [ "$mode" = enforce ]; then
         _ue_err "release manifest for '$1' refused: ${why} (SYNAP_RELEASE_VERIFY=enforce)"
+        _ue_err "To go on unverified, this run only: synap update --insecure-skip-verify (or SYNAP_RELEASE_VERIFY=warn in the environment)"
         return 1
     fi
     _ue_warn "release manifest for '$1' is NOT signature-verified: ${why} — continuing (SYNAP_RELEASE_VERIFY=warn)"
@@ -5071,9 +5075,15 @@ cmd_update() {
                 force=1; shift ;;
             --unattended)
                 unattended=1; shift ;;
+            --insecure-skip-verify)
+                # One run, a person's: the unattended plan re-exports enforce.
+                export SYNAP_RELEASE_VERIFY=warn
+                _ue_warn "--insecure-skip-verify: a release manifest whose signature fails is applied anyway (this run only)"
+                shift ;;
             -h|--help)
                 cat <<'USAGE'
 synap update [--release <id|fast|stable>] [--from-source] [--force] [--unattended]
+             [--insecure-skip-verify]
 
   --release <ref>   apply a published release: a release id (main-<sha7>, vX.Y.Z)
                     or a channel — fast (every green main push) | stable (v* tags).
@@ -5086,6 +5096,10 @@ synap update [--release <id|fast|stable>] [--from-source] [--force] [--unattende
                     (state/requests/update.json) or the owner's policy
                     (state/update-policy.json: auto, channel, window); always
                     SYNAP_RELEASE_VERIFY=enforce. Nothing to do = exit 0.
+  --insecure-skip-verify
+                    apply a release whose manifest signature cannot be
+                    verified (no cosign, no bundle, a failed check): warns and
+                    goes on, for this run only. The default refuses it.
 
 Every update: lock → manifest → preflight → pull by digest → verified backup →
 migrate → canary → swap → all services → verify → record. Any failure rolls
