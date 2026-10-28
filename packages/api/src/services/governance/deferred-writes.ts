@@ -200,6 +200,9 @@ const REPLAY_DOORS: Record<ReplayableDeferredPair, ReplayDoor> = {
       workspaceId: str(d.workspaceId) ?? workspaceId,
       title: String(d.title ?? ""),
       ...defined({
+        // The id the door handed the agent when it held the write: the
+        // replay lands under it, so the agent's `documentId` resolves.
+        proposedDocumentId: str(d.id),
         content: str(d.content),
         type: d.type as "markdown" | undefined,
         url: str(d.url),

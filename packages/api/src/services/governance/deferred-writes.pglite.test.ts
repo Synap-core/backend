@@ -590,6 +590,34 @@ describe("join approval — membership, then replay as the agent", () => {
     });
   });
 
+  it("a kept document is replayed under the id the agent was handed (held-writes d50550c2)", async () => {
+    // Live 2026-10-27: the agent was told documentId 4203118d, the replay
+    // landed the document as fc52a02e, and every link to the first id broke.
+    const handed = randomUUID();
+    const r = (await checkPermissionOrPropose({
+      userId: AGENT,
+      agentUserId: AGENT,
+      workspaceId: WS,
+      subjectType: "document",
+      action: "create",
+      data: {
+        id: handed,
+        title: "State of the work",
+        type: "markdown",
+        content: "Five lines.",
+        workspaceId: WS,
+        userId: HUMAN,
+      },
+    } as Parameters<typeof checkPermissionOrPropose>[0])) as {
+      proposalId: string;
+    };
+
+    await approveJoin(r.proposalId);
+
+    expect(h.doorCalls.map((c) => c.door)).toEqual(["document/create"]);
+    expect(h.doorCalls[0]!.input).toMatchObject({ proposedDocumentId: handed });
+  });
+
   it("a rejected join records `rejected` for every kept write — nothing replays", async () => {
     await fiveWrites();
     const [join] = await joinRows();

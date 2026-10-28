@@ -103,6 +103,13 @@ export const documentsRouter = router({
          * name matches on the proposal path.
          */
         expectedLabel: z.string().optional(),
+        /**
+         * The id this door handed the agent when its write was held (a
+         * held-writes pack or a join). The replay passes it back so the
+         * document lands under the id the agent already reported; same
+         * contract as `entities.create.proposedEntityId`.
+         */
+        proposedDocumentId: z.string().uuid().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -123,7 +130,33 @@ export const documentsRouter = router({
         }).content;
       }
       const userId = ctx.userId!;
-      const documentId = randomUUID();
+      // A caller-named id that already names a row: the caller's own live
+      // document ⇒ this create already landed (a replay run twice): return
+      // it; any other row ⇒ not ours to reuse: mint a fresh id.
+      let documentId = input.proposedDocumentId ?? randomUUID();
+      if (input.proposedDocumentId) {
+        const [taken] = await db
+          .select({
+            id: documents.id,
+            userId: documents.userId,
+            deletedAt: documents.deletedAt,
+          })
+          .from(documents)
+          .where(eq(documents.id, input.proposedDocumentId))
+          .limit(1);
+        if (taken) {
+          if (taken.userId === userId && !taken.deletedAt) {
+            return {
+              id: taken.id,
+              documentId: taken.id,
+              status: "created" as const,
+              ackState: "duplicate-ignored" as const,
+              priorDocumentId: taken.id,
+            };
+          }
+          documentId = randomUUID();
+        }
+      }
       const actingAgent = await actingAgentUserId(ctx, input.agentUserId);
       const agentUserId = actingAgent ?? userId;
       const correlationId = randomUUID();
