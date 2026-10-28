@@ -573,19 +573,21 @@ function beforeOf(
 }
 
 /**
- * Refuse an update-pack item whose touched fields no longer hold what they
- * held when the pack was filed — someone edited the record meanwhile, and the
- * reviewer approved a change against values that are gone.
+ * The touched fields that no longer hold what they held when the change was
+ * filed (someone edited the record meanwhile), or `null` when every one still
+ * does. `before` is a pack item's `before` or a single `entity/update`
+ * proposal's `previousData` (`captureEntityPreviousData`, same shape; an absent
+ * key was recorded `null`). Throws "No longer exists" for a deleted record.
  */
-export async function assertUpdatePackItemCurrent(
-  item: UpdatePackItem
-): Promise<void> {
+export async function entityFieldsChangedSinceFiled(
+  entityId: string,
+  before: EntityUpdateBefore
+): Promise<string[] | null> {
   const row = await db.query.entities.findFirst({
-    where: and(eq(entities.id, item.id), isNull(entities.deletedAt)),
+    where: and(eq(entities.id, entityId), isNull(entities.deletedAt)),
     columns: { title: true, preview: true, properties: true },
   });
   if (!row) throw new Error("No longer exists");
-  const { before } = item;
   const changed: string[] = [];
   if ("title" in before && (row.title ?? null) !== (before.title ?? null)) {
     changed.push("title");
@@ -602,7 +604,19 @@ export async function assertUpdatePackItemCurrent(
       changed.push(key);
     }
   }
-  if (changed.length > 0) {
+  return changed.length > 0 ? changed : null;
+}
+
+/**
+ * Refuse an update-pack item whose touched fields no longer hold what they
+ * held when the pack was filed — someone edited the record meanwhile, and the
+ * reviewer approved a change against values that are gone.
+ */
+export async function assertUpdatePackItemCurrent(
+  item: UpdatePackItem
+): Promise<void> {
+  const changed = await entityFieldsChangedSinceFiled(item.id, item.before);
+  if (changed) {
     throw new Error(
       `Changed since this pack was filed (${changed.join(", ")}) — not overwritten`
     );
