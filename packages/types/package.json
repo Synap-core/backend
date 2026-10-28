@@ -285,6 +285,10 @@
       "types": "./dist/capability-intents/index.d.ts",
       "import": "./dist/capability-intents/index.js"
     },
+    "./skill-code": {
+      "types": "./dist/skill-code/index.d.ts",
+      "import": "./dist/skill-code/index.js"
+    },
     "./navigation": {
       "types": "./dist/navigation/index.d.ts",
       "import": "./dist/navigation/index.js"
@@ -405,6 +409,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "acorn": "^8.17.0",
+    "acorn-walk": "^8.3.5",
     "drizzle-orm": "^0.45.1",
     "drizzle-zod": "0.8.3",
     "yjs": "^13.6.11",
