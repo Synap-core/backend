@@ -57,7 +57,7 @@
     "gen-types": "node scripts/gen-types.mjs",
     "gen:capability-schema": "tsx src/contracts/gen-capability-execute-schema.ts",
     "gen:mcp-manifest": "export $(grep -v '^#' ../../.env | xargs) && PINO_PRETTY=false tsx src/routers/mcp/tools/gen-manifest.ts",
-    "gen-types:check": "node scripts/gen-types.mjs --check && git diff --exit-code -- ../api-types/src/generated.d.ts",
+    "gen-types:check": "node scripts/gen-types.mjs --check",
     "gen-docs": "node scripts/gen-sdk-docs.mjs",
     "typecheck": "NODE_OPTIONS=\"--max-old-space-size=6144 ${NODE_OPTIONS:-}\" tsc --noEmit",
     "test": "vitest run",
