@@ -195,7 +195,7 @@ Ruleset **"base branch security"** on the default branch. After §5.3 it holds:
   - `Release gate` (`ci.yml`)
   - `Full suite` (`ci.yml`)
   - `API e2e` (`ci.yml`)
-  - `Reference docs are current` (`reference-docs.yml`)
+  - `Reference docs are current` (`ci.yml`; its own workflow `reference-docs.yml` until 2026-10-28)
 
   These names come from the check runs of a recent `main` commit; the script
   refuses a name that main's latest CI run did not report. All four workflows

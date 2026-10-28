@@ -445,8 +445,8 @@ describe("ci-changes: a draft's skipped suites never read as passed", () => {
     expect(changes?.block).toContain("BASE_REF: ${{ github.base_ref }}");
   });
 
-  it("ci.yml and reference-docs.yml run for a pull request to ANY base", () => {
-    for (const file of ["ci.yml", "reference-docs.yml"]) {
+  it("ci.yml runs for a pull request to ANY base", () => {
+    for (const file of ["ci.yml"]) {
       const text = readFileSync(join(REPO, ".github/workflows", file), "utf8");
       const on = text.slice(text.indexOf("\non:\n"), text.indexOf("\njobs:\n"));
       const prBlock = /^ {2}pull_request:\n((?: {4}.*\n| *#.*\n)*)/m.exec(on);
@@ -479,15 +479,13 @@ describe("ci-changes: a draft's skipped suites never read as passed", () => {
   });
 
   it("Reference docs reports red for a negctl branch instead of skipping", () => {
-    const text = readFileSync(
-      join(REPO, ".github/workflows/reference-docs.yml"),
-      "utf8"
-    );
+    // A job of ci.yml since 2026-10-28 (it waits for Preflight).
+    const job = jobs.find((j) => j.name === "Reference docs are current");
+    expect(job, "job exists").toBeDefined();
     // No job-level skip for negctl: a skipped required check reads as passed.
-    expect(text).not.toMatch(/^ {4}if: .*negctl/m);
-    const steps = text.split(/^ {6}- /m).slice(1);
-    expect(steps[0]).toContain("startsWith(github.head_ref, 'negctl/')");
-    expect(steps[0]).toMatch(/\n\s+exit 1\n/);
+    expect(job?.if).not.toMatch(/negctl/);
+    expect(job?.steps[0]).toContain("startsWith(github.head_ref, 'negctl/')");
+    expect(job?.steps[0]).toMatch(/\n\s+exit 1\n/);
   });
 
   it("every suite job runs on a hold and its FIRST step fails", () => {

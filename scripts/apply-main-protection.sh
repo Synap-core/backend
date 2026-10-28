@@ -14,7 +14,8 @@ REPO="Synap-core/backend"
 RULESET_ID=25542891            # "base branch security", target: the default branch
 GITHUB_ACTIONS_APP_ID=15368    # the integration that posts the CI check runs
 ENVIRONMENT="production"       # publish-types.yml's environment on main
-# The CI check run names, from ci.yml and reference-docs.yml. A renamed job must
+# The CI check run names, all jobs of ci.yml (scripts/preflight.tripwire.test.ts
+# reads this list: each must fail at "Preflight red"). A renamed job must
 # be renamed here too, or every pull request waits on a check that never runs.
 REQUIRED_CHECKS=("Release gate" "Full suite" "API e2e" "Reference docs are current")
 
