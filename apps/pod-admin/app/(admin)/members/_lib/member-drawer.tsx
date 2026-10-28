@@ -17,6 +17,7 @@ import { openIn } from "../../../../lib/open-in";
 import {
   ExitFallback,
   rowHref,
+  useAppOpenAttempt,
   usePlacedExit,
 } from "../../../../lib/exit-link";
 import { useOperatorEmail } from "../../components/admin-shell";
@@ -27,10 +28,10 @@ import type { PodMember } from "./helpers";
 /**
  * The exit from a membership row to that space in the app.
  *
- * The row carries only the LINK. The "get the app" fallback is rendered once
- * beneath the list instead of inside every row — `open-in.ts` says so in as
- * many words, and someone in six spaces should not be told to install the
- * app six times. 40px target, because 24px was not a real one.
+ * The row carries only the LINK. The download is offered beside it only once
+ * a click on it did not open the app (`useAppOpenAttempt`) — someone in six
+ * spaces should not be told to install the app six times. 40px target,
+ * because 24px was not a real one.
  */
 function WorkspaceExit({ workspaceId }: { workspaceId: string }) {
   const exit = openIn({
@@ -40,21 +41,27 @@ function WorkspaceExit({ workspaceId }: { workspaceId: string }) {
   });
   // On a phone the mobile app has no space screen: the arrow opens the
   // space's console page instead.
-  const href = rowHref(usePlacedExit(exit));
+  const placed = usePlacedExit(exit);
+  const open = useAppOpenAttempt(placed);
+  const href = rowHref(placed);
   if (href === null) return null;
   return (
-    <Button
-      as="a"
-      href={href}
-      isIconOnly
-      size="sm"
-      radius="full"
-      variant="light"
-      aria-label="Open this space in app"
-      className="h-10 w-10 min-w-10 text-foreground/65 hover:text-foreground"
-    >
-      <ArrowUpRight className="h-3.5 w-3.5" strokeWidth={1.75} />
-    </Button>
+    <>
+      <Button
+        as="a"
+        href={href}
+        onPress={open.onOpen}
+        isIconOnly
+        size="sm"
+        radius="full"
+        variant="light"
+        aria-label="Open this space in app"
+        className="h-10 w-10 min-w-10 text-foreground/65 hover:text-foreground"
+      >
+        <ArrowUpRight className="h-3.5 w-3.5" strokeWidth={1.75} />
+      </Button>
+      {open.offer}
+    </>
   );
 }
 

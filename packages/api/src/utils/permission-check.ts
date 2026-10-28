@@ -134,7 +134,6 @@ import { isPodAdmin } from "./workspace-role.js";
 import { grantWriteDenial } from "./grant-write-check.js";
 import {
   decideAgentPolicy,
-  DEFAULT_DAILY_WRITE_CEILING,
   findMatchingPattern,
   requiredPermissionFor,
   isBlockedFilesystemPath,
@@ -1306,10 +1305,10 @@ type ExhaustiveAgentPolicyInput = AgentPolicyInput &
  *                            and there is no agent here, so there is no
  *                            meaningful key to count against; a pod-wide count
  *                            would be a different axis wearing this rung's name.
- *                            (b) `DEFAULT_DAILY_WRITE_CEILING` is 500 and one
- *                            bulk capture auto-approves ~1,600 `entity.create`
- *                            rows, so adopting it would silently start queueing
- *                            proposals mid-capture. Giving the anonymous
+ *                            (b) a stored ceiling is a finite per-day limit
+ *                            and one bulk capture auto-approves ~1,600
+ *                            `entity.create` rows, so adopting it would
+ *                            silently start queueing proposals mid-capture. Giving the anonymous
  *                            principal its OWN ceiling axis is a follow-up.
  *   2.6  BY-KIND           — FIRES (previously hand-mirrored here).
  *   2.7  PER-CAPABILITY    — NO-OP. `capabilityGovernance: undefined` → the
@@ -3398,8 +3397,12 @@ export {
   HELD_WRITES_TARGET_TYPE,
   HELD_WRITES_PROPOSAL_TYPE,
 } from "./held-writes-pack.js";
-/** Writes one day's pack may hold: one more day's worth at the default ceiling. */
-export const HELD_WRITES_MAX = DEFAULT_DAILY_WRITE_CEILING;
+/**
+ * Writes one day's pack may hold. Its OWN constant: it was once tied to the
+ * default daily ceiling (500), and that default is now "no limit" (null), but
+ * the pack — one proposal row a person reviews — still needs a finite size.
+ */
+export const HELD_WRITES_MAX = 500;
 /** The rung 2.56 reason code that routes a write to the pack. */
 const DAILY_WRITE_CEILING_CODE =
   "DAILY_WRITE_CEILING" satisfies keyof typeof PROPOSE_REASON;

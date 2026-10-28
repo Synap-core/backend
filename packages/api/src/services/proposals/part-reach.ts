@@ -10,7 +10,9 @@
  *     door's own rule (`answeringSkillsWhere` + `answeringSkillOrder`,
  *     `executeCapability`); a `skill` step → that skill by id, same lens;
  *   - the skill's reach by kind: a code skill's `metadata.allowedHosts` (the
- *     sandbox egress list `runSkillInSandbox` enforces), a declarative verb's
+ *     sandbox egress list `runSkillInSandbox` enforces) plus the connections
+ *     its code names in `callProvider(...)` (the runtime lets it call any of
+ *     the person's connections, each call governed), a declarative verb's
  *     provider connection and fixed `baseUrlOverride` host, nothing for a
  *     builtin (it runs in the pod);
  *   - a `fetch` step / `webhook` output → its URL's host, when the URL is
@@ -23,7 +25,18 @@
  * same floor every other read of the review applies.
  */
 
-import { db, skills, and, or, inArray } from "@synap/database";
+import {
+  db,
+  skills,
+  links,
+  tools,
+  and,
+  or,
+  eq,
+  inArray,
+  drizzleSql,
+  userVisibleWhere,
+} from "@synap/database";
 import { resolveServiceName } from "@synap-core/types/service-marks";
 import {
   isLikelyUUID,
@@ -41,6 +54,40 @@ export interface SkillReachRow {
   kind?: unknown;
   metadata?: unknown;
   providerSpec?: unknown;
+  code?: unknown;
+  /** The tools it declares it calls (`requires` edges), by name. */
+  requiredTools?: readonly string[];
+}
+
+/**
+ * The tools each skill declares it calls (`requires` edges, the scope a
+ * person approves with the skill), by name — only tools `userId` can see,
+ * the same floor `visibleRequiredTools` applies at filing and approval.
+ */
+export async function readRequiredToolNames(
+  userId: string,
+  skillIds: readonly string[]
+): Promise<Map<string, string[]>> {
+  const out = new Map<string, string[]>();
+  if (skillIds.length === 0) return out;
+  const edges = await db
+    .select({ skillId: links.fromId, name: tools.name })
+    .from(links)
+    // `links.to_id` is text, `tools.id` a uuid.
+    .innerJoin(tools, drizzleSql`${tools.id}::text = ${links.toId}`)
+    .where(
+      and(
+        eq(links.fromType, "skill"),
+        eq(links.toType, "tool"),
+        eq(links.linkType, "requires"),
+        inArray(links.fromId, [...skillIds]),
+        userVisibleWhere(tools.workspaceId, userId)
+      )
+    );
+  for (const e of edges) {
+    out.set(e.skillId, [...(out.get(e.skillId) ?? []), e.name]);
+  }
+  return out;
 }
 
 /** How a flow's steps find the skills they would run. */
@@ -76,18 +123,37 @@ export function literalHost(raw: unknown): string | null {
   }
 }
 
+const PROVIDER_CALL = /\bcallProvider\s*\(/g;
+const LITERAL_PROVIDER_CALL =
+  /\bcallProvider\s*\(\s*(["'`])([A-Za-z0-9_.:-]+)\1/g;
+
+/**
+ * The connections a code skill's source calls through `callProvider`. A call
+ * whose provider is written out names it; any other call (a provider held in
+ * a variable or built at run time) is counted as unread, never dropped.
+ */
+export function codeProviderCalls(code: unknown): {
+  providers: string[];
+  unread: number;
+} {
+  const source = typeof code === "string" ? code : "";
+  const calls = source.match(PROVIDER_CALL)?.length ?? 0;
+  const providers = [...source.matchAll(LITERAL_PROVIDER_CALL)].map(
+    (m) => m[2]!
+  );
+  return { providers, unread: calls - providers.length };
+}
+
 /**
  * Where a skill reaches, by kind. Null for an instruction: it runs nothing,
  * so it has no reach to draw.
  */
-export function skillReach(
-  row: SkillReachRow
-): Pick<ProposalPartReach, "hosts" | "connections"> | null {
+export function skillReach(row: SkillReachRow): ProposalPartReach | null {
   switch (row.kind) {
     case "instruction":
       return null;
     case "builtin":
-      return { hosts: [], connections: [] };
+      return { hosts: [], connections: [], unreadSteps: 0 };
     case "declarative": {
       const spec = bag(row.providerSpec);
       const tool = str(spec?.tool);
@@ -95,12 +161,15 @@ export function skillReach(
       return {
         hosts: host ? [host] : [],
         connections: tool ? [resolveServiceName(tool)] : [],
+        unreadSteps: 0,
       };
     }
     default: {
       // A code skill (the column's default kind): its egress allowlist, as
-      // written — the sandbox matches it exactly.
+      // written — the sandbox matches it exactly — and the connections its
+      // code calls through the pod.
       const allowed = bag(row.metadata)?.allowedHosts;
+      const calls = codeProviderCalls(row.code);
       return {
         hosts: Array.isArray(allowed)
           ? allowed.flatMap((h) => {
@@ -108,7 +177,14 @@ export function skillReach(
               return host ? [host] : [];
             })
           : [],
-        connections: [],
+        connections: [
+          ...new Set(
+            [...(row.requiredTools ?? []), ...calls.providers].map((p) =>
+              resolveServiceName(p)
+            )
+          ),
+        ].sort(),
+        unreadSteps: calls.unread > 0 ? 1 : 0,
       };
     }
   }
@@ -141,6 +217,7 @@ export function flowReach(
     const reach = skillReach(row);
     reach?.hosts.forEach((h) => hosts.add(h));
     reach?.connections.forEach((c) => connections.add(c));
+    unreadSteps += reach?.unreadSteps ?? 0;
   };
   const addUrl = (url: unknown) => {
     const host = literalHost(url);
@@ -234,6 +311,7 @@ export async function readStepSkillLookups(
         kind: skills.kind,
         metadata: skills.metadata,
         providerSpec: skills.providerSpec,
+        code: skills.code,
       })
       .from(skills)
       .where(
@@ -246,9 +324,14 @@ export async function readStepSkillLookups(
         )
       )
       .orderBy(...answeringSkillOrder());
+    const required = await readRequiredToolNames(
+      userId,
+      found.map((row) => row.id)
+    );
     const byName = new Map<string, SkillReachRow>();
     const byId = new Map<string, SkillReachRow>();
-    for (const row of found) {
+    for (const skillRow of found) {
+      const row = { ...skillRow, requiredTools: required.get(skillRow.id) };
       // Ordered: the first of a name is the one the run door would pick.
       if (!byName.has(row.name)) byName.set(row.name, row);
       byId.set(row.id, row);

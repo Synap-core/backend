@@ -105,8 +105,8 @@ describe("TRIPWIRE — anonymous principal routes through the shared policy engi
 
   it("anonymousPolicyInput pins rung 2.56 (daily write ceiling) to undefined — the deferral is deliberate", () => {
     // Not a claim that the rung is right to be off: a claim that turning it ON
-    // must be a deliberate edit here, not a drive-by. `DEFAULT_DAILY_WRITE_
-    // CEILING` is 500 and one bulk capture auto-approves ~1,600 rows, so a
+    // must be a deliberate edit here, not a drive-by. A stored daily ceiling is
+    // a finite limit and one bulk capture auto-approves ~1,600 rows, so a
     // silent adoption would start queueing proposals mid-capture.
     const helper = SOURCE.slice(
       SOURCE.indexOf("function anonymousPolicyInput("),

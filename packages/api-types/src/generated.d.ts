@@ -6840,6 +6840,32 @@ declare const OBJECT_ROOM_CONTEXT_TYPES: readonly [
 	"entity"
 ];
 export type ObjectRoomType = (typeof OBJECT_ROOM_CONTEXT_TYPES)[number];
+export interface GrantDraft {
+	/** Permission patterns, `<subject>[.<kind>].<action>`. */
+	readonly permissions: readonly string[];
+	/** null/undefined/[] = any workspace the person can reach. */
+	readonly workspaceIds?: readonly string[] | null;
+	/** null/undefined/[] = no project narrowing. */
+	readonly projectIds?: readonly string[] | null;
+	/** null/undefined/[] = no object pinning. */
+	readonly entityIds?: readonly string[] | null;
+	/** undefined → DEFAULT_KEY_TTL_DAYS; a number → that many days; null → never. */
+	readonly expiresInDays?: number | null;
+	/** What the person calls it ("Portfolio site"); a stored grant may have none. */
+	readonly label?: string | null;
+}
+export interface KeyDraft {
+	/** What the person calls it. Required. */
+	readonly name: string;
+	/** "Where will you keep it?" — stored with the key. */
+	readonly note?: string;
+	/** The template it started from (a built-in id or a stored role's id). */
+	readonly templateId?: string | null;
+	/** Where it is used (`KEY_USES` ids): this decides its scopes. */
+	readonly uses: readonly string[];
+	/** What it may touch, where, and for how long. */
+	readonly grant: GrantDraft;
+}
 /**
  * What a key may touch, as a key list shows it:
  *   - `ungranted` — it never had a grant: it may touch NOTHING (P5);
@@ -8713,7 +8739,43 @@ export interface ProposalReviewModel {
 	graph?: ProposalReviewGraph;
 	/** Present ONLY for delete proposals — see {@link ProposalRemoval}. */
 	removal?: ProposalRemoval;
+	/**
+	 * Present ONLY for a pending `capability.enable`: what approving it turns
+	 * on — see {@link ProposalTurnsOn}.
+	 */
+	turnsOn?: ProposalTurnsOn;
 	events: ProposalReviewEvent[];
+}
+/**
+ * What a `capability.enable` would turn on, read NOW (while it is pending)
+ * under the viewer's skill read rule: each skill whole, so the person reads
+ * the code or prose they are switching on and where it can reach. A skill the
+ * viewer cannot read is COUNTED in `unreadSkills`, never dropped silently.
+ */
+export interface ProposalTurnsOn {
+	skills: ProposalTurnOnSkill[];
+	/** Skills in the request this viewer could not read (or that are gone). */
+	unreadSkills: number;
+}
+export interface ProposalTurnOnSkill {
+	id: string;
+	name: string;
+	/** `code` | `instruction` | `declarative` | `builtin`. */
+	kind: string;
+	/** `box` = a script run on the person's computer, not in the pod. */
+	executionMode: string;
+	/** The whole code it would run; never excerpted. */
+	code?: string;
+	/** Its whole documentation, or an instruction skill's prose. */
+	body?: string;
+	/** A box script's declaration (packages, hosts, limits), as stored. */
+	box?: Record<string, unknown>;
+	/**
+	 * What it can reach outside the pod, read like every "Can reach" fact.
+	 * Absent for an instruction (it runs nothing) and for a box script (its
+	 * declaration says what it reaches, not the pod's sandbox).
+	 */
+	reach?: ProposalPartReach;
 }
 export interface CompositeCreateEntityOp {
 	op: "create_entity";
@@ -9216,6 +9278,89 @@ declare enum MessageLinkRelationshipType {
 	QUOTES = "quotes",// Message quotes this object
 	CONTEXT = "context"
 }
+declare const repoSnapshotEventSchema: z.ZodObject<{
+	live: z.ZodOptional<z.ZodNullable<z.ZodObject<{
+		behindBy: z.ZodOptional<z.ZodNullable<z.ZodNumber>>;
+		kind: z.ZodEnum<{
+			desktop: "desktop";
+			image: "image";
+			npm: "npm";
+			pod: "pod";
+			site: "site";
+		}>;
+		label: z.ZodString;
+		sha: z.ZodNullable<z.ZodString>;
+	}, z.core.$strip>>>;
+	main: z.ZodObject<{
+		fixedBy: z.ZodOptional<z.ZodNullable<z.ZodObject<{
+			number: z.ZodNumber;
+			repo: z.ZodString;
+		}, z.core.$strip>>>;
+		health: z.ZodEnum<{
+			infra: "infra";
+			ok: "ok";
+			red: "red";
+			unmeasured: "unmeasured";
+		}>;
+		reason: z.ZodOptional<z.ZodNullable<z.ZodString>>;
+		redSince: z.ZodOptional<z.ZodNullable<z.ZodObject<{
+			at: z.ZodOptional<z.ZodString>;
+			prNumber: z.ZodOptional<z.ZodNumber>;
+			sha: z.ZodString;
+		}, z.core.$strip>>>;
+		sha: z.ZodNullable<z.ZodString>;
+		source: z.ZodEnum<{
+			"devbox-baseline": "devbox-baseline";
+			"github-checks": "github-checks";
+			none: "none";
+		}>;
+	}, z.core.$strip>;
+	mergedToday: z.ZodArray<z.ZodObject<{
+		mergedAt: z.ZodString;
+		number: z.ZodNumber;
+		podSessionId: z.ZodOptional<z.ZodNullable<z.ZodString>>;
+		title: z.ZodString;
+		url: z.ZodString;
+	}, z.core.$strip>>;
+	observedAt: z.ZodString;
+	prs: z.ZodArray<z.ZodObject<{
+		author: z.ZodString;
+		autoMerge: z.ZodBoolean;
+		branch: z.ZodOptional<z.ZodString>;
+		checks: z.ZodEnum<{
+			green: "green";
+			infra: "infra";
+			none: "none";
+			queued: "queued";
+			red: "red";
+			running: "running";
+		}>;
+		dependsOn: z.ZodOptional<z.ZodArray<z.ZodObject<{
+			number: z.ZodNumber;
+			repo: z.ZodString;
+		}, z.core.$strip>>>;
+		draft: z.ZodBoolean;
+		headSha: z.ZodString;
+		mergeable: z.ZodEnum<{
+			blocked: "blocked";
+			clean: "clean";
+			dirty: "dirty";
+			unknown: "unknown";
+		}>;
+		number: z.ZodNumber;
+		podSessionId: z.ZodOptional<z.ZodNullable<z.ZodString>>;
+		redInheritedFromMain: z.ZodOptional<z.ZodBoolean>;
+		title: z.ZodString;
+		updatedAt: z.ZodString;
+		url: z.ZodString;
+	}, z.core.$strip>>;
+	repo: z.ZodString;
+	visibility: z.ZodEnum<{
+		private: "private";
+		public: "public";
+	}>;
+}, z.core.$strip>;
+export type RepoSnapshotFact = z.infer<typeof repoSnapshotEventSchema>;
 declare const PULL_REQUEST_STATES: readonly [
 	"open",
 	"merged",
@@ -10960,14 +11105,6 @@ declare const NEEDS_YOU_PROPOSAL_CLASSES: readonly [
 export type NeedsYouProposalClass = (typeof NEEDS_YOU_PROPOSAL_CLASSES)[number];
 /** Every class a row can carry — one vocabulary across slots and proposals. */
 export type NeedsYouClass = NeedsYouSlotClass | NeedsYouProposalClass;
-declare const NEEDS_YOU_FOLDS: readonly [
-	"working",
-	"stopped",
-	"review_later",
-	"from_system",
-	"changes_to_review"
-];
-export type NeedsYouFold = (typeof NEEDS_YOU_FOLDS)[number];
 /** The headline and every fold, counted over the SAME rows a list draws. */
 export interface NeedsYouFoldCounts {
 	/** The headline: rows that really need the person. */
@@ -11296,20 +11433,6 @@ export interface ExpectedOutput {
 	 * Only meaningful alongside `owner: 'human'`.
 	 */
 	why?: string;
-	/**
-	 * WHAT MOVES when the person answers — one line naming the next step, the
-	 * session or the PR that waits on the answer ("the EU launch deploy",
-	 * "session 'Pricing page' starts"). Decision E (needs-truth §5): a needs-you
-	 * row says what to do, WHAT IT UNBLOCKS, who asked and since when.
-	 *
-	 * DECLARED by the agent with the hand-over, like `why`, and expected when
-	 * an agent hands a slot to the person: a hand-over without it is stamped
-	 * `ASK_UNBLOCKS_DEFAULT` and the agent is warned (`slotsMissingUnblocks`,
-	 * api `slot-asked-event.ts`); a system producer's slot reads it from its cause
-	 * (`effectiveSlotUnblocks`, `@synap-core/types/ask`). Cleared with the other
-	 * ownership fields when the slot goes back to the agent.
-	 */
-	unblocks?: string;
 	/**
 	 * WHEN the slot became the human's — stamped the moment `owner` becomes
 	 * `human`, and cleared with it. Mirrors `delegatedAt` accompanying
@@ -12067,7 +12190,6 @@ export interface PostChannelMessageResult {
 	slot?: {
 		hint?: string;
 		status: string;
-		warnings?: string[];
 	};
 }
 export interface PersonalConversationTransition {
@@ -13832,6 +13954,26 @@ export interface DeviceRequestView {
 	/** The reach the computer gets — the preset's name, shown in Details. */
 	accessName: string;
 }
+export type KeyRequestStatusView = "approved" | "consumed" | "denied" | "expired" | "pending";
+export interface KeyRequestView {
+	requestId: string;
+	status: KeyRequestStatusView;
+	/** Who asks: the computer (or the person's own key). */
+	requester: {
+		isComputer: boolean;
+		name: string;
+		userId: string;
+	};
+	template: {
+		description: string;
+		id: string;
+		name: string;
+	} | null;
+	/** The most the key may be: approving unchanged mints exactly this. */
+	draft: KeyDraft;
+	createdAt: Date;
+	expiresAt: Date;
+}
 /** One permission a pod app asks for, and the spaces it may be given in. */
 export interface OAuthAppOfferItem {
 	permission: string;
@@ -14549,11 +14691,6 @@ export interface OwedSlot {
 	 * else a criterion / param slot's own) — the card's door.
 	 */
 	askCause?: AskCause;
-	/**
-	 * WHAT MOVES when the person answers (`effectiveSlotUnblocks`): the slot's
-	 * declared line, else its cause's. Absent when neither says (decision E).
-	 */
-	unblocks?: string;
 	/**
 	 * THE needs-you rule's class for this slot (`classifyOwedAsk`,
 	 * `@synap-core/types/needs-you/rule`, decision E): `needs_you` is the
@@ -16115,6 +16252,38 @@ export interface CapabilityGrantRow {
 	createdAt: string;
 	active: boolean;
 }
+/** A skill or tool row. `kind` absent = skill (the execute door's shape). */
+export interface CapabilityRef {
+	kind?: "skill" | "tool";
+	id: string;
+	name: string;
+}
+/**
+ * What the caller hands back. `originalActionRan: false` is a literal on BOTH
+ * arms: the refused action did not run, whether or not the request was filed.
+ */
+export type CapabilityEnableOffer = {
+	message: string;
+	originalActionRan: false;
+	proposalId: string;
+	reviewUrl: string;
+	skills: CapabilityRef[];
+	status: "proposed";
+	title: string;
+} | {
+	error: string;
+	message: string;
+	originalActionRan: false;
+	status: "failed";
+};
+declare function proposeCapabilityEnable(input: {
+	/** The acting agent; `null` = filed on behalf of the owner (unattended run). */
+	agentUserId: string | null;
+	refused: CapabilityRef[];
+	sessionId?: string | null;
+	userId: string;
+	workspaceId: string | null;
+}): Promise<CapabilityEnableOffer[]>;
 /**
  * Intent classification for the WRITE side of the Rule Loop — the sibling of
  * `classify.ts`.
@@ -16906,38 +17075,6 @@ export interface SyncConnectorConnection {
 	 */
 	hasError?: boolean;
 }
-/** A skill or tool row. `kind` absent = skill (the execute door's shape). */
-export interface CapabilityRef {
-	kind?: "skill" | "tool";
-	id: string;
-	name: string;
-}
-/**
- * What the caller hands back. `originalActionRan: false` is a literal on BOTH
- * arms: the refused action did not run, whether or not the request was filed.
- */
-export type CapabilityEnableOffer = {
-	message: string;
-	originalActionRan: false;
-	proposalId: string;
-	reviewUrl: string;
-	skills: CapabilityRef[];
-	status: "proposed";
-	title: string;
-} | {
-	error: string;
-	message: string;
-	originalActionRan: false;
-	status: "failed";
-};
-declare function proposeCapabilityEnable(input: {
-	/** The acting agent; `null` = filed on behalf of the owner (unattended run). */
-	agentUserId: string | null;
-	refused: CapabilityRef[];
-	sessionId?: string | null;
-	userId: string;
-	workspaceId: string | null;
-}): Promise<CapabilityEnableOffer[]>;
 /**
  * ARGUMENT VALIDATION AT THE PROPOSE MOMENT — check the call against the verb's
  * DECLARED schema before a human is asked to approve it.
@@ -21369,11 +21506,6 @@ export interface Signal {
 	 */
 	needsYouClass?: NeedsYouClass;
 	/**
-	 * `owed-slot`: WHAT MOVES when the person answers — the card's "Unblocks"
-	 * line (decision E; `effectiveSlotUnblocks`). Absent when nothing says.
-	 */
-	unblocks?: string;
-	/**
 	 * WHERE the row came from — the small provenance door (lens grammar §5: a
 	 * source is shown only when it differs from the page's scope; the client
 	 * decides that with `visibleSource`, `@synap-core/types/lens`). The most
@@ -21505,136 +21637,6 @@ export interface SignalSource {
 	label: string;
 }
 /**
- * The minimum a notification row must expose to become a signal. Mirrors the
- * `notifications` columns the reader already selects — no DB dependency.
- */
-export interface NotificationSignalInput {
-	id: string;
-	title: string;
-	category: string;
-	sourceType: string;
-	sourceId: string | null;
-	createdAt: Date;
-	/**
-	 * The registry type (`notifications.type`). Read ONLY for the type's
-	 * `needsYou` role (`needsYouRole`, registry.ts). Optional because this is a
-	 * DB-free mirror; every real row carries it, and a row without one is an
-	 * ordinary `"item"`.
-	 */
-	type?: string;
-	/**
-	 * The row's persisted registry actions (`notifications.actions`). Read ONLY
-	 * for a `navigate-object` action's `view`, so a notification that opens a
-	 * room from its banner also opens the room from the inbox — one source, the
-	 * registry row, never a per-type map here.
-	 */
-	actions?: unknown;
-	/**
-	 * The producer's collapse key (`notifications.group_key`). Read ONLY for a
-	 * type whose registry `foldBy` is `"groupKey"` ({@link foldNotifications}).
-	 */
-	groupKey?: string | null;
-}
-/**
- * The CONTAINER a notification resolves to, derived from what it points at
- * (`lens-containers.ts`: its session target, or the room its message was
- * posted in) — never a stored column. Only a session the VIEWER may read is
- * ever named, so a container never leaks a session the person cannot open.
- */
-export interface NotificationContainer {
-	sessionId: string | null;
-	/** The session's display name (`resolveSessionTitle`), when it has one. */
-	sessionTitle: string | null;
-	projectId: string | null;
-	trackId: string | null;
-}
-/**
- * The minimum an owed slot must expose to become a signal. A DB-free mirror of
- * the fields `listOwedSlots` (`focus-sessions/owed-outputs.ts`) already
- * projects — nothing is re-derived here.
- */
-export interface OwedSlotSignalInput {
-	sessionId: string;
-	/** The DECLARED label. It is the title, verbatim — see below. */
-	label: string;
-	/** ISO-8601, written by the block door. The ordering key. */
-	owedSince: string;
-	/**
-	 * The three disclosure fields, carried from `listOwedSlots` straight through.
-	 * Optional here because a slot blocked before these existed has none — and an
-	 * absent reason must render as "no reason recorded", never as a guessed one.
-	 */
-	blockedReason?: ExpectedOutput["blockedReason"];
-	why?: string;
-	claimedDone?: boolean;
-	/** The owning session's declared goal, straight from `listOwedSlots`. */
-	sessionGoal?: string | null;
-	/** The owning session's display name, straight from `listOwedSlots`. */
-	sessionTitle?: string | null;
-	/** The owning session's project, straight from `listOwedSlots`. */
-	projectId?: string | null;
-	/**
-	 * The slot's own `ExpectedOutput.kind`, straight from `listOwedSlots`.
-	 * Optional here only because this input is a DB-free mirror; every real slot
-	 * carries one.
-	 */
-	kind?: string;
-	/**
-	 * The criterion key of a criterion slot, straight from `listOwedSlots`.
-	 * Optional for the same reason as `kind`, plus back-compat: an older slot
-	 * carries none.
-	 */
-	criterionKey?: string;
-	/** The slot's pointer, straight from `listOwedSlots`. */
-	ref?: OutputRef;
-	/** The slot's ask, straight from `listOwedSlots`. */
-	ask?: SlotAsk;
-	/** A relay awaiting the tap, straight from `listOwedSlots`. */
-	pendingRelay?: SlotPendingRelay;
-	/** Kept owed past its session, straight from `listOwedSlots`. */
-	keptOwedAt?: string;
-	/** A param slot's param, straight from `listOwedSlots`. */
-	paramName?: string;
-	/** Who asked and their name, straight from `listOwedSlots`. */
-	askedBy?: string;
-	askedByName?: string;
-	/** What raised it when no agent did, straight from `listOwedSlots`. */
-	askCause?: AskCause;
-	/** The rule's class, straight from `listOwedSlots` (`needsYouLens`). */
-	needsYouClass?: NeedsYouSlotClass;
-	/** What the answer unblocks, straight from `listOwedSlots`. */
-	unblocks?: string;
-}
-/** A pending trusted issuer, as `listPendingIssuers` reads it. */
-export interface PendingIssuerSignalInput {
-	id: string;
-	displayName: string;
-	issuerUrl: string;
-	createdAt: Date;
-}
-/** An app connection request waiting on an owner, as `listPendingAppRequests` reads it. */
-export interface PendingAppRequestSignalInput {
-	id: string;
-	displayName: string;
-	requestedOrigin: string;
-	createdAt: Date;
-	/** The handoff lease: past it the request is expired, never decidable. */
-	expiresAt: Date;
-}
-/** An open invite to another space, as `listOpenSpaceInvites` reads it. */
-export interface SpaceInviteSignalInput {
-	id: string;
-	token: string;
-	type: "pod" | "workspace";
-	role: string;
-	workspaceId: string | null;
-	/** The space's name (null: a pod-wide invite, or the space has none). */
-	spaceName: string | null;
-	createdAt: Date;
-	/** Past it the pod refuses the invite: the row's countdown ends there. */
-	expiresAt: Date;
-}
-/**
  * The STATUS BANNER — system health, never a needs-you row (lens grammar,
  * founder-approved 2026-10-04). ONE banner for the page, however many health
  * rows are unread: each issue is folded per `(type, source)` — "Intelligence
@@ -21695,26 +21697,6 @@ export interface LensPagePicks {
 	/** Halves that FAILED. Non-empty ⇒ never "nothing to do". */
 	unreadable: string[];
 }
-export interface UnfinishedCapture {
-	sessionId: string;
-	title: string | null;
-	goal: string | null;
-	updatedAt: Date;
-	projectId: string | null;
-	status: "needs_answer" | "suggested";
-}
-/** One project session whose next move is the person's acceptance. */
-export interface ReviewSessionRow {
-	id: string;
-	title: string | null;
-	goal: string | null;
-	/** When the session last moved — the row's `occurredAt`. */
-	updatedAt: Date;
-	/** The session's containers — the row's provenance door. */
-	workspaceId: string | null;
-	projectId: string | null;
-	trackId: string | null;
-}
 /** A sub-read's name — what `unreadable` reports. */
 export type SignalSubRead = "activity" | "app-requests" | "captures" | "drafts" | "events" | "invites" | "issuers" | "liveness" | "notifications" | "outputs" | "owed" | "proposals" | "review";
 /** One class of the lens page. */
@@ -21747,8 +21729,115 @@ export interface LensPageWire {
 	 */
 	picks?: LensPagePicks;
 }
-/** The needs-you rows by fold: the headline, then each fold of the rule. */
-export type NeedsYouClassifiedRows = Record<"needs_you" | NeedsYouFold, Signal[]>;
+declare const SHIP_STAGES: readonly [
+	"working",
+	"checks",
+	"ready",
+	"on_main"
+];
+export type ShipStage = (typeof SHIP_STAGES)[number];
+declare const CHECK_VERDICTS: readonly [
+	"green",
+	"own_red",
+	"inherited",
+	"infra",
+	"queued",
+	"running",
+	"unmeasured"
+];
+export type CheckVerdict = (typeof CHECK_VERDICTS)[number];
+declare const SHIP_FOLDS: readonly [
+	"draft",
+	"negctl",
+	"dependabot",
+	"stale"
+];
+export type ShipFold = (typeof SHIP_FOLDS)[number] | null;
+export type BlockRef = {
+	kind: "pr";
+	number: number;
+	repo: string;
+} | {
+	kind: "main";
+	repo: string;
+};
+declare const WORK_RELEASE_SOURCE_STATES: {
+	readonly holders: readonly [
+		"ok",
+		"unavailable"
+	];
+	readonly sessions: readonly [
+		"ok",
+		"unavailable"
+	];
+	readonly snapshots: readonly [
+		"ok",
+		"stale",
+		"missing"
+	];
+};
+export interface WorkReleaseSources {
+	/** `stale` = the newest snapshot is older than {@link SNAPSHOT_STALE_MS}. */
+	snapshots: (typeof WORK_RELEASE_SOURCE_STATES.snapshots)[number];
+	sessions: (typeof WORK_RELEASE_SOURCE_STATES.sessions)[number];
+	holders: (typeof WORK_RELEASE_SOURCE_STATES.holders)[number];
+}
+export interface WorkReleaseRepo {
+	/** `owner/name`, as the producer spelled it. */
+	repo: string;
+	/** The name without its owner: `backend`. */
+	label: string;
+	visibility: "private" | "public";
+	main: RepoSnapshotFact["main"];
+	live: NonNullable<RepoSnapshotFact["live"]> | null;
+	snapshotAt: string | null;
+}
+export interface WorkReleaseHolder {
+	/** A session holding the PR is working on it now (`isSessionWorkingNow`). */
+	live: boolean;
+	/** Who holds it: the session's agent, else its owner. */
+	label: string;
+	/** The session's newest activity; null when nothing was recorded. */
+	lastActiveAt: string | null;
+}
+export interface WorkReleasePr {
+	repo: string;
+	number: number;
+	title: string;
+	url: string;
+	stage: ShipStage;
+	verdict: CheckVerdict;
+	fold: ShipFold;
+	sessionId: string | null;
+	sessionTitle: string | null;
+	/** `null` when no session holds it, or the holders read failed (`sources`). */
+	holder: WorkReleaseHolder | null;
+	/** Explicit `dependsOn` still open, then (inherited red) its repo's main. */
+	blockedBy: BlockRef[];
+	/** Auto-merge is armed: green + clean merges it with no one. */
+	autoMerge: boolean;
+	updatedAt: string;
+	mergedAt?: string | null;
+}
+export interface WorkReleaseBlocker {
+	ref: BlockRef;
+	/** Open PRs + mains waiting behind it, transitively. */
+	waiting: number;
+	waitingPrs: number;
+	waitingMains: number;
+	/** A main: its `reason`; a PR: its title. */
+	reason: string | null;
+	/** A main: the PR that fixes it, when named. Absent on a PR. */
+	fixedBy?: BlockRef | null;
+}
+export interface WorkReleaseRead {
+	generatedAt: string;
+	sources: WorkReleaseSources;
+	repos: WorkReleaseRepo[];
+	prs: WorkReleasePr[];
+	/** The blocker with the most waiting behind it, transitively, first. */
+	blockers: WorkReleaseBlocker[];
+}
 /**
  * resolveEntityOpenTarget — WHERE opening this entity should go, decided on the
  * pod so every client (browser, relay) only dispatches.
@@ -22966,7 +23055,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				};
 				hubId?: string | undefined;
 				keyName: string;
-				scope: string[];
+				note?: string | undefined;
+				scope?: string[] | undefined;
+				templateId?: string | undefined;
+				uses?: ("chat" | "hub" | "mcp" | "n8n" | "n8n-analyze" | "realtime" | "skills")[] | undefined;
 				workspaceId?: string | undefined;
 			};
 			meta: object;
@@ -22976,13 +23068,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				keyPrefix: string;
 				message?: undefined;
 				proposalId: string;
+				scope?: undefined;
 				status: "proposed";
 			} | {
-				id: any;
+				id: string;
 				key: string;
 				keyPrefix: string;
 				message: string;
 				proposalId?: undefined;
+				scope: string[];
 				status: "created";
 			};
 		}>;
@@ -22998,7 +23092,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					roleId?: string | undefined;
 				};
 				name: string;
-				scopes: string[];
+				note?: string | undefined;
+				scopes?: string[] | undefined;
+				templateId?: string | undefined;
+				uses?: ("chat" | "hub" | "mcp" | "n8n" | "n8n-analyze" | "realtime" | "skills")[] | undefined;
 			};
 			meta: object;
 			output: {
@@ -23046,6 +23143,29 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				status: "approved" | "denied";
 			};
 		}>;
+		decideKeyRequest: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				decision: "approve" | "deny";
+				draft?: {
+					grant: {
+						entityIds?: string[] | undefined;
+						expiresInDays?: number | null | undefined;
+						permissions: string[];
+						projectIds?: string[] | undefined;
+						workspaceIds?: string[] | undefined;
+					};
+					name: string;
+					note?: string | undefined;
+					templateId?: string | null | undefined;
+					uses: ("chat" | "hub" | "mcp" | "n8n" | "n8n-analyze" | "realtime" | "skills")[];
+				} | undefined;
+				requestId: string;
+			};
+			meta: object;
+			output: {
+				status: "approved" | "denied";
+			};
+		}>;
 		decideOAuthAuthorization: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				appSignInFingerprint?: string | undefined;
@@ -23077,6 +23197,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: DeviceRequestView;
+		}>;
+		getKeyRequest: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				requestId: string;
+			};
+			meta: object;
+			output: KeyRequestView;
 		}>;
 		getMachineDefaults: import("@trpc/server").TRPCQueryProcedure<{
 			input: void;
@@ -25423,19 +25550,23 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				};
 				meta: object;
 				output: {
+					approved?: undefined;
 					id: `${string}-${string}-${string}-${string}-${string}`;
 					proposalId: string;
 					status: "proposed";
 					toolId: string;
 					toolName: string;
+					turnOnRequest?: undefined;
 					verbName: string;
 					wiring: WireCreatedVerbResult;
 				} | {
+					approved: boolean;
 					id: string;
 					proposalId?: undefined;
 					status: "created";
 					toolId: string;
 					toolName: string;
+					turnOnRequest: CapabilityEnableOffer | undefined;
 					verbName: string;
 					wiring: WireCreatedVerbResult;
 				};
@@ -31918,7 +32049,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					url: string;
 				} | null | undefined;
 				sessionId: string;
-				unblocks?: string | undefined;
 				why?: string | undefined;
 			};
 			meta: object;
@@ -32464,7 +32594,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						relationType: string;
 						status: "linked" | "proposed" | "skipped";
 					} | undefined;
-					unblocks?: string | undefined;
 					why?: string | undefined;
 				}[] | undefined;
 				forceCreate?: boolean | undefined;
@@ -33545,7 +33674,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						relationType: string;
 						status: "linked" | "proposed" | "skipped";
 					} | undefined;
-					unblocks?: string | undefined;
 					why?: string | undefined;
 				}[] | undefined;
 				followPlaybookId?: string | null | undefined;
@@ -33750,6 +33878,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: SessionUsage;
+		}>;
+		workUnits: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				sessionId: string;
+			};
+			meta: object;
+			output: PacketSection<PacketWorkUnitItem>;
 		}>;
 	}>>;
 	forms: import("@trpc/server").TRPCBuiltRouter<{
@@ -34003,7 +34138,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: {
 				count: number;
-				limit: number;
+				limit: number | null;
 			};
 		}>;
 	}>>;
@@ -34361,6 +34496,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					workspaceIds?: string[] | undefined;
 				};
 				name: string;
+				uses?: ("chat" | "hub" | "mcp" | "n8n" | "n8n-analyze" | "realtime" | "skills")[] | undefined;
 			};
 			meta: object;
 			output: {
@@ -34388,6 +34524,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				name: string;
 				stored: true;
 				updatedAt: Date;
+				uses?: ("chat" | "hub" | "mcp" | "n8n" | "n8n-analyze" | "realtime" | "skills")[] | undefined;
 			};
 		}>;
 		list: import("@trpc/server").TRPCQueryProcedure<{
@@ -34418,6 +34555,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				name: string;
 				stored: true;
 				updatedAt: Date;
+				uses?: ("chat" | "hub" | "mcp" | "n8n" | "n8n-analyze" | "realtime" | "skills")[] | undefined;
 			}[];
 		}>;
 		update: import("@trpc/server").TRPCMutationProcedure<{
@@ -34432,6 +34570,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				};
 				id: string;
 				name: string;
+				uses?: ("chat" | "hub" | "mcp" | "n8n" | "n8n-analyze" | "realtime" | "skills")[] | undefined;
 			};
 			meta: object;
 			output: {
@@ -34459,6 +34598,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				name: string;
 				stored: true;
 				updatedAt: Date;
+				uses?: ("chat" | "hub" | "mcp" | "n8n" | "n8n-analyze" | "realtime" | "skills")[] | undefined;
 			};
 		}>;
 	}>>;
@@ -44695,101 +44835,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				signals: Signal[];
 			};
 		}>;
-		needsYou: import("@trpc/server").TRPCQueryProcedure<{
-			input: {
-				automationId?: string | undefined;
-				limit?: number | undefined;
-				profileSlug?: string | undefined;
-				projectId?: string | undefined;
-				sessionId?: string | undefined;
-				trackId?: string | undefined;
-				workspaceId?: string | null | undefined;
-			} | undefined;
-			meta: object;
-			output: {
-				count: ReturnType<(a: {
-					accessRequests: {
-						applications: PendingAppRequestSignalInput[];
-						issuers: PendingIssuerSignalInput[];
-					};
-					accessRequestsTruncated: boolean;
-					allNotifications: (NotificationSignalInput & {
-						workspaceId: string | null;
-					})[];
-					captures: {
-						captures: UnfinishedCapture[];
-						truncated: boolean;
-					};
-					clusterSessions: Map<any, any>;
-					containers: Map<string, NotificationContainer>;
-					draftAsks: {
-						slots: OwedSlotSignalInput[];
-						starterNames: Map<string, string>;
-					};
-					draftAsksTruncated: boolean;
-					failures: {
-						blocking: {
-							error: unknown;
-							source: SignalSubRead;
-						}[];
-						proposed: {
-							error: unknown;
-							source: SignalSubRead;
-						}[];
-						status: {
-							error: unknown;
-							source: SignalSubRead;
-						}[];
-					};
-					groups: {
-						distinct: number;
-						folds: ClusterFoldCounts;
-						groups: ProposalCluster[];
-						reviewLater: number;
-						scanTruncated: boolean;
-						scanned: number;
-					};
-					measuredOwedSessionIds: Set<string>;
-					notifications: (NotificationSignalInput & {
-						workspaceId: string | null;
-					})[];
-					notificationsTruncated: boolean;
-					openQuestionSessionIds: Set<string> | undefined;
-					owed: (OwedSlotSignalInput & {
-						workspaceId: string | null;
-					})[];
-					owedTruncated: boolean;
-					review: {
-						sessions: ReviewSessionRow[];
-						truncated: boolean;
-					};
-					spaceInvites: SpaceInviteSignalInput[];
-					spaceInvitesTruncated: boolean;
-					statusNotifications: (NotificationSignalInput & {
-						workspaceId: string | null;
-					})[];
-				}) => {
-					blocked: number;
-					captures: number;
-					decisions: number;
-					distinct: number;
-					drafts: number;
-					draftsTruncated: boolean;
-					folds: NeedsYouFoldCounts;
-					invites: number;
-					needsYou: number;
-					notifications: number;
-					requests: number;
-					review: number;
-					reviewLater: number;
-					suggestions: number;
-					truncated: boolean;
-				}>;
-				lens: "needs-you";
-				rows: NeedsYouClassifiedRows;
-				truncated: boolean;
-			};
-		}>;
 		skipNextMove: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				key: string;
@@ -44866,13 +44911,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: {
+				approved?: undefined;
 				id: `${string}-${string}-${string}-${string}-${string}`;
 				proposalId: string;
 				status: "proposed";
+				turnOnRequest?: undefined;
 			} | {
+				approved: boolean;
 				id: string;
 				proposalId?: undefined;
 				status: "created";
+				turnOnRequest: CapabilityEnableOffer | undefined;
 			};
 		}>;
 		createRule: import("@trpc/server").TRPCMutationProcedure<{
@@ -48593,6 +48642,38 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				viewRendererViewTypes: string[] | null;
 				workspaceId: string | null;
 			};
+		}>;
+	}>>;
+	workRelease: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		errorShape: {
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: {
+				candidates?: {
+					id: string;
+					title: string | null;
+					type: string;
+				}[] | undefined;
+				captureQuestionStatus?: string | undefined;
+				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
+				currentStatus?: string | null;
+				expectedStatus?: string | null;
+				httpStatus: number;
+				opRef?: string | undefined;
+				path?: string;
+				pendingProposalId?: string | undefined;
+				reasonCode?: string;
+				stack?: string;
+			};
+			message: string;
+		};
+		meta: object;
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		get: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			meta: object;
+			output: WorkReleaseRead;
 		}>;
 	}>>;
 	workers: import("@trpc/server").TRPCBuiltRouter<{

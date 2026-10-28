@@ -63,7 +63,11 @@ import { SectionCard } from "../components/section-card";
 import { type StatusKind } from "../components/status-pill";
 import { formatRelative, readableError } from "../../../lib/format";
 import { openIn } from "../../../lib/open-in";
-import { ExitFallback, usePlacedExit } from "../../../lib/exit-link";
+import {
+  ExitFallback,
+  useAppOpenAttempt,
+  usePlacedExit,
+} from "../../../lib/exit-link";
 
 // Pull the workspace shape from the query response so we don't drift.
 // We declare it inline (rather than using `inferRouterOutputs`) because
@@ -329,7 +333,9 @@ function WorkspaceRowActions({
   // `null` on a phone: the console does not hand spaces to the mobile app —
   // its space screen hides system and agent spaces, which this list holds.
   // The line beneath says so and links this space's own page instead.
-  const appHref = usePlacedExit(desktopExit).href;
+  const appPlaced = usePlacedExit(desktopExit);
+  const appOpen = useAppOpenAttempt(appPlaced);
+  const appHref = appPlaced.href;
 
   const deleteMutation = trpc.workspaces.adminDelete.useMutation({
     onSuccess: (data) => {
@@ -398,13 +404,14 @@ function WorkspaceRowActions({
         <PopoverContent className="min-w-[220px] max-w-[280px] p-1">
           <div className="flex w-full flex-col">
             {/* The workspace's contents live in the desktop app. `synap://`
-                does nothing at all when the app is not installed, so the
-                download fallback is rendered right underneath — never a
-                click with no way out. */}
+                does nothing at all when the app is not installed, so a click
+                that opened nothing offers the download right underneath —
+                never a click with no way out. */}
             {appHref !== null && (
               <Button
                 as="a"
                 href={appHref}
+                onPress={appOpen.onOpen}
                 variant="light"
                 size="sm"
                 radius="sm"
@@ -416,8 +423,9 @@ function WorkspaceRowActions({
                 Open in app
               </Button>
             )}
-            <span className="px-3 pb-1">
+            <span className="px-3 pb-1 empty:hidden">
               <ExitFallback exit={desktopExit} />
+              {appOpen.offer}
             </span>
             {/* Members, API keys, connections and governance are pod-admin's
                 own surfaces — internal navigation, not an exit. */}

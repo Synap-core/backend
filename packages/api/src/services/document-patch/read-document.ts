@@ -23,6 +23,7 @@ import type { Embed } from "@synap-core/markdown-core/embeds";
 import {
   diagnoseForDocument,
   readStoredDiagnostics,
+  storedRunTimeDiagnostics,
   type DiagnosticsOutcome,
 } from "./apply-document-patch.js";
 
@@ -70,7 +71,12 @@ export function readableMarkdown(markdown: string): string {
   return coreReadableMarkdown(markdown, readableEmbedLabel);
 }
 
-/** Diagnostics for the document at `revision`: the stored stamp if current, else checked now. */
+/**
+ * Diagnostics for the document at `revision`: the stored stamp if current
+ * (this revision, this checker), else checked now as the reader, keeping a
+ * stale same-revision stamp's run-time items, which no re-check can derive.
+ * Nothing is stored here: re-stamping is the owner's (the reactor's).
+ */
 export async function currentDiagnostics(args: {
   documentId: string;
   workspaceId: string | null;
@@ -81,11 +87,18 @@ export async function currentDiagnostics(args: {
 }): Promise<DiagnosticsOutcome> {
   const stored = readStoredDiagnostics(args.metadata, args.revision);
   if (stored) return { items: stored };
-  return diagnoseForDocument(
+  const checked = await diagnoseForDocument(
     args.content,
     { id: args.documentId, workspaceId: args.workspaceId },
     args.readerUserId
   );
+  if (!checked.items) return checked;
+  return {
+    items: [
+      ...checked.items,
+      ...storedRunTimeDiagnostics(args.metadata, args.revision),
+    ],
+  };
 }
 
 /** The stored row fields the agent projection reads. */

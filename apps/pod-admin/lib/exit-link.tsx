@@ -15,6 +15,12 @@
  * it is structural here, and `__tripwires__/exit-door.test.ts` pins that no
  * one goes back to hand-rolling it.
  *
+ * On a desktop, "Open in app" stands ALONE (founder, 2026-10-27: no "Get the
+ * desktop app" beside it). The download is offered only when a click on the
+ * `synap://` link did not open the app, in the same place, by
+ * `useAppOpenAttempt` — the one door every renderer of a desktop link
+ * (`ExitLink`, rows built from `rowHref`, `HandoffCard`) goes through.
+ *
  * The same holds for the DEVICE. On a phone `synap://` opens the mobile app,
  * which opens a different set of things; `usePlacedExit` is the one place that
  * asks, so a hand-off never offers "Get the desktop app" to a phone or a link
@@ -22,11 +28,16 @@
  * page a phone is offered instead comes only to a role that may open it.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { usePathname } from "next/navigation";
 import { ArrowUpRight } from "lucide-react";
 import { useConsoleRole } from "../app/(admin)/components/side-nav-role";
-import { placeExit, type Exit, type PlacedExit } from "./open-in";
+import {
+  DESKTOP_NOT_OPENED_NOTE,
+  placeExit,
+  type Exit,
+  type PlacedExit,
+} from "./open-in";
 import { isPhone } from "./platform";
 
 /**
@@ -123,21 +134,144 @@ export function usePlacedExit(exit: Exit): PlacedExit {
 /**
  * Where a ROW's link goes on this device: the exit itself, or — when a phone
  * cannot follow it — the console page that covers it. `null` = render the row
- * as text; the list's `ExitFallback` says why, once.
+ * as text; the list's `ExitFallback` says why, once. A row whose link is a
+ * desktop hand-off takes `useAppOpenAttempt(placed)` too: its `onOpen` on the
+ * anchor, its `offer` beside it.
  */
 export function rowHref(placed: PlacedExit): string | null {
   return placed.href ?? placed.unavailable?.web?.href ?? null;
 }
 
+/**
+ * How long a click on a `synap://` link waits for a sign that the app took it.
+ *
+ * A page cannot ask whether a URL scheme has a handler: a `synap://` with no
+ * app behind it does nothing at all, with no error and no event. So this is
+ * the standard heuristic. When the app (or the OS's "Open Synap?" prompt)
+ * takes the hand-off, the page loses focus (`blur`) or is hidden
+ * (`visibilitychange` → hidden), or unloads (`pagehide`); when nothing took
+ * it, none of that happens. ~1.5 s is long enough for the OS to raise its
+ * prompt and short enough that the reader is still looking at the link.
+ */
+export const APP_OPEN_WAIT_MS = 1500;
+
+/** What `watchAppOpen` listens to: `window` and `document` in the browser. */
+export interface AppOpenSignals {
+  win: EventTarget;
+  doc: EventTarget & { readonly visibilityState: DocumentVisibilityState };
+}
+
+/**
+ * Watch one attempt to open the app: `onNotOpened` runs once if, within
+ * `waitMs`, the page neither lost focus, nor was hidden, nor unloaded. Any of
+ * those cancels the watch for good. Returns the cancel, for an unmount or a
+ * second click. Pure of React, so it is tested with fake timers and plain
+ * `EventTarget`s.
+ */
+export function watchAppOpen(
+  { win, doc }: AppOpenSignals,
+  onNotOpened: () => void,
+  waitMs: number = APP_OPEN_WAIT_MS
+): () => void {
+  const timer = setTimeout(() => {
+    stop();
+    onNotOpened();
+  }, waitMs);
+  const stop = () => {
+    clearTimeout(timer);
+    win.removeEventListener("blur", stop);
+    win.removeEventListener("pagehide", stop);
+    doc.removeEventListener("visibilitychange", onHidden);
+  };
+  const onHidden = () => {
+    if (doc.visibilityState === "hidden") stop();
+  };
+  win.addEventListener("blur", stop);
+  win.addEventListener("pagehide", stop);
+  doc.addEventListener("visibilitychange", onHidden);
+  return stop;
+}
+
+/**
+ * The one door for a desktop hand-off's click. `onOpen` goes on the anchor
+ * that follows `placed`'s `synap://` link (`onClick` on an `<a>`, `onPress` on
+ * a HeroUI `Button as="a"`); `offer` goes where the link is. It stays `null`
+ * at rest and after a click that opened the app, and becomes the quiet
+ * "Synap didn't open. Get the desktop app" line after one that did not —
+ * then stays (no flicker, no second watch).
+ *
+ * Nothing on a phone or for a web exit: `placeExit` gives those no
+ * `ifNotOpened`, so `onOpen` is `undefined` and `offer` `null`.
+ */
+export function useAppOpenAttempt(placed: PlacedExit): {
+  onOpen?: () => void;
+  offer: ReactNode;
+} {
+  const [notOpened, setNotOpened] = useState(false);
+  const stopRef = useRef<(() => void) | null>(null);
+  useEffect(() => () => stopRef.current?.(), []);
+  const hatch = placed.ifNotOpened;
+  if (!hatch || placed.href === null) return { offer: null };
+  const onOpen = () => {
+    if (notOpened) return;
+    stopRef.current?.();
+    stopRef.current = watchAppOpen({ win: window, doc: document }, () => {
+      stopRef.current = null;
+      setNotOpened(true);
+    });
+  };
+  return {
+    onOpen,
+    offer: notOpened ? <NotOpenedOffer hatch={hatch} /> : null,
+  };
+}
+
+/**
+ * The line a click that opened nothing leaves behind. Exported for its test
+ * only: `useAppOpenAttempt` is the one place that renders it, and the
+ * tripwire pins that no call site does.
+ *
+ * `role="status"` so a screen reader hears it appear; the link is a real
+ * anchor in the tab order, at the contrast floor above.
+ */
+export function NotOpenedOffer({
+  hatch,
+}: {
+  hatch: { href: string; label: string };
+}) {
+  return (
+    <span
+      role="status"
+      className="inline-flex flex-wrap items-center gap-x-2 text-[12px] text-foreground/70"
+    >
+      {DESKTOP_NOT_OPENED_NOTE}
+      <a
+        href={hatch.href}
+        target="_blank"
+        rel="noopener noreferrer"
+        className={FALLBACK_CLASS}
+      >
+        {hatch.label}
+      </a>
+    </span>
+  );
+}
+
 export function ExitLink({ exit, label }: { exit: Exit; label: string }) {
   const placed = usePlacedExit(exit);
+  const open = useAppOpenAttempt(placed);
   // Nothing to click on this device: the fallback line carries the sentence
   // (and the web page that covers it, when there is one).
   if (placed.href === null) return <PlacedFallback placed={placed} />;
   const href = placed.href;
   return (
     <span className="inline-flex flex-wrap items-center gap-x-3 gap-y-1">
-      <a href={href} {...externalProps(href)} className={PRIMARY_CLASS}>
+      <a
+        href={href}
+        {...externalProps(href)}
+        onClick={open.onOpen}
+        className={PRIMARY_CLASS}
+      >
         {label}
         {/* The icon is a promise about behaviour: it means "this opens away
             from here". pod-admin's own routes (`/proposal/:id`, `/open/:kind/:id`)
@@ -147,19 +281,22 @@ export function ExitLink({ exit, label }: { exit: Exit; label: string }) {
         )}
       </a>
       <PlacedFallback placed={placed} />
+      {open.offer}
     </span>
   );
 }
 
 /**
- * The fallback on its own, for a LIST whose every row is a desktop link.
+ * The phone's line on its own, for a LIST whose every row is a desktop link.
  * Rendered once beneath the list rather than once per row — six workspace rows
  * should not tell the reader to install the app six times.
  *
- * On a phone it is the device's line instead: the mobile app's install hatch
- * when Relay can open the rows, or "open this on your computer" when it
- * cannot. `showWeb={false}` for a list: each row's own web page is the row's
- * link (`rowHref`), so one row's alternative must not speak for the list.
+ * On a phone it is the mobile app's install hatch when Relay can open the
+ * rows, or "open this on your computer" when it cannot. On a desktop it
+ * renders nothing: each row offers the download itself, only after its own
+ * click did not open the app (`useAppOpenAttempt`). `showWeb={false}` for a
+ * list: each row's own web page is the row's link (`rowHref`), so one row's
+ * alternative must not speak for the list.
  */
 export function ExitFallback({
   exit,
@@ -173,7 +310,10 @@ export function ExitFallback({
 }
 
 /**
- * The one spelling of "the way out of a hand-off". Callers that already hold
+ * The one spelling of "the way out of a hand-off" AT REST: the phone's
+ * install hatch, the console page that covers it, or the note that this
+ * device cannot follow it. Never the desktop download — that waits for a
+ * failed open (`ifNotOpened`, `useAppOpenAttempt`). Callers that already hold
  * a `PlacedExit` (`HandoffCard`) render it directly rather than placing twice.
  */
 export function PlacedFallback({

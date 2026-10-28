@@ -2166,7 +2166,7 @@ describe("checkPermissionOrPropose — anonymous principal routed through decide
   // ── rung 2.56 DAILY WRITE CEILING — DELIBERATELY DEFERRED ───────────────
 
   it("rung 2.56 does NOT fire for the anonymous principal — no write count is taken and the write still auto-executes", async () => {
-    // PINNED ON PURPOSE. `DEFAULT_DAILY_WRITE_CEILING` is 500 and one bulk
+    // PINNED ON PURPOSE. A stored daily ceiling is a finite limit and one bulk
     // capture auto-approves ~1,600 `entity.create` rows, so adopting this rung
     // here would silently start queueing proposals mid-capture. The ceiling is
     // also keyed on an AGENT ID, which does not exist on this path.

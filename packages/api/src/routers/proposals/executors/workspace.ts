@@ -1609,6 +1609,7 @@ export function registerWorkspaceExecutors(): void {
       } as unknown as Context);
 
       const hubId = (inner.hubId ?? raw.hubId) as string | undefined;
+      const note = (inner.note ?? raw.note) as string | undefined;
       // `null` = never (explicit) and must survive the replay; only an ABSENT
       // value falls back to the door's 90-day default.
       const expiresInDays = (
@@ -1632,6 +1633,7 @@ export function registerWorkspaceExecutors(): void {
         keyName,
         scope,
         ...(hubId ? { hubId } : {}),
+        ...(note ? { note } : {}),
         ...(expiresInDays !== undefined ? { expiresInDays } : {}),
         grant,
         ...(keyWorkspaceId ? { workspaceId: keyWorkspaceId } : {}),

@@ -44,6 +44,7 @@ import { pairExit } from "../../../lib/open-in";
 import {
   externalProps,
   PlacedFallback,
+  useAppOpenAttempt,
   usePlacedExit,
 } from "../../../lib/exit-link";
 import {
@@ -1300,6 +1301,7 @@ function OpenInSynap({
   exit: NonNullable<ReturnType<typeof pairExit>>;
 }) {
   const placed = usePlacedExit(exit);
+  const open = useAppOpenAttempt(placed);
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
       {placed.href !== null ? (
@@ -1307,6 +1309,7 @@ function OpenInSynap({
           as="a"
           href={placed.href}
           {...externalProps(placed.href)}
+          onPress={open.onOpen}
           color="primary"
           radius="md"
           size="md"
@@ -1315,6 +1318,7 @@ function OpenInSynap({
         </Button>
       ) : null}
       <PlacedFallback placed={placed} />
+      {open.offer}
     </div>
   );
 }
