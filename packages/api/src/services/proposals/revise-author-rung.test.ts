@@ -274,3 +274,63 @@ describe("THE KEY HALF — revising needs the approve right, unless the key's ag
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 });
+
+// Issue 314a6554: a key limited to spaces could file a proposal inside its
+// grant (through a governed door) and then point its payload outside it, as
+// its author, before the person approves. A revise passes no gate.
+describe("A KEY LIMITED TO SPACES rewords its own proposal, never what it runs", () => {
+  const CRM_KEY = {
+    scopes: [{ permissions: ["entity.*.update"], workspaceIds: ["ws"] }],
+    clientId: "crm-app",
+  };
+  const FULL_KEY = { scopes: [{ permissions: ["*"] }], clientId: null };
+  const asKey = (grant: typeof CRM_KEY | typeof FULL_KEY, fn: () => Promise<void>) =>
+    runWithActingAgent(AGENT, () => runWithGrant(grant as never, fn));
+
+  it("a payload patch, a re-target of space or project: FORBIDDEN, nothing written", async () => {
+    for (const change of [
+      { patch: { kind: "inner" as const, fields: { workspaceId: "brand" } } },
+      { workspaceId: "brand" },
+      { workspaceId: null },
+      { projectId: "p" },
+    ]) {
+      await expect(
+        asKey(CRM_KEY, () =>
+          mergeProposalRevision({
+            proposalId: "p1",
+            actorId: HUMAN,
+            actingAgentUserId: AGENT,
+            ...change,
+          })
+        ),
+        JSON.stringify(change)
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    }
+    expect(h.updates).toBe(0);
+  });
+
+  it("its summary or reasoning: still revised", async () => {
+    await asKey(CRM_KEY, () =>
+      mergeProposalRevision({
+        proposalId: "p1",
+        summary: "after",
+        reasoning: "why",
+        actorId: HUMAN,
+        actingAgentUserId: AGENT,
+      })
+    );
+    expect(h.updates).toBe(1);
+  });
+
+  it("CONTROL — an unbounded `*` key amends the payload as before", async () => {
+    await asKey(FULL_KEY, () =>
+      mergeProposalRevision({
+        proposalId: "p1",
+        patch: { kind: "inner", fields: { name: "Acme Corp" } },
+        actorId: HUMAN,
+        actingAgentUserId: AGENT,
+      })
+    );
+    expect(h.updates).toBe(1);
+  });
+});
