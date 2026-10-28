@@ -504,6 +504,20 @@ export const OBJECT_KINDS: Record<string, ObjectKindDef> = {
     label: "Participant",
     labelPlural: "Participants",
   },
+  // The pod's event log as a person grants it (`event.read` / `event.create`:
+  // observations, commits, builds, CI results). NOT `event`, which is the
+  // calendar kind (`entity.event.*`, "Events" with a Calendar icon): naming the
+  // log "Events" on a permission page read as calendar access. The grant
+  // catalog names this noun for its `event` subject (`grants/catalog.ts`).
+  // A mass noun: the plural heading is "Activity", as the Work tab says it.
+  activity: {
+    kind: "activity",
+    category: "run",
+    icon: "Activity",
+    color: ID(11),
+    label: "Activity",
+    labelPlural: "Activity",
+  },
 
   // A bundle of templates installed together. Internally a `suite` package
   // (see the alias below); the user word is "Pack" (`skills/synap/concepts.md`).

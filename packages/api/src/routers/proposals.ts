@@ -1570,6 +1570,8 @@ export const proposalsRouter = router({
          * an agent caller, and it needs the authority of authoring that row
          * by hand (pod admin). Refused (BAD_REQUEST) on any other proposal or
          * a pack that is no longer pending. Absent/false ⇒ a plain approve.
+         * No daily limit in force (no ceiling row, the default) ⇒ nothing to
+         * lift: a plain approve, and the answer carries no `allowedToday`.
          */
         allowToday: z.boolean().optional(),
       })
@@ -1680,6 +1682,7 @@ export const proposalsRouter = router({
         actingAgentUserId: ctx.agentUserId,
         sourceProposalId: proposal.id,
       });
+      if (!allowedToday) return approved;
       return { ...approved, allowedToday };
     }),
 

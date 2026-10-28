@@ -9,7 +9,7 @@
  * embed resolver (every key known, every referent visible), so the content
  * diagnostics run for real over a clean report.
  */
-import { describe, it, expect, beforeAll, vi } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 
 const h = vi.hoisted(() => ({
@@ -62,6 +62,12 @@ import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import * as database from "@synap/database";
 import { BUILTIN_VERBS } from "../capabilities/builtin-verbs.js";
 import { readStoredDiagnostics } from "../document-patch/apply-document-patch.js";
+import {
+  DOCUMENT_DIAGNOSTICS_CHECKER,
+  type DocumentDiagnostic,
+} from "../document-patch/document-diagnostics.js";
+import { currentDiagnostics } from "../document-patch/read-document.js";
+import { refreshDocumentDiagnostics } from "../document-patch/diagnostics-reactor.js";
 import { freezeChartEmbeds } from "./freeze-chart-embeds.js";
 
 const BASIC =
@@ -185,5 +191,123 @@ describe("document.stamp_diagnostics: freeze_failed lands ON the report", () => 
         { userId: OWNER, workspaceId: null }
       )
     ).rejects.toThrow();
+  });
+});
+
+// ─── A stamp from an older checker is stale (founder pod, doc 6aa8d140) ──────
+
+/** A chart drawn from its snapshot: no profileSlug, and none needed (a3f283f2d). */
+const SNAPSHOT_DOC = [
+  "# Tokens",
+  "",
+  ':::synap-cell{cellKey="chart-bar"}',
+  "```json",
+  '{"label":"Tokens","data":[{"label":"before","value":84895},{"label":"after","value":56364}],"capturedAt":"2026-10-22T05:00:00Z"}',
+  "```",
+  ":::",
+].join("\n");
+/** The verdict the checker before a3f283f2d stamped on it. */
+const FALSE_BAD_PROPS: DocumentDiagnostic = {
+  code: "bad_props",
+  severity: "error",
+  message:
+    '"chart-bar" needs props.profileSlug; without it the cell renders empty.',
+  fix: "Add profileSlug",
+  line: 3,
+  directive: "synap-cell",
+  ref: { cellKey: "chart-bar" },
+};
+const FREEZE_FAILED: DocumentDiagnostic = {
+  code: "freeze_failed",
+  severity: "warning",
+  message: "The chart could not be snapshotted; it reads live.",
+  fix: "Press Freeze",
+  line: 3,
+  directive: "synap-cell",
+  ref: { cellKey: "chart-bar" },
+};
+
+async function documentWithStamp(
+  revision: number,
+  stamp: Record<string, unknown>
+): Promise<string> {
+  const id = await newDocument(revision);
+  await q(`update documents set metadata = $2::jsonb where id = $1`, [
+    id,
+    JSON.stringify({ diagnostics: stamp }),
+  ]);
+  return id;
+}
+const read = async (id: string, revision: number) =>
+  currentDiagnostics({
+    documentId: id,
+    workspaceId: null,
+    metadata: await metadata(id),
+    revision,
+    content: SNAPSHOT_DOC,
+    readerUserId: OWNER,
+  });
+const codesOf = (items: DocumentDiagnostic[] | null) =>
+  (items ?? []).map((d) => d.code);
+
+describe("a diagnostics stamp is current only for the checker that wrote it", () => {
+  beforeAll(() => {
+    h.blob = SNAPSHOT_DOC;
+  });
+  afterAll(() => {
+    h.blob = frozen.markdown;
+  });
+
+  it("a same-revision stamp with no checker is re-checked: the snapshot chart's false bad_props is gone", async () => {
+    const legacy = {
+      revision: 7,
+      checkedAt: "2026-10-22T12:10:00.000Z",
+      items: [FALSE_BAD_PROPS],
+    };
+    const id = await documentWithStamp(7, legacy);
+    expect(readStoredDiagnostics(await metadata(id), 7)).toBeNull();
+    const out = await read(id, 7);
+    expect(out.error).toBeUndefined();
+    expect(out.items).not.toBeNull();
+    expect(codesOf(out.items)).not.toContain("bad_props");
+    // The read path checks as the reader and never stores.
+    expect(await metadata(id)).toEqual({ diagnostics: legacy });
+    // The reactor (as the owner) re-stamps it under the current checker.
+    expect(await refreshDocumentDiagnostics(id)).toBe("stamped");
+    const restamped = (
+      (await metadata(id)) as { diagnostics: Record<string, unknown> }
+    ).diagnostics;
+    expect(restamped.checker).toBe(DOCUMENT_DIAGNOSTICS_CHECKER);
+    expect(readStoredDiagnostics(await metadata(id), 7)).toEqual([]);
+  });
+
+  it("a stamp with the current checker is served as stored, without a re-check", async () => {
+    // A re-check of SNAPSHOT_DOC finds nothing, so the item coming back proves
+    // the stamp was served, not re-derived.
+    const id = await documentWithStamp(7, {
+      revision: 7,
+      checker: DOCUMENT_DIAGNOSTICS_CHECKER,
+      checkedAt: new Date().toISOString(),
+      items: [FALSE_BAD_PROPS],
+    });
+    expect((await read(id, 7)).items).toEqual([FALSE_BAD_PROPS]);
+    expect(await refreshDocumentDiagnostics(id)).toBe("current");
+  });
+
+  it("a stale stamp's freeze_failed survives the re-check, on the read path and in the reactor's re-stamp", async () => {
+    const stale = {
+      revision: 8,
+      checkedAt: "2026-10-22T12:10:00.000Z",
+      items: [FALSE_BAD_PROPS, FREEZE_FAILED],
+    };
+    const id = await documentWithStamp(8, stale);
+    expect((await read(id, 8)).items).toEqual([FREEZE_FAILED]);
+    expect(await refreshDocumentDiagnostics(id)).toBe("stamped");
+    expect(readStoredDiagnostics(await metadata(id), 8)).toEqual([
+      FREEZE_FAILED,
+    ]);
+    // …but never onto another revision: it described revision 8's run only.
+    const moved = await documentWithStamp(9, stale);
+    expect((await read(moved, 9)).items).toEqual([]);
   });
 });

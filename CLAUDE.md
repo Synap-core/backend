@@ -14,7 +14,7 @@ This repository is public: anything committed here is published.
 Code comments cite plans by name, for example `MACHINE-IDENTITY-PLAN §3` or
 `APP-DOCK-MENTAL-MODEL-PLAN (team pod)`. Plans, research and decision briefs are
 not files in any repository: the team keeps them in its Synap pod
-(`synap ask "<plan name>"`). Decisions the code depends on are recorded in
+(`synap ask "<plan name>"`). Decisions the code depends on are pod `decision` entities, indexed in
 [docs/decisions/](docs/decisions/README.md).
 
 ## Commands

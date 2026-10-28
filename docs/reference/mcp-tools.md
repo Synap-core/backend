@@ -2,7 +2,7 @@
 
 # MCP tools
 
-The pod's MCP server lists 103 tools. A new agent key lists the `entry` tools; the others arrive by group when an agent calls `synap_load_skill` with `tools:<group>` (or `tools:builder` for every group). A group narrows what is listed; it is not a permission. A call still runs under the key's scopes and the pod's governance.
+The pod's MCP server lists 104 tools. A new agent key lists the `entry` tools; the others arrive by group when an agent calls `synap_load_skill` with `tools:<group>` (or `tools:builder` for every group). A group narrows what is listed; it is not a permission. A call still runs under the key's scopes and the pod's governance.
 
 | Tool                                                                      | Title                             | Group        | Read-only |
 | ------------------------------------------------------------------------- | --------------------------------- | ------------ | --------- |
@@ -45,6 +45,7 @@ The pod's MCP server lists 103 tools. A new agent key lists the `entry` tools; t
 | [`synap_relay_answer`](#synap_relay_answer)                               | Relay the person's answer         | entry        | no        |
 | [`synap_list_sessions`](#synap_list_sessions)                             | List focus sessions               | sessions     | yes       |
 | [`synap_get_work_graph`](#synap_get_work_graph)                           | Get the work graph                | sessions     | yes       |
+| [`synap_get_work_release`](#synap_get_work_release)                       | Get the release state             | sessions     | yes       |
 | [`synap_list_agents`](#synap_list_agents)                                 | List agents and computers         | sessions     | yes       |
 | [`synap_create_cell`](#synap_create_cell)                                 | Define cell                       | build        | no        |
 | [`synap_promote_cell_to_renderer`](#synap_promote_cell_to_renderer)       | Promote cell to renderer          | build        | no        |
@@ -719,6 +720,14 @@ The whole map of YOUR work in one read — read-only. Every OPEN session, plus e
 | `kind`        | enum   | no       | Which population is in the window. 'work', 'run', 'receipt', or 'all' (default). Far ends of edges are any kind. One of: `work`, `run`, `receipt`, `all`.                                                                               |
 | `lens`        | enum   | no       | 'all' (default) = every session. 'default' hides agent drafts not yet accepted by a person; 'triage' = only those. One of: `default`, `triage`, `all`.                                                                                  |
 | `detail`      | enum   | no       | 'lean' (default) = per node id, title, status, kind, parentSessionId, trackId, projectId, workspaceId, updatedAt, inWindow and the next move (kind, actor, label). 'full' = the whole list row per node: large. One of: `lean`, `full`. |
+
+## synap_get_work_release
+
+**Get the release state** · Group: `sessions` · readOnlyHint: true · openWorldHint: false
+
+Can the work be released, and what blocks it — read-only. Per repo: `main` (health ok | red | infra | unmeasured, `reason`, `fixedBy`) and `live` (what is deployed, `behindBy`). Per PR: `stage` on the road to main (working, checks, ready, on_main), `verdict` (green, own_red, inherited = red only because main is red, infra = did not run, queued, running, unmeasured), `fold` (draft, negctl, dependabot, stale; null = shown), the session holding it and `holder.live` (that session worked in the last 5 min), and `blockedBy`. `blockers` are ranked by how much waits behind each, transitively: the first is the thing to fix. `sources` says when the producer's snapshots are stale or missing, or a read failed (`unavailable` is not an empty list). Facts come from the devbox producer's `dev.repo_snapshot` observations; the pod reads no GitHub itself.
+
+No parameters.
 
 ## synap_list_agents
 

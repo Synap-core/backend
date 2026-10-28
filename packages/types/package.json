@@ -1,6 +1,6 @@
 {
   "name": "@synap-core/types",
-  "version": "1.12.9",
+  "version": "1.12.10",
   "description": "Shared TypeScript types and Zod schemas for the Synap platform",
   "type": "module",
   "publishConfig": {
@@ -320,6 +320,10 @@
     "./needs-you/rule": {
       "types": "./dist/needs-you/rule.d.ts",
       "import": "./dist/needs-you/rule.js"
+    },
+    "./work-release": {
+      "types": "./dist/work-release/index.d.ts",
+      "import": "./dist/work-release/index.js"
     },
     "./lens": {
       "types": "./dist/lens/index.d.ts",

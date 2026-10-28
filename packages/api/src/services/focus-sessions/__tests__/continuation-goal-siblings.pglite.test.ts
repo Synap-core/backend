@@ -86,7 +86,9 @@ import {
 } from "@synap/database";
 import type { ExpectedOutput } from "@synap/playbooks";
 import {
+  PACKET_TOP_N,
   projectContinuationPacket,
+  readAllWorkUnits,
   workUnitsSection,
 } from "../continuation-packet.js";
 
@@ -456,6 +458,46 @@ describe("continuation packet — the WORK UNITS a session recorded", () => {
         { kind: "pull_request", state: "retired" },
       ],
     });
+  });
+
+  it("the packet holds the first few; the uncapped read holds every one, same rule (dogfood 2026-10-28)", async () => {
+    const prs = Array.from({ length: PACKET_TOP_N + 3 }, (_, i) =>
+      slot({
+        kind: "pull_request",
+        label: `backend#${300 + i}`,
+        ref: { url: `https://github.com/Synap-core/backend/pull/${300 + i}` },
+      })
+    );
+    const capped = workUnitsSection([...prs, slot({ label: "The plan" })]);
+    expect(capped).toMatchObject({ status: "ok", total: PACKET_TOP_N + 3 });
+    expect(capped.status === "ok" && capped.items).toHaveLength(PACKET_TOP_N);
+    const all = workUnitsSection([...prs, slot({ label: "The plan" })], {
+      uncapped: true,
+    });
+    expect(all.status === "ok" && all.items.map((u) => u.label)).toEqual(
+      prs.map((p) => p.label)
+    );
+
+    // The door's read: every unit of the row, never only the packet's first few.
+    const id = randomUUID();
+    await session(id, { title: "Many PRs", projectId: PROJECT });
+    await q(
+      `update focus_sessions set expected_outputs = $2::jsonb where id = $1`,
+      [id, JSON.stringify(prs)]
+    );
+    const [row] = await db
+      .select()
+      .from(focusSessions)
+      .where(eq(focusSessions.id, id));
+    const read = await readAllWorkUnits(row!, { database: db, userId: USER });
+    expect(read).toMatchObject({ status: "ok", total: PACKET_TOP_N + 3 });
+    if (read.status !== "ok") throw new Error(read.status);
+    expect(read.items.map((u) => u.url)).toEqual(
+      prs.map((p) => (p.ref as { url: string }).url)
+    );
+    const packet = (await packetFor(id)).workUnits;
+    expect(packet).toMatchObject({ status: "ok", total: PACKET_TOP_N + 3 });
+    expect(packet.status === "ok" && packet.items).toHaveLength(PACKET_TOP_N);
   });
 
   it("rides on the packet (none recorded = an empty ok list)", async () => {

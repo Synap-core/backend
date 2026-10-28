@@ -15,6 +15,9 @@
  *   *_ids             — NULL = the role does not narrow on that axis.
  *   expires_in_days   — the lifetime it sets; NULL = it sets none (the key
  *                       keeps the mint default) unless `never_expires`.
+ *   uses              — where a key made from it is used (`KEY_USES` ids of
+ *                       `@synap-core/types/grants`, 0363); NULL = it sets no
+ *                       door, so the role is a template of permissions only.
  *
  * ONE write door: `GrantRoleRepository`.
  */
@@ -47,6 +50,7 @@ export const grantRoles = pgTable(
     entityIds: uuid("entity_ids").array(),
     expiresInDays: integer("expires_in_days"),
     neverExpires: boolean("never_expires").notNull().default(false),
+    uses: text("uses").array(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
