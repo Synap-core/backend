@@ -21,6 +21,7 @@ import {
   STOPPED_SESSION_VERB,
   type GroupableSignal,
   type NeedsYouAccessRequest,
+  type NeedsYouConvertibleGoals,
   type NeedsYouInvite,
   type NeedsYouRow,
 } from "../needs-you/index.js";
@@ -278,6 +279,8 @@ export interface LensNeedsYouSignal extends GroupableSignal {
   access?: NeedsYouAccessRequest | null;
   /** `space-invite`: the invite the row's Accept and Decline act on. */
   invite?: NeedsYouInvite | null;
+  /** `convertible-goals`: the entities the card's "Make them goals" reviews. */
+  convertible?: NeedsYouConvertibleGoals | null;
   /**
    * `proposal-cluster`: the ONE agent that filed every member; `owed-slot`:
    * the agent that asked it, when the pod can name it (the pod's `Signal.by`).
@@ -507,6 +510,17 @@ function itemShape(
           ? `Invited as ${humanizeToken(s.invite.role)}`
           : null,
         verb: verb("accept"),
+      };
+    case "convertible-goals":
+      // The pod's one "Make them goals" card (D-3): a decision only the person
+      // makes. The title says how many and from where; the verb opens the
+      // short review list the host draws (one row per entity, a door to each)
+      // — it never converts on its own. No door: the card is not one page.
+      return {
+        state: { pendingDecisions: 1 },
+        objectKind: "track",
+        reason: null,
+        verb: verb("track.make_goals"),
       };
     case "draft-asks":
       return {

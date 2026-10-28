@@ -392,6 +392,14 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
     past: "Took their offer",
   },
   "track.keep_ask": { imperative: "Keep my ask", past: "Kept my ask" },
+  // The pod's one "Make them goals" card (founder decision D-3, 2026-10-26):
+  // the retired goal / objective / OKR entities the person reviews and makes
+  // goals, each through the one convert door. Plural on purpose — the single
+  // entity's door stays "Make it a goal".
+  "track.make_goals": {
+    imperative: "Make them goals",
+    past: "Made them goals",
+  },
   // Pod hygiene (`profile/retire`, the cleanup pack). `retire` is a SOFT,
   // reversible hide of a kind — not a delete, so it never reads "Deleted".
   // `close` ends an idle session through the close door; `expire` takes a

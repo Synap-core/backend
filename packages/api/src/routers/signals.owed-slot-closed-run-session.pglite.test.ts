@@ -79,6 +79,15 @@ vi.mock("../services/signals/access-requests.js", async (orig) => ({
 vi.mock("../services/signals/space-invites.js", () => ({
   listOpenSpaceInvites: async () => ({ rows: [], truncated: false }),
 }));
+// The "Make them goals" card's read: pinned by its own PGlite suite
+// (`signals.convertible-goals.pglite.test.ts`); none here.
+vi.mock("../services/signals/convertible-goals.js", () => ({
+  listConvertibleGoals: async () => ({
+    rows: [],
+    truncated: false,
+    newestAt: null,
+  }),
+}));
 vi.mock("../services/projects/project-needs-you.js", () => ({
   countProjectSessionsAwaitingReview: async () => ({
     review: 0,
