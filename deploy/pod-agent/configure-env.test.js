@@ -9,6 +9,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
 const {
+  CONFIGURE_COMMAND_KEY_PATTERN,
   CONFIGURE_NEVER_KEYS,
   commandErrorStatus,
   configureEnvEntries,
@@ -44,7 +45,7 @@ test("the immutable set is derived from env.schema and is not vacuous", () => {
 });
 
 test("every key the Control Plane sends via configure stays accepted", () => {
-  // claim-warm-pod.ts, backup-vault, pod-email-relay
+  // claim-warm-pod.ts, pod-name-move.ts, backup-vault, pod-email-relay
   assert.equal(
     statusFor({
       envVars: [
@@ -56,6 +57,8 @@ test("every key the Control Plane sends via configure stays accepted", () => {
         "CORS_ORIGIN=https://claimed.example.com",
         "ALLOWED_ORIGINS=https://claimed.example.com",
         "POD_AGENT_AUDIENCE=https://claimed.example.com",
+        "SYNAP_LEGACY_DOMAIN=old.example.com",
+        "SYNAP_LEGACY_POD_ADMIN_DOMAIN=admin.old.example.com",
       ],
       profiles: [],
       recreate: ["caddy", "backend", "kratos", "pod-admin", "pod-agent"],
@@ -123,6 +126,99 @@ test("keys must be plain env names", () => {
   assert.equal(statusFor({ envVars: ["DEBUG=1", "DEBUG=2"] }), 400);
 });
 
+// Audit 2026-10-28 (HIGH): the check was a denylist, so a CP-signed configure
+// could set SYNAP_UPDATE_NOTIFY_CMD, which `synap update` ran through `sh -c`
+// as root on the host. A command now sets only the keys env.schema flags `cp`.
+// Every key the Control Plane's configure senders write (claim-warm-pod.ts,
+// pod-name-move.ts moveEnvVars, backup-vault buildBackupVaultEnv,
+// pod-email-relay podEmailRelayEnv), as of control-plane-api main 2026-10-28.
+const CP_SENT_KEYS = [
+  "DOMAIN",
+  "PUBLIC_URL",
+  "POD_ADMIN_DOMAIN",
+  "POD_ADMIN_URL",
+  "FRONTEND_URL",
+  "CORS_ORIGIN",
+  "ALLOWED_ORIGINS",
+  "POD_AGENT_AUDIENCE",
+  "SYNAP_LEGACY_DOMAIN",
+  "SYNAP_LEGACY_POD_ADMIN_DOMAIN",
+  "SMTP_CONNECTION_URI",
+  "SMTP_FROM_ADDRESS",
+  "BACKUP_REPOSITORY",
+  "BACKUP_B2_ACCOUNT_ID",
+  "BACKUP_B2_ACCOUNT_KEY",
+];
+
+test("the `cp` allowlist is derived from env.schema and is exactly what the CP sends", () => {
+  assert.deepEqual([...IMMUTABLE.cp.exact].sort(), [...CP_SENT_KEYS].sort());
+  assert.deepEqual(IMMUTABLE.cp.prefixes, []);
+  for (const key of IMMUTABLE.cp.exact) {
+    assert.doesNotMatch(key, CONFIGURE_COMMAND_KEY_PATTERN, key);
+  }
+});
+
+test("a key without the `cp` flag is operator-local: a command cannot set it", () => {
+  // the hole itself, and the schema's other operator-local keys
+  for (const entry of [
+    "SYNAP_UPDATE_NOTIFY_CMD=touch /tmp/pwned",
+    "POSTGRES_INIT_SCRIPT=/tmp/x.sh",
+    "SYNAP_UPDATE_CHANNEL=main",
+    "LETSENCRYPT_EMAIL=a@example.com",
+    "BACKUP_HEARTBEAT_URL=https://evil.example",
+    "NOT_IN_THE_SCHEMA=1",
+  ]) {
+    assert.equal(statusFor({ envVars: [entry] }), 400, entry);
+  }
+  // one refused key refuses the whole command, allowed keys alongside or not
+  assert.equal(
+    statusFor({
+      envVars: ["SMTP_FROM_ADDRESS=pod@example.com", "SYNAP_EDGE=traefik"],
+    }),
+    400
+  );
+  // every typed, non-`cp`, non-`retired` key of the shipped schema
+  let checked = 0;
+  for (const rawLine of SCHEMA.split("\n")) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    const [key, , flags = "-"] = line.split(/\s+/);
+    const set = flags.split(",");
+    if (key.endsWith("*") || set.includes("cp") || set.includes("retired"))
+      continue;
+    assert.equal(statusFor({ envVars: [`${key}=x`] }), 400, key);
+    checked += 1;
+  }
+  assert.ok(
+    checked >= 50,
+    `expected the schema's operator-local keys, got ${checked}`
+  );
+});
+
+test("the refusal names the key and the reason", () => {
+  assert.throws(
+    () =>
+      validateConfigurePayload({ envVars: ["SYNAP_EDGE=traefik"] }, IMMUTABLE),
+    /SYNAP_EDGE is operator-local/
+  );
+  assert.throws(
+    () =>
+      validateConfigurePayload(
+        { envVars: ["SYNAP_UPDATE_NOTIFY_CMD=id"] },
+        IMMUTABLE
+      ),
+    /SYNAP_UPDATE_NOTIFY_CMD names a command the host runs/
+  );
+});
+
+test("a command-type key is refused even if the schema flagged it `cp`", () => {
+  const schema =
+    "JWT_SECRET token secret,immutable\nSOME_HOOK str cp\nX_CMD str cp,retired\n";
+  const policy = parseImmutableEnvKeys(schema);
+  assert.equal(statusFor({ envVars: ["SOME_HOOK=id"] }, policy), 400);
+  assert.equal(statusFor({ envVars: ["X_CMD=id"] }, policy), 400);
+});
+
 test("trust anchors and immutable secrets cannot be set by a command", () => {
   for (const key of CONFIGURE_NEVER_KEYS) {
     assert.equal(statusFor({ envVars: [`${key}=https://x.example`] }), 400);
@@ -160,6 +256,16 @@ test("an unreadable or empty schema refuses env writes (fail closed)", () => {
   assert.equal(statusFor({ envVars: ["DEBUG=1"] }, null), 503);
   assert.equal(
     statusFor({ envVars: ["DEBUG=1"] }, parseImmutableEnvKeys("")),
+    503
+  );
+  // a schema with no `cp` flag (an older one) cannot widen what a command writes
+  assert.equal(
+    statusFor(
+      { envVars: ["DOMAIN=a.example"] },
+      parseImmutableEnvKeys(
+        "JWT_SECRET token secret,immutable\nDOMAIN host required\n"
+      )
+    ),
     503
   );
   // nothing to write ⇒ nothing to check against
