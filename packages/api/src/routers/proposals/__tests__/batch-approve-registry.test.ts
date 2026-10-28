@@ -265,9 +265,10 @@ describe("(b) approve and batchApprove share one implementation", () => {
 
   it("single approve calls the same function", () => {
     // The interactive door opts in to the background hand-off for a large
-    // graph (`background: true`) — the same function, the same gates.
+    // graph (`background: true`) — the same function, the same gates. Its
+    // result is kept (`approved`): F3 "allow today" (#365) runs after it.
     expect(ROUTER).toMatch(
-      /return await applyProposalApproval\(\{\s*proposal,\s*userId,\s*input,\s*ctx,\s*background: true,\s*\}\);/
+      /const approved = await applyProposalApproval\(\{\s*proposal,\s*userId,\s*input,\s*ctx,\s*background: true,\s*\}\);/
     );
     // Exactly two call sites: the two approve doors. A third would be drift.
     expect(ROUTER.match(/await applyProposalApproval\(/g)?.length).toBe(2);
