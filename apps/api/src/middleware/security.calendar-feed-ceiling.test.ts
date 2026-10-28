@@ -66,7 +66,11 @@ describe("calendar feed — the IP ceiling bounds an anonymous caller", () => {
     process.env.DATABASE_URL ??=
       "postgresql://synap:test@localhost:5432/synap_test";
     ({ rateLimitMiddleware } = await import("./security.js"));
-  });
+    // `security.ts` loads the whole `@synap/api` barrel (security.ts:11): 20-30 s
+    // on a CI runner, against a 30 s default hook timeout (as in
+    // security.request-size-limit.test.ts). The real fix is to stop that import
+    // loading the barrel, not this budget.
+  }, 120_000);
 
   it("has a ceiling that is generous but finite (non-vacuity)", () => {
     // If this were Infinity or 0 the traffic assertions below would pass or

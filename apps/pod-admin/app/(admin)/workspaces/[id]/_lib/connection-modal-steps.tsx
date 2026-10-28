@@ -79,67 +79,6 @@ export function Step1Pattern({
   );
 }
 
-// ─── Step 2a — Key-based ──────────────────────────────────────────────────────
-
-export function Step2Key({
-  podUrl,
-  pattern,
-  scopes,
-  scopeList,
-  onToggle,
-}: {
-  podUrl: string;
-  pattern: Pattern;
-  scopes: string[];
-  scopeList: { value: string; label: string; description: string }[];
-  onToggle: (s: string) => void;
-}) {
-  const endpoint =
-    pattern === "hub-protocol" || pattern === "webhook-inbound"
-      ? `${podUrl}/api/hub/*`
-      : `${podUrl}/trpc/{router}.{procedure}`;
-
-  return (
-    <>
-      <p className="text-[12.5px] text-foreground/65">
-        Your service calls{" "}
-        <code className="font-mono text-[11.5px]">{endpoint}</code> with{" "}
-        <code className="font-mono text-[11.5px]">
-          Authorization: Bearer {"{key}"}
-        </code>
-        .
-      </p>
-      <div className="flex flex-col gap-1">
-        <p className="text-[12.5px] font-medium text-foreground">
-          Allowed scopes
-        </p>
-        <div className="rounded-lg ring-1 ring-inset ring-foreground/10">
-          {scopeList.map((s) => (
-            <label
-              key={s.value}
-              className="flex cursor-pointer items-start gap-2 border-b border-foreground/[0.05] px-3 py-2 last:border-0 hover:bg-content2/40"
-            >
-              <Checkbox
-                size="sm"
-                isSelected={scopes.includes(s.value)}
-                onValueChange={() => onToggle(s.value)}
-              />
-              <span className="flex flex-col">
-                <span className="font-mono text-[12px] font-medium text-foreground">
-                  {s.label}
-                </span>
-                <span className="text-[11px] text-foreground/65">
-                  {s.description}
-                </span>
-              </span>
-            </label>
-          ))}
-        </div>
-      </div>
-    </>
-  );
-}
-
 // ─── Step 2b — Webhook outbound ───────────────────────────────────────────────
 
 export function Step2WebhookOutbound({

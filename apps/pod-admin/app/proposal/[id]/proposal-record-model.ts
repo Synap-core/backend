@@ -37,6 +37,7 @@ import {
   type PropertyRenderKind,
 } from "@synap-core/types/property-render";
 import {
+  humanizeToken,
   resolveObjectNoun,
   resolveStatusLabel,
 } from "@synap-core/types/vocabulary";
@@ -423,6 +424,70 @@ export interface RecordInput {
 }
 
 /**
+ * A link proposal as what it joins: its two ends (doors when the pod resolved
+ * them, else the names the pod wrote beside them) and the relation between
+ * them — never its columns. Live (proposal f15b68ae, 2026-10-28): a link
+ * delete drew Title, From ID, To type, Source label… each "empty removed", and
+ * the founder could not tell what the agent was deleting.
+ */
+function linkRecord(
+  input: RecordInput,
+  op: "create" | "delete"
+): ProposedRecord | null {
+  const changes = input.changes ?? [];
+  const valueAt = (path: string): unknown => {
+    const change = changes.find((c) => c.path === path);
+    return op === "delete" ? change?.before : change?.after;
+  };
+  const end = (idPath: string, namePath: string): RecordValue | null => {
+    const resolved = input.objectRefs?.[idPath];
+    if (resolved) return recordValue("text", valueAt(idPath), resolved);
+    const name = valueAt(namePath);
+    return typeof name === "string" && name.trim() ? textValue(name) : null;
+  };
+  const linkType = valueAt("linkType");
+  const relationText =
+    typeof linkType === "string" && linkType.trim()
+      ? humanizeToken(linkType)
+      : null;
+  const relation = relationText ? textValue(relationText) : null;
+  const from = end("fromId", "sourceLabel");
+  const to = end("toId", "targetLabel");
+  const fieldOp: RecordField["op"] = op === "delete" ? "remove" : "add";
+  const fields = (
+    [
+      ["fromId", "From", from],
+      ["linkType", "Relation", relation],
+      ["toId", "To", to],
+    ] as const
+  ).flatMap(([key, label, value]): RecordField[] =>
+    value
+      ? [
+          {
+            key,
+            label,
+            op: fieldOp,
+            before: op === "delete" ? value : undefined,
+            after: op === "delete" ? undefined : value,
+            stale: false,
+            wide: false,
+          },
+        ]
+      : []
+  );
+  const name = (v: RecordValue | null) =>
+    v?.kind === "ref" ? v.name : v?.kind === "text" ? v.text : null;
+  // "Markdown → pod cleanup blocked by Resolve what needs you", not the pod's
+  // generic "Session blocked by session".
+  const title =
+    from && to && relationText
+      ? `${name(from)} ${relationText.toLowerCase()} ${name(to)}`
+      : input.targetName?.trim() || null;
+  if (fields.length === 0) return null;
+  return { ref: input.ref ?? "single", title, kind: "link", op, fields };
+}
+
+/**
  * One proposal's diff as the record it creates, changes or removes. `null`
  * when the diff has nothing a reviewer can read — the raw request is still in
  * Advanced.
@@ -435,6 +500,7 @@ export function proposedRecord(input: RecordInput): ProposedRecord | null {
       : input.action === "delete"
         ? "delete"
         : "update";
+  if (input.kind === "link" && op !== "update") return linkRecord(input, op);
   const defs = new Map((input.definitions ?? []).map((d) => [d.slug, d]));
   let title = op === "create" ? null : input.targetName?.trim() || null;
   let kind = input.kind ?? null;
@@ -506,6 +572,7 @@ export function proposedRecord(input: RecordInput): ProposedRecord | null {
     // real side; a removal needs the thing it removes.
     if (fieldOp === "add" && !after) continue;
     if (fieldOp === "change" && !after && !before) continue;
+    if (fieldOp === "remove" && !before) continue;
 
     const wide = [after, before].some(
       (v) =>

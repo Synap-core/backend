@@ -8372,7 +8372,8 @@ export interface ProposalReviewChange {
 	label: string;
 	operation: "create" | "delete" | "set" | "update";
 	/**
-	 * The value before this change, on UPDATE rows only.
+	 * The value before this change: on an UPDATE row, the value it replaces;
+	 * on a DELETE row, the value it removes (a delete row has no `after`).
 	 *
 	 *   - `null`      — RECORDED empty: the propose-time snapshot read this
 	 *     field and it had no value ("was empty");
@@ -22870,9 +22871,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		adminCreateServiceKey: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				expiresInDays?: number | undefined;
+				expiresInDays?: number | null | undefined;
+				grant?: {
+					entityIds?: string[] | undefined;
+					label?: string | undefined;
+					permissions: string[];
+					projectIds?: string[] | undefined;
+					roleId?: string | undefined;
+					workspaceIds?: string[] | undefined;
+				} | undefined;
 				keyName: string;
-				scope: string[];
+				note?: string | undefined;
+				scope?: string[] | undefined;
+				uses?: ("chat" | "hub" | "mcp" | "n8n" | "n8n-analyze" | "realtime" | "skills")[] | undefined;
 				workspaceId: string;
 			};
 			meta: object;
@@ -22949,6 +22960,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		connectIntegration: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
+				grant?: {
+					entityIds?: string[] | undefined;
+					label?: string | undefined;
+					permissions: string[];
+					projectIds?: string[] | undefined;
+					roleId?: string | undefined;
+					workspaceIds?: string[] | undefined;
+				} | undefined;
 				integration: "cli" | "custom" | "openclaw" | "raycast";
 				strategy?: "create_new" | "replace_existing" | undefined;
 				workspaceId?: string | undefined;
@@ -23042,9 +23061,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		createSystemKey: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				expiresInDays?: number | undefined;
+				expiresInDays?: number | null | undefined;
+				grant?: {
+					entityIds?: string[] | undefined;
+					label?: string | undefined;
+					permissions: string[];
+					projectIds?: string[] | undefined;
+					roleId?: string | undefined;
+					workspaceIds?: string[] | undefined;
+				} | undefined;
 				keyName: string;
-				scope: string[];
+				note?: string | undefined;
+				scope?: string[] | undefined;
+				uses?: ("chat" | "hub" | "mcp" | "n8n" | "n8n-analyze" | "realtime" | "skills")[] | undefined;
 			};
 			meta: object;
 			output: {

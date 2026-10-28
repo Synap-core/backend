@@ -595,3 +595,152 @@ describe("proposedRecord — any long text rewrite reads as the whole text, chan
     expect(record.fields[0]!.after?.kind).toBe("text");
   });
 });
+
+describe("proposedRecord — a removal names what it removes", () => {
+  it("a delete draws each value it removes, never 'empty'", () => {
+    const record = proposedRecord({
+      changes: [
+        {
+          path: "properties.role",
+          label: "Role",
+          operation: "delete",
+          before: "CTO",
+        },
+      ],
+      action: "delete",
+      targetName: "Ada",
+      kind: "person",
+    });
+    expect(record?.op).toBe("delete");
+    expect(record?.fields).toEqual([
+      expect.objectContaining({
+        key: "properties.role",
+        op: "remove",
+        before: { kind: "text", text: "CTO", long: false },
+        after: undefined,
+      }),
+    ]);
+  });
+
+  it("a removal with nothing readable is not drawn", () => {
+    const record = proposedRecord({
+      changes: [
+        { path: "properties.role", label: "Role", operation: "delete" },
+        {
+          path: "properties.city",
+          label: "City",
+          operation: "delete",
+          before: "Lyon",
+        },
+      ],
+      action: "delete",
+      targetName: "Ada",
+      kind: "person",
+    });
+    expect(record?.fields.map((f) => f.key)).toEqual(["properties.city"]);
+  });
+});
+
+describe("proposedRecord — a link reads as what it joins", () => {
+  // Live shape (proposal f15b68ae, 2026-10-28): a session's blocked_by link.
+  const FROM = "dfc6c1be-0cb4-423a-951a-7a543b92756f";
+  const TO = "a74e5430-6bc0-40b0-bc33-be683967f541";
+  const row = (path: string, before: string) => ({
+    path,
+    label: path,
+    operation: "delete" as const,
+    before,
+  });
+  const changes = [
+    row("title", "Session blocked by session"),
+    row("toId", TO),
+    row("fromId", FROM),
+    row("toType", "session"),
+    row("fromType", "session"),
+    row("linkType", "blocked_by"),
+    row("sourceLabel", "Markdown → pod cleanup"),
+    row("targetLabel", "Resolve what needs you: fix round and merge"),
+  ];
+  const objectRefs = {
+    fromId: { id: FROM, kind: "session", name: "Markdown → pod cleanup" },
+    toId: {
+      id: TO,
+      kind: "session",
+      name: "Resolve what needs you: fix round and merge",
+    },
+  };
+
+  it("a delete names both ends as doors and the relation between them", () => {
+    const record = proposedRecord({
+      changes,
+      action: "delete",
+      targetName: "Session blocked by session",
+      kind: "link",
+      objectRefs,
+    });
+    expect(record?.title).toBe(
+      "Markdown → pod cleanup blocked by Resolve what needs you: fix round and merge"
+    );
+    expect(record?.fields.map((f) => [f.label, f.op, f.before])).toEqual([
+      [
+        "From",
+        "remove",
+        {
+          kind: "ref",
+          objectKind: "session",
+          id: FROM,
+          name: "Markdown → pod cleanup",
+        },
+      ],
+      ["Relation", "remove", { kind: "text", text: "Blocked by", long: false }],
+      [
+        "To",
+        "remove",
+        {
+          kind: "ref",
+          objectKind: "session",
+          id: TO,
+          name: "Resolve what needs you: fix round and merge",
+        },
+      ],
+    ]);
+  });
+
+  it("unresolved ends fall back to the names the pod wrote beside them", () => {
+    const record = proposedRecord({
+      changes,
+      action: "delete",
+      targetName: "Session blocked by session",
+      kind: "link",
+    });
+    expect(record?.fields.map((f) => f.before)).toEqual([
+      { kind: "text", text: "Markdown → pod cleanup", long: false },
+      { kind: "text", text: "Blocked by", long: false },
+      {
+        kind: "text",
+        text: "Resolve what needs you: fix round and merge",
+        long: false,
+      },
+    ]);
+  });
+
+  it("a create draws the same ends as what it adds", () => {
+    const record = proposedRecord({
+      changes: changes.map(({ path, label, before }) => ({
+        path,
+        label,
+        operation: "create" as const,
+        after: before,
+      })),
+      action: "create",
+      kind: "link",
+      objectRefs,
+    });
+    expect(record?.op).toBe("create");
+    expect(record?.fields.map((f) => [f.label, f.op, f.before])).toEqual([
+      ["From", "add", undefined],
+      ["Relation", "add", undefined],
+      ["To", "add", undefined],
+    ]);
+  });
+});

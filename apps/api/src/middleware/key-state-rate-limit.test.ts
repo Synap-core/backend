@@ -47,7 +47,11 @@ describe("key-state — one IP gets one budget, whatever Bearer it sends", () =>
     process.env.DATABASE_URL ??=
       "postgresql://synap:test@localhost:5432/synap_test";
     ({ rateLimitMiddleware } = await import("./security.js"));
-  });
+    // `security.ts` loads the whole `@synap/api` barrel (security.ts:11): 20-30 s
+    // on a CI runner, against a 30 s default hook timeout (as in
+    // security.request-size-limit.test.ts). The real fix is to stop that import
+    // loading the barrel, not this budget.
+  }, 120_000);
 
   it("classifies both hub mounts as key_state, and nothing else", () => {
     expect(classifyRateLimitPath("/api/hub/auth/key-state")).toBe("key_state");
