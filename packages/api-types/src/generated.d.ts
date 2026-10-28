@@ -34747,6 +34747,18 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					database: string;
 					jobQueue: string;
 				};
+				status: string;
+				timestamp: string;
+			};
+		}>;
+		readyDetails: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			meta: object;
+			output: {
+				checks: {
+					database: string;
+					jobQueue: string;
+				};
 				degraded: string[];
 				details: {
 					database: any;
