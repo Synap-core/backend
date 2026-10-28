@@ -26,6 +26,8 @@
  *               read off the verb it resolved (`capability.publish_post.run`);
  *               a run with no intent (the raw provider proxy) has none, so
  *               only a grant on every intent permits it.
+ *               For `event`: data.family, the observation namespace the
+ *               door read off its type (`event.ci.create`).
  *   workspace = the gate's workspaceId
  *   entity    = data.id / data.entityId
  *   projects  = the gate's projectId / data.projectId (unknown → a
@@ -80,6 +82,10 @@ export async function grantRequestsForWrite(
     // Only a RUN is qualified by intent; a create/attach body's `intent` is
     // the caller's data, never the request key.
     qualifier = str(data.intent);
+  } else if (subject === "event") {
+    // The activity FAMILY the DOOR read off the observation's type
+    // (`ci.workflow.completed` → `ci`); none → only an every-family grant.
+    qualifier = str(data.family);
   }
   const projectId = str(input.projectId) ?? str(data.projectId);
   const req: GrantRequest = {

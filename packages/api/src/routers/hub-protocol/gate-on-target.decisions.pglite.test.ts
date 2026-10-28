@@ -348,3 +348,44 @@ describe("D5 — an observation is event.create where it lands (W2d)", () => {
     expect(res.recorded).toBe(1);
   });
 });
+
+describe("an observation's FAMILY is its namespace (event.<family>.create, K2)", () => {
+  const post = (grant: unknown, type: string) =>
+    hub(grant).observations.append({
+      observations: [
+        {
+          type,
+          subjectType: "repo",
+          subjectId: "repo-1",
+          workspaceId: WS,
+          data: {},
+        },
+      ],
+    });
+  const only = (permissions: string[]) => ({
+    scopes: [scope(permissions, null)],
+    clientId: null,
+  });
+
+  // Rules out: a family pattern the door never checks (finding 2ed74472: the
+  // door asked `event.create` with no family, so `event.dev.create` could
+  // never be a real limit).
+  it("a key limited to dev events posts dev, and is refused on ci", async () => {
+    const dev = only(["event.dev.create"]);
+    expect((await post(dev, "dev.commit")).recorded).toBe(1);
+    const ci = await post(dev, "ci.build");
+    expect(ci.recorded).toBe(0);
+    expect(ci.results[0]).toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/does not allow "event\.ci\.create"/),
+    });
+  });
+
+  // Rules out: breaking every poster key minted since D5 (the Dev loop
+  // poster template, the devbox and CI keys all hold `event.create`).
+  it("CONTROL — an event.create key still posts every family", async () => {
+    const poster = only(["event.create"]);
+    expect((await post(poster, "dev.commit")).recorded).toBe(1);
+    expect((await post(poster, "ci.build")).recorded).toBe(1);
+  });
+});

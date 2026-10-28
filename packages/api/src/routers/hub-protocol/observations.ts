@@ -266,10 +266,14 @@ export const observationsRouter = router({
                 `Workspace ${obs.workspaceId} is not accessible to this key; the observation was not recorded.`
               );
             }
+            // Its FAMILY is the type's namespace (`event.ci.create`, decision
+            // a29a40d4): a key limited to dev events posts no CI result.
+            // `event.create` still posts every family.
             const denial = await grantWriteDenial({
               subjectType: "event",
               action: "create",
               workspaceId: workspaceId ?? null,
+              data: { family: obs.type.split(".")[0] },
             });
             if (denial) throw new Error(denial);
           }

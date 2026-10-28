@@ -156,6 +156,16 @@ describe("access requests", () => {
     ).toEqual({ page: "connectionRequest", id: "r1" });
   });
 
+  // Rules out: a pending key request in needs-you with no door (finding
+  // d99517f7's sibling): its person decides it on its own page.
+  it("routes a key request to its review page, for its person (member)", () => {
+    const t = accessRequestConsoleTarget({ kind: "key-request", id: "k 1" });
+    expect(t).toEqual({ page: "keyRequest", id: "k 1" });
+    expect(consoleHref(ORIGIN, t!)).toBe(`${ORIGIN}/keys/requests/k%201`);
+    expect(consoleTargetVisibleTo(t!, "member")).toBe(true);
+    expect(consoleVerbLabel(t!)).toBe("Review in console");
+  });
+
   it("is null for anything else", () => {
     expect(accessRequestConsoleTarget({ kind: "entity", id: "e" })).toBeNull();
     expect(accessRequestConsoleTarget({ kind: "issuer", id: "" })).toBeNull();

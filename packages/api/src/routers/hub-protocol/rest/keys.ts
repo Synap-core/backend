@@ -334,6 +334,8 @@ function registerKeyRequestRoutes(app: HubHono): void {
       description:
         "Files a key request the person approves on the pod-admin page " +
         "`review_url` (they may narrow it, never widen it past the template). " +
+        "It waits 24 hours; asking the same again returns the request already " +
+        "waiting (same id and link, a new `request_code`). " +
         "Then poll `POST /keys/requests/token` with `request_code` to collect " +
         "the key once. The caller never mints a key itself.",
       security: bearerSecurity,
@@ -354,6 +356,8 @@ function registerKeyRequestRoutes(app: HubHono): void {
                     .nullable()
                     .optional(),
                   workspaceId: uuidParam.optional(),
+                  /** Narrow the key to one project (no Activity there). */
+                  projectId: uuidParam.optional(),
                 })
                 .openapi("KeyRequestInput"),
             },
@@ -408,6 +412,7 @@ function registerKeyRequestRoutes(app: HubHono): void {
           name: body.name,
           expiresInDays: body.expiresInDays,
           workspaceId: body.workspaceId,
+          projectId: body.projectId,
           podAdminOrigin: toPodAdminOrigin(origin),
         });
         c.header("Cache-Control", "no-store");

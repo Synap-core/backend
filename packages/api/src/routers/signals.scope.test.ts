@@ -50,10 +50,12 @@ vi.mock("../services/focus-sessions/owed-outputs.js", async (orig) => ({
 
 const issuersSpy = vi.fn();
 const appRequestsSpy = vi.fn();
+const keyRequestsSpy = vi.fn();
 vi.mock("../services/signals/access-requests.js", async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
   listPendingIssuers: async (...args: unknown[]) => issuersSpy(...args),
   listPendingAppRequests: async (...args: unknown[]) => appRequestsSpy(...args),
+  listPendingKeyRequests: async (...args: unknown[]) => keyRequestsSpy(...args),
 }));
 // The viewer's open space invites: pinned by their own PGlite suite
 // (`space-invites.pglite.test.ts`); none here.
@@ -119,6 +121,7 @@ beforeEach(() => {
   notifListSpy.mockResolvedValue({ notifications: [] });
   issuersSpy.mockResolvedValue({ rows: [], truncated: false });
   appRequestsSpy.mockResolvedValue({ rows: [], truncated: false });
+  keyRequestsSpy.mockResolvedValue({ rows: [], truncated: false });
   eventsReadSpy.mockResolvedValue([]);
   activitySpy.mockResolvedValue({ items: [], nextCursor: null });
   landedSpy.mockResolvedValue({
@@ -537,6 +540,7 @@ describe("signals — the access-request halves (pending issuers, app requests)"
     await caller().list({ lens: "needs-you" });
     expect(issuersSpy).toHaveBeenCalledTimes(1);
     expect(appRequestsSpy).toHaveBeenCalledTimes(1);
+    expect(keyRequestsSpy).toHaveBeenCalledTimes(1);
     for (const scope of [
       { workspaceId: "ws-1" },
       { workspaceId: null },
@@ -549,7 +553,37 @@ describe("signals — the access-request halves (pending issuers, app requests)"
       await caller().list({ lens: "needs-you", ...scope });
       expect(issuersSpy, JSON.stringify(scope)).not.toHaveBeenCalled();
       expect(appRequestsSpy, JSON.stringify(scope)).not.toHaveBeenCalled();
+      expect(keyRequestsSpy, JSON.stringify(scope)).not.toHaveBeenCalled();
     }
+  });
+
+  // Rules out: a key request waiting 24 h that the person can only reach by
+  // its link (decision 68d37853, answer 25: pending requests in needs-you).
+  it("the viewer's own key request is one row, a part of the one number", async () => {
+    keyRequestsSpy.mockResolvedValue({
+      rows: [
+        {
+          id: "kr-1",
+          requestedName: "Dev loop poster",
+          requesterName: "devbox",
+          createdAt: new Date("2026-10-12T10:00:00Z"),
+          expiresAt: new Date("2026-10-13T10:00:00Z"),
+        },
+      ],
+      truncated: false,
+    });
+    const r = await caller().list({ lens: "needs-you" });
+    expect(r.signals.map((s) => [s.kind, s.target, s.title])).toEqual([
+      [
+        "access-request",
+        { kind: "key-request", id: "kr-1" },
+        'Create API key "Dev loop poster"',
+      ],
+    ]);
+    expect(keyRequestsSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ personUserId: expect.any(String) })
+    );
+    expect((await caller().count()).requests).toBe(1);
   });
 
   it("list and count carry them as one row each, and `requests` is a part of the one number", async () => {
