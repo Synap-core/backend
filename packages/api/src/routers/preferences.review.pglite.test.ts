@@ -32,11 +32,7 @@ vi.mock("@synap/database", async (importOriginal) => {
 });
 
 import { getTableConfig } from "drizzle-orm/pg-core";
-import {
-  syncGeneration,
-  userPreferences,
-  users,
-} from "@synap/database/schema";
+import { syncGeneration, userPreferences, users } from "@synap/database/schema";
 import { preferencesRouter } from "./preferences.js";
 
 const U = randomUUID();
