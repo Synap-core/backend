@@ -21,6 +21,7 @@ import {
   webhookDeliveries,
 } from "@synap/database/schema";
 import { eq, and } from "@synap/database";
+import { isSpaceManageRole } from "@synap-core/types/workspaces";
 import { randomBytes } from "crypto";
 import {
   liveApiKeyIds,
@@ -48,6 +49,37 @@ const UpdateWebhookInputSchema = z.object({
   eventTypes: z.array(z.string()).min(1).optional(),
   active: z.boolean().optional(),
 });
+
+/**
+ * Who may delete or disable a space's outbound webhook (audit F7): the member
+ * who created it, or an owner / admin of the space. `workspaceProcedure`
+ * admits every role, viewers included, and a webhook is an integration the
+ * whole space relies on. A row outside the caller's space is NOT_FOUND, as
+ * before.
+ */
+async function assertWebhookManage(
+  ctx: { userId: string; workspaceId: string; workspaceRole?: string },
+  id: string
+): Promise<void> {
+  const sub = await db.query.webhookSubscriptions.findFirst({
+    where: and(
+      eq(webhookSubscriptions.id, id),
+      eq(webhookSubscriptions.workspaceId, ctx.workspaceId)
+    ),
+    columns: { userId: true },
+  });
+  if (!sub) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Webhook not found" });
+  }
+  if (sub.userId === ctx.userId || isSpaceManageRole(ctx.workspaceRole)) {
+    return;
+  }
+  throw new TRPCError({
+    code: "FORBIDDEN",
+    message:
+      "Only the webhook's creator or an owner or admin of this space can change it.",
+  });
+}
 
 export const webhooksRouter = router({
   /**
@@ -297,12 +329,14 @@ export const webhooksRouter = router({
     }),
 
   /**
-   * Delete workspace-scoped webhook subscription (workspace member, must own)
+   * Delete workspace-scoped webhook subscription (its creator, or an owner /
+   * admin of the space)
    */
   deleteForWorkspace: workspaceProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
       const workspaceId = ctx.workspaceId;
+      await assertWebhookManage(ctx, input.id);
       const result = await db
         .delete(webhookSubscriptions)
         .where(
@@ -321,13 +355,14 @@ export const webhooksRouter = router({
     }),
 
   /**
-   * Toggle active state (workspace member)
+   * Toggle active state (its creator, or an owner / admin of the space)
    */
   toggleForWorkspace: workspaceProcedure
     .use(requireFreshAuthentication)
     .input(z.object({ id: z.string().uuid(), active: z.boolean() }))
     .mutation(async ({ ctx, input }) => {
       const workspaceId = ctx.workspaceId;
+      await assertWebhookManage(ctx, input.id);
       const [updated] = await db
         .update(webhookSubscriptions)
         .set({ active: input.active })
