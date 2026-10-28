@@ -176,7 +176,9 @@ function ReceiverHeader({
           aria-hidden
           className="flex h-5 w-5 items-center justify-center rounded-md bg-primary"
         >
-          <span className="text-[9px] font-semibold text-white/95">S</span>
+          <span className="text-[9px] font-semibold text-primary-foreground">
+            S
+          </span>
         </span>
         <span className="text-sm font-medium tracking-tight text-foreground">
           Synap
