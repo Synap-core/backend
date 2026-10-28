@@ -35,6 +35,7 @@ import {
   GRANT_ACTIONS,
   grantActionLabel,
   grantKindLabel,
+  grantPlainAction,
   grantSubjectLabel,
   isQualifiedGrantSubject,
   parsePermission,
@@ -85,7 +86,8 @@ const key = (permission: string, workspaceId: string) =>
  * The permission names a gate verb (approve, reject, archive, merge,
  * transition, run, …: any verb but read / create / update / delete), or is
  * full access (`*`), which covers every one. Each is a decision the person
- * gives on its own (#94, #133); Edit never includes one.
+ * gives on its own (#94, #133); Edit never includes one. `facet.attach` /
+ * `facet.detach` are create / delete (`grantPlainAction`), never a decision.
  */
 export function isDecisionPermission(permission: string): boolean {
   const { subject, action } = parts(permission);
@@ -132,7 +134,13 @@ function parts(permission: string): {
       action: verb(segs[2]),
     };
   }
-  return { object: subject, subject, kind: null, action: verb(segs[1]) };
+  return {
+    object: subject,
+    subject,
+    kind: null,
+    // `facet.attach` IS `facet.create` (#411): one treatment for both.
+    action: grantPlainAction(subject, verb(segs[1])),
+  };
 }
 
 /** The offer as the screen lists it: reads and writes, then decisions apart. */
@@ -548,6 +556,15 @@ const ACTION_WORDS: Record<string, string> = {
 };
 
 /**
+ * A role on a record (`facet.create`, `facet.delete`, and the door's spelling
+ * `facet.attach` / `facet.detach`): the person reads the act, not the row.
+ */
+const ROLE_ON_RECORD_WORDS: Record<string, string> = {
+  create: "Add roles to records",
+  delete: "Remove roles from records",
+};
+
+/**
  * A bare subject or kind (`entity.post`, `entity.*`): every plain verb,
  * "Read, create, edit and delete".
  */
@@ -577,6 +594,9 @@ export function permissionLabel(permission: string): string {
   if (subject === "*") return FULL_ACCESS_LABEL;
   if (subject === "proposal" && action && isDecisionPermission(permission)) {
     return `${grantActionLabel(action)} changes waiting for your review`;
+  }
+  if (subject === "facet" && action && ROLE_ON_RECORD_WORDS[action]) {
+    return ROLE_ON_RECORD_WORDS[action];
   }
   // A gate verb (archive, merge, run, …) in the vocabulary's words.
   const verb =
