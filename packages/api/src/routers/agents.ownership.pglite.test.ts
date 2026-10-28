@@ -149,8 +149,10 @@ beforeEach(async () => {
   ])
     await h.client!.query(
       `insert into agents (id, name, agent_slug, owner_type, user_id, active, created_at, updated_at)
-       values ($1, $2, $2, $3, $4, true, now(), now())`,
-      [id, slug, ownerType, userId]
+       values ($1, $2, $3, $4, $5, true, now(), now())`,
+      // name and slug as two parameters: one `$2` for a text and a varchar
+      // column is "inconsistent types deduced" on PGlite.
+      [id, slug, slug, ownerType, userId]
     );
 });
 
