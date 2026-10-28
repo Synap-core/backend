@@ -210,8 +210,8 @@ const SECTION_ROWS: Record<string, (s: DiagnoseSection) => RowBody | null> = {
           : "") + "Anything that calls them is refused until you turn them on.",
       action: {
         kind: "link",
-        label: "Turn on in Marketplace",
-        exit: consoleRoute(navHref("marketplace", { tab: "tools" })),
+        label: "Turn on in Tools",
+        exit: consoleRoute(navHref("tools", { tab: "actions" })),
       },
       items: [],
     };

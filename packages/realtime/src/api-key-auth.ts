@@ -8,7 +8,8 @@
  * to import the full HTTP-server's tRPC stack just to check a token.
  *
  * Contract — keep in sync with the canonical implementation:
- *   • Prefix-extract → bcrypt-compare against active, unexpired rows
+ *   • Prefix-extract → indexed sha256 lookup (`key_lookup_hash`) → bcrypt
+ *     ONLY for legacy rows without a lookup hash
  *   • Returns the row (with scopes) on match, null otherwise
  *   • Caller is responsible for scope enforcement (e.g. requiring
  *     `realtime:observe`) and for joining only the rooms the key is
@@ -19,6 +20,7 @@
  * join it, narrowed by the key's bound workspace and its grant.
  */
 
+import { createHash } from "crypto";
 import bcrypt from "bcrypt";
 import { db, and, eq, or, isNull, gt } from "@synap/database";
 import { apiKeys, type ApiKeyRecord } from "@synap/database/schema";
@@ -53,13 +55,44 @@ function extractPrefix(apiKey: string): string | null {
   return null;
 }
 
+/** sha256(plaintext key), hex — `ApiKeyService.verificationCacheKey`. */
+function lookupHashOf(apiKey: string): string {
+  return createHash("sha256").update(apiKey).digest("hex");
+}
+
+/** A verified row: the scope check, then the key the socket runs as. */
+function accept(candidate: ApiKeyRecord): ValidatedRealtimeKey | null {
+  const scopes = (candidate.scope ?? []) as string[];
+  if (!scopes.includes("realtime:observe")) {
+    // Match found but key lacks the required scope — treat as auth failure.
+    return null;
+  }
+
+  // Best-effort usage tracking. Fire-and-forget; never block.
+  db.update(apiKeys)
+    .set({ lastUsedAt: new Date() })
+    .where(eq(apiKeys.id, candidate.id))
+    .catch(() => {
+      /* non-fatal */
+    });
+
+  return {
+    apiKeyId: candidate.id,
+    userId: candidate.userId,
+    scopes,
+    keyName: candidate.keyName,
+    ownerUserId: candidate.linkedUserId ?? candidate.userId,
+    workspaceId: candidate.workspaceId ?? null,
+  };
+}
+
 /**
  * Validate an API key for realtime subscription.
  *
  * Returns the validated key record if and only if:
  *   • the format / prefix is recognised,
- *   • a row with that prefix exists, is active, not expired,
- *   • bcrypt compare matches the row's hash,
+ *   • a row whose sha256 lookup hash matches (or, for a legacy row with no
+ *     lookup hash, whose bcrypt hash matches) is active and not expired,
  *   • the key's scopes include `realtime:observe`.
  *
  * Returns `null` otherwise. Failures are silent by design — the caller logs
@@ -74,43 +107,44 @@ export async function validateRealtimeApiKey(
   const prefix = extractPrefix(apiKey);
   if (!prefix) return null;
 
+  // 1. O(1) path: indexed sha256 lookup — the canonical verifier
+  // (`ApiKeyService.validateApiKey`, @synap/api). Every key created since
+  // migration 0157 carries `key_lookup_hash`, and a legacy key gains one on its
+  // first bcrypt verify there. This query does not filter on active/expiry, so
+  // both are re-checked here.
+  const [lookupMatch]: ApiKeyRecord[] = await db
+    .select()
+    .from(apiKeys)
+    .where(eq(apiKeys.keyLookupHash, lookupHashOf(apiKey)))
+    .limit(1);
+  if (lookupMatch) {
+    if (!lookupMatch.isActive) return null;
+    if (lookupMatch.expiresAt && lookupMatch.expiresAt <= new Date()) {
+      return null;
+    }
+    return accept(lookupMatch);
+  }
+
+  // 2. Fallback for un-migrated legacy keys ONLY (lookup hash NULL). A row
+  // with a lookup hash was already ruled out by the sha256 miss; bcrypt-
+  // comparing it again (cost 12, ~0.7 s each) let an unauthenticated
+  // handshake with any made-up key burn one bcrypt per same-prefix key.
   const candidates: ApiKeyRecord[] = await db
     .select()
     .from(apiKeys)
     .where(
       and(
         eq(apiKeys.keyPrefix, prefix),
+        isNull(apiKeys.keyLookupHash),
         eq(apiKeys.isActive, true),
         or(isNull(apiKeys.expiresAt), gt(apiKeys.expiresAt, new Date()))
       )
     );
 
   for (const candidate of candidates) {
-    const isMatch = await bcrypt.compare(apiKey, candidate.keyHash);
-    if (!isMatch) continue;
-
-    const scopes = (candidate.scope ?? []) as string[];
-    if (!scopes.includes("realtime:observe")) {
-      // Match found but key lacks the required scope — treat as auth failure.
-      return null;
+    if (await bcrypt.compare(apiKey, candidate.keyHash)) {
+      return accept(candidate);
     }
-
-    // Best-effort usage tracking. Fire-and-forget; never block.
-    db.update(apiKeys)
-      .set({ lastUsedAt: new Date() })
-      .where(eq(apiKeys.id, candidate.id))
-      .catch(() => {
-        /* non-fatal */
-      });
-
-    return {
-      apiKeyId: candidate.id,
-      userId: candidate.userId,
-      scopes,
-      keyName: candidate.keyName,
-      ownerUserId: candidate.linkedUserId ?? candidate.userId,
-      workspaceId: candidate.workspaceId ?? null,
-    };
   }
 
   return null;

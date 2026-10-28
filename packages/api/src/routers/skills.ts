@@ -21,7 +21,7 @@ import {
   type SQL,
 } from "@synap/database";
 import { skills, tools } from "@synap/database/schema";
-import type { ProviderVerbSpec } from "@synap/database/schema";
+import type { ProviderVerbSpec, SkillInputMap } from "@synap/database/schema";
 import type { CapabilityEnableOffer } from "../services/capabilities/propose-capability-enable.js";
 import {
   getLinksFor,
@@ -30,6 +30,12 @@ import {
 } from "../services/links/links-service.js";
 import { requireUserId } from "../utils/user-scoped.js";
 import { visibleSkillsWhere } from "../services/skills/visibility.js";
+import {
+  assertMayChangeSkill,
+  defaultSkillScope,
+  holdsSkillAuthority,
+  POD_SKILL_PUBLISH_MESSAGE,
+} from "../services/skills/skill-write-authority.js";
 import { alwaysSkillBudgetWarningsOnEdit } from "../services/skills/template-skills.js";
 import { ruleNotExpiredWhere } from "../services/rules/expiry.js";
 import { ruleSentenceSchema } from "../services/rules/sentence-schema.js";
@@ -62,14 +68,7 @@ import { randomUUID } from "crypto";
 import { parseSkillMd } from "../skills/skill-md-parser.js";
 import { parseSkillToml } from "../skills/skill-toml-parser.js";
 import { runSkill } from "../services/skills/run-skill.js";
-import * as acorn from "acorn";
-import * as acornWalk from "acorn-walk";
-import {
-  SKILL_RUNTIME_VERSION as STDLIB_RUNTIME_VERSION,
-  SKILL_WEB_GLOBALS,
-  SKILL_HOST_BRIDGES,
-  SKILL_ALLOWED_GLOBALS,
-} from "../services/skills/skill-stdlib.js";
+import { checkSkillCode } from "@synap-core/types/skill-code";
 import {
   SKILL_SLUG_PATTERN,
   SKILL_SLUG_PATTERN_MESSAGE,
@@ -77,204 +76,16 @@ import {
 } from "../services/skills/skill-authoring.js";
 
 /**
- * Save-time global-reference scan for code skills (B1).
- *
- * A code skill runs inside an isolated-vm isolate whose ONLY globals are
- * pure-ECMAScript built-ins + the versioned skill stdlib (host bridges + web
- * polyfills). A skill that references any OTHER global (e.g. `fetch`, `crypto`)
- * throws a ReferenceError at run time — the exact class of failure the
- * `URLSearchParams` polyfill patched reactively. This scan makes the AUTHOR/AI
- * learn the gap at CREATE time instead.
- *
- * SSOT: the allow-list is IMPORTED from the co-located backend runtime module
- * (`services/skills/skill-stdlib.ts`) — the SAME module the in-process sandbox
- * (`run-skill-in-sandbox.ts`) boots with — so the scan and the isolate can never
- * disagree within the backend. That backend module is itself a verbatim port of
- * the IS SSOT; `skill-runtime-globals.test.ts` still asserts byte-equality
- * against the IS sibling (until the IS copy is retired) so cross-repo drift is
- * caught.
+ * Save-time code check for code skills (B1). THE rule is `checkSkillCode`
+ * (`@synap-core/types/skill-code`), shared with the catalog validator so a
+ * skill the pod would refuse never ships in the catalog. The names below are
+ * re-exported for this router's callers and tripwires.
  */
-export const SKILL_RUNTIME_VERSION = STDLIB_RUNTIME_VERSION;
-
-/** The derived allow-list — every identifier a skill may reference. */
-export const SKILL_RUNTIME_ALLOWED_GLOBALS: ReadonlySet<string> = new Set(
-  SKILL_ALLOWED_GLOBALS
-);
-
-/** Collect every binding name a pattern node introduces (destructuring-aware). */
-function collectPatternNames(
-  node: acorn.Node | null | undefined,
-  out: Set<string>
-): void {
-  if (!node) return;
-  const n = node as unknown as Record<string, unknown> & { type: string };
-  switch (n.type) {
-    case "Identifier":
-      out.add(n.name as string);
-      break;
-    case "ObjectPattern":
-      for (const p of n.properties as acorn.Node[]) collectPatternNames(p, out);
-      break;
-    case "Property":
-      collectPatternNames(n.value as acorn.Node, out);
-      break;
-    case "ArrayPattern":
-      for (const e of n.elements as (acorn.Node | null)[])
-        if (e) collectPatternNames(e, out);
-      break;
-    case "RestElement":
-      collectPatternNames(n.argument as acorn.Node, out);
-      break;
-    case "AssignmentPattern":
-      collectPatternNames(n.left as acorn.Node, out);
-      break;
-  }
-}
-
-/**
- * Parse a skill body and return the free global identifiers it references that
- * are NOT in the runtime allow-list. Uses the SAME async-function wrapper the IS
- * executor uses, so `args`/`context`/top-level `await` parse identically.
- *
- * Detection = (identifiers referenced anywhere) − (identifiers bound anywhere) −
- * allow-list. "Bound anywhere" makes a local shadow of an allowed name safe and
- * never false-positives on locals; only a name that is never declared and not
- * provided by the runtime is flagged. Throws SyntaxError text on a parse failure.
- */
-export function scanSkillGlobals(code: string): {
-  ok: boolean;
-  unknownGlobals: string[];
-  parseError?: string;
-  /** The code only DEFINES functions: see {@link onlyDefinesFunctions}. */
-  onlyDefinesFunctions?: boolean;
-} {
-  const wrapped = `(async function(args, context){\n${code}\n})`;
-  let ast: acorn.Node;
-  try {
-    ast = acorn.parse(wrapped, { ecmaVersion: 2022, sourceType: "script" });
-  } catch (err) {
-    return {
-      ok: false,
-      unknownGlobals: [],
-      parseError: err instanceof Error ? err.message : "Syntax error",
-    };
-  }
-
-  const bound = new Set<string>();
-  const referenced = new Set<string>();
-
-  acornWalk.fullAncestor(
-    ast,
-    (node: acorn.Node, _state: unknown, ancestors: acorn.Node[]) => {
-      const n = node as unknown as Record<string, unknown> & { type: string };
-      switch (n.type) {
-        case "VariableDeclarator":
-          collectPatternNames(n.id as acorn.Node, bound);
-          return;
-        case "FunctionDeclaration":
-        case "FunctionExpression":
-        case "ArrowFunctionExpression":
-          if (n.id) bound.add((n.id as { name: string }).name);
-          for (const p of n.params as acorn.Node[])
-            collectPatternNames(p, bound);
-          return;
-        case "ClassDeclaration":
-        case "ClassExpression":
-          if (n.id) bound.add((n.id as { name: string }).name);
-          return;
-        case "CatchClause":
-          if (n.param) collectPatternNames(n.param as acorn.Node, bound);
-          return;
-      }
-      if (n.type !== "Identifier") return;
-      const name = n.name as string;
-      const parent = ancestors[ancestors.length - 2] as unknown as
-        (Record<string, unknown> & { type: string }) | undefined;
-      if (!parent) {
-        referenced.add(name);
-        return;
-      }
-      // Exclude identifiers that are NOT variable references:
-      if (
-        parent.type === "MemberExpression" &&
-        parent.property === node &&
-        !parent.computed
-      )
-        return;
-      if (
-        parent.type === "Property" &&
-        parent.key === node &&
-        !parent.computed &&
-        parent.value !== node
-      )
-        return;
-      if (
-        (parent.type === "MethodDefinition" ||
-          parent.type === "PropertyDefinition") &&
-        parent.key === node &&
-        !parent.computed
-      )
-        return;
-      if (parent.type === "LabeledStatement" && parent.label === node) return;
-      if (
-        (parent.type === "BreakStatement" ||
-          parent.type === "ContinueStatement") &&
-        parent.label === node
-      )
-        return;
-      if (parent.type === "VariableDeclarator" && parent.id === node) return;
-      if (
-        (parent.type === "FunctionDeclaration" ||
-          parent.type === "FunctionExpression" ||
-          parent.type === "ArrowFunctionExpression") &&
-        (parent.id === node || (parent.params as acorn.Node[]).includes(node))
-      )
-        return;
-      referenced.add(name);
-    }
-  );
-
-  const unknownGlobals = [...referenced]
-    .filter(
-      (name) => !bound.has(name) && !SKILL_RUNTIME_ALLOWED_GLOBALS.has(name)
-    )
-    .sort();
-  return {
-    ok: unknownGlobals.length === 0,
-    unknownGlobals,
-    onlyDefinesFunctions: onlyDefinesFunctions(ast),
-  };
-}
-
-/**
- * The runner runs a skill's code as the BODY of `async function(args,
- * context)` (runner/skill-isolate.ts). Code that is itself a function —
- * `async (args, context) => { … }` or `function run() { … }` — is defined by
- * that body and never called: every run returns `undefined` and still reports
- * success. Live (skill dogfood_echo, run 12b2997a, 2026-10-28): approved,
- * delivered, no result.
- */
-function onlyDefinesFunctions(ast: acorn.Node): boolean {
-  const program = ast as unknown as {
-    body: Array<{ expression?: { body?: { body?: acorn.Node[] } } }>;
-  };
-  const statements = program.body[0]?.expression?.body?.body ?? [];
-  return (
-    statements.length > 0 &&
-    statements.every((node) => {
-      const s = node as unknown as {
-        type: string;
-        expression?: { type: string };
-      };
-      return (
-        s.type === "FunctionDeclaration" ||
-        (s.type === "ExpressionStatement" &&
-          (s.expression?.type === "FunctionExpression" ||
-            s.expression?.type === "ArrowFunctionExpression"))
-      );
-    })
-  );
-}
+export {
+  SKILL_RUNTIME_VERSION,
+  SKILL_RUNTIME_ALLOWED_GLOBALS,
+  scanSkillGlobals,
+} from "@synap-core/types/skill-code";
 
 /**
  * The B1 save-time scan for a skill of `kind` — the one rule every write door
@@ -368,37 +179,9 @@ export function skillKindAfterUpdate(
 export function assertSkillGlobalsAllowed(
   code: string | undefined | null
 ): void {
-  const trimmed = code?.trim();
-  if (!trimmed) return;
-  const scan = scanSkillGlobals(trimmed);
-  if (scan.parseError) {
-    throw new TRPCError({
-      code: "BAD_REQUEST",
-      message: `Skill code has a syntax error: ${scan.parseError}`,
-    });
-  }
-  if (scan.onlyDefinesFunctions) {
-    throw new TRPCError({
-      code: "BAD_REQUEST",
-      message:
-        "Skill code only defines a function, so a run would call nothing and return nothing. " +
-        "The code is the BODY of a function that receives `args` and `context`: " +
-        "write its statements directly and `return` the result " +
-        '(e.g. `const text = String(args.text ?? ""); return { echoed: text };`), ' +
-        "without a wrapper like `async (args, context) => { … }`.",
-    });
-  }
-  if (!scan.ok) {
-    const allowed = [...SKILL_WEB_GLOBALS, ...SKILL_HOST_BRIDGES].join(", ");
-    throw new TRPCError({
-      code: "BAD_REQUEST",
-      message:
-        `Skill references ${scan.unknownGlobals.map((g) => `\`${g}\``).join(", ")}, ` +
-        `not provided by skill runtime v${SKILL_RUNTIME_VERSION}. ` +
-        `Code skills run in a sandbox with ECMAScript built-ins plus: ${allowed}. ` +
-        `Use \`host.fetch(url, opts)\` for HTTP (not \`fetch\`); there is no \`crypto\`, ` +
-        `\`process\`, \`require\`, or timers.`,
-    });
+  const problem = checkSkillCode(code);
+  if (problem) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: problem.message });
   }
 }
 
@@ -554,6 +337,18 @@ export async function insertSkillGoverned(
   // path, it closes the gap for callers that construct a `kind: "code"` skill
   // without going through those two mutations.
   assertSkillCodeAllowed(values.kind, values.code, values.executionMode);
+
+  // A pod-wide skill reaches every user's agents: publishing one needs the
+  // approval authority (F6). The column default is "pod", so an absent scope
+  // counts as pod-wide. Callers pick `defaultSkillScope` when they name none.
+  if (
+    (values.scope ?? "pod") === "pod" &&
+    !(await holdsSkillAuthority(values.userId, {
+      workspaceId: values.workspaceId,
+    }))
+  ) {
+    return { status: "denied", reason: POD_SKILL_PUBLISH_MESSAGE };
+  }
 
   const perm = await checkPermissionOrPropose({
     userId: values.userId,
@@ -1295,7 +1090,9 @@ export const skillsRouter = router({
         kind: z
           .enum(["instruction", "code", "declarative", "builtin"])
           .optional(),
-        scope: z.enum(["pod", "user", "workspace"]).default("pod"),
+        /** Absent: pod-wide for a caller with the authority to publish one
+         *  (`holdsSkillAuthority`), else the caller's own (`user`). */
+        scope: z.enum(["pod", "user", "workspace"]).optional(),
         agentTypes: z.array(z.string()).optional(),
         /** Stable ref `load_skill` resolves by (e.g. "biz/business-plan").
          *  Without one, a documentation skill is authored but unreachable:
@@ -1358,6 +1155,14 @@ export const skillsRouter = router({
          * that changes what a reader receives (a RE_APPROVAL field).
          */
         urlPatterns: z.array(z.string().min(1).max(300)).max(64).optional(),
+        /**
+         * How the verb's parameters are read from its intent's one input
+         * (`skills.input_map`, 0368), already validated by the applier
+         * (`inputMapProblems`). Applier-only, like `intent`, and not on
+         * `update`: a definition re-apply is the one thing that changes what
+         * an app's input becomes (a RE_APPROVAL field).
+         */
+        inputMap: z.record(z.string(), z.unknown()).optional(),
         /** The acting AGENT identity, when this create is agent-initiated
          *  (e.g. via an MCP tool) — mirrors entities.ts's createEntity input.
          *  Threaded into checkPermissionOrPropose below so an agent-created
@@ -1378,15 +1183,34 @@ export const skillsRouter = router({
       // decides which kept links a verb receives, so a member-authored skill
       // must never declare one through this door (only a definition does).
       if (
-        (input.intent !== undefined || input.urlPatterns !== undefined) &&
+        (input.intent !== undefined ||
+          input.urlPatterns !== undefined ||
+          input.inputMap !== undefined) &&
         !isDefinitionApplier(ctx)
       ) {
         throw new TRPCError({
           code: "FORBIDDEN",
           message:
-            "intent and urlPatterns come only from a capability definition; install or update its package instead.",
+            "intent, urlPatterns and inputMap come only from a capability definition; install or update its package instead.",
         });
       }
+
+      // A pod-wide skill reaches every user's agents (F6): publishing one
+      // needs the approval authority. The capability-definition applier keeps
+      // its own install path (its pod skills are the catalog's). After the input-only refusal above, so
+      // a refused call reads nothing.
+      const mayPublishPod =
+        isDefinitionApplier(ctx) ||
+        (await holdsSkillAuthority(userId, {
+          workspaceId: input.workspaceId,
+        }));
+      if (input.scope === "pod" && !mayPublishPod) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: POD_SKILL_PUBLISH_MESSAGE,
+        });
+      }
+      const scope = input.scope ?? (mayPublishPod ? "pod" : "user");
 
       // Documentation + optional Code. Derive `kind` from code presence (explicit
       // input.kind still honored). A skill must carry documentation or code.
@@ -1481,7 +1305,7 @@ export const skillsRouter = router({
           userId,
           workspaceId: input.workspaceId ?? null,
           kind,
-          scope: input.scope,
+          scope,
           agentTypes: input.agentTypes ?? null,
           slug: input.slug ?? null,
           name: input.name,
@@ -1499,6 +1323,9 @@ export const skillsRouter = router({
           ...(input.intent ? { intent: input.intent } : {}),
           ...(input.urlPatterns?.length
             ? { urlPatterns: input.urlPatterns }
+            : {}),
+          ...(input.inputMap
+            ? { inputMap: input.inputMap as SkillInputMap }
             : {}),
           // Replayed by the `skill/create` executor through the same
           // `replaceSkillRequiredTools` once the skill row exists.
@@ -1545,7 +1372,7 @@ export const skillsRouter = router({
           // narrows to one. No workspace context → pod-wide (NULL).
           workspaceId: input.workspaceId ?? null,
           kind,
-          scope: input.scope,
+          scope,
           agentTypes: input.agentTypes ?? null,
           slug: input.slug ?? null,
           name: input.name,
@@ -1565,6 +1392,11 @@ export const skillsRouter = router({
           // The reader's declared URLs (applier-only); omitted → NULL, not a reader.
           ...(input.urlPatterns?.length
             ? { urlPatterns: input.urlPatterns }
+            : {}),
+          // The intent input map (applier-only); omitted → NULL, not offered
+          // to apps for the intent.
+          ...(input.inputMap
+            ? { inputMap: input.inputMap as SkillInputMap }
             : {}),
           // Persist the caller-supplied metadata bag (e.g. the marketplace
           // source-link); omitted → the column default `{}` applies.
@@ -1709,6 +1541,20 @@ export const skillsRouter = router({
           message: "Skill not found",
         });
       }
+      // Seeing a pod skill is not owning it (F6): a non-author needs the
+      // skill's approval authority to change it.
+      await assertMayChangeSkill(userId, existingSkill);
+      // Moving a skill to pod-wide is publishing it.
+      if (
+        input.scope === "pod" &&
+        existingSkill.scope !== "pod" &&
+        !(await holdsSkillAuthority(userId, existingSkill))
+      ) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: POD_SKILL_PUBLISH_MESSAGE,
+        });
+      }
 
       // Save-time global-reference scan (B1) — same gate as `create`: an EDIT
       // that re-points a skill's code to reference an unprovided global (fetch/
@@ -1800,10 +1646,13 @@ export const skillsRouter = router({
         // take an already-approved instruction skill and rewrite its body while
         // it KEPT `approved: true` — precisely the "hostile fetched content
         // persists itself into the prompt" path the approval gate exists to
-        // stop. A human editing their own skill is unaffected. Deliberately
-        // PRESENCE-based, not value-based: an agent that submits a body must
-        // re-earn approval even in the edge case where the text is unchanged.
-        (updateData.body !== undefined && !!actingAgentUserId) ||
+        // stop. Deliberately PRESENCE-based, not value-based: an agent that
+        // submits a body must re-earn approval even in the edge case where the
+        // text is unchanged. The same holds for a PERSON who is not the
+        // skill's author (F6: a pod admin editing another member's skill):
+        // only the author's own edit keeps the approval it had.
+        (updateData.body !== undefined &&
+          (!!actingAgentUserId || existingSkill.userId !== userId)) ||
         // Widening the sandbox's egress allowlist is an execution change: it is
         // what decides which hosts an approved skill may reach. It cannot ride
         // in `RE_APPROVAL_FIELDS` because `metadata` is peeled off `updateData`
@@ -1952,6 +1801,8 @@ export const skillsRouter = router({
           message: "Skill not found",
         });
       }
+      // A pod skill another person wrote is not the caller's to delete (F6).
+      await assertMayChangeSkill(userId, existingSkill);
 
       // 1. Permission check
       // The acting agent is read AMBIENTLY first. `skillsRouter` is mounted on
@@ -2324,7 +2175,7 @@ export const skillsRouter = router({
         userId,
         workspaceId: input.workspaceId,
         kind: "instruction",
-        scope: "pod",
+        scope: await defaultSkillScope(userId, input.workspaceId),
         name: parsed.name,
         description: parsed.description,
         body: parsed.instructions,
@@ -2404,14 +2255,16 @@ export const skillsRouter = router({
       const skill = await db.query.skills.findFirst({
         where: and(
           eq(skills.id, input.skillId),
-          // Owner floor before editing the skill's `requires` edges — same gate
-          // as getRequiredTools / skills.get. Pod-scoped skills stay editable by
-          // any user (existing model); user-scoped skills are owner-only.
+          // Visibility floor before editing the skill's `requires` edges —
+          // same lookup as getRequiredTools / skills.get.
           or(eq(skills.scope, "pod"), eq(skills.userId, userId))
         ),
       });
       if (!skill)
         throw new TRPCError({ code: "NOT_FOUND", message: "Skill not found" });
+      // Seeing a pod skill is not owning it (F6). The definition applier
+      // re-seeds the catalog's own skills on re-install.
+      if (!isDefinitionApplier(ctx)) await assertMayChangeSkill(userId, skill);
 
       await replaceSkillRequiredTools({
         userId,

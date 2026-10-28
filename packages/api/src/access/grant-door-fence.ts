@@ -10,7 +10,9 @@
  * new read door is refused until someone verifies it and lists it here.
  *
  * Writes on Hub REST and MCP stay open: each one is meant to pass the gate,
- * whose rung 0 denies an out-of-grant write. On the Bearer tRPC door (S7,
+ * whose rung 0 denies an out-of-grant write. The free-form `POST /proposals`
+ * passes no gate, so it runs rung 0 itself on an allowlist
+ * (`fenced-proposal.ts`, 2026-10-28). On the Bearer tRPC door (S7,
  * 2026-10-20) a mutation passes only when `TRPC_KEY_MUTATION_DOORS` says the
  * gate really bounds it; every other one needs an unbounded `*` key.
  *
@@ -44,6 +46,7 @@ export type FencedReadDoor =
       readonly bound: "narrowed";
       readonly subject: string;
       readonly full: readonly string[];
+      readonly action: string;
     }
   | { readonly bound: "refused"; readonly reason: string };
 
@@ -71,16 +74,21 @@ const PERSON = (subject: string): FencedReadDoor => ({
  * not reach is a 404), and the parts that read `full` are added only when one
  * scope reads every one of them unbounded (`READS(...full)`); otherwise the
  * route says they were withheld, never an empty section. Admitted when one
- * live scope grants `<subject>.read`, pinned or not: an app, whose grant is
- * always pinned to spaces, reads the row the list door already gives it.
+ * live scope grants `<subject>.<action>` (`read` unless named), pinned or not:
+ * an app, whose grant is always pinned to spaces, reads the row the list door
+ * already gives it. For a QUALIFIED subject any one qualifier suffices
+ * (`capability.publish_post.run` admits a `capability … run` door): the route
+ * then checks the qualifier and the space it was asked about.
  */
 const NARROWED = (
   subject: string,
-  full: readonly string[]
+  full: readonly string[],
+  action = "read"
 ): FencedReadDoor => ({
   bound: "narrowed",
   subject,
   full,
+  action,
 });
 const REFUSED = (reason: string): FencedReadDoor => ({
   bound: "refused",
@@ -94,6 +102,28 @@ function grantReadsSubject(grant: KeyGrant, subject: string): boolean {
       patternMatches(p, { subject, action: "read" })
     )
   );
+}
+
+/**
+ * Does one live scope grant `<subject>.<action>`, whatever it is pinned to?
+ * For a qualified subject, on at least one qualifier (an intent, a kind).
+ */
+function grantHoldsAction(
+  grant: KeyGrant,
+  subject: string,
+  action: string
+): boolean {
+  const qualified = (QUALIFIED_GRANT_SUBJECTS as readonly string[]).includes(
+    subject
+  );
+  return grant.scopes.some((scope) => {
+    if (!qualified)
+      return scope.permissions.some((p) =>
+        patternMatches(p, { subject, action })
+      );
+    const allowed = allowedQualifiers(scope, subject, action);
+    return allowed === "all" || allowed.length > 0;
+  });
 }
 
 /** Does ONE scope read `subject` everywhere (every kind, no narrowing)? */
@@ -113,8 +143,9 @@ export function grantBoundsDoor(
 ): boolean {
   if (!door || door.bound === "refused") return false;
   if (door.bound === "seamed") return true;
-  if (door.bound === "person" || door.bound === "narrowed")
-    return grantReadsSubject(grant, door.subject);
+  if (door.bound === "person") return grantReadsSubject(grant, door.subject);
+  if (door.bound === "narrowed")
+    return grantHoldsAction(grant, door.subject, door.action);
   // A deny-all scope (`permissions: []`) reads nothing — `every` over a door
   // that declares no subject would otherwise let it through.
   return grant.scopes.some(
@@ -318,6 +349,13 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
       "track"
     ),
   ],
+  // Intent actions (decision 3A, 2026-10-28): which of the person's tools can
+  // do ONE intent, for a key holding `capability.<intent>.run`. The route
+  // narrows itself (`capabilities-intent.ts`): `intent` and `workspaceId`
+  // are required, the grant must permit that intent in that space, and only
+  // that intent's actions come back, each with the intent's input — never a
+  // verb's raw parameters. The labels are the pod's own.
+  [/^\/capabilities\/actions\/?$/, NARROWED("capability", [], "run")],
   // `readWorkRelease` (services/dev-loop/work-release.ts): `dev.repo_snapshot`
   // events, the sessions the PRs belong to, and their liveness (chat turns,
   // events, proposals, room notes). Same as MCP `synap_get_work_release`.
@@ -354,10 +392,12 @@ export const GRANT_REST_POST_READS: ReadonlyArray<
   // and never installed over (fence1).
   [/^\/workspaces\/ensure-template\/?$/, SEAMED],
   [/^\/diagnose\/?$/, REFUSED("Pod internals across every subject.")],
-  [
-    /^\/capabilities\/execute\/?$/,
-    REFUSED("Runs arbitrary capability code: its reads cannot be declared."),
-  ],
+  // Runs a capability. A key the fence bounds may only run an INTENT action
+  // (decision 3A, 2026-10-28): the route refuses any other body for it, checks
+  // `capability.<intent>.run` on the verb's own intent in the named space, and
+  // an app's outward run always files a proposal (the capability gate). So it
+  // is admitted only for a key holding some `capability … run`.
+  [/^\/capabilities\/execute\/?$/, NARROWED("capability", [], "run")],
 ];
 
 /**
@@ -399,6 +439,7 @@ export const MCP_READ_TOOL_DOORS: Readonly<Record<string, FencedReadDoor>> = {
   synap_list_proposals: READS("proposal", "entity"),
   synap_get_proposal: READS("proposal", "entity"),
   synap_list_sessions: READS("session", "project"),
+  synap_needs_you: READS("session", "proposal", "channel", "entity"),
   // Same subjects as `GET /focus-sessions/graph` (GRANT_REST_GET_READS).
   synap_get_work_graph: READS(
     "session",
@@ -515,11 +556,9 @@ export const GRANT_OWNER_WIDE_REST_DOORS: readonly RegExp[] = [
  *    member.
  *  - `DELETE /messaging/accounts/:id` (disconnects the person's messaging
  *    account at the provider), `POST /messaging/accounts/sync` (rewrites the
- *    person's account mirror, registers provider webhooks), `POST
- *    /messaging/service-config[/migrate]` (replaces the pod's messaging
- *    connector credentials). The send through an account is NOT here: it
- *    checks `messaging.send` in the conversation's space
- *    (`sendExternalMessage`).
+ *    person's account mirror, registers provider webhooks). The send through
+ *    an account is NOT here: it checks `messaging.send` in the conversation's
+ *    space (`sendExternalMessage`).
  *  - `/memory` writes (`POST /memory`, `/memory/turns|sessions|writes`,
  *    `DELETE /memory/:id`; S5 2026-10-20): `knowledge_facts` about the
  *    person, recalled in EVERY workspace, written directly — no grant narrows
@@ -541,7 +580,6 @@ export const GRANT_OWNER_WIDE_REST_WRITES: readonly RegExp[] = [
   /^\/connectors\/disconnect\/?$/,
   /^\/connectors\/(?:connect|session)\/?$/,
   /^\/messaging\/accounts\/[^/]+\/?$/,
-  /^\/messaging\/service-config(?:\/migrate)?\/?$/,
   /^\/memory(?:\/(?!search\/?$)[^/]+)?\/?$/,
   /^\/knowledge\/(?!(?:search|ask|answer)\/?$)[^/]+\/?$/,
 ];
@@ -736,7 +774,8 @@ export const TRPC_KEY_MUTATION_DOORS: Readonly<Record<string, TrpcWriteDoor>> =
     "automations.updateAutomation": GATED,
     "automations.activateAutomation": GATED,
     "automations.triggerAutomation": GATED,
-    // D3: revising honours the key's space / project / object pins.
+    // D3: revising honours the key's space / project / object pins, and a
+    // fenced key never changes the payload or the space (issue 314a6554).
     "proposals.updateProposal": GATED,
     // D5: an observation is `event.create` where it lands; never widened.
     "observations.append": GATED,

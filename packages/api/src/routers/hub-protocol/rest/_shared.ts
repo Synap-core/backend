@@ -93,6 +93,12 @@ export type HubVariables = {
    */
   keyWorkspaceId?: string | null;
   /**
+   * The authenticating key's `hub_id` (`integration:<kind>` for a key minted by
+   * "Connect an integration"), or null. Read by `rejectAgentReviewer`: an
+   * integration key other than the CLI never reviews (audit F10).
+   */
+  keyHubId?: string | null;
+  /**
    * The caller's active focus session, resolved ONCE by the session middleware
    * in `hub-protocol-rest.ts` from the client-supplied `X-Session-Id` header.
    *
@@ -171,12 +177,48 @@ export const uuidPathParam = uuidParam;
  * review door. TODO: a future "trusted reviewer agent" could be an explicit,
  * audited opt-in that bypasses this.
  */
+/**
+ * A `hub_inbound` key minted by "Connect an integration" for an integration
+ * other than the CLI (its `hub_id` is `integration:<kind>`; see
+ * `integrationHubId`). The CLI's key is the person's own terminal and keeps
+ * reviewing; every other integration kind is a key handed to another app.
+ */
+export function isNonCliIntegrationKey(
+  keyType: string | undefined,
+  keyHubId: string | null | undefined
+): boolean {
+  return (
+    keyType === "hub_inbound" &&
+    typeof keyHubId === "string" &&
+    keyHubId.startsWith("integration:") &&
+    keyHubId !== "integration:cli"
+  );
+}
+
 export function rejectAgentReviewer(
   c: Context<{ Variables: HubVariables }>,
   action: "approve" | "revert"
 ): Response | null {
   const agentUserId = c.get("agentUserId");
   const keyType = c.get("keyType") as string | undefined;
+  // AUDIT F10 (2026-10-28): a key minted by "Connect an integration" for
+  // anything but the person's own CLI (`custom`, `raycast`, legacy `openclaw`)
+  // is a full-access key of the PERSON, so it is no agent credential — and
+  // "custom" exists to be pasted into a third-party AI app. Whatever holds it
+  // could approve its own or another agent's queued writes. Approval and
+  // revert stay a signed-in act: such a key is refused like an agent.
+  if (isNonCliIntegrationKey(keyType, c.get("keyHubId"))) {
+    logger.warn(
+      { keyType, proposalId: c.req.param("id"), action },
+      "integration key attempted to review a proposal — blocked (human review required)"
+    );
+    return c.json(
+      {
+        error: `An integration key cannot ${action} proposals — ${action} is human review. Open the proposal in Synap, or use the Synap CLI after \`synap login\`.`,
+      },
+      403
+    );
+  }
   if (!isAgentCaller({ agentUserId, keyType })) return null;
   logger.warn(
     { agentUserId, keyType, proposalId: c.req.param("id"), action },

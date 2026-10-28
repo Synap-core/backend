@@ -97,6 +97,7 @@ describe("CpBrokerConnector.listConnectionsResult — fault ≠ empty", () => {
           createdAt: new Date("2026-09-01T00:00:00.000Z"),
           lastSyncAt: undefined,
           hasError: true,
+          objectScoped: false,
         },
       ]);
     }

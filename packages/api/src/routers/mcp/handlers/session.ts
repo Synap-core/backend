@@ -31,9 +31,12 @@ import type { ExpectedOutput, SessionCriterion } from "@synap/playbooks";
 import { requestClientKey } from "../../../services/focus-sessions/resolve-work-session.js";
 import { refuseUndeclaredArgs } from "../undeclared-args.js";
 import {
+  waitForConversationChanges,
   waitForSessionAnswers,
   waitForSessionChanges,
 } from "../../../services/focus-sessions/wait-for-answers.js";
+import { namedConversationOf } from "../../../services/focus-sessions/conversation-changes.js";
+import { getRequestClientKey } from "@synap/database";
 import { parseSessionChangeKinds } from "../../../services/focus-sessions/session-changes.js";
 import {
   describeRelayRefusal,
@@ -304,9 +307,19 @@ export const sessionHandlers: McpHandlerMap = {
   ): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, agentUserId, signal } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
+    if (
+      args.scope !== undefined &&
+      args.scope !== "session" &&
+      args.scope !== "conversation"
+    ) {
+      return ok({ error: 'scope must be "session" or "conversation".' });
+    }
+    const isConversation = args.scope === "conversation";
     const sessionId =
       typeof args.sessionId === "string" ? args.sessionId.trim() : "";
-    if (!UUID_RE.test(sessionId)) {
+    // A conversation wait may name its bound session (its runner row); it
+    // needs none.
+    if (!UUID_RE.test(sessionId) && !(isConversation && sessionId === "")) {
       return ok({ error: `Focus session ${sessionId || "(none)"} not found` });
     }
     let since: Date | null = null;
@@ -328,6 +341,38 @@ export const sessionHandlers: McpHandlerMap = {
     }
     // `stamp: false` = a PEEK (a watcher): never writes the "Picked up" receipt.
     const stampReceipt = Boolean(agentUserId) && args.stamp !== false;
+    if (isConversation) {
+      if (!kinds.kinds) {
+        return ok({
+          error:
+            'scope "conversation" needs `events` (the kinds to wait for, or ["all"]).',
+        });
+      }
+      const conversation = namedConversationOf(getRequestClientKey());
+      if (!conversation) {
+        return ok({
+          error:
+            "This request names no conversation the pod can follow: send X-Synap-Conversation (`<harness>:<id>`, the synap CLI and synap-bridge do), or wait on one session with sessionId.",
+        });
+      }
+      const changes = await waitForConversationChanges({
+        userId,
+        conversation,
+        since,
+        timeoutSeconds,
+        kinds: kinds.kinds,
+        runnerSessionId: sessionId || null,
+        agentUserId,
+        signal,
+      });
+      if (changes.status === "timeout") {
+        return ok({
+          ...changes,
+          next: "Nothing changed on this conversation's sessions. Call synap_wait_for_answer again with scope conversation and since = nextSince.",
+        });
+      }
+      return ok(changes);
+    }
     if (kinds.kinds) {
       if (
         args.knownStage !== undefined &&

@@ -402,6 +402,20 @@ export interface ExpectedOutput {
    */
   why?: string;
   /**
+   * WHAT MOVES when the person answers — one line naming the next step, the
+   * session or the PR that waits on the answer ("the EU launch deploy",
+   * "session 'Pricing page' starts"). Decision E (needs-truth §5): a needs-you
+   * row says what to do, WHAT IT UNBLOCKS, who asked and since when.
+   *
+   * DECLARED by the agent with the hand-over, like `why`, and expected when
+   * an agent hands a slot to the person: a hand-over without it is stamped
+   * `ASK_UNBLOCKS_DEFAULT` and the agent is warned (`slotsMissingUnblocks`,
+   * api `slot-asked-event.ts`); a system producer's slot reads it from its cause
+   * (`effectiveSlotUnblocks`, `@synap-core/types/ask`). Cleared with the other
+   * ownership fields when the slot goes back to the agent.
+   */
+  unblocks?: string;
+  /**
    * WHEN the slot became the human's — stamped the moment `owner` becomes
    * `human`, and cleared with it. Mirrors `delegatedAt` accompanying
    * `delegatedTo` and `returnedAt` accompanying `returnedReason`: the server
@@ -2142,6 +2156,16 @@ export interface CapabilitySkillDef {
    * it on an approved skill demotes the skill (a RE_APPROVAL field).
    */
   urls?: string[];
+  /**
+   * How this verb's parameters are read from its intent's ONE input
+   * (`capability_intents.input_schema`; intent actions, decision 5B,
+   * 2026-10-28): `{ "params": { "content": "$.text", "type": { "const":
+   * "schedule" } } }` — path copy and constants, no expressions. Lets a pod
+   * app ask the person's tools for the intent without knowing this verb.
+   * Projected onto `skills.input_map` only from an official template, and
+   * validated on install; a RE_APPROVAL field. Absent = not offered to apps.
+   */
+  inputMap?: Record<string, unknown>;
 }
 
 /**

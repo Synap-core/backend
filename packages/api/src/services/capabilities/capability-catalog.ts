@@ -572,9 +572,9 @@ export { capabilityNextAction } from "./capability-enable-link.js";
 
 /**
  * The ONE derivation of the user's live provider → connectionId map from the
- * broker's connection list (FIRST connection wins — the same dedup
- * `dedupeConnections` enforces on the registry, so a duplicate provider is a
- * transient anomaly, not a real fork). `loadConnState` (the catalog) and both
+ * broker's connection list (FIRST connection wins: the reconcile revokes the
+ * connections a reconnect leaves behind, `staleConnectionIds`, so a duplicate
+ * provider is a transient anomaly, not a real fork). `loadConnState` (the catalog) and both
  * `connectors.providers` doors (tRPC + Hub REST) read THIS projection, so
  * "which providers are connected, and to what" can never fork across surfaces.
  */

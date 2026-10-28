@@ -29,6 +29,7 @@ import {
 import { sessionCriteriaSchema } from "../../schemas/session-criteria.js";
 import { isHttpUrl } from "@synap/shared-utils";
 import {
+  ASK_LIMITS,
   ASK_LOOKED_AT_KINDS,
   AnswerProvenanceSchema,
   AskAnswerValueSchema,
@@ -97,7 +98,13 @@ import {
   type AgentHandOffDecision,
 } from "./agent-hand-off.js";
 import { archivedAnswerHistory } from "./answer-history.js";
-import { logSlotsAsked, stampAskProvenance } from "./slot-asked-event.js";
+import {
+  logSlotsAsked,
+  slotsMissingUnblocks,
+  stampAskProvenance,
+  unblocksAdvisedMessage,
+  withDefaultUnblocks,
+} from "./slot-asked-event.js";
 import type { FollowOutcome } from "./follow-playbook.js";
 import {
   closedRunRefusal,
@@ -131,6 +138,8 @@ export interface UpdateFocusSessionParams {
     owner?: ExpectedOutput["owner"];
     blockedReason?: ExpectedOutput["blockedReason"];
     why?: ExpectedOutput["why"];
+    /** What moves when the person answers — required with `owner: 'human'` from an agent. */
+    unblocks?: ExpectedOutput["unblocks"];
     /**
      * WHERE the deliverable lives / where the person must go. Accepted HERE and
      * not only on the wholesale array because this is the door an agent uses to
@@ -434,6 +443,16 @@ export const expectedOutputWireSchema = z.object({
   owner: z.enum(["human", "agent"]).optional(),
   blockedReason: z.enum(BLOCKED_REASONS).optional(),
   why: z.string().max(500).optional(),
+  // WHAT MOVES on the person's answer — the agent's declaration, like `why`
+  // (decision E). Required when an agent hands a slot over
+  // (`slotsMissingUnblocks`), not at the parse: a wholesale patch may carry a
+  // stored slot that predates it.
+  unblocks: z
+    .string()
+    .trim()
+    .min(1)
+    .max(ASK_LIMITS.unblocksMaxChars)
+    .optional(),
   // Server-stamped alongside `owner: 'human'` (see `reconcileOwedSince`). It is
   // ON the wire only so a caller round-tripping a stored slot does not lose it
   // at the parse — never so a client can author a time it did not observe; the
@@ -604,6 +623,8 @@ export const CLIENT_DECLARABLE_OUTPUT_FIELDS = [
   "owner",
   "blockedReason",
   "why",
+  // What the answer unblocks — the declarer's word, like `why` (decision E).
+  "unblocks",
   // The pointer the declarer supplies. Declaring WHERE something lives is not a
   // claim that it landed, so it closes nothing — same footing as `why`.
   "ref",
@@ -704,6 +725,9 @@ export const SERVER_OWNED_OUTPUT_FIELDS = [
   "owner",
   "blockedReason",
   "why",
+  // Same erasure reason as `why`: renaming a sibling must not drop what the
+  // answer unblocks.
+  "unblocks",
   // Listed for ERASURE, not authority (see the docblock above): a browser that
   // has never heard of `ref` reads the array, renames a sibling, sends it back —
   // and must not silently drop the door the agent put on the card.
@@ -1312,7 +1336,8 @@ export function droppedAskWarnings(
  * reviewer — `claimed`.
  *
  * The outcomes must stay tellable apart. `completed` = claim recorded AND
- * verified by evidence; `claimed` = claim recorded, no evidence yet; `refused`
+ * verified by evidence (or the slot was already met: nothing left to verify);
+ * `claimed` = claim recorded, no evidence yet; `refused`
  * is the floor: the slot is the human's and the agent may not close it —
  * actionable, the caller should stop claiming the work is done. `no_match` is
  * the DOCUMENTED contract of this field, not an error — but a caller still has
@@ -1328,7 +1353,7 @@ export type CompleteOutputOutcome = {
    * the evidence verdict closed.)
    */
   completed: number;
-  /** Of `completed`, the slots the evidence verdict stamped done. */
+  /** Of `completed`, the slots that are done: already met, or stamped by the evidence verdict. */
   verified?: number;
   /** Matching slots REFUSED because `owner: 'human'`. */
   refusedHumanOwned: number;
@@ -1358,7 +1383,12 @@ export function withEvidenceVerdict(
   ).length;
   if (verified === 0) return report;
   const { message: _pending, ...rest } = report;
-  return { ...rest, verified, result: "completed" };
+  // Slots the report already counted as met (an earlier verdict) stay counted.
+  return {
+    ...rest,
+    verified: (report.verified ?? 0) + verified,
+    result: "completed",
+  };
 }
 
 /** The outputs array a patch produced, plus the report of what it refused. */
@@ -1371,21 +1401,38 @@ export interface OutputMutationResult {
 }
 
 /**
- * Turn the two match counts into the verdict + its sentence. A recorded claim
+ * Turn the match counts into the verdict + its sentence. A recorded claim
  * reads `claimed` here; {@link withEvidenceVerdict} upgrades it to `completed`
  * once the evidence verdict has run.
+ *
+ * `alreadyDone`: of `completed`, the slots that were ALREADY met (`status:
+ * "done"`, by any door) before this call. When every matched slot is already
+ * met there is no claim left to verify, so the verdict is `completed` now: the
+ * evidence verdict never runs for a done slot, so it could not upgrade a
+ * `claimed` here, and the caller was told "waits for review" about a slot the
+ * same reply showed done (finding 3790d851).
  */
 export function describeCompleteOutput(
   label: string,
   completed: number,
-  refusedHumanOwned: number
+  refusedHumanOwned: number,
+  alreadyDone = 0
 ): CompleteOutputOutcome {
+  if (completed > 0 && alreadyDone === completed) {
+    return {
+      label,
+      completed,
+      refusedHumanOwned,
+      verified: alreadyDone,
+      result: "completed",
+    };
+  }
   if (completed > 0) {
     return {
       label,
       completed,
       refusedHumanOwned,
-      verified: 0,
+      verified: alreadyDone,
       result: "claimed",
       message: `Recorded your claim on "${label}" — a claim is not a verdict. No evidence is attributed to it yet, so it waits for review. Attach evidence and it is verified automatically: produce the object inside this session (record it against this slot's key), or set the slot's \`ref\` to it.`,
     };
@@ -1464,6 +1511,7 @@ export function applyOutputMutations(
           ? { blockedReason: add.blockedReason }
           : {}),
         ...(add.why !== undefined ? { why: add.why } : {}),
+        ...(add.unblocks !== undefined ? { unblocks: add.unblocks } : {}),
         // `null` here is the same CLEAR the wire uses; a brand-new slot has
         // nothing to clear, so it simply carries no key.
         ...(add.ref ? { ref: add.ref } : {}),
@@ -1486,6 +1534,7 @@ export function applyOutputMutations(
     const keys = deriveSlotKeys(next);
     let completed = 0;
     let refused = 0;
+    let alreadyDone = 0;
     next = next.map((o, i) => {
       if (o.label !== label && keys[i] !== label) return o;
       if (o.owner === "human") {
@@ -1494,10 +1543,19 @@ export function applyOutputMutations(
       }
       completed += 1;
       // Already verified (any door) or already claimed: nothing to record.
-      if (o.status === "done" || o.claimedDone === true) return o;
+      if (o.status === "done") {
+        alreadyDone += 1;
+        return o;
+      }
+      if (o.claimedDone === true) return o;
       return { ...o, claimedDone: true };
     });
-    completeOutput = describeCompleteOutput(label, completed, refused);
+    completeOutput = describeCompleteOutput(
+      label,
+      completed,
+      refused,
+      alreadyDone
+    );
   }
 
   // WITHDRAW a slot — the explicit verb an agent's upsert-only list leaves for
@@ -1758,6 +1816,52 @@ export async function updateFocusSession(
           reason: unreachableOutputRefError(unreachable),
         };
       }
+    }
+  }
+
+  // WHAT IT UNBLOCKS (decision E, needs-truth §5): an AGENT that hands the
+  // person a slot says what moves on the answer. Read on the slots this patch
+  // would newly pose (`slotsMissingUnblocks`, the provenance stamp's own
+  // rule), before the membrane. ADVISED, never refused (rv-be-needs F1): a
+  // slot that says nothing lands with `ASK_UNBLOCKS_DEFAULT` and the reply's
+  // `warnings` says so, so the agent can name the real next step next time.
+  let unblocksAdvice: string | null = null;
+  if (
+    params.agentUserId &&
+    (params.expectedOutputs !== undefined || params.addOutput)
+  ) {
+    const stored: OutputItem[] = Array.isArray(existing.expectedOutputs)
+      ? (existing.expectedOutputs as OutputItem[])
+      : [];
+    const missing = slotsMissingUnblocks(
+      stored,
+      applyOutputMutations(
+        stored,
+        {
+          ...(params.expectedOutputs !== undefined
+            ? { expectedOutputs: params.expectedOutputs }
+            : {}),
+          ...(params.addOutput ? { addOutput: params.addOutput } : {}),
+        },
+        { keepUnlisted: true }
+      ).outputs
+    );
+    if (missing.length > 0) {
+      params = {
+        ...params,
+        ...(params.expectedOutputs !== undefined
+          ? {
+              expectedOutputs: withDefaultUnblocks(
+                params.expectedOutputs,
+                missing
+              ),
+            }
+          : {}),
+        ...(params.addOutput
+          ? { addOutput: withDefaultUnblocks([params.addOutput], missing)[0] }
+          : {}),
+      };
+      unblocksAdvice = unblocksAdvisedMessage(missing);
     }
   }
 
@@ -2388,6 +2492,7 @@ export async function updateFocusSession(
     ? [
         ...droppedAskWarnings(declaredOutputs, outputsAfter),
         ...restatedAskHints(declaredOutputs),
+        ...(unblocksAdvice ? [unblocksAdvice] : []),
       ]
     : [];
 

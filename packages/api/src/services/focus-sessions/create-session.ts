@@ -283,6 +283,29 @@ export interface CreateFocusSessionParams {
    * The POD files it ({@link GOAL_LOOP_AUTHOR}), not the owner it asks.
    */
   goalLoopOf?: string;
+  /**
+   * The id this door minted when the start was HELD (a held-writes pack or a
+   * join that kept it; the proposal's `data.id`): the replay passes it back
+   * (`deferred-writes.ts`), so the session lands under the id the proposal
+   * names.
+   * Same contract as `entities.create.proposedEntityId` and
+   * `documents.createDocument.proposedDocumentId` (#381): a free id is used;
+   * the caller's own row already at that id is returned (a replay run twice),
+   * never a second row; anyone else's row there ⇒ a fresh id.
+   */
+  proposedSessionId?: string;
+  /**
+   * INTERNAL ONLY — session governance stamped at birth as
+   * `metadata.governance` (a server-owned key, `session-metadata.ts`), which
+   * the gate re-reads on every AI write that carries this session
+   * (`loadSessionGovernanceContext`): `forceProposeWrites` turns each agent
+   * write in the session into a proposal. No public door (tRPC, Hub, MCP)
+   * declares it; `onboarding.startFirstSession` is its caller (plan v1 §2.6).
+   * Written on the DIRECT path only: a `proposed` or `deduped` result carries
+   * no stamp, so the caller must treat those as not done (and pass
+   * `forceCreate`).
+   */
+  governance?: { forceProposeWrites: true };
 }
 
 /**
@@ -413,6 +436,22 @@ export async function createFocusSession(
     clientKey = null,
   } = params;
   const templateId = requestedTemplateId;
+
+  // A caller-named id (`proposedSessionId`, a held start's replay) that already
+  // names a row: the caller's own session ⇒ this start already landed (a
+  // replay run twice): return it, before any check that could now refuse it;
+  // any other row ⇒ not ours to reuse: mint a fresh id below. Same contract
+  // as `proposedEntityId` / `proposedDocumentId`.
+  let heldSessionId: string | null = null;
+  // A uuid only: comparing the uuid column to other text throws in Postgres.
+  if (params.proposedSessionId && UUID_RE.test(params.proposedSessionId)) {
+    const taken = await db.query.focusSessions.findFirst({
+      where: eq(focusSessions.id, params.proposedSessionId),
+    });
+    if (taken?.userId === userId) return { status: "created", session: taken };
+    if (!taken) heldSessionId = params.proposedSessionId;
+  }
+
   // The agent that starts a session is on its roster. `origin: "agent"` says
   // AN agent opened it; only `agentIds` says WHICH, and every surface names
   // the agent from `agentIds` alone — without this, a session Raycast started
@@ -665,7 +704,8 @@ export async function createFocusSession(
   // it the prospective id the executor inserts at. Left to the column default,
   // the receipt minted its own random id that no row ever had (live receipt
   // 91191f04, 2026-09-14). The dedup hash strips `id`, so retries still dedup.
-  const sessionId = randomUUID();
+  // A held start's replay brings back the id it was first given (see above).
+  const sessionId = heldSessionId ?? randomUUID();
 
   // TRACK PARAMS (0274) — resolved BEFORE the membrane so a mistyped answer
   // refuses its author rather than landing in a human's queue. Only when no
@@ -982,6 +1022,7 @@ export async function createFocusSession(
             {
               clientKey,
               adoptedAt: new Date().toISOString(),
+              ...(params.governance ? { governance: params.governance } : {}),
               // What this run was actually given — same key, same meaning as
               // the run funnel's (`RUN_PARAMS_METADATA_KEY`). Only when a
               // playbook resolved; an ad-hoc session has no params to store.
@@ -1021,11 +1062,15 @@ export async function createFocusSession(
           title ||
           derivedTitle ||
           paramResolution ||
+          params.governance ||
           isProbeWriteContext()
             ? {
                 metadata: stampProbeMarker({
                   ...(clientKey
                     ? { clientKey, ...conversationCwdPatch(clientKey) }
+                    : {}),
+                  ...(params.governance
+                    ? { governance: params.governance }
                     : {}),
                   ...(title
                     ? titleSourcePatch(agentUserId ? "agent" : "human")

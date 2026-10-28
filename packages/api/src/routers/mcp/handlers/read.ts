@@ -367,6 +367,44 @@ export const readHandlers: McpHandlerMap = {
     const proposal = await caller.get({ proposalId });
     return ok(detail === "full" ? proposal : leanProposal(proposal));
   },
+  /**
+   * THE needs-you read (decision E) — the twin of Hub `GET /needs-you`: both
+   * call `signals.needsYou`, so an agent and an outside reader see the same
+   * rows by fold and the same count.
+   */
+  synap_needs_you: async (ctx: McpToolContext): Promise<CallToolResult> => {
+    const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
+    requireScope(apiKeyScopes, "mcp.read", toolName);
+    const str = (v: unknown) =>
+      typeof v === "string" && v.trim() !== "" ? v.trim() : undefined;
+    const limit =
+      typeof args.limit === "number" && Number.isFinite(args.limit)
+        ? Math.min(200, Math.max(1, Math.floor(args.limit)))
+        : undefined;
+    const callerCtx = await createHubProtocolCallerContext(
+      userId,
+      apiKeyScopes,
+      undefined,
+      undefined,
+      undefined,
+      agentUserId
+    );
+    const { signalsRouter } = await import("../../signals.js");
+    const caller = signalsRouter.createCaller(
+      callerCtx as Parameters<typeof signalsRouter.createCaller>[0]
+    );
+    return ok(
+      await caller.needsYou({
+        ...(str(args.workspaceId)
+          ? { workspaceId: str(args.workspaceId) }
+          : {}),
+        ...(str(args.projectId) ? { projectId: str(args.projectId) } : {}),
+        ...(str(args.trackId) ? { trackId: str(args.trackId) } : {}),
+        ...(str(args.sessionId) ? { sessionId: str(args.sessionId) } : {}),
+        ...(limit ? { limit } : {}),
+      })
+    );
+  },
   synap_list_proposals: async (
     ctx: McpToolContext
   ): Promise<CallToolResult> => {

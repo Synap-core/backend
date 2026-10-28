@@ -43,6 +43,10 @@ import {
 import { secrets, tools, workspaces } from "@synap/database/schema";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import {
+  describeMessagingService,
+  UNIPILE_NOT_CONFIGURED_MESSAGE,
+} from "../connectors/unipile-connection.js";
+import {
   BrokerRefusalError,
   enrichmentProviderRegistry,
   getMessagingConnector,
@@ -798,119 +802,13 @@ export const connectorsRouter = router({
     }),
 
   /**
-   * Get messaging service configuration status (keys are never returned to the client).
-   *
-   * Reads VAULT → `settings.messaging` → env, matching the Unipile resolver's
-   * precedence. Kept in step with `saveMessagingConfig` (which now writes to the
-   * vault) so a fresh save doesn't report "not configured".
-   *
-   * `workspaceId` is optional for backwards compatibility; when omitted this
-   * keeps the legacy unordered `findFirst()` behaviour.
+   * The messaging service's connection state (never a key). The ONE Unipile
+   * connection is the installed `unipile-linkedin` capability's v2 key — set
+   * on the capability, so there is no save door here.
    */
-  getMessagingConfig: protectedProcedure
-    .input(z.object({ workspaceId: z.string().uuid().optional() }).optional())
-    .query(async ({ input, ctx }) => {
-      const database = await getDb();
-      // Same rule as getNangoConfig: a caller-supplied workspaceId must be
-      // backed by membership of that workspace.
-      if (input?.workspaceId) {
-        const membership = await getWorkspaceMembership(
-          database,
-          input.workspaceId,
-          ctx.userId
-        );
-        if (!membership) throw new TRPCError({ code: "FORBIDDEN" });
-      }
-      const ws = await database.query.workspaces.findFirst({
-        ...(input?.workspaceId
-          ? { where: eq(workspaces.id, input.workspaceId) }
-          : {}),
-        columns: { settings: true, ownerId: true },
-      });
-
-      const vaultCfg = ws?.ownerId
-        ? await getServiceSecret("messaging-connector", ws.ownerId)
-        : null;
-      const cfg = ((ws?.settings as Record<string, unknown>)?.messaging ??
-        {}) as Record<string, unknown>;
-
-      const hasDsn =
-        !!vaultCfg?.dsn ||
-        !!(cfg.unipileDsn as string | undefined) ||
-        !!process.env.UNIPILE_DSN;
-      const hasApiKey =
-        !!vaultCfg?.apiKey ||
-        !!(cfg.unipileApiKey as string | undefined) ||
-        !!process.env.UNIPILE_API_KEY;
-      const hasWebhookSecret =
-        !!vaultCfg?.webhookSecret ||
-        !!(cfg.unipileWebhookSecret as string | undefined) ||
-        !!process.env.UNIPILE_WEBHOOK_SECRET;
-      const fromEnv =
-        !vaultCfg?.dsn &&
-        !vaultCfg?.apiKey &&
-        !cfg.unipileDsn &&
-        !cfg.unipileApiKey;
-      return {
-        configured: hasDsn && hasApiKey,
-        hasDsn,
-        hasApiKey,
-        hasWebhookSecret,
-        fromEnv,
-      };
-    }),
-
-  /**
-   * Save messaging (Unipile) credentials to the VAULT (server-encrypted).
-   * Pass undefined to leave a key unchanged; pass empty string to clear it.
-   *
-   * SECURITY: requires admin/owner of the named workspace — see
-   * `requirePodConnectorWorkspace`.
-   *
-   * STORAGE: writes the vault secret `(workspace.ownerId, "messaging-connector")`
-   * with fields `dsn` / `apiKey` / `webhookSecret` — the EXACT shape the Unipile
-   * resolver already reads first (`connectors/index.ts` registerMessagingType
-   * "unipile"). The legacy plaintext `settings.messaging` is left untouched (no
-   * migration in this wave); the resolver still falls back to it.
-   */
-  saveMessagingConfig: podAdminProcedure
-    .input(
-      z.object({
-        unipileDsn: z.string().optional(),
-        unipileApiKey: z.string().optional(),
-        unipileWebhookSecret: z.string().optional(),
-      })
-    )
-    .mutation(async ({ input }) => {
-      const ws = await requirePodConnectorWorkspace();
-      assertVaultWritable();
-      const ownerId = vaultOwnerFor(ws);
-
-      const existing =
-        (await getServiceSecret("messaging-connector", ownerId)) ?? {};
-      const merged: Record<string, string> = { ...existing };
-      // Input names are Unipile-flavoured; the vault fields are the generic
-      // dsn/apiKey/webhookSecret the resolver expects.
-      const fieldMap = [
-        ["dsn", input.unipileDsn],
-        ["apiKey", input.unipileApiKey],
-        ["webhookSecret", input.unipileWebhookSecret],
-      ] as const;
-      for (const [field, value] of fieldMap) {
-        if (value === undefined) continue;
-        if (value === "") delete merged[field];
-        else merged[field] = value;
-      }
-
-      await upsertServiceSecret(
-        "messaging-connector",
-        ownerId,
-        "Messaging (Unipile)",
-        merged
-      );
-
-      return { success: true };
-    }),
+  getMessagingConfig: protectedProcedure.query(() =>
+    describeMessagingService()
+  ),
 
   /**
    * Probe for sibling services on the same parent domain as PUBLIC_URL.
@@ -1237,13 +1135,24 @@ export const connectorsRouter = router({
     }
 
     async function probeUnipile(): Promise<ServiceHealth> {
-      const connector = await getMessagingConnector();
+      // An installed key the pod cannot read throws: report it, never as
+      // "not configured" and never by failing every other row.
+      const connector = await getMessagingConnector().catch(
+        (err: unknown) => err as Error
+      );
+      if (connector instanceof Error)
+        return {
+          configured: true,
+          reachable: false,
+          authenticated: false,
+          error: connector.message,
+        };
       if (!connector)
         return {
           configured: false,
           reachable: false,
           authenticated: false,
-          error: "DSN or API key not configured",
+          error: UNIPILE_NOT_CONFIGURED_MESSAGE,
         };
       // TODO: becomes a capability cast (Credentialed/probe()).
       const result = await (connector as UnipileConnector).probe();

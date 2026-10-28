@@ -76,7 +76,7 @@ beforeEach(() => {
   h.rowReads = [[{ id: "secrets-row-1" }]];
   h.verify.mockResolvedValue(CLAIMS);
   h.enqueue.mockResolvedValue(undefined);
-  h.reconcile.mockResolvedValue({ ok: true, capabilities: 1 });
+  h.reconcile.mockResolvedValue({ ok: true, capabilities: 1, superseded: [] });
 });
 
 describe("POST /sync-trigger", () => {

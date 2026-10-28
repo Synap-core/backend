@@ -63,7 +63,12 @@ describe("MCP read-tool classification (derived from the live tool list)", () =>
         : d.bound === "person"
           ? [d.subject]
           : d.bound === "narrowed"
-            ? [d.subject, ...d.full]
+            ? // A door narrowed on a gate verb (`capability … run`, the intent
+              // actions doors) is admitted by that verb, not by a read of its
+              // subject; what it reads is still `full`.
+              d.action === "read"
+              ? [d.subject, ...d.full]
+              : [...d.full]
             : [];
     const unknown = doors.flatMap(([n, d]) =>
       declared(d)

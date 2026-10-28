@@ -418,6 +418,11 @@ http
         if (resolveCommandName(payload) !== "read-host-log") {
           return respond(res, 403, { error: "wrong command" });
         }
+        // The owner's policy (D3) binds a pushed read as it binds a pulled one.
+        assertCommandAllowed(
+          readPodAgentPolicy(policyFile(DEPLOY_DIR)),
+          "read-host-log"
+        );
         if (consumeSignedCommandReceipt(payload) === "replayed") {
           return respond(res, 409, { error: "replay" });
         }
@@ -464,6 +469,11 @@ http
         assertPushable(payload);
         if (resolveCommandName(payload) !== "read-docker-logs")
           return respond(res, 403, { error: "wrong command" });
+        // The owner's policy (D3) binds a pushed read as it binds a pulled one.
+        assertCommandAllowed(
+          readPodAgentPolicy(policyFile(DEPLOY_DIR)),
+          "read-docker-logs"
+        );
         if (consumeSignedCommandReceipt(payload) === "replayed") {
           return respond(res, 409, { error: "replay" });
         }

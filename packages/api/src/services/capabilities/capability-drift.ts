@@ -27,7 +27,11 @@
  */
 
 import { z } from "zod";
-import type { ToolVerbCatalogEntry } from "@synap/database/schema";
+import type {
+  SkillInputMap,
+  ToolVerbCatalogEntry,
+} from "@synap/database/schema";
+import { readInputMap } from "./intent-input.js";
 import { paramPlaceholderTokens } from "../_shared/interpolate.js";
 import {
   isBroadUrlPattern,
@@ -68,6 +72,11 @@ export function canonicalJson(value: unknown): string {
  * teaching the comparator a new field invalidates every stamp it ever wrote and
  * every pod re-diffs exactly once. Absent (legacy) = pre-versioned = re-diff.
  *
+ * v13 = v12 + the skill-row `input_map` COLUMN (migration 0368): how a pod
+ *      app's intent input becomes the verb's parameters (`projectInputMap`).
+ *      A v12 stamp certified a container under a comparator that never read
+ *      it, so a template's new map would reach no pod already stamped;
+ *      retiring v12 stamps makes each container re-diff once.
  * v12 = v11 + `metadata.metering` (the verb's DECLARED meter — see
  *      `declaredMetering`) + a DECLARED-none `intent: null`, which the applier
  *      now writes (clearing a stored intent). A v11 stamp certified a container
@@ -127,7 +136,7 @@ export function canonicalJson(value: unknown): string {
  * v2 = the ten `PROJECTED_SKILL_FIELDS` + the projected verb catalog (intent).
  * v1 (never written) = the original providerSpec/parameters/code/description.
  */
-export const DRIFT_COMPARATOR_VERSION = 12;
+export const DRIFT_COMPARATOR_VERSION = 13;
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return (
@@ -186,6 +195,9 @@ export interface InstalledSkillRow {
   /** The live row's `skills.url_patterns` column (0330) — see the entry in
    *  `PROJECTED_SKILL_FIELDS`. */
   urlPatterns?: string[] | null;
+  /** The live row's `skills.input_map` column (0368) — see the entry in
+   *  `PROJECTED_SKILL_FIELDS`. */
+  inputMap?: unknown;
   /** The live row's `skills.metadata` bag. Only its `allowedHosts` and `readOnly`
    *  keys are definition-owned; every other key is DB state (see
    *  the `SKILL_METADATA_*` constants). */
@@ -223,6 +235,11 @@ export interface DefinitionSkillRow {
    * `skills.url_patterns` by {@link projectUrlPatterns}.
    */
   urls?: readonly string[] | null;
+  /**
+   * How the verb's parameters are read from its intent's one input, projected
+   * onto `skills.input_map` by {@link projectInputMap}.
+   */
+  inputMap?: unknown;
 }
 
 /**
@@ -258,6 +275,25 @@ export function projectUrlPatterns(
     out.push(p);
   }
   return out.length > 0 ? out : null;
+}
+
+/**
+ * THE applier's `skills.input_map` projection (0368, intent actions decision
+ * 5B) — and the comparator's `expected`, so the two cannot disagree. Kept only
+ * when the skill declares an intent, the map reads as the mapping language
+ * (`readInputMap`), and the definition comes from the OFFICIAL vendor: a map
+ * is what lets a pod app's input reach a verb, so a third-party package cannot
+ * route apps to its verbs by declaring one (routing is not authorization).
+ * Always a value, never `undefined`: a template that drops its map clears the
+ * column, and the verb stops being offered to apps.
+ */
+export function projectInputMap(
+  skill: Pick<DefinitionSkillRow, "inputMap" | "intent">,
+  opts: { officialSource: boolean }
+): SkillInputMap | null {
+  if (!opts.officialSource) return null;
+  if (typeof skill.intent !== "string" || !skill.intent) return null;
+  return readInputMap(skill.inputMap);
 }
 
 /** The routing intent a reader verb declares (catalog `intent`, migration 0329). */
@@ -624,6 +660,15 @@ export const PROJECTED_SKILL_FIELDS: Record<
     // (`cp_catalog_cache`'s official source): their broad patterns are kept.
     expected: (d) => projectUrlPatterns(d, { officialSource: true }),
     actual: (i) => i.urlPatterns ?? null,
+  },
+  /**
+   * How an app's input becomes this verb's parameters (0368). Always written
+   * (`null` = not offered to apps), so it never skips: a template that drops
+   * its map converges the column to null. Official templates, as above.
+   */
+  inputMap: {
+    expected: (d) => projectInputMap(d, { officialSource: true }),
+    actual: (i) => i.inputMap ?? null,
   },
   // NARROWED ON PURPOSE. The applier's `.set({ metadata })` writes exactly the
   // definition-owned keys of this bag (`projectSkillMetadata` above); every

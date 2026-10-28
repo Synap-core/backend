@@ -97,6 +97,21 @@ export const UIPreferencesSchema = z
     defaultView: z.enum(["list", "grid", "timeline"]).optional(),
     /** Where to open entity detail: floating | side | modal */
     entityOpenMode: z.enum(["floating", "side", "modal"]).optional(),
+    /**
+     * The view a person prefers per kind (onboarding §2.3). Declared here
+     * because this object strips unknown keys.
+     */
+    kindViews: z
+      .record(
+        z.string(),
+        z.object({
+          view: z.string(),
+          type: z.string(),
+          at: z.string(),
+          source: z.enum(["onboarding", "settings"]),
+        })
+      )
+      .optional(),
     /** How the person reviews: grouping + per-package layouts. */
     review: ReviewPreferencesSchema.optional(),
   })
