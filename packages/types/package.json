@@ -1,6 +1,6 @@
 {
   "name": "@synap-core/types",
-  "version": "1.12.9",
+  "version": "1.12.10",
   "description": "Shared TypeScript types and Zod schemas for the Synap platform",
   "type": "module",
   "publishConfig": {
@@ -31,6 +31,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./*": {
+      "types": "./dist/*/index.d.ts",
+      "import": "./dist/*/index.js"
     },
     "./focus-sessions": {
       "types": "./dist/focus-sessions/index.d.ts",
@@ -75,6 +79,10 @@
     "./lifecycle": {
       "types": "./dist/lifecycle/index.d.ts",
       "import": "./dist/lifecycle/index.js"
+    },
+    "./onboarding/start": {
+      "types": "./dist/onboarding/index.d.ts",
+      "import": "./dist/onboarding/index.js"
     },
     "./renderables": {
       "types": "./dist/renderables/index.d.ts",
@@ -225,6 +233,10 @@
       "types": "./dist/proposals/capability-run.d.ts",
       "import": "./dist/proposals/capability-run.js"
     },
+    "./proposals/review-package": {
+      "types": "./dist/proposals/review-package.d.ts",
+      "import": "./dist/proposals/review-package.js"
+    },
     "./text": {
       "types": "./dist/text/index.d.ts",
       "import": "./dist/text/index.js"
@@ -281,6 +293,10 @@
       "types": "./dist/capability-intents/index.d.ts",
       "import": "./dist/capability-intents/index.js"
     },
+    "./skill-code": {
+      "types": "./dist/skill-code/index.d.ts",
+      "import": "./dist/skill-code/index.js"
+    },
     "./navigation": {
       "types": "./dist/navigation/index.d.ts",
       "import": "./dist/navigation/index.js"
@@ -316,6 +332,14 @@
     "./needs-you": {
       "types": "./dist/needs-you/index.d.ts",
       "import": "./dist/needs-you/index.js"
+    },
+    "./needs-you/rule": {
+      "types": "./dist/needs-you/rule.d.ts",
+      "import": "./dist/needs-you/rule.js"
+    },
+    "./work-release": {
+      "types": "./dist/work-release/index.d.ts",
+      "import": "./dist/work-release/index.js"
     },
     "./lens": {
       "types": "./dist/lens/index.d.ts",
@@ -397,6 +421,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "acorn": "^8.17.0",
+    "acorn-walk": "^8.3.5",
     "drizzle-orm": "^0.45.1",
     "drizzle-zod": "0.8.3",
     "yjs": "^13.6.11",

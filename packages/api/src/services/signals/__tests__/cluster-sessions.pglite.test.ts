@@ -64,6 +64,7 @@ function cluster(fp: string, sessionId: string): ProposalCluster {
     class: "objectWork",
     lifetimeHours: null,
     reviewLater: false,
+    package: "data-changes",
     count: 1,
     sampleProposalIds: [`p-${fp}`],
     sources: [],

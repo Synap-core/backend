@@ -73,6 +73,8 @@ export const ASK_LIMITS = {
   /** "What I looked at" — the objects the agent read before asking. */
   lookedAtMax: 8,
   lookedAtIdMaxChars: 200,
+  /** "What it unblocks" — one line on a human-owned slot (decision E). */
+  unblocksMaxChars: 200,
 } as const;
 
 // ─── Modes ──────────────────────────────────────────────────────────────────
@@ -132,13 +134,31 @@ export function atMostOneRecommended(
  * level deep. Strict (an unknown key is refused) rather than a `z.never()`
  * field: the Hub OpenAPI generator cannot draw `never`, and every route whose
  * body carries an ask dropped out of `hub-openapi.json`.
+ *
+ * The wording is given to BOTH zod majors this package admits
+ * (`^3.25.0 || ^4.0.0`): zod 4 reads `error`, zod 3 reads `errorMap` and
+ * ignores `error`. The root workspace (app, browser, relay) resolves zod 3, so
+ * with `error` alone they read zod 3's default wording. A variable, not a
+ * literal, because zod 4's param type does not name `errorMap`.
+ * `zod-majors.test.ts` parses under each major.
  */
-const AskFollowUpOptionSchema = z.strictObject(AskOptionSchema.shape, {
-  error: (iss) =>
-    iss.code === "unrecognized_keys" && iss.keys.includes("followUp")
-      ? "a follow-up goes one level deep"
-      : undefined,
-});
+const oneLevelDeep = (iss: { code: string; keys?: unknown }) =>
+  iss.code === "unrecognized_keys" &&
+  Array.isArray(iss.keys) &&
+  iss.keys.includes("followUp")
+    ? "a follow-up goes one level deep"
+    : undefined;
+const followUpOptionParams = {
+  error: oneLevelDeep,
+  errorMap: (
+    iss: { code: string; keys?: unknown },
+    ctx: { defaultError: string }
+  ) => ({ message: oneLevelDeep(iss) ?? ctx.defaultError }),
+};
+const AskFollowUpOptionSchema = z.strictObject(
+  AskOptionSchema.shape,
+  followUpOptionParams
+);
 
 /**
  * The question a choose option opens once picked (the decision tree, one
@@ -1484,6 +1504,8 @@ export {
   askFate,
   isAskReviewLater,
   effectiveAskCause,
+  effectiveSlotUnblocks,
+  ASK_UNBLOCKS_DEFAULT,
   stripAskVerbPrefix,
   askTextRestates,
   stripLeadingRestatement,

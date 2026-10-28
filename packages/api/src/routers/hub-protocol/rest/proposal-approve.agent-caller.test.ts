@@ -70,7 +70,7 @@ const ID = "00000000-0000-4000-8000-000000000001";
 const HUMAN = "human-1";
 const AGENT = "agent-1";
 
-type Who = { agentUserId?: string; keyType?: string };
+type Who = { agentUserId?: string; keyType?: string; keyHubId?: string };
 
 function app(who: Who): HubHono {
   const a: HubHono = new OpenAPIHono<{ Variables: HubVariables }>();
@@ -79,6 +79,7 @@ function app(who: Who): HubHono {
     c.set("scopes", ["hub-protocol.read", "hub-protocol.write"]);
     if (who.agentUserId) c.set("agentUserId", who.agentUserId);
     if (who.keyType) c.set("keyType", who.keyType as never);
+    if (who.keyHubId) c.set("keyHubId", who.keyHubId);
     await next();
   });
   registerProposalsRoutes(a);
@@ -150,6 +151,39 @@ describe("Hub REST proposal-approve doors refuse an agent caller", () => {
     // Not vacuous: the request got past validation and the door to a read.
     expect(reached).toHaveBeenCalled();
   });
+});
+
+describe("F10: an integration key other than the CLI's never reviews", () => {
+  const REVIEW_DOORS = DOORS.filter(
+    (d) => d.door !== "import/apply (proposalId)"
+  );
+  for (const d of REVIEW_DOORS) {
+    it.each([
+      { kind: "custom", keyHubId: "integration:custom" },
+      { kind: "raycast", keyHubId: "integration:raycast" },
+      { kind: "openclaw (legacy)", keyHubId: "integration:openclaw" },
+    ])(`${d.door}: a $kind key → 403, nothing read`, async ({ keyHubId }) => {
+      const res = await post(
+        { keyType: "hub_inbound", keyHubId },
+        d.path,
+        d.body
+      );
+      expect(res.status).toBe(403);
+      const body = (await res.json()) as { error: string };
+      expect(body.error).toMatch(/integration key/i);
+      expect(reached).not.toHaveBeenCalled();
+    });
+
+    it(`${d.door}: CONTROL — the person's CLI integration key passes the door`, async () => {
+      const res = await post(
+        { keyType: "hub_inbound", keyHubId: "integration:cli" },
+        d.path,
+        d.body
+      );
+      expect(res.status).not.toBe(403);
+      expect(reached).toHaveBeenCalled();
+    });
+  }
 });
 
 describe("the canonical approve floor refuses an agent caller", () => {

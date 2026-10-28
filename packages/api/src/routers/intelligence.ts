@@ -12,10 +12,20 @@ import {
   workspaceProcedure,
   podProcedure,
   podAdminProcedure,
+  requireFreshAuthentication,
+  assertPodAdmin,
 } from "../trpc.js";
 import type { Context } from "../context.js";
 import { TRPCError } from "@trpc/server";
-import { db, eq, and, desc, or, like, drizzleSql } from "@synap/database";
+import {
+  db,
+  eq,
+  and,
+  desc,
+  or,
+  drizzleSql,
+  encryptServiceKey,
+} from "@synap/database";
 import {
   intelligenceCommands,
   commandRuns,
@@ -42,7 +52,11 @@ import {
 import { authoringMisses } from "../utils/template-diagnostics.js";
 import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
 import { requireUserId } from "../utils/user-scoped.js";
+import { publicServiceRow } from "../utils/intelligence-service-projection.js";
+import { assertSafeServiceUrl } from "../utils/intelligence-service-url.js";
+import { safeExternalFetch, isBlockedOutboundError } from "@synap/shared-utils";
 import { scopedDb, accessFor } from "../access/index.js";
+import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import {
   ensureAgentThread,
   getAgentIdBySlug,
@@ -170,6 +184,25 @@ const selectionContextSchema = z.object({
   documentIds: z.array(z.string().uuid()).optional(),
   text: z.string().optional(),
 });
+
+/**
+ * The WRITE floor of a shared AI command (audit F9). The scoped load above it
+ * is the READ floor: every member, viewers included, sees a
+ * `sharedScope: 'workspace'` command. Rewriting its prompt or widening its
+ * tools changes what the next teammate's run executes, so it takes its creator
+ * or an editor+ of the command's workspace (the gate `tools.update` uses, on
+ * the LOADED row).
+ */
+async function assertCommandWrite(
+  userId: string | null | undefined,
+  cmd: { workspaceId: string | null; createdBy: string | null }
+): Promise<void> {
+  if (userId && cmd.createdBy === userId) return;
+  await assertWorkspaceWrite(db, userId, {
+    workspaceId: cmd.workspaceId,
+    ownerId: cmd.createdBy,
+  });
+}
 
 export const intelligenceRouter = router({
   /** List commands for workspace */
@@ -305,6 +338,7 @@ export const intelligenceRouter = router({
           message: "Command not found",
         });
       }
+      await assertCommandWrite(ctx.userId, cmd);
       const updates: Record<string, unknown> = {
         updatedAt: new Date(),
         ...(input.title !== undefined && { title: input.title }),
@@ -365,6 +399,7 @@ export const intelligenceRouter = router({
           message: "Command not found",
         });
       }
+      await assertCommandWrite(ctx.userId, cmd);
       await db
         .delete(intelligenceCommands)
         .where(eq(intelligenceCommands.id, input.id));
@@ -1062,8 +1097,16 @@ export const intelligenceRouter = router({
    *
    * Security model: tokens travel browser → backend (HTTPS + Kratos session)
    * → service (internal Docker network for cloud, direct HTTPS for self-hosted).
-   * Tokens are never stored on Synap servers. If the service is unreachable the
-   * command is stored as `metadata.pendingConfig` and replayed on reconnect.
+   * If the service is unreachable the command is stored as
+   * `metadata.pendingConfig` and replayed on reconnect (stripped from every
+   * read: `utils/intelligence-service-projection.ts`).
+   *
+   * Pod admin only, and the target is ONE registered service named exactly
+   * (audit 2026-10-28, pod-routers F5). The pod authenticates the call with
+   * that service's stored management token, so this is the pod operating a
+   * pod-wide service, not a member's act. Before, any space member could
+   * drive it, and a `LIKE '<id>-%'` prefix match (no producer of such ids
+   * exists) reached other rows, wildcards included.
    */
   relayToService: workspaceProcedure
     .input(
@@ -1078,14 +1121,9 @@ export const intelligenceRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      requireUserId(ctx.userId);
-      // Support both exact match and slug-prefix match (a service registered
-      // as "<slug>-{userId}" is addressed by "<slug>").
+      await assertPodAdmin(requireUserId(ctx.userId));
       const service = await db.query.intelligenceServices.findFirst({
-        where: or(
-          eq(intelligenceServices.serviceId, input.serviceId),
-          like(intelligenceServices.serviceId, `${input.serviceId}-%`)
-        ),
+        where: eq(intelligenceServices.serviceId, input.serviceId),
       });
       if (!service || !service.enabled) {
         throw new TRPCError({
@@ -1134,7 +1172,7 @@ export const intelligenceRouter = router({
         await db
           .update(intelligenceServices)
           .set({ metadata: { ...meta, pendingConfig } })
-          .where(eq(intelligenceServices.serviceId, input.serviceId));
+          .where(eq(intelligenceServices.id, service.id));
         return {
           success: true,
           pending: true,
@@ -1471,17 +1509,26 @@ export const intelligenceRouter = router({
    *
    * Tests connectivity to a candidate custom IS before registering.
    * Pings /api/capabilities (required) and /api/manifest (optional).
+   *
+   * Pod admin only, like `registerCustomService` (the only reason to test is
+   * to register, and only a pod admin may). It fetches a caller-chosen URL
+   * from inside the pod and reflects what came back, so the URL passes the
+   * SSRF guard first and every request goes through `safeExternalFetch`
+   * (no redirect is followed: the key rides in the header).
    */
   testCustomServiceConnection: workspaceProcedure
     .input(z.object({ hubUrl: z.string().url(), apiKey: z.string().min(1) }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ ctx, input }) => {
       const { hubUrl, apiKey } = input;
+
+      await assertPodAdmin(ctx.userId);
+      assertSafeServiceUrl(hubUrl, "hubUrl");
 
       let capabilities: string[] = [];
       let hasManifest = false;
 
       try {
-        const capRes = await fetch(`${hubUrl}/api/capabilities`, {
+        const capRes = await safeExternalFetch(`${hubUrl}/api/capabilities`, {
           headers: { Authorization: `Bearer ${apiKey}` },
           signal: AbortSignal.timeout(8000),
         });
@@ -1497,6 +1544,9 @@ export const intelligenceRouter = router({
           : [];
       } catch (err) {
         if (err instanceof TRPCError) throw err;
+        if (isBlockedOutboundError(err)) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
+        }
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: `Could not reach ${hubUrl}. Make sure the service is running and the URL is correct.`,
@@ -1504,7 +1554,7 @@ export const intelligenceRouter = router({
       }
 
       try {
-        const mfRes = await fetch(`${hubUrl}/api/manifest`, {
+        const mfRes = await safeExternalFetch(`${hubUrl}/api/manifest`, {
           headers: { Authorization: `Bearer ${apiKey}` },
           signal: AbortSignal.timeout(5000),
         });
@@ -1521,8 +1571,17 @@ export const intelligenceRouter = router({
    *
    * Registers a custom IS endpoint for the workspace.
    * Does NOT auto-activate — use setActiveService to make it active.
+   *
+   * Pod admin only, like every other door that writes an
+   * `intelligence_services` row (`intelligence-registry.ts` says why). The
+   * row is pod-wide, and its origin becomes an audience hub auth accepts
+   * delegation tokens for: a space owner who could add one could route their
+   * space to their own server and receive a token acting as every person who
+   * chats there, with full Hub Protocol reach beyond that space. It sets a
+   * credential, so it also takes the step-up.
    */
   registerCustomService: workspaceProcedure
+    .use(requireFreshAuthentication)
     .input(
       z.object({
         displayName: z.string().min(1).max(80),
@@ -1533,17 +1592,14 @@ export const intelligenceRouter = router({
     .mutation(async ({ ctx, input }) => {
       const { displayName, hubUrl, apiKey } = input;
 
-      if (ctx.workspaceRole !== "owner" && ctx.workspaceRole !== "admin") {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "Only workspace owners and admins can register AI services.",
-        });
-      }
+      await assertPodAdmin(ctx.userId);
+      // The stored URL is fetched downstream without a check: refuse it here.
+      assertSafeServiceUrl(hubUrl, "hubUrl");
 
       // Fetch capabilities to verify connectivity
       let capabilities: string[] = [];
       try {
-        const capRes = await fetch(`${hubUrl}/api/capabilities`, {
+        const capRes = await safeExternalFetch(`${hubUrl}/api/capabilities`, {
           headers: { Authorization: `Bearer ${apiKey}` },
           signal: AbortSignal.timeout(8000),
         });
@@ -1559,6 +1615,9 @@ export const intelligenceRouter = router({
           : [];
       } catch (err) {
         if (err instanceof TRPCError) throw err;
+        if (isBlockedOutboundError(err)) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
+        }
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: "Could not reach the service. Make sure it is running.",
@@ -1568,7 +1627,7 @@ export const intelligenceRouter = router({
       // Try fetching manifest (soft-fail)
       let agentManifest: unknown = null;
       try {
-        const mfRes = await fetch(`${hubUrl}/api/manifest`, {
+        const mfRes = await safeExternalFetch(`${hubUrl}/api/manifest`, {
           headers: { Authorization: `Bearer ${apiKey}` },
           signal: AbortSignal.timeout(5000),
         });
@@ -1590,7 +1649,12 @@ export const intelligenceRouter = router({
         serviceId,
         name: displayName,
         webhookUrl: hubUrl,
-        apiKey,
+        // Enveloped like every other writer of this column (AAD bound to the
+        // row); the resolver reads it through `resolveServiceKey`.
+        apiKey: encryptServiceKey(apiKey, {
+          column: "intelligence_services.api_key",
+          rowId: id,
+        }),
         capabilities,
         metadata: agentManifest
           ? {
@@ -1648,7 +1712,7 @@ export const intelligenceRouter = router({
    * listRegisteredServices
    *
    * Returns all IS records registered for the workspace.
-   * apiKey is never returned.
+   * apiKey and secret-shaped metadata (managementToken…) are never returned.
    */
   listRegisteredServices: workspaceProcedure.query(async () => {
     const records = await db.query.intelligenceServices.findMany({
@@ -1656,7 +1720,7 @@ export const intelligenceRouter = router({
         apiKey: false, // never expose
       },
     });
-    return { services: records };
+    return { services: records.map(publicServiceRow) };
   }),
 
   /**

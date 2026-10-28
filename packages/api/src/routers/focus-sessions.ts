@@ -1515,6 +1515,37 @@ export const focusSessionsRouter = router({
     }),
 
   /**
+   * EVERY pull request and branch a session recorded, each PR with its state:
+   * the session page's "Show all" (its packet carries the first few). The same
+   * rule and state read as the packet's `workUnits` (`readAllWorkUnits`),
+   * under the same read floor as `get`.
+   */
+  workUnits: protectedProcedure
+    .input(z.object({ sessionId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const roster = rosterReadFor(ctx);
+      const row = await db.query.focusSessions.findFirst({
+        where: and(
+          eq(focusSessions.id, input.sessionId),
+          sessionReadableWhere({ userId: requireUserId(ctx.userId), roster })
+        ),
+      });
+      if (!row) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Focus session ${input.sessionId} not found`,
+        });
+      }
+      const { readAllWorkUnits } =
+        await import("../services/focus-sessions/continuation-packet.js");
+      return readAllWorkUnits(row, {
+        database: db,
+        userId: requireUserId(ctx.userId),
+        roster,
+      });
+    }),
+
+  /**
    * Get a single focus session by ID.
    * Scoped to the authenticated user — cannot read another user's session.
    *
@@ -2756,6 +2787,11 @@ export const focusSessionsRouter = router({
         /** ONE line naming WHICH thing is missing, not its class. */
         why: z.string().max(500).optional(),
         /**
+         * WHAT MOVES when the person answers (decision E) — the slot wire's
+         * own field. Required from an agent unless the slot already says it.
+         */
+        unblocks: expectedOutputWireSchema.shape.unblocks,
+        /**
          * WHERE to go — the card's title becomes a door. `null` clears a stored
          * pointer; omitted leaves it alone. Refused when it names an object the
          * caller cannot already see (`isOutputRefVisible`, the one floor).
@@ -2778,6 +2814,7 @@ export const focusSessionsRouter = router({
         expectedLabel: input.expectedLabel,
         blockedReason: input.blockedReason,
         why: input.why,
+        unblocks: input.unblocks,
         ref: input.ref,
         ask: input.ask,
       });

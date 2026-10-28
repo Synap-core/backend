@@ -317,7 +317,8 @@ describe("proposedRecord — a skill's instructions are never cut", () => {
     expect(after.length).toBeGreaterThan(9_000);
     // Read paragraph by paragraph: what went, and every character it became.
     expect(field.after?.kind).toBe("changes");
-    const lines = field.after?.kind === "changes" ? field.after.lines : [];
+    const lines =
+      field.after?.kind === "changes" ? field.after.change.lines : [];
     const added = lines
       .flatMap((l) =>
         l.op === "add" ? [l.text] : l.op === "change" ? [l.after] : []
@@ -349,7 +350,7 @@ describe("proposedRecord — a skill's instructions are never cut", () => {
     });
   });
 
-  it("code keeps both sides whole, as code (never a prose diff)", () => {
+  it("code reads as a line diff over the whole code (never a prose diff)", () => {
     const record = proposedRecord({
       action: "update",
       kind: "skill",
@@ -363,15 +364,11 @@ describe("proposedRecord — a skill's instructions are never cut", () => {
         },
       ],
     })!;
-    expect(record.fields[0]!.before).toEqual({
-      kind: "code",
-      text: "return 1;",
-      lines: 1,
-    });
+    expect(record.fields[0]!.before).toBeUndefined();
     expect(record.fields[0]!.after).toEqual({
-      kind: "code",
-      text: "return 2;",
-      lines: 1,
+      kind: "changes",
+      change: { before: "return 1;", after: "return 2;", lines: [] },
+      code: true,
     });
   });
 
@@ -486,5 +483,264 @@ describe("proposedEntityMedia — the upload a create would make", () => {
     ).toBeNull();
     expect(proposedEntityMedia(null)).toBeNull();
     expect(proposedEntityMedia("x")).toBeNull();
+  });
+});
+
+describe("proposedRecord — any long text rewrite reads as the whole text, changed in place", () => {
+  const before =
+    "Follow up on the leads in outreach whose next action date is today.\n\nNever send.";
+  const after =
+    "Follow up on the leads in outreach whose next action date is today or past.\n\nNever send.";
+
+  it("a playbook's goal (a top-level text) is diffed, not drawn as two cards", () => {
+    const record = proposedRecord({
+      action: "update",
+      kind: "playbook",
+      changes: [
+        {
+          path: "goalTemplate",
+          label: "GoalTemplate",
+          operation: "update" as const,
+          before,
+          after,
+        },
+      ],
+    })!;
+    const field = record.fields[0]!;
+    expect(field.before).toBeUndefined();
+    expect(field.after?.kind).toBe("changes");
+    const change = field.after?.kind === "changes" ? field.after.change : null;
+    expect(change?.before).toBe(before);
+    expect(change?.after).toBe(after);
+    expect(change?.lines.map((l) => l.op)).toEqual(["change", "same"]);
+    expect(field.wide).toBe(true);
+  });
+
+  it("a long text property is diffed too", () => {
+    const record = proposedRecord({
+      action: "update",
+      kind: "note",
+      changes: [
+        {
+          path: "properties.content",
+          label: "Content",
+          operation: "update" as const,
+          before,
+          after,
+        },
+      ],
+    })!;
+    expect(record.fields[0]!.after?.kind).toBe("changes");
+  });
+
+  it("a secret is never diffed, however long", () => {
+    const record = proposedRecord({
+      action: "update",
+      kind: "connection",
+      definitions: [
+        { slug: "apiKey", label: "API key", valueType: "secret" } as never,
+      ],
+      changes: [
+        {
+          path: "properties.apiKey",
+          label: "API key",
+          operation: "update" as const,
+          before: "sk-".padEnd(120, "a"),
+          after: "sk-".padEnd(120, "b"),
+        },
+      ],
+    });
+    const after = record?.fields[0]?.after;
+    expect(after?.kind).not.toBe("changes");
+    expect(JSON.stringify(record ?? null)).not.toContain("sk-aaaa");
+  });
+
+  it("a short text keeps its before → after reading", () => {
+    const record = proposedRecord({
+      action: "update",
+      kind: "note",
+      changes: [
+        {
+          path: "title",
+          label: "Title",
+          operation: "update" as const,
+          before: "Old",
+          after: "New",
+        },
+      ],
+    })!;
+    expect(record.fields[0]!.before).toMatchObject({
+      kind: "text",
+      text: "Old",
+    });
+    expect(record.fields[0]!.after).toMatchObject({
+      kind: "text",
+      text: "New",
+    });
+  });
+
+  it("with no before on record, a long text is drawn as written (nothing to diff)", () => {
+    const record = proposedRecord({
+      action: "update",
+      kind: "playbook",
+      changes: [
+        {
+          path: "goalTemplate",
+          label: "GoalTemplate",
+          operation: "update" as const,
+          after,
+        },
+      ],
+    })!;
+    expect(record.fields[0]!.after?.kind).toBe("text");
+  });
+});
+
+describe("proposedRecord — a removal names what it removes", () => {
+  it("a delete draws each value it removes, never 'empty'", () => {
+    const record = proposedRecord({
+      changes: [
+        {
+          path: "properties.role",
+          label: "Role",
+          operation: "delete",
+          before: "CTO",
+        },
+      ],
+      action: "delete",
+      targetName: "Ada",
+      kind: "person",
+    });
+    expect(record?.op).toBe("delete");
+    expect(record?.fields).toEqual([
+      expect.objectContaining({
+        key: "properties.role",
+        op: "remove",
+        before: { kind: "text", text: "CTO", long: false },
+        after: undefined,
+      }),
+    ]);
+  });
+
+  it("a removal with nothing readable is not drawn", () => {
+    const record = proposedRecord({
+      changes: [
+        { path: "properties.role", label: "Role", operation: "delete" },
+        {
+          path: "properties.city",
+          label: "City",
+          operation: "delete",
+          before: "Lyon",
+        },
+      ],
+      action: "delete",
+      targetName: "Ada",
+      kind: "person",
+    });
+    expect(record?.fields.map((f) => f.key)).toEqual(["properties.city"]);
+  });
+});
+
+describe("proposedRecord — a link reads as what it joins", () => {
+  // Live shape (proposal f15b68ae, 2026-10-28): a session's blocked_by link.
+  const FROM = "dfc6c1be-0cb4-423a-951a-7a543b92756f";
+  const TO = "a74e5430-6bc0-40b0-bc33-be683967f541";
+  const row = (path: string, before: string) => ({
+    path,
+    label: path,
+    operation: "delete" as const,
+    before,
+  });
+  const changes = [
+    row("title", "Session blocked by session"),
+    row("toId", TO),
+    row("fromId", FROM),
+    row("toType", "session"),
+    row("fromType", "session"),
+    row("linkType", "blocked_by"),
+    row("sourceLabel", "Markdown → pod cleanup"),
+    row("targetLabel", "Resolve what needs you: fix round and merge"),
+  ];
+  const objectRefs = {
+    fromId: { id: FROM, kind: "session", name: "Markdown → pod cleanup" },
+    toId: {
+      id: TO,
+      kind: "session",
+      name: "Resolve what needs you: fix round and merge",
+    },
+  };
+
+  it("a delete names both ends as doors and the relation between them", () => {
+    const record = proposedRecord({
+      changes,
+      action: "delete",
+      targetName: "Session blocked by session",
+      kind: "link",
+      objectRefs,
+    });
+    expect(record?.title).toBe(
+      "Markdown → pod cleanup blocked by Resolve what needs you: fix round and merge"
+    );
+    expect(record?.fields.map((f) => [f.label, f.op, f.before])).toEqual([
+      [
+        "From",
+        "remove",
+        {
+          kind: "ref",
+          objectKind: "session",
+          id: FROM,
+          name: "Markdown → pod cleanup",
+        },
+      ],
+      ["Relation", "remove", { kind: "text", text: "Blocked by", long: false }],
+      [
+        "To",
+        "remove",
+        {
+          kind: "ref",
+          objectKind: "session",
+          id: TO,
+          name: "Resolve what needs you: fix round and merge",
+        },
+      ],
+    ]);
+  });
+
+  it("unresolved ends fall back to the names the pod wrote beside them", () => {
+    const record = proposedRecord({
+      changes,
+      action: "delete",
+      targetName: "Session blocked by session",
+      kind: "link",
+    });
+    expect(record?.fields.map((f) => f.before)).toEqual([
+      { kind: "text", text: "Markdown → pod cleanup", long: false },
+      { kind: "text", text: "Blocked by", long: false },
+      {
+        kind: "text",
+        text: "Resolve what needs you: fix round and merge",
+        long: false,
+      },
+    ]);
+  });
+
+  it("a create draws the same ends as what it adds", () => {
+    const record = proposedRecord({
+      changes: changes.map(({ path, label, before }) => ({
+        path,
+        label,
+        operation: "create" as const,
+        after: before,
+      })),
+      action: "create",
+      kind: "link",
+      objectRefs,
+    });
+    expect(record?.op).toBe("create");
+    expect(record?.fields.map((f) => [f.label, f.op, f.before])).toEqual([
+      ["From", "add", undefined],
+      ["Relation", "add", undefined],
+      ["To", "add", undefined],
+    ]);
   });
 });

@@ -8,8 +8,10 @@
  * gap that matters most.
  *
  * Contract pinned here:
- *   · BRIDGE_SECRET unset  → pass (local-dev compatibility, the pre-existing
- *     behaviour of /bridge/emit — the loopback port bind is what contains it)
+ *   · BRIDGE_SECRET unset, not production → pass (local-dev compatibility)
+ *   · BRIDGE_SECRET unset IN PRODUCTION → 503, the caller MUST stop, logged
+ *     once (it used to pass, so a pod installed without the secret served
+ *     /bridge/emit and /yjs/:room/{state,restore} to the whole compose network)
  *   · set + absent header  → 401, and the caller MUST stop
  *   · set + wrong header   → 401 (no partial/prefix match)
  *   · set + correct header → pass, nothing written to the response
@@ -18,7 +20,7 @@
  * A gate nothing calls is the failure mode this whole effort kept finding.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { readFileSync } from "fs";
 import { join } from "path";
 import type { IncomingMessage, ServerResponse } from "http";
@@ -26,13 +28,18 @@ import { bridgeSecretOk } from "../bridge.js";
 
 const SECRET = "s3cr3t-value";
 let saved: string | undefined;
+let savedNodeEnv: string | undefined;
 
 beforeEach(() => {
   saved = process.env.BRIDGE_SECRET;
+  savedNodeEnv = process.env.NODE_ENV;
 });
 afterEach(() => {
   if (saved === undefined) delete process.env.BRIDGE_SECRET;
   else process.env.BRIDGE_SECRET = saved;
+  if (savedNodeEnv === undefined) delete process.env.NODE_ENV;
+  else process.env.NODE_ENV = savedNodeEnv;
+  vi.restoreAllMocks();
 });
 
 /** Minimal req/res doubles that record what the helper did to the response. */
@@ -56,11 +63,30 @@ function mk(headerValue?: string) {
 }
 
 describe("bridgeSecretOk", () => {
-  it("passes when BRIDGE_SECRET is unset (local-dev compatibility)", () => {
+  it("passes when BRIDGE_SECRET is unset outside production (local-dev compatibility)", () => {
     delete process.env.BRIDGE_SECRET;
+    process.env.NODE_ENV = "development";
     const { req, res, written } = mk();
     expect(bridgeSecretOk(req, res)).toBe(true);
     expect(written.status).toBeUndefined();
+  });
+
+  it("FAILS CLOSED in production when BRIDGE_SECRET is unset or empty, and says so once", () => {
+    process.env.NODE_ENV = "production";
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    for (const unset of [undefined, ""]) {
+      if (unset === undefined) delete process.env.BRIDGE_SECRET;
+      else process.env.BRIDGE_SECRET = unset;
+      // No header, and a header that would equal an empty secret.
+      for (const header of [undefined, ""]) {
+        const { req, res, written } = mk(header);
+        expect(bridgeSecretOk(req, res)).toBe(false);
+        expect(written.status).toBe(503);
+      }
+    }
+    expect(
+      log.mock.calls.filter((c) => String(c[0]).includes("BRIDGE_SECRET"))
+    ).toHaveLength(1);
   });
 
   it("401s when the secret is set and the header is ABSENT", () => {

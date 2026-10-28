@@ -583,3 +583,59 @@ describe("a long capture", () => {
     expect(cls).toContain("bg-background");
   });
 });
+
+describe("a request to turn an agent's skill on (capability.enable)", () => {
+  const SKILL = "66666666-6666-4666-8666-666666666666";
+  const CODE = [
+    "async function run(args) {",
+    '  return callProvider("gmail", "send", { to: args.to });',
+    "}",
+  ].join("\n");
+  function turnOnRequest(unreadSkills: number) {
+    const data = { skillIds: [SKILL], targetName: "mail_digest" };
+    return {
+      ...personCreate(null),
+      proposalType: "capability.enable",
+      targetType: "skill",
+      targetId: SKILL,
+      targetName: "mail_digest",
+      governanceReason: null,
+      data,
+      request: { targetType: "skill", changeType: "update", data },
+      review: {
+        reasoning: "I wrote this skill; it turns on only when you say so.",
+        changes: [],
+        turnsOn: {
+          skills: [
+            {
+              id: SKILL,
+              name: "mail_digest",
+              kind: "code",
+              executionMode: "sandbox",
+              code: CODE,
+              body: "Sends the morning digest.",
+              reach: { hosts: [], connections: ["Gmail"], unreadSteps: 0 },
+            },
+          ],
+          unreadSkills,
+        },
+      },
+    };
+  }
+
+  it("draws the skill's whole code and what it can reach", () => {
+    state.proposal = turnOnRequest(0);
+    const page = text(render());
+    for (const line of CODE.split("\n")) expect(page).toContain(line.trim());
+    expect(page).toContain("Can reach");
+    expect(page).toContain("your existing Gmail connection");
+    expect(page).not.toMatch(/cannot read/);
+  });
+
+  it("counts a skill in the request the reader cannot read", () => {
+    state.proposal = turnOnRequest(1);
+    expect(text(render())).toContain(
+      "It also turns on 1 skill you cannot read."
+    );
+  });
+});

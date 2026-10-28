@@ -2096,15 +2096,15 @@ const linkGrid: WidgetCapabilityDef = {
         title: "Quick Access",
         columns: 3,
         links: [
-          { label: "Docs", url: "https://synap.so/docs", icon: "FileText" },
+          { label: "Docs", url: "https://doc.synap.live", icon: "FileText" },
           {
             label: "Community",
-            url: "https://synap.so/community",
+            url: "https://synap.live/community",
             icon: "Users",
           },
           {
             label: "Support",
-            url: "https://synap.so/support",
+            url: "https://synap.live/support",
             icon: "LifeBuoy",
           },
         ],

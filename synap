@@ -768,6 +768,9 @@ generate_and_create_env() {
     VAULT_SERVER_KEY=$(openssl rand -hex 32)
     HUB_PROTOCOL_API_KEY=$(openssl rand -hex 32)
     HUB_JWT_SECRET=$(openssl rand -hex 32)
+    local BRIDGE_SECRET GRAFANA_PASSWORD
+    BRIDGE_SECRET=$(openssl rand -hex 32)
+    GRAFANA_PASSWORD=$(openssl rand -hex 32)
     
     # Placeholder until the image step pins the release block (SYNAP_IMAGE_*,
     # BACKEND_VERSION=<release id>) — never `latest`.
@@ -825,6 +828,8 @@ PROVISIONING_TOKEN=${PROVISIONING_TOKEN}
 VAULT_SERVER_KEY=${VAULT_SERVER_KEY}
 HUB_PROTOCOL_API_KEY=${HUB_PROTOCOL_API_KEY}
 HUB_JWT_SECRET=${HUB_JWT_SECRET}
+BRIDGE_SECRET=${BRIDGE_SECRET}
+GRAFANA_PASSWORD=${GRAFANA_PASSWORD}
 
 # Realtime CORS + links (compose defaults are dev values: * and localhost)
 FRONTEND_URL=https://${domain}
@@ -1593,6 +1598,22 @@ _bootstrap_token_backfill() {
     fi
 }
 
+# Secrets nothing generated before the audit of 2026-10-28, written once when
+# empty and never rotated (the update that writes one recreates its services):
+#   BRIDGE_SECRET    the backend's key to realtime (/bridge/emit,
+#                    /yjs/:room/state|restore); empty, realtime took those calls
+#                    from anything on the compose network
+#   GRAFANA_PASSWORD the optional monitoring profile's admin; compose fell back
+#                    to "admin" (Grafana keeps the password of its FIRST start)
+_generated_secrets_backfill() {
+    local gen   # not `key`: config-door.test.sh reads cmd_update's `for key in` list
+    for gen in BRIDGE_SECRET GRAFANA_PASSWORD; do
+        [ -n "$(_ue_env_get "$gen")" ] && continue
+        SYNAP_ENV_FILE=.env envcfg_write_raw S "$gen" "$(openssl rand -hex 32)" || return 1
+        echo -e "${BLUE}ℹ️  Generated ${gen} into .env${NC}"
+    done
+}
+
 # "needed" (no owner yet) | "ready" | "unknown" — the pod's own answer.
 _setup_needs_probe() {
     local pod_url token body
@@ -2289,6 +2310,11 @@ SYNAP_POLICY_FILE="state/pod-agent-policy.json"
 # Same pattern as deploy/pod-agent/policy.js — a recipient the pod-agent would
 # reject must never be written (the whole file would then fail closed).
 SYNAP_AGE_RECIPIENT_RE='^age1[0-9a-z]{20,200}$'
+# What the pod-agent asks the policy about: its COMMANDS (server.js), the
+# pulled `update`, and the two reads. install-policy.test.sh derives server.js's
+# side and pins this list to it. The self-hosted default is policy.js's.
+SYNAP_POLICY_COMMANDS="update agent-update suspend restore restore-archive archive configure read-host-log read-docker-logs"
+SYNAP_POLICY_SELF_HOSTED_DEFAULT='["archive","restore-archive","configure"]'
 
 _policy_log()  { echo -e "${BLUE}[policy] $*${NC}"; }
 _policy_ok()   { echo -e "${GREEN}[policy] ✓ $*${NC}"; }
@@ -2336,6 +2362,7 @@ _policy_seed_from_registration() {
 }
 
 # synap policy show | set-mode <managed|self-hosted> | add-recipient <age1…> | remove-recipient <age1…>
+#              | refuse <command> | allow <command>
 cmd_policy() {
     local deploy_dir
     deploy_dir=$(get_deploy_dir)
@@ -2351,7 +2378,7 @@ cmd_policy() {
             if [ -e "$SYNAP_POLICY_FILE" ]; then echo "file: ${deploy_dir}/${SYNAP_POLICY_FILE}"
             else echo "file: (none — ${deploy_dir}/${SYNAP_POLICY_FILE} is absent, so the default applies)"; fi
             echo "$cur" | jq -r '"mode: \(.mode // "(missing)")",
-                "refuse: \(if has("refuse") then (.refuse | join(", ")) else (if .mode == "managed" then "(nothing)" else "archive, restore-archive, configure" end) + " (mode default)" end)",
+                "refuse: \(if has("refuse") then (if (.refuse | length) == 0 then "(nothing)" else (.refuse | join(", ")) end) else (if .mode == "managed" then "(nothing)" else "archive, restore-archive, configure" end) + " (mode default)" end)",
                 "archiveRecipients: \((.archiveRecipients // []) | if length == 0 then "(none)" else join(", ") end)"' ;;
         set-mode)
             local mode="${1:-}"
@@ -2373,8 +2400,24 @@ cmd_policy() {
                     || { _policy_err "could not write ${SYNAP_POLICY_FILE}"; exit 1; }
                 _policy_ok "archive recipient removed (if it was listed)"
             fi ;;
+        refuse|allow)
+            # The refuse list REPLACES the mode default (policy.js), so the
+            # first edit writes the default out and changes it.
+            local c="${1:-}"
+            case " ${SYNAP_POLICY_COMMANDS} " in
+                *" ${c} "*) [ -n "$c" ] ;;
+                *) false ;;
+            esac || { _policy_err "usage: synap policy ${action} <command>  (one of: ${SYNAP_POLICY_COMMANDS})"; exit 1; }
+            cur="$(_policy_current)" || exit 1
+            _policy_write "$(echo "$cur" | jq -c --arg c "$c" --arg a "$action" --argjson dflt "$SYNAP_POLICY_SELF_HOSTED_DEFAULT" '
+                (if has("refuse") then .refuse elif .mode == "managed" then [] else $dflt end) as $r
+                | .mode = (.mode // "self-hosted")
+                | .refuse = (if $a == "refuse" then (if ($r | index($c)) then $r else $r + [$c] end) else ($r | map(select(. != $c))) end)')" \
+                || { _policy_err "could not write ${SYNAP_POLICY_FILE}"; exit 1; }
+            if [ "$action" = refuse ]; then _policy_ok "the pod-agent now refuses \"${c}\" from the Control Plane"
+            else _policy_ok "the pod-agent now accepts \"${c}\" from the Control Plane (a signed order is still required)"; fi ;;
         *)
-            echo "Usage: synap policy show | set-mode <managed|self-hosted> | add-recipient <age1…> | remove-recipient <age1…>"
+            echo "Usage: synap policy show | set-mode <managed|self-hosted> | add-recipient <age1…> | remove-recipient <age1…> | refuse <command> | allow <command>"
             exit 1 ;;
     esac
 }
@@ -3107,6 +3150,7 @@ EOF
         update_env_value "VAULT_SERVER_KEY" "$(openssl rand -hex 32)"
         echo -e "${BLUE}ℹ️  Backfilled VAULT_SERVER_KEY into .env${NC}"
     fi
+    _generated_secrets_backfill
 
     # Explicit choices from flags land in .env through the one writer, before
     # anything reads them (_ue_edge, should_start_pod_agent, compose).
@@ -3680,7 +3724,8 @@ EOF
 # deploy files. It never restores data: the schema stays migrated and the
 # pre-update dump is offered to the operator (_ue_rollback). Every outcome is RECORDED
 # (state/last-update.json + state/events.jsonl + a `SYNAP_EVENT {json}` line)
-# and handed to an optional notify hook (SYNAP_UPDATE_NOTIFY_CMD) — U4.
+# (U4). The notify hook (SYNAP_UPDATE_NOTIFY_CMD) is gone: it ran a .env value
+# through `sh -c` as root, and a configure could set it (audit 2026-10-28).
 #
 # UPDATE THE UPDATER FIRST (H1). A release update used to run entirely in the
 # host's PREVIOUS `synap`: a fix to the kratos render, the recreate list, verify
@@ -3757,9 +3802,12 @@ _ue_fetch() { # <url> <out>
 # release AND on the channel pointer. Verified against the signing workflow
 # (main via workflow_run, which always runs the default-branch file, or a v* tag)
 # and GitHub's OIDC issuer, so a release written by a token or a fork build fails.
-# SYNAP_RELEASE_VERIFY (env or deploy/.env): warn (default) — a missing cosign,
-# missing bundle or failed check WARNS and the update goes on; enforce — any of
-# them refuses the manifest; off — skip (a private mirror with no signatures).
+# SYNAP_RELEASE_VERIFY (env or deploy/.env): enforce (default, and what an
+# unknown value means) — a missing cosign, missing bundle or failed check
+# refuses the manifest; warn — they WARN and the update goes on (what
+# `synap update --insecure-skip-verify` sets for one run, with a warning); off — skip (a
+# private mirror with no signatures). The default was warn until the audit of
+# 2026-10-28: a manual update applied a manifest whose signature had failed.
 SYNAP_RELEASE_SIGNER_RE='^https://github\.com/(?i:synap-core/backend)/\.github/workflows/docker-publish\.yml@refs/(heads/main|tags/v[0-9][0-9A-Za-z.+-]*)$'
 SYNAP_RELEASE_OIDC_ISSUER="https://token.actions.githubusercontent.com"
 # Nothing installs cosign on a pod host, and the unattended path ENFORCES the
@@ -3804,10 +3852,10 @@ _ue_cosign_verify() {
 
 _ue_verify_manifest_sig() { # <fast|stable|release-id> <manifest> — non-zero only under enforce
     local mode="${SYNAP_RELEASE_VERIFY:-$(_ue_env_get SYNAP_RELEASE_VERIFY)}" bundle="$2.sigstore.json" why="" out via rc=0
-    case "${mode:=warn}" in
+    case "${mode:=enforce}" in
         warn|enforce) ;;
-        off) return 0 ;;
-        *) _ue_warn "SYNAP_RELEASE_VERIFY=${mode} is not warn|enforce|off — using warn"; mode=warn ;;
+        off) _ue_warn "release manifest for '$1' is NOT signature-checked (SYNAP_RELEASE_VERIFY=off)"; return 0 ;;
+        *) _ue_warn "SYNAP_RELEASE_VERIFY=${mode} is not warn|enforce|off — using enforce"; mode=enforce ;;
     esac
     rm -f "$bundle"
     via="$(_ue_cosign_via)"
@@ -3828,6 +3876,7 @@ _ue_verify_manifest_sig() { # <fast|stable|release-id> <manifest> — non-zero o
     fi
     if [ "$mode" = enforce ]; then
         _ue_err "release manifest for '$1' refused: ${why} (SYNAP_RELEASE_VERIFY=enforce)"
+        _ue_err "To go on unverified, this run only: synap update --insecure-skip-verify (or SYNAP_RELEASE_VERIFY=warn in the environment)"
         return 1
     fi
     _ue_warn "release manifest for '$1' is NOT signature-verified: ${why} — continuing (SYNAP_RELEASE_VERIFY=warn)"
@@ -3945,21 +3994,46 @@ _ue_migration_level() {
 # builder sort them) — never the locale's collation, which `[[ < ]]` uses.
 _ue_name_lt() { [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | LC_ALL=C sort | head -n 1)" = "$1" ]; }
 
-# 0 when release <a> is OLDER than release <b>: both stable ids vX.Y.Z, compared
-# number by number. Anything else (main-<sha>, local-<sha>, adopted-…, a
-# pre-release, an unknown id) has no order: never older. The control plane
-# never orders such a downgrade, by the same rule (isOlderRelease).
-_ue_release_older() {
-    local a="$1" b="$2" i x y
-    [[ "$a" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] || return 1
-    local -a av=("${BASH_REMATCH[@]:1}")
-    [[ "$b" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] || return 1
-    local -a bv=("${BASH_REMATCH[@]:1}")
-    for i in 0 1 2; do
-        x=$((10#${av[$i]})); y=$((10#${bv[$i]}))
-        [ "$x" -lt "$y" ] && return 0
-        [ "$x" -gt "$y" ] && return 1
-    done
+# 0 when release <a> is OLDER than the running release <b>. Three orders, any
+# one is enough:
+#   1. both stable ids vX.Y.Z, compared number by number;
+#   2. [<a's manifest> <b's record>] the signed manifests' createdAt (CI's build
+#      time, ISO-8601 UTC, compared as text), when both are registry releases —
+#      a from-source build's createdAt is the host's clock, an adopted pod has
+#      none;
+#   3. the target's newest migration is behind the running release's: its code
+#      would run on a schema it never knew.
+# Before 2026-10-28 only (1) existed, so any older main-<sha> (a signed,
+# superseded build) was applied without --force. An id with none of these
+# (adopted-…, a manifest without the fields) has no order: never older. The
+# control plane never orders a stable downgrade (isOlderRelease, rule 1).
+_ue_release_older() { # <a> <b> [<a manifest> <b record>]
+    local a="$1" b="$2" ma="${3:-}" mb="${4:-}" i x y ta tb la lb semver=0
+    local sv='^v([0-9]+)\.([0-9]+)\.([0-9]+)$'
+    if [[ "$a" =~ $sv ]]; then
+        local -a av=("${BASH_REMATCH[@]:1}")
+        if [[ "$b" =~ $sv ]]; then
+            local -a bv=("${BASH_REMATCH[@]:1}")
+            semver=1
+            for i in 0 1 2; do
+                x=$((10#${av[$i]})); y=$((10#${bv[$i]}))
+                [ "$x" -lt "$y" ] && return 0
+                [ "$x" -gt "$y" ] && break
+            done
+        fi
+    fi
+    [ -s "$ma" ] && [ -s "$mb" ] || return 1
+    # Two stable ids are ordered by number only: a backport tag (v1.2.5) can be
+    # built after a newer one (v1.3.0), and moving up to v1.3.0 is not a downgrade.
+    if [ "$semver" = 0 ]; then
+        local iso='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'
+        ta="$(jq -r 'if (.source // false) == true then empty else (.createdAt // empty | strings) end' "$ma" 2>/dev/null || true)"
+        tb="$(jq -r 'if (.source // false) == true then empty else (.createdAt // empty | strings) end' "$mb" 2>/dev/null || true)"
+        if [[ "$ta" =~ $iso ]] && [[ "$tb" =~ $iso ]] && _ue_name_lt "$ta" "$tb"; then return 0; fi
+    fi
+    la="$(jq -r '.migrations.last // empty | strings' "$ma" 2>/dev/null || true)"
+    lb="$(jq -r '.migrations.last // empty | strings' "$mb" 2>/dev/null || true)"
+    [ -n "$la" ] && [ -n "$lb" ] && _ue_name_lt "$la" "$lb" && return 0
     return 1
 }
 
@@ -4124,8 +4198,8 @@ _ue_backend_healthy() { # waits up to SYNAP_UPDATE_HEALTH_TRIES × SYNAP_HEALTH_
 # pod-agent). The pod can surface it without a new door: the backend container
 # already mounts this deploy dir read-only at /opt/synap/deploy (compose
 # `backend.volumes`), so state/last-update.json is readable in-pod — wiring it
-# into /status/release + notif-center is the wave-2 seam. SYNAP_UPDATE_NOTIFY_CMD
-# (env or .env) receives the JSON on stdin, best-effort.
+# into /status/release + notif-center is the wave-2 seam. No hook command is run
+# (SYNAP_UPDATE_NOTIFY_CMD is retired in env.schema: it ran through `sh -c`).
 # An unattended run started by a request carries the request's `id` as
 # `request` (UE_REQUEST_ID, set by _ue_unattended_plan / _ue_unattended_busy):
 # pod-agent matches it to report the outcome of the order it queued.
@@ -4145,11 +4219,12 @@ _ue_record() { # <status> <from> <to> <reason> <dbRestored true|false> [backup] 
 
 # The ONE host event recorder (update, heal, units): stamps ts + pod onto
 # <json-object>, appends it to state/events.jsonl, prints the `SYNAP_EVENT` line,
-# and with notify=1 pipes it to SYNAP_UPDATE_NOTIFY_CMD. [latest-file] keeps the
+# and runs no command (notify is kept in the signature for callers; the hook
+# was retired 2026-10-28). [latest-file] keeps the
 # newest of that kind (last-update.json is the update outcome only — a heal
 # never overwrites it). cwd = deploy dir.
-_synap_event() { # <json-object> <notify 0|1> [latest-file]
-    local ev hook
+_synap_event() { # <json-object> <notify 0|1, unused> [latest-file]
+    local ev
     ev="$(jq -c --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg pod "$(_ue_env_get DOMAIN)" '{ts:$ts} + . + {pod:$pod}' <<<"$1")"
     mkdir -p state
     if [ -n "${3:-}" ]; then
@@ -4157,11 +4232,6 @@ _synap_event() { # <json-object> <notify 0|1> [latest-file]
     fi
     printf '%s\n' "$ev" >> state/events.jsonl
     echo "SYNAP_EVENT $ev"
-    [ "${2:-0}" = 1 ] || return 0
-    hook="${SYNAP_UPDATE_NOTIFY_CMD:-$(_ue_env_get SYNAP_UPDATE_NOTIFY_CMD)}"
-    if [ -n "$hook" ]; then
-        printf '%s\n' "$ev" | sh -c "$hook" || _ue_warn "notify hook failed (the event is still in state/events.jsonl)"
-    fi
 }
 
 # ── requests (state/requests/<name>.json, watched by synap-<name>.path) ──────
@@ -4821,7 +4891,7 @@ synap_update_engine() {
     # A downgrade is never applied by accident (a channel pointer moved back, a
     # mistyped --release): the older release's code would run on a schema and
     # deploy files it never knew. A failed update's rollback is not this path.
-    if [ "$force" != 1 ] && _ue_release_older "$UE_TO" "$UE_FROM"; then
+    if [ "$force" != 1 ] && _ue_release_older "$UE_TO" "$UE_FROM" "$m" state/current-release.json; then
         _ue_err "release ${UE_TO} is older than the running ${UE_FROM} — refusing to downgrade. Nothing was changed."
         _ue_err "To apply it anyway: synap update --release ${UE_TO} --force"
         _ue_record aborted "$UE_FROM" "$UE_TO" "older than the running release ${UE_FROM}" false
@@ -5074,9 +5144,15 @@ cmd_update() {
                 force=1; shift ;;
             --unattended)
                 unattended=1; shift ;;
+            --insecure-skip-verify)
+                # One run, a person's: the unattended plan re-exports enforce.
+                export SYNAP_RELEASE_VERIFY=warn
+                _ue_warn "--insecure-skip-verify: a release manifest whose signature fails is applied anyway (this run only)"
+                shift ;;
             -h|--help)
                 cat <<'USAGE'
 synap update [--release <id|fast|stable>] [--from-source] [--force] [--unattended]
+             [--insecure-skip-verify]
 
   --release <ref>   apply a published release: a release id (main-<sha7>, vX.Y.Z)
                     or a channel — fast (every green main push) | stable (v* tags).
@@ -5089,6 +5165,10 @@ synap update [--release <id|fast|stable>] [--from-source] [--force] [--unattende
                     (state/requests/update.json) or the owner's policy
                     (state/update-policy.json: auto, channel, window); always
                     SYNAP_RELEASE_VERIFY=enforce. Nothing to do = exit 0.
+  --insecure-skip-verify
+                    apply a release whose manifest signature cannot be
+                    verified (no cosign, no bundle, a failed check): warns and
+                    goes on, for this run only. The default refuses it.
 
 Every update: lock → manifest → preflight → pull by digest → verified backup →
 migrate → canary → swap → all services → verify → record. Any failure rolls
@@ -5167,6 +5247,7 @@ USAGE
         echo -e "${YELLOW}⚠️  Added missing SYNAP_SERVICE_ENCRYPTION_KEY to .env${NC}"
     fi
     _bootstrap_token_backfill
+    _generated_secrets_backfill
 
     echo -e "${BLUE}🔄 Updating Synap (${mode}${ref:+: $ref})...${NC}"
     synap_update_engine "$mode" "$ref" "$force"
@@ -7810,7 +7891,7 @@ ${YELLOW}Management:${NC}
   synap doctor [--json]          Read-only health: env drift, compose projects, checkout, release, backups, pgdata
   synap federation <action>      External sign-in: status | connect-cloud | disable
   synap pod-key <action>         This pod's own identity key: ensure | show | enroll --pod-id <id> --code <spr_…>
-  synap policy <action>          What the Control Plane may order on this pod: show | set-mode <managed|self-hosted> | add-recipient <age1…> | remove-recipient <age1…>
+  synap policy <action>          What the Control Plane may order on this pod: show | set-mode <managed|self-hosted> | add-recipient <age1…> | remove-recipient <age1…> | refuse <command> | allow <command>
   synap clean [type]             Clean this pod's Docker leftovers (interactive if no type; never volumes or other stacks')
   synap heal                     Restart this pod's unhealthy containers (budget 3 / 30 min; never postgres)
   synap units <install|status|remove>  systemd timers: heal (2 min), update requests; auto-update opt-in

@@ -25,6 +25,11 @@ export interface SyncConnectorConnection {
    * happens to pick it, so the registry keeps reporting it "healthy".
    */
   hasError?: boolean;
+  /**
+   * Bound to a pod object (an entity or project): a deliberate second account
+   * of the same provider, never superseded by a reconnect (stale-connections).
+   */
+  objectScoped?: boolean;
 }
 
 export interface SyncConnector {

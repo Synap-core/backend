@@ -217,6 +217,50 @@ describe("hub documents.createDocument — one title", () => {
   });
 });
 
+describe("hub documents.createDocument — the id handed out is the id it lands under", () => {
+  async function createAs(user: string, proposedDocumentId: string) {
+    return hubDocumentsRouter
+      .createCaller({ userId: user, scopes: [] } as never)
+      .createDocument({
+        userId: user,
+        title: `Held plan ${proposedDocumentId.slice(0, 8)}`,
+        content: "Replayed after approval.",
+        proposedDocumentId,
+      });
+  }
+
+  it("a replayed create lands under the proposed id", async () => {
+    const handed = randomUUID();
+    const res = await createAs(USER, handed);
+    expect(res.documentId).toBe(handed);
+    expect((await stored(handed)).title).toBe(
+      `Held plan ${handed.slice(0, 8)}`
+    );
+  });
+
+  it("a replay run twice returns the caller's own document, never a second row", async () => {
+    const handed = randomUUID();
+    await createAs(USER, handed);
+    const again = await createAs(USER, handed);
+    expect(again).toMatchObject({
+      documentId: handed,
+      ackState: "duplicate-ignored",
+    });
+    const { rows } = await h.client!.query<{ n: number }>(
+      `select count(*)::int as n from documents where id = $1`,
+      [handed]
+    );
+    expect(rows[0]!.n).toBe(1);
+  });
+
+  it("an id that names another person's document is not reused", async () => {
+    const theirs = randomUUID();
+    await createAs(randomUUID(), theirs);
+    const mine = await createAs(USER, theirs);
+    expect(mine.documentId).not.toBe(theirs);
+  });
+});
+
 describe("documents.upload — no name given", () => {
   it("a markdown upload with no title is named by its leading `# `, which leaves the body", async () => {
     const res = await documentsRouter

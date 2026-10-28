@@ -53,10 +53,10 @@ describe("navHref", () => {
 });
 
 describe("navForRole", () => {
-  it("shows members only Home and Review, in one group", () => {
+  it("shows members only Home, Review and Settings, in one group", () => {
     const groups = navForRole("member");
     expect(groups.map((g) => g.items.map((i) => i.id))).toEqual([
-      ["home", "review"],
+      ["home", "review", "settings"],
     ]);
   });
 
@@ -87,6 +87,8 @@ describe("consoleRedirects", () => {
       ["/audit", "section=queue", "/review", false],
       ["/audit", "section=proposals", "/review", false],
       ["/trust-keys", "section=api-keys", "/keys", false],
+      ["/marketplace", "tab=installed", "/tools?tab=installed", false],
+      ["/marketplace", "tab=tools", "/tools?tab=actions", false],
       ["/trust-keys", "section=secrets", "/security?section=secrets", false],
       ["/overview", null, "/home", false],
       ["/origins", null, "/applications", false],

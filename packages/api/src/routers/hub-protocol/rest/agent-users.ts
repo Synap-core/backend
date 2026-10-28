@@ -17,6 +17,7 @@ import {
 } from "@synap/governance-policy/postures";
 import { createNamedAgent } from "../../../services/agent-identity-service.js";
 import { appAgentGovernanceDenial } from "../../../services/app-agent-floor.js";
+import { isAgentCaller } from "../../../services/library/agent-door.js";
 import {
   loadAgentPresence,
   NEVER_SEEN,
@@ -373,11 +374,40 @@ export function registerAgentUsersRoutes(app: HubHono): void {
    * list) OR the legacy `autoApproveFor` + `writesRequireProposal` pair. Not
    * both. Authz: agent's creator (`users.createdByUserId ===` effective
    * userId) OR pod admin (`isPodAdmin`). Anyone else → 403.
+   *
+   * A PERSON's act only (audit 2026-10-28 F2): an agent credential (an agent
+   * key, or the IS internal key) is refused before anything is read or
+   * written, whatever the body. "Tightening" was not a safe exception:
+   * `posture: null`, another posture, or `autoApproveFor: []` each REVOKE the
+   * stored `propose` rows, so an ask-first agent could switch itself (or a
+   * sibling of the same person) back to the pod default and write unreviewed.
    */
   app.patch("/agent-users/:agentUserId/governance", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
       return c.json(
         { error: "Insufficient scope: hub-protocol.write required" },
+        403
+      );
+    }
+    if (
+      isAgentCaller({
+        agentUserId: c.get("agentUserId") as string | undefined,
+        keyType: c.get("keyType") as string | undefined,
+      })
+    ) {
+      logger.warn(
+        {
+          agentUserId: c.get("agentUserId"),
+          keyType: c.get("keyType"),
+          target: c.req.param("agentUserId"),
+        },
+        "agent credential attempted to set agent governance — blocked (a person's act)"
+      );
+      return c.json(
+        {
+          error:
+            "How an agent's writes are reviewed is the person's choice. Change it in the Synap app (agent settings) or with a personal access token, not with an agent credential.",
+        },
         403
       );
     }
@@ -468,15 +498,17 @@ export function registerAgentUsersRoutes(app: HubHono): void {
         return c.json({ error: "Agent not found" }, 404);
       }
 
-      // An app's agent is governed by the app's owner: no agent's credential
-      // changes how its writes land, even to "tighten" (PB4).
+      // An app's agent is governed by the app's owner: a scoped key (an app
+      // sign-in included) cannot change how its writes land (PB4). Agent
+      // credentials were already refused above.
       const appDenial = await appAgentGovernanceDenial(agentUserId, {
         agentUserId: c.get("agentUserId") as string | undefined,
         keyType: c.get("keyType") as string | undefined,
       });
       if (appDenial) return c.json({ error: appDenial }, 403);
 
-      // Effective user (agent keys: linked human). Creator or pod admin only.
+      // Effective user (a person: agent credentials were refused above).
+      // Creator or pod admin only.
       const callerId = c.get("userId") as string;
 
       // Governance is the rule store: every key is bounded by its grant.
@@ -486,25 +518,6 @@ export function registerAgentUsersRoutes(app: HubHono): void {
       });
       if (denial) return c.json({ error: denial }, 403);
 
-      // An AGENT key passes the creator check as its human, so it could write
-      // its own auto-approve rules. It may TIGHTEN (a named posture, which never
-      // auto-approves beyond the floors; an empty list; writesRequireProposal
-      // true) but never widen — widening is the human's call.
-      if (c.get("agentUserId")) {
-        const widens =
-          (hasAutoApproveFor &&
-            (body!.autoApproveFor as string[]).length > 0) ||
-          body?.writesRequireProposal === false;
-        if (widens) {
-          return c.json(
-            {
-              error:
-                "An agent key cannot widen agent governance. Choose a posture, or widen it from the Synap app or with a personal access token.",
-            },
-            403
-          );
-        }
-      }
       const isCreator = agentUser.createdByUserId === callerId;
       if (!isCreator && !(await isPodAdmin(callerId))) {
         return c.json(
@@ -542,13 +555,8 @@ export function registerAgentUsersRoutes(app: HubHono): void {
       delete persistedMeta.autoApproveFor;
       // A hand-set list is no longer the named posture it may have replaced.
       if (hasAutoApproveFor) delete persistedMeta.governancePosture;
-      // An agent that omits the dial keeps the stored one: defaulting to false
-      // would be a silent widening.
       const writesRequireProposal =
-        (body?.writesRequireProposal as boolean | undefined) ??
-        (c.get("agentUserId")
-          ? existingMeta.writesRequireProposal === true
-          : false);
+        (body?.writesRequireProposal as boolean | undefined) ?? false;
       persistedMeta.writesRequireProposal = writesRequireProposal;
 
       await db

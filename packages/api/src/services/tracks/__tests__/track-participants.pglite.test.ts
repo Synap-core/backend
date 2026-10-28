@@ -600,6 +600,7 @@ describe("only the judge closes the goal", () => {
       trackId: id,
       status: "archived",
       verdict: "no_longer_needed",
+      expectedStatus: "active",
       actor: agentOf(OWNER, AGENT_A),
     });
     expect(res.status).toBe("proposed");
@@ -637,6 +638,7 @@ describe("only the judge closes the goal", () => {
       trackId: id,
       status: "completed",
       verdict: "met",
+      expectedStatus: "active",
       actor: agentOf(OWNER, AGENT_A),
     });
     expect(res.status).toBe("proposed");

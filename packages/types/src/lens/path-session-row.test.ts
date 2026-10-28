@@ -95,6 +95,24 @@ describe("lensRowOfSession", () => {
     expect(row.cls).toBe("happened");
   });
 
+  it("a finished session with no facts on its row reads done; a FAILED count reads unmeasured", () => {
+    const closed = { id: "s3", title: "Done", status: "closed" } as const;
+    expect(resolveUnitState(lensRowOfSession(closed).state).state).toBe("done");
+    expect(
+      resolveUnitState(
+        lensRowOfSession({ ...closed, unitFacts: { owedFromYou: 0 } }).state
+      ).state
+    ).toBe("done");
+    expect(
+      resolveUnitState(
+        lensRowOfSession({
+          ...closed,
+          unitFacts: { owedFromYou: null, pendingDecisions: 0 },
+        }).state
+      ).state
+    ).toBe("unmeasured");
+  });
+
   it("the reason defaults to what blocks it; a caller's reason wins, an empty one is none", () => {
     expect(
       lensRowOfSession({ id: "a", title: "t", blockedBy: "Review" }).reason

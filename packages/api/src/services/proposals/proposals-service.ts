@@ -21,6 +21,7 @@ import {
   or,
   desc,
   drizzleSql,
+  getActingAgentUserId,
 } from "@synap/database";
 import type { ProposalRevision } from "@synap/database";
 import { isDeepStrictEqual } from "node:util";
@@ -32,6 +33,10 @@ import {
 } from "@synap-core/types/proposals";
 import type { ProposalStatusFilter } from "../../routers/hub-protocol/rest/_codecs/proposal.js";
 import { ownAgentUserFilter } from "../agent-identity-service.js";
+import {
+  reviewPackageOfRow,
+  type ReviewPackage,
+} from "./review-package-of-row.js";
 
 /**
  * List proposals CREATED BY a user (optionally narrowed to a workspace/status),
@@ -53,6 +58,32 @@ export async function listCreatedProposals(params: {
    * (caller owns the focus_session) and lists all proposals for that session —
    * not only rows createdBy the agent key (agent vs human createdBy mismatch).
    */
+  sessionId?: string;
+  status?: string;
+  limit?: number;
+  /**
+   * Only rows of this REVIEW PACKAGE (`reviewPackageOfRow`). Decided per row,
+   * so it filters a bounded scan ({@link PACKAGE_SCAN_LIMIT}) of the newest
+   * matching rows, then takes `limit`.
+   */
+  package?: ReviewPackage;
+}): Promise<Array<typeof proposals.$inferSelect>> {
+  const rows = await listCreatedProposalRows({
+    ...params,
+    limit: params.package ? PACKAGE_SCAN_LIMIT : params.limit,
+  });
+  if (!params.package) return rows;
+  return rows
+    .filter((r) => reviewPackageOfRow(r) === params.package)
+    .slice(0, params.limit ?? 20);
+}
+
+/** Rows a `package` filter scans before taking `limit`. */
+const PACKAGE_SCAN_LIMIT = 500;
+
+async function listCreatedProposalRows(params: {
+  createdBy: string;
+  workspaceId?: string;
   sessionId?: string;
   status?: string;
   limit?: number;
@@ -727,9 +758,26 @@ export async function mergeProposalRevision(
     // ⛔ The agent id is NOT forwarded into `computeCanReviewApproval` below.
     // Author authority lets an agent change WHAT IT IS ASKING FOR; it never
     // lets the agent decide the request. A human still approves.
+    //
+    // The acting agent is the AMBIENT one first (`runWithActingAgent`, entered
+    // server-side at every key-auth door), then the door's own value: a door
+    // that forgets to forward it cannot turn an agent into its human.
+    const actingAgentUserId =
+      getActingAgentUserId() ?? params.actingAgentUserId ?? null;
     const isAuthor =
-      !!params.actingAgentUserId &&
-      existing.agentUserId === params.actingAgentUserId;
+      !!actingAgentUserId && existing.agentUserId === actingAgentUserId;
+
+    // AN AGENT REVISES ONLY ITS OWN REQUEST (audit F1, 2026-10-28). Revising
+    // someone else's pending proposal (another agent's, the IS's, a person's)
+    // rewrites what a person is about to approve: that is a review act, and an
+    // agent never reviews. The reviewer ladder below cannot judge it, because
+    // an agent key is remapped to its HUMAN owner (`actorId`), who may always
+    // review; and the key half (`assertMayReviseProposal`) passes for a
+    // default agent grant (`*`). So an acting agent that is not the author is
+    // refused here, before either. NOT_FOUND, like the ladder: no oracle.
+    if (actingAgentUserId && !isAuthor) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "Proposal not found" });
+    }
 
     const { computeCanReviewApproval, assertMayReviseProposal } =
       await import("../../routers/proposals/review-authority.js");
@@ -791,7 +839,7 @@ export async function mergeProposalRevision(
       reasoning: params.reasoning,
       actorId: params.actorId,
       actingAgentUserId:
-        params.attributionAgentUserId ?? params.actingAgentUserId ?? null,
+        params.attributionAgentUserId ?? actingAgentUserId ?? null,
     });
 
     // A revision that changes the PAYLOAD was checked before the lock by
@@ -863,6 +911,13 @@ const REVISED_PAYLOAD_VALIDATORS: Record<
       "update",
       payload
     ),
+  // A revised shell command is judged by the same policy the Hub door files
+  // it under (audit F1): otherwise a revise is a way around the denylist.
+  "command/execute": async (payload) => {
+    const { commandPolicyRefusal } = await import("@synap/governance-policy");
+    const refusal = commandPolicyRefusal(payload.command);
+    if (refusal) throw new Error(refusal);
+  },
 };
 
 async function checkRevisedPayload(

@@ -453,7 +453,7 @@ export async function getProjectPath(
               currentStage: t.currentStage,
               status: t.status,
               // The track lifecycle's own words ("Closed", "Dropped",
-              // "Proposed"…) — a client that predates a status still reads it.
+              // "Draft"…) — a client that predates a status still reads it.
               statusLabel: resolveTrackStatusLabel(t.status),
               pausedBy: trackPausedBy(t),
               stages: deriveTrackStages(

@@ -73,10 +73,12 @@ import {
 import { redactUnreadableSessionTargets } from "../../services/proposals/session-content-redaction.js";
 import {
   flowReach,
+  readRequiredToolNames,
   readStepSkillLookups,
   skillReach,
   type StepSkillLookup,
 } from "../../services/proposals/part-reach.js";
+import { readEnableTurnsOn } from "../../services/proposals/enable-turns-on.js";
 import type { EventRecord } from "@synap/database";
 import type {
   ProposalRemoval,
@@ -1257,9 +1259,15 @@ export async function enrichProposalsForDisplay(
     documentRows.map((row) => [row.id, row.title])
   );
   const skillTargetById = await readSkillUpdateTargets(rows, userId);
+  const playbookTargetById = await readPlaybookUpdateTargets(rows, nameAccess);
   // What the automations of a pending mixed proposal can reach: the skills
   // their steps would run, read through the run door's rule.
   const stepSkillsFor = await readStepSkillLookups(
+    rows.filter((row) => isLiveProposalStatus(row.status)),
+    userId
+  );
+  // What a pending enable request would turn on, each skill whole.
+  const turnsOnById = await readEnableTurnsOn(
     rows.filter((row) => isLiveProposalStatus(row.status)),
     userId
   );
@@ -2032,9 +2040,11 @@ export async function enrichProposalsForDisplay(
         resolveEntityTitle: resolveEntityTitleScoped,
         existingRolesByEntityId,
         ...skillUpdateReads(row, skillTargetById),
+        ...playbookUpdateReads(row, playbookTargetById),
         ...(isLiveProposalStatus(row.status)
           ? { stepSkills: stepSkillsFor(row.workspaceId) }
           : {}),
+        turnsOn: turnsOnById.get(row.id),
         events: request.correlationId
           ? (traceByCorrelationId.get(request.correlationId) ?? [])
           : [],
@@ -2043,8 +2053,64 @@ export async function enrichProposalsForDisplay(
   });
 }
 
+/** `update` on a playbook row (a template or a method rewritten). */
+function isPlaybookUpdateRow(row: ProposalRow): boolean {
+  return (
+    row.targetType === "playbook" &&
+    row.proposalType.slice(row.proposalType.lastIndexOf(".") + 1) === "update"
+  );
+}
+
+/**
+ * The texts the PENDING playbook updates on the page rewrite, as they read
+ * now, keyed as the update's payload names them: the review shows each one
+ * before → after (the description, the goal, each stage's goal) instead of
+ * only the new text. Read once, floored by the playbook visibility rule the
+ * page's name reads use, so a review never quotes a playbook the viewer
+ * cannot read. Once applied the row holds the proposed text, so an applied
+ * proposal reads nothing.
+ */
+async function readPlaybookUpdateTargets(
+  rows: readonly ProposalRow[],
+  access: ReturnType<typeof scopedDb>
+): Promise<Map<string, Record<string, unknown>>> {
+  const ids = uniqueStrings(
+    rows.flatMap((row) =>
+      isPlaybookUpdateRow(row) && isLiveProposalStatus(row.status)
+        ? [row.targetId]
+        : []
+    )
+  ).filter(isLikelyUUID);
+  if (ids.length === 0) return new Map();
+  const found = await db
+    .select({
+      id: playbooks.id,
+      description: playbooks.description,
+      goalTemplate: playbooks.goalTemplate,
+      stages: playbooks.stages,
+    })
+    .from(playbooks)
+    .where(and(inArray(playbooks.id, ids), access.predicate(playbooks)));
+  return new Map(found.map(({ id, ...values }) => [id, values]));
+}
+
+/** A pending playbook update's values now, for its before → after rows. */
+function playbookUpdateReads(
+  row: ProposalRow,
+  playbookById: ReadonlyMap<string, Record<string, unknown>>
+): { targetBefore?: Readonly<Record<string, unknown>> } {
+  if (!isPlaybookUpdateRow(row) || !isLiveProposalStatus(row.status)) return {};
+  const values = playbookById.get(row.targetId);
+  return values ? { targetBefore: values } : {};
+}
+
 /** A skill as an update's review reads it: its name and its values now. */
-type SkillTargetRead = { name: string; values: Record<string, unknown> };
+type SkillTargetRead = {
+  name: string;
+  values: Record<string, unknown>;
+  /** The tools it declares it calls (`requires`), for its reach. */
+  requiredTools?: string[];
+};
 
 /** `skill.update` (stored `update`) on a skill row. */
 function isSkillUpdateRow(row: ProposalRow): boolean {
@@ -2110,8 +2176,15 @@ async function readSkillUpdateTargets(
         )
       )
     );
+  const required = await readRequiredToolNames(
+    userId,
+    found.map((row) => row.id)
+  );
   return new Map(
-    found.map(({ id, ...values }) => [id, { name: values.name, values }])
+    found.map(({ id, ...values }) => [
+      id,
+      { name: values.name, values, requiredTools: required.get(id) },
+    ])
   );
 }
 
@@ -2138,8 +2211,11 @@ function skillUpdateReads(
       if (!skill) return undefined;
       if (!live) return { name: skill.name };
       // What the skill it rewrites can reach (the patch never changes it).
-      const reach = skillReach(skill.values);
-      return reach ? { ...skill, reach: { ...reach, unreadSteps: 0 } } : skill;
+      const reach = skillReach({
+        ...skill.values,
+        requiredTools: skill.requiredTools,
+      });
+      return reach ? { ...skill, reach } : skill;
     },
   };
 }
@@ -2173,6 +2249,8 @@ function buildProposalReviewModel(params: {
   targetBefore?: Readonly<Record<string, unknown>>;
   /** Pending only: the skills an automation's steps would run, for its reach. */
   stepSkills?: StepSkillLookup;
+  /** A pending `capability.enable` only: what it would turn on. */
+  turnsOn?: ProposalReviewModel["turnsOn"];
   events: Awaited<ReturnType<EventRepository["getCorrelatedEvents"]>>;
 }): ProposalReviewModel {
   const {
@@ -2187,6 +2265,7 @@ function buildProposalReviewModel(params: {
     resolveUpdateTarget,
     targetBefore,
     stepSkills,
+    turnsOn,
     events,
   } = params;
   const requestData =
@@ -2255,6 +2334,7 @@ function buildProposalReviewModel(params: {
     ),
     ...(graph ? { graph } : {}),
     ...(removal ? { removal } : {}),
+    ...(turnsOn ? { turnsOn } : {}),
     events: reviewEvents,
   };
 }

@@ -27,6 +27,7 @@ const INSTRUCTION_SKILL = "44444444-4444-4444-8444-444444444443";
 const TWIN = "44444444-4444-4444-8444-444444444444";
 const SKILL_UPDATE = "44444444-4444-4444-8444-444444444445";
 const ACTING_GRAPH = "44444444-4444-4444-8444-444444444446";
+const ENABLE = "44444444-4444-4444-8444-444444444447";
 
 const h = vi.hoisted(() => ({
   proposals: new Map<string, Record<string, unknown>>(),
@@ -204,6 +205,20 @@ beforeEach(() => {
       }
     )
   );
+  // A request to turn an agent's skill on (`proposeCapabilityEnable`): its
+  // stored data is flat, ids only, and approving it switches code on.
+  h.proposals.set(ENABLE, {
+    ...row(ENABLE, "capability", {}),
+    proposalType: "capability.enable",
+    targetId: "skill-9",
+    data: {
+      sourceId: HUMAN,
+      containerId: null,
+      skillIds: ["skill-9"],
+      skillId: "skill-9",
+      summary: 'Enable Capability "inbox_count": inbox_count',
+    },
+  });
   h.apply.mockClear();
 });
 
@@ -226,13 +241,19 @@ describe("batchApprove — a page-only item is refused, the rest is approved", (
     expect(applied()).toEqual([ORDINARY]);
   });
 
-  it("an instruction skill, a skill update and an acting graph are refused", async () => {
+  it("an instruction skill, a skill update, an acting graph and a turn-on request are refused", async () => {
     const res = results(
       await caller.batchApprove({
-        proposalIds: [INSTRUCTION_SKILL, SKILL_UPDATE, ACTING_GRAPH, ORDINARY],
+        proposalIds: [
+          INSTRUCTION_SKILL,
+          SKILL_UPDATE,
+          ACTING_GRAPH,
+          ENABLE,
+          ORDINARY,
+        ],
       })
     );
-    for (const id of [INSTRUCTION_SKILL, SKILL_UPDATE, ACTING_GRAPH]) {
+    for (const id of [INSTRUCTION_SKILL, SKILL_UPDATE, ACTING_GRAPH, ENABLE]) {
       expect(res.find((r) => r.proposalId === id)).toEqual({
         proposalId: id,
         success: false,
@@ -270,6 +291,7 @@ describe("batchApprove — a page-only item is refused, the rest is approved", (
       INSTRUCTION_SKILL,
       SKILL_UPDATE,
       ACTING_GRAPH,
+      ENABLE,
     ]) {
       await caller.approve({ proposalId: id, expectedRevision: 0 });
     }
@@ -278,6 +300,7 @@ describe("batchApprove — a page-only item is refused, the rest is approved", (
       INSTRUCTION_SKILL,
       SKILL_UPDATE,
       ACTING_GRAPH,
+      ENABLE,
     ]);
   });
 });
@@ -289,6 +312,7 @@ describe("approve — an acting page-only proposal needs the revision its page r
       INSTRUCTION_SKILL,
       SKILL_UPDATE,
       ACTING_GRAPH,
+      ENABLE,
     ]) {
       const err = await caller.approve({ proposalId: id }).then(
         () => null,

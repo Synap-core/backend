@@ -7,12 +7,15 @@
  *  - reads = every subject in GRANT_READ_SPECS (the read hook);
  *  - doors = every door in GATE_WRITE_DOORS, folded to the grammar spelling by
  *    `grantRequestKey` (the fold every refusing layer uses).
- * Every door verb is CLASSIFIED: a destructive verb (DESTRUCTIVE_ACTIONS) or
- * `approve` must be refused; every other verb — create, update and each gate
- * verb — must be permitted at BOTH refusing layers, the key grant
- * (`grantRequestForWrite` + `permits`) and the agent capability rung
- * (`decideAgentPolicy` rung 1), or be listed in AI_PRESET_EXCLUSIONS with a
- * reason (and then be refused at both). A new door fails here until decided.
+ * Every door verb is CLASSIFIED by the door's OWN spelling (governance reads
+ * `facet/detach` as a write, not a delete, though its grant folds onto
+ * `facet.delete`): a destructive verb (DESTRUCTIVE_ACTIONS) or `approve` must
+ * be refused; every other verb — create, update and each gate verb — must be
+ * permitted at BOTH refusing layers, the key grant (`grantWriteDenial`, which
+ * accepts a folded door's own spelling too: `grantRequestKeys`) and the agent
+ * capability rung (`decideAgentPolicy` rung 1), or be listed in
+ * AI_PRESET_EXCLUSIONS with a reason (and then be refused at both). A new door
+ * fails here until decided.
  *
  * NOT COVERED (stated): a write path that does not pass
  * `checkPermissionOrPropose` (posting a channel message) is outside both
@@ -24,6 +27,7 @@ import {
   GATE_WRITE_DOORS,
   decideAgentPolicy,
   grantRequestKey,
+  grantRequestKeys,
 } from "@synap/governance-policy";
 import { permits } from "@synap/governance-policy/grants";
 import {
@@ -34,7 +38,7 @@ import {
 } from "@synap-core/types/grants";
 import { secrets } from "@synap/database/schema";
 import { GRANT_READ_SPECS, grantReadClause } from "../access/grant-read.js";
-import { grantRequestForWrite } from "../utils/grant-write-check.js";
+import { grantWriteDenial } from "../utils/grant-write-check.js";
 
 const PRESET = GRANT_PRESETS.find((r) => r.id === AI_READ_PROPOSE_ROLE_ID)!
   .grant.permissions;
@@ -47,21 +51,27 @@ const doors = Object.keys(GATE_WRITE_DOORS).map((d) => {
   const i = d.indexOf("/");
   const raw = { subject: d.slice(0, i), action: d.slice(i + 1) };
   const key = grantRequestKey(raw.subject, raw.action);
-  return { ...raw, key: `${key.subject}.${key.action}`, verb: key.action };
+  // The door's own verb (the last request key): `detach`, not the `delete`
+  // its grant folds onto.
+  const verb = grantRequestKeys(raw.subject, raw.action).at(-1)!.action;
+  return { ...raw, key: `${key.subject}.${key.action}`, verb };
 });
 const refusedVerb = (verb: string) =>
   DESTRUCTIVE_ACTIONS.includes(verb) || verb === "approve";
 const grantedDoors = doors.filter((d) => !refusedVerb(d.verb));
 const excluded = (key: string) => key in AI_PRESET_EXCLUSIONS;
 
-/** The key grant's answer for a gate door (the same request the gate builds). */
+/** The key grant's answer for a gate door (the gate's own grant rung). */
 async function grantAllows(subjectType: string, action: string) {
-  const req = await grantRequestForWrite({
-    subjectType,
-    action,
-    data: subjectType === "entity" ? { profileSlug: "note" } : {},
-  });
-  return permits(SCOPE, req);
+  const denial = await grantWriteDenial(
+    {
+      subjectType,
+      action,
+      data: subjectType === "entity" ? { profileSlug: "note" } : {},
+    },
+    { scopes: [SCOPE], clientId: null }
+  );
+  return denial === null;
 }
 
 /** The agent capability rung's answer (rung 1 of decideAgentPolicy). */

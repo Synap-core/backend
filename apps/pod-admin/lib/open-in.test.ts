@@ -165,10 +165,21 @@ describe("openIn — a viewed object hands off with its view", () => {
 });
 
 describe("placeExit — the device decides what a hand-off shows", () => {
-  it("leaves every exit untouched off a phone", () => {
+  it("off a phone keeps the desktop link alone, its download held for a failed open", () => {
     const exit = openIn({ kind: "settings", section: "vault" });
+    for (const role of ["admin", "member"] as const) {
+      expect(placeExit(exit, false, role)).toEqual({
+        href: "synap://open/app/settings/vault",
+        isDesktopLink: true,
+        ifNotOpened: exit.fallback,
+      });
+    }
+    expect(exit.fallback?.href).toContain("/download/browser");
+  });
+
+  it("leaves web exits untouched off a phone", () => {
+    const exit = openIn({ kind: "guide", slug: "quickstart" });
     expect(placeExit(exit, false, "admin")).toBe(exit);
-    expect(placeExit(exit, false, "member")).toBe(exit);
   });
 
   it("leaves web exits untouched on a phone", () => {
@@ -225,10 +236,11 @@ describe("placeExit — the device decides what a hand-off shows", () => {
       expect(placed.web).toBeUndefined();
     });
 
-    it("the desktop keeps the desktop link and its hatch", () => {
+    it("the desktop keeps the desktop link, its hatch only for a failed open", () => {
       const placed = placeExit(exit, false, "admin");
       expect(placed.href).toBe(`synap://open/agent/${ID}`);
-      expect(placed.fallback?.href).toContain("/download/browser");
+      expect(placed.fallback).toBeUndefined();
+      expect(placed.ifNotOpened?.href).toContain("/download/browser");
       expect(placed.web).toBeUndefined();
     });
   });
@@ -358,6 +370,7 @@ describe("placeExit — the device decides what a hand-off shows", () => {
         const placed = placeExit(openIn(target), true, role);
         expect(placed.href).toBeNull();
         expect(placed.fallback).toBeUndefined();
+        expect(placed.ifNotOpened).toBeUndefined();
       }
     }
   });

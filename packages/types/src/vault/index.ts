@@ -391,3 +391,56 @@ export interface SecretDetailBundle {
   grants: SecretGrantView[];
   recentActivity: SecretActivityEvent[];
 }
+
+// ============================================================================
+// Vault requests — which saved secret an agent's request names
+// ============================================================================
+
+/** What an agent's `vault.request` names (`hub-protocol/rest/vault.ts`). */
+export interface VaultRequestTarget {
+  service?: string | null;
+  secretType?: string | null;
+}
+
+/** The fields of a saved secret the request is matched against. */
+export interface VaultRequestCandidate {
+  id: string;
+  type?: string | null;
+  name?: string | null;
+  category?: string | null;
+  url?: string | null;
+  description?: string | null;
+}
+
+const normVaultField = (s: unknown): string =>
+  String(s ?? "")
+    .toLowerCase()
+    .trim();
+
+/**
+ * The saved secrets that satisfy an agent's vault request: the same type AND
+ * the service named in the secret's name, category, url or description.
+ *
+ * ONE rule for every door that grants a request — the desktop vault card
+ * preselects the single match, and the approve executor (pod console, phone,
+ * inbox) grants it — so the secret a person is shown is the secret granted.
+ * A request naming neither service nor type matches nothing.
+ */
+export function matchVaultRequestSecrets<T extends VaultRequestCandidate>(
+  secrets: readonly T[],
+  request: VaultRequestTarget
+): T[] {
+  const svc = normVaultField(request.service);
+  const typ = normVaultField(request.secretType);
+  if (!svc && !typ) return [];
+  return secrets.filter((s) => {
+    const st = normVaultField(s.type);
+    const typeOk = !typ || st === typ || st.includes(typ) || typ.includes(st);
+    const svcOk =
+      !svc ||
+      [s.name, s.category, s.url, s.description].some((f) =>
+        normVaultField(f).includes(svc)
+      );
+    return typeOk && svcOk;
+  });
+}

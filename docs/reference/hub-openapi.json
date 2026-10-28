@@ -2506,6 +2506,11 @@
                     "minLength": 1,
                     "maxLength": 2000,
                     "description": "The command the agent will run on approval. DISCLOSURE ONLY — the pod never executes it."
+                  },
+                  "step": {
+                    "type": "string",
+                    "enum": ["push", "publish", "deploy"],
+                    "description": "What the approval lets ship: 'push' (to a protected branch), 'publish' (a package) or 'deploy'. It covers this step only. Optional so older callers keep filing; with none, a reader takes the step from `deployCommand`."
                   }
                 },
                 "required": [
@@ -3646,6 +3651,10 @@
           "ttl": {
             "type": "number",
             "description": "Minutes the grant lives. Defaults to 60."
+          },
+          "secretId": {
+            "type": "string",
+            "description": "The saved secret to grant, when the agent knows it (the id in its vault:// reference). Omitted: the person's one secret matching service and secretType."
           }
         },
         "required": ["secretType", "service", "purpose"]
@@ -4891,6 +4900,140 @@
         },
         "required": ["apiKey", "keyId", "scopes"]
       },
+      "KeyTemplate": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "description": { "type": "string" },
+          "stored": { "type": "boolean" },
+          "uses": { "type": "array", "items": { "type": "string" } },
+          "permissions": { "type": "array", "items": { "type": "string" } },
+          "workspaceIds": {
+            "type": ["array", "null"],
+            "items": { "type": "string" }
+          },
+          "projectIds": {
+            "type": ["array", "null"],
+            "items": { "type": "string" }
+          },
+          "entityIds": {
+            "type": ["array", "null"],
+            "items": { "type": "string" }
+          },
+          "expiresInDays": { "type": ["integer", "null"] }
+        },
+        "required": [
+          "id",
+          "name",
+          "description",
+          "stored",
+          "uses",
+          "permissions",
+          "workspaceIds",
+          "projectIds",
+          "entityIds"
+        ]
+      },
+      "KeyRequestResult": {
+        "type": "object",
+        "properties": {
+          "request_code": { "type": "string" },
+          "request_id": { "type": "string" },
+          "review_url": { "type": "string" },
+          "expires_in": { "type": "number" },
+          "interval": { "type": "number" }
+        },
+        "required": [
+          "request_code",
+          "request_id",
+          "review_url",
+          "expires_in",
+          "interval"
+        ]
+      },
+      "KeyRequestInput": {
+        "type": "object",
+        "properties": {
+          "template": { "type": "string", "minLength": 1, "maxLength": 120 },
+          "name": { "type": "string", "minLength": 1, "maxLength": 100 },
+          "expiresInDays": {
+            "type": ["integer", "null"],
+            "minimum": 1,
+            "maximum": 36500
+          },
+          "workspaceId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i"
+          }
+        },
+        "required": ["template"]
+      },
+      "KeyRequestTokenResult": {
+        "type": "object",
+        "properties": {
+          "apiKey": { "type": "string" },
+          "keyId": { "type": "string" },
+          "keyPrefix": { "type": "string" },
+          "name": { "type": "string" },
+          "scopes": { "type": "array", "items": { "type": "string" } },
+          "expiresAt": { "type": ["string", "null"] }
+        },
+        "required": [
+          "apiKey",
+          "keyId",
+          "keyPrefix",
+          "name",
+          "scopes",
+          "expiresAt"
+        ]
+      },
+      "KeyRequestTokenError": {
+        "type": "object",
+        "properties": {
+          "error": { "type": "string" },
+          "error_description": { "type": "string" },
+          "interval": { "type": "number" }
+        },
+        "required": ["error", "error_description"]
+      },
+      "KeyRequestTokenInput": {
+        "type": "object",
+        "properties": {
+          "request_code": {
+            "type": "string",
+            "minLength": 16,
+            "maxLength": 128
+          }
+        },
+        "required": ["request_code"]
+      },
+      "RequestedKey": {
+        "type": "object",
+        "properties": {
+          "keyId": { "type": "string" },
+          "name": { "type": "string" },
+          "keyPrefix": { "type": "string" },
+          "templateId": { "type": "string" },
+          "scopes": { "type": "array", "items": { "type": "string" } },
+          "createdAt": { "type": "string" },
+          "expiresAt": { "type": ["string", "null"] },
+          "lastUsedAt": { "type": ["string", "null"] },
+          "revokedAt": { "type": ["string", "null"] }
+        },
+        "required": [
+          "keyId",
+          "name",
+          "keyPrefix",
+          "templateId",
+          "scopes",
+          "createdAt",
+          "expiresAt",
+          "lastUsedAt",
+          "revokedAt"
+        ]
+      },
       "Skill": {
         "type": "object",
         "properties": {
@@ -5109,6 +5252,82 @@
           "note": { "type": "string" }
         },
         "required": ["triggered"]
+      },
+      "WorkRelease": {
+        "type": "object",
+        "properties": {
+          "generatedAt": { "type": "string" },
+          "sources": {
+            "type": "object",
+            "properties": {
+              "snapshots": {
+                "type": "string",
+                "enum": ["ok", "stale", "missing"]
+              },
+              "sessions": { "type": "string", "enum": ["ok", "unavailable"] },
+              "holders": { "type": "string", "enum": ["ok", "unavailable"] }
+            },
+            "required": ["snapshots", "sessions", "holders"]
+          },
+          "repos": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": {}
+            }
+          },
+          "prs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": {}
+            }
+          },
+          "blockers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "ref": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": { "type": "string", "enum": ["pr"] },
+                        "repo": { "type": "string" },
+                        "number": { "type": "number" }
+                      },
+                      "required": ["kind", "repo", "number"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": { "type": "string", "enum": ["main"] },
+                        "repo": { "type": "string" }
+                      },
+                      "required": ["kind", "repo"]
+                    }
+                  ]
+                },
+                "waiting": { "type": "number" },
+                "waitingPrs": { "type": "number" },
+                "waitingMains": { "type": "number" },
+                "reason": { "type": ["string", "null"] }
+              },
+              "required": [
+                "ref",
+                "waiting",
+                "waitingPrs",
+                "waitingMains",
+                "reason"
+              ],
+              "additionalProperties": {}
+            }
+          }
+        },
+        "required": ["generatedAt", "sources", "repos", "prs", "blockers"]
       },
       "RoutingHealth": {
         "type": "object",
@@ -10151,7 +10370,7 @@
                   },
                   "allowToday": {
                     "type": "boolean",
-                    "description": "Held-writes packs only (agent/held_writes): also lift the agent's daily write ceiling to 2x the current limit until the next 00:00 UTC, so its next writes today are not held again. A person's act: refused for an agent credential and without the authority to author that ceiling (pod admin). 400 on any other proposal or a pack already decided. The response then carries allowedToday {ceilingId, agentUserId, limit, previousLimit, expiresAt, alreadyAllowed}."
+                    "description": "Held-writes packs only (agent/held_writes): also lift the agent's daily write ceiling to 2x the current limit until the next 00:00 UTC, so its next writes today are not held again. A person's act: refused for an agent credential and without the authority to author that ceiling (pod admin). 400 on any other proposal or a pack already decided. The response then carries allowedToday {ceilingId, agentUserId, limit, previousLimit, expiresAt, alreadyAllowed}. With no daily limit in force (no ceiling row, the default), nothing is raised and allowedToday is absent."
                   }
                 }
               }
@@ -26466,6 +26685,428 @@
         }
       }
     },
+    "/keys/templates": {
+      "get": {
+        "tags": ["Keys"],
+        "summary": "The templates a key can be requested from",
+        "description": "The built-in key templates (Dev loop poster, Website or pod app, Read-only, Full access), then the person's own roles that say where a key is used. `synap keys templates` lists these.",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "Templates",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "templates": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/KeyTemplate" }
+                    }
+                  },
+                  "required": ["templates"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request — the wrapped door refused the input",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden — missing scope",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict — a refusal the caller can act on",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "412": {
+            "description": "Precondition failed",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/keys/requests": {
+      "post": {
+        "tags": ["Keys"],
+        "summary": "Ask the person for a key made from a template",
+        "description": "Files a key request the person approves on the pod-admin page `review_url` (they may narrow it, never widen it past the template). Then poll `POST /keys/requests/token` with `request_code` to collect the key once. The caller never mints a key itself.",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/KeyRequestInput" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Request filed",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/KeyRequestResult" }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request — the wrapped door refused the input",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized — a key request is made with a key",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden — missing scope",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict — a refusal the caller can act on",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "412": {
+            "description": "Precondition failed",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/keys/requests/token": {
+      "post": {
+        "tags": ["Keys"],
+        "summary": "Collect an approved key, once",
+        "description": "Poll with the `request_code` of `POST /keys/requests`, every `interval` seconds. Answers 400 `authorization_pending` until the person decides; then 200 with the key, exactly once. Only the caller that filed the request may collect it.",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/KeyRequestTokenInput" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The key — shown once",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyRequestTokenResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not collected: authorization_pending | slow_down | access_denied | expired_token | invalid_grant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyRequestTokenError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict — a refusal the caller can act on",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "412": {
+            "description": "Precondition failed",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/keys/requested": {
+      "get": {
+        "tags": ["Keys"],
+        "summary": "The keys this caller requested",
+        "description": "Only keys minted from this caller's own key requests — never the person's other keys (`synap open keys` shows those).",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "Requested keys",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "keys": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/RequestedKey" }
+                    }
+                  },
+                  "required": ["keys"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request — the wrapped door refused the input",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden — missing scope",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict — a refusal the caller can act on",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "412": {
+            "description": "Precondition failed",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/keys/requested/{keyId}": {
+      "delete": {
+        "tags": ["Keys"],
+        "summary": "Revoke a key this caller requested",
+        "description": "Revokes a key minted from this caller's own key request. Any other key is 404: a computer never revokes the person's other keys.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i"
+            },
+            "required": true,
+            "name": "keyId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Revoked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": { "revoked": { "type": "boolean" } },
+                  "required": ["revoked"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request — the wrapped door refused the input",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden — missing scope",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict — a refusal the caller can act on",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "412": {
+            "description": "Precondition failed",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/focus-sessions": {
       "get": {
         "tags": ["FocusSessions"],
@@ -26745,6 +27386,11 @@
                           ]
                         },
                         "why": { "type": "string", "maxLength": 500 },
+                        "unblocks": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
                         "ref": {
                           "anyOf": [
                             {
@@ -27273,6 +27919,11 @@
                           ]
                         },
                         "why": { "type": "string", "maxLength": 500 },
+                        "unblocks": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
                         "owedSince": { "type": "string" },
                         "attestedBy": { "type": "string" },
                         "attestedAt": { "type": "string" },
@@ -29351,6 +30002,11 @@
                           ]
                         },
                         "why": { "type": "string", "maxLength": 500 },
+                        "unblocks": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
                         "ref": {
                           "anyOf": [
                             {
@@ -29879,6 +30535,11 @@
                           ]
                         },
                         "why": { "type": "string", "maxLength": 500 },
+                        "unblocks": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
                         "owedSince": { "type": "string" },
                         "attestedBy": { "type": "string" },
                         "attestedAt": { "type": "string" },
@@ -31820,6 +32481,11 @@
                     ]
                   },
                   "why": { "type": "string", "maxLength": 500 },
+                  "unblocks": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
                   "ref": {
                     "anyOf": [
                       {
@@ -33760,6 +34426,100 @@
         "responses": {
           "200": {
             "description": "Count",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": {}
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown kind / track",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "412": {
+            "description": "The kind declares no lifecycle",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/needs-you": {
+      "get": {
+        "tags": ["Attention"],
+        "summary": "What really needs the person, and where everything else went",
+        "description": "`signals.needsYou` — THE needs-you rule (decision E): `rows.needs_you` is the headline; `rows.working` (an agent is on it), `rows.stopped` (no agent for 7 days; one row per ask, `needsYouRows` draws one per session), `rows.review_later`, `rows.from_system` (no real asker) and `rows.changes_to_review` (pending proposals nothing waits on) are its folds. `count` is `signals.count` over the same read, with `count.folds`. Read this instead of re-deriving needs-you from session reads.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string" },
+            "required": false,
+            "name": "workspaceId",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string" },
+            "required": false,
+            "name": "projectId",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string" },
+            "required": false,
+            "name": "trackId",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string" },
+            "required": false,
+            "name": "sessionId",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "integer", "minimum": 1, "maximum": 200 },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Rows by fold + the count",
             "content": {
               "application/json": {
                 "schema": {
@@ -36759,6 +37519,40 @@
           },
           "403": {
             "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/work-release": {
+      "get": {
+        "tags": ["FocusSessions"],
+        "summary": "Work › Ship: can I release, and what blocks it",
+        "description": "The release read (`services/dev-loop/work-release.ts`): the newest `dev.repo_snapshot` per repo (posted by the devbox producer), each PR's stage on the road to main (working, checks, ready, on_main), its check verdict (own red vs red inherited from main), its fold (draft, negctl, dependabot, stale), the session holding it and whether that session is working now, and the blockers ranked by how much waits behind them transitively. `sources` says which read was stale, missing or failed: a failed read is `unavailable`, never an empty list. A workspace-bound key reads its own workspace's facts.",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "Work release",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/WorkRelease" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }

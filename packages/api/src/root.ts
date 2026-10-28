@@ -94,12 +94,14 @@ import { workersRouter } from "./routers/workers.js";
 import { automationsRouter } from "./routers/automations.js";
 import { knowledgeRouter } from "./routers/knowledge.js";
 import { onboardingRouter } from "./routers/onboarding.js";
+import { onboardingMilestonesRouter } from "./routers/onboarding-milestones.js";
 // Previously mounted ONLY via the dynamic `registerRouter` registry (so they
 // were served but invisible to codegen). Folded into coreRouter so root.ts is
 // the SINGLE source of truth for the served + typed API surface.
 import { diagnoseRouter } from "./routers/diagnose.js";
 import { signalRouter } from "./routers/signal.js";
 import { signalsRouter } from "./routers/signals.js";
+import { workReleaseRouter } from "./routers/work-release.js";
 import { typesenseRouter } from "./routers/typesense.js";
 import { n8nActionsRouter } from "./routers/n8n/actions.js";
 import { usersRouter } from "./routers/users.js";
@@ -214,9 +216,13 @@ export const coreRouter = router({
   lifecycle: lifecycleRouter,
   workers: workersRouter,
   onboarding: onboardingRouter,
+  // Settings › Privacy: share setup milestones with the CP (plan §5, OQ3).
+  onboardingMilestones: onboardingMilestonesRouter,
   diagnose: diagnoseRouter,
   signal: signalRouter,
   signals: signalsRouter,
+  // Work › Ship — the release read (dev.repo_snapshot facts, folded).
+  workRelease: workReleaseRouter,
   typesense: typesenseRouter,
   n8nActions: n8nActionsRouter,
   users: usersRouter,

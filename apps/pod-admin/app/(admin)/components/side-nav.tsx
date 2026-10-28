@@ -30,6 +30,7 @@ import {
   Activity,
   AppWindow,
   Bot,
+  Boxes,
   Building2,
   Database,
   Grid3x3,
@@ -45,6 +46,7 @@ import {
   Plug,
   RefreshCw,
   ScrollText,
+  SlidersHorizontal,
   Search,
   Shapes,
   ShieldCheck,
@@ -96,10 +98,12 @@ const NAV_ICONS: Record<NavIconName, LucideIcon> = {
   Plug,
   Sparkles,
   Store,
+  Boxes,
   ShieldCheck,
   HardDrive,
   RefreshCw,
   ScrollText,
+  SlidersHorizontal,
 };
 
 const BADGE_PILL: Record<BadgeTone, string> = {

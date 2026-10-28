@@ -42,6 +42,14 @@ export const DEV_PLAN_APPROVAL_TYPE = "dev.plan_approval";
 export const DEV_DEPLOY_APPROVAL_TYPE = "dev.deploy_approval";
 
 /**
+ * What a deploy approval lets ship: a push to a protected branch, a package
+ * publish, or a deploy. An approval covers its commit for its step only
+ * (founder, 2026-10-28): approving "push to main" does not approve a publish.
+ */
+export const DEV_DEPLOY_STEPS = ["push", "publish", "deploy"] as const;
+export type DevDeployStep = (typeof DEV_DEPLOY_STEPS)[number];
+
+/**
  * The LEGACY stage a session sits at once a gate clears — used only when the
  * session follows no staged playbook that names the gate (`stageAfterDevGate`
  * decides otherwise). Read by the polling CLI agent as "you may proceed", so
@@ -170,6 +178,15 @@ export const DevDeployApprovalPayloadSchema = z.object({
     .describe(
       "The command the agent will run on approval. DISCLOSURE ONLY — the pod " +
         "never executes it."
+    ),
+  step: z
+    .enum(DEV_DEPLOY_STEPS)
+    .optional()
+    .describe(
+      "What the approval lets ship: 'push' (to a protected branch), 'publish' " +
+        "(a package) or 'deploy'. It covers this step only. Optional so older " +
+        "callers keep filing; with none, a reader takes the step from " +
+        "`deployCommand`."
     ),
 });
 export type DevDeployApprovalPayload = z.infer<

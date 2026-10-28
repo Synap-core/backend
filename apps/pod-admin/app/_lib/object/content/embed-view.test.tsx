@@ -20,6 +20,9 @@ const KEY = "generated:fleet-report";
 const PAGE =
   "<!doctype html><html><head><title>Fleet</title></head><body><h1>Fleet report</h1></body></html>";
 const REACT = "export default function Cell() { return <div>Deals</div>; }";
+/** How the founder's report (`generated:claude-code-fleet-report`) opens: no doctype, no <html>. */
+const TITLE_FIRST_PAGE =
+  '<title>Claude Code Fleet Report</title>\n<meta name="claude:viewport-fit-sides" content="cover">\n<link rel="preconnect" href="https://fonts.googleapis.com">\n<style>\nbody { margin: 0 }\n</style>\n<h1>Fleet</h1>';
 
 const block = (key: string, fallback = "Read the summary below.") =>
   [`:::synap-cell{cellKey="${key}"}`, fallback, ":::"].join("\n");
@@ -85,6 +88,23 @@ describe("a document's HTML cell runs in the isolated frame", () => {
 
   it("keeps the author's prose under it", () => {
     expect(out).toContain("Read the summary below.");
+  });
+});
+
+describe("a `frame` row that opens with <title> runs as a page", () => {
+  it("draws the founder's report in the frame, not as a chip", () => {
+    const out = draw(
+      block("generated:claude-code-fleet-report"),
+      readOf({
+        rendererType: "frame",
+        rendererSource: TITLE_FIRST_PAGE,
+        workspaceId: null,
+      })
+    );
+    expect(iframes(out)).toHaveLength(1);
+    expect(unescape(attr(iframes(out)[0]!, "srcdoc")!)).toContain(
+      "<h1>Fleet</h1>"
+    );
   });
 });
 
@@ -166,7 +186,21 @@ describe("cellIsHtmlPage — the stored mechanism decides", () => {
       cellIsHtmlPage({ rendererType: "iframe", rendererSource: "<p>x</p>" })
     ).toBe(true);
   });
-  it("a `frame` cell is a page only when its source opens as a document", () => {
+  it("a `frame` cell whose source opens with <title> is a page (the founder's report)", () => {
+    expect(
+      cellIsHtmlPage({
+        rendererType: "frame",
+        rendererSource: TITLE_FIRST_PAGE,
+      })
+    ).toBe(true);
+    expect(
+      cellIsHtmlPage({
+        rendererType: "frame",
+        rendererSource: "<!-- report -->\n<style>h1{}</style><h1>x</h1>",
+      })
+    ).toBe(true);
+  });
+  it("a `frame` cell is a page only when its source opens with markup", () => {
     expect(
       cellIsHtmlPage({ rendererType: "frame", rendererSource: PAGE })
     ).toBe(true);

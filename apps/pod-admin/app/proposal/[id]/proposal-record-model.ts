@@ -37,6 +37,7 @@ import {
   type PropertyRenderKind,
 } from "@synap-core/types/property-render";
 import {
+  humanizeToken,
   resolveObjectNoun,
   resolveStatusLabel,
 } from "@synap-core/types/vocabulary";
@@ -46,8 +47,9 @@ import {
 } from "@synap-core/types/presentation";
 import { formatDate, formatTimestamp } from "../../../lib/format";
 import {
+  hasChanges,
   textChanges,
-  type ChangeLine,
+  type TextChange,
 } from "../../_lib/object/content/document-changes-model";
 import type { ProposalChangeInput } from "./proposal-review-model";
 
@@ -67,8 +69,11 @@ export type RecordValue =
   | { kind: "tags"; items: string[] }
   /** Source code, whole: never clipped (the card may fold it, never cut it). */
   | { kind: "code"; text: string; lines: number }
-  /** A rewritten text as its changed paragraphs (instructions before → after). */
-  | { kind: "changes"; lines: ChangeLine[] };
+  /**
+   * A rewritten text, whole, with its changes where they happen (instructions,
+   * a goal, a note's body). `code`: read as source, line by line.
+   */
+  | { kind: "changes"; change: TextChange; code: boolean };
 
 export interface RecordField {
   key: string;
@@ -123,8 +128,17 @@ const WHOLE_TEXT_KEYS: ReadonlySet<string> = new Set([
 const PROSE_TEXT_KEYS: ReadonlySet<string> = new Set(["body", "instructions"]);
 
 /**
- * A rewritten instruction as the paragraphs it changes, or `null` when the
- * two sides are not both text or nothing changed.
+ * The property kinds whose rewrite reads as a diff. Never a secret (the card
+ * never draws one), a link, a date or a choice: those keep their own reading.
+ */
+const DIFFABLE_KINDS: ReadonlySet<PropertyRenderKind> = new Set([
+  "text",
+  "richtext",
+]);
+
+/**
+ * A rewritten text, whole, with its changes in place, or `null` when the two
+ * sides are not both text or nothing changed.
  */
 export function proseChanges(
   before: unknown,
@@ -133,13 +147,33 @@ export function proseChanges(
   if (typeof before !== "string" || typeof after !== "string") return null;
   if (before.trim() === "" || after.trim() === "") return null;
   const lines = textChanges(before, after);
-  return lines.some((l) => l.op !== "unchanged")
-    ? { kind: "changes", lines }
+  return hasChanges(lines)
+    ? { kind: "changes", change: { before, after, lines }, code: false }
     : null;
+}
+
+/** Rewritten code, read line by line, or `null` when it did not change. */
+export function codeChanges(
+  before: unknown,
+  after: unknown
+): RecordValue | null {
+  if (typeof before !== "string" || typeof after !== "string") return null;
+  if (before.trim() === "" || after.trim() === "" || before === after) {
+    return null;
+  }
+  return { kind: "changes", change: { before, after, lines: [] }, code: true };
 }
 
 /** Text past this many characters (or with a line break) takes the card's width. */
 const WIDE_TEXT_CHARS = 80;
+
+/** A text a rewrite of reads as a diff: too long to compare by eye. */
+function isLongText(value: unknown): boolean {
+  return (
+    typeof value === "string" &&
+    (value.trim().length > WIDE_TEXT_CHARS || value.trim().includes("\n"))
+  );
+}
 /** The longest text drawn in a card; the whole value stays in Advanced. */
 const MAX_TEXT_CHARS = 600;
 
@@ -390,6 +424,70 @@ export interface RecordInput {
 }
 
 /**
+ * A link proposal as what it joins: its two ends (doors when the pod resolved
+ * them, else the names the pod wrote beside them) and the relation between
+ * them — never its columns. Live (proposal f15b68ae, 2026-10-28): a link
+ * delete drew Title, From ID, To type, Source label… each "empty removed", and
+ * the founder could not tell what the agent was deleting.
+ */
+function linkRecord(
+  input: RecordInput,
+  op: "create" | "delete"
+): ProposedRecord | null {
+  const changes = input.changes ?? [];
+  const valueAt = (path: string): unknown => {
+    const change = changes.find((c) => c.path === path);
+    return op === "delete" ? change?.before : change?.after;
+  };
+  const end = (idPath: string, namePath: string): RecordValue | null => {
+    const resolved = input.objectRefs?.[idPath];
+    if (resolved) return recordValue("text", valueAt(idPath), resolved);
+    const name = valueAt(namePath);
+    return typeof name === "string" && name.trim() ? textValue(name) : null;
+  };
+  const linkType = valueAt("linkType");
+  const relationText =
+    typeof linkType === "string" && linkType.trim()
+      ? humanizeToken(linkType)
+      : null;
+  const relation = relationText ? textValue(relationText) : null;
+  const from = end("fromId", "sourceLabel");
+  const to = end("toId", "targetLabel");
+  const fieldOp: RecordField["op"] = op === "delete" ? "remove" : "add";
+  const fields = (
+    [
+      ["fromId", "From", from],
+      ["linkType", "Relation", relation],
+      ["toId", "To", to],
+    ] as const
+  ).flatMap(([key, label, value]): RecordField[] =>
+    value
+      ? [
+          {
+            key,
+            label,
+            op: fieldOp,
+            before: op === "delete" ? value : undefined,
+            after: op === "delete" ? undefined : value,
+            stale: false,
+            wide: false,
+          },
+        ]
+      : []
+  );
+  const name = (v: RecordValue | null) =>
+    v?.kind === "ref" ? v.name : v?.kind === "text" ? v.text : null;
+  // "Markdown → pod cleanup blocked by Resolve what needs you", not the pod's
+  // generic "Session blocked by session".
+  const title =
+    from && to && relationText
+      ? `${name(from)} ${relationText.toLowerCase()} ${name(to)}`
+      : input.targetName?.trim() || null;
+  if (fields.length === 0) return null;
+  return { ref: input.ref ?? "single", title, kind: "link", op, fields };
+}
+
+/**
  * One proposal's diff as the record it creates, changes or removes. `null`
  * when the diff has nothing a reviewer can read — the raw request is still in
  * Advanced.
@@ -402,6 +500,7 @@ export function proposedRecord(input: RecordInput): ProposedRecord | null {
       : input.action === "delete"
         ? "delete"
         : "update";
+  if (input.kind === "link" && op !== "update") return linkRecord(input, op);
   const defs = new Map((input.definitions ?? []).map((d) => [d.slug, d]));
   let title = op === "create" ? null : input.targetName?.trim() || null;
   let kind = input.kind ?? null;
@@ -441,11 +540,22 @@ export function proposedRecord(input: RecordInput): ProposedRecord | null {
         : change.operation === "update"
           ? "change"
           : "add";
-    // Rewritten instructions read as what changes, not two whole copies.
+    // A rewritten text reads as the whole text with its changes in place,
+    // never two whole copies: a skill's code line by line, its instructions,
+    // and any long text (a goal, a description, a note's body) as prose.
     const rewrite =
-      fieldOp === "change" && !isProperty && PROSE_TEXT_KEYS.has(key)
-        ? proseChanges(change.before, change.after)
-        : null;
+      fieldOp !== "change"
+        ? null
+        : !isProperty && key === "code"
+          ? codeChanges(change.before, change.after)
+          : (!isProperty && PROSE_TEXT_KEYS.has(key)) ||
+              ((isLongText(change.before) || isLongText(change.after)) &&
+                !(!isProperty && WHOLE_TEXT_KEYS.has(key)) &&
+                DIFFABLE_KINDS.has(
+                  classifyPropertyKind({ slug: key, value: change.after, def })
+                ))
+            ? proseChanges(change.before, change.after)
+            : null;
     const after = rewrite
       ? rewrite
       : fieldOp === "remove"
@@ -462,6 +572,7 @@ export function proposedRecord(input: RecordInput): ProposedRecord | null {
     // real side; a removal needs the thing it removes.
     if (fieldOp === "add" && !after) continue;
     if (fieldOp === "change" && !after && !before) continue;
+    if (fieldOp === "remove" && !before) continue;
 
     const wide = [after, before].some(
       (v) =>

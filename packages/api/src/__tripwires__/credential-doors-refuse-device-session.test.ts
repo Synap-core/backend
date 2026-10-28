@@ -86,6 +86,9 @@ const CREDENTIAL_TABLES: Record<string, string> = {
   vaultGrants: "vault_grants",
   trustedIssuers: "trusted_issuers",
   deviceAuthRequests: "device_auth_requests",
+  // A person's approval of a key a CLI asked for (keys plan Decision 4): the
+  // CLI collects a key with it.
+  keyRequests: "key_requests",
   mcpConnectCodes: "mcp_connect_codes",
   oauthAuthorizationCodes: "oauth_authorization_codes",
   oauthRefreshTokens: "oauth_refresh_tokens",
@@ -167,6 +170,7 @@ const SELF_GRANT_DOORS: Record<string, { reaches: string[]; why: string }> = {
  */
 const KNOWN_CREDENTIAL_DOORS = [
   "packages/api/src/routers/api-keys.ts create",
+  "packages/api/src/routers/api-keys.ts decideKeyRequest",
   "packages/api/src/routers/apps.ts create",
   'packages/api/src/routers/proposals/executors/app.ts executor "app/connect"',
   "packages/api/src/routers/governance-rules.ts create",

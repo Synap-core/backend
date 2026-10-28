@@ -8,7 +8,10 @@ import { router, protectedProcedure } from "../trpc.js";
 import { AccessContext, scopedDb } from "../access/index.js";
 import { userPreferences } from "@synap/database/schema";
 import { eq } from "@synap/database";
-import { UpdatePreferencesInputSchema } from "@synap-core/types";
+import {
+  ReviewPreferencesSchema,
+  UpdatePreferencesInputSchema,
+} from "@synap-core/types";
 import {
   assertPinnableSurface,
   RailGoalPinsFullError,
@@ -435,6 +438,38 @@ export const preferencesRouter = router({
         });
 
       return { success: true, viewModes: newUiPrefs.viewModes };
+    }),
+
+  /**
+   * Save how the person reviews (`uiPreferences.review`: the grouping and
+   * each package's layout, founder B-4). MERGED into `uiPreferences`, like
+   * `updateViewMode`: `update` replaces the whole JSONB, which would drop the
+   * rail pins, view modes and feed preferences kept beside it. The caller's
+   * own row only.
+   */
+  updateReview: protectedProcedure
+    .input(ReviewPreferencesSchema)
+    .mutation(async ({ ctx, input }) => {
+      const current = await ctx.db.query.userPreferences.findFirst({
+        where: eq(userPreferences.userId, ctx.userId),
+        columns: { uiPreferences: true },
+      });
+      const nextUi = {
+        ...((current?.uiPreferences as Record<string, unknown>) ?? {}),
+        review: input,
+      };
+      await ctx.db
+        .insert(userPreferences)
+        .values({
+          userId: ctx.userId,
+          uiPreferences: nextUi,
+          updatedAt: new Date(),
+        })
+        .onConflictDoUpdate({
+          target: userPreferences.userId,
+          set: { uiPreferences: nextUi, updatedAt: new Date() },
+        });
+      return { review: input };
     }),
 
   // ============================================================================

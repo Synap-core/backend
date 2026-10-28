@@ -10,7 +10,7 @@ import {
   CAN_REACH_LABEL,
   type ProposalReviewGraph,
 } from "@synap-core/types/proposals";
-import { compositeItems } from "./composite-parts-model";
+import { compositeItems, turnOnRecords } from "./composite-parts-model";
 
 const SKILL_ID = "7d4f6c0e-6a1b-4a8e-9a53-3f2b1c0d9e11";
 const NEW_BODY = "## Creative director\n\nWrite the new way.";
@@ -207,5 +207,48 @@ describe("compositeItems — what an acting part can reach", () => {
     );
     const reach = record.fields.find((f) => f.key === "canReach");
     expect(reach?.after).toMatchObject({ text: "api.old.example" });
+  });
+});
+
+describe("turnOnRecords — what a turn-on request switches on", () => {
+  it("an instruction reads as its whole instructions, with no reach", () => {
+    const [record] = turnOnRecords({
+      skills: [
+        {
+          id: SKILL_ID,
+          name: "Creative director",
+          kind: "instruction",
+          executionMode: "sandbox",
+          body: NEW_BODY,
+        },
+      ],
+      unreadSkills: 0,
+    });
+    expect(record?.fields.map((f) => f.key)).toEqual(["instructions"]);
+    expect(record?.fields[0]?.after).toMatchObject({
+      kind: "code",
+      text: NEW_BODY,
+    });
+  });
+
+  it("a box script shows its declaration, not a sandbox reach", () => {
+    const [record] = turnOnRecords({
+      skills: [
+        {
+          id: SKILL_ID,
+          name: "local_backup",
+          kind: "code",
+          executionMode: "box",
+          code: "console.log(1)",
+          box: { hosts: ["backup.example.test"] },
+        },
+      ],
+      unreadSkills: 0,
+    });
+    expect(record?.fields.map((f) => f.key)).toEqual(["code", "declaration"]);
+    expect(record?.fields[1]?.after).toMatchObject({ kind: "code" });
+    expect(JSON.stringify(record?.fields[1]?.after)).toContain(
+      "backup.example.test"
+    );
   });
 });

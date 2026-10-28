@@ -83,6 +83,15 @@ vi.mock("../services/signals/access-requests.js", async (orig) => ({
 vi.mock("../services/signals/space-invites.js", () => ({
   listOpenSpaceInvites: async () => ({ rows: [], truncated: false }),
 }));
+// The "Make them goals" card's read: pinned by its own PGlite suite
+// (`signals.convertible-goals.pglite.test.ts`); none here.
+vi.mock("../services/signals/convertible-goals.js", () => ({
+  listConvertibleGoals: async () => ({
+    rows: [],
+    truncated: false,
+    newestAt: null,
+  }),
+}));
 vi.mock("../services/projects/project-needs-you.js", () => ({
   countProjectSessionsAwaitingReview: async () => ({
     review: 0,
@@ -111,6 +120,10 @@ import {
   workspaceMembers,
   podMembers,
   projectMembers,
+  chatTurns,
+  events,
+  playbookRuns,
+  proposals,
 } from "@synap/database";
 import { signalsRouter } from "./signals.js";
 
@@ -230,6 +243,11 @@ describe("signals: session.needs_you in needs-you (session.room_update retired)"
       workspaceMembers,
       podMembers,
       projectMembers,
+      // The needs-you rule's facts (agent evidence, proposal waits).
+      chatTurns,
+      events,
+      playbookRuns,
+      proposals,
     ]) {
       await h.client!.exec(ddlFor(t as unknown as PgTable));
     }

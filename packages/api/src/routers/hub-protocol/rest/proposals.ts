@@ -257,7 +257,7 @@ export function registerProposalsRoutes(app: HubHono): void {
           .boolean()
           .optional()
           .describe(
-            "Held-writes packs only (agent/held_writes): also lift the agent's daily write ceiling to 2x the current limit until the next 00:00 UTC, so its next writes today are not held again. A person's act: refused for an agent credential and without the authority to author that ceiling (pod admin). 400 on any other proposal or a pack already decided. The response then carries allowedToday {ceilingId, agentUserId, limit, previousLimit, expiresAt, alreadyAllowed}."
+            "Held-writes packs only (agent/held_writes): also lift the agent's daily write ceiling to 2x the current limit until the next 00:00 UTC, so its next writes today are not held again. A person's act: refused for an agent credential and without the authority to author that ceiling (pod admin). 400 on any other proposal or a pack already decided. The response then carries allowedToday {ceilingId, agentUserId, limit, previousLimit, expiresAt, alreadyAllowed}. With no daily limit in force (no ceiling row, the default), nothing is raised and allowedToday is absent."
           ),
       }),
     },
@@ -713,7 +713,24 @@ export function registerProposalsRoutes(app: HubHono): void {
       identityResolution?: unknown;
       identityResolutionByRef?: unknown;
       allowToday?: unknown;
+      expectedRevision?: unknown;
     };
+    // The revision the approver read (`revisionHistory.length`). Required by
+    // the approve door for a proposal someone else revised (audit F1).
+    if (
+      rawBody.expectedRevision !== undefined &&
+      !(
+        typeof rawBody.expectedRevision === "number" &&
+        Number.isInteger(rawBody.expectedRevision) &&
+        rawBody.expectedRevision >= 0
+      )
+    ) {
+      return c.json(
+        { error: "Invalid expectedRevision (non-negative integer)" },
+        400
+      );
+    }
+    const expectedRevision = rawBody.expectedRevision as number | undefined;
     if (
       rawBody.allowToday !== undefined &&
       typeof rawBody.allowToday !== "boolean"
@@ -757,6 +774,7 @@ export function registerProposalsRoutes(app: HubHono): void {
         ...(identityResolution ? { identityResolution } : {}),
         ...(identityResolutionByRef ? { identityResolutionByRef } : {}),
         ...(allowToday ? { allowToday: true } : {}),
+        ...(expectedRevision !== undefined ? { expectedRevision } : {}),
       })) as {
         primaryId?: string;
         /** F3: what "allow today" raised the agent's ceiling to. */

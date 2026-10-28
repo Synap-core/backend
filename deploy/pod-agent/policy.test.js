@@ -153,3 +153,32 @@ test("a CP configure can never set POD_AGENT_PUSH_ENABLED", () => {
     /POD_AGENT_PUSH_ENABLED cannot be changed by a command/
   );
 });
+
+// Audit 2026-10-28: the pushed GET /host-log and /docker-logs verified the token
+// but never asked the owner's policy, so a self-hosted owner who refused
+// "read-docker-logs" was still read. server.js listens on load, so its wiring is
+// asserted at the source. The routes are DERIVED: every pushed name check
+// (`resolveCommandName(payload) !== "<name>"`) must be followed by the policy
+// check for that name, before the replay receipt is spent.
+test("every pushed read asks the owner's policy before its receipt is spent", () => {
+  const src = fs.readFileSync(path.join(__dirname, "server.js"), "utf8");
+  const nameCheck = /resolveCommandName\(payload\) !== "([a-z][a-z0-9-]*)"/g;
+  const names = [];
+  for (const m of src.matchAll(nameCheck)) {
+    const name = m[1];
+    names.push(name);
+    const rest = src.slice(m.index);
+    const receipt = rest.indexOf("consumeSignedCommandReceipt(payload)");
+    const asked = rest.search(
+      new RegExp(
+        `assertCommandAllowed\\(\\s*readPodAgentPolicy\\(policyFile\\(DEPLOY_DIR\\)\\),\\s*"${name}"\\s*\\)`
+      )
+    );
+    assert.ok(receipt > 0, `${name}: no receipt check after the name check`);
+    assert.ok(
+      asked > 0 && asked < receipt,
+      `${name}: the pushed route does not ask the owner's policy before spending the receipt`
+    );
+  }
+  assert.deepEqual(names.sort(), ["read-docker-logs", "read-host-log"]);
+});

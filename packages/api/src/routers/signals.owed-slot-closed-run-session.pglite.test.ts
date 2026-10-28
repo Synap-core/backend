@@ -79,6 +79,15 @@ vi.mock("../services/signals/access-requests.js", async (orig) => ({
 vi.mock("../services/signals/space-invites.js", () => ({
   listOpenSpaceInvites: async () => ({ rows: [], truncated: false }),
 }));
+// The "Make them goals" card's read: pinned by its own PGlite suite
+// (`signals.convertible-goals.pglite.test.ts`); none here.
+vi.mock("../services/signals/convertible-goals.js", () => ({
+  listConvertibleGoals: async () => ({
+    rows: [],
+    truncated: false,
+    newestAt: null,
+  }),
+}));
 vi.mock("../services/projects/project-needs-you.js", () => ({
   countProjectSessionsAwaitingReview: async () => ({
     review: 0,
@@ -107,6 +116,10 @@ import {
   workspaceMembers,
   podMembers,
   projectMembers,
+  chatTurns,
+  events,
+  playbookRuns,
+  proposals,
 } from "@synap/database";
 import { signalsRouter } from "./signals.js";
 
@@ -196,6 +209,11 @@ describe("signals: an owed decision on a closed, run-kind, null-workspace, proje
       workspaceMembers,
       podMembers,
       projectMembers,
+      // The needs-you rule's facts (agent evidence, proposal waits).
+      chatTurns,
+      events,
+      playbookRuns,
+      proposals,
     ]) {
       await h.client!.exec(ddlFor(t as unknown as PgTable));
     }
@@ -221,24 +239,29 @@ describe("signals: an owed decision on a closed, run-kind, null-workspace, proje
     });
   });
 
-  it("the Synap project's needs-you list and badge carry it too (project lens, no workspace)", async () => {
+  // The session is CLOSED: under the needs-you rule (decision E1) its owed
+  // decision sits in the Stopped fold — still listed and counted, never
+  // dropped, but out of the headline.
+  it("the Synap project's needs-you list and badge carry it too (project lens, no workspace), in Stopped", async () => {
     const s = await seedFounderSession();
     const { signals } = await caller().list({
       lens: "needs-you",
       projectId: PROJECT,
     });
-    expect(signals.map((x) => [x.kind, x.title, x.target?.id])).toEqual([
-      ["owed-slot", LABEL, s],
-    ]);
+    expect(
+      signals.map((x) => [x.kind, x.title, x.target?.id, x.needsYouClass])
+    ).toEqual([["owed-slot", LABEL, s, "stopped"]]);
 
     const c = await caller().count({ projectId: PROJECT });
-    expect(c.blocked).toBe(1);
+    expect(c.blocked).toBe(0);
+    expect(c.folds.stopped).toBe(1);
   });
 
-  it("the pod-wide count states it once (the handoff notification folds into the slot)", async () => {
+  it("the pod-wide count states it once (the handoff notification folds into the slot), in Stopped", async () => {
     await seedFounderSession();
     const c = await caller().count({});
-    expect(c.blocked).toBe(1);
-    expect(c.needsYou).toBe(1);
+    expect(c.blocked).toBe(0);
+    expect(c.folds.stopped).toBe(1);
+    expect(c.needsYou).toBe(0);
   });
 });
