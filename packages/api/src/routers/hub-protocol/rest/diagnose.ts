@@ -14,13 +14,13 @@ import { z } from "zod";
 import { diagnoseRouter } from "../../../services/diagnose/index.js";
 import { readUsageForCaller } from "../../../services/usage/read-usage.js";
 import { API_USAGE_GROUP_BY } from "@synap/database";
-import { TRPCError } from "@trpc/server";
 import { ErrorSchema, uuidQueryParam } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import {
   hasScope,
   logger,
   type HubHono,
+  errCode,
   httpStatusForTrpcError,
   readJsonBody,
 } from "./_shared.js";
@@ -201,9 +201,8 @@ export function registerDiagnoseRoutes(app: HubHono): void {
       const usage = await readUsageForCaller(userId, q);
       return c.json(usage);
     } catch (err) {
-      const refused =
-        err instanceof TRPCError &&
-        (err.code === "FORBIDDEN" || err.code === "BAD_REQUEST");
+      const code = errCode(err);
+      const refused = code === "FORBIDDEN" || code === "BAD_REQUEST";
       if (!refused) {
         logger.error({ err, userId }, "usage read failed");
       }
