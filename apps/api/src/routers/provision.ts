@@ -62,7 +62,6 @@ import { courierStatus } from "../courier-status.js";
 import { buildPodUpdatesStatus, readLastUpdate } from "../pod-updates/index.js";
 import { readPodUpdateSettingsRaw } from "./pod-updates-deps.js";
 import { findAccountByIdentity, isPodAdmin } from "./account-recovery-deps.js";
-import { isDirectLoopbackCall } from "../middleware/rate-limit-classes.js";
 
 /** The id (and serviceId) of the CP-provisioned intelligence service row. */
 const SYNAP_HUB_SERVICE_ID = "synap-hub";
@@ -789,27 +788,6 @@ async function statusReader(
   }
 }
 
-/**
- * Who may read the pod's DIAGNOSTICS (`/diagnose-intelligence`, the details of
- * `/status/release`): the `/status` details reader (the pod's approved Control
- * Plane through the trusted-issuer door, or a pod admin's session), plus an
- * in-container caller over loopback (`isDirectLoopbackCall`, decided on the
- * socket, never a header): the update engine reads `/status/release` that way
- * (`docker exec … fetch('http://localhost:4000/status/release')`).
- *
- * Everyone else is "public": these routes disclose the shared intelligence
- * service's private address, a key fingerprint, the migration ledger and
- * pending conversions, and `/diagnose-intelligence` fires two outbound probes
- * per hit (audit pod-doors F4).
- */
-export async function podDiagnosticsReader(
-  c: Context
-): Promise<"details" | "public" | "denied"> {
-  if (isDirectLoopbackCall(c)) return "details";
-  const cp = await readControlPlaneLink();
-  return statusReader(c, cp?.issuer ?? undefined);
-}
-
 provisionRouter.get("/status", async (c) => {
   try {
     // The CP connection is POD-level state: the link the registration or
@@ -1163,23 +1141,9 @@ export function keyFingerprintOf(key: string): string {
 // ─── GET /api/provision/diagnose-intelligence ────────────────────────────────
 //
 // Diagnostic endpoint: resolves the IS URL, probes health/ready, validates auth.
-// Pod admin, the pod's Control Plane, or an in-container caller only
-// (`podDiagnosticsReader`); anyone else gets a 401 and no probe is fired.
+// Public (same auth level as /status) — returns structured diagnostic info.
 
 provisionRouter.get("/diagnose-intelligence", async (c) => {
-  // Behind the diagnostics reader BEFORE anything is resolved or probed: an
-  // anonymous hit learns nothing and makes the pod call nothing.
-  const reader = await podDiagnosticsReader(c);
-  if (reader !== "details") {
-    return c.json(
-      {
-        error:
-          "Intelligence diagnostics are for a pod admin or the pod's Control Plane.",
-      },
-      401
-    );
-  }
-
   const issues: string[] = [];
 
   // 1. Resolve the service that ACTUALLY serves — through the resolver routing
@@ -1196,7 +1160,7 @@ provisionRouter.get("/diagnose-intelligence", async (c) => {
   let resolvedUrl: string | null = null;
   let resolvedSource: "database" | "env" | "none" = "none";
   let resolvedVia: string | null = null;
-  // A fingerprint, never characters of the key, even to an admin.
+  // A fingerprint, never characters of the key: this route is public.
   let keyFingerprint: string | null = null;
 
   try {

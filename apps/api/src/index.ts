@@ -447,55 +447,15 @@ import {
 } from "./startup/boot-status.js";
 let conversionsBootState: ConversionsBootState = UNCHECKED_CONVERSIONS_STATE;
 
-// ── Deploy verification ─────────────────────────────────────────────────────
+// ── Deploy verification (public, no auth) ──────────────────────────────────
 // GET /status/release answers "is the latest actually deployed, and did the
 // migration apply?" in one call. Every lookup is wrapped so a missing table or
 // failed check degrades to null + a note — it never 500s. Kept OUT of /health
 // so the liveness probe stays cheap and its api-types compat literal is
 // untouched.
-//
-// Public: `status`, `timestamp`, `version`, `buildStamp` (the CP's release
-// door reads `buildStamp`). The DETAILS (migration ledger, schema drift,
-// pending conversions, system-profile seeding) are pod internals: only the
-// diagnostics reader gets them (`podDiagnosticsReader`: the pod's Control
-// Plane, a pod admin's session, or an in-container loopback call, which is how
-// the update engine reads this route before `verify-deploy.sh`). Audit
-// pod-doors F4.
 app.get("/status/release", async (c) => {
   // version — the running @synap/api build (off disk, not a literal)
   const version = getRunningApiVersion();
-
-  // buildStamp — the git commit the running image was built from, stamped in
-  // at image-build time via `docker build --build-arg GIT_SHA=$(git rev-parse HEAD)`
-  // (deploy/Dockerfile ARG GIT_SHA -> ENV SYNAP_GIT_SHA). null when the image
-  // was built/pulled without that arg (older images, registry pulls that
-  // predate this change) — reported as null rather than fabricated.
-  const buildStamp: string | null = process.env.SYNAP_GIT_SHA || null;
-
-  // A FAILED check of the caller (the CP link or the session could not be
-  // read) serves the public answer, saying so: never the details, and never a
-  // 500 for the part that needs no database.
-  let reader: "details" | "public" | "denied" | "unchecked";
-  try {
-    reader = await podDiagnosticsReader(c);
-  } catch (err) {
-    apiLogger.warn({ err }, "/status/release: caller check failed");
-    reader = "unchecked";
-  }
-  if (reader === "denied") {
-    return c.json({ error: "Issuer is not approved for this Pod" }, 401);
-  }
-  if (reader !== "details") {
-    return c.json({
-      status: "ok",
-      timestamp: new Date().toISOString(),
-      version,
-      buildStamp,
-      ...(reader === "unchecked"
-        ? { note: "details unavailable: the caller could not be checked" }
-        : {}),
-    });
-  }
 
   // migrations — the hand-written migration ledger (_migrations, public schema)
   let migrations: {
@@ -549,6 +509,13 @@ app.get("/status/release", async (c) => {
       }`,
     };
   }
+
+  // buildStamp — the git commit the running image was built from, stamped in
+  // at image-build time via `docker build --build-arg GIT_SHA=$(git rev-parse HEAD)`
+  // (deploy/Dockerfile ARG GIT_SHA -> ENV SYNAP_GIT_SHA). null when the image
+  // was built/pulled without that arg (older images, registry pulls that
+  // predate this change) — reported as null rather than fabricated.
+  const buildStamp: string | null = process.env.SYNAP_GIT_SHA || null;
 
   return c.json({
     status: "ok",
@@ -1084,7 +1051,7 @@ app.route("/api/admin/source-configs", adminSourceConfigsRouter);
 // Legacy provisioning integration endpoints. New external identity and access
 // flows are mounted separately under /api/federation and do not depend on this
 // product-specific compatibility surface.
-import { provisionRouter, podDiagnosticsReader } from "./routers/provision.js";
+import { provisionRouter } from "./routers/provision.js";
 app.route("/api/provision", provisionRouter);
 
 import { federationRouter } from "./routers/federation.js";

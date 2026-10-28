@@ -2,7 +2,8 @@
  * The session gate in front of the main `/trpc` mount.
  *
  * Every `/trpc/*` request needs a Kratos session, except calls to the public
- * procedures below (the two health probes, first-admin setup, invite preview).
+ * procedures below (health probes, first-admin setup, invite preview and
+ * CP-relayed accept).
  *
  * The skip is decided on the procedure list tRPC will EXECUTE, parsed the way
  * `@trpc/server` 11's fetch adapter parses it (`fetchRequestHandler`: the raw,
@@ -20,17 +21,10 @@
 import type { MiddlewareHandler } from "hono";
 
 /** Router namespaces whose every procedure is public. */
-export const PUBLIC_TRPC_NAMESPACES = ["setup"] as const;
+export const PUBLIC_TRPC_NAMESPACES = ["health", "setup"] as const;
 
-/**
- * Single public procedures inside otherwise session-only routers. `health` is
- * NOT a public namespace: only its two probes are public; `health.metrics`,
- * `health.readyDetails` and `health.migrations` need a session (audit
- * pod-routers F12: they disclosed the pod's activity and internals to anyone).
- */
+/** Single public procedures inside otherwise session-only routers. */
 export const PUBLIC_TRPC_PROCEDURES: ReadonlySet<string> = new Set([
-  "health.alive",
-  "health.ready",
   "workspaces.previewInvite",
 ]);
 

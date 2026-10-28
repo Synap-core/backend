@@ -37,10 +37,8 @@
 #                           (the engine fetches it from inside the backend container,
 #                           which publishes no host port)
 #
-# pod-url defaults to http://localhost:4000. The migration ledger is served
-# only to a caller inside the backend container itself (loopback), a pod admin
-# or the pod's Control Plane, so a plain curl from anywhere else fails (a): use
-# RELEASE_JSON_FILE as the engine does. Exits non-zero on ANY mismatch or unreachable pod — callers (the synap CLI, CI)
+# pod-url defaults to http://localhost:4000 (in-cluster / on-host use). Exits
+# non-zero on ANY mismatch or unreachable pod — callers (the synap CLI, CI)
 # should treat a non-zero exit as "deploy did not actually
 # land, do not consider it successful."
 #
@@ -73,10 +71,7 @@ fi
 ACTUAL_MIGRATION="$(echo "$RELEASE_JSON" | grep -o '"lastApplied":"[^"]*"' | head -1 | cut -d'"' -f4)"
 
 if [ -z "$ACTUAL_MIGRATION" ]; then
-  # Since audit pod-doors F4 the migration ledger is served only in-container
-  # (loopback), to a pod admin, or to the pod's Control Plane: a curl from
-  # outside the backend container reads the public half (no `migrations`).
-  die "/status/release reported no migrations.lastApplied (expected ${EXPECTED_MIGRATION}) — response: ${RELEASE_JSON}. The details are served only from inside the backend container: run this through \`synap update\`, or pass RELEASE_JSON_FILE read with \`docker exec <backend> node -e \"fetch('http://localhost:4000/status/release').then(r=>r.text()).then(console.log)\"\`."
+  die "/status/release reported no migrations.lastApplied (expected ${EXPECTED_MIGRATION}) — response: ${RELEASE_JSON}"
 fi
 
 if [ "$ACTUAL_MIGRATION" != "$EXPECTED_MIGRATION" ]; then

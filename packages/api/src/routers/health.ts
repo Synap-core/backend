@@ -4,12 +4,7 @@
  * Provides monitoring endpoints for system health and readiness
  */
 
-import {
-  router,
-  publicProcedure,
-  protectedProcedure,
-  podAdminProcedure,
-} from "../trpc.js";
+import { router, publicProcedure } from "../trpc.js";
 import {
   sql,
   db,
@@ -252,30 +247,6 @@ function staleCatalogReasons(
   return reasons;
 }
 
-/** The two HARD readiness checks: only these gate traffic. */
-async function readHardChecks(): Promise<
-  [PromiseSettledResult<void>, PromiseSettledResult<void>]
-> {
-  const [database, jobQueue] = await Promise.allSettled([
-    checkDatabase(),
-    checkJobQueue(),
-  ]);
-  return [database, jobQueue];
-}
-
-/**
- * Who may read what (audit pod-routers F12, pod-doors F4). The `/trpc` session
- * gate lets ONLY `health.alive` and `health.ready` through without a session
- * (`apps/api/src/trpc-session-gate.ts`, `PUBLIC_TRPC_PROCEDURES`); the rest of
- * this router is behind a session and the floor named on each procedure.
- *
- *   - `alive`, `ready`: anyone. `ready` says ready/degraded and which hard
- *     check failed, nothing more: no error text, no counts, no catalog source.
- *   - `metrics`: a signed-in pod user (the browser's pod health widget).
- *   - `readyDetails`, `migrations`: a pod admin. The job-queue counts, the
- *     embedding pipeline, the catalog sync stamps and raw error messages are
- *     pod internals.
- */
 export const healthRouter = router({
   /**
    * Liveness probe - basic "is the service running" check
@@ -286,32 +257,13 @@ export const healthRouter = router({
   }),
 
   /**
-   * Readiness probe - is the service ready to handle traffic. Public, so it
-   * answers the hard checks only and reads nothing else: the soft signals
-   * (and the scans behind them) are `readyDetails`.
+   * Readiness probe - is the service ready to handle traffic
+   * Checks all critical dependencies
    */
   ready: publicProcedure.query(async () => {
-    const [database, jobQueue] = await readHardChecks();
-    const databaseOk = database.status === "fulfilled";
-    const jobQueueOk = jobQueue.status === "fulfilled";
-    return {
-      status: databaseOk && jobQueueOk ? "ready" : "degraded",
-      timestamp: new Date().toISOString(),
-      checks: {
-        database: databaseOk ? "healthy" : "unhealthy",
-        jobQueue: jobQueueOk ? "healthy" : "unhealthy",
-      },
-    };
-  }),
-
-  /**
-   * The full readiness reading for a pod admin: the hard checks with their
-   * error text, the soft-degradation reasons and the raw signals behind them.
-   */
-  readyDetails: podAdminProcedure.query(async () => {
     const now = Date.now();
     const [checks, softSignals, catalogStamps] = await Promise.all([
-      readHardChecks(),
+      Promise.allSettled([checkDatabase(), checkJobQueue()]),
       readSoftSignals(),
       getCatalogSyncStamps().catch(
         () => ({}) as Record<string, CatalogSyncStamp>
@@ -385,9 +337,9 @@ export const healthRouter = router({
   }),
 
   /**
-   * Migration status - shows applied database migrations. Pod admin.
+   * Migration status - shows applied database migrations
    */
-  migrations: podAdminProcedure.query(async () => {
+  migrations: publicProcedure.query(async () => {
     try {
       const rows = await sql`
         SELECT id, hash, created_at
@@ -414,10 +366,9 @@ export const healthRouter = router({
   }),
 
   /**
-   * System metrics - basic operational metrics. A signed-in pod user: the
-   * pod's activity level is not for anonymous callers.
+   * System metrics - basic operational metrics
    */
-  metrics: protectedProcedure.query(async () => {
+  metrics: publicProcedure.query(async () => {
     const [eventCount, entityCount] = await Promise.allSettled([
       sql`SELECT COUNT(*) as count FROM events WHERE timestamp > NOW() - INTERVAL '24 hours'`,
       sql`SELECT COUNT(*) as count FROM entities`,

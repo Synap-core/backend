@@ -30,7 +30,7 @@
 
 import { z } from "zod";
 import { router, protectedProcedure, credentialProcedure } from "../trpc.js";
-import { assertPodAdmin, assertWorkspaceUsable } from "../trpc.js";
+import { assertPodAdmin } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import {
   db,
@@ -317,9 +317,6 @@ export const governanceRulesRouter = router({
     )
     .query(async ({ ctx, input }) => {
       const workspaceId = input.workspaceId ?? ctx.workspaceId ?? undefined;
-      // A protectedProcedure: the workspace (input or header) is unvetted. Its
-      // rules say who is auto-approved for what there: members only (F11).
-      if (workspaceId) await assertWorkspaceUsable(ctx.userId, workspaceId);
 
       const scopePredicate = podOrWorkspaceScopePredicate(workspaceId);
 

@@ -27,7 +27,6 @@ import {
 import { TRPCError } from "@trpc/server";
 import { auditLog } from "../utils/audit-log.js";
 import { userVisibleWhere } from "../utils/user-visible-where.js";
-import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import { emitSideEffects } from "@synap/events";
 
 export const templatesRouter = router({
@@ -166,14 +165,6 @@ export const templatesRouter = router({
       const templateId = randomUUID();
       const effectiveWorkspaceId =
         input.workspaceId || ctx.workspaceId || undefined;
-      // A protectedProcedure: neither the input nor the header workspace was
-      // vetted. A workspace template (and with isDefault, the config every new
-      // entity of that type starts from) needs editor+ there (audit F11).
-      if (effectiveWorkspaceId) {
-        await assertWorkspaceWrite(db, ctx.userId, {
-          workspaceId: effectiveWorkspaceId,
-        });
-      }
 
       const [_template] = await db
         .insert(entityTemplates)
