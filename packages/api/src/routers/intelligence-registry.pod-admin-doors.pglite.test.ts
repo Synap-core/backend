@@ -329,13 +329,20 @@ describe("service URLs — the SSRF guard holds at every writer and probe", () =
   });
 
   it("registerCustomService does not follow a redirect (the key is a header)", async () => {
-    fetchSpy.mockImplementationOnce(
-      async () =>
-        new Response(null, {
-          status: 302,
-          headers: { location: "http://169.254.169.254/latest" },
-        })
-    );
+    // Like the real fetch: a redirect is FOLLOWED (to the internal target,
+    // which answers) unless the caller asks for `redirect: "manual"`.
+    fetchSpy.mockImplementationOnce((async (
+      _url: string,
+      init?: RequestInit
+    ) =>
+      init?.redirect === "manual"
+        ? new Response(null, {
+            status: 302,
+            headers: { location: "http://169.254.169.254/latest" },
+          })
+        : new Response(JSON.stringify({ capabilities: ["chat"] }), {
+            status: 200,
+          })) as never);
     await expect(
       intelligence(ADMIN).registerCustomService({
         displayName: "Bounce",
