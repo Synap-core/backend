@@ -164,23 +164,7 @@ export const GRANT_READ_SPECS = new Map<object, GrantReadSpec>([
   [
     entityFacets,
     spec("facet", entityFacets, {
-      // The role rows that justify the entity reach: a pod-wide facet whose
-      // role is granted to a granted space (decision B, space-keyed), on a
-      // POD-WIDE entity, as branch (b) requires (rv-security B-1). A shared
-      // role's facet is stored pod-wide whatever its entity's space, so
-      // without this an entity stored in another space would lend its role
-      // row (properties, status) to the reach.
-      spaceReach: (spaces) =>
-        and(
-          podSharedFacetForSpacesWhere(spaces),
-          inArray(
-            entityFacets.entityId,
-            db
-              .select({ id: entities.id })
-              .from(entities)
-              .where(isNull(entities.workspaceId))
-          )
-        )!,
+      spaceReach: (spaces) => sharedRoleRowsInSpacesWhere(spaces),
     }),
   ],
   [views, spec("view", views)],
@@ -234,6 +218,34 @@ export const GRANT_READ_SPECS = new Map<object, GrantReadSpec>([
   [secrets, spec("vault", secrets)],
   [apiKeys, spec("apiKey", apiKeys)],
 ]);
+
+/**
+ * The SHARED-role rows a member of `spaces` reads: a pod-wide facet whose role
+ * is granted to one of them (decision B, space-keyed), on a pod-wide entity
+ * (branch (b) of the entity reach) or on one STORED in one of them. A member
+ * reads the role on a record of their space; an entity stored in a space
+ * outside `spaces` lends its role row (properties, status) to nobody there
+ * (rv-security B-1), as a shared role's row is stored pod-wide whatever its
+ * entity's space. The facets `spaceReach` (GRANT_READ_SPECS), and where a key
+ * may change a shared role (utils/role-write-grant.ts).
+ */
+export function sharedRoleRowsInSpacesWhere(spaces: readonly string[]): SQL {
+  return and(
+    podSharedFacetForSpacesWhere(spaces),
+    inArray(
+      entityFacets.entityId,
+      db
+        .select({ id: entities.id })
+        .from(entities)
+        .where(
+          or(
+            isNull(entities.workspaceId),
+            inArray(entities.workspaceId, [...spaces])
+          )
+        )
+    )
+  )!;
+}
 
 const NONE = sql`false`;
 

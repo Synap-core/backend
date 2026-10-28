@@ -3896,50 +3896,21 @@
         "type": "object",
         "properties": {
           "configured": { "type": "boolean" },
-          "source": {
+          "capabilityKey": { "type": "string" },
+          "capabilityId": { "type": ["string", "null"] },
+          "problem": {
             "type": ["string", "null"],
-            "enum": ["vault", "workspace_settings", "env", null]
+            "enum": ["not-installed", "no-key", "unreadable", null]
           },
-          "dsn": { "type": ["string", "null"] },
-          "hasApiKey": { "type": "boolean" },
-          "hasWebhookSecret": { "type": "boolean" },
-          "migration": {
-            "type": "object",
-            "properties": {
-              "available": { "type": "boolean" },
-              "hasDsn": { "type": "boolean" },
-              "hasApiKey": { "type": "boolean" }
-            },
-            "required": ["available", "hasDsn", "hasApiKey"]
-          }
+          "message": { "type": ["string", "null"] }
         },
         "required": [
           "configured",
-          "source",
-          "dsn",
-          "hasApiKey",
-          "hasWebhookSecret",
-          "migration"
+          "capabilityKey",
+          "capabilityId",
+          "problem",
+          "message"
         ]
-      },
-      "MessagingMigrateResult": {
-        "type": "object",
-        "properties": { "ok": { "type": "boolean" } },
-        "required": ["ok"]
-      },
-      "MessagingServiceConfigResult": {
-        "type": "object",
-        "properties": { "ok": { "type": "boolean" } },
-        "required": ["ok"]
-      },
-      "MessagingServiceConfigInput": {
-        "type": "object",
-        "properties": {
-          "dsn": { "type": "string" },
-          "apiKey": { "type": "string" },
-          "webhookSecret": { "type": "string" }
-        },
-        "required": ["dsn", "apiKey"]
       },
       "MessagingDeleteResult": {
         "type": "object",
@@ -24092,74 +24063,15 @@
     "/messaging/service-config": {
       "get": {
         "tags": ["Messaging"],
-        "summary": "Get current messaging connector config state (masked)",
+        "summary": "Get the messaging service's connection state (no secret)",
         "responses": {
           "200": {
-            "description": "Config state",
+            "description": "Connection state",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/MessagingServiceConfig"
                 }
-              }
-            }
-          }
-        }
-      },
-      "post": {
-        "tags": ["Messaging"],
-        "summary": "Store Unipile connector credentials in the vault",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/MessagingServiceConfigInput"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Stored successfully",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MessagingServiceConfigResult"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Missing required fields",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/HubError" }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/messaging/service-config/migrate": {
-      "post": {
-        "tags": ["Messaging"],
-        "summary": "Migrate workspace settings messaging credentials to vault",
-        "responses": {
-          "200": {
-            "description": "Migrated",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MessagingMigrateResult"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "No credentials to migrate",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/HubError" }
               }
             }
           }

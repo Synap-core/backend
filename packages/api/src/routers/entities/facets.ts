@@ -31,6 +31,7 @@ import {
 } from "../../utils/permission-check.js";
 import { auditLog } from "../../utils/audit-log.js";
 import {
+  roleRowInKeyReach,
   roleWriteGrantSpace,
   type RoleWriteDoor,
   type RoleWriteTarget,
@@ -243,7 +244,6 @@ export const facetProcs = {
             facetPlacement.rung === 2 ? facetPlacement.workspaceId : null;
         }
       }
-      const governanceWorkspaceId = facetWorkspaceId ?? ctx.workspaceId ?? null;
 
       // Fast-fail BEFORE governance: a structurally impossible attach (target
       // profile isn't a role, or the role doesn't apply to this kind) must be
@@ -326,6 +326,12 @@ export const facetProcs = {
         profileId: roleProfileId,
         storedWorkspaceId: storedFacetWorkspaceId,
       });
+      // The gate decides where it always has: the facet's space, else the lens.
+      const governanceWorkspaceId = facetWorkspaceId ?? ctx.workspaceId ?? null;
+      // A shared role sent with no lens names no space: its proposal and audit
+      // are filed in the space the key's grant was checked in. Record only.
+      const filedWorkspaceId =
+        facetWorkspaceId ?? grantWorkspaceId ?? ctx.workspaceId ?? null;
 
       // 1. .requested
       const requestedEvent = await auditLog({
@@ -335,7 +341,7 @@ export const facetProcs = {
         subjectId: input.entityId,
         userId: ctx.userId,
         agentUserId: actingAgentUserId,
-        workspaceId: governanceWorkspaceId,
+        workspaceId: filedWorkspaceId,
         correlationId,
         data: {
           entityId: input.entityId,
@@ -353,6 +359,7 @@ export const facetProcs = {
         agentUserId: input.agentUserId,
         workspaceId: governanceWorkspaceId,
         grantWorkspaceId,
+        proposalWorkspaceId: filedWorkspaceId,
         subjectType: "facet",
         action: "attach",
         source: input.source,
@@ -496,14 +503,16 @@ export const facetProcs = {
       // A workspace-scoped role is shared operational state (owner/admin/editor
       // of that workspace); a pod-wide role answers to the pod owner/admins.
       const existing = await facetRepo.getById(input.facetId);
-      if (!existing || !(await canWriteFacet(existing, ctx.userId))) {
+      if (
+        !existing ||
+        !(await canWriteFacet(existing, ctx.userId)) ||
+        !(await roleRowInKeyReach(existing.id))
+      ) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: `Facet not found: ${input.facetId}`,
         });
       }
-      const governanceWorkspaceId =
-        existing.workspaceId ?? ctx.workspaceId ?? null;
 
       // Best-effort readable label for the parent entity — surfaced on
       // proposal/notification cards (which otherwise show raw entity ids).
@@ -517,6 +526,13 @@ export const facetProcs = {
         profileId: existing.profileId,
         storedWorkspaceId: existing.workspaceId ?? null,
       });
+      // The gate decides where it always has: the row's space, else the lens.
+      const governanceWorkspaceId =
+        existing.workspaceId ?? ctx.workspaceId ?? null;
+      // A shared role's row names no space: its proposal and audit are filed in
+      // the space the grant was checked in. Record only.
+      const filedWorkspaceId =
+        existing.workspaceId ?? grantWorkspaceId ?? ctx.workspaceId ?? null;
 
       // LIFECYCLE SPLIT (work model L2): a ROLE's status — `status`, or its
       // lifecycle property — is MOVED through the one door (`moveStatus`:
@@ -622,7 +638,7 @@ export const facetProcs = {
         subjectId: input.facetId,
         userId: ctx.userId,
         agentUserId: input.agentUserId,
-        workspaceId: governanceWorkspaceId,
+        workspaceId: filedWorkspaceId,
         correlationId,
         data: { facetId: input.facetId, status: input.status },
       });
@@ -633,6 +649,7 @@ export const facetProcs = {
         agentUserId: input.agentUserId,
         workspaceId: governanceWorkspaceId,
         grantWorkspaceId,
+        proposalWorkspaceId: filedWorkspaceId,
         subjectType: "facet",
         action: "update",
         source: input.source,
@@ -689,7 +706,7 @@ export const facetProcs = {
         subjectId: facet.id,
         userId: ctx.userId,
         agentUserId: input.agentUserId,
-        workspaceId: governanceWorkspaceId,
+        workspaceId: filedWorkspaceId,
         correlationId,
       });
 
@@ -744,14 +761,16 @@ export const facetProcs = {
       const facetRepo = new FacetRepository(database, eventRepo);
 
       const existing = await facetRepo.getById(input.facetId);
-      if (!existing || !(await canWriteFacet(existing, ctx.userId))) {
+      if (
+        !existing ||
+        !(await canWriteFacet(existing, ctx.userId)) ||
+        !(await roleRowInKeyReach(existing.id))
+      ) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: `Facet not found: ${input.facetId}`,
         });
       }
-      const governanceWorkspaceId =
-        existing.workspaceId ?? ctx.workspaceId ?? null;
 
       // Best-effort readable label for the parent entity — surfaced on
       // proposal/notification cards (which otherwise show raw entity ids).
@@ -765,6 +784,13 @@ export const facetProcs = {
         profileId: existing.profileId,
         storedWorkspaceId: existing.workspaceId ?? null,
       });
+      // The gate decides where it always has: the row's space, else the lens.
+      const governanceWorkspaceId =
+        existing.workspaceId ?? ctx.workspaceId ?? null;
+      // A shared role's row names no space: its proposal and audit are filed in
+      // the space the grant was checked in. Record only.
+      const filedWorkspaceId =
+        existing.workspaceId ?? grantWorkspaceId ?? ctx.workspaceId ?? null;
 
       // 1. .requested
       const requestedEvent = await auditLog({
@@ -774,7 +800,7 @@ export const facetProcs = {
         subjectId: input.facetId,
         userId: ctx.userId,
         agentUserId: input.agentUserId,
-        workspaceId: governanceWorkspaceId,
+        workspaceId: filedWorkspaceId,
         correlationId,
         data: { facetId: input.facetId, entityId: existing.entityId },
       });
@@ -785,6 +811,7 @@ export const facetProcs = {
         agentUserId: input.agentUserId,
         workspaceId: governanceWorkspaceId,
         grantWorkspaceId,
+        proposalWorkspaceId: filedWorkspaceId,
         subjectType: "facet",
         action: "detach",
         source: input.source,
@@ -826,7 +853,7 @@ export const facetProcs = {
         subjectId: input.facetId,
         userId: ctx.userId,
         agentUserId: input.agentUserId,
-        workspaceId: governanceWorkspaceId,
+        workspaceId: filedWorkspaceId,
         correlationId,
       });
 

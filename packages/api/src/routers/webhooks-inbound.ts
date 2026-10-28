@@ -865,12 +865,17 @@ webhooksInboundRouter.post("/messaging", async (c) => {
     return c.json({ error: "Messaging connector not configured" }, 503);
   }
 
+  // Unipile v2 signs every delivery (`unipile-signature`, HMAC of the raw body
+  // under the endpoint's secret); parseWebhook verifies it and returns null for
+  // a request that is not a signed event it handles — acknowledged, ignored.
   let parsed: Awaited<ReturnType<typeof connector.parseWebhook>>;
   try {
     parsed = await connector.parseWebhook(headers, rawBody);
   } catch (err) {
-    logger.warn({ err }, "Webhook parse error");
-    return c.json({ ok: true }); // always 200 to prevent Unipile retries on auth failures
+    // The signing secrets could not be read from Unipile: a 503 makes it
+    // retry (2 s, then 12 s) instead of the event being dropped.
+    logger.warn({ err }, "Messaging webhook could not be verified");
+    return c.json({ error: "Webhook could not be verified" }, 503);
   }
 
   if (!parsed) return c.json({ ok: true });
@@ -911,8 +916,8 @@ webhooksInboundRouter.post("/messaging", async (c) => {
 
       // Resolve-or-create the EXTERNAL channel + dedup-record the inbound
       // message + fire `external_message.received` via the shared recorder.
-      // Unipile has no native message id, so the idempotency seed is the same
-      // composite the inline path hashed before: thread + sentAt + body.
+      // The idempotency seed is the composite the LinkedIn backfill also
+      // hashes (thread + sentAt + body), so a message both paths see lands once.
       await recordInboundMessage({
         provider: event.provider,
         externalId: event.threadId,
@@ -934,7 +939,8 @@ webhooksInboundRouter.post("/messaging", async (c) => {
         },
       });
     } else if (event.type === "account.created") {
-      // notify_url callback: auto-sync the newly connected account into our DB
+      // `account.add` / `account.reconnect` (state = the user who started the
+      // hosted auth): auto-sync the newly connected account into our DB
       const connector = await getMessagingConnector();
       if (connector) {
         const liveAccounts = await connector

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   GRANT_SUBJECT_CATALOG,
+  grantPlainAction,
   grantSubjectLabel,
   grantSubjectNoun,
   grantSubjectSpec,
@@ -64,5 +65,25 @@ describe("the event log in the grant catalog (Activity)", () => {
     expect(
       normalizeGrantPermissions(["event.read", "playbook.read", "entity.read"])
     ).toEqual(["entity.*.read", "playbook.read", "event.read"]);
+  });
+});
+
+// A facet is a ROLE to the person ("Users see Role, not Facet"). Since #411 a
+// role write is granted as `facet.create` / `facet.delete`; `facet.attach` /
+// `facet.detach` are the door's own spelling of the same act.
+describe("a role on a record (facet)", () => {
+  it("is named Roles, never Facets", () => {
+    expect(grantSubjectNoun("facet")).toBe("role");
+    expect(grantSubjectLabel("facet")).toBe("Roles");
+  });
+
+  it("attach is create and detach is delete; every other action is itself", () => {
+    expect(grantPlainAction("facet", "attach")).toBe("create");
+    expect(grantPlainAction("facet", "detach")).toBe("delete");
+    expect(grantPlainAction("facet", "create")).toBe("create");
+    expect(grantPlainAction("facet", "update")).toBe("update");
+    expect(grantPlainAction("entity", "transition")).toBe("transition");
+    expect(grantPlainAction("tool", "attach")).toBe("attach");
+    expect(grantPlainAction("facet", null)).toBeNull();
   });
 });

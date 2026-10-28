@@ -974,6 +974,14 @@ export interface PermissionCheckBaseOpts {
    * (S7, plan 13 §3.4). Omitted → `workspaceId`.
    */
   grantWorkspaceId?: string | null;
+  /**
+   * The workspace a proposal or auto-approve receipt is FILED in, when it is
+   * not the governance home: a shared role's row names no space, so its write
+   * is filed in the space the key's grant was checked in. RECORD ONLY: no rung
+   * reads it, so whether the write applies or proposes is decided on
+   * `workspaceId` exactly as without it. Omitted → `workspaceId`.
+   */
+  proposalWorkspaceId?: string | null;
   source?: string;
   /**
    * Effective per-channel capability grant for the acting AI teammate, when the
@@ -1404,6 +1412,12 @@ async function evaluatePermission(
     nodeId,
     channelCapabilities,
   } = opts;
+  // Where a proposal or receipt is filed. Record only: every rung below
+  // decides on `workspaceId`.
+  const filedWorkspaceId =
+    opts.proposalWorkspaceId !== undefined
+      ? opts.proposalWorkspaceId
+      : workspaceId;
 
   // ATTRIBUTION FLOOR. `agentUserId` arrives as a CALLER-SUPPLIED option, so a door
   // that simply omits it skips the whole AI-policy block below (`if (agentUserId)`)
@@ -1609,7 +1623,7 @@ async function evaluatePermission(
             return createProposal({
               createdBy: opts.machineAuthor,
               envelope: writeEnvelope,
-              workspaceId,
+              workspaceId: filedWorkspaceId,
               subjectType,
               action,
               data,
@@ -1685,7 +1699,7 @@ async function evaluatePermission(
               createdBy: opts.machineAuthor,
               envelope: writeEnvelope,
               proposedByUserId: userId,
-              workspaceId,
+              workspaceId: filedWorkspaceId,
               subjectType,
               action,
               data,
@@ -1727,7 +1741,7 @@ async function evaluatePermission(
       return createProposal({
         createdBy: opts.machineAuthor,
         envelope: writeEnvelope,
-        workspaceId,
+        workspaceId: filedWorkspaceId,
         subjectType,
         action,
         data,
@@ -2137,7 +2151,7 @@ async function evaluatePermission(
         return createProposal({
           createdBy: opts.machineAuthor,
           envelope: governedEnvelope,
-          workspaceId,
+          workspaceId: filedWorkspaceId,
           subjectType,
           action,
           data,
@@ -2231,7 +2245,7 @@ async function evaluatePermission(
           const [receipt] = await db
             .insert(proposals)
             .values({
-              workspaceId: workspaceId ?? null,
+              workspaceId: filedWorkspaceId ?? null,
               targetType: subjectType,
               targetId: String(data?.id ?? randomUUID()),
               proposalType: `${subjectType}.${action}`,
@@ -2541,7 +2555,7 @@ async function evaluatePermission(
           const [receipt] = await db
             .insert(proposals)
             .values({
-              workspaceId: workspaceId ?? null,
+              workspaceId: filedWorkspaceId ?? null,
               targetType: subjectType,
               targetId: String(data?.id ?? randomUUID()),
               proposalType: eventKey,
@@ -2627,7 +2641,7 @@ async function evaluatePermission(
       return createProposal({
         createdBy: opts.machineAuthor,
         envelope: writeEnvelope,
-        workspaceId,
+        workspaceId: filedWorkspaceId,
         subjectType,
         action,
         data,

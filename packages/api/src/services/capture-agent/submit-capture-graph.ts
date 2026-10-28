@@ -98,6 +98,10 @@ import {
 import { openLink } from "../../utils/deep-links.js";
 import { entityWriteVisibleWhere } from "../../routers/entities/helpers.js";
 import { captureGraphMemberProposes } from "./capture-graph-governance.js";
+import {
+  fenceCaptureGraphOperations,
+  grantMayLinkRecord,
+} from "./fenced-capture-graph.js";
 import { buildRuleLoopCallers } from "../../utils/rule-loop-callers.js";
 import {
   buildMaterializedRecord,
@@ -1284,7 +1288,8 @@ export async function submitCaptureGraph(
             )
           )
           .limit(1);
-        if (visible) {
+        // A key limited to spaces links only a record its grant may edit.
+        if (visible && (await grantMayLinkRecord(visible.id))) {
           e.existingEntityId = visible.id; // link, don't create
           continue;
         }
@@ -1305,6 +1310,13 @@ export async function submitCaptureGraph(
     projectId: resolvedProjectId,
     workspaceId,
     ...(planInput ? { plan: planInput } : {}),
+  });
+  // A key limited to spaces captures only inside its grant, on BOTH terminals
+  // (auto-apply and pending): each record pinned to the graph's space and
+  // checked by the gate's rung 0, every other op refused.
+  await fenceCaptureGraphOperations(builtOperations, {
+    workspaceId,
+    bindingCount: bindings.length,
   });
 
   // ── PREFLIGHT: never queue what can't materialize ────────────────────────

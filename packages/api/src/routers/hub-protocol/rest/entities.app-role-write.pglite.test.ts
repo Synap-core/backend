@@ -18,8 +18,11 @@
  * G may add or remove one only when EVERY space the role is granted to is in G
  * with `facet.create` / `facet.delete` there (so it never shows the record in a
  * space the person did not grant the app), and the record is readable by the
- * key and in G's reach. Changing one keeps #239's rule (one of the role's spaces
- * in G, on a pod-wide record).
+ * key and in the reach of the role's own spaces (never of another space of G).
+ * Changing one keeps #239's rule: one of the role's spaces in G, on a record
+ * pod-wide or stored in that space (a member of it reads that row; a record
+ * stored outside G lends nothing, rv-security B-1). Each write files its
+ * proposal in the space the grant was checked in.
  *
  * Rows rule out: the parent's null workspace still refusing (every pod-wide
  * person), a role in another space (Brand) passing, a shared role granted to a
@@ -115,6 +118,11 @@ vi.mock("../../../utils/permission-check.js", async (importOriginal) => {
       if (preview.decision !== "propose")
         return actual.checkPermissionOrPropose(opts);
       const data = (opts.data ?? {}) as Record<string, unknown>;
+      // Filed where the real gate files it (record only, never the decision).
+      const filedIn =
+        opts.proposalWorkspaceId !== undefined
+          ? opts.proposalWorkspaceId
+          : (opts.workspaceId ?? null);
       const uuid = () => globalThis.crypto.randomUUID();
       const id = uuid();
       const subject = opts.subjectType as string;
@@ -126,7 +134,7 @@ vi.mock("../../../utils/permission-check.js", async (importOriginal) => {
         requestId: uuid(),
         source: opts.source ?? "intelligence",
         sourceId: opts.userId,
-        workspaceId: opts.workspaceId ?? null,
+        workspaceId: filedIn,
         targetType,
         targetId,
         changeType: opts.action,
@@ -139,7 +147,7 @@ vi.mock("../../../utils/permission-check.js", async (importOriginal) => {
          values ($1,$2,$3,$4,$5,$6::jsonb,'pending',$7,$7,$8)`,
         [
           id,
-          opts.workspaceId ?? null,
+          filedIn,
           targetType,
           targetId,
           opts.action,
@@ -229,6 +237,8 @@ const ROLE_VIP = randomUUID(); // stamped per space (LEAD wears it in Brand)
 const ROLE_PARTNER = randomUUID(); // shared, granted to CRM AND Brand
 const ROLE_ORPHAN = randomUUID(); // shared, granted to no space
 const LEAD_STAGE = randomUUID(); // the `leadStage` property def
+const ROLE_DEAL = randomUUID(); // shared, granted to CRM (stored NULL); lifecycle `dealStage`
+const DEAL_STAGE = randomUUID(); // the `dealStage` property def
 
 const LEAD = randomUUID(); // pod-wide person: lead in CRM (stage new), vip in Brand, client
 const CONTACT = randomUUID(); // pod-wide person: contact in CRM → "make a lead"
@@ -240,6 +250,9 @@ const ACME = randomUUID(); // pod-wide company: contact in CRM
 const TEAM_PERSON = randomUUID(); // the teammate's pod-wide person, contact in CRM
 const SHARE_A = randomUUID(); // pod-wide person, contact in CRM (shared attach, agent)
 const SHARE_B = randomUUID(); // pod-wide person, contact in CRM (shared attach, person)
+const SHARE_C = randomUUID(); // pod-wide person, contact in CRM (shared attach, no workspaceId)
+const STORED_CRM = randomUUID(); // person STORED in CRM: deal (shared, NULL), stage new
+const STORED_OTHER = randomUUID(); // person STORED in OTHER: deal (shared, NULL), stage new
 
 const F_LEAD = randomUUID(); // LEAD's lead@CRM
 const F_LEAD_VIP = randomUUID(); // LEAD's vip@Brand
@@ -247,6 +260,8 @@ const F_LEAD_CLIENT = randomUUID(); // LEAD's client (shared, NULL)
 const F_LEAD_PARTNER = randomUUID(); // LEAD's partner (shared, NULL; CRM + Brand)
 const F_ONLY = randomUUID(); // ONLY_CRM's contact@CRM
 const F_ACME = randomUUID(); // ACME's contact@CRM
+const F_STORED_CRM = randomUUID(); // STORED_CRM's deal (shared, NULL)
+const F_STORED_OTHER = randomUUID(); // STORED_OTHER's deal (shared, NULL)
 
 interface Key {
   id: string;
@@ -314,6 +329,17 @@ const KEYS = {
     id: randomUUID(),
     permissions: ["facet.read", "facet.create"],
     workspaceIds: [CRM],
+    principal: AGENT,
+    person: OWNER,
+  },
+  /**
+   * The CRM app granted TWO spaces, CRM and OTHER, with role writes in both:
+   * its reach is wider than any one role's spaces.
+   */
+  crmTwo: {
+    id: randomUUID(),
+    permissions: CRM_APP,
+    workspaceIds: [CRM, OTHER],
     principal: AGENT,
     person: OWNER,
   },
@@ -421,6 +447,16 @@ beforeAll(async () => {
     `insert into profile_workspace_access (profile_id, workspace_id) values ($1,$2),($3,$2),($3,$4)`,
     [ROLE_CLIENT, CRM, ROLE_PARTNER, BRAND]
   );
+  // `deal`: shared, homed nowhere, granted to CRM, with its own lifecycle.
+  await q(
+    `insert into profiles (id, slug, display_name, profile_kind, scope, entity_scope, is_active, ui_hints, workspace_id) values
+       ($1,'deal','Deal','role','shared','pod',true,'{}'::jsonb,null)`,
+    [ROLE_DEAL]
+  );
+  await q(
+    `insert into profile_workspace_access (profile_id, workspace_id) values ($1,$2)`,
+    [ROLE_DEAL, CRM]
+  );
   // The lead's ONE lifecycle, `leadStage` (work model wave 0).
   await q(
     `insert into property_defs (id, slug, value_type, constraints, ui_hints) values ($1,'leadStage','string',$2::jsonb,'{}'::jsonb)`,
@@ -440,6 +476,23 @@ beforeAll(async () => {
     `insert into profile_properties (profile_id, property_def_id, is_lifecycle) values ($1,$2,true)`,
     [ROLE_LEAD, LEAD_STAGE]
   );
+  await q(
+    `insert into property_defs (id, slug, value_type, constraints, ui_hints) values ($1,'dealStage','string',$2::jsonb,'{}'::jsonb)`,
+    [
+      DEAL_STAGE,
+      JSON.stringify({
+        enumOptions: [
+          { key: "new", category: "open" },
+          { key: "engaged", category: "active" },
+          { key: "won", category: "done" },
+        ],
+      }),
+    ]
+  );
+  await q(
+    `insert into profile_properties (profile_id, property_def_id, is_lifecycle) values ($1,$2,true)`,
+    [ROLE_DEAL, DEAL_STAGE]
+  );
   for (const [id, kind, kindId, owner] of [
     [LEAD, "person", PERSON_KIND, OWNER],
     [CONTACT, "person", PERSON_KIND, OWNER],
@@ -451,6 +504,7 @@ beforeAll(async () => {
     [TEAM_PERSON, "person", PERSON_KIND, TEAMMATE],
     [SHARE_A, "person", PERSON_KIND, OWNER],
     [SHARE_B, "person", PERSON_KIND, OWNER],
+    [SHARE_C, "person", PERSON_KIND, OWNER],
   ] as const) {
     await q(
       `insert into entities (id, user_id, workspace_id, profile_id, type, title, properties, system_data)
@@ -471,6 +525,7 @@ beforeAll(async () => {
     [F_LEAD_PARTNER, LEAD, ROLE_PARTNER, null, OWNER, null],
     [randomUUID(), SHARE_A, ROLE_CONTACT, CRM, OWNER, null],
     [randomUUID(), SHARE_B, ROLE_CONTACT, CRM, OWNER, null],
+    [randomUUID(), SHARE_C, ROLE_CONTACT, CRM, OWNER, null],
   ] as const) {
     await q(
       `insert into entity_facets (id, entity_id, profile_id, user_id, workspace_id, status, properties)
@@ -484,6 +539,23 @@ beforeAll(async () => {
         status,
         JSON.stringify(status ? { leadStage: status } : {}),
       ]
+    );
+  }
+  // Two persons STORED in a space (not pod-wide), each wearing the shared
+  // `deal` role (its row stored pod-wide, as a shared role's always is).
+  for (const [id, ws, facetId] of [
+    [STORED_CRM, CRM, F_STORED_CRM],
+    [STORED_OTHER, OTHER, F_STORED_OTHER],
+  ] as const) {
+    await q(
+      `insert into entities (id, user_id, workspace_id, profile_id, type, title, properties, system_data)
+       values ($1,$2,$3,$4,'person','e','{}'::jsonb,'{}'::jsonb)`,
+      [id, OWNER, ws, PERSON_KIND]
+    );
+    await q(
+      `insert into entity_facets (id, entity_id, profile_id, user_id, workspace_id, status, properties)
+       values ($1,$2,$3,$4,null,'new','{"dealStage":"new"}'::jsonb)`,
+      [facetId, id, ROLE_DEAL, OWNER]
     );
   }
   for (const k of Object.values(KEYS)) {
@@ -579,6 +651,15 @@ async function json(res: Response): Promise<Record<string, unknown>> {
 
 const proposalCount = async () =>
   (await q(`select id from proposals`)).rows.length;
+
+/** The space a proposal is filed in (`proposals.workspace_id`). */
+const proposalSpace = async (id: string) =>
+  (
+    await q<{ workspace_id: string | null }>(
+      `select workspace_id from proposals where id = $1`,
+      [id]
+    )
+  ).rows[0]?.workspace_id;
 
 /** The live facets of `entityId` for `role`, with their stored space. */
 const liveFacets = (entityId: string, role: string) =>
@@ -780,12 +861,15 @@ describe("the CRM app changes a CRM role on a pod-wide person (D1)", () => {
     expect(body.status).toBe("proposed");
   });
 
-  it("the person's role in Brand: 403, nothing filed", async () => {
+  it("the person's role in Brand, outside the grant: 404 (not found, Brand never named), nothing filed", async () => {
     const before = await proposalCount();
     const res = await send("crm", "PATCH", `/facets/${F_LEAD_VIP}`, {
       properties: { source: "app" },
     });
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(404);
+    const error = String((await json(res)).error);
+    expect(error).toBe(`Facet not found: ${F_LEAD_VIP}`);
+    expect(error).not.toContain(BRAND);
     expect(await proposalCount()).toBe(before);
   });
 
@@ -813,9 +897,12 @@ describe("the CRM app takes a CRM role off (D1)", () => {
     expect(await liveFacets(LEAD, ROLE_LEAD)).toHaveLength(1);
   });
 
-  it("a role in another space (Brand): 403, still live", async () => {
+  it("a role in another space (Brand), outside the grant: 404 (not found, Brand never named), still live", async () => {
     const res = await send("crm", "DELETE", `/facets/${F_LEAD_VIP}`);
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(404);
+    const error = String((await json(res)).error);
+    expect(error).toBe(`Facet not found: ${F_LEAD_VIP}`);
+    expect(error).not.toContain(BRAND);
     expect(await liveFacets(LEAD, ROLE_VIP)).toHaveLength(1);
   });
 
@@ -894,6 +981,20 @@ describe("the CRM app adds or removes a SHARED role only when every space it is 
     expect(await coreOf(SHARE_B)).toEqual(before);
   });
 
+  it("agent mode, no workspaceId: the proposal and its audit carry CRM, the space the grant was checked in", async () => {
+    h.audits.length = 0;
+    const res = await attach("crm", SHARE_C, { profileSlug: "client" });
+    const body = await json(res);
+    expect(res.status, JSON.stringify(body)).toBe(200);
+    expect(body.status).toBe("proposed");
+    expect(await proposalSpace(String(body.proposalId))).toBe(CRM);
+    expect(
+      h.audits.find((a) => a.action === "attach" && a.phase === "requested")
+        ?.workspaceId
+    ).toBe(CRM);
+    expect(await liveFacets(SHARE_C, ROLE_CLIENT)).toEqual([]);
+  });
+
   it("a shared role also granted to Brand (outside the grant): 403 naming Brand, nothing filed", async () => {
     const before = await proposalCount();
     for (const key of ["crm", "crmPerson"] as const) {
@@ -956,11 +1057,12 @@ describe("the CRM app adds or removes a SHARED role only when every space it is 
     expect(await liveFacets(STRANGER, ROLE_CLIENT)).toEqual([]);
   });
 
-  it("removing the shared client role: proposed, still live; removing partner (also Brand's): 403", async () => {
+  it("removing the shared client role: proposed in CRM, still live; removing partner (also Brand's): 403", async () => {
     const res = await send("crm", "DELETE", `/facets/${F_LEAD_CLIENT}`);
     const body = await json(res);
     expect(res.status, JSON.stringify(body)).toBe(200);
     expect(body.status).toBe("proposed");
+    expect(await proposalSpace(String(body.proposalId))).toBe(CRM);
     expect(await liveFacets(LEAD, ROLE_CLIENT)).toHaveLength(1);
 
     const before = await proposalCount();
@@ -973,7 +1075,7 @@ describe("the CRM app adds or removes a SHARED role only when every space it is 
     expect(await liveFacets(LEAD, ROLE_PARTNER)).toHaveLength(1);
   });
 
-  it("changing a shared role keeps #239's rule: one of its spaces in the grant is enough (client and partner)", async () => {
+  it("changing a shared role keeps #239's rule: one of its spaces in the grant is enough (client and partner), proposed in CRM", async () => {
     for (const id of [F_LEAD_CLIENT, F_LEAD_PARTNER]) {
       const res = await send("crm", "PATCH", `/facets/${id}`, {
         properties: { source: "app" },
@@ -981,7 +1083,129 @@ describe("the CRM app adds or removes a SHARED role only when every space it is 
       const body = await json(res);
       expect(res.status, `${id}: ${JSON.stringify(body)}`).toBe(200);
       expect(body.status).toBe("proposed");
+      expect(await proposalSpace(String(body.proposalId))).toBe(CRM);
     }
+  });
+});
+
+describe("a key granted TWO spaces adds a shared role only on a record its role's own spaces reach", () => {
+  it("client (granted to CRM only) onto a pod-wide person reached only through OTHER: 403 naming CRM, nothing filed", async () => {
+    const before = await proposalCount();
+    const res = await attach("crmTwo", ELSEWHERE, { profileSlug: "client" });
+    const body = await json(res);
+    expect(res.status, JSON.stringify(body)).toBe(403);
+    expect(String(body.error)).toMatch(
+      new RegExp(
+        `grant does not allow "facet\\.create" on a record outside workspace ${CRM}:`
+      )
+    );
+    expect(await proposalCount()).toBe(before);
+    expect(await liveFacets(ELSEWHERE, ROLE_CLIENT)).toEqual([]);
+  });
+
+  it("the same role onto a contact in CRM's reach: proposed, filed in CRM", async () => {
+    const res = await attach("crmTwo", CONTACT_B, { profileSlug: "client" });
+    const body = await json(res);
+    expect(res.status, JSON.stringify(body)).toBe(200);
+    expect(body.status).toBe("proposed");
+    expect(await proposalSpace(String(body.proposalId))).toBe(CRM);
+  });
+});
+
+// ─── A shared role on a record STORED in a granted space ────────────────────
+
+type ListedRow = {
+  id: string;
+  facets?: Array<{ facetId: string; status: string | null }>;
+};
+const listDeals = async (key: KeyName, space: string) => {
+  const res = await send(
+    key,
+    "GET",
+    `/entities?workspaceId=${space}&facetSlug=deal&includeFacets=true`
+  );
+  const rows = (await res.json()) as ListedRow[];
+  expect(res.status, JSON.stringify(rows)).toBe(200);
+  return rows;
+};
+
+describe("a shared role on a record STORED in CRM: the CRM app reads it and moves it, as a member of CRM does", () => {
+  it("the list (facetSlug + includeFacets) carries the record with its deal row; not the record stored in OTHER", async () => {
+    const rows = await listDeals("crm", CRM);
+    expect(rows.map((r) => r.id)).toEqual([STORED_CRM]);
+    expect(rows[0]!.facets).toEqual([
+      expect.objectContaining({ facetId: F_STORED_CRM, status: "new" }),
+    ]);
+  });
+
+  it("GET /entities/:id/facets returns the deal row; the record stored in OTHER is 404", async () => {
+    const res = await send("crm", "GET", `/entities/${STORED_CRM}/facets`);
+    const body = (await json(res)) as {
+      facets?: Array<{ facet: { id: string } }>;
+    };
+    expect(res.status, JSON.stringify(body)).toBe(200);
+    expect(body.facets!.map((f) => f.facet.id)).toEqual([F_STORED_CRM]);
+    expect(
+      (await send("crm", "GET", `/entities/${STORED_OTHER}/facets`)).status
+    ).toBe(404);
+  });
+
+  it("agent mode: the stage move is proposed, filed in CRM; the stage unchanged", async () => {
+    const res = await send("crm", "PATCH", `/facets/${F_STORED_CRM}`, {
+      status: "engaged",
+      expectedStatus: "new",
+    });
+    const body = await json(res);
+    expect(res.status, JSON.stringify(body)).toBe(200);
+    expect(body.status).toBe("proposed");
+    expect(await proposalSpace(String(body.proposalId))).toBe(CRM);
+    expect((await liveFacets(STORED_CRM, ROLE_DEAL))[0]!.status).toBe("new");
+  });
+
+  it("person mode: the stage move applies", async () => {
+    const res = await send("crmPerson", "PATCH", `/facets/${F_STORED_CRM}`, {
+      status: "engaged",
+      expectedStatus: "new",
+    });
+    const body = await json(res);
+    expect(res.status, JSON.stringify(body)).toBe(200);
+    expect(body.status).toBe("updated");
+    expect((await liveFacets(STORED_CRM, ROLE_DEAL))[0]!.status).toBe(
+      "engaged"
+    );
+  });
+
+  it("B-1: the same role on a record stored in OTHER, outside the grant, lends nothing: 404 (not found), nothing filed", async () => {
+    const before = await proposalCount();
+    for (const patch of [
+      { status: "engaged", expectedStatus: "new" },
+      { properties: { source: "app" } },
+    ]) {
+      const res = await send(
+        "crm",
+        "PATCH",
+        `/facets/${F_STORED_OTHER}`,
+        patch
+      );
+      expect(res.status, JSON.stringify(patch)).toBe(404);
+    }
+    const detach = await send("crm", "DELETE", `/facets/${F_STORED_OTHER}`);
+    expect(detach.status).toBe(404);
+    expect(await proposalCount()).toBe(before);
+    expect((await liveFacets(STORED_OTHER, ROLE_DEAL))[0]!.status).toBe("new");
+  });
+
+  it("a key granted CRM and OTHER reads the role on the record stored in OTHER (a member of both does), but changes it only where the role's own space reaches the record: 403", async () => {
+    const rows = await listDeals("crmTwo", OTHER);
+    expect(rows.find((r) => r.id === STORED_OTHER)?.facets).toEqual([
+      expect.objectContaining({ facetId: F_STORED_OTHER }),
+    ]);
+    const before = await proposalCount();
+    const res = await send("crmTwo", "PATCH", `/facets/${F_STORED_OTHER}`, {
+      properties: { source: "app" },
+    });
+    expect(res.status).toBe(403);
+    expect(await proposalCount()).toBe(before);
   });
 });
 
