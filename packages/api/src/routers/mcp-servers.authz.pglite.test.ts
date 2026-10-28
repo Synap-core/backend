@@ -496,6 +496,42 @@ describe("stdio on the shared hub", () => {
     });
   });
 
+  it("the hub's 403 MCP_URL_NOT_ALLOWED on ping / listTools → a clear error, recorded on the row", async () => {
+    const message =
+      "This hub only connects to public MCP servers: URL '10.0.0.1' resolves to a private or reserved address.";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              status: "error",
+              code: "MCP_URL_NOT_ALLOWED",
+              error: message,
+            }),
+            { status: 403 }
+          )
+      )
+    );
+    const id = await seedServer(WS, true);
+    await expect(caller(WS_ADMIN).ping({ id })).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+      message,
+    });
+    const r = await h.client!.query<{ status: string; error_message: string }>(
+      `select status, error_message from mcp_servers where id = $1`,
+      [id]
+    );
+    expect(r.rows[0]).toMatchObject({
+      status: "error",
+      error_message: message,
+    });
+    await expect(caller(WS_MEMBER).listTools({ id })).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+      message,
+    });
+  });
+
   it("any other hub 403 stays a gateway failure (the mapping keys on the code)", async () => {
     vi.stubGlobal(
       "fetch",

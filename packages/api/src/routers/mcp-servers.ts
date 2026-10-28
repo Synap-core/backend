@@ -55,8 +55,18 @@ function assertSpawnable(server: { transport: string; approved: boolean }) {
  */
 const SHARED_HUB_SERVICE_ID = "synap-hub";
 
-/** The hub's reason code when it refuses a stdio server (intelligence-service). */
-const MCP_STDIO_NOT_ALLOWED = "MCP_STDIO_NOT_ALLOWED";
+/**
+ * The hub's reason codes when it refuses an MCP server by policy
+ * (intelligence-service `mcp-client-manager.ts`, 403 on every /api/mcp door):
+ * a stdio server, or an http URL on a private / loopback / metadata address.
+ */
+const HUB_REFUSAL_CODES = new Set([
+  "MCP_STDIO_NOT_ALLOWED",
+  "MCP_URL_NOT_ALLOWED",
+]);
+
+const URL_REFUSED_MESSAGE =
+  "This hub only connects to public MCP servers; use a public https URL.";
 
 const STDIO_ON_SHARED_HUB_MESSAGE =
   "This hub does not run local commands; use an http MCP server.";
@@ -91,17 +101,23 @@ function assertNotStdioOnSharedHub(
 }
 
 /**
- * The hub's own refusal, read off a non-OK answer: its message when the body
- * carries `code: MCP_STDIO_NOT_ALLOWED`, else null (any other failure).
+ * The hub's own policy refusal, read off a non-OK answer: its message when the
+ * body is a 403 carrying one of HUB_REFUSAL_CODES, else null (any other
+ * failure stays a gateway failure).
  */
-async function hubStdioRefusal(res: Response): Promise<string | null> {
+async function hubRefusal(res: Response): Promise<string | null> {
   if (res.status !== 403) return null;
+  // An unparseable 403 body is not a policy refusal: the caller reports the
+  // status as a gateway failure, so nothing is hidden by this fallback.
   const body = (await res.json().catch(() => null)) as {
     code?: string;
     error?: string;
   } | null;
-  if (body?.code !== MCP_STDIO_NOT_ALLOWED) return null;
-  return body.error || STDIO_ON_SHARED_HUB_MESSAGE;
+  if (!body?.code || !HUB_REFUSAL_CODES.has(body.code)) return null;
+  if (body.error) return body.error;
+  return body.code === "MCP_STDIO_NOT_ALLOWED"
+    ? STDIO_ON_SHARED_HUB_MESSAGE
+    : URL_REFUSED_MESSAGE;
 }
 
 const McpServerWriteSchema = z.object({
@@ -400,7 +416,7 @@ export const mcpServersRouter = router({
         });
         if (!res.ok) {
           newStatus = "error";
-          refusedByHub = await hubStdioRefusal(res);
+          refusedByHub = await hubRefusal(res);
           errorMessage = refusedByHub ?? `Hub returned ${res.status}`;
         }
       } catch (err) {
@@ -497,7 +513,7 @@ export const mcpServersRouter = router({
         });
       }
       if (!res.ok) {
-        const refusedByHub = await hubStdioRefusal(res);
+        const refusedByHub = await hubRefusal(res);
         if (refusedByHub)
           throw new TRPCError({
             code: "PRECONDITION_FAILED",
