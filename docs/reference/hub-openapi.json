@@ -3646,6 +3646,10 @@
           "ttl": {
             "type": "number",
             "description": "Minutes the grant lives. Defaults to 60."
+          },
+          "secretId": {
+            "type": "string",
+            "description": "The saved secret to grant, when the agent knows it (the id in its vault:// reference). Omitted: the person's one secret matching service and secretType."
           }
         },
         "required": ["secretType", "service", "purpose"]
