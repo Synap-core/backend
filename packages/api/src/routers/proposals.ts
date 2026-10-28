@@ -77,7 +77,10 @@ import {
 } from "../services/proposals/object-subject.js";
 import { resolveThingsLens } from "../services/focus-sessions/session-subject.js";
 import { markProposalNotificationsActioned } from "../notifications/mark-proposal-notifications-actioned.js";
-import { assertReviewedRevision } from "../utils/reviewed-revision.js";
+import {
+  assertReviewedRevision,
+  assertRevisedProposalBound,
+} from "../utils/reviewed-revision.js";
 import { requireUserId } from "../utils/user-scoped.js";
 import { auditLog } from "../utils/audit-log.js";
 import { discardProposalSourceBlob } from "../utils/store-entity-source-blob.js";
@@ -1598,6 +1601,15 @@ export const proposalsRouter = router({
       // revise has since changed the proposal — BEFORE any mutation, so a stale
       // approval never materializes. Omitted ⇒ no-op (backward-compatible).
       assertReviewedRevision(input.expectedRevision, proposal.revisionHistory);
+      // A proposal someone else revised is approved only against the revision
+      // the approver saw (audit F1): a call naming none is refused.
+      if (input.expectedRevision === undefined) {
+        assertRevisedProposalBound({
+          status: proposal.status,
+          revisionHistory: proposal.revisionHistory,
+          approverUserId: userId,
+        });
+      }
       // A proposal whose approval turns something on (a skill, an automation,
       // a rule) is approved only bound to the revision its page rendered:
       // without it, a revise between render and click would turn on what the
@@ -3383,6 +3395,13 @@ export const proposalsRouter = router({
           const expectedRevision = input.expectedRevisions?.[proposalId];
           if (expectedRevision !== undefined) {
             assertReviewedRevision(expectedRevision, proposal.revisionHistory);
+          } else {
+            // Revised by someone else: only against the revision seen (F1).
+            assertRevisedProposalBound({
+              status: proposal.status,
+              revisionHistory: proposal.revisionHistory,
+              approverUserId: userId,
+            });
           }
 
           // PENDING or APPROVAL_FAILED are the retryable states (both surface in
