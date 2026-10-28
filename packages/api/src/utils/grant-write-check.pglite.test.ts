@@ -44,7 +44,7 @@ import * as schema from "@synap/database/schema";
 import { grantOfScope, runWithGrant } from "@synap/database";
 import type { GrantScope } from "@synap/governance-policy/grants";
 import { checkPermissionOrPropose } from "./permission-check.js";
-import { grantRequestForWrite } from "./grant-write-check.js";
+import { grantRequestForWrite, grantWriteDenial } from "./grant-write-check.js";
 
 const WS = randomUUID();
 const OTHER_WS = randomUUID();
@@ -234,5 +234,56 @@ describe("the write gate enforces the key's grant (W1d)", () => {
       expect(await denial(write({ permissions }, move))).toContain(
         "entity.task.update"
       );
+  });
+});
+
+// Intent actions (decision 2A, 2026-10-28): a capability run is checked on the
+// INTENT it serves — `capability.<intent>.run` — named by the door from the
+// verb it resolved, never by the caller. Rules out: the intent ignored (one
+// intent's grant runs another), the workspace ignored, an intent grant
+// opening the raw provider proxy (a run with no intent), and an existing
+// `capability.run` grant no longer matching.
+describe("a capability run is checked on its intent", () => {
+  const run = (intent?: string, workspaceId: string = WS) => ({
+    subjectType: "capability",
+    action: "run",
+    workspaceId,
+    data: intent ? { intent } : {},
+  });
+  const keyOf = (permissions: string[]) =>
+    grantOfScope({ permissions, workspaceIds: [WS] });
+
+  it("names the intent as the request's qualifier", async () => {
+    expect(await grantRequestForWrite(run("publish_post"))).toMatchObject({
+      subject: "capability",
+      qualifier: "publish_post",
+      action: "run",
+      workspaceId: WS,
+    });
+  });
+
+  it("capability.<intent>.run permits that intent, in its workspaces only", async () => {
+    const key = keyOf(["capability.publish_post.run"]);
+    expect(await grantWriteDenial(run("publish_post"), key)).toBeNull();
+    expect(await grantWriteDenial(run("send_message"), key)).toContain(
+      '"capability.send_message.run"'
+    );
+    expect(
+      await grantWriteDenial(run("publish_post", OTHER_WS), key)
+    ).not.toBeNull();
+    expect(await grantWriteDenial(run(), key)).toContain('"capability.run"');
+  });
+
+  it("only a run is qualified: a create's body intent is never the key", async () => {
+    const key = keyOf(["capability.publish_post.create"]);
+    expect(
+      await grantWriteDenial({ ...run("publish_post"), action: "create" }, key)
+    ).toContain('"capability.create"');
+  });
+
+  it("an existing capability.run grant still permits every run", async () => {
+    const key = keyOf(["capability.run"]);
+    for (const intent of ["publish_post", "send_message", undefined])
+      expect(await grantWriteDenial(run(intent), key), intent).toBeNull();
   });
 });

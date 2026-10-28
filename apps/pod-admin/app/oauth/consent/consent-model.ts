@@ -40,6 +40,7 @@ import {
   isQualifiedGrantSubject,
   parsePermission,
 } from "@synap-core/types/grants";
+import { intentRunLabel } from "@synap-core/types/capability-intents";
 import { isAppPublicId } from "@synap-core/types/membrane";
 import { FIRST_PARTY_CLIENT_NAMES } from "@synap-core/types/vocabulary";
 import { patternMatches } from "@synap/governance-policy/grants";
@@ -125,6 +126,16 @@ function parts(permission: string): {
   }
   const subject = segs[0] ?? "";
   const verb = (v: string | undefined) => (v && v !== "*" ? v : null);
+  // A capability's qualifier is an INTENT, not a kind: the object stays
+  // `capability` (one "Tools" row), the intent rides in `kind` for the label.
+  if (subject === "capability") {
+    return {
+      object: subject,
+      subject,
+      kind: verb(segs[1]),
+      action: verb(segs[2]),
+    };
+  }
   if (isQualifiedGrantSubject(subject)) {
     const kind = segs[1] ?? "*";
     return {
@@ -586,7 +597,8 @@ const midSentence = (noun: string) =>
  * `proposal.approve` → "Approve changes waiting for your review",
  * `entity.post.archive` → "Archive posts", `playbook.run` → "Run templates",
  * `entity.deal.transition` → "Move deals", `entity.*` → "Read, create, edit
- * and delete everything in it", `*` → "Full access". The raw permission is
+ * and delete everything in it", `capability.publish_post.run` → "Publish
+ * posts with your tools", `*` → "Full access". The raw permission is
  * shown beside it, so an unusual one is never hidden behind a friendly word.
  */
 export function permissionLabel(permission: string): string {
@@ -595,6 +607,12 @@ export function permissionLabel(permission: string): string {
   if (subject === "proposal" && action && isDecisionPermission(permission)) {
     return `${grantActionLabel(action)} changes waiting for your review`;
   }
+  // A capability's qualifier is the INTENT a run serves, never a kind
+  // (decision 2A, 2026-10-28): `capability.publish_post.run` → "Publish posts
+  // with your tools". Every other capability permission reads as before
+  // (`capability.run` → "Run tools"): `parts` gives it no kind.
+  if (subject === "capability" && action === "run" && kind)
+    return intentRunLabel(kind);
   if (subject === "facet" && action && ROLE_ON_RECORD_WORDS[action]) {
     return ROLE_ON_RECORD_WORDS[action];
   }

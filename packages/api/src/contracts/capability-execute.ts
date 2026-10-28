@@ -179,6 +179,7 @@ export const SERVER_DERIVED_PARAMS = [
   "observability",
   "toolId",
   "requestEnableForOwner",
+  "intentRequest",
 ] as const;
 
 /**

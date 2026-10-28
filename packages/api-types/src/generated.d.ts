@@ -1919,6 +1919,31 @@ export type ProviderVerbSpec = {
  * workspace — visible to all members of the workspace
  */
 export type SkillScope = "pod" | "user" | "workspace";
+/**
+ * `skills.input_map` (0368): a verb parameter ← `"$.<path>"` (the app's input,
+ * validated against the intent's input schema), `"$account.<id|label|provider>"`
+ * (the account the action targets) or `{ const: <value> }`. Validated by
+ * `services/capabilities/intent-input.ts` before it is stored.
+ */
+export type SkillInputMapValue = string | {
+	const: unknown;
+};
+/**
+ * Where a verb's ACCOUNTS come from when they live inside the tool, not in
+ * pod connections (a Postiz key reaches several social channels): a READ verb
+ * of the same tool that lists them, and which field of each listed record is
+ * its id, its label and its provider.
+ */
+export type SkillInputMapAccounts = {
+	id: string;
+	label: string;
+	provider?: string;
+	verb: string;
+};
+export type SkillInputMap = {
+	accounts?: SkillInputMapAccounts;
+	params: Record<string, SkillInputMapValue>;
+};
 declare const WORKER_SIZES: readonly [
 	"per_thing",
 	"per_moment"
@@ -45562,6 +45587,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code?: string | undefined;
 				description?: string | undefined;
 				executionMode?: "async" | "box" | "sync" | undefined;
+				inputMap?: Record<string, unknown> | undefined;
 				intent?: string | undefined;
 				kind?: "builtin" | "code" | "declarative" | "instruction" | undefined;
 				metadata?: Record<string, unknown> | undefined;
@@ -45687,6 +45713,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					errorMessage: string | null;
 					executionMode: "async" | "box" | "sync";
 					id: string;
+					inputMap: SkillInputMap | null;
 					intent: string | null;
 					kind: SkillKind;
 					metadata: Record<string, unknown>;
@@ -45856,6 +45883,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					errorMessage: string | null;
 					executionMode: "async" | "box" | "sync";
 					id: string;
+					inputMap: SkillInputMap | null;
 					intent: string | null;
 					kind: SkillKind;
 					metadata: Record<string, unknown>;
@@ -47711,6 +47739,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					errorMessage: string | null;
 					executionMode: "async" | "box" | "sync";
 					id: string;
+					inputMap: SkillInputMap | null;
 					intent: string | null;
 					kind: SkillKind;
 					metadata: Record<string, unknown>;

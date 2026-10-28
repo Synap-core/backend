@@ -149,6 +149,7 @@ import {
   type CapabilityNextAction,
 } from "./capability-enable-link.js";
 import { answeringSkillOrder, answeringSkillsWhere } from "./verb-skill.js";
+import type { IntentRequestRecord } from "./intent-actions.js";
 import { resolveEntityVerbRunSubject } from "./capability-run-subject.js";
 import {
   proposeCapabilityEnable,
@@ -517,6 +518,15 @@ export async function executeCapability(input: {
    * the correct value for non-session activity — never synthesise one.
    */
   sessionId?: string | null;
+  /**
+   * A pod app's INTENT ACTION this run serves (intent actions, decision 3A):
+   * the intent, the action, the tool, the account and the app's own input, as
+   * the run door resolved them (`resolveIntentRun`). Recorded on a proposal so
+   * the person's approval screen shows what the app asked, in its words, next
+   * to the mapped parameters. INTERNAL ONLY (see `SERVER_DERIVED_PARAMS`): a
+   * client names an action, never this record.
+   */
+  intentRequest?: IntentRequestRecord | null;
 }): Promise<ExecuteCapabilityResult> {
   const { verbId, skillId, parameters, workspaceId, userId } = input;
   if (!verbId && !skillId) {
@@ -547,6 +557,8 @@ export async function executeCapability(input: {
       // copies it verbatim). Read by `checkVerbParameters` before a proposal is
       // filed. Absent = cannot validate, never "no arguments allowed".
       parameters: skills.parameters,
+      // The intent the verb serves: the gate's app outward floor reads it.
+      intent: skills.intent,
     })
     .from(skills)
     .where(
@@ -785,6 +797,8 @@ export async function executeCapability(input: {
         ...(input.idempotencyKey
           ? { idempotencyKey: input.idempotencyKey }
           : {}),
+        // What a pod app asked, for the approval screen (intent actions).
+        ...(input.intentRequest ? { intentRequest: input.intentRequest } : {}),
       },
       // WHY this needs a human, persisted onto `proposals.governance_reason`.
       // Previously never passed here: `createPendingProposal` has forwarded

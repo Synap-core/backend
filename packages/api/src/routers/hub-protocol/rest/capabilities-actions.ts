@@ -17,6 +17,12 @@ import {
 } from "../../../services/capabilities/capability-registry.js";
 import { foldVerbsByIntent } from "../../../services/capabilities/capability-intent-index.js";
 import { projectRunnableActions } from "../../../services/capabilities/action-projection.js";
+import { listIntentActions } from "../../../services/capabilities/intent-actions.js";
+import {
+  admitIntent,
+  IntentActionSchema,
+  takesIntentForm,
+} from "./capabilities-intent.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import {
@@ -68,7 +74,11 @@ export function registerCapabilitiesActionsRoutes(app: HubHono): void {
       "Pass `intent` (a closed ABSTRACT_VERBS value) to keep only the actions " +
       "whose verb declares that routing intent — the vendor-independent way to " +
       'ask "what can send a message?". A verb that declares no intent is ' +
-      "never matched (the vocabulary is closed; absence is never guessed).",
+      "never matched (the vocabulary is closed; absence is never guessed). " +
+      "A key the grant fence bounds (a pod app) must pass `intent`, needs " +
+      "`capability.<intent>.run` in that workspace, and gets that intent's " +
+      "actions in the pod's words: an opaque id, the verb's label, the tool, " +
+      "the account, and the ONE input the action accepts.",
     request: {
       query: z.object({
         workspaceId: z.string().uuid(),
@@ -84,7 +94,9 @@ export function registerCapabilitiesActionsRoutes(app: HubHono): void {
     responses: {
       200: {
         description: "Runnable actions",
-        schema: z.object({ actions: z.array(ActionSchema) }),
+        schema: z.object({
+          actions: z.array(z.union([ActionSchema, IntentActionSchema])),
+        }),
       },
       400: { description: "Bad request", schema: ErrorSchema },
       403: { description: "Forbidden", schema: ErrorSchema },
@@ -107,6 +119,37 @@ export function registerCapabilitiesActionsRoutes(app: HubHono): void {
         { error: "workspaceId query param (UUID) is required" },
         400
       );
+    }
+
+    // A pod app (a key the fence bounds): ONE intent's actions, in the pod's
+    // words, only where its grant runs that intent (`capabilities-intent.ts`).
+    if (takesIntentForm()) {
+      const admitted = await admitIntent(
+        c,
+        parsedWorkspaceId.data,
+        c.req.query("intent")?.trim() || undefined
+      );
+      if (!admitted.ok) return c.json(admitted.body, admitted.status);
+      try {
+        const listed = await listIntentActions(
+          {
+            userId: admitted.userId,
+            workspaceId: admitted.workspaceId,
+            agentUserId: (c.get("agentUserId") as string | undefined) ?? null,
+          },
+          admitted.intent
+        );
+        return c.json(
+          { actions: (listed?.actions ?? []).map((a) => a.view) },
+          200
+        );
+      } catch (err) {
+        logger.error({ err }, "capabilities actions (intent form) failed");
+        return c.json(
+          { error: err instanceof Error ? err.message : "Unknown error" },
+          httpStatusForTrpcError(err)
+        );
+      }
     }
 
     const acting = await resolveActingContext(c, {

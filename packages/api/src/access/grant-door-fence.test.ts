@@ -274,6 +274,36 @@ describe("mcpToolAllowed", () => {
   });
 });
 
+// Intent actions (decision 3A, 2026-10-28): the two capability doors admit a
+// key holding `capability.<intent>.run` (or the older `capability.run`), pinned
+// to spaces as an app's always is; the route then checks the intent and the
+// space it is asked about. Rules out: the AI preset (attach / renderer_set /
+// create) reaching a run, a read-only key reaching it, and a run grant on one
+// intent opening every other door.
+describe("the intent actions doors admit a key that runs an intent", () => {
+  const POSTER = key({
+    permissions: ["capability.publish_post.run"],
+    workspaceIds: ["w1"],
+  });
+  const ANY_RUN = key({
+    permissions: ["capability.run"],
+    workspaceIds: ["w1"],
+  });
+  it.each([
+    ["GET", "/capabilities/actions"],
+    ["POST", "/capabilities/execute"],
+  ])("%s %s", (method, path) => {
+    expect(restDoorAllowed(method, path, POSTER)).toBe(true);
+    expect(restDoorAllowed(method, path, ANY_RUN)).toBe(true);
+    expect(restDoorAllowed(method, path, AI)).toBe(false);
+    expect(restDoorAllowed(method, path, DOC_ONLY)).toBe(false);
+  });
+  it("a run grant opens no other door", () => {
+    expect(restDoorAllowed("GET", "/capabilities", POSTER)).toBe(false);
+    expect(restDoorAllowed("POST", "/diagnose", POSTER)).toBe(false);
+  });
+});
+
 describe("trpcProcedureAllowed (S7: the Bearer tRPC door fences mutations)", () => {
   const FULL = key({ permissions: ["*"] });
   const STAR_ONE_WS = key({ permissions: ["*"], workspaceIds: ["w1"] });

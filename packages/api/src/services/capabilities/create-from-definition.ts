@@ -97,8 +97,11 @@ import {
   canonicalJson,
   projectSkillMetadata,
   projectUrlPatterns,
+  projectInputMap,
   mergePreservingExisting,
 } from "./capability-drift.js";
+import { definitionInputMapProblems } from "./intent-input.js";
+import { loadIntentInput } from "./intent-registry.js";
 import { capabilityContainersRouter } from "../../routers/capability-containers.js";
 import type { Context } from "../../types/context.js";
 import { assertWorkspaceWrite } from "../../utils/workspace-write-access.js";
@@ -479,6 +482,7 @@ export function definitionSkillChangesExecution(
       executionMode: s.executionMode ?? "sync",
       timeoutSeconds: s.timeoutSeconds ?? 30,
       urlPatterns: projectUrlPatterns(s, readerTrust),
+      inputMap: projectInputMap(s, readerTrust),
     },
     existing
   );
@@ -517,6 +521,34 @@ export interface CreateCapabilityOptions {
    * package dependency, a third-party source.
    */
   officialSource?: boolean;
+}
+
+/**
+ * Refuse a definition whose skill `inputMap` (intent actions, 0368) would be
+ * stored but cannot work: a source outside the mapping language, a parameter
+ * the verb does not declare, an input field the intent does not have, an
+ * intent with no input shape, or an account source that is not a read of the
+ * same tool listing the fields it names. Checked only where the map is
+ * projected (an official definition); elsewhere `projectInputMap` drops it.
+ */
+async function assertInputMaps(
+  skills: readonly CapabilitySkillDef[],
+  trust: { officialSource: boolean }
+): Promise<void> {
+  for (const s of skills) {
+    if (s.inputMap === undefined || !trust.officialSource) continue;
+    const intent = typeof s.intent === "string" ? s.intent : null;
+    const row = intent ? await loadIntentInput(intent) : null;
+    const problems = definitionInputMapProblems(
+      s,
+      skills,
+      row?.inputSchema ?? null
+    );
+    if (problems.length > 0)
+      throw new Error(
+        `Capability skill "${s.name}" declares an invalid inputMap: ${problems.join("; ")}.`
+      );
+  }
 }
 
 /**
@@ -863,6 +895,7 @@ export async function createCapabilityFromDefinition(
   const knownIntents = await knownIntentSetFor(
     def.skills.map((s) => (s as { intent?: unknown }).intent)
   );
+  await assertInputMaps(def.skills, readerTrust);
   for (const t of def.tools) {
     const credentialRef =
       t.credentialRef && vaultByRef.has(t.credentialRef)
@@ -1004,6 +1037,8 @@ export async function createCapabilityFromDefinition(
         // Read so `skillExecFieldsChanged` can compare the declared reader URLs
         // by value (`url_patterns` is a RE_APPROVAL field).
         urlPatterns: skillsTable.urlPatterns,
+        // Same, for the intent input map (`input_map`, a RE_APPROVAL field).
+        inputMap: skillsTable.inputMap,
         // Read so the egress projection can MERGE onto the live bag rather than
         // replace it, and so `allowedHostsChanged` can compare by value.
         metadata: skillsTable.metadata,
@@ -1117,6 +1152,10 @@ export async function createCapabilityFromDefinition(
           // The URLs a READER verb reads (0330). Always written — `null` = not
           // a reader — so a template that drops `urls` stops routing to it.
           urlPatterns: projectUrlPatterns(s, readerTrust),
+          // How an app's intent input becomes this verb's parameters (0368).
+          // Always written — `null` = not offered to apps — so a template that
+          // drops its map stops the verb being offered.
+          inputMap: projectInputMap(s, readerTrust),
           // The ONLY definition-owned keys of this DB-owned bag. `undefined`
           // when the definition declares none, which Drizzle SKIPS — the
           // live bag (marketSource, rule, counters) is then untouched.
@@ -1163,6 +1202,8 @@ export async function createCapabilityFromDefinition(
       intent: resolveVerbIntent(s, knownIntents) ?? undefined,
       // The URLs a READER verb reads (0330), same projection as the update.
       urlPatterns: projectUrlPatterns(s, readerTrust) ?? undefined,
+      // The intent input map (0368), same projection as the update.
+      inputMap: projectInputMap(s, readerTrust) ?? undefined,
       // Persist the definition-owned keys of the `metadata` bag — the declared
       // sandbox egress allowlist. Without it a published package could never
       // grant its own skill egress: the sandbox is default-deny, so the skill
