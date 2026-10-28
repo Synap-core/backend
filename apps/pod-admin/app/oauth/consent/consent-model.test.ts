@@ -1267,3 +1267,23 @@ describe("a re-consent names what it asks that is new", () => {
     expect(s.size).toBe(0);
   });
 });
+
+// Intent actions (decision 2A, 2026-10-28): an app asks to run the person's
+// tools for ONE intent — `capability.<intent>.run` — and the screen says what
+// that does in the person's words, never the slug. Rules out: the intent read
+// as a kind ("Run publish_posts"), the bare `capability.run` losing its words,
+// and an intent run folded into Edit.
+describe("capability.<intent>.run reads in people's words", () => {
+  it.each([
+    ["capability.publish_post.run", "Publish posts with your tools"],
+    ["capability.send_message.run", "Send messages with your tools"],
+    ["capability.run", "Run tools"],
+    ["capability.*.run", "Run tools"],
+  ])("%s → %s", (permission, label) => {
+    expect(permissionLabel(permission)).toBe(label);
+  });
+
+  it("is a decision, given on its own", () => {
+    expect(isDecisionPermission("capability.publish_post.run")).toBe(true);
+  });
+});
