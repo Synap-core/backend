@@ -1773,9 +1773,13 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
   // EXCEPTION: `allowDestructiveAutoApprove` is the raw opt-in for the future
   // "Crazy" mode. Default (absent/false) → always propose.
   // TODO: wire to a first-class Crazy mode instead of a raw boolean.
+  // D7 Q2: an organise write its door PROVED (the agent's own fresh
+  // `blocked_by` edge) goes on to the class row at 2.8; with no row it proposes
+  // at 2.87 with this same reason. Only keys of the closed destructive list.
   if (
     DESTRUCTIVE_ACTIONS.includes(action) &&
-    input.allowDestructiveAutoApprove !== true
+    input.allowDestructiveAutoApprove !== true &&
+    !(organise && isOwnOrganiseDestructiveWrite(eventKey))
   ) {
     return {
       verdict: "propose",
@@ -1985,6 +1989,13 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
   // identity. Above ownership (3) and the auto-approve lists (4, 8), so
   // `focus_session.update`'s default allowance never files a session.
   if (organise) {
+    if (isOwnOrganiseDestructiveWrite(eventKey)) {
+      return {
+        verdict: "propose",
+        reason: PROPOSE_REASON.DESTRUCTIVE_HARD_FLOOR,
+        reasonCode: "DESTRUCTIVE_HARD_FLOOR",
+      };
+    }
     const ownReason = FORCED_WRITE_REASON[eventKey];
     return ownReason
       ? {
@@ -2300,8 +2311,13 @@ export function isReversibleWrite(eventKey: string): boolean {
  * person named (`own-organise.ts`, @synap/database). Each door passes
  * `forcePropose: !ownWorkOrganise`, so outside the class nothing changes.
  *
- * Closed list. Recording a decision the person made in chat, starting a
- * track, unfiling, a space move and a track filing are NOT here.
+ * Closed list. Starting a track, unfiling, a space move and a track filing
+ * are NOT here. D7 (founder, 2026-10-28: Q2, Q3 and "own renames") added
+ * three writes, each proven by its own door: removing the agent's own fresh
+ * `blocked_by` edge, re-typing its own fresh record within the same scope,
+ * and recording a decision the person made in chat, relayed with their
+ * verbatim words. Every other delete, admin, scope and access write stays a
+ * floor.
  */
 export const OWN_ORGANISE_CLASS_PATTERN = "@own-organise";
 
@@ -2313,11 +2329,50 @@ export const OWN_ORGANISE_EVENT_KEYS = [
   "focus_session.update",
   /** Close its own task (`move-status.ts`, into a `done` option). */
   "entity.transition",
+  /**
+   * D7 "own renames": re-type its OWN fresh record (`issue` → `finding`) when
+   * the kind change is the write's only forcing reason and both kinds have
+   * the same entity scope (`entities/mutate.ts`). A promotion to pod-wide, a
+   * body attach or a status carried by the retype stays a floor.
+   */
+  "entity.update",
+  /**
+   * D7 Q3: record a decision the person made in chat, relayed with their
+   * verbatim words (`answeredVia: "relayed"` + `relayQuote` +
+   * `sourceSessionId` naming the agent's own session), born decided. Applied
+   * with a receipt; the Undo is the check (`entities/create.ts`, the capture
+   * graph).
+   */
+  "entity.create",
+  /**
+   * D7 Q2: remove its OWN fresh `blocked_by` edge on its own session
+   * (`dependency-links.ts`). The ONE destructive write the class may cover:
+   * see {@link OWN_ORGANISE_DESTRUCTIVE_EVENT_KEYS}.
+   */
+  "link.delete",
 ] as const satisfies readonly GateEventKey[];
 
 /** Is this event key one the own-organise class may cover? */
 export function isOwnOrganiseWrite(eventKey: string): boolean {
   return (OWN_ORGANISE_EVENT_KEYS as readonly string[]).includes(eventKey);
+}
+
+/**
+ * The organise writes that carry a DESTRUCTIVE verb. Rung 2.5 lets these
+ * through ONLY with the door's proof, so the class row (2.8) decides them;
+ * without the row they propose at 2.87 with the destructive reason they always
+ * had. Every other delete (a record, someone else's link, an old link) still
+ * stops at 2.5 (founder D7: "every floor stays").
+ */
+export const OWN_ORGANISE_DESTRUCTIVE_EVENT_KEYS = [
+  "link.delete",
+] as const satisfies readonly (typeof OWN_ORGANISE_EVENT_KEYS)[number][];
+
+/** Is this an organise write that carries a destructive verb? */
+export function isOwnOrganiseDestructiveWrite(eventKey: string): boolean {
+  return (OWN_ORGANISE_DESTRUCTIVE_EVENT_KEYS as readonly string[]).includes(
+    eventKey
+  );
 }
 
 /**

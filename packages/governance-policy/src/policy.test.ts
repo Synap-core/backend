@@ -23,6 +23,8 @@ import {
   deriveGatePairFromOperations,
   COMPOSITE_OP_GATE_PAIRS,
   GATE_WRITE_DOORS,
+  OWN_ORGANISE_DESTRUCTIVE_EVENT_KEYS,
+  isOwnOrganiseDestructiveWrite,
   type RequiredPermission,
 } from "./index.js";
 
@@ -1229,6 +1231,10 @@ describe("decideAgentPolicy — rung 2.6 per-capability governance", () => {
 
 describe("decideAgentPolicy — rung 2.8 governance_rules store (safety tripwire)", () => {
   it("FB1020 B3: the own-organise class row can NEVER auto-approve a delete, an admin write or a scope change, even with a door's proof", () => {
+    // D7 Q2 (founder, 2026-10-28) carved out exactly ONE destructive write:
+    // the agent removing its own fresh `blocked_by` edge. Pinned by name, so
+    // a second carve-out cannot join the class without editing this line.
+    expect([...OWN_ORGANISE_DESTRUCTIVE_EVENT_KEYS]).toEqual(["link.delete"]);
     // Derived from the engine's own door registry, never a hand list.
     const floored = Object.keys(GATE_WRITE_DOORS)
       .map((door) => door.replace("/", "."))
@@ -1238,8 +1244,10 @@ describe("decideAgentPolicy — rung 2.8 governance_rules store (safety tripwire
           ADMIN_ACTIONS.includes(key) ||
           (DESTRUCTIVE_ACTIONS as readonly string[]).includes(action)
         );
-      });
+      })
+      .filter((key) => !isOwnOrganiseDestructiveWrite(key));
     expect(floored.length).toBeGreaterThan(15);
+    expect(floored).toContain("entity.delete");
     for (const key of floored) {
       const dot = key.indexOf(".");
       const v = decideAgentPolicy({

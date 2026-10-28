@@ -89,6 +89,7 @@ import {
 import { recordDomainMutation } from "../../utils/domain-mutation.js";
 import { stampAutoApprovedCreate } from "../proposals/stamp-materialized.js";
 import { linkProposalTitle } from "./link-proposal-title.js";
+import { ownWorkOrganiseForBlockerRemoval } from "../governance/own-organise.js";
 
 const logger = createLogger({ module: "dependency-links" });
 
@@ -526,6 +527,16 @@ async function gate(
   { go: true; receiptId?: string } | { go: false; result: GovernedLinkResult }
 > {
   if (input.approvedProposalId) return { go: true };
+  // D7 Q2: an agent removing its OWN fresh `blocked_by` edge may go to the
+  // pod's own-organise class row instead of the destructive floor. No
+  // `forcePropose` here: without the proof the floor (2.5) already proposes,
+  // with its own reason.
+  const ownWorkOrganise =
+    action === "delete" &&
+    (await ownWorkOrganiseForBlockerRemoval({
+      agentUserId: input.agentUserId,
+      edge: input.edge,
+    }));
   const perm = await checkPermissionOrPropose({
     userId: input.userId,
     agentUserId: input.agentUserId ?? undefined,
@@ -533,6 +544,7 @@ async function gate(
     subjectType: "link",
     action,
     ...(input.issuer ? { issuer: input.issuer } : {}),
+    ...(ownWorkOrganise ? { ownWorkOrganise: true } : {}),
     ...(input.sessionId ? { sessionId: input.sessionId } : {}),
     ...(input.reasoning?.trim() ? { reasoning: input.reasoning.trim() } : {}),
     data: {

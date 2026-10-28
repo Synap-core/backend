@@ -4,10 +4,12 @@ import {
   DESTRUCTIVE_ACTIONS,
   GATE_WRITE_DOORS,
   OWN_ORGANISE_CLASS_PATTERN,
+  OWN_ORGANISE_DESTRUCTIVE_EVENT_KEYS,
   OWN_ORGANISE_EVENT_KEYS,
   PROPOSE_REASON,
   decideAgentPolicy,
   findMatchingPattern,
+  isOwnOrganiseDestructiveWrite,
   isOwnOrganiseWrite,
   matchesActionPattern,
 } from "./index.js";
@@ -43,17 +45,24 @@ const classAuto = {
 const TERMINAL = { intoTerminal: true, humanOnly: false };
 
 describe("the own-organise class — shape", () => {
-  it("covers exactly the three organise writes, each a real gate door", () => {
+  it("covers exactly the six organise writes, each a real gate door", () => {
     expect([...OWN_ORGANISE_EVENT_KEYS].sort()).toEqual([
+      "entity.create",
       "entity.transition",
+      "entity.update",
       "focus_session.update",
+      "link.delete",
       "project.file_entities",
     ]);
     for (const key of OWN_ORGANISE_EVENT_KEYS) {
       expect(Object.keys(GATE_WRITE_DOORS)).toContain(key.replace(".", "/"));
       expect(ADMIN_ACTIONS.includes(key)).toBe(false);
-      expect(DESTRUCTIVE_ACTIONS.includes(split(key).action)).toBe(false);
+      // The ONE destructive organise write is named (D7 Q2), never implied.
+      expect(DESTRUCTIVE_ACTIONS.includes(split(key).action)).toBe(
+        isOwnOrganiseDestructiveWrite(key)
+      );
     }
+    expect([...OWN_ORGANISE_DESTRUCTIVE_EVENT_KEYS]).toEqual(["link.delete"]);
     expect(isOwnOrganiseWrite("entity.delete")).toBe(false);
     expect(isOwnOrganiseWrite("track.create")).toBe(false);
   });
@@ -178,7 +187,8 @@ describe("the own-organise class — safety tripwire (floors still win)", () => 
       "projectMember.create",
       "relation.expose",
       "track.create",
-      "entity.update",
+      "link.create",
+      "relation.delete",
     ]) {
       const v = decideAgentPolicy({
         ...split(key),
@@ -214,5 +224,120 @@ describe("the own-organise class — safety tripwire (floors still win)", () => 
         ...classAuto,
       })
     ).toMatchObject({ verdict: "propose" });
+  });
+});
+
+/**
+ * D7 (founder, 2026-10-28): Q2 own `blocked_by` removal, "own renames" (a
+ * re-type of its own fresh record) and Q3 relayed decisions. The
+ * discriminating inputs: `link.delete` is DESTRUCTIVE (rung 2.5 must let it
+ * through only WITH the proof), `entity.update` / `entity.create` are
+ * REVERSIBLE (so `@reversible` must not widen them once a door claims the
+ * organise lane), and a born-decided decision is a TERMINAL move.
+ */
+describe("the own-organise class — D7 widenings", () => {
+  const reversibleAuto = {
+    governanceRuleVerdict: "auto" as const,
+    governanceRuleIsOwnOrganise: false,
+  };
+  const destructiveFloor = {
+    verdict: "propose",
+    reason: PROPOSE_REASON.DESTRUCTIVE_HARD_FLOOR,
+    reasonCode: "DESTRUCTIVE_HARD_FLOOR",
+  };
+
+  it("Q2: its own blocked_by removal applies with the class row and the proof", () => {
+    expect(
+      decideAgentPolicy({
+        ...split("link.delete"),
+        ownWorkOrganise: true,
+        ...classAuto,
+      })
+    ).toEqual({ verdict: "execute", governanceRuleId: "rule-own" });
+  });
+
+  it("Q2: without the proof, or without the row, a link delete stays the destructive floor", () => {
+    // The class row alone (no proof) never reaches past 2.5.
+    expect(
+      decideAgentPolicy({ ...split("link.delete"), ...classAuto })
+    ).toEqual(destructiveFloor);
+    // The proof alone (class off) proposes with the SAME reason as before.
+    expect(
+      decideAgentPolicy({ ...split("link.delete"), ownWorkOrganise: true })
+    ).toEqual(destructiveFloor);
+    // Another auto row (`@reversible`, a glob) never widens it.
+    expect(
+      decideAgentPolicy({
+        ...split("link.delete"),
+        ownWorkOrganise: true,
+        ...reversibleAuto,
+      })
+    ).toEqual(destructiveFloor);
+    // The carve-out is the key, not the verb: any other delete with a proof.
+    for (const key of ["entity.delete", "relation.delete", "document.delete"]) {
+      expect(
+        decideAgentPolicy({ ...split(key), ownWorkOrganise: true, ...classAuto })
+      ).toMatchObject({ verdict: "propose" });
+    }
+  });
+
+  it("own rename: a re-type of its own fresh record applies with the row; off ⇒ the scope/identity floor as before", () => {
+    expect(
+      decideAgentPolicy({
+        ...split("entity.update"),
+        ownWorkOrganise: true,
+        ...classAuto,
+      })
+    ).toEqual({ verdict: "execute", governanceRuleId: "rule-own" });
+    const before = decideAgentPolicy({
+      ...split("entity.update"),
+      forcePropose: true,
+    });
+    expect(before).toMatchObject({ reasonCode: "SCOPE_IDENTITY_CHANGE" });
+    expect(
+      decideAgentPolicy({ ...split("entity.update"), ownWorkOrganise: true })
+    ).toEqual(before);
+    // entity.update IS reversible: @reversible must not widen the claim.
+    expect(
+      decideAgentPolicy({
+        ...split("entity.update"),
+        ownWorkOrganise: true,
+        ...reversibleAuto,
+      })
+    ).toEqual(before);
+  });
+
+  it("Q3: a relayed decision born decided applies with the row; off ⇒ the terminal floor as before", () => {
+    expect(
+      decideAgentPolicy({
+        ...split("entity.create"),
+        lifecycleMove: TERMINAL,
+        ownWorkOrganise: true,
+        ...classAuto,
+      })
+    ).toEqual({ verdict: "execute", governanceRuleId: "rule-own" });
+    const before = decideAgentPolicy({
+      ...split("entity.create"),
+      lifecycleMove: TERMINAL,
+      ...reversibleAuto,
+    });
+    expect(before).toMatchObject({ reasonCode: "LIFECYCLE_TERMINAL" });
+    expect(
+      decideAgentPolicy({
+        ...split("entity.create"),
+        lifecycleMove: TERMINAL,
+        ownWorkOrganise: true,
+        ...reversibleAuto,
+      })
+    ).toEqual(before);
+    expect(
+      decideAgentPolicy({
+        ...split("entity.create"),
+        lifecycleMove: TERMINAL,
+        ownWorkOrganise: true,
+      })
+    ).toEqual(
+      decideAgentPolicy({ ...split("entity.create"), lifecycleMove: TERMINAL })
+    );
   });
 });

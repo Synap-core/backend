@@ -13,7 +13,9 @@
  *       the proposal (receipt) it went through records this key
  *       (`proposals.api_key_id`);
  *     - a session: it is bound to this key (`metadata.clientKey`
- *       `key:<id>[|conv:…|call:…]`, stamped when the client opened it).
+ *       `key:<id>[|conv:…|call:…]`, stamped when the client opened it);
+ *     - a link (D7 Q2): its `link.create.completed` event names this agent
+ *       and its receipt records this key, exactly as for a record.
  *  2. FRESH — created in the last {@link OWN_WORK_FRESH_HOURS} hours.
  *  3. UNTOUCHED BY A PERSON — no completed write on it since that a person
  *     made (an event with no agent, from a person's door — not the system,
@@ -34,6 +36,7 @@ import { createLogger } from "@synap-core/core";
 import { entities } from "../schema/entities.js";
 import { events } from "../schema/events.js";
 import { focusSessions } from "../schema/focus-sessions.js";
+import { links } from "../schema/links.js";
 import { proposals } from "../schema/proposals.js";
 
 type DbHandle = typeof import("../client-pg.js").db;
@@ -51,7 +54,7 @@ export interface OwnFreshWorkInput {
   agentUserId: string | null | undefined;
   /** The key this request authenticated with (`getRequestApiKeyId()`). */
   apiKeyId: string | null | undefined;
-  subjectType: "entity" | "focus_session";
+  subjectType: "entity" | "focus_session" | "link";
   subjectIds: readonly string[];
   /** Test seam. */
   now?: Date;
@@ -76,11 +79,19 @@ export async function isOwnFreshWork(
   );
 
   try {
-    if (input.subjectType === "entity") {
-      const rows = await db
-        .select({ id: entities.id, createdAt: entities.createdAt })
-        .from(entities)
-        .where(and(inArray(entities.id, ids), isNull(entities.deletedAt)));
+    if (input.subjectType === "entity" || input.subjectType === "link") {
+      const rows =
+        input.subjectType === "entity"
+          ? await db
+              .select({ id: entities.id, createdAt: entities.createdAt })
+              .from(entities)
+              .where(
+                and(inArray(entities.id, ids), isNull(entities.deletedAt))
+              )
+          : await db
+              .select({ id: links.id, createdAt: links.createdAt })
+              .from(links)
+              .where(inArray(links.id, ids));
       if (rows.length !== ids.length) return false;
       if (rows.some((r) => !r.createdAt || r.createdAt < since)) return false;
 
@@ -93,7 +104,7 @@ export async function isOwnFreshWork(
         .where(
           and(
             inArray(events.subjectId, ids),
-            eq(events.type, "entity.create.completed"),
+            eq(events.type, `${input.subjectType}.create.completed`),
             eq(events.agentUserId, agentUserId),
             eq(proposals.apiKeyId, apiKeyId)
           )
