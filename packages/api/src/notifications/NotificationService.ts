@@ -51,6 +51,7 @@ import {
 import {
   decidePush,
   derivePushFacts,
+  deriveAskBudgetFact,
   readPodPushSettings,
 } from "./push-decision.js";
 import type { DeliveryChannel, NotificationDef } from "./registry.js";
@@ -773,7 +774,15 @@ export const NotificationService = {
       let pushCategory: PushPayloadExtras["pushCategory"] | null = null;
       if (channels.has("os")) {
         try {
-          const facts = await (input.push?.facts ?? derivePushFacts(input));
+          const facts = {
+            ...(await (input.push?.facts ?? derivePushFacts(input))),
+            // D7: past the person's daily ask budget an ask is in Later.
+            ...(await deriveAskBudgetFact({
+              userId: input.userId,
+              type: input.type,
+              notificationId: row.id,
+            })),
+          };
           let pod: Awaited<ReturnType<typeof readPodPushSettings>>;
           try {
             pod = await readPodPushSettings(input.userId);

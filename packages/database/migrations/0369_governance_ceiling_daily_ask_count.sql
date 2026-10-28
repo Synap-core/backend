@@ -1,0 +1,13 @@
+-- 0369 — D7 (founder, 2026-10-28): the daily ask budget.
+--
+-- A new `governance_ceilings` axis, `daily_ask_count`: how many asks may
+-- interrupt one person per UTC day. Its default (5) lives in code, in
+-- `CEILING_DEFAULTS` (@synap/governance-policy); a row (principal `any`,
+-- subject `user` + the person's id, or pod-wide with no subject) changes it.
+-- Past the limit an ask waits in "Later": listed, never pushed, and never
+-- approved to stay under the number. The engine does not read this axis.
+--
+-- TRANSACTION NOTE: as 0266 and 0330 — `ALTER TYPE … ADD VALUE` is legal
+-- inside the migration transaction on Postgres 12+ when the value is not used
+-- in it.
+ALTER TYPE governance_ceiling_axis ADD VALUE IF NOT EXISTS 'daily_ask_count';

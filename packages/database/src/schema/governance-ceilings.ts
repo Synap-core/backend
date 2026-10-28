@@ -46,6 +46,8 @@ export const governanceCeilingAxisEnum = pgEnum("governance_ceiling_axis", [
   "automation_ai_dispatch_daily",
   "worker_pending_approvals",
   "worker_irreversible_sends_daily",
+  // 0369 — D7: asks that may interrupt one person per UTC day.
+  "daily_ask_count",
 ]);
 export const GOVERNANCE_CEILING_AXES = governanceCeilingAxisEnum.enumValues;
 export type GovernanceCeilingAxis = (typeof GOVERNANCE_CEILING_AXES)[number];

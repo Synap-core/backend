@@ -7,6 +7,8 @@ import {
   resolvePushCategoryLabel,
   PUSH_QUICK_ANSWER_CATEGORIES,
   PUSH_TYPE_RULES,
+  ASK_NOTIFICATION_TYPES,
+  isAskNotificationType,
   blockingAskTarget,
   classifyPush,
   effectivePushCategories,
@@ -26,6 +28,34 @@ import {
 
 const slot = { sessionId: "s-1", label: "Tone" };
 const ask = (a: unknown): Ask => AskSchema.parse(a);
+
+describe("D7: an ask past the day's budget (Later) never pushes", () => {
+  it("every ask type is quiet in Later, and pushes as before in Asks", () => {
+    expect(ASK_NOTIFICATION_TYPES).toEqual(
+      expect.arrayContaining([
+        "proposal.created",
+        "session.needs_you",
+        "ai_request.vault_access",
+      ])
+    );
+    for (const type of ASK_NOTIFICATION_TYPES) {
+      const facts = { proposalBlocksOpenSession: true };
+      expect(classifyPush(type, { ...facts, askLane: "later" })).toBeNull();
+      expect(classifyPush(type, { ...facts, askLane: "asks" })).toBe(
+        classifyPush(type, facts)
+      );
+      expect(classifyPush(type, facts)).not.toBeNull();
+    }
+  });
+
+  it("Later only quiets asks: a mention or a broken run still pushes", () => {
+    for (const type of ["chat.mention", "agent.task_failed"]) {
+      expect(isAskNotificationType(type)).toBe(false);
+      expect(classifyPush(type, { askLane: "later" })).toBe(classifyPush(type));
+    }
+    expect(isAskNotificationType("toString")).toBe(false);
+  });
+});
 
 describe("classifyPush", () => {
   it("a proposal pushes ONLY when it blocks an open session", () => {

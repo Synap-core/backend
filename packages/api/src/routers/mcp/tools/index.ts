@@ -1301,7 +1301,7 @@ export const tools = {
             profileSlug: {
               type: "string",
               description:
-                "CONVERT the entity to another kind (e.g. a misfiled knowledge entry → decision, issue or note). It keeps its id, links, document and history; always a proposal. Send the new kind's required properties in `properties` in the same call. An unknown kind is refused — list kinds with synap_list_profiles.",
+                "CONVERT the entity to another kind (e.g. a misfiled knowledge entry → decision, issue or note). It keeps its id, links, document and history; a proposal, except for a record you made through this key in the last 24 h that no person has touched, re-typed to a kind the same people see: that applies at once with an Undo (the pod's 'tidy its own new work' default, which the person can switch off). Send the new kind's required properties in `properties` in the same call. An unknown kind is refused — list kinds with synap_list_profiles.",
             },
             title: { type: "string" },
             description: { type: "string" },
@@ -1435,7 +1435,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Propose deleting an entity. For you, this is ALWAYS a proposal the person reviews — 'proposed' is success, never retry it. Nothing is removed until they approve; then the entity is hidden (soft delete), its body document is kept, and they can undo it. Use it to clean up what you created by mistake or what the person asked you to remove. To remove only a role, use synap_detach_facet; to change an entity, synap_update_entity.",
+          "Propose deleting an entity. For you, this is ALWAYS a proposal the person reviews — 'proposed' is success, never retry it. Nothing is removed until they approve; then the entity is hidden (soft delete), its body document is kept, and they can undo it. Use it to clean up what you created by mistake or what the person asked you to remove. Knowledge you replaced is not deleted: set `supersededBy` on the old entry to the new one's id with synap_update_entity, an ordinary update. To remove only a role, use synap_detach_facet; to change an entity, synap_update_entity.",
         inputSchema: {
           type: "object",
           properties: {

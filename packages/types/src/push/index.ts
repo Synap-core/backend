@@ -172,7 +172,19 @@ export interface PushFacts {
    * a stray agent write), so that work waits on the decision.
    */
   proposalBlocksOpenSession?: boolean;
+  /**
+   * D7 — where this ask falls in the person's daily ask budget
+   * (`daily_ask_count`, counted once by the pod's `askBudget`). `"later"`: the
+   * day's budget is spent, so the ask waits in Later and never pushes
+   * ({@link isAskNotificationType}); it is still listed and decidable, and it
+   * is never approved to stay under the number. Absent = not counted.
+   */
+  askLane?: AskLane;
 }
+
+/** The two lanes of the person's daily ask budget (D7). */
+export const ASK_LANES = ["asks", "later"] as const;
+export type AskLane = (typeof ASK_LANES)[number];
 
 /**
  * `PushCategory` — always this category. `"blocking-proposal"` — the
@@ -228,6 +240,28 @@ export const PUSH_TYPE_RULES: Readonly<Record<string, PushTypeRule>> = {
   "chat.room_member_added": null,
 };
 
+/**
+ * Is this notification type an ASK — a decision or answer the person owes
+ * (`blocking-ask`, `decision-blocking`, a blocking proposal)? These are what
+ * the daily ask budget counts, and what Later keeps from pushing. Read from
+ * {@link PUSH_TYPE_RULES}, so a new ask type is counted once it is classified.
+ */
+export function isAskNotificationType(notificationType: string): boolean {
+  if (!Object.prototype.hasOwnProperty.call(PUSH_TYPE_RULES, notificationType))
+    return false;
+  const rule = PUSH_TYPE_RULES[notificationType];
+  return (
+    rule === "blocking-ask" ||
+    rule === "decision-blocking" ||
+    rule === "blocking-proposal"
+  );
+}
+
+/** The ask notification types, derived from {@link PUSH_TYPE_RULES}. */
+export const ASK_NOTIFICATION_TYPES: readonly string[] = Object.keys(
+  PUSH_TYPE_RULES
+).filter(isAskNotificationType);
+
 /** The category a notification pushes under, or `null` (do not push). */
 export function classifyPush(
   notificationType: string,
@@ -239,6 +273,10 @@ export function classifyPush(
   )
     ? PUSH_TYPE_RULES[notificationType]
     : null;
+  // D7: an ask past the day's budget waits in Later — never a push.
+  if (facts.askLane === "later" && isAskNotificationType(notificationType)) {
+    return null;
+  }
   if (rule === "blocking-proposal") {
     return facts.proposalBlocksOpenSession === true
       ? "decision-blocking"

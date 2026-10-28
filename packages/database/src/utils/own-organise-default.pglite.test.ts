@@ -90,6 +90,11 @@ beforeAll(async () => {
       subject_type text,
       subject_id text
     );
+    CREATE TABLE proposals (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      agent_user_id text,
+      data jsonb
+    );
     CREATE TABLE events (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       agent_user_id text,
@@ -112,7 +117,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  await pg.exec(`DELETE FROM governance_rules;`);
+  await pg.exec(`DELETE FROM governance_rules; DELETE FROM proposals;`);
   await pg.exec(REVERSIBLE);
   await pg.exec(OWN_ORGANISE);
 });
@@ -217,6 +222,93 @@ describe("the own-organise default, seeded ON", () => {
     });
     expect(await decide("track.create", proven)).toMatchObject({
       decision: "propose",
+    });
+  });
+});
+
+/**
+ * D7 (founder, 2026-10-28). The widened class on real rows: its own
+ * `blocked_by` removal (a DELETE, so rung 2.5 must let it through only with
+ * the proof), its own re-type and a relayed decision born decided. Then the
+ * Undo rule: two of THIS agent's class-applied writes undone in 7 days and the
+ * class row stops applying for it.
+ */
+describe("the own-organise class — D7 widenings on real rows", () => {
+  it("each widened write executes under the class row with its door's proof", async () => {
+    const { ruleId } = await readOwnOrganiseDefault(db);
+    for (const [key, extra] of [
+      ["link.delete", {}],
+      ["entity.update", {}],
+      ["entity.create", { lifecycleMove: TERMINAL }],
+    ] as const) {
+      expect(await decide(key, { ...proven, ...extra })).toMatchObject({
+        decision: "execute",
+        governanceRuleId: ruleId,
+      });
+    }
+  });
+
+  it("without the proof each stays on its floor", async () => {
+    expect(await decide("link.delete")).toMatchObject({ decision: "propose" });
+    expect(await decide("entity.update", { forcePropose: true })).toMatchObject(
+      { decision: "propose" }
+    );
+    expect(
+      await decide("entity.create", { lifecycleMove: TERMINAL })
+    ).toMatchObject({ decision: "propose" });
+  });
+
+  it("switched OFF: the proven link delete proposes again", async () => {
+    await setOwnOrganiseDefault(db, { enabled: false, userId: HUMAN });
+    expect(await decide("link.delete", proven)).toMatchObject({
+      decision: "propose",
+    });
+  });
+});
+
+describe("an Undo counts as a no: two in 7 days revoke the class for that agent", () => {
+  const OTHER_AGENT = "33333333-3333-4333-8333-333333333333";
+  const undo = async (
+    agent: string,
+    ruleId: string,
+    revertedAt: Date = new Date()
+  ) =>
+    pg.query(
+      `INSERT INTO proposals (agent_user_id, data) VALUES ($1, $2::jsonb)`,
+      [
+        agent,
+        JSON.stringify({
+          _autoApprove: { governanceRuleId: ruleId },
+          revertedAt: revertedAt.toISOString(),
+        }),
+      ]
+    );
+
+  it("one undo: still applied; the second: the class stops applying", async () => {
+    const { ruleId } = await readOwnOrganiseDefault(db);
+    await undo(STRICT_AGENT, ruleId!);
+    expect(await decide("focus_session.update", proven)).toMatchObject({
+      decision: "execute",
+      governanceRuleId: ruleId,
+    });
+    await undo(STRICT_AGENT, ruleId!);
+    for (const key of ["focus_session.update", "link.delete"]) {
+      expect(await decide(key, proven)).toMatchObject({ decision: "propose" });
+    }
+  });
+
+  it("undos older than 7 days, another agent's, or of another rule do not count", async () => {
+    const { ruleId } = await readOwnOrganiseDefault(db);
+    const eightDaysAgo = new Date(Date.now() - 8 * 24 * 3_600_000);
+    await undo(STRICT_AGENT, ruleId!, eightDaysAgo);
+    await undo(STRICT_AGENT, ruleId!, eightDaysAgo);
+    await undo(OTHER_AGENT, ruleId!);
+    await undo(OTHER_AGENT, ruleId!);
+    await undo(STRICT_AGENT, "44444444-4444-4444-8444-444444444444");
+    await undo(STRICT_AGENT, "44444444-4444-4444-8444-444444444444");
+    expect(await decide("focus_session.update", proven)).toMatchObject({
+      decision: "execute",
+      governanceRuleId: ruleId,
     });
   });
 });

@@ -287,10 +287,7 @@ export async function ownWorkOrganiseForRelayedDecision(input: {
 }): Promise<boolean> {
   const apiKeyId = getRequestApiKeyId();
   if (!input.agentUserId || !apiKeyId) return false;
-  const sessionId = relayedDecisionSession(
-    input.profileSlug,
-    input.properties
-  );
+  const sessionId = relayedDecisionSession(input.profileSlug, input.properties);
   if (!sessionId) return false;
   return sessionIsThisKeys(sessionId, apiKeyId, input.userId);
 }

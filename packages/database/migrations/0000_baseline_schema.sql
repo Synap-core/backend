@@ -4784,6 +4784,8 @@ ALTER TYPE governance_ceiling_axis ADD VALUE IF NOT EXISTS 'automation_ai_dispat
 ALTER TYPE governance_ceiling_axis ADD VALUE IF NOT EXISTS 'automation_ai_dispatch_daily';
 ALTER TYPE governance_ceiling_axis ADD VALUE IF NOT EXISTS 'worker_pending_approvals';
 ALTER TYPE governance_ceiling_axis ADD VALUE IF NOT EXISTS 'worker_irreversible_sends_daily';
+-- 0369: D7, asks that may interrupt one person per UTC day.
+ALTER TYPE governance_ceiling_axis ADD VALUE IF NOT EXISTS 'daily_ask_count';
 CREATE TABLE IF NOT EXISTS "governance_ceilings" (
   "id"                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   "axis"                governance_ceiling_axis NOT NULL,

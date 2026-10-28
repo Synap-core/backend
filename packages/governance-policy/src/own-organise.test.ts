@@ -276,7 +276,11 @@ describe("the own-organise class — D7 widenings", () => {
     // The carve-out is the key, not the verb: any other delete with a proof.
     for (const key of ["entity.delete", "relation.delete", "document.delete"]) {
       expect(
-        decideAgentPolicy({ ...split(key), ownWorkOrganise: true, ...classAuto })
+        decideAgentPolicy({
+          ...split(key),
+          ownWorkOrganise: true,
+          ...classAuto,
+        })
       ).toMatchObject({ verdict: "propose" });
     }
   });

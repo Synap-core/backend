@@ -22,6 +22,7 @@ import type { CompositeProposalOperation } from "@synap-core/types/proposals";
 import { resolveAgentGovernanceDecision } from "@synap/database/agent-governance";
 import { captureGraphEventKeys } from "./capture-graph-policy.js";
 import { initialCreateStatusFloorOfSlug } from "../lifecycle/initial-status-floor.js";
+import { ownWorkOrganiseForRelayedDecision } from "../governance/own-organise.js";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "capture-graph-governance" });
@@ -60,6 +61,34 @@ async function createFloorsBySlug(
 }
 
 /** True when ANY member of the graph would propose at its own door. */
+/**
+ * D7 Q3 — the created kinds whose every op carries the relay proof
+ * (`ownWorkOrganiseForRelayedDecision`). Keyed by slug like the floors: the
+ * resolver is asked once per kind, so ONE op of the kind without the proof
+ * keeps the whole kind on its floor.
+ */
+async function relayedDecisionKinds(input: {
+  agentUserId: string;
+  userId: string;
+  operations: CompositeProposalOperation[];
+}): Promise<Set<string>> {
+  const proven = new Map<string, boolean>();
+  for (const op of input.operations) {
+    if (op.op !== "create_entity" || !op.profileSlug) continue;
+    if (proven.get(op.profileSlug) === false) continue;
+    proven.set(
+      op.profileSlug,
+      await ownWorkOrganiseForRelayedDecision({
+        agentUserId: input.agentUserId,
+        userId: input.userId,
+        profileSlug: op.profileSlug,
+        properties: op.properties as Record<string, unknown> | undefined,
+      })
+    );
+  }
+  return new Set([...proven].filter(([, ok]) => ok).map(([slug]) => slug));
+}
+
 export async function captureGraphMemberProposes(input: {
   agentUserId: string;
   userId: string;
@@ -85,6 +114,9 @@ export async function captureGraphMemberProposes(input: {
     );
     return true;
   }
+  // D7 Q3: the kinds whose EVERY created op is a decision the person made in
+  // chat, relayed by this agent with their words and its own session.
+  const relayedKinds = await relayedDecisionKinds(input);
   for (const key of keys) {
     const lifecycleMove =
       key.subjectType === "entity" &&
@@ -107,6 +139,11 @@ export async function captureGraphMemberProposes(input: {
         ? { subjectUoValidated: key.subjectUoValidated }
         : {}),
       ...(lifecycleMove ? { lifecycleMove } : {}),
+      ...(lifecycleMove?.intoTerminal &&
+      key.subjectProfileSlug &&
+      relayedKinds.has(key.subjectProfileSlug)
+        ? { ownWorkOrganise: true }
+        : {}),
       // MCP is an agent WRITE door — prefer the agent's own metadata
       // autoApproveFor, falling back to the workspace override (chat-door rule).
       preferAgentMetadataAutoApproveFor: true,

@@ -15,6 +15,11 @@
  *      the person named that type and asked for its push. A CATEGORY-level
  *      rule does not — it predates the push categories and was never a
  *      statement about one type.
+ *
+ * Above all three: an ASK past the person's daily ask budget is in Later and
+ * never pushes (D7, founder 2026-10-28: "Later never pushes"), whatever rule
+ * names its type. The person raises the budget (`daily_ask_count`) to hear
+ * more; the ask itself is unchanged and still waits for them.
  */
 import {
   db,
@@ -25,9 +30,14 @@ import {
   storedSessionSource,
 } from "@synap/database";
 import { loadAgentPresence } from "../services/agent-presence.js";
+import { askLaneOfNotification } from "../services/governance/ask-budget.js";
+import { createLogger } from "@synap-core/core";
+
+const logger = createLogger({ module: "push-decision" });
 import { OPEN_SESSION_STATUSES } from "@synap-core/types/focus-sessions";
 import {
   classifyPush,
+  isAskNotificationType,
   isPushCategoryEnabled,
   type PushCategory,
   type PushFacts,
@@ -39,7 +49,7 @@ export type PushDecision =
   | {
       push: false;
       category: PushCategory | null;
-      reason: "unclassified" | "category_off";
+      reason: "unclassified" | "category_off" | "later";
     };
 
 /** Pure: the three rules above, in order. */
@@ -49,6 +59,9 @@ export function decidePush(p: {
   facts: PushFacts;
   prefs: PushPrefs;
 }): PushDecision {
+  if (p.facts.askLane === "later" && isAskNotificationType(p.type)) {
+    return { push: false, category: null, reason: "later" };
+  }
   const category = classifyPush(p.type, p.facts);
   if (p.typeRule === "os" || p.typeRule === "all") {
     return { push: true, category, reason: "forced" };
@@ -167,6 +180,32 @@ export async function derivePushFacts(input: {
     };
   }
   return {};
+}
+
+/**
+ * D7 — the ask-budget fact of a STORED notification (`askLane`), read from the
+ * one counter (`ask-budget.ts`). Added to whatever facts the producer gave,
+ * so no producer can opt an ask out of the budget. A budget that cannot be
+ * read is logged and leaves the fact absent: the push is then decided as it
+ * was before the budget existed (an unread budget must never silence an ask
+ * an agent is stopped on).
+ */
+export async function deriveAskBudgetFact(input: {
+  userId: string;
+  type: string;
+  notificationId: string;
+}): Promise<Pick<PushFacts, "askLane">> {
+  if (!isAskNotificationType(input.type)) return {};
+  try {
+    const askLane = await askLaneOfNotification(input);
+    return askLane ? { askLane } : {};
+  } catch (err) {
+    logger.warn(
+      { err, type: input.type, notificationId: input.notificationId },
+      "Ask budget unreadable — push decided without it"
+    );
+    return {};
+  }
 }
 
 export { readPushPrefs, readPodPushSettings } from "./push-prefs.js";

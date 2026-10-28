@@ -71,6 +71,7 @@ import {
   isJoinGate,
   proposedMessageFor,
 } from "../../utils/permission-check.js";
+import { ownWorkOrganiseForRelayedDecision } from "../../services/governance/own-organise.js";
 import { resolveViewTrust } from "../../services/view-trust-service.js";
 import { getAgentFocusProjectId } from "../../services/agent-identity-service.js";
 import { initialCreateStatusFloor } from "../../services/lifecycle/initial-status-floor.js";
@@ -1478,6 +1479,22 @@ export const createProcs = {
       const proposeAsDuplicate =
         isAgentFiling && duplicateCheck?.status === "possible";
 
+      // D7 Q3 (founder, 2026-10-28): a decision the person made in chat,
+      // recorded by the agent that heard it with their verbatim words and the
+      // session they answered in (its own), is applied with a receipt and an
+      // Undo instead of asking them to confirm what they said. Only a decision
+      // BORN decided needs it (any other create already applies as before).
+      const ownRelayedDecision =
+        !!input.agentUserId &&
+        initialLifecycleMove?.intoTerminal === true &&
+        !proposeAsDuplicate &&
+        (await ownWorkOrganiseForRelayedDecision({
+          agentUserId: input.agentUserId,
+          userId: ctx.userId,
+          profileSlug,
+          properties: input.properties,
+        }));
+
       // 2. Permission check (may create proposal with correlationId)
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,
@@ -1490,6 +1507,7 @@ export const createProcs = {
         action: "create",
         source: input.source,
         lifecycleMove: initialLifecycleMove,
+        ...(ownRelayedDecision ? { ownWorkOrganise: true } : {}),
         issuer,
         reasoning: input.reasoning,
         correlationId,

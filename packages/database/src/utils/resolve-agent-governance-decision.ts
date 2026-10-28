@@ -14,6 +14,7 @@ import {
 import { users, type AgentMetadata } from "../schema/users.js";
 import { workspaces, type WorkspaceSettings } from "../schema/workspaces.js";
 import { governanceRules } from "../schema/governance-rules.js";
+import { proposals } from "../schema/proposals.js";
 import {
   governanceCeilings,
   type GovernanceCeilingAxis,
@@ -34,7 +35,9 @@ import {
   PROPOSE_REASON,
   REVERSIBLE_CLASS_PATTERN,
   OWN_ORGANISE_CLASS_PATTERN,
+  OWN_ORGANISE_UNDO_WINDOW_MS,
   isOwnOrganiseWrite,
+  ownOrganiseRevokedByUndos,
   type ChannelCapabilityGrant,
 } from "@synap/governance-policy";
 import {
@@ -586,6 +589,25 @@ export async function resolveGovernanceRule(
       )
     )) as GovernanceRuleCandidate[];
 
+  // D7 (R7 §3.5): an Undo of a write the class row applied is a "no". Two in
+  // the window and the row stops applying for THIS agent; a `propose` row is
+  // never skipped (tightening stays).
+  const organiseAutoRowIds = organise
+    ? candidates
+        .filter(
+          (r) =>
+            r.targetKind === "action" &&
+            r.targetPattern === OWN_ORGANISE_CLASS_PATTERN &&
+            r.verdict === "auto"
+        )
+        .map((r) => r.id)
+    : [];
+  const organiseRowRevoked =
+    organiseAutoRowIds.length > 0 &&
+    ownOrganiseRevokedByUndos(
+      await countOwnOrganiseUndos(db, agentUserId!, organiseAutoRowIds)
+    );
+
   let best:
     | {
         id: string;
@@ -617,6 +639,9 @@ export async function resolveGovernanceRule(
       rule.targetKind === "action" &&
       rule.targetPattern === OWN_ORGANISE_CLASS_PATTERN;
     if (isOrganiseClassRow && !organise) continue;
+    if (isOrganiseClassRow && organiseRowRevoked && rule.verdict === "auto") {
+      continue;
+    }
     if (organise && !isOrganiseClassRow && rule.verdict === "auto") continue;
     const targetScore = isOrganiseClassRow
       ? 1 // ranked like a class / glob: any more specific rule outranks it
@@ -657,6 +682,39 @@ export async function resolveGovernanceRule(
         namesWrite: best.namesWrite,
       }
     : undefined;
+}
+
+/**
+ * How many of this agent's writes, applied by one of these own-organise class
+ * rows, a person undid within {@link OWN_ORGANISE_UNDO_WINDOW_MS}. Read from
+ * the receipts themselves: the rule that applied a write is stamped on its
+ * receipt (`data._autoApprove.governanceRuleId`) and the Undo stamps
+ * `data.revertedAt` (also when the Undo sends it back to review).
+ */
+export async function countOwnOrganiseUndos(
+  db: DbHandle,
+  agentUserId: string,
+  ruleIds: readonly string[],
+  now: Date = new Date()
+): Promise<number> {
+  if (ruleIds.length === 0) return 0;
+  const since = new Date(
+    now.getTime() - OWN_ORGANISE_UNDO_WINDOW_MS
+  ).toISOString();
+  const [row] = await db
+    .select({ n: count() })
+    .from(proposals)
+    .where(
+      and(
+        eq(proposals.agentUserId, agentUserId),
+        inArray(
+          sql<string>`${proposals.data} -> '_autoApprove' ->> 'governanceRuleId'`,
+          [...ruleIds]
+        ),
+        sql`${proposals.data} ->> 'revertedAt' >= ${since}`
+      )
+    );
+  return Number(row?.n ?? 0);
 }
 
 export interface SyncAutoApproveRulesInput {

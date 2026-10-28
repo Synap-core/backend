@@ -39,6 +39,7 @@ import { loadEditableDocument } from "../../utils/document-edit-access.js";
 import { assertBodyNotReplacedSilently } from "../../services/entity-body/body-replace-guard.js";
 import { documentOwnedByAnotherObject } from "../../services/entity-body/document-ownership.js";
 import { isAiWriteRequest } from "../../utils/ai-write.js";
+import { ownWorkOrganiseForRetype } from "../../services/governance/own-organise.js";
 import { resolveViewTrust } from "../../services/view-trust-service.js";
 import { auditLog } from "../../utils/audit-log.js";
 import { assertKeyMayWrite } from "../../utils/assert-key-may-write.js";
@@ -445,9 +446,27 @@ export const mutateProcs = {
         !!input.documentId &&
         input.documentId !== existing.documentId &&
         !agentAttachesOwnDocument;
+      // D7 "own renames" (founder, 2026-10-28): an agent re-typing its OWN
+      // fresh record (same key, last 24 h, untouched by a person), when the
+      // kind change is the write's ONLY forcing reason and both kinds have the
+      // same entity scope, may reach the pod's own-organise class row instead
+      // of the identity floor. Whether it applies is still the engine's call.
+      const ownRetype =
+        changesProfileType &&
+        !promotesToGlobal &&
+        !aiAttachesBody &&
+        input.forcePropose !== true &&
+        !!input.agentUserId &&
+        (await ownWorkOrganiseForRetype({
+          agentUserId: input.agentUserId,
+          entityId: input.id,
+          fromKind: existing.type,
+          toKind: input.profileSlug!,
+          workspaceId: existing.workspaceId ?? null,
+        }));
       const forcePropose =
         promotesToGlobal ||
-        changesProfileType ||
+        (changesProfileType && !ownRetype) ||
         aiAttachesBody ||
         input.forcePropose === true;
 
@@ -475,6 +494,7 @@ export const mutateProcs = {
         source: input.source,
         issuer,
         forcePropose,
+        ...(ownRetype ? { ownWorkOrganise: true } : {}),
         reasoning: input.reasoning,
         correlationId,
         requestedEventId: requestedEvent?.id,

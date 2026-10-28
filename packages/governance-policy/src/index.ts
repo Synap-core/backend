@@ -304,6 +304,17 @@ export const DEFAULT_DAILY_WRITE_CEILING: number | null = null;
 export const WORKER_IRREVERSIBLE_DAILY_CEILING = 50;
 
 /**
+ * D7 (founder, 2026-10-28) — how many ASKS may interrupt one person per UTC
+ * day: the default of the `daily_ask_count` ceiling axis. The budget is on the
+ * person's attention, never on the agents' writes: past it an ask waits in
+ * "Later", which never pushes a notification, and it is NEVER approved to stay
+ * under the number. The engine (`decideAgentPolicy`) does not read it; the one
+ * counter is `askBudget` (api `services/governance/ask-budget.ts`). A batch
+ * counts as one ask (Q1).
+ */
+export const DEFAULT_DAILY_ASK_COUNT = 5;
+
+/**
  * THE CAPS FOLD (agent routing W1c, 0330): the fallback value of every
  * `governance_ceilings` axis, in ONE table. A stored row overrides it for its
  * (subject, principal, scope); `resolveCeiling` (@synap/database) is the one
@@ -321,6 +332,8 @@ export const CEILING_DEFAULTS = {
   automation_ai_dispatch_daily: 50,
   worker_pending_approvals: 20,
   worker_irreversible_sends_daily: WORKER_IRREVERSIBLE_DAILY_CEILING,
+  /** Asks that may interrupt one person per UTC day (D7); the rest wait in Later. */
+  daily_ask_count: DEFAULT_DAILY_ASK_COUNT,
 } as const;
 
 /**
@@ -2367,6 +2380,24 @@ export function isOwnOrganiseWrite(eventKey: string): boolean {
 export const OWN_ORGANISE_DESTRUCTIVE_EVENT_KEYS = [
   "link.delete",
 ] as const satisfies readonly (typeof OWN_ORGANISE_EVENT_KEYS)[number][];
+
+/**
+ * D7 (founder, 2026-10-28; R7 §3.5) — an Undo of a write the own-organise
+ * class row applied counts as a "no" for that row. When ONE agent has had
+ * {@link OWN_ORGANISE_UNDO_LIMIT} such writes undone within
+ * {@link OWN_ORGANISE_UNDO_WINDOW_MS}, the row stops applying for THAT agent
+ * (`resolveGovernanceRule`, @synap/database): its organise writes propose
+ * again, for the reason their door's floor always gave. Tightening only — it
+ * never widens anything, so it needs no approval — and it lifts by itself once
+ * the undos age out of the window.
+ */
+export const OWN_ORGANISE_UNDO_LIMIT = 2;
+export const OWN_ORGANISE_UNDO_WINDOW_MS = 7 * 24 * 3_600_000;
+
+/** Pure: has this agent been undone often enough to lose the class row? */
+export function ownOrganiseRevokedByUndos(undoneInWindow: number): boolean {
+  return undoneInWindow >= OWN_ORGANISE_UNDO_LIMIT;
+}
 
 /** Is this an organise write that carries a destructive verb? */
 export function isOwnOrganiseDestructiveWrite(eventKey: string): boolean {

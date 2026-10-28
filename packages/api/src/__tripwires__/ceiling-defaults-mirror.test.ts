@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   CEILING_DEFAULTS,
+  DEFAULT_DAILY_ASK_COUNT,
   DEFAULT_DAILY_WRITE_CEILING,
   WORKER_IRREVERSIBLE_DAILY_CEILING,
 } from "@synap/governance-policy";
@@ -32,6 +33,7 @@ describe("tripwire: ceiling defaults have one source", () => {
         AI_DISPATCH_GUARDRAILS.maxAiDispatchesPerDayDefault,
       worker_pending_approvals: DEFAULT_WORKER_MAX_PENDING_APPROVALS,
       worker_irreversible_sends_daily: WORKER_IRREVERSIBLE_DAILY_CEILING,
+      daily_ask_count: DEFAULT_DAILY_ASK_COUNT,
     }).toEqual(CEILING_DEFAULTS);
   });
 });

@@ -85,9 +85,7 @@ export async function isOwnFreshWork(
           ? await db
               .select({ id: entities.id, createdAt: entities.createdAt })
               .from(entities)
-              .where(
-                and(inArray(entities.id, ids), isNull(entities.deletedAt))
-              )
+              .where(and(inArray(entities.id, ids), isNull(entities.deletedAt)))
           : await db
               .select({ id: links.id, createdAt: links.createdAt })
               .from(links)
