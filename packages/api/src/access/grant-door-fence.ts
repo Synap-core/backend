@@ -10,7 +10,9 @@
  * new read door is refused until someone verifies it and lists it here.
  *
  * Writes on Hub REST and MCP stay open: each one is meant to pass the gate,
- * whose rung 0 denies an out-of-grant write. On the Bearer tRPC door (S7,
+ * whose rung 0 denies an out-of-grant write. The free-form `POST /proposals`
+ * passes no gate, so it runs rung 0 itself on an allowlist
+ * (`fenced-proposal.ts`, 2026-10-28). On the Bearer tRPC door (S7,
  * 2026-10-20) a mutation passes only when `TRPC_KEY_MUTATION_DOORS` says the
  * gate really bounds it; every other one needs an unbounded `*` key.
  *
@@ -734,7 +736,8 @@ export const TRPC_KEY_MUTATION_DOORS: Readonly<Record<string, TrpcWriteDoor>> =
     "automations.updateAutomation": GATED,
     "automations.activateAutomation": GATED,
     "automations.triggerAutomation": GATED,
-    // D3: revising honours the key's space / project / object pins.
+    // D3: revising honours the key's space / project / object pins, and a
+    // fenced key never changes the payload or the space (issue 314a6554).
     "proposals.updateProposal": GATED,
     // D5: an observation is `event.create` where it lands; never widened.
     "observations.append": GATED,
