@@ -185,7 +185,13 @@ describe("cellInstances — the input workspace is gated, not only the header (F
     });
     expect(cell.workspaceId).toBe(WA);
     expect(await cellsIn(WA)).toBe(before + 1);
-    const linked = await caller(ALICE, WA).link({ cellId: C, entityId: E });
+    // A system relation type: the default ("references") needs a relation def
+    // in the space, which this fixture does not seed.
+    const linked = await caller(ALICE, WA).link({
+      cellId: C,
+      entityId: E,
+      relationType: "embedded_in",
+    });
     expect(linked.status).toBe("created");
   });
 });
