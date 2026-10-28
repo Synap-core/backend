@@ -50,7 +50,7 @@ import {
   resolveObjectNounPlural,
 } from "@synap-core/types/vocabulary";
 import Link from "next/link";
-import { useState } from "react";
+import { Suspense, useState } from "react";
 
 import {
   ExitFallback,
@@ -81,6 +81,7 @@ import { useConsoleRole } from "../components/side-nav-role";
 import { StatusPill, type StatusKind } from "../components/status-pill";
 import { HEALTH_PILL } from "../components/status-tone";
 import { buildNeedsYou, statusLine, type NeedsYouRow } from "./_lib/needs-you";
+import { StartUnavailableBand } from "./_lib/start-unavailable-band";
 import { updateIssue } from "../updates/_lib/updates-model";
 import {
   PodUpdatesError,
@@ -99,6 +100,10 @@ export default function HomePage() {
             : "What needs you on this pod."
         }
       />
+
+      <Suspense fallback={null}>
+        <StartUnavailableBand />
+      </Suspense>
 
       <RecoveryCodesNudge />
 
