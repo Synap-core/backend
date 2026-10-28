@@ -59,6 +59,10 @@ import {
   type SessionChangesPage,
 } from "./session-changes.js";
 import { stampSessionRunner } from "./session-runners.js";
+import {
+  listConversationChanges,
+  type ConversationChangesPage,
+} from "./conversation-changes.js";
 import { stampSessionMessagesRead } from "./session-inbox.js";
 
 const logger = createLogger({ module: "wait-for-answers" });
@@ -71,6 +75,14 @@ export const WAIT_DEFAULT_SECONDS = 50;
 export const WAIT_MAX_SECONDS = 90;
 /** The floor poll when no NOTIFY arrives — a hint wake usually comes first. */
 export const WAIT_FALLBACK_POLL_MS = 5_000;
+/**
+ * The conversation wait's floor poll. One read covers every session of the
+ * conversation (up to 25, several queries each), so it polls three times less
+ * often; a NOTIFY on any of them still wakes it at once. Cost: a change no
+ * NOTIFY announces (a proposal decision) reaches a held wait within 15 s, and
+ * every new wait reads at once.
+ */
+export const CONVERSATION_FALLBACK_POLL_MS = 15_000;
 
 export type WaitForAnswersResult =
   | ({ status: "answered" } & SessionAnswersPage)
@@ -135,15 +147,25 @@ interface WaitCommon {
  * (`stampSessionRunner`, itself throttled to one write a minute) after the
  * first read proves the session readable, and again a minute later.
  */
-async function waitLoop<P extends { sessionId: string }>(
+async function waitLoop<P>(
   p: WaitCommon,
   deps: Pick<
     WaitForAnswersDeps,
     "subscribe" | "stampRunner" | "pollMs" | "now"
   >,
-  read: (startedAt: number) => Promise<P | null>,
+  /**
+   * One read. `watch` subscribes more sessions to the wake: a read over a SET
+   * (a conversation) calls it once it knows the set, BEFORE it reads their
+   * changes, so a write landing during the read still wakes the wait.
+   */
+  read: (
+    startedAt: number,
+    watch: (ids: readonly string[]) => void
+  ) => Promise<P | null>,
   isHit: (page: P) => boolean,
-  onHit: (page: P) => Promise<void>
+  onHit: (page: P) => Promise<void>,
+  /** The sessions subscribed before the first read. */
+  initial: readonly string[] = [p.sessionId]
 ): Promise<
   | { kind: "hit"; page: P }
   | { kind: "timeout"; page: P; waitedSeconds: number }
@@ -163,19 +185,30 @@ async function waitLoop<P extends { sessionId: string }>(
   // the sleep still wakes us (no lost-wakeup window).
   let woken = false;
   let wakeResolve: (() => void) | null = null;
-  const unsubscribe = subscribe(p.sessionId, () => {
-    woken = true;
-    wakeResolve?.();
-  });
+  const subscriptions = new Map<string, () => void>();
+  const watch = (ids: readonly string[]) => {
+    for (const id of ids) {
+      if (subscriptions.has(id)) continue;
+      subscriptions.set(
+        id,
+        subscribe(id, () => {
+          woken = true;
+          wakeResolve?.();
+        })
+      );
+    }
+  };
+  watch(initial);
 
   try {
     for (;;) {
       woken = false;
-      const page = await read(startedAt);
+      const page = await read(startedAt, watch);
       if (!page) return null;
       if (
-        runnerStampedAt === null ||
-        now() - runnerStampedAt >= RUNNER_RESTAMP_MS
+        p.sessionId &&
+        (runnerStampedAt === null ||
+          now() - runnerStampedAt >= RUNNER_RESTAMP_MS)
       ) {
         runnerStampedAt = now();
         // Never fails the wait (the stamp logs its own failure).
@@ -212,7 +245,7 @@ async function waitLoop<P extends { sessionId: string }>(
       });
     }
   } finally {
-    unsubscribe();
+    for (const unsubscribe of subscriptions.values()) unsubscribe();
   }
 }
 
@@ -376,6 +409,98 @@ export async function waitForSessionChanges(
     since: out.page.since,
     nextSince: out.page.nextSince,
     state: out.page.state,
+    waitedSeconds: out.waitedSeconds,
+  };
+}
+
+export type WaitForConversationChangesResult =
+  | ({ status: "changed" } & ConversationChangesPage)
+  | ({
+      status: "timeout";
+      waitedSeconds: number;
+    } & Omit<ConversationChangesPage, "events" | "hasMore">);
+
+/**
+ * The CONVERSATION change feed wait — {@link waitForSessionChanges} over every
+ * session one agent conversation opened (`conversation-changes.ts` holds the
+ * set and the contract). Same clamp, same exclusive cursor, same fallback
+ * poll; it wakes on the NOTIFY of ANY session in the set, and re-reads the set
+ * on every read, so a session opened mid-wait is watched from the next read
+ * (its first change, at worst, from the fallback poll).
+ *
+ * ALWAYS A PEEK: it never stamps an answer "Picked up" or a message read — it
+ * is a watcher's read (synap-bridge), and the agent doing the work still gets
+ * both as unread from its own session wait. `runnerSessionId` (optional) is
+ * the session whose runner row this wait keeps fresh: the watcher's bound one.
+ */
+export async function waitForConversationChanges(
+  p: Omit<WaitCommon, "sessionId"> & {
+    conversation: string;
+    kinds: ReadonlySet<SessionChangeKind>;
+    runnerSessionId?: string | null;
+  },
+  deps: Omit<WaitForChangesDeps, "list" | "stamp" | "stampRead"> & {
+    list?: typeof listConversationChanges;
+  } = {}
+): Promise<WaitForConversationChangesResult> {
+  const list = deps.list ?? listConversationChanges;
+  const stampRunner = deps.stampRunner ?? stampSessionRunner;
+  const now = deps.now ?? Date.now;
+  let runnerStampedAt: number | null = null;
+  const out = await waitLoop<ConversationChangesPage>(
+    // No session of its own: the runner is stamped below, once the read has
+    // shown `runnerSessionId` is one of this conversation's sessions.
+    { ...p, sessionId: "" },
+    { ...deps, pollMs: deps.pollMs ?? CONVERSATION_FALLBACK_POLL_MS },
+    async (startedAt, watch) => {
+      const page = await list({
+        userId: p.userId,
+        conversation: p.conversation,
+        // Subscribed between listing the set and reading it: no lost wake.
+        onSessions: watch,
+        kinds: p.kinds,
+        since: p.since ?? null,
+        limit: p.limit,
+        ...(p.since
+          ? {}
+          : {
+              skipPickedUp: true,
+              roomSince: new Date(startedAt),
+              floor: new Date(startedAt),
+            }),
+      });
+      const runner = p.runnerSessionId;
+      if (
+        runner &&
+        page.sessions.some((s) => s.id === runner) &&
+        (runnerStampedAt === null ||
+          now() - runnerStampedAt >= RUNNER_RESTAMP_MS)
+      ) {
+        runnerStampedAt = now();
+        await stampRunner({
+          sessionId: runner,
+          ownerId: p.userId,
+          agentUserId: p.agentUserId ?? null,
+        });
+      }
+      return page;
+    },
+    (page) => page.events.length > 0,
+    async () => {},
+    []
+  );
+  // `list` never answers null (an empty set is an empty page).
+  if (!out) throw new Error("conversation change feed: no page");
+  if (out.kind === "hit") return { status: "changed", ...out.page };
+  const { page } = out;
+  return {
+    status: "timeout",
+    scope: page.scope,
+    conversation: page.conversation,
+    sessions: page.sessions,
+    since: page.since,
+    nextSince: page.nextSince,
+    notCovered: page.notCovered,
     waitedSeconds: out.waitedSeconds,
   };
 }
