@@ -14,6 +14,7 @@ import { registerOpenApi } from "./_codecs/_register.js";
 import {
   confineWorkspaceOrForbidden,
   hasScope,
+  httpStatusForTrpcError,
   logger,
   resolveActingContext,
   type HubHono,
@@ -100,7 +101,7 @@ export function registerWorkReleaseRoutes(app: HubHono): void {
       logger.error({ err }, "GET /work-release failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
