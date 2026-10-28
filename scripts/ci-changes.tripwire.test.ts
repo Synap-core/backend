@@ -10,7 +10,13 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 // @ts-expect-error — plain ESM script, no declarations
-import { decide, isDocsOnly, isImageNeutral } from "./ci-changes.mjs";
+import {
+  decide,
+  isDocsOnly,
+  isImageNeutral,
+  queuePrNumber,
+  suitesPassed,
+} from "./ci-changes.mjs";
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 const none = () => [];
@@ -41,6 +47,53 @@ describe("ci-changes: every check runs unless a narrow match says otherwise", ()
         false,
       ]);
     }
+  });
+
+  it("a merge-queue entry whose PR's own suites passed runs the Release gate only", () => {
+    const d = decide({
+      event: "merge_group",
+      headRef: "",
+      draft: false,
+      files: null,
+      siblingTests: none,
+      queue: { pr: 402, headSha: "550070005abc", suitesPassed: true },
+    });
+    expect([d.gate, d.image, d.suites, d.negctl]).toEqual([
+      true,
+      true,
+      false,
+      false,
+    ]);
+    expect(d.reason).toContain("#402");
+  });
+
+  it("a merge-queue entry without that evidence checks everything", () => {
+    for (const queue of [
+      null,
+      { pr: 402, headSha: "x", suitesPassed: false },
+    ]) {
+      const d = decide({
+        event: "merge_group",
+        headRef: "",
+        draft: false,
+        files: null,
+        siblingTests: none,
+        queue,
+      });
+      expect([d.gate, d.image, d.suites]).toEqual([true, true, true]);
+    }
+  });
+
+  it("only a pull request run's evidence is ever read (a push never trusts it)", () => {
+    const d = decide({
+      event: "push",
+      headRef: "",
+      draft: false,
+      files: null,
+      siblingTests: none,
+      queue: { pr: 402, headSha: "x", suitesPassed: true },
+    });
+    expect(d.suites).toBe(true);
   });
 
   it("unknown changed files check everything", () => {
@@ -118,6 +171,75 @@ describe("ci-changes: every check runs unless a narrow match says otherwise", ()
       "packages/api/src/a.test.ts",
       "packages/jobs/src/b.test.ts",
     ]);
+  });
+});
+
+describe("ci-changes: a queue entry trusts only suites that really ran", () => {
+  const run = (
+    name: string,
+    conclusion: string | null,
+    status = "completed"
+  ) => ({
+    name,
+    status,
+    conclusion,
+  });
+
+  it("reads the PR from the queue branch, and nothing else", () => {
+    expect(
+      queuePrNumber("refs/heads/gh-readonly-queue/main/pr-402-550070005abc")
+    ).toBe(402);
+    expect(queuePrNumber("gh-readonly-queue/main/pr-7-abc")).toBe(7);
+    expect(queuePrNumber("feat/pr-402-x")).toBeNull();
+    expect(queuePrNumber(undefined)).toBeNull();
+  });
+
+  it("both suites completed with success: trusted", () => {
+    expect(
+      suitesPassed([run("Full suite", "success"), run("API e2e", "success")])
+    ).toBe(true);
+  });
+
+  // Each row rules out a looser rule: GitHub counts skipped and neutral as
+  // green (a draft run reports its suites skipped), so accepting either would
+  // let a PR whose suites never ran merge through a light queue run.
+  it.each([
+    [
+      "Full suite skipped (a draft run)",
+      [run("Full suite", "skipped"), run("API e2e", "success")],
+    ],
+    [
+      "API e2e skipped",
+      [run("Full suite", "success"), run("API e2e", "skipped")],
+    ],
+    ["neutral", [run("Full suite", "neutral"), run("API e2e", "success")]],
+    ["failure", [run("Full suite", "failure"), run("API e2e", "success")]],
+    [
+      "still running",
+      [run("Full suite", null, "in_progress"), run("API e2e", "success")],
+    ],
+    ["API e2e missing", [run("Full suite", "success")]],
+    ["Full suite missing", [run("API e2e", "success")]],
+    [
+      "a shard is not the judge",
+      [run("Full suite (shard 1/4)", "success"), run("API e2e", "success")],
+    ],
+    [
+      "one of two runs red",
+      [
+        run("Full suite", "success"),
+        run("Full suite", "failure"),
+        run("API e2e", "success"),
+      ],
+    ],
+    ["no runs", []],
+  ])("%s: not trusted", (_label, runs) => {
+    expect(suitesPassed(runs)).toBe(false);
+  });
+
+  it("anything that is not a list is not trusted", () => {
+    expect(suitesPassed(null as never)).toBe(false);
+    expect(suitesPassed(undefined as never)).toBe(false);
   });
 });
 
