@@ -85,7 +85,10 @@ export function registerCapabilitiesActionsRoutes(app: HubHono): void {
       "SUBJECT_NOT_READABLE): each action then carries `reach` " +
       "({ ok, why? }: can it reach them, from the addresses the pod holds), " +
       "and the list is ranked for them: reachable first, then the channel " +
-      "last used with them.",
+      "last used with them. Any other key (an agent drafting for the person) " +
+      "gets the same intent form when it asks for it: by passing `subject`, " +
+      "or `form=intent` to list an intent's actions for no one; without " +
+      "either it reads the raw projection above.",
     request: {
       query: z.object({
         workspaceId: z.string().uuid(),
@@ -95,8 +98,11 @@ export function registerCapabilitiesActionsRoutes(app: HubHono): void {
         // can send a message", without knowing `gmail_send`. Resolved by the
         // shared reverse index (`foldVerbsByIntent`), never a second lookup.
         intent: z.string().regex(INTENT_SLUG_RE).optional(),
-        // Intent form only: the person or company the actions are for.
+        // Intent form only: the person or company the actions are for. Asks
+        // for the intent form from any key.
         subject: z.string().uuid().optional(),
+        // `intent`: the intent form from any key, with no subject.
+        form: z.enum(["intent"]).optional(),
         limit: z.coerce.number().int().positive().max(100).optional(),
       }),
     },
@@ -132,7 +138,13 @@ export function registerCapabilitiesActionsRoutes(app: HubHono): void {
 
     // A pod app (a key the fence bounds): ONE intent's actions, in the pod's
     // words, only where its grant runs that intent (`capabilities-intent.ts`).
-    if (takesIntentForm()) {
+    // Any other key gets the same answer when it asks for it (`subject` or
+    // `form=intent`); otherwise the raw projection below, as before.
+    const form = c.req.query("form");
+    if (form !== undefined && form !== "intent") {
+      return c.json({ error: 'form must be "intent"' }, 400);
+    }
+    if (takesIntentForm() || form === "intent" || !!c.req.query("subject")) {
       const admitted = await admitIntent(
         c,
         parsedWorkspaceId.data,

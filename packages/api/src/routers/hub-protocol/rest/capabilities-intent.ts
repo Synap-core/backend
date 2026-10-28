@@ -9,7 +9,12 @@
  * the intent's actions in the pod's words (`services/capabilities/
  * intent-actions.ts`) and asks one to run with the intent's ONE input; it never
  * names a verb, a skill or a verb's parameters. A key the fence does not bound
- * (a signed-in session, an unbounded `*` key) keeps both doors as they were.
+ * (a signed-in session, an unbounded `*` key, an agent's key) keeps both doors
+ * as they were, and takes the intent form only when it asks for it: `subject`
+ * or `form=intent` on the list, an `actionId` in the run body (decision
+ * 790baeb5: an agent drafting for the person proposes the send through the
+ * same actions an app sees). An outward intent action files a proposal
+ * whoever asked (the capability gate's outward floor, `intentRun`).
  *
  * Refusals carry a `code` an app can branch on: INTENT_REQUIRED, UNKNOWN_INTENT,
  * GRANT_DENIED, INTENT_MISMATCH, INVALID_INPUT, ACTION_NOT_FOUND, RATE_LIMITED,

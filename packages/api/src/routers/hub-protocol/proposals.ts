@@ -14,6 +14,7 @@ import { ProposalStatus } from "@synap/database/schema";
 import {
   proposalIdsFilterSchema,
   proposalIdsWhere,
+  proposalRecipientWhere,
   proposalUserFloor,
 } from "../proposals/scope-conditions.js";
 import { redactUnreadableSessionTargets } from "../../services/proposals/session-content-redaction.js";
@@ -70,6 +71,9 @@ export const proposalsRouter = router({
         // It only narrows: an id outside the caller's floor or grant is
         // omitted, never an error that would confirm it exists.
         proposalIds: proposalIdsFilterSchema.optional(),
+        // Only the intent actions sent to this person or company (an app's
+        // or an agent's send waiting for approval, on that lead's page).
+        recipient: z.string().uuid().optional(),
         // Bounded, and paired with `offset` + a `total` in the result. Before
         // this, `limit` had no ceiling, there was no `offset` at all, and the
         // response carried no count — so every caller rendered `items.length`
@@ -110,6 +114,9 @@ export const proposalsRouter = router({
       // compiles to `false` (no rows), not to "no filter".
       if (input.proposalIds) {
         conditions.push(proposalIdsWhere(input.proposalIds));
+      }
+      if (input.recipient) {
+        conditions.push(proposalRecipientWhere(input.recipient));
       }
       if (input.status !== "all") {
         conditions.push(

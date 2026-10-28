@@ -119,7 +119,10 @@ export function registerCapabilitiesExecuteRoutes(app: HubHono): void {
       "When the action sends to someone, `input.to` is a person's or company's " +
       "entity id the key may read (else 403 SUBJECT_NOT_READABLE); the pod " +
       "finds their address for the action's account at run time (none on " +
-      "file: 400 RECIPIENT_UNREACHABLE with `why`), and the proposal names them.",
+      "file: 400 RECIPIENT_UNREACHABLE with `why`), and the proposal names them. " +
+      "Any other key (an agent drafting for the person) may send the same " +
+      "intent body (it is told apart by `actionId`): it is resolved the same " +
+      "way, and an outward intent files a proposal for it too.",
     request: { body: ExecuteCapabilityRequestSchema },
     responses: {
       200: {
@@ -170,17 +173,22 @@ export function registerCapabilitiesExecuteRoutes(app: HubHono): void {
     // nothing else: the action is resolved, its input checked and mapped
     // onto the verb's parameters here (`capabilities-intent.ts`), then it
     // runs through the same core below. Any other body is refused for it.
-    const asApp = takesIntentForm();
+    // Any other key asks for one by sending its `actionId` (an agent
+    // drafting for the person); a raw body never carries one.
+    const asIntent =
+      takesIntentForm() ||
+      (typeof raw === "object" && raw !== null && "actionId" in raw);
     let body: z.infer<typeof ExecuteCapabilityRequestSchema>;
     let intentRequest: IntentRequestRecord | null = null;
     let lens: { userId: string; workspaceId: string | null };
-    if (asApp) {
+    if (asIntent) {
       const ask = IntentRunRequestSchema.safeParse(raw);
       if (!ask.success) {
         return c.json(
           {
-            error:
-              "This key may only ask for an intent action: { workspaceId, intent, actionId, input, idempotencyKey? }.",
+            error: takesIntentForm()
+              ? "This key may only ask for an intent action: { workspaceId, intent, actionId, input, idempotencyKey? }."
+              : "An intent action is asked for as { workspaceId, intent, actionId, input, idempotencyKey? }.",
             code: "INVALID_REQUEST",
             issues: ask.error.issues.map((i) => ({
               path: i.path.join("."),

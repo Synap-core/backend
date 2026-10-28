@@ -24,7 +24,11 @@
  *    account that is gone still running (404);
  *  - a raw body (`verbId`/`parameters`) accepted from an app;
  *  - the per-key, per-intent cap missing (429 + retryAfter);
- *  - an unfenced operator, or an existing `capability.run` grant, changed.
+ *  - an unfenced operator, or an existing `capability.run` grant, changed;
+ *  - an agent's key (no app) unable to ask for the intent form, or its
+ *    outward intent run (or the person's own) running instead of proposing;
+ *  - a LinkedIn id sent through an Instagram account;
+ *  - the sends to one person not findable from their page (`recipient`).
  *
  * Mocked: the key lookup, the guest check, the sub-token mapping, the audit
  * log, the event log, the person-token classification (the identity a mint
@@ -193,6 +197,7 @@ import { hubAuthMiddleware } from "../_middleware/auth.js";
 import { intentActionId } from "../../../services/capabilities/intent-actions.js";
 import { registerCapabilitiesActionsRoutes } from "./capabilities-actions.js";
 import { registerCapabilitiesExecuteRoutes } from "./capabilities-execute.js";
+import { registerProposalsRoutes } from "./proposals.js";
 import type { HubHono, HubVariables } from "./_shared.js";
 
 const BASIC =
@@ -318,6 +323,14 @@ const KEYS = {
   ]),
   /** A poster used only to exhaust the per-intent cap. */
   busy: app(["capability.publish_post.run"]),
+  /** The CRM reading its sends waiting for approval. */
+  crmReview: app([
+    "capability.send_message.run",
+    "entity.*.read",
+    "proposal.read",
+  ]),
+  /** An agent's own key (no app): unbounded, acting for the person. */
+  agent: app(["*"], { workspaceIds: null, clientId: null }),
   /** The person's own unbounded key: not limited to spaces, no app. */
   operator: app(["*"], {
     workspaceIds: null,
@@ -521,6 +534,7 @@ function hubApp() {
   hub.use("/*", hubAuthMiddleware as never);
   registerCapabilitiesActionsRoutes(hub);
   registerCapabilitiesExecuteRoutes(hub);
+  registerProposalsRoutes(hub);
   const root = new Hono();
   root.route("/api/hub", hub);
   return root;
@@ -1333,6 +1347,27 @@ describe("an app sends to a person it names: the pod finds the address", () => {
     });
   });
 
+  it("a LinkedIn invitation never goes through her Instagram account", async () => {
+    const ig = (await forMarie("request_connection")).find(
+      (a) => a.connection?.account === "antoiinesrvt"
+    )!;
+    expect(ig.reach).toEqual({
+      ok: false,
+      why: "Instagram can't reach Marie Dupont on LinkedIn.",
+    });
+    const before = (await q(`select id from proposals`)).rows.length;
+    const res = await run("crm", {
+      workspaceId: CRM,
+      intent: "request_connection",
+      actionId: ig.id,
+      input: { to: MARIE },
+    });
+    const body = await json(res);
+    expect(res.status, JSON.stringify(body)).toBe(400);
+    expect(body.code).toBe("RECIPIENT_UNREACHABLE");
+    expect((await q(`select id from proposals`)).rows.length).toBe(before);
+  });
+
   it("refuses a send the pod cannot address (RECIPIENT_UNREACHABLE), and files nothing", async () => {
     const mail = (await forMarie()).find((a) => a.tool === "Mail")!;
     const before = (await q(`select id from proposals`)).rows.length;
@@ -1382,5 +1417,165 @@ describe("an app sends to a person it names: the pod finds the address", () => {
     });
     expect(res.status).toBe(400);
     expect((await json(res)).code).toBe("INVALID_INPUT");
+  });
+
+  // ── An agent drafting for the person (decision 790baeb5: the AI proposes
+  //    sends, the person approves them whenever). Its key is not an app's: it
+  //    asks for the intent form, and its outward run still files a proposal.
+
+  it("an agent's key reads the raw projection unless it asks for the intent form", async () => {
+    const raw = await list("agent", `workspaceId=${CRM}&intent=send_message`);
+    const rawBody = await json(raw);
+    expect(raw.status, JSON.stringify(rawBody)).toBe(200);
+    expect((rawBody.actions as unknown[]).length).toBeGreaterThan(0);
+    expect(
+      (rawBody.actions as Array<Record<string, unknown>>).every(
+        (a) => typeof a.verbId === "string"
+      )
+    ).toBe(true);
+
+    const asked = await list(
+      "agent",
+      `workspaceId=${CRM}&intent=send_message&form=intent`
+    );
+    const askedBody = await json(asked);
+    expect(asked.status, JSON.stringify(askedBody)).toBe(200);
+    const views = askedBody.actions as Array<Record<string, unknown>>;
+    expect(views.length).toBeGreaterThan(0);
+    for (const v of views) {
+      expect(v).not.toHaveProperty("verbId");
+      expect(v).not.toHaveProperty("reach");
+      expect(typeof v.id).toBe("string");
+    }
+
+    expect(
+      (await list("agent", `workspaceId=${CRM}&intent=send_message&form=raw`))
+        .status
+    ).toBe(400);
+  });
+
+  it("an agent's key listing for a subject gets her reach and ranking", async () => {
+    const res = await list(
+      "agent",
+      `workspaceId=${CRM}&intent=send_message&subject=${MARIE}`
+    );
+    const body = await json(res);
+    expect(res.status, JSON.stringify(body)).toBe(200);
+    const actions = body.actions as Array<
+      ActionView & { reach?: { ok: boolean; why?: string } }
+    >;
+    expect(actions.map((a) => [named(a), a.reach]).slice(0, 2)).toEqual([
+      ["Reply in the chat · Antoine Servant", { ok: true }],
+      ["Send a first message · Antoine Servant", { ok: true }],
+    ]);
+    expect(JSON.stringify(actions)).not.toContain("ACoAAMarie");
+  });
+
+  it("an agent's send is proposed for the person, never run", async () => {
+    const res0 = await list(
+      "agent",
+      `workspaceId=${CRM}&intent=send_message&subject=${MARIE}`
+    );
+    const reply = ((await json(res0)).actions as ActionView[])[0]!;
+    const res = await run("agent", {
+      workspaceId: CRM,
+      intent: "send_message",
+      actionId: reply.id,
+      input: { to: MARIE, text: "Bonjour Marie, from the agent" },
+    });
+    const body = await json(res);
+    expect(res.status, JSON.stringify(body)).toBe(202);
+    const row = (
+      await q<{
+        governance_reason: string | null;
+        agent_user_id: string | null;
+        app_id: string | null;
+        data: Record<string, unknown>;
+      }>(
+        `select governance_reason, agent_user_id, app_id, data from proposals where id = $1`,
+        [String(body.proposalId)]
+      )
+    ).rows[0]!;
+    expect(row).toMatchObject({
+      governance_reason: "INTENT_OUTWARD",
+      agent_user_id: AGENT,
+      app_id: null,
+    });
+    expect(row.data).toMatchObject({
+      parameters: { accountId: "acc-li", threadId: "chat-marie" },
+      intentRequest: { recipient: { id: MARIE, name: "Marie Dupont" } },
+    });
+    expect(posts()).toEqual([]);
+  });
+
+  it("an intent action asked for with the person's own key is proposed too (no owner bypass)", async () => {
+    const res0 = await list(
+      "operator",
+      `workspaceId=${CRM}&intent=send_message&subject=${MARIE}`
+    );
+    const mail = ((await json(res0)).actions as ActionView[]).find(
+      (a) => a.tool === "Mail"
+    )!;
+    const res = await run("operator", {
+      workspaceId: CRM,
+      intent: "send_message",
+      actionId: mail.id,
+      input: { to: MARIE, text: "By the person, through the intent form" },
+    });
+    const body = await json(res);
+    expect(res.status, JSON.stringify(body)).toBe(202);
+    expect((await proposalRow(String(body.proposalId))).governance_reason).toBe(
+      "INTENT_OUTWARD"
+    );
+    expect(posts()).toEqual([]);
+  });
+
+  it("an agent's run body is told apart by its actionId: a raw body stays raw", async () => {
+    const res = await run("agent", {
+      workspaceId: CRM,
+      intent: "send_message",
+      actionId: "x.y",
+      input: { to: MARIE, text: "Hi" },
+      verbId: "mail_send",
+    });
+    const body = await json(res);
+    expect(res.status, JSON.stringify(body)).toBe(400);
+    expect(body.code).toBe("INVALID_REQUEST");
+  });
+
+  // ── "Sends waiting for your approval" on a lead: the proposals of the
+  //    intent actions sent to her, and only those.
+
+  it("lists the sends proposed to one person (GET /proposals?recipient=)", async () => {
+    const sentTo = async (key: KeyName, who: string) => {
+      const res = await send(
+        key,
+        "GET",
+        `/proposals?status=pending&limit=200&recipient=${who}`
+      );
+      const body = await json(res);
+      expect(res.status, JSON.stringify(body)).toBe(200);
+      return body.proposals as Array<{
+        id: string;
+        data: { intentRequest?: { recipient?: { id: string } } };
+      }>;
+    };
+    const all = await q<{ id: string }>(
+      `select id from proposals where status = 'pending'`
+    );
+    const toMarie = await sentTo("operator", MARIE);
+    // The app's sends and the agent's, and nothing else of the queue.
+    expect(toMarie.length).toBeGreaterThanOrEqual(4);
+    expect(toMarie.length).toBeLessThan(all.rows.length);
+    for (const p of toMarie)
+      expect(p.data.intentRequest?.recipient?.id).toBe(MARIE);
+    expect(await sentTo("operator", PAUL)).toEqual([]);
+    // An app that reads proposals in its space sees the same list.
+    expect((await sentTo("crmReview", MARIE)).map((p) => p.id).sort()).toEqual(
+      toMarie.map((p) => p.id).sort()
+    );
+    expect(
+      (await send("operator", "GET", "/proposals?recipient=marie")).status
+    ).toBe(400);
   });
 });

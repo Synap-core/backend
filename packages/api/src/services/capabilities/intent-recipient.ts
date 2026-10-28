@@ -23,6 +23,11 @@
  *                             else the property `<provider>ProviderId`
  *                             (`linkedinProviderId` for a LinkedIn account)
  *
+ * A provider-named address (`linkedin.*`) resolves only for an action on an
+ * account of that provider (case-insensitive: Unipile says `LINKEDIN`), or
+ * for an action with no account; `chat` and `attendee` stay on the action's
+ * account; `email` and `phone` serve any action.
+ *
  * Kind-blind: a company is reached only through the addresses it carries
  * itself (a shared inbox, its own chat). The pod never picks a person at a
  * company; the app names the person.
@@ -230,12 +235,37 @@ function accountWords(target: RecipientTarget): string {
   return provider ? humanizeToken(provider) : "this account";
 }
 
+/**
+ * A provider-named address (`linkedin.providerId`) is that provider's: an
+ * action on an account of another provider cannot use it ("Instagram can't
+ * reach Marie Dupont on LinkedIn."), and an account whose provider the pod
+ * does not know is not that provider's either. An action with no account
+ * reads it from the person's properties. The provider is the address's own
+ * first segment, never a hand-kept list.
+ */
+function providerMismatch(
+  r: IntentRecipient,
+  address: RecipientAddress,
+  target: RecipientTarget
+): string | null {
+  const dot = address.indexOf(".");
+  if (dot < 0 || !target.account) return null;
+  const named = address.slice(0, dot);
+  if (lower(target.account.provider) === named) return null;
+  const from = target.account.provider
+    ? humanizeToken(target.account.provider)
+    : accountWords(target);
+  return `${from} can't reach ${r.name} on ${humanizeToken(named)}.`;
+}
+
 /** One address, or the plain sentence saying why the pod has none. */
 function resolveAddress(
   r: IntentRecipient,
   address: RecipientAddress,
   target: RecipientTarget
 ): { value: string } | { why: string } {
+  const mismatch = providerMismatch(r, address, target);
+  if (mismatch) return { why: mismatch };
   const p = r.properties;
   const found = (value: string | null, why: string) =>
     value ? { value } : { why };

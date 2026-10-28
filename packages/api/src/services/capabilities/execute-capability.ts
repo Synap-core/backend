@@ -641,6 +641,9 @@ export async function executeCapability(input: {
     channelId: actingChannelId,
     issuer: "hub.capabilities-execute",
     readOnly: autoRuns,
+    // An intent action proposes when it reaches outside the pod, whoever
+    // asked (an app or an agent drafting for the person).
+    intentRun: !!input.intentRequest,
   });
 
   if (decision.decision === "deny") {

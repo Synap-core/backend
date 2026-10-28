@@ -9,6 +9,7 @@
  *  - an address the pod does not hold mapped to `undefined` and sent anyway
  *    instead of refused with a plain `why`;
  *  - a chat or attendee id from ANOTHER account used for this one;
+ *  - a LinkedIn id handed to an action on an Instagram account;
  *  - the provider id looked up by a hand-written per-provider branch rather
  *    than the `<provider>ProviderId` convention;
  *  - "last used" counting a conversation on another account, or a touch
@@ -234,6 +235,39 @@ describe("resolveRecipient — the pod finds the address for one account", () =>
         provider: null,
       })
     ).toEqual({ ok: false, why: "No Instagram id on file for Marie Dupont." });
+  });
+
+  it("a LinkedIn address serves only an action on a LinkedIn account", () => {
+    const ids = ["linkedin.providerId"] as const;
+    expect(
+      resolveRecipient(MARIE, ids, { account: INSTAGRAM, provider: null })
+    ).toEqual({
+      ok: false,
+      why: "Instagram can't reach Marie Dupont on LinkedIn.",
+    });
+    expect(
+      resolveRecipient(MARIE, ["linkedin.publicIdentifier"], {
+        account: { id: "acc-x", label: "Inbox", provider: null },
+        provider: "linkedin",
+      })
+    ).toEqual({
+      ok: false,
+      why: "Inbox can't reach Marie Dupont on LinkedIn.",
+    });
+    // Unipile names the provider in capitals.
+    expect(
+      resolveRecipient(MARIE, ids, { account: LINKEDIN, provider: null })
+    ).toEqual({ ok: true, addresses: { "linkedin.providerId": "ACoAAMarie" } });
+    // An action with no account reads the person's properties.
+    expect(
+      resolveRecipient(MARIE, ids, { account: null, provider: "unipile" })
+    ).toEqual({ ok: true, addresses: { "linkedin.providerId": "ACoAAMarie" } });
+  });
+
+  it("email and phone serve an action on any account", () => {
+    expect(
+      resolveRecipient(MARIE, ["email"], { account: INSTAGRAM, provider: null })
+    ).toEqual({ ok: true, addresses: { email: "marie@example.test" } });
   });
 
   it("an address the pod does not hold is refused in one plain sentence", () => {

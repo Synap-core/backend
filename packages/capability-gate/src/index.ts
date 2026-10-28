@@ -147,6 +147,15 @@ export interface GateCapabilityExecutionInput {
     canPropose: boolean;
     canAct: boolean;
   } | null;
+  /**
+   * The run is an INTENT ACTION (an action the pod listed for an intent,
+   * asked for through the intent form of `POST /capabilities/execute`), by
+   * any caller: an agent drafting for the person, not only a pod app. An
+   * outward one always files a proposal (decision 790baeb5, founder
+   * 2026-10-28: the AI proposes sends, the person approves them), which is
+   * what the listed action promises (`governance: "propose"`). Tighten-only.
+   */
+  intentRun?: boolean;
 }
 
 /** The proposal target/type a `propose` verdict materializes against. */
@@ -383,8 +392,11 @@ export async function gateCapabilityExecution(
   //       a `synap_acts_as: person` token resolves as the person (no
   //       agentUserId), so the bypass below would run a publish with no review.
   //       Tighten-only; a declared read returned above.
-  if (await appRunMustPropose(input)) {
-    return buildProposeDecision(input, APP_OUTWARD_INTENT);
+  //       An intent action asked for by any other caller (an agent's key)
+  //       meets the same floor (`intentRun`, decision 790baeb5).
+  const outward = await outwardRunMustPropose(input);
+  if (outward) {
+    return buildProposeDecision(input, outward);
   }
 
   // ── 1. Owner bypass — only a GENUINE human owner run (no agentUserId) skips the
@@ -507,23 +519,39 @@ export async function gateCapabilityExecution(
 
 /** `proposals.governance_reason` of a run the app outward floor proposed. */
 export const APP_OUTWARD_INTENT = "APP_OUTWARD_INTENT";
+/** The same floor, for an intent action no app asked for (an agent's key). */
+export const INTENT_OUTWARD = "INTENT_OUTWARD";
 
 /**
- * Must this run be proposed because a pod app asked for it and it reaches
- * outside the pod? The app is the request's grant `clientId` (an app's public
- * id; null for a bare key), set by the key-auth doors for an app's agent key
- * AND a person token alike — so the person's own use in the pod (no grant) and
- * a personal key never meet this floor.
- *
+ * Must this run be proposed because a pod app asked for it, or because it is
+ * an intent action, and it reaches outside the pod? The reason it records,
+ * or null. The app is the request's grant `clientId` (an app's public id;
+ * null for a bare key), set by the key-auth doors for an app's agent key AND
+ * a person token alike — so the person's own use in the pod (no grant) and a
+ * personal key never meet this floor, unless they ask for an intent action
+ * (`intentRun`).
+ */
+async function outwardRunMustPropose(
+  input: GateCapabilityExecutionInput
+): Promise<typeof APP_OUTWARD_INTENT | typeof INTENT_OUTWARD | null> {
+  const reason = getRequestGrant()?.clientId
+    ? APP_OUTWARD_INTENT
+    : input.intentRun
+      ? INTENT_OUTWARD
+      : null;
+  if (!reason) return null;
+  return (await isOutward(input)) ? reason : null;
+}
+
+/**
  * Outward = the verb's intent has an effect other than `read` in
  * `capability_intents` (a write or an act changes, sends or spends something
  * the pod cannot call back). Fail closed: a verb with no intent, an intent
  * with no row, and a raw tool call (no verb, so no intent) are outward.
  */
-async function appRunMustPropose(
+async function isOutward(
   input: GateCapabilityExecutionInput
 ): Promise<boolean> {
-  if (!getRequestGrant()?.clientId) return false;
   if (input.capabilityKind !== "skill") return true;
   let intent = input.skill?.intent;
   const db = await getDb();
