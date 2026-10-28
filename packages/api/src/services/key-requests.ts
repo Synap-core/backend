@@ -48,6 +48,7 @@ import {
 import { revokeApiKeys } from "@synap/database/api-key-revocation";
 import {
   KEY_TEMPLATES,
+  describeKeyProblem,
   grantLifetime,
   keyTemplate,
   validateKeyDraft,
@@ -55,7 +56,6 @@ import {
   type GrantRole,
   type KeyCeiling,
   type KeyDraft,
-  type KeyDraftProblem,
   type KeyUseId,
 } from "@synap-core/types/grants";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
@@ -433,26 +433,6 @@ export interface DecideKeyRequestInput {
   draft?: KeyDraft;
 }
 
-/** Words for a draft the approval refuses. */
-function problemText(p: KeyDraftProblem): string {
-  switch (p.code) {
-    case "no-name":
-      return "Give the key a name.";
-    case "no-uses":
-      return "Say where the key is used.";
-    case "unknown-use":
-      return `Unknown use "${p.use}".`;
-    case "grant":
-      return "message" in p.problem
-        ? p.problem.message
-        : p.problem.code === "no-permissions"
-          ? "Pick at least one permission."
-          : `The lifetime must be 1 to 36,500 days, or never.`;
-    case "wider-than-ceiling":
-      return `This goes beyond what the computer asked for (${p.axis}). You can narrow a requested key, never widen it.`;
-  }
-}
-
 export async function decideKeyRequest(
   input: DecideKeyRequestInput
 ): Promise<{ status: "approved" | "denied" }> {
@@ -495,7 +475,9 @@ export async function decideKeyRequest(
   if (!verdict.ok)
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: verdict.problems.map(problemText).join(" "),
+      message: verdict.problems
+        .map((p) => describeKeyProblem(p).text)
+        .join(" "),
     });
 
   // A person deciding in their own session IS the decision, but policy may

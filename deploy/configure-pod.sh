@@ -6,7 +6,8 @@
 #
 # Runs INSIDE the pod-agent container (busybox sh, deploy dir at /deploy).
 # .env is written ONLY through deploy/env-config.sh — the same validated door
-# as `synap config set` (update-door plan P4): unknown keys, malformed values,
+# as `synap config set` (update-door plan P4), in its `--cp` mode: only keys
+# env.schema flags `cp` (audit 2026-10-28); unknown keys, malformed values,
 # the release block, the compose-project pin and a POD_AGENT_AUDIENCE that
 # would no longer match PUBLIC_URL are refused, ALL-or-nothing, before any
 # container is touched; the previous .env is kept as .env.bak.<ts>.
@@ -88,7 +89,9 @@ while [ $# -gt 0 ]; do
 done
 
 if [ -s "$PAIRS" ]; then
-  if ! CONFIG_OUT="$(envcfg_set --from-file "$PAIRS" 2>&1)"; then
+  # --cp: a Control Plane command sets only the keys env.schema flags `cp`
+  # (pod-agent trust.js refuses the rest first; this is the same line again).
+  if ! CONFIG_OUT="$(envcfg_set --cp --from-file "$PAIRS" 2>&1)"; then
     printf '%s\n' "$CONFIG_OUT" | while IFS= read -r l; do log "$l"; done
     report "failed" "$(printf '%s' "$CONFIG_OUT" | grep 'refused' | head -n 3 | tr '\n' ' ')"
     exit 1

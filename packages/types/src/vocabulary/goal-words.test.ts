@@ -13,7 +13,10 @@ import {
   THIS_WEEK_LABEL,
   resolveActionLabel,
   resolveGoalFieldLabel,
+  resolveObjectNoun,
   resolveTrackMoveLabel,
+  resolveTrackStatusLabel,
+  resolveTrackWorkKindLabel,
 } from "./index.js";
 import { LENS_SECTION_LABELS } from "../lens/classes.js";
 import { TRACK_COMMITMENT_MOVE_KEYS } from "../units/track-participants.js";
@@ -124,5 +127,26 @@ describe("a goal's field labels", () => {
     expect(resolveGoalFieldLabel("workKind")).toBe("Kind of work");
     expect(resolveGoalFieldLabel("loop_budget")).not.toBe("loop_budget");
     expect(resolveGoalFieldLabel(null)).toBe("");
+  });
+});
+
+describe("a goal's words never borrow another thing's name (D-2, D-7)", () => {
+  it("a goal being shaped reads Draft — 'Proposed' is an agent's write waiting for approval", () => {
+    expect(resolveTrackStatusLabel("proposed")).toBe("Draft");
+    expect(resolveTrackMoveLabel("proposed")).toBe("Move to draft");
+    const governance = [
+      resolveActionLabel("propose", "past"),
+      LENS_SECTION_LABELS.proposed,
+    ];
+    expect(governance).toContain("Proposed"); // non-vacuity
+    expect(governance).not.toContain(resolveTrackStatusLabel("proposed"));
+  });
+
+  it("the one-off kind of work reads Build — 'Project' is the container a goal lives in", () => {
+    expect(resolveTrackWorkKindLabel("project")).toBe("Build");
+    expect(resolveObjectNoun("project")).toBe("Project"); // non-vacuity
+    expect(resolveTrackWorkKindLabel("project")).not.toBe(
+      resolveObjectNoun("project")
+    );
   });
 });

@@ -22,6 +22,14 @@ import {
   isCorporateDomain,
   companyNameFromDomain,
 } from "../../utils/email-domain.js";
+import type { CompositeProposalOperation } from "@synap-core/types/proposals";
+import {
+  EVENT_KIND,
+  eventStartOf,
+  eventTitleKey,
+  sameEventStart,
+  type EventStart,
+} from "../duplicates/event-identity.js";
 
 /** Upsert identity of one entity: the `entity_external_links` (provider, externalId) key. */
 export interface SyncIdentity {
@@ -37,6 +45,11 @@ export interface SyncGraphEntity {
   title: string;
   properties: Record<string, unknown>;
   identity: SyncIdentity;
+  /**
+   * More upstream records that are this same entity (`foldEventTwins`): each is
+   * linked to it on write, so a later sync of any of them finds it.
+   */
+  alsoIdentities?: SyncIdentity[];
 }
 
 export interface SyncGraphRelation {
@@ -102,6 +115,90 @@ export function mergeSyncGraph(into: SyncGraph, next: SyncGraph): SyncGraph {
     into.relations.push(r);
   }
   return into;
+}
+
+/**
+ * Fold events that are the SAME event — same title, same start
+ * (`event-identity.ts`) — into the first one, as a new graph. Two calendar
+ * records of one event (a booking mirrored twice) would otherwise propose two
+ * entities, and the second one's create meets the first as a twin when the
+ * proposal is approved. The later record's identity rides on the first
+ * (`alsoIdentities`), its relations move to the first's ref (deduped), and
+ * properties fill as in `mergeSyncGraph`. Same title on another date is another
+ * event and is kept. An event with no readable start is never folded.
+ */
+export function foldEventTwins(graph: SyncGraph): SyncGraph {
+  const entities: SyncGraphEntity[] = [];
+  const keptByTitle = new Map<
+    string,
+    Array<{ entity: SyncGraphEntity; start: EventStart }>
+  >();
+  const foldedInto = new Map<string, string>();
+  for (const e of graph.entities) {
+    const start =
+      e.profileSlug === EVENT_KIND ? eventStartOf(e.properties) : null;
+    if (!start) {
+      entities.push(e);
+      continue;
+    }
+    const title = eventTitleKey(e.title);
+    const kept = keptByTitle.get(title) ?? [];
+    const twin = kept.find((k) => sameEventStart(k.start, start));
+    if (!twin) {
+      const copy = { ...e, properties: { ...e.properties } };
+      entities.push(copy);
+      kept.push({ entity: copy, start });
+      keptByTitle.set(title, kept);
+      continue;
+    }
+    const into = twin.entity;
+    for (const [k, v] of Object.entries(e.properties)) {
+      if (into.properties[k] === undefined) into.properties[k] = v;
+    }
+    into.alsoIdentities = [
+      ...(into.alsoIdentities ?? []),
+      e.identity,
+      ...(e.alsoIdentities ?? []),
+    ];
+    foldedInto.set(e.ref, into.ref);
+  }
+  if (foldedInto.size === 0) return graph;
+  const relations: SyncGraphRelation[] = [];
+  const seen = new Set<string>();
+  for (const r of graph.relations) {
+    const moved = {
+      ...r,
+      sourceRef: foldedInto.get(r.sourceRef) ?? r.sourceRef,
+      targetRef: foldedInto.get(r.targetRef) ?? r.targetRef,
+    };
+    const k = relationKey(moved);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    relations.push(moved);
+  }
+  return { entities, relations };
+}
+
+/**
+ * The approval verb a sync proposal carries for each record it CREATES: keep it
+ * separate from a same-name record. The sync already settled identity when it
+ * built the graph (external link, the kind's own match — an event's title +
+ * start —, a strong signal) and pinned every match as `existingEntityId`, so a
+ * name alone is not a reason to stop the approval: without this, the approval
+ * refused the first create whose name an older record shared (a recurring
+ * event's earlier date), and nothing of the import landed. Read by
+ * `withProposedIdentityResolutions` (apply-approval.ts), keyed by op ref; a
+ * reviewer's own choice for a ref still wins.
+ */
+export function separateSyncCreates(
+  operations: readonly CompositeProposalOperation[]
+): Record<string, { verb: "separate" }> {
+  const byRef: Record<string, { verb: "separate" }> = {};
+  for (const op of operations) {
+    if (op.op !== "create_entity" || op.existingEntityId || !op.ref) continue;
+    byRef[op.ref] = { verb: "separate" };
+  }
+  return byRef;
 }
 
 function isDerivedIdentity(id: SyncIdentity): boolean {

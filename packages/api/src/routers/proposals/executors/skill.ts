@@ -438,7 +438,27 @@ export function registerSkillExecutors(): void {
         )) as { status?: string }
       );
 
+      // The registry does not flip the row: without this, an applied update
+      // stayed `pending` forever (proposal bf90d6a2, approved twice, still
+      // pending with reviewedBy null).
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
       reportApproved(deps, proposal, input.proposalId);
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
       return { success: true };
     },
   });

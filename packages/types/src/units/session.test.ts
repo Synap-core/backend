@@ -11,6 +11,14 @@ import {
   pathRowUnitView,
   type SessionUnitFacts,
 } from "./session.js";
+import {
+  classifyOwedAsk,
+  foldNeedsYouCounts,
+  type NeedsYouSessionFacts,
+  type NeedsYouSlotFacts,
+} from "../needs-you/rule.js";
+
+const DAY_MS = 24 * 3_600_000;
 
 const stateOf = (facts: SessionUnitFacts) =>
   resolveUnitState(sessionUnitInput(facts)).state;
@@ -50,9 +58,11 @@ describe("sessionUnitInput — one session", () => {
     expect(
       stateOf({ status: "paused", owedFromYou: 0, pendingDecisions: null })
     ).toBe("paused");
+    // A closed session whose proposals read FAILED may still owe a decision:
+    // no Done (this case used to pin "done", against its own name).
     expect(
       stateOf({ status: "closed", owedFromYou: 0, pendingDecisions: null })
-    ).toBe("done");
+    ).toBe("unmeasured");
   });
 
   it("failed outranks terminal although failed is a terminal status", () => {
@@ -409,5 +419,325 @@ describe("D1 — path rows and the aggregate read liveness through the one rule"
         })
       ).state
     ).toBe("paused");
+  });
+});
+
+describe("sessionUnitInput — an agent at work outranks its asks (decision E2)", () => {
+  const NOW_E2 = Date.parse("2026-10-27T12:00:00.000Z");
+  const owed = {
+    status: "active",
+    owedFromYou: 1,
+    pendingDecisions: 0,
+    now: NOW_E2,
+  };
+
+  it("measured at work (a turn in flight): working, its ask waits", () => {
+    expect(
+      resolveUnitState(
+        sessionUnitInput({
+          ...owed,
+          live: { turnInFlight: true, lastAt: null },
+        })
+      ).state
+    ).toBe("working");
+  });
+
+  it("not measured (an older pod) or quiet: the ask is the person's turn", () => {
+    expect(resolveUnitState(sessionUnitInput(owed)).state).toBe("needs_you");
+    expect(
+      resolveUnitState(
+        sessionUnitInput({
+          ...owed,
+          live: {
+            turnInFlight: false,
+            lastAt: new Date(NOW_E2 - 3_600_000).toISOString(),
+          },
+        })
+      ).state
+    ).toBe("needs_you");
+  });
+});
+
+describe("M6: the card reads the needs-you rule's Working clock, not any-actor liveness", () => {
+  const NOW_M6 = Date.parse("2026-10-27T12:00:00.000Z");
+  const ago = (ms: number) => new Date(NOW_M6 - ms).toISOString();
+  const owed = {
+    status: "active",
+    owedFromYou: 1,
+    pendingDecisions: 0,
+    now: NOW_M6,
+  };
+
+  it("an agent that asked and stopped: its ask is the person's turn", () => {
+    // The question post moved `lastAt` a minute ago; the agent's last WORK is
+    // two days old.
+    const live = {
+      turnInFlight: false,
+      lastAt: ago(60_000),
+      lastAgentWorkAt: ago(2 * DAY_MS),
+    };
+    expect(stateOf({ ...owed, live })).toBe("needs_you");
+    // Without the rule's clock (an older pod) the D1 liveness still decides.
+    expect(
+      stateOf({ ...owed, live: { ...live, lastAgentWorkAt: undefined } })
+    ).toBe("working");
+  });
+
+  it("the person approving a proposal is not an agent at work", () => {
+    expect(
+      stateOf({
+        ...owed,
+        live: {
+          turnInFlight: false,
+          lastAt: ago(30_000),
+          lastAgentWorkAt: null,
+        },
+      })
+    ).toBe("needs_you");
+  });
+
+  it("agent work inside the window, or a turn in flight: working", () => {
+    expect(
+      stateOf({
+        ...owed,
+        live: {
+          turnInFlight: false,
+          lastAt: ago(60_000),
+          lastAgentWorkAt: ago(60_000),
+        },
+      })
+    ).toBe("working");
+    expect(
+      stateOf({
+        ...owed,
+        live: { turnInFlight: true, lastAt: null, lastAgentWorkAt: null },
+      })
+    ).toBe("working");
+  });
+});
+
+describe("card vs rule parity: one session, one answer", () => {
+  // For each session the rule classifies ONE ask; the card is handed the
+  // pod's count of it (headline rows only: `foldNeedsYouCounts(..).needsYou`,
+  // the U1 count) and the same live facts. Needs you on one ⇔ needs you on
+  // the other; Working ⇔ working; a Stopped or a system ask never reads as
+  // the person's turn on the card.
+  const NOW_P = Date.parse("2026-10-27T12:00:00.000Z");
+  const ago = (ms: number) => new Date(NOW_P - ms).toISOString();
+  const ask: NeedsYouSlotFacts = {
+    owner: "human",
+    owedSince: ago(DAY_MS),
+    askedBy: "agent-1",
+    ask: { mode: "confirm" },
+  };
+  const FIXTURES: Array<{
+    name: string;
+    session: NeedsYouSessionFacts;
+    slot: NeedsYouSlotFacts;
+  }> = [
+    {
+      name: "a fresh ask on live work",
+      session: {
+        status: "active",
+        turnInFlight: false,
+        lastAgentActivityAt: ago(3_600_000),
+        lastAgentWorkAt: ago(3_600_000),
+        startedAt: ago(3 * DAY_MS),
+      },
+      slot: ask,
+    },
+    {
+      name: "an agent at work",
+      session: {
+        status: "active",
+        turnInFlight: false,
+        lastAgentActivityAt: ago(60_000),
+        lastAgentWorkAt: ago(60_000),
+        startedAt: ago(3 * DAY_MS),
+      },
+      slot: ask,
+    },
+    {
+      name: "a turn in flight",
+      session: {
+        status: "active",
+        turnInFlight: true,
+        lastAgentActivityAt: ago(10_000),
+        lastAgentWorkAt: ago(10_000),
+        startedAt: ago(3 * DAY_MS),
+      },
+      slot: ask,
+    },
+    {
+      name: "asked a minute ago and stopped",
+      session: {
+        status: "active",
+        turnInFlight: false,
+        lastAgentActivityAt: ago(60_000),
+        lastAgentWorkAt: ago(2 * DAY_MS),
+        startedAt: ago(3 * DAY_MS),
+      },
+      slot: ask,
+    },
+    {
+      name: "no agent for 8 days (Stopped)",
+      session: {
+        status: "active",
+        turnInFlight: false,
+        lastAgentActivityAt: ago(8 * DAY_MS),
+        lastAgentWorkAt: ago(8 * DAY_MS),
+        startedAt: ago(20 * DAY_MS),
+      },
+      slot: ask,
+    },
+    {
+      name: "a system ask on live work",
+      session: {
+        status: "active",
+        turnInFlight: false,
+        lastAgentActivityAt: ago(3_600_000),
+        lastAgentWorkAt: ago(3_600_000),
+        startedAt: ago(3 * DAY_MS),
+      },
+      slot: { owner: "human", askCause: { kind: "decision" } },
+    },
+    {
+      name: "a deliverable on a closed session",
+      session: {
+        status: "closed",
+        turnInFlight: false,
+        lastAgentActivityAt: ago(DAY_MS),
+        lastAgentWorkAt: ago(DAY_MS),
+        startedAt: ago(3 * DAY_MS),
+      },
+      slot: { ...ask, ask: { mode: "act" } },
+    },
+  ];
+
+  it.each(FIXTURES)("$name", ({ session, slot }) => {
+    const cls = classifyOwedAsk(slot, session, NOW_P)!;
+    const card = stateOf({
+      status: session.status,
+      owedFromYou: foldNeedsYouCounts([{ needsYouClass: cls }]).needsYou,
+      pendingDecisions: 0,
+      live: {
+        turnInFlight: session.turnInFlight,
+        lastAt: session.lastAgentActivityAt,
+        lastAgentWorkAt: session.lastAgentWorkAt,
+      },
+      now: NOW_P,
+    });
+    expect(card === "needs_you").toBe(cls === "needs_you");
+    expect(card === "working").toBe(cls === "working");
+  });
+
+  it("non-vacuity: the fixtures reach every slot class but review later", () => {
+    const seen = new Set(
+      FIXTURES.map((f) => classifyOwedAsk(f.slot, f.session, NOW_P))
+    );
+    expect([...seen].sort()).toEqual(
+      ["from_system", "needs_you", "stopped", "working"].sort()
+    );
+  });
+});
+
+describe("a FAILED needs-you count is never a measured 0 (relay, 2026-10-27)", () => {
+  const live = { turnInFlight: false, lastAt: null };
+  const facts = (owedFromYou: number | null) => ({
+    owedFromYou,
+    pendingDecisions: 0,
+    awaitingReview: false,
+    draft: false,
+  });
+
+  it("a path row: null reads unmeasured, 0 reads the quiet state", () => {
+    expect(
+      pathRowUnitView({
+        status: "active",
+        unitFacts: facts(null),
+        live,
+      } as never).state
+    ).toBe("unmeasured");
+    expect(
+      pathRowUnitView({ status: "active", unitFacts: facts(0), live } as never)
+        .state
+    ).toBe("paused");
+  });
+
+  it("a draft is never unread: it never needs you", () => {
+    expect(
+      pathRowUnitView({
+        status: "active",
+        unitFacts: { ...facts(null), draft: true },
+        live,
+      } as never).state
+    ).toBe("paused");
+  });
+
+  it("a project: one unread open session is unmeasured, never idle", () => {
+    const state = (owedFromYou: number | null) =>
+      resolveUnitState(
+        projectAggregateInput({
+          sessions: [
+            { status: "active", unitFacts: facts(0), live },
+            { status: "active", unitFacts: facts(owedFromYou), live },
+          ],
+          unreadable: false,
+        })
+      ).state;
+    expect(state(null)).toBe("unmeasured");
+    expect(state(0)).toBe("paused");
+  });
+});
+
+describe("a closed session whose needs-you count FAILED claims no Done (team-lead, 2026-10-27)", () => {
+  it("closed + owedFromYou null (or pendingDecisions null) reads unmeasured, never done", () => {
+    expect(stateOf({ status: "closed", owedFromYou: null })).toBe("unmeasured");
+    expect(
+      stateOf({ status: "closed", owedFromYou: 0, pendingDecisions: null })
+    ).toBe("unmeasured");
+    // The measured twin: nothing owed, read fine ⇒ done.
+    expect(
+      stateOf({ status: "closed", owedFromYou: 0, pendingDecisions: 0 })
+    ).toBe("done");
+  });
+
+  it("failed still outranks an unread count", () => {
+    expect(stateOf({ status: "failed", owedFromYou: null })).toBe("failed");
+  });
+
+  it("a project of closed sessions, one unread: unmeasured, never done", () => {
+    const facts = (owedFromYou: number | null) => ({
+      owedFromYou,
+      pendingDecisions: 0,
+      awaitingReview: false,
+      draft: false,
+    });
+    const state = (owedFromYou: number | null) =>
+      resolveUnitState(
+        projectAggregateInput({
+          sessions: [
+            { status: "closed", unitFacts: facts(0) },
+            { status: "closed", unitFacts: facts(owedFromYou) },
+          ],
+          unreadable: false,
+        })
+      ).state;
+    expect(state(null)).toBe("unmeasured");
+    expect(state(0)).toBe("done");
+  });
+
+  it("a closed path row with an unread count: unmeasured", () => {
+    expect(
+      pathRowUnitView({
+        status: "closed",
+        unitFacts: {
+          owedFromYou: null,
+          pendingDecisions: 0,
+          awaitingReview: false,
+          draft: false,
+        },
+      } as never).state
+    ).toBe("unmeasured");
   });
 });

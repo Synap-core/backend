@@ -28,7 +28,9 @@
 #
 # Callers set SYNAP_DEPLOY_DIR (default: cwd) or SYNAP_ENV_FILE / SYNAP_ENV_SCHEMA.
 #
-#   envcfg_set [--force] [--stdin] KEY=VALUE... | KEY VALUE     0 ok · 1 refused · 2 usage
+#   envcfg_set [--force] [--cp] [--stdin] KEY=VALUE... | KEY VALUE  0 ok · 1 refused · 2 usage
+#              --cp: the writer is a Control Plane command (configure-pod.sh):
+#              only keys env.schema flags `cp` (and `retired` ones, dropped)
 #   envcfg_unset [--force] KEY...
 #   envcfg_get KEY [--reveal]                                   masked unless --reveal
 #   envcfg_validate [env-file]       one finding per line: error|KEY|message / warn|KEY|message
@@ -311,15 +313,32 @@ _ec_legacy_name_errors() {
     done
 }
 
-# envcfg_set [--force] [--stdin] KEY=VALUE... | KEY VALUE
+# A Control Plane command (`--cp`) may set only what env.schema flags `cp`; a
+# key naming a command, hook or script never (its value is code the host may
+# run: SYNAP_UPDATE_NOTIFY_CMD, audit 2026-10-28). Mirrors pod-agent trust.js.
+_ec_check_cp_key() { # <key> → prints the reason and returns 1 when refused
+    case "$1" in
+        *_CMD|*_COMMAND|*_HOOK|*_SCRIPT)
+            echo "$1: names a command the host runs — only the pod's operator sets it (synap config set)"; return 1 ;;
+    esac
+    envcfg_is_retired "$1" && return 0
+    _ec_cm="$(envcfg_lookup "$1")"
+    if [ -z "$_ec_cm" ] || ! _ec_has_flag "${_ec_cm#* }" cp; then
+        echo "$1: operator-local — a Control Plane command may set only the keys env.schema flags \`cp\`"; return 1
+    fi
+    return 0
+}
+
+# envcfg_set [--force] [--cp] [--stdin] KEY=VALUE... | KEY VALUE
 # Validates EVERY pair before writing ANY (all-or-nothing), backs up, writes
 # atomically, and prints what changed (masked) plus the services that must be
 # recreated to see it (`synap apply`). ENVCFG_CHANGED_KEYS is left set.
 envcfg_set() {
-    _ec_force=0; _ec_stdin=0
+    _ec_force=0; _ec_stdin=0; _ec_cp=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --force) _ec_force=1; shift ;;
+            --cp) _ec_cp=1; shift ;;
             --stdin|--from-file)
                 _ec_stdin=1
                 if [ "$1" = --from-file ]; then
@@ -359,6 +378,10 @@ envcfg_set() {
     #    retired key is not checked: it is dropped in step 3)
     _ec_bad=""
     while IFS="$(printf '\t')" read -r _ec_k _ec_v; do
+        if [ "$_ec_cp" = 1 ]; then
+            _ec_r="$(_ec_check_cp_key "$_ec_k")" || { _ec_bad="${_ec_bad}${_ec_r}
+"; continue; }
+        fi
         envcfg_is_retired "$_ec_k" && continue
         _ec_r="$(_ec_check_pair "$_ec_k" "$_ec_v" "$_ec_force")" || _ec_bad="${_ec_bad}${_ec_r}
 "

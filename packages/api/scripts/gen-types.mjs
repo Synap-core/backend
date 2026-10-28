@@ -1,5 +1,5 @@
 import { execSync } from "child_process";
-import { resolve, join } from "path";
+import { resolve, join, relative } from "path";
 import { writeFileSync, readFileSync } from "fs";
 
 import { sortStringLiteralUnions } from "./sort-literal-unions.mjs";
@@ -60,6 +60,44 @@ try {
     `✅ Types generated at ${OUTPUT_FILE} (schema ${schemaHashOf(content)})`
   );
 } catch (error) {
+  failGeneration(error);
+}
+
+// `--check`: the COMMITTED file must be what the generator produces for this
+// source. CI runs it on every PR and again in the merge queue, where the source
+// is the PR merged with the next main: two PRs that each regenerated the file
+// can merge text-cleanly into a file the generator would not produce, and the
+// queue run is what keeps that off main. Nothing regenerates it after a merge.
+if (CHECK) {
+  const rel = relative(ROOT_DIR, OUTPUT_FILE);
+  let drift = false;
+  try {
+    execSync(`git diff --quiet -- "${rel}"`, { cwd: ROOT_DIR });
+  } catch {
+    drift = true;
+  }
+  if (drift) {
+    // The stat, not the diff: the file is 1.5 MB and its diff helps no one.
+    execSync(`git diff --stat -- "${rel}"`, {
+      cwd: ROOT_DIR,
+      stdio: "inherit",
+    });
+    console.error(
+      [
+        "❌ packages/api-types/src/generated.d.ts is not what the generator produces for this source.",
+        "   Fix when red: build the workspace dependencies, run `pnpm --filter @synap/api gen-types`,",
+        "   and commit packages/api-types/src/generated.d.ts with your change.",
+        "   In the merge queue: another PR changed the API surface ahead of yours. Merge main into",
+        "   your branch, regenerate, commit, and queue again.",
+        "   On a merge conflict in the file: resolve the SOURCE conflicts, take either side of",
+        "   generated.d.ts, then regenerate. Never hand-merge it.",
+      ].join("\n")
+    );
+    process.exit(1);
+  }
+}
+
+function failGeneration(error) {
   // dts-bundle-generator can SIGSEGV in memory-constrained Docker builds.
   // This is non-fatal: the previously-committed generated.d.ts stays in place.
   // Consumers continue to work; types will be refreshed on the next local run.

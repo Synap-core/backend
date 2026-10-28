@@ -5,6 +5,7 @@ import {
   KEY_POWERFUL_ACTIONS,
   KEY_LIFETIME_CHOICES,
   describeKey,
+  describeKeyProblem,
   keyDraftFromTemplate,
   powerfulVerbs,
   setKeyGrant,
@@ -218,6 +219,47 @@ describe("validateKeyDraft", () => {
         problems: [{ code: "wider-than-ceiling", axis: "permissions" }],
       });
     });
+  });
+});
+
+describe("describeKeyProblem", () => {
+  const SECTION_IDS = KEY_DRAFT_SECTIONS.map((s) => s.id as string);
+
+  it("every problem points at a section of the page and reads as words", () => {
+    const v = validateKeyDraft(
+      {
+        name: "",
+        uses: [],
+        grant: { permissions: ["Bad..x"], expiresInDays: 0 },
+      },
+      { ceiling: { grant: poster.grant, uses: [] } }
+    );
+    const problems = v.ok ? [] : v.problems;
+    expect(problems.length).toBeGreaterThanOrEqual(4);
+    for (const p of problems) {
+      const { section, text } = describeKeyProblem(p);
+      expect(SECTION_IDS).toContain(section);
+      expect(text.trim()).not.toBe("");
+    }
+  });
+
+  it("sends each problem to the section that fixes it", () => {
+    expect(describeKeyProblem({ code: "no-name" }).section).toBe("name");
+    expect(describeKeyProblem({ code: "no-uses" }).section).toBe("uses");
+    expect(
+      describeKeyProblem({ code: "wider-than-ceiling", axis: "permissions" })
+        .section
+    ).toBe("access");
+    expect(
+      describeKeyProblem({ code: "wider-than-ceiling", axis: "lifetime" })
+        .section
+    ).toBe("lifetime");
+    expect(
+      describeKeyProblem({
+        code: "grant",
+        problem: { code: "invalid-lifetime", days: 0 },
+      }).section
+    ).toBe("lifetime");
   });
 });
 

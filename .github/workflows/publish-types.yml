@@ -6,20 +6,14 @@ on:
   # 22.22.3 while this workflow pinned node 20) — so there must be a CI button
   # to press instead.
   workflow_dispatch:
+  # Types reach npm once per release (founder, 2026-10-28: "trunk + tags").
+  # Our own repos never wait on npm: app-bases, browser and relay link
+  # packages/types and packages/api-types from the backend checkout. Only
+  # registry consumers do, and they get the surface of each release. A
+  # publish per main push queued one production approval per merge, and each
+  # newer push cancelled the waiting one.
   push:
-    branches: [main]
-    # Repo-root-relative. These were once prefixed `synap-backend/` from a
-    # monorepo layout that no longer exists — with that prefix the filter could
-    # never match and this workflow never fired, which is how publishing ended
-    # up being done by hand.
-    paths:
-      - "packages/types/src/**"
-      - "packages/api/src/routers/**"
-      - "packages/api/src/root.ts"
-      # A PR that commits a regenerated surface (gen-types, the regen bot) or a
-      # hand version bump must publish too: neither touches the paths above.
-      - "packages/api-types/src/generated.d.ts"
-      - "packages/api-types/package.json"
+    tags: ["v*"]
 
 # Publishing is not idempotent at the transport layer: killing a run mid-publish
 # can leave a version half-uploaded. Serialise publishes; never cancel.
@@ -34,9 +28,11 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    # D16: a publish from main waits for the `production` environment's
-    # required reviewer; a manual run on another branch uses no environment.
-    environment: ${{ github.ref == 'refs/heads/main' && 'production' || '' }}
+    # D16: a publish from a v* tag, or a manual run on main, waits for the
+    # `production` environment's required reviewer (its deployment policy
+    # allows main and v* tags); a manual run on another branch uses no
+    # environment.
+    environment: ${{ (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && 'production' || '' }}
     # Least privilege. `contents: write` is required because this workflow pushes
     # the version-bump commit back to main at the end (`contents: read` made that
     # final `git push` 403 AFTER npm had already accepted the version, so the

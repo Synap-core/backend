@@ -7,7 +7,12 @@
 # An archive made since D15 is age-encrypted (archive-pod.sh). Its identity
 # never comes from the Control Plane: the operator places it on THIS host at
 # deploy/state/archive-identity.txt (ARCHIVE_AGE_IDENTITY_FILE overrides)
-# before the restore runs. Older plaintext archives still restore as before.
+# before the restore runs.
+#
+# A plaintext (pre-D15) archive is refused unless the operator opts in on this
+# host (RESTORE_ALLOW_PLAINTEXT=1, a manual run): the signed command carries only
+# a URL, so a plaintext archive is SQL anyone who can order a restore could have
+# written. The URL must be https (audit 2026-10-28).
 #
 set -e
 
@@ -47,10 +52,16 @@ fi
 
 log "=== Restoring from archive ==="
 
-# Stop services (fresh server may already be running from cloud-init)
-$COMPOSE stop 2>/dev/null || true
+case "$ARCHIVE_URL" in
+  https://?*) ;;
+  *)
+    log "ERROR: ARCHIVE_URL_NOT_HTTPS — the archive URL must be https://"
+    report "failed" "\"ARCHIVE_URL_NOT_HTTPS\""
+    exit 1 ;;
+esac
 
-# Download archive
+# Download archive (services keep running until the archive is known good:
+# a refused archive must not leave a live pod stopped)
 log "Downloading archive..."
 wget -q -O /tmp/pod-archive.tar.gz "$ARCHIVE_URL" 2>&1 || {
   log "ERROR: Download failed"
@@ -77,7 +88,15 @@ if [ "$(head -c 21 /tmp/pod-archive.tar.gz 2>/dev/null)" = "age-encryption.org/v
     || { rm -f /tmp/pod-archive.tar.gz.dec; fatal "archive decryption failed (wrong identity?)"; }
   mv -f /tmp/pod-archive.tar.gz.dec /tmp/pod-archive.tar.gz
   log "Archive decrypted"
+elif [ "${RESTORE_ALLOW_PLAINTEXT:-}" = 1 ]; then
+  log "WARN: RESTORE_ALLOW_PLAINTEXT=1 — restoring an archive that is not age-encrypted (a pre-D15 archive)"
+else
+  rm -f /tmp/pod-archive.tar.gz
+  fatal "ARCHIVE_NOT_ENCRYPTED — this archive is not age-encrypted; a pre-D15 archive restores only by hand on this host: RESTORE_ALLOW_PLAINTEXT=1 restore-archive-pod.sh <url> '' ''"
 fi
+
+# Stop services (fresh server may already be running from cloud-init)
+$COMPOSE stop 2>/dev/null || true
 
 # Extract
 TMPDIR=$(mktemp -d)

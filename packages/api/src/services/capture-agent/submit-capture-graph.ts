@@ -1263,6 +1263,7 @@ export async function submitCaptureGraph(
         signals: extractIdentitySignals(e.properties, {
           kind: e.profileSlug,
         }),
+        properties: e.properties,
         recordScope: weakScope,
         forRef: e.ref,
         ...(pending ? { pending } : {}),
