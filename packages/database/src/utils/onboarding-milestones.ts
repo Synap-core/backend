@@ -27,6 +27,7 @@ import {
   isNotNull,
   isNull,
   lt,
+  ne,
   sql as drizzleSql,
 } from "drizzle-orm";
 
@@ -42,6 +43,7 @@ import { ProposalStatus, proposals } from "../schema/proposals.js";
 import { workspaces } from "../schema/workspaces.js";
 
 const DAY_MS = 86_400_000;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // ── The switch ─────────────────────────────────────────────────────────────
 
@@ -178,7 +180,12 @@ export async function readOnboardingMilestoneFacts(): Promise<OnboardingMileston
   // The setup proposal and, once approved, whether its spaces were undone.
   let setupProposal: OnboardingMilestoneFacts["setupProposal"] = null;
   const setup = isRecord(start.setup) ? start.setup : null;
-  if (typeof setup?.proposalId === "string") {
+  // A stored pointer that is not a uuid would fail the read's cast forever.
+  const setupProposalId =
+    typeof setup?.proposalId === "string" && UUID.test(setup.proposalId)
+      ? setup.proposalId
+      : null;
+  if (setupProposalId) {
     const [p] = await db
       .select({
         status: proposals.status,
@@ -187,7 +194,7 @@ export async function readOnboardingMilestoneFacts(): Promise<OnboardingMileston
         data: proposals.data,
       })
       .from(proposals)
-      .where(eq(proposals.id, setup.proposalId))
+      .where(eq(proposals.id, setupProposalId))
       .limit(1);
     if (p) {
       const data = isRecord(p.data) ? p.data : {};
@@ -249,17 +256,22 @@ export async function readOnboardingMilestoneFacts(): Promise<OnboardingMileston
   let agentWeek2At: Date | null = null;
   const week2From = new Date(row.offeredAt.getTime() + 7 * DAY_MS);
   const week2To = new Date(row.offeredAt.getTime() + 14 * DAY_MS);
+  // The setup itself is authored by the person's own agent, not one they run.
+  const notSetup = setupProposalId
+    ? ne(proposals.id, setupProposalId)
+    : undefined;
   if (agentIds.length > 0) {
     const [first] = await db
       .select({ at: drizzleSql<Date | null>`min(${proposals.createdAt})` })
       .from(proposals)
-      .where(inArray(proposals.agentUserId, agentIds));
+      .where(and(inArray(proposals.agentUserId, agentIds), notSetup));
     const [approved] = await db
       .select({ at: drizzleSql<Date | null>`min(${proposals.reviewedAt})` })
       .from(proposals)
       .where(
         and(
           inArray(proposals.agentUserId, agentIds),
+          notSetup,
           eq(proposals.status, ProposalStatus.APPROVED),
           isNotNull(proposals.reviewedAt)
         )
