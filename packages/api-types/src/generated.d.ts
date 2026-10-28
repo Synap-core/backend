@@ -11088,6 +11088,39 @@ export type UndoPromotePropertyToBodyResult = {
 	status: "refused";
 };
 /**
+ *   `expires`          — an ephemeral ask with a lifetime: lapses at
+ *                        `expiresAt`. `orSessionEnd` when it is bound to a
+ *                        session too: closing the session retires it as well,
+ *                        so it goes at the EARLIER of the two.
+ *   `dies_with_session` — a session-bound draft: retired when its session ends.
+ *   `review_later`     — objectWork untouched for 7 days: out of the headline
+ *                        count, kept in the Review later pile `since` then.
+ *   `until_decided`    — waits for a decision, with no deadline.
+ */
+export type ProposalFate = {
+	expiresAt: string;
+	kind: "expires";
+	orSessionEnd: boolean;
+} | {
+	kind: "dies_with_session";
+} | {
+	kind: "until_decided";
+} | {
+	kind: "review_later";
+	since: string;
+};
+declare const PROPOSAL_WAIT_REASONS: readonly [
+	"gate",
+	"owed_slot",
+	"parked_run"
+];
+export type ProposalWaitReason = (typeof PROPOSAL_WAIT_REASONS)[number];
+export interface ProposalWaits {
+	waits: boolean;
+	/** Present only when `waits`. */
+	reason?: ProposalWaitReason;
+}
+/**
  * WHO is asking for access, on an `access-request` row — a pod-level request
  * that is not a proposal: an external service asking to be a TRUSTED ISSUER
  * (it would sign identity tokens this pod accepts), or an APPLICATION asking
@@ -11126,39 +11159,6 @@ export interface NeedsYouInvite {
 	scope: "pod" | "workspace";
 	/** The space's name; null for a pod-wide invite or an unnamed space. */
 	spaceName: string | null;
-}
-/**
- *   `expires`          — an ephemeral ask with a lifetime: lapses at
- *                        `expiresAt`. `orSessionEnd` when it is bound to a
- *                        session too: closing the session retires it as well,
- *                        so it goes at the EARLIER of the two.
- *   `dies_with_session` — a session-bound draft: retired when its session ends.
- *   `review_later`     — objectWork untouched for 7 days: out of the headline
- *                        count, kept in the Review later pile `since` then.
- *   `until_decided`    — waits for a decision, with no deadline.
- */
-export type ProposalFate = {
-	expiresAt: string;
-	kind: "expires";
-	orSessionEnd: boolean;
-} | {
-	kind: "dies_with_session";
-} | {
-	kind: "until_decided";
-} | {
-	kind: "review_later";
-	since: string;
-};
-declare const PROPOSAL_WAIT_REASONS: readonly [
-	"gate",
-	"owed_slot",
-	"parked_run"
-];
-export type ProposalWaitReason = (typeof PROPOSAL_WAIT_REASONS)[number];
-export interface ProposalWaits {
-	waits: boolean;
-	/** Present only when `waits`. */
-	reason?: ProposalWaitReason;
 }
 /**
  * CONNECTION EVENT LINES — the ONE rule that turns a connection's lifecycle

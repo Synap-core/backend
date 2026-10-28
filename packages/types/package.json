@@ -325,6 +325,10 @@
       "types": "./dist/needs-you/index.d.ts",
       "import": "./dist/needs-you/index.js"
     },
+    "./needs-you/rule": {
+      "types": "./dist/needs-you/rule.d.ts",
+      "import": "./dist/needs-you/rule.js"
+    },
     "./work-release": {
       "types": "./dist/work-release/index.d.ts",
       "import": "./dist/work-release/index.js"
