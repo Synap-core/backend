@@ -45,7 +45,10 @@ permissions:
 # it cannot affect — a draft runs no suites, a negctl/* branch runs only its own
 # test files ("Targeted tests"), a docs-only change runs nothing, and the Docker
 # build + deploy tests run only when an image-relevant path changed. Push to
-# main, release branches and the merge queue always run everything. FAIL-SAFE:
+# main and release branches always run everything. A merge queue entry runs the
+# Release gate and takes the Full suite + API e2e from the PR's own run, only
+# when both concluded `success` on the PR's head (founder 2026-10-28, "light
+# queue run"); otherwise it runs everything. FAIL-SAFE:
 # every job also runs when `changes` itself fails (`needs.changes.result !=
 # 'success'`), and a job skipped by its `if:` reports success to the required
 # check, so a skip must only ever come from a positive decision.
@@ -57,6 +60,11 @@ jobs:
     name: What changed
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # A merge queue entry reads its PR's head and that head's check runs.
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
     outputs:
       gate: ${{ steps.decide.outputs.gate }}
       image: ${{ steps.decide.outputs.image }}
@@ -78,6 +86,9 @@ jobs:
           DRAFT: ${{ github.event.pull_request.draft }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          QUEUE_HEAD_REF: ${{ github.event.merge_group.head_ref }}
+          REPO: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/ci-changes.mjs
 
   release-gate:
