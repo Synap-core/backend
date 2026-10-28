@@ -21,6 +21,10 @@ import {
   CP_ENTITLEMENT_SYNC_CRON,
 } from "./workers/cp-entitlement-sync.js";
 import {
+  ONBOARDING_MILESTONES_QUEUE,
+  ONBOARDING_MILESTONES_CRON,
+} from "./workers/onboarding-milestones.js";
+import {
   TOOL_DEMAND_FORWARD_QUEUE,
   TOOL_DEMAND_FORWARD_CRON,
 } from "./workers/tool-demand-forward.js";
@@ -552,6 +556,19 @@ export async function registerCronSchedules(): Promise<void> {
   logger.info("Registered cron: cp-entitlement-sync (every 15min)");
   await sendSafe(boss, CP_ENTITLEMENT_SYNC_QUEUE, {});
   logger.info("Enqueued startup run: cp-entitlement-sync");
+
+  // Onboarding milestones (plan §5, A9): send the start's milestone ids and
+  // times to the CP every 15 minutes, and once now. No-ops on a self-hosted
+  // pod, with sharing switched off, or when nothing changed.
+  await scheduleSafe(
+    boss,
+    ONBOARDING_MILESTONES_QUEUE,
+    ONBOARDING_MILESTONES_CRON,
+    {}
+  );
+  logger.info("Registered cron: onboarding-milestones (every 15min)");
+  await sendSafe(boss, ONBOARDING_MILESTONES_QUEUE, {});
+  logger.info("Enqueued startup run: onboarding-milestones");
 
   // PageRank centrality (every 6h + one startup run so a cold pod populates
   // entity_centrality without waiting for the first tick — this is also the
