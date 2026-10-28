@@ -40,9 +40,30 @@ export interface MarketplaceCandidate {
   kind: string;
 }
 
+/**
+ * A PENDING skill proposal whose skill is named like a missing verb: the verb
+ * exists once a person approves it. Read under the caller's proposal floor.
+ */
+export interface PendingVerbProposal {
+  verbId: string;
+  proposalId: string;
+  /** The summary the proposal stores (what the review page shows). Absent = not rendered. */
+  title?: string;
+  reviewUrl: string;
+  /** The proposed skill's kind ("instruction", "code", …), when the proposal states it. */
+  skillKind?: string;
+}
+
 export interface ValidateFlowCapabilitiesDeps {
   /** Access-scoped registry read. */
   loadIndex: () => Promise<ResolvableCapabilityIndex>;
+  /**
+   * Best-effort read of the caller's PENDING skill proposals for verbs that did
+   * not resolve (ticket c7e2afa2). A step naming one is still refused — an
+   * automation cannot depend on another pending proposal — but the error names
+   * the proposal that blocks it. MAY reject; a failure never blocks the verdict.
+   */
+  findPendingProposals?: (verbIds: string[]) => Promise<PendingVerbProposal[]>;
   /**
    * Best-effort marketplace lookup for a verb that did not resolve. MAY reject or
    * hang — the caller wraps it; a failure never blocks the validation verdict.
@@ -182,12 +203,32 @@ export async function validateFlowCapabilities(
         .map((p) => p.ref.verbId as string)
     ),
   ];
+  // ── Best-effort: a PENDING proposal that would provide the verb ─────────
+  // The step is still refused (a proposal cannot depend on another pending
+  // proposal), but the agent learns WHICH proposal blocks it instead of being
+  // told the verb does not exist. A failure degrades to the plain error.
+  const pendingByVerb = new Map<string, PendingVerbProposal>();
+  if (deps.findPendingProposals && missingVerbs.length > 0) {
+    try {
+      const found = await withTimeout(
+        deps.findPendingProposals(missingVerbs),
+        deps.marketplaceTimeoutMs ?? 3000
+      );
+      for (const p of Array.isArray(found) ? found : []) {
+        if (!pendingByVerb.has(p.verbId)) pendingByVerb.set(p.verbId, p);
+      }
+    } catch {
+      /* no pending-proposal hint; the verdict is unchanged */
+    }
+  }
+
   const candidatesByVerb = new Map<string, MarketplaceCandidate[]>();
-  if (deps.searchMarketplace && missingVerbs.length > 0) {
+  const unpendingVerbs = missingVerbs.filter((v) => !pendingByVerb.has(v));
+  if (deps.searchMarketplace && unpendingVerbs.length > 0) {
     try {
       await withTimeout(
         Promise.all(
-          missingVerbs.map(async (v) => {
+          unpendingVerbs.map(async (v) => {
             try {
               const found = await deps.searchMarketplace!(v);
               if (Array.isArray(found) && found.length > 0) {
@@ -207,8 +248,22 @@ export async function validateFlowCapabilities(
 
   const lines = problems.map((p) => {
     let line = ` · step "${p.ref.nodeId}" ${p.reason}`;
+    const pending = p.ref.verbId ? pendingByVerb.get(p.ref.verbId) : undefined;
     const cands = p.ref.verbId ? candidatesByVerb.get(p.ref.verbId) : undefined;
-    if (cands && cands.length > 0) {
+    if (pending) {
+      line +=
+        `\n   It is waiting for review: proposal ${pending.proposalId}` +
+        (pending.title ? ` "${pending.title}"` : "") +
+        ` (${pending.reviewUrl}). An automation cannot name a skill that is still a proposal: ` +
+        `once the person approves it, re-send create_automation unchanged.`;
+      line +=
+        pending.skillKind === "instruction"
+          ? `\n   To file a skill and the automation that uses it for ONE approval, send both in one ` +
+            `synap_capture call (skills[] + automations[]; skills are applied before automations, so the step resolves), ` +
+            `and reject this proposal.`
+          : `\n   A synap_capture bundle (skills[] + automations[], one approval) cannot carry it: its skills[] ` +
+            `creates instruction skills only, and this is ${pending.skillKind ? `a ${pending.skillKind}` : "not an instruction"} skill.`;
+    } else if (cands && cands.length > 0) {
       line +=
         `\n   Marketplace entries that may provide it: ` +
         cands

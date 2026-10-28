@@ -13,6 +13,10 @@
  *     is held for review and leaves it off until approved again), and a
  *     second create under a name already in scope is refused with the id to
  *     update.
+ *   - ticket c7e2afa2 (option C): `synap_create_automation` still refuses a
+ *     step naming a skill that is only proposed, but the error names that
+ *     proposal and its review link, and says whether one `synap_capture`
+ *     bundle (skills[] + automations[]) can carry the pair.
  *
  * Driven end to end on PGlite: the REAL MCP handlers → the REAL
  * `skills.create` / `skills.update` → the REAL gate (an agent with no rule:
@@ -122,11 +126,21 @@ vi.mock("../../../middleware/read-only-guard.js", () => ({
 vi.mock("../../../middleware/audit-log.js", () => ({
   auditLogMiddleware: async (opts: { next: () => unknown }) => opts.next(),
 }));
+// create_automation's registry read: nothing is installed, so every verb a
+// flow names is missing and the pending-proposal hint is what is under test.
+vi.mock(
+  "../../../services/capabilities/capability-registry.js",
+  async (orig) => ({
+    ...(await orig<Record<string, unknown>>()),
+    listCapabilities: async () => [],
+  })
+);
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import { eq } from "drizzle-orm";
 import * as schema from "@synap/database/schema";
 import { buildHandlers } from "./build.js";
+import { capabilityHandlers } from "./capability.js";
 import type { McpToolContext } from "./shared.js";
 import { applyProposalApproval } from "../../proposals/apply-approval.js";
 import { buildProposalSummary } from "../../../utils/permission-check.js";
@@ -183,9 +197,6 @@ function ddlFor(table: PgTable): string {
 
 const q = <T = Record<string, unknown>>(sql: string, params?: unknown[]) =>
   h.client!.query<T>(sql, params);
-const USER = randomUUID();
-const AGENT = randomUUID();
-const GMAIL_TOOL = randomUUID();
 
 /** Pure computation: reaches nothing outside the pod. */
 const PURE = `const n = Number(args.n ?? 0);
@@ -202,10 +213,10 @@ type Reply = Record<string, unknown> & {
 };
 
 async function agentCalls(
-  tool: "synap_create_skill" | "synap_update_skill",
+  tool: "synap_create_skill" | "synap_update_skill" | "synap_create_automation",
   args: Record<string, unknown>
 ): Promise<{ isError?: boolean; reply: Reply; text: string }> {
-  const res = await buildHandlers[tool]!({
+  const res = await { ...buildHandlers, ...capabilityHandlers }[tool]!({
     toolName: tool,
     args,
     userId: USER,
@@ -383,5 +394,96 @@ describe("a code skill keeps its id and is fixed in place", () => {
     expect((await q(`select id from proposals`)).rows).toHaveLength(
       before.rows.length
     );
+  });
+});
+
+describe("c7e2afa2: an automation naming a skill still in review names that proposal", () => {
+  const OTHER = randomUUID();
+
+  /** A weekly automation whose one step runs `verbId`. */
+  const weekly = (verbId: string) => ({
+    name: "Weekly handle scores",
+    triggerType: "cron",
+    triggerConfig: { cron: "0 9 * * 1" },
+    flowDefinition: {
+      nodes: [
+        {
+          id: "start",
+          type: "capability",
+          position: { x: 0, y: 0 },
+          data: { verbId },
+        },
+      ],
+      edges: [],
+    },
+  });
+
+  it("a pending CODE skill: refused, names the proposal and its link, and says the bundle cannot carry it", async () => {
+    const { reply: skill } = await agentCalls("synap_create_skill", {
+      name: "instagram.weekly_scores",
+      description: "Score every tracked handle",
+      code: PURE,
+    });
+    expect(skill.status, JSON.stringify(skill)).toBe("proposed");
+
+    const { reply } = await agentCalls(
+      "synap_create_automation",
+      weekly("instagram.weekly_scores")
+    );
+    expect(reply.error).toContain("Automation not created");
+    expect(reply.error).toContain(`proposal ${skill.proposalId}`);
+    expect(reply.error).toContain(`/open/${skill.proposalId}`);
+    expect(reply.error).toContain("a code skill");
+    // Nothing was filed for the automation.
+    expect(
+      (await q(`select id from proposals where target_type = 'automation'`))
+        .rows
+    ).toHaveLength(0);
+  });
+
+  it("a pending INSTRUCTION skill: points at one synap_capture bundle", async () => {
+    const { reply: skill } = await agentCalls("synap_create_skill", {
+      name: "instagram.weekly_brief",
+      slug: "instagram/weekly-brief",
+      body: "Write the weekly brief from the scores.",
+    });
+    expect(skill.status, JSON.stringify(skill)).toBe("proposed");
+
+    const { reply } = await agentCalls(
+      "synap_create_automation",
+      weekly("instagram.weekly_brief")
+    );
+    expect(reply.error).toContain(`proposal ${skill.proposalId}`);
+    expect(reply.error).toContain("synap_capture");
+    expect(reply.error).toContain("skills[] + automations[]");
+  });
+
+  it("never names another person's pending proposal", async () => {
+    await q(
+      `insert into users (id, email, name, user_type) values ($1, 'o@x.test', 'Other', 'human')`,
+      [OTHER]
+    );
+    const foreign = randomUUID();
+    await q(
+      `insert into proposals (id, workspace_id, target_type, target_id, proposal_type, status, created_by, subject_user_id, data)
+       values ($1, null, 'skill', $2, 'create', 'pending', $3, $3, $4)`,
+      [
+        foreign,
+        randomUUID(),
+        OTHER,
+        JSON.stringify({
+          summary: 'Create skill "instagram.private_scores"',
+          data: { name: "instagram.private_scores", kind: "code" },
+        }),
+      ]
+    );
+
+    const { reply } = await agentCalls(
+      "synap_create_automation",
+      weekly("instagram.private_scores")
+    );
+    expect(reply.error).toContain("instagram.private_scores");
+    expect(reply.error).not.toContain(foreign);
+    expect(reply.error).not.toContain("waiting for review");
   });
 });
