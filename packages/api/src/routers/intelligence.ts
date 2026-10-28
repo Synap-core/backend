@@ -53,6 +53,8 @@ import { authoringMisses } from "../utils/template-diagnostics.js";
 import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
 import { requireUserId } from "../utils/user-scoped.js";
 import { publicServiceRow } from "../utils/intelligence-service-projection.js";
+import { assertSafeServiceUrl } from "../utils/intelligence-service-url.js";
+import { safeExternalFetch, isBlockedOutboundError } from "@synap/shared-utils";
 import { scopedDb, accessFor } from "../access/index.js";
 import {
   ensureAgentThread,
@@ -1485,17 +1487,26 @@ export const intelligenceRouter = router({
    *
    * Tests connectivity to a candidate custom IS before registering.
    * Pings /api/capabilities (required) and /api/manifest (optional).
+   *
+   * Pod admin only, like `registerCustomService` (the only reason to test is
+   * to register, and only a pod admin may). It fetches a caller-chosen URL
+   * from inside the pod and reflects what came back, so the URL passes the
+   * SSRF guard first and every request goes through `safeExternalFetch`
+   * (no redirect is followed: the key rides in the header).
    */
   testCustomServiceConnection: workspaceProcedure
     .input(z.object({ hubUrl: z.string().url(), apiKey: z.string().min(1) }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ ctx, input }) => {
       const { hubUrl, apiKey } = input;
+
+      await assertPodAdmin(ctx.userId);
+      assertSafeServiceUrl(hubUrl, "hubUrl");
 
       let capabilities: string[] = [];
       let hasManifest = false;
 
       try {
-        const capRes = await fetch(`${hubUrl}/api/capabilities`, {
+        const capRes = await safeExternalFetch(`${hubUrl}/api/capabilities`, {
           headers: { Authorization: `Bearer ${apiKey}` },
           signal: AbortSignal.timeout(8000),
         });
@@ -1511,6 +1522,9 @@ export const intelligenceRouter = router({
           : [];
       } catch (err) {
         if (err instanceof TRPCError) throw err;
+        if (isBlockedOutboundError(err)) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
+        }
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: `Could not reach ${hubUrl}. Make sure the service is running and the URL is correct.`,
@@ -1518,7 +1532,7 @@ export const intelligenceRouter = router({
       }
 
       try {
-        const mfRes = await fetch(`${hubUrl}/api/manifest`, {
+        const mfRes = await safeExternalFetch(`${hubUrl}/api/manifest`, {
           headers: { Authorization: `Bearer ${apiKey}` },
           signal: AbortSignal.timeout(5000),
         });
@@ -1557,11 +1571,13 @@ export const intelligenceRouter = router({
       const { displayName, hubUrl, apiKey } = input;
 
       await assertPodAdmin(ctx.userId);
+      // The stored URL is fetched downstream without a check: refuse it here.
+      assertSafeServiceUrl(hubUrl, "hubUrl");
 
       // Fetch capabilities to verify connectivity
       let capabilities: string[] = [];
       try {
-        const capRes = await fetch(`${hubUrl}/api/capabilities`, {
+        const capRes = await safeExternalFetch(`${hubUrl}/api/capabilities`, {
           headers: { Authorization: `Bearer ${apiKey}` },
           signal: AbortSignal.timeout(8000),
         });
@@ -1577,6 +1593,9 @@ export const intelligenceRouter = router({
           : [];
       } catch (err) {
         if (err instanceof TRPCError) throw err;
+        if (isBlockedOutboundError(err)) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
+        }
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: "Could not reach the service. Make sure it is running.",
@@ -1586,7 +1605,7 @@ export const intelligenceRouter = router({
       // Try fetching manifest (soft-fail)
       let agentManifest: unknown = null;
       try {
-        const mfRes = await fetch(`${hubUrl}/api/manifest`, {
+        const mfRes = await safeExternalFetch(`${hubUrl}/api/manifest`, {
           headers: { Authorization: `Bearer ${apiKey}` },
           signal: AbortSignal.timeout(5000),
         });

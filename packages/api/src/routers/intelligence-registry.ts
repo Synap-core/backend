@@ -33,6 +33,7 @@ import { createLogger } from "@synap-core/core";
 import { randomUUID } from "crypto";
 import { encryptServiceKey } from "@synap/database";
 import { scopedProcedure } from "../middleware/api-key-auth.js";
+import { assertSafeServiceUrl } from "../utils/intelligence-service-url.js";
 import {
   setDefaultIntelligenceService,
   selectPodDefaultService,
@@ -132,6 +133,10 @@ const UpdateServiceSchema = z.object({
  * tokens go) and `rotateKey` set where a credential goes or the credential
  * itself, so they also take the credential-door step-up
  * (`requireFreshAuthentication`).
+ *
+ * `register` and `update` also refuse a `webhookUrl` the SSRF guard refuses
+ * (`assertSafeServiceUrl`), as the Hub Protocol door does: downstream fetches
+ * trust the stored value.
  */
 export const intelligenceRegistryRouter = router({
   /**
@@ -144,6 +149,7 @@ export const intelligenceRegistryRouter = router({
     .use(requireFreshAuthentication)
     .input(RegisterServiceSchema)
     .mutation(async ({ input }) => {
+      assertSafeServiceUrl(input.webhookUrl, "webhookUrl");
       logger.info(
         { serviceId: input.serviceId },
         "Registering intelligence service"
@@ -291,6 +297,9 @@ export const intelligenceRegistryRouter = router({
     .input(UpdateServiceSchema)
     .mutation(async ({ input }) => {
       const { id, ...updates } = input;
+      if (updates.webhookUrl !== undefined) {
+        assertSafeServiceUrl(updates.webhookUrl, "webhookUrl");
+      }
 
       const [updated] = await db
         .update(intelligenceServices)

@@ -284,3 +284,94 @@ describe("intelligenceRegistry writes — a pod admin still can", () => {
     ).toBe("plain-secret");
   });
 });
+
+/*
+ * The URL a pod admin stores is fetched downstream with no further check
+ * (~40 sites trust `webhookUrl`), so the writer refuses what the SSRF guard
+ * refuses, as the Hub Protocol `services.register` door does. And the two
+ * custom-service doors fetch a caller-chosen URL from inside the pod: guard
+ * first, then `safeExternalFetch` (no redirect followed, the key is a header).
+ */
+describe("service URLs — the SSRF guard holds at every writer and probe", () => {
+  it("register refuses a cloud metadata webhookUrl and adds no row", async () => {
+    await expect(
+      registry(ADMIN).register({
+        serviceId: "svc-meta",
+        name: "Meta",
+        webhookUrl: "http://169.254.169.254/latest",
+        apiKey: "k",
+        capabilities: ["chat"],
+      })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(await rows()).toHaveLength(2);
+  });
+
+  it("update refuses a loopback webhookUrl and keeps the old one", async () => {
+    await expect(
+      registry(ADMIN).update({
+        id: SVC_ROW,
+        webhookUrl: "http://localhost:5432",
+      })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect((await rows())[0]!.webhook_url).toBe(GOOD_URL);
+  });
+
+  it("registerCustomService refuses a private hubUrl before probing it", async () => {
+    await expect(
+      intelligence(ADMIN).registerCustomService({
+        displayName: "Inside",
+        hubUrl: "http://10.0.0.5:8080",
+        apiKey: "k",
+      })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(await rows()).toHaveLength(2);
+  });
+
+  it("registerCustomService does not follow a redirect (the key is a header)", async () => {
+    fetchSpy.mockImplementationOnce(
+      async () =>
+        new Response(null, {
+          status: 302,
+          headers: { location: "http://169.254.169.254/latest" },
+        })
+    );
+    await expect(
+      intelligence(ADMIN).registerCustomService({
+        displayName: "Bounce",
+        hubUrl: "https://bounce.synap.example",
+        apiKey: "k",
+      })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(await rows()).toHaveLength(2);
+  });
+
+  it("testCustomServiceConnection: a space owner is refused and nothing is fetched", async () => {
+    await expect(
+      intelligence(SPACE_OWNER).testCustomServiceConnection({
+        hubUrl: GOOD_URL,
+        apiKey: "k",
+      })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("testCustomServiceConnection: a pod admin cannot probe an internal host", async () => {
+    await expect(
+      intelligence(ADMIN).testCustomServiceConnection({
+        hubUrl: "http://169.254.169.254",
+        apiKey: "k",
+      })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("testCustomServiceConnection: a pod admin still tests a public service", async () => {
+    const res = await intelligence(ADMIN).testCustomServiceConnection({
+      hubUrl: GOOD_URL,
+      apiKey: "k",
+    });
+    expect(res).toMatchObject({ ok: true, capabilities: ["chat"] });
+  });
+});
