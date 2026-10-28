@@ -19,6 +19,7 @@ import {
 import { parsePermission } from "./grammar.js";
 import { GRANT_SUBJECT_CATALOG, isQualifiedGrantSubject } from "./catalog.js";
 import type { KeyUseId } from "./key-uses.js";
+import type { KeyScope } from "./access-levels.js";
 
 /**
  * "AI — read & propose" — the limits every NEW AI agent starts with (founder
@@ -236,6 +237,11 @@ export interface GrantRole {
    * lifetime is `grant.expiresInDays` like any role's.
    */
   readonly uses?: readonly KeyUseId[];
+  /**
+   * Where a key made from it works (step 1 of the New key page). Absent =
+   * wherever its permissions work (`templateFitsScope` derives it).
+   */
+  readonly scopes?: readonly KeyScope[];
 }
 
 export const GRANT_PRESETS: readonly GrantRole[] = [
@@ -292,6 +298,8 @@ export const KEY_TEMPLATES: readonly GrantRole[] = [
       "Posts what happened (commits, builds, CI results) to the pod's activity. Reads nothing, changes nothing else.",
     grant: { permissions: ["event.create"], expiresInDays: 90 },
     uses: ["hub"],
+    // An observation carries no project (finding 8809cc21).
+    scopes: ["pod", "space"],
   },
   {
     id: "website-or-pod-app",

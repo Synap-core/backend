@@ -37,8 +37,9 @@ import {
   grantKindLabel,
   grantPlainAction,
   grantSubjectLabel,
-  isQualifiedGrantSubject,
+  isKindQualifiedGrantSubject,
   parsePermission,
+  resolveEventFamilyPermissionLabel,
 } from "@synap-core/types/grants";
 import { intentRunLabel } from "@synap-core/types/capability-intents";
 import { isAppPublicId } from "@synap-core/types/membrane";
@@ -136,7 +137,17 @@ function parts(permission: string): {
       action: verb(segs[2]),
     };
   }
-  if (isQualifiedGrantSubject(subject)) {
+  // An activity FAMILY (`event.ci.create`) is not a kind either: one
+  // Activity row, the family named in the permission's label.
+  if (subject === "event") {
+    return {
+      object: subject,
+      subject,
+      kind: null,
+      action: verb(segs[2]),
+    };
+  }
+  if (isKindQualifiedGrantSubject(subject)) {
     const kind = segs[1] ?? "*";
     return {
       object: `${subject}.${kind}`,
@@ -613,6 +624,10 @@ export function permissionLabel(permission: string): string {
   // (`capability.run` → "Run tools"): `parts` gives it no kind.
   if (subject === "capability" && action === "run" && kind)
     return intentRunLabel(kind);
+  if (subject === "event" && action) {
+    const family = resolveEventFamilyPermissionLabel(permission);
+    if (family) return family;
+  }
   if (subject === "facet" && action && ROLE_ON_RECORD_WORDS[action]) {
     return ROLE_ON_RECORD_WORDS[action];
   }

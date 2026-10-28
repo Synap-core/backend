@@ -23,8 +23,9 @@ import { GRANT_ACTIONS, parsePermission } from "./grammar.js";
 import {
   GRANT_SUBJECT_CATALOG,
   grantActionLabel,
-  grantKindLabel,
+  grantQualifierLabel,
   grantSubjectLabel,
+  isKindQualifiedGrantSubject,
   isQualifiedGrantSubject,
   type GrantAction,
   type GrantSubjectSpec,
@@ -42,7 +43,10 @@ export interface GrantSummaryRow {
   /** Stable React key: `subject` or `subject.kind`. */
   readonly key: string;
   readonly subject: string;
-  /** null = an unqualified subject; `*` = every kind; else a kind slug. */
+  /**
+   * null = the subject's own row when it is not kind-qualified (`event`'s is
+   * every family); `*` = every kind; else a kind slug or an activity family.
+   */
   readonly kind: string | null;
   readonly label: string;
   /** Catalog actions granted (a kind row lists only what "every kind" does not). */
@@ -234,20 +238,47 @@ export function summarizeGrant(
   if (!full) {
     for (const spec of catalog) {
       const { subject } = spec;
-      if (!isQualifiedGrantSubject(subject)) {
+      // A qualifier row (`entity.note`, `event.ci`) lists only what the
+      // subject's own row does not already give.
+      const qualifierRows = (given: readonly GrantAction[]) => {
+        const qualifiers = new Set<string>();
+        for (const s of parsed)
+          if (s[0] === subject && s[1] && s[1] !== "*") qualifiers.add(s[1]);
+        for (const q of qualifiers) {
+          const pattern = `${subject}.${q}`;
+          pushRow(
+            {
+              key: pattern,
+              subject,
+              kind: q,
+              label: grantQualifierLabel(subject, q, opts.kindNames?.[q]),
+              actions: spec.actions.filter(
+                (action) =>
+                  !given.includes(action) &&
+                  isGranted(d, { subject, kind: q, action })
+              ),
+              all: has(pattern),
+            },
+            gatesFor(subject, q)
+          );
+        }
+      };
+      if (!isKindQualifiedGrantSubject(subject)) {
+        const own = spec.actions.filter((action) =>
+          isGranted(d, { subject, action })
+        );
         pushRow(
           {
             key: subject,
             subject,
             kind: null,
             label: grantSubjectLabel(subject),
-            actions: spec.actions.filter((action) =>
-              isGranted(d, { subject, action })
-            ),
+            actions: own,
             all: has(subject),
           },
-          gatesFor(subject, null)
+          gatesFor(subject, isQualifiedGrantSubject(subject) ? "*" : null)
         );
+        if (isQualifiedGrantSubject(subject)) qualifierRows(own);
         continue;
       }
       const every = spec.actions.filter((action) =>
@@ -264,27 +295,7 @@ export function summarizeGrant(
         },
         gatesFor(subject, "*")
       );
-      const kinds = new Set<string>();
-      for (const s of parsed)
-        if (s[0] === subject && s[1] && s[1] !== "*") kinds.add(s[1]);
-      for (const kind of kinds) {
-        const pattern = `${subject}.${kind}`;
-        pushRow(
-          {
-            key: pattern,
-            subject,
-            kind,
-            label: grantKindLabel(kind, opts.kindNames?.[kind]),
-            actions: spec.actions.filter(
-              (action) =>
-                !every.includes(action) &&
-                isGranted(d, { subject, kind, action })
-            ),
-            all: has(pattern),
-          },
-          gatesFor(subject, kind)
-        );
-      }
+      qualifierRows(every);
     }
   }
   const other = full ? [] : valid.filter((p) => !isCatalogPattern(p, catalog));
