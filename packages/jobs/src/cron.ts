@@ -99,6 +99,10 @@ import {
 } from "./workers/external-agent-poll.js";
 import { FEDERATION_RECEIPT_CLEANUP_QUEUE } from "./workers/federation-receipt-cleanup.js";
 import {
+  API_USAGE_RETENTION_CRON,
+  API_USAGE_RETENTION_QUEUE,
+} from "./workers/api-usage-retention.js";
+import {
   PUSH_DEVICE_SWEEP_QUEUE,
   PUSH_DEVICE_SWEEP_CRON,
 } from "./workers/push-devices.js";
@@ -404,6 +408,15 @@ export async function registerCronSchedules(): Promise<void> {
   logger.info(
     "Registered cron: federation-receipt-cleanup (daily at 2:15 AM UTC)"
   );
+
+  // API usage telemetry keeps 30 days (api_usage_buckets, 0364).
+  await scheduleSafe(
+    boss,
+    API_USAGE_RETENTION_QUEUE,
+    API_USAGE_RETENTION_CRON,
+    {}
+  );
+  logger.info("Registered cron: api-usage-retention (daily at 2:25 AM UTC)");
 
   // Phones unused for 90 days stop getting pushes (daily at 2:50 AM UTC).
   await scheduleSafe(boss, PUSH_DEVICE_SWEEP_QUEUE, PUSH_DEVICE_SWEEP_CRON, {});

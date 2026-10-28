@@ -56,6 +56,8 @@ import {
 } from "../../utils/user-visible-where.js";
 import { visibleSkillsAnyWorkspaceWhere } from "../skills/visibility.js";
 import { listRuns, listRunGroups, getRun } from "../runs/index.js";
+import { readUsageForCaller } from "../usage/read-usage.js";
+import { TRPCError } from "@trpc/server";
 import { CAPABILITY_RUN_PROPOSAL_TYPE } from "../proposals/proposal-class.js";
 import {
   collapseProposalsToClusters,
@@ -108,6 +110,7 @@ const CLASS_VALUES: DiagnoseClass[] = [
   "entity",
   "run",
   "workspace",
+  "usage",
 ];
 
 /* `CAPABILITY_RUN_PROPOSAL_TYPE` — the agnostic-capability last-mile executor's
@@ -187,6 +190,15 @@ export interface DiagnoseInput {
   flowId?: string;
   runId?: string;
   limit?: number;
+  // ── type "usage" (0364) ──
+  /** Usage window start, ISO (default 24 h ago). */
+  since?: string;
+  /** Usage dimensions: hour, day, apiKeyId, limiterKey, client, conversationId, rlClass, outcome. */
+  groupBy?: string | string[];
+  /** Narrow usage to one key. */
+  apiKeyId?: string;
+  /** Narrow usage to one client (`synap-bridge/0.6.0`). */
+  client?: string;
 }
 
 export async function diagnoseRouter(
@@ -241,6 +253,7 @@ export async function diagnoseRouter(
         error: `Unknown type "${input.type}". Expected one of: ${CLASS_VALUES.join(", ")}`,
       };
     }
+    if (input.type === "usage") return diagnoseUsage(input);
     return diagnoseClass(userId, input.type, input.workspaceId ?? undefined);
   }
 
@@ -838,6 +851,46 @@ async function diagnoseObject(
       const unhandled: never = kind;
       return { error: `No object handler for kind ${String(unhandled)}` };
     }
+  }
+}
+
+// ── CLASS usage (0364) ───────────────────────────────────────────────────────
+
+/** Calls per key / client / conversation / class / outcome — pod admins only. */
+async function diagnoseUsage(
+  input: DiagnoseInput
+): Promise<ClassReport | { error: string }> {
+  try {
+    const usage = await readUsageForCaller(input.userId, {
+      since: input.since,
+      groupBy: input.groupBy,
+      apiKeyId: input.apiKeyId,
+      client: input.client,
+      limit: input.limit,
+    });
+    const calls = usage.groups.reduce((n, g) => n + g.calls, 0);
+    const limited = usage.groups
+      .filter((g) => g.outcome === "429")
+      .reduce((n, g) => n + g.calls, 0);
+    return {
+      mode: "class",
+      type: "usage",
+      summary:
+        `${calls} calls since ${usage.since}` +
+        (usage.groupBy.includes("outcome")
+          ? `, ${limited} refused (429)`
+          : "") +
+        `, in ${usage.groups.length} groups by ${usage.groupBy.join(", ")}.`,
+      detail: usage as unknown as Record<string, unknown>,
+    };
+  } catch (err) {
+    if (
+      err instanceof TRPCError &&
+      (err.code === "FORBIDDEN" || err.code === "BAD_REQUEST")
+    ) {
+      return { error: err.message };
+    }
+    throw err;
   }
 }
 
