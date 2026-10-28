@@ -72,8 +72,10 @@ function ddlFor(table: PgTable): string {
   const cols = cfg.columns.map((c) => {
     const t = c.getSQLType();
     const type = BASIC.test(t) ? t.replace(/\(.*\)/, "") : "text";
+    // The real ids default to gen_random_uuid() (messaging_accounts.id is
+    // text: `(gen_random_uuid())::text`); the auto-seed insert relies on it.
     const key = c.primary
-      ? ` primary key${type === "uuid" ? " default gen_random_uuid()" : ""}`
+      ? ` primary key${type === "uuid" ? " default gen_random_uuid()" : type === "text" ? " default gen_random_uuid()::text" : ""}`
       : "";
     return `"${c.name}" ${type}${key}`;
   });
