@@ -6177,6 +6177,17 @@ export interface GoalCriterionView {
 	 * decision with no run). `undefined` never: a write's fallback reads `null`.
 	 */
 	claim: GoalCriterionClaim | null;
+	/**
+	 * D-6 (founder, 2026-10-26): what backs a criterion — its claim's run title,
+	 * evidence and note, and its `currentValue` — is shown only to the goal's
+	 * OWNER, its JUDGE and whoever may read that run. `true` = there is such
+	 * content and this reader is none of them: those fields read `null`
+	 * ("Evidence visible to the owner and judge"), never an empty claim.
+	 * `false` = nothing withheld. The pod sets it on every derived read; it is
+	 * absent only on a write's fallback view, which read no goal facts
+	 * (`mark: null`).
+	 */
+	evidenceWithheld?: boolean;
 }
 declare const OPERATION_PERIOD_MARKS: readonly [
 	"met",

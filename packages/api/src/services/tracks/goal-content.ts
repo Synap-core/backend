@@ -75,9 +75,11 @@ import {
 } from "@synap-core/types/units";
 import { sessionCriteriaSchema } from "../../schemas/session-criteria.js";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
+import { grantReadPredicate } from "../../access/grant-read.js";
+import { sessionReadableWhere } from "../../access/session-visibility.js";
 import {
   loadGoalJudge,
-  loadGoalJudges,
+  loadGoalSeats,
   loadGoalOwner,
   participantDisplayNames,
 } from "./track-participant-store.js";
@@ -750,25 +752,31 @@ export async function loadGoalRunsForRead(
 /**
  * The goal facts for MANY tracks in a bounded number of queries: the sessions
  * filed into them (every member's — the goal is the project's, like its check
- * gate; marks and counts only, never a session's content), their evaluation
- * rows, the pending proposals about the goal or its open runs the reader can
- * see, and `blocked_by` edges on the goal and its open runs. A failed read
- * THROWS — never folded into "nothing claimed, waiting on nothing".
+ * gate; marks and counts only), their evaluation rows, the pending proposals
+ * about the goal or its open runs the reader can see, and `blocked_by` edges
+ * on the goal and its open runs. What BACKS a criterion (its claim's run
+ * title, evidence and note, its measured value) is a run's content: shown
+ * only to the goal's owner, its judge and whoever may read that run (D-6,
+ * `evidenceWithheld`). `reader.roster` is the door's session read rule
+ * (`rosterReadFor`; default owner-only, like `sessionReadableWhere`). A
+ * failed read THROWS — never folded into "nothing claimed, waiting on
+ * nothing".
  */
 export async function loadTrackGoalFacts(
   tracks: ReadonlyArray<
     Pick<ProjectTrack, "id" | "userId" | "criteria" | "workKind">
   >,
-  userId: string
+  userId: string,
+  reader: { roster?: boolean } = {}
 ): Promise<Map<string, TrackGoalFacts>> {
   const out = new Map<string, TrackGoalFacts>();
   if (tracks.length === 0) return out;
   const db = await getDb();
   const trackIds = tracks.map((t) => t.id);
 
-  const [{ openSessions, titleOf, runsOf }, judges] = await Promise.all([
+  const [{ openSessions, titleOf, runsOf }, seats] = await Promise.all([
     loadGoalRunsForRead(tracks),
-    loadGoalJudges(tracks),
+    loadGoalSeats(tracks),
   ]);
   const openSessionIds = openSessions.map((s) => s.id);
 
@@ -818,17 +826,61 @@ export async function loadTrackGoalFacts(
       deriveGoalCriteria(
         readGoalCriteria(track.criteria),
         runsOf.get(track.id) ?? [],
-        { judgeId: judges.get(track.id) ?? null }
+        { judgeId: seats.get(track.id)?.judge ?? null }
       ),
     ])
   );
-  // What backs each claim (its evidence) and who made it, by name — read
-  // once for the whole list, only for the rows that claim something.
-  const claims = [...statesOf.values()].flatMap((states) =>
-    states.flatMap((st) => (st.claim ? [st.claim] : []))
+  // D-6 (founder, 2026-10-26): what backs a criterion is its RUN's content.
+  // The goal's owner and judge see it (theirs is the call), as does whoever
+  // may read the run under THE session read rule; anyone else who sees the
+  // goal reads the mark alone, told it is withheld. The marks above counted
+  // every run either way. A key reads as its person within its grant — on
+  // the seat branch too, so a key granted only `track` reads no run.
+  const allStates = [...statesOf.values()].flat();
+  const backingRunIds = [
+    ...new Set(
+      allStates.flatMap((st) => [
+        ...(st.claim ? [st.claim.sessionId] : []),
+        ...(st.currentValueSessionId ? [st.currentValueSessionId] : []),
+      ])
+    ),
+  ];
+  const seatedTrackIds = tracks
+    .filter((t) => {
+      const seat = seats.get(t.id);
+      return seat?.owner === userId || seat?.judge === userId;
+    })
+    .map((t) => t.id);
+  const shownRuns = new Set(
+    backingRunIds.length > 0
+      ? (
+          await db
+            .select({ id: focusSessions.id })
+            .from(focusSessions)
+            .where(
+              and(
+                inArray(focusSessions.id, backingRunIds),
+                or(
+                  sessionReadableWhere({ userId, roster: reader.roster }),
+                  seatedTrackIds.length > 0
+                    ? and(
+                        inArray(focusSessions.trackId, seatedTrackIds),
+                        grantReadPredicate(focusSessions)
+                      )
+                    : undefined
+                )
+              )
+            )
+        ).map((r) => r.id)
+      : []
   );
+
+  // What backs each claim (its evidence) and who made it, by name — read
+  // once for the whole list, only for the rows that claim something; the
+  // evidence only of the claims this reader is shown.
+  const claims = allStates.flatMap((st) => (st.claim ? [st.claim] : []));
   const claimEvaluationIds = claims.flatMap((c) =>
-    c.evaluationId ? [c.evaluationId] : []
+    c.evaluationId && shownRuns.has(c.sessionId) ? [c.evaluationId] : []
   );
   const [evidenceRows, claimNames] = await Promise.all([
     claimEvaluationIds.length > 0
@@ -847,15 +899,21 @@ export async function loadTrackGoalFacts(
   );
   const claimView = (
     c: NonNullable<ReturnType<typeof deriveGoalCriteria>[number]["claim"]>
-  ): GoalCriterionClaim => ({
-    by: c.by,
-    byName: c.by ? (claimNames.get(c.by) ?? null) : null,
-    sessionId: c.sessionId,
-    sessionTitle: titleOf.get(c.sessionId)?.trim() || null,
-    evidence: c.evaluationId ? (evidenceOf.get(c.evaluationId) ?? null) : null,
-    note: c.note,
-    at: c.at,
-  });
+  ): GoalCriterionClaim => {
+    const shown = shownRuns.has(c.sessionId);
+    return {
+      by: c.by,
+      byName: c.by ? (claimNames.get(c.by) ?? null) : null,
+      sessionId: c.sessionId,
+      sessionTitle: shown ? titleOf.get(c.sessionId)?.trim() || null : null,
+      evidence:
+        shown && c.evaluationId
+          ? (evidenceOf.get(c.evaluationId) ?? null)
+          : null,
+      note: shown ? c.note : null,
+      at: c.at,
+    };
+  };
 
   // R6: the period an operation is read over — this week.
   const weekFrom = operationWeekStart(new Date());
@@ -899,13 +957,19 @@ export async function loadTrackGoalFacts(
     out.set(track.id, {
       criteria: criteria.map((c) => {
         const s = stateOf.get(c.key)!;
+        const valueShown =
+          s.currentValueSessionId === null ||
+          shownRuns.has(s.currentValueSessionId);
         return {
           ...c,
           mark: s.mark,
           acceptanceState: s.acceptanceState,
           meaning: s.meaning,
-          currentValue: s.currentValue,
+          currentValue: valueShown ? s.currentValue : null,
           claim: s.claim ? claimView(s.claim) : null,
+          evidenceWithheld:
+            !valueShown ||
+            (s.claim !== null && !shownRuns.has(s.claim.sessionId)),
         };
       }),
       inReview: goalInReview(criteria, states),

@@ -175,6 +175,8 @@ import {
   projectMembers,
   sessionEvaluations,
   trackParticipants,
+  channels,
+  channelMembers,
 } from "@synap/database";
 import {
   advanceTrackStage,
@@ -280,6 +282,10 @@ beforeAll(async () => {
     sessionEvaluations,
     // Who is on a goal (0348): `startTrack` seeds the owner row.
     trackParticipants,
+    // A goal read checks who may see what backs a criterion through THE
+    // session read rule (D-6), whose human-door branch reads a run's room.
+    channels,
+    channelMembers,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }
