@@ -320,6 +320,8 @@ describe("an agent's auto-approved session update can be undone", () => {
       agentUserId: AGENT,
       title: "Founder radar",
       status: "paused",
+      // W4: an agent's pause says what it waits on.
+      hold: { on: "decision", reason: "Waiting on the owner." },
     });
     const row = await plannerRow(await receiptId());
     expect(revertableForRow(row)).toBe(false);

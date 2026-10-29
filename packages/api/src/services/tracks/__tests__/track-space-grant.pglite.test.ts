@@ -816,6 +816,8 @@ describe("D1 closing a goal is a person's act, whatever the pod's rules", () => 
       status: "paused",
       expectedStatus: "active",
       actor: agent,
+      // W4: an agent's pause says what it waits on.
+      hold: { on: "decision", reason: "Waiting on the owner." },
     });
     expect(res.status).toBe("updated");
     expect((await trackRow(trackId)).status).toBe("paused");
