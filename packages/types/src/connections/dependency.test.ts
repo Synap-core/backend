@@ -15,6 +15,7 @@ import {
   type DependencyNodeState,
 } from "./index.js";
 import { OPEN_SESSION_STATUSES } from "../focus-sessions/statuses.js";
+import { TRACK_STATUSES } from "../units/track-status.js";
 import { resolveLineageEdgeLabel } from "../vocabulary/index.js";
 
 const dep = (
@@ -125,6 +126,53 @@ describe("classifyDependencyBlocker — per kind", () => {
     expect(isDependencyEnded("entity", "Done")).toBe(true);
     expect(isDependencyEnded("entity", "wont_do")).toBe(true);
     expect(isDependencyEnded("entity", null)).toBe(false);
+  });
+});
+
+// Status-flow W5: the track outcome is DERIVED from its declaration, not from
+// a hand list. Behaviour-neutral: every value the retired lists held (copied
+// here verbatim, with the lists that stay) keeps its answer, and every other
+// declared track status stays open.
+describe("classifyDependencyBlocker — same answers as the hand lists it retired", () => {
+  const RETIRED = {
+    track: { delivered: ["completed"], dropped: ["archived"] },
+    session: { delivered: ["closed"], dropped: ["cancelled", "failed"] },
+    entity: {
+      delivered: [
+        "done",
+        "completed",
+        "complete",
+        "closed",
+        "resolved",
+        "finished",
+        "shipped",
+        "closed_won",
+      ],
+      dropped: ["cancelled", "canceled", "archived", "closed_lost", "wont_do"],
+    },
+  } as const;
+  for (const [kind, lists] of Object.entries(RETIRED)) {
+    it(`${kind}: every listed value keeps its outcome`, () => {
+      for (const s of lists.delivered) {
+        expect(classifyDependencyBlocker(kind, s), s).toBe("delivered");
+      }
+      for (const s of lists.dropped) {
+        expect(classifyDependencyBlocker(kind, s), s).toBe("dropped");
+      }
+    });
+  }
+  // Rules out a derivation that clears or drops more than the lists did.
+  it("track: every other declared status, and an unknown one, holds", () => {
+    const listed: readonly string[] = [
+      ...RETIRED.track.delivered,
+      ...RETIRED.track.dropped,
+    ];
+    for (const s of TRACK_STATUSES.filter((t) => !listed.includes(t))) {
+      expect(classifyDependencyBlocker("track", s), s).toBe("open");
+    }
+    for (const s of ["", "Completed", "weird", null, undefined]) {
+      expect(classifyDependencyBlocker("track", s), String(s)).toBe("open");
+    }
   });
 });
 

@@ -310,6 +310,48 @@ describe("x2 decision `status` → decisionStatus (homes X2)", () => {
   });
 });
 
+describe("w5 question `status` → questionStatus (status-flow W5)", () => {
+  const KEY = "w5.question.status-into-lifecycle";
+  it("folds Life OS states; a set questionStatus wins; unmapped values and other kinds kept; idempotent", async () => {
+    const question = await profile("question", "kind", "system");
+    const task = await profile("task", "kind", "system");
+    const q1 = await entity(question, "question", {
+      status: "answered",
+      title: "x",
+    });
+    const q2 = await entity(question, "question", {
+      status: "open",
+      questionStatus: "abandoned",
+    });
+    const q3 = await entity(question, "question", { status: "todo" });
+    const q4 = await entity(question, "question", {});
+    const t1 = await entity(task, "task", { status: "open" });
+
+    const s = await run([KEY]);
+    expect(errorsOf(s), errorsOf(s).join("\n")).toEqual([]);
+
+    expect(await propsOf(q1)).toEqual({
+      questionStatus: "answered",
+      title: "x",
+    });
+    expect(await propsOf(q2)).toEqual({ questionStatus: "abandoned" });
+    // A value that is no question state is kept for a person, never guessed.
+    expect(await propsOf(q3)).toEqual({ status: "todo" });
+    expect(await propsOf(q4)).toEqual({});
+    expect(await propsOf(t1)).toEqual({ status: "open" });
+
+    // A second real run (ledger cleared) changes nothing.
+    await db.exec(`DROP TABLE IF EXISTS "_conversions"`);
+    const again = await run([KEY]);
+    expect(errorsOf(again)).toEqual([]);
+    expect(await propsOf(q1)).toEqual({
+      questionStatus: "answered",
+      title: "x",
+    });
+    expect(await propsOf(q3)).toEqual({ status: "todo" });
+  });
+});
+
 describe("h0 stray `status` → the dev lifecycles", () => {
   it("folds the stray key; a lifecycle value already set wins; unmapped is kept", async () => {
     const feature = await profile("devplane_feature", "kind", "workspace");

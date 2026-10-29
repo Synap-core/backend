@@ -2,10 +2,16 @@
  * The LIFECYCLES of the core (system-seeded) kinds — work model L1, 0319.
  *
  * The seeder (`ensure-system-profiles.ts`) creates these kinds and their
- * status selects with bare-string options; this pass gives each its ONE
- * lifecycle: option categories on the def (`constraints.enumOptions`, through
- * the one mapper) and the link flag (`declareLifecycle`, which also fills the
- * columns of existing rows from the read projection).
+ * status selects, their option keys read from this table
+ * ({@link systemLifecycleKeys}); this pass gives each its ONE lifecycle:
+ * option categories on the def (`constraints.enumOptions`, through the one
+ * mapper) and the link flag (`declareLifecycle`, which also fills the columns
+ * of existing rows from the read projection).
+ *
+ * It stays a second pass of the same boot call, not a merge into the seeder:
+ * the seeder creates a def only when it is missing, so this pass is what
+ * converges the defs pods already hold, and `declareLifecycle` needs the
+ * profile links the seeder writes first.
  *
  * Only knowledge-work kinds a person or an agent MOVES through a life are
  * declared. Machine-run statuses (report generation, devplane deploy / run /
@@ -93,6 +99,19 @@ export const SYSTEM_LIFECYCLES: ReadonlyArray<{
     ],
   },
 ];
+
+/**
+ * The option keys of the core lifecycle on `propertySlug`, in declared order:
+ * the `constraints.enum` the seeder gives that status select, so the keys are
+ * written once, here.
+ */
+export function systemLifecycleKeys(propertySlug: string): string[] {
+  const decl = SYSTEM_LIFECYCLES.find((d) => d.propertySlug === propertySlug);
+  if (!decl) {
+    throw new Error(`No system lifecycle declares "${propertySlug}"`);
+  }
+  return decl.options.map((o) => o.key);
+}
 
 export interface EnsureSystemLifecyclesResult {
   declared: string[];

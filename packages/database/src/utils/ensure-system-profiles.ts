@@ -23,6 +23,7 @@ import { foldPropertyKey } from "../services/did-you-mean.js";
 import { WORKSPACE_MEMBERSHIP_ROLE_CATEGORY } from "./facet-visibility.js";
 import {
   ensureSystemLifecycles,
+  systemLifecycleKeys,
   type EnsureSystemLifecyclesResult,
 } from "./ensure-system-lifecycles.js";
 
@@ -740,7 +741,7 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
         slug: "status",
         valueType: PropertyValueType.STRING,
         constraints: {
-          enum: ["todo", "in-progress", "done", "cancelled"],
+          enum: systemLifecycleKeys("status"),
         },
         uiHints: { label: "Status", inputType: "select" },
       },
@@ -1247,7 +1248,7 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
         slug: "questionStatus",
         valueType: PropertyValueType.STRING,
         constraints: {
-          enum: ["open", "exploring", "answered", "abandoned"],
+          enum: systemLifecycleKeys("questionStatus"),
         },
         uiHints: { label: "Status", inputType: "select", displayAs: "status" },
       },
@@ -1267,7 +1268,7 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
         slug: "researchStatus",
         valueType: PropertyValueType.STRING,
         constraints: {
-          enum: ["ongoing", "concluded", "abandoned"],
+          enum: systemLifecycleKeys("researchStatus"),
         },
         uiHints: { label: "Status", inputType: "select", displayAs: "status" },
       },
@@ -1277,7 +1278,7 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
         slug: "issueStatus",
         valueType: PropertyValueType.STRING,
         constraints: {
-          enum: ["open", "investigating", "fixed", "wont_fix"],
+          enum: systemLifecycleKeys("issueStatus"),
         },
         uiHints: { label: "Status", inputType: "select", displayAs: "status" },
       },
@@ -1360,7 +1361,7 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
         slug: "decisionStatus",
         valueType: PropertyValueType.STRING,
         constraints: {
-          enum: ["proposed", "accepted", "superseded", "rejected"],
+          enum: systemLifecycleKeys("decisionStatus"),
         },
         uiHints: { label: "Status", inputType: "select", displayAs: "status" },
       },
