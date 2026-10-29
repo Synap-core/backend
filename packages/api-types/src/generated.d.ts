@@ -32005,6 +32005,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			} | {
 				deferred?: true | undefined;
 				message: string;
+				notice?: string;
 				proposalId: string;
 				proposalType: string;
 				ref?: string | undefined;
@@ -32013,6 +32014,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				statusMove?: MoveStatusResult | undefined;
 			} | {
 				message: string;
+				notice?: string;
 				proposalId?: undefined;
 				proposalType?: undefined;
 				reviewUrl?: undefined;
