@@ -1832,6 +1832,20 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "heartbeat_at",
     addedBy: "0352_proposal_apply_runs.sql",
   },
+
+  // api_usage_buckets — calls per key / client / conversation (0364). Absence
+  // means every usage flush fails (logged, the counts are dropped) and the
+  // usage read door (synap_diagnose type usage, GET /api/hub/usage) 42P01s.
+  {
+    table: "api_usage_buckets",
+    column: "held_ms",
+    addedBy: "0364_api_usage_buckets.sql",
+  },
+  {
+    table: "api_usage_buckets",
+    column: "limiter_key",
+    addedBy: "0364_api_usage_buckets.sql",
+  },
   {
     table: "proposal_apply_runs",
     column: "revision",

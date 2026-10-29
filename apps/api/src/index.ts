@@ -84,6 +84,7 @@ import {
   applicationConnectionStatusRateLimitMiddleware,
   handshakeRateLimitMiddleware,
 } from "./middleware/security.js";
+import { usageTelemetry } from "./middleware/usage-telemetry.js";
 import { configuredPodAdminBase } from "./pod-admin-config.js";
 import { registerInviteBounce } from "./invite-bounce.js";
 import { registerLinkCloudBounce } from "./link-cloud-bounce.js";
@@ -282,6 +283,9 @@ app.use("*", podEdgeCorsMiddleware);
 app.use("*", requestSizeLimit); // Max 10MB requests
 // Mounted on "*" BEFORE every route, so tRPC and the backend's own
 // /.ory/kratos/public/* proxy (pod-admin's whoami) are keyed alike.
+// Usage telemetry (0364) wraps the limiter so it counts the limiter's own
+// 429s too; a separate middleware, the limiter itself is untouched.
+app.use("*", usageTelemetry.middleware);
 app.use("*", rateLimitMiddleware); // multi-class; Bearer, session or IP keyed
 app.use("*", secureHeaders()); // Hono built-in security headers
 
@@ -360,7 +364,7 @@ app.get("/health", async (c) => {
     //
     // DO NOT gate a deploy check on this field: it is not derived from the
     // running build, so it looks identical whether or not a deploy landed.
-    apiTypesVersion: "1.33.2",
+    apiTypesVersion: "1.34.0",
     mode: "multi-user",
     auth: "ory-stack",
     // Git SHA the running image was built from (see deploy/Dockerfile ARG
@@ -2275,6 +2279,12 @@ process.on("uncaughtException", (error) => {
     apiLogger.info(`${signal} received, shutting down gracefully`);
     if (config.server.localMode) {
       stopLocalSyncDriver();
+    }
+    try {
+      usageTelemetry.stop();
+      await usageTelemetry.flushNow();
+    } catch (err) {
+      apiLogger.error({ err }, "Error flushing usage telemetry");
     }
     try {
       await stopBoss();

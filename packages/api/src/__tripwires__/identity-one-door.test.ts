@@ -196,7 +196,7 @@ describe("tripwire: API-key identity has one door (resolveKeyIdentity)", () => {
   });
 
   it("the MCP attribution reject gate keys on the agent signal (admits agents)", () => {
-    const src = read("src/routers/mcp/http-handler.ts");
+    const src = read("src/routers/mcp/call-fence.ts");
     const at = src.indexOf("function shouldRejectUnattributedWrite");
     expect(at).toBeGreaterThan(-1);
     // The bare-key predicate must AND in `!isAgent` — otherwise a legitimate
@@ -206,7 +206,7 @@ describe("tripwire: API-key identity has one door (resolveKeyIdentity)", () => {
       body,
       "shouldRejectUnattributedWrite must consult the is-agent signal so a real " +
         "agent principal is ADMITTED, not rejected as an unattributed write."
-    ).toMatch(/!isAgent/);
+    ).toMatch(/!principal\.isAgent/);
   });
 });
 

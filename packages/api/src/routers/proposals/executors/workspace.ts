@@ -218,6 +218,17 @@ async function markApproved(
           {}),
         materializedWorkspaceId: applied.workspaceId,
         materializeStatus: applied.materializeStatus,
+        // Every space THIS approval minted (the template's own, then each
+        // required dependency it installed) — what an undo archives. A space
+        // that already existed (reused, composed onto, found) is not listed.
+        createdWorkspaceIds: [
+          ...(applied.materializeStatus === "created"
+            ? [applied.workspaceId]
+            : []),
+          ...applied.dependencies.flatMap((d) =>
+            d.action === "installed" && d.workspaceId ? [d.workspaceId] : []
+          ),
+        ],
       },
       reviewedBy: userId,
       reviewedAt: new Date(),

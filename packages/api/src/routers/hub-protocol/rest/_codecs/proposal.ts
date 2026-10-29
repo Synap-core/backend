@@ -530,6 +530,14 @@ export const ListProposalsQuerySchema = z
           "Combine with `status=all` to resolve ids whatever their status, and " +
           "a `limit` at least the batch size."
       ),
+    recipient: uuidQueryParam
+      .optional()
+      .describe(
+        "Only the intent actions sent to this person or company (entity " +
+          "id): the sends an app or an agent asked for through " +
+          "`POST /capabilities/execute` with `input.to`, e.g. those waiting " +
+          "for approval on a lead. A filter on the same floor and key grant."
+      ),
     limit: z.coerce
       .number()
       .int()

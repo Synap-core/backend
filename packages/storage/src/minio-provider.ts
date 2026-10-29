@@ -26,11 +26,14 @@ import type {
   UploadOptions,
   FileInfo,
   SignedUploadOptions,
+  DownloadStream,
+  DownloadStreamOptions,
 } from "./interface.js";
 import { StorageUploadUnavailableError } from "./interface.js";
 import { attachmentDisposition, buildEntityPath } from "./utils.js";
 import { fileChecksum } from "./checksum.js";
 import { uploadStreamToS3 } from "./s3-stream-upload.js";
+import { downloadStreamFromS3 } from "./s3-stream-download.js";
 
 export interface MinIOConfig {
   /** MinIO endpoint URL (e.g., "http://localhost:9000") */
@@ -245,6 +248,20 @@ export class MinIOStorageProvider implements IFileStorage {
     }
 
     return Buffer.concat(chunks);
+  }
+
+  async downloadStream(
+    path: string,
+    options?: DownloadStreamOptions
+  ): Promise<DownloadStream> {
+    await this.ensureBucket();
+
+    return downloadStreamFromS3({
+      client: this.client,
+      bucket: this.bucketName,
+      key: path,
+      maxBytes: options?.maxBytes,
+    });
   }
 
   async delete(path: string): Promise<void> {

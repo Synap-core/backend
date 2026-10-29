@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { TRPCError } from "@trpc/server";
 import { resolveConfinedWorkspace } from "../routers/hub-protocol/confine-workspace.js";
-import { shouldRejectUnattributedWrite } from "../routers/mcp/http-handler.js";
+import { shouldRejectUnattributedWrite } from "../routers/mcp/call-fence.js";
 
 /**
  * TRIPWIRE — pod-wide bridge model: pod-wide ≠ unattributed.
@@ -30,7 +30,7 @@ const OTHER = "22222222-2222-2222-2222-222222222222";
 const writeToolDefs = [
   { name: "synap_capture", annotations: { readOnlyHint: false } },
 ] as const;
-const writeCall = { method: "tools/call", params: { name: "synap_capture" } };
+const writeCall = "synap_capture";
 
 describe("pod-wide bridge — confinement (which workspace)", () => {
   it("UNBOUND service key is pod-wide: null request passes through, no 403", () => {
@@ -60,12 +60,10 @@ describe("pod-wide bridge — attribution (who) is preserved", () => {
     // The bridge key carries an acting user → the write is attributed and must
     // NOT be rejected by the attribution floor. Pod-wide + attributed = allowed.
     expect(
-      shouldRejectUnattributedWrite(
-        writeCall,
-        writeToolDefs,
-        "hub_inbound",
-        "some-linked-user-id"
-      )
+      shouldRejectUnattributedWrite(writeCall, writeToolDefs, {
+        keyType: "hub_inbound",
+        linkedUserId: "some-linked-user-id",
+      })
     ).toBe(false);
   });
 
@@ -73,15 +71,16 @@ describe("pod-wide bridge — attribution (who) is preserved", () => {
     // Bare key, no acting user → hard-reject. Making the key pod-wide (unbound)
     // must not change this outcome.
     expect(
-      shouldRejectUnattributedWrite(
-        writeCall,
-        writeToolDefs,
-        "hub_inbound",
-        null
-      )
+      shouldRejectUnattributedWrite(writeCall, writeToolDefs, {
+        keyType: "hub_inbound",
+        linkedUserId: null,
+      })
     ).toBe(true);
     expect(
-      shouldRejectUnattributedWrite(writeCall, writeToolDefs, "user_pat", null)
+      shouldRejectUnattributedWrite(writeCall, writeToolDefs, {
+        keyType: "user_pat",
+        linkedUserId: null,
+      })
     ).toBe(true);
   });
 
@@ -89,13 +88,11 @@ describe("pod-wide bridge — attribution (who) is preserved", () => {
     // A pod-wide agent (userType='agent', no linked human) is a legitimate
     // attributed principal — the is-agent signal admits it.
     expect(
-      shouldRejectUnattributedWrite(
-        writeCall,
-        writeToolDefs,
-        "hub_inbound",
-        null,
-        true
-      )
+      shouldRejectUnattributedWrite(writeCall, writeToolDefs, {
+        keyType: "hub_inbound",
+        linkedUserId: null,
+        isAgent: true,
+      })
     ).toBe(false);
   });
 });

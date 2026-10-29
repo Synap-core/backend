@@ -1,0 +1,17 @@
+auto-install-peers=true
+strict-peer-dependencies=false
+
+# ─── Flat node_modules ───────────────────────────────────────────────────────
+# Use npm-style hoisted install so every consumer in the monorepo resolves to
+# the same physical copy of each package. pnpm's default isolated install
+# creates per-peer-variant duplicates (pkg@x_react@19.1.0__rn@0.81.5 vs
+# pkg@x_react@19.2.4__rn@0.84.0) because synap-app and relay-app declare
+# different React / React Native versions. A second React is an "Invalid hook
+# call"; a second react-native-reanimated / react-native-worklets is a native
+# module and JS plugin that disagree at runtime (see relay-app/metro.config.js
+# PINNED_PACKAGES). Flat install guarantees a single instance.
+#
+# Cost: loses pnpm's strict isolation (packages can reach deps they don't
+# declare). We accept this — one React / one native-module copy across the
+# workspace outweighs dependency hygiene at the package level.
+node-linker=hoisted

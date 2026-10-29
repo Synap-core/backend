@@ -26,6 +26,13 @@ import {
   MessageIndexer,
 } from "../indexers/index.js";
 
+/**
+ * Rows per Typesense import in a full reindex. Each entity/document row carries
+ * its body (up to 64k), read from storage in parallel, so a pod-wide pass is
+ * cut into batches rather than held whole in memory.
+ */
+const REINDEX_BATCH_SIZE = 200;
+
 export class IndexingService {
   private queue: Map<string, IndexingQueueItem[]> = new Map();
 
@@ -166,29 +173,11 @@ export class IndexingService {
         const entityRows = await db.query.entities.findMany({
           where: inArray(schema.entities.id, ids),
         });
-        const withFacets = await this.attachFacetSlugs(db, entityRows);
-        // Fold the linked document body into `content` so an entity is
-        // keyword-searchable by its attached document's text — the search
-        // counterpart of the entity-embedding wire-cut. The entities table has
-        // NO `content` column; the body lives in document_versions via
-        // entities.documentId. Without this, entity-indexer's `entity.content`
-        // read is always undefined.
-        const docIds = withFacets
-          .map((e) => e.documentId as string | null)
-          .filter((d): d is string => !!d);
-        const bodies = await this.loadDocumentBodies(db, docIds);
-        const indexable = [];
-        for (const e of withFacets) {
-          const docId = e.documentId as string | null;
-          // A body we could not read is NOT an empty body: keep the entity's
-          // previous index entry rather than overwrite its text with nothing.
-          if (docId && bodies.failed.has(docId)) continue;
-          if (docId && bodies.texts.has(docId)) {
-            e.content = bodies.texts.get(docId);
-          }
-          indexable.push(e);
-        }
-        return indexable;
+        return this.withStoredBodies(
+          "entities",
+          db,
+          await this.attachFacetSlugs(db, entityRows)
+        );
       }
 
       case "documents": {
@@ -200,22 +189,7 @@ export class IndexingService {
             searchIndexableDocumentWhere(schema.documents.metadata)
           ),
         });
-        // The documents table has NO `content` column. Index the stored body —
-        // the markdown as it is now (a person's saves cut no version row, so the
-        // latest row is stale), never legacy `yjs:` editor state.
-        const bodies = await this.loadDocumentBodies(
-          db,
-          docRows.map((d) => d.id)
-        );
-        return (
-          docRows
-            // Unreadable body ⇒ keep the previous index entry (see above).
-            .filter((d) => !bodies.failed.has(d.id))
-            .map((d) => ({
-              ...d,
-              content: bodies.texts.get(d.id) ?? null,
-            }))
-        );
+        return this.withStoredBodies("documents", db, docRows);
       }
 
       case "views":
@@ -402,25 +376,35 @@ export class IndexingService {
             continue;
         }
 
-        // 2. Convert and upsert into Typesense
-        const searchDocs = await indexer.toSearchDocuments(dbRecords);
+        // 2. Convert and upsert into Typesense, a batch at a time: entities and
+        // documents carry their stored body (up to 64k each), read here as
+        // `fetchDocuments` reads it, so a full reindex never writes a row
+        // WITHOUT the text an incremental index gave it.
         let upserted = 0;
-        if (searchDocs.length > 0) {
+        let failed = 0;
+        for (let i = 0; i < dbRecords.length; i += REINDEX_BATCH_SIZE) {
+          const batch = await this.withStoredBodies(
+            collection,
+            db,
+            dbRecords.slice(i, i + REINDEX_BATCH_SIZE)
+          );
+          const searchDocs = await indexer.toSearchDocuments(batch);
+          if (searchDocs.length === 0) continue;
           const importResult = await client
             .collections(collection)
             .documents()
             .import(searchDocs, { action: "upsert" });
-          upserted = importResult.filter((r: any) => r.success).length;
-          const failed = importResult.filter((r: any) => !r.success).length;
-          if (failed > 0) {
-            console.error(
-              `[fullReindex] ${failed} docs failed in ${collection}`
-            );
-          }
+          upserted += importResult.filter((r: any) => r.success).length;
+          failed += importResult.filter((r: any) => !r.success).length;
+        }
+        if (failed > 0) {
+          console.error(`[fullReindex] ${failed} docs failed in ${collection}`);
         }
 
         // 3. Delete Typesense docs that no longer exist in DB
-        // Use the export endpoint to stream all document IDs from Typesense
+        // Use the export endpoint to stream all document IDs from Typesense.
+        // A row whose body could not be read is still LIVE (its previous
+        // entry is kept), so liveIds counts every DB row, not the batches.
         const liveIds = new Set(dbRecords.map((r: any) => r.id));
         let deleted = 0;
         try {
@@ -451,7 +435,11 @@ export class IndexingService {
           // export may fail for empty collections — fine
         }
 
-        results[collection] = { upserted, deleted };
+        results[collection] = {
+          upserted,
+          deleted,
+          ...(failed > 0 ? { error: `${failed} docs failed to import` } : {}),
+        };
         console.log(
           `[fullReindex] ${collection}: upserted=${upserted}, deleted=${deleted}`
         );
@@ -534,6 +522,49 @@ export class IndexingService {
       } else {
         out.set(r.entityId, [r.workspaceId]);
       }
+    }
+    return out;
+  }
+
+  /**
+   * Fold each row's stored body into `content` — the tables have NO `content`
+   * column. An entity's body is its linked document's (`documentId`), so it is
+   * keyword-searchable by that text; a document's is its own. The body is the
+   * markdown as it is now (a person's saves cut no version row, so the latest
+   * row is stale), never legacy `yjs:` editor state.
+   *
+   * A body we could not read is NOT an empty body: that row is left out, so
+   * its previous index entry is kept rather than overwritten with no text.
+   * Other collections pass through.
+   */
+  private async withStoredBodies(
+    collection: string,
+    db: Awaited<ReturnType<typeof getDb>>,
+    rows: any[]
+  ): Promise<any[]> {
+    const bodyIdOf =
+      collection === "entities"
+        ? (r: any) => (r.documentId as string | null) ?? null
+        : collection === "documents"
+          ? (r: any) => r.id as string
+          : null;
+    if (!bodyIdOf || rows.length === 0) return rows;
+
+    const bodies = await this.loadDocumentBodies(
+      db,
+      rows.map(bodyIdOf).filter((d): d is string => !!d)
+    );
+    const out = [];
+    for (const r of rows) {
+      const bodyId = bodyIdOf(r);
+      if (bodyId && bodies.failed.has(bodyId)) continue;
+      out.push(
+        collection === "documents"
+          ? { ...r, content: bodies.texts.get(r.id) ?? null }
+          : bodyId && bodies.texts.has(bodyId)
+            ? { ...r, content: bodies.texts.get(bodyId) }
+            : r
+      );
     }
     return out;
   }

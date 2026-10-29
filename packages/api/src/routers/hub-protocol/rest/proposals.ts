@@ -132,7 +132,7 @@ export function registerProposalsRoutes(app: HubHono): void {
       },
       400: {
         description:
-          "Malformed sessionId/workspaceId/proposalIds, or unknown status / view",
+          "Malformed sessionId/workspaceId/recipient/proposalIds, or unknown status / view",
         schema: ErrorSchema,
       },
       403: { description: "Missing scope", schema: ErrorSchema },
@@ -413,6 +413,7 @@ export function registerProposalsRoutes(app: HubHono): void {
     const userId = c.req.query("userId") || (c.get("userId") as string);
     const workspaceId = c.req.query("workspaceId");
     const sessionId = c.req.query("sessionId");
+    const recipient = c.req.query("recipient");
     // Shape-check the uuid FILTERS before forwarding. Both reach `uuid` columns;
     // a malformed value makes Postgres throw invalid-uuid-syntax, which the
     // catch below maps to 500 — so a client typo reported as a server fault.
@@ -422,6 +423,7 @@ export function registerProposalsRoutes(app: HubHono): void {
     for (const [name, value] of [
       ["sessionId", sessionId],
       ["workspaceId", workspaceId],
+      ["recipient", recipient],
     ] as const) {
       if (value && !isUuid(value)) {
         return c.json(
@@ -543,6 +545,7 @@ export function registerProposalsRoutes(app: HubHono): void {
         status,
         ...(sessionId ? { sessionId } : {}),
         ...(proposalIds ? { proposalIds } : {}),
+        ...(recipient ? { recipient } : {}),
         limit,
         offset,
       });

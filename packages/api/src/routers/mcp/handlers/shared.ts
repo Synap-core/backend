@@ -25,6 +25,7 @@ import { entityDataNeighbors } from "../../../services/object-graph/entity-data-
 import type { LinkEndpointType } from "@synap/playbooks";
 import { getDb } from "@synap/database";
 import { createLogger } from "@synap-core/core";
+import { fenceUntrustedData } from "../../../services/agent-dispatch/binding-call.js";
 import {
   db,
   entities,
@@ -193,6 +194,38 @@ const PROPOSAL_REINFORCEMENT_HINT =
 const PROPOSAL_DUPLICATE_HINT =
   "An identical proposal is already pending review — this did NOT create a new one. Do not re-propose; give the user this link to the existing proposal.";
 
+/**
+ * Text a person other than the caller, or the outside world, wrote: a
+ * teammate's document, an external channel message, an answer built from
+ * pages kept in the Library. A handler marks it with {@link untrusted}; `ok()`
+ * — the one serializer every tool result passes — writes it FENCED
+ * (`fenceUntrustedData`, the fence the session room, the change feed and the
+ * external-agent wake use), so an instruction planted in it reads as data to
+ * the agent, never as Synap speaking (audit F5, 2026-10-28). The caller's own
+ * text is never marked and stays as written.
+ */
+export class UntrustedText {
+  constructor(
+    readonly text: string,
+    /** Where it came from, said in the fence header ("a teammate's document"). */
+    readonly source: string
+  ) {}
+}
+
+/** Mark `text` as third-party; a non-string passes through untouched. */
+export function untrusted<T>(text: T, source: string): T | UntrustedText {
+  return typeof text === "string" && text !== ""
+    ? new UntrustedText(text, source)
+    : text;
+}
+
+/** The JSON replacer that applies the fence — used by `ok()` only. */
+function fenceUntrustedReplacer(_key: string, value: unknown): unknown {
+  return value instanceof UntrustedText
+    ? fenceUntrustedData(value.text, value.source)
+    : value;
+}
+
 export function ok(data: unknown): CallToolResult {
   // Best-effort: inject the canonical clickable `link` (`${PUBLIC_URL}/open/<id>`)
   // whenever the result carries a primary object id (see primaryObjectId). The
@@ -238,7 +271,13 @@ export function ok(data: unknown): CallToolResult {
     // as a formatted document: the pretty-printer's indentation was a measured
     // 33-36% of the BYTES across nine entity types. (Byte savings only — nobody
     // has measured the token effect, and whitespace tokenizes efficiently.)
-    content: [{ type: "text", text: JSON.stringify(payload) }],
+    // Third-party text is fenced HERE, the one place (see UntrustedText).
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify(payload, fenceUntrustedReplacer),
+      },
+    ],
   };
 }
 

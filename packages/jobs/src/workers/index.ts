@@ -15,6 +15,7 @@ import {
   handleSearchIndex,
   handleBulkIndex,
   handleFullReindex,
+  enqueueSearchReindexIfBehind,
 } from "./search-worker.js";
 import { handleWorkspaceInit } from "./workspace-init.js";
 import { handleCrossChannelNotify } from "./cross-channel-notifier.js";
@@ -78,6 +79,10 @@ import {
   FEDERATION_RECEIPT_CLEANUP_QUEUE,
   handleFederationReceiptCleanup,
 } from "./federation-receipt-cleanup.js";
+import {
+  API_USAGE_RETENTION_QUEUE,
+  handleApiUsageRetention,
+} from "./api-usage-retention.js";
 import {
   PUSH_DEVICE_SWEEP_QUEUE,
   PUSH_RECEIPTS_QUEUE,
@@ -338,6 +343,8 @@ const ALL_QUEUES = [
   "relation-backfill",
   NOTIFICATION_CLEANUP_QUEUE,
   FEDERATION_RECEIPT_CLEANUP_QUEUE,
+  // API usage telemetry: 30-day retention of api_usage_buckets (0364).
+  API_USAGE_RETENTION_QUEUE,
   // Phone push hygiene: Expo receipts per send + the daily unused-phone sweep.
   PUSH_RECEIPTS_QUEUE,
   PUSH_DEVICE_SWEEP_QUEUE,
@@ -594,6 +601,13 @@ export async function registerAllWorkers(): Promise<void> {
   try {
     await collectionService.initializeCollections();
     logger.info("Typesense collections initialized");
+    // An indexer change reaches existing rows only through a full reindex:
+    // queue it once when this pod's index predates the indexer.
+    try {
+      await enqueueSearchReindexIfBehind(boss);
+    } catch (err) {
+      logger.warn({ err }, "Search index version check failed (non-fatal)");
+    }
   } catch (err) {
     logger.warn(
       { err },
@@ -787,6 +801,12 @@ export async function registerAllWorkers(): Promise<void> {
     handleFederationReceiptCleanup()
   );
   logger.info("Registered worker: federation-receipt-cleanup");
+
+  // API usage retention (cron: daily at 2:25 AM UTC)
+  await boss.work(API_USAGE_RETENTION_QUEUE, async () => {
+    await handleApiUsageRetention();
+  });
+  logger.info("Registered worker: api-usage-retention");
 
   // Phone push hygiene (receipts: ~15 min after each send; sweep: daily)
   await boss.work(PUSH_RECEIPTS_QUEUE, async ([job]: any[]) =>

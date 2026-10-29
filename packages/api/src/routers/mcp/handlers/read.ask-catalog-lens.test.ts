@@ -91,7 +91,7 @@ describe("synap_ask — catalog lens", () => {
     vi.clearAllMocks();
     getAccessibleProfiles.mockResolvedValue([]);
     askMock.mockResolvedValue({ answers: [], routedTo: [], pending: null });
-    synthesizeAnswerMock.mockResolvedValue({ answer: "ok" });
+    synthesizeAnswerMock.mockResolvedValue({ answer: "ok", sources: [] });
     // Accessible by default; the leak case overrides this explicitly below.
     validateWorkspaceAccess.mockImplementation(
       async (_u: string, requested: string[]) =>

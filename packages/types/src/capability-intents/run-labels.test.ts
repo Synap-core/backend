@@ -19,6 +19,10 @@ describe("intentRunLabel", () => {
     );
   });
 
+  it("edit_video reads as the founder's sentence (decision ac1ba2b6)", () => {
+    expect(intentRunLabel("edit_video")).toBe("Edit videos with your tools");
+  });
+
   it("an unknown slug still reads as a sentence, never a bare slug", () => {
     expect(intentRunLabel("make_coffee")).toBe("Run your tools to make coffee");
   });

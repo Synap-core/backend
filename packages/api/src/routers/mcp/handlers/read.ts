@@ -35,7 +35,9 @@ import {
   getUserAccessibleWorkspaceIds,
 } from "../../hub-protocol/rest/_shared.js";
 import { entitiesRouter as regularEntitiesRouter } from "../../entities.js";
-import { getDb } from "@synap/database";
+import { documents, eq, getDb } from "@synap/database";
+import { classifyRoomAuthor } from "../../../services/focus-sessions/room-messages.js";
+import { AccessContext, scopedDb } from "../../../access/index.js";
 import {
   parseEntityListSort,
   type EntityListOrderBy,
@@ -54,6 +56,7 @@ import {
 } from "../../../services/object-graph/graph-service.js";
 import {
   ok,
+  untrusted,
   requireScope,
   buildGraphEnvelope,
   resolveEntityWorkspaceId,
@@ -207,6 +210,12 @@ export const readHandlers: McpHandlerMap = {
           "The matched sources below are real; tell the user the AI answer layer is degraded (not that nothing was found).",
       });
     }
+    // A Library item is a page or file from outside the pod: an answer
+    // composed from one carries its words, so it is fenced (`untrusted`,
+    // audit F5). An answer built only from the pod's own records is not.
+    const fromLibrary = synthesis.sources.some(
+      (source) => source.substrate === "library"
+    );
     // DOOR PARITY: `degraded` is the retrieval-health signal `ask()` already
     // computes (a substrate outage, a keyword-only fallback after the vector
     // index went down). The hub `/answer` door has forwarded it since the
@@ -215,6 +224,14 @@ export const readHandlers: McpHandlerMap = {
     // degraded one. `truncated` rides along inside `...synthesis`.
     return ok({
       ...synthesis,
+      ...(fromLibrary
+        ? {
+            answer: untrusted(
+              synthesis.answer,
+              "an answer built from pages and files kept in the Library"
+            ),
+          }
+        : {}),
       ...sourcesBlock,
       ...pendingBlock,
       ...spacesBlock,
@@ -307,12 +324,32 @@ export const readHandlers: McpHandlerMap = {
       documentId: args.documentId as string,
       ...(args.format === "readable" ? { format: "readable" as const } : {}),
     });
-    return ok(result);
+    // Another person's document is their text, not the caller's: fenced
+    // (`untrusted`, audit F5). The author is read through the caller's own
+    // floor (the read above already admitted the document); a row that cannot
+    // be read is fenced too (fail closed).
+    const [row] = await scopedDb(AccessContext.operator({ userId })).findMany<{
+      userId: string;
+    }>(documents, {
+      where: eq(documents.id, result.document.id),
+      columns: { userId: true },
+    });
+    if (row?.userId === userId) return ok(result);
+    return ok({
+      ...result,
+      document: {
+        ...result.document,
+        content: untrusted(
+          result.document.content,
+          "a document another person wrote"
+        ),
+      },
+    });
   },
   synap_get_thread_context: async (
     ctx: McpToolContext
   ): Promise<CallToolResult> => {
-    const { toolName, args, apiKeyScopes, caller } = ctx;
+    const { toolName, args, userId, apiKeyScopes, caller } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     // `limit` used to reach nothing — every call returned 50 messages.
     // Clamped, not refused: an over-large ask still gets the cap.
@@ -320,7 +357,28 @@ export const readHandlers: McpHandlerMap = {
       threadId: args.threadId as string,
       limit: pageLimit(args.limit, 50, 100),
     });
-    return ok(result);
+    // Only the caller's own typing is theirs. A teammate's, an agent's, an
+    // external contact's (WhatsApp, email, Telegram) or the pod's own message
+    // is fenced (`untrusted`, audit F5), by the ONE room rule
+    // (`classifyRoomAuthor`) judged against the caller.
+    return ok({
+      ...result,
+      messages: result.messages.map((m) =>
+        m.userId &&
+        classifyRoomAuthor(
+          { role: m.role, authorType: m.authorType, userId: m.userId },
+          userId
+        ) === "person"
+          ? m
+          : {
+              ...m,
+              content: untrusted(
+                m.content,
+                `a channel message (${m.authorType ?? "unknown"} author)`
+              ),
+            }
+      ),
+    });
   },
   /**
    * ONE proposal, in full — the "why did my write not land?" door.
@@ -527,8 +585,13 @@ export const readHandlers: McpHandlerMap = {
         | "entity"
         | "run"
         | "workspace"
+        | "usage"
         | undefined,
       workspaceId: (args.workspaceId as string | undefined) ?? undefined,
+      since: args.since as string | undefined,
+      groupBy: args.groupBy as string[] | undefined,
+      apiKeyId: args.apiKeyId as string | undefined,
+      client: args.client as string | undefined,
       stuckThresholdHours: args.stuckThresholdHours as number | undefined,
       flowType: args.flowType as
         | "automation"

@@ -1,0 +1,36 @@
+{
+  "private": true,
+  "type": "module",
+  "name": "synap-monorepo-ci-slice",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "electron",
+      "esbuild",
+      "node-pty"
+    ],
+    "overrides": {
+      "react-native-svg": "15.15.4",
+      "lucide-react": "0.555.0",
+      "lucide-react-native": "0.400.0",
+      "react": "19.2.3",
+      "react-dom": "19.2.3",
+      "@types/react": "~19.2.0",
+      "react-native": "0.86.3",
+      "@synap-core/core": "link:synap-backend/packages/core",
+      "@synap/database": "link:synap-backend/packages/database",
+      "@synap-core/api-types":"link:synap-backend/packages/api-types",
+      "@synap-core/types": "link:synap-backend/packages/types",
+      "@synap-core/markdown-core": "link:synap-backend/packages/markdown-core",
+      "@synap-core/control-plane-types": "link:synap-app/packages/core/control-plane-types",
+      "@synap-core/pricing": "link:synap-control-plane-api/packages/pricing",
+      "@types/react-dom": "~19.2.0"
+    },
+    "peerDependencyRules": {
+      "ignoreMissing": [
+        "@synap-core/core",
+        "@synap/database"
+      ]
+    }
+  },
+  "packageManager": "pnpm@10.28.0"
+}

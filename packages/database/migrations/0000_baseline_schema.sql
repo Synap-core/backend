@@ -5412,3 +5412,27 @@ CREATE INDEX IF NOT EXISTS "idx_box_runs_session"
 CREATE INDEX IF NOT EXISTS "idx_box_runs_skill"
   ON "box_runs" ("skill_id")
   WHERE "skill_id" IS NOT NULL;
+
+-- 0364: api usage buckets — calls per key, client, conversation, limiter
+-- class and outcome, per 5 minutes. Telemetry written by the API's usage
+-- middleware (one batched upsert a minute), kept 30 days. Mirrors
+-- 0364_api_usage_buckets.sql.
+CREATE TABLE IF NOT EXISTS "api_usage_buckets" (
+  "bucket_start"    timestamptz NOT NULL,
+  "api_key_id"      uuid,
+  "limiter_key"     text        NOT NULL,
+  "client"          text        NOT NULL,
+  "conversation_id" text,
+  "rl_class"        text        NOT NULL,
+  "outcome"         text        NOT NULL,
+  "calls"           integer     NOT NULL DEFAULT 0,
+  "held_ms"         bigint      NOT NULL DEFAULT 0,
+  CONSTRAINT "api_usage_buckets_dims_unique" UNIQUE NULLS NOT DISTINCT
+    ("bucket_start", "api_key_id", "limiter_key", "client", "conversation_id", "rl_class", "outcome")
+);
+
+CREATE INDEX IF NOT EXISTS "idx_api_usage_buckets_key_time"
+  ON "api_usage_buckets" ("api_key_id", "bucket_start");
+
+CREATE INDEX IF NOT EXISTS "idx_api_usage_buckets_time"
+  ON "api_usage_buckets" ("bucket_start");

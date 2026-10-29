@@ -70,6 +70,13 @@ import {
 import { recordDomainMutation } from "../utils/domain-mutation.js";
 import { isConnectionAuthError } from "../services/connection-health/notify-connector-unhealthy.js";
 import { CAPABILITY_RUN_PROPOSAL_TYPE } from "../services/proposals/proposal-class.js";
+import {
+  describeFileBody,
+  encodeProviderFileBody,
+  ProviderFileBodyError,
+  type EncodedFileBody,
+  type ProviderFileBody,
+} from "./provider-file-body.js";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "external-dispatch" });
@@ -1226,6 +1233,15 @@ export interface TriggerProviderActionInput {
    * `runSkillInSandbox`); no request door forwards it.
    */
   verbAct?: { skillId: string; toolIds: readonly string[] };
+  /**
+   * A body that carries POD FILES (`provider-file-body.ts`): multipart with
+   * file parts streamed from storage, or JSON with base64 slots. Instead of
+   * `body`, never with it. Each file is a storage key the HOST resolved after
+   * re-checking the file, so — like `verbAct` — no request door forwards this
+   * field, and a call carrying it is never stored in a proposal (refused
+   * instead). `vault://` tools only.
+   */
+  fileBody?: ProviderFileBody;
 }
 
 export interface TriggerProviderActionResult {
@@ -1757,7 +1773,13 @@ const vaultHandler: SchemeHandler = async ({ input, tool }) => {
   // Content-Type and the auth header set below always WIN — a custom header can
   // never override auth or the structural Content-Type.
   const headers: Record<string, string> = { ...(input.headers ?? {}) };
-  if (body !== undefined) headers["Content-Type"] = "application/json";
+  let fileBody: EncodedFileBody | undefined;
+  if (input.fileBody) {
+    const encoded = await encodeFileBodyOrRefuse(input.fileBody);
+    if (!encoded.ok) return encoded.result;
+    fileBody = encoded.body;
+    headers["Content-Type"] = fileBody.contentType;
+  } else if (body !== undefined) headers["Content-Type"] = "application/json";
 
   // Inject the secret per config — header or query. Never logged.
   if (auth.in === "query") {
@@ -1766,13 +1788,57 @@ const vaultHandler: SchemeHandler = async ({ input, tool }) => {
     headers[auth.name] = `${auth.prefix}${secret}`;
   }
 
-  const sent = await sendVaultRequest(url, {
-    method: method.toUpperCase(),
-    headers,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
+  const sent = await sendVaultRequest(
+    url,
+    {
+      method: method.toUpperCase(),
+      headers,
+      body: fileBody
+        ? fileBody.body
+        : body !== undefined
+          ? JSON.stringify(body)
+          : undefined,
+    },
+    fileBody
+  );
   return sent.result;
 };
+
+/**
+ * Encode a file body, turning its typed refusal (file gone, over a cap, a bad
+ * shape, storage failing) into the dispatch result. Nothing was sent.
+ */
+async function encodeFileBodyOrRefuse(
+  fileBody: ProviderFileBody
+): Promise<
+  | { ok: true; body: EncodedFileBody }
+  | { ok: false; result: TriggerProviderActionResult }
+> {
+  try {
+    return { ok: true, body: await encodeProviderFileBody(fileBody) };
+  } catch (err) {
+    if (err instanceof ProviderFileBodyError) {
+      return { ok: false, result: fileBodyFailureResult(err) };
+    }
+    throw err;
+  }
+}
+
+function fileBodyFailureResult(
+  err: ProviderFileBodyError
+): TriggerProviderActionResult {
+  return {
+    success: false,
+    status: err.status,
+    errorCode:
+      err.code === "file_not_found"
+        ? "not_found"
+        : err.code === "file_unreadable"
+          ? "unavailable"
+          : "bad_request",
+    error: err.message,
+  };
+}
 
 /**
  * Compose a vault tool's outbound URL and pass it through the SSRF guard.
@@ -1828,12 +1894,27 @@ function composeVaultUrl(
  */
 async function sendVaultRequest(
   url: URL,
-  init: { method: string; headers: Record<string, string>; body?: string }
+  init: {
+    method: string;
+    headers: Record<string, string>;
+    body?: string | AsyncIterable<Uint8Array>;
+  },
+  fileBody?: EncodedFileBody
 ): Promise<{ result: TriggerProviderActionResult; parsed?: unknown }> {
   let res: Response;
   try {
-    res = await safeExternalFetch(url.toString(), init);
+    res = await safeExternalFetch(
+      url.toString(),
+      typeof init.body === "object"
+        ? // A streamed request body (multipart file parts) must say so.
+          ({ ...init, duplex: "half" } as unknown as RequestInit)
+        : (init as RequestInit)
+    );
   } catch (err) {
+    // A streamed file part that failed (gone, over its cap) aborted the
+    // request: report the file, not "the provider was unreachable".
+    const failed = fileBody?.failure();
+    if (failed) return { result: fileBodyFailureResult(failed) };
     return {
       result: {
         success: false,
@@ -1945,28 +2026,51 @@ async function sessionAuthCall(args: {
 
     // Custom headers FIRST so the token header and Content-Type always win.
     const headers: Record<string, string> = { ...(input.headers ?? {}) };
+    // Session-derived fields (e.g. B2's accountId) fill ONLY the slots the
+    // request body declares (key present, any value) and OVERRIDE that value —
+    // they describe the credential. An operation that does not take the field
+    // never receives it (B2 rejects unknown fields).
+    const fillSessionSlots = (
+      declared: Record<string, unknown>
+    ): Record<string, unknown> => {
+      const fill = Object.fromEntries(
+        Object.entries(session.bodyValues).filter(([k]) => k in declared)
+      );
+      return Object.keys(fill).length > 0 ? { ...declared, ...fill } : declared;
+    };
     let body = input.body;
-    if (body !== undefined) {
+    // Built per attempt: a streamed body cannot be sent twice.
+    let fileBody: EncodedFileBody | undefined;
+    if (input.fileBody) {
+      const encoded = await encodeFileBodyOrRefuse(
+        input.fileBody.encoding === "json-base64"
+          ? { ...input.fileBody, json: fillSessionSlots(input.fileBody.json) }
+          : input.fileBody
+      );
+      if (!encoded.ok) return { done: true, result: encoded.result };
+      fileBody = encoded.body;
+      headers["Content-Type"] = fileBody.contentType;
+    } else if (body !== undefined) {
       headers["Content-Type"] = "application/json";
-      // Session-derived fields (e.g. B2's accountId) fill ONLY the slots the
-      // request body declares (key present, any value) and OVERRIDE that value —
-      // they describe the credential. An operation that does not take the field
-      // never receives it (B2 rejects unknown fields).
       if (typeof body === "object" && body !== null && !Array.isArray(body)) {
-        const declared = body as Record<string, unknown>;
-        const fill = Object.fromEntries(
-          Object.entries(session.bodyValues).filter(([k]) => k in declared)
-        );
-        if (Object.keys(fill).length > 0) body = { ...declared, ...fill };
+        body = fillSessionSlots(body as Record<string, unknown>);
       }
     }
     headers[config.token.header] = `${config.token.prefix}${session.token}`;
 
-    const sent = await sendVaultRequest(target.url, {
-      method: input.method.toUpperCase(),
-      headers,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    });
+    const sent = await sendVaultRequest(
+      target.url,
+      {
+        method: input.method.toUpperCase(),
+        headers,
+        body: fileBody
+          ? fileBody.body
+          : body !== undefined
+            ? JSON.stringify(body)
+            : undefined,
+      },
+      fileBody
+    );
     return {
       done: false,
       token: session.token,
@@ -2315,6 +2419,16 @@ export async function triggerProviderAction(
 ): Promise<TriggerProviderActionResult> {
   const { provider, workspaceId } = input;
 
+  if (input.fileBody && input.body !== undefined) {
+    return {
+      success: false,
+      status: 400,
+      errorCode: "bad_request",
+      error:
+        "A provider call carries either a JSON body or a file body, not both.",
+    };
+  }
+
   // Stage worker ceiling (work model L4): a WRITE made inside a worker's
   // session — auto, to be filed, or an approved replay — is not made past the
   // day's irreversible-send ceiling (see worker-send-ceiling.ts). A read sends
@@ -2474,6 +2588,17 @@ export async function triggerProviderAction(
   // A call inside an already-decided verb, to one of ITS OWN required tools, is
   // that verb's act — see `verbAct`. The tool's approval floor still holds: an
   // unapproved tool falls through to the gate, which refuses it.
+  // Only the vault:// handler writes its own HTTP body; the broker and MCP
+  // doors carry JSON only, so a file body is refused there, before the gate.
+  if (input.fileBody && !/^vault:\/\//i.test(credentialRef)) {
+    return {
+      success: false,
+      status: 400,
+      errorCode: "bad_request",
+      error: `Files can be sent only to API-key (vault://) tools today; "${tool.name}" takes a JSON body only.`,
+    };
+  }
+
   const coveredByVerb =
     !!input.verbAct &&
     tool.approved === true &&
@@ -2556,11 +2681,25 @@ export async function triggerProviderAction(
           provider,
           method: input.method,
           path: input.path,
+          ...(input.fileBody
+            ? { files: describeFileBody(input.fileBody) }
+            : {}),
         },
       };
     }
 
     if (decision.decision === "propose") {
+      if (input.fileBody) {
+        // A proposal stores the call to replay it; a file body names storage
+        // keys the host resolved for THIS run, so it is never stored. Files
+        // leave only inside an act already decided (a verb's own tool).
+        return {
+          success: false,
+          status: 409,
+          errorCode: "bad_request",
+          error: `Sending files to "${tool.name}" needs this run to be approved first; the call was not stored and nothing was sent.`,
+        };
+      }
       // The door PRODUCES a reviewable proposal that,
       // on approval, re-enters this same impl (Door 2) with `alreadyApproved`.
       // We carry the full provider call in `data` so the executor can replay it.
@@ -2748,6 +2887,9 @@ export async function triggerProviderAction(
           sourceProposalId: input.sourceProposalId ?? null,
           // The verb this call was part of (one governed act), when it was.
           viaVerbSkillId: coveredByVerb ? input.verbAct!.skillId : null,
+          ...(input.fileBody
+            ? { files: describeFileBody(input.fileBody) }
+            : {}),
         },
       });
     } catch (err) {
