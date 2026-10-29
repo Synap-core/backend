@@ -731,7 +731,7 @@ const captureHandler: McpToolHandler = async (
       await import("../../../services/intake/record-session-run-manifest.js");
     const { ensureIntakeSession } =
       await import("../../../services/intake/ensure-intake-session.js");
-    const { computeCaptureGraphIdempotencyKey, findPendingTextMatches } =
+    const { computeCaptureGraphIdempotencyKey } =
       await import("../../../utils/pending-capture-dedup.js");
     const { resolveAgentRunReceipt } =
       await import("../../../utils/permission-check.js");
@@ -811,6 +811,8 @@ const captureHandler: McpToolHandler = async (
     // Never a refusal; a failed scan only drops the advice.
     let pendingMatches: PendingTextMatch[] = [];
     try {
+      const { findPendingTextMatches } =
+        await import("../../../utils/pending-capture-dedup.js");
       pendingMatches = await findCapturePendingMatches(
         (query) =>
           findPendingTextMatches(db, {
