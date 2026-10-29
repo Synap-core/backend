@@ -414,7 +414,6 @@ function RedeemForm() {
       ) : null}
       <Input
         label="Account email"
-        labelPlacement="outside"
         type="email"
         autoComplete="email"
         value={email}
@@ -426,7 +425,6 @@ function RedeemForm() {
       />
       <Input
         label="Recovery code"
-        labelPlacement="outside"
         placeholder="XXXX-XXXX-XXXX-XXXX"
         autoComplete="one-time-code"
         autoCapitalize="characters"

@@ -877,8 +877,9 @@ function NoteField({
     );
   }
   return (
-    <Input
+    <Textarea
       size="sm"
+      minRows={1}
       label={ASK_COPY.note}
       value={value}
       onValueChange={onChange}
@@ -932,8 +933,9 @@ function ChooseControl({
         )}
       </RadioGroup>
       {isOther && (
-        <Input
+        <Textarea
           size="sm"
+          minRows={1}
           label="Your own answer"
           value={other}
           onValueChange={setOther}
@@ -1094,7 +1096,16 @@ function FieldInput({
         />
       );
     case "text":
-      return (
+      // A typed value (email, url, tel, date) keeps its native input; plain
+      // text starts one line tall and grows, so a sentence wraps in view.
+      return field.inputType === "text" ? (
+        <Textarea
+          {...common}
+          minRows={1}
+          value={typeof value === "string" ? value : ""}
+          onValueChange={onChange}
+        />
+      ) : (
         <Input
           {...common}
           type={field.inputType}

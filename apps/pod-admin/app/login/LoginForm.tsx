@@ -626,7 +626,6 @@ function FlowFields({
           <Input
             key={`${name}-${idx}`}
             label={String(label)}
-            labelPlacement="outside"
             name={name}
             type={
               type === "password"

@@ -177,7 +177,6 @@ export function SetupForm() {
             {!hasMagicToken ? (
               <Input
                 label="Admin token (PROVISIONING_TOKEN)"
-                labelPlacement="outside"
                 type="password"
                 value={adminToken}
                 onValueChange={setAdminToken}
@@ -192,7 +191,6 @@ export function SetupForm() {
 
             <Input
               label="Email"
-              labelPlacement="outside"
               type="email"
               value={email}
               onValueChange={setEmail}
@@ -205,7 +203,6 @@ export function SetupForm() {
 
             <Input
               label="Display name"
-              labelPlacement="outside"
               type="text"
               value={name}
               onValueChange={setName}
@@ -218,7 +215,6 @@ export function SetupForm() {
 
             <Input
               label="Password"
-              labelPlacement="outside"
               type="password"
               value={password}
               onValueChange={setPassword}
