@@ -180,3 +180,109 @@ export function normalizeScopes(
     .map((x) => x.trim())
     .filter(Boolean);
 }
+
+// ─── The list's toolbar: search, type, status, order ────────────────────────
+
+/** What the status filter picks; `live` (every key not revoked) is the default. */
+export type KeyStatusFilter =
+  "live" | "expiring" | "expired" | "revoked" | "all";
+
+export const KEY_STATUS_FILTERS: readonly {
+  key: KeyStatusFilter;
+  label: string;
+}[] = [
+  { key: "live", label: "Active" },
+  { key: "expiring", label: "Expiring soon" },
+  { key: "expired", label: "Expired" },
+  { key: "revoked", label: "Revoked" },
+  { key: "all", label: "All statuses" },
+];
+
+export type KeySort = "recent" | "oldest" | "name" | "last-used";
+
+export const KEY_SORTS: readonly { key: KeySort; label: string }[] = [
+  { key: "recent", label: "Newest first" },
+  { key: "oldest", label: "Oldest first" },
+  { key: "name", label: "Name A–Z" },
+  { key: "last-used", label: "Recently used" },
+];
+
+export interface KeyListQuery {
+  /** Free text: name, prefix, holder, type, scopes, the person. */
+  search: string;
+  /** null = every type. */
+  type: KeyCategory | null;
+  status: KeyStatusFilter;
+}
+
+function matchesStatus(k: UnifiedKey, status: KeyStatusFilter): boolean {
+  if (status === "all") return true;
+  if (status === "revoked") return !k.isActive;
+  if (!k.isActive) return false;
+  if (status === "live") return true;
+  const label = keyStatus(k).label;
+  return status === "expired" ? label === "Expired" : label === "Expiring soon";
+}
+
+/** Every word of the search must appear in what the row shows about the key. */
+function matchesSearch(k: UnifiedKey, search: string): boolean {
+  const words = search.toLowerCase().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return true;
+  const hay = [
+    k.keyName,
+    k.keyPrefix,
+    holderName(k),
+    CATEGORY_LABEL[categorize(k)],
+    ...normalizeScopes(k.scope),
+    k.user?.name,
+    k.user?.email,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  return words.every((w) => hay.includes(w));
+}
+
+const time = (d: Date | string | null | undefined): number =>
+  d ? new Date(d).getTime() : 0;
+
+const KEY_ORDER: Record<KeySort, (a: UnifiedKey, b: UnifiedKey) => number> = {
+  recent: (a, b) => time(b.createdAt) - time(a.createdAt),
+  oldest: (a, b) => time(a.createdAt) - time(b.createdAt),
+  name: (a, b) =>
+    a.keyName.localeCompare(b.keyName, undefined, { sensitivity: "base" }),
+  // Never used sorts last (time 0).
+  "last-used": (a, b) => time(b.lastUsedAt) - time(a.lastUsedAt),
+};
+
+/** The keys the toolbar shows, in its order. */
+export function queryKeys(
+  keys: readonly UnifiedKey[],
+  q: KeyListQuery,
+  sort: KeySort
+): UnifiedKey[] {
+  return keys
+    .filter(
+      (k) =>
+        matchesStatus(k, q.status) &&
+        (q.type === null || categorize(k) === q.type) &&
+        matchesSearch(k, q.search)
+    )
+    .sort(KEY_ORDER[sort]);
+}
+
+/**
+ * How many keys each type would show under the current search and status —
+ * the counts beside the type filter's choices. Types with none are left out.
+ */
+export function keyTypeCounts(
+  keys: readonly UnifiedKey[],
+  q: Omit<KeyListQuery, "type">
+): Map<KeyCategory, number> {
+  const counts = new Map<KeyCategory, number>();
+  for (const k of queryKeys(keys, { ...q, type: null }, "recent")) {
+    const c = categorize(k);
+    counts.set(c, (counts.get(c) ?? 0) + 1);
+  }
+  return counts;
+}
