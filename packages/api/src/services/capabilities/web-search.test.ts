@@ -1,11 +1,17 @@
 /**
- * `searchWeb` (the `web.search` verb): it only ever runs a provider the caller
- * NAMED, through `executeCapability`, and every other path is an honest
- * `blocked` / `failed` that ran nothing.
+ * `searchWeb` (the `web.search` verb): it runs a provider the caller NAMED, or
+ * the one installed (`search_web`, 0360), through `executeCapability`, and
+ * every other path is an honest `blocked` / `failed` that ran nothing.
  */
 import { describe, it, expect, vi } from "vitest";
 import { searchWeb, type WebSearchDeps } from "./web-search.js";
 import type { IntentVerbMatch } from "./capability-intent-index.js";
+import type { CatalogCacheEntry } from "./catalog-cache-query.js";
+
+// The production lookup, for the one test that does not inject `listProviders`.
+vi.mock("./capability-intent-index.js", () => ({
+  capabilitiesByIntent: vi.fn(),
+}));
 
 const CTX = {
   userId: "user-1",
@@ -14,24 +20,60 @@ const CTX = {
   sessionId: "session-1",
 };
 
-function match(verbId: string, capabilityName: string): IntentVerbMatch {
+function match(
+  verbId: string,
+  capabilityName: string,
+  ready = true
+): IntentVerbMatch {
   return {
-    intent: "search_external",
+    intent: "search_web",
     verbId,
     verbLabel: verbId,
     verbKind: "read",
     granted: false,
     runPosture: "auto",
-    backingSkillExecutable: true,
+    backingSkillExecutable: ready,
     sourceKind: "skill",
     capabilityId: `cap-${verbId}`,
     capabilityName,
   };
 }
 
+function catalogEntry(
+  slug: string,
+  name: string,
+  skills: Array<{ name: string; intent?: string }>
+): CatalogCacheEntry {
+  return {
+    source: "https://cp.synap.live",
+    kind: "capability",
+    slug,
+    name,
+    description: null,
+    version: null,
+    tier: null,
+    vendor: null,
+    tags: null,
+    contentHash: null,
+    definition: { key: slug, skills },
+    listing: null,
+  };
+}
+
+const CATALOG = [
+  catalogEntry("exa", "Exa — Web Search", [
+    { name: "exa_search", intent: "search_web" },
+    { name: "exa_find_similar", intent: "search_external" },
+  ]),
+  catalogEntry("notion", "Notion", [
+    { name: "notion_search", intent: "search_external" },
+  ]),
+  catalogEntry("gmail", "Gmail", [{ name: "gmail_send" }]),
+];
+
 const INSTALLED = [
   match("web.search", "Synap Core"),
-  match("notion_search", "Notion"),
+  match("brave_search", "Brave Search"),
   match("exa_search", "Exa — Neural Web Search"),
 ];
 
@@ -40,6 +82,7 @@ function deps(
 ): WebSearchDeps & { execute: ReturnType<typeof vi.fn> } {
   return {
     listProviders: async () => INSTALLED,
+    listCatalog: async () => CATALOG,
     execute: vi.fn(async () => ({
       kind: "run" as const,
       skillId: "skill-exa",
@@ -52,7 +95,7 @@ function deps(
 }
 
 describe("searchWeb", () => {
-  it("with no provider named, runs nothing and lists the ones the caller may name", async () => {
+  it("with several providers and none named, runs nothing and lists the ones the caller may name", async () => {
     const d = deps();
     const out = await searchWeb(CTX, "synap", {}, d);
     expect(d.execute).not.toHaveBeenCalled();
@@ -61,31 +104,166 @@ describe("searchWeb", () => {
       reason: "no_provider",
       nextStep: "name_provider",
     });
-    // Never itself, sorted, with the capability that tells a web index from a notes search.
+    // Never itself, sorted, with the capability that names the provider.
     expect(out.providers).toEqual([
+      { verbId: "brave_search", capabilityName: "Brave Search", ready: true },
       {
         verbId: "exa_search",
         capabilityName: "Exa — Neural Web Search",
         ready: true,
       },
-      { verbId: "notion_search", capabilityName: "Notion", ready: true },
     ]);
   });
 
-  it("with nothing installed, says to install one", async () => {
+  it("with none named, runs the one installed provider", async () => {
+    const d = deps({
+      listProviders: async () => [
+        match("web.search", "Synap Core"),
+        match("exa_search", "Exa — Neural Web Search"),
+      ],
+    });
+    const out = await searchWeb(CTX, "synap", {}, d);
+    expect(d.execute).toHaveBeenCalledTimes(1);
+    expect(d.execute.mock.calls[0]![0]).toMatchObject({
+      verbId: "exa_search",
+      parameters: { query: "synap" },
+    });
+    expect(out.search).toMatchObject({ status: "ok", provider: "exa_search" });
+  });
+
+  it("with none named, the only READY provider wins over ones not enabled", async () => {
+    const d = deps({
+      listProviders: async () => [
+        match("brave_search", "Brave Search", false),
+        match("exa_search", "Exa — Neural Web Search"),
+      ],
+    });
+    const out = await searchWeb(CTX, "synap", {}, d);
+    expect(d.execute.mock.calls[0]![0]).toMatchObject({
+      verbId: "exa_search",
+    });
+    expect(out.search).toMatchObject({ status: "ok", provider: "exa_search" });
+  });
+
+  it("with none named and none ready, the only installed one runs so its gate can ask to enable it", async () => {
+    const d = deps({
+      listProviders: async () => [match("exa_search", "Exa", false)],
+      execute: vi.fn(async () => ({
+        kind: "deny" as const,
+        reason: "not approved",
+        enableProposal: { status: "proposed", proposalId: "prop-1" },
+      })) as never,
+    });
+    const out = await searchWeb(CTX, "synap", {}, d);
+    expect(d.execute).toHaveBeenCalledTimes(1);
+    expect(out.search).toMatchObject({
+      status: "blocked",
+      reason: "not_enabled",
+      provider: "exa_search",
+      proposalId: "prop-1",
+    });
+  });
+
+  it("with none named and several installed but none ready, runs nothing", async () => {
+    const d = deps({
+      listProviders: async () => [
+        match("brave_search", "Brave Search", false),
+        match("exa_search", "Exa", false),
+      ],
+    });
+    const out = await searchWeb(CTX, "synap", {}, d);
+    expect(d.execute).not.toHaveBeenCalled();
+    expect(out.search).toMatchObject({
+      status: "blocked",
+      nextStep: "name_provider",
+    });
+  });
+
+  it("looks providers up by search_web, never search_external", async () => {
+    const { capabilitiesByIntent } =
+      await import("./capability-intent-index.js");
+    vi.mocked(capabilitiesByIntent).mockResolvedValueOnce([]);
+    const out = await searchWeb(
+      CTX,
+      "synap",
+      {},
+      { listCatalog: async () => [] }
+    );
+    expect(capabilitiesByIntent).toHaveBeenCalledWith(
+      { userId: "user-1", workspaceId: null },
+      "search_web"
+    );
+    expect(out.search).toMatchObject({ nextStep: "install_provider" });
+  });
+
+  it("with nothing installed, offers the catalog's web search providers to install on the person's own key", async () => {
     const d = deps({ listProviders: async () => [match("web.search", "x")] });
     const out = await searchWeb(CTX, "synap", {}, d);
     expect(d.execute).not.toHaveBeenCalled();
     expect(out.search).toMatchObject({
       status: "blocked",
+      reason: "no_provider",
       nextStep: "install_provider",
     });
+    // Only the capability with a search_web verb: never a notes search, never
+    // a capability with no search verb.
+    expect(
+      out.search.status === "blocked" ? out.search.install : undefined
+    ).toEqual([
+      {
+        slug: "exa",
+        name: "Exa — Web Search",
+        verbs: ["exa_search"],
+        hint: 'Add "Exa — Web Search" to install its verbs.',
+      },
+    ]);
+    expect(out.search.status === "blocked" ? out.search.detail : "").toContain(
+      'market.install({ slug, kind: "capability" })'
+    );
     expect(out.providers).toEqual([]);
+  });
+
+  it("with nothing installed and nothing in the catalog, points to market.search", async () => {
+    const d = deps({
+      listProviders: async () => [],
+      listCatalog: async () => [],
+    });
+    const out = await searchWeb(CTX, "synap", {}, d);
+    expect(out.search).toMatchObject({
+      status: "blocked",
+      nextStep: "install_provider",
+      install: [],
+    });
+    expect(out.search.status === "blocked" ? out.search.detail : "").toContain(
+      "market.search"
+    );
+  });
+
+  it("a failed catalog read throws — never answered as 'nothing to install'", async () => {
+    const d = deps({
+      listProviders: async () => [],
+      listCatalog: async () => {
+        throw new Error("catalog cache down");
+      },
+    });
+    await expect(searchWeb(CTX, "synap", {}, d)).rejects.toThrow(
+      "catalog cache down"
+    );
+  });
+
+  it("with a provider installed, the catalog is never read", async () => {
+    const listCatalog = vi.fn(async () => CATALOG);
+    const d = deps({
+      listProviders: async () => [match("exa_search", "Exa")],
+      listCatalog,
+    });
+    await searchWeb(CTX, "synap", {}, d);
+    expect(listCatalog).not.toHaveBeenCalled();
   });
 
   it("a named verb that is not an installed provider fails and runs nothing", async () => {
     const d = deps();
-    for (const provider of ["entity.delete", "web.search"]) {
+    for (const provider of ["entity.delete", "web.search", "notion_search"]) {
       const out = await searchWeb(CTX, "synap", { provider }, d);
       expect(out.search).toMatchObject({ status: "failed", provider });
     }

@@ -3938,10 +3938,11 @@ const webReadHandler: BuiltinVerbHandler = async (params, ctx) => {
 // ── Search the web ("web.search") ─────────────────────────────────────────────
 //
 // The agent's door onto `searchWeb` (web-search.ts): runs an installed search
-// provider the caller NAMES, through that verb's own gate, so the search is
-// governed, recorded and metered as the provider's run. It never calls a vendor
-// itself. Read-only (READ_ONLY_BUILTIN_VERBS), like `web.read`: it mutates
-// nothing, and the provider verb still meets its own gate.
+// provider (the one the caller names, else the one installed) through that
+// verb's own gate, so the search is governed, recorded and metered as the
+// provider's run. It never calls a vendor itself. Read-only
+// (READ_ONLY_BUILTIN_VERBS), like `web.read`: it mutates nothing, and the
+// provider verb still meets its own gate.
 
 const webSearchParams = z.object({
   /** What to search the web for. */
@@ -4215,7 +4216,7 @@ export const READ_ONLY_BUILTIN_VERBS: ReadonlySet<string> = new Set([
   // own gate). Mutates nothing in the pod; reads never flood recall
   // (observability "mirror").
   "web.read",
-  // web.search — runs a named search provider through ITS own gate (the same
+  // web.search — runs a search provider through ITS own gate (the same
   // shape as web.read naming a reader). Mutates nothing in the pod.
   "web.search",
 ]);

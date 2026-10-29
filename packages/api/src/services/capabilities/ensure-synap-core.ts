@@ -890,15 +890,15 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
       name: "web.search",
       kind: "builtin",
       scope: "pod",
-      intent: "search_external",
+      intent: "search_web",
       description:
-        "Search the web through a search provider installed on this pod (e.g. Exa), run through that provider's own approval and recorded with its cost. " +
+        "Search the web through a search provider installed on this pod on the person's own key (e.g. Exa, or any verb declaring search_web), run through that provider's own approval and recorded with its cost. " +
         "Use when: you need pages you do not have a link for yet; then read one in full with web.read. " +
         "Don't use when: you have the link (web.read), or you are searching the user's own notes, files or mail (their own verbs). " +
-        "Name the provider in `provider` (a verbId from providers[]): there is no default provider yet. " +
-        "Returns { search: { status: ok|blocked|failed, provider?, result?, reason?, nextStep?, detail?, error? }, providers[]: { verbId, capabilityName, ready } }. " +
-        "`blocked` means nothing ran: no_provider (name one of providers[], or install one found with market.search), not_enabled (offer to enable it), awaiting_review. Never retry blindly. " +
-        "Args: query (required); provider (a providers[].verbId).",
+        "Omit `provider` to search with the one installed; when several are, name one in `provider` (a verbId from providers[]). " +
+        "Returns { search: { status: ok|blocked|failed, provider?, result?, reason?, nextStep?, detail?, error?, install?[]: { slug, name, verbs, hint } }, providers[]: { verbId, capabilityName, ready } }. " +
+        '`blocked` means nothing ran: no_provider (name one of providers[], or offer to install one of search.install[] on the person\'s own key with market.install({ slug, kind: "capability" })), not_enabled (offer to enable it), awaiting_review. Never retry blindly. ' +
+        "Args: query (required); provider (optional: a providers[].verbId).",
       parameters: {
         type: "object",
         required: ["query"],

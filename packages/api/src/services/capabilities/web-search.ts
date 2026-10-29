@@ -2,18 +2,27 @@
  * `web.search` — the pod's one door for "search the web".
  *
  * It never calls a search vendor itself. It runs a PROVIDER: an installed verb
- * that declares `search_external`, through `executeCapability`, so the search
+ * that declares `search_web`, through `executeCapability`, so the search
  * carries the caller's grant, the agent posture and the provider verb's own
  * gate, and lands as that verb's `capability_run` (metered when the verb
  * declares `metadata.metering`). This module only picks WHICH verb.
  *
- * ── WHICH PROVIDER (wave C0) ────────────────────────────────────────────────
- * Only the one the caller NAMES (`provider`, a verb id from `providers[]`).
- * `search_external` means "query an outside corpus", not "the web": Notion,
- * Dropbox and Gmail searches declare it too, so an unnamed search never picks
- * one of them on the caller's behalf. With no name the answer is an honest
- * `blocked`, listing the installed verbs the caller could name. The pod's
- * default provider (a Synap-run, metered one) is a later wave.
+ * ── WHICH PROVIDER ──────────────────────────────────────────────────────────
+ * The one the caller NAMES (`provider`, a verb id from `providers[]`), else the
+ * one installed: the only ready provider (or, when none is ready, the only
+ * installed one, so its run can ask to enable it). Several ready providers and
+ * no name is an honest `blocked` listing them, never a silent pick.
+ * `search_web` (0360), not `search_external`: the latter means "query an
+ * outside corpus" and Notion, Dropbox and Gmail searches declare it too, so it
+ * never makes a verb a web search provider. Any verb declaring it is one: a
+ * catalog capability (Exa) or one the person built themselves.
+ *
+ * ── BRING YOUR OWN PROVIDER ─────────────────────────────────────────────────
+ * Synap runs no default search provider (founder, 2026-10-26: people bring
+ * their own tools). With none installed, the `blocked` answer carries
+ * `install[]`: the catalog capabilities that would add one, each installed with
+ * `market.install({ slug, kind: "capability" })` (a reviewable proposal for an
+ * agent; the person approves it and adds their own key).
  *
  * ── HONEST OUTCOMES ─────────────────────────────────────────────────────────
  * `ok` (the provider's own result) | `blocked` (nothing ran: no provider named
@@ -22,13 +31,15 @@
  */
 
 import type { FailureErrorClass } from "../../connectors/external-dispatch.js";
+import type { CatalogCacheEntry } from "./catalog-cache-query.js";
+import { capabilityNextAction } from "./capability-enable-link.js";
 import {
   capabilitiesByIntent,
   type IntentVerbMatch,
 } from "./capability-intent-index.js";
 
-/** The intent a web search provider declares. */
-const WEB_SEARCH_INTENT = "search_external";
+/** The intent a web search provider declares (migration 0360). */
+const WEB_SEARCH_INTENT = "search_web";
 /** This verb — it declares the intent too, and is never its own provider. */
 const WEB_SEARCH_VERB = "web.search";
 
@@ -48,6 +59,16 @@ export interface WebSearchProvider {
   ready: boolean;
 }
 
+/** A catalog capability that adds a web search provider, run on the person's own key. */
+export interface WebSearchInstallOffer {
+  /** Install with `market.install({ slug, kind: "capability" })`. */
+  slug: string;
+  name: string;
+  /** Its verbs that declare `search_web`. */
+  verbs: string[];
+  hint: string;
+}
+
 export type WebSearchOutcome =
   | {
       status: "ok";
@@ -64,6 +85,8 @@ export type WebSearchOutcome =
       detail: string;
       provider?: string;
       proposalId?: string;
+      /** With `install_provider`: what would add one (may be empty). */
+      install?: WebSearchInstallOffer[];
     }
   | {
       status: "failed";
@@ -80,6 +103,8 @@ export interface WebSearchResult {
 /** Test seams; production uses the real modules. */
 export interface WebSearchDeps {
   listProviders?: (ctx: WebSearchContext) => Promise<IntentVerbMatch[]>;
+  /** The official catalog's capabilities (`cp_catalog_cache`). */
+  listCatalog?: () => Promise<CatalogCacheEntry[]>;
   execute?: (
     input: Parameters<
       typeof import("./execute-capability.js").executeCapability
@@ -90,8 +115,9 @@ export interface WebSearchDeps {
 /**
  * Search the web for `query` through the named provider.
  *
- * @throws only when the installed providers cannot be listed, or the provider
- *   run itself throws: a failed lookup is never answered as "none installed".
+ * @throws only when the installed providers or the catalog cannot be listed,
+ *   or the provider run itself throws: a failed lookup is never answered as
+ *   "none installed" or "nothing to install".
  */
 export async function searchWeb(
   ctx: WebSearchContext,
@@ -116,29 +142,48 @@ export async function searchWeb(
     }))
     .sort((a, b) => a.verbId.localeCompare(b.verbId));
 
-  if (opts.provider === undefined) {
+  // Unnamed: the one installed provider. Prefer the ready ones; with none
+  // ready, the only installed one still runs, so its gate can ask to enable it.
+  const ready = providers.filter((p) => p.ready);
+  const candidates = ready.length > 0 ? ready : providers;
+  if (opts.provider === undefined && candidates.length > 1) {
     return {
-      search:
-        providers.length > 0
-          ? {
-              status: "blocked",
-              reason: "no_provider",
-              nextStep: "name_provider",
-              detail:
-                "This pod has no default web search provider yet. Name one of providers[] in `provider` (pick one that searches the web, not a notes or files search).",
-            }
-          : {
-              status: "blocked",
-              reason: "no_provider",
-              nextStep: "install_provider",
-              detail:
-                'No web search provider is installed. Find one with market.search (e.g. query "web search") and install it, or tell the user.',
-            },
+      search: {
+        status: "blocked",
+        reason: "no_provider",
+        nextStep: "name_provider",
+        detail:
+          "Several web search providers are installed. Name one of providers[] in `provider`.",
+      },
+      providers,
+    };
+  }
+  if (opts.provider === undefined && candidates.length === 0) {
+    const install = installOffers(
+      await (
+        deps.listCatalog ??
+        (async () =>
+          (await import("./catalog-cache-query.js")).queryCatalogCache({
+            kind: "capability",
+          }))
+      )()
+    );
+    return {
+      search: {
+        status: "blocked",
+        reason: "no_provider",
+        nextStep: "install_provider",
+        detail:
+          install.length > 0
+            ? `No web search provider is installed. Offer to install one of install[] on the person's own key: market.install({ slug, kind: "capability" }) proposes it, and the person approves it and adds their key. Any capability of theirs whose verb declares search_web works too.`
+            : `No web search provider is installed. Find one with market.search (e.g. query "web search") and install it on the person's own key, or tell the user.`,
+        install,
+      },
       providers,
     };
   }
 
-  const provider = opts.provider;
+  const provider = opts.provider ?? candidates[0]!.verbId;
   if (!providers.some((p) => p.verbId === provider)) {
     return {
       search: {
@@ -235,4 +280,30 @@ export async function searchWeb(
         providers,
       };
   }
+}
+
+/** The catalog capabilities with a verb declaring `search_web`, by name. */
+function installOffers(
+  entries: readonly CatalogCacheEntry[]
+): WebSearchInstallOffer[] {
+  const offers: WebSearchInstallOffer[] = [];
+  for (const entry of entries) {
+    if (entry.kind !== "capability") continue;
+    const skills = entry.definition?.skills;
+    const verbs = (Array.isArray(skills) ? skills : [])
+      .filter(
+        (sk): sk is { name: string } =>
+          typeof (sk as { name?: unknown })?.name === "string" &&
+          (sk as { intent?: unknown }).intent === WEB_SEARCH_INTENT
+      )
+      .map((sk) => sk.name);
+    if (verbs.length === 0) continue;
+    offers.push({
+      slug: entry.slug,
+      name: entry.name,
+      verbs,
+      hint: capabilityNextAction("available", entry.name).hint,
+    });
+  }
+  return offers.sort((a, b) => a.name.localeCompare(b.name));
 }
