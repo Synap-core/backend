@@ -569,10 +569,6 @@ registerVisibility({
     nullWorkspaceMeans: "ownerPrivate",
   },
 });
-// A box run (0356) is its REQUESTER's: the script, its parameters and its
-// evidence. A NULL workspace is a pod-wide run that stays owner-private. The
-// computer that leases it never reads through here — the lease routes floor on
-// the computer's own person (services/box-runs).
 // An inbound webhook delivery (0372) is the subscription OWNER's: its body is
 // what an outside service sent to that person's source, so the floor is the
 // owner alone, whatever space the source fires into (the same floor as the
@@ -582,6 +578,10 @@ registerVisibility({
   query: () => db.query.inboundDeliveries,
   rule: { kind: "user", userColumn: inboundDeliveries.userId },
 });
+// A box run (0356) is its REQUESTER's: the script, its parameters and its
+// evidence. A NULL workspace is a pod-wide run that stays owner-private. The
+// computer that leases it never reads through here — the lease routes floor on
+// the computer's own person (services/box-runs).
 registerVisibility({
   table: boxRuns,
   query: () => db.query.boxRuns,

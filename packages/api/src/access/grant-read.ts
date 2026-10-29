@@ -56,6 +56,7 @@ import {
   events,
   feeds,
   focusSessions,
+  inboundDeliveries,
   inboxItems,
   intelligenceCommands,
   libraryGroups,
@@ -211,6 +212,10 @@ export const GRANT_READ_SPECS = new Map<object, GrantReadSpec>([
   [messagingAccounts, spec("messaging", messagingAccounts)],
   [sourceConfigs, spec("source", sourceConfigs)],
   [sourceSubscriptions, spec("source", sourceSubscriptions)],
+  // What an inbound source received (0372): a grant on SOURCES reads it, over
+  // the owner floor (registry.ts); a space grant reads the deliveries of the
+  // sources that fire into its spaces.
+  [inboundDeliveries, spec("source", inboundDeliveries)],
   [userPreferences, spec("preference", {})], // no id / workspace column
   [userResourceState, spec("preference", {})], // no id / workspace column
   [agentConfigs, spec("agent", agentConfigs)],
