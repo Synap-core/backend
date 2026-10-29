@@ -13877,7 +13877,7 @@ declare const OperationalEventTypes: {
 		readonly type: "entity.delete.completed";
 	};
 	readonly ENTITY_SIGNALED: {
-		readonly description: "Runs once when a thing passes its due date, is about to, stays too long in one status, or a pause is ready to be reviewed.";
+		readonly description: "Runs once when something passes its due date or is about to, stays too long in one status, or a pause is ready for review.";
 		readonly domain: "Entity";
 		readonly filterKeys: [
 			"signal",
