@@ -825,6 +825,9 @@ fileUploadApp.post("/uploads/finalize", async (c) => {
   }
 });
 
+/** How long a signed GET of the file doors lives when the caller names no TTL. */
+export const FILE_URL_DEFAULT_TTL_SECONDS = 3600;
+
 // ---------------------------------------------------------------------------
 // GET /documents/:documentId/url — presigned download URL for document storage
 // ---------------------------------------------------------------------------
@@ -862,7 +865,7 @@ fileUploadApp.get("/documents/:documentId/url", async (c) => {
       return c.json({ error: "Document file not found" }, 404);
     }
 
-    const expiresInSeconds = 3600;
+    const expiresInSeconds = FILE_URL_DEFAULT_TTL_SECONDS;
     const url = await storage.getSignedUrl(
       document.storageKey,
       expiresInSeconds
@@ -913,6 +916,8 @@ export type FileEntityUrlResult =
   | {
       ok: true;
       body: { url: string; expiresAt: string; mimeType: string | null };
+      /** The file the URL signs, as the read floor returned it (never on the wire). */
+      entity: SignableFileEntity;
     }
   | { ok: false; status: 403 | 404; error: string };
 
@@ -937,7 +942,13 @@ export type FileEntityUrlResult =
  */
 export async function signFileEntityUrl(
   userId: string,
-  entityId: string
+  entityId: string,
+  /**
+   * How long the URL lives. The HTTP doors keep the default; a tool verb that
+   * receives a pod file asks for its own lifetime (15 min sync, 6 h async:
+   * `file-parameters.ts`), minted after approval so it never expires waiting.
+   */
+  opts: { expiresInSeconds?: number } = {}
 ): Promise<FileEntityUrlResult> {
   const readable = await readableFileEntity(userId, entityId);
   if (!readable.ok) return readable;
@@ -946,12 +957,17 @@ export async function signFileEntityUrl(
     return { ok: false, status: 404, error: "File has no storage key" };
   }
 
-  const expiresInSeconds = 3600;
+  const expiresInSeconds =
+    opts.expiresInSeconds ?? FILE_URL_DEFAULT_TTL_SECONDS;
   const url = await storage.getSignedUrl(entity.storageKey, expiresInSeconds);
   const expiresAt = new Date(
     Date.now() + expiresInSeconds * 1000
   ).toISOString();
-  return { ok: true, body: { url, expiresAt, mimeType: entity.mimeType } };
+  return {
+    ok: true,
+    body: { url, expiresAt, mimeType: entity.mimeType },
+    entity,
+  };
 }
 
 // ---------------------------------------------------------------------------

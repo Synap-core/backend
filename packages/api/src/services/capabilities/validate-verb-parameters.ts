@@ -54,6 +54,7 @@
 
 import { type z } from "zod";
 import { BUILTIN_VERB_PARAM_SCHEMAS } from "./builtin-verbs.js";
+import { looksLikeJsonSchema } from "./parameter-dialect.js";
 
 /** What the caller must change, machine-readable. */
 export interface ParameterRepair {
@@ -70,7 +71,30 @@ export interface ParameterRepair {
   unrecognized?: string[];
   /** The schema's own fix-it sentences (Zod `custom` issues), verbatim. */
   hints?: string[];
+  /**
+   * Pod files the call names that cannot be sent (`file-parameters.ts`): one
+   * per field or file, with the reason. Unreadable or unknown files are
+   * refused here, before any proposal is filed.
+   */
+  files?: Array<{ field: string; fileId?: string; problem: PodFileProblem }>;
 }
+
+/** Why a pod file named by a call cannot be sent to the verb's tool. */
+export type PodFileProblem =
+  /** The value is not a file id (or a list of them, for `file[]`). */
+  | "not_a_file_id"
+  /** No such file. */
+  | "not_found"
+  /** The caller cannot read it (or the key's grant does not reach it). */
+  | "forbidden"
+  /** The file has no stored bytes to send. */
+  | "no_stored_bytes"
+  /** Larger than a tool may be sent by URL. */
+  | "too_large"
+  /** More files than one parameter may carry. */
+  | "too_many"
+  /** The verb asks for a delivery not wired yet (bytes, phase 2). */
+  | "delivery_not_supported";
 
 export type VerbParameterCheck =
   /**
@@ -99,6 +123,9 @@ function runtimeTypeOf(value: unknown): string {
   return typeof value;
 }
 
+/** `file` / `file[]`, with any delivery suffix (`:url`): see `file-parameters.ts`. */
+const FILE_PARAMETER_TYPE = /^file(\[\])?(?::[a-z]+)?$/;
+
 /**
  * The type-map dialect `skills.parameters` is written in — the same one the IS
  * `buildZodSchema` reads: `{ field: "string" | "number?" | "array" | … }`, where
@@ -114,24 +141,6 @@ const KNOWN_DECLARED_TYPES = new Set([
   "object",
   "array",
 ]);
-
-/**
- * Is this bag JSON Schema rather than the shorthand type map?
- *
- * DISCRIMINATE ON `properties`, NOT ON `type`. A type map may legitimately
- * declare a FIELD named `type` — `exa_search` does (`"type": "string?"`) — so
- * keying on `type` alone would misread a real type map as a schema. Only the
- * pairing of `type: "object"` with a `properties` OBJECT identifies the
- * dialect.
- */
-function looksLikeJsonSchema(declared: Record<string, unknown>): boolean {
-  return (
-    declared.type === "object" &&
-    typeof declared.properties === "object" &&
-    declared.properties !== null &&
-    !Array.isArray(declared.properties)
-  );
-}
 
 /**
  * A number or boolean sent as a string. CLI and HTTP callers send every value
@@ -181,7 +190,19 @@ function checkTypeMap(
   for (const [field, rawType] of Object.entries(declared)) {
     if (typeof rawType !== "string") continue; // not this dialect → skip field
     const optional = rawType.endsWith("?");
-    const type = optional ? rawType.slice(0, -1) : rawType;
+    // A pod file parameter (`file:url`, `file[]:url?`) carries a file id, or a
+    // list of them: checked as the string or array it is on the wire. Which
+    // ids may be sent is `file-parameters.ts`'s check.
+    const file = FILE_PARAMETER_TYPE.exec(
+      optional ? rawType.slice(0, -1) : rawType
+    );
+    const type = file
+      ? file[1]
+        ? "array"
+        : "string"
+      : optional
+        ? rawType.slice(0, -1)
+        : rawType;
     // A declared type outside the dialect means we are not sure we are reading
     // this declaration correctly, so the field is skipped ENTIRELY — not even
     // its requiredness is enforced. Requiredness IS readable from the `?`
@@ -362,6 +383,18 @@ export function coerceDeclaredParameters(
   return out;
 }
 
+/** What each pod-file refusal tells the caller to fix. */
+const POD_FILE_PROBLEM_WORDS: Record<PodFileProblem, string> = {
+  not_a_file_id: "should be a pod file id (a list of them for several files)",
+  not_found: "no such file",
+  forbidden: "you cannot read this file",
+  no_stored_bytes: "this file has no stored content to send",
+  too_large: "this file is too large to send to a tool",
+  too_many: "too many files for one parameter",
+  delivery_not_supported:
+    "this verb asks for files as bytes, which come in a later release",
+};
+
 /** The human half of the repair error — one sentence the agent can act on. */
 export function describeParameterRepair(
   verbLabel: string,
@@ -385,6 +418,11 @@ export function describeParameterRepair(
   if (unknownOnly.length) {
     parts.push(
       `unknown argument${unknownOnly.length > 1 ? "s" : ""} ${unknownOnly.join(", ")}`
+    );
+  }
+  for (const f of repair.files ?? []) {
+    parts.push(
+      `${f.field}: ${POD_FILE_PROBLEM_WORDS[f.problem]}${f.fileId ? ` (${f.fileId})` : ""}`
     );
   }
   for (const hint of repair.hints ?? []) parts.push(hint);

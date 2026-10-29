@@ -122,6 +122,14 @@ export interface GateCapabilityExecutionInput {
    * the approval gate above (an unapproved read is still denied).
    */
   readOnly?: boolean;
+  /**
+   * The run carries at least one POD FILE to the verb's tool (a declared
+   * `file:url` parameter the call fills: `file-parameters.ts` in the api).
+   * Set server-side by the run door from the verb's declaration, never from
+   * request fields. An agent's or an app's run that carries one always
+   * proposes (POD_FILE_OUTWARD, decision 7d42be8c); tighten-only.
+   */
+  carriesPodFiles?: boolean;
   workspaceId?: string | null;
   sessionId?: string | null;
   playbookId?: string | null;
@@ -364,6 +372,22 @@ export async function gateCapabilityExecution(
       })
     : undefined;
 
+  // ── 0.7 POD FILE FLOOR (decision 7d42be8c, founder 2026-10-28) — a run that
+  //       hands one of the person's pod files to a tool, asked for by an AGENT
+  //       or through a POD APP's credential, ALWAYS files a proposal: a file
+  //       leaving the pod is a commitment the person confirms. It precedes the
+  //       read-only short-circuit (a file verb is refused `readOnly` at install,
+  //       but a verb authored elsewhere could claim it), the owner bypass (a
+  //       person token resolves as the person) and the grant/rule rungs (an
+  //       auto grant or an auto rule must not widen it). The person's own run
+  //       in the pod (no agent, no app) is untouched. Tighten-only.
+  if (
+    input.carriesPodFiles &&
+    (input.agentUserId || getRequestGrant()?.clientId)
+  ) {
+    return buildProposeDecision(input, POD_FILE_OUTWARD);
+  }
+
   // ── READ-ONLY short-circuit — mirrors execute-provider-verb's
   //    `isReadMethod → alreadyApproved:true`. A read is not a mutation: once it
   //    clears the APPROVAL gate above, it never needs a grant and never proposes.
@@ -542,6 +566,9 @@ async function outwardRunMustPropose(
   if (!reason) return null;
   return (await isOutward(input)) ? reason : null;
 }
+
+/** `proposals.governance_reason` of a run the pod file floor proposed. */
+export const POD_FILE_OUTWARD = "POD_FILE_OUTWARD";
 
 /**
  * Outward = the verb's intent has an effect other than `read` in

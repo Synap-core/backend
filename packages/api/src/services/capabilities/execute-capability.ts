@@ -160,6 +160,12 @@ import { CAPABILITY_RUN_PROPOSAL_TYPE } from "../proposals/proposal-class.js";
 import { isQueuedBoxRunResult } from "../box-runs/box-runs.js";
 import { capErrorMessage } from "../connection-health/notify-connector-unhealthy.js";
 import type { WriteAckState } from "../../utils/write-door-idempotency.js";
+import {
+  checkPodFilesAtAsk,
+  describePodFileSend,
+  resolvePodFilesAtRun,
+  verbToolLabel,
+} from "./file-parameters.js";
 
 const logger = createLogger({ module: "execute-capability" });
 
@@ -558,6 +564,8 @@ export async function executeCapability(input: {
       // copies it verbatim). Read by `checkVerbParameters` before a proposal is
       // filed. Absent = cannot validate, never "no arguments allowed".
       parameters: skills.parameters,
+      // Sync or async: how long a pod file's URL lives (`file-parameters.ts`).
+      executionMode: skills.executionMode,
       // The intent the verb serves: the gate's app outward floor reads it.
       intent: skills.intent,
     })
@@ -631,6 +639,22 @@ export async function executeCapability(input: {
   const actingChannelId =
     input.channelId ?? (await resolveActingChannelId(input.sourceMessageId));
 
+  // POD FILES (plan e7c3c98e): every file id the call names must be a file the
+  // CALLER can read (an app key's grant narrows it), with stored bytes, under
+  // the cap — checked before the gate, so a refusal files nothing and the
+  // gate knows the run carries files (an agent's always proposes).
+  const podFiles = await checkPodFilesAtAsk(skillRow, parameters, userId);
+  if (!podFiles.ok) {
+    return {
+      kind: "error",
+      message: describeParameterRepair(
+        verbId ?? skillRow.name,
+        podFiles.repair
+      ),
+      repair: podFiles.repair,
+    };
+  }
+
   const decision = await gateCapabilityExecution({
     capabilityKind: "skill",
     capabilityId: skillRow.id,
@@ -644,6 +668,7 @@ export async function executeCapability(input: {
     // An intent action proposes when it reaches outside the pod, whoever
     // asked (an app or an agent drafting for the person).
     intentRun: !!input.intentRequest,
+    carriesPodFiles: podFiles.files.length > 0,
   });
 
   if (decision.decision === "deny") {
@@ -782,16 +807,29 @@ export async function executeCapability(input: {
         // A pod app's intent run reads as what the app asked, by name: the
         // action, the recipient, the account ("Send message to Marie Dupont
         // from Antoine Servant on LinkedIn"), never the verb's raw ids.
-        summary: input.intentRequest
-          ? describeIntentRun(input.intentRequest)
-          : describeCapabilityRun(
-              verbId ?? null,
-              parameters ?? {},
-              await resolveEntityVerbRunSubject(
-                entityVerbRunTarget(verbId ?? null, parameters ?? {}),
-                userId
+        //
+        // A run that sends pod files says so first, whoever asked: which
+        // files, how big, to which tool (the app's own request still rides in
+        // `intentRequest` for the approval screen). The ids stay in
+        // `parameters`; `files` names them for the review card. No URL is
+        // stored: it is minted after approval.
+        summary:
+          podFiles.files.length > 0
+            ? describePodFileSend(
+                podFiles.files,
+                await verbToolLabel(skillRow.id)
               )
-            ),
+            : input.intentRequest
+              ? describeIntentRun(input.intentRequest)
+              : describeCapabilityRun(
+                  verbId ?? null,
+                  parameters ?? {},
+                  await resolveEntityVerbRunSubject(
+                    entityVerbRunTarget(verbId ?? null, parameters ?? {}),
+                    userId
+                  )
+                ),
+        ...(podFiles.files.length > 0 ? { files: podFiles.files } : {}),
         // WHY — the run door has no top-level `reasoning`, so an agent's reason
         // rides in `parameters`; hoisted to where the review card reads it
         // (`request.reasoning`). `reasoning` is a volatile dedup key, so this
@@ -1462,6 +1500,14 @@ export interface ResolvedSkillRow {
    * that forgot the column would silently skip the write-back on its path.
    */
   metadata: unknown;
+  /**
+   * REQUIRED for the same reason: the verb's declared parameters say which are
+   * pod files (`file-parameters.ts`); a loader that forgot the column would
+   * hand the skill file ids where it expects URLs.
+   */
+  parameters: unknown;
+  /** Sync or async: the lifetime of a pod file's signed URL. */
+  executionMode: string | null;
 }
 
 /**
@@ -1642,6 +1688,42 @@ async function runResolvedSkillInner(
       enable?: CapabilityNextAction;
     }
 > {
+  // A run-time connection pick can't reach a code skill's sandbox (`runSkill`
+  // takes no selector). Rather than SILENTLY running against the capability's
+  // default credential — the wrong account, with no signal — refuse explicitly.
+  // Declarative/provider verbs (below) honor the selector; for a code-backed
+  // verb the user should set the capability's default connection instead.
+  //
+  // Checked before the pod files below, so nothing is minted for a run that
+  // cannot start.
+  if (
+    skill.kind !== "builtin" &&
+    skill.kind !== "declarative" &&
+    (ctx.connectionSelector?.connectionId ||
+      ctx.connectionSelector?.contextObjectId)
+  ) {
+    return {
+      kind: "deny",
+      reason: `Verb "${skill.name}" runs as a code skill and does not support run-time connection selection. Set the capability's default connection instead.`,
+    };
+  }
+
+  // POD FILES (plan e7c3c98e): every tier receives the declared file
+  // parameters resolved — each file read again as the run's identity, a fresh
+  // signed URL in place of its id, one `file.sent` event per file. A file that
+  // cannot be sent stops the run here: a definite not-delivered.
+  const filesResolved = await resolvePodFilesAtRun(skill, parameters, {
+    userId: ctx.userId,
+    workspaceId: ctx.workspaceId,
+    sessionId: ctx.sessionId ?? null,
+    agentUserId: ctx.agentUserId ?? ctx.provenance?.agentUserId ?? null,
+    proposalId: ctx.provenance?.proposalId ?? null,
+  });
+  if (!filesResolved.ok) {
+    return { kind: "error", message: filesResolved.message };
+  }
+  const runParameters = filesResolved.parameters;
+
   if (skill.kind === "builtin") {
     const handler = BUILTIN_VERBS[skill.name];
     if (!handler) {
@@ -1650,7 +1732,7 @@ async function runResolvedSkillInner(
         message: `No builtin handler registered for verb "${skill.name}".`,
       };
     }
-    const result = await handler(parameters ?? {}, {
+    const result = await handler(runParameters ?? {}, {
       userId: ctx.userId,
       workspaceId: ctx.workspaceId,
       agentUserId: ctx.agentUserId ?? null,
@@ -1673,12 +1755,16 @@ async function runResolvedSkillInner(
         message: `Declarative verb "${skill.name}" is missing its providerSpec.`,
       };
     }
-    const result = await executeProviderVerb(skill.providerSpec, parameters, {
-      userId: ctx.userId,
-      workspaceId: ctx.workspaceId ?? undefined,
-      connectionSelector: ctx.connectionSelector ?? null,
-      sessionId: ctx.sessionId ?? null,
-    });
+    const result = await executeProviderVerb(
+      skill.providerSpec,
+      runParameters,
+      {
+        userId: ctx.userId,
+        workspaceId: ctx.workspaceId ?? undefined,
+        connectionSelector: ctx.connectionSelector ?? null,
+        sessionId: ctx.sessionId ?? null,
+      }
+    );
     // executeProviderVerb flattens a provider FAILURE back to its `{success:false,
     // error}` envelope (execute-provider-verb.ts). Surface it as `kind:"error"` so
     // callers have ONE failure channel — never a success:false riding inside a
@@ -1709,21 +1795,6 @@ async function runResolvedSkillInner(
     return { kind: "run", skillId: skill.id, result };
   }
 
-  // A run-time connection pick can't reach a code skill's sandbox (`runSkill`
-  // takes no selector). Rather than SILENTLY running against the capability's
-  // default credential — the wrong account, with no signal — refuse explicitly.
-  // Declarative/provider verbs (above) honor the selector; for a code-backed
-  // verb the user should set the capability's default connection instead.
-  if (
-    ctx.connectionSelector?.connectionId ||
-    ctx.connectionSelector?.contextObjectId
-  ) {
-    return {
-      kind: "deny",
-      reason: `Verb "${skill.name}" runs as a code skill and does not support run-time connection selection. Set the capability's default connection instead.`,
-    };
-  }
-
   // TIER 2 (code/instruction): execute the backing skill through the ONE skill
   // door (`runSkill`, R2): the pod's own sandbox by default — the bridges in
   // this process, the code in a supervised runner process — or the IS only
@@ -1743,7 +1814,7 @@ async function runResolvedSkillInner(
   const envelope = await runSkill({
     skillId: skill.id,
     userId: ctx.userId,
-    parameters,
+    parameters: runParameters,
     workspaceId: ctx.workspaceId,
     agentUserId: ctx.agentUserId ?? null,
     sessionId: ctx.sessionId ?? null,

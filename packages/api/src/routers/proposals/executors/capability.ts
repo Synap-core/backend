@@ -64,6 +64,10 @@ async function loadApprovedRunnableSkill(
       kind: skills.kind,
       providerSpec: skills.providerSpec,
       metadata: skills.metadata,
+      // Which parameters are pod files, and how long their URLs live: the
+      // runner mints them after this approval (`file-parameters.ts`).
+      parameters: skills.parameters,
+      executionMode: skills.executionMode,
       approved: skills.approved,
     })
     .from(skills)

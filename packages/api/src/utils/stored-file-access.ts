@@ -173,6 +173,16 @@ export interface SignableFileEntity {
   storageKey: string | undefined;
   /** The served type — only ever the `documents` row's, never a property's claim. */
   mimeType: string | null;
+  /** The entity's display name (a file's name), as stored. */
+  title: string | null;
+  /** The blob's size in bytes, from the same `documents` row; null without one. */
+  size: number | null;
+  /**
+   * Set when the entity is in the trash. The URL doors still sign it (a trash
+   * view draws it); a door that SENDS the file out (`file-parameters.ts`)
+   * refuses it.
+   */
+  deletedAt: Date | null;
 }
 
 /**
@@ -194,8 +204,16 @@ export async function loadSignableFileEntity(
     id: string;
     userId: string;
     documentId: string | null;
+    title: string | null;
+    deletedAt: Date | null;
   }>(entities, {
-    columns: { id: true, userId: true, documentId: true },
+    columns: {
+      id: true,
+      userId: true,
+      documentId: true,
+      title: true,
+      deletedAt: true,
+    },
     where: eq(entities.id, entityId),
   });
   if (!entity) return undefined;
@@ -206,7 +224,7 @@ export async function loadSignableFileEntity(
           eq(documents.id, entity.documentId),
           eq(documents.userId, entity.userId)
         ),
-        columns: { id: true, storageKey: true, mimeType: true },
+        columns: { id: true, storageKey: true, mimeType: true, size: true },
       })
     : undefined;
   return {
@@ -214,6 +232,9 @@ export async function loadSignableFileEntity(
     documentId: doc?.id ?? undefined,
     storageKey: doc?.storageKey ?? undefined,
     mimeType: doc?.mimeType ?? null,
+    title: entity.title ?? null,
+    size: doc?.size ?? null,
+    deletedAt: entity.deletedAt ?? null,
   };
 }
 

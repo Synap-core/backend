@@ -17310,7 +17310,33 @@ export interface ParameterRepair {
 	unrecognized?: string[];
 	/** The schema's own fix-it sentences (Zod `custom` issues), verbatim. */
 	hints?: string[];
+	/**
+	 * Pod files the call names that cannot be sent (`file-parameters.ts`): one
+	 * per field or file, with the reason. Unreadable or unknown files are
+	 * refused here, before any proposal is filed.
+	 */
+	files?: Array<{
+		field: string;
+		fileId?: string;
+		problem: PodFileProblem;
+	}>;
 }
+/** Why a pod file named by a call cannot be sent to the verb's tool. */
+export type PodFileProblem = 
+/** The value is not a file id (or a list of them, for `file[]`). */
+"not_a_file_id"
+/** No such file. */
+ | "not_found"
+/** The caller cannot read it (or the key's grant does not reach it). */
+ | "forbidden"
+/** The file has no stored bytes to send. */
+ | "no_stored_bytes"
+/** Larger than a tool may be sent by URL. */
+ | "too_large"
+/** More files than one parameter may carry. */
+ | "too_many"
+/** The verb asks for a delivery not wired yet (bytes, phase 2). */
+ | "delivery_not_supported";
 export type ExecuteCapabilityResult = {
 	ackState: WriteAckState;
 	/**
