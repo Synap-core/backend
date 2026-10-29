@@ -104,7 +104,10 @@ import { dirname, join, relative } from "node:path";
 // converted — its door now imports `PropertyValueType` (via proposed-kind-field,
 // #495). Counts 46 once the three #482 recall tests are converted too
 // (fix/main-red-recall-mocks-and-lineage).
-const BASELINE = 46;
+// 46 → 45 on 2026-10-29 (#456, one door owns proposals.status):
+// `routers/proposals/__tests__/rule-create-approval.test.ts` now takes the real
+// `transitionProposal` through importOriginal.
+const BASELINE = 45;
 
 const here = dirname(fileURLToPath(import.meta.url));
 const SRC = join(here, "..");
