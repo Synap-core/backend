@@ -21,6 +21,12 @@ vi.mock("@synap/database", async (importOriginal) => {
   return { ...actual, getDb: async () => ({}) };
 });
 vi.mock("@synap/events", () => ({ emitSideEffects: async () => undefined }));
+// `protectedProcedure`'s read-only guard reads `sync_generation` on every
+// mutation; stub only that read so the test needs no database.
+vi.mock("../utils/split-brain-service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../utils/split-brain-service.js")>()),
+  isPodReadOnly: vi.fn(async () => false),
+}));
 vi.mock("../services/projects/load-visible-project.js", () => ({
   loadVisibleProject: async () => ({ id: PROJECT, workspaceId: null }),
 }));

@@ -69,6 +69,38 @@ import { entitiesRouter } from "../entities.js";
 const USER = randomUUID();
 const AGENT = randomUUID();
 
+const BASIC =
+  /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
+function ddlFor(table: PgTable): string {
+  const cfg = getTableConfig(table);
+  const cols = cfg.columns.map((c) => {
+    const t = c.getSQLType();
+    const isArray = t.endsWith("[]");
+    const base = BASIC.test(t) ? t.replace(/\(.*\)/, "") : "text";
+    const type = isArray && !base.endsWith("[]") ? `${base}[]` : base;
+    const pk = c.primary
+      ? ` primary key${type === "uuid" ? " default gen_random_uuid()" : ""}`
+      : "";
+    let def = "";
+    if (c.name === "created_at" || c.name === "updated_at")
+      def = " default now()";
+    else if (
+      c.hasDefault &&
+      c.default !== undefined &&
+      typeof c.default !== "object"
+    ) {
+      const d = c.default as unknown;
+      def =
+        typeof d === "string"
+          ? ` default '${d.replace(/'/g, "''")}'`
+          : ` default ${String(d)}`;
+    } else if (c.hasDefault && type === "jsonb") def = ` default '{}'::jsonb`;
+    return `"${c.name}" ${type}${pk}${def}`;
+  });
+  return `create table "${cfg.name}" (${cols.join(", ")});`;
+}
+const q = (sql: string, params?: unknown[]) => h.client!.query(sql, params);
+
 beforeAll(async () => {
   const tables = (Object.values(schema) as unknown[]).filter(
     (v): v is PgTable =>
