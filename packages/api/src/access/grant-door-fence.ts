@@ -717,6 +717,9 @@ export const TRPC_KEY_MUTATION_DOORS: Readonly<Record<string, TrpcWriteDoor>> =
     "profiles.createProfile": GATED,
     "profiles.setRenderer": GATED,
     "profiles.createPropertyDef": GATED,
+    // The batch (ticket a375443d): one gate, pod-wide unless every field is an
+    // overlay — the same target rule as one def.
+    "profiles.createPropertyDefs": GATED,
     "profiles.updatePropertyDef": GATED,
     // D2 (founder 2026-10-20): the parent's workspace; a pod-wide role is pod
     // scope — routers/hub-protocol/gate-on-target.schema.pglite.test.ts
