@@ -22,6 +22,10 @@ import {
   FIREFLIES_INGEST_QUEUE,
   type FirefliesIngestJobData,
 } from "@synap/jobs/workers/fireflies-worker.js";
+import {
+  liveApiKeyIds,
+  subscriptionKeyLive,
+} from "@synap/jobs/workers/webhook-worker.js";
 import { getMessagingConnector } from "../connectors/index.js";
 import { MessagingAccountService } from "../services/messaging-account-service.js";
 import { recordInboundMessage } from "../services/connectors/inbound-recorder.js";
@@ -113,16 +117,22 @@ webhooksInboundRouter.post("/inbound/:subscriptionId", async (c) => {
     return c.json({ error: "Payload too large" }, 413);
   }
 
+  // Only an INBOUND source receives here (0362). An outbound row's secret is
+  // known to the endpoint the pod DELIVERS to, so accepting it here let that
+  // third party forge signed events into the space's automations (pre-launch
+  // audit 2026-10-28, webhooks F3).
   const subscription = await db.query.webhookSubscriptions.findFirst({
     where: and(
       eq(webhookSubscriptions.id, subscriptionId),
-      eq(webhookSubscriptions.active, true)
+      eq(webhookSubscriptions.active, true),
+      eq(webhookSubscriptions.direction, "inbound")
     ),
   });
 
-  // Uniform auth failure: an unknown/inactive subscription and a bad signature
-  // return the SAME 401 body, so a caller cannot enumerate which subscription
-  // ids exist. Verify HMAC-SHA256 — timingSafeEqual needs equal-length buffers.
+  // Uniform auth failure: an unknown/inactive/outbound subscription, a bad
+  // signature and a revoked creating key return the SAME 401 body, so a caller
+  // cannot enumerate which subscription ids exist. Verify HMAC-SHA256 —
+  // timingSafeEqual needs equal-length buffers.
   const header = (name: string) => c.req.header(name);
   const signature = firstHeader(header, SIGNATURE_HEADERS) ?? "";
   const expected = subscription
@@ -135,10 +145,20 @@ webhooksInboundRouter.post("/inbound/:subscriptionId", async (c) => {
     sigBuf.length === expBuf.length &&
     timingSafeEqual(sigBuf, expBuf);
 
-  if (!sigValid || !subscription) {
+  // A source created by an API key lives only while that key does: the same
+  // rule the outbound worker applies (S2, `subscriptionKeyLive`).
+  const keyLive =
+    sigValid &&
+    subscription != null &&
+    subscriptionKeyLive(
+      subscription.apiKeyId,
+      await liveApiKeyIds([subscription.apiKeyId])
+    );
+
+  if (!sigValid || !subscription || !keyLive) {
     logger.warn(
-      { subscriptionId, known: subscription != null },
-      "Rejected inbound webhook (unknown subscription or invalid signature)"
+      { subscriptionId, known: subscription != null, keyLive },
+      "Rejected inbound webhook (unknown source, invalid signature or revoked key)"
     );
     return c.json({ error: "Unauthorized" }, 401);
   }
@@ -589,19 +609,23 @@ webhooksInboundRouter.post("/fireflies/:token", async (c) => {
     workspaceId,
     ownerUserId,
   };
-  await getBoss()
-    .send(FIREFLIES_INGEST_QUEUE, jobData, {
+  try {
+    await getBoss().send(FIREFLIES_INGEST_QUEUE, jobData, {
       retryLimit: 5,
       retryDelay: 30,
       retryBackoff: true,
       expireInSeconds: 300,
-    })
-    .catch((err) =>
-      logger.error(
-        { err, toolId: ffTool.id, meetingId },
-        "fireflies webhook: enqueue failed (backfill will retry)"
-      )
+    });
+  } catch (err) {
+    // Not queued: say so (503) rather than 200 "queued" (pre-launch audit
+    // 2026-10-28, webhooks F6). The meeting is not marked seen, so a sender
+    // retry or the backfill poller lands it.
+    logger.error(
+      { err, toolId: ffTool.id, meetingId },
+      "fireflies webhook: enqueue failed (backfill will retry)"
     );
+    return c.json({ error: "Not queued, retry later" }, 503);
+  }
 
   return c.json({ received: true, queued: true }, 200);
 });
@@ -959,9 +983,9 @@ webhooksInboundRouter.post("/messaging", async (c) => {
       // hosted auth): auto-sync the newly connected account into our DB
       const connector = await getMessagingConnector();
       if (connector) {
-        const liveAccounts = await connector
-          .getAccounts(event.userId)
-          .catch(() => []);
+        // A failed read throws to the handler (500, Unipile retries): it is
+        // not "no such account".
+        const liveAccounts = await connector.getAccounts(event.userId);
         const account = liveAccounts.find(
           (a) => a.externalId === event.accountExternalId
         );
@@ -1007,7 +1031,11 @@ webhooksInboundRouter.post("/messaging", async (c) => {
       );
     }
   } catch (err) {
+    // An authenticated event that was NOT handled is a 500 so Unipile retries
+    // it (recordInboundMessage is idempotent on its seed); it used to answer
+    // 200 and the message was lost (pre-launch audit 2026-10-28, webhooks F6).
     logger.error({ err, event }, "Webhook handler error");
+    return c.json({ error: "Not handled, retry later" }, 500);
   }
 
   return c.json({ ok: true });
