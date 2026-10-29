@@ -87,6 +87,11 @@ vi.mock("../status-write-floor.js", () => ({
 }));
 
 import { moveStatus, statusMoveActorFor } from "../move-status.js";
+import {
+  grantOfScope,
+  runWithActingAgent,
+  runWithGrant,
+} from "@synap/database";
 
 const AGENT = { kind: "agent" as const, userId: "u1", agentUserId: "a1" };
 
@@ -309,6 +314,46 @@ describe("statusMoveActorFor (who a request-door move is made by)", () => {
     expect(
       statusMoveActorFor({ userId: "u1" }, { source: "system" }).actor.kind
     ).toBe("system");
+  });
+  // A person's app sign-in (`app_person`): its grant names the app and no
+  // agent acts in the request — on the hub ctx every hub-scoped key gets.
+  const APP = "app_contentstudio";
+  const HUB = { userId: "u1", source: "intelligence", isHubProtocol: true };
+  const asSignIn = <T>(fn: () => T) =>
+    runWithGrant(grantOfScope({ permissions: ["*"] }, APP), fn);
+  // The app itself is stamped on the transition (`transitionStamp`), not on
+  // the actor: these pin who governs the move.
+  it("a person's app sign-in is the PERSON", () => {
+    expect(asSignIn(() => statusMoveActorFor(HUB, {}))).toEqual({
+      actor: { kind: "human", userId: "u1" },
+      approvedProposalId: undefined,
+    });
+  });
+  it("an app sign-in never claims the system (its hub ctx has no req)", () => {
+    expect(
+      asSignIn(() => statusMoveActorFor(HUB, { source: "system" })).actor
+    ).toEqual({ kind: "human", userId: "u1" });
+  });
+  it("an app sign-in is the person through the hub forwarder's AI source too", () => {
+    expect(
+      asSignIn(() => statusMoveActorFor(HUB, { source: "intelligence" })).actor
+    ).toEqual({ kind: "human", userId: "u1" });
+  });
+  it("an app's AGENT key stays its agent", () => {
+    expect(
+      asSignIn(() =>
+        runWithActingAgent("a1", () =>
+          statusMoveActorFor({ ...HUB, agentUserId: "a1" }, {})
+        )
+      ).actor
+    ).toEqual({ kind: "agent", userId: "u1", agentUserId: "a1" });
+  });
+  it("a hub key whose grant names no app is still an unattributed agent", () => {
+    expect(
+      runWithGrant(grantOfScope({ permissions: ["*"] }, "dcr_x"), () =>
+        statusMoveActorFor(HUB, {})
+      ).actor
+    ).toEqual({ kind: "agent", userId: "u1", agentUserId: null });
   });
   it("an internal caller holding a decision replays it", () => {
     expect(
