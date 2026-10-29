@@ -51,9 +51,27 @@ export const GrantInputSchema = z.object({
     .array(z.string().min(1).max(120))
     .min(1)
     .max(MAX_GRANT_PERMISSIONS),
-  workspaceIds: z.array(z.string().uuid()).max(64).optional(),
-  projectIds: z.array(z.string().uuid()).max(64).optional(),
-  entityIds: z.array(z.string().uuid()).max(256).optional(),
+  /**
+   * Where the key may act. Omitted = not narrowed on that axis. An EMPTY list
+   * is refused, never read: the store reads it as "not narrowed" (every
+   * space) while `permits` reads it as "nowhere", so narrowing to nothing
+   * would silently widen to everything.
+   */
+  workspaceIds: z
+    .array(z.string().uuid())
+    .min(1, "Name at least one space, or leave spaces out for every space.")
+    .max(64)
+    .optional(),
+  projectIds: z
+    .array(z.string().uuid())
+    .min(1, "Name at least one project, or leave projects out.")
+    .max(64)
+    .optional(),
+  entityIds: z
+    .array(z.string().uuid())
+    .min(1, "Name at least one record, or leave records out.")
+    .max(256)
+    .optional(),
   label: z.string().max(120).optional(),
   /**
    * The stored role this grant was built from (lineage). Recorded only when

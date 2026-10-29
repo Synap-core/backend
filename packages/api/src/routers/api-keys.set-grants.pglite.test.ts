@@ -163,6 +163,41 @@ describe("apiKeys.setGrants", () => {
     ).toMatch(/does not allow "entity.note.create"/);
   });
 
+  // Ticket 945d8737: `workspaceIds: []` was stored as null = every space,
+  // while `permits` reads [] as nowhere — narrowing to nothing widened.
+  it("an EMPTY pinning is refused, never stored as every space", async () => {
+    const id = await addKey();
+    await repo().attach(grantInput(id, ["entity.note.read"]));
+    for (const empty of [
+      { workspaceIds: [] },
+      { projectIds: [] },
+      { entityIds: [] },
+    ]) {
+      await expect(
+        asOwner().setGrants({
+          keyId: id,
+          grants: [{ permissions: ["entity.note.*"], ...empty }],
+        })
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    }
+    const { scopes } = (await repo().resolveForKey(id))!;
+    expect(scopes).toEqual([
+      {
+        permissions: ["entity.note.read"],
+        workspaceIds: [WS],
+        projectIds: null,
+        entityIds: null,
+      },
+    ]);
+    // ...so the write the empty pinning would have opened stays denied.
+    expect(
+      await grantWriteDenial(
+        { ...createNote, workspaceId: "44444444-4444-4444-8444-444444444444" },
+        (await repo().resolveForKey(id))!
+      )
+    ).not.toBeNull();
+  });
+
   it("replaces the set — the previous grants end", async () => {
     const id = await addKey();
     await repo().attachMany([
