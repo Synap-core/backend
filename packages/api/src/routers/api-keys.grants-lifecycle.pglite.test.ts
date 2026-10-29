@@ -291,6 +291,19 @@ describe("key lists say what a key may touch", () => {
     expect(key.grants).toEqual([]);
   });
 
+  // The grants now on the Keys list are a pod admin's read: a member (even
+  // the key's own person, once not an admin) is refused the whole list.
+  it("only a pod admin reads every key's access (adminListAll)", async () => {
+    const member = apiKeysRouter.createCaller({
+      db: h.db,
+      authenticated: true,
+      userId: "member-not-admin",
+    } as never);
+    await expect(member.adminListAll()).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+  });
+
   it("a key that never had a grant reads 'ungranted'", async () => {
     const id = await addKey();
     const key = await listed(id);
