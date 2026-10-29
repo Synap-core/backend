@@ -28,6 +28,8 @@ import {
   type WorkUnitActor,
 } from "../services/lifecycle/work-unit-transition.js";
 import { getActingAgentUserId } from "../utils/request-write-context.js";
+import { HoldRefusedError, listHolds } from "../services/lifecycle/holds.js";
+import { decideMoveHold, type Hold } from "@synap-core/types/lifecycle";
 import type {
   ProjectTrack,
   ProjectTrackDefinitionSnapshot,
@@ -281,6 +283,17 @@ export class TrackRepository extends BaseRepository<
       actor?: WorkUnitActor;
       reason?: string | null;
       proposalId?: string | null;
+      /**
+       * What a pause waits on (`decideMoveHold`: refused from an agent when
+       * absent; `defaultHold`, else `unspecified`, for a person or the
+       * system). A goal already paused keeps the hold it had.
+       */
+      hold?: Hold | null;
+      defaultHold?: Hold;
+      /** When it really happened (already bounded by the door). */
+      occurredAt?: Date | null;
+      /** A replay: the app its proposal was filed by (`proposals.app_id`). */
+      appId?: string | null;
     },
     userId: string
   ): Promise<ProjectTrack | null> {
@@ -294,7 +307,28 @@ export class TrackRepository extends BaseRepository<
     }
     const actor =
       params.actor ?? workUnitActorOf(userId, getActingAgentUserId());
+    const fromCategory = TRACK_STATUS_DECLARATION[params.from].category;
     const track = await this.db.transaction(async (tx: any) => {
+      // The hold is decided BEFORE the flip: a refused pause writes nothing.
+      const decided = decideMoveHold({
+        from: params.from,
+        fromCategory,
+        toCategory: TRACK_STATUS_DECLARATION[params.to].category,
+        actorKind: actor.kind,
+        approved: Boolean(params.proposalId),
+        given: params.hold,
+        current:
+          fromCategory === "paused"
+            ? ((
+                await listHolds(tx, {
+                  subjects: [{ subjectType: "track", subjectId: id }],
+                })
+              )[0]?.hold ?? null)
+            : null,
+        fallback: params.defaultHold,
+        since: params.occurredAt ?? new Date(),
+      });
+      if (!decided.ok) throw new HoldRefusedError(decided);
       const [flipped] = await tx
         .update(projectTracks)
         .set({
@@ -327,12 +361,15 @@ export class TrackRepository extends BaseRepository<
           subjectId: flipped.id,
           from: params.from,
           to: params.to,
-          fromCategory: TRACK_STATUS_DECLARATION[params.from].category,
+          fromCategory,
           category: TRACK_STATUS_DECLARATION[params.to].category,
           actor,
           ownerUserId: userId,
           reason: params.reason,
           proposalId: params.proposalId,
+          occurredAt: params.occurredAt,
+          hold: decided.hold,
+          appId: params.appId,
           workspaceId: project?.workspaceId ?? null,
           projectId: flipped.projectId,
           trackId: flipped.id,

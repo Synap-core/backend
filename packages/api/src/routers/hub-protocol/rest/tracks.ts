@@ -89,6 +89,10 @@ import {
   convertEntityToGoal,
   convertToGoalInputSchema,
 } from "../../../services/tracks/convert-to-goal.js";
+import {
+  moveHoldArgs,
+  moveHoldInputShape,
+} from "../../../services/lifecycle/hold-input.js";
 
 const Uuid = z.string().uuid();
 const ParamsBag = z.record(z.string(), z.unknown());
@@ -139,6 +143,8 @@ const StatusSchema = z.object({
   /** The status the caller read — an agent sends it (D1 step 1 warns without it); 409 when stale. */
   expectedStatus: z.enum(PROJECT_TRACK_STATUSES).optional(),
   reasoning: z.string().max(2000).optional(),
+  /** With a pause: what it waits on, and when the move happened (W4). */
+  ...moveHoldInputShape,
 });
 const ReopenSchema = z.object({
   name: z.string().trim().min(1).max(200).optional(),
@@ -593,6 +599,7 @@ export function registerTracksRoutes(app: HubHono): void {
         verdictReason: body.data.verdictReason,
         expectedStatus: body.data.expectedStatus,
         actor: actorOf(c, body.data.reasoning),
+        ...moveHoldArgs(body.data),
       });
       if (result.status === "proposed") return jsonGoverned(c, result);
       return jsonGoverned(c, {

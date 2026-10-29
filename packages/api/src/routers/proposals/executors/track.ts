@@ -75,6 +75,7 @@ import {
   applyTrackParticipantProposal,
   registerTrackParticipantExecutors,
 } from "./track-participants.js";
+import type { Hold } from "@synap-core/types/lifecycle";
 
 function innerData(proposal: { data: unknown }): Record<string, unknown> {
   return ((proposal.data as Record<string, unknown>)?.data ?? {}) as Record<
@@ -349,6 +350,16 @@ export function registerTrackExecutors(): void {
                 proposal.agentUserId
               ),
               proposalId: proposal.id,
+              appId: proposal.appId ?? null,
+              // The pause's hold and the move's time, as filed (W4).
+              hold:
+                data.hold && typeof data.hold === "object"
+                  ? (data.hold as Hold)
+                  : null,
+              occurredAt:
+                typeof data.occurredAt === "string"
+                  ? new Date(data.occurredAt)
+                  : null,
             }
           );
         }

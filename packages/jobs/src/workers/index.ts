@@ -80,6 +80,12 @@ import {
   handleInboundDeliverySweeper,
   INBOUND_DELIVERY_SWEEPER_QUEUE,
 } from "./inbound-delivery-sweeper.js";
+import {
+  handleHoldResume,
+  HOLD_RESUME_QUEUE,
+  registerHoldResumeReactor,
+  type HoldResumeJobData,
+} from "./hold-resume.js";
 import { handleRelationBackfill } from "./relation-backfill.js";
 import {
   handleNotificationCleanup,
@@ -351,6 +357,7 @@ const ALL_QUEUES = [
   AUTOMATION_RUN_REAPER_QUEUE,
   LIFECYCLE_TRANSITION_SWEEPER_QUEUE,
   INBOUND_DELIVERY_SWEEPER_QUEUE,
+  HOLD_RESUME_QUEUE,
   FOCUS_SESSION_REAPER_QUEUE,
   SESSION_TITLER_QUEUE,
   // Session recall: on-demand per session + the 2-min sweep floor that
@@ -821,6 +828,15 @@ export async function registerAllWorkers(): Promise<void> {
     handleInboundDeliverySweeper()
   );
   logger.info("Registered worker: inbound-delivery-sweeper");
+
+  // Hold resume (cron: hourly — a paused thing whose hold date has come goes
+  // back to the status it left; and, sent by its reactor on every transition,
+  // the holds that waited on the thing that moved; status-flow W4)
+  await boss.work(HOLD_RESUME_QUEUE, async ([job]: any[]) =>
+    handleHoldResume((job?.data ?? {}) as HoldResumeJobData)
+  );
+  registerHoldResumeReactor();
+  logger.info("Registered worker + reactor: hold-resume");
 
   // Relation backfill (one-time: creates relation rows for existing entity_id property values)
   await boss.work("relation-backfill", async ([job]: any[]) =>

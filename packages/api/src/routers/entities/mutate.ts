@@ -58,6 +58,14 @@ import {
   readEntityUndoSnapshot,
   stampEntityUpdate,
 } from "../../services/proposals/stamp-materialized.js";
+import {
+  moveHoldArgs,
+  moveHoldInputShape,
+} from "../../services/lifecycle/hold-input.js";
+import {
+  MOVE_FACTS_IGNORED_NOTICE,
+  moveFactsWithoutMoveMessage,
+} from "@synap-core/types/lifecycle";
 import { createLogger } from "@synap-core/core";
 import {
   UpdateEntitiesInputSchema,
@@ -169,6 +177,8 @@ export const mutateProcs = {
          * stale value gets CONFLICT and NOTHING in the call is written.
          */
         expectedStatus: z.string().nullable().optional(),
+        /** With a pause: what it waits on, and when the move happened (W4). */
+        ...moveHoldInputShape,
         /**
          * The `updateEntities` call this write belongs to. Stamped on the
          * gate data, so the AUTO_APPROVED receipt carries it and a feed can
@@ -301,6 +311,7 @@ export const mutateProcs = {
       // whole call before anything else is written. A re-typed entity
       // (`profileSlug`) re-derives its columns in the repository instead.
       let statusMove: MoveStatusResult | undefined;
+      let moveFactsNotice: { notice?: string } = {};
       const lifecycleSlug =
         existing.profileId && input.profileSlug === undefined
           ? (
@@ -340,7 +351,14 @@ export const mutateProcs = {
           reason: input.reasoning ?? null,
           workspaceId: overlayWorkspaceId,
           forcePropose: input.forcePropose,
+          ...moveHoldArgs(input),
         });
+        // A move that found the thing already there records no hold or time:
+        // said back, never silently dropped.
+        moveFactsNotice =
+          statusMove.status === "unchanged" && (input.hold || input.occurredAt)
+            ? { notice: MOVE_FACTS_IGNORED_NOTICE }
+            : {};
         if (statusMove.status === "conflict") {
           throw lifecycleConflictError(
             statusMove.expectedFrom,
@@ -395,8 +413,17 @@ export const mutateProcs = {
             message: "Entity updated",
             written: after,
             statusMove,
+            ...moveFactsNotice,
           };
         }
+      }
+
+      // A hold or a time with no status move would be dropped: refused.
+      if (!statusMove && (input.hold || input.occurredAt)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: moveFactsWithoutMoveMessage(input),
+        });
       }
 
       // 1. Emit .requested event
@@ -516,6 +543,7 @@ export const mutateProcs = {
             ? { deferred: true as const, ref: perm.deferredRef }
             : {}),
           ...(statusMove ? { statusMove } : {}),
+          ...moveFactsNotice,
         };
       }
 
@@ -769,6 +797,7 @@ export const mutateProcs = {
         // The lifecycle part of this call, when it carried the status key
         // (moved / unchanged / proposed — see LIFECYCLE SPLIT above).
         ...(statusMove ? { statusMove } : {}),
+        ...moveFactsNotice,
         // The row as THIS write left it — what an approval's undo stamp
         // records as `after`, read from the write itself so a concurrent edit
         // landing just after it is never recorded as this write's change.

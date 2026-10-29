@@ -43,6 +43,21 @@ import {
 
 /** Mirrors `LIFECYCLE_TRANSITION_EVENT_TYPE` (@synap/events). */
 const TRANSITION_EVENT = "entity.transition.completed";
+/**
+ * When a move HAPPENED: the transition's `occurredAt` (W4: a backdated move
+ * counts from when it really happened), else the log row's time.
+ */
+const OCCURRED_AT = drizzleSql`coalesce((${events.data}->>'occurredAt')::timestamptz, ${events.timestamp})`;
+/** When a move was RECORDED (stamped at the move since W4), else the row's time. */
+const RECORDED_AT = drizzleSql`coalesce((${events.data}->>'recordedAt')::timestamptz, ${events.timestamp})`;
+/**
+ * When the thing ENTERED its current step: the occurred time of its LATEST
+ * move — latest by record order, so a backdated move that came last still
+ * counts (a later `max(occurredAt)` would skip it). Default the founder may
+ * override: a backdated move counts from when it happened (plan Q3.2, at
+ * most 30 days back).
+ */
+const ENTERED_AT = drizzleSql`(array_agg(${OCCURRED_AT} ORDER BY ${RECORDED_AT} DESC, ${events.timestamp} DESC, ${events.id} DESC))[1]`;
 
 export type StatusGroupSubject =
   | { kind: "kind"; profileIds: string[] }
@@ -391,7 +406,7 @@ function thingsInColumns(params: {
   const lastMove = db
     .select({
       subjectId: events.subjectId,
-      enteredAt: drizzleSql`max(${events.timestamp})`.as("last_entered_at"),
+      enteredAt: drizzleSql`${ENTERED_AT}`.as("last_entered_at"),
     })
     .from(events)
     .where(
@@ -586,7 +601,7 @@ export async function countTerminalEntriesByBucket(params: {
   // The unit is one of three literals (typed), never caller text.
   const unit = drizzleSql.raw(`'${params.bucket}'`);
   // Truncated in UTC, then read back as an instant (timestamptz).
-  const bucketStart = drizzleSql`(date_trunc(${unit}, ${events.timestamp} AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')`;
+  const bucketStart = drizzleSql`(date_trunc(${unit}, ${OCCURRED_AT} AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')`;
   const rows = await db
     .select({
       bucketStart: drizzleSql<string>`${bucketStart}`.as("bucket_start"),

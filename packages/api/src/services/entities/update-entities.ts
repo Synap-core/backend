@@ -81,6 +81,7 @@ import {
   recallIdempotentResult,
   rememberIdempotentResult,
 } from "../../routers/hub-protocol/_middleware/idempotency.js";
+import { moveHoldInputShape } from "../lifecycle/hold-input.js";
 
 export const UPDATE_ENTITIES_MAX = UPDATE_PACK_MAX_ITEMS;
 
@@ -92,6 +93,8 @@ export const EntityUpdatePatchSchema = z
     properties: z.record(z.string(), z.unknown()).optional(),
     deleteProperties: z.array(z.string()).optional(),
     expectedStatus: z.string().nullable().optional(),
+    // With a pause: what it waits on, and when the move happened (W4).
+    ...moveHoldInputShape,
   })
   .strict();
 

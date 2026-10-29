@@ -1243,6 +1243,18 @@
           "description": "When you change the status: the status you SAW (compare-and-set). If it moved meanwhile you get { status: 'conflict', conflict: { currentStatus } } and nothing is written — re-read and decide again; never retry blindly."
         },
         {
+          "name": "hold",
+          "type": "object",
+          "required": false,
+          "description": "Required when the move pauses. Say what it waits on. on: person | agent | external | thing | decision | date | nobody. ref: who or what ('person:<id>', 'company:<id>', a label). reason: why. until: { date: ISO } resumes on that day; { moves: '<entity|track|focus_session>:<id>', to?: status or category } resumes when that thing moves. reviewBy: an ISO date to look again (14 days by default when nothing resumes it on a date). Leave it out when the move does not pause."
+        },
+        {
+          "name": "occurredAt",
+          "type": "string",
+          "required": false,
+          "description": "When the move really happened, if earlier than now (ISO date-time): at most 30 days back, never in the future. The move is recorded now and marked backdated."
+        },
+        {
           "name": "documentId",
           "type": "string",
           "required": false,
@@ -1289,6 +1301,34 @@
           "expectedStatus": {
             "type": ["string", "null"],
             "description": "When you change the status: the status you SAW (compare-and-set). If it moved meanwhile you get { status: 'conflict', conflict: { currentStatus } } and nothing is written — re-read and decide again; never retry blindly."
+          },
+          "hold": {
+            "type": "object",
+            "description": "Required when the move pauses. Say what it waits on. on: person | agent | external | thing | decision | date | nobody. ref: who or what ('person:<id>', 'company:<id>', a label). reason: why. until: { date: ISO } resumes on that day; { moves: '<entity|track|focus_session>:<id>', to?: status or category } resumes when that thing moves. reviewBy: an ISO date to look again (14 days by default when nothing resumes it on a date). Leave it out when the move does not pause.",
+            "properties": {
+              "on": {
+                "type": "string",
+                "enum": [
+                  "person",
+                  "agent",
+                  "external",
+                  "thing",
+                  "decision",
+                  "date",
+                  "nobody"
+                ]
+              },
+              "ref": { "type": ["string", "null"] },
+              "reason": { "type": ["string", "null"] },
+              "until": { "type": ["object", "null"] },
+              "reviewBy": { "type": ["string", "null"] }
+            },
+            "required": ["on"],
+            "additionalProperties": false
+          },
+          "occurredAt": {
+            "type": "string",
+            "description": "When the move really happened, if earlier than now (ISO date-time): at most 30 days back, never in the future. The move is recorded now and marked backdated."
           },
           "documentId": {
             "type": "string",
@@ -1375,6 +1415,34 @@
                     "expectedStatus": {
                       "type": ["string", "null"],
                       "description": "When the patch moves the status: the status you SAW. If it moved meanwhile the item is skipped."
+                    },
+                    "hold": {
+                      "type": "object",
+                      "description": "Required when the move pauses. Say what it waits on. on: person | agent | external | thing | decision | date | nobody. ref: who or what ('person:<id>', 'company:<id>', a label). reason: why. until: { date: ISO } resumes on that day; { moves: '<entity|track|focus_session>:<id>', to?: status or category } resumes when that thing moves. reviewBy: an ISO date to look again (14 days by default when nothing resumes it on a date). Leave it out when the move does not pause.",
+                      "properties": {
+                        "on": {
+                          "type": "string",
+                          "enum": [
+                            "person",
+                            "agent",
+                            "external",
+                            "thing",
+                            "decision",
+                            "date",
+                            "nobody"
+                          ]
+                        },
+                        "ref": { "type": ["string", "null"] },
+                        "reason": { "type": ["string", "null"] },
+                        "until": { "type": ["object", "null"] },
+                        "reviewBy": { "type": ["string", "null"] }
+                      },
+                      "required": ["on"],
+                      "additionalProperties": false
+                    },
+                    "occurredAt": {
+                      "type": "string",
+                      "description": "When the move really happened, if earlier than now (ISO date-time): at most 30 days back, never in the future. The move is recorded now and marked backdated."
                     }
                   },
                   "additionalProperties": false
@@ -2566,7 +2634,7 @@
           "name": "statusOf",
           "type": "array<string>",
           "required": false,
-          "description": "Optional: up to 10 ids (thing, goal, session or run). `startHere.statusOf` says where each stands: status, category, since, stuck, what it waits on."
+          "description": "Optional: up to 10 ids (thing, goal, session or run). `startHere.statusOf` says where each stands: status, how long it has been there, whether it is stuck, and what it waits on."
         }
       ],
       "inputSchema": {
@@ -2601,7 +2669,7 @@
             "type": "array",
             "items": { "type": "string" },
             "maxItems": 10,
-            "description": "Optional: up to 10 ids (thing, goal, session or run). `startHere.statusOf` says where each stands: status, category, since, stuck, what it waits on."
+            "description": "Optional: up to 10 ids (thing, goal, session or run). `startHere.statusOf` says where each stands: status, how long it has been there, whether it is stuck, and what it waits on."
           }
         },
         "required": []
@@ -3879,6 +3947,18 @@
           "enum": ["active", "paused"]
         },
         {
+          "name": "hold",
+          "type": "object",
+          "required": false,
+          "description": "Required when the move pauses. Say what it waits on. on: person | agent | external | thing | decision | date | nobody. ref: who or what ('person:<id>', 'company:<id>', a label). reason: why. until: { date: ISO } resumes on that day; { moves: '<entity|track|focus_session>:<id>', to?: status or category } resumes when that thing moves. reviewBy: an ISO date to look again (14 days by default when nothing resumes it on a date). Leave it out when the move does not pause."
+        },
+        {
+          "name": "occurredAt",
+          "type": "string",
+          "required": false,
+          "description": "When the move really happened, if earlier than now (ISO date-time): at most 30 days back, never in the future. The move is recorded now and marked backdated."
+        },
+        {
           "name": "progress",
           "type": "number",
           "required": false,
@@ -4013,6 +4093,34 @@
             "type": "string",
             "enum": ["active", "paused"],
             "description": "New lifecycle status (optional). To CLOSE a session use synap_complete_session — update_session cannot close, since a raw close would orphan a running playbook_run."
+          },
+          "hold": {
+            "type": "object",
+            "description": "Required when the move pauses. Say what it waits on. on: person | agent | external | thing | decision | date | nobody. ref: who or what ('person:<id>', 'company:<id>', a label). reason: why. until: { date: ISO } resumes on that day; { moves: '<entity|track|focus_session>:<id>', to?: status or category } resumes when that thing moves. reviewBy: an ISO date to look again (14 days by default when nothing resumes it on a date). Leave it out when the move does not pause.",
+            "properties": {
+              "on": {
+                "type": "string",
+                "enum": [
+                  "person",
+                  "agent",
+                  "external",
+                  "thing",
+                  "decision",
+                  "date",
+                  "nobody"
+                ]
+              },
+              "ref": { "type": ["string", "null"] },
+              "reason": { "type": ["string", "null"] },
+              "until": { "type": ["object", "null"] },
+              "reviewBy": { "type": ["string", "null"] }
+            },
+            "required": ["on"],
+            "additionalProperties": false
+          },
+          "occurredAt": {
+            "type": "string",
+            "description": "When the move really happened, if earlier than now (ISO date-time): at most 30 days back, never in the future. The move is recorded now and marked backdated."
           },
           "progress": {
             "type": "number",
@@ -10812,6 +10920,18 @@
           ]
         },
         {
+          "name": "hold",
+          "type": "object",
+          "required": false,
+          "description": "Required when the move pauses. Say what it waits on. on: person | agent | external | thing | decision | date | nobody. ref: who or what ('person:<id>', 'company:<id>', a label). reason: why. until: { date: ISO } resumes on that day; { moves: '<entity|track|focus_session>:<id>', to?: status or category } resumes when that thing moves. reviewBy: an ISO date to look again (14 days by default when nothing resumes it on a date). Leave it out when the move does not pause."
+        },
+        {
+          "name": "occurredAt",
+          "type": "string",
+          "required": false,
+          "description": "When the move really happened, if earlier than now (ISO date-time): at most 30 days back, never in the future. The move is recorded now and marked backdated."
+        },
+        {
           "name": "reasoning",
           "type": "string",
           "required": false,
@@ -10871,6 +10991,34 @@
               "archived"
             ],
             "description": "The status you read the goal in (synap_list_tracks) — always send it. Compare-and-set: if it moved meanwhile the call answers status='conflict' with the current status and writes nothing."
+          },
+          "hold": {
+            "type": "object",
+            "description": "Required when the move pauses. Say what it waits on. on: person | agent | external | thing | decision | date | nobody. ref: who or what ('person:<id>', 'company:<id>', a label). reason: why. until: { date: ISO } resumes on that day; { moves: '<entity|track|focus_session>:<id>', to?: status or category } resumes when that thing moves. reviewBy: an ISO date to look again (14 days by default when nothing resumes it on a date). Leave it out when the move does not pause.",
+            "properties": {
+              "on": {
+                "type": "string",
+                "enum": [
+                  "person",
+                  "agent",
+                  "external",
+                  "thing",
+                  "decision",
+                  "date",
+                  "nobody"
+                ]
+              },
+              "ref": { "type": ["string", "null"] },
+              "reason": { "type": ["string", "null"] },
+              "until": { "type": ["object", "null"] },
+              "reviewBy": { "type": ["string", "null"] }
+            },
+            "required": ["on"],
+            "additionalProperties": false
+          },
+          "occurredAt": {
+            "type": "string",
+            "description": "When the move really happened, if earlier than now (ISO date-time): at most 30 days back, never in the future. The move is recorded now and marked backdated."
           },
           "reasoning": {
             "type": "string",

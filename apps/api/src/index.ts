@@ -1954,6 +1954,8 @@ try {
               await import("@synap/jobs/utils/proactive-post.js");
             const { registerSessionCloser, registerStoppedSessionStaler } =
               await import("@synap/jobs/utils/session-close.js");
+            const { registerHoldResumeFollowUp } =
+              await import("@synap/jobs/workers/hold-resume.js");
             const { registerStageAdvancer } =
               await import("@synap/jobs/utils/stage-advance.js");
             const { registerSessionOutcomeDoor } =
@@ -1997,6 +1999,11 @@ try {
             // its agent's confirm / choose asks, and those asks end with it.
             registerStoppedSessionStaler((input) =>
               api.staleStoppedSession(input)
+            );
+            // A hold's resume (W4) owes what the api's doors do after the same
+            // move: a goal's judgement notices, a stale session's runs.
+            registerHoldResumeFollowUp((resumed) =>
+              api.holdResumeFollowUp(resumed)
             );
             // ONE stage-advance door: the automation `session_update` output
             // wrote `focus_sessions.current_stage` with a raw UPDATE and resolved

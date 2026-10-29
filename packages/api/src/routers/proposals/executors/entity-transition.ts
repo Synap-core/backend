@@ -4,6 +4,7 @@ import { ProposalStatus } from "@synap/database/schema";
 import { moveStatus } from "../../../services/lifecycle/move-status.js";
 import { registerProposalExecutor } from "../execution-registry.js";
 import { reportApproved } from "./shared.js";
+import type { Hold } from "@synap-core/types/lifecycle";
 
 /**
  * Approval half of the `moveStatus` door (work model L2): `entity/transition`.
@@ -59,6 +60,15 @@ export function registerEntityTransitionExecutors(): void {
         reason: typeof inner.reason === "string" ? inner.reason : null,
         workspaceId: proposal.workspaceId ?? null,
         approvedProposalId: input.proposalId,
+        // The pause's hold and the move's time, as filed (W4).
+        hold:
+          inner.hold && typeof inner.hold === "object"
+            ? (inner.hold as Hold)
+            : null,
+        occurredAt:
+          typeof inner.occurredAt === "string" ? inner.occurredAt : null,
+        // Moved for the app whose key filed it (0310), not the approver's.
+        appId: proposal.appId ?? null,
       });
 
       if (result.status === "conflict") {

@@ -1454,6 +1454,50 @@
             "type": ["string", "null"],
             "description": "Compare-and-set on the status: the status you SAW. If it moved meanwhile the call answers 409 with the current status and writes nothing."
           },
+          "hold": {
+            "type": "object",
+            "properties": {
+              "on": {
+                "type": "string",
+                "enum": [
+                  "person",
+                  "agent",
+                  "external",
+                  "thing",
+                  "decision",
+                  "date",
+                  "nobody",
+                  "unspecified"
+                ]
+              },
+              "ref": { "type": ["string", "null"], "maxLength": 500 },
+              "reason": { "type": ["string", "null"], "maxLength": 2000 },
+              "until": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": { "date": { "type": "string" } },
+                    "required": ["date"],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "moves": { "type": "string" },
+                      "to": { "type": "string" }
+                    },
+                    "required": ["moves"],
+                    "additionalProperties": false
+                  },
+                  { "type": "null" }
+                ]
+              },
+              "reviewBy": { "type": ["string", "null"] }
+            },
+            "required": ["on"],
+            "additionalProperties": false
+          },
+          "occurredAt": { "type": "string" },
           "documentId": {
             "type": "string",
             "format": "uuid",
@@ -8662,7 +8706,54 @@
                   "expectedStatus": {
                     "type": ["string", "null"],
                     "description": "Compare-and-set on the role's status: the status you SAW. If it moved meanwhile the call answers 409 with the current status and writes nothing."
-                  }
+                  },
+                  "hold": {
+                    "type": "object",
+                    "properties": {
+                      "on": {
+                        "type": "string",
+                        "enum": [
+                          "person",
+                          "agent",
+                          "external",
+                          "thing",
+                          "decision",
+                          "date",
+                          "nobody",
+                          "unspecified"
+                        ]
+                      },
+                      "ref": { "type": ["string", "null"], "maxLength": 500 },
+                      "reason": {
+                        "type": ["string", "null"],
+                        "maxLength": 2000
+                      },
+                      "until": {
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": { "date": { "type": "string" } },
+                            "required": ["date"],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "moves": { "type": "string" },
+                              "to": { "type": "string" }
+                            },
+                            "required": ["moves"],
+                            "additionalProperties": false
+                          },
+                          { "type": "null" }
+                        ]
+                      },
+                      "reviewBy": { "type": ["string", "null"] }
+                    },
+                    "required": ["on"],
+                    "additionalProperties": false
+                  },
+                  "occurredAt": { "type": "string" }
                 }
               }
             }
@@ -30085,6 +30176,53 @@
                       "cancelled"
                     ]
                   },
+                  "hold": {
+                    "type": "object",
+                    "properties": {
+                      "on": {
+                        "type": "string",
+                        "enum": [
+                          "person",
+                          "agent",
+                          "external",
+                          "thing",
+                          "decision",
+                          "date",
+                          "nobody",
+                          "unspecified"
+                        ]
+                      },
+                      "ref": { "type": ["string", "null"], "maxLength": 500 },
+                      "reason": {
+                        "type": ["string", "null"],
+                        "maxLength": 2000
+                      },
+                      "until": {
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": { "date": { "type": "string" } },
+                            "required": ["date"],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "moves": { "type": "string" },
+                              "to": { "type": "string" }
+                            },
+                            "required": ["moves"],
+                            "additionalProperties": false
+                          },
+                          { "type": "null" }
+                        ]
+                      },
+                      "reviewBy": { "type": ["string", "null"] }
+                    },
+                    "required": ["on"],
+                    "additionalProperties": false
+                  },
+                  "occurredAt": { "type": "string" },
                   "progress": {
                     "type": "integer",
                     "minimum": 0,

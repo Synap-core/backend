@@ -136,6 +136,19 @@ describe("writeStageSubjectStatus — the status door (work model L2)", () => {
     });
   });
 
+  it("hands the door the stage's own hold, used only if the move pauses (W4)", async () => {
+    h.move.mockResolvedValue({ status: "moved", transition: {} });
+    await writeStageSubjectStatus({
+      session: SESSION,
+      toStage: "draft",
+      userId: "owner-1",
+      agentUserId: "agent-1",
+    });
+    expect(h.move.mock.calls[0]![0]).toMatchObject({
+      pauseHold: { on: "thing", ref: "stage:draft" },
+    });
+  });
+
   it("a proposed move is success; a playbook human-only status still forces a proposal", async () => {
     h.proc!.humanOnlyStatuses = ["published"];
     h.move.mockResolvedValue({

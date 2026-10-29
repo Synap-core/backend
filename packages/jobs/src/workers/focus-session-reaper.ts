@@ -249,6 +249,11 @@ export async function handleFocusSessionReaper(): Promise<void> {
       to: "stale",
       actor: { kind: "system" },
       reason: `No activity for ${REAPER_STALE_HOURS} hours.`,
+      // Idle: nobody is on it (a session already paused keeps its own hold).
+      defaultHold: {
+        on: "nobody",
+        reason: `No activity for ${REAPER_STALE_HOURS} hours.`,
+      },
     });
 
     if (reaped.length === 0) {

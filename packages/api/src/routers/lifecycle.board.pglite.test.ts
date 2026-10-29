@@ -186,7 +186,13 @@ async function thing(
 async function moved(
   client: PGlite,
   entityId: string,
-  o: { to: string; daysAgo: number; role?: string | null }
+  o: {
+    to: string;
+    daysAgo: number;
+    role?: string | null;
+    /** W4: when it really happened (a backdated move); recorded `daysAgo`. */
+    occurredDaysAgo?: number;
+  }
 ) {
   await client.query(
     `insert into events (id, timestamp, type, subject_id, subject_type, data, user_id)
@@ -194,7 +200,16 @@ async function moved(
     [
       ago(o.daysAgo),
       entityId,
-      JSON.stringify({ to: o.to, role: o.role ?? null }),
+      JSON.stringify({
+        to: o.to,
+        role: o.role ?? null,
+        ...(o.occurredDaysAgo !== undefined
+          ? {
+              recordedAt: ago(o.daysAgo),
+              occurredAt: ago(o.occurredDaysAgo),
+            }
+          : {}),
+      }),
       USER,
     ]
   );
@@ -292,6 +307,31 @@ describe("lifecycle.board — a kind", () => {
     expect(board.live).toBe(5);
     expect(board.hasWorker).toBe(false);
     expect(board.suggestedShape).toBe("list");
+  });
+
+  it("time in column counts from the LATEST move's occurred time, a backdated one included (W4)", async () => {
+    const client = await freshDb();
+    const talks = await thing(client, {
+      status: "negotiating",
+      title: "Talks",
+      createdDaysAgo: 40,
+    });
+    await moved(client, talks, { to: "negotiating", daysAgo: 2 });
+    // Recorded later, but says it happened 8 days ago: it is the move the
+    // thing stands on, so it decides — `max(occurredAt)` would read 2 days.
+    await moved(client, talks, {
+      to: "negotiating",
+      daysAgo: 1,
+      occurredDaysAgo: 8,
+    });
+    const board = await (
+      await lifecycleCaller()
+    ).board({ profileSlug: "deal" });
+    const item = board.columns
+      .find((c) => c.key === "negotiating")!
+      .items.find((i) => i.id === talks)!;
+    const days = (Date.now() - Date.parse(String(item.enteredAt))) / 86_400_000;
+    expect(Math.round(days)).toBe(8);
   });
 
   it("a wider window brings the old win back", async () => {

@@ -476,6 +476,13 @@ export {
   type WorkUnitActor,
 } from "./services/lifecycle/work-unit-transition.js";
 export {
+  HoldRefusedError,
+  listHolds,
+  type CurrentHold,
+  type HoldFilter,
+  type HoldSubjectRef,
+} from "./services/lifecycle/holds.js";
+export {
   LifecycleWriteOutsideDoorError,
   assertNoLifecycleMove,
   columnsForValue,

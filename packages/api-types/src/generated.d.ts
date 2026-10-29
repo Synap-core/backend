@@ -5925,6 +5925,57 @@ declare const LIFECYCLE_CATEGORIES: readonly [
 	"lost"
 ];
 export type LifecycleCategory = (typeof LIFECYCLE_CATEGORIES)[number];
+declare const HOLD_ON: readonly [
+	"person",
+	"agent",
+	"external",
+	"thing",
+	"decision",
+	"date",
+	"nobody",
+	"unspecified"
+];
+export type HoldOn = (typeof HOLD_ON)[number];
+/**
+ * How a hold resumes: on a calendar date (ISO), or when the awaited thing moves
+ * (`moves` = `<subjectType>:<id>`, e.g. `entity:…`, `track:…`,
+ * `focus_session:…`), optionally only when it reaches `to` (a status key, or a
+ * category such as `done`).
+ */
+export type HoldUntil = {
+	date: string;
+} | {
+	moves: string;
+	to?: string;
+};
+/** A hold as a mover gives it. */
+export interface Hold {
+	on: HoldOn;
+	/** Who or what: `person:<id>`, `company:<id>`, `check:<stage>`, a free label. */
+	ref?: string | null;
+	reason?: string | null;
+	until?: HoldUntil | null;
+	/** ISO date by which someone looks at it again (never a move). */
+	reviewBy?: string | null;
+}
+/**
+ * A hold as the transition records it: the mover's hold plus what the server
+ * knows. `resumeTo` is the status the thing left when the pause BEGAN (a
+ * carried hold keeps it), so a resume by date or by move goes back there;
+ * `since` is when the pause began (its occurred time).
+ */
+export interface RecordedHold extends Hold {
+	resumeTo: string | null;
+	since: string;
+}
+export type MoveHoldDecision = {
+	hold: RecordedHold | null;
+	ok: true;
+} | {
+	code: "HOLD_INVALID" | "HOLD_NOT_A_PAUSE" | "HOLD_REQUIRED";
+	message: string;
+	ok: false;
+};
 /**
  * What a transition is ABOUT. An entity (a kind's lifecycle, or a role's on
  * its facet) moves through the `moveStatus` door; a goal (`project_tracks`)
@@ -5947,7 +5998,17 @@ export interface TransitionBase {
 	to: string;
 	fromCategory: LifecycleCategory | null;
 	category: LifecycleCategory;
+	/** How the move was governed and compare-and-set (who wins a race). */
 	actorKind: "agent" | "human" | "system";
+	/**
+	 * Who made it, for attribution: `actorKind`, except a move made with an
+	 * APP's key (`grants.client_id`, the same attribution `events.app_id`
+	 * carries, 0310) is the app's: the CRM app moving a deal is neither the
+	 * person who connected it nor an agent.
+	 */
+	actorClass: TransitionActorClass;
+	/** The app's `public_id` when `actorClass` is `app`, else null. */
+	appId: string | null;
 	/** The person the move is attributed to (the owner of an agent's move). */
 	userId: string;
 	agentUserId: string | null;
@@ -5958,7 +6019,23 @@ export interface TransitionBase {
 	proposalId: string | null;
 	/** The lens the move happened in. */
 	workspaceId: string | null;
+	/**
+	 * When it happened (ISO): now, or up to 30 days back when the mover says so
+	 * (`resolveOccurredAt`). Time in a status is measured from here.
+	 */
+	occurredAt: string;
+	/** When it was recorded (ISO), stamped at the move, never at delivery. */
+	recordedAt: string;
+	/** `occurredAt` was given and lies before `recordedAt`. */
+	backdated: boolean;
+	/**
+	 * What a move into a paused status waits on (`./hold.ts`); null for any
+	 * other move. The transition log is the hold's only store.
+	 */
+	hold: RecordedHold | null;
 }
+/** Who made a move, for attribution (`TransitionBase.actorClass`). */
+export type TransitionActorClass = "agent" | "app" | "human" | "system";
 /**
  * The payload of `entity.transition.completed` — the ONE event every entity
  * status move emits (the `moveStatus` door). `role` is the role-profile slug
@@ -7077,7 +7154,9 @@ export type ApplyStatusMoveResult = {
 	expectedFrom: string | null;
 	status: "conflict";
 } | {
-	code: "UNKNOWN_OPTION";
+	code: "UNKNOWN_OPTION" | Extract<MoveHoldDecision, {
+		ok: false;
+	}>["code"];
 	reason: string;
 	status: "refused";
 };
@@ -11132,7 +11211,7 @@ export type MoveStatusResult = ApplyStatusMoveResult | {
 	reason: string;
 	status: "denied";
 } | {
-	code: "NOT_FOUND" | "NOT_THE_LIFECYCLE" | "NO_LIFECYCLE" | "ROLE_NOT_ATTACHED" | "UNKNOWN_OPTION";
+	code: "HOLD_INVALID" | "HOLD_NOT_A_PAUSE" | "HOLD_REQUIRED" | "NOT_FOUND" | "NOT_THE_LIFECYCLE" | "NO_LIFECYCLE" | "OCCURRED_AT_INVALID" | "ROLE_NOT_ATTACHED" | "UNKNOWN_OPTION";
 	reason: string;
 	status: "refused";
 };
@@ -32092,7 +32171,20 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				expectedStatus?: string | null | undefined;
 				forcePropose?: boolean | undefined;
 				global?: boolean | undefined;
+				hold?: {
+					on: "agent" | "date" | "decision" | "external" | "nobody" | "person" | "thing" | "unspecified";
+					reason?: string | null | undefined;
+					ref?: string | null | undefined;
+					reviewBy?: string | null | undefined;
+					until?: {
+						date: string;
+					} | {
+						moves: string;
+						to?: string | undefined;
+					} | null | undefined;
+				} | undefined;
 				id: string;
+				occurredAt?: string | undefined;
 				profileSlug?: string | undefined;
 				properties?: Record<string, unknown> | undefined;
 				reasoning?: string | undefined;
@@ -32121,6 +32213,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			} | {
 				deferred?: true | undefined;
 				message: string;
+				notice?: string;
 				proposalId: string;
 				proposalType: string;
 				ref?: string | undefined;
@@ -32129,6 +32222,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				statusMove?: MoveStatusResult | undefined;
 			} | {
 				message: string;
+				notice?: string;
 				proposalId?: undefined;
 				proposalType?: undefined;
 				reviewUrl?: undefined;
@@ -32154,6 +32248,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				} | undefined;
 				expectedStatus?: string | null | undefined;
 				facetId: string;
+				hold?: {
+					on: "agent" | "date" | "decision" | "external" | "nobody" | "person" | "thing" | "unspecified";
+					reason?: string | null | undefined;
+					ref?: string | null | undefined;
+					reviewBy?: string | null | undefined;
+					until?: {
+						date: string;
+					} | {
+						moves: string;
+						to?: string | undefined;
+					} | null | undefined;
+				} | undefined;
+				occurredAt?: string | undefined;
 				properties?: Record<string, unknown> | undefined;
 				reasoning?: string | undefined;
 				source?: "agent" | "ai" | "cli" | "extension" | "intelligence" | "n8n" | "openwebui-pipeline" | "raycast" | "system" | "user" | undefined;
@@ -32224,6 +32331,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						deleteProperties?: string[] | undefined;
 						description?: string | undefined;
 						expectedStatus?: string | null | undefined;
+						hold?: {
+							on: "agent" | "date" | "decision" | "external" | "nobody" | "person" | "thing" | "unspecified";
+							reason?: string | null | undefined;
+							ref?: string | null | undefined;
+							reviewBy?: string | null | undefined;
+							until?: {
+								date: string;
+							} | {
+								moves: string;
+								to?: string | undefined;
+							} | null | undefined;
+						} | undefined;
+						occurredAt?: string | undefined;
 						properties?: Record<string, unknown> | undefined;
 						title?: string | undefined;
 					};
@@ -34573,7 +34693,20 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				followPlaybookId?: string | null | undefined;
 				followStageKey?: string | null | undefined;
 				goal?: string | undefined;
+				hold?: {
+					on: "agent" | "date" | "decision" | "external" | "nobody" | "person" | "thing" | "unspecified";
+					reason?: string | null | undefined;
+					ref?: string | null | undefined;
+					reviewBy?: string | null | undefined;
+					until?: {
+						date: string;
+					} | {
+						moves: string;
+						to?: string | undefined;
+					} | null | undefined;
+				} | undefined;
 				id: string;
+				occurredAt?: string | undefined;
 				params?: Record<string, unknown> | undefined;
 				progress?: number | undefined;
 				projectId?: string | null | undefined;
@@ -48780,7 +48913,20 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		setStatus: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				expectedStatus?: "active" | "agreed" | "archived" | "completed" | "paused" | "proposed" | "ready" | undefined;
+				hold?: {
+					on: "agent" | "date" | "decision" | "external" | "nobody" | "person" | "thing" | "unspecified";
+					reason?: string | null | undefined;
+					ref?: string | null | undefined;
+					reviewBy?: string | null | undefined;
+					until?: {
+						date: string;
+					} | {
+						moves: string;
+						to?: string | undefined;
+					} | null | undefined;
+				} | undefined;
 				id: string;
+				occurredAt?: string | undefined;
 				reasoning?: string | undefined;
 				status: "active" | "agreed" | "archived" | "completed" | "paused" | "proposed" | "ready";
 				verdict?: "impossible" | "met" | "mistake" | "no_longer_needed" | "not_met" | "partly_met" | "replaced" | "retired" | undefined;

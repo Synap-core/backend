@@ -196,6 +196,8 @@ import {
   completeRunBodySchema,
   settleRunTurnEnd,
 } from "../../../services/runs/run-turn-end.js";
+import { moveHoldInputShape } from "../../../services/lifecycle/hold-input.js";
+import { sessionMoveRefusal } from "../../../services/focus-sessions/update-session.js";
 
 // ── Wire schemas ───────────────────────────────────────────────────────────
 
@@ -434,6 +436,8 @@ const UpdateBodySchema = z.object({
   // ONE status vocabulary — the same list the tRPC `focus_sessions.update` door
   // takes, so the two write doors can never drift apart.
   status: z.enum(UPDATABLE_SESSION_STATUSES).optional(),
+  // With a pause: what it waits on, and when the move happened (W4).
+  ...moveHoldInputShape,
   progress: z.number().int().min(0).max(100).optional(),
   channelId: z.string().uuid().optional(),
   correlationId: z.string().optional(),
@@ -2117,6 +2121,14 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
               workspaceId,
             });
 
+      // W4: what a pause waits on, and when it happened — refused up front.
+      const moveRefusal = sessionMoveRefusal(
+        existing.status,
+        patch,
+        agentUserId
+      );
+      if (moveRefusal) return c.json({ error: moveRefusal }, 400);
+
       // Step 3a: STAGE GATE FLOOR — the MCP door's (`updateFocusSession`). An
       // agent cannot resume a gate-held session, advance it while held, or
       // jump over a gated stage; the gate's approval is the door. 409: the
@@ -2258,6 +2270,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           ...sessionGoalPayload(existing, patch.goal),
           ...(patch.title !== undefined ? { title: patch.title } : {}),
           ...(patch.status !== undefined ? { status: patch.status } : {}),
+          // Replayed with the move (the approval keeps them).
+          ...(patch.hold ? { hold: patch.hold } : {}),
+          ...(patch.occurredAt ? { occurredAt: patch.occurredAt } : {}),
           ...(patch.progress !== undefined ? { progress: patch.progress } : {}),
           ...(patch.channelId !== undefined
             ? { channelId: patch.channelId }
@@ -2437,6 +2452,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         sessionId: id,
         set,
         actor: workUnitActorOf(userId, agentUserId),
+        hold: patch.hold,
+        occurredAt: patch.occurredAt ? new Date(patch.occurredAt) : null,
       });
 
       const usesStamped =

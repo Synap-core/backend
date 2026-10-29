@@ -44,6 +44,7 @@ import {
   type CallToolResult,
   type McpHandlerMap,
 } from "./shared.js";
+import { moveHoldToolArgs } from "../../../services/lifecycle/hold-input.js";
 
 const Uuid = z.string().uuid();
 
@@ -209,6 +210,8 @@ export const trackHandlers: McpHandlerMap = {
           verdictReason: str(ctx.args.verdictReason),
           ...(expectedStatus ? { expectedStatus } : {}),
           actor: actorOf(ctx),
+          // A pause's hold and the move's time (W4), checked by the service.
+          ...moveHoldToolArgs(ctx.args),
         });
       } catch (err) {
         // A stale status move is an answer the agent re-plans on, not a fault.

@@ -32,13 +32,20 @@ import {
   SESSION_STATUS_DECLARATION,
   type SessionStatus,
 } from "@synap-core/types/focus-sessions";
-import type { WorkUnitTransitionPayload } from "@synap-core/types/lifecycle";
+import {
+  HOLD_NOT_A_PAUSE_MESSAGE,
+  decideMoveHold,
+  type Hold,
+  type RecordedHold,
+  type WorkUnitTransitionPayload,
+} from "@synap-core/types/lifecycle";
 import type * as schema from "../../schema/index.js";
 import {
   focusSessions,
   type FocusSession,
 } from "../../schema/focus-sessions.js";
 import { insertTransitionOutbox } from "./transition-outbox.js";
+import { HoldRefusedError, listHolds } from "./holds.js";
 import {
   buildWorkUnitTransition,
   type WorkUnitActor,
@@ -69,6 +76,19 @@ export interface SetSessionStatusInput {
   proposalId?: string | null;
   /** The other columns written in the SAME statement (never the status). */
   set?: SessionColumnsPatch;
+  /**
+   * What a move into a paused status (`paused`, `stale`) waits on, given by
+   * the mover. Absent: refused for an agent (`HoldRefusedError`), else
+   * `defaultHold` (`unspecified` when none). A session already paused keeps
+   * the hold it had (the reaper's `paused → stale`).
+   */
+  hold?: Hold | null;
+  /** A person's or the system's hold when none is given (the reaper: nobody). */
+  defaultHold?: Hold;
+  /** When it really happened (already bounded by the door); default now. */
+  occurredAt?: Date | null;
+  /** A replay: the app its proposal was filed by (`proposals.app_id`). */
+  appId?: string | null;
 }
 
 export interface SetSessionStatusResult {
@@ -106,6 +126,42 @@ export async function setSessionStatus(
       .for("update", { of: focusSessions });
     if (locked.length === 0) return { rows: [], transitions: [] };
 
+    // The hold each row's move records — decided BEFORE the write, so a
+    // refused pause writes nothing. Rows already paused carry their own.
+    const toCategory = SESSION_STATUS_DECLARATION[input.to].category;
+    const since = input.occurredAt ?? new Date();
+    const carried = new Map<string, RecordedHold>();
+    if (toCategory === "paused") {
+      const paused = locked.filter(
+        (r) => SESSION_STATUS_DECLARATION[r.status].category === "paused"
+      );
+      for (const h of await listHolds(tx, {
+        subjects: paused.map((r) => ({
+          subjectType: "focus_session" as const,
+          subjectId: r.id,
+        })),
+      })) {
+        carried.set(h.subjectId, h.hold);
+      }
+    }
+    const holds = new Map<string, RecordedHold | null>();
+    for (const r of locked) {
+      if (r.status === input.to) continue;
+      const decided = decideMoveHold({
+        from: r.status,
+        fromCategory: SESSION_STATUS_DECLARATION[r.status].category,
+        toCategory,
+        actorKind: input.actor.kind,
+        approved: Boolean(input.proposalId),
+        given: input.hold,
+        current: carried.get(r.id) ?? null,
+        fallback: input.defaultHold,
+        since,
+      });
+      if (!decided.ok) throw new HoldRefusedError(decided);
+      holds.set(r.id, decided.hold);
+    }
+
     const rows = await tx
       .update(focusSessions)
       .set({ ...input.set, status: input.to })
@@ -138,6 +194,9 @@ export async function setSessionStatus(
           workspaceId: row.workspaceId ?? null,
           projectId: row.projectId ?? null,
           trackId: row.trackId ?? null,
+          occurredAt: input.occurredAt,
+          hold: holds.get(row.id) ?? null,
+          appId: input.appId,
         });
       });
     await insertTransitionOutbox(tx, transitions);
@@ -162,10 +221,21 @@ export async function writeSessionPatch(
     set: SessionColumnsPatch & { status?: SessionStatus };
     actor: WorkUnitActor;
     proposalId?: string | null;
+    /** With a pause: what it waits on (`setSessionStatus`). */
+    hold?: Hold | null;
+    occurredAt?: Date | null;
+    appId?: string | null;
   }
 ): Promise<FocusSession[]> {
   const { status, ...rest } = input.set;
   if (status === undefined) {
+    if (input.hold) {
+      throw new HoldRefusedError({
+        ok: false,
+        code: "HOLD_NOT_A_PAUSE",
+        message: HOLD_NOT_A_PAUSE_MESSAGE,
+      });
+    }
     return db
       .update(focusSessions)
       .set(rest)
@@ -179,6 +249,9 @@ export async function writeSessionPatch(
     actor: input.actor,
     proposalId: input.proposalId,
     set: rest,
+    hold: input.hold,
+    occurredAt: input.occurredAt,
+    appId: input.appId,
   });
   return rows;
 }

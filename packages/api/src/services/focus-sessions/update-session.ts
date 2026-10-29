@@ -120,9 +120,17 @@ import type { FollowOutcome } from "./follow-playbook.js";
 import {
   closedRunRefusal,
   normalizeSessionTitle,
+  SESSION_STATUS_DECLARATION,
   SESSION_TITLE_MAX,
   titleSourcePatch,
+  type SessionStatus,
 } from "@synap-core/types/focus-sessions";
+import {
+  decideMoveHold,
+  moveFactsWithoutMoveMessage,
+  resolveOccurredAt,
+  type Hold,
+} from "@synap-core/types/lifecycle";
 
 export interface UpdateFocusSessionParams {
   sessionId: string;
@@ -133,6 +141,13 @@ export interface UpdateFocusSessionParams {
   title?: string | null;
   goal?: string;
   status?: "active" | "paused";
+  /**
+   * With `status: paused`: what the pause waits on (W4) — required from an
+   * agent, `unspecified` for a person when absent.
+   */
+  hold?: Hold | null;
+  /** When the move really happened, if earlier (≤ 30 days back). */
+  occurredAt?: string | null;
   progress?: number;
   currentStage?: string;
   /**
@@ -1705,6 +1720,45 @@ function patchAsksForMore(
   });
 }
 
+/**
+ * Why a session move's time or hold is refused, or null (W4): the same rule
+ * the write applies (`resolveOccurredAt`, `decideMoveHold`), asked before
+ * governance so an agent's pause without a hold is never filed. A session
+ * already paused (`stale → paused`) keeps its hold: nothing to ask then.
+ */
+export function sessionMoveRefusal(
+  from: SessionStatus,
+  params: {
+    status?: SessionStatus;
+    hold?: Hold | null;
+    occurredAt?: string | null;
+  },
+  agentUserId?: string | null
+): string | null {
+  if (params.status === undefined || params.status === from) {
+    return params.hold || params.occurredAt
+      ? moveFactsWithoutMoveMessage(params)
+      : null;
+  }
+  let since = new Date();
+  if (params.occurredAt) {
+    const when = resolveOccurredAt(params.occurredAt);
+    if (!when.ok) return when.message;
+    since = when.occurredAt;
+  }
+  const fromCategory = SESSION_STATUS_DECLARATION[from].category;
+  if (fromCategory === "paused" && !params.hold) return null;
+  const decided = decideMoveHold({
+    from,
+    fromCategory,
+    toCategory: SESSION_STATUS_DECLARATION[params.status].category,
+    actorKind: agentUserId ? "agent" : "human",
+    given: params.hold,
+    since,
+  });
+  return decided.ok ? null : decided.message;
+}
+
 export async function updateFocusSession(
   params: UpdateFocusSessionParams
 ): Promise<UpdateFocusSessionResult> {
@@ -1726,6 +1780,11 @@ export async function updateFocusSession(
   // (the MCP door's `status` is active|paused, both open).
   const reopening = closedRunRefusal(existing.status, params.status);
   if (reopening) return { status: "denied", reason: reopening };
+  // WHEN and WHAT IT WAITS ON (W4), refused before anything is filed; the
+  // write applies the same rule in its transaction (a session already paused
+  // carries the hold it had there).
+  const moveRefusal = sessionMoveRefusal(existing.status, params, agentUserId);
+  if (moveRefusal) return { status: "denied", reason: moveRefusal };
 
   // A `projectId` equal to the one the session already has is NOT a filing:
   // dropped here, before every floor and the membrane, so it never forces a
@@ -2187,6 +2246,9 @@ export async function updateFocusSession(
           ...sessionGoalPayload(existing, params.goal),
           ...(params.title !== undefined ? { title: params.title } : {}),
           ...(params.status !== undefined ? { status: params.status } : {}),
+          // Replayed with the move (the approval keeps them).
+          ...(params.hold ? { hold: params.hold } : {}),
+          ...(params.occurredAt ? { occurredAt: params.occurredAt } : {}),
           ...(params.progress !== undefined
             ? { progress: params.progress }
             : {}),
@@ -2384,6 +2446,8 @@ export async function updateFocusSession(
       sessionId,
       set,
       actor: workUnitActorOf(userId, agentUserId),
+      hold: params.hold,
+      occurredAt: params.occurredAt ? new Date(params.occurredAt) : null,
     });
   });
   await stampSessionUpdate({

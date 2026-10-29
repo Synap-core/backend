@@ -112,6 +112,7 @@ import {
 import { SESSION_CHANGE_KINDS } from "../../../services/focus-sessions/session-changes.js";
 import { REVIEW_PACKAGES } from "@synap-core/types/proposals/review-package";
 import { TRACK_PARTICIPANT_ACTIONS } from "../handlers/track-participants.js";
+import { MOVE_HOLD_TOOL_PROPERTIES } from "../../../services/lifecycle/hold-input.js";
 
 /**
  * When an entity's `content` becomes a linked document rather than the inline
@@ -1374,6 +1375,7 @@ export const tools = {
               description:
                 "When you change the status: the status you SAW (compare-and-set). If it moved meanwhile you get { status: 'conflict', conflict: { currentStatus } } and nothing is written — re-read and decide again; never retry blindly.",
             },
+            ...MOVE_HOLD_TOOL_PROPERTIES,
             documentId: {
               type: "string",
               description:
@@ -1443,6 +1445,7 @@ export const tools = {
                         description:
                           "When the patch moves the status: the status you SAW. If it moved meanwhile the item is skipped.",
                       },
+                      ...MOVE_HOLD_TOOL_PROPERTIES,
                     },
                     additionalProperties: false,
                   },
@@ -2192,7 +2195,7 @@ export const tools = {
               items: { type: "string" },
               maxItems: 10,
               description:
-                "Optional: up to 10 ids (thing, goal, session or run). `startHere.statusOf` says where each stands: status, category, since, stuck, what it waits on.",
+                "Optional: up to 10 ids (thing, goal, session or run). `startHere.statusOf` says where each stands: status, how long it has been there, whether it is stuck, and what it waits on.",
             },
           },
           required: [],
@@ -2414,6 +2417,7 @@ export const tools = {
               description:
                 "New lifecycle status (optional). To CLOSE a session use synap_complete_session — update_session cannot close, since a raw close would orphan a running playbook_run.",
             },
+            ...MOVE_HOLD_TOOL_PROPERTIES,
             progress: {
               type: "number",
               description: "0-100 integer progress (optional).",
@@ -4422,6 +4426,7 @@ export const tools = {
               description:
                 "The status you read the goal in (synap_list_tracks) — always send it. Compare-and-set: if it moved meanwhile the call answers status='conflict' with the current status and writes nothing.",
             },
+            ...MOVE_HOLD_TOOL_PROPERTIES,
             reasoning: {
               type: "string",
               description:

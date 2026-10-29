@@ -124,6 +124,10 @@ import {
 import { canWrite, userPrincipal } from "../../../access/door.js";
 import { jsonGoverned } from "../proposal-response.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
+import {
+  moveHoldArgs,
+  moveHoldInputShape,
+} from "../../../services/lifecycle/hold-input.js";
 
 /** The shallow `impact` block attached to an update response (additive). */
 interface UpdateImpactBlock {
@@ -2907,6 +2911,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
         ...(body.expectedStatus !== undefined
           ? { expectedStatus: body.expectedStatus }
           : {}),
+        ...moveHoldArgs(body),
         ...(body.documentId ? { documentId: body.documentId } : {}),
         ...(body.replaceBody ? { replaceBody: true } : {}),
       });
@@ -3325,6 +3330,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
                 .describe(
                   "Compare-and-set on the role's status: the status you SAW. If it moved meanwhile the call answers 409 with the current status and writes nothing."
                 ),
+              ...moveHoldInputShape,
             }),
           },
         },
@@ -3392,6 +3398,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
         ...(body.expectedStatus !== undefined
           ? { expectedStatus: body.expectedStatus }
           : {}),
+        ...moveHoldArgs(body),
       });
       if (result.status === "conflict") return c.json(result, 409);
       return c.json(result, 200);

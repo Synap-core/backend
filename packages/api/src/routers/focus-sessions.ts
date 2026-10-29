@@ -192,6 +192,8 @@ import {
   WORK_GRAPH_DEFAULT_WINDOW_HOURS,
   WORK_GRAPH_MAX_WINDOW_HOURS,
 } from "../services/focus-sessions/work-graph.js";
+import { moveHoldInputShape } from "../services/lifecycle/hold-input.js";
+import { sessionMoveRefusal } from "../services/focus-sessions/update-session.js";
 
 // ── Shared input fragment ──────────────────────────────────────────────────
 
@@ -1971,6 +1973,8 @@ export const focusSessionsRouter = router({
       z.object({
         id: z.string().uuid(),
         status: updatableStatusSchema.optional(),
+        /** With a pause: what it waits on, and when the move happened (W4). */
+        ...moveHoldInputShape,
         progress: z.number().int().min(0).max(100).optional(),
         channelId: z.string().uuid().optional(),
         correlationId: z.string().optional(),
@@ -2110,6 +2114,15 @@ export const focusSessionsRouter = router({
       if (reopening) {
         throw new TRPCError({ code: "BAD_REQUEST", message: reopening });
       }
+      // W4: what a pause waits on, and when it happened — refused up front.
+      const moveRefusal = sessionMoveRefusal(
+        existing.status,
+        patch,
+        ctx.agentUserId
+      );
+      if (moveRefusal) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: moveRefusal });
+      }
 
       // TRACK FILING — the ONE resolution (throws the refusal as a TRPCError).
       const trackFilingModule =
@@ -2234,6 +2247,8 @@ export const focusSessionsRouter = router({
         sessionId: input.id,
         set,
         actor: workUnitActorOf(ctx.userId, ctx.agentUserId),
+        hold: patch.hold,
+        occurredAt: patch.occurredAt ? new Date(patch.occurredAt) : null,
       });
 
       // The spine record of this edit — the signal "touched by a person
