@@ -44,7 +44,7 @@ import {
   type IdentityReceipt,
   type IdentityResolutionInput,
 } from "../routers/proposals/executors/identity-resolution.js";
-import { rethrowIfWeakDedup } from "./weak-dedup-wire.js";
+import { readWeakDedupWire, rethrowIfWeakDedup } from "./weak-dedup-wire.js";
 import {
   advanceExistingFacet,
   type AdvanceableFacet,
@@ -222,6 +222,18 @@ export interface MaterializeProgress {
   linked: number;
   /** Operations that did not land. */
   failed: number;
+}
+
+/**
+ * A record an approval left out on purpose: the reviewer chose "use existing
+ * records" for every twin, and the same-name gate found SEVERAL existing
+ * records, so linking one would be a guess. Connections to it do not land
+ * (they are reported in `relationsFailed`).
+ */
+export interface MaterializeSkippedTwin {
+  ref: string;
+  title: string | null;
+  existingIds: string[];
 }
 
 /** One relation op that was submitted but never created — the honest detail
@@ -508,6 +520,8 @@ export interface MaterializeResult {
    * nameable instead of a swallowed `logger.warn`. Empty on the happy path.
    */
   relationsFailed: MaterializeRelationFailure[];
+  /** Records left out under `identityResolutionForTwins` (several twins). */
+  entitiesSkipped?: MaterializeSkippedTwin[];
   /**
    * Facets the attach door reported `attached`. The door answers `attached`
    * for a re-attach of an existing live facet too, so this is "attached by the
@@ -834,6 +848,15 @@ export interface MaterializeOptions {
    */
   reviewedTwinIdsByRef?: Record<string, string[]>;
   /**
+   * With `askReviewerOnDuplicate`: the reviewer's ONE answer for every
+   * same-name twin that no per-ref choice covers — "Use existing records and
+   * continue" / "Keep both and continue" after a large import stopped on a
+   * record that already exists. `separate` keeps both. `keep_existing` links
+   * the twin when the gate found exactly one, and leaves the record out
+   * (`entitiesSkipped`) when it found several. Never applied inside a plan.
+   */
+  identityResolutionForTwins?: "keep_existing" | "separate";
+  /**
    * Disposition ref for a create_entity op. Approve passes this because the
    * operations array may already have rejected ops removed, so `$opN` is NOT
    * the index in this array. Default: `op.ref ?? opRef(index)`.
@@ -1037,6 +1060,7 @@ export async function materializeCompositeGraph(
   const facetResults: MaterializeFacetResult[] = [];
   let relations: MaterializeRelationResult[] = [];
   const relationsFailed: MaterializeRelationFailure[] = [];
+  const entitiesSkipped: MaterializeSkippedTwin[] = [];
   const projectResults: MaterializeProjectResult[] = [];
   const sessionResults: MaterializeSessionResult[] = [];
   const linkResults: MaterializeLinkResult[] = [];
@@ -1050,6 +1074,7 @@ export async function materializeCompositeGraph(
     entities,
     relations,
     relationsFailed,
+    ...(entitiesSkipped.length > 0 ? { entitiesSkipped } : {}),
     facets: facetResults,
     skills: skillResults,
     automations: automationResults,
@@ -1344,50 +1369,103 @@ export async function materializeCompositeGraph(
         // caller's ambient flag (proposal.approve path unchanged).
         const opTargetWorkspaceId = op.targetWorkspaceId;
         let result: Awaited<ReturnType<EntityCreateCaller["create"]>>;
+        const createInput = {
+          profileSlug: op.profileSlug,
+          title: op.title || "Untitled",
+          description: op.description,
+          properties: op.properties,
+          content: op.content, // long-form body → linked document
+          ...(opProjectId ? { projectId: opProjectId } : {}),
+          ...(opTargetWorkspaceId
+            ? { targetWorkspaceId: opTargetWorkspaceId }
+            : {}),
+          source: materializeSource,
+          // Explicit workspace-scope request: pin to the target (or ambient)
+          // workspace even for pod-default profiles. Per-op pin forces true;
+          // otherwise imports may set options.workspaceScoped, while proposal
+          // approve leaves it false so pod-default profiles stay global.
+          workspaceScoped: opTargetWorkspaceId
+            ? true
+            : (options?.workspaceScoped ?? false),
+          // The reviewer owns a same-name twin (B2b) on an APPROVAL:
+          // `separate` ⇒ keep both; no verb ⇒ keep both for a twin the card
+          // SHOWED, refuse (with candidates, so the card asks) a twin it did
+          // not. Auto-apply and imports pass neither: the capture door
+          // already checked at file time.
+          ...(options?.askReviewerOnDuplicate
+            ? {
+                approvalDuplicate: resolutionDecision?.keepBoth
+                  ? ("keep_both" as const)
+                  : ("ask_reviewer" as const),
+                ...(!resolutionDecision &&
+                options.reviewedTwinIdsByRef?.[resolvedRef]?.length
+                  ? {
+                      approvalReviewedTwinIds:
+                        options.reviewedTwinIdsByRef[resolvedRef],
+                    }
+                  : {}),
+              }
+            : {}),
+        };
+        // Set when the reviewer's answer for every twin made this op keep both.
+        let keptBothForTwins = false;
         try {
-          result = await entityCaller.create({
-            profileSlug: op.profileSlug,
-            title: op.title || "Untitled",
-            description: op.description,
-            properties: op.properties,
-            content: op.content, // long-form body → linked document
-            ...(opProjectId ? { projectId: opProjectId } : {}),
-            ...(opTargetWorkspaceId
-              ? { targetWorkspaceId: opTargetWorkspaceId }
-              : {}),
-            source: materializeSource,
-            // Explicit workspace-scope request: pin to the target (or ambient)
-            // workspace even for pod-default profiles. Per-op pin forces true;
-            // otherwise imports may set options.workspaceScoped, while proposal
-            // approve leaves it false so pod-default profiles stay global.
-            workspaceScoped: opTargetWorkspaceId
-              ? true
-              : (options?.workspaceScoped ?? false),
-            // The reviewer owns a same-name twin (B2b) on an APPROVAL:
-            // `separate` ⇒ keep both; no verb ⇒ keep both for a twin the card
-            // SHOWED, refuse (with candidates, so the card asks) a twin it did
-            // not. Auto-apply and imports pass neither: the capture door
-            // already checked at file time.
-            ...(options?.askReviewerOnDuplicate
-              ? {
-                  approvalDuplicate: resolutionDecision?.keepBoth
-                    ? ("keep_both" as const)
-                    : ("ask_reviewer" as const),
-                  ...(!resolutionDecision &&
-                  options.reviewedTwinIdsByRef?.[resolvedRef]?.length
-                    ? {
-                        approvalReviewedTwinIds:
-                          options.reviewedTwinIdsByRef[resolvedRef],
-                      }
-                    : {}),
-                }
-              : {}),
-          });
+          result = await entityCaller.create(createInput);
         } catch (err) {
-          rethrowIfWeakDedup(err, resolvedRef);
-          throw err;
+          // The same-name gate refused, and the reviewer already answered for
+          // every twin no per-ref choice covers (`identityResolutionForTwins`).
+          const twinIds =
+            options?.identityResolutionForTwins &&
+            !resolution &&
+            !planMode &&
+            err instanceof TRPCError &&
+            err.code === "CONFLICT"
+              ? (readWeakDedupWire(err.cause)?.candidates.map((c) => c.id) ??
+                null)
+              : null;
+          if (!twinIds || twinIds.length === 0) {
+            rethrowIfWeakDedup(err, resolvedRef);
+            throw err;
+          }
+          if (options?.identityResolutionForTwins === "separate") {
+            result = await entityCaller.create({
+              ...createInput,
+              approvalDuplicate: "keep_both" as const,
+            });
+            keptBothForTwins = true;
+          } else if (twinIds.length === 1) {
+            const decision = await applyIdentityResolution({
+              resolution: {
+                verb: "keep_existing",
+                existingEntityId: twinIds[0],
+              },
+              proposed: {
+                title: op.title ?? null,
+                description: op.description ?? null,
+                content: op.content ?? null,
+                properties: op.properties ?? null,
+              },
+              ...entityIdentityPorts(entityCaller),
+            });
+            if (decision.keepBoth) throw err;
+            identity = { ...decision.receipt, ref: resolvedRef };
+            // Linked exactly like a strong-signal dedup below: counted as
+            // already there, and a revert never deletes the existing record.
+            result = { id: decision.receipt.entityId, deduplicated: true };
+          } else {
+            entitiesSkipped.push({
+              ref: resolvedRef,
+              title: op.title ?? null,
+              existingIds: twinIds,
+            });
+            await settle("entities", "skipped");
+            continue;
+          }
         }
-        if (resolutionDecision?.keepBoth && (result as { id?: string }).id) {
+        if (
+          (resolutionDecision?.keepBoth || keptBothForTwins) &&
+          (result as { id?: string }).id
+        ) {
           identity = {
             verb: "separate",
             entityId: (result as { id: string }).id,

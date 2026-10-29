@@ -18,6 +18,8 @@ import { showApprovalProgressToast } from "../../_lib/approval-progress/approval
 export interface ApproveChoice {
   identityResolution?: DuplicateResolution;
   identityResolutionByRef?: Record<string, DuplicateResolution>;
+  /** A graph's ONE answer for every twin not chosen one by one. */
+  identityResolutionForTwins?: "keep_existing" | "separate";
 }
 
 /**
@@ -49,6 +51,9 @@ export function approveInput(
     ...(choice.identityResolutionByRef &&
     Object.keys(choice.identityResolutionByRef).length > 0
       ? { identityResolutionByRef: choice.identityResolutionByRef }
+      : {}),
+    ...(choice.identityResolutionForTwins
+      ? { identityResolutionForTwins: choice.identityResolutionForTwins }
       : {}),
   };
 }

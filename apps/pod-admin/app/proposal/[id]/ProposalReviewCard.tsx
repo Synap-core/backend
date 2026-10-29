@@ -102,6 +102,7 @@ import {
   DuplicateUnchecked,
   ItemTwinChoice,
   TwinDoors,
+  TwinStopVerbs,
   TwinVerbs,
 } from "./DuplicateChoice";
 import {
@@ -142,7 +143,9 @@ import {
   approvalProgressCopy,
   isApplying,
   progressUnavailable,
+  stoppedOnTwins,
   type ApprovalRun,
+  type ApprovalRunTwin,
 } from "../../_lib/approval-progress/approval-progress-model";
 import {
   renderedRevision,
@@ -559,6 +562,7 @@ function DecisionButtons({
   undo,
   onDecided,
   resume = false,
+  stopTwins = null,
 }: {
   proposal: ProposalReviewData;
   mode: DecisionMode;
@@ -566,6 +570,11 @@ function DecisionButtons({
   onDecided: () => void;
   /** A background attempt stopped part-way: approving again finishes it. */
   resume?: boolean;
+  /**
+   * It stopped on records that already exist: approving again as-is would
+   * stop on them again, so the verbs answer for every such record.
+   */
+  stopTwins?: readonly ApprovalRunTwin[] | null;
 }) {
   const [reason, setReason] = useState("");
   const [rejecting, setRejecting] = useState(false);
@@ -621,6 +630,33 @@ function DecisionButtons({
     </Button>
   );
   const undoChip = undo && <DisclosedMark mark={undo} icon={TriangleAlert} />;
+
+  if (stopTwins && stopTwins.length > 0 && mode.kind !== "twin-verbs") {
+    const choice: ApproveChoice =
+      mode.kind === "graph-choices"
+        ? {
+            identityResolutionByRef: identityResolutionByRefFor(
+              mode.review.items,
+              mode.choices
+            ).byRef,
+          }
+        : {};
+    return (
+      <div className="flex flex-col gap-2.5">
+        <TwinStopVerbs
+          twins={stopTwins}
+          onAnswer={(identityResolutionForTwins) =>
+            decision.approve({ ...choice, identityResolutionForTwins })
+          }
+          busy={busy}
+        />
+        <div className="flex flex-wrap items-center gap-2">
+          {rejectButton}
+          {undoChip}
+        </div>
+      </div>
+    );
+  }
 
   if (mode.kind === "twin-verbs") {
     return (
@@ -1156,6 +1192,7 @@ export function ProposalReviewBody({
               undo={undo}
               onDecided={onDecided}
               resume={stopped}
+              stopTwins={stoppedOnTwins(run) ? run.twins : null}
             />
           </>
         ) : (

@@ -11,6 +11,7 @@ import {
   countsLine,
   isApplying,
   progressUnavailable,
+  stoppedOnTwins,
   type ApprovalRun,
 } from "./approval-progress-model";
 
@@ -131,5 +132,48 @@ describe("helpers", () => {
     expect(isApplying({ ...RUN, state: "queued" })).toBe(true);
     expect(isApplying({ ...RUN, state: "stalled" })).toBe(false);
     expect(isApplying(null)).toBe(false);
+  });
+});
+
+describe("a run that stopped on a record that already exists", () => {
+  const STOPPED: ApprovalRun = {
+    ...RUN,
+    state: "failed",
+    done: 1,
+    total: 358,
+    error: "Couldn't create — \u201ccontactsamirt\u201d already exists.",
+    twins: [{ id: "e1", title: "contactsamirt", kind: "person" }],
+  };
+
+  it("names the record and asks for one answer, never a bare Resume", () => {
+    expect(stoppedOnTwins(STOPPED)).toBe(true);
+    const copy = approvalProgressCopy(STOPPED);
+    expect(copy.title).toBe(
+      "Stopped at 1 of 358: \u201ccontactsamirt\u201d already exists"
+    );
+    expect(copy.detail).toMatch(/every record that already exists/);
+    expect(copy).toMatchObject({ tone: "danger", resumable: true });
+  });
+
+  it("any other stop keeps the plain Resume copy", () => {
+    expect(stoppedOnTwins({ ...STOPPED, twins: null })).toBe(false);
+    expect(stoppedOnTwins({ ...STOPPED, twins: undefined })).toBe(false);
+    expect(stoppedOnTwins({ ...STOPPED, state: "succeeded" })).toBe(false);
+    expect(approvalProgressCopy({ ...STOPPED, twins: null }).title).toBe(
+      "Stopped at 1 of 358"
+    );
+  });
+
+  it("a finished run says what it left out", () => {
+    const copy = approvalProgressCopy({
+      ...RUN,
+      state: "succeeded",
+      failed: 0,
+      skipped: 2,
+    });
+    expect(copy.detail).toContain(
+      "2 left out: several existing records share the name"
+    );
+    expect(copy.tone).toBe("warning");
   });
 });

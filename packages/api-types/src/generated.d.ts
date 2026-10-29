@@ -10415,6 +10415,17 @@ export interface IdentityReceipt {
 	filled?: string[];
 	conflicts?: IdentityConflict[];
 }
+/**
+ * A record an approval left out on purpose: the reviewer chose "use existing
+ * records" for every twin, and the same-name gate found SEVERAL existing
+ * records, so linking one would be a guess. Connections to it do not land
+ * (they are reported in `relationsFailed`).
+ */
+export interface MaterializeSkippedTwin {
+	ref: string;
+	title: string | null;
+	existingIds: string[];
+}
 /** One relation op that was submitted but never created — the honest detail
  * behind a `created < submitted` gap on a materialize receipt. */
 export interface MaterializeRelationFailure {
@@ -10646,6 +10657,8 @@ export interface MaterializeResult {
 	 * nameable instead of a swallowed `logger.warn`. Empty on the happy path.
 	 */
 	relationsFailed: MaterializeRelationFailure[];
+	/** Records left out under `identityResolutionForTwins` (several twins). */
+	entitiesSkipped?: MaterializeSkippedTwin[];
 	/**
 	 * Facets the attach door reported `attached`. The door answers `attached`
 	 * for a re-attach of an existing live facet too, so this is "attached by the
@@ -13544,6 +13557,12 @@ export interface ProposalExecutorResult {
 	 */
 	relationsFailed?: MaterializeRelationFailure[];
 	/**
+	 * Records of an approved composite left out on purpose: the reviewer chose
+	 * "use existing records" for every twin, and several existing records
+	 * shared the name. Omitted when none was.
+	 */
+	entitiesSkipped?: MaterializeSkippedTwin[];
+	/**
 	 * Set when an identity-resolution verb ran. `filled` / `conflicts` are
 	 * fill_empty only (conflicts may be empty). Composite approvals with more
 	 * than one resolved op leave this unset and report `identities` instead —
@@ -13578,6 +13597,16 @@ export interface ApprovalRunView {
 	failed: number;
 	/** A safe sentence (failed / stalled), never raw thrown text. */
 	error: string | null;
+	/** The failure's class (`conflict`, `validation`…); null while it runs. */
+	errorClass: string | null;
+	/**
+	 * The existing records a stopped run met: the same-name gate refused a
+	 * record because these already exist. The reviewer can then use them, or
+	 * keep both, for every twin and approve again. Null for any other stop.
+	 */
+	twins: ApprovalRunTwin[] | null;
+	/** Records a finished run left out (several twins shared the name). */
+	skipped: number;
 	/** Who approved — the only person who may resume a partial attempt. */
 	approverId: string;
 	/** Doors to what was created, once it succeeded. */
@@ -13588,6 +13617,13 @@ export interface ApprovalRunView {
 	startedAt: string | null;
 	finishedAt: string | null;
 	updatedAt: string;
+}
+/** An existing record a stopped run met — a door, never a sentence. */
+export interface ApprovalRunTwin {
+	id: string;
+	title: string | null;
+	/** The record's kind (profile slug). */
+	kind: string;
 }
 /** What "allow today" raised the agent's daily write ceiling to. */
 export interface AllowedToday {
@@ -43346,6 +43382,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					existingEntityId?: string | undefined;
 					verb: "fill_empty" | "keep_existing" | "separate" | "use_capture";
 				}> | undefined;
+				identityResolutionForTwins?: "keep_existing" | "separate" | undefined;
 				propertyDecisions?: Record<string, {
 					action: "keep";
 				} | {
@@ -43371,6 +43408,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				approvalRun?: ApprovalRunView;
 				created?: number;
 				effect?: ProposalEffect;
+				entitiesSkipped?: MaterializeSkippedTwin[];
 				identities?: Array<IdentityReceipt & {
 					ref: string;
 				}>;
