@@ -21,7 +21,11 @@ const MIGRATION = readFileSync(
 let pg: PGlite;
 
 const counts = async (name: string) => {
-  const r = await pg.query<{ run: number | null; ok: number | null; bad: number | null }>(
+  const r = await pg.query<{
+    run: number | null;
+    ok: number | null;
+    bad: number | null;
+  }>(
     `SELECT run_count AS run, success_count AS ok, failure_count AS bad FROM automations WHERE name = $1`,
     [name]
   );
