@@ -1376,6 +1376,10 @@ describe("merge-bot: what it must never do", () => {
     );
     expect(on).toMatch(/branches-ignore:\n\s+- "gh-readonly-queue\/\*\*"/);
   });
+  it("every landing on main re-judges every PR (the schedule is best effort)", () => {
+    const on = wf.slice(wf.indexOf("\non:\n"), wf.indexOf("\npermissions:"));
+    expect(on).toMatch(/\n {2}push:\n\s+branches: \[main\]\n/);
+  });
   it("one concurrency group for every pass (never two enqueues of one PR at once)", () => {
     expect(
       /^concurrency:\n(?:\s+#.*\n)*\s+group: (\S+)\s*$/m.exec(wf)?.[1]

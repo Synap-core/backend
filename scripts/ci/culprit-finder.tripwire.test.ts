@@ -1670,6 +1670,14 @@ describe("the wire and the workflow", () => {
       expect(job("name")).toContain(s);
   });
 
+  it("red-main.yml: the revert sweep ticks on every finished CI run, one at a time (the schedule is best effort)", () => {
+    const sweep = job("sweep");
+    expect(sweep).toMatch(/github\.event_name == 'workflow_run'/);
+    expect(sweep).toMatch(
+      /\n {4}concurrency:\n {6}group: red-main-sweep\n {6}cancel-in-progress: false\n/
+    );
+  });
+
   it("the merge bot app's secrets: only in jobs of environment ci-bots; the probe job holds no token and no pod secret", () => {
     const jobs = [...jobsText.matchAll(/\n {2}([a-z-]+):\n/g)].map((m) => m[1]);
     expect(jobs).toEqual(["name", "bisect", "post", "sweep"]); // non-vacuity: every job is looked at
