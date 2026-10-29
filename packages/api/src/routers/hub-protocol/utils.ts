@@ -93,8 +93,17 @@ export async function createHubProtocolCallerContext(
  *    stated connector source (`"cli"`, `"n8n"`, …) is not an AI source to the
  *    gate, so honouring it would let an unattributed key leave the
  *    anonymous-AI ladder.
+ *
+ * Two signatures: with no stated source the result is exactly
+ * `"user" | "intelligence"`. A single generic signature let TypeScript infer
+ * `S` from the call's contextual type and widen it to `string` (TS2322 at the
+ * no-argument call sites).
  */
-export function hubWriteSource<S extends string = never>(
+export function hubWriteSource(): "user" | "intelligence";
+export function hubWriteSource<S extends string>(
+  stated: S | null | undefined
+): S | "user" | "intelligence";
+export function hubWriteSource<S extends string>(
   stated?: S | null
 ): S | "user" | "intelligence" {
   if (!appSignInPublicId()) return "intelligence";
