@@ -324,6 +324,39 @@ export async function enqueueConnectionSyncApproval(
   );
 }
 
+// 9. Document passages (recall plan A-W2): a document's create or update
+// rebuilds its recall passages, once the burst of saves is over. Skipped
+// where vector search is off, like the entity embedding.
+const documentPassagesReactor: Reactor = {
+  id: "document-passages",
+  match: (payload) =>
+    config.server.vectorSearchEnabled &&
+    payload.subjectType === "document" &&
+    (payload.action === "create" || payload.action === "update"),
+  async handler(payload, { boss }) {
+    await enqueueDocumentPassages({ documentId: payload.subjectId }, boss);
+  },
+};
+
+/**
+ * THE one enqueue for the `document-passages` job — used by the reactor above,
+ * the revision sweep and the backfill script (`@synap/jobs`). A TRAILING
+ * debounce per document: the job runs after the window, so the last edit of a
+ * burst is the one read (a bare `singletonSeconds` would run the first and
+ * drop the rest). `reembed` = embed every passage again (a planned model
+ * change), never set by an edit.
+ */
+export async function enqueueDocumentPassages(
+  input: { documentId: string; reembed?: boolean },
+  boss: Pick<ReturnType<typeof getBoss>, "send"> = getBoss()
+): Promise<void> {
+  await boss.send("document-passages", input, {
+    singletonKey: `document-passages:${input.documentId}`,
+    singletonSeconds: 60,
+    startAfter: 60,
+  });
+}
+
 // Registration order === original inline order. Do not reorder.
 registerReactor(searchIndexReactor);
 registerReactor(entityEmbeddingReactor);
@@ -333,6 +366,7 @@ registerReactor(automationTriggerMatchReactor);
 registerReactor(hydrationSummaryReactor);
 registerReactor(sessionRecapReactor);
 registerReactor(connectionSyncApprovalReactor);
+registerReactor(documentPassagesReactor);
 
 // ============================================================================
 

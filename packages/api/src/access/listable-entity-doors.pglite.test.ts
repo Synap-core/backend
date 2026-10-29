@@ -815,6 +815,8 @@ const WITHHELD_JOBS_FILES: Record<string, string> = {
   "utils/process-sync.ts": "one subject, by id",
   "workers/ai-workers.ts": "one entity, by id",
   "workers/cross-channel-notifier.ts": "one subject, by id",
+  "workers/document-passages.ts":
+    "re-embeds the entities that own one document, by document id",
   "workers/entity-embedding.ts": "indexes one row, by id",
   "workers/entity-query-scope.ts": "defines the jobs-local access floor",
   "workers/pagerank-centrality.ts":
