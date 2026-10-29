@@ -15,8 +15,11 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   liveEntryShas,
+  selectStalledMainRuns,
   selectSupersededQueueRuns,
+  STALL_MS,
   sweep,
+  sweepStalledMain,
   // @ts-expect-error — plain ESM script, no declarations
 } from "./cancel-superseded-queue-runs.mjs";
 
@@ -351,5 +354,115 @@ describe("cancel-superseded-queue-runs: the workflow", () => {
     expect(ci).toContain(
       "cancel-in-progress: ${{ github.event_name == 'pull_request' }}"
     );
+  });
+});
+
+// 29 Oct: run 40909558682's "Full suite" judge sat queued 1 h 51 min and
+// held main's group; 13 newer main runs waited and were replaced.
+describe("cancel-superseded-queue-runs: a main run stalled on a job GitHub never starts", () => {
+  const ago = (min: number) => new Date(NOW - min * 60_000).toISOString();
+  const mainRun = (id: number, status: string, createdMin: number): Run => ({
+    id,
+    event: "push",
+    head_branch: "main",
+    path: ".github/workflows/ci.yml",
+    status,
+    created_at: ago(createdMin),
+    head_sha: String(id).padStart(40, "a"),
+  });
+  const stalled = mainRun(1, "in_progress", 120);
+  const waiting = mainRun(2, "pending", 10);
+  const stuckJobs = [
+    { name: "Release gate", status: "completed", created_at: ago(118) },
+    {
+      name: "Full suite",
+      status: "queued",
+      created_at: ago(STALL_MS / 60_000 + 5),
+    },
+  ];
+  const pick = (runs: Run[], jobs: unknown = stuckJobs) =>
+    selectStalledMainRuns({
+      runs,
+      jobsByRun: new Map([[1, jobs]]),
+      now: NOW,
+    }).map((r: { id: number }) => r.id);
+
+  it("cancels it when a newer main run waits for the group", () => {
+    expect(pick([stalled, waiting])).toEqual([1]);
+  });
+  it("keeps it when no newer main run waits (it is the only main run)", () => {
+    expect(pick([stalled])).toEqual([]);
+    expect(pick([stalled, mainRun(2, "pending", 130)])).toEqual([]);
+  });
+  it("keeps it while its queued job is younger than STALL_MS", () => {
+    const fresh = [
+      {
+        name: "Full suite",
+        status: "queued",
+        created_at: ago(STALL_MS / 60_000 - 5),
+      },
+    ];
+    expect(pick([stalled, waiting], fresh)).toEqual([]);
+  });
+  it("keeps it when its jobs could not be read or carry no time", () => {
+    expect(pick([stalled, waiting], null)).toEqual([]);
+    expect(
+      pick([stalled, waiting], [{ name: "Full suite", status: "queued" }])
+    ).toEqual([]);
+  });
+  it("never a PR, merge-queue or other-workflow run, nor a branch other than main", () => {
+    for (const other of [
+      { ...stalled, event: "pull_request" },
+      { ...stalled, event: "merge_group" },
+      { ...stalled, path: ".github/workflows/release.yml" },
+      { ...stalled, head_branch: "fix/x" },
+    ])
+      expect(pick([other, waiting])).toEqual([]);
+  });
+  it("through a fake GitHub: lists the main runs, reads the jobs, cancels the stalled one", async () => {
+    const cancelled: number[] = [];
+    const request = async (method: string, path: string) => {
+      const ok = (body: unknown) => ({
+        ok: true,
+        status: 200,
+        json: async () => body,
+      });
+      if (method === "GET" && path.includes("/actions/workflows/ci.yml/runs")) {
+        const status = new URL(`https://x${path}`).searchParams.get("status");
+        return ok({
+          workflow_runs: [stalled, waiting].filter((r) => r.status === status),
+        });
+      }
+      if (method === "GET" && /\/actions\/runs\/1\/jobs/.test(path))
+        return ok({ jobs: stuckJobs });
+      const c = /\/actions\/runs\/(\d+)\/cancel$/.exec(path);
+      if (method === "POST" && c) {
+        cancelled.push(Number(c[1]));
+        return { ok: true, status: 202, json: async () => ({}) };
+      }
+      return { ok: false, status: 404, json: async () => ({}) };
+    };
+    const r = await sweepStalledMain({
+      request,
+      repo: "Synap-core/backend",
+      log: () => {},
+      now: NOW,
+    });
+    expect(cancelled).toEqual([1]);
+    expect(r.cancelled).toEqual([1]);
+  });
+  it("an unreadable run list cancels nothing", async () => {
+    const cancelled: number[] = [];
+    const request = async (method: string, path: string) => {
+      if (method === "POST" && path.endsWith("/cancel")) cancelled.push(1);
+      return { ok: false, status: 502, json: async () => ({}) };
+    };
+    await sweepStalledMain({
+      request,
+      repo: "Synap-core/backend",
+      log: () => {},
+      now: NOW,
+    });
+    expect(cancelled).toEqual([]);
   });
 });

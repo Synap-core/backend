@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
  * cancel-superseded-queue-runs.mjs — cancel the merge-queue CI runs whose
- * queue entry no longer exists.
+ * queue entry no longer exists, and a main run stalled on a job GitHub never
+ * starts while a newer main run waits (STALL_MS, sweepStalledMain).
  *
  * ── WHY ──────────────────────────────────────────────────────────────────────
  * ci.yml gives each merge-queue run its own concurrency group (one per
@@ -253,6 +254,116 @@ export async function sweep({
   return result;
 }
 
+/**
+ * A main push run whose job GitHub never starts holds main's concurrency
+ * group (ci.yml: one main run at a time, a newer one waits `pending` and
+ * replaces the previous pending one). Nothing else ends it: GitHub drops a
+ * queued job only after 24 h. 29 Oct 2026: the "Full suite" judge of run
+ * 40909558682 (main 888162ba) sat queued from 16:53 to 18:44 while every
+ * other job ran, and 13 newer main runs waited and were replaced; main had
+ * no finished post-merge run from 16:05 on, so no culprit could be named
+ * and the nightly had no newer green commit.
+ *
+ * A run is cancelled only when ALL hold (selectStalledMainRuns): it is a
+ * ci.yml `push` run on main, in flight; a NEWER ci.yml push run on main is
+ * waiting for the group (`pending`); and one of its jobs has been `queued`
+ * for STALL_MS or more. The newer run tests a main that contains this
+ * run's commit, so nothing is lost. Every doubt keeps it: an unreadable run
+ * or job list, a job with no readable creation time.
+ */
+export const STALL_MS = 30 * 60_000;
+
+/** The stalled main runs to cancel, each with why. Pure. */
+export function selectStalledMainRuns({ runs, jobsByRun, now = Date.now() }) {
+  const main = (runs ?? []).filter(
+    (r) =>
+      r.event === "push" &&
+      r.head_branch === QUEUE_BASE &&
+      CANCELLABLE_WORKFLOWS.includes(r.path) &&
+      IN_FLIGHT.has(r.status)
+  );
+  const out = [];
+  for (const run of main) {
+    const created = Date.parse(run.created_at ?? "");
+    if (!Number.isFinite(created)) continue;
+    const newerWaits = main.some(
+      (o) =>
+        o.id !== run.id &&
+        o.status === "pending" &&
+        Date.parse(o.created_at ?? "") > created
+    );
+    if (!newerWaits) continue;
+    const jobs = jobsByRun?.get(run.id);
+    if (!Array.isArray(jobs)) continue;
+    const stuck = jobs.find((j) => {
+      const at = Date.parse(j?.created_at ?? "");
+      return (
+        j?.status === "queued" && Number.isFinite(at) && now - at >= STALL_MS
+      );
+    });
+    if (!stuck) continue;
+    out.push({
+      id: run.id,
+      sha: String(run.head_sha ?? ""),
+      url: run.html_url,
+      why: `main run ${run.id} (${String(run.head_sha ?? "").slice(0, 9)}): job "${stuck.name}" queued for ${Math.round((now - Date.parse(stuck.created_at)) / 60_000)} min while a newer main run waits for the group`,
+    });
+  }
+  return out;
+}
+
+/** One stalled-main sweep, through the same `request` as sweep(). */
+export async function sweepStalledMain({
+  request,
+  repo,
+  dryRun = false,
+  log = console.log,
+  now = Date.now(),
+}) {
+  const result = { cancelled: [], kept: [] };
+  const runs = [];
+  for (const status of LISTED_STATUSES.concat("pending")) {
+    const res = await request(
+      "GET",
+      `/repos/${repo}/actions/workflows/ci.yml/runs?event=push&branch=${QUEUE_BASE}&status=${status}&per_page=100`
+    );
+    if (!res.ok) {
+      log(
+        `::warning::could not list the ${status} main runs (HTTP ${res.status}); no main run cancelled`
+      );
+      return result;
+    }
+    runs.push(...((await res.json()).workflow_runs ?? []));
+  }
+  const jobsByRun = new Map();
+  for (const r of runs) {
+    if (r.status === "pending") continue;
+    const res = await request(
+      "GET",
+      `/repos/${repo}/actions/runs/${r.id}/jobs?per_page=100`
+    );
+    if (res.ok) jobsByRun.set(r.id, (await res.json()).jobs ?? []);
+  }
+  for (const r of selectStalledMainRuns({ runs, jobsByRun, now })) {
+    if (dryRun) {
+      log(`  would cancel ${r.id}: ${r.why}`);
+      continue;
+    }
+    const res = await request(
+      "POST",
+      `/repos/${repo}/actions/runs/${r.id}/cancel`
+    );
+    if (res.ok || res.status === 409) {
+      log(`  cancelled ${r.id}: ${r.why} (${r.url ?? ""})`);
+      result.cancelled.push(r.id);
+    } else {
+      log(`::warning::could not cancel ${r.id} (HTTP ${res.status}): ${r.why}`);
+      result.kept.push(r.id);
+    }
+  }
+  return result;
+}
+
 async function main() {
   const token = process.env.GITHUB_TOKEN;
   if (!token) {
@@ -279,6 +390,11 @@ async function main() {
     repo: process.env.GITHUB_REPOSITORY,
     selfRunId: Number(process.env.GITHUB_RUN_ID),
     triggerSha: process.env.TRIGGER_SHA,
+    dryRun: process.argv.includes("--dry-run"),
+  });
+  await sweepStalledMain({
+    request,
+    repo: process.env.GITHUB_REPOSITORY,
     dryRun: process.argv.includes("--dry-run"),
   });
 }

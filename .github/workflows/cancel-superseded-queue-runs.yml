@@ -9,6 +9,10 @@ name: Cancel superseded queue runs
 # never a PR run, never a live entry's run. If the live entries cannot be
 # read, nothing is cancelled. The rules and their tripwire:
 # scripts/ci/cancel-superseded-queue-runs.mjs.
+# The same sweep cancels ONE kind of main push run: one whose job has sat
+# queued for 30 min (GitHub never started it) while a newer main run waits
+# for main's concurrency group (sweepStalledMain). The newer run tests a main
+# that contains it.
 #
 # No concurrency group: a group would cancel a pending sweep, and that
 # cancelled run would show on a queue commit. Two sweeps at once cancel the
