@@ -138,13 +138,18 @@ export async function staleAbandonedAgentSessions(): Promise<number> {
   const touched = await personTouchedSubjectIds(db, "focus_session", ids);
   const abandoned = ids.filter((id) => !touched.has(id));
   if (abandoned.length === 0) return 0;
-  const staled = await db
-    .update(focusSessions)
-    .set({ status: "stale" })
-    .where(
-      and(inArray(focusSessions.id, abandoned), AGENT_SESSION_MAY_BE_ABANDONED)
-    )
-    .returning({ id: focusSessions.id });
+  // Through the one session status write: the compare-and-set re-checks the
+  // rule under the row lock, and each staled session owes its transition.
+  const { rows: staled } = await setSessionStatus(db, {
+    where: and(
+      inArray(focusSessions.id, abandoned),
+      AGENT_SESSION_MAY_BE_ABANDONED
+    )!,
+    from: ["active", "paused"],
+    to: "stale",
+    actor: { kind: "system" },
+    reason: `Waiting on the person, no activity for ${AGENT_SESSION_ABANDONED_DAYS} days.`,
+  });
   return staled.length;
 }
 

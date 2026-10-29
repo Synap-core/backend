@@ -3,9 +3,10 @@
  *
  * Real: `staleAbandonedAgentSessions` → `AGENT_SESSION_MAY_BE_ABANDONED` SQL →
  * `personTouchedSubjectIds` (@synap/database, the own-fresh-work person-touch
- * test) → the update. A session that waits on the person, opened by an agent,
- * silent 14 days, that no person ever wrote on, becomes `stale`; its asks stay
- * owed. A person-touched one, a person's own, a fresh one, or one that owes
+ * test) → `setSessionStatus` (the one session status write). A session
+ * that waits on the person, opened by an agent, silent 14 days, that no
+ * person ever wrote on, becomes `stale` and owes its transition; its asks
+ * stay owed. A person-touched one, a person's own, a fresh one, or one that owes
  * nothing (the main sweep's) is left alone.
  */
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
@@ -34,6 +35,7 @@ import {
   events,
   proposals,
   chatTurns,
+  lifecycleTransitionOutbox,
 } from "@synap/database/schema";
 import {
   AGENT_SESSION_ABANDONED_DAYS,
@@ -105,13 +107,23 @@ const OLD = AGENT_SESSION_ABANDONED_DAYS + 1;
 
 beforeAll(async () => {
   // Every table the waits-on-the-person predicate reads (needs-you-predicate:
-  // the session's room, turns, proposals and events).
-  for (const t of [focusSessions, messages, events, proposals, chatTurns])
+  // the session's room, turns, proposals and events), and the outbox the one
+  // session status write owes each transition to.
+  for (const t of [
+    focusSessions,
+    messages,
+    events,
+    proposals,
+    chatTurns,
+    lifecycleTransitionOutbox,
+  ])
     await h.client!.exec(ddlFor(t as unknown as PgTable));
 }, 120_000);
 
 beforeEach(async () => {
-  await h.client!.exec("delete from focus_sessions; delete from events;");
+  await h.client!.exec(
+    "delete from focus_sessions; delete from events; delete from lifecycle_transition_outbox;"
+  );
 });
 
 describe("staleAbandonedAgentSessions", () => {
@@ -127,6 +139,11 @@ describe("staleAbandonedAgentSessions", () => {
       )
     ).rows;
     expect(row!.expected_outputs).toEqual(OWED);
+    // The move went through the one session status write: it owes its transition.
+    const owed = await q<{ to: string; subject: string }>(
+      `select transition->>'to' as to, transition->>'subjectId' as subject from lifecycle_transition_outbox`
+    );
+    expect(owed.rows).toEqual([{ to: "stale", subject: left }]);
   });
 
   it("never stales a session a person wrote on", async () => {
