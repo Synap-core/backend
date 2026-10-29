@@ -42,7 +42,10 @@
  * ── REFRESH ──────────────────────────────────────────────────────────────────
  * Weekly (prior-art brief rule 4): `node scripts/ci/check-scores.mjs` and
  * commit the JSON. A check whose p_i stays under ~0.1 % for a quarter is a
- * candidate to leave the PR path for the main baseline.
+ * candidate to leave the PR path for the main baseline. The same weekly pass
+ * runs `node scripts/ci/shard-plan.mjs` (the shards' costs) and
+ * `node scripts/ci/pr-latency.mjs --days=7` (push → 4 required checks green;
+ * the founder's target is 8-10 min), and quotes the latency table.
  *
  * Usage:
  *   node scripts/ci/check-scores.mjs [--runs=400] [--repo=Synap-core/backend]
@@ -99,8 +102,16 @@ export const unitOf = (jobName) =>
 // The job half of a step's key. A Release gate part keeps the key its step had
 // in the single job ("Release gate › Lint"), so the rows of runs before and
 // after the split are one row, and the preflight's `mirrors` still find them.
+// Shard 1's own steps (Security Audit, the api-types freshness check) keep
+// one key whatever the shard count: since lane L8 a PR selection runs in 1 to
+// 8 shards ("Full suite (shard 1/2)"), main in 4.
 export const stepOwner = (jobName) =>
-  unitOf(jobName) === "Release gate" ? "Release gate" : jobName;
+  unitOf(jobName) === "Release gate"
+    ? "Release gate"
+    : jobName.replace(
+        /^Full suite \(shard 1\/\d+\)$/,
+        "Full suite (shard 1/4)"
+      );
 
 export const laplace = (f, n) => (f + 1) / (n + 2);
 export const median = (xs) => {

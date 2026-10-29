@@ -38,6 +38,9 @@
  *
  * ── REFRESH ──────────────────────────────────────────────────────────────────
  * Weekly, with check-scores.json:  node scripts/ci/shard-plan.mjs
+ * The plan also prices a PR's selection (test-ratchet-shards.mjs fileCost,
+ * planSelection): a packages/api file by its own cost, another package's file
+ * by its package's wall over its test-file count.
  * A file added since is placed by a hash of its path until then.
  *
  * Usage:
@@ -242,12 +245,16 @@ function gh(argv) {
   });
 }
 
-/** The latest completed CI runs whose 4 shard jobs all succeeded. */
+/**
+ * The latest completed main push runs whose 4 shard jobs all succeeded. Only
+ * main: since lane L8 a PR runs a selection of test files (report ids
+ * `select:<dir>#shard<k>`), whose times would read as whole packages here.
+ */
 function recentShardRuns(repo, want) {
   const runs = JSON.parse(
     gh([
       "api",
-      `repos/${repo}/actions/workflows/ci.yml/runs?status=completed&per_page=50`,
+      `repos/${repo}/actions/workflows/ci.yml/runs?status=completed&branch=main&event=push&per_page=50`,
     ])
   ).workflow_runs;
   const out = [];

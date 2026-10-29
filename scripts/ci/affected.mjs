@@ -1,6 +1,7 @@
 /**
  * affected.mjs — which tests a pull request must run, DERIVED from the
- * repository (founder, 2026-10-29, "One trunk, three CI tiers").
+ * repository (founder, 2026-10-29: "One trunk, three CI tiers"; lane L8, the
+ * same day: "a backend PR's 4 required checks green in 8-10 minutes").
  *
  * ── THE THREE TIERS ──────────────────────────────────────────────────────────
  *   PR (required)   Preflight, the Release gate, and the tests of what the
@@ -12,56 +13,64 @@
  *   release / pods  a pod updates only to a main commit whose post-merge run
  *                   was ALL green (scripts/ci/release-gate-wait.mjs).
  *
- * ── THE GRAPH (never hand-listed) ────────────────────────────────────────────
- * Two derived sources, at two granularities:
- *   1. PACKAGES: P depends on Q when P's package.json names Q with
- *      `workspace:` (dependencies, devDependencies, peerDependencies,
- *      optionalDependencies). A change in Q runs Q, P and P's dependents.
- *   2. TEST FILES: a test file T of package P that names a path inside
- *      package Q, either repo-relative (`"packages/database/migrations"`) or
- *      relative and resolving into Q (`"../../database/src/x"`, an import or
- *      a vi.mock), runs whenever Q is affected. Only T runs: P's code does
- *      not reach Q through T, so P's other tests and P's dependents are not
- *      affected by it. Measured 2026-10-29: taken at the PACKAGE level, these
- *      references form one cycle (packages/api tests read packages/database,
- *      packages/database tests read packages/api...) and every change would
- *      reach every package.
- * TRIPWIRES run on every PR, whatever changed: they are the tests that read
- * across the tree (369 files on 2026-10-29; packages/api's 321 cost ~550
- * worker-seconds in the shard plan, about 3 min on 3 workers).
- * What this cannot see: a path built from pieces at run time
- * (`join(__dirname, "..", "..", "database")`) in a test that is not a
- * tripwire. Main runs the whole suite after the merge and names the commits
- * since its last all-green run when it goes red.
+ * ── WHAT A PR RUNS: TEST FILES, NOT PACKAGES ─────────────────────────────────
+ * Until lane L8 a PR ran whole packages: the touched ones and every package
+ * that depends on them. packages/api (2,058 test files) was in 79 of the 105
+ * PRs merged 28-29 Oct, so "affected" was the whole api suite, 4 shards of
+ * ~20 min. Now a PR runs (scope "selected"):
+ *   1. every test file the change reaches through the import graph
+ *      (scripts/ci/import-graph.mjs: imports, transitively, and the files and
+ *      directories a file reads by path), a changed test file included;
+ *   2. every test file that names a changed file's package by path (the
+ *      cross-package path-reference scan below, kept from the package tier);
+ *   3. when the known-red baseline changed: every file it names, before and
+ *      after the change (a removed line claims a file passes: it runs);
+ *   4. EVERY tripwire, whatever changed: they are the tests that read across
+ *      the tree (369 files on 2026-10-29; packages/api's 321 cost ~551
+ *      worker-seconds in the shard plan, ~3 min of a shard on 3 workers).
+ * packages/types, packages/database and packages/core go through the graph
+ * like any package. A migration (.sql) is read by the tests and helpers that
+ * name it, and the shards migrate the test database before any test, so a
+ * migration that does not apply is red in every shard.
  *
- * ── THE FULL SUITE ON A PR ───────────────────────────────────────────────────
- * A change to a path everything rests on runs everything:
- *   - any path outside a workspace package (root config, the lockfile,
- *     scripts/, .github/, skills/, deploy/, docs that tests read...), except
- *     SUITE_NEUTRAL: generated files no test reads;
- *   - a directory under apps/ or packages/ that is not a workspace package;
- *   - a non-test file of packages/database (schema, migrations),
- *     packages/types or packages/core.
- *
- * ── TEST FILES ───────────────────────────────────────────────────────────────
- * A changed `*.test.*` file runs its own package and is not followed to the
- * dependents: no package imports another package's test file. Test HELPERS
- * (`__tests__/helpers.ts`, `test-utils/`) are not test files and are followed.
+ * ── PATHS OUTSIDE EVERY PACKAGE ──────────────────────────────────────────────
+ * NARROWED (through the graph's read edges, plus the jobs that own them):
+ *   skills/**            the tests and modules that read skills by path
+ *   deploy/**, kratos/**, docker/**, Dockerfile, .dockerignore, install.sh,
+ *   synap                the deploy tests and the Docker image (their own
+ *                        jobs, IMAGE_INPUTS in ci-changes.mjs) and the tests
+ *                        that read them
+ *   .github/**, ci/**, scripts/** (not the runner, below)
+ *                        the tests that import or read them; every CI
+ *                        tripwire (scripts/**\/*.tripwire.test.ts) runs anyway
+ *                        as a tripwire; a changed workflow job runs itself
+ *   docs/** (what ci-changes.mjs's DOCS_ONLY does not skip), CLAUDE.md,
+ *   AGENTS.md, .claude/** the tests that read them by name
+ * FULL (ROOT_FULL), one reason each:
+ *   package.json, pnpm-lock.yaml, pnpm-workspace.yaml, .npmrc
+ *                        what is installed, and which packages exist: every
+ *                        test resolves its imports through them
+ *   turbo.json           how every package is built before its tests run
+ *   tsconfig*.json, .node-version
+ *                        how every file is compiled and which Node runs it
+ *   vitest*.config.* (at the root)
+ *                        how the root tripwires run
+ *   the test runner: scripts/test-ratchet*.mjs, scripts/tripwire-discovery.mjs,
+ *   scripts/test-floors.json
+ *                        they run and judge every test; a run they planned
+ *                        cannot vouch for a change to them
+ *   any other path outside a workspace package, and a directory under apps/
+ *   or packages/ that is not a workspace package (fail-safe: unknown = full)
+ * SUITE_NEUTRAL paths (generated, read by no test) widen nothing.
  *
  * Self-contained (node: built-ins only): the "What changed" job runs it
  * before any install.
  */
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
+import { buildGraph, reach } from "./import-graph.mjs";
 
 export const TEST_FILE = /\.test\.(ts|tsx|mts|cts|mjs|cjs|js)$/;
-
-/** Non-test files of these packages run the full suite: everything rests on them. */
-export const FULL_SUITE_PACKAGES = [
-  "packages/database",
-  "packages/types",
-  "packages/core",
-];
 
 /**
  * Paths outside every workspace package that no test file reads, so their
@@ -74,6 +83,28 @@ export const FULL_SUITE_PACKAGES = [
  * take it off the list.
  */
 export const SUITE_NEUTRAL = [/^docs\/reference\//];
+
+/** Paths outside every package that run the full suite (header, "FULL"). */
+export const ROOT_FULL = [
+  /^(package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|\.npmrc|turbo\.json|\.node-version)$/,
+  /^tsconfig[^/]*\.json$/,
+  /^vitest[^/]*\.config\.[mc]?[jt]s$/,
+  /^scripts\/(test-ratchet[^/]*\.mjs|tripwire-discovery\.mjs|test-floors\.json)$/,
+];
+
+/** Paths outside every package that go through the graph (header, "NARROWED"). */
+export const NARROWED = [
+  /^skills\//,
+  /^(deploy|kratos|docker)\//,
+  /^(Dockerfile[^/]*|\.dockerignore|install\.sh|synap)$/,
+  /^(\.github|ci|scripts)\//,
+  /^docs\//,
+  /^(CLAUDE|AGENTS)\.md$/,
+  /^\.claude\//,
+];
+
+/** The known-red baseline: when it changes, every file it names runs. */
+export const BASELINE = "scripts/test-ratchet-baseline.txt";
 
 /**
  * Paths whose change runs "API e2e" (the founder's rule: only when the HTTP
@@ -140,6 +171,21 @@ export function workspacePackages(root) {
     }
   }
   return out.sort((a, b) => a.dir.localeCompare(b.dir));
+}
+
+/**
+ * The packages whose `test` script is `vitest run …`: the ratchet's package
+ * suites (test-ratchet.mjs packageRuns reads the same scripts).
+ */
+export function suiteDirs(root) {
+  return workspacePackages(root)
+    .map((p) => p.dir)
+    .filter((d) =>
+      /^vitest run(\s|$)/.test(
+        JSON.parse(readFileSync(join(root, d, "package.json"), "utf8")).scripts
+          ?.test ?? ""
+      )
+    );
 }
 
 function walk(dir, found) {
@@ -211,6 +257,160 @@ export function testReferences(root, dirs, keep = () => true) {
   return out;
 }
 
+/** The files a baseline text names (one per entry line). */
+export function baselineFiles(text) {
+  return (text ?? "")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l && !l.startsWith("#"))
+    .map((l) => l.split("|")[0].trim())
+    .filter(Boolean);
+}
+
+/**
+ * The graph of a checkout: { dirs (workspace package dirs), graph (the
+ * package-level dependents graph, for selectPackageTier), imports
+ * (import-graph.mjs buildGraph; null with `{ imports: false }`: the culprit
+ * finder needs only the package graph, and the import graph costs ~5 s),
+ * refs (testReferences of every test file that is not a tripwire), tripwires
+ * (every tripwire, repo-relative, when `imports`), baseline (the files the
+ * checkout's baseline names) }.
+ */
+export function loadGraph(
+  root,
+  isTripwire,
+  { imports: withImports = true } = {}
+) {
+  const packages = workspacePackages(root);
+  const dirs = packages.map((p) => p.dir);
+  const imports = withImports ? buildGraph(root) : null;
+  const baselinePath = join(root, BASELINE);
+  return {
+    dirs,
+    graph: dependentsGraph(packages),
+    imports,
+    refs: testReferences(root, dirs, (f) => !isTripwire(f)),
+    tripwires: imports ? imports.files.filter(isTripwire) : [],
+    baseline: existsSync(baselinePath)
+      ? baselineFiles(readFileSync(baselinePath, "utf8"))
+      : [],
+  };
+}
+
+const cap = (xs, n = 8) =>
+  `${xs.slice(0, n).join("; ")}${xs.length > n ? `; and ${xs.length - n} more` : ""}`;
+
+/**
+ * The PR tier for a list of changed paths (none of them docs-only: the caller
+ * routes docs-only changes first). `g` comes from loadGraph(); `baseBaseline`
+ * is the list of files the BASE commit's baseline names, when it changed.
+ * Returns { scope: "full" | "selected", tests, e2e, why }:
+ *   tests  scope=selected: every test file to run (sorted), tripwires included
+ *   why    what forced the full suite, or what was selected and from what
+ */
+export function selectTier(files, g, { baseBaseline = [] } = {}) {
+  const full = [];
+  const neutral = [];
+  const graphed = [];
+  for (const f of files) {
+    if (SUITE_NEUTRAL.some((re) => re.test(f))) {
+      neutral.push(f);
+      continue;
+    }
+    const pkg = packageOf(f, g.dirs);
+    if (pkg) {
+      graphed.push(f);
+      continue;
+    }
+    if (/^(apps|packages)\/[^/]+\//.test(f)) {
+      full.push(
+        `${f} (${f.split("/").slice(0, 2).join("/")} is not a workspace package)`
+      );
+      continue;
+    }
+    if (ROOT_FULL.some((re) => re.test(f))) {
+      full.push(
+        `${f} (root config or the test runner: every test rests on it)`
+      );
+      continue;
+    }
+    if (f === BASELINE || NARROWED.some((re) => re.test(f))) {
+      graphed.push(f);
+      continue;
+    }
+    full.push(`${f} (outside every workspace package, not a narrowed path)`);
+  }
+  const e2e = files.some((f) => API_SURFACE.some((re) => re.test(f)));
+  if (full.length)
+    return {
+      scope: "full",
+      tests: [],
+      e2e: true,
+      why: [`full suite: ${cap(full)}`],
+    };
+
+  const r = reach(graphed, g.imports);
+  const selected = new Set(r.tests);
+  const fromGraph = selected.size;
+  // A changed test file always runs itself (even one the graph cannot read).
+  for (const f of graphed) if (TEST_FILE.test(f)) selected.add(f);
+  // Tests that name a changed file's package by path.
+  const touched = new Set(
+    graphed.map((f) => packageOf(f, g.dirs)).filter(Boolean)
+  );
+  const byRef = g.refs
+    .filter((x) => !selected.has(x.file) && x.reads.some((q) => touched.has(q)))
+    .map((x) => x.file);
+  for (const f of byRef) selected.add(f);
+  // The baseline changed: every file it names, before and after.
+  const byBaseline = graphed.includes(BASELINE)
+    ? [...new Set([...g.baseline, ...baseBaseline])].filter(
+        (f) => !selected.has(f)
+      )
+    : [];
+  for (const f of byBaseline) selected.add(f);
+  const beforeTripwires = selected.size;
+  for (const t of g.tripwires) selected.add(t);
+  return {
+    scope: "selected",
+    tests: [...selected].sort(),
+    e2e,
+    why: [
+      graphed.length
+        ? `changed: ${graphed.length} file(s)`
+        : "no package source changed",
+      `${fromGraph} test file(s) the change reaches through imports or reads by path (scripts/ci/import-graph.mjs)`,
+      ...(byRef.length
+        ? [`${byRef.length} test file(s) that name a changed package by path`]
+        : []),
+      ...(byBaseline.length
+        ? [`${byBaseline.length} file(s) the known-red baseline names`]
+        : []),
+      `${selected.size - beforeTripwires} more: every tripwire (${g.tripwires.length})`,
+      ...(neutral.length
+        ? [
+            `read by no test: ${neutral.length} generated file(s) under docs/reference/`,
+          ]
+        : []),
+    ],
+  };
+}
+
+// ── THE PACKAGE TIER (before lane L8) ────────────────────────────────────────
+// What a PR ran until lane L8: the touched packages, every workspace package
+// that depends on them, and the test files of other packages that read them
+// by path. PRs no longer run it. scripts/ci/culprit-finder.mjs still asks it
+// "may this PR have made that file fail?": a wider reach than the file-level
+// selection, so an attribution it cannot settle goes to the bisect instead of
+// being called a flake.
+
+/** Non-test files of these packages reach everything in the package tier. */
+export const PACKAGE_TIER_FULL = [
+  "packages/database",
+  "packages/types",
+  "packages/core",
+];
+
 /** dir → the set of package dirs whose package.json depends on it DIRECTLY. */
 export function dependentsGraph(packages) {
   const byName = new Map(packages.map((p) => [p.name, p.dir]));
@@ -221,19 +421,6 @@ export function dependentsGraph(packages) {
       if (d && d !== p.dir) graph.get(d).add(p.dir);
     }
   return graph;
-}
-
-/**
- * The graph of a checkout: { graph: dependentsGraph, refs: testReferences of
- * every test file that is not a tripwire }.
- */
-export function loadGraph(root, isTripwire) {
-  const packages = workspacePackages(root);
-  const dirs = packages.map((p) => p.dir);
-  return {
-    graph: dependentsGraph(packages),
-    refs: testReferences(root, dirs, (f) => !isTripwire(f)),
-  };
 }
 
 /** Every package reachable from `start` through dependents, `start` included. */
@@ -252,85 +439,27 @@ export function closure(start, graph) {
 }
 
 /**
- * The PR tier for a list of changed paths (none of them docs-only: the caller
- * routes docs-only changes first). `graph` and `refs` come from loadGraph().
- * Returns { scope: "full" | "affected", dirs, tests, e2e, why }:
- *   dirs   the packages whose whole suite runs (touched + dependents, and the
- *          packages of changed test files)
- *   tests  test files of OTHER packages that read an affected package by path
- *   why    what forced the full suite, or what was selected and from what
+ * The package tier of changed paths: { scope: "full" | "affected", dirs (the
+ * packages whose whole suite it reaches), tests (test files of OTHER packages
+ * that read them by path) }. `graph` = loadGraph().graph, `refs` its refs.
  */
-export function selectTier(files, { graph, refs = [] }) {
+export function selectPackageTier(files, { graph, refs = [] }) {
   const dirs = [...graph.keys()];
-  const full = [];
   const touched = new Set();
   const testOnly = new Set();
-  const neutral = [];
   for (const f of files) {
-    if (SUITE_NEUTRAL.some((re) => re.test(f))) {
-      neutral.push(f);
-      continue;
-    }
+    if (SUITE_NEUTRAL.some((re) => re.test(f))) continue;
     const pkg = packageOf(f, dirs);
-    if (!pkg) {
-      full.push(
-        /^(apps|packages)\/[^/]+\//.test(f)
-          ? `${f} (${f.split("/").slice(0, 2).join("/")} is not a workspace package)`
-          : `${f} (outside every workspace package)`
-      );
-      continue;
-    }
-    if (TEST_FILE.test(f)) {
-      testOnly.add(pkg);
-      continue;
-    }
-    if (FULL_SUITE_PACKAGES.includes(pkg)) {
-      full.push(`${f} (${pkg}: every package rests on it)`);
-      continue;
-    }
-    touched.add(pkg);
+    if (!pkg) return { scope: "full", dirs: [], tests: [] };
+    if (TEST_FILE.test(f)) testOnly.add(pkg);
+    else if (PACKAGE_TIER_FULL.includes(pkg))
+      return { scope: "full", dirs: [], tests: [] };
+    else touched.add(pkg);
   }
-  const e2e = files.some((f) => API_SURFACE.some((re) => re.test(f)));
-  if (full.length)
-    return {
-      scope: "full",
-      dirs: [],
-      tests: [],
-      e2e: true,
-      why: [
-        `full suite: ${full.slice(0, 8).join("; ")}${full.length > 8 ? `; and ${full.length - 8} more` : ""}`,
-      ],
-    };
-  const reach = closure(touched, graph);
-  const brought = [...reach].filter((d) => !touched.has(d)).sort();
-  const extraPkgs = [...testOnly].filter((d) => !reach.has(d)).sort();
-  const affected = new Set([...reach, ...testOnly]);
+  const affected = new Set([...closure(touched, graph), ...testOnly]);
   const tests = refs
     .filter((r) => !affected.has(r.pkg) && r.reads.some((q) => affected.has(q)))
     .map((r) => r.file)
     .sort();
-  return {
-    scope: "affected",
-    dirs: [...affected].sort(),
-    tests,
-    e2e,
-    why: [
-      touched.size
-        ? `changed: ${[...touched].sort().join(", ")}`
-        : "no package source changed",
-      ...(brought.length ? [`their dependents: ${brought.join(", ")}`] : []),
-      ...(extraPkgs.length ? [`test files only: ${extraPkgs.join(", ")}`] : []),
-      ...(tests.length
-        ? [
-            `${tests.length} test file(s) of other packages that read them by path`,
-          ]
-        : []),
-      ...(neutral.length
-        ? [
-            `read by no test: ${neutral.length} generated file(s) under docs/reference/`,
-          ]
-        : []),
-      "every tripwire",
-    ],
-  };
+  return { scope: "affected", dirs: [...affected].sort(), tests };
 }

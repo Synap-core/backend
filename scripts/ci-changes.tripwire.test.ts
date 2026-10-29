@@ -12,7 +12,22 @@ import { join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 // @ts-expect-error — plain ESM script, no declarations
-import { SUITE_NEUTRAL, loadGraph, selectTier } from "./ci/affected.mjs";
+import {
+  BASELINE,
+  SUITE_NEUTRAL,
+  TEST_FILE,
+  loadGraph,
+  selectTier,
+  suiteDirs,
+} from "./ci/affected.mjs";
+import {
+  SELECTION_MAX_SHARDS,
+  loadShardPlan,
+  ownerDir,
+  planSelection,
+  selectionProblems,
+  // @ts-expect-error — plain ESM script, no declarations
+} from "./test-ratchet-shards.mjs";
 // @ts-expect-error — plain ESM script, no declarations
 import { isTripwire } from "./tripwire-discovery.mjs";
 import {
@@ -23,6 +38,7 @@ import {
   isImageInput,
   queuePrNumber,
   reusableRun,
+  shardMatrix,
   suitesPassed,
   summary,
   // @ts-expect-error — plain ESM script, no declarations
@@ -30,9 +46,33 @@ import {
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 const none = () => [];
-// The real graph of this checkout: the decision under test is the one CI makes.
+// The real graph of this checkout: the decision under test is the one CI makes
+// (ci-changes.mjs tierOfCheckout: the tier, then its shard plan).
 const graph = loadGraph(REPO, isTripwire);
-const tier = (files: string[]) => selectTier(files, graph);
+const SUITES: string[] = suiteDirs(REPO);
+const countByDir: Record<string, number> = {};
+for (const f of graph.imports.files as string[])
+  if (TEST_FILE.test(f))
+    countByDir[ownerDir(f)] = (countByDir[ownerDir(f)] ?? 0) + 1;
+const allSuiteTests = (graph.imports.files as string[]).filter(
+  (f) => TEST_FILE.test(f) && (isTripwire(f) || SUITES.includes(ownerDir(f)))
+);
+const shardPlan = loadShardPlan();
+const tier = (files: string[]) => {
+  const t = selectTier(files, graph);
+  return t.scope === "selected"
+    ? {
+        ...t,
+        selection: planSelection({
+          tests: t.tests,
+          suiteDirs: SUITES,
+          isTripwire,
+          plan: shardPlan,
+          countByDir,
+        }),
+      }
+    : t;
+};
 const pr = (files: string[] | null, extra = {}) =>
   decide({
     event: "pull_request",
@@ -325,14 +365,15 @@ describe("ci-changes: every check runs unless a narrow match says otherwise", ()
     expect([mixed.gate, mixed.suites, mixed.scope]).toEqual([
       true,
       true,
-      "full",
+      "selected",
     ]);
   });
 
   it("a docs-only file beside package source never widens the tier", () => {
-    const d = pr(["apps/pod-admin/app/x.tsx", "README.md"]);
-    expect(d.scope).toBe("affected");
-    expect(d.affected).toEqual(["apps/pod-admin"]);
+    const src = "apps/pod-admin/app/(admin)/review/_lib/review-rows.ts";
+    const d = pr([src, "README.md"]);
+    expect(d.scope).toBe("selected");
+    expect(d.selection?.tests).toEqual(pr([src]).selection?.tests);
   });
 
   it("files that tests read are never docs-only", () => {
@@ -372,56 +413,160 @@ describe("ci-changes: every check runs unless a narrow match says otherwise", ()
   });
 });
 
-// The founder's three routing cases (2026-10-29), on the real graph. Each row
-// rules out a looser rule: "a source change runs everything" fails row 1;
-// "only the touched package" fails row 1's dependents; "packages/types is a
-// package like any other" fails row 2; "docs run the suites" fails row 3.
+// The PR tier on the real graph (lane L8, 2026-10-29): test FILES the change
+// reaches, every tripwire, root config full. Each row rules out a looser or a
+// tighter rule: "the touched package and its dependents" (the tier before L8)
+// fails row 1's exclusions; "only direct importers" fails row 1b; "shared
+// code runs everything" fails row 2; "anything outside a package is full"
+// fails row 3; "root config is a path like any other" fails row 4.
+const nonTripwire = (tests: string[]) => tests.filter((f) => !isTripwire(f));
+const tests = (d: { selection: { tests: string[] } | null }) =>
+  d.selection?.tests ?? [];
+
 describe("ci-changes: the PR tier on the real graph", () => {
-  it("1. a leaf package (apps/pod-admin): its own suite, every tripwire, no e2e", () => {
+  it("1. a pod-admin module: its importers' tests and every tripwire, no other package, no e2e", () => {
     const d = pr(["apps/pod-admin/app/(admin)/review/_lib/review-rows.ts"]);
-    expect([d.scope, d.suites, d.e2e]).toEqual(["affected", true, false]);
-    expect(d.affected).toEqual(["apps/pod-admin"]);
+    expect([d.scope, d.suites, d.e2e]).toEqual(["selected", true, false]);
+    expect(tests(d)).toEqual(
+      expect.arrayContaining([
+        "apps/pod-admin/app/(admin)/review/_lib/review-rows.test.ts",
+        "apps/pod-admin/app/(admin)/review/_lib/review-groups.test.tsx",
+        ...graph.tripwires,
+      ])
+    );
+    // Not the package: a pod-admin test that does not import it stays out.
+    const all = graph.imports.files.filter(
+      (f: string) => f.startsWith("apps/pod-admin/") && TEST_FILE.test(f)
+    );
+    expect(nonTripwire(tests(d)).length).toBeLessThan(
+      nonTripwire(all).length / 2
+    );
+    expect(
+      nonTripwire(tests(d)).every((f) => f.startsWith("apps/pod-admin/"))
+    ).toBe(true);
     expect(d.reason).toContain("every tripwire");
   });
 
-  it("1b. a library: it, its dependents, and the tests that read it", () => {
+  it("1b. a library: its own tests and the tests of every importer, transitively", () => {
     const d = pr(["packages/governance-policy/src/index.ts"]);
-    expect(d.scope).toBe("affected");
-    // package.json: database, api, jobs, capability-gate, pod-admin... depend on it.
-    for (const dep of [
-      "packages/governance-policy",
-      "packages/api",
-      "packages/database",
-      "packages/jobs",
-      "apps/pod-admin",
-      "apps/api",
+    expect(d.scope).toBe("selected");
+    for (const f of [
+      // its own package's tests
+      "packages/governance-policy/src/agent-hand-off.test.ts",
+      // a test that imports it directly
+      "packages/api/src/routers/proposals/__tests__/execute-executors.test.ts",
+      // a test that reaches it through packages/api/src/access/grant-read.ts
+      "packages/api/src/access/grant-read-coverage.tripwire.test.ts",
     ])
-      expect(d.affected, dep).toContain(dep);
+      expect(tests(d), f).toContain(f);
   });
 
-  it("2. packages/types or the database schema: the full suite and e2e", () => {
+  it("2. packages/types, packages/database and packages/core go through the graph", () => {
+    for (const [f, reached] of [
+      [
+        "packages/types/src/vocabulary/index.ts",
+        "packages/types/src/vocabulary/vocabulary.test.ts",
+      ],
+      [
+        "packages/database/src/schema/entities.ts",
+        "packages/database/src/migrations-0319.pglite.test.ts",
+      ],
+      [
+        // a migration is read by the test that applies it by path
+        "packages/database/migrations/0319_lifecycle_columns.sql",
+        "packages/api/src/routers/webhooks-postiz.pglite.test.ts",
+      ],
+      ["packages/core/src/index.ts", "apps/api/src/admin-event-stream.test.ts"],
+    ]) {
+      const d = pr([f]);
+      expect(d.scope, f).toBe("selected");
+      expect(tests(d), `${f} → ${reached}`).toContain(reached);
+      expect(tests(d).length, f).toBeLessThan(allSuiteTests.length);
+    }
+  });
+
+  it("3. skills/, deploy/, .github/, scripts/ and read docs: the tests that read them, no full suite", () => {
+    for (const [f, reached] of [
+      [
+        "skills/synap/SKILL.md",
+        "packages/api/src/routers/hub-protocol/rest/skills-crud.create-projection.test.ts",
+      ],
+      [
+        "deploy/docker-compose.yml",
+        "apps/api/src/middleware/rate-limit-deploy-wiring.test.ts",
+      ],
+      [".github/workflows/ci.yml", "scripts/ci-changes.tripwire.test.ts"],
+      ["scripts/preflight.mjs", "scripts/preflight.tripwire.test.ts"],
+    ]) {
+      const d = pr([f]);
+      expect(d.scope, f).toBe("selected");
+      expect(tests(d), `${f} → ${reached}`).toContain(reached);
+      // Rules out "a narrowed path runs everything": far below the suite.
+      expect(tests(d).length, f).toBeLessThan(allSuiteTests.length / 3);
+    }
+  });
+
+  it("4. root config and the test runner run the full suite (each one, alone)", () => {
     for (const f of [
-      "packages/types/src/vocabulary/index.ts",
-      "packages/database/src/schema/entities.ts",
-      "packages/database/migrations/0400_x.sql",
-      "packages/core/src/index.ts",
-      "pnpm-lock.yaml",
       "package.json",
-      ".github/workflows/ci.yml",
-      "skills/synap/SKILL.md",
+      "pnpm-lock.yaml",
+      "pnpm-workspace.yaml",
+      ".npmrc",
+      "turbo.json",
+      ".node-version",
+      "tsconfig.json",
+      "tsconfig.base.json",
+      "vitest.config.ts",
+      "scripts/test-ratchet.mjs",
+      "scripts/test-ratchet-shards.mjs",
+      "scripts/test-ratchet-retry.mjs",
+      "scripts/tripwire-discovery.mjs",
+      "scripts/test-floors.json",
+      // fail-safe: unknown outside paths, and a dir that is not a package
+      ".husky/pre-push",
+      "kratos-unknown/x",
+      "packages/ghost/src/x.ts",
     ]) {
       const d = pr([f]);
       expect([d.scope, d.suites, d.e2e], f).toEqual(["full", true, true]);
     }
+    // The control: a narrowed script beside them is not full on its own.
+    expect(pr(["scripts/pod-observation.mjs"]).scope).toBe("selected");
+    for (const f of [
+      "CLAUDE.md",
+      ".claude/rules/x.md",
+      "docs/decisions/README.md",
+    ])
+      expect(pr([f]).scope, f).toBe("selected");
   });
 
-  it("2b. a TEST file of packages/types runs its package, not everything", () => {
-    const d = pr(["packages/types/src/vocabulary/vocabulary.test.ts"]);
-    expect(d.scope).toBe("affected");
-    expect(d.affected).toEqual(["packages/types"]);
+  it("5. a changed TEST file runs itself, not its package", () => {
+    const f = "packages/types/src/vocabulary/goal-words.test.ts";
+    const d = pr([f]);
+    expect(d.scope).toBe("selected");
+    expect(tests(d)).toContain(f);
+    expect(tests(d)).not.toContain(
+      "packages/types/src/vocabulary/sign-in-way-labels.test.ts"
+    );
   });
 
-  it("3. docs only: no suite, an explicit not-affected verdict", () => {
+  it("6. the known-red baseline changed: every file it names runs, before and after", () => {
+    const d = selectTier([BASELINE], graph, {
+      baseBaseline: [
+        "packages/api/src/services/capabilities/install-layers.test.ts",
+      ],
+    });
+    expect(d.scope).toBe("selected");
+    expect(d.tests).toEqual(
+      expect.arrayContaining([
+        ...graph.baseline,
+        "packages/api/src/services/capabilities/install-layers.test.ts",
+      ])
+    );
+    expect(graph.baseline.length).toBeGreaterThan(5);
+  });
+
+  it("7. docs only: no suite, an explicit not-affected verdict", () => {
     const d = pr(["docs/DEVELOPER.md"]);
     expect([d.scope, d.suites, d.e2e, d.gate]).toEqual([
       "none",
@@ -446,42 +591,57 @@ describe("ci-changes: the PR tier on the real graph", () => {
     ] as const)
       expect(pr([f]).e2e, f).toBe(e2e);
   });
+
+  it("a selection comes with its shard plan: 1 shard when small, more when large, never above the cap", () => {
+    const small = pr(["apps/pod-admin/app/(admin)/review/_lib/review-rows.ts"]);
+    expect(small.selection?.shards).toBe(1);
+    const large = pr(["packages/governance-policy/src/index.ts"]);
+    expect(large.selection?.shards).toBeGreaterThan(1);
+    expect(large.selection?.shards).toBeLessThanOrEqual(SELECTION_MAX_SHARDS);
+    // Every planned file in exactly one run; every tripwire planned.
+    for (const d of [small, large]) {
+      const planned = d.selection!.runs.flatMap(
+        (r: { files: string[] }) => r.files
+      );
+      expect(new Set(planned).size).toBe(planned.length);
+      expect(selectionProblems(d.selection, graph.tripwires)).toEqual([]);
+    }
+    expect(shardMatrix(small)).toEqual([1]);
+    expect(shardMatrix(pr(["package.json"]))).toEqual([1, 2, 3, 4]);
+  });
 });
 
-// Finding 606c00e3 (27 Oct): six PRs merged while breaking tests none of them
-// changed. Their REAL file lists (gh api pulls/<n>/files, in
-// scripts/ci/finding-606c00e3-prs.json) go through the real decision on this
-// checkout's graph, and every test file the finding names as broken must run
-// for every one of them: in the full suite, as a tripwire (every PR tier runs
-// all of them), in an affected package's suite, or as an --also file.
-describe("ci-changes: finding 606c00e3's six PRs would have run the tests they broke", () => {
+// Finding 606c00e3 (27 Oct) and the main reds of 28-29 Oct: each test file
+// that went red on main after a merge, and the PR that broke it (named by the
+// fix PR or commit: #446 in #451, #476 in #489, #495 in #505, #482/#483 in
+// #509, #365 in 08027767c). The culprit's REAL file list (gh api
+// pulls/<n>/files) must select the file it broke. Tripwires are not listed:
+// every PR runs every tripwire.
+describe("ci-changes: every main red of 27-29 Oct is selected by the PR that caused it", () => {
   const { prs } = JSON.parse(
     readFileSync(join(REPO, "scripts/ci/finding-606c00e3-prs.json"), "utf8")
   ) as { prs: Record<string, string[]> };
-  const BROKEN = [
-    "packages/api/src/__tripwires__/skill-tool-tokens-resolve.test.ts",
+  const { culprits } = JSON.parse(
+    readFileSync(join(REPO, "scripts/ci/main-red-culprits.json"), "utf8")
+  ) as {
+    culprits: { pr: string; red: string; files: string[]; evidence: string }[];
+  };
+  const BROKEN_606 = [
     "packages/api/src/routers/proposals/__tests__/podwide-executor-approval.test.ts",
     "packages/api/src/routers/proposals/__tests__/batch-approve-registry.test.ts",
     "packages/api/src/routers/proposals/executors/__tests__/workspace-template-update-approve.pglite.test.ts",
     "packages/api/src/services/capabilities/install-layers.test.ts",
-    "packages/api/src/routers/workspaces/definition-engine.install-layers.tripwire.test.ts",
   ];
-  const pkgOf = (f: string) => /^((?:apps|packages)\/[^/]+)\//.exec(f)?.[1];
-  const runs = (
-    d: { scope: string; affected: string[]; also: string[] },
-    f: string
-  ) =>
-    d.scope === "full" ||
-    (d.scope === "affected" &&
-      (isTripwire(f) || d.affected.includes(pkgOf(f)!) || d.also.includes(f)));
+  const runs = (d: ReturnType<typeof pr>, f: string) =>
+    d.scope === "full" || tests(d).includes(f);
 
-  it("the fixture holds the six PRs, and the broken files exist", () => {
+  it("the fixtures hold the PRs, and every red file exists", () => {
     expect(Object.keys(prs).sort()).toEqual(
       ["#278", "#323", "#350", "#357", "#364", "#365"].sort()
     );
-    // #278 has 162 files: the list is paginated, not the first 100.
     expect(prs["#278"].length).toBe(162);
-    for (const f of BROKEN)
+    expect(culprits.length).toBeGreaterThanOrEqual(6);
+    for (const f of [...BROKEN_606, ...culprits.map((c) => c.red)])
       expect(
         execFileSync("git", ["ls-files", f], {
           cwd: REPO,
@@ -491,90 +651,36 @@ describe("ci-changes: finding 606c00e3's six PRs would have run the tests they b
       ).toBe(f);
   });
 
-  it.each(Object.keys(prs))("%s runs every broken test file", (n) => {
-    const d = pr(prs[n]);
-    expect(d.suites, n).toBe(true);
-    for (const f of BROKEN) expect(runs(d, f), `${n}: ${f}`).toBe(true);
+  it("606c00e3: every broken file runs for at least one of the six, batch-approve-registry for #365", () => {
+    for (const f of BROKEN_606)
+      expect(
+        Object.values(prs).some((files) => runs(pr(files), f)),
+        f
+      ).toBe(true);
+    expect(
+      runs(
+        pr(prs["#365"]),
+        "packages/api/src/routers/proposals/__tests__/batch-approve-registry.test.ts"
+      )
+    ).toBe(true);
   });
 
-  // What each one selects today, so a change to the rules shows up here.
-  it("their tiers: three full (packages/database or types, skills/), three affected", () => {
-    const tiers = Object.fromEntries(
-      Object.entries(prs).map(([n, files]) => [n, pr(files).scope])
-    );
-    expect(tiers).toEqual({
-      "#357": "full", // skills/synap/*.md
-      "#365": "affected",
-      "#350": "full", // packages/database, packages/types
-      "#364": "affected",
-      "#323": "affected",
-      "#278": "full", // packages/database/migrations
-    });
-  });
-});
-
-describe("ci-changes: the graph rules, on a graph small enough to read", () => {
-  // lib <- mid <- app ; other stands alone. A test of `other` reads lib by path.
-  const graph = new Map([
-    ["packages/lib", new Set(["packages/mid"])],
-    ["packages/mid", new Set(["apps/app"])],
-    ["apps/app", new Set<string>()],
-    ["packages/other", new Set<string>()],
-  ]);
-  const refs = [
-    {
-      file: "packages/other/src/reads-lib.test.ts",
-      pkg: "packages/other",
-      reads: ["packages/lib"],
-    },
-  ];
-  const sel = (files: string[]) => selectTier(files, { graph, refs });
-
-  it("a change runs its package, every transitive dependent, and the tests that read it", () => {
-    const t = sel(["packages/lib/src/x.ts"]);
-    expect(t.scope).toBe("affected");
-    // Rules out "only the touched package" and "direct dependents only".
-    expect(t.dirs).toEqual(["apps/app", "packages/lib", "packages/mid"]);
-    expect(t.tests).toEqual(["packages/other/src/reads-lib.test.ts"]);
-  });
-
-  it("a leaf change does not climb UP the graph", () => {
-    const t = sel(["apps/app/src/x.ts"]);
-    expect(t.dirs).toEqual(["apps/app"]);
-    expect(t.tests).toEqual([]);
-  });
-
-  it("a test-file change runs its package only, never its dependents", () => {
-    const t = sel(["packages/lib/src/x.test.ts"]);
-    expect(t.dirs).toEqual(["packages/lib"]);
-  });
-
-  it("outside every package, or a directory that is not a package: the full suite", () => {
-    for (const f of ["tsconfig.json", "packages/ghost/src/x.ts"])
-      expect(sel([f]).scope, f).toBe("full");
-  });
-
-  it("docs/reference/ widens nothing; beside a package it keeps that package's tier", () => {
-    expect(sel(["docs/reference/mcp-tools.json"])).toMatchObject({
-      scope: "affected",
-      dirs: [],
-      e2e: false,
-    });
-    expect(sel(["docs/reference/x.md", "apps/app/src/x.ts"]).dirs).toEqual([
-      "apps/app",
-    ]);
-  });
+  it.each(culprits.map((c) => [c.pr, c.red, c] as const))(
+    "%s selects %s",
+    (_n, red, c) => {
+      const d = pr(c.files.filter((f) => !isDocsOnly(f)));
+      expect(d.suites).toBe(true);
+      expect(runs(d, red), c.evidence).toBe(true);
+    }
+  );
 });
 
 describe("ci-changes: the real graph is derived, not empty", () => {
-  it("reads every workspace package and the cross-package test references", () => {
-    expect(graph.graph.size).toBeGreaterThan(20);
-    // Self-check on a known edge: packages/api's package.json names
-    // @synap/governance-policy, so it is a dependent.
-    expect([...graph.graph.get("packages/governance-policy")!]).toContain(
-      "packages/api"
-    );
+  it("reads every workspace package, the import graph and the cross-package test references", () => {
+    expect(graph.dirs.length).toBeGreaterThan(20);
+    expect(graph.imports.files.length).toBeGreaterThan(5000);
     expect(graph.refs.length).toBeGreaterThan(50);
+    expect(graph.tripwires.length).toBeGreaterThan(300);
     // Tripwires run on every PR, so they never widen the tier through refs.
     expect(graph.refs.some((r: { file: string }) => isTripwire(r.file))).toBe(
       false
@@ -800,16 +906,16 @@ describe("ci-changes: the merge queue", () => {
     expect([d.gate, d.suites, d.scope, d.e2e]).toEqual([
       true,
       true,
-      "affected",
+      "selected",
       false,
     ]);
-    expect(d.affected).toEqual(["apps/pod-admin"]);
+    expect(d.selection?.tests).toEqual(graph.tripwires.slice().sort());
     // Until 2026-10-29 the PR's own passed suites were taken whole here (#428).
     expect(d.reason).toContain("on the tree it will land");
   });
 
-  it("a queue entry touching shared code runs everything", () => {
-    const d = queued(null, ["packages/types/src/x.ts"]);
+  it("a queue entry touching root config runs everything", () => {
+    const d = queued(null, ["pnpm-lock.yaml"]);
     expect([d.gate, d.suites, d.scope, d.e2e]).toEqual([
       true,
       true,
@@ -1079,11 +1185,15 @@ describe("ci-changes: holds never read as passed", () => {
           HEAD_SHA: "HEAD",
           GITHUB_OUTPUT: join(dir, "out"),
           GITHUB_STEP_SUMMARY: join(dir, "summary"),
+          SELECTION_OUT: join(dir, "selection.json"),
         },
       });
       return {
         out: readFileSync(join(dir, "out"), "utf8").split("\n"),
         summary: readFileSync(join(dir, "summary"), "utf8"),
+        selection: existsSync(join(dir, "selection.json"))
+          ? JSON.parse(readFileSync(join(dir, "selection.json"), "utf8"))
+          : null,
       };
     };
     const draft = run("true");
@@ -1094,12 +1204,28 @@ describe("ci-changes: holds never read as passed", () => {
     // An empty diff is not docs-only: the tier selects nothing to widen from,
     // and every output a judge reads is present.
     const ready = run("false");
-    for (const key of ["suites", "scope", "affected", "also", "e2e", "reason"])
+    for (const key of [
+      "suites",
+      "scope",
+      "shards",
+      "shard_count",
+      "selected",
+      "e2e",
+      "reason",
+    ])
       expect(
         ready.out.some((l) => l.startsWith(`${key}=`)),
         key
       ).toBe(true);
     expect(ready.out).toEqual(expect.arrayContaining(["draft_hold=false"]));
+    // An empty diff selects every tripwire, in one shard, written to the file
+    // the shards and the judge read; a draft writes none.
+    expect(ready.out).toEqual(
+      expect.arrayContaining(["scope=selected", "shards=[1]", "shard_count=1"])
+    );
+    expect(ready.selection?.shards).toBe(1);
+    expect(selectionProblems(ready.selection, graph.tripwires)).toEqual([]);
+    expect(draft.selection).toBeNull();
     // An empty diff touches nothing the image is made of: the image jobs pass
     // through "Not affected", with the reason they print.
     expect(ready.out).toEqual(expect.arrayContaining(["image=false"]));
@@ -1110,7 +1236,7 @@ describe("ci-changes: holds never read as passed", () => {
       "| Docker image + deploy tests | skipped: not affected (IMAGE_INPUTS)"
     );
     expect(ready.summary).toContain("### What this run checks");
-  });
+  }, 60_000);
 });
 
 // ci.yml read as text: the jobs block, split per job at two-space indent.
@@ -1183,25 +1309,45 @@ describe("ci.yml: every required check runs, and passes a skipped tier only out 
       );
   });
 
-  it("the shards and the judge read the same scope", () => {
+  it("the shards and the judge read the same selection and shard count", () => {
     const shard = jobs.find((j) => j.id === "full-suite-shard");
     const judge = jobs.find((j) => j.name === "Full suite");
+    const SELECT =
+      "TEST_RATCHET_SELECT: ${{ needs.changes.result == 'success' && needs.changes.outputs.scope == 'selected' && format('{0}/selection/selection.json', runner.temp) || '' }}";
+    const COUNT =
+      "${{ needs.changes.result == 'success' && needs.changes.outputs.shard_count || 4 }}";
     for (const j of [shard, judge]) {
-      expect(j?.block).toContain(
-        "TEST_RATCHET_SCOPE: ${{ needs.changes.outputs.scope }}"
-      );
-      expect(j?.block).toContain(
-        "TEST_RATCHET_AFFECTED: ${{ needs.changes.outputs.scope == 'affected' && needs.changes.outputs.affected || '' }}"
-      );
-      expect(j?.block).toContain(
-        "TEST_RATCHET_ALSO: ${{ needs.changes.outputs.scope == 'affected' && needs.changes.outputs.also || '' }}"
+      expect(j?.block).toContain(SELECT);
+      expect(j?.block).toContain(COUNT);
+      // Each downloads the one selection file the changes job uploads.
+      expect(j?.block).toMatch(
+        /download-artifact@[0-9a-f]{40}[^\n]*\n\s+with:\n\s+name: selection\n/
       );
     }
+    // The shard matrix is the decision's own, the plan's 4 when it failed.
+    expect(shard?.block).toContain(
+      "shard: ${{ fromJSON(needs.changes.result == 'success' && needs.changes.outputs.shards || '[1,2,3,4]') }}"
+    );
+    expect(shard?.block).toContain(`--shard=\${{ matrix.shard }}/${COUNT}`);
+    expect(judge?.block).toContain(`--shards=${COUNT}`);
     const changes = jobs.find((j) => j.name === "What changed");
-    for (const o of ["scope", "affected", "also", "e2e", "reason"])
+    for (const o of [
+      "scope",
+      "shards",
+      "shard_count",
+      "selected",
+      "e2e",
+      "reason",
+    ])
       expect(changes?.block).toContain(
         `${o}: \${{ steps.decide.outputs.${o} }}`
       );
+    expect(changes?.block).toContain(
+      "SELECTION_OUT: ${{ runner.temp }}/selection/selection.json"
+    );
+    expect(changes?.block).toMatch(
+      /upload-artifact@[0-9a-f]{40}[^\n]*\n\s+with:\n\s+name: selection\n\s+path: \$\{\{ runner\.temp \}\}\/selection\/selection\.json\n\s+if-no-files-found: error/
+    );
   });
 
   it("the changes job exports hold and passes the base ref", () => {

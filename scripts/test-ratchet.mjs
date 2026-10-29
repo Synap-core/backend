@@ -57,12 +57,22 @@
  * ── USAGE ────────────────────────────────────────────────────────────────────
  *   node scripts/test-ratchet.mjs                 run everything, then check
  *   node scripts/test-ratchet.mjs --only=packages/api,packages/jobs
+ *   node scripts/test-ratchet.mjs --select=selection.json [--shard=k/N]
+ *                                                 the PR tier since lane L8
+ *                                                 (ci-changes.mjs writes the
+ *                                                 file, scope "selected"): the
+ *                                                 planned test files, in the
+ *                                                 planned shards; see
+ *                                                 selectMode() below
+ *   node scripts/test-ratchet.mjs --reports=DIR --select=selection.json
+ *                                                 judge a selection's shards
  *   node scripts/test-ratchet.mjs --affected=packages/api,apps/api --also=F,G
- *                                                 the PR tier (ci-changes.mjs
- *                                                 outputs affected / also):
- *                                                 those packages' suites, the
- *                                                 files F,G of other packages,
- *                                                 and EVERY tripwire
+ *                                                 the package tier CI ran
+ *                                                 before lane L8 (kept for
+ *                                                 local use): those packages'
+ *                                                 suites, the files F,G of
+ *                                                 other packages, and EVERY
+ *                                                 tripwire
  *   node scripts/test-ratchet.mjs --script=test:e2e --only=packages/test-e2e
  *                                                 a lane run by its own CI job
  *                                                 (the package script to read;
@@ -105,6 +115,9 @@ import {
   parseShard,
   planFits,
   runsForShard,
+  selectRunArgs,
+  selectionProblems,
+  shardDoneId,
   shardReportId,
 } from "./test-ratchet-shards.mjs";
 import {
@@ -150,7 +163,22 @@ const AFFECTED =
 const ALSO = list(flag("also") ?? process.env.TEST_RATCHET_ALSO);
 if (AFFECTED && flag("only"))
   throw new Error("--affected and --only are two scopes: pass one");
-const ONLY = flag("only")?.split(",").filter(Boolean) ?? AFFECTED;
+// --select=<selection.json>: the PR tier since lane L8 (ci-changes.mjs writes
+// it, scope "selected"): a list of test files, planned into shards. No
+// package suite runs whole; see selectMode() below. An unreadable selection
+// throws: the shard or the judge fails, it never runs something else.
+const SELECT_PATH = flag("select") ?? process.env.TEST_RATCHET_SELECT;
+const SELECTION = SELECT_PATH
+  ? JSON.parse(readFileSync(resolve(SELECT_PATH), "utf8"))
+  : null;
+if (SELECTION && (AFFECTED || flag("only") || RECORD))
+  throw new Error(
+    "--select is its own scope: no --only, --affected or --record"
+  );
+const ONLY =
+  flag("only")?.split(",").filter(Boolean) ??
+  AFFECTED ??
+  (SELECTION ? [] : undefined);
 const SCRIPT = flag("script") ?? "test";
 const SHARD = parseShard(flag("shard"));
 const SHARDS = flag("shards") ? Number(flag("shards")) : null;
@@ -467,11 +495,12 @@ async function retryNewFailures(executed) {
 }
 
 // Every test file of a package, as vitest itself resolves them (its own
-// include/exclude), relative to the package; null when the listing fails.
-function listVitestFiles(run) {
+// include/exclude), relative to the package; null when the listing fails (or,
+// unless `emptyIsList`, when it lists nothing).
+function listVitestFiles(run, { emptyIsList = false } = {}) {
   const out = join(
     reportsDir,
-    `${run.id.replace(/[^a-z0-9]+/gi, "_")}.list.json`
+    `${run.id.replace(/[^a-z0-9]+/gi, "_")}.vitest-list.json`
   );
   return new Promise((done) => {
     const child = spawn(
@@ -487,13 +516,233 @@ function listVitestFiles(run) {
         const files = JSON.parse(readFileSync(out, "utf8")).map((e) =>
           relative(base, e.file).replaceAll("\\", "/")
         );
-        done(files.length ? files.sort() : null);
+        done(files.length || emptyIsList ? files.sort() : null);
       } catch {
         done(null);
       }
     });
   });
 }
+
+// ── the PR selection (--select) ──────────────────────────────────────────────
+// The plan (scripts/test-ratchet-shards.mjs planSelection) names every run:
+// { id, dir, shard, files }. A shard lists each of its runs with vitest's own
+// include/exclude first (`<id>.list.json`: the files vitest would collect, or
+// null when listing failed), runs the ones that collect something, retries new
+// failures once, and writes `select-shard-<k>.done.json`. The judge reads the
+// same plan and is red on: a broken plan (a tripwire planned nowhere), a shard
+// with no done marker, a run with no report (unless its listing was empty), a
+// planned file that vitest collected (or could not list) but no report holds,
+// a tripwire in no report, a new failure, a fixed or stale baseline entry of
+// a planned file. A planned file its package's config does not collect is
+// listed, not red: main's full suite does not run it either.
+async function selectMode() {
+  const scriptArgs = new Map(allRuns.map((r) => [r.dir, r.args]));
+  const planned = SELECTION.runs.map((r) => ({
+    id: r.id,
+    dir: r.dir,
+    shard: r.shard,
+    files: r.files,
+    args: selectRunArgs(r, scriptArgs.get(r.dir) ?? []),
+    allowEmpty: true,
+  }));
+  const listPath = (id) =>
+    join(reportsDir, `${id.replace(/[^a-z0-9]+/gi, "_")}.list.json`);
+  if (!REPORTS_IN) {
+    if (SHARD && SHARD.n !== SELECTION.shards)
+      throw new Error(
+        `--shard=${SHARD.k}/${SHARD.n} but the selection plans ${SELECTION.shards} shard(s)`
+      );
+    const ks = SHARD
+      ? [SHARD.k]
+      : Array.from({ length: SELECTION.shards }, (_, i) => i + 1);
+    const mine = planned.filter((r) => ks.includes(r.shard));
+    clearRetry(mine);
+    const toRun = [];
+    for (const r of mine) {
+      const listed = await listVitestFiles(r, { emptyIsList: true });
+      const repoRel = listed?.map((f) => (r.dir === "." ? f : `${r.dir}/${f}`));
+      writeFileSync(
+        listPath(r.id),
+        `${JSON.stringify({ listed: repoRel ?? null })}\n`
+      );
+      if (repoRel && repoRel.length === 0) continue;
+      rmSync(reportFile(reportsDir, r.id), { force: true });
+      toRun.push(r);
+    }
+    console.log(
+      `test-ratchet: selection of ${SELECTION.tests.length} file(s) in ${SELECTION.shards} shard(s); running ${toRun.length} of ${mine.length} planned run(s)${SHARD ? ` (shard ${SHARD.k}/${SHARD.n})` : ""}, ${CONCURRENCY} at a time`
+    );
+    await pool(toRun, CONCURRENCY, (r) =>
+      runVitest(r, reportFile(reportsDir, r.id))
+    );
+    await retryNewFailures(toRun);
+    for (const k of ks)
+      writeFileSync(
+        join(reportsDir, `${shardDoneId(k)}.json`),
+        `${JSON.stringify({ shard: k, runs: mine.filter((r) => r.shard === k).map((r) => r.id) })}\n`
+      );
+    if (SHARD) {
+      console.log(
+        `\ntest-ratchet: shard ${SHARD.k}/${SHARD.n} done; reports in ${relative(REPO_ROOT, reportsDir)}. The "Full suite" job judges them.`
+      );
+      process.exit(0);
+    }
+  }
+
+  const problems = [];
+  for (const p of selectionProblems(SELECTION, discovered))
+    problems.push({ kind: "selection", detail: p });
+  for (let k = 1; k <= SELECTION.shards; k++)
+    if (!existsSync(join(reportsDir, `${shardDoneId(k)}.json`)))
+      problems.push({
+        kind: "no-report",
+        detail: `shard ${k}/${SELECTION.shards} wrote no done marker (${shardDoneId(k)}.json): it crashed or never ran`,
+      });
+  const results = new Map();
+  const flaky = [];
+  const perRun = [];
+  const notCollected = [];
+  const unrun = [];
+  for (const r of planned) {
+    let listed = null;
+    try {
+      listed = JSON.parse(readFileSync(listPath(r.id), "utf8")).listed;
+    } catch {
+      // no listing: the shard did not reach this run; its report decides
+    }
+    if (Array.isArray(listed) && listed.length === 0) {
+      notCollected.push(...r.files);
+      continue;
+    }
+    const report = readReport(reportsDir, r.id);
+    if (!report) {
+      problems.push({
+        kind: "no-report",
+        detail: `${r.id}: no report (shard ${r.shard} crashed before it, or the suite crashed before reporting). Reproduce: cd ${r.dir} && npx vitest run ${r.args.length > 8 ? `<${r.args.length} args>` : r.args.join(" ")}`,
+      });
+      continue;
+    }
+    const first = classifyReport(report);
+    const retry = readReport(reportsDir, retryReportId(r.id));
+    const retried = applyRetry(
+      first.files,
+      retry ? classifyReport(retry).files : null,
+      baseline
+    );
+    for (const fl of retried.flaky) flaky.push({ ...fl, run: r.id });
+    for (const [f, v] of retried.files) results.set(f, v);
+    perRun.push({
+      id: r.id,
+      files: retried.files.size,
+      failedFiles: [...retried.files.values()].filter((v) => !v.ok).length,
+      passed: first.passed,
+      total: first.total,
+    });
+    const listedSet = Array.isArray(listed) ? new Set(listed) : null;
+    for (const f of r.files)
+      if (!retried.files.has(f))
+        (listedSet && !listedSet.has(f) ? notCollected : unrun).push(f);
+  }
+  if (unrun.length)
+    problems.push({
+      kind: "select-unrun",
+      detail: `${unrun.length} planned test file(s) that vitest collects (or could not list) appear in no report:\n${unrun
+        .slice(0, 20)
+        .map((f) => `      ${f}`)
+        .join("\n")}`,
+    });
+  const twUnrun = discovered.filter((t) => !results.has(t));
+  if (twUnrun.length)
+    problems.push({
+      kind: "tripwire-unrun",
+      detail: `${twUnrun.length} tripwire file(s) appear in no report (every PR runs every tripwire):\n${twUnrun
+        .slice(0, 20)
+        .map((f) => `      ${f}`)
+        .join("\n")}`,
+    });
+  if (discovered.length < 100)
+    problems.push({
+      kind: "vacuous",
+      detail: `only ${discovered.length} tripwire files discovered (326 on 2026-10-21) — did the naming convention or the walk change?`,
+    });
+  const plannedSet = new Set(planned.flatMap((r) => r.files));
+  const failing = [...results].filter(([, v]) => !v.ok);
+  const newRed = failing.filter(([f]) => !baseline.has(f));
+  const fixed = [];
+  const stale = [];
+  for (const [f] of baseline) {
+    if (!existsSync(join(REPO_ROOT, f))) {
+      stale.push(f);
+      continue;
+    }
+    if (!plannedSet.has(f) || notCollected.includes(f)) continue;
+    const r = results.get(f);
+    if (r?.ok) fixed.push(f);
+  }
+  for (const p of parseProblems)
+    problems.push({ kind: "baseline-format", detail: p });
+  if (newRed.length)
+    problems.push({
+      kind: "new-failure",
+      detail: `${newRed.length} file(s) fail that are not in the baseline (failed twice where a retry ran). Fix them; the baseline is not a place to park new red:\n${newRed.map(([f, v]) => `      ${f}\n        ↳ ${v.reason}`).join("\n")}`,
+    });
+  if (fixed.length)
+    problems.push({
+      kind: "fixed",
+      detail: `${fixed.length} baseline file(s) now pass — remove them from scripts/test-ratchet-baseline.txt so they can never regress unseen:\n${fixed.map((f) => `      ${f}`).join("\n")}`,
+    });
+  if (stale.length)
+    problems.push({
+      kind: "stale-baseline",
+      detail: `${stale.length} baseline file(s) no longer exist — remove them:\n${stale.map((f) => `      ${f}`).join("\n")}`,
+    });
+
+  console.log(
+    "\n─── test ratchet (PR selection) ──────────────────────────────"
+  );
+  for (const r of perRun)
+    console.log(
+      `  ${r.id.padEnd(44)} ${String(r.files).padStart(5)} files  ${String(r.failedFiles).padStart(4)} red  ${String(r.passed).padStart(6)}/${r.total} tests passed`
+    );
+  console.log(
+    `  ${results.size} files ran of ${plannedSet.size} planned in ${SELECTION.shards} shard(s), ${failing.length} red, ${discovered.length} tripwires discovered${flaky.length ? `, ${flaky.length} flaky` : ""}`
+  );
+  if (notCollected.length)
+    console.log(
+      `\n  [not-collected] ${notCollected.length} planned file(s) their package's vitest config does not collect (main's full suite does not run them either):\n${notCollected
+        .slice(0, 20)
+        .map((f) => `      ${f}`)
+        .join("\n")}`
+    );
+  if (SELECTION.dropped?.length)
+    console.log(
+      `\n  [no-suite] ${SELECTION.dropped.length} selected file(s) in a dir with no \`vitest run\` suite (run nowhere, on main either):\n${SELECTION.dropped
+        .slice(0, 20)
+        .map((f) => `      ${f}`)
+        .join("\n")}`
+    );
+  if (flaky.length) {
+    console.log(
+      `\n  [flaky]\n      ${flaky.length} file(s) failed, then passed when re-run alone in the same job. Not counted; own and fix them:\n${flaky.map((f) => `      ${f.file}\n        ↳ first run: ${f.firstReason}`).join("\n")}`
+    );
+    if (IN_CI)
+      for (const f of flaky)
+        console.log(
+          `::warning file=${f.file},title=Flaky test file::failed, then passed on the retry (not counted). First run: ${f.firstReason}`
+        );
+  }
+  if (problems.length === 0) {
+    console.log(
+      `\n✓ test ratchet OK — every planned file ran, every red file is a known, owned baseline entry.\n`
+    );
+    process.exit(0);
+  }
+  console.error(`\n✗ TEST RATCHET — ${problems.length} problem(s)\n`);
+  for (const p of problems) console.error(`  [${p.kind}]\n      ${p.detail}\n`);
+  process.exit(1);
+}
+if (SELECTION) await selectMode();
 
 let executed = [];
 if (!REPORTS_IN) {

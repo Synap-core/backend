@@ -137,8 +137,8 @@ jobs:
       - name: Keep the default branch's finder
         run: |
           mkdir -p "$RUNNER_TEMP/finder/scripts/ci"
-          cp scripts/ci/culprit-finder.mjs scripts/ci/affected.mjs scripts/ci/release-gate-wait.mjs "$RUNNER_TEMP/finder/scripts/ci/"
-          cp scripts/tripwire-discovery.mjs scripts/pod-observation.mjs "$RUNNER_TEMP/finder/scripts/"
+          cp scripts/ci/culprit-finder.mjs scripts/ci/affected.mjs scripts/ci/import-graph.mjs scripts/ci/release-gate-wait.mjs "$RUNNER_TEMP/finder/scripts/ci/"
+          cp scripts/tripwire-discovery.mjs scripts/pod-observation.mjs scripts/strip-comments.mjs "$RUNNER_TEMP/finder/scripts/"
 
       # The read-only Reader App lays out the private siblings the
       # cross-repo tests read (as every ci.yml job that installs).

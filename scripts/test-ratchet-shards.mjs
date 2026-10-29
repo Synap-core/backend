@@ -225,3 +225,174 @@ export function mergeShardReports(reports) {
     numPassedTests: reports.reduce((s, r) => s + (r.numPassedTests ?? 0), 0),
   };
 }
+
+// ── THE PR SELECTION (lane L8, 2026-10-29) ───────────────────────────────────
+// A PR runs a list of test files (scripts/ci/affected.mjs, scope "selected"),
+// not whole packages. The decision ("What changed") plans it here, before any
+// install, and hands the plan to the shards and the judge as one file
+// (selection.json): which files, in how many shards, under which report ids.
+// The judge reads the same file, so a planned run whose report is missing is
+// red, never a partial green.
+
+/** Per-shard test time the plan aims at (s): 2.4 min setup + this ≈ 8-9 min. */
+export const SELECTION_BUDGET_SECONDS = 360;
+/**
+ * The most shards a PR selection may use. A small selection uses 1 (fewer jobs
+ * on the org's concurrency, faster queue); a large one up to this. Main and the
+ * merge queue keep the committed 4-shard plan.
+ */
+export const SELECTION_MAX_SHARDS = 8;
+/** A package whose selected files cost less than this runs as one item. */
+const SPLIT_FLOOR_SECONDS = 60;
+/** What one more vitest process costs in a shard (start, config, DB pool). */
+export const RUN_OVERHEAD_SECONDS = 8;
+
+export const selectReportId = (dir, k) => `select:${dir}#shard${k}`;
+export const shardDoneId = (k) => `select-shard-${k}.done`;
+
+/**
+ * The cost (seconds of shard wall) of each test file, from the committed
+ * plan: a packages/api file's rebuilt cost over the api workers; a file of
+ * another package its package's measured wall over its test-file count
+ * (`countByDir`); anything unmeasured, the median packages/api file.
+ */
+export function fileCost(plan, countByDir) {
+  const W = plan?.apiWorkers || 3;
+  const api = Object.values(plan?.api ?? {})
+    .map((v) => v?.[1])
+    .filter((x) => typeof x === "number")
+    .sort((a, b) => a - b);
+  const medianApi = api.length ? api[Math.floor(api.length / 2)] / W : 2;
+  return (file) => {
+    const dir = ownerDir(file);
+    if (SHARDED_DIRS.includes(dir)) {
+      const c = plan?.api?.[file.slice(dir.length + 1)]?.[1];
+      return typeof c === "number" ? c / W : medianApi;
+    }
+    const s = plan?.packageSeconds?.[dir];
+    if (typeof s === "number") return s / Math.max(1, countByDir[dir] ?? 1);
+    return medianApi;
+  };
+}
+
+/**
+ * Plan a selection. `tests`: the repo-relative test files to run (tripwires
+ * included); `suiteDirs`: the packages with a `vitest run` test script;
+ * `isTripwire`; `plan`: the committed shard plan (costs); `countByDir`: test
+ * files per owning dir in the checkout. Returns
+ *   { version, shards, budgetSeconds, predictedSeconds[], runs[{ id, dir,
+ *     shard, files }], tests (what runs), dropped (selected files that run
+ *     nowhere, on main either: a non-tripwire test of a dir with no suite) }.
+ * Deterministic: same input, same plan. Longest processing time first.
+ */
+export function planSelection({
+  tests,
+  suiteDirs,
+  isTripwire,
+  plan = null,
+  countByDir = {},
+  budgetSeconds = SELECTION_BUDGET_SECONDS,
+  maxShards = SELECTION_MAX_SHARDS,
+}) {
+  const suites = new Set(suiteDirs);
+  const cost = fileCost(plan, countByDir);
+  const runnable = [];
+  const dropped = [];
+  for (const f of [...new Set(tests)].sort())
+    (suites.has(ownerDir(f)) || isTripwire(f) ? runnable : dropped).push(f);
+  const byDir = new Map();
+  for (const f of runnable) {
+    const d = ownerDir(f);
+    if (!byDir.has(d)) byDir.set(d, []);
+    byDir.get(d).push(f);
+  }
+  // Items: a big package's files one by one; a small package as one item.
+  const items = [];
+  for (const [dir, files] of byDir) {
+    const total = files.reduce((s, f) => s + cost(f), 0);
+    if (total < SPLIT_FLOOR_SECONDS)
+      items.push({ dir, files, cost: total, key: dir });
+    else
+      for (const f of files)
+        items.push({ dir, files: [f], cost: cost(f), key: f });
+  }
+  const total =
+    items.reduce((s, i) => s + i.cost, 0) + byDir.size * RUN_OVERHEAD_SECONDS;
+  const shards = Math.max(
+    1,
+    Math.min(maxShards, Math.ceil(total / budgetSeconds))
+  );
+  items.sort((a, b) => b.cost - a.cost || a.key.localeCompare(b.key));
+  const load = Array.from({ length: shards }, () => 0);
+  const runsOf = Array.from({ length: shards }, () => new Map());
+  for (const it of items) {
+    let k = 0;
+    for (let i = 1; i < shards; i++) if (load[i] < load[k]) k = i;
+    const runs = runsOf[k];
+    if (!runs.has(it.dir)) {
+      runs.set(it.dir, []);
+      load[k] += RUN_OVERHEAD_SECONDS;
+    }
+    runs.get(it.dir).push(...it.files);
+    load[k] += it.cost;
+  }
+  const runs = [];
+  runsOf.forEach((m, i) => {
+    for (const [dir, files] of [...m].sort(([a], [b]) => a.localeCompare(b)))
+      runs.push({
+        id: selectReportId(dir, i + 1),
+        dir,
+        shard: i + 1,
+        files: files.sort(),
+      });
+  });
+  return {
+    version: 1,
+    shards,
+    budgetSeconds,
+    predictedSeconds: load.map((s) => Math.round(s)),
+    runs,
+    tests: runnable,
+    dropped,
+  };
+}
+
+/**
+ * The vitest argv of a planned run: its package's own test-script flags and
+ * its files relative to the run's dir (the root runs files only). vitest reads
+ * a file argument as a SUBSTRING filter, so a run may also reach an unplanned
+ * file whose path contains a planned one: it runs, and is judged, as an extra.
+ */
+export function selectRunArgs(run, scriptArgs = []) {
+  return [
+    ...scriptArgs,
+    ...run.files.map((f) =>
+      run.dir === "." ? f : f.slice(run.dir.length + 1)
+    ),
+  ];
+}
+
+/**
+ * Problems with a selection file; the judge is red on any (it never judges a
+ * plan that dropped a tripwire or names a run it cannot match to a shard).
+ */
+export function selectionProblems(sel, tripwires) {
+  if (!sel || sel.version !== 1) return ["not a version-1 selection"];
+  const out = [];
+  if (!Number.isInteger(sel.shards) || sel.shards < 1)
+    out.push(`shards is ${sel.shards}`);
+  if (!Array.isArray(sel.runs)) return [...out, "no runs"];
+  const planned = new Set(sel.runs.flatMap((r) => r.files ?? []));
+  const missing = tripwires.filter((t) => !planned.has(t));
+  if (missing.length)
+    out.push(
+      `${missing.length} tripwire(s) planned in no run (every PR runs every tripwire): ${missing.slice(0, 5).join(", ")}`
+    );
+  for (const r of sel.runs)
+    if (
+      !(r.shard >= 1 && r.shard <= sel.shards) ||
+      r.id !== selectReportId(r.dir, r.shard)
+    )
+      out.push(`run ${r.id} does not match its dir and shard`);
+  return out;
+}

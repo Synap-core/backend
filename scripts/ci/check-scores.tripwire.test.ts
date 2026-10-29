@@ -69,6 +69,42 @@ describe("check-scores", () => {
     expect(units[0].secs).toBe(22 * 60);
   });
 
+  it("a PR selection's shards (1 to 8) are the same unit, and shard 1's steps keep one key", () => {
+    // Since lane L8 a PR selection runs "Full suite (shard 1/1)" … "(shard
+    // k/8)"; preflight mirrors "Full suite (shard 1/4) › Security Audit".
+    const { units, steps } = observe([
+      pr(1, [
+        job(
+          "Full suite (shard 1/2)",
+          "success",
+          [["Security Audit", "success"]],
+          0,
+          8
+        ),
+        job("Full suite (shard 2/2)", "success", [], 0, 9),
+        job("Full suite", "success", [], 9, 10),
+      ]),
+      pr(2, [
+        job(
+          "Full suite (shard 1/1)",
+          "success",
+          [["Security Audit", "success"]],
+          0,
+          6
+        ),
+        job("Full suite", "success", [], 6, 7),
+      ]),
+    ]);
+    expect(units.map((u: { key: string }) => u.key)).toEqual([
+      "Full suite",
+      "Full suite",
+    ]);
+    expect(steps.map((s: { key: string }) => s.key)).toEqual([
+      "Full suite (shard 1/4) › Security Audit",
+      "Full suite (shard 1/4) › Security Audit",
+    ]);
+  });
+
   it("the Release gate's parts and judge are ONE unit, and keep the single job's step keys", () => {
     // Since 2026-10-29 the Release gate is "Release gate: <part>" jobs plus a
     // judge named "Release gate". Rows before and after the split must be one

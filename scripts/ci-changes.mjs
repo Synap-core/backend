@@ -18,12 +18,12 @@
  *
  * ── THREE TIERS (founder, 2026-10-29, "One trunk, three CI tiers") ──────────
  *   PR       Preflight, the Release gate, and the tests of what the change can
- *            break: the touched packages, every workspace package that
- *            depends on them, the test files of other packages that read them
- *            by path, and every tripwire (scripts/ci/affected.mjs). A change
- *            to shared or core code (outside a package, packages/database,
- *            types, core) runs the full suite. API e2e only when the API
- *            surface changed (affected.mjs API_SURFACE).
+ *            break: the test files it reaches through the import graph, the
+ *            tests that name a changed package by path, and every tripwire
+ *            (scripts/ci/affected.mjs, scope "selected"), in 1 to 8 shards
+ *            sized from their measured cost. Root config and the test runner
+ *            run the full suite (affected.mjs ROOT_FULL). API e2e only when
+ *            the API surface changed (affected.mjs API_SURFACE).
  *   main     every push runs everything; nobody waits on it.
  *   release  a pod updates only to a main commit whose post-merge run was
  *            all green (scripts/ci/release-gate-wait.mjs).
@@ -67,11 +67,16 @@
  *   suites        the Full suite shards run   false: draft, stack, negctl,
  *                                             docs-only, a same-tree or a
  *                                             light queue entry
- *   scope         what the shards run: "full" | "affected" | "none"
- *   affected      scope=affected: the package dirs whose whole suite runs,
- *                 comma-separated (test-ratchet.mjs --affected=)
- *   also          scope=affected: test files of other packages that read an
- *                 affected package by path, comma-separated (--also=)
+ *   scope         what the shards run: "full" | "selected" | "none"
+ *   shards        the shard matrix, JSON (`[1,2,3,4]`; scope=selected: 1 to
+ *                 SELECTION_MAX_SHARDS, sized from the selection's measured
+ *                 cost, scripts/test-ratchet-shards.mjs planSelection)
+ *   shard_count   the number of shards (the job name's "k/N")
+ *   selected      scope=selected: how many test files run
+ *   The selection itself (which files, in which shard, under which report id)
+ *   is written to SELECTION_OUT (default coverage/selection.json); ci.yml
+ *   uploads it, and the shards and the judge read that one file
+ *   (test-ratchet.mjs --select=).
  *   e2e           API e2e runs (the API surface changed, or everything runs)
  *   reuse         a queue entry re-runs nothing (same tree as its PR's
  *                 all-green run)
@@ -93,10 +98,27 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { appendFileSync, existsSync, readdirSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  writeFileSync,
+} from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadGraph, selectTier } from "./ci/affected.mjs";
+import {
+  BASELINE,
+  baselineFiles,
+  loadGraph,
+  selectTier,
+  suiteDirs,
+} from "./ci/affected.mjs";
+import {
+  loadShardPlan,
+  ownerDir,
+  planSelection,
+} from "./test-ratchet-shards.mjs";
 import { isTripwire } from "./tripwire-discovery.mjs";
 
 // Paths no test, build or image reads. Narrow on purpose: tests read
@@ -261,8 +283,7 @@ export function decide({
     image: true,
     suites: true,
     scope: "full",
-    affected: [],
-    also: [],
+    selection: null,
     e2e: true,
     why: [],
     negctl: false,
@@ -311,14 +332,12 @@ export function decide({
   // The tier: what the change can break (scripts/ci/affected.mjs). No graph
   // (it failed to load) is the full suite, never a guess.
   const pick = () => {
-    if (docsOnly)
-      return { scope: "none", dirs: [], tests: [], e2e: false, why: [] };
+    if (docsOnly) return { scope: "none", tests: [], e2e: false, why: [] };
     // Docs-only paths read by no test (DOCS_ONLY) never widen the tier.
     const t = tier ? tier(files.filter((f) => !isDocsOnly(f))) : null;
     return (
       t ?? {
         scope: "full",
-        dirs: [],
         tests: [],
         e2e: true,
         why: ["full suite: the dependency graph could not be read"],
@@ -328,8 +347,7 @@ export function decide({
   const tierFields = (t) => ({
     suites: t.scope !== "none",
     scope: t.scope,
-    affected: t.dirs,
-    also: t.tests,
+    selection: t.scope === "selected" ? (t.selection ?? null) : null,
     e2e: t.e2e,
     why: t.why,
   });
@@ -441,7 +459,7 @@ export function tierText(t) {
       ? "the full suite"
       : t.scope === "none"
         ? "no test suite"
-        : `the suites of ${t.dirs.length} package(s) (${t.dirs.join(", ")})${t.tests.length ? `, ${t.tests.length} test file(s) of other packages that read them` : ""} and every tripwire`;
+        : `${t.tests.length} selected test file(s), every tripwire included${t.selection ? `, in ${t.selection.shards} shard(s)` : ""}`;
   return `${suite}${t.why?.length ? ` [${t.why.join("; ")}]` : ""}; API e2e ${t.e2e ? "runs" : "not affected (no API surface path changed)"}`;
 }
 
@@ -469,8 +487,8 @@ export function summary(d, files) {
           ? "reused"
           : d.scope === "full"
             ? "runs: everything"
-            : d.scope === "affected"
-              ? `runs: ${d.affected.join(", ")}${d.also.length ? ` + ${d.also.length} file(s) of other packages` : ""} + every tripwire`
+            : d.scope === "selected"
+              ? `runs: ${d.selection?.tests.length ?? "?"} selected test file(s) (every tripwire included) in ${d.selection?.shards ?? "?"} shard(s)`
               : "not affected",
     ],
     [
@@ -501,12 +519,22 @@ export function summary(d, files) {
     "",
     `Why: ${d.reason}.`,
     ...(d.why?.length ? ["", ...d.why.map((w) => `- ${w}`)] : []),
-    ...(d.also?.length
+    ...(d.selection
       ? [
           "",
-          "<details><summary>Test files of other packages that run</summary>",
+          `Shards: ${d.selection.shards}, predicted test seconds per shard ${d.selection.predictedSeconds.join(" / ")} (budget ${d.selection.budgetSeconds} s; scripts/test-ratchet-shards.mjs planSelection).`,
+          ...(d.selection.dropped.length
+            ? [
+                "",
+                `${d.selection.dropped.length} selected file(s) run nowhere, on main either (no \`vitest run\` suite in their package): ${d.selection.dropped.slice(0, 10).join(", ")}`,
+              ]
+            : []),
           "",
-          ...d.also.map((f) => `- \`${f}\``),
+          "<details><summary>The selected test files that are not tripwires</summary>",
+          "",
+          ...d.selection.tests
+            .filter((f) => !isTripwire(f))
+            .map((f) => `- \`${f}\``),
           "",
           "</details>",
         ]
@@ -609,17 +637,56 @@ async function reuseEvidence(get, checkRuns) {
   }
 }
 
+// The files the known-red baseline names at a commit ([] when unreadable).
+function baselineAt(sha) {
+  if (!sha) return [];
+  try {
+    return baselineFiles(
+      execFileSync("git", ["show", `${sha}:${BASELINE}`], { encoding: "utf8" })
+    );
+  } catch {
+    return [];
+  }
+}
+
 // The tier function over this checkout's graph, or null when the graph cannot
-// be read (decide() then runs the full suite).
-function tierOfCheckout() {
+// be read (decide() then runs the full suite). A selection comes with its
+// shard plan (scripts/test-ratchet-shards.mjs planSelection).
+function tierOfCheckout(baseSha) {
   try {
     const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
     const g = loadGraph(root, isTripwire);
-    return (files) => selectTier(files, g);
+    const suites = suiteDirs(root);
+    const countByDir = {};
+    for (const f of g.imports.files)
+      if (TEST_FILE.test(f))
+        countByDir[ownerDir(f)] = (countByDir[ownerDir(f)] ?? 0) + 1;
+    const plan = loadShardPlan();
+    const baseBaseline = baselineAt(baseSha);
+    return (files) => {
+      const t = selectTier(files, g, { baseBaseline });
+      if (t.scope !== "selected") return t;
+      return {
+        ...t,
+        selection: planSelection({
+          tests: t.tests,
+          suiteDirs: suites,
+          isTripwire,
+          plan,
+          countByDir,
+        }),
+      };
+    };
   } catch (err) {
     console.log(`dependency graph unreadable (${err.message}): full suite`);
     return null;
   }
+}
+
+/** The shard matrix of a decision: a selection's own count, else the plan's 4. */
+export function shardMatrix(d) {
+  const n = d.scope === "selected" && d.selection ? d.selection.shards : 4;
+  return Array.from({ length: n }, (_, i) => i + 1);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
@@ -636,17 +703,31 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     draft: process.env.DRAFT === "true",
     files,
     siblingTests,
-    tier: tierOfCheckout(),
+    tier: tierOfCheckout(
+      event === "merge_group"
+        ? process.env.QUEUE_BASE_SHA
+        : process.env.BASE_SHA
+    ),
     queue,
   });
+  // A selection reaches the shards and the judge as one file (ci.yml uploads
+  // it); without it they fail, they never run something else.
+  if (d.selection) {
+    const outFile = resolve(
+      process.env.SELECTION_OUT ?? "coverage/selection.json"
+    );
+    mkdirSync(dirname(outFile), { recursive: true });
+    writeFileSync(outFile, `${JSON.stringify(d.selection, null, 1)}\n`);
+  }
   const out = [
     `gate=${d.gate}`,
     `image=${d.image}`,
     `image_reason=${d.imageWhy}`,
     `suites=${d.suites}`,
     `scope=${d.scope}`,
-    `affected=${d.affected.join(",")}`,
-    `also=${d.also.join(",")}`,
+    `shards=${JSON.stringify(shardMatrix(d))}`,
+    `shard_count=${shardMatrix(d).length}`,
+    `selected=${d.selection?.tests.length ?? ""}`,
     `e2e=${d.e2e}`,
     `negctl=${d.negctl}`,
     `negctl_tests=${d.negctlTests.join(" ")}`,
