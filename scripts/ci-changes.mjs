@@ -179,19 +179,31 @@ export function queuePrNumber(queueHeadRef) {
 export const QUEUE_TRUSTED_CHECKS = ["Full suite", "API e2e"];
 
 /**
+ * The check run that decides `name` on a commit: the newest one (highest id),
+ * as GitHub reads a required check, or null. A commit run twice (a flake
+ * re-run, the merge bot's draft/ready toggle for a victim of a red main)
+ * keeps the first run's red beside the second's green, and `filter=latest`
+ * returns both (one per check suite). Requiring every one to pass made each
+ * such PR re-run its suites in the queue though GitHub counted it green
+ * (29 Oct: #485, a failure at 00:15 and a success at 01:58 on one head).
+ */
+function decidingRun(checkRuns, name) {
+  const runs = checkRuns.filter((r) => r?.name === name);
+  if (runs.length === 0) return null;
+  return runs.reduce((a, b) => (Number(b.id) > Number(a.id) ? b : a));
+}
+
+/**
  * Did the PR's own run REALLY pass the suites? `checkRuns` = the latest check
- * runs of the PR's head commit ({ name, status, conclusion }). Only
+ * runs of the PR's head commit ({ id, name, status, conclusion }). Only
  * `completed` + `success` counts: `skipped` and `neutral` count as green to
  * GitHub, and a draft run reports the suites red ("suites not run").
  */
 export function suitesPassed(checkRuns) {
   if (!Array.isArray(checkRuns)) return false;
   return QUEUE_TRUSTED_CHECKS.every((name) => {
-    const runs = checkRuns.filter((r) => r?.name === name);
-    return (
-      runs.length > 0 &&
-      runs.every((r) => r.status === "completed" && r.conclusion === "success")
-    );
+    const r = decidingRun(checkRuns, name);
+    return r?.status === "completed" && r.conclusion === "success";
   });
 }
 
@@ -213,7 +225,8 @@ export const TESTED_STEP = /^Tested commit ([0-9a-f]{40})$/;
 /**
  * The workflow run id on which EVERY required check concluded `success`, or
  * null. `checkRuns` = the latest check runs of the PR's head for those names
- * ({ name, status, conclusion, details_url }). All of them must come from ONE
+ * ({ id, name, status, conclusion, details_url }); each name is decided by
+ * its newest run (decidingRun). All of them must come from ONE
  * run (its id read from details_url, `/actions/runs/<id>/`): that run tested
  * one commit, the one its "What changed" step names.
  */
@@ -221,14 +234,12 @@ export function reusableRun(checkRuns) {
   if (!Array.isArray(checkRuns)) return null;
   const ids = new Set();
   for (const name of QUEUE_REUSE_CHECKS) {
-    const runs = checkRuns.filter((r) => r?.name === name);
-    if (runs.length === 0) return null;
-    for (const r of runs) {
-      if (r.status !== "completed" || r.conclusion !== "success") return null;
-      const id = /\/actions\/runs\/(\d+)\//.exec(r.details_url ?? "")?.[1];
-      if (!id) return null;
-      ids.add(id);
-    }
+    const r = decidingRun(checkRuns, name);
+    if (!r) return null;
+    if (r.status !== "completed" || r.conclusion !== "success") return null;
+    const id = /\/actions\/runs\/(\d+)\//.exec(r.details_url ?? "")?.[1];
+    if (!id) return null;
+    ids.add(id);
   }
   return ids.size === 1 ? Number([...ids][0]) : null;
 }
