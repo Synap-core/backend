@@ -175,6 +175,8 @@ describe("orient startHere.openGoals", () => {
           criteria: 0,
         },
       ],
+      // The listed goals' rows, for orient's rollups (never on the wire).
+      tracks: [expect.objectContaining({ id: G.secondProject })],
       howTo: expect.any(String),
     });
     const mine = await readOpenGoals(ME, P.mine);

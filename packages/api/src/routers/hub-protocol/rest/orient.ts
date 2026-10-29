@@ -11,6 +11,7 @@
  *   ?scope=a,b,c   — restrict to workspaces|projects|profiles
  *   ?workspaceId=  — pin to one workspace
  *   ?projectId=    — pin to one project
+ *   ?statusOf=a,b  — where each id stands (`startHere.statusOf`)
  */
 
 import { z } from "@hono/zod-openapi";
@@ -29,6 +30,10 @@ import {
   WorkspaceNotAccessibleError,
   type DiscoverScope,
 } from "../../../services/discover/discover.js";
+import {
+  STATUS_OF_MAX,
+  statusOfInput,
+} from "../../../services/status/status-read.js";
 
 export function registerOrientRoutes(app: HubHono): void {
   registerOpenApi(app, {
@@ -65,6 +70,21 @@ export function registerOrientRoutes(app: HubHono): void {
     const workspaceId = c.req.query("workspaceId") || undefined;
     const projectId = c.req.query("projectId") || undefined;
     const explain = c.req.query("explain") === "true";
+    const statusOfParam = c.req.query("statusOf");
+    const statusOf = statusOfInput.safeParse(
+      statusOfParam
+        ? statusOfParam
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean)
+        : undefined
+    );
+    if (!statusOf.success) {
+      return c.json(
+        { error: `statusOf takes at most ${STATUS_OF_MAX} ids.` },
+        400
+      );
+    }
     const scopeParam = c.req.query("scope");
     const scope = scopeParam
       ? (scopeParam
@@ -84,6 +104,7 @@ export function registerOrientRoutes(app: HubHono): void {
         scope,
         workspaceId,
         projectId,
+        ...(statusOf.data?.length ? { statusOf: statusOf.data } : {}),
         explain,
       });
       return c.json(result);

@@ -30,6 +30,10 @@ import {
 } from "@synap/database";
 import { entities, entityFacets, events } from "@synap/database/schema";
 import type { SQL } from "drizzle-orm";
+import {
+  isTerminalLifecycleCategory,
+  type LifecycleOption,
+} from "@synap-core/types/lifecycle";
 import { projectLensWhere } from "../../utils/project-scope.js";
 import { resolveFacetVisibilityScope } from "../../utils/workspace-membership.js";
 import {
@@ -139,6 +143,39 @@ export function kindVisibilityConditions(input: {
 
 function iso(v: unknown): string {
   return (v instanceof Date ? v : new Date(String(v))).toISOString();
+}
+
+/**
+ * THE stuck rules of a lifecycle: each option that declares `stuckAfterDays`
+ * → its days. Declared once, on the lifecycle, never a client guess; a
+ * terminal option never carries one (done and lost do not get stuck). Read by
+ * the board, the homes and the status read (`services/status`).
+ */
+export function stuckAfterDaysOf(
+  options: ReadonlyArray<
+    Pick<LifecycleOption, "key" | "category" | "stuckAfterDays">
+  >
+): Map<string, number> {
+  return new Map(
+    options.flatMap((o) =>
+      o.stuckAfterDays !== undefined && !isTerminalLifecycleCategory(o.category)
+        ? [[o.key, o.stuckAfterDays] as const]
+        : []
+    )
+  );
+}
+
+/** Whole days since `sinceIso`, when that is past `days`; else null. */
+export function stuckForDays(
+  sinceIso: string,
+  days: number | undefined,
+  now: number = Date.now()
+): number | null {
+  if (days === undefined) return null;
+  const since = Date.parse(sinceIso);
+  return since < now - days * 86_400_000
+    ? Math.floor((now - since) / 86_400_000)
+    : null;
 }
 
 /**

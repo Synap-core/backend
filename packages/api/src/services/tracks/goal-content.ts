@@ -74,7 +74,6 @@ import {
   readGoalLoop,
 } from "@synap-core/types/units";
 import { sessionCriteriaSchema } from "../../schemas/session-criteria.js";
-import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import { grantReadPredicate } from "../../access/grant-read.js";
 import { sessionReadableWhere } from "../../access/session-visibility.js";
 import {
@@ -785,7 +784,12 @@ export async function loadTrackGoalFacts(
   // cycle with the session services. Imported eagerly here, it changed the
   // order every importer of the tracks service initialises in, and suites that
   // stub `checkPermissionOrPropose` got the real ladder in the hand-off gate.
-  const { readDependencyFacts } = await import("../links/dependency-links.js");
+  const [{ readDependencyFacts }, { proposalUserFloor }] = await Promise.all([
+    import("../links/dependency-links.js"),
+    // THE proposal user floor (lens ∪ own, the key's grant): loaded late for
+    // the same import-order reason.
+    import("../../routers/proposals/scope-conditions.js"),
+  ]);
   const [pending, deps] = await Promise.all([
     db
       .select({
@@ -797,7 +801,7 @@ export async function loadTrackGoalFacts(
       .where(
         and(
           eq(proposals.status, ProposalStatus.PENDING),
-          userVisibleWhere(proposals.workspaceId, userId),
+          proposalUserFloor(userId),
           or(
             and(
               eq(proposals.targetType, "track"),

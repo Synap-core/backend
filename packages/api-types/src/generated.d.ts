@@ -16124,6 +16124,66 @@ export interface SessionsOwingGrade {
 		ungraded: number;
 	}>;
 }
+/** Counts per lifecycle category; a category with none is left out. */
+export type CategoryCounts = Partial<Record<LifecycleCategory, number>>;
+export interface GoalRollup {
+	/** When the goal entered its status (ISO); `sinceMeasured` false = created. */
+	since: string | null;
+	sinceMeasured: boolean;
+	/** Its work sessions per category; absent when it has none. */
+	work?: CategoryCounts;
+	/** Status moves of the goal and its sessions in the window; absent when 0. */
+	moved?: number;
+	/** Absent when it waits on nothing. */
+	waitingOn?: WaitingOnMark[];
+}
+export interface ScopeRollup {
+	lens: "project" | "workspace";
+	id: string;
+	windowDays: number;
+	/** Things with a declared lifecycle (kinds; roles are not counted here). */
+	things: CategoryCounts;
+	/** Work sessions per category. */
+	work: CategoryCounts;
+	moved: number;
+	stuck: {
+		count: number;
+		items: Array<{
+			forDays: number;
+			id: string;
+			kind: string;
+			name: string | null;
+			status: string;
+		}>;
+	};
+	waitingOn: WaitingOnMark[];
+}
+type Unavailable$1 = {
+	status: "unavailable";
+};
+export interface StatusOf {
+	id: string;
+	type: "entity" | "goal" | "run" | "session";
+	name: string | null;
+	status: string | null;
+	label: string | null;
+	category: LifecycleCategory | null;
+	/** When it entered this status (ISO), or a stored fallback (below). */
+	since: string | null;
+	/** False: no move was recorded, so `since` is when it was created or started. */
+	sinceMeasured: boolean;
+	/** Present only when its step declares a stuck rule and it is past it. */
+	stuck?: {
+		afterDays: number;
+		forDays: number;
+	};
+	waitingOn: WaitingOnMark[] | Unavailable$1;
+	link: string;
+}
+export type StatusOfAnswer = StatusOf | {
+	id: string;
+	type: "unknown";
+};
 /** INDEX projection a UI/agent can name, not just id. */
 export type UsedWorkspaceRef = {
 	domain: string | null;
@@ -16247,10 +16307,25 @@ export interface StartHere {
 			id: string;
 			name: string;
 			projectId: string;
+			/** Where it stands: since when, its work per category, moves, waits. */
+			rollup: GoalRollup | StartHereUnavailable;
 			status: string;
 		}>;
 		lens: "pod" | "project";
+		/** The window `rollup.moved` counts over. */
+		rollupWindowDays: number;
 	} | StartHereUnavailable;
+	/**
+	 * Where the PINNED space or project stands (present only when orient is
+	 * pinned): things and work per category, moves this week, the stuck things,
+	 * what waits. See `services/status/status-rollup.ts`.
+	 */
+	statusRollup?: ScopeRollup | StartHereUnavailable;
+	/**
+	 * The answer to `statusOf`: where each asked id stands (present only when
+	 * asked). See `services/status/status-read.ts`.
+	 */
+	statusOf?: StatusOfAnswer[] | StartHereUnavailable;
 	/**
 	 * Open sessions the person HANDED TO THIS AGENT (the agent is on the
 	 * session's roster — e.g. relay Capture "Give to agent"), newest first.
@@ -19798,14 +19873,14 @@ export interface SessionOutputDependencies {
 	/** Sessions waiting on THIS session's outputs (only while it is open). */
 	outputsWaitedOnBy: OutputWaitedOnBy[];
 }
-type Unavailable$1 = {
+type Unavailable$2 = {
 	reason: string;
 	status: "unavailable";
 };
 export type PathCount = {
 	status: "ok";
 	total: number;
-} | Unavailable$1;
+} | Unavailable$2;
 /**
  * A row's `unitFacts`. Structurally a `NeedsYouFacts` (`needs-you.ts`): feed it
  * to `sessionNeedsYou` / `tallyNeedsYou` unchanged.
@@ -20700,7 +20775,7 @@ export interface ProjectOutputsResult {
 	 */
 	truncated: boolean;
 }
-type Unavailable$2 = {
+type Unavailable$3 = {
 	reason: string;
 	status: "unavailable";
 };
@@ -20747,7 +20822,7 @@ export interface ProjectPathRow {
 	hasOutputs: {
 		status: "ok";
 		value: boolean;
-	} | Unavailable$2;
+	} | Unavailable$3;
 	/**
 	 * The session's DECLARED deliverables (`expected_outputs`), counted by THE
 	 * shared rule (`tallyDeliverables`, `@synap-core/types/units`
@@ -20759,7 +20834,7 @@ export interface ProjectPathRow {
 	 */
 	deliverables: ({
 		status: "ok";
-	} & DeliverableCounts) | Unavailable$2;
+	} & DeliverableCounts) | Unavailable$3;
 	nextMove: ContinuationNextMove;
 	/**
 	 * The liveness facts the "working right now" rule reads (D1,
@@ -20788,7 +20863,7 @@ export interface ProjectPathResult {
 	tracks: {
 		items: ProjectPathTrack[];
 		status: "ok";
-	} | Unavailable$2;
+	} | Unavailable$3;
 	/**
 	 * Across the WHOLE path under the same filter, not just this page.
 	 *
