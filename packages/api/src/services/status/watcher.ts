@@ -1,37 +1,19 @@
 /**
- * THE STATUS WATCHER (status-flow plan W6) — the proactive layer. Every hour
- * (`@synap/jobs` `status-watcher` cron, this runner filled at boot) it notices
- * what is late, close to its date, stuck in its step, or paused past its
- * review date, and says so ONCE per episode:
+ * THE STATUS WATCHER — every hour it notices what is late, nearly due, stuck
+ * in its step, or paused past its review date, and raises each ONCE per
+ * episode: the derived event `<subjectType>.signal.completed` (automations
+ * trigger on it; nothing here moves a thing) and a notification to the
+ * thing's owner, else its goal's owner.
  *
- *   1. the derived event `<subjectType>.signal.completed` — only signals, the
- *      thing an automation triggers on (plan Q6.2) — with the goal and project
- *      resolved now (Q6.3). Automations react under the existing governance;
- *      nothing here acts on a thing (Q4.3);
- *   2. a notification to the thing's owner, else its goal's owner (Q4.2),
- *      through the ONE notification door: an item in needs-you while unread,
- *      a push under `late-or-stuck` inside the daily cap (Q4.1).
- *
- * Every rule comes from an existing reader, never re-derived: stuck = the
- * step's `stuckAfterDays` (`stuckAfterDaysOf` + `stuckForDays`) over the
- * board's own time-in-column read (`pageThingsInColumn`, since = the latest
- * move's `occurredAt`); late / approaching = the step's `dateBinding`
- * (`dateBindingsOf` + `dateSignalOf`, calendar time); hold review = `listHolds`.
- *
- * EPISODE. The event's id is derived from (signal, subject, anchor), and the
- * anchor is what changes when an episode ends: when the thing entered its step
- * (a move out and back is a new stay), the bound date (a new date is a new
- * deadline), the pause's own transition and review date. The event is dated
- * when its condition BEGAN (`beganAt`: the date fell due, the stuck threshold
- * passed…), so the events table's primary key (id, timestamp) is the episode
- * store: an hour later the same episode derives the same row and is skipped
- * (refused by the key even if two ticks race); after it clears and recurs the
- * anchor differs and it is raised again. No table of its own. Residual,
- * stated: a crash between the log row and the fan-out loses that episode's
- * fan-out and notification (the log row stands, so it is not raised twice).
+ * EPISODE = (subject, signal, anchor); the anchor is what changes when an
+ * episode ends: the step and when it was entered, the bound date, the pause
+ * and its review date. The episode is claimed in `status_signal_raised`
+ * before it is raised, so two racing ticks raise it once; a raise that fails
+ * gives its claim back. Residual: a crash between claim and raise loses it.
  */
 import {
   and,
+  claimStatusSignals,
   db,
   declaredLifecycleProfilesStatement,
   desc,
@@ -39,25 +21,30 @@ import {
   entities,
   entityFacets,
   eq,
-  events,
   EventRepository,
   focusSessions,
   inArray,
   isNotNull,
-  isUniqueViolation,
+  isNull,
   listableEntityWhere,
   listHolds,
   profiles,
   ProfileResolutionService,
   projectTracks,
   relations,
+  releaseStatusSignal,
   sql,
+  trackParticipants,
   users,
   type CurrentHold,
+  type StatusSignalEpisode,
 } from "@synap/database";
+import type { ProjectTrack } from "@synap/database/schema";
+import type { SQL } from "drizzle-orm";
 import { emitSideEffects } from "@synap/events";
 import { createLogger } from "@synap-core/core";
 import {
+  DATE_APPROACHING_DAYS,
   dateSignalOf,
   findLifecycleOption,
   lifecycleOptionLabel,
@@ -65,6 +52,8 @@ import {
   type StatusSignal,
   type TransitionSubjectType,
 } from "@synap-core/types/lifecycle";
+import { shortDate } from "@synap-core/types/lens";
+import { goalOwner } from "@synap-core/types/units";
 import {
   humanizeToken,
   resolveObjectNoun,
@@ -72,9 +61,11 @@ import {
   resolveTrackStatusLabel,
 } from "@synap-core/types/vocabulary";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
+import { randomUUID } from "node:crypto";
 import { NotificationService } from "../../notifications/NotificationService.js";
-import { deterministicUuidFromKey } from "../../utils/write-door-idempotency.js";
-import { goalOwnerToAsk } from "../tracks/goal-content.js";
+import { AccessContext, scopedDb } from "../../access/index.js";
+import { entityReadVisibleWhere } from "../../access/entity-read-floor.js";
+import { sessionReadableWhere } from "../../access/session-visibility.js";
 import { BELONGS_TO_PROJECT } from "../../utils/project-scope.js";
 import {
   dateBindingsOf,
@@ -86,47 +77,37 @@ import {
 
 const logger = createLogger({ module: "status-watcher" });
 
-/** Things read per page, and at most per lifecycle per tick (logged when hit). */
+const DAY_MS = 86_400_000;
 const PAGE = 500;
-const MAX_PER_LIFECYCLE = 5_000;
-/** Episode ids checked against the log per query. */
-const ID_BATCH = 500;
 
-/** One thing the watcher noticed, before it is resolved and raised. */
+/**
+ * A signal whose episode began longer ago than this is raised in-app and in
+ * needs-you only, never pushed: the first tick after an upgrade finds the
+ * whole backlog, which must not spend the day's pushes.
+ */
+export const SIGNAL_BACKLOG_AFTER_MS = 24 * 3_600_000;
+
 export interface SignalCandidate {
   signal: StatusSignal;
   subjectType: TransitionSubjectType;
   subjectId: string;
-  /** A role's lifecycle lives on its facet. */
   facetId: string | null;
-  /** The role whose lifecycle it is; null for the kind's own (or a goal / session). */
+  /** The role whose lifecycle it is; null for a kind's own, a goal or a session. */
   role: string | null;
   status: string;
-  /** The status's words. */
   statusLabel: string;
   category: LifecycleCategory | null;
-  /** What ends the episode when it changes (see the header). */
-  anchor: string;
-  /** When the condition began (ISO) — the event's time; derived, so stable. */
+  episodeKey: string;
+  /** When the condition began (ISO). */
   beganAt: string;
-  /** The facts of this signal, carried on the event. */
-  facts: Record<string, unknown>;
-  /** The thing's name, when the read already had it. */
-  name?: string | null;
-  /** The lens of a hold's move: a goal has no lens of its own. */
+  /** A hold's move lens: a goal has no lens of its own. */
   workspaceId?: string | null;
-}
-
-/** The event id of a candidate's episode: same episode, same id. */
-export function signalEpisodeId(c: SignalCandidate): string {
-  return deterministicUuidFromKey(
-    `status-signal:${c.signal}:${c.subjectType}:${c.facetId ?? c.subjectId}:${c.anchor}`
-  );
+  facts: Record<string, unknown>;
 }
 
 // ── Noticing ────────────────────────────────────────────────────────────────
 
-/** Stuck, late and approaching things of every declared lifecycle. */
+/** Stuck, late and nearly-due things of every declared lifecycle. */
 async function lifecycleCandidates(now: Date): Promise<SignalCandidate[]> {
   const res = (await db.execute(declaredLifecycleProfilesStatement())) as
     Array<{ profile_id: string }> | { rows: Array<{ profile_id: string }> };
@@ -142,92 +123,131 @@ async function lifecycleCandidates(now: Date): Promise<SignalCandidate[]> {
     })
     .from(profiles)
     .where(inArray(profiles.id, declaredIds));
-
   const resolver = new ProfileResolutionService(db);
   const out: SignalCandidate[] = [];
   for (const p of declared) {
-    const lifecycle = await resolver.getEffectiveLifecycle(p.id, null);
-    if (!lifecycle) continue;
-    const stuck = stuckAfterDaysOf(lifecycle.options);
-    const dated = dateBindingsOf(lifecycle.options);
-    if (stuck.size === 0 && dated.size === 0) continue;
-    const isRole = p.profileKind === "role";
-    const subject: StatusGroupSubject = isRole
-      ? { kind: "role", profileIds: [p.id], roleSlug: p.slug }
-      : { kind: "kind", profileIds: [p.id] };
-    const items = await thingsIn(subject, [
-      ...new Set([...stuck.keys(), ...dated.keys()]),
-    ]);
-    const dates = await boundDates(
-      isRole,
-      items.filter((i) => i.status && dated.has(i.status)),
-      dated
-    );
-    for (const i of items) {
-      if (!i.status) continue;
-      const option = findLifecycleOption(lifecycle, i.status);
-      const base = {
-        subjectType: "entity" as const,
-        subjectId: i.id,
-        facetId: i.facetId,
-        role: isRole ? p.slug : null,
-        status: i.status,
-        statusLabel: option ? lifecycleOptionLabel(option) : i.status,
-        category: option?.category ?? null,
-        name: i.name,
-      };
-      const afterDays = stuck.get(i.status);
-      const forDays = stuckForDays(i.since, afterDays, now.getTime());
-      if (afterDays !== undefined && forDays !== null) {
-        out.push({
-          ...base,
-          signal: "stuck",
-          anchor: i.since,
-          beganAt: new Date(
-            Date.parse(i.since) + afterDays * 86_400_000
-          ).toISOString(),
-          facts: { since: i.since, afterDays, forDays },
-        });
-      }
-      const property = dated.get(i.status);
-      const value = dates.get(i.facetId ?? i.id);
-      const date = property ? dateSignalOf(value, now.getTime()) : null;
-      if (property && date) {
-        out.push({
-          ...base,
-          signal: date.signal,
-          anchor: `${i.since}:${String(value)}`,
-          beganAt: date.beganAt,
-          facts: { property, date: value, dueAt: date.dueAt, since: i.since },
-        });
-      }
+    // One lifecycle that cannot be read must not silence every other one.
+    try {
+      out.push(...(await profileCandidates(p, resolver, now)));
+    } catch (err) {
+      logger.error(
+        { err, profile: p.slug },
+        "status watcher: a lifecycle could not be read — its signals wait for the next tick"
+      );
     }
   }
   return out;
 }
 
-/** The things of `subject` in `statuses`, longest in their step first. */
-async function thingsIn(subject: StatusGroupSubject, statuses: string[]) {
+async function profileCandidates(
+  p: { id: string; slug: string; profileKind: string },
+  resolver: ProfileResolutionService,
+  now: Date
+): Promise<SignalCandidate[]> {
+  const lifecycle = await resolver.getEffectiveLifecycle(p.id, null);
+  if (!lifecycle) return [];
+  const stuck = stuckAfterDaysOf(lifecycle.options);
+  const dated = dateBindingsOf(lifecycle.options);
+  if (stuck.size === 0 && dated.size === 0) return [];
+  const isRole = p.profileKind === "role";
+  const subject: StatusGroupSubject = isRole
+    ? { kind: "role", profileIds: [p.id], roleSlug: p.slug }
+    : { kind: "kind", profileIds: [p.id] };
+  const base = (i: { id: string; facetId: string | null; status: string }) => {
+    const option = findLifecycleOption(lifecycle, i.status);
+    return {
+      subjectType: "entity" as const,
+      subjectId: i.id,
+      facetId: i.facetId,
+      role: isRole ? p.slug : null,
+      status: i.status,
+      statusLabel: option ? lifecycleOptionLabel(option) : i.status,
+      category: option?.category ?? null,
+    };
+  };
+  const out: SignalCandidate[] = [];
+
+  if (stuck.size > 0) {
+    const rules = [...stuck].map(([status, days]) => ({ status, days }));
+    // Only the things stuck by a rule, filtered in SQL (the board's own
+    // time-in-step read and the same predicate its stuck count uses).
+    for (const i of await allThings(subject, [...stuck.keys()], [], rules)) {
+      const afterDays = i.status ? stuck.get(i.status) : undefined;
+      const forDays = stuckForDays(i.since, afterDays, now.getTime());
+      if (!i.status || afterDays === undefined || forDays === null) continue;
+      out.push({
+        ...base({ ...i, status: i.status }),
+        signal: "stuck",
+        episodeKey: `${i.status}:${i.since}`,
+        beganAt: new Date(
+          Date.parse(i.since) + afterDays * DAY_MS
+        ).toISOString(),
+        facts: { since: i.since, afterDays, forDays },
+      });
+    }
+  }
+
+  if (dated.size > 0) {
+    // A superset in SQL (the date's day is not after the approaching
+    // horizon), compared as text so a bad value is skipped, never cast; the
+    // exact rule is `dateSignalOf` below.
+    const horizon = new Date(now.getTime() + DATE_APPROACHING_DAYS * DAY_MS)
+      .toISOString()
+      .slice(0, 10);
+    const statusCol = isRole ? entityFacets.status : entities.status;
+    const valueOf = (prop: string) =>
+      isRole
+        ? drizzleSql`coalesce(${entityFacets.properties}->>${prop}::text, ${entities.properties}->>${prop}::text)`
+        : drizzleSql`(${entities.properties}->>${prop}::text)`;
+    const dueSoon = drizzleSql`(${drizzleSql.join(
+      [...dated].map(
+        ([status, prop]) =>
+          drizzleSql`(${statusCol} = ${status} AND left(${valueOf(prop)}, 10) ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' AND left(${valueOf(prop)}, 10) <= ${horizon})`
+      ),
+      drizzleSql` OR `
+    )})`;
+    const items = await allThings(subject, [...dated.keys()], [dueSoon]);
+    const dates = await boundDates(isRole, items, dated);
+    for (const i of items) {
+      const property = i.status ? dated.get(i.status) : undefined;
+      const value = dates.get(i.facetId ?? i.id);
+      const date = property ? dateSignalOf(value, now.getTime()) : null;
+      if (!i.status || !property || !date) continue;
+      out.push({
+        ...base({ ...i, status: i.status }),
+        signal: date.signal,
+        episodeKey: `${i.status}:${i.since}:${String(value)}`,
+        beganAt: date.beganAt,
+        facts: { property, date: value, dueAt: date.dueAt, since: i.since },
+      });
+    }
+  }
+  return out;
+}
+
+/** Every thing of `subject` in `statuses` that passes the filters, paged. */
+async function allThings(
+  subject: StatusGroupSubject,
+  statuses: string[],
+  conditions: SQL[],
+  stuckRules?: Array<{ status: string; days: number }>
+) {
   const items: Awaited<ReturnType<typeof pageThingsInColumn>>["items"] = [];
-  for (let offset = 0; offset < MAX_PER_LIFECYCLE; offset += PAGE) {
+  for (let offset = 0; ; offset += PAGE) {
     const page = await pageThingsInColumn({
       subject,
       // No viewer: the owner is told about their own thing. THE listing rule
       // still holds (no probe, no demo rows).
-      conditions: [listableEntityWhere({})],
+      conditions: [listableEntityWhere({}), ...conditions],
       order: "time_in_column",
       column: { statuses },
+      stuckRules,
       offset,
       limit: PAGE,
     });
     items.push(...page.items);
     if (!page.hasMore) return items;
   }
-  logger.warn(
-    { subject, statuses, read: items.length },
-    "status watcher: lifecycle has more things than one tick reads — the rest wait for the next"
-  );
-  return items;
 }
 
 /** The bound date of each thing (its facet's property for a role, else its own). */
@@ -291,48 +311,73 @@ async function boundDates(
   return out;
 }
 
-/** Things still paused past their hold's `reviewBy` (plan Q2.2). */
+/** Things still paused past their hold's review date. */
 async function holdCandidates(now: Date): Promise<SignalCandidate[]> {
   const holds = await listHolds(db, { reviewDueBy: now }, now);
-  return holds.map((h: CurrentHold) => ({
-    signal: "hold_review_due" as const,
-    subjectType: h.subjectType,
-    subjectId: h.subjectId,
-    facetId: h.facetId,
-    role: h.role,
-    status: h.status,
-    statusLabel:
-      h.subjectType === "track"
-        ? resolveTrackStatusLabel(h.status)
-        : resolveStatusLabel(h.status),
-    category: "paused" as const,
-    anchor: `${h.transitionId}:${h.hold.reviewBy}`,
-    beganAt: new Date(h.hold.reviewBy as string).toISOString(),
-    workspaceId: h.workspaceId,
-    facts: {
-      reviewBy: h.hold.reviewBy,
-      pausedSince: h.hold.since,
-      holdOn: h.hold.on,
-      holdRef: h.hold.ref ?? null,
-      holdReason: h.hold.reason ?? null,
-    },
-  }));
+  // An entity's hold obeys THE listing rule, like every other signal.
+  const entityIds = holds
+    .filter((h) => h.subjectType === "entity")
+    .map((h) => h.subjectId);
+  const listed = new Set(
+    entityIds.length
+      ? (
+          await db
+            .select({ id: entities.id })
+            .from(entities)
+            .where(
+              and(
+                inArray(entities.id, entityIds),
+                isNull(entities.deletedAt),
+                listableEntityWhere({})
+              )
+            )
+        ).map((r) => r.id)
+      : []
+  );
+  return holds
+    .filter((h) => h.subjectType !== "entity" || listed.has(h.subjectId))
+    .map((h: CurrentHold) => ({
+      signal: "hold_review_due" as const,
+      subjectType: h.subjectType,
+      subjectId: h.subjectId,
+      facetId: h.facetId,
+      role: h.role,
+      status: h.status,
+      statusLabel:
+        h.subjectType === "track"
+          ? resolveTrackStatusLabel(h.status)
+          : resolveStatusLabel(h.status),
+      category: "paused" as const,
+      episodeKey: `${h.transitionId}:${h.hold.reviewBy}`,
+      beganAt: h.hold.reviewBy as string,
+      workspaceId: h.workspaceId,
+      facts: {
+        reviewBy: h.hold.reviewBy,
+        pausedSince: h.hold.since,
+        holdOn: h.hold.on,
+        holdRef: h.hold.ref ?? null,
+        holdReason: h.hold.reason ?? null,
+      },
+    }));
 }
 
-// ── Resolving: where it sits, who owns it, its name ────────────────────────
+// ── Where it sits, who is told ──────────────────────────────────────────────
 
 interface Place {
   name: string;
   workspaceId: string | null;
-  /** The thing's kind (an entity's), for the event's `profileSlug`. */
+  /** The entity's kind, for the event's `profileSlug`. */
   profileSlug: string | null;
   projectId: string | null;
   trackId: string | null;
-  /** Who the thing belongs to, before the person check. */
+  /** Who the thing belongs to (a person or an agent). */
   holderId: string;
 }
 
-/** Name, lens, goal, project and holder of each candidate's subject. Batched. */
+const keyOf = (c: Pick<SignalCandidate, "subjectType" | "subjectId">) =>
+  `${c.subjectType}:${c.subjectId}`;
+
+/** Name, lens, goal, project and holder of each subject. Batched. */
 async function resolvePlaces(
   cs: readonly SignalCandidate[]
 ): Promise<Map<string, Place>> {
@@ -353,7 +398,7 @@ async function resolvePlaces(
       })
       .from(entities)
       .leftJoin(profiles, eq(profiles.id, entities.profileId))
-      .where(inArray(entities.id, entityIds));
+      .where(and(inArray(entities.id, entityIds), isNull(entities.deletedAt)));
     // Its goal: the newest goal-filed session about it (the subject spine).
     const goals = await db
       .selectDistinctOn([focusSessions.subjectEntityId], {
@@ -448,108 +493,195 @@ async function resolvePlaces(
 }
 
 /**
- * WHO IS TOLD (plan Q4.2): the thing's owner when that is a person, else its
- * goal's owner (`goalOwnerToAsk`, the one answer to "who is asked about a
- * goal"). A goal's own signal goes to its owner. `null` = nobody to tell (the
- * event is still raised).
+ * WHO IS TOLD: the thing's owner when that is a person, else its goal's owner
+ * (a goal's own signal goes to its owner) — and only a PERSON who can read
+ * the thing. Anyone else: `null`, nobody is told (the event is still raised).
  */
-async function ownersOf(
+async function recipientsOf(
   cs: readonly SignalCandidate[],
   places: Map<string, Place>
 ): Promise<Map<string, string | null>> {
-  const holders = [...new Set([...places.values()].map((p) => p.holderId))];
+  const goalIds = [
+    ...new Set(
+      cs.flatMap((c) => {
+        const p = places.get(keyOf(c));
+        return c.subjectType === "track"
+          ? [c.subjectId]
+          : p?.trackId
+            ? [p.trackId]
+            : [];
+      })
+    ),
+  ];
+  const [tracks, owners] = goalIds.length
+    ? await Promise.all([
+        db
+          .select({ id: projectTracks.id, userId: projectTracks.userId })
+          .from(projectTracks)
+          .where(inArray(projectTracks.id, goalIds)),
+        db
+          .select()
+          .from(trackParticipants)
+          .where(
+            and(
+              inArray(trackParticipants.trackId, goalIds),
+              eq(trackParticipants.role, "owner")
+            )
+          ),
+      ])
+    : [[], []];
+  const goalOwnerOf = new Map(
+    tracks.map((t) => [
+      t.id,
+      goalOwner(
+        owners.filter((o) => o.trackId === t.id),
+        t
+      ),
+    ])
+  );
+  const candidates = [
+    ...new Set([
+      ...[...places.values()].map((p) => p.holderId),
+      ...goalOwnerOf.values(),
+    ]),
+  ];
   const people = new Set(
-    holders.length
+    candidates.length
       ? (
           await db
             .select({ id: users.id })
             .from(users)
-            .where(and(inArray(users.id, holders), eq(users.userType, "human")))
+            .where(
+              and(inArray(users.id, candidates), eq(users.userType, "human"))
+            )
         ).map((u) => u.id)
       : []
   );
-  const goalOwner = new Map<string, Promise<string>>();
-  const ownerOfGoal = async (trackId: string) => {
-    if (!goalOwner.has(trackId)) {
-      goalOwner.set(
-        trackId,
-        db
-          .select({ id: projectTracks.id, userId: projectTracks.userId })
-          .from(projectTracks)
-          .where(eq(projectTracks.id, trackId))
-          .limit(1)
-          .then(([t]) => (t ? goalOwnerToAsk(t) : ""))
-      );
-    }
-    return (await goalOwner.get(trackId)!) || null;
-  };
-  const out = new Map<string, string | null>();
+
+  // The person each subject would go to, before the read check.
+  const chosen = new Map<string, string>();
   for (const c of cs) {
-    const key = `${c.subjectType}:${c.subjectId}`;
-    if (out.has(key)) continue;
+    const key = keyOf(c);
     const place = places.get(key);
-    if (!place) continue;
-    if (c.subjectType === "track") {
-      out.set(key, await ownerOfGoal(c.subjectId));
-    } else if (people.has(place.holderId)) {
-      out.set(key, place.holderId);
-    } else {
-      out.set(key, place.trackId ? await ownerOfGoal(place.trackId) : null);
-    }
+    if (!place || chosen.has(key)) continue;
+    const person =
+      c.subjectType === "track"
+        ? goalOwnerOf.get(c.subjectId)
+        : people.has(place.holderId)
+          ? place.holderId
+          : place.trackId
+            ? goalOwnerOf.get(place.trackId)
+            : undefined;
+    if (person && people.has(person)) chosen.set(key, person);
   }
-  return out;
+
+  // …and only if they can read it (the same rules `statusOf` reads by).
+  const readable = new Set<string>();
+  const byPerson = new Map<string, string[]>();
+  for (const [key, person] of chosen) {
+    byPerson.set(person, [...(byPerson.get(person) ?? []), key]);
+  }
+  for (const [person, keys] of byPerson) {
+    const of = (t: string) =>
+      keys
+        .filter((k) => k.startsWith(`${t}:`))
+        .map((k) => k.slice(t.length + 1));
+    const [es, ts, ss] = [of("entity"), of("track"), of("focus_session")];
+    const [eRows, tRows, sRows] = await Promise.all([
+      es.length
+        ? db
+            .select({ id: entities.id })
+            .from(entities)
+            .where(
+              and(inArray(entities.id, es), entityReadVisibleWhere(person))
+            )
+        : [],
+      ts.length
+        ? scopedDb(
+            AccessContext.operator({ userId: person })
+          ).findMany<ProjectTrack>(projectTracks, {
+            where: inArray(projectTracks.id, ts),
+          })
+        : [],
+      ss.length
+        ? db
+            .select({ id: focusSessions.id })
+            .from(focusSessions)
+            .where(
+              and(
+                inArray(focusSessions.id, ss),
+                sessionReadableWhere({ userId: person, roster: true })
+              )
+            )
+        : [],
+    ]);
+    for (const r of eRows) readable.add(`entity:${r.id}`);
+    for (const r of tRows) readable.add(`track:${r.id}`);
+    for (const r of sRows) readable.add(`focus_session:${r.id}`);
+  }
+  return new Map(
+    [...places.keys()].map((key) => [
+      key,
+      readable.has(key) ? (chosen.get(key) ?? null) : null,
+    ])
+  );
 }
 
 // ── The words ───────────────────────────────────────────────────────────────
 
-/** The notification's two lines for a signal — sentences, built here. */
+const days = (n: number) => (n === 1 ? "1 day" : `${n} days`);
+const dateWords = (v: unknown) => {
+  const day = String(v ?? "").slice(0, 10);
+  return shortDate(day) ?? day;
+};
+
+/** The notification's two lines; every detail ends with a next step. */
 export function signalWords(
   c: Pick<SignalCandidate, "signal" | "statusLabel" | "facts">,
   name: string,
   now: Date = new Date()
 ): { headline: string; detail: string } {
   const f = c.facts;
-  const status = c.statusLabel.toLowerCase();
-  const day = (v: unknown) => String(v ?? "").slice(0, 10);
+  const property = humanizeToken(String(f.property ?? "")).toLowerCase();
   switch (c.signal) {
     case "late":
       return {
         headline: `${name} is late`,
-        detail: `Its ${humanizeToken(String(f.property)).toLowerCase()} (${day(f.date)}) has passed and it is still ${status}.`,
+        detail: `The ${property} was ${dateWords(f.date)} and the status is still ${c.statusLabel}. Update it or move it on.`,
       };
     case "approaching": {
-      const days = Math.max(
-        0,
-        Math.ceil((Date.parse(String(f.dueAt)) - now.getTime()) / 86_400_000) -
-          1
+      // Whole calendar days from today to the due day (UTC).
+      const ahead = Math.round(
+        (Date.parse(String(f.date).slice(0, 10)) -
+          Date.parse(now.toISOString().slice(0, 10))) /
+          DAY_MS
       );
       return {
         headline:
-          days === 0
+          ahead <= 0
             ? `${name} is due today`
-            : `${name} is due in ${days === 1 ? "1 day" : `${days} days`}`,
-        detail: `Its ${humanizeToken(String(f.property)).toLowerCase()} is ${day(f.date)} and it is still ${status}.`,
+            : ahead === 1
+              ? `${name} is due tomorrow`
+              : `${name} is due in ${days(ahead)}`,
+        detail: `The ${property} is ${dateWords(f.date)} and the status is still ${c.statusLabel}. Move it on before then.`,
       };
     }
     case "stuck":
       return {
-        headline: `${name} has been ${status} for ${f.forDays} days`,
-        detail: `Longer than the ${f.afterDays} days this step allows.`,
+        headline: `${name} has been in ${c.statusLabel} for ${days(Number(f.forDays))}`,
+        detail: `This step usually moves on within ${days(Number(f.afterDays))}. Move it on, or pause it with a reason.`,
       };
     case "hold_review_due":
       return {
-        headline: `${name} is due for review`,
-        detail: `Paused since ${day(f.pausedSince)}${f.holdReason ? ` (${String(f.holdReason)})` : ""}. Resume it, or say what it still waits on.`,
+        headline: `${name} has been paused longer than planned`,
+        detail: `Paused since ${dateWords(f.pausedSince)}${f.holdReason ? `: ${String(f.holdReason)}` : ""}. Resume it, or note what it is still waiting on.`,
       };
   }
 }
 
 // ── Raising ─────────────────────────────────────────────────────────────────
 
-/**
- * The registry type and source of a subject's signal notification — each
- * `type:` written out, so the producer scan sees it (notification registry).
- */
+/** Each subject's registry type and source — `type:` written out for the producer scan. */
 const SIGNAL_NOTIFICATION = {
   entity: { type: "entity.signal", sourceType: "entity" },
   track: { type: "track.signal", sourceType: "track" },
@@ -560,43 +692,61 @@ const SIGNAL_NOTIFICATION = {
 >;
 
 export interface StatusWatcherResult {
-  /** Signals noticed this tick (open episodes, new or not). */
+  /** Open episodes seen this tick, new or not. */
   noticed: number;
-  /** Episodes raised this tick (new events). */
+  /** Episodes raised this tick. */
   raised: number;
-  /** Raised with nobody to tell (no person owns it or its goal). */
+  /** Raised with nobody to tell. */
   unowned: number;
 }
 
-/** One tick of the watcher. A failed read THROWS (the cron logs it). */
+/** One tick. A read that fails is logged and skipped, never the whole tick. */
 export async function runStatusWatcher(
   now: Date = new Date()
 ): Promise<StatusWatcherResult> {
+  const read = (what: string, p: Promise<SignalCandidate[]>) =>
+    p.catch((err) => {
+      logger.error(
+        { err },
+        `status watcher: ${what} could not be read — their signals wait for the next tick`
+      );
+      return [] as SignalCandidate[];
+    });
   const noticed = [
-    ...(await lifecycleCandidates(now)),
-    ...(await holdCandidates(now)),
+    ...(await read("lifecycles", lifecycleCandidates(now))),
+    ...(await read("holds", holdCandidates(now))),
   ];
-  const fresh = await notYetRaised(noticed);
+  const claims = await claimStatusSignals(
+    db,
+    noticed.map((c) => ({
+      subjectType: c.subjectType,
+      subjectId: c.facetId ?? c.subjectId,
+      signal: c.signal,
+      episodeKey: c.episodeKey,
+      candidate: c,
+    }))
+  );
   const result: StatusWatcherResult = {
     noticed: noticed.length,
     raised: 0,
     unowned: 0,
   };
-  if (fresh.length === 0) return result;
+  if (claims.length === 0) return result;
 
+  const fresh = claims.map((e) => e.candidate);
   const places = await resolvePlaces(fresh);
-  const owners = await ownersOf(fresh, places);
-  for (const c of fresh) {
-    const key = `${c.subjectType}:${c.subjectId}`;
-    const place = places.get(key);
+  const recipients = await recipientsOf(fresh, places);
+  for (const claim of claims) {
+    const c = claim.candidate;
+    const place = places.get(keyOf(c));
     if (!place) continue; // deleted since it was read
-    const ownerId = owners.get(key) ?? null;
+    const ownerId = recipients.get(keyOf(c)) ?? null;
     try {
-      if (await raise(c, place, ownerId, now)) {
-        result.raised++;
-        if (!ownerId) result.unowned++;
-      }
+      await raise(c, place, ownerId, now);
+      result.raised++;
+      if (!ownerId) result.unowned++;
     } catch (err) {
+      await releaseStatusSignal(db, claim as StatusSignalEpisode);
       logger.warn(
         {
           err,
@@ -604,7 +754,7 @@ export async function runStatusWatcher(
           subjectType: c.subjectType,
           subjectId: c.subjectId,
         },
-        "status signal not raised — retried on the next tick"
+        "status signal not raised — its claim is released, so the next tick raises it"
       );
     }
   }
@@ -612,34 +762,17 @@ export async function runStatusWatcher(
   return result;
 }
 
-/** The candidates whose episode has no log row yet. */
-async function notYetRaised(
-  cs: readonly SignalCandidate[]
-): Promise<SignalCandidate[]> {
-  const byId = new Map(cs.map((c) => [signalEpisodeId(c), c]));
-  const ids = [...byId.keys()];
-  for (let i = 0; i < ids.length; i += ID_BATCH) {
-    for (const r of await db
-      .select({ id: events.id })
-      .from(events)
-      .where(inArray(events.id, ids.slice(i, i + ID_BATCH)))) {
-      byId.delete(r.id);
-    }
-  }
-  return [...byId.values()];
-}
-
-/** Log the episode (once), fan it out, tell the owner. False = already raised. */
+/** Log the episode, fan it out, tell the owner. A throw means nothing was logged. */
 async function raise(
   c: SignalCandidate,
   place: Place,
   ownerId: string | null,
   now: Date
-): Promise<boolean> {
-  const eventId = signalEpisodeId(c);
-  // The thing's own lens; a goal has none, so its hold's move lens.
+): Promise<void> {
+  const eventId = randomUUID();
   const workspaceId = place.workspaceId ?? c.workspaceId ?? null;
-  // The person the event is about; the system raised it.
+  // The person the event is about: who is told, else the thing's holder
+  // (possibly an agent). `source: "system"` records that the watcher raised it.
   const userId = ownerId ?? place.holderId;
   const data = {
     signal: c.signal,
@@ -653,29 +786,22 @@ async function raise(
     ownerId,
     projectId: place.projectId,
     trackId: place.trackId,
-    noticedAt: now.toISOString(),
+    beganAt: c.beganAt,
     ...c.facts,
   };
-  try {
-    await new EventRepository(sql).append({
-      // The episode IS the row's id: at most one, ever.
-      id: eventId,
-      version: "v1",
-      type: `${c.subjectType}.signal.completed`,
-      subjectId: c.subjectId,
-      subjectType: c.subjectType,
-      data,
-      metadata: {},
-      userId,
-      workspaceId: workspaceId ?? undefined,
-      source: "system",
-      // Dated when it began: the same episode is the same (id, timestamp) row.
-      timestamp: new Date(c.beganAt),
-    } as Parameters<EventRepository["append"]>[0]);
-  } catch (err) {
-    if (isUniqueViolation(err)) return false;
-    throw err;
-  }
+  await new EventRepository(sql).append({
+    id: eventId,
+    version: "v1",
+    type: `${c.subjectType}.signal.completed`,
+    subjectId: c.subjectId,
+    subjectType: c.subjectType,
+    data,
+    metadata: {},
+    userId,
+    workspaceId: workspaceId ?? undefined,
+    source: "system",
+    timestamp: now,
+  } as Parameters<EventRepository["append"]>[0]);
   await emitSideEffects({
     subjectType: c.subjectType,
     action: "signal",
@@ -685,18 +811,19 @@ async function raise(
     eventId,
     data: { ...data, profileSlug: place.profileSlug },
   });
-  if (ownerId) {
-    const { type, sourceType } = SIGNAL_NOTIFICATION[c.subjectType];
-    await NotificationService.create({
-      type,
-      userId: ownerId,
-      workspaceId,
-      sourceType,
-      sourceId: c.subjectId,
-      // One needs-you row per signal and kind of thing ("and 4 more like it").
-      groupKey: `status-signal:${c.signal}:${c.role ?? place.profileSlug ?? c.subjectType}`,
-      data: signalWords(c, c.name?.trim() || place.name, now),
-    });
-  }
-  return true;
+  if (!ownerId) return;
+  const { type, sourceType } = SIGNAL_NOTIFICATION[c.subjectType];
+  // `create` logs its own failures and does not throw: a lost notification is
+  // logged there, and not retried (the episode is raised).
+  await NotificationService.create({
+    type,
+    userId: ownerId,
+    workspaceId,
+    sourceType,
+    sourceId: c.subjectId,
+    // One needs-you row per signal and kind of thing ("and 4 more like it").
+    groupKey: `status-signal:${c.signal}:${c.role ?? place.profileSlug ?? c.subjectType}`,
+    inAppOnly: now.getTime() - Date.parse(c.beganAt) > SIGNAL_BACKLOG_AFTER_MS,
+    data: signalWords(c, place.name, now),
+  });
 }

@@ -1,13 +1,6 @@
 /**
- * STATUS WATCHER cron (status-flow plan W6) — thin scheduler: every hour it
- * runs the watcher that notices what is late, close to its date, stuck in its
- * step, or paused past its review date, and raises each ONCE per episode
- * (`runStatusWatcher`, @synap/api `services/status/watcher.ts`).
- *
- * @synap/jobs cannot import @synap/api (api → jobs), so apps/api fills the
- * runner slot at boot (`registerStatusWatcherRunner`) — the stale-proposal
- * cron's pattern. A failed tick is logged; the next tick finds the same open
- * episodes, so nothing is lost.
+ * The hourly STATUS WATCHER tick. The watcher lives in @synap/api, which
+ * depends on @synap/jobs, so apps/api fills this runner slot at boot.
  */
 import { createLogger } from "@synap-core/core";
 

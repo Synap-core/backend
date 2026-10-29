@@ -51,9 +51,11 @@ import {
 import {
   decidePush,
   derivePushFacts,
+  pushCapApplies,
   pushesCountedToday,
   readPodPushSettings,
   recordPush,
+  withinPushCap,
 } from "./push-decision.js";
 import type { DeliveryChannel, NotificationDef } from "./registry.js";
 import {
@@ -120,6 +122,13 @@ export interface CreateNotificationInput {
    * level. Ignored on a type that declares none.
    */
   connection?: ConnectionRef;
+
+  /**
+   * The producer knows this is not worth an interruption (old news, e.g. a
+   * status signal whose episode began long before it was raised): the row
+   * lands in the bell and in needs-you, never on the phone.
+   */
+  inAppOnly?: boolean;
 
   // Override registry defaults (optional)
   groupKey?: string;
@@ -313,7 +322,19 @@ async function recipientTimezone(userId: string): Promise<string> {
       .from(users)
       .where(eq(users.id, userId))
       .limit(1);
-    return row?.timezone || "UTC";
+    const zone = row?.timezone || "UTC";
+    // A stored name Intl does not know reads as UTC (as `localHourMinute`
+    // does), so no reader downstream — the push count's SQL — ever sees it.
+    try {
+      new Intl.DateTimeFormat("en-GB", { timeZone: zone });
+      return zone;
+    } catch {
+      logger.warn(
+        { userId, timeZone: zone },
+        "Unknown IANA timezone — read as UTC"
+      );
+      return "UTC";
+    }
   } catch (err) {
     logger.warn(
       { err, userId },
@@ -752,6 +773,7 @@ export const NotificationService = {
       // is already persisted, so a channel that declines (or fails) only costs
       // the interruption, never the notification.
       const channels = resolveChannels(def, categoryRule, suppressRealtime);
+      if (input.inAppOnly) channels.delete("os");
 
       if (channels.has("in_app")) {
         // Deliver to the RECIPIENT's user room — never the workspace room. The
@@ -793,19 +815,35 @@ export const NotificationService = {
             );
             pod = { prefs: {}, routingRules: {} };
           }
-          const decision = decidePush({
+          let decision = decidePush({
             type: input.type,
             // A FORCED push reads the POD-WIDE rule only: a workspace
             // override row must never ring a phone the person silenced.
             typeRule: pod.routingRules[input.type],
             facts,
             prefs: pod.prefs,
-            // The interruption budget counts the person's own day.
-            pushedToday: await pushesCountedToday(
-              input.userId,
-              await recipientTimezone(input.userId)
-            ),
           });
+          // The interruption budget, counted in the person's own day — read
+          // only when it applies, so an exempt or forced push never waits on
+          // it. A failed count skips the push, except a blocking ask (as for
+          // unreadable settings above).
+          if (pushCapApplies(decision)) {
+            try {
+              decision = withinPushCap(
+                decision,
+                await pushesCountedToday(
+                  input.userId,
+                  await recipientTimezone(input.userId)
+                )
+              );
+            } catch (err) {
+              if (decision.category !== "blocking-ask") throw err;
+              logger.warn(
+                { err, type: input.type, notificationId: row.id },
+                "Push count unreadable — blocking ask pushed without the daily cap"
+              );
+            }
+          }
           if (!decision.push) {
             channels.delete("os");
             logger.debug(

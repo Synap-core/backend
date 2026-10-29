@@ -113,6 +113,7 @@ export function toLifecycleWire(
       ...(o.stuckAfterDays !== undefined
         ? { stuckAfterDays: o.stuckAfterDays }
         : {}),
+      ...(o.dateBinding !== undefined ? { dateBinding: o.dateBinding } : {}),
     })),
   };
 }

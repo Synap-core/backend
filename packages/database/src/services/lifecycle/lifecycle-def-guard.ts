@@ -33,6 +33,7 @@ import {
   LIFECYCLE_CATEGORIES,
 } from "../../utils/lifecycle-model.js";
 import { lifecycleProjectionStatements } from "./project-lifecycle-columns.js";
+import { dateBindingProblems } from "./declare-lifecycle.js";
 
 type Db = PostgresJsDatabase<typeof schema>;
 
@@ -207,6 +208,7 @@ export async function changeLifecycleOptions(
   if (!def) return { status: "refused", reason: "property not found" };
 
   const { options, errors } = parseLifecycleOptions(input.options);
+  errors.push(...(await dateBindingProblems(db, profileIds, options)));
   if (errors.length) return { status: "refused", reason: errors.join("; ") };
   const next = new Set(options.map((o) => o.key));
   const before = storedOptions(def);

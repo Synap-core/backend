@@ -5487,3 +5487,14 @@ CREATE TABLE IF NOT EXISTS "observation_keys" (
   "event_id" uuid,
   "claimed_at" timestamptz NOT NULL DEFAULT now()
 );
+
+-- 0376: the status watcher's episode claims (status-flow W6) — mirrors
+-- 0376_status_signal_raised.sql.
+CREATE TABLE IF NOT EXISTS "status_signal_raised" (
+  "subject_type" text NOT NULL,
+  "subject_id"   text NOT NULL,
+  "signal"       text NOT NULL,
+  "episode_key"  text NOT NULL,
+  "raised_at"    timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY ("subject_type", "subject_id", "signal", "episode_key")
+);

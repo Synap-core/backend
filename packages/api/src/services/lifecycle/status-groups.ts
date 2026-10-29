@@ -294,25 +294,34 @@ export async function countStuckThings(params: {
   if (params.subject.profileIds.length === 0 || params.rules.length === 0)
     return out;
   const { t, since } = thingsInColumns({ ...params, order: "newest" });
-  const stuck = drizzleSql.join(
-    params.rules.map(
-      (r) =>
-        drizzleSql`(${t.status} = ${r.status} AND ${since} < now() - make_interval(days => ${r.days}::int))`
-    ),
-    drizzleSql` OR `
-  );
+  const stuck = stuckWhere(t.status, since, params.rules);
   const rows = await db
     .select({
       status: t.status,
       n: drizzleSql<number>`cast(count(*) as integer)`,
     })
     .from(t)
-    .where(drizzleSql`(${stuck})`)
+    .where(stuck)
     .groupBy(t.status);
   for (const r of rows) {
     if (r.status !== null) out.set(r.status as string, Number(r.n));
   }
   return out;
+}
+
+/** In a ruled status longer than its days: THE stuck predicate (counts and pages). */
+function stuckWhere(
+  status: unknown,
+  since: SQL,
+  rules: ReadonlyArray<{ status: string; days: number }>
+): SQL {
+  return drizzleSql`(${drizzleSql.join(
+    rules.map(
+      (r) =>
+        drizzleSql`(${status} = ${r.status} AND ${since} < now() - make_interval(days => ${r.days}::int))`
+    ),
+    drizzleSql` OR `
+  )})`;
 }
 
 /**
@@ -327,6 +336,8 @@ export async function pageThingsInColumn(params: {
   order: "newest" | "time_in_column";
   terminal?: { statuses: string[]; since: Date };
   column: { statuses: string[] } | { outside: string[] };
+  /** Only the things STUCK by these rules (the status watcher). */
+  stuckRules?: ReadonlyArray<{ status: string; days: number }>;
   offset: number;
   limit: number;
 }): Promise<{
@@ -360,7 +371,15 @@ export async function pageThingsInColumn(params: {
       since: since.as("since"),
     })
     .from(t)
-    .where(and(windowFilter, inColumn))
+    .where(
+      and(
+        windowFilter,
+        inColumn,
+        params.stuckRules?.length
+          ? stuckWhere(t.status, since, params.stuckRules)
+          : undefined
+      )
+    )
     .orderBy(orderBy)
     .offset(params.offset)
     .limit(params.limit + 1);

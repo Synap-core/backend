@@ -1,17 +1,11 @@
 /**
- * THE STATUS WATCHER (status-flow W6) on real SQL (PGlite, every table):
- *
- *   - late: an invoice past the date its step is bound to raises ONCE — not
- *     again an hour later — and again after it clears and recurs (a move out
- *     and back is a new episode);
- *   - approaching: within the default window before the date;
- *   - stuck: past the step's `stuckAfterDays`, from the latest move's
- *     `occurredAt` (the board's own read); a thing that moved yesterday is not;
- *   - hold review due: a paused thing whose hold's `reviewBy` passed;
- *   - each event is `<subject>.signal.completed`, carries its goal and
- *     project (Q6.3), and is fanned out to the automation matcher;
- *   - owner: the thing's owner when a person, else its goal's owner (Q4.2);
- *   - the signal shows up in needs-you (`signals.count`, the real read).
+ * THE STATUS WATCHER on real SQL (PGlite, every table): each kind of signal
+ * (late, approaching, stuck from the latest move's `occurredAt`, hold review
+ * due for a thing, a goal and a session) is raised once, not again an hour
+ * later, and again after it clears and recurs; it carries its goal and
+ * project and is fanned out; old news is not pushed; it is told only to a
+ * person who owns the thing or its goal and can read it; it shows up in
+ * needs-you (`signals.count`, the real read); a bad hold row is skipped.
  *
  * Stubbed: `getEffectiveLifecycle` (its own suites prove it), the event log
  * writer (to the same PGlite `events` table), Expo, the socket, and the
@@ -126,6 +120,7 @@ vi.mock("../../projects/project-needs-you.js", () => ({
 }));
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
+import { shortDate } from "@synap-core/types/lens";
 import { runStatusWatcher, signalWords } from "../watcher.js";
 import { signalsRouter } from "../../../routers/signals.js";
 
@@ -141,6 +136,13 @@ const I_FAR = randomUUID();
 const I_HELD = randomUUID();
 const D_STUCK = randomUUID();
 const D_FRESH = randomUUID();
+const D_AGENT_GOAL = randomUUID();
+const D_HIDDEN = randomUUID();
+const I_BAD = randomUUID();
+const G_HELD = randomUUID();
+const G_AGENT = randomUUID();
+const S_HELD = randomUUID();
+const W_PRIVATE = randomUUID();
 const DAY = 86_400_000;
 const NOW = new Date();
 const day = (offset: number) =>
@@ -195,6 +197,60 @@ async function moved(entityId: string, daysAgo: number) {
   );
 }
 
+/** A current hold on a paused subject, its review date `reviewDays` from now. */
+async function hold(
+  subjectType: string,
+  subjectId: string,
+  to: string,
+  reviewDays: number,
+  o: {
+    entityId?: string;
+    workspaceId?: string;
+    reason?: string;
+    reviewBy?: string;
+  }
+) {
+  const since = new Date(NOW.getTime() - 10 * DAY).toISOString();
+  await q(
+    `insert into lifecycle_transition_outbox (transition_id, transition, created_at) values ($1, $2::jsonb, $3)`,
+    [
+      randomUUID(),
+      JSON.stringify({
+        transitionId: randomUUID(),
+        subjectType,
+        subjectId,
+        ...(o.entityId
+          ? { entityId: o.entityId, facetId: null, role: null }
+          : {}),
+        to,
+        category: "paused",
+        userId: ME,
+        workspaceId: o.workspaceId ?? null,
+        recordedAt: since,
+        hold: {
+          on: "external",
+          reason: o.reason ?? null,
+          reviewBy:
+            o.reviewBy ??
+            new Date(NOW.getTime() + reviewDays * DAY).toISOString(),
+          since,
+          resumeTo: "active",
+        },
+      }),
+      since,
+    ]
+  );
+}
+
+/** A goal-filed session about the thing (its goal, by the subject spine). */
+async function workedToward(entityId: string, trackId: string, ws: string) {
+  await q(
+    `insert into focus_sessions (id, user_id, workspace_id, project_id, track_id, subject_entity_id, goal, status, origin, expected_outputs, metadata, started_at, created_at, updated_at)
+     values (gen_random_uuid(), $1, $2, $3, $4, $5, 'Work it', 'active', 'agent', '[]'::jsonb, '{}'::jsonb, now(), now(), now())`,
+    [AGENT, ws, P, trackId, entityId]
+  );
+}
+
 async function thing(o: {
   id: string;
   profile: string;
@@ -203,6 +259,7 @@ async function thing(o: {
   title: string;
   properties?: Record<string, unknown>;
   createdDaysAgo?: number;
+  workspaceId?: string;
 }) {
   await q(
     `insert into entities (id, user_id, workspace_id, profile_id, title, status, properties, created_at, updated_at)
@@ -210,7 +267,7 @@ async function thing(o: {
     [
       o.id,
       o.owner ?? ME,
-      W,
+      o.workspaceId ?? W,
       o.profile,
       o.title,
       o.status,
@@ -313,34 +370,36 @@ beforeAll(async () => {
     properties: { dueDate: day(-40) },
   });
   // Its pause: a hold whose review date passed two days ago.
-  const holdAt = new Date(NOW.getTime() - 10 * DAY).toISOString();
+  await hold("entity", I_HELD, "disputed", -2, {
+    entityId: I_HELD,
+    workspaceId: W,
+    reason: "Client disputes the amount",
+  });
+  // A hold written around the doors, its review date in no stamp shape: it
+  // is skipped, and must not fail the watcher's read.
+  await thing({
+    id: I_BAD,
+    profile: INVOICE,
+    status: "disputed",
+    title: "Invoice 105",
+  });
+  await hold("entity", I_BAD, "disputed", 0, {
+    entityId: I_BAD,
+    reviewBy: "next tuesday",
+  });
+  // A paused goal and a paused session, both past their review date.
   await q(
-    `insert into lifecycle_transition_outbox (transition_id, transition, created_at) values ($1, $2::jsonb, $3)`,
-    [
-      randomUUID(),
-      JSON.stringify({
-        transitionId: randomUUID(),
-        subjectType: "entity",
-        subjectId: I_HELD,
-        entityId: I_HELD,
-        facetId: null,
-        role: null,
-        to: "disputed",
-        category: "paused",
-        userId: ME,
-        workspaceId: W,
-        recordedAt: holdAt,
-        hold: {
-          on: "external",
-          reason: "Client disputes the amount",
-          reviewBy: new Date(NOW.getTime() - 2 * DAY).toISOString(),
-          since: holdAt,
-          resumeTo: "sent",
-        },
-      }),
-      holdAt,
-    ]
+    `insert into project_tracks (id, project_id, user_id, name, definition_snapshot, method_version, status, criteria, created_at, updated_at)
+     values ($1, $2, $3, 'Hire a designer', '{}'::jsonb, '1', 'paused', '[]'::jsonb, now(), now())`,
+    [G_HELD, P, ME]
   );
+  await hold("track", G_HELD, "paused", -2, { reason: "Budget freeze" });
+  await q(
+    `insert into focus_sessions (id, user_id, workspace_id, goal, title, status, origin, expected_outputs, metadata, started_at, created_at, updated_at)
+     values ($1, $2, $3, 'Draft the brief', 'Draft the brief', 'paused', 'human', '[]'::jsonb, '{}'::jsonb, now(), now(), now())`,
+    [S_HELD, ME, W]
+  );
+  await hold("focus_session", S_HELD, "paused", -3, {});
 
   // Deals: one in talks for 5 days (stuck after 3), one moved in yesterday.
   // The stuck one was captured by an agent and is worked toward goal G.
@@ -352,6 +411,7 @@ beforeAll(async () => {
     title: "ACME renewal",
   });
   await moved(D_STUCK, 5);
+  await workedToward(D_STUCK, G, W);
   await thing({
     id: D_FRESH,
     profile: DEAL,
@@ -359,17 +419,44 @@ beforeAll(async () => {
     title: "Globex",
   });
   await moved(D_FRESH, 1);
+  // An agent's deal whose goal was started by an agent (no owner seat): the
+  // goal's owner is that agent, so nobody is told.
   await q(
-    `insert into focus_sessions (id, user_id, workspace_id, project_id, track_id, subject_entity_id, goal, status, origin, expected_outputs, metadata, started_at, created_at, updated_at)
-     values (gen_random_uuid(), $1, $2, $3, $4, $5, 'Renew ACME', 'active', 'agent', '[]'::jsonb, '{}'::jsonb, now(), now(), now())`,
-    [AGENT, W, P, G, D_STUCK]
+    `insert into project_tracks (id, project_id, user_id, name, definition_snapshot, method_version, status, criteria, created_at, updated_at)
+     values ($1, $2, $3, 'Agent goal', '{}'::jsonb, '1', 'active', '[]'::jsonb, now(), now())`,
+    [G_AGENT, P, AGENT]
   );
+  await thing({
+    id: D_AGENT_GOAL,
+    profile: DEAL,
+    status: "negotiating",
+    owner: AGENT,
+    title: "Initech",
+  });
+  await moved(D_AGENT_GOAL, 6);
+  await workedToward(D_AGENT_GOAL, G_AGENT, W);
+  // An agent's deal in a space the goal's owner is not in: they cannot read
+  // it, so nobody is told.
+  await q(
+    `insert into workspaces (id, name, owner_id, settings) values ($1, 'Private', $2, '{}'::jsonb)`,
+    [W_PRIVATE, ME]
+  );
+  await thing({
+    id: D_HIDDEN,
+    profile: DEAL,
+    status: "negotiating",
+    owner: AGENT,
+    title: "Umbrella",
+    workspaceId: W_PRIVATE,
+  });
+  await moved(D_HIDDEN, 6);
+  await workedToward(D_HIDDEN, G, W_PRIVATE);
 });
 
 describe("the status watcher", () => {
-  it("raises late, approaching, stuck and hold-review once each, with goal and project", async () => {
+  it("raises each kind of signal once, placed in its goal and project", async () => {
     const r = await runStatusWatcher(NOW);
-    expect(r).toMatchObject({ noticed: 4, raised: 4, unowned: 0 });
+    expect(r).toMatchObject({ noticed: 8, raised: 8, unowned: 2 });
     const raised = await signalEvents();
     const bySubject = new Map(raised.map((e) => [String(e.data.subjectId), e]));
     expect(bySubject.get(I_LATE)?.data).toMatchObject({
@@ -394,20 +481,48 @@ describe("the status watcher", () => {
       forDays: 5,
       trackId: G,
       projectId: P,
+      ownerId: GOAL_OWNER,
     });
-    expect(bySubject.has(I_FAR)).toBe(false);
-    expect(bySubject.has(D_FRESH)).toBe(false);
-    for (const e of raised) expect(e.type).toBe("entity.signal.completed");
-    // Fanned out to the automation matcher, as `entity.signal`.
+    // A goal's and a session's pause.
+    expect(bySubject.get(G_HELD)).toMatchObject({
+      type: "track.signal.completed",
+      data: {
+        signal: "hold_review_due",
+        trackId: G_HELD,
+        projectId: P,
+        ownerId: ME,
+      },
+    });
+    expect(bySubject.get(S_HELD)).toMatchObject({
+      type: "focus_session.signal.completed",
+      data: { signal: "hold_review_due", ownerId: ME },
+    });
+    for (const id of [I_FAR, D_FRESH, I_BAD])
+      expect(bySubject.has(id)).toBe(false);
+    // Fanned out to the automation matcher, one per episode.
     const signals = h.fannedOut.filter((p) => p.action === "signal");
-    expect(signals.map((p) => p.subjectType)).toEqual(Array(4).fill("entity"));
-    expect(signals.every((p) => p.workspaceId === W && p.eventId)).toBe(true);
+    expect(signals.map((p) => p.subjectType).sort()).toEqual(
+      [...Array(6).fill("entity"), "focus_session", "track"].sort()
+    );
+    expect(signals.every((p) => p.eventId)).toBe(true);
+  });
+
+  it("pushes only fresh news: a signal that began over a day ago lands in-app only", async () => {
+    // Only the approaching invoice began within the day (its window opened
+    // under a day ago); the late, stuck and review-due ones are backlog.
+    expect(h.pushes.map((p) => p.title)).toEqual([
+      "Invoice 102 is due in 2 days",
+    ]);
+    const rows = await q<{ n: number }>(
+      `select count(*)::int as n from notifications where type like '%.signal' and status = 'unread'`
+    );
+    expect(rows.rows[0]!.n).toBe(6);
   });
 
   it("does not raise the same episode again an hour later", async () => {
     const before = (await signalEvents()).length;
     const r = await runStatusWatcher(at(1));
-    expect(r).toMatchObject({ noticed: 4, raised: 0 });
+    expect(r).toMatchObject({ noticed: 8, raised: 0 });
     expect(await signalEvents()).toHaveLength(before);
   });
 
@@ -415,7 +530,7 @@ describe("the status watcher", () => {
     // Clears: paid.
     await q(`update entities set status = 'paid' where id = $1`, [I_LATE]);
     expect(await runStatusWatcher(at(2))).toMatchObject({
-      noticed: 3,
+      noticed: 7,
       raised: 0,
     });
     // Recurs: back to sent (a new stay in the step), the date still passed.
@@ -426,7 +541,7 @@ describe("the status watcher", () => {
     expect(late.map((e) => e.data.signal)).toEqual(["late", "late"]);
   });
 
-  it("tells the thing's owner, else its goal's owner", async () => {
+  it("tells a person who owns the thing or its goal and can read it — nobody else", async () => {
     const notes = await q<{ user_id: string; type: string; title: string }>(
       `select user_id, type, title from notifications order by created_at`
     );
@@ -434,10 +549,29 @@ describe("the status watcher", () => {
       notes.rows.filter((n) => n.title === title).map((n) => n.user_id);
     expect(to("Invoice 101 is late")).toEqual([ME, ME]);
     // An agent's thing: its goal's owner (the owner seat, not the starter).
-    expect(to("ACME renewal has been negotiating for 5 days")).toEqual([
+    expect(to("ACME renewal has been in Negotiating for 5 days")).toEqual([
       GOAL_OWNER,
     ]);
-    expect(notes.rows.every((n) => n.type === "entity.signal")).toBe(true);
+    // A goal owned by an agent, and a goal owner who cannot read the thing.
+    expect(to("Initech has been in Negotiating for 6 days")).toEqual([]);
+    expect(to("Umbrella has been in Negotiating for 6 days")).toEqual([]);
+    const events = await signalEvents();
+    for (const id of [D_AGENT_GOAL, D_HIDDEN]) {
+      expect(
+        events.find((e) => e.data.subjectId === id)?.data.ownerId
+      ).toBeNull();
+    }
+    expect(to("Hire a designer has been paused longer than planned")).toEqual([
+      ME,
+    ]);
+    expect(to("Draft the brief has been paused longer than planned")).toEqual([
+      ME,
+    ]);
+    expect([...new Set(notes.rows.map((n) => n.type))].sort()).toEqual([
+      "entity.signal",
+      "session.signal",
+      "track.signal",
+    ]);
   });
 
   it("shows up in needs-you", async () => {
@@ -451,25 +585,62 @@ describe("the status watcher", () => {
     expect(count.notifications).toBe(1);
     expect(count.needsYou).toBeGreaterThanOrEqual(1);
   });
+});
 
-  it("says it in words", () => {
+describe("signalWords", () => {
+  const NOW_W = new Date("2026-10-29T10:00:00.000Z");
+  const words = (c: Parameters<typeof signalWords>[0]) =>
+    signalWords(c, "Invoice 102", NOW_W);
+
+  it("late and approaching: the date in words, the status label, a next step", () => {
     expect(
-      signalWords(
-        {
-          signal: "approaching",
-          statusLabel: "Sent",
-          facts: {
-            property: "dueDate",
-            date: "2026-10-31",
-            dueAt: "2026-11-01T00:00:00.000Z",
-          },
-        },
-        "Invoice 102",
-        new Date("2026-10-29T10:00:00.000Z")
-      )
+      words({
+        signal: "late",
+        statusLabel: "Sent",
+        facts: { property: "dueDate", date: "2026-10-20" },
+      })
     ).toEqual({
-      headline: "Invoice 102 is due in 2 days",
-      detail: "Its due date is 2026-10-31 and it is still sent.",
+      headline: "Invoice 102 is late",
+      detail: `The due date was ${shortDate("2026-10-20")} and the status is still Sent. Update it or move it on.`,
+    });
+    const due = (date: string) =>
+      words({
+        signal: "approaching",
+        statusLabel: "Sent",
+        facts: { property: "dueDate", date },
+      }).headline;
+    expect(due("2026-10-29")).toBe("Invoice 102 is due today");
+    expect(due("2026-10-30")).toBe("Invoice 102 is due tomorrow");
+    expect(due("2026-10-31")).toBe("Invoice 102 is due in 2 days");
+  });
+
+  it("stuck: one day is a day", () => {
+    expect(
+      words({
+        signal: "stuck",
+        statusLabel: "Negotiating",
+        facts: { forDays: 1, afterDays: 1 },
+      })
+    ).toEqual({
+      headline: "Invoice 102 has been in Negotiating for 1 day",
+      detail:
+        "This step usually moves on within 1 day. Move it on, or pause it with a reason.",
+    });
+  });
+
+  it("hold review: since when, and why, then what to do", () => {
+    expect(
+      words({
+        signal: "hold_review_due",
+        statusLabel: "Disputed",
+        facts: {
+          pausedSince: "2026-10-01T09:00:00.000Z",
+          holdReason: "Client disputes the amount",
+        },
+      })
+    ).toEqual({
+      headline: "Invoice 102 has been paused longer than planned",
+      detail: `Paused since ${shortDate("2026-10-01")}: Client disputes the amount. Resume it, or note what it is still waiting on.`,
     });
   });
 });

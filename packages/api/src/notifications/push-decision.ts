@@ -15,11 +15,13 @@
  *      the person named that type and asked for its push. A CATEGORY-level
  *      rule does not — it predates the push categories and was never a
  *      statement about one type;
- *   4. the interruption budget (plan Q4.1): an earned push past the person's
- *      {@link PUSH_DAILY_CAP} pushes today is held back — the row stays in
- *      the bell and in needs-you. "Something broke" (`work-broke`) is exempt
- *      and never counted; a forced push (rule 3) is the person's own ask and
- *      is never held back, but it counts.
+ *   4. the interruption budget ({@link withinPushCap}): an EARNED push past
+ *      the person's {@link PUSH_DAILY_CAP} pushes today is held back — the row
+ *      stays in the bell and in needs-you. "Something broke" (`work-broke`) is
+ *      exempt and never counted; a forced push (rule 3) is the person's own
+ *      ask and is never held back, but it counts. The count is read only when
+ *      the cap applies (`pushCapApplies`), so no exempt or forced push waits
+ *      on it.
  */
 import {
   and,
@@ -54,14 +56,12 @@ export type PushDecision =
       reason: "unclassified" | "category_off" | "over_cap";
     };
 
-/** Pure: the four rules above, in order. */
+/** Pure: rules 1-3 above, in order. */
 export function decidePush(p: {
   type: string;
   typeRule: string | undefined;
   facts: PushFacts;
   prefs: PushPrefs;
-  /** Pushes the cap counts that the person already got today. */
-  pushedToday: number;
 }): PushDecision {
   const category = classifyPush(p.type, p.facts);
   if (p.typeRule === "os" || p.typeRule === "all") {
@@ -71,19 +71,38 @@ export function decidePush(p: {
   if (!isPushCategoryEnabled(p.prefs, category)) {
     return { push: false, category, reason: "category_off" };
   }
-  if (
-    !PUSH_CAP_EXEMPT_CATEGORIES.includes(category) &&
-    p.pushedToday >= PUSH_DAILY_CAP
-  ) {
-    return { push: false, category, reason: "over_cap" };
-  }
   return { push: true, category, reason: "earned" };
+}
+
+/** Rule 4 applies only to an EARNED push in a counted category. Pure. */
+export function pushCapApplies(d: PushDecision): boolean {
+  return (
+    d.push &&
+    d.reason === "earned" &&
+    d.category !== null &&
+    !PUSH_CAP_EXEMPT_CATEGORIES.includes(d.category)
+  );
+}
+
+/**
+ * Rule 4, pure: hold back an earned push once the person had their pushes
+ * today. Accepted overshoot: the count is read, then the push recorded, so
+ * two pushes deciding at the same instant can both pass at the cap's edge.
+ */
+export function withinPushCap(
+  d: PushDecision,
+  pushedToday: number
+): PushDecision {
+  return pushCapApplies(d) && pushedToday >= PUSH_DAILY_CAP
+    ? { push: false, category: d.category, reason: "over_cap" }
+    : d;
 }
 
 /**
  * The pushes the cap counts that `userId` got since the start of THEIR day
- * (`timeZone`, IANA): every row pushed today (`pushed_at`) except "something
- * broke" types. A failed read THROWS (the caller skips the push and logs).
+ * (`timeZone`, a VALID IANA name: `recipientTimezone` checks it): every row
+ * pushed today (`pushed_at`) except "something broke" types. A failed read
+ * THROWS (the caller logs it, and skips the push unless it is a blocking ask).
  */
 export async function pushesCountedToday(
   userId: string,

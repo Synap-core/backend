@@ -478,6 +478,11 @@ export {
   type HoldSubjectRef,
 } from "./services/lifecycle/holds.js";
 export {
+  claimStatusSignals,
+  releaseStatusSignal,
+  type StatusSignalEpisode,
+} from "./services/lifecycle/status-signals.js";
+export {
   LifecycleWriteOutsideDoorError,
   assertNoLifecycleMove,
   columnsForValue,

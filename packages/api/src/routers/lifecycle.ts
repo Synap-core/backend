@@ -72,6 +72,8 @@ const lifecycleOptionWire = z.object({
    * `LifecycleOption` — surfaces assign one to the other.
    */
   stuckAfterDays: z.number().optional(),
+  /** The date property the option is bound to (late / approaching); absent = none. */
+  dateBinding: z.string().optional(),
 });
 
 const lifecycleWire = z.object({

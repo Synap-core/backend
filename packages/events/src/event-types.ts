@@ -109,16 +109,15 @@ export const OperationalEventTypes = {
       "actorKind",
     ],
   },
-  // The status watcher (status-flow W6) noticed something about a thing that
-  // stands still, ONCE per episode (raised again only after it clears and
-  // recurs). Derived: computed hourly, stored only because a rule triggers on
-  // it (plan Q6.2). Goal and project resolved when it is raised (Q6.3).
+  // The status watcher noticed something about a thing that stands still,
+  // ONCE per episode (raised again only after it clears and recurs). Stored
+  // only because a rule triggers on it; goal and project resolved when raised.
   ENTITY_SIGNALED: {
     type: "entity.signal.completed",
-    label: "Late or stuck",
+    label: "Needs a look",
     domain: "Entity",
     description:
-      "Fires once when a thing becomes late, nears its date, sits too long in a step, or its pause is due for review.",
+      "Runs once when a thing passes its due date, is about to, stays too long in one status, or a pause is ready to be reviewed.",
     filterKeys: [
       // stuck | late | approaching | hold_review_due
       "signal",
@@ -171,13 +170,12 @@ export const OperationalEventTypes = {
       "trackId",
     ],
   },
-  // The status watcher (W6): a session paused past its hold's review date.
+  // The status watcher: a session paused past its hold's review date.
   FOCUS_SESSION_SIGNALED: {
     type: "focus_session.signal.completed",
-    label: "Session due for review",
+    label: "Needs a look",
     domain: "Focus sessions",
-    description:
-      "Fires once when a paused session's hold passes its review date.",
+    description: "Runs once when a paused session is ready to be reviewed.",
     filterKeys: [
       "signal",
       "status",
@@ -221,12 +219,12 @@ export const OperationalEventTypes = {
       "trackId",
     ],
   },
-  // The status watcher (W6): a goal paused past its hold's review date.
+  // The status watcher: a goal paused past its hold's review date.
   TRACK_SIGNALED: {
     type: "track.signal.completed",
-    label: "Goal due for review",
+    label: "Needs a look",
     domain: "Tracks",
-    description: "Fires once when a paused goal's hold passes its review date.",
+    description: "Runs once when a paused goal is ready to be reviewed.",
     filterKeys: [
       "signal",
       "status",

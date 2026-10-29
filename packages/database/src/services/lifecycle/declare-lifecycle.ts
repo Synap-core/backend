@@ -14,7 +14,7 @@
  *    SHADOW a different one declared on an ancestor, and options without a
  *    valid category.
  */
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type * as schema from "../../schema/index.js";
 import { profileProperties } from "../../schema/profile-properties.js";
@@ -75,6 +75,54 @@ export function withLifecycleOptions<
     enumValues: options.map((o) => o.key),
   };
   return props;
+}
+
+/**
+ * Each option's `dateBinding` must name a DATE property of the profile (or an
+ * ancestor): its own def or one linked to it. One problem line per binding
+ * that does not. Shared by `declareLifecycle` and `changeLifecycleOptions`.
+ */
+export async function dateBindingProblems(
+  db: Db,
+  profileIds: readonly string[],
+  options: ReadonlyArray<{ key: string; dateBinding?: string }>
+): Promise<string[]> {
+  const bound = options.filter((o) => o.dateBinding);
+  if (bound.length === 0 || profileIds.length === 0) return [];
+  const ids = sql.join(
+    profileIds.map((id) => sql`${id}::uuid`),
+    sql`, `
+  );
+  const slugs = sql.join(
+    [...new Set(bound.map((o) => o.dateBinding!))].map((v) => sql`${v}`),
+    sql`, `
+  );
+  const res = (await db.execute(sql`
+    WITH RECURSIVE chain AS (
+      SELECT id, parent_profile_id, 0 AS depth FROM profiles WHERE id IN (${ids})
+      UNION ALL
+      SELECT p.id, p.parent_profile_id, c.depth + 1
+        FROM profiles p JOIN chain c ON p.id = c.parent_profile_id
+       WHERE c.depth < 16
+    )
+    SELECT DISTINCT pd.slug
+      FROM property_defs pd
+     WHERE pd.value_type = 'date'
+       AND pd.slug IN (${slugs})
+       AND (pd.profile_id IN (SELECT id FROM chain)
+            OR EXISTS (SELECT 1 FROM profile_properties pp
+                        WHERE pp.property_def_id = pd.id
+                          AND pp.profile_id IN (SELECT id FROM chain)))`)) as
+    Array<{ slug: string }> | { rows: Array<{ slug: string }> };
+  const dates = new Set(
+    (Array.isArray(res) ? res : res.rows).map((r) => r.slug)
+  );
+  return bound
+    .filter((o) => !dates.has(o.dateBinding!))
+    .map(
+      (o) =>
+        `option "${o.key}" dateBinding "${o.dateBinding}" is not a date property of this profile`
+    );
 }
 
 export type DeclareLifecycleResult =
@@ -139,7 +187,8 @@ export async function declareLifecycle(
   // reports them `unclassified`, never guesses); a lifecycle needs at least one
   // categorized option, and a category that is not one of the five is refused.
   const categorized = (stored ?? []).filter((o) => o.category !== undefined);
-  const { errors } = parseLifecycleOptions(categorized);
+  const { options, errors } = parseLifecycleOptions(categorized);
+  errors.push(...(await dateBindingProblems(db, [input.profileId], options)));
   if (errors.length) {
     return {
       status: "refused",

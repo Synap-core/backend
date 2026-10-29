@@ -217,4 +217,57 @@ describe("declareLifecycle + getEffectiveLifecycle", () => {
     expect(lc?.options.map((o) => o.key)).toEqual(["new"]);
     expect(lc?.unclassified).toEqual(["odd"]);
   });
+
+  it("refuses a dateBinding that is not a date property of the profile (or an ancestor)", async () => {
+    const options = [
+      { key: "draft", category: "open" },
+      { key: "sent", category: "active", dateBinding: "dueDate" },
+      { key: "paid", category: "done" },
+    ];
+    const doc = await profile("document");
+    const invoice = await profile("invoice", doc);
+    await prop(
+      invoice,
+      "invoiceStatus",
+      buildStoredConstraints({ enumOptions: options })
+    );
+    // No such property yet: refused, and the binding is named.
+    const none = await declareLifecycle(db, {
+      profileId: invoice,
+      propertySlug: "invoiceStatus",
+    });
+    expect(none.status).toBe("refused");
+    expect((none as { reason: string }).reason).toMatch(/dueDate/);
+    // A STRING property of that name is not a date.
+    await prop(invoice, "dueDate", {});
+    expect(
+      (
+        await declareLifecycle(db, {
+          profileId: invoice,
+          propertySlug: "invoiceStatus",
+        })
+      ).status
+    ).toBe("refused");
+    // A date property on the ancestor is the profile's too.
+    const [d] = await db
+      .insert(schema.propertyDefs)
+      .values({
+        slug: "dueDate",
+        valueType: "date",
+        constraints: {},
+        profileId: doc,
+      })
+      .returning();
+    await db
+      .insert(schema.profileProperties)
+      .values({ profileId: doc, propertyDefId: d.id });
+    expect(
+      (
+        await declareLifecycle(db, {
+          profileId: invoice,
+          propertySlug: "invoiceStatus",
+        })
+      ).status
+    ).toBe("declared");
+  });
 });

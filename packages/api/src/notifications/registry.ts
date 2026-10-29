@@ -219,15 +219,12 @@ export const NOTIFICATION_REPEAT_WINDOW_MS = 24 * 60 * 60 * 1000;
 export const STALE_NEWS_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
- * A STATUS SIGNAL (status-flow W6): the hourly watcher noticed a thing its
- * owner owns is late, close to its date, stuck in its step, or paused past its
- * review date (`services/status/watcher.ts`). One row per subject type, so the
- * button opens the right kind of object; the words are built by the watcher
- * (`headline`, `detail`). Once per episode — the derived event's id is the
- * episode — so no dedupe window. An ITEM in needs-you (the person decides
- * what to do), folded per signal and kind ("and 4 more like it"); it goes
- * stale on its own after a week. Pushes under `late-or-stuck`, inside the
- * daily cap.
+ * A STATUS SIGNAL: the status watcher (`services/status/watcher.ts`) noticed
+ * that a thing its owner owns is late, nearly due, stuck in its step, or
+ * paused past its review date. One row per subject type, so the button opens
+ * the right kind of object; the watcher writes the words. Raised once per
+ * episode (no dedupe window), an item in needs-you folded per signal and
+ * kind, stale after a week; pushes under `late-or-stuck`, inside the cap.
  */
 function statusSignalDef(
   type: string,
@@ -236,7 +233,7 @@ function statusSignalDef(
   return {
     type,
     category: "data",
-    label: "Late or stuck",
+    label: "Needs a look",
     icon: "alarm-clock",
     priority: "normal",
     titleTemplate: "{{headline}}",

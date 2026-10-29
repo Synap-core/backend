@@ -150,6 +150,13 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "pushed_at",
     addedBy: "0375_notifications_pushed_at.sql",
   },
+  // The status watcher's episode claims (0376). Absent, every watcher tick
+  // fails at its claim and no signal is raised.
+  {
+    table: "status_signal_raised",
+    column: "episode_key",
+    addedBy: "0376_status_signal_raised.sql",
+  },
   // notification_preferences — per-person push categories (0289). The
   // producer reads it on every os-channel notification; missing, the push
   // decision read throws, the row is still written and the bell still

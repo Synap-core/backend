@@ -66,7 +66,7 @@ import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import { notifications, notificationPreferences, users } from "@synap/database";
 import { PUSH_DAILY_CAP } from "@synap-core/types/push";
 import { NotificationService } from "../NotificationService.js";
-import { decidePush } from "../push-decision.js";
+import { decidePush, withinPushCap } from "../push-decision.js";
 
 const USER = "11111111-1111-4111-8111-111111111111";
 const BASIC =
@@ -155,13 +155,15 @@ describe("the daily push cap", () => {
     expect(h.pushes).toHaveLength(PUSH_DAILY_CAP + 2);
     // Exempt pushes are not counted: had they been, this one would be held.
     expect(
-      decidePush({
-        type: "agent.task_failed",
-        typeRule: undefined,
-        facts: {},
-        prefs: {},
-        pushedToday: 99,
-      })
+      withinPushCap(
+        decidePush({
+          type: "agent.task_failed",
+          typeRule: undefined,
+          facts: {},
+          prefs: {},
+        }),
+        99
+      )
     ).toMatchObject({ push: true, category: "work-broke" });
   });
 
@@ -182,5 +184,21 @@ describe("the daily push cap", () => {
     );
     for (let n = 1; n <= PUSH_DAILY_CAP + 1; n++) await signal(n);
     expect(h.pushes).toHaveLength(PUSH_DAILY_CAP + 1);
+  });
+
+  it("a timezone nobody knows reads as UTC: the cap holds and 'broke' still pushes", async () => {
+    await q(`update users set timezone = 'Mars/Olympus_Mons' where id = $1`, [
+      USER,
+    ]);
+    try {
+      for (let n = 1; n <= PUSH_DAILY_CAP + 1; n++) await signal(n);
+      await broke();
+      expect(h.pushes).toHaveLength(PUSH_DAILY_CAP + 1);
+      expect(h.pushes.at(-1)).toMatchObject({
+        data: { type: "agent.task_failed" },
+      });
+    } finally {
+      await q(`update users set timezone = 'UTC' where id = $1`, [USER]);
+    }
   });
 });
