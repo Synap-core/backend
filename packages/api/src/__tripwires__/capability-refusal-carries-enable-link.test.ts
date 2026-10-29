@@ -326,7 +326,9 @@ describe("TRIPWIRE: capability refusals emit a human-facing record", () => {
     // refuses with.
     const src = readFileSync(PERMISSION_CHECK, "utf-8");
     const cap =
-      /export async function refuseAtAgentPendingCap\(([\s\S]*?)\n\}/.exec(src);
+      /export async function refuseAtAgentPendingCap\([\s\S]*?\): Promise<[^\n]*\{\n([\s\S]*?)\n\}\n/.exec(
+        src
+      );
     expect(cap, "proposal-cap branch not found — did it move?").not.toBeNull();
     expect(cap![1]).toMatch(/if \(pendingCount < cap\) return null;/);
     expect(src).toMatch(

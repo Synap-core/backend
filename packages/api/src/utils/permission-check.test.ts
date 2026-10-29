@@ -2600,12 +2600,13 @@ describe("checkPermissionOrPropose — human-proposer (insufficient-role member)
 describe("agentProposalCap", () => {
   /**
    * Build `total` rows (most-recent-first, matching `orderBy(desc(createdAt))
-   * .limit(CAP_TRUST_WINDOW)`) with `approved` of them AUTO_APPROVED and the
-   * rest PENDING, then stub the query chain to resolve them.
+   * .limit(CAP_TRUST_WINDOW)`) with `approved` of them APPROVED by a person
+   * and the rest PENDING, then stub the query chain to resolve them. No
+   * receipts: the real query leaves `auto_approved` rows out of the window.
    */
   function mockRecentWindow(row: { total: number; approved: number }) {
     const rows = Array.from({ length: row.total }, (_, i) => ({
-      status: i < row.approved ? "auto_approved" : "pending",
+      status: i < row.approved ? "approved" : "pending",
     }));
     mockDbSelect.mockImplementation(() => {
       const b: Record<string, unknown> = {
