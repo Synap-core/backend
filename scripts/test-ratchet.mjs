@@ -57,6 +57,12 @@
  * ── USAGE ────────────────────────────────────────────────────────────────────
  *   node scripts/test-ratchet.mjs                 run everything, then check
  *   node scripts/test-ratchet.mjs --only=packages/api,packages/jobs
+ *   node scripts/test-ratchet.mjs --affected=packages/api,apps/api --also=F,G
+ *                                                 the PR tier (ci-changes.mjs
+ *                                                 outputs affected / also):
+ *                                                 those packages' suites, the
+ *                                                 files F,G of other packages,
+ *                                                 and EVERY tripwire
  *   node scripts/test-ratchet.mjs --script=test:e2e --only=packages/test-e2e
  *                                                 a lane run by its own CI job
  *                                                 (the package script to read;
@@ -94,6 +100,8 @@ import {
   SHARDED_DIRS,
   loadShardPlan,
   mergeShardReports,
+  mustRunFiles,
+  soloRuns,
   parseShard,
   planFits,
   runsForShard,
@@ -122,7 +130,27 @@ const flag = (name) =>
   args.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3);
 const RECORD = args.includes("--record");
 const REPORTS_IN = flag("reports");
-const ONLY = flag("only")?.split(",").filter(Boolean);
+// --affected=<dirs>: the PR tier (scripts/ci/affected.mjs). Like --only for
+// the package suites, but EVERY tripwire still runs, and so does each
+// --also=<files> test (a test of an unaffected package that reads an affected
+// one by path). The shards and the judge get the same two, in CI through
+// TEST_RATCHET_AFFECTED / TEST_RATCHET_ALSO (a path with `[id]` never meets a
+// shell glob). TEST_RATCHET_SCOPE=affected (ci-changes.mjs `scope`) makes an
+// EMPTY list mean "no package suite, every tripwire" (a change that
+// touches no package: only docs/reference/, or an empty diff).
+// Otherwise empty or absent = not the PR tier: everything in scope runs.
+const list = (v) => (v ? v.split(",").filter(Boolean) : []);
+const affectedList = list(
+  flag("affected") ?? process.env.TEST_RATCHET_AFFECTED
+);
+const AFFECTED =
+  affectedList.length || process.env.TEST_RATCHET_SCOPE === "affected"
+    ? affectedList
+    : undefined;
+const ALSO = list(flag("also") ?? process.env.TEST_RATCHET_ALSO);
+if (AFFECTED && flag("only"))
+  throw new Error("--affected and --only are two scopes: pass one");
+const ONLY = flag("only")?.split(",").filter(Boolean) ?? AFFECTED;
 const SCRIPT = flag("script") ?? "test";
 const SHARD = parseShard(flag("shard"));
 const SHARDS = flag("shards") ? Number(flag("shards")) : null;
@@ -325,9 +353,13 @@ function readReport(dir, id) {
 }
 
 // A sharded package's report is its N shard reports merged; one missing shard
-// makes the whole package a `no-report`.
+// makes the whole package a `no-report`. Only the PACKAGE run is sharded:
+// shard 1 runs a package's must-run files that no package run reached (the
+// PR tier, packages/api not affected) as one `tripwires:<dir>` report.
+const isShardedRun = (run) =>
+  !!SHARDS && SHARDED_DIRS.includes(run.dir) && run.id === run.dir;
 function readRunReport(dir, run) {
-  if (SHARDS && SHARDED_DIRS.includes(run.dir))
+  if (isShardedRun(run))
     return mergeShardReports(
       Array.from({ length: SHARDS }, (_, i) =>
         readReport(dir, shardReportId(run.id, i + 1))
@@ -339,12 +371,11 @@ function readRunReport(dir, run) {
 // The retry reports of a run (one per shard for a sharded package; any may be
 // absent: only the shards with new failures retried). null when there is none.
 function readRetryReport(dir, run) {
-  const ids =
-    SHARDS && SHARDED_DIRS.includes(run.dir)
-      ? Array.from({ length: SHARDS }, (_, i) =>
-          retryReportId(shardReportId(run.id, i + 1))
-        )
-      : [retryReportId(run.id)];
+  const ids = isShardedRun(run)
+    ? Array.from({ length: SHARDS }, (_, i) =>
+        retryReportId(shardReportId(run.id, i + 1))
+      )
+    : [retryReportId(run.id)];
   const found = ids.map((id) => readReport(dir, id)).filter(Boolean);
   return found.length
     ? { testResults: found.flatMap((r) => r.testResults ?? []) }
@@ -359,6 +390,25 @@ const inScope = (path) =>
   !ONLY || ONLY.some((d) => path === d || path.startsWith(`${d}/`));
 const { runs: allRuns, skipped } = packageRuns();
 const runs = allRuns.filter((r) => inScope(r.dir));
+
+// The files that run on their own, under their package's config, wherever no
+// package run reaches them: the tripwires (all of them under --affected, the
+// in-scope ones otherwise) and the --also files of packages that have a suite
+// (a test of a package with no `vitest run` script runs nowhere, on main
+// either). Shard 1 runs them; the judge expects their reports.
+const discovered = discoverTripwires(REPO_ROOT).map((f) =>
+  relative(REPO_ROOT, f)
+);
+const { files: mustRun, also: alsoFiles } = mustRunFiles({
+  discovered,
+  affected: AFFECTED ?? null,
+  also: ALSO,
+  inScope,
+  suiteDirs: allRuns.map((r) => r.dir),
+  exists: (f) => existsSync(join(REPO_ROOT, f)),
+});
+const mustRunSet = new Set(mustRun);
+const alsoSet = new Set(alsoFiles);
 const reportsDir = REPORTS_IN ? resolve(REPORTS_IN) : DEFAULT_REPORTS;
 mkdirSync(reportsDir, { recursive: true });
 
@@ -492,21 +542,12 @@ if (!REPORTS_IN) {
 // goes red as `no-report` — loud, never silently green.
 if (SHARD) {
   if (SHARD.k === 1) {
-    const owned = new Set(allRuns.map((r) => r.dir));
-    const byDir = new Map();
-    for (const t of discoverTripwires(REPO_ROOT)
-      .map((f) => relative(REPO_ROOT, f))
-      .filter(inScope)) {
-      const dir = tripwireOwner(t);
-      if (owned.has(dir)) continue;
-      if (!byDir.has(dir)) byDir.set(dir, []);
-      byDir.get(dir).push(dir === "." ? t : t.slice(dir.length + 1));
-    }
-    const tripwireShardRuns = [...byDir].map(([dir, files]) => ({
-      id: `tripwires:${dir}`,
-      dir,
-      args: files,
-    }));
+    // A package that runs in this invocation (in some shard) reaches its own
+    // files; every other must-run file runs here.
+    const tripwireShardRuns = soloRuns(
+      mustRun,
+      runs.map((r) => r.dir)
+    );
     clearRetry(tripwireShardRuns);
     await pool(tripwireShardRuns, CONCURRENCY, (r) =>
       runVitest(r, reportFile(reportsDir, r.id))
@@ -528,7 +569,7 @@ const flaky = []; // { file, firstReason, run } — failed, then passed on the r
 const collect = (run) => {
   const report = readRunReport(reportsDir, run);
   if (!report) {
-    const sharded = SHARDS && SHARDED_DIRS.includes(run.dir);
+    const sharded = isShardedRun(run);
     problems.push({
       kind: "no-report",
       detail: `${run.id}: ${sharded ? `at least one of its ${SHARDS} shard reports is missing — a shard crashed or never ran` : "the runner produced no parseable JSON — the suite crashed before reporting"}. Reproduce: cd ${run.dir} && npx vitest run ${run.args.length > 8 ? `<${run.args.length} args>` : run.args.join(" ")}`,
@@ -565,15 +606,14 @@ const collect = (run) => {
 };
 runs.forEach(collect);
 
-// Tripwires no package run reached (packages without a `test` script, the repo
-// root). Run them where they live, like `pnpm tripwires` does.
-const tripwires = discoverTripwires(REPO_ROOT)
-  .map((f) => relative(REPO_ROOT, f))
-  .filter(inScope);
-if (!ONLY && tripwires.length < 100) {
+// Tripwires (and --also files) no package run reached (packages without a
+// `test` script, the repo root, packages outside --affected). Run them where
+// they live, like `pnpm tripwires` does.
+const tripwires = mustRun;
+if ((!ONLY || AFFECTED) && discovered.length < 100) {
   problems.push({
     kind: "vacuous",
-    detail: `only ${tripwires.length} tripwire files discovered (326 on 2026-10-21) — did the naming convention or the walk change?`,
+    detail: `only ${discovered.length} tripwire files discovered (326 on 2026-10-21) — did the naming convention or the walk change?`,
   });
 }
 const unreached = new Map();
@@ -597,7 +637,14 @@ if (!REPORTS_IN && tripwireRuns.length) {
   await retryNewFailures(tripwireRuns);
 }
 tripwireRuns.forEach(collect);
-const unrun = tripwires.filter((t) => !results.has(t));
+// An --also file its package's config excludes runs on main neither: noted,
+// not red. A tripwire that ran nowhere is red.
+const alsoUnrun = tripwires.filter((t) => alsoSet.has(t) && !results.has(t));
+if (alsoUnrun.length)
+  console.log(
+    `\n  [also-unrun] ${alsoUnrun.length} --also file(s) appear in no report (their package's vitest config excludes them, so the full suite does not run them either):\n${alsoUnrun.map((f) => `      ${f}`).join("\n")}`
+  );
+const unrun = tripwires.filter((t) => !alsoSet.has(t) && !results.has(t));
 if (unrun.length) {
   problems.push({
     kind: "tripwire-unrun",
@@ -682,7 +729,8 @@ const ownerDir = (file) =>
     .filter((d) => d !== "." && file.startsWith(`${d}/`))
     .sort((a, b) => b.length - a.length)[0] ??
   (ranDirs.has(".") && !/^(packages|apps)\//.test(file) ? "." : null);
-const ownedHere = (file) => inScope(file) && ownerDir(file) !== null;
+const ownedHere = (file) =>
+  (inScope(file) || mustRunSet.has(file)) && ownerDir(file) !== null;
 
 const failing = [...results].filter(([, v]) => !v.ok);
 const newRed = failing.filter(([f]) => !baseline.has(f));

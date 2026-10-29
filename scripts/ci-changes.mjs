@@ -15,14 +15,33 @@
  * anything: an unknown path, a failed `git diff` or a push to main checks
  * everything. ci.yml also runs every job when THIS job fails.
  *
- * ── THE MERGE QUEUE (founder, 2026-10-28: "light queue run") ─────────────────
+ * ── THREE TIERS (founder, 2026-10-29, "One trunk, three CI tiers") ──────────
+ *   PR       Preflight, the Release gate, and the tests of what the change can
+ *            break: the touched packages, every workspace package that
+ *            depends on them, the test files of other packages that read them
+ *            by path, and every tripwire (scripts/ci/affected.mjs). A change
+ *            to shared or core code (outside a package, packages/database,
+ *            types, core) runs the full suite. API e2e only when the API
+ *            surface changed (affected.mjs API_SURFACE).
+ *   main     every push runs everything; nobody waits on it.
+ *   release  a pod updates only to a main commit whose post-merge run was
+ *            all green (scripts/ci/release-gate-wait.mjs).
+ * A required check whose suite this tier does not run still RUNS and passes
+ * through an explicit "Not affected" step that writes why to the run's
+ * summary; it is never skipped by its `if:` (GitHub counts a skipped job as a
+ * passed required check, #441).
+ *
+ * ── THE MERGE QUEUE (founder, 2026-10-28: "light queue run", #428) ──────────
  * A queue entry re-checks what can break when PRs combine — the Release gate
  * (install, lint, typecheck, build, migrate, boot, image) — and takes the Full
  * suite + API e2e from the PR's OWN run, but only when that run really ran
- * them: both checks concluded `success` on the PR's head commit. A skipped or
- * neutral conclusion (a draft run skips the suites, and GitHub counts a skip
- * as green), a failure, a missing check or any API error runs everything, as
- * before.
+ * them: both checks concluded `success` on the PR's head commit (since
+ * 2026-10-29 that run checked the PR's tier, not everything: main's
+ * post-merge run checks everything, and only an all-green one reaches a pod).
+ * A skipped or neutral conclusion, a failure, a missing check or any API
+ * error falls through to the tier of what the entry changes on top of the
+ * main it will land on (`git diff <merge_group.base_sha>...<merge_group.
+ * head_sha>`: the PR plus any entry ahead of it), on the combined tree.
  *
  * SAME TREE, NOTHING RE-RUNS (2026-10-28): #471 passed all 4 required checks
  * on its PR run, entered the queue with main unchanged, and the queue ran a
@@ -33,7 +52,7 @@
  * 4 required checks concluded `success` (one run; skipped, neutral or missing
  * is not success) re-runs nothing: the required checks skip, which GitHub
  * reports as passed, and the step summary names the reused run. Anything else
- * falls through to the light queue run above, then to everything. What it
+ * falls through to the light queue run above, then to the tier. What it
  * does not re-check: the sibling repos (control-plane-api, app-bases) at
  * main may have moved since; Preflight re-reads the one cross-repo red we
  * measured (door-tool-names) on every queue run.
@@ -41,11 +60,17 @@
  * ── OUTPUTS (GITHUB_OUTPUT) ──────────────────────────────────────────────────
  *   gate          Release gate runs           false: negctl branch, docs-only
  *   image         Docker build + deploy tests false: only image-neutral paths
- *   suites        Full suite + API e2e run    false: draft, negctl, docs-only,
- *                                             a queue entry whose PR's own
- *                                             suites passed on its head
+ *   suites        the Full suite shards run   false: draft, stack, negctl,
+ *                                             docs-only, a same-tree or a
+ *                                             light queue entry
+ *   scope         what the shards run: "full" | "affected" | "none"
+ *   affected      scope=affected: the package dirs whose whole suite runs,
+ *                 comma-separated (test-ratchet.mjs --affected=)
+ *   also          scope=affected: test files of other packages that read an
+ *                 affected package by path, comma-separated (--also=)
+ *   e2e           API e2e runs (the API surface changed, or everything runs)
  *   reuse         a queue entry re-runs nothing (same tree as its PR's
- *                 all-green run); Reference docs skips too
+ *                 all-green run)
  *   negctl        a negctl/* branch           true: run "Targeted tests" only
  *   negctl_tests  the test files a negctl runs (space-separated, repo-relative)
  *   hold          why a required check reports RED instead of being skipped:
@@ -58,13 +83,17 @@
  *
  * Usage (ci.yml): node scripts/ci-changes.mjs
  *   env EVENT, HEAD_REF, BASE_REF, DRAFT ("true"/"false"), BASE_SHA, HEAD_SHA
- *   merge queue: QUEUE_HEAD_REF (merge_group.head_ref), QUEUE_HEAD_SHA
- *   (merge_group.head_sha), REPO, GITHUB_TOKEN
+ *   merge queue: QUEUE_HEAD_REF (merge_group.head_ref), QUEUE_BASE_SHA
+ *   (merge_group.base_sha), QUEUE_HEAD_SHA (merge_group.head_sha), REPO,
+ *   GITHUB_TOKEN
  */
 
 import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, readdirSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { loadGraph, selectTier } from "./ci/affected.mjs";
+import { isTripwire } from "./tripwire-discovery.mjs";
 
 // Paths no test, build or image reads. Narrow on purpose: tests read
 // docs/decisions/*.md, skills/**/SKILL.md, CLAUDE.md and .claude/rules/*.md,
@@ -114,8 +143,25 @@ export function queuePrNumber(queueHeadRef) {
   return m ? Number(m[1]) : null;
 }
 
-/** The suites a queue entry may take from the PR's own run. */
+/** The suites a light queue entry takes from the PR's own run (#428). */
 export const QUEUE_TRUSTED_CHECKS = ["Full suite", "API e2e"];
+
+/**
+ * Did the PR's own run REALLY pass the suites? `checkRuns` = the latest check
+ * runs of the PR's head commit ({ name, status, conclusion }). Only
+ * `completed` + `success` counts: `skipped` and `neutral` count as green to
+ * GitHub, and a draft run reports the suites red ("suites not run").
+ */
+export function suitesPassed(checkRuns) {
+  if (!Array.isArray(checkRuns)) return false;
+  return QUEUE_TRUSTED_CHECKS.every((name) => {
+    const runs = checkRuns.filter((r) => r?.name === name);
+    return (
+      runs.length > 0 &&
+      runs.every((r) => r.status === "completed" && r.conclusion === "success")
+    );
+  });
+}
 
 /**
  * The checks a same-tree queue entry takes whole from the PR's own run: the
@@ -156,26 +202,11 @@ export function reusableRun(checkRuns) {
 }
 
 /**
- * Did the PR's own run REALLY pass the suites? `checkRuns` = the latest check
- * runs of the PR's head commit ({ name, status, conclusion }). Only
- * `completed` + `success` counts: `skipped` and `neutral` count as green to
- * GitHub, and a draft run reports the suites as skipped.
- */
-export function suitesPassed(checkRuns) {
-  if (!Array.isArray(checkRuns)) return false;
-  return QUEUE_TRUSTED_CHECKS.every((name) => {
-    const runs = checkRuns.filter((r) => r?.name === name);
-    return (
-      runs.length > 0 &&
-      runs.every((r) => r.status === "completed" && r.conclusion === "success")
-    );
-  });
-}
-
-/**
  * The decision for one run. Pure: `files` is the changed path list, or null
  * when it could not be read (then everything runs).
  * `siblingTests(path)` lists test files beside a changed source file.
+ * `tier(files)` is scripts/ci/affected.mjs selectTier over this checkout's
+ * graph, or null when the graph could not be read (then the full suite runs).
  * `queue` is a merge-queue entry's evidence ({ pr, headSha, suitesPassed,
  * reuse: { runId, testedCommit, testedTree, queueTree } | null }), or null.
  */
@@ -190,17 +221,31 @@ export function decide({
   draft,
   files,
   siblingTests,
+  tier = null,
   queue = null,
 }) {
   const all = {
     gate: true,
     image: true,
     suites: true,
+    scope: "full",
+    affected: [],
+    also: [],
+    e2e: true,
+    why: [],
     negctl: false,
     negctlTests: [],
     draftHold: false,
     hold: "",
     dependents: false,
+  };
+  const nothing = {
+    ...all,
+    gate: false,
+    image: false,
+    suites: false,
+    scope: "none",
+    e2e: false,
   };
   const reuse = queue?.reuse;
   if (
@@ -211,27 +256,70 @@ export function decide({
     reuse.testedTree === reuse.queueTree
   )
     return {
-      ...all,
-      gate: false,
-      image: false,
-      suites: false,
+      ...nothing,
       reuse: true,
       reason: `merge queue: tree ${reuse.testedTree.slice(0, 9)} is the tree #${queue.pr}'s run ${reuse.runId} tested (commit ${String(reuse.testedCommit).slice(0, 9)}), where all ${QUEUE_REUSE_CHECKS.length} required checks passed; nothing re-runs`,
     };
+  if (event !== "pull_request" && event !== "merge_group")
+    return { ...all, reason: `${event}: every check runs (tier 2: main)` };
+  if (!files)
+    return {
+      ...all,
+      dependents: event === "pull_request",
+      reason: "changed files unknown: every check runs",
+    };
+
+  const docsOnly = files.length > 0 && files.every(isDocsOnly);
+  const image = !files.every(isImageNeutral);
+  // The tier: what the change can break (scripts/ci/affected.mjs). No graph
+  // (it failed to load) is the full suite, never a guess.
+  const pick = () => {
+    if (docsOnly)
+      return { scope: "none", dirs: [], tests: [], e2e: false, why: [] };
+    // Docs-only paths read by no test (DOCS_ONLY) never widen the tier.
+    const t = tier ? tier(files.filter((f) => !isDocsOnly(f))) : null;
+    return (
+      t ?? {
+        scope: "full",
+        dirs: [],
+        tests: [],
+        e2e: true,
+        why: ["full suite: the dependency graph could not be read"],
+      }
+    );
+  };
+  const tierFields = (t) => ({
+    suites: t.scope !== "none",
+    scope: t.scope,
+    affected: t.dirs,
+    also: t.tests,
+    e2e: t.e2e,
+    why: t.why,
+  });
+
+  // The light queue run (#428): the PR's own Full suite and API e2e passed,
+  // so the entry re-checks the Release gate. The two suite checks pass
+  // through their "Not affected" steps, which name this reason.
   if (event === "merge_group" && queue?.suitesPassed === true)
     return {
       ...all,
       suites: false,
+      scope: "none",
+      e2e: false,
       reason: `merge queue: #${queue.pr}'s own Full suite and API e2e passed on ${String(queue.headSha).slice(0, 9)}; this run re-checks the Release gate`,
     };
-  if (event !== "pull_request")
-    return { ...all, reason: `${event}: every check runs` };
-  if (!files)
+
+  // A queue entry whose PR run did not pass both: the Release gate, and the
+  // tier of what it changes on top of the main it lands on, run on the
+  // combined tree.
+  if (event === "merge_group") {
+    const t = pick();
     return {
       ...all,
-      dependents: true,
-      reason: "changed files unknown: every check runs",
+      ...tierFields(t),
+      reason: `merge queue${queue?.pr ? ` (#${queue.pr})` : ""}: the Release gate, and ${tierText(t)} on the tree it will land`,
     };
+  }
 
   if (headRef?.startsWith("negctl/")) {
     const tests = new Set(files.filter((f) => TEST_FILE.test(f)));
@@ -243,44 +331,33 @@ export function decide({
     // skips: only its title said "NEVER MERGE". Every required check holds red
     // instead; "Targeted tests" still runs its files.
     return {
-      gate: false,
-      image: false,
-      suites: false,
+      ...nothing,
       negctl: true,
       negctlTests: [...tests].sort(),
-      draftHold: false,
       hold: "negctl",
-      dependents: false,
       reason: `negctl branch: only its ${tests.size} test file(s) run; every required check reports red (a negctl branch never merges)`,
     };
   }
 
-  if (files.length > 0 && files.every(isDocsOnly))
+  if (docsOnly)
     return {
-      gate: false,
-      image: false,
-      suites: false,
-      negctl: false,
-      negctlTests: [],
-      draftHold: false,
-      hold: "",
-      dependents: false,
+      ...nothing,
       reason: `docs only (${files.length} file(s)): no check needs to run`,
     };
 
-  const image = !files.every(isImageNeutral);
   // A base other than main/develop is a stack. It gets the Release gate (a
   // typecheck and build, so a stack is not entirely unchecked), and the suites
   // hold red: they run when the PR is retargeted to main. Docs-only returned
   // above. A stacked draft holds as "stacked".
   const stacked = !!baseRef && !LANDING_BASES.includes(baseRef);
   const hold = stacked ? "stacked" : draft ? "draft" : "";
+  const t = hold ? null : pick();
   return {
-    gate: true,
+    ...all,
     image,
-    suites: !draft && !stacked,
-    negctl: false,
-    negctlTests: [],
+    ...(t
+      ? tierFields(t)
+      : { suites: false, scope: "none", e2e: false, why: [] }),
     // A draft skips the suites, and GitHub counts a job skipped by its `if:`
     // as a PASSED required check. backend#382 and #394 (28 Oct) merged the
     // moment they were marked ready, on the draft run's skipped "Full suite"
@@ -292,20 +369,96 @@ export function decide({
     draftHold: hold === "draft",
     hold,
     dependents: touchesDependents(files),
-    reason:
-      [
-        stacked
-          ? `base is ${baseRef}, not main: Release gate only; Full suite and API e2e report red (suites not run) until the PR targets main`
-          : draft
-            ? "draft: Release gate only; Full suite and API e2e report red (suites not run) until it is marked ready"
-            : "",
-        image
-          ? ""
-          : "no image-relevant path: Docker build and deploy tests skipped",
-      ]
-        .filter(Boolean)
-        .join("; ") || "every check runs",
+    reason: [
+      stacked
+        ? `base is ${baseRef}, not main: Release gate only; Full suite and API e2e report red (suites not run) until the PR targets main`
+        : draft
+          ? "draft: Release gate only; Full suite and API e2e report red (suites not run) until it is marked ready"
+          : `the Release gate, and ${tierText(t)}`,
+      image
+        ? ""
+        : "no image-relevant path: Docker build and deploy tests skipped",
+    ]
+      .filter(Boolean)
+      .join("; "),
   };
+}
+
+/** One line for a tier: what the Full suite and API e2e run, and why. */
+export function tierText(t) {
+  const suite =
+    t.scope === "full"
+      ? "the full suite"
+      : t.scope === "none"
+        ? "no test suite"
+        : `the suites of ${t.dirs.length} package(s) (${t.dirs.join(", ")})${t.tests.length ? `, ${t.tests.length} test file(s) of other packages that read them` : ""} and every tripwire`;
+  return `${suite}${t.why?.length ? ` [${t.why.join("; ")}]` : ""}; API e2e ${t.e2e ? "runs" : "not affected (no API surface path changed)"}`;
+}
+
+/**
+ * The run's step summary: what each required check does in this run, and
+ * why. The judges whose suite does not run pass by pointing at it.
+ */
+export function summary(d, files) {
+  const rows = [
+    [
+      "Release gate",
+      d.hold === "negctl"
+        ? "red (negctl never merges)"
+        : d.reuse
+          ? "reused"
+          : d.gate
+            ? "runs"
+            : "not affected",
+    ],
+    [
+      "Full suite",
+      d.hold
+        ? `red (${d.hold}: suites not run)`
+        : d.reuse
+          ? "reused"
+          : d.scope === "full"
+            ? "runs: everything"
+            : d.scope === "affected"
+              ? `runs: ${d.affected.join(", ")}${d.also.length ? ` + ${d.also.length} file(s) of other packages` : ""} + every tripwire`
+              : "not affected",
+    ],
+    [
+      "API e2e",
+      d.hold
+        ? `red (${d.hold}: suites not run)`
+        : d.reuse
+          ? "reused"
+          : d.e2e
+            ? "runs"
+            : "not affected",
+    ],
+    ["Docker image + deploy tests", d.gate && d.image ? "runs" : "skipped"],
+  ];
+  return [
+    "### What this run checks (scripts/ci-changes.mjs)",
+    "",
+    "| check | this run |",
+    "|---|---|",
+    ...rows.map(([c, v]) => `| ${c} | ${String(v).replace(/\|/g, "\\|")} |`),
+    "",
+    `Why: ${d.reason}.`,
+    ...(d.why?.length ? ["", ...d.why.map((w) => `- ${w}`)] : []),
+    ...(d.also?.length
+      ? [
+          "",
+          "<details><summary>Test files of other packages that run</summary>",
+          "",
+          ...d.also.map((f) => `- \`${f}\``),
+          "",
+          "</details>",
+        ]
+      : []),
+    ...(files
+      ? ["", `${files.length} changed file(s).`]
+      : ["", "Changed files unknown."]),
+    "",
+  ].join("\n");
 }
 
 function changedFiles(base, head) {
@@ -364,7 +517,7 @@ async function queueEvidence() {
     };
   } catch (err) {
     console.log(
-      `merge queue: could not read #${pr}'s own checks (${err.message}); every check runs`
+      `merge queue: could not read #${pr}'s own checks (${err.message}); no reuse`
     );
     return null;
   }
@@ -399,22 +552,44 @@ async function reuseEvidence(get, checkRuns) {
   }
 }
 
+// The tier function over this checkout's graph, or null when the graph cannot
+// be read (decide() then runs the full suite).
+function tierOfCheckout() {
+  try {
+    const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+    const g = loadGraph(root, isTripwire);
+    return (files) => selectTier(files, g);
+  } catch (err) {
+    console.log(`dependency graph unreadable (${err.message}): full suite`);
+    return null;
+  }
+}
+
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const queue =
-    process.env.EVENT === "merge_group" ? await queueEvidence() : null;
+  const event = process.env.EVENT;
+  const queue = event === "merge_group" ? await queueEvidence() : null;
+  const files =
+    event === "merge_group"
+      ? changedFiles(process.env.QUEUE_BASE_SHA, process.env.QUEUE_HEAD_SHA)
+      : changedFiles(process.env.BASE_SHA, process.env.HEAD_SHA);
   const d = decide({
-    event: process.env.EVENT,
+    event,
     headRef: process.env.HEAD_REF,
     baseRef: process.env.BASE_REF,
     draft: process.env.DRAFT === "true",
-    files: changedFiles(process.env.BASE_SHA, process.env.HEAD_SHA),
+    files,
     siblingTests,
+    tier: tierOfCheckout(),
     queue,
   });
   const out = [
     `gate=${d.gate}`,
     `image=${d.image}`,
     `suites=${d.suites}`,
+    `scope=${d.scope}`,
+    `affected=${d.affected.join(",")}`,
+    `also=${d.also.join(",")}`,
+    `e2e=${d.e2e}`,
     `negctl=${d.negctl}`,
     `negctl_tests=${d.negctlTests.join(" ")}`,
     `draft_hold=${d.draftHold}`,
@@ -426,9 +601,11 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   console.log(out.join("\n"));
   if (process.env.GITHUB_OUTPUT)
     appendFileSync(process.env.GITHUB_OUTPUT, `${out.join("\n")}\n`);
-  if (d.reuse && process.env.GITHUB_STEP_SUMMARY)
+  if (process.env.GITHUB_STEP_SUMMARY)
     appendFileSync(
       process.env.GITHUB_STEP_SUMMARY,
-      `### Merge queue: verdict reused\n\n${d.reason}.\n\nReused run: https://github.com/${process.env.REPO}/actions/runs/${queue?.reuse?.runId}\n`
+      d.reuse
+        ? `### Merge queue: verdict reused\n\n${d.reason}.\n\nReused run: https://github.com/${process.env.REPO}/actions/runs/${queue?.reuse?.runId}\n`
+        : summary(d, files)
     );
 }

@@ -112,6 +112,18 @@ green for a commit to be released; its parts run as parallel "Release gate:
 needs succeeded. **Full suite** (all tests, the test floor, the tripwires,
 `pnpm audit`) reports the rest.
 
+CI runs in three tiers. A pull request runs the tests of what it can break:
+the packages it changes, every workspace package that depends on them (read
+from the `workspace:` dependencies in each `package.json`), the test files of
+other packages that name them by path, and every tripwire. A change to shared
+code (outside a package, `packages/database`, `packages/types`,
+`packages/core`, CI files, the lockfile) runs the full suite, and **API e2e**
+runs only when the API surface changes (`scripts/ci/affected.mjs`). A check
+whose work is not needed still runs and passes through a "Not affected" step
+that writes why to the run's summary. Every push to `main` runs everything. A
+pod updates only to a `main` commit whose post-merge run had all four
+required checks green (`scripts/ci/release-gate-wait.mjs`).
+
 ### Tests and guards you add
 
 A test that guards an invariant is only trusted once it has failed: revert your

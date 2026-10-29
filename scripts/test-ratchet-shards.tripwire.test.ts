@@ -14,10 +14,12 @@ import {
   hashShard,
   loadShardPlan,
   mergeShardReports,
+  mustRunFiles,
   parseShard,
   planFits,
   runsForShard,
   shardReportId,
+  soloRuns,
 } from "./test-ratchet-shards.mjs";
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -201,5 +203,60 @@ describe("test-ratchet shards: the measured plan", () => {
       expect(
         Object.values(committed.api).some((v) => (v as number[])[0] === k)
       ).toBe(true);
+  });
+});
+
+describe("test-ratchet shards: the PR tier's must-run files", () => {
+  const discovered = [
+    "packages/api/src/__tripwires__/a.test.ts",
+    "packages/jobs/src/b.tripwire.test.ts",
+    "scripts/c.tripwire.test.ts",
+  ];
+  const suiteDirs = ["packages/api", "packages/jobs", "apps/pod-admin"];
+  const inScope = (p: string) => p.startsWith("apps/pod-admin/");
+  const exists = (f: string) => !f.includes("gone");
+
+  it("under --affected: EVERY tripwire, and only the --also files that can run", () => {
+    const { files, also } = mustRunFiles({
+      discovered,
+      affected: ["apps/pod-admin"],
+      also: [
+        "packages/api/src/x.test.ts", // kept
+        "apps/pod-admin/y.test.ts", // its package runs whole: not solo
+        "packages/api/src/gone.test.ts", // deleted
+        "packages/core/src/z.test.ts", // a package with no suite
+      ],
+      inScope,
+      suiteDirs,
+      exists,
+    });
+    expect(also).toEqual(["packages/api/src/x.test.ts"]);
+    expect(files).toEqual([...discovered, "packages/api/src/x.test.ts"].sort());
+  });
+
+  it("not the PR tier: the in-scope tripwires only, as before", () => {
+    expect(
+      mustRunFiles({
+        discovered,
+        affected: null,
+        also: ["packages/api/src/x.test.ts"],
+        inScope: (p: string) => p.startsWith("packages/jobs/"),
+        suiteDirs,
+        exists,
+      })
+    ).toEqual({ files: ["packages/jobs/src/b.tripwire.test.ts"], also: [] });
+  });
+
+  it("shard 1 runs, per owning dir, what no package run reaches", () => {
+    expect(
+      soloRuns([...discovered, "packages/api/src/x.test.ts"], ["packages/jobs"])
+    ).toEqual([
+      {
+        id: "tripwires:packages/api",
+        dir: "packages/api",
+        args: ["src/__tripwires__/a.test.ts", "src/x.test.ts"],
+      },
+      { id: "tripwires:.", dir: ".", args: ["scripts/c.tripwire.test.ts"] },
+    ]);
   });
 });
