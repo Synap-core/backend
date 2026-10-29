@@ -14,7 +14,8 @@ const vectorWheres: unknown[] = [];
 const subquery = { sub: true };
 const subWheres: Node[] = [];
 
-vi.mock("@synap/database", () => {
+vi.mock("@synap/database", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@synap/database")>();
   const vectorChain = {
     from: () => vectorChain,
     where: (w: unknown) => {
@@ -32,6 +33,7 @@ vi.mock("@synap/database", () => {
     },
   };
   return {
+    ...actual,
     db: {
       select: (cols: Record<string, unknown>) =>
         "entityId" in cols ? vectorChain : subChain,
