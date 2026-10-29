@@ -15,6 +15,8 @@ import {
   eq,
   and,
   inArray,
+  or,
+  isNull,
   drizzleSql,
   resolveSlugKind,
   loadFacetSlugsBatch,
@@ -197,6 +199,25 @@ export async function hybridRecall(
         conds.push(eq(entityVectors.entityType, profileSlug));
       if (projectIds)
         conds.push(inArray(entityVectors.entityId, [...projectIds]));
+      // Workspace lens, same semantics as the keyword half (workspace rows plus
+      // pod-scoped rows). `entity_vectors` has no workspace column, so constrain
+      // by the entity's own — at query time, so the `widen` budget isn't spent
+      // on other workspaces' rows.
+      if (workspaceId)
+        conds.push(
+          inArray(
+            entityVectors.entityId,
+            db
+              .select({ id: entities.id })
+              .from(entities)
+              .where(
+                or(
+                  eq(entities.workspaceId, workspaceId),
+                  isNull(entities.workspaceId)
+                )
+              )
+          )
+        );
       const where = conds.length > 1 ? and(...conds) : conds[0];
       const rows = await db
         .select({ entityId: entityVectors.entityId })
