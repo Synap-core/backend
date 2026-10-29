@@ -32212,7 +32212,7 @@
       "post": {
         "tags": ["FocusSessions"],
         "summary": "Complete (close) a focus session and return the proposal pack",
-        "description": "Lifecycle close via completeFocusSession — stamps closed, finishes any running playbook_run, returns pendingProposals + counts + warnings. Every still-open room question is stamped closed (session ended). An agent's closed/failed close is refused (409 OPEN_QUESTIONS) while a question it asked is open, unless questionDispositions settles each. Distinct from POST .../complete-run (playbook run only).",
+        "description": "Lifecycle close via completeFocusSession — stamps closed, finishes any running playbook_run, returns pendingProposals + counts + warnings. Every still-open room question is stamped closed (session ended). An agent's closed/failed close is refused (409 OPEN_QUESTIONS) while a question it asked is open, unless questionDispositions settles each. An agent's closed close is refused (409 NOT_DONE: unmetCriteria[], openOutcomes[], owedByPerson[], waiting) while a required criterion it can still check is not passing or a required outcome (an agent's or the person's) is open, unless `reason` says why it is done anyway (posted in the session room). Distinct from POST .../complete-run (playbook run only).",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -32301,7 +32301,7 @@
             }
           },
           "409": {
-            "description": "Refused: the calling agent's own room questions are still open (openQuestions[])",
+            "description": "Refused: the calling agent's own room questions are still open (OPEN_QUESTIONS, openQuestions[]), or required work it can still move is open (NOT_DONE)",
             "content": {
               "application/json": {
                 "schema": {
