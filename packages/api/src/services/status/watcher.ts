@@ -79,6 +79,13 @@ const logger = createLogger({ module: "status-watcher" });
 
 const DAY_MS = 86_400_000;
 const PAGE = 500;
+/** Ids per `IN (…)` list: far under Postgres's 65,535 bind parameters. */
+const CHUNK = 1_000;
+
+const chunks = <T>(xs: readonly T[]): T[][] =>
+  Array.from({ length: Math.ceil(xs.length / CHUNK) }, (_, i) =>
+    xs.slice(i * CHUNK, (i + 1) * CHUNK)
+  );
 
 /**
  * A signal whose episode began longer ago than this is raised in-app and in
@@ -191,7 +198,11 @@ async function profileCandidates(
     // A superset in SQL (the date's day is not after the approaching
     // horizon), compared as text so a bad value is skipped, never cast; the
     // exact rule is `dateSignalOf` below.
-    const horizon = new Date(now.getTime() + DATE_APPROACHING_DAYS * DAY_MS)
+    // +1 day: a timestamp with a positive offset carries a later local date
+    // than the UTC day it falls due on.
+    const horizon = new Date(
+      now.getTime() + (DATE_APPROACHING_DAYS + 1) * DAY_MS
+    )
       .toISOString()
       .slice(0, 10);
     const statusCol = isRole ? entityFacets.status : entities.status;
@@ -217,7 +228,11 @@ async function profileCandidates(
         ...base({ ...i, status: i.status }),
         signal: date.signal,
         episodeKey: `${i.status}:${i.since}:${String(value)}`,
-        beganAt: date.beganAt,
+        // A thing that entered the step after its date came due began then.
+        beganAt:
+          Date.parse(i.since) > Date.parse(date.beganAt)
+            ? i.since
+            : date.beganAt,
         facts: { property, date: value, dueAt: date.dueAt, since: i.since },
       });
     }
@@ -252,6 +267,22 @@ async function allThings(
 
 /** The bound date of each thing (its facet's property for a role, else its own). */
 async function boundDates(
+  isRole: boolean,
+  items: ReadonlyArray<{
+    id: string;
+    facetId: string | null;
+    status: string | null;
+  }>,
+  dated: Map<string, string>
+): Promise<Map<string, unknown>> {
+  const out = new Map<string, unknown>();
+  for (const part of chunks(items)) {
+    for (const [k, v] of await boundDatesOf(isRole, part, dated)) out.set(k, v);
+  }
+  return out;
+}
+
+async function boundDatesOf(
   isRole: boolean,
   items: ReadonlyArray<{
     id: string;
@@ -318,22 +349,20 @@ async function holdCandidates(now: Date): Promise<SignalCandidate[]> {
   const entityIds = holds
     .filter((h) => h.subjectType === "entity")
     .map((h) => h.subjectId);
-  const listed = new Set(
-    entityIds.length
-      ? (
-          await db
-            .select({ id: entities.id })
-            .from(entities)
-            .where(
-              and(
-                inArray(entities.id, entityIds),
-                isNull(entities.deletedAt),
-                listableEntityWhere({})
-              )
-            )
-        ).map((r) => r.id)
-      : []
-  );
+  const listed = new Set<string>();
+  for (const part of chunks(entityIds)) {
+    for (const r of await db
+      .select({ id: entities.id })
+      .from(entities)
+      .where(
+        and(
+          inArray(entities.id, part),
+          isNull(entities.deletedAt),
+          listableEntityWhere({})
+        )
+      ))
+      listed.add(r.id);
+  }
   return holds
     .filter((h) => h.subjectType !== "entity" || listed.has(h.subjectId))
     .map((h: CurrentHold) => ({
@@ -733,28 +762,46 @@ export async function runStatusWatcher(
   };
   if (claims.length === 0) return result;
 
-  const fresh = claims.map((e) => e.candidate);
-  const places = await resolvePlaces(fresh);
-  const recipients = await recipientsOf(fresh, places);
-  for (const claim of claims) {
-    const c = claim.candidate;
-    const place = places.get(keyOf(c));
-    if (!place) continue; // deleted since it was read
-    const ownerId = recipients.get(keyOf(c)) ?? null;
-    try {
-      await raise(c, place, ownerId, now);
-      result.raised++;
-      if (!ownerId) result.unowned++;
-    } catch (err) {
-      await releaseStatusSignal(db, claim as StatusSignalEpisode);
-      logger.warn(
-        {
-          err,
-          signal: c.signal,
-          subjectType: c.subjectType,
-          subjectId: c.subjectId,
-        },
-        "status signal not raised — its claim is released, so the next tick raises it"
+  // Every claim this tick does not raise is given back — whatever throws — so
+  // the next tick raises it; a claim kept for an unraised episode loses it.
+  const raised = new Set<(typeof claims)[number]>();
+  try {
+    // In chunks, so every `IN (…)` list downstream stays bounded.
+    for (const part of chunks(claims)) {
+      const fresh = part.map((e) => e.candidate);
+      const places = await resolvePlaces(fresh);
+      const recipients = await recipientsOf(fresh, places);
+      for (const claim of part) {
+        const c = claim.candidate;
+        const place = places.get(keyOf(c));
+        if (!place) continue; // deleted since it was read
+        const ownerId = recipients.get(keyOf(c)) ?? null;
+        try {
+          await raise(c, place, ownerId, now);
+          raised.add(claim);
+          result.raised++;
+          if (!ownerId) result.unowned++;
+        } catch (err) {
+          logger.warn(
+            {
+              err,
+              signal: c.signal,
+              subjectType: c.subjectType,
+              subjectId: c.subjectId,
+            },
+            "status signal not raised — its claim is given back, so the next tick raises it"
+          );
+        }
+      }
+    }
+  } finally {
+    for (const claim of claims) {
+      if (raised.has(claim)) continue;
+      await releaseStatusSignal(db, claim as StatusSignalEpisode).catch((err) =>
+        logger.error(
+          { err, signal: claim.signal, subjectId: claim.subjectId },
+          "status signal claim not given back — this episode will not be raised"
+        )
       );
     }
   }

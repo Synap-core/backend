@@ -78,21 +78,32 @@ export function withLifecycleOptions<
 }
 
 /**
- * Each option's `dateBinding` must name a DATE property of the profile (or an
- * ancestor): its own def or one linked to it. One problem line per binding
- * that does not. Shared by `declareLifecycle` and `changeLifecycleOptions`.
+ * Each option's `dateBinding` must name a DATE property of EVERY profile the
+ * lifecycle is declared on (each one's own def, one linked to it, or an
+ * ancestor's): a profile without it would carry a date rule it cannot read.
+ * One problem line per (binding, profile) that fails. Shared by
+ * `declareLifecycle` and `changeLifecycleOptions`.
  */
 export async function dateBindingProblems(
   db: Db,
   profileIds: readonly string[],
   options: ReadonlyArray<{ key: string; dateBinding?: string }>
 ): Promise<string[]> {
+  const problems: string[] = [];
+  for (const profileId of profileIds) {
+    problems.push(...(await profileDateProblems(db, profileId, options)));
+  }
+  return problems;
+}
+
+async function profileDateProblems(
+  db: Db,
+  profileId: string,
+  options: ReadonlyArray<{ key: string; dateBinding?: string }>
+): Promise<string[]> {
   const bound = options.filter((o) => o.dateBinding);
-  if (bound.length === 0 || profileIds.length === 0) return [];
-  const ids = sql.join(
-    profileIds.map((id) => sql`${id}::uuid`),
-    sql`, `
-  );
+  if (bound.length === 0) return [];
+  const ids = sql`${profileId}::uuid`;
   const slugs = sql.join(
     [...new Set(bound.map((o) => o.dateBinding!))].map((v) => sql`${v}`),
     sql`, `

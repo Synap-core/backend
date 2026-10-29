@@ -122,6 +122,13 @@ export function checkLifecycleDefUpdate(
 
   const merged: StoredEnumOption[] = authored.map((o) => {
     const prev = old.get(o.key);
+    // A date binding is checked against the profile's date properties, which
+    // this pure door cannot read: it is set through `changeLifecycleOptions`.
+    if (o.dateBinding !== undefined && o.dateBinding !== prev?.dateBinding) {
+      reasons.push(
+        `"${o.key}" dateBinding is set through the lifecycle door (it must name a date property)`
+      );
+    }
     if (!prev) {
       if (!isLifecycleCategory(o.category)) {
         reasons.push(`the new option "${o.key}" needs a category`);

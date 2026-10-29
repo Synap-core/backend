@@ -27,6 +27,7 @@ const h = vi.hoisted(() => ({
   tables: [] as unknown[],
   fannedOut: [] as Array<Record<string, unknown>>,
   pushes: [] as Array<Record<string, unknown>>,
+  db: null as unknown as Record<string, unknown>,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -40,13 +41,13 @@ vi.mock("@synap/database", async (importOriginal) => {
   h.tables = Object.values(actual).filter((v) => is(v, PgTable));
   const schema = await import("@synap/database/schema");
   const pg = drizzle(client, { schema });
+  h.db = pg as unknown as Record<string, unknown>;
   return {
     ...actual,
     db: pg,
     getDb: async () => pg,
     eventRepository: { append: async () => undefined },
-    // The log row, written to the same table (a duplicate (id, timestamp)
-    // throws 23505 exactly like the real one).
+    // The log row, written to the same PGlite `events` table.
     EventRepository: class {
       async append(e: Record<string, unknown>) {
         await client.query(
@@ -139,12 +140,16 @@ const D_FRESH = randomUUID();
 const D_AGENT_GOAL = randomUUID();
 const D_HIDDEN = randomUUID();
 const I_BAD = randomUUID();
+const I_EDGE = randomUUID();
+const I_RETRY = randomUUID();
 const G_HELD = randomUUID();
 const G_AGENT = randomUUID();
 const S_HELD = randomUUID();
 const W_PRIVATE = randomUUID();
 const DAY = 86_400_000;
-const NOW = new Date();
+// Noon UTC today: a fixed time of day, so the date-horizon case below (a due
+// time whose local date is a day later than its UTC one) always falls inside.
+const NOW = new Date(`${new Date().toISOString().slice(0, 10)}T12:00:00.000Z`);
 const day = (offset: number) =>
   new Date(NOW.getTime() + offset * DAY).toISOString().slice(0, 10);
 
@@ -362,6 +367,15 @@ beforeAll(async () => {
     title: "Invoice 103",
     properties: { dueDate: day(30) },
   });
+  // Due 3 days from now minus an hour, written with a +14:00 offset: its
+  // local date is a day after the UTC day it falls due on.
+  await thing({
+    id: I_EDGE,
+    profile: INVOICE,
+    status: "sent",
+    title: "Invoice 107",
+    properties: { dueDate: `${day(4)}T01:00:00+14:00` },
+  });
   await thing({
     id: I_HELD,
     profile: INVOICE,
@@ -456,7 +470,7 @@ beforeAll(async () => {
 describe("the status watcher", () => {
   it("raises each kind of signal once, placed in its goal and project", async () => {
     const r = await runStatusWatcher(NOW);
-    expect(r).toMatchObject({ noticed: 8, raised: 8, unowned: 2 });
+    expect(r).toMatchObject({ noticed: 9, raised: 9, unowned: 2 });
     const raised = await signalEvents();
     const bySubject = new Map(raised.map((e) => [String(e.data.subjectId), e]));
     expect(bySubject.get(I_LATE)?.data).toMatchObject({
@@ -468,6 +482,8 @@ describe("the status watcher", () => {
       ownerId: ME,
     });
     expect(bySubject.get(I_SOON)?.data.signal).toBe("approaching");
+    // A positive offset never hides a thing that is nearly due.
+    expect(bySubject.get(I_EDGE)?.data.signal).toBe("approaching");
     expect(bySubject.get(I_HELD)?.data).toMatchObject({
       signal: "hold_review_due",
       status: "disputed",
@@ -502,27 +518,29 @@ describe("the status watcher", () => {
     // Fanned out to the automation matcher, one per episode.
     const signals = h.fannedOut.filter((p) => p.action === "signal");
     expect(signals.map((p) => p.subjectType).sort()).toEqual(
-      [...Array(6).fill("entity"), "focus_session", "track"].sort()
+      [...Array(7).fill("entity"), "focus_session", "track"].sort()
     );
     expect(signals.every((p) => p.eventId)).toBe(true);
   });
 
   it("pushes only fresh news: a signal that began over a day ago lands in-app only", async () => {
-    // Only the approaching invoice began within the day (its window opened
-    // under a day ago); the late, stuck and review-due ones are backlog.
-    expect(h.pushes.map((p) => p.title)).toEqual([
+    // Only the approaching invoices began within the day (their window
+    // opened under a day ago); the late, stuck and review-due ones are
+    // backlog. (Invoice 107's words count days by its own date, in UTC.)
+    expect(h.pushes.map((p) => p.title).sort()).toEqual([
       "Invoice 102 is due in 2 days",
+      "Invoice 107 is due in 4 days",
     ]);
     const rows = await q<{ n: number }>(
       `select count(*)::int as n from notifications where type like '%.signal' and status = 'unread'`
     );
-    expect(rows.rows[0]!.n).toBe(6);
+    expect(rows.rows[0]!.n).toBe(7);
   });
 
   it("does not raise the same episode again an hour later", async () => {
     const before = (await signalEvents()).length;
     const r = await runStatusWatcher(at(1));
-    expect(r).toMatchObject({ noticed: 8, raised: 0 });
+    expect(r).toMatchObject({ noticed: 9, raised: 0 });
     expect(await signalEvents()).toHaveLength(before);
   });
 
@@ -530,7 +548,7 @@ describe("the status watcher", () => {
     // Clears: paid.
     await q(`update entities set status = 'paid' where id = $1`, [I_LATE]);
     expect(await runStatusWatcher(at(2))).toMatchObject({
-      noticed: 7,
+      noticed: 8,
       raised: 0,
     });
     // Recurs: back to sent (a new stay in the step), the date still passed.
@@ -584,6 +602,39 @@ describe("the status watcher", () => {
     const count = await signalsRouter.createCaller(ctx).count({} as never);
     expect(count.notifications).toBe(1);
     expect(count.needsYou).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("the status watcher, when a tick fails half-way", () => {
+  it("gives back every claim it did not raise, so the next tick raises it; a thing that entered its step after its date counts from then", async () => {
+    // Late by its date, but it entered "sent" three hours after NOW: it is
+    // fresh news, not backlog.
+    await thing({
+      id: I_RETRY,
+      profile: INVOICE,
+      status: "sent",
+      title: "Invoice 106",
+      properties: { dueDate: day(-5) },
+    });
+    await moved(I_RETRY, -3 / 24);
+    const db = h.db;
+    const real = db.selectDistinctOn;
+    db.selectDistinctOn = () => {
+      throw new Error("places down");
+    };
+    try {
+      await expect(runStatusWatcher(at(4))).rejects.toThrow("places down");
+    } finally {
+      db.selectDistinctOn = real;
+    }
+    h.pushes.length = 0;
+    expect(await runStatusWatcher(at(5))).toMatchObject({ raised: 1 });
+    const [late] = await signalEvents(I_RETRY);
+    expect(late?.data).toMatchObject({
+      signal: "late",
+      beganAt: new Date(NOW.getTime() + 3 * 3_600_000).toISOString(),
+    });
+    expect(h.pushes.map((p) => p.title)).toEqual(["Invoice 106 is late"]);
   });
 });
 

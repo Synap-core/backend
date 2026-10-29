@@ -117,7 +117,7 @@ export const OperationalEventTypes = {
     label: "Needs a look",
     domain: "Entity",
     description:
-      "Runs once when a thing passes its due date, is about to, stays too long in one status, or a pause is ready to be reviewed.",
+      "Runs once when something passes its due date or is about to, stays too long in one status, or a pause is ready for review.",
     filterKeys: [
       // stuck | late | approaching | hold_review_due
       "signal",
