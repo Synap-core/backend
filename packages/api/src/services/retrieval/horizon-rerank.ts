@@ -10,14 +10,16 @@
  *                       by the pagerank-centrality batch job). Falls back to the
  *                       graph-propagation-weight proxy until the job has run.
  *   Q  query relevance= fused recall position (top = 1), already in `rows` order.
- *   L  lens PageRank  = 0 THIS PHASE (Phase 3 batch job — see TODO below).
+ *   L  lens affinity  = `lensAffinity(row, focus)` (lens-signal.ts): how well
+ *                       the row matches the caller's focus; 0 with no focus.
  * A validity gate (1 live / 0.1 deleted) multiplies the weighted sum.
  *
- * Weights + half-life are chosen BY LENS (project vs workspace). Because L is
- * folded to 0 this phase, the remaining weights are applied AS GIVEN (NOT
- * renormalized) — the intent of the missing L weight is deferred, not
- * reallocated.
+ * Weights + half-life are chosen BY LENS (project vs workspace). The weights
+ * sum to 1 with L included; with no focus L is 0 and the others are applied AS
+ * GIVEN (not renormalized), so an unfocused ranking is unchanged.
  */
+
+import { lensAffinity, type LensFocus } from "./lens-signal.js";
 
 export type HorizonLens = "project" | "workspace";
 
@@ -29,15 +31,10 @@ export interface HorizonWeights {
   L: number;
 }
 
-/**
- * Confirmed lens→weight mapping. L is the deferred lens-PageRank signal, folded
- * to 0 this phase; its intended weight is noted so Phase 3 can restore it.
- */
+/** Confirmed lens→weight mapping, L included (each profile sums to 1). */
 export const HORIZON_WEIGHTS: Record<HorizonLens, HorizonWeights> = {
-  // project lens intent: { C .35, L .25, F .2, R .1, Q .1 } — L folded to 0.
-  project: { C: 0.35, F: 0.2, R: 0.1, Q: 0.1, L: 0 },
-  // workspace lens intent: { R .35, F .25, Q .25, C .1, L .05 } — L folded to 0.
-  workspace: { R: 0.35, F: 0.25, Q: 0.25, C: 0.1, L: 0 },
+  project: { C: 0.35, L: 0.25, F: 0.2, R: 0.1, Q: 0.1 },
+  workspace: { R: 0.35, F: 0.25, Q: 0.25, C: 0.1, L: 0.05 },
 };
 
 /** Recency half-life: long memory under a project lens, short under workspace. */
@@ -50,6 +47,9 @@ export interface HorizonRow {
   id: string;
   updatedAt: Date | string | null;
   deletedAt?: Date | string | null;
+  /** Workspace + home workspace — read by the lens term L (optional). */
+  workspaceId?: string | null;
+  homeWorkspaceId?: string | null;
 }
 
 export interface HorizonOpts {
@@ -62,6 +62,8 @@ export interface HorizonOpts {
   /** centrality C per id — global PageRank (entity_centrality), else the graph
    * propagation-weight proxy fallback. Raw scores; normalized here. Missing ⇒ 0. */
   centrality: Map<string, number>;
+  /** The caller's focus (lens term L). Absent ⇒ L = 0. */
+  focus?: LensFocus;
 }
 
 export interface HorizonScored<T> {
@@ -127,9 +129,8 @@ export function horizonScore<T extends HorizonRow>(
       // normalized to the pool max.
       const cRaw = opts.centrality.get(row.id) ?? 0;
       const C = maxCentrality > 0 ? cRaw / maxCentrality : 0;
-      // L — lens PageRank. 0 this phase; Phase 3 batch job populates it.
-      // TODO(Phase 3): compute lens-scoped PageRank and restore the L weight.
-      const L = 0;
+      // L — the one lens signal, shared with the baseline ranker.
+      const L = lensAffinity(row, opts.focus);
       // Validity gate — deleted rows are heavily damped. `fetchOrdered` already
       // excludes deletedAt, so in practice this stays 1 (defense-in-depth).
       const validity = toDate(row.deletedAt) ? 0.1 : 1;

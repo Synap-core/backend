@@ -11,6 +11,7 @@
  */
 import { matchesHint } from "./property-hint-match.js";
 import { recencyScore } from "./temporal-signal.js";
+import { lensAffinity, type LensFocus } from "./lens-signal.js";
 import type { PropertyHint } from "./understand-query.js";
 
 /** A single signal (property hit OR max recency) lifts a row up to this share of
@@ -20,6 +21,11 @@ export const SINGLE_FRACTION = 0.4;
  *  this smaller share — a modest salience nudge over untyped / note rows, never
  *  enough to dominate the fused position. */
 export const SALIENCE_FRACTION = 0.2;
+/** A row matching the caller's FOCUS (`lensAffinity` = 1) lifts by this share.
+ *  Below `SINGLE_FRACTION`: a focus is ambient context, weaker evidence than a
+ *  hint the query itself carries. Above `SALIENCE_FRACTION`: the lens is the
+ *  weighting f3b13c37 asks for, the kind nudge is the one it questions. */
+export const LENS_FRACTION = 0.3;
 /** All boosts together are capped at this share, so even every signal maxed on
  *  the bottom row cannot reach the top — RRF stays the primary ranking. */
 export const COMBINED_CAP = 0.5;
@@ -43,6 +49,9 @@ export interface RerankRow {
   updatedAt: Date | string | null;
   /** Entity type/profile slug — drives the bounded salience nudge (optional). */
   type?: string | null;
+  /** Workspace + home workspace — read by the lens nudge (optional). */
+  workspaceId?: string | null;
+  homeWorkspaceId?: string | null;
 }
 
 export interface RerankOpts {
@@ -51,6 +60,8 @@ export interface RerankOpts {
   now: number;
   /** Latest event timestamp per entity id (recency grounding). */
   eventTs?: Map<string, Date>;
+  /** The caller's focus — boosts matching rows, never drops the others. */
+  focus?: LensFocus;
 }
 
 export function compositeRerank<T extends RerankRow>(
@@ -81,6 +92,8 @@ export function compositeRerank<T extends RerankRow>(
       if (row.type && SALIENT_TYPES.has(row.type)) {
         boost += span * SALIENCE_FRACTION;
       }
+      // Lens — a bounded nudge toward the caller's focus (lens-signal.ts).
+      boost += lensAffinity(row, opts.focus) * span * LENS_FRACTION;
       boost = Math.min(boost, span * COMBINED_CAP);
       return { row, i, score: n - i + boost }; // fused position is primary
     })
