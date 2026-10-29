@@ -61,6 +61,13 @@ export const ListRelationsQuerySchema = z
       .optional()
       .describe("Filter to relations involving this entity (either side)."),
     type: z.string().optional().describe("Filter by relation type."),
+    limit: z.string().optional().describe("Page size, 1-200 (default 100)."),
+    offset: z
+      .string()
+      .optional()
+      .describe(
+        "Rows to skip, newest first (default 0). Not with `entityId`: that read is not paged."
+      ),
   })
   .openapi("ListRelationsQuery");
 

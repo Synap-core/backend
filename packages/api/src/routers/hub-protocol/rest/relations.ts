@@ -28,6 +28,12 @@ import {
 import { jsonGoverned } from "../proposal-response.js";
 import { resolveCaptureActorUserId } from "../../../services/capture-agent/resolve-capture-actor.js";
 
+/** `limit` / `offset` of GET /relations; absent keeps the tRPC defaults. */
+const ListRelationsPageSchema = z.object({
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+  offset: z.coerce.number().int().min(0).optional(),
+});
+
 export function registerRelationsRoutes(app: HubHono): void {
   // ── OpenAPI metadata ─────────────────────────────────────────────────────
   registerOpenApi(app, {
@@ -109,6 +115,17 @@ export function registerRelationsRoutes(app: HubHono): void {
     const { userId, workspaceId } = acting;
     const entityId = c.req.query("entityId");
     const type = c.req.query("type");
+    const page = ListRelationsPageSchema.safeParse({
+      limit: c.req.query("limit"),
+      offset: c.req.query("offset"),
+    });
+    if (!page.success) {
+      return c.json(
+        { error: "Invalid query", details: page.error.flatten() },
+        400
+      );
+    }
+    const { limit, offset } = page.data;
     try {
       // No workspace lens → pod-wide user floor (all accessible workspaces +
       // pod-wide globals). A provided workspaceId narrows to that workspace,
@@ -120,6 +137,8 @@ export function registerRelationsRoutes(app: HubHono): void {
           userId,
           entityId,
           type,
+          limit,
+          offset,
         });
         return c.json(result);
       }
@@ -129,6 +148,8 @@ export function registerRelationsRoutes(app: HubHono): void {
         workspaceId,
         entityId,
         type,
+        limit,
+        offset,
       });
       return c.json(result);
     } catch (err) {
