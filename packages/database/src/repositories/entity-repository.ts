@@ -18,6 +18,7 @@ import { FacetRepository } from "./facet-repository.js";
 import type { FacetAttachContext } from "../utils/facet-attached-hook.js";
 import type { EntityFacet } from "../schema/entity-facets.js";
 import type { Entity, NewEntity } from "../schema/entities.js";
+import type { Profile } from "../schema/profiles.js";
 import {
   ProfileResolutionService,
   PropertyValidationService,
@@ -198,6 +199,224 @@ export interface DeleteEntityOptions {
   deleteDocument?: boolean;
 }
 
+/** What {@link validateEntityCreateProperties} decided for one create. */
+export interface ValidatedEntityCreate {
+  /** The KIND the row is written as (a role's underlying kind after 1a). */
+  profile: Profile;
+  /** The properties the create carries on: `{}` when a role took them. */
+  entityProperties: Record<string, unknown> | undefined;
+  /** Validated, normalized properties stored on the row. */
+  validatedProperties: Record<string, unknown>;
+  /** Set when the create named a role: it is attached as a facet. */
+  roleFacetProfile: Profile | null;
+  roleFacetProperties: Record<string, unknown>;
+  /** Advisory: keys the profile does not model, across both passes. */
+  unmodeled: UnmodeledProperty[];
+}
+
+/**
+ * THE property checks of an entity create, steps 1a (role → kind + facet),
+ * 1a-post (reserved kinds) and 2 (title merge, knowledge normalization,
+ * schema validation; skipped under `skipValidation`). `EntityRepository.create`
+ * runs it at materialization, and the governed create door runs it BEFORE its
+ * gate so an agent's write that can never apply is refused at write time with
+ * the same `PropertyValidationError`, instead of filing a proposal that fails
+ * at approval (proposal e368ca9e, 2026-10-27). One copy, two callers.
+ */
+export async function validateEntityCreateProperties(
+  services: {
+    profileResolution: ProfileResolutionService;
+    propertyValidation: PropertyValidationService;
+  },
+  resolvedProfile: Profile,
+  input: Pick<
+    CreateEntityInput,
+    "title" | "properties" | "workspaceId" | "skipValidation"
+  >,
+  userId: string
+): Promise<ValidatedEntityCreate> {
+  let profile = resolvedProfile;
+  let data = input;
+  const unmodeled: UnmodeledProperty[] = [];
+  // 1a. Role profiles are hats, never things (Kind + Facets). A create
+  // aimed at a role profile is transparently adapted to the same shape
+  // ConvertToFacetOp produces: the entity is created on an underlying KIND,
+  // and the role attaches as a facet carrying the supplied properties
+  // (attached atomically with the insert in step 3). This keeps every
+  // legacy door — capture, remember_fact, research persistence, raw
+  // create_entity — writing the kind+facet shape without per-caller edits.
+  // One applicable kind is that kind. Several (lead → company|person) pick
+  // via `pickUnderlyingKind` (the title's subject) so a caller who named a
+  // role and no existing party is not sent back to do the two writes itself.
+  // A role that names NO kind still refuses: there is nothing to create.
+  let roleFacetProfile: Profile | null = null;
+  let roleFacetProperties: Record<string, unknown> = {};
+  if (profile.profileKind === "role") {
+    // The role→kind+facet adapter runs UNCONDITIONALLY, even when
+    // skipValidation:true (trusted seeds/imports) — skipValidation may
+    // still skip PROPERTY schema enforcement below, but it must never skip
+    // this identity-shape adapter, or a seed/template referencing a role
+    // slug directly reintroduces the exact one-entity-one-kind drift this
+    // feature exists to close.
+    const applicable = profile.applicableKinds ?? [];
+    const targetSlug = pickUnderlyingKind(applicable, data.title);
+    if (!targetSlug) {
+      throw new EntityCreateRejectedError(
+        "role-is-not-a-kind",
+        `Profile '${profile.slug}' is a role (a hat), not a kind — it cannot ` +
+          `be created as an entity. It declares no underlying kind. Attach ` +
+          `the '${profile.slug}' facet to an existing entity instead.`,
+        profile.id
+      );
+    }
+    const target = await services.profileResolution.resolveProfile(
+      targetSlug,
+      userId,
+      data.workspaceId ?? ""
+    );
+    if (!target || target.profileKind === "role") {
+      throw new Error(
+        `Role '${profile.slug}' targets kind '${targetSlug}', which is ` +
+          `not an active kind profile on this pod`
+      );
+    }
+    if (data.skipValidation) {
+      // Trusted seed data (template provisioning) — store facet properties
+      // as-is without schema enforcement, mirroring the non-role
+      // skipValidation behavior below.
+      roleFacetProperties = { ...data.properties };
+    } else {
+      // Validate the role's properties against the ROLE profile up front, so
+      // a bad payload fails BEFORE the kind entity is inserted (no orphan).
+      // Merge data.title in first — a converted role can carry a vestigial
+      // required `title` def left over from when it was a kind (e.g.
+      // `contact`), and the caller supplies title at the top level (the
+      // common frontend/API pattern), not inside `properties`. Mirrors the
+      // identical merge the non-role path below already does, and does NOT
+      // disable enforceRequired wholesale (unlike attach()'s enforceRequired:
+      // false) — a role's OWN required fields
+      // must still fail loud here; only the vestigial-title case is real.
+      const roleTitleAlreadyInProps =
+        data.properties && "title" in data.properties;
+      const propsToValidateForRole: Record<string, unknown> = {
+        ...data.properties,
+      };
+      if (data.title !== undefined && !roleTitleAlreadyInProps) {
+        propsToValidateForRole["title"] = data.title;
+      }
+      const facetValidation =
+        await services.propertyValidation.validateProperties(
+          propsToValidateForRole,
+          profile.id,
+          data.workspaceId ?? null
+        );
+      if (!facetValidation.valid) {
+        throw new PropertyValidationError(
+          facetValidation.errors.map((err, idx) => ({
+            field: `property_${idx}`,
+            message: err,
+          })),
+          profile.id
+        );
+      }
+      unmodeled.push(...facetValidation.unmodeled);
+      roleFacetProperties = { ...facetValidation.normalized };
+      if (!roleTitleAlreadyInProps) {
+        // title was merged in ONLY to satisfy a vestigial required def — it
+        // belongs on the kind entity (see comment below), not duplicated
+        // onto the facet's own properties.
+        delete roleFacetProperties["title"];
+      }
+    }
+    roleFacetProfile = profile;
+    profile = target;
+    // The role's data lives on the facet; the kind entity carries only the
+    // identity columns (title/preview/document).
+    data = { ...data, properties: {} };
+  }
+
+  // 1a-post. Reserved-kind door (P1 guardrail e). A project is a COMMITMENT
+  // WITH GRAVITY held in the `projects` TABLE — never an entity. Pre-0151
+  // fossils created `project`-profile entities via this generic door, orphan
+  // rows that bypass the projects table AND the (a)–(d) project guardrails
+  // (dedup / provenance / gravity). Block CREATE only — update/read of the
+  // remaining fossils stay allowed. Checked HERE, on the kind this create
+  // would actually write (after the role adapter swapped it in), so a role
+  // whose applicable kind is reserved cannot route around it. The wording is
+  // the reservation's own (`reservedEntityKindReason`), never a second copy.
+  const reservedKindReason = reservedEntityKindReason(profile.slug);
+  if (reservedKindReason) {
+    throw new EntityCreateRejectedError(
+      "project-is-not-an-entity",
+      reservedKindReason,
+      profile.id
+    );
+  }
+
+  const profileId: string = profile.id;
+
+  // 2. Validate and normalize properties
+  let validatedProperties: Record<string, unknown> = {};
+  if (data.skipValidation) {
+    // Trusted seed data (template provisioning) — store as-is without schema enforcement
+    validatedProperties = data.properties ?? {};
+  } else if (profileId) {
+    // Merge top-level title into properties before validation so profiles that
+    // declare a required "title" property_def don't fail when the caller only
+    // passes title at the entity level (which is the common frontend pattern).
+    let propsToValidate: Record<string, unknown> = { ...data.properties };
+    if (data.title !== undefined && !("title" in propsToValidate)) {
+      propsToValidate["title"] = data.title;
+    }
+    if (profile.slug === "knowledge") {
+      try {
+        propsToValidate = normalizeKnowledgeProperties(propsToValidate);
+      } catch (error) {
+        if (error instanceof KnowledgeFormConflictError) {
+          throw new PropertyValidationError(
+            [{ field: "knowledgeForm", message: error.message }],
+            profileId
+          );
+        }
+        throw error;
+      }
+    }
+
+    // Validate through the requesting workspace's lens — overlay props
+    // owned by other workspaces are treated as unknown (ignored), so cross-
+    // workspace schema leaks can't happen here.
+    const validationResult =
+      await services.propertyValidation.validateProperties(
+        propsToValidate,
+        profileId,
+        data.workspaceId ?? null
+      );
+
+    if (!validationResult.valid) {
+      const errors = validationResult.errors.map((err, idx) => ({
+        field: `property_${idx}`,
+        message: err,
+      }));
+      throw new PropertyValidationError(errors, profileId);
+    }
+
+    validatedProperties = validationResult.normalized;
+    unmodeled.push(...validationResult.unmodeled);
+  } else if (!profileId && data.properties) {
+    // No profile - just store properties as-is (flexible)
+    validatedProperties = data.properties;
+  }
+
+  return {
+    profile,
+    entityProperties: data.properties,
+    validatedProperties,
+    roleFacetProfile,
+    roleFacetProperties,
+    unmodeled,
+  };
+}
+
 export class EntityRepository extends BaseRepository<
   Entity,
   CreateEntityInput,
@@ -318,120 +537,20 @@ export class EntityRepository extends BaseRepository<
       );
     }
 
-    // 1a. Role profiles are hats, never things (Kind + Facets). A create
-    // aimed at a role profile is transparently adapted to the same shape
-    // ConvertToFacetOp produces: the entity is created on an underlying KIND,
-    // and the role attaches as a facet carrying the supplied properties
-    // (attached atomically with the insert in step 3). This keeps every
-    // legacy door — capture, remember_fact, research persistence, raw
-    // create_entity — writing the kind+facet shape without per-caller edits.
-    // One applicable kind is that kind. Several (lead → company|person) pick
-    // via `pickUnderlyingKind` (the title's subject) so a caller who named a
-    // role and no existing party is not sent back to do the two writes itself.
-    // A role that names NO kind still refuses: there is nothing to create.
-    let roleFacetProfile: typeof profile | null = null;
-    let roleFacetProperties: Record<string, unknown> = {};
-    if (profile.profileKind === "role") {
-      // The role→kind+facet adapter runs UNCONDITIONALLY, even when
-      // skipValidation:true (trusted seeds/imports) — skipValidation may
-      // still skip PROPERTY schema enforcement below, but it must never skip
-      // this identity-shape adapter, or a seed/template referencing a role
-      // slug directly reintroduces the exact one-entity-one-kind drift this
-      // feature exists to close.
-      const applicable = profile.applicableKinds ?? [];
-      const targetSlug = pickUnderlyingKind(applicable, data.title);
-      if (!targetSlug) {
-        throw new EntityCreateRejectedError(
-          "role-is-not-a-kind",
-          `Profile '${profile.slug}' is a role (a hat), not a kind — it cannot ` +
-            `be created as an entity. It declares no underlying kind. Attach ` +
-            `the '${profile.slug}' facet to an existing entity instead.`,
-          profile.id
-        );
-      }
-      const target = await this.profileResolution.resolveProfile(
-        targetSlug,
-        userId,
-        data.workspaceId ?? ""
-      );
-      if (!target || target.profileKind === "role") {
-        throw new Error(
-          `Role '${profile.slug}' targets kind '${targetSlug}', which is ` +
-            `not an active kind profile on this pod`
-        );
-      }
-      if (data.skipValidation) {
-        // Trusted seed data (template provisioning) — store facet properties
-        // as-is without schema enforcement, mirroring the non-role
-        // skipValidation behavior below.
-        roleFacetProperties = { ...data.properties };
-      } else {
-        // Validate the role's properties against the ROLE profile up front, so
-        // a bad payload fails BEFORE the kind entity is inserted (no orphan).
-        // Merge data.title in first — a converted role can carry a vestigial
-        // required `title` def left over from when it was a kind (e.g.
-        // `contact`), and the caller supplies title at the top level (the
-        // common frontend/API pattern), not inside `properties`. Mirrors the
-        // identical merge the non-role path below already does, and does NOT
-        // disable enforceRequired wholesale (unlike attach()'s enforceRequired:
-        // false) — a role's OWN required fields
-        // must still fail loud here; only the vestigial-title case is real.
-        const roleTitleAlreadyInProps =
-          data.properties && "title" in data.properties;
-        const propsToValidateForRole: Record<string, unknown> = {
-          ...data.properties,
-        };
-        if (data.title !== undefined && !roleTitleAlreadyInProps) {
-          propsToValidateForRole["title"] = data.title;
-        }
-        const facetValidation =
-          await this.propertyValidation.validateProperties(
-            propsToValidateForRole,
-            profile.id,
-            data.workspaceId ?? null
-          );
-        if (!facetValidation.valid) {
-          throw new PropertyValidationError(
-            facetValidation.errors.map((err, idx) => ({
-              field: `property_${idx}`,
-              message: err,
-            })),
-            profile.id
-          );
-        }
-        unmodeled.push(...facetValidation.unmodeled);
-        roleFacetProperties = { ...facetValidation.normalized };
-        if (!roleTitleAlreadyInProps) {
-          // title was merged in ONLY to satisfy a vestigial required def — it
-          // belongs on the kind entity (see comment below), not duplicated
-          // onto the facet's own properties.
-          delete roleFacetProperties["title"];
-        }
-      }
-      roleFacetProfile = profile;
-      profile = target;
-      // The role's data lives on the facet; the kind entity carries only the
-      // identity columns (title/preview/document).
-      data = { ...data, properties: {} };
-    }
-
-    // 1a-post. Reserved-kind door (P1 guardrail e). A project is a COMMITMENT
-    // WITH GRAVITY held in the `projects` TABLE — never an entity. Pre-0151
-    // fossils created `project`-profile entities via this generic door, orphan
-    // rows that bypass the projects table AND the (a)–(d) project guardrails
-    // (dedup / provenance / gravity). Block CREATE only — update/read of the
-    // remaining fossils stay allowed. Checked HERE, on the kind this create
-    // would actually write (after the role adapter swapped it in), so a role
-    // whose applicable kind is reserved cannot route around it. The wording is
-    // the reservation's own (`reservedEntityKindReason`), never a second copy.
-    const reservedKindReason = reservedEntityKindReason(profile.slug);
-    if (reservedKindReason) {
-      throw new EntityCreateRejectedError(
-        "project-is-not-an-entity",
-        reservedKindReason,
-        profile.id
-      );
-    }
+    const prepared = await validateEntityCreateProperties(
+      {
+        profileResolution: this.profileResolution,
+        propertyValidation: this.propertyValidation,
+      },
+      profile,
+      data,
+      userId
+    );
+    unmodeled.push(...prepared.unmodeled);
+    profile = prepared.profile;
+    data = { ...data, properties: prepared.entityProperties };
+    const { roleFacetProfile, roleFacetProperties, validatedProperties } =
+      prepared;
 
     const profileId: string = profile.id;
     const entityType: string = profile.slug;
@@ -442,57 +561,6 @@ export class EntityRepository extends BaseRepository<
     // is given (null = pod-wide). Do NOT re-derive scope from the profile here
     // — doing so would override an explicit workspace request (e.g. imports).
     const effectiveWorkspaceId = data.workspaceId ?? null;
-
-    // 2. Validate and normalize properties
-    let validatedProperties: Record<string, unknown> = {};
-    if (data.skipValidation) {
-      // Trusted seed data (template provisioning) — store as-is without schema enforcement
-      validatedProperties = data.properties ?? {};
-    } else if (profileId) {
-      // Merge top-level title into properties before validation so profiles that
-      // declare a required "title" property_def don't fail when the caller only
-      // passes title at the entity level (which is the common frontend pattern).
-      let propsToValidate: Record<string, unknown> = { ...data.properties };
-      if (data.title !== undefined && !("title" in propsToValidate)) {
-        propsToValidate["title"] = data.title;
-      }
-      if (profile.slug === "knowledge") {
-        try {
-          propsToValidate = normalizeKnowledgeProperties(propsToValidate);
-        } catch (error) {
-          if (error instanceof KnowledgeFormConflictError) {
-            throw new PropertyValidationError(
-              [{ field: "knowledgeForm", message: error.message }],
-              profileId
-            );
-          }
-          throw error;
-        }
-      }
-
-      // Validate through the requesting workspace's lens — overlay props
-      // owned by other workspaces are treated as unknown (ignored), so cross-
-      // workspace schema leaks can't happen here.
-      const validationResult = await this.propertyValidation.validateProperties(
-        propsToValidate,
-        profileId,
-        data.workspaceId ?? null
-      );
-
-      if (!validationResult.valid) {
-        const errors = validationResult.errors.map((err, idx) => ({
-          field: `property_${idx}`,
-          message: err,
-        }));
-        throw new PropertyValidationError(errors, profileId);
-      }
-
-      validatedProperties = validationResult.normalized;
-      unmodeled.push(...validationResult.unmodeled);
-    } else if (!profileId && data.properties) {
-      // No profile - just store properties as-is (flexible)
-      validatedProperties = data.properties;
-    }
 
     // 2b. LIFECYCLE columns for the new row, from the same value the read
     // projection holds (a born row is not a move — it has no "from").

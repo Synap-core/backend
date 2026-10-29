@@ -27,6 +27,8 @@ import {
   inArray,
   getDb,
   ProfileResolutionService,
+  PropertyValidationService,
+  validateEntityCreateProperties,
   eventRepository,
   EntityRepository,
   EntityBodyService,
@@ -1477,6 +1479,33 @@ export const createProcs = {
       // add a card). A near retry is floored like any twin.
       const proposeAsDuplicate =
         isAgentFiling && duplicateCheck?.status === "possible";
+
+      // WRITE-TIME property validation for an AI's filing: the checks the
+      // repository runs at materialization (`validateEntityCreateProperties`,
+      // the one copy), run BEFORE the gate, where the row lands. Without it an
+      // agent's write with a bad enum value was filed as a proposal that could
+      // only fail at approval (e368ca9e). Throws the same
+      // PropertyValidationError (mapped to BAD_REQUEST); nothing is filed. A
+      // person's own create is validated by the repository moments later.
+      if (isAgentFiling) {
+        const validationDb = await getDb();
+        const profileResolution = new ProfileResolutionService(validationDb);
+        await validateEntityCreateProperties(
+          {
+            profileResolution,
+            propertyValidation: new PropertyValidationService(
+              profileResolution
+            ),
+          },
+          earlyResolvedProfile,
+          {
+            title: input.title || undefined,
+            properties: effectiveProperties,
+            workspaceId: resolvedEntityWorkspaceId ?? null,
+          },
+          ctx.userId
+        );
+      }
 
       // 2. Permission check (may create proposal with correlationId)
       const perm = await checkPermissionOrPropose({
