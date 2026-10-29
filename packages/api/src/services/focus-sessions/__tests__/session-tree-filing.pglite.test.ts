@@ -401,7 +401,7 @@ describe("filing a root files its open sub-sessions (S5, Q7)", () => {
     expect(after[t.closed]).toEqual({ project: null, goal: null });
   });
 
-  it("FLOOR: a tree that is not all the agent's own fresh work is ONE proposal, nothing moved; approving it re-reads the tree and files it with one Undo", async () => {
+  it("FLOOR: a tree that is not all the agent's own fresh work is ONE proposal carrying the tree; nothing moves", async () => {
     const t = await seedTree({ staleChild: true });
     const res = await asAgent(() =>
       updateFocusSession({
@@ -416,8 +416,7 @@ describe("filing a root files its open sub-sessions (S5, Q7)", () => {
     const gate = permSpy.mock.calls[0]![0];
     expect(gate).toMatchObject({ forcePropose: true });
     expect(gate).not.toHaveProperty("ownWorkOrganise");
-    const data = gate.data as Record<string, unknown>;
-    expect(data.subSessionIds).toEqual(
+    expect((gate.data as { subSessionIds?: string[] }).subSessionIds).toEqual(
       expect.arrayContaining([t.a, t.aa, t.b, t.underClosed])
     );
     const before = await placement(Object.values(t));
@@ -425,15 +424,23 @@ describe("filing a root files its open sub-sessions (S5, Q7)", () => {
       if (id === t.elsewhere || id === t.underElsewhere) continue;
       expect(before[id]!.project, id).toBeNull();
     }
+  });
 
+  it("APPROVAL re-reads the tree: only what is still open, under the root and where it sat is filed; one Undo puts it back", async () => {
+    const t = await seedTree();
     // Between filing and approval: `aa` is closed, and a session OUTSIDE the
     // tree (open, unfiled — it would pass the placement compare-and-set) is
-    // slipped into the stored ids. Approval re-reads the tree: neither moves.
+    // in the stored ids. Neither may move.
     await q(`update focus_sessions set status = 'closed' where id = $1`, [
       t.aa,
     ]);
     const stranger = await ownSession();
-    data.subSessionIds = [...(data.subSessionIds as string[]), stranger];
+    const data: Record<string, unknown> = {
+      id: t.root,
+      projectId: SYNAP,
+      projectName: "Synap",
+      subSessionIds: [t.a, t.aa, t.b, t.underClosed, stranger],
+    };
 
     // The person approves the one proposal: the executor files the tree.
     const proposalId = randomUUID();
