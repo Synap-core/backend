@@ -73,9 +73,9 @@ const EXTRA = [
   "packages/governance-policy/src/agent-hand-off.test.ts",
 ];
 
-const report = (files: string[], red: string[] = []) => ({
+const report = (files: string[], red: string[] = [], passed = 100) => ({
   numTotalTests: files.length + 100,
-  numPassedTests: 100,
+  numPassedTests: passed,
   testResults: files.map((f) => {
     const failed = baseline.has(f) || red.includes(f);
     return {
@@ -106,6 +106,8 @@ function judge(
     notListed,
     emptyList,
     red = [],
+    vacuousRun,
+    echo,
   }: {
     dropReport?: string;
     dropMarker?: number;
@@ -113,6 +115,10 @@ function judge(
     notListed?: string;
     emptyList?: string;
     red?: string[];
+    /** this run's report: tests, and not one passed */
+    vacuousRun?: string;
+    /** `file` also appears, passing, in the report of run `into` */
+    echo?: { file: string; into: string };
   } = {}
 ) {
   const dir = mkdtempSync(join(tmpdir(), "ratchet-select-"));
@@ -127,15 +133,15 @@ function judge(
         JSON.stringify({ listed })
       );
       if (r.id === dropReport || r.id === emptyList) continue;
-      writeFileSync(
-        join(dir, fileName(r.id)),
-        JSON.stringify(
-          report(
-            r.files.filter((f) => f !== dropFile && f !== notListed),
-            red
-          )
-        )
+      const files = r.files.filter((f) => f !== dropFile && f !== notListed);
+      const own = report(
+        files,
+        red.filter((f) => r.files.includes(f)),
+        r.id === vacuousRun ? 0 : 100
       );
+      if (echo?.into === r.id)
+        own.testResults.push(report([echo.file]).testResults[0]);
+      writeFileSync(join(dir, fileName(r.id)), JSON.stringify(own));
     }
     for (let k = 1; k <= sel.shards; k++)
       if (k !== dropMarker)
@@ -256,6 +262,51 @@ describe("test-ratchet --select: the PR selection, judged as CI judges it", () =
     expect(r.status).toBe(1);
     expect(r.out).toContain("[new-failure]");
     expect(r.out).toContain(EXTRA[2]);
+  });
+
+  it("a run with tests and not one passing: red (vacuous), as in the full mode", () => {
+    const run = small.runs.find((x) => x.files.some((f) => !baseline.has(f)))!;
+    const r = judge(small, { vacuousRun: run.id });
+    expect(r.status).toBe(1);
+    expect(r.out).toContain("[vacuous]");
+    expect(r.out).toContain(run.id);
+  });
+
+  it("a file two runs reached: its red is never overwritten by a later green", () => {
+    // EXTRA[0] is red in its own run and passes in a run collected AFTER it
+    // (vitest's file filters are substrings: one file can run twice).
+    const own = large.runs.findIndex((x) => x.files.includes(EXTRA[0]));
+    const later = large.runs[large.runs.length - 1];
+    expect(large.runs.indexOf(later)).toBeGreaterThan(own);
+    const r = judge(large, {
+      red: [EXTRA[0]],
+      echo: { file: EXTRA[0], into: later.id },
+    });
+    expect(r.status).toBe(1);
+    expect(r.out).toContain("[new-failure]");
+    expect(r.out).toContain(EXTRA[0]);
+  });
+
+  it("a plan whose runs are not its selection, or that runs a file twice: red", () => {
+    const twice = {
+      ...small,
+      runs: small.runs.map((x, i) =>
+        i === 0 ? { ...x, files: [...x.files, small.runs[1].files[0]] } : x
+      ),
+    };
+    expect(selectionProblems(twice, tripwires).join(" ")).toContain(
+      "planned in two runs"
+    );
+    const extra = {
+      ...small,
+      tests: [...small.tests, "packages/x/gone.test.ts"],
+    };
+    expect(selectionProblems(extra, tripwires).join(" ")).toContain(
+      "the runs are not the selection"
+    );
+    const r = judge(twice);
+    expect(r.status).toBe(1);
+    expect(r.out).toContain("[selection]");
   });
 
   it("a missing selection file fails the judge (it never judges something else)", () => {

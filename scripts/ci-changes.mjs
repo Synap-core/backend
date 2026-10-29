@@ -371,11 +371,21 @@ export function decide({
         .join("; "),
     };
 
-  // A queue entry whose PR run did not pass both: the Release gate, and the
-  // tier of what it changes on top of the main it lands on, run on the
-  // combined tree.
+  // A queue entry whose PR run did not pass both: the Release gate and the
+  // FULL suite on the combined tree (rare: the PR's own suites were red,
+  // skipped or unreadable, so nothing vouches for a selection). Docs only
+  // still runs no suite.
   if (event === "merge_group") {
-    const t = pick();
+    const t = docsOnly
+      ? pick()
+      : {
+          scope: "full",
+          tests: [],
+          e2e: true,
+          why: [
+            "full suite: the PR's own Full suite and API e2e did not both pass, so the entry is checked whole",
+          ],
+        };
     return {
       ...all,
       image,
@@ -546,12 +556,19 @@ export function summary(d, files) {
   ].join("\n");
 }
 
-function changedFiles(base, head) {
+/**
+ * The paths a change touched, or null when git cannot say. `--no-renames`: a
+ * rename lists its OLD path too, so the tests that still read the old path are
+ * selected (a rename detected by git would hide it).
+ */
+export function changedFiles(base, head, cwd = undefined) {
   if (!base || !head) return null;
   try {
-    return execFileSync("git", ["diff", "--name-only", `${base}...${head}`], {
-      encoding: "utf8",
-    })
+    return execFileSync(
+      "git",
+      ["diff", "--name-only", "--no-renames", `${base}...${head}`],
+      { encoding: "utf8", cwd }
+    )
       .split("\n")
       .filter(Boolean);
   } catch {

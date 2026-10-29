@@ -1,52 +1,29 @@
 /**
  * affected.mjs — which tests a pull request must run, DERIVED from the
- * repository (founder, 2026-10-29: "One trunk, three CI tiers"; lane L8, the
- * same day: "a backend PR's 4 required checks green in 8-10 minutes").
+ * repository.
  *
  * ── THE THREE TIERS ──────────────────────────────────────────────────────────
  *   PR (required)   Preflight, the Release gate, and the tests of what the
  *                   change can break (this file). API e2e only when the API
  *                   surface changed.
  *   main            every push runs everything: Full suite, API e2e, Docker,
- *                   deploy tests. Nobody waits on it; a red main names the
- *                   commits since its last all-green run.
+ *                   deploy tests. A red main names its culprit.
  *   release / pods  a pod updates only to a main commit whose post-merge run
  *                   was ALL green (scripts/ci/release-gate-wait.mjs).
  *
- * ── WHAT A PR RUNS: TEST FILES, NOT PACKAGES ─────────────────────────────────
- * Until lane L8 a PR ran whole packages: the touched ones and every package
- * that depends on them. packages/api (2,058 test files) was in 79 of the 105
- * PRs merged 28-29 Oct, so "affected" was the whole api suite, 4 shards of
- * ~20 min. Now a PR runs (scope "selected"):
+ * ── WHAT A PR RUNS (scope "selected") ────────────────────────────────────────
  *   1. every test file the change reaches through the import graph
  *      (scripts/ci/import-graph.mjs: imports, transitively, and the files and
  *      directories a file reads by path), a changed test file included;
- *   2. every test file that names a changed file's package by path (the
- *      cross-package path-reference scan below, kept from the package tier);
+ *   2. every test file that names a changed file's package by path;
  *   3. when the known-red baseline changed: every file it names, before and
  *      after the change (a removed line claims a file passes: it runs);
- *   4. EVERY tripwire, whatever changed: they are the tests that read across
- *      the tree (369 files on 2026-10-29; packages/api's 321 cost ~551
- *      worker-seconds in the shard plan, ~3 min of a shard on 3 workers).
- * packages/types, packages/database and packages/core go through the graph
- * like any package. A migration (.sql) is read by the tests and helpers that
- * name it, and the shards migrate the test database before any test, so a
- * migration that does not apply is red in every shard.
+ *   4. EVERY tripwire, whatever changed: they read across the tree (381 files
+ *      on 2026-10-29, ~5.3 min of one shard in the shard plan's costs).
+ * Package source goes through the graph, packages/types, packages/database
+ * (its src) and packages/core included.
  *
- * ── PATHS OUTSIDE EVERY PACKAGE ──────────────────────────────────────────────
- * NARROWED (through the graph's read edges, plus the jobs that own them):
- *   skills/**            the tests and modules that read skills by path
- *   deploy/**, kratos/**, docker/**, Dockerfile, .dockerignore, install.sh,
- *   synap                the deploy tests and the Docker image (their own
- *                        jobs, IMAGE_INPUTS in ci-changes.mjs) and the tests
- *                        that read them
- *   .github/**, ci/**, scripts/** (not the runner, below)
- *                        the tests that import or read them; every CI
- *                        tripwire (scripts/**\/*.tripwire.test.ts) runs anyway
- *                        as a tripwire; a changed workflow job runs itself
- *   docs/** (what ci-changes.mjs's DOCS_ONLY does not skip), CLAUDE.md,
- *   AGENTS.md, .claude/** the tests that read them by name
- * FULL (ROOT_FULL), one reason each:
+ * ── THE FULL SUITE (FULL, one reason each) ───────────────────────────────────
  *   package.json, pnpm-lock.yaml, pnpm-workspace.yaml, .npmrc
  *                        what is installed, and which packages exist: every
  *                        test resolves its imports through them
@@ -55,12 +32,34 @@
  *                        how every file is compiled and which Node runs it
  *   vitest*.config.* (at the root)
  *                        how the root tripwires run
- *   the test runner: scripts/test-ratchet*.mjs, scripts/tripwire-discovery.mjs,
- *   scripts/test-floors.json
- *                        they run and judge every test; a run they planned
- *                        cannot vouch for a change to them
+ *   the test runner and the selector: scripts/test-ratchet*.mjs,
+ *   tripwire-discovery.mjs, test-floors.json, scripts/ci-changes.mjs,
+ *   scripts/ci/affected.mjs, scripts/ci/import-graph.mjs,
+ *   scripts/strip-comments.mjs
+ *                        they plan, run and judge every test, from the PR's
+ *                        own checkout: a run they planned cannot vouch for a
+ *                        change to them
+ *   .github/workflows/ci.yml, .github/actions/**
+ *                        the shard jobs themselves: their database service,
+ *                        env, migrate step and install layout (a DB test that
+ *                        skips without DATABASE_URL would read green)
+ *   packages/database/migrations/**
+ *                        every DATABASE_URL test runs on the migrated schema
  *   any other path outside a workspace package, and a directory under apps/
  *   or packages/ that is not a workspace package (fail-safe: unknown = full)
+ *
+ * ── NARROWED (through the graph's read edges, plus the jobs that own them) ──
+ *   skills/**            the tests and modules that read skills by path
+ *   deploy/**, kratos/**, docker/**, Dockerfile, .dockerignore, install.sh,
+ *   synap                the deploy tests and the Docker image (their own
+ *                        jobs, IMAGE_INPUTS in ci-changes.mjs) and the tests
+ *                        that read them
+ *   .github/** (not ci.yml, not the actions), ci/**, scripts/** (not the
+ *   runner or the selector)
+ *                        the tests that import or read them; every CI
+ *                        tripwire runs anyway; a changed workflow runs itself
+ *   docs/** (what ci-changes.mjs's DOCS_ONLY does not skip), CLAUDE.md,
+ *   AGENTS.md, .claude/** the tests that read them by name
  * SUITE_NEUTRAL paths (generated, read by no test) widen nothing.
  *
  * Self-contained (node: built-ins only): the "What changed" job runs it
@@ -84,12 +83,17 @@ export const TEST_FILE = /\.test\.(ts|tsx|mts|cts|mjs|cjs|js)$/;
  */
 export const SUITE_NEUTRAL = [/^docs\/reference\//];
 
-/** Paths outside every package that run the full suite (header, "FULL"). */
+/** Paths that run the full suite (header, "THE FULL SUITE"). */
 export const ROOT_FULL = [
   /^(package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|\.npmrc|turbo\.json|\.node-version)$/,
   /^tsconfig[^/]*\.json$/,
   /^vitest[^/]*\.config\.[mc]?[jt]s$/,
   /^scripts\/(test-ratchet[^/]*\.mjs|tripwire-discovery\.mjs|test-floors\.json)$/,
+  /^scripts\/(ci-changes|strip-comments)\.mjs$/,
+  /^scripts\/ci\/(affected|import-graph)\.mjs$/,
+  /^\.github\/workflows\/ci\.yml$/,
+  /^\.github\/actions\//,
+  /^packages\/database\/migrations\//,
 ];
 
 /** Paths outside every package that go through the graph (header, "NARROWED"). */
@@ -317,6 +321,12 @@ export function selectTier(files, g, { baseBaseline = [] } = {}) {
       neutral.push(f);
       continue;
     }
+    if (ROOT_FULL.some((re) => re.test(f))) {
+      full.push(
+        `${f} (root config, the test runner, the selector, the shard jobs or a migration: every test rests on it)`
+      );
+      continue;
+    }
     const pkg = packageOf(f, g.dirs);
     if (pkg) {
       graphed.push(f);
@@ -325,12 +335,6 @@ export function selectTier(files, g, { baseBaseline = [] } = {}) {
     if (/^(apps|packages)\/[^/]+\//.test(f)) {
       full.push(
         `${f} (${f.split("/").slice(0, 2).join("/")} is not a workspace package)`
-      );
-      continue;
-    }
-    if (ROOT_FULL.some((re) => re.test(f))) {
-      full.push(
-        `${f} (root config or the test runner: every test rests on it)`
       );
       continue;
     }

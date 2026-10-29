@@ -162,37 +162,6 @@ export const ownerDir = (file) =>
   file.match(/^((?:packages|apps)\/[^/]+)\//)?.[1] ?? ".";
 
 /**
- * The files that run on their own, under their package's config, wherever no
- * package run reaches them (scripts/ci/affected.mjs, the PR tier):
- *   discovered   every tripwire file (repo-relative)
- *   affected     the --affected package dirs, or null (not the PR tier)
- *   also         the --also files: tests of unaffected packages that read an
- *                affected one by path
- *   inScope      the run's scope predicate (--only / --affected)
- *   suiteDirs    the dirs of every package with a `vitest run` test script
- *   exists       file → boolean
- * Under --affected EVERY tripwire runs, plus each --also file whose package
- * has a suite (a test of a package with none runs nowhere, on main either).
- * Otherwise only the in-scope tripwires, as before.
- * Returns { files (sorted), also (the --also files kept) }.
- */
-export function mustRunFiles({
-  discovered,
-  affected,
-  also = [],
-  inScope,
-  suiteDirs,
-  exists,
-}) {
-  if (!affected) return { files: discovered.filter(inScope).sort(), also: [] };
-  const suites = new Set(suiteDirs);
-  const kept = also.filter(
-    (f) => !inScope(f) && exists(f) && suites.has(ownerDir(f))
-  );
-  return { files: [...new Set([...discovered, ...kept])].sort(), also: kept };
-}
-
-/**
  * Shard 1's own runs: the must-run files whose package does not run in this
  * invocation (`runDirs`, any shard), one run per owning dir, under the report
  * id the judge derives (`tripwires:<dir>`), each path relative to its dir.
@@ -382,7 +351,22 @@ export function selectionProblems(sel, tripwires) {
   if (!Number.isInteger(sel.shards) || sel.shards < 1)
     out.push(`shards is ${sel.shards}`);
   if (!Array.isArray(sel.runs)) return [...out, "no runs"];
-  const planned = new Set(sel.runs.flatMap((r) => r.files ?? []));
+  const all = sel.runs.flatMap((r) => r.files ?? []);
+  const planned = new Set(all);
+  if (planned.size !== all.length)
+    out.push(
+      `${all.length - planned.size} file(s) planned in two runs: ${all
+        .filter((f, i) => all.indexOf(f) !== i)
+        .slice(0, 5)
+        .join(", ")}`
+    );
+  const tests = new Set(sel.tests ?? []);
+  const unplanned = [...tests].filter((f) => !planned.has(f));
+  const unlisted = [...planned].filter((f) => !tests.has(f));
+  if (unplanned.length || unlisted.length)
+    out.push(
+      `the runs are not the selection: ${unplanned.length} selected file(s) planned in no run (${unplanned.slice(0, 3).join(", ")}), ${unlisted.length} planned file(s) not selected (${unlisted.slice(0, 3).join(", ")})`
+    );
   const missing = tripwires.filter((t) => !planned.has(t));
   if (missing.length)
     out.push(

@@ -232,7 +232,10 @@ export function evaluatePaths(text, fileDir, cwd) {
     const v = evalArgs(m[1], m[2]);
     if (v !== null) out.push(v);
   }
-  return out.filter((p) => !p.startsWith(".."));
+  // A const that is only an anchor (`const HERE = dirname(fileURLToPath(…))`)
+  // is a path the file built too: `readdirSync(HERE)` walks it.
+  for (const v of consts.values()) out.push(v);
+  return [...new Set(out)].filter((p) => !p.startsWith(".."));
 }
 
 // ── workspace packages ───────────────────────────────────────────────────────
@@ -335,7 +338,9 @@ export function workspaceIndex(root, fileSet) {
  *   imports   Map file → Set of files it imports (resolved)
  *   reads     Map file → Set of files it reads by path
  *   readDirs  Map file → Set of directories it reads by path
- *   missing   Map file → Set of paths it names that do not exist (no extension)
+ *   missing   Map file → Set of import paths that do not exist (no extension)
+ *   missingReads  Map file → Set of paths it reads that do not exist (a file
+ *             a change deleted or renamed is still read by it)
  *   wholePkg  Map file → Set of package dirs it depends on whole
  *   packages  the workspace index
  */
@@ -354,8 +359,22 @@ export function buildGraph(root, { files = listFiles(root) } = {}) {
   const anchorDirs = new Set(["apps", "packages", ...pkgDirs]);
   for (const d of pkgDirs)
     for (const a of ancestors(`${d}/x`)) anchorDirs.add(a);
+  // What a package is built and compiled from: its package.json (exports),
+  // its tsconfig files and its build configs. Every importer of the package
+  // and every test of the package depends on them (a database tsconfig decides
+  // the dist every api test loads).
+  const BUILD_CONFIG =
+    /^(package\.json|tsconfig[^/]*\.json|tsup[^/]*\.config\.[mc]?[jt]s|vite[^/]*\.config\.[mc]?[jt]s|build\.[mc]?js)$/;
+  const configsOf = new Map(pkgDirs.map((d) => [d, []]));
+  for (const f of files) {
+    const d = packageOf(f);
+    if (d && BUILD_CONFIG.test(f.slice(d.length + 1))) configsOf.get(d).push(f);
+  }
 
-  const resolveFile = (base) => {
+  const resolveFile = (raw) => {
+    // A relative path into another package's build output reads its source.
+    const dist = /^((?:apps|packages)\/[^/]+)\/dist\/(.+)$/.exec(raw);
+    const base = dist ? `${dist[1]}/src/${dist[2]}` : raw;
     if (fileSet.has(base) && !DECLARATION.test(base)) return base;
     const stem = base.replace(/\.(js|jsx|mjs|cjs)$/, "");
     for (const s of stem === base ? [base] : [stem, base])
@@ -392,6 +411,7 @@ export function buildGraph(root, { files = listFiles(root) } = {}) {
   const reads = new Map();
   const readDirs = new Map();
   const missing = new Map();
+  const missingReads = new Map();
   const wholePkg = new Map();
   const add = (m, k, v) => {
     if (!m.has(k)) m.set(k, new Set());
@@ -428,7 +448,7 @@ export function buildGraph(root, { files = listFiles(root) } = {}) {
       }
       const r = resolvePackage(spec);
       if (!r) continue; // a third-party package
-      add(imports, f, `${r.pkg.dir}/package.json`);
+      for (const c of configsOf.get(r.pkg.dir) ?? []) add(imports, f, c);
       if (r.src) add(imports, f, r.src);
       else add(wholePkg, f, r.pkg.dir);
     }
@@ -439,8 +459,17 @@ export function buildGraph(root, { files = listFiles(root) } = {}) {
     // relative literals count. Test code (a test file, a test helper) reads
     // one hop, so every literal heuristic applies to it.
     const evaluated = evaluatePaths(text, dir, cwd);
+    const evaluatedSet = new Set(evaluated);
     const targets = new Set(evaluated);
     const testCode = isTestCode(f);
+    // A test that walks a directory (readdir, glob, a walk helper) reads the
+    // directories it built, its own package's included: a test scanning
+    // packages/api/src is hit by any change there.
+    const walks =
+      testCode &&
+      /\b(readdirSync|readdir|opendirSync|opendir|globSync|glob|walk\w*)\s*\(/.test(
+        text
+      );
     // A test reads `readSrc("routers/proposals.ts")` relative to a directory
     // it built (`join(process.cwd(), "src")`): a path literal is also tried
     // under each directory the file evaluates, and under its package's src/.
@@ -483,8 +512,11 @@ export function buildGraph(root, { files = listFiles(root) } = {}) {
           targets.add(norm(`${b}/${clean}`));
     }
     for (const t of targets) {
-      if (t === "" || t.startsWith("..") || own.has(t) || anchorDirs.has(t))
+      if (t.startsWith("..")) continue;
+      if (t === "" || own.has(t) || anchorDirs.has(t)) {
+        if (walks && evaluatedSet.has(t)) add(readDirs, f, t);
         continue;
+      }
       if (fileSet.has(t)) {
         if (t === f) continue;
         // A vitest config's setup files are loaded by every test it runs.
@@ -494,12 +526,12 @@ export function buildGraph(root, { files = listFiles(root) } = {}) {
       else if (isConfig) {
         const r = resolveFile(t);
         if (r) add(imports, f, r);
-      }
+      } else if (testCode || evaluatedSet.has(t)) add(missingReads, f, t);
     }
 
-    // A test runs under its package's config and package.json.
+    // A test runs under its package's build configs and vitest config.
     if (TEST_FILE.test(f) && pkgDir) {
-      add(imports, f, `${pkgDir}/package.json`);
+      for (const c of configsOf.get(pkgDir) ?? []) add(imports, f, c);
       for (const c of files.filter(
         (x) =>
           x.startsWith(`${pkgDir}/`) &&
@@ -516,6 +548,7 @@ export function buildGraph(root, { files = listFiles(root) } = {}) {
     reads,
     readDirs,
     missing,
+    missingReads,
     wholePkg,
     packages,
     packageOf,
@@ -551,7 +584,8 @@ export function reach(changed, g) {
     for (const t of ts) if (changedSet.has(t)) mark(f, t);
   for (const [f, ds] of g.readDirs)
     for (const d of ds) {
-      const c = changed.find((x) => x.startsWith(`${d}/`));
+      // "" = the repo root, walked by a test: every change reaches it.
+      const c = changed.find((x) => d === "" || x.startsWith(`${d}/`));
       if (c) mark(f, c);
     }
   // Importers of a deleted file (a specifier that no longer resolves).
@@ -562,6 +596,15 @@ export function reach(changed, g) {
     for (const [f, ms] of g.missing)
       for (const m of ms) {
         const c = gone.find((x) => x === m || x === `${m}/index`);
+        if (c) mark(f, c);
+      }
+  // Readers of a deleted (or renamed-away) file or directory: the path they
+  // read no longer exists, so they are what the change can break.
+  const deleted = changed.filter((c) => !g.fileSet.has(c));
+  if (deleted.length)
+    for (const [f, ms] of g.missingReads ?? [])
+      for (const m of ms) {
+        const c = deleted.find((x) => x === m || x.startsWith(`${m}/`));
         if (c) mark(f, c);
       }
   // Files that depend on a whole package (an unmapped specifier).

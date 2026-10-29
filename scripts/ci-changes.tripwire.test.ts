@@ -6,7 +6,13 @@
  * skipped tier only through an explicit, logged "Not affected" step.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, statSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -37,6 +43,7 @@ import {
   isDocsOnly,
   isImageInput,
   queuePrNumber,
+  changedFiles,
   reusableRun,
   shardMatrix,
   suitesPassed,
@@ -471,12 +478,12 @@ describe("ci-changes: the PR tier on the real graph", () => {
         "packages/database/src/schema/entities.ts",
         "packages/database/src/migrations-0319.pglite.test.ts",
       ],
-      [
-        // a migration is read by the test that applies it by path
-        "packages/database/migrations/0319_lifecycle_columns.sql",
-        "packages/api/src/routers/webhooks-postiz.pglite.test.ts",
-      ],
       ["packages/core/src/index.ts", "apps/api/src/admin-event-stream.test.ts"],
+      [
+        // a test that walks its own package's src (review #522, finding 5)
+        "packages/api/src/services/tracks/tracks-service.ts",
+        "packages/api/src/notifications/notification-producer-allowlist.test.ts",
+      ],
     ]) {
       const d = pr([f]);
       expect(d.scope, f).toBe("selected");
@@ -495,7 +502,10 @@ describe("ci-changes: the PR tier on the real graph", () => {
         "deploy/docker-compose.yml",
         "apps/api/src/middleware/rate-limit-deploy-wiring.test.ts",
       ],
-      [".github/workflows/ci.yml", "scripts/ci-changes.tripwire.test.ts"],
+      [
+        ".github/workflows/merge-bot.yml",
+        "scripts/ci/merge-bot.tripwire.test.ts",
+      ],
       ["scripts/preflight.mjs", "scripts/preflight.tripwire.test.ts"],
     ]) {
       const d = pr([f]);
@@ -522,6 +532,16 @@ describe("ci-changes: the PR tier on the real graph", () => {
       "scripts/test-ratchet-retry.mjs",
       "scripts/tripwire-discovery.mjs",
       "scripts/test-floors.json",
+      // the selector: a PR must never run its own weakened selection
+      "scripts/ci-changes.mjs",
+      "scripts/ci/affected.mjs",
+      "scripts/ci/import-graph.mjs",
+      "scripts/strip-comments.mjs",
+      // the shard jobs: database service, env, migrate step, install layout
+      ".github/workflows/ci.yml",
+      ".github/actions/monorepo-setup/action.yml",
+      // every DATABASE_URL test runs on the migrated schema
+      "packages/database/migrations/0372_inbound_deliveries_and_observation_keys.sql",
       // fail-safe: unknown outside paths, and a dir that is not a package
       ".husky/pre-push",
       "kratos-unknown/x",
@@ -538,6 +558,48 @@ describe("ci-changes: the PR tier on the real graph", () => {
       "docs/decisions/README.md",
     ])
       expect(pr([f]).scope, f).toBe("selected");
+  });
+
+  it("4b. a package's tsconfig or build config reaches every importer, not just its own tests", () => {
+    for (const f of [
+      "packages/database/tsconfig.json",
+      "packages/database/tsup.config.ts",
+    ]) {
+      const d = pr([f]);
+      expect(d.scope, f).toBe("selected");
+      // api tests load @synap/database through exports → dist.
+      expect(tests(d), f).toContain(
+        "packages/api/src/routers/agent-runs.summary.test.ts"
+      );
+      expect(nonTripwire(tests(d)).length, f).toBeGreaterThan(1000);
+    }
+  });
+
+  it("4c. the changed paths list a rename's old path too (git diff --no-renames)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ci-changes-git-"));
+    const git = (...a: string[]) =>
+      execFileSync("git", a, {
+        cwd: dir,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          GIT_AUTHOR_NAME: "t",
+          GIT_AUTHOR_EMAIL: "t@t",
+          GIT_COMMITTER_NAME: "t",
+          GIT_COMMITTER_EMAIL: "t@t",
+        },
+      }).trim();
+    git("init", "-q");
+    writeFileSync(join(dir, "old.yml"), "a: 1\nb: 2\nc: 3\n");
+    git("add", ".");
+    git("commit", "-qm", "one");
+    const base = git("rev-parse", "HEAD");
+    git("mv", "old.yml", "new.yml");
+    git("commit", "-qm", "rename");
+    expect(changedFiles(base, "HEAD", dir).sort()).toEqual([
+      "new.yml",
+      "old.yml",
+    ]);
   });
 
   it("5. a changed TEST file runs itself, not its package", () => {
@@ -897,20 +959,20 @@ describe("ci-changes: the merge queue", () => {
     expect(d.reason).toContain("#471");
   });
 
-  it("main moved (a different tree): the Release gate and the tier, on the combined tree", () => {
+  it("main moved and the PR's own suites did not both pass: the Release gate and the FULL suite, on the combined tree", () => {
     const d = queued(
       { runId: 1, testedCommit: "c", testedTree: T, queueTree: U },
       ["apps/pod-admin/app/x.tsx"]
     );
     expect(d.reuse).not.toBe(true);
+    // Never a selection here: nothing vouches for one (review of #522).
     expect([d.gate, d.suites, d.scope, d.e2e]).toEqual([
       true,
       true,
-      "selected",
-      false,
+      "full",
+      true,
     ]);
-    expect(d.selection?.tests).toEqual(graph.tripwires.slice().sort());
-    // Until 2026-10-29 the PR's own passed suites were taken whole here (#428).
+    expect(d.selection).toBeNull();
     expect(d.reason).toContain("on the tree it will land");
   });
 

@@ -83,8 +83,33 @@ const FIXTURE: Record<string, string> = {
     'readFileSync(join(HERE, "fixtures", "data.json"), "utf8");',
     'readFileSync("skills/synap/SKILL.md", "utf8");',
     'readFileSync("CLAUDE.md", "utf8");',
+    // A file this change deletes (or renames away): absent from the head.
+    'readFileSync("deploy/old.yml", "utf8");',
     "",
   ].join("\n"),
+  // Walks its own folder: a change in it reaches the test (an ancestor dir
+  // the test builds and reads, not an anchor).
+  "packages/app/src/walk/scan.test.ts": [
+    'import { readdirSync } from "node:fs";',
+    'import { dirname } from "node:path";',
+    'import { fileURLToPath } from "node:url";',
+    "const HERE = dirname(fileURLToPath(import.meta.url));",
+    "for (const f of readdirSync(HERE)) check(f);",
+    "",
+  ].join("\n"),
+  "packages/app/src/walk/rules.ts": "export const rules = 1;\n",
+  // Builds the same directory and never walks it: no read.
+  "packages/app/src/walk/no-walk.test.ts": [
+    'import { dirname } from "node:path";',
+    'import { fileURLToPath } from "node:url";',
+    "const HERE = dirname(fileURLToPath(import.meta.url));",
+    "use(HERE);",
+    "",
+  ].join("\n"),
+  // A relative import into another package's build output reads its source.
+  "packages/app/src/dist-rel.test.ts":
+    'import { sub } from "../../lib/dist/sub.js";\n',
+  "packages/lib/tsconfig.json": '{ "compilerOptions": {} }\n',
   "packages/app/src/src-relative.test.ts": [
     'import { join } from "node:path";',
     'const SRC = join(process.cwd(), "src");',
@@ -198,6 +223,33 @@ describe("import-graph: the edges, on a fixture small enough to read", () => {
     expect(sel(T("c.ts"))).not.toContain(T("comment.test.ts"));
   });
 
+  it("a package's tsconfig or build config reaches its importers like its package.json", () => {
+    // packages/lib's tsconfig decides the dist every importer loads.
+    const s = sel("packages/lib/tsconfig.json");
+    expect(s).toEqual(
+      expect.arrayContaining([
+        T("a.test.ts"),
+        T("value.test.ts"),
+        T("entry.test.ts"),
+      ])
+    );
+    expect(s).not.toContain(T("types-only.test.ts"));
+    expect(sel("packages/lib/tsup.config.ts")).toEqual(s);
+  });
+
+  it("a deleted or renamed file is still read by the tests that name it", () => {
+    // deploy/old.yml is absent from the head (the change deleted it).
+    expect(sel("deploy/old.yml")).toEqual([T("reads.test.ts")]);
+  });
+
+  it("a test that walks a directory it built reads it, its own folder included", () => {
+    expect(sel(T("walk/rules.ts"))).toEqual([T("walk/scan.test.ts")]);
+  });
+
+  it("a relative import into another package's dist reads its source", () => {
+    expect(sel("packages/lib/src/deep.ts")).toContain(T("dist-rel.test.ts"));
+  });
+
   it("a deleted module still reaches the files that import it", () => {
     expect(sel(T("deleted.ts"))).toEqual([T("gone.test.ts")]);
   });
@@ -260,6 +312,8 @@ describe("import-graph: the parsers' own self-checks", () => {
     ).toEqual(
       [
         "packages",
+        // HERE itself: a const that is only an anchor is a built path too
+        "packages/app/src",
         "packages/skills/synap",
         "packages/app/fixtures/x.json",
         "packages/app/src/a.ts",
