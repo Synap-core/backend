@@ -261,6 +261,7 @@ export {
   type RetirementPlan,
   type SystemProfilesBootLogger,
 } from "./utils/ensure-system-profiles.js";
+export { systemLifecycleKeys } from "./utils/ensure-system-lifecycles.js";
 
 // Machine-written property defs (read-only in every editor) + their pass
 export {
