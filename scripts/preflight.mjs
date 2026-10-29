@@ -47,17 +47,22 @@
  *                                  red=true|false and reds=<ids> to GITHUB_OUTPUT
  *                                  and a table to GITHUB_STEP_SUMMARY. The job's
  *                                  next step turns red=true into a failure.
- *   --cp-source=<file>             door-tool-names: read the control-plane-api
- *                                  catalog from this file (tests)
+ *   --cp-source=<file>             door-tool-names, cp-pod-tools-drift: read the
+ *                                  control-plane-api catalog from this file (tests)
+ *   --cp-drift-test-source=<file>  cp-pod-tools-drift: read CP's drift test (its
+ *                                  omission registries) from this file (tests)
  */
 
 import { spawn } from "node:child_process";
 import {
   appendFileSync,
   existsSync,
+  mkdtempSync,
   readFileSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
@@ -66,7 +71,12 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const SCORES_PATH = join(ROOT, "scripts", "ci", "check-scores.json");
 const CP_REPO = "Synap-core/control-plane-api";
 const CP_FILE = "src/routes/mcp-pod-tools.ts";
+const CP_DRIFT_TEST = "src/__tests__/mcp-pod-tools-drift.test.ts";
 const BACKEND_REPO = "Synap-core/backend";
+const MCP_MANIFEST =
+  "packages/api/src/routers/mcp/tools/mcp-tools.manifest.json";
+// The pod error text CP's drift test scans for prescribed tools.
+const MCP_TOOL_ERRORS = "packages/api/src/routers/mcp/tool-errors.ts";
 
 // ── process helpers ──────────────────────────────────────────────────────────
 function sh(
@@ -110,6 +120,156 @@ async function ghJson(path, env) {
   const r = await sh("gh", ["api", path], { env, timeoutMs: 20_000 });
   if (r.code !== 0) throw new Error(tail(r.out, 2) || `gh api ${path} failed`);
   return JSON.parse(r.out);
+}
+
+/** A file's text at `ref` of a GitHub repo, through `gh api` (throws). */
+async function ghRaw(repo, path, ref, env) {
+  const r = await sh(
+    "gh",
+    [
+      "api",
+      `repos/${repo}/contents/${path}?ref=${ref}`,
+      "-H",
+      "Accept: application/vnd.github.raw",
+    ],
+    { env, timeoutMs: 20_000 }
+  );
+  if (r.code !== 0) throw new Error(tail(r.out, 1) || `gh api ${path} failed`);
+  return { text: r.out };
+}
+
+/** A file of this repo at main: origin/main if fetched, else GitHub. */
+async function mainFile(path, env) {
+  const local = await sh("git", ["show", `origin/main:${path}`], {
+    timeoutMs: 10_000,
+  });
+  if (local.code === 0) return { text: local.out };
+  return ghRaw(BACKEND_REPO, path, "main", env).catch((error) => ({ error }));
+}
+
+/**
+ * Import one export of a self-contained TypeScript module given as TEXT
+ * (Node's type stripping, 22.18+): CP's generated catalog has no imports.
+ */
+async function importTsModule(text, exportName) {
+  const dir = mkdtempSync(join(tmpdir(), "preflight-ts-"));
+  try {
+    const file = join(dir, "module.mts");
+    writeFileSync(file, text);
+    const mod = await import(pathToFileURL(file).href);
+    if (!(exportName in mod)) throw new Error(`no export ${exportName}`);
+    return mod[exportName];
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * The keys of `const <name>: Record<…> = { … }` in TypeScript source, or null
+ * when the declaration is not there. Skips strings and comments, so a reason
+ * holding a brace, a comma or a colon does not shift the scan.
+ */
+export function parseRegistryKeys(src, name) {
+  const decl = new RegExp(`\\bconst ${name}\\b[^=]*=\\s*\\{`).exec(src);
+  if (!decl) return null;
+  let i = decl.index + decl[0].length;
+  const keys = [];
+  let depth = 1;
+  let expectKey = true;
+  const skipString = (q) => {
+    i++;
+    while (i < src.length && src[i] !== q) i += src[i] === "\\" ? 2 : 1;
+    i++;
+  };
+  while (i < src.length && depth > 0) {
+    const c = src[i];
+    if (c === "/" && src[i + 1] === "/") {
+      i = src.indexOf("\n", i);
+      if (i < 0) break;
+      continue;
+    }
+    if (c === "/" && src[i + 1] === "*") {
+      i = src.indexOf("*/", i) + 2;
+      if (i < 2) break;
+      continue;
+    }
+    if (/\s/.test(c)) {
+      i++;
+      continue;
+    }
+    if (depth === 1 && expectKey) {
+      if (c === "}") {
+        depth--;
+        break;
+      }
+      const m = /^(?:"([^"]+)"|'([^']+)'|([A-Za-z_$][\w$]*))\s*:/.exec(
+        src.slice(i, i + 300)
+      );
+      if (!m) return null;
+      keys.push(m[1] ?? m[2] ?? m[3]);
+      i += m[0].length;
+      expectKey = false;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === "`") {
+      skipString(c);
+      continue;
+    }
+    if (c === "{" || c === "[" || c === "(") depth++;
+    else if (c === "}" || c === "]" || c === ")") depth--;
+    else if (c === "," && depth === 1) expectKey = true;
+    i++;
+  }
+  return depth === 0 ? keys : null;
+}
+
+/**
+ * The rows control-plane-api's mcp-pod-tools-drift test
+ * (src/__tests__/mcp-pod-tools-drift.test.ts) would report, for a pod
+ * manifest and CP's catalog + registries. Pure; sorted strings:
+ *   missing <tool>        CP curates a pod tool that no longer exists
+ *   uncurated <tool>      a pod tool neither curated nor declared omitted
+ *   readOnlyHint <tool>   the pod's readOnlyHint differs from CP's copy
+ *   input <tool>.<prop>   a pod input the curated copy drops, undeclared
+ *   error-text <tool>()   pod error text prescribes a tool CP does not expose
+ * Not mirrored: CP-internal checks the pod cannot move (proposal wording,
+ * frozen public names, dangling references inside CP's own descriptions).
+ */
+export function cpDriftProblems({
+  manifestTools,
+  toolErrorsSource = "",
+  curated,
+  omittedTools,
+  omittedProps,
+  exempt = [],
+}) {
+  const pod = new Map(manifestTools.map((t) => [t.name, t]));
+  const curatedNames = new Set(curated.map((c) => c.podToolName));
+  const out = new Set();
+  for (const c of curated) {
+    const t = pod.get(c.podToolName);
+    if (!t) {
+      out.add(`missing ${c.podToolName}`);
+      continue;
+    }
+    const ro = t.annotations?.readOnlyHint;
+    if (typeof ro === "boolean" && ro !== c.annotations?.readOnlyHint)
+      out.add(`readOnlyHint ${c.podToolName}`);
+    const mine = new Set(Object.keys(c.inputSchema?.properties ?? {}));
+    for (const prop of Object.keys(t.inputSchema?.properties ?? {})) {
+      // CP injects workspaceId onto every tool (the drift test's own rule).
+      if (prop === "workspaceId" || mine.has(prop)) continue;
+      if (omittedProps.includes(`${c.podToolName}.${prop}`)) continue;
+      out.add(`input ${c.podToolName}.${prop}`);
+    }
+  }
+  for (const name of pod.keys())
+    if (!curatedNames.has(name) && !omittedTools.includes(name))
+      out.add(`uncurated ${name}`);
+  for (const m of toolErrorsSource.matchAll(/\b(synap_[a-z_]+)\(\)/g))
+    if (!curatedNames.has(m[1]) && !exempt.includes(m[1]))
+      out.add(`error-text ${m[1]}()`);
+  return [...out].sort();
 }
 
 // ── changed files (tier 1) ───────────────────────────────────────────────────
@@ -295,6 +455,130 @@ export const CHECKS = [
       return {
         verdict: "FAIL",
         detail: `door-tool-names.generated.ts is stale against ${from}: ${diff.length} row(s) differ (${diff.slice(0, 4).join(", ")}${diff.length > 4 ? ", …" : ""}). The producer changed, not necessarily this PR`,
+      };
+    },
+  },
+  {
+    // THE OTHER DIRECTION (2026-10-29): door-tool-names above asks "did CP
+    // change under us?"; this asks "will THIS change turn CP red?". backend#366
+    // (28 Oct) added four `synap_diagnose` inputs; nothing on the backend side
+    // said so, and control-plane-api's mcp-pod-tools-drift test went red on
+    // CP's next run. This runs that test's checks here, against CP main and
+    // this tree's MCP manifest (cpDriftProblems).
+    // WARN, never FAIL (advisory): the red lands in CP, whose hand-copied
+    // catalog is what must follow; this backend change is correct as it is.
+    // Holding it would make every MCP tool change a two-repo lockstep, and a
+    // Depends-On cannot say "CP follows me". What the incident lacked was the
+    // WARNING: it reaches the PR as an annotation and the step summary, and
+    // `pnpm preflight` locally, naming each CP row to fix.
+    id: "cp-pod-tools-drift",
+    tier: 0,
+    advisory: true,
+    annotate: true,
+    mirrors: null,
+    costHint: 2,
+    fix: `in control-plane-api: curate each new tool/input in ${CP_FILE} (scripts/gen-pod-tools.ts) or declare it in src/__tests__/mcp-pod-tools-drift.test.ts (INTENTIONALLY_OMITTED_*), after this lands`,
+    async run(ctx) {
+      if (/^Depends-On:.*control-plane-api/im.test(ctx.prBody ?? ""))
+        return {
+          verdict: "SKIP",
+          detail:
+            "the PR body names a control-plane-api Depends-On: CP main is not the comparison",
+        };
+      const env = {
+        ...ctx.env,
+        ...(ctx.env.CP_READ_TOKEN ? { GH_TOKEN: ctx.env.CP_READ_TOKEN } : {}),
+      };
+      const raw = (repo, path, useEnv) =>
+        ghRaw(repo, path, "main", useEnv).catch((err) => ({ error: err }));
+      const [cpCatalog, cpTest, mainManifest, mainErrors] = await Promise.all([
+        ctx.cpSource
+          ? { text: readFileSync(ctx.cpSource, "utf8") }
+          : raw(CP_REPO, CP_FILE, env),
+        ctx.cpDriftTestSource
+          ? { text: readFileSync(ctx.cpDriftTestSource, "utf8") }
+          : raw(CP_REPO, CP_DRIFT_TEST, env),
+        mainFile(MCP_MANIFEST, ctx.env),
+        mainFile(MCP_TOOL_ERRORS, ctx.env),
+      ]);
+      for (const [what, r] of [
+        [`${CP_REPO}@main ${CP_FILE}`, cpCatalog],
+        [`${CP_REPO}@main ${CP_DRIFT_TEST}`, cpTest],
+      ])
+        if (r.error)
+          return {
+            verdict: "WARN",
+            detail: `could not read ${what}: ${r.error.message}`,
+          };
+      let curated;
+      try {
+        curated = await importTsModule(cpCatalog.text, "CURATED_POD_TOOLS");
+      } catch (err) {
+        return {
+          verdict: "WARN",
+          detail: `cannot load CP's catalog on node ${process.version} (needs >= 22.18, erasable TS): ${err.message}`,
+        };
+      }
+      const omittedTools = parseRegistryKeys(
+        cpTest.text,
+        "INTENTIONALLY_OMITTED_TOOLS"
+      );
+      const omittedProps = parseRegistryKeys(
+        cpTest.text,
+        "INTENTIONALLY_OMITTED_PROPS"
+      );
+      const exempt = parseRegistryKeys(
+        cpTest.text,
+        "REFERENCEABLE_WITHOUT_EXPOSURE"
+      );
+      if (!omittedTools || !omittedProps || !exempt)
+        return {
+          verdict: "WARN",
+          detail: `could not read the omission registries in ${CP_DRIFT_TEST} (its shape changed: fix parseRegistryKeys)`,
+        };
+      const registries = { curated, omittedTools, omittedProps, exempt };
+      const here = cpDriftProblems({
+        manifestTools: JSON.parse(
+          readFileSync(join(ROOT, MCP_MANIFEST), "utf8")
+        ).tools,
+        toolErrorsSource: readFileSync(join(ROOT, MCP_TOOL_ERRORS), "utf8"),
+        ...registries,
+      });
+      if (here.length === 0)
+        return {
+          verdict: "PASS",
+          detail: `CP main's catalog (${curated.length} curated) holds against this tree's manifest`,
+        };
+      // Which rows this change adds, and which backend main already has.
+      const atMain =
+        mainManifest.error || mainErrors.error
+          ? null
+          : new Set(
+              cpDriftProblems({
+                manifestTools: JSON.parse(mainManifest.text).tools,
+                toolErrorsSource: mainErrors.text,
+                ...registries,
+              })
+            );
+      const added = atMain ? here.filter((p) => !atMain.has(p)) : here;
+      const already = atMain ? here.filter((p) => atMain.has(p)) : [];
+      const list = (xs) =>
+        `${xs.slice(0, 6).join(", ")}${xs.length > 6 ? `, … (${xs.length})` : ""}`;
+      return {
+        verdict: "WARN",
+        detail: [
+          added.length
+            ? `this change turns control-plane-api's mcp-pod-tools-drift test red once it lands: ${list(added)}`
+            : "",
+          already.length
+            ? `CP is already red against backend main (not this change): ${list(already)}`
+            : "",
+          atMain
+            ? ""
+            : "(backend main unread: every row is listed as this change's)",
+        ]
+          .filter(Boolean)
+          .join("; "),
       };
     },
   },
@@ -666,6 +950,7 @@ async function main() {
     env: process.env,
     prBody: process.env.PR_BODY ?? "",
     cpSource: flag("cp-source"),
+    cpDriftTestSource: flag("cp-drift-test-source"),
     base: process.env.PREFLIGHT_BASE || undefined,
     changed: () => (changed ??= changedFiles(ctx)),
   };
@@ -715,6 +1000,15 @@ async function main() {
       if (r.verdict === "FAIL")
         console.log(
           `::error title=Preflight ${r.id}::${r.detail.replace(/\n/g, " ")} — fix: ${r.fix}`
+        );
+      // An advisory check whose warning someone must act on (cp-pod-tools-drift)
+      // shows on the PR's checks page, not only in the step summary.
+      else if (
+        r.verdict === "WARN" &&
+        selected.find((c) => c.id === r.id)?.annotate
+      )
+        console.log(
+          `::warning title=Preflight ${r.id}::${r.detail.replace(/\n/g, " ")} — fix: ${r.fix}`
         );
     process.exit(0);
   }

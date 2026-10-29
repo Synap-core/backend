@@ -416,3 +416,25 @@ describe("pod-observation: posting", () => {
     expect(isKeyRefusal(null)).toBe(false);
   });
 });
+
+describe("pod-observations.yml: the debounce never drops a PR event or a main run", () => {
+  // The concurrency group cancels a waiting post for a PR branch when a newer
+  // CI run of that branch finishes (2026-10-29). A pull_request event
+  // (dev.pr_merged …) or a main run sharing a group with anything would be
+  // dropped the same way: each must fall to its own run's group. Text-level:
+  // it pins the expression, it does not evaluate it.
+  const wf = readFileSync(
+    join(
+      dirname(fileURLToPath(import.meta.url)),
+      "../.github/workflows/pod-observations.yml"
+    ),
+    "utf8"
+  );
+
+  it("only a workflow_run of a non-main branch shares a group", () => {
+    expect(wf).toContain(
+      "  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch != 'main' && format('ci-{0}', github.event.workflow_run.head_branch) || github.run_id }}\n"
+    );
+    expect(wf).toMatch(/^ {2}cancel-in-progress: true$/m);
+  });
+});

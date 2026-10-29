@@ -107,8 +107,10 @@ checkouts are missing; CI lays them out and runs them.
 
 CI has two jobs. **Release gate** (lint, typecheck, migrations on a real
 Postgres, schema coherence, build, a boot smoke test, the Docker build) must be
-green for a commit to be released. **Full suite** (all tests, the test floor,
-the tripwires, `pnpm audit`) reports the rest.
+green for a commit to be released; its parts run as parallel "Release gate:
+…" jobs, and the check named **Release gate** passes only when every part it
+needs succeeded. **Full suite** (all tests, the test floor, the tripwires,
+`pnpm audit`) reports the rest.
 
 ### Tests and guards you add
 

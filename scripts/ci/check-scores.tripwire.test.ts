@@ -69,6 +69,36 @@ describe("check-scores", () => {
     expect(units[0].secs).toBe(22 * 60);
   });
 
+  it("the Release gate's parts and judge are ONE unit, and keep the single job's step keys", () => {
+    // Since 2026-10-29 the Release gate is "Release gate: <part>" jobs plus a
+    // judge named "Release gate". Rows before and after the split must be one
+    // row, or the preflight's `mirrors: "Release gate › Lint"` finds no p.
+    const { units, steps } = observe([
+      pr(1, [
+        job("Release gate: lint", "failure", [["Lint", "failure"]], 0, 5),
+        job(
+          "Release gate: typecheck, build, boot",
+          "success",
+          [["Build", "success"]],
+          0,
+          9
+        ),
+        job("Release gate", "failure", [], 10, 11),
+        job("Release gates and more", "success", [["Lint", "success"]], 0, 1),
+      ]),
+    ]);
+    const gate = units.find((u: { key: string }) => u.key === "Release gate");
+    expect(gate?.failed).toBe(true);
+    expect(gate?.secs).toBe(11 * 60);
+    expect(gate?.failedSteps).toEqual(["Release gate › Lint"]);
+    expect(steps.map((s: { key: string }) => s.key)).toEqual([
+      "Release gate › Lint",
+      "Release gate › Build",
+      // A job that merely starts with the words is not a part.
+      "Release gates and more › Lint",
+    ]);
+  });
+
   it("a red main also had at the time is exonerated; the rest counts", () => {
     const obs = [0, 1, 2, 3].map((i) => ({
       run: { event: "pull_request", branch: "fix/x", id: i },

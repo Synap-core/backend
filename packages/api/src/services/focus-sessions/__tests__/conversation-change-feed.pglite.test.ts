@@ -361,10 +361,16 @@ describe("the conversation change feed", () => {
       occurredAt: "2026-10-28T08:00:00.000Z",
       ingestedAt: new Date(Date.now() + 1000).toISOString(),
     });
+    // Heard of AFTER the cursor, said explicitly. Left to the row time (DB
+    // now()), it raced the cursor (finding bf1e2ca6): the feed keeps a fact
+    // when heardAt > cursor, both truncated to the millisecond, and an insert
+    // landing in the cursor's own millisecond (or on PGlite's clock a hair
+    // behind JS's Date) compared EQUAL and was not news, so 9002 went missing.
     await prFact({
       type: "dev.pr_closed",
       number: 9002,
       sessionId: resolved.sessionId,
+      ingestedAt: new Date(Date.now() + 1000).toISOString(),
     });
     // Nobody's PR here; and another person's fact on a declared number.
     await prFact({ type: "dev.pr_merged", number: 9003 });

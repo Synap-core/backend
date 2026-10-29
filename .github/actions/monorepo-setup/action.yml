@@ -2,9 +2,10 @@ name: Monorepo layout + dependencies
 description: >
   Lays out ../synap-control-plane-api and ../synap-app beside this checkout
   (the cross-repo tripwires read them) through the layout resolver
-  (scripts/layout/layout.mjs), then sets up Node + pnpm and installs.
-  Shared by ci.yml's release-gate and full-suite jobs so the two can never set
-  up differently. The repository itself must already be checked out.
+  (scripts/layout/layout.mjs), then sets up Node + pnpm, installs, and builds
+  the workspace dependencies through the turbo cache. Shared by every ci.yml
+  job that installs, so they can never set up differently. The repository
+  itself must already be checked out.
 
 inputs:
   app-id:
@@ -19,11 +20,27 @@ inputs:
     description: secrets.CROSS_REPO_TOKEN (transition fallback for the Reader App)
     required: false
     default: ""
+  build:
+    description: >
+      "true": build the workspace dependencies (turbo, through the turbo
+      cache). "false": install only (a job that lints needs no dist).
+    required: false
+    default: "true"
+  restore-turbo-cache:
+    description: >
+      "true": restore the newest turbo cache before building. "false": build
+      from an empty cache (main's Release gate, so the entry it saves holds
+      only that commit's tasks and does not grow run after run).
+    required: false
+    default: "true"
 
 outputs:
   token:
     description: The read token used for the sibling checkouts
     value: ${{ steps.app-token.outputs.token || inputs.cross-repo-token }}
+  turbo-cache-key:
+    description: The key a job saves .turbo/cache under (actions/cache/save)
+    value: ${{ steps.turbo-key.outputs.key }}
 
 runs:
   using: composite
@@ -114,9 +131,47 @@ runs:
       shell: bash
       run: pnpm install --frozen-lockfile
 
+    # TURBO CACHE (2026-10-29, lane cispeed). The build below took ~110 s in
+    # EVERY job of a run (7 jobs, measured on run 40786725416: install 9 s,
+    # pnpm store restore 9 s, build 109 s). Turbo's local cache
+    # (.turbo/cache) is restored from an earlier run, so a package whose
+    # inputs did not change is replayed instead of rebuilt.
+    # WHY A HIT IS NEVER STALE: turbo replays a task only when the task's
+    # own hash matches, and the hash covers every git-tracked file of the
+    # package ($TURBO_DEFAULT$ in turbo.json; packages/api leaves out its
+    # tests, which its build never reads), the hashes of the packages it
+    # depends on, the lockfile entries it resolves, the root tsconfig.json,
+    # and the env turbo.json declares. Files a build reads from OUTSIDE its
+    # package are declared in that package's turbo.json ($TURBO_ROOT$/...).
+    # The actions/cache key only picks WHICH cache directory to start from:
+    # an exact key (a re-run of this commit) or, failing that, the newest
+    # entry this ref may read (its own PR's, else main's). A cache from
+    # another commit is safe for the same reason: turbo checks every task.
+    # A miss builds exactly as before. The Node version is in the key:
+    # turbo does not hash the node binary.
+    - name: Turbo cache key
+      id: turbo-key
+      if: ${{ inputs.build == 'true' }}
+      shell: bash
+      env:
+        NODE_PIN: ${{ hashFiles('.node-version') }}
+      run: |
+        echo "prefix=${RUNNER_OS}-turbo-v1-${NODE_PIN}-" >> "$GITHUB_OUTPUT"
+        echo "key=${RUNNER_OS}-turbo-v1-${NODE_PIN}-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
+    - name: Restore the turbo cache
+      if: ${{ inputs.build == 'true' && inputs.restore-turbo-cache == 'true' }}
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      with:
+        path: .turbo/cache
+        key: ${{ steps.turbo-key.outputs.key }}
+        restore-keys: |
+          ${{ steps.turbo-key.outputs.prefix }}
+
     # Build workspace packages first so TypeScript can resolve types (project
     # references need built .d.ts files) and tests can import their dist.
     - name: Build workspace dependencies
+      if: ${{ inputs.build == 'true' }}
       shell: bash
       run: |
         pnpm turbo build \
@@ -130,3 +185,12 @@ runs:
           --filter='@synap/auth' \
           --filter='@synap/events' \
           || echo "⚠️  Some builds may have failed, continuing..."
+
+    # skills/<pkg>/SKILL.md is generated (gitignored) by @synap/api's build
+    # script, and the api tripwires read it. A turbo cache HIT replays the
+    # api's dist without running that script, so it runs here every time
+    # (idempotent, well under a second).
+    - name: Assemble the skill packages (skills/build.mjs)
+      if: ${{ inputs.build == 'true' }}
+      shell: bash
+      run: node skills/build.mjs

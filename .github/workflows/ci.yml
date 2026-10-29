@@ -38,10 +38,14 @@ permissions:
 #                  lints, typechecks, builds, migrates a real Postgres, boots,
 #                  and builds the image. docker-publish.yml's ci-gate reads THIS
 #                  job's check run ("Release gate") for the sha, nothing else.
+#                  Since 2026-10-29 its work runs in four parallel "Release
+#                  gate: <part>" jobs and the job named "Release gate" judges
+#                  them (see the release-gate block below).
 #   full-suite   — the test suites, the floor, the tripwires, the audit. Red here
 #                  is a backlog to burn down, not a release blocker.
 # They run in parallel and set up through ONE composite action
-# (.github/actions/monorepo-setup) so they can never set up differently.
+# (.github/actions/monorepo-setup) so they can never set up differently; its
+# turbo cache replays the build of every package whose inputs did not change.
 
 # WHAT RUNS (2026-10-27, pod document "Backend CI: where the 2 hours per PR
 # go"): the `changes` job reads what a pull request touched and turns off what
@@ -180,60 +184,46 @@ jobs:
           echo "::error::Preflight red: $REDS. Reproduce with 'pnpm preflight'; the step summary has each fix."
           exit 1
 
-  release-gate:
-    name: Release gate
+  # THE RELEASE GATE (2026-10-29, lane cispeed): four jobs in parallel and
+  # one judge named "Release gate", the required check that docker-publish.yml
+  # (scripts/ci/release-gate-wait.mjs) and the merge queue
+  # (scripts/ci-changes.mjs QUEUE_REUSE_CHECKS) read by that exact name.
+  # Until then it was ONE sequential job: 23.5 min on a run that changed CI
+  # files (run 40786725416: setup 3, lint 2.5, format 1.5, deploy tests 4.8,
+  # typecheck 2.3, gen-types 1.1, build 1.6, Docker 5.7), 8.5 min otherwise.
+  #   Release gate: lint                    conformance, lint, format, orphan
+  #                                         routes (install, no build, no db)
+  #   Release gate: typecheck, build, boot  typecheck, gen-types:check,
+  #                                         migrate, schema, build, boot,
+  #                                         smoke, schema hash (Postgres)
+  #   Release gate: deploy tests            deploy/__tests__ + pod-agent (no
+  #                                         install); only when image-relevant
+  #   Release gate: Docker image            build + image smoke (no install);
+  #                                         only when image-relevant
+  #   Release gate (judge)                  fails unless every sub-job it needs
+  #                                         succeeded (scripts/ci/release-gate-judge.mjs)
+  # Every step of the old job is in exactly one sub-job, under its old name
+  # (scripts/ci/check-scores.mjs folds "Release gate: <part>" back into the
+  # "Release gate" unit, so its rows stay comparable).
+  gate-lint:
+    name: "Release gate: lint"
     needs: [changes, preflight]
-    if: ${{ !cancelled() && (needs.preflight.outputs.hold == 'true' || needs.changes.result != 'success' || needs.changes.outputs.gate == 'true' || needs.changes.outputs.hold == 'negctl') }}
+    if: ${{ !cancelled() && needs.preflight.outputs.hold != 'true' && (needs.changes.result != 'success' || needs.changes.outputs.gate == 'true') }}
     runs-on: ubuntu-latest
-    # ~1.5x the slower of two measured runs (15.5 min in 39176917085, 21 min
-    # in 39179071834 — runner speed varies).
-    timeout-minutes: 32
-
-    services:
-      postgres:
-        # No database for a negctl or preflight hold: the job only reports red.
-        image: ${{ needs.changes.outputs.hold != 'negctl' && needs.preflight.outputs.hold != 'true' && 'timescale/timescaledb-ha:pg16' || '' }}
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: synap_test
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 5432:5432
-
+    timeout-minutes: 20
     steps:
-      # A negctl/* branch never merges. The Release gate is a required check,
-      # and a job skipped by its `if:` reports success, so a negctl PR to main
-      # could merge on a green skip. It reports red instead. See ci-changes.mjs.
-      - name: Never merges (negctl)
-        if: ${{ needs.changes.outputs.hold == 'negctl' }}
-        run: |
-          echo "::error::A negctl/* branch never merges: this required check reports red on purpose. Run the negative control inside the devbox job (NEG_REF) and open no PR."
-          exit 1
-
-      # A red preflight: this required check FAILS without doing the work (a
-      # job skipped by its `if:` would report success). See the header.
-      - name: Preflight red (${{ needs.preflight.outputs.reds }})
-        if: ${{ needs.preflight.outputs.hold == 'true' }}
-        run: |
-          echo "::error::Preflight is red (${{ needs.preflight.outputs.reds }}): this check did not run its work. Open the Preflight job for each red and its fix, or run 'pnpm preflight'."
-          exit 1
-
       - name: Checkout Repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # Cross-repo layout (../synap-control-plane-api, ../synap-app), Node,
-      # pnpm, install, and the workspace-dependency build. See the action.
+      # The layout (ci/scripts/check.mjs scans the sibling repos' workflows)
+      # and the install. eslint here is not type-aware: no dist needed.
       - name: Monorepo layout + dependencies
         uses: ./.github/actions/monorepo-setup
         with:
           app-id: ${{ vars.SYNAP_READER_APP_ID }}
           app-key: ${{ secrets.SYNAP_READER_APP_KEY }}
           cross-repo-token: ${{ secrets.CROSS_REPO_TOKEN }}
+          build: "false"
 
       # CI/CD CONFORMANCE GATE. Every publish workflow across ALL repos must
       # satisfy the shared rules in ci/repos.yml (no dual pnpm pin, id-token:
@@ -262,28 +252,48 @@ jobs:
         run: pnpm format || echo "⚠️  Format check failed - run 'pnpm format:fix' to auto-fix"
         continue-on-error: true
 
-      # Deploy safety tripwires (daemon-free). pgdata-safety guards the
-      # 2026-10-02 pod wipe: postgres data must live on its volume, every update
-      # door must run the placement guard first, and backups must land on the
-      # host. They guard what a release DOES to a pod, so they gate releases.
-      - name: Deploy safety tests
-        if: ${{ needs.changes.result != 'success' || needs.changes.outputs.image == 'true' }}
-        run: |
-          python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
-          # EVERY deploy/__tests__/*.test.sh, derived by glob: a new test joins
-          # by existing. stdin is closed: a test that reads it would hang the job.
-          failed=""; n=0
-          for t in deploy/__tests__/*.test.sh; do
-            n=$((n+1)); echo "::group::$t"
-            bash "$t" </dev/null || failed="$failed $t"
-            echo "::endgroup::"
-          done
-          [ "$n" -ge 30 ] || { echo "::error::only $n deploy tests found (glob moved?)"; exit 1; }
-          node --test deploy/pod-agent/*.test.js || failed="$failed deploy/pod-agent"
-          [ -z "$failed" ] || { echo "::error::deploy tests failed:$failed"; exit 1; }
-
       - name: Check orphaned REST route files
         run: node packages/api/src/routers/hub-protocol/rest/check-orphan-routes.mjs
+
+  gate-build:
+    name: "Release gate: typecheck, build, boot"
+    needs: [changes, preflight]
+    if: ${{ !cancelled() && needs.preflight.outputs.hold != 'true' && (needs.changes.result != 'success' || needs.changes.outputs.gate == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: timescale/timescaledb-ha:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: synap_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Cross-repo layout (../synap-control-plane-api, ../synap-app), Node,
+      # pnpm, install, and the workspace-dependency build through the turbo
+      # cache. A push to main builds from an EMPTY turbo cache: the entry it
+      # saves below then holds exactly that commit's tasks, and PR runs start
+      # from it.
+      - name: Monorepo layout + dependencies
+        id: setup
+        uses: ./.github/actions/monorepo-setup
+        with:
+          app-id: ${{ vars.SYNAP_READER_APP_ID }}
+          app-key: ${{ secrets.SYNAP_READER_APP_KEY }}
+          cross-repo-token: ${{ secrets.CROSS_REPO_TOKEN }}
+          restore-turbo-cache: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'false' || 'true' }}
 
       # @synap/api's `tsc --noEmit` outgrew Node's default heap on the hosted
       # runner (2026-10-23: "JavaScript heap out of memory", exit 134, on main
@@ -363,12 +373,68 @@ jobs:
           echo "generated.d.ts: $want  /api/hub/health: $got"
           [ -n "$want" ] && [ "$got" = "$want" ] || { echo "::error::/api/hub/health schemaHash ($got) is not the hash of packages/api-types/src/generated.d.ts ($want)"; exit 1; }
 
-      # The image smoke: in the BUILT image, the code-skill sandbox's native
-      # addon loads and runs an isolate. isolated-vm is resolved from @synap/api
-      # (the package that imports it), with the flag its README requires on
-      # Node >= 20, and the image's CMD must carry that flag too.
+      # The turbo cache this job built (every package's build and typecheck),
+      # for the next runs of this ref and, from main, of every PR. Only after
+      # a green build: turbo caches only tasks that succeeded anyway. Not from
+      # a merge-queue entry, whose ref is deleted once it merges.
+      - name: Save the turbo cache
+        if: ${{ success() && github.event_name != 'merge_group' }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: .turbo/cache
+          key: ${{ steps.setup.outputs.turbo-cache-key }}
+
+  # Deploy safety tripwires (daemon-free). pgdata-safety guards the
+  # 2026-10-02 pod wipe: postgres data must live on its volume, every update
+  # door must run the placement guard first, and backups must land on the
+  # host. They guard what a release DOES to a pod, so they gate releases.
+  # bash, python3 and node only: no install, no layout (until 2026-10-29 they
+  # ran inside the single gate job, after its install, and read none of it).
+  gate-deploy:
+    name: "Release gate: deploy tests"
+    needs: [changes, preflight]
+    if: ${{ !cancelled() && needs.preflight.outputs.hold != 'true' && (needs.changes.result != 'success' || (needs.changes.outputs.gate == 'true' && needs.changes.outputs.image == 'true')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: ".node-version"
+
+      - name: Deploy safety tests
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
+          # EVERY deploy/__tests__/*.test.sh, derived by glob: a new test joins
+          # by existing. stdin is closed: a test that reads it would hang the job.
+          failed=""; n=0
+          for t in deploy/__tests__/*.test.sh; do
+            n=$((n+1)); echo "::group::$t"
+            bash "$t" </dev/null || failed="$failed $t"
+            echo "::endgroup::"
+          done
+          [ "$n" -ge 30 ] || { echo "::error::only $n deploy tests found (glob moved?)"; exit 1; }
+          node --test deploy/pod-agent/*.test.js || failed="$failed deploy/pod-agent"
+          [ -z "$failed" ] || { echo "::error::deploy tests failed:$failed"; exit 1; }
+
+  # The image smoke: in the BUILT image, the code-skill sandbox's native
+  # addon loads and runs an isolate. isolated-vm is resolved from @synap/api
+  # (the package that imports it), with the flag its README requires on
+  # Node >= 20, and the image's CMD must carry that flag too. The image is
+  # built from a clean checkout, as docker-publish.yml builds it.
+  gate-image:
+    name: "Release gate: Docker image"
+    needs: [changes, preflight]
+    if: ${{ !cancelled() && needs.preflight.outputs.hold != 'true' && (needs.changes.result != 'success' || (needs.changes.outputs.gate == 'true' && needs.changes.outputs.image == 'true')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
       - name: Test Docker Build
-        if: ${{ needs.changes.result != 'success' || needs.changes.outputs.image == 'true' }}
         run: |
           docker build -t synap-backend:test -f deploy/Dockerfile .
           docker run --rm synap-backend:test node --version
@@ -391,6 +457,56 @@ jobs:
           docker run --rm -v "$PWD/scripts/skill-runner-sandbox-smoke.mjs:/smoke/skill-runner-sandbox-smoke.mjs:ro" \
             synap-backend:test node --no-node-snapshot /smoke/skill-runner-sandbox-smoke.mjs
           docker rmi synap-backend:test
+
+  # The judge: the ONE check named "Release gate". It runs whenever the gate
+  # is due (same condition as the single job had) and fails unless every
+  # sub-job it needs ended `success`; the deploy tests and the image only
+  # when the change is image-relevant, and then they too must succeed. A
+  # sub-job that failed, was cancelled (a timeout), or was skipped while
+  # required is red here (scripts/ci/release-gate-judge.mjs reads `needs`
+  # whole, so a sub-job added to `needs:` is required by existing).
+  # `!cancelled()`, not `always()`: a superseded (cancelled) run then starts
+  # no runner just to report red, and its "Release gate" is not a success
+  # either way (cancelled or never created), so it cannot merge or release.
+  release-gate:
+    name: Release gate
+    needs: [changes, preflight, gate-lint, gate-build, gate-deploy, gate-image]
+    if: ${{ !cancelled() && (needs.preflight.outputs.hold == 'true' || needs.changes.result != 'success' || needs.changes.outputs.gate == 'true' || needs.changes.outputs.hold == 'negctl') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # A negctl/* branch never merges. The Release gate is a required check,
+      # and a job skipped by its `if:` reports success, so a negctl PR to main
+      # could merge on a green skip. It reports red instead. See ci-changes.mjs.
+      - name: Never merges (negctl)
+        if: ${{ needs.changes.outputs.hold == 'negctl' }}
+        run: |
+          echo "::error::A negctl/* branch never merges: this required check reports red on purpose. Run the negative control inside the devbox job (NEG_REF) and open no PR."
+          exit 1
+
+      # A red preflight: this required check FAILS without doing the work (a
+      # job skipped by its `if:` would report success). See the header.
+      - name: Preflight red (${{ needs.preflight.outputs.reds }})
+        if: ${{ needs.preflight.outputs.hold == 'true' }}
+        run: |
+          echo "::error::Preflight is red (${{ needs.preflight.outputs.reds }}): this check did not run its work. Open the Preflight job for each red and its fix, or run 'pnpm preflight'."
+          exit 1
+
+      - name: Checkout the judge
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: scripts/ci/release-gate-judge.mjs
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Every Release gate job succeeded
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+          # The jobs that run only for an image-relevant change, and whether
+          # this change is one (the same condition their `if:` reads).
+          IMAGE_JOBS: gate-deploy gate-image
+          IMAGE_DUE: ${{ needs.changes.result != 'success' || needs.changes.outputs.image == 'true' }}
+        run: node scripts/ci/release-gate-judge.mjs
 
   # The Full suite: 4 shard jobs run the tests, one judge job ("Full suite", the
   # required check) reads their reports and applies the ratchet once. Measured

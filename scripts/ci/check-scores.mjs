@@ -78,7 +78,7 @@ export const HOLD_STEP =
 // checks: not checks. (Ranked, their tiny cost let the Laplace prior of a step
 // that never failed outrank every real check.)
 const BOOKKEEPING =
-  /^(Set up job|Complete job|Post |Run actions\/|Stop containers|Initialize containers|Upload |API log$)/;
+  /^(Set up job|Complete job|Post |Run actions\/|Stop containers|Initialize containers|Upload |API log$|Save the turbo cache$)/;
 // Setup steps (checkout, token, toolchain, install): listed with their own p (an
 // install can fail), ranked after the checks: no preflight can run them sooner.
 export const SETUP_STEP =
@@ -86,9 +86,21 @@ export const SETUP_STEP =
 // Fewer runs than this and p is mostly the Laplace prior: listed, ranked last.
 const MIN_SAMPLE = 10;
 
-// The Full suite's shards and judge are one unit; every other job is its own.
+// The Full suite's shards and judge are one unit, and so are the Release
+// gate's parallel parts ("Release gate: lint", … since 2026-10-29) and its
+// judge; every other job is its own.
 export const unitOf = (jobName) =>
-  /^Full suite( \(shard \d+\/\d+\))?$/.test(jobName) ? "Full suite" : jobName;
+  /^Full suite( \(shard \d+\/\d+\))?$/.test(jobName)
+    ? "Full suite"
+    : /^Release gate(: .+)?$/.test(jobName)
+      ? "Release gate"
+      : jobName;
+
+// The job half of a step's key. A Release gate part keeps the key its step had
+// in the single job ("Release gate › Lint"), so the rows of runs before and
+// after the split are one row, and the preflight's `mirrors` still find them.
+export const stepOwner = (jobName) =>
+  unitOf(jobName) === "Release gate" ? "Release gate" : jobName;
 
 export const laplace = (f, n) => (f + 1) / (n + 2);
 export const median = (xs) => {
@@ -229,7 +241,7 @@ export function observe(runs) {
         if (!s.started || !s.completed) continue;
         steps.push({
           run: r,
-          key: `${job.name} › ${s.name}`,
+          key: `${stepOwner(job.name)} › ${s.name}`,
           unit: unitOf(job.name),
           failed: s.conclusion === "failure",
           secs: Math.max(0, secs(s.started, s.completed)),
@@ -250,7 +262,7 @@ export function observe(runs) {
       if (job.conclusion === "failure") {
         cur.failed = true;
         if (failedStep)
-          cur.failedSteps.push(`${job.name} › ${failedStep.name}`);
+          cur.failedSteps.push(`${stepOwner(job.name)} › ${failedStep.name}`);
       }
       byUnit.set(u, cur);
     }

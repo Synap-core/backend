@@ -22,8 +22,14 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-// @ts-expect-error — plain ESM script, no declarations
-import { CHECKS, inScoreOrder, runChecks } from "./preflight.mjs";
+import {
+  CHECKS,
+  cpDriftProblems,
+  inScoreOrder,
+  parseRegistryKeys,
+  runChecks,
+  // @ts-expect-error — plain ESM script, no declarations
+} from "./preflight.mjs";
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -179,6 +185,158 @@ describe("preflight --ci: door-tool-names against a CP catalog file", () => {
     expect(r.outputs).toContain("red=true");
     expect(r.outputs).toContain("reds=door-tool-names");
     expect(r.code).toBe(0);
+  });
+});
+
+// cp-pod-tools-drift: control-plane-api's mcp-pod-tools-drift test, run from
+// the backend side (backend#366 → CP red, 28 Oct). Each row of the pure part
+// is one rule of CP's test; the seam runs the CLI on catalog + registry files
+// against this tree's real manifest.
+describe("preflight: cp-pod-tools-drift (will this change turn CP red?)", () => {
+  const tool = (
+    name: string,
+    props: string[],
+    readOnlyHint = true
+  ): Record<string, unknown> => ({
+    name,
+    annotations: { readOnlyHint },
+    inputSchema: {
+      properties: Object.fromEntries(props.map((p) => [p, {}])),
+    },
+  });
+  const curatedTool = (
+    podToolName: string,
+    props: string[],
+    readOnlyHint = true
+  ) => ({
+    podToolName,
+    annotations: { readOnlyHint },
+    inputSchema: { properties: Object.fromEntries(props.map((p) => [p, {}])) },
+  });
+  const base = {
+    curated: [
+      curatedTool("synap_ask", ["query"]),
+      curatedTool("synap_diagnose", ["type", "id"]),
+    ],
+    omittedTools: ["synap_request_upload"],
+    omittedProps: ["synap_ask.compare"],
+    exempt: [],
+  };
+  const manifest = [
+    tool("synap_ask", ["query", "compare", "workspaceId"]),
+    tool("synap_diagnose", ["type", "id"]),
+    tool("synap_request_upload", ["path"]),
+  ];
+
+  it("a manifest CP's catalog covers reports nothing (declared omissions, workspaceId)", () => {
+    expect(cpDriftProblems({ manifestTools: manifest, ...base })).toEqual([]);
+  });
+
+  it("replays backend#366: new synap_diagnose inputs are named, one row each", () => {
+    const m = manifest.map((t) =>
+      t.name === "synap_diagnose"
+        ? tool("synap_diagnose", ["type", "id", "since", "groupBy"])
+        : t
+    );
+    expect(cpDriftProblems({ manifestTools: m, ...base })).toEqual([
+      "input synap_diagnose.groupBy",
+      "input synap_diagnose.since",
+    ]);
+  });
+
+  it.each([
+    [
+      "a new pod tool, neither curated nor declared",
+      [...manifest, tool("synap_new", [])],
+      "",
+      ["uncurated synap_new"],
+    ],
+    [
+      "a curated tool the pod removed or renamed",
+      manifest.filter((t) => t.name !== "synap_diagnose"),
+      "",
+      ["missing synap_diagnose"],
+    ],
+    [
+      "a read-only flip",
+      manifest.map((t) =>
+        t.name === "synap_ask"
+          ? tool("synap_ask", ["query", "compare"], false)
+          : t
+      ),
+      "",
+      ["readOnlyHint synap_ask"],
+    ],
+    [
+      "pod error text prescribing an uncurated tool",
+      manifest,
+      "Retry; if it persists call synap_request_upload() then synap_ask().",
+      ["error-text synap_request_upload()"],
+    ],
+  ])("%s", (_label, manifestTools, toolErrorsSource, want) => {
+    expect(
+      cpDriftProblems({ manifestTools, toolErrorsSource, ...base })
+    ).toEqual(want);
+  });
+
+  it("reads the registries' keys past braces, commas, colons and comments in the reasons", () => {
+    const src = `
+      const INTENTIONALLY_OMITTED_TOOLS: Record<string, string> = {
+        // synap_commented_out: "not a key",
+        synap_request_upload:
+          "claude.ai cannot send file bytes; {not: a, key}.",
+        "synap_ask.compare": 'a reason, with: punctuation',
+        /* block: comment */ synap_wait_for_answer:
+          "2026-09-28 (V1 W1): a bounded " +
+          "LONG-POLL, up to 90s",
+      };
+      const EMPTY: Record<string, string> = {};
+    `;
+    expect(parseRegistryKeys(src, "INTENTIONALLY_OMITTED_TOOLS")).toEqual([
+      "synap_request_upload",
+      "synap_ask.compare",
+      "synap_wait_for_answer",
+    ]);
+    expect(parseRegistryKeys(src, "EMPTY")).toEqual([]);
+    expect(parseRegistryKeys(src, "NOT_THERE")).toBeNull();
+  });
+
+  it("the CLI warns (never reds), names the rows, and annotates the PR in CI", () => {
+    const dir = mkdtempSync(join(tmpdir(), "preflight-cp-"));
+    const catalog = join(dir, "mcp-pod-tools.ts");
+    const driftTest = join(dir, "mcp-pod-tools-drift.test.ts");
+    const out = join(dir, "github-output");
+    // A catalog curating ONE real tool: every other manifest tool is uncurated.
+    writeFileSync(
+      catalog,
+      `export interface T { podToolName: string }\nexport const CURATED_POD_TOOLS: T[] = [{ name: "ask", podToolName: "synap_ask", annotations: { readOnlyHint: true }, inputSchema: { properties: {} } }];\n`
+    );
+    writeFileSync(
+      driftTest,
+      `const INTENTIONALLY_OMITTED_PROPS: Record<string, string> = {};\nconst INTENTIONALLY_OMITTED_TOOLS: Record<string, string> = {};\nconst REFERENCEABLE_WITHOUT_EXPOSURE: Record<string, string> = {};\n`
+    );
+    writeFileSync(out, "");
+    const env = { ...process.env, GITHUB_OUTPUT: out, PR_BODY: "" };
+    delete env.GITHUB_STEP_SUMMARY;
+    const r = spawnSync(
+      "node",
+      [
+        "scripts/preflight.mjs",
+        "--ci",
+        "--only=cp-pod-tools-drift",
+        `--cp-source=${catalog}`,
+        `--cp-drift-test-source=${driftTest}`,
+      ],
+      { cwd: REPO, encoding: "utf8", env }
+    );
+    const text = `${r.stdout}${r.stderr}`;
+    expect(text).toContain("WARN  cp-pod-tools-drift");
+    // One curated tool against the real manifest: dozens of rows, listed six
+    // and counted (as this change's, or main's when origin/main is readable).
+    expect(text).toMatch(/(turns control-plane-api|already red).*… \(\d{2,}\)/);
+    expect(text).toContain("::warning title=Preflight cp-pod-tools-drift::");
+    expect(readFileSync(out, "utf8").split("\n")).toContain("red=false");
+    expect(r.status).toBe(0);
   });
 });
 

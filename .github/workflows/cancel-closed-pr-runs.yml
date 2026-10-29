@@ -1,0 +1,46 @@
+name: Cancel a closed PR's runs
+
+# When a pull request closes (merged or not), its CI runs still queued or
+# running are cancelled: they judge a branch nobody will merge again, and hold
+# slots every open PR waits behind (11 of ~50 queued runs at 2026-10-28 22:20Z
+# were CI for PRs already merged). Only that PR's own `pull_request` runs of
+# ci.yml: never a push run (main, develop, release/**), never a merge-queue
+# run, never "Pod observations" (it posts this very close). The rules and
+# their tripwire: scripts/ci/cancel-closed-pr-runs.mjs.
+#
+# A fork's PR gets a read-only token: the cancel calls are refused, and the
+# script only warns.
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions: {}
+
+concurrency:
+  group: cancel-closed-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  cancel:
+    name: Cancel this PR's CI runs
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      # Least privilege: list and cancel workflow runs, read the script.
+      actions: write
+      contents: read
+    steps:
+      # Only the script, at the PR's head (its merge ref may be gone once
+      # merged).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          sparse-checkout: scripts/ci/cancel-closed-pr-runs.mjs
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Cancel the PR's queued and running CI runs
+        run: node scripts/ci/cancel-closed-pr-runs.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
