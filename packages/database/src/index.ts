@@ -489,6 +489,27 @@ export {
   lifecycleColumnsFor,
   type LifecycleColumns,
 } from "./services/lifecycle/lifecycle-columns.js";
+// When we last spoke to someone (0359): the one forward-only door + the rule
+// of what counts, shared by the reactor, the sweep and the recompute.
+export {
+  LAST_INTERACTION_PROPERTY,
+  noteInteraction,
+  type NoteInteractionInput,
+  type NoteInteractionResult,
+} from "./services/interactions/note-interaction.js";
+export {
+  INTERACTION_RELATION_TYPES,
+  OUTREACH_INTERACTION_MOVES,
+  OUTREACH_TOUCH_KIND,
+} from "./services/interactions/interaction-kinds.js";
+export {
+  collectInteractionEvidence,
+  noteInteractionsFrom,
+  rebuildLastInteraction,
+  type EvidenceScope,
+  type InteractionEvidence,
+  type RebuildLastInteractionResult,
+} from "./services/interactions/interaction-evidence.js";
 export {
   resolvePropertyLabel,
   resolvePropertyOptions,

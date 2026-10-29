@@ -39,6 +39,8 @@ import { assertKnownProfileSlug } from "../../utils/assert-known-profile-slug.js
 import {
   entityListOrderBySchema,
   entityListOrderBySql,
+  lastInteractionWindowFields,
+  lastInteractionWindowWhere,
 } from "../../utils/entity-list-sort.js";
 import {
   paginatedInput,
@@ -374,6 +376,13 @@ export const readProcs = {
          * page 2 continues page 1 in this order. Omitted = newest created first.
          */
         orderBy: entityListOrderBySchema.optional(),
+        /**
+         * LAST-INTERACTION WINDOW — "who haven't I spoken to in a month" =
+         * `lastInteractionBefore: <now-30d>` + `includeNever: true`. Half-open
+         * like the creation window; `includeNever` admits the never-contacted.
+         * One rule for every door: `lastInteractionWindowWhere`.
+         */
+        ...lastInteractionWindowFields,
       })
     )
     .query(async ({ input, ctx }) => {
@@ -609,6 +618,14 @@ export const readProcs = {
       if (input.createdBefore) {
         conditions.push(lt(entities.createdAt, input.createdBefore));
       }
+      const interactionWindow = lastInteractionWindowWhere(input);
+      if ("error" in interactionWindow) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: interactionWindow.error,
+        });
+      }
+      if (interactionWindow.where) conditions.push(interactionWindow.where);
 
       const results = await db.query.entities.findMany({
         where: and(...conditions),

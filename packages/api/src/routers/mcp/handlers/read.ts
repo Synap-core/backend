@@ -39,6 +39,7 @@ import { documents, eq, getDb } from "@synap/database";
 import { classifyRoomAuthor } from "../../../services/focus-sessions/room-messages.js";
 import { AccessContext, scopedDb } from "../../../access/index.js";
 import {
+  lastInteractionWindowWhere,
   parseEntityListSort,
   type EntityListOrderBy,
 } from "../../../utils/entity-list-sort.js";
@@ -259,6 +260,29 @@ export const readHandlers: McpHandlerMap = {
       if ("error" in parsed) return ok({ error: parsed.error });
       orderBy = parsed.orderBy;
     }
+    // "Who haven't I spoken to in a month": the last-interaction window. An
+    // unparseable or inverted bound is an error, never an empty "nobody".
+    const bound = (key: string): Date | undefined | null => {
+      const raw = args[key];
+      if (raw === undefined || raw === null || raw === "") return undefined;
+      const d = new Date(String(raw));
+      return Number.isNaN(d.getTime()) ? null : d;
+    };
+    const lastInteractionAfter = bound("lastInteractionAfter");
+    const lastInteractionBefore = bound("lastInteractionBefore");
+    if (lastInteractionAfter === null || lastInteractionBefore === null) {
+      return ok({
+        error:
+          "lastInteractionAfter/lastInteractionBefore must be ISO-8601 dates (e.g. 2026-09-26T00:00:00Z)",
+      });
+    }
+    const interactionWindow = lastInteractionWindowWhere({
+      lastInteractionAfter,
+      lastInteractionBefore,
+    });
+    if ("error" in interactionWindow) {
+      return ok({ error: interactionWindow.error });
+    }
     const page = await caller.entities.getEntities({
       userId,
       profileSlug: profileSlug || undefined,
@@ -271,6 +295,9 @@ export const readHandlers: McpHandlerMap = {
       // PAGING (plan 9992207a, c-paging): one row past the page tells whether
       // another page exists — the hub forwarder returns rows, not a total.
       ...(orderBy ? { orderBy } : {}),
+      ...(lastInteractionAfter ? { lastInteractionAfter } : {}),
+      ...(lastInteractionBefore ? { lastInteractionBefore } : {}),
+      ...(args.includeNever === true ? { includeNever: true } : {}),
       limit: limit + 1,
       offset,
     });

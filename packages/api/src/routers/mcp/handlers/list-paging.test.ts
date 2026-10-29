@@ -200,8 +200,41 @@ describe("synap_get_entities — sort", () => {
 
   it("an unknown sortBy is an error, never a silently unsorted list", async () => {
     getEntities.mockClear();
-    const out = await call({ sortBy: "lastInteractionAt" });
+    const out = await call({ sortBy: "dueDate" });
     expect(out.error).toMatch(/Unsupported sort/);
+    expect(getEntities).not.toHaveBeenCalled();
+  });
+
+  it("'who haven't I spoken to in a month' reaches the list door whole", async () => {
+    getEntities.mockClear();
+    await call({
+      facetSlug: "lead",
+      lastInteractionBefore: "2026-09-26T00:00:00Z",
+      includeNever: true,
+      sortBy: "lastInteractionAt",
+      sortDir: "asc",
+    });
+    expect(getEntities.mock.calls[0]![0]).toMatchObject({
+      facetSlug: "lead",
+      lastInteractionBefore: new Date("2026-09-26T00:00:00Z"),
+      includeNever: true,
+      orderBy: { field: "lastInteractionAt", dir: "asc" },
+    });
+  });
+
+  it.each([
+    ["an unparseable bound", { lastInteractionBefore: "a month ago" }],
+    [
+      "an inverted window",
+      {
+        lastInteractionAfter: "2026-10-20T00:00:00Z",
+        lastInteractionBefore: "2026-10-01T00:00:00Z",
+      },
+    ],
+  ])("%s is an error, never an empty list", async (_n, args) => {
+    getEntities.mockClear();
+    const out = await call(args);
+    expect(out.error).toMatch(/lastInteraction/);
     expect(getEntities).not.toHaveBeenCalled();
   });
 });

@@ -31382,6 +31382,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				documentId: string | null;
 				homeWorkspaceId: string | null;
 				id: string;
+				lastInteractionAt: Date | null;
 				preview: string | null;
 				profileId: string | null;
 				properties: {};
@@ -31898,12 +31899,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				globalOnly?: boolean | undefined;
 				includeDescendants?: boolean | undefined;
 				includeFacets?: boolean | undefined;
+				includeNever?: boolean | undefined;
 				includePodWide?: boolean | undefined;
+				lastInteractionAfter?: unknown;
+				lastInteractionBefore?: unknown;
 				limit?: number | undefined;
 				offset?: number | undefined;
 				orderBy?: {
 					dir?: "asc" | "desc" | undefined;
-					field: "createdAt" | "title" | "updatedAt";
+					field: "createdAt" | "lastInteractionAt" | "title" | "updatedAt";
 				} | undefined;
 				profileSlug?: string | undefined;
 				projectId?: string | undefined;
@@ -35878,6 +35882,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					documentId: string | null;
 					homeWorkspaceId: string | null;
 					id: string;
+					lastInteractionAt: Date | null;
 					preview: string | null;
 					profileId: string | null;
 					properties: unknown;
@@ -44933,6 +44938,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					documentId: string | null;
 					homeWorkspaceId: string | null;
 					id: string;
+					lastInteractionAt: Date | null;
 					preview: string | null;
 					profileId: string | null;
 					properties: unknown;
@@ -49586,6 +49592,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					facetSlugs: string[];
 					homeWorkspaceId: string | null;
 					id: string;
+					lastInteractionAt: Date | null;
 					preview: string | null;
 					profileId: string | null;
 					properties: unknown;

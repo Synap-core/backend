@@ -107,6 +107,10 @@ import {
 import { HOLD_RESUME_QUEUE, HOLD_RESUME_CRON } from "./workers/hold-resume.js";
 import { EVENT_END_CRON_QUEUE } from "./workers/event-end-cron.js";
 import {
+  INTERACTION_SWEEP_QUEUE,
+  INTERACTION_SWEEP_CRON,
+} from "./workers/interaction-note.js";
+import {
   EXTERNAL_AGENT_POLL_QUEUE,
   EXTERNAL_AGENT_POLL_CRON,
 } from "./workers/external-agent-poll.js";
@@ -347,6 +351,11 @@ export async function registerCronSchedules(): Promise<void> {
   // to the status it left; status-flow W4)
   await scheduleSafe(boss, HOLD_RESUME_QUEUE, HOLD_RESUME_CRON, {});
   logger.info("Registered cron: hold-resume (hourly)");
+
+  // Interaction sweep (daily — a meeting linked before it happened becomes
+  // an interaction once its date has passed; CRM recall C-W2)
+  await scheduleSafe(boss, INTERACTION_SWEEP_QUEUE, INTERACTION_SWEEP_CRON, {});
+  logger.info("Registered cron: interaction-sweep (daily at 03:40 UTC)");
 
   // Pod hygiene near-dup scan (daily at 3:15 AM UTC).
   // Files PENDING entity merge proposals only; never auto-merges.

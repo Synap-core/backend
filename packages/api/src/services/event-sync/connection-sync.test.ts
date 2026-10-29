@@ -902,6 +902,11 @@ describe("steady run under an auto rule", () => {
         subjectType: "relation",
         action: "create",
         origin: "sync",
+        // The fan-out carries the relation door's keys: the interaction
+        // reactor (@synap/events) reads `relationType` to see a synced
+        // meeting's attendee.
+        data: expect.objectContaining({ relationType: "attended_by" }),
+        logData: expect.objectContaining({ type: "attended_by" }),
       })
     );
     // No bare fan-out for a write — progress events are the only direct emits.
@@ -911,6 +916,41 @@ describe("steady run under an auto rule", () => {
           (c[0] as { subjectType: string }).subjectType !== "connection_sync"
       )
     ).toEqual([]);
+  });
+
+  it("a synced meeting's attendee edge reaches the interaction reactor (the seam: this producer's fan-out → the REAL reactor)", async () => {
+    await runConnectionSync({ provider: "google" });
+    const relationWrites = h.record.mock.calls
+      .map((c) => c[0] as Record<string, unknown>)
+      .filter((o) => {
+        // The edge's type from whichever payload carries it, so this test
+        // still FINDS the edge if the fan-out shape regresses — and then fails.
+        const logged = (o.logData ?? o.data) as { type?: string } | undefined;
+        return (
+          o.subjectType === "relation" &&
+          o.action === "create" &&
+          logged?.type === "attended_by"
+        );
+      });
+    expect(relationWrites.length).toBeGreaterThan(0);
+    const { getReactors } =
+      await vi.importActual<typeof import("@synap/events")>("@synap/events");
+    const reactor = getReactors().find((r) => r.id === "interaction-note");
+    expect(reactor).toBeDefined();
+    // `recordDomainMutation` fans out `data` as the payload's data (domain-mutation.ts).
+    for (const o of relationWrites) {
+      expect(
+        reactor!.match!({
+          subjectType: "relation",
+          action: "create",
+          subjectId: String(o.subjectId),
+          userId: String(o.userId),
+          workspaceId: (o.workspaceId as string | null) ?? null,
+          data: o.data as Record<string, unknown>,
+          origin: "sync",
+        })
+      ).toBe(true);
+    }
   });
 
   it("gates each write on ITS action: a refresh the rule does not auto-approve is not written", async () => {
