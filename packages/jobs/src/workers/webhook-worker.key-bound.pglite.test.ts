@@ -42,7 +42,7 @@ vi.mock("@synap/database", async (importOriginal) => {
 });
 vi.mock("@synap/shared-utils", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  safeExternalFetch: async (url: string) => {
+  safePublicFetch: async (url: string) => {
     h.fetched.push(url);
     return { ok: true, status: 200 };
   },

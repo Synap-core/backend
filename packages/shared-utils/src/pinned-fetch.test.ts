@@ -1,11 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import {
-  isPublicAddress,
-  safePublicFetch,
-  type AddressResolver,
-} from "./pinned-fetch.js";
+import { safePublicFetch, type AddressResolver } from "./pinned-fetch.js";
+import { isPublicAddress } from "./validate-url.js";
 
 /**
  * DNS rebinding: a hostname that passes `validateExternalUrl` (no private
@@ -25,6 +22,22 @@ const seen: Array<{ host?: string; url?: string }> = [];
 beforeAll(async () => {
   server = http.createServer((req, res) => {
     seen.push({ host: req.headers.host, url: req.url });
+    if (req.url === "/echo") {
+      const chunks: Buffer[] = [];
+      req.on("data", (c: Buffer) => chunks.push(c));
+      req.on("end", () => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            method: req.method,
+            contentLength: req.headers["content-length"] ?? null,
+            transferEncoding: req.headers["transfer-encoding"] ?? null,
+            body: Buffer.concat(chunks).toString(),
+          })
+        );
+      });
+      return;
+    }
     if (req.url === "/redirect-internal") {
       res.writeHead(302, {
         location: `http://internal.test:${port}/secret`,
@@ -197,14 +210,119 @@ describe("safePublicFetch — ports and abort", () => {
   });
 });
 
+/**
+ * Request bodies: every outbound door that POSTs (automation webhook + fetch
+ * nodes, webhook subscriptions, vault tools, session sign-in, the skill
+ * sandbox) sends through this door, so a body must arrive, and a streamed one
+ * (multipart file parts read from storage) must arrive chunked, whole.
+ */
+describe("safePublicFetch — request bodies", () => {
+  const deps = {
+    resolve: table({ "api.test": ["127.0.0.1"] }),
+    isAllowedAddress: loopbackIsTheInternet,
+    ...anyPort,
+  };
+  const echo = async (res: Response) =>
+    (await res.json()) as {
+      method: string;
+      contentLength: string | null;
+      transferEncoding: string | null;
+      body: string;
+    };
+
+  it("sends a string body with its own Content-Length (a caller's is ignored)", async () => {
+    const res = await safePublicFetch(
+      `http://api.test:${port}/echo`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", "content-length": "1" },
+        body: '{"a":"é"}',
+      },
+      0,
+      deps
+    );
+    expect(await echo(res)).toEqual({
+      method: "POST",
+      contentLength: String(Buffer.byteLength('{"a":"é"}')),
+      transferEncoding: null,
+      body: '{"a":"é"}',
+    });
+  });
+
+  it("sends a byte body", async () => {
+    const res = await safePublicFetch(
+      `http://api.test:${port}/echo`,
+      { method: "PUT", body: new TextEncoder().encode("bytes!") },
+      0,
+      deps
+    );
+    expect(await echo(res)).toMatchObject({
+      contentLength: "6",
+      body: "bytes!",
+    });
+  });
+
+  it("streams an AsyncIterable body chunked, never with a Content-Length", async () => {
+    async function* parts() {
+      yield new TextEncoder().encode("--b\r\npart one\r\n");
+      yield new TextEncoder().encode("--b\r\npart two\r\n--b--");
+    }
+    const res = await safePublicFetch(
+      `http://api.test:${port}/echo`,
+      {
+        method: "POST",
+        headers: { "content-type": "multipart/form-data; boundary=b" },
+        body: parts(),
+      },
+      0,
+      deps
+    );
+    expect(await echo(res)).toEqual({
+      method: "POST",
+      contentLength: null,
+      transferEncoding: "chunked",
+      body: "--b\r\npart one\r\n--b\r\npart two\r\n--b--",
+    });
+  });
+
+  it("a streamed body that fails mid-way rejects with the source's own error", async () => {
+    async function* broken() {
+      yield new TextEncoder().encode("start");
+      throw new Error("file gone mid-stream");
+    }
+    await expect(
+      safePublicFetch(
+        `http://api.test:${port}/echo`,
+        { method: "POST", body: broken() },
+        0,
+        deps
+      )
+    ).rejects.toThrow(/file gone mid-stream/);
+  });
+
+  it("refuses a redirect answered to a streamed body (it cannot be sent twice)", async () => {
+    async function* once() {
+      yield new TextEncoder().encode("x");
+    }
+    await expect(
+      safePublicFetch(
+        `http://api.test:${port}/redirect-ok`,
+        { method: "POST", body: once() },
+        3,
+        deps
+      )
+    ).rejects.toThrow(/Blocked outbound request: .*streamed request body/);
+  });
+});
+
 describe("a refused hop is a TYPED error", () => {
-  it("safePublicFetch and safeExternalFetch throw BlockedOutboundError (message kept for logs)", async () => {
-    const { BlockedOutboundError, isBlockedOutboundError, safeExternalFetch } =
+  it("safePublicFetch throws BlockedOutboundError (message kept for logs)", async () => {
+    const { BlockedOutboundError, isBlockedOutboundError } =
       await import("./validate-url.js");
     const { safePublicFetch } = await import("./pinned-fetch.js");
     for (const run of [
       () => safePublicFetch("http://127.0.0.1/x"),
-      () => safeExternalFetch("http://10.0.0.5/x"),
+      () => safePublicFetch("http://10.0.0.5/x"),
     ]) {
       const err = await run().then(
         () => null,

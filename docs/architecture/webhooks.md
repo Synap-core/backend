@@ -26,8 +26,12 @@ Rules the handlers share:
 
 - Secrets and signatures are compared with `crypto.timingSafeEqual` after a
   length check.
-- **Generic inbound.** An unknown or inactive subscription and a bad signature
-  return the same 401, so subscription ids cannot be enumerated. Bodies are
+- **Generic inbound.** Only an active INBOUND source (`direction = 'inbound'`, 0362) receives: an outbound subscription's secret is known to the endpoint
+  the pod delivers to, so it never authenticates a call here. A source created
+  by an API key is accepted only while that key is live (the outbound worker's
+  rule, `subscriptionKeyLive`). An unknown, inactive or outbound subscription,
+  a bad signature and a revoked key return the same 401, so subscription ids
+  cannot be enumerated. Bodies are
   capped at 1 MB. A valid call updates `last_triggered_at` and emits
   `external_webhook.received` with `{ subscriptionId, payload, event?,
 deliveryId? }`, so an automation can trigger on it
@@ -57,9 +61,14 @@ deliveryId? }`, so an automation can trigger on it
   its tool (`metadata.<provider>.webhook`); an unknown token is a 404. Cal.com
   and Fireflies dedup on their own ids, and a backfill poller recovers events a
   webhook missed. Fireflies acknowledges first and fetches the transcript in a
-  `fireflies-ingest` job.
-- **Messaging** answers 200 even when parsing fails, so the provider does not
-  retry a payload it will never accept.
+  `fireflies-ingest` job; when that job cannot be queued it answers 503, never
+  200 "queued".
+- **Messaging** answers 200 to a request that is not a signed event it
+  handles (unsigned, mis-signed, unparsable), so the provider does not retry
+  a payload it will never accept. Every Unipile endpoint secret must be
+  non-empty to verify anything. A signed event whose handling FAILED answers
+  500, so Unipile retries it (`recordInboundMessage` is idempotent on its
+  seed).
 - Writes go through service functions that call `emitSideEffects()`
   (`MessagingAccountService` for messaging accounts, `syncUserFromKratos` for
   Kratos), never through a bare insert. The resulting events

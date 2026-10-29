@@ -43,6 +43,15 @@ const h = vi.hoisted(() => ({
     query: <T>(sql: string, params?: unknown[]) => Promise<{ rows: T[] }>;
   },
   db: null as unknown,
+  publicFetch: vi.fn(
+    async (..._args: unknown[]): Promise<Response> =>
+      new Response(JSON.stringify({ capabilities: ["chat"] }), { status: 200 })
+  ),
+}));
+
+vi.mock("@synap/shared-utils", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  safePublicFetch: h.publicFetch,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -157,10 +166,12 @@ beforeAll(async () => {
     );
 });
 
-const fetchSpy = vi.fn(
-  async () =>
-    new Response(JSON.stringify({ capabilities: ["chat"] }), { status: 200 })
-);
+// `fetchSpy` is the pinned door the probes go through (`safePublicFetch`,
+// mocked above); a raw `fetch` must never be reached.
+const fetchSpy = h.publicFetch;
+const rawFetchSpy = vi.fn(async () => {
+  throw new Error("a probe reached a raw fetch");
+});
 
 beforeEach(async () => {
   await h.client!.exec(`delete from intelligence_services;`);
@@ -181,7 +192,8 @@ beforeEach(async () => {
     [GOOD_URL]
   );
   fetchSpy.mockClear();
-  vi.stubGlobal("fetch", fetchSpy);
+  rawFetchSpy.mockClear();
+  vi.stubGlobal("fetch", rawFetchSpy);
 });
 
 afterEach(() => {
@@ -290,7 +302,8 @@ describe("intelligenceRegistry writes — a pod admin still can", () => {
  * (~40 sites trust `webhookUrl`), so the writer refuses what the SSRF guard
  * refuses, as the Hub Protocol `services.register` door does. And the two
  * custom-service doors fetch a caller-chosen URL from inside the pod: guard
- * first, then `safeExternalFetch` (no redirect followed, the key is a header).
+ * first, then the pinned `safePublicFetch` (no redirect followed, the key is
+ * a header; a public name resolving to a private address is refused).
  */
 describe("service URLs — the SSRF guard holds at every writer and probe", () => {
   it("register refuses a cloud metadata webhookUrl and adds no row", async () => {
@@ -328,21 +341,23 @@ describe("service URLs — the SSRF guard holds at every writer and probe", () =
     expect(await rows()).toHaveLength(2);
   });
 
-  it("registerCustomService does not follow a redirect (the key is a header)", async () => {
-    // Like the real fetch: a redirect is FOLLOWED (to the internal target,
-    // which answers) unless the caller asks for `redirect: "manual"`.
+  it("registerCustomService probes through the pinned door, no redirect followed (the key is a header)", async () => {
+    // The door answers a redirect at maxRedirects 0 with its typed refusal
+    // (pinned-fetch.test.ts drives that on a real socket). Here: the probe
+    // goes through it, asks for no redirect, and its refusal stores nothing.
     fetchSpy.mockImplementationOnce((async (
       _url: string,
-      init?: RequestInit
-    ) =>
-      init?.redirect === "manual"
-        ? new Response(null, {
-            status: 302,
-            headers: { location: "http://169.254.169.254/latest" },
-          })
-        : new Response(JSON.stringify({ capabilities: ["chat"] }), {
-            status: 200,
-          })) as never);
+      _init: unknown,
+      maxRedirects?: number
+    ) => {
+      if ((maxRedirects ?? 0) === 0) {
+        const { BlockedOutboundError } = await import("@synap/shared-utils");
+        throw new BlockedOutboundError("too many redirects");
+      }
+      return new Response(JSON.stringify({ capabilities: ["chat"] }), {
+        status: 200,
+      });
+    }) as never);
     await expect(
       intelligence(ADMIN).registerCustomService({
         displayName: "Bounce",
@@ -351,6 +366,15 @@ describe("service URLs — the SSRF guard holds at every writer and probe", () =
       })
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
     expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy.mock.calls[0]).toEqual([
+      "https://bounce.synap.example/api/capabilities",
+      expect.objectContaining({
+        headers: { Authorization: "Bearer k" },
+      }),
+      0,
+      { allowedPorts: "any" },
+    ]);
+    expect(rawFetchSpy).not.toHaveBeenCalled();
     expect(await rows()).toHaveLength(2);
   });
 

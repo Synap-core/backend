@@ -2,11 +2,12 @@
  * `fetch` step executor — makes an HTTP request and returns status + body.
  */
 import { resolveTemplate } from "../template-resolve.js";
+import { resolveAuthoredVaultRefs } from "../../utils/authored-vault-refs.js";
 import {
-  resolveVaultReferences,
-  isVaultReference,
-} from "../../utils/vault-resolver.js";
-import { validateExternalUrl, safeExternalFetch } from "@synap/shared-utils";
+  guardProducerEffect,
+  PolicyBlockedError,
+} from "../../utils/automation-governance.js";
+import { validateExternalUrl, safePublicFetch } from "@synap/shared-utils";
 import type { StepContext } from "../automation-executor-types.js";
 
 export async function executeFetchStep(
@@ -17,8 +18,35 @@ export async function executeFetchStep(
     body: string;
   },
   context: StepContext,
-  ownerId: string
+  ownerId: string,
+  opts: {
+    workspaceId: string;
+    /** The causal-chain producer (see the webhook node's guard in output.ts). */
+    producerAgentUserId?: string | null;
+  }
 ): Promise<Record<string, unknown>> {
+  // CONFUSED-DEPUTY GUARD, the same one the `webhook` node runs: a fetch sends
+  // the owner's vault secrets and run data to a URL the run may have chosen.
+  // When an agent produced the trigger of a human-owned automation, it fails
+  // closed BEFORE any URL, template or vault work (pre-launch audit
+  // 2026-10-28, governance F3: `fetch` with method POST was the same effect
+  // through an unguarded door).
+  const guard = await guardProducerEffect({
+    producerAgentUserId: opts.producerAgentUserId,
+    principalUserId: ownerId,
+    workspaceId: opts.workspaceId,
+    subjectType: "webhook",
+    action: "send",
+  });
+  if ("block" in guard) {
+    throw new PolicyBlockedError(
+      guard.kind,
+      guard.kind === "deny"
+        ? `fetch denied by producer-agent governance (confused-deputy guard): ${guard.reason ?? "denied"}`
+        : `fetch cannot auto-execute: an agent produced this trigger, so a human-owned automation may not send a request with the owner's credentials ungoverned (confused-deputy guard).`
+    );
+  }
+
   // Resolve template variables in url, headers, body
   const resolvedUrl = resolveTemplate(data.url, context);
   const resolvedHeaders: Record<string, string> = {};
@@ -29,11 +57,28 @@ export async function executeFetchStep(
     ? resolveTemplate(data.body, context)
     : undefined;
 
-  // Resolve vault references in header values (e.g., Authorization: vault://secret-id)
-  const hasVaultHeaders = Object.values(resolvedHeaders).some(isVaultReference);
-  const finalHeaders = hasVaultHeaders
-    ? await resolveVaultReferences(resolvedHeaders, ownerId)
-    : resolvedHeaders;
+  if (!resolvedUrl) throw new Error("fetch node: url is required");
+
+  // SSRF guard: the URL is content/template-derived, so an untrusted source
+  // could otherwise steer it at an internal address. Checked BEFORE any secret
+  // is resolved; `safePublicFetch` then resolves the name, refuses a private
+  // answer and pins the address it vetted. Any port: the author names it (a
+  // self-hosted n8n on :5678).
+  const fetchUrlCheck = validateExternalUrl(resolvedUrl, {
+    allowedPorts: "any",
+  });
+  if (!fetchUrlCheck.valid) {
+    throw new Error(`fetch node blocked: ${fetchUrlCheck.reason}`);
+  }
+
+  // Vault references (`Authorization: vault://secret-id`) are resolved only
+  // where the author wrote them; one that came out of a template is refused.
+  const finalHeaders = await resolveAuthoredVaultRefs(
+    data.headers ?? {},
+    resolvedHeaders,
+    ownerId,
+    "fetch node"
+  );
 
   // Parse body as JSON if valid, else send as raw string
   let bodyPayload: string | undefined;
@@ -49,25 +94,21 @@ export async function executeFetchStep(
     }
   }
 
-  if (!resolvedUrl) throw new Error("fetch node: url is required");
-
-  // SSRF guard: the URL is content/template-derived, so an untrusted source
-  // could otherwise steer it at an internal address.
-  const fetchUrlCheck = validateExternalUrl(resolvedUrl);
-  if (!fetchUrlCheck.valid) {
-    throw new Error(`fetch node blocked: ${fetchUrlCheck.reason}`);
-  }
-
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 30_000);
 
   try {
-    const response = await safeExternalFetch(resolvedUrl, {
-      method: data.method ?? "GET",
-      headers: finalHeaders,
-      body: bodyPayload,
-      signal: controller.signal,
-    });
+    const response = await safePublicFetch(
+      resolvedUrl,
+      {
+        method: data.method ?? "GET",
+        headers: finalHeaders,
+        body: bodyPayload,
+        signal: controller.signal,
+      },
+      0,
+      { allowedPorts: "any" }
+    );
     clearTimeout(timer);
 
     // Collect response headers as a plain record

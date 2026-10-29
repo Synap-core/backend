@@ -78,7 +78,7 @@ vi.mock("@synap/database", () => {
     drizzleSql: () => ({}),
   };
 });
-vi.mock("@synap/shared-utils", () => ({ safeExternalFetch: h.fetch }));
+vi.mock("@synap/shared-utils", () => ({ safePublicFetch: h.fetch }));
 
 import { getReactors } from "@synap/events";
 import { handleWebhookDelivery, webhookDeliveryId } from "./webhook-worker.js";

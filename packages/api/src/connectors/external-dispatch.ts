@@ -45,7 +45,11 @@ import { resolveBroker } from "./index.js";
 import type { SyncConnectorConnection } from "./SyncConnector.js";
 import { resolveVaultSecret } from "../utils/vault-resolver.js";
 import { resolveCapabilityGrant, getRequestGrant } from "@synap/database";
-import { validateExternalUrl, safeExternalFetch } from "@synap/shared-utils";
+import {
+  validateExternalUrl,
+  safePublicFetch,
+  type ValidateExternalUrlOptions,
+} from "@synap/shared-utils";
 import {
   getSession,
   invalidateSession,
@@ -1806,6 +1810,7 @@ const vaultHandler: SchemeHandler = async ({ input, tool }) => {
           ? JSON.stringify(body)
           : undefined,
     },
+    target.allowedPorts,
     fileBody
   );
   return sent.result;
@@ -1856,7 +1861,13 @@ function fileBodyFailureResult(
 function composeVaultUrl(
   baseUrl: string | undefined,
   path: string
-): { ok: true; url: URL } | { ok: false; result: TriggerProviderActionResult } {
+):
+  | {
+      ok: true;
+      url: URL;
+      allowedPorts: ValidateExternalUrlOptions["allowedPorts"];
+    }
+  | { ok: false; result: TriggerProviderActionResult } {
   let rawUrl: string;
   if (baseUrl) {
     // baseUrl wins: always compose host + path, ignoring any absolute scheme in
@@ -1879,7 +1890,13 @@ function composeVaultUrl(
   }
 
   // (c) SSRF guard — reuse the shared validator (blocks loopback/private/metadata).
-  const checked = validateExternalUrl(rawUrl);
+  // A configured baseUrl was approved with the tool (or came from the approved
+  // sign-in endpoint), port included; a call-time absolute path may name only a
+  // web port.
+  const allowedPorts: ValidateExternalUrlOptions["allowedPorts"] = baseUrl
+    ? "any"
+    : undefined;
+  const checked = validateExternalUrl(rawUrl, { allowedPorts });
   if (!checked.valid) {
     return {
       ok: false,
@@ -1891,7 +1908,7 @@ function composeVaultUrl(
       },
     };
   }
-  return { ok: true, url: checked.url };
+  return { ok: true, url: checked.url, allowedPorts };
 }
 
 /**
@@ -1906,17 +1923,16 @@ async function sendVaultRequest(
     headers: Record<string, string>;
     body?: string | AsyncIterable<Uint8Array>;
   },
+  allowedPorts: ValidateExternalUrlOptions["allowedPorts"],
   fileBody?: EncodedFileBody
 ): Promise<{ result: TriggerProviderActionResult; parsed?: unknown }> {
   let res: Response;
   try {
-    res = await safeExternalFetch(
-      url.toString(),
-      typeof init.body === "object"
-        ? // A streamed request body (multipart file parts) must say so.
-          ({ ...init, duplex: "half" } as unknown as RequestInit)
-        : (init as RequestInit)
-    );
+    // The pinned door: resolves the host, refuses a private answer, connects
+    // to the vetted address. A streamed body (multipart file parts) is sent
+    // chunked; a redirect is refused (maxRedirects 0: the headers carry the
+    // credential).
+    res = await safePublicFetch(url.toString(), init, 0, { allowedPorts });
   } catch (err) {
     // A streamed file part that failed (gone, over its cap) aborted the
     // request: report the file, not "the provider was unreachable".
@@ -2076,6 +2092,7 @@ async function sessionAuthCall(args: {
             ? JSON.stringify(body)
             : undefined,
       },
+      target.allowedPorts,
       fileBody
     );
     return {

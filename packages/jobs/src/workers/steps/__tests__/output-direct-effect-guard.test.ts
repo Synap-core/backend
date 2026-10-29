@@ -15,7 +15,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
  * backstop run) and the external sinks (to assert they are never reached).
  */
 
-const { resolveDecisionMock, safeExternalFetchMock, insertChannelMessageMock } =
+const { resolveDecisionMock, safePublicFetchMock, insertChannelMessageMock } =
   vi.hoisted(() => ({
     resolveDecisionMock: vi.fn(
       async (input: { agentUserId: string; forcePropose?: boolean }) => {
@@ -29,7 +29,7 @@ const { resolveDecisionMock, safeExternalFetchMock, insertChannelMessageMock } =
         }
       }
     ),
-    safeExternalFetchMock: vi.fn(async () => ({ ok: true, status: 200 })),
+    safePublicFetchMock: vi.fn(async () => ({ ok: true, status: 200 })),
     insertChannelMessageMock: vi.fn(async () => ({ id: "msg-1" })),
   }));
 
@@ -71,7 +71,7 @@ vi.mock("../../../utils/vault-resolver.js", () => ({
 }));
 vi.mock("@synap/shared-utils", () => ({
   validateExternalUrl: vi.fn(() => ({ valid: true })),
-  safeExternalFetch: safeExternalFetchMock,
+  safePublicFetch: safePublicFetchMock,
 }));
 vi.mock("../../template-resolve.js", () => ({
   deepResolveTemplates: vi.fn((c: unknown) => c),
@@ -125,7 +125,7 @@ const run = (
 
 beforeEach(() => {
   resolveDecisionMock.mockClear();
-  safeExternalFetchMock.mockClear();
+  safePublicFetchMock.mockClear();
   insertChannelMessageMock.mockClear();
 });
 
@@ -137,7 +137,7 @@ describe("webhook — producer guard fail-closed (M1)", () => {
         "producer-agent"
       )
     ).rejects.toThrow(/confused-deputy guard/);
-    expect(safeExternalFetchMock).not.toHaveBeenCalled();
+    expect(safePublicFetchMock).not.toHaveBeenCalled();
   });
 
   it("agent producer denied by its own floor → THROWS 'denied'", async () => {
@@ -147,7 +147,7 @@ describe("webhook — producer guard fail-closed (M1)", () => {
         "producer-agent-denied"
       )
     ).rejects.toThrow(/denied by producer-agent governance/);
-    expect(safeExternalFetchMock).not.toHaveBeenCalled();
+    expect(safePublicFetchMock).not.toHaveBeenCalled();
   });
 
   it("NO producer → proceeds to fetch (guard never touches the ladder)", async () => {
@@ -156,7 +156,7 @@ describe("webhook — producer guard fail-closed (M1)", () => {
       config: { url: "https://example.com/hook" },
     });
     expect(res).toMatchObject({ status: "sent" });
-    expect(safeExternalFetchMock).toHaveBeenCalledTimes(1);
+    expect(safePublicFetchMock).toHaveBeenCalledTimes(1);
     expect(resolveDecisionMock).not.toHaveBeenCalled();
   });
 
@@ -166,7 +166,7 @@ describe("webhook — producer guard fail-closed (M1)", () => {
       "human-owner"
     );
     expect(res).toMatchObject({ status: "sent" });
-    expect(safeExternalFetchMock).toHaveBeenCalledTimes(1);
+    expect(safePublicFetchMock).toHaveBeenCalledTimes(1);
   });
 });
 

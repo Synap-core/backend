@@ -29,9 +29,6 @@ vi.mock("@synap/shared-utils", async (importOriginal) => {
       if (!make) throw new Error(`unexpected fetch ${url}`);
       return make();
     },
-    safeExternalFetch: async () => {
-      throw new Error("the unpinned fetcher must not be used");
-    },
   };
 });
 

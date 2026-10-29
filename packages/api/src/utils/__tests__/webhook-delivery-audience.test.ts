@@ -15,7 +15,7 @@
  * Boundaries mocked (the same seams the neighbouring tests mock): the
  * subscription SELECTs (`db`), the channel reader set
  * (`listChannelAudienceUserIds`), the entity read floor (`scopedDb`), pg-boss
- * (`getBoss` — a recorder), and the outbound fetch (`safeExternalFetch`).
+ * (`getBoss` — a recorder), and the outbound fetch (`safePublicFetch`).
  * Driven through the real emit door (`emitChatEvent`) for chat, and the util's
  * own door for entities.
  *
@@ -95,7 +95,7 @@ vi.mock("@synap/database/schema", () => {
     projectTracks: t,
   };
 });
-vi.mock("@synap/shared-utils", () => ({ safeExternalFetch: h.fetch }));
+vi.mock("@synap/shared-utils", () => ({ safePublicFetch: h.fetch }));
 vi.mock("../channel-visibility.js", () => ({
   listChannelAudienceUserIds: async (_db: unknown, channelId: string) =>
     h.channelReaders.get(channelId) ?? [],
