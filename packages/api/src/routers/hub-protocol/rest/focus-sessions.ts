@@ -1902,6 +1902,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       });
     } catch (err) {
       // An agent's start that declares no criterion: a refusal, not a fault.
+      // Its status comes from the one REST error door (BAD_REQUEST); only
+      // the body carries the refusal shape. No status literal in this catch:
+      // rest-error-mapping-one-door scans it for one.
       const reasonCode = (err as { reasonCode?: unknown })?.reasonCode;
       if (reasonCode === "NO_CRITERIA") {
         return c.json(
@@ -1910,7 +1913,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
             reasonCode,
             error: err instanceof Error ? err.message : String(err),
           },
-          400
+          httpStatusForTrpcError(err)
         );
       }
       logger.error({ err }, "focus-sessions.create failed");
