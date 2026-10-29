@@ -138,7 +138,10 @@ import {
 import { ASK_UNBLOCKS_DEFAULT } from "@synap-core/types/ask";
 import { answerSessionSlot, attestSessionSlot } from "../session-answer.js";
 import { paramOwedSlots } from "../param-slots.js";
-import { selectSlotToAttest } from "../satisfy-expected-output.js";
+import {
+  criterionMetBy,
+  selectSlotToAttest,
+} from "../satisfy-expected-output.js";
 import { CRITERION_SLOT_ASK } from "../evaluations/record.js";
 import { gradeCriterionAsOwner } from "../evaluations/evaluate.js";
 import { postChannelMessage } from "../../messaging/post-message.js";
@@ -488,6 +491,108 @@ describe("param / criterion / provide / room question on the ONE answer door", (
     expect(await roomMessages(channelId)).toHaveLength(0);
   });
 
+  // ── a person's task that meets a criterion (plan aac47c4a, Q7.4) ─────────
+
+  // How an outcome declared `owner: "human"` + `verify` is stored: one slot
+  // and one criterion under ONE key (`outcome-declarations.ts`).
+  const SIGNED = [
+    {
+      key: "contract-signed",
+      statement: "The contract is signed",
+      required: true,
+      check: { kind: "human" },
+    },
+  ];
+  const actTask = (key = "contract-signed") => ({
+    key,
+    kind: "task",
+    label: "Sign the contract",
+    status: "pending",
+    owner: "human",
+    blockedReason: "physical",
+    why: "Only you can sign it",
+    owedSince: "2026-09-27T09:00:00.000Z",
+    ask: { mode: "act", steps: ["Sign it in DocuSign"] },
+  });
+  const humanEvals = async (sessionId: string) =>
+    (
+      await q<{
+        criterion_key: string;
+        verdict: string;
+        evaluator_kind: string;
+      }>(
+        `select criterion_key, verdict, evaluator_kind from session_evaluations where session_id = $1`,
+        [sessionId]
+      )
+    ).rows;
+
+  it("'I did this' on an act task under a criterion's key grades that criterion PASS through the grade door", async () => {
+    const { sessionId } = await seed([actTask()], { criteria: SIGNED });
+    const r = await attestSessionSlot({
+      sessionId,
+      userId: OWNER,
+      expectedLabel: "Sign the contract",
+    });
+    expect(r.status).toBe("attested");
+    expect(await humanEvals(sessionId)).toEqual([
+      {
+        criterion_key: "contract-signed",
+        verdict: "pass",
+        evaluator_kind: "human",
+      },
+    ]);
+    expect((await slotOf(sessionId, "Sign the contract")).status).toBe("done");
+  });
+
+  it("an act task under no criterion's key grades nothing", async () => {
+    const { sessionId } = await seed([actTask("other-task")], {
+      criteria: SIGNED,
+    });
+    const r = await attestSessionSlot({
+      sessionId,
+      userId: OWNER,
+      expectedLabel: "Sign the contract",
+    });
+    expect(r.status).toBe("attested");
+    expect(await humanEvals(sessionId)).toEqual([]);
+  });
+
+  it("only a person's DEED meets a criterion: an answer, an agent's slot or an escalated criterion slot never does", () => {
+    const criteria = [{ key: "contract-signed" }, { key: "no-stale" }];
+    expect(criterionMetBy([actTask() as never], 0, criteria)).toBe(
+      "contract-signed"
+    );
+    expect(
+      criterionMetBy(
+        [
+          { ...actTask(), ask: { mode: "provide", provide: { kind: "file" } } },
+        ] as never,
+        0,
+        criteria
+      )
+    ).toBe("contract-signed");
+    // A decision is an answer, not a deed: "No" must never pass it.
+    expect(
+      criterionMetBy(
+        [{ ...actTask(), ask: { mode: "confirm" } }] as never,
+        0,
+        criteria
+      )
+    ).toBeNull();
+    // The agent's own deliverable is checked by its evaluator, not by itself.
+    expect(
+      criterionMetBy([{ ...actTask(), owner: undefined }] as never, 0, criteria)
+    ).toBeNull();
+    // An escalated criterion slot is graded by its own pass/fail answer.
+    expect(
+      criterionMetBy(
+        [{ ...criterionSlot(), key: "no-stale" }] as never,
+        0,
+        criteria
+      )
+    ).toBeNull();
+  });
+
   // ── provide ─────────────────────────────────────────────────────────────
 
   const provideSlot = (provide: Record<string, unknown>) => ({
@@ -546,6 +651,46 @@ describe("param / criterion / provide / room question on the ONE answer door", (
       'Stored the secret "STRIPE_KEY" in the vault · No agent can read it yet'
     );
     expect(JSON.stringify(await roomMessages(channelId))).not.toContain(id);
+  });
+
+  it("provide under a criterion's key: handing it over grades the criterion PASS; the slot keeps its own answer rule", async () => {
+    const id = await seedSecret({ userId: OWNER });
+    const { sessionId } = await seed(
+      [
+        {
+          ...provideSlot({ kind: "secret", name: "STRIPE_KEY" }),
+          key: "stripe-key",
+        },
+      ],
+      {
+        criteria: [
+          {
+            key: "stripe-key",
+            statement: "The live Stripe key is in the vault",
+            check: { kind: "human" },
+          },
+        ],
+      }
+    );
+    const r = await answerSessionSlot({
+      sessionId,
+      userId: OWNER,
+      expectedLabel: "Stripe key",
+      value: {
+        type: "provide",
+        ref: { kind: "secret", vaultRef: `vault://${id}` },
+      },
+    });
+    expect(r.status).toBe("answered");
+    if (r.status !== "answered") return;
+    expect(r.graded).toEqual({
+      verdict: "pass",
+      recorded: true,
+      resumed: false,
+    });
+    expect(await humanEvals(sessionId)).toEqual([
+      { criterion_key: "stripe-key", verdict: "pass", evaluator_kind: "human" },
+    ]);
   });
 
   it("provide(secret): someone else's / a deleted secret is refused, nothing posted, ref never echoed", async () => {

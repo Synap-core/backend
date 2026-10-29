@@ -66,6 +66,7 @@ import {
   PACKET_TOP_N,
   type ContinuationNextMove,
   type NextMoveBlockers,
+  type NextMoveCriteria,
   type NextMoveInbox,
   type PacketChildItem,
   type PacketProposalItem,
@@ -73,6 +74,7 @@ import {
   type PacketSlotFacts,
 } from "./continuation-packet.js";
 import { projectOwedSlots, type OwedSlot } from "./owed-outputs.js";
+import { attachSessionVerdicts } from "./evaluations/record.js";
 import { isNeedsYou } from "@synap-core/types/needs-you/rule";
 import { owedSlotClassOf } from "../signals/needs-you-union.js";
 import { classifyPendingProposals } from "../proposals/proposal-needs-you.js";
@@ -105,6 +107,14 @@ export interface PathSourceRow {
    */
   origin: string | null;
   metadata: unknown;
+  /**
+   * REQUIRED, like `origin`: the next move's rung 6b reads the session's
+   * verdict (`attachSessionVerdicts`, owner-floored on `userId`). Optional
+   * here would let a narrowed select read every row as declaring no criteria
+   * — "ready to close" with its contract unmet.
+   */
+  userId: string;
+  criteria: unknown;
 }
 
 /** The sections every path/map row carries. */
@@ -461,7 +471,9 @@ async function readOutputPresence(
  * reads for the page (proposals, outbound edges, inbound edges, outputs,
  * THE dependency rule's blockers for the next move — `readDependencyFacts`,
  * the read the packet's `readDependencyState` batches — and the open inboxes,
- * `readOpenInboxes`, the packet's own reader), each settled on its own so one
+ * `readOpenInboxes`, the packet's own reader) — plus the needs-you headline
+ * and THE criteria verdict (`attachSessionVerdicts`, the packet's
+ * `loadSessionEvaluationSummary` batched) — each settled on its own so one
  * failure marks one section `unavailable`.
  *
  * The rows must already be owner-floored by the caller: this reads edges and
@@ -492,6 +504,7 @@ export async function attachPathSections<R extends PathSourceRow>(
     dependencies,
     inboxes,
     needsYou,
+    verdicts,
   ] = await Promise.all([
     settle(
       ctx,
@@ -537,6 +550,17 @@ export async function attachPathSections<R extends PathSourceRow>(
       "needsYou",
       "What needs you in these sessions could not be read.",
       () => readPageNeedsYou(database, opts.userId, rows, now)
+    ),
+    // THE verdict per row (rung 6b of the next move) — the batch the list
+    // door's `verdict` comes from; no query when no row declares criteria.
+    settle(
+      ctx,
+      "criteria",
+      "Whether these sessions' criteria pass could not be read.",
+      async () =>
+        new Map(
+          (await attachSessionVerdicts([...rows])).map((r) => [r.id, r.verdict])
+        )
     ),
   ]);
 
@@ -600,6 +624,17 @@ export async function attachPathSections<R extends PathSourceRow>(
             waiting: null,
           })
         : inboxes;
+    // A row without a verdict declares no criteria (never "unknown").
+    const criteria: NextMoveCriteria =
+      verdicts.status === "ok"
+        ? {
+            status: "ok",
+            verdict: verdicts.value.get(row.id) ?? {
+              state: "none",
+              requiredUnmet: 0,
+            },
+          }
+        : verdicts;
     const nextMove = deriveNextMove({
       status: row.status,
       owedSlots,
@@ -610,6 +645,7 @@ export async function attachPathSections<R extends PathSourceRow>(
       outputs,
       children,
       inbox,
+      criteria,
     });
     return {
       ...row,

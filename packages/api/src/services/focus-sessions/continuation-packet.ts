@@ -501,6 +501,19 @@ export type NextMoveBlockers =
   | { status: "unavailable"; reason: string };
 
 /**
+ * The session's grade as `deriveNextMove` reads it: THE verdict
+ * (`computeSessionVerdict`, read through `loadSessionEvaluationSummary` /
+ * `attachSessionVerdicts`), never a second computation. A failed read holds
+ * back `ready_to_close`, never "no criteria".
+ */
+export type NextMoveCriteria =
+  | {
+      status: "ok";
+      verdict: Pick<SessionVerdict, "state" | "requiredUnmet">;
+    }
+  | { status: "unavailable"; reason: string };
+
+/**
  * The open inbox as `deriveNextMove` reads it: only the oldest wake-worthy
  * post and the total. A failed read never claims "no message" — it holds
  * back `ready_to_close` (an unread handoff may be more work).
@@ -2065,7 +2078,15 @@ const isOpenStatus = (status: string): boolean =>
  *     owed nor produced, so it declares nothing; a cancelled, failed or stale
  *     sub-session produced nothing, so it is no evidence either. Its actor is
  *     the USER: everything promised is produced, so what remains is the
- *     person's acceptance, never the agent closing its own work.
+ *     person's acceptance, never the agent closing its own work;
+ *  6b. …and only when every REQUIRED criterion passes (plan aac47c4a, Q7.2).
+ *     With one not passing, the move stays the AI's (`agent_slot`): a
+ *     criterion is a declared outcome the agent still owes (outcomes model,
+ *     `kind: "fact"`). It grades it against real evidence, or hands one only
+ *     the person can check to them as a task whose answer grades it. A
+ *     session with no criteria keeps the readiness above (legacy work is
+ *     never blocked); closing itself still never blocks on criteria
+ *     (`complete-session.ts`, founder decision).
  *
  * Never claims a move from a section it could not read: an `unavailable`
  * section it would have consulted yields `unknown`.
@@ -2084,6 +2105,8 @@ export function deriveNextMove(input: {
   children: PacketSection<PacketChildItem>;
   /** The open inbox — the rung reads only its `waiting` post. */
   inbox: NextMoveInbox;
+  /** The session's grade — rung 6b reads only its required criteria. */
+  criteria: NextMoveCriteria;
 }): ContinuationNextMove {
   const { owedSlots, pendingProposals, aiCanDo, blockers } = input;
   const terminal = isTerminalSessionStatus(input.status);
@@ -2237,12 +2260,40 @@ export function deriveNextMove(input: {
   // share is the actor: `selectNextMoveBanner` (@synap-core/session-continuation)
   // promotes the first row whose `nextMove.actor === "user"`, and the workbench /
   // relay continue card render it "Next move · You" off the same field.
-  const readyToClose: ContinuationNextMove = {
-    kind: "ready_to_close",
-    actor: "user",
-    label: "Review and close this session",
-    reason:
-      "Everything this session declared is produced, and nothing is owed or pending review — accepting the work and closing it is yours to decide.",
+  //
+  // Rung 6b: every REQUIRED criterion passes first. Until then the move is the
+  // agent's: the person is never asked to accept work whose contract is not
+  // met. No criteria at all keeps today's readiness.
+  const readyToClose = (): ContinuationNextMove => {
+    if (input.criteria.status === "unavailable") {
+      return {
+        kind: "unknown",
+        actor: "none",
+        label: "Next move unknown",
+        reason: `Whether this session's criteria pass could not be read (${input.criteria.reason}).`,
+      };
+    }
+    const { state, requiredUnmet } = input.criteria.verdict;
+    if (requiredUnmet > 0) {
+      const one = requiredUnmet === 1;
+      return {
+        kind: "agent_slot",
+        actor: "ai",
+        label: one
+          ? "Meet the required criterion left"
+          : `Meet the ${requiredUnmet} required criteria left`,
+        reason: `Everything this session declared is produced, but ${requiredUnmet} required criteri${one ? "on" : "a"} ${state === "failing" ? "do not pass (at least one failed)" : "have no passing grade yet"}. The agent grades ${one ? "it" : "them"} against real evidence, or hands one only the person can check to them as a task whose answer grades it; the session is ready to close once ${one ? "it passes" : "they pass"}.`,
+      };
+    }
+    return {
+      kind: "ready_to_close",
+      actor: "user",
+      label: "Review and close this session",
+      reason:
+        state === "none"
+          ? "Everything this session declared is produced, and nothing is owed or pending review — accepting the work and closing it is yours to decide."
+          : "Everything this session declared is produced, every required criterion passes, and nothing is owed or pending review — accepting the work and closing it is yours to decide.",
+    };
   };
   if (input.children.status === "unavailable") {
     return {
@@ -2272,7 +2323,7 @@ export function deriveNextMove(input: {
     };
   }
   if (input.expectedOutputs.some((s) => s.retiredAt == null)) {
-    return readyToClose;
+    return readyToClose();
   }
   // No live declared deliverables: only produced work or sub-sessions separate
   // a finished session from an empty one, so a failed outputs read is unknown.
@@ -2288,7 +2339,7 @@ export function deriveNextMove(input: {
     (input.outputs.status === "ok" && input.outputs.total > 0) ||
     input.children.items.some((c) => c.status === "closed")
   ) {
-    return readyToClose;
+    return readyToClose();
   }
   return {
     kind: "undeclared",
@@ -2734,6 +2785,7 @@ export async function projectContinuationPacket(
       outputs,
       children,
       inbox,
+      criteria: evaluation,
     }),
     evaluation,
   };

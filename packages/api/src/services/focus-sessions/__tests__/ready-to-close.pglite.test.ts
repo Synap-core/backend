@@ -112,13 +112,14 @@ const owedByPerson = {
 async function session(p: {
   agent?: string;
   outputs?: unknown[];
+  criteria?: unknown[];
   status?: string;
   goal?: string;
 }): Promise<string> {
   const id = randomUUID();
   await q(
     `insert into focus_sessions (id, user_id, goal, status, origin, agent_ids, expected_outputs, criteria, metadata, created_at, updated_at, started_at)
-     values ($1, $2, $3, $4, 'agent', $5::text[], $6::jsonb, '[]'::jsonb, $7::jsonb, now(), now(), now())`,
+     values ($1, $2, $3, $4, 'agent', $5::text[], $6::jsonb, $8::jsonb, $7::jsonb, now(), now(), now())`,
     [
       id,
       PERSON,
@@ -128,10 +129,36 @@ async function session(p: {
       JSON.stringify(p.outputs ?? []),
       // Already offered: keeps the playbook matcher out of the nudge read.
       JSON.stringify({ playbookOfferedAt: "2026-10-27T00:00:00Z" }),
+      JSON.stringify(p.criteria ?? []),
     ]
   );
   return id;
 }
+
+/** One `session_evaluations` row, as the grade door writes it. */
+async function grade(
+  sessionId: string,
+  criterionKey: string,
+  verdict: "pass" | "fail"
+): Promise<void> {
+  await q(
+    `insert into session_evaluations (id, session_id, user_id, criterion_key, attempt, verdict, evaluator_kind, evaluator_id, evidence, created_at)
+     values ($1, $2, $3, $4, 1, $5, 'evidence', 'ci', '{}'::jsonb, now())`,
+    [randomUUID(), sessionId, PERSON, criterionKey, verdict]
+  );
+}
+
+const ciGreen = {
+  key: "ci-green",
+  statement: "CI is green on the PR",
+  check: { kind: "evidence", evidenceKey: "ci" },
+};
+const optionalNote = {
+  key: "note",
+  statement: "A note is posted",
+  required: false,
+  check: { kind: "judge" },
+};
 
 async function row(id: string) {
   const [r] = await db
@@ -171,6 +198,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   await q(`delete from focus_sessions`);
+  await q(`delete from session_evaluations`);
 });
 
 describe("update_session nudge: readyToClose (F4)", () => {
@@ -186,6 +214,57 @@ describe("update_session nudge: readyToClose (F4)", () => {
       readyToClose: { reason: expect.any(String) },
       hints: expect.arrayContaining([
         expect.stringContaining("complete_session"),
+      ]),
+    });
+  });
+
+  it("a REQUIRED criterion without a passing grade holds it back (rung 6b); its pass releases it", async () => {
+    const id = await session({ outputs: [delivered], criteria: [ciGreen] });
+    const nudge = async () =>
+      loadSessionNudges({
+        session: await row(id),
+        phase: "update",
+        userId: PERSON,
+        agentUserId: AGENT,
+      });
+    const unmet = await nudge();
+    expect(unmet && "readyToClose" in unmet).toBeFalsy();
+    await grade(id, "ci-green", "fail");
+    const failed = await nudge();
+    expect(failed && "readyToClose" in failed).toBeFalsy();
+
+    await grade(id, "ci-green", "pass");
+    expect(await nudge()).toMatchObject({
+      readyToClose: {
+        reason: expect.stringContaining("every required criterion passes"),
+      },
+      hints: expect.arrayContaining([
+        expect.stringContaining(
+          "every required criterion passes and nothing is owed: file the close now with complete_session"
+        ),
+      ]),
+    });
+  });
+
+  it("an OPTIONAL criterion ungraded never holds it back; the hint says to grade it, then close", async () => {
+    const id = await session({
+      outputs: [delivered],
+      criteria: [ciGreen, optionalNote],
+    });
+    await grade(id, "ci-green", "pass");
+    const nudges = await loadSessionNudges({
+      session: await row(id),
+      phase: "update",
+      userId: PERSON,
+      agentUserId: AGENT,
+    });
+    expect(nudges).toMatchObject({
+      ungradedCriteria: ["note"],
+      readyToClose: expect.any(Object),
+      hints: expect.arrayContaining([
+        expect.stringContaining(
+          "grade the optional criteria above with evaluate_session, then file the close now with complete_session"
+        ),
       ]),
     });
   });
@@ -303,6 +382,27 @@ describe("orient looseEnds.readyToClose (F4): at once, never idle-gated", () => 
     expect(items[0]!.close).toContain(
       `synap_complete_session {"sessionId":"${ready}"}`
     );
+  });
+
+  it("never lists a session whose required criterion does not pass yet", async () => {
+    const unmet = await session({
+      outputs: [delivered],
+      criteria: [ciGreen],
+      goal: "criterion unmet",
+    });
+    const met = await session({
+      outputs: [delivered],
+      criteria: [ciGreen],
+      goal: "criterion met",
+    });
+    await grade(met, "ci-green", "pass");
+    const r = await readSessionsReadyToClose({
+      userId: PERSON,
+      agentUserId: AGENT,
+    });
+    const items = (r as { items: Array<{ id: string }> }).items;
+    expect(items.map((i) => i.id)).toEqual([met]);
+    expect(items.map((i) => i.id)).not.toContain(unmet);
   });
 
   it("a FAILED read is unavailable, never 'nothing to close'", async () => {

@@ -69,13 +69,18 @@ import {
   resolveAskResolution,
 } from "@synap-core/types/ask";
 import { CRITERION_SLOT_KIND } from "@synap-core/types/focus-sessions";
-import { readCriteria, type ExpectedOutput } from "@synap/playbooks";
+import {
+  readCriteria,
+  type ExpectedOutput,
+  type SessionCriterion,
+} from "@synap/playbooks";
 import { logEvent } from "../../lib/event-helpers.js";
 import { normalizeExpectedLabel } from "./expected-label.js";
 import {
   deriveSlotKeys,
   findClaimedSlotIndex,
   findSlotIndex,
+  slotKeyAt,
 } from "./slot-keys.js";
 import { acceptDraftOnEngagement } from "./accept-on-engagement.js";
 import { linkSatisfiedOutputsToSubject } from "./subject-edge.js";
@@ -455,6 +460,11 @@ export type AttestExpectedOutputResult =
       /** The slot as it stood BEFORE the stamp (delegatedTo, ask, …). */
       before: ExpectedOutput;
       attestedAt: string;
+      /**
+       * The criterion this deed MET ({@link criterionMetBy}), graded pass
+       * after the commit; `null` when the slot stands for none.
+       */
+      criterionMet: string | null;
       session: {
         id: string;
         workspaceId: string | null;
@@ -478,6 +488,7 @@ export async function attestExpectedOutput(
         workspaceId: focusSessions.workspaceId,
         channelId: focusSessions.channelId,
         agentIds: focusSessions.agentIds,
+        criteria: focusSessions.criteria,
       })
       .from(focusSessions)
       .where(
@@ -528,6 +539,11 @@ export async function attestExpectedOutput(
       kind: slot.kind,
       before: slot,
       attestedAt: now.toISOString(),
+      criterionMet: criterionMetBy(
+        current,
+        index,
+        readCriteria(locked.criteria)
+      ),
       session: {
         id: locked.id,
         workspaceId: locked.workspaceId ?? null,
@@ -567,8 +583,48 @@ export async function attestExpectedOutput(
     // The attested slot's declared output → subject edge, when its `ref`
     // names the entity (subject-edge.ts; best-effort).
     await linkSatisfiedOutputsToSubject({ sessionId: result.session.id });
+    // The person DID what the criterion checks: their word is its grade,
+    // through THE owner grade door (never throws: the stamp stands). Loaded
+    // on use: the grade door imports this module (it discharges an escalated
+    // criterion's slot through `attestExpectedOutput`).
+    if (result.criterionMet) {
+      const { gradeCriterionAfterAct } =
+        await import("./evaluations/evaluate.js");
+      await gradeCriterionAfterAct({
+        sessionId: result.session.id,
+        userId,
+        criterionKey: result.criterionMet,
+        verdict: "pass",
+      });
+    }
   }
   return result;
+}
+
+/**
+ * The criterion a PERSON's task stands for, when doing it IS meeting it (plan
+ * aac47c4a, Q7.4): a human-owned slot whose ask is a deed — `act` ("I did
+ * this") or `provide` (handed over) — stored under the same key as a declared
+ * criterion. That is how an outcome declared `owner: "human"` with a `verify`
+ * is stored (`outcome-declarations.ts`: one slot and one criterion under ONE
+ * key, folded into one outcome by the projection), so no new field links them.
+ * `criterionKey` stays the escalation's server stamp (`evaluations/record.ts`):
+ * an escalated criterion slot is graded by its own pass/fail answer, never
+ * here. A confirm / choose / form is an answer, not a deed: `null`. Pure.
+ */
+export function criterionMetBy(
+  outputs: readonly ExpectedOutput[],
+  index: number,
+  criteria: readonly Pick<SessionCriterion, "key">[]
+): string | null {
+  const slot = outputs[index];
+  if (!slot || slot.owner !== "human" || slot.kind === CRITERION_SLOT_KIND) {
+    return null;
+  }
+  const mode = effectiveSlotAsk(slot)?.mode;
+  if (mode !== "act" && mode !== "provide") return null;
+  const key = slotKeyAt(outputs, index);
+  return key && criteria.some((c) => c.key === key) ? key : null;
 }
 
 function slotAttestedEventData(
