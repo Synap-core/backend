@@ -40,6 +40,7 @@ import { resolveRankStrategy } from "./rank-strategy.js";
 import { viewCountsByEntity } from "./reinforcement-signal.js";
 import { centralityByEntity } from "./centrality-signal.js";
 import { horizonScore, type HorizonScored } from "./horizon-rerank.js";
+import { queryIsEnumerative } from "../knowledge/classify.js";
 import { gradeResults, rekey, type RetrievalVerdict } from "./grade.js";
 import {
   understandQuery,
@@ -327,7 +328,13 @@ export async function retrieve(
       embedding,
       facetVisibilityScope,
     }),
-    ...understanding.profileTypes.slice(0, 2).map((slug) =>
+    // Type-scoped passes fuse at equal RRF weight, so they only run for a
+    // list-shaped query ("show my events"); a technical query that merely
+    // contains a kind word relies on the main pass.
+    ...(queryIsEnumerative(query, catalog)
+      ? understanding.profileTypes.slice(0, 2)
+      : []
+    ).map((slug) =>
       hybridRecall({
         query,
         userId,

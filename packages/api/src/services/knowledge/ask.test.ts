@@ -180,6 +180,27 @@ describe("ask router", () => {
     );
   });
 
+  it("requires 3 matched terms for an uncued procedural lane, 2 when cued", async () => {
+    await ask({
+      ...baseParams,
+      query:
+        "What are the 3 most important things the founder should do this week?",
+    });
+    expect(searchFullTextMock).toHaveBeenLastCalledWith(
+      expect.anything(),
+      "user-1",
+      5,
+      expect.objectContaining({ minMatchedTerms: 3 })
+    );
+    await ask({ ...baseParams, query: "how to deploy" });
+    expect(searchFullTextMock).toHaveBeenLastCalledWith(
+      expect.anything(),
+      "user-1",
+      5,
+      expect.objectContaining({ minMatchedTerms: 2 })
+    );
+  });
+
   it("uses the pinned workspace lens for procedural search when provided", async () => {
     await ask({ ...baseParams, workspaceId: "ws-9", query: "how to deploy" });
     expect(searchFullTextMock).toHaveBeenCalledWith(
@@ -271,13 +292,13 @@ describe("ask router — procedural lane vs project lens (X1)", () => {
     expect(r.primary).toBe("procedural");
   });
 
-  it("the procedural search asks for ≥2 content-term matches, ignoring function words", async () => {
+  it("an uncued procedural search asks for ≥3 content-term matches, ignoring function words", async () => {
     await ask({ ...baseParams, query: "the revenue model" });
     const opts = searchFullTextMock.mock.calls[0]![3] as {
       minMatchedTerms: number;
       ignoreTerms: ReadonlySet<string>;
     };
-    expect(opts.minMatchedTerms).toBe(2);
+    expect(opts.minMatchedTerms).toBe(3);
     expect(opts.ignoreTerms.has("the")).toBe(true);
     expect(opts.ignoreTerms.has("what")).toBe(true);
     expect(opts.ignoreTerms.has("revenue")).toBe(false);

@@ -594,7 +594,7 @@ export function buildSynthesisContext(
    */
   let admittedFirst = false;
   /** Procedural rows admitted so far — see `MAX_PROCEDURAL_ROWS`. */
-  const proceduralAdmitted = 0;
+  let proceduralAdmitted = 0;
 
   // ONE drop site, so the count and the id list CANNOT diverge.
   //
@@ -752,6 +752,7 @@ export function buildSynthesisContext(
       contextParts.push(admittedEntry);
       contextLen += admittedEntry.length + 1;
       admittedFirst = true;
+      if (isProcedural) proceduralAdmitted++;
     }
   }
 
