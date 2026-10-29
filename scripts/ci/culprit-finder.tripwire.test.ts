@@ -138,7 +138,7 @@ describe("attribute: cheapest correct method first", () => {
   it("a range of ONE commit: that commit, high", () => {
     const a = attribute(
       f("packages/c/src/x.test.ts"),
-      [c("a", 1, ["README.md"])],
+      [c("a", 1, ["packages/x/src/unrelated.ts"])],
       GRAPH
     );
     expect(a.get("packages/c/src/x.test.ts")).toMatchObject({
