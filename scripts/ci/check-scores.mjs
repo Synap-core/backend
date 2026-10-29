@@ -163,11 +163,25 @@ export function parseNewFailures(log) {
   }
 }
 
-async function gh(path, { raw = false } = {}) {
+/**
+ * `gh api <path>`: parsed JSON, or the raw body (a job log). A test log
+ * carries ANSI codes, and the runner's gh refuses to print terminal escape
+ * sequences without `--allow-escape-sequences` (29 Oct 2026, run
+ * 40937265099); an older gh (2.87.2 on the Mac) rejects the unknown flag, so
+ * a raw read retries without it. Same fix as culprit-finder.mjs (#520).
+ */
+export async function gh(path, { raw = false } = {}) {
   const argv = ["api", path];
   if (raw) argv.push("-H", "Accept: application/vnd.github.raw");
-  const { stdout } = await run("gh", argv, { maxBuffer: 256 * 1024 * 1024 });
-  return raw ? stdout : JSON.parse(stdout);
+  const call = (a) => run("gh", a, { maxBuffer: 256 * 1024 * 1024 });
+  if (!raw) return JSON.parse((await call(argv)).stdout);
+  try {
+    return (await call([...argv, "--allow-escape-sequences"])).stdout;
+  } catch (err) {
+    const said = `${err.message ?? ""}\n${err.stderr ?? ""}`;
+    if (!/unknown flag: --allow-escape-sequences/.test(said)) throw err;
+    return (await call(argv)).stdout;
+  }
 }
 
 async function pool(items, size, fn) {

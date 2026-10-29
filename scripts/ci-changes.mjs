@@ -109,8 +109,10 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   BASELINE,
+  PACKAGE_JSON,
   baselineFiles,
   loadGraph,
+  packageJsonInert,
   selectTier,
   suiteDirs,
 } from "./ci/affected.mjs";
@@ -577,6 +579,52 @@ export function changedFiles(base, head, cwd = undefined) {
   }
 }
 
+/**
+ * The changed package.json files whose diff touches only fields that decide
+ * nothing about collection (affected.mjs INERT_PACKAGE_KEYS). `read(path)`
+ * returns [before, after] texts (null for a side that does not exist).
+ */
+export function collectionInert(files, read) {
+  return files.filter((f) => {
+    if (!PACKAGE_JSON.test(f)) return false;
+    const [before, after] = read(f);
+    return packageJsonInert(before, after);
+  });
+}
+
+/** A file at a commit, or null (absent, or git cannot say). */
+function showAt(ref, path, cwd) {
+  try {
+    return execFileSync("git", ["show", `${ref}:${path}`], {
+      encoding: "utf8",
+      cwd,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * [before, after] of a path over `base...head` (the merge base, as
+ * changedFiles diffs), or [null, null] when the merge base cannot be read.
+ */
+export function sidesOf(base, head, cwd = undefined) {
+  let mb = null;
+  try {
+    if (base && head)
+      mb = execFileSync("git", ["merge-base", base, head], {
+        encoding: "utf8",
+        cwd,
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim();
+  } catch {
+    mb = null;
+  }
+  return (path) =>
+    mb ? [showAt(mb, path, cwd), showAt(head, path, cwd)] : [null, null];
+}
+
 // `src/x/foo.ts` → `src/x/foo.test.ts`, `src/x/foo.*.test.ts` that exist.
 function siblingTests(path) {
   const dir = dirname(path);
@@ -674,7 +722,7 @@ function baselineAt(sha) {
 // by cost in up to 8 shards, judged with the full mode's floors (`full`).
 // Main pushes and the merge queue never reach this function: they keep the
 // 4-shard plan.
-function tierOfCheckout(baseSha) {
+function tierOfCheckout(baseSha, headSha) {
   try {
     const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
     const g = loadGraph(root, isTripwire);
@@ -686,13 +734,20 @@ function tierOfCheckout(baseSha) {
     const plan = loadShardPlan();
     const baseBaseline = baselineAt(baseSha);
     const everyTest = g.imports.files.filter((f) => TEST_FILE.test(f));
+    const sides = sidesOf(baseSha, headSha);
     return (files) =>
-      withPlan(selectTier(files, g, { baseBaseline }), {
-        everyTest,
-        suiteDirs: suites,
-        plan,
-        countByDir,
-      });
+      withPlan(
+        selectTier(files, g, {
+          baseBaseline,
+          collectionInert: collectionInert(files, sides),
+        }),
+        {
+          everyTest,
+          suiteDirs: suites,
+          plan,
+          countByDir,
+        }
+      );
   } catch (err) {
     console.log(`dependency graph unreadable (${err.message}): full suite`);
     return null;
@@ -701,15 +756,17 @@ function tierOfCheckout(baseSha) {
 
 /**
  * A PR tier with its shard plan: a selection plans its files; the full tier
- * plans `everyTest` (marked `full`, so the judge keeps the full mode's
- * floors). `ctx` = { everyTest, suiteDirs, plan, countByDir }.
+ * plans `everyTest` (marked `full`: the judge adds the 2,000-file floor),
+ * unless it is a COMMITTED_PLAN change. `ctx` = { everyTest, suiteDirs, plan,
+ * countByDir }.
  */
 export function withPlan(t, ctx) {
   if (t.scope !== "selected" && t.scope !== "full") return t;
-  // A full tier the runner, the selector or ci.yml caused is planned by the
-  // changed code itself: it gets no plan, so the shards run the committed
-  // 4-shard plan in the full mode (re-review of #522, N2).
-  if (t.scope === "full" && t.selfFull) return t;
+  // A full tier a cost-sized plan cannot vouch for (affected.mjs
+  // COMMITTED_PLAN: the runner, the selector, ci.yml, what vitest collects)
+  // gets no plan: the shards run the committed 4-shard plan in the full mode,
+  // with its floors.
+  if (t.scope === "full" && t.committedPlan) return t;
   const full = t.scope === "full";
   return {
     ...t,
@@ -750,7 +807,10 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     tier: tierOfCheckout(
       event === "merge_group"
         ? process.env.QUEUE_BASE_SHA
-        : process.env.BASE_SHA
+        : process.env.BASE_SHA,
+      event === "merge_group"
+        ? process.env.QUEUE_HEAD_SHA
+        : process.env.HEAD_SHA
     ),
     queue,
   });

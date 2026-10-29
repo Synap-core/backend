@@ -335,16 +335,17 @@ describe("test-ratchet --select: the PR selection, judged as CI judges it", () =
     expect(r.out).toContain("[selection]");
   });
 
-  it("a PR's FULL tier planned as a selection keeps the full mode's floors", () => {
-    // The same small plan, marked full: far below the file floor and every
-    // package floor, so red; unmarked (a selection), green.
+  it("a PR's FULL tier planned as a selection keeps the full mode's file floor", () => {
+    // The same small plan, marked full: far below 2,000 files, so red;
+    // unmarked (a selection), green. Per-package floors are not applied: the
+    // full mode counts what vitest collects, the plan names files (see
+    // affected.mjs COMMITTED_PLAN).
     const sel = planOf([...tripwires, ...EXTRA]);
     expect(judge(sel).status).toBe(0);
-    const full = { ...sel, full: true };
-    const r = judge(full);
+    const r = judge({ ...sel, full: true });
     expect(r.status).toBe(1);
-    expect(r.out).toContain("[below-floor]");
-    expect(r.out).toMatch(/only \d+ test files ran \(floor/);
+    expect(r.out).toMatch(/only \d+ test files ran \(floor 2000\)/);
+    expect(r.out).not.toContain("[below-floor]");
   });
 
   it("a missing selection file fails the judge (it never judges something else)", () => {

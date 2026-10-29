@@ -678,27 +678,16 @@ async function selectMode() {
     const r = results.get(f);
     if (r?.ok) fixed.push(f);
   }
-  // A PR's FULL tier, planned as a selection: the full mode's floors hold too
-  // (a config that stops collecting tests must not read green).
-  if (SELECTION.full) {
-    if (results.size < PLAUSIBLE_MIN_FILES)
-      problems.push({
-        kind: "vacuous",
-        detail: `only ${results.size} test files ran (floor ${PLAUSIBLE_MIN_FILES}). Whole packages went missing.`,
-      });
-    const floors = JSON.parse(readFileSync(FLOORS_PATH, "utf8")).entries.filter(
-      (e) => !e.args && typeof e.floor === "number"
-    );
-    for (const e of floors) {
-      const mine = perRun.filter((x) => x.dir === e.dir);
-      const passed = mine.reduce((n, x) => n + x.passed, 0);
-      if (passed < e.floor)
-        problems.push({
-          kind: "below-floor",
-          detail: `${e.dir}: ${passed} passing${mine.length ? "" : " (it did not run)"}, floor ${e.floor} (scripts/test-floors.json).`,
-        });
-    }
-  }
+  // A PR's FULL tier, planned as a selection: the full mode's file floor
+  // holds too. Not the per-package floors: the full mode counts what vitest
+  // collects (packages/auth's compiled dist/*.test.js included), the plan
+  // names test files; a change that can alter collection never gets a plan
+  // (affected.mjs COMMITTED_PLAN).
+  if (SELECTION.full && results.size < PLAUSIBLE_MIN_FILES)
+    problems.push({
+      kind: "vacuous",
+      detail: `only ${results.size} test files ran (floor ${PLAUSIBLE_MIN_FILES}). Whole packages went missing.`,
+    });
   for (const p of parseProblems)
     problems.push({ kind: "baseline-format", detail: p });
   if (newRed.length)

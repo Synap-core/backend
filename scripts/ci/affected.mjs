@@ -94,6 +94,11 @@ export const ROOT_FULL = [
   /^\.github\/workflows\/ci\.yml$/,
   /^\.github\/actions\//,
   /^packages\/database\/migrations\//,
+  // what vitest collects in a package: its test script and its config. A
+  // package.json whose diff changes only INERT_PACKAGE_KEYS is not one of
+  // these (selectTier `collectionInert`): it goes through the graph.
+  /^(apps|packages)\/[^/]+\/package\.json$/,
+  /^(apps|packages)\/[^/]+\/vitest[^/]*\.config\.[mc]?[jt]s$/,
 ];
 
 /** Paths outside every package that go through the graph (header, "NARROWED"). */
@@ -108,16 +113,81 @@ export const NARROWED = [
 ];
 
 /**
- * The full-suite paths that plan, run or judge the tests, or define the shard
- * jobs: a full tier they cause runs the committed 4-shard plan, never a plan
- * the changed code computed (ci-changes.mjs withPlan).
+ * The full-suite paths a cost-sized plan cannot vouch for: the code that
+ * plans, runs or judges the tests and the shard jobs (the plan would be
+ * computed by the changed code), and what decides which files vitest
+ * collects (package.json files, the lockfile, the workspace, .npmrc, vitest
+ * configs: the plan names test files, and only the full mode's floors see a
+ * package collecting more or fewer). A full tier they cause runs the
+ * committed 4-shard plan in the full mode (ci-changes.mjs withPlan).
+ * Measured on #522's own run 40930625305: main collects packages/auth's
+ * compiled dist/*.test.js too (4 files, 18 tests), the plan named its 2
+ * src files (9 tests).
  */
-export const SELF_FULL = [
+export const COMMITTED_PLAN = [
   /^scripts\/(test-ratchet[^/]*\.mjs|tripwire-discovery\.mjs|test-floors\.json)$/,
   /^scripts\/(ci-changes|strip-comments)\.mjs$/,
   /^scripts\/ci\/(affected|import-graph)\.mjs$/,
   /^\.github\/workflows\/ci\.yml$/,
+  /(^|\/)package\.json$/,
+  /^(pnpm-lock\.yaml|pnpm-workspace\.yaml|\.npmrc)$/,
+  /(^|\/)vitest[^/]*\.config\.[mc]?[jt]s$/,
 ];
+
+/**
+ * The package.json fields that decide nothing about which files vitest
+ * collects or how they run: a package.json change touching only these is a
+ * package config edge (its package's tests and every dependent), not a full
+ * suite. Replay of 28-29 Oct: 11 of 21 committed-plan PRs only added an
+ * `exports` subpath or bumped `version`. Dependencies and scripts stay full
+ * (a dependency also moves the lockfile; a script can change collection).
+ */
+export const INERT_PACKAGE_KEYS = new Set([
+  "version",
+  "exports",
+  "typesVersions",
+  "main",
+  "module",
+  "types",
+  "typings",
+  "files",
+  "description",
+  "keywords",
+  "publishConfig",
+  "sideEffects",
+  "repository",
+  "license",
+  "author",
+  "homepage",
+  "bugs",
+]);
+
+/** A package's own package.json (not the root one, which stays full). */
+export const PACKAGE_JSON = /^(apps|packages)\/[^/]+\/package\.json$/;
+
+/**
+ * True when `before` and `after` (package.json texts) differ only in
+ * INERT_PACKAGE_KEYS. Unparsable, added or deleted: false (full suite).
+ */
+export function packageJsonInert(before, after) {
+  if (typeof before !== "string" || typeof after !== "string") return false;
+  let a;
+  let b;
+  try {
+    a = JSON.parse(before);
+    b = JSON.parse(after);
+  } catch {
+    return false;
+  }
+  if (!a || !b || typeof a !== "object" || typeof b !== "object") return false;
+  for (const k of new Set([...Object.keys(a), ...Object.keys(b)]))
+    if (
+      !INERT_PACKAGE_KEYS.has(k) &&
+      JSON.stringify(a[k]) !== JSON.stringify(b[k])
+    )
+      return false;
+  return true;
+}
 
 /** The known-red baseline: when it changes, every file it names runs. */
 export const BASELINE = "scripts/test-ratchet-baseline.txt";
@@ -320,11 +390,19 @@ const cap = (xs, n = 8) =>
  * The PR tier for a list of changed paths (none of them docs-only: the caller
  * routes docs-only changes first). `g` comes from loadGraph(); `baseBaseline`
  * is the list of files the BASE commit's baseline names, when it changed.
+ * `collectionInert` lists the changed package.json files whose diff touches
+ * only INERT_PACKAGE_KEYS (ci-changes.mjs reads both sides): they are package
+ * config edges, not full-suite paths.
  * Returns { scope: "full" | "selected", tests, e2e, why }:
  *   tests  scope=selected: every test file to run (sorted), tripwires included
  *   why    what forced the full suite, or what was selected and from what
  */
-export function selectTier(files, g, { baseBaseline = [] } = {}) {
+export function selectTier(
+  files,
+  g,
+  { baseBaseline = [], collectionInert = [] } = {}
+) {
+  const inert = new Set(collectionInert.filter((f) => PACKAGE_JSON.test(f)));
   const full = [];
   const neutral = [];
   const graphed = [];
@@ -333,7 +411,7 @@ export function selectTier(files, g, { baseBaseline = [] } = {}) {
       neutral.push(f);
       continue;
     }
-    if (ROOT_FULL.some((re) => re.test(f))) {
+    if (!inert.has(f) && ROOT_FULL.some((re) => re.test(f))) {
       full.push(
         `${f} (root config, the test runner, the selector, the shard jobs or a migration: every test rests on it)`
       );
@@ -362,7 +440,9 @@ export function selectTier(files, g, { baseBaseline = [] } = {}) {
       scope: "full",
       tests: [],
       e2e: true,
-      selfFull: files.some((f) => SELF_FULL.some((re) => re.test(f))),
+      committedPlan: files.some(
+        (f) => !inert.has(f) && COMMITTED_PLAN.some((re) => re.test(f))
+      ),
       why: [`full suite: ${cap(full)}`],
     };
 

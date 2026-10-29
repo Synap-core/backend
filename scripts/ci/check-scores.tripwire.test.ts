@@ -4,9 +4,12 @@
  * hold (red on purpose) as a failure, would rank the wrong checks first. This
  * pins the formula on hand-built runs (pure functions, no network).
  */
-import { describe, expect, it } from "vitest";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 // @ts-expect-error — plain ESM script, no declarations
-import { HOLD_STEP, laplace, observe, score } from "./check-scores.mjs";
+import { HOLD_STEP, gh, laplace, observe, score } from "./check-scores.mjs";
 
 const at = (min: number) =>
   new Date(Date.UTC(2026, 9, 28, 10, min)).toISOString();
@@ -157,5 +160,52 @@ describe("check-scores", () => {
       { run: { event: "push", branch: "main" }, failed: true, secs: 60 },
     ];
     expect(score(obs, () => false).n).toBe(0);
+  });
+});
+
+// A job log carries ANSI codes. The runner's gh refuses to print them
+// without --allow-escape-sequences (run 40937265099); an older gh (2.87.2)
+// rejects the flag. Two fake `gh` executables on PATH, one of each.
+describe("check-scores gh: raw job logs through a new and an old gh", () => {
+  const PATH = process.env.PATH;
+  let dir = "";
+  afterEach(() => {
+    process.env.PATH = PATH;
+    if (dir) rmSync(dir, { recursive: true, force: true });
+  });
+  const fakeGh = (body: string) => {
+    dir = mkdtempSync(join(tmpdir(), "fake-gh-"));
+    const f = join(dir, "gh");
+    writeFileSync(
+      f,
+      `#!/usr/bin/env node\nconst a = process.argv.slice(2);\n${body}\n`
+    );
+    chmodSync(f, 0o755);
+    process.env.PATH = `${dir}:${PATH}`;
+  };
+  const LOG = "\u001b[31mred\u001b[0m";
+
+  it("a new gh: the raw read passes --allow-escape-sequences and gets the log", async () => {
+    fakeGh(
+      `if (!a.includes("--allow-escape-sequences")) { console.error("the response contains terminal escape sequences; pass --allow-escape-sequences to output it anyway"); process.exit(1); }\nprocess.stdout.write(${JSON.stringify(LOG)});`
+    );
+    expect(await gh("repos/x/actions/jobs/1/logs", { raw: true })).toBe(LOG);
+  });
+
+  it("an old gh: the unknown flag is retried without it", async () => {
+    fakeGh(
+      `if (a.includes("--allow-escape-sequences")) { console.error("unknown flag: --allow-escape-sequences"); process.exit(1); }\nprocess.stdout.write(${JSON.stringify(LOG)});`
+    );
+    expect(await gh("repos/x/actions/jobs/1/logs", { raw: true })).toBe(LOG);
+  });
+
+  it("any other error is not swallowed; a JSON read never sends the flag", async () => {
+    fakeGh(
+      `if (a.includes("--allow-escape-sequences")) { console.error("HTTP 404"); process.exit(1); }\nprocess.stdout.write('{"ok":true}');`
+    );
+    await expect(
+      gh("repos/x/actions/jobs/1/logs", { raw: true })
+    ).rejects.toThrow(/404/);
+    expect(await gh("repos/x/actions/runs/1")).toEqual({ ok: true });
   });
 });

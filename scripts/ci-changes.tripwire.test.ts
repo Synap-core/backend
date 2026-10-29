@@ -8,6 +8,7 @@
 import { execFileSync } from "node:child_process";
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   statSync,
@@ -20,10 +21,11 @@ import { describe, expect, it } from "vitest";
 // @ts-expect-error — plain ESM script, no declarations
 import {
   BASELINE,
-  SELF_FULL,
+  COMMITTED_PLAN,
   SUITE_NEUTRAL,
   TEST_FILE,
   loadGraph,
+  packageJsonInert,
   selectTier,
   suiteDirs,
 } from "./ci/affected.mjs";
@@ -46,6 +48,8 @@ import {
   isImageInput,
   queuePrNumber,
   changedFiles,
+  collectionInert,
+  sidesOf,
   reusableRun,
   shardMatrix,
   withPlan,
@@ -426,6 +430,8 @@ describe("ci-changes: every check runs unless a narrow match says otherwise", ()
 // code runs everything" fails row 2; "anything outside a package is full"
 // fails row 3; "root config is a path like any other" fails row 4.
 const nonTripwire = (tests: string[]) => tests.filter((f) => !isTripwire(f));
+const MIGRATION =
+  "packages/database/migrations/0372_inbound_deliveries_and_observation_keys.sql";
 const tests = (d: { selection: { tests: string[] } | null }) =>
   d.selection?.tests ?? [];
 
@@ -548,9 +554,9 @@ describe("ci-changes: the PR tier on the real graph", () => {
     ]) {
       const d = pr([f]);
       expect([d.scope, d.suites, d.e2e], f).toEqual(["full", true, true]);
-      if (SELF_FULL.some((re: RegExp) => re.test(f))) {
-        // The runner, the selector, ci.yml: never a plan the changed code
-        // computed; the committed 4-shard plan, in the full mode.
+      if (COMMITTED_PLAN.some((re: RegExp) => re.test(f))) {
+        // The runner, the selector, ci.yml, what vitest collects: never a
+        // cost-sized plan; the committed 4-shard plan, in the full mode.
         expect(d.selection, f).toBeNull();
         expect(shardMatrix(d), f).toEqual([1, 2, 3, 4]);
       } else {
@@ -565,15 +571,24 @@ describe("ci-changes: the PR tier on the real graph", () => {
     }
     // Both kinds are in the list above (non-vacuity of the two branches).
     expect(
-      SELF_FULL.some((re: RegExp) => re.test("scripts/ci-changes.mjs"))
+      COMMITTED_PLAN.some((re: RegExp) => re.test("scripts/ci-changes.mjs"))
     ).toBe(true);
-    expect(SELF_FULL.some((re: RegExp) => re.test("pnpm-lock.yaml"))).toBe(
-      false
-    );
-    // A self-change beside a lockfile change: still the committed plan.
-    expect(
-      pr(["pnpm-lock.yaml", "scripts/ci/import-graph.mjs"]).selection
-    ).toBeNull();
+    // What vitest collects is a committed-plan change too (run 40930625305:
+    // main collects packages/auth's dist/*.test.js, a plan does not).
+    for (const f of [
+      "pnpm-lock.yaml",
+      "apps/pod-admin/package.json",
+      "packages/database/vitest.config.ts",
+    ]) {
+      expect(
+        COMMITTED_PLAN.some((re: RegExp) => re.test(f)),
+        f
+      ).toBe(true);
+      expect([pr([f]).scope, pr([f]).selection], f).toEqual(["full", null]);
+    }
+    expect(COMMITTED_PLAN.some((re: RegExp) => re.test(MIGRATION))).toBe(false);
+    // A migration beside a committed-plan change: the committed plan.
+    expect(pr([MIGRATION, "scripts/ci/import-graph.mjs"]).selection).toBeNull();
     // The control: a narrowed script beside them is not full on its own.
     expect(pr(["scripts/pod-observation.mjs"]).scope).toBe("selected");
     for (const f of [
@@ -597,6 +612,98 @@ describe("ci-changes: the PR tier on the real graph", () => {
       );
       expect(nonTripwire(tests(d)).length, f).toBeGreaterThan(1000);
     }
+  });
+
+  it("4d. a package.json that only adds an export or bumps its version goes through the graph", () => {
+    const PKG = "packages/types/package.json";
+    const before = readFileSync(join(REPO, PKG), "utf8");
+    const j = JSON.parse(before);
+    const withKey = (k: string, v: unknown) =>
+      JSON.stringify({ ...j, [k]: v }, null, 2);
+    // The shapes of #474 (an exports subpath) and #463 (a version bump).
+    const exportsAdded = withKey("exports", {
+      ...j.exports,
+      "./i18n": { types: "./dist/i18n/index.d.ts" },
+    });
+    const bumped = withKey("version", "99.0.0");
+    // What can change collection or how tests run: never inert.
+    const scripts = withKey("scripts", { ...j.scripts, test: "vitest run x" });
+    const deps = withKey("devDependencies", {
+      ...j.devDependencies,
+      vitest: "0.0.1",
+    });
+    const type = withKey("type", j.type === "module" ? "commonjs" : "module");
+    expect(packageJsonInert(before, exportsAdded)).toBe(true);
+    expect(packageJsonInert(before, bumped)).toBe(true);
+    for (const after of [scripts, deps, type])
+      expect(packageJsonInert(before, after)).toBe(false);
+    // Added, deleted, unparsable: full.
+    expect(packageJsonInert(null, before)).toBe(false);
+    expect(packageJsonInert(before, null)).toBe(false);
+    expect(packageJsonInert(before, "{")).toBe(false);
+
+    // Through the production seam: collectionInert, selectTier, withPlan.
+    const tierRead = (files: string[], after: string) =>
+      withPlan(
+        selectTier(files, graph, {
+          collectionInert: collectionInert(files, () => [before, after]),
+        }),
+        { everyTest, suiteDirs: SUITES, plan: shardPlan, countByDir }
+      );
+    const inert = tierRead([PKG], exportsAdded);
+    expect(inert.scope).toBe("selected");
+    // a package config edge: its own tests and every importer's
+    expect(inert.tests).toContain(
+      "packages/api/src/routers/agent-runs.summary.test.ts"
+    );
+    expect(
+      (inert.tests as string[]).some((f) => f.startsWith("packages/types/"))
+    ).toBe(true);
+    const live = tierRead([PKG], scripts);
+    expect([live.scope, live.committedPlan, live.selection]).toEqual([
+      "full",
+      true,
+      undefined,
+    ]);
+    // The root package.json is never inert (it is root config).
+    expect(tierRead(["package.json"], bumped).scope).toBe("full");
+    expect(
+      collectionInert(["package.json", PKG, "packages/types/src/x.ts"], () => [
+        before,
+        bumped,
+      ])
+    ).toEqual([PKG]);
+
+    // sidesOf reads the merge base and the head (a real repository).
+    const dir = mkdtempSync(join(tmpdir(), "ci-changes-pkg-"));
+    const git = (...a: string[]) =>
+      execFileSync("git", a, {
+        cwd: dir,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          GIT_AUTHOR_NAME: "t",
+          GIT_AUTHOR_EMAIL: "t@t",
+          GIT_COMMITTER_NAME: "t",
+          GIT_COMMITTER_EMAIL: "t@t",
+        },
+      }).trim();
+    git("init", "-q");
+    mkdirSync(join(dir, "packages/types"), { recursive: true });
+    writeFileSync(join(dir, PKG), before);
+    git("add", ".");
+    git("commit", "-qm", "base");
+    const base = git("rev-parse", "HEAD");
+    writeFileSync(join(dir, PKG), exportsAdded);
+    git("commit", "-qam", "export");
+    const head1 = git("rev-parse", "HEAD");
+    writeFileSync(join(dir, PKG), scripts);
+    git("commit", "-qam", "script");
+    const head2 = git("rev-parse", "HEAD");
+    expect(collectionInert([PKG], sidesOf(base, head1, dir))).toEqual([PKG]);
+    expect(collectionInert([PKG], sidesOf(base, head2, dir))).toEqual([]);
+    // git cannot say: not inert.
+    expect(collectionInert([PKG], sidesOf(base, "nope", dir))).toEqual([]);
   });
 
   it("4c. the changed paths list a rename's old path too (git diff --no-renames)", () => {
@@ -712,7 +819,7 @@ describe("ci-changes: the PR tier on the real graph", () => {
     expect(shardMatrix(small)).toEqual([1]);
     // A full PR: every test file in up to 8 cost-sized shards. A push to
     // main keeps the committed 4-shard plan, whatever it changed.
-    const full = pr(["package.json"]);
+    const full = pr([MIGRATION]);
     expect(full.selection?.tests.length).toBe(
       full.selection!.runs.flatMap((r: { files: string[] }) => r.files).length
     );
