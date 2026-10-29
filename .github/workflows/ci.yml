@@ -36,13 +36,15 @@ permissions:
 # TWO JOBS (founder decision 2026-10-19, release gating option A):
 #   release-gate — what must hold for a commit to be RELEASED: it installs,
 #                  lints, typechecks, builds, migrates a real Postgres, boots,
-#                  and builds the image. docker-publish.yml's ci-gate reads THIS
-#                  job's check run ("Release gate") for the sha, nothing else.
-#                  Since 2026-10-29 its work runs in four parallel "Release
-#                  gate: <part>" jobs and the job named "Release gate" judges
-#                  them (see the release-gate block below).
-#   full-suite   — the test suites, the floor, the tripwires, the audit. Red here
-#                  is a backlog to burn down, not a release blocker.
+#                  and builds the image. Since 2026-10-29 its work runs in four
+#                  parallel "Release gate: <part>" jobs and the job named
+#                  "Release gate" judges them (see the release-gate block below).
+#   full-suite   — the test suites, the floor, the tripwires, the audit.
+# Since 2026-10-29 ("One trunk, three CI tiers") a release needs BOTH, and API
+# e2e and Reference docs too: docker-publish.yml's ci-gate takes only a commit
+# whose post-merge run (event push) had all 4 required checks `success`
+# (scripts/ci/release-gate-wait.mjs). Until then it read "Release gate" alone
+# and a red Full suite was a backlog, not a release blocker.
 # They run in parallel and set up through ONE composite action
 # (.github/actions/monorepo-setup) so they can never set up differently; its
 # turbo cache replays the build of every package whose inputs did not change.
@@ -51,11 +53,20 @@ permissions:
 # go"): the `changes` job reads what a pull request touched and turns off what
 # it cannot affect — a draft runs no suites, a negctl/* branch runs only its own
 # test files ("Targeted tests"), a docs-only change runs nothing, and the Docker
-# build + deploy tests run only when an image-relevant path changed. Push to
-# main and release branches always run everything. A merge queue entry runs the
-# Release gate and takes the Full suite + API e2e from the PR's own run, only
-# when both concluded `success` on the PR's head (founder 2026-10-28, "light
-# queue run"); otherwise it runs everything. An entry whose TREE is the tree
+# build + deploy tests run only when an image-relevant path changed.
+# THREE TIERS (founder, 2026-10-29, "One trunk, three CI tiers"): a pull
+# request runs the tests of what it can break (the touched packages, their
+# workspace dependents, the tests that read them by path, every tripwire;
+# the full suite when shared or core code changed) and API e2e only when the
+# API surface changed (scripts/ci/affected.mjs). Push to main and release
+# branches always run everything; a pod updates only to a main commit whose
+# post-merge run was all green (docker-publish.yml, ci-gate). A merge queue
+# entry runs the Release gate and takes the Full suite + API e2e from its PR's
+# own run when both concluded `success` there (founder 2026-10-28, "light
+# queue run", #428); otherwise it runs the tier of what it changes on top of
+# the main it lands on, on the combined tree. Every required check RUNS on a PR or
+# a queue entry: one whose work is not needed passes through a "Not affected"
+# step that names why, never through a skip. An entry whose TREE is the tree
 # its PR's run tested, with all 4 required checks `success` on that run,
 # re-runs nothing (`reuse`, scripts/ci-changes.mjs "SAME TREE"). FAIL-SAFE:
 # every job also runs when `changes` itself fails (`needs.changes.result !=
@@ -92,6 +103,11 @@ jobs:
       gate: ${{ steps.decide.outputs.gate }}
       image: ${{ steps.decide.outputs.image }}
       suites: ${{ steps.decide.outputs.suites }}
+      scope: ${{ steps.decide.outputs.scope }}
+      affected: ${{ steps.decide.outputs.affected }}
+      also: ${{ steps.decide.outputs.also }}
+      e2e: ${{ steps.decide.outputs.e2e }}
+      reason: ${{ steps.decide.outputs.reason }}
       negctl: ${{ steps.decide.outputs.negctl }}
       negctl_tests: ${{ steps.decide.outputs.negctl_tests }}
       hold: ${{ steps.decide.outputs.hold }}
@@ -121,6 +137,7 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           QUEUE_HEAD_REF: ${{ github.event.merge_group.head_ref }}
+          QUEUE_BASE_SHA: ${{ github.event.merge_group.base_sha }}
           QUEUE_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
           REPO: ${{ github.repository }}
           GITHUB_TOKEN: ${{ github.token }}
@@ -468,12 +485,20 @@ jobs:
   # `!cancelled()`, not `always()`: a superseded (cancelled) run then starts
   # no runner just to report red, and its "Release gate" is not a success
   # either way (cancelled or never created), so it cannot merge or release.
+  # NEVER SKIPPED (2026-10-29, three CI tiers): when this run does not need
+  # the gate (docs only, a same-tree queue entry), the job still runs and
+  # passes through its "Not affected" step, which names the decision in the
+  # run's summary. A job skipped by its `if:` would pass the required check
+  # silently (#441: skipped never counts as passed).
   release-gate:
     name: Release gate
     needs: [changes, preflight, gate-lint, gate-build, gate-deploy, gate-image]
-    if: ${{ !cancelled() && (needs.preflight.outputs.hold == 'true' || needs.changes.result != 'success' || needs.changes.outputs.gate == 'true' || needs.changes.outputs.hold == 'negctl') }}
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    env:
+      # The gate's work ran (or `changes` failed, and then everything ran).
+      RUN_WORK: ${{ needs.changes.result != 'success' || needs.changes.outputs.gate != 'false' }}
     steps:
       # A negctl/* branch never merges. The Release gate is a required check,
       # and a job skipped by its `if:` reports success, so a negctl PR to main
@@ -492,7 +517,18 @@ jobs:
           echo "::error::Preflight is red (${{ needs.preflight.outputs.reds }}): this check did not run its work. Open the Preflight job for each red and its fix, or run 'pnpm preflight'."
           exit 1
 
+      # An explicit, logged pass: only a successful `changes` that decided
+      # gate=false (docs only, a same-tree queue entry) reaches it.
+      - name: Not affected (the Release gate's work did not need to run)
+        if: ${{ needs.changes.result == 'success' && needs.changes.outputs.gate == 'false' && needs.changes.outputs.hold == '' && needs.preflight.outputs.hold != 'true' }}
+        env:
+          REASON: ${{ needs.changes.outputs.reason }}
+        run: |
+          echo "Release gate not run: $REASON"
+          printf '### Release gate: not affected\n\n%s.\n\nDecided by "What changed" (scripts/ci-changes.mjs); its summary lists what this run checks.\n' "$REASON" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Checkout the judge
+        if: ${{ env.RUN_WORK == 'true' }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: scripts/ci/release-gate-judge.mjs
@@ -500,6 +536,7 @@ jobs:
           persist-credentials: false
 
       - name: Every Release gate job succeeded
+        if: ${{ env.RUN_WORK == 'true' }}
         env:
           NEEDS: ${{ toJSON(needs) }}
           # The jobs that run only for an image-relevant change, and whether
@@ -564,6 +601,10 @@ jobs:
       # judges nothing: it writes its vitest JSON reports, the judge job below
       # reads all four. @synap-core/core's `test` script is an echo stub
       # (circular dependency on @synap/database); the ratchet lists it as not run.
+      # The PR tier (scope=affected): only the affected packages' suites, the
+      # test files of other packages that read them, and every tripwire
+      # (scripts/ci/affected.mjs). Empty = everything (a push to main, a
+      # shared-code change, or `changes` failed).
       - name: Test (shard ${{ matrix.shard }}/4)
         timeout-minutes: 45
         run: node scripts/test-ratchet.mjs --shard=${{ matrix.shard }}/4
@@ -571,6 +612,9 @@ jobs:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/synap_test
           NODE_ENV: test
           TEST_RATCHET_CONCURRENCY: "2"
+          TEST_RATCHET_SCOPE: ${{ needs.changes.outputs.scope }}
+          TEST_RATCHET_AFFECTED: ${{ needs.changes.outputs.scope == 'affected' && needs.changes.outputs.affected || '' }}
+          TEST_RATCHET_ALSO: ${{ needs.changes.outputs.scope == 'affected' && needs.changes.outputs.also || '' }}
 
       - name: Security Audit
         if: ${{ !cancelled() && matrix.shard == 1 }}
@@ -600,12 +644,17 @@ jobs:
           path: coverage/test-ratchet/
           retention-days: 7
 
+  # NEVER SKIPPED (2026-10-29, three CI tiers): a run whose tier runs no suite
+  # (docs only, a same-tree queue entry) passes through the "Not affected"
+  # step, which names the decision in the run's summary.
   full-suite:
     name: Full suite
     needs: [changes, preflight, full-suite-shard]
-    if: ${{ !cancelled() && (needs.preflight.outputs.hold == 'true' || needs.changes.result != 'success' || needs.changes.outputs.suites == 'true' || needs.changes.outputs.hold != '') }}
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      RUN_WORK: ${{ needs.changes.result != 'success' || needs.changes.outputs.suites != 'false' }}
     steps:
       # A draft: this required check FAILS instead of being skipped, because
       # GitHub counts a job skipped by its `if:` as passed ("A job that is
@@ -632,16 +681,29 @@ jobs:
           echo "::error::Preflight is red (${{ needs.preflight.outputs.reds }}): this check did not run its work. Open the Preflight job for each red and its fix, or run 'pnpm preflight'."
           exit 1
 
+      # An explicit, logged pass: only a successful `changes` that decided
+      # suites=false with no hold reaches it.
+      - name: Not affected (no test suite needed to run)
+        if: ${{ needs.changes.result == 'success' && needs.changes.outputs.suites == 'false' && needs.changes.outputs.hold == '' && needs.preflight.outputs.hold != 'true' }}
+        env:
+          REASON: ${{ needs.changes.outputs.reason }}
+        run: |
+          echo "Full suite not run: $REASON"
+          printf '### Full suite: not affected\n\n%s.\n\nDecided by "What changed" (scripts/ci-changes.mjs); its summary lists what this run checks.\n' "$REASON" >> "$GITHUB_STEP_SUMMARY"
+
       # The ratchet's judge reads the workspace's package.json files, the
       # baseline and the tripwire files: a checkout, no install.
       - name: Checkout Repository
+        if: ${{ env.RUN_WORK == 'true' }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: ${{ env.RUN_WORK == 'true' }}
         with:
           node-version-file: ".node-version"
 
       - name: Collect the shards' reports
+        if: ${{ env.RUN_WORK == 'true' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: ratchet-shard-*
@@ -649,13 +711,19 @@ jobs:
           merge-multiple: true
 
       # A missing shard report is `no-report` (red), never a partial green.
+      # Judged with the shards' own scope (the same two outputs).
       - name: Test ratchet (all shards, against the known-red baseline)
+        if: ${{ env.RUN_WORK == 'true' }}
         run: node scripts/test-ratchet.mjs --reports="$RUNNER_TEMP/ratchet" --shards=4
+        env:
+          TEST_RATCHET_SCOPE: ${{ needs.changes.outputs.scope }}
+          TEST_RATCHET_AFFECTED: ${{ needs.changes.outputs.scope == 'affected' && needs.changes.outputs.affected || '' }}
+          TEST_RATCHET_ALSO: ${{ needs.changes.outputs.scope == 'affected' && needs.changes.outputs.also || '' }}
 
       # A shard can also fail outside its reports (setup, the audit, the
       # publish-freshness tripwire): that fails the Full suite too.
       - name: Every shard job succeeded
-        if: ${{ !cancelled() && needs.changes.outputs.hold == '' && needs.preflight.outputs.hold != 'true' }}
+        if: ${{ !cancelled() && env.RUN_WORK == 'true' && needs.changes.outputs.hold == '' && needs.preflight.outputs.hold != 'true' }}
         run: |
           [ "${{ needs.full-suite-shard.result }}" = "success" ] || {
             echo "::error::a Full suite shard job ended '${{ needs.full-suite-shard.result }}' — open the shard jobs for the failing step"
@@ -676,11 +744,15 @@ jobs:
   reference-docs:
     name: Reference docs are current
     needs: [changes, preflight]
-    # Skipped only for a merge-queue entry that reuses its PR's all-green run
-    # on the same tree (`reuse`); a failed `changes` leaves reuse empty: runs.
-    if: ${{ !cancelled() && (needs.preflight.outputs.hold == 'true' || needs.changes.outputs.reuse != 'true') }}
+    # NEVER SKIPPED (2026-10-29): a merge-queue entry that reuses its PR's
+    # all-green run on the same tree (`reuse`) passes through the "Reused"
+    # step, which names the reused run; a failed `changes` leaves reuse empty:
+    # the work runs.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      RUN_WORK: ${{ needs.changes.outputs.reuse != 'true' }}
     steps:
       # A negctl/* branch never merges and runs only its own tests. This
       # required check reports red for it instead of being skipped: a job
@@ -700,26 +772,41 @@ jobs:
           echo "::error::Preflight is red (${{ needs.preflight.outputs.reds }}): this check did not run its work. Open the Preflight job for each red and its fix, or run 'pnpm preflight'."
           exit 1
 
+      # An explicit, logged pass: only a same-tree queue entry reaches it.
+      - name: Reused (same tree as the PR's all-green run)
+        if: ${{ needs.changes.result == 'success' && needs.changes.outputs.reuse == 'true' && needs.preflight.outputs.hold != 'true' }}
+        env:
+          REASON: ${{ needs.changes.outputs.reason }}
+        run: |
+          echo "Reference docs not re-run: $REASON"
+          printf '### Reference docs are current: reused\n\n%s.\n' "$REASON" >> "$GITHUB_STEP_SUMMARY"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: ${{ env.RUN_WORK == 'true' }}
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: ${{ env.RUN_WORK == 'true' }}
         with:
           node-version-file: ".node-version"
 
       # No `version:`: the repo pins pnpm through `packageManager`.
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        if: ${{ env.RUN_WORK == 'true' }}
 
       # `--ignore-scripts`: the generator only imports TypeScript and builds
       # the workspace packages below; no native addon or git hook is needed.
       - name: Install dependencies
+        if: ${{ env.RUN_WORK == 'true' }}
         run: pnpm install --frozen-lockfile --ignore-scripts
 
       # The API resolves its workspace dependencies through their dist/ entry
       # points, so build exactly those (pnpm orders them topologically).
       - name: Build the API's workspace dependencies
+        if: ${{ env.RUN_WORK == 'true' }}
         run: pnpm -r --filter "@synap/api^..." run build
 
       - name: Check docs/reference is up to date
+        if: ${{ env.RUN_WORK == 'true' }}
         run: pnpm docs:reference:check
 
   # A negctl/* branch exists to watch a test go RED with its fix reverted. It
@@ -793,16 +880,23 @@ jobs:
   api-e2e:
     name: API e2e
     needs: [changes, preflight]
-    if: ${{ !cancelled() && (needs.preflight.outputs.hold == 'true' || needs.changes.result != 'success' || needs.changes.outputs.suites == 'true' || needs.changes.outputs.hold != '') }}
+    # NEVER SKIPPED (2026-10-29, three CI tiers): a PR whose change does not
+    # touch the API surface (scripts/ci/affected.mjs API_SURFACE) passes
+    # through the "Not affected" step, which names the decision in the run's
+    # summary. Main runs the e2e suite on every push.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      RUN_WORK: ${{ needs.changes.result != 'success' || needs.changes.outputs.e2e != 'false' }}
 
-    # A draft or a preflight hold starts no service ("If jobs.<job_id>.services.<service_id>.image
-    # is assigned an empty string, the service will not start."): its one step
-    # fails at once.
+    # A draft, a preflight hold or a not-affected run starts no service ("If
+    # jobs.<job_id>.services.<service_id>.image is assigned an empty string,
+    # the service will not start."): its one step ends the job at once. The
+    # services context cannot read `env`, so the condition is RUN_WORK's.
     services:
       postgres:
-        image: ${{ needs.changes.outputs.hold == '' && needs.preflight.outputs.hold != 'true' && 'timescale/timescaledb-ha:pg16' || '' }}
+        image: ${{ needs.changes.outputs.hold == '' && needs.preflight.outputs.hold != 'true' && (needs.changes.result != 'success' || needs.changes.outputs.e2e != 'false') && 'timescale/timescaledb-ha:pg16' || '' }}
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -818,7 +912,7 @@ jobs:
       # (deploy/docker-compose.yml). A service container takes no command line,
       # so the server is configured through its TYPESENSE_* environment.
       typesense:
-        image: ${{ needs.changes.outputs.hold == '' && needs.preflight.outputs.hold != 'true' && 'typesense/typesense:0.25.2' || '' }}
+        image: ${{ needs.changes.outputs.hold == '' && needs.preflight.outputs.hold != 'true' && (needs.changes.result != 'success' || needs.changes.outputs.e2e != 'false') && 'typesense/typesense:0.25.2' || '' }}
         env:
           TYPESENSE_DATA_DIR: /tmp
           TYPESENSE_API_KEY: ci-typesense
@@ -851,10 +945,22 @@ jobs:
           echo "::error::Preflight is red (${{ needs.preflight.outputs.reds }}): this check did not run its work. Open the Preflight job for each red and its fix, or run 'pnpm preflight'."
           exit 1
 
+      # An explicit, logged pass: only a successful `changes` that decided
+      # e2e=false with no hold reaches it.
+      - name: Not affected (no API surface path changed)
+        if: ${{ needs.changes.result == 'success' && needs.changes.outputs.e2e == 'false' && needs.changes.outputs.hold == '' && needs.preflight.outputs.hold != 'true' }}
+        env:
+          REASON: ${{ needs.changes.outputs.reason }}
+        run: |
+          echo "API e2e not run: $REASON"
+          printf '### API e2e: not affected\n\n%s.\n\nDecided by "What changed" (scripts/ci-changes.mjs, API_SURFACE in scripts/ci/affected.mjs); main runs the e2e suite after the merge.\n' "$REASON" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Checkout Repository
+        if: ${{ env.RUN_WORK == 'true' }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Monorepo layout + dependencies
+        if: ${{ env.RUN_WORK == 'true' }}
         uses: ./.github/actions/monorepo-setup
         with:
           app-id: ${{ vars.SYNAP_READER_APP_ID }}
@@ -862,14 +968,17 @@ jobs:
           cross-repo-token: ${{ secrets.CROSS_REPO_TOKEN }}
 
       - name: Migrate the test database
+        if: ${{ env.RUN_WORK == 'true' }}
         run: pnpm --filter @synap/database migrate
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/synap_test
 
       - name: Build the API
+        if: ${{ env.RUN_WORK == 'true' }}
         run: pnpm turbo build --filter=api...
 
       - name: Start the API (test mode)
+        if: ${{ env.RUN_WORK == 'true' }}
         run: |
           # The workers create the search collections at boot, so Typesense
           # must answer before the API starts.
@@ -904,6 +1013,7 @@ jobs:
           exit 1
 
       - name: E2E (ratchet against the known-red baseline)
+        if: ${{ env.RUN_WORK == 'true' }}
         timeout-minutes: 20
         run: node scripts/test-ratchet.mjs --script=test:e2e --only=packages/test-e2e
         env:
@@ -911,11 +1021,11 @@ jobs:
           NODE_ENV: test
 
       - name: API log
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && env.RUN_WORK == 'true' }}
         run: tail -n 200 "$RUNNER_TEMP/api.log" || true
 
       - name: Upload e2e reports
-        if: always()
+        if: ${{ always() && env.RUN_WORK == 'true' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: e2e-reports
@@ -1042,3 +1152,35 @@ jobs:
         continue-on-error: true
         working-directory: ..
         run: pnpm --filter relay-app run typecheck
+
+  # RED MAIN (2026-10-29, three CI tiers): a PR runs only what it can break,
+  # so main's post-merge run is the first to see the whole suite. When a
+  # required check of a push run on main is not green, this job writes the
+  # commits since the last main commit whose post-merge run was all green to
+  # the run's summary, so the ONE owner of the red (.claude/rules/github-ci.md,
+  # "one owner per red main") starts from the range. It reverts nothing and is
+  # not a required check. `!cancelled()`: a superseded run is not a red.
+  red-main:
+    name: "Red main: culprit range"
+    needs: [release-gate, full-suite, api-e2e, reference-docs]
+    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && (needs.release-gate.result != 'success' || needs.full-suite.result != 'success' || needs.api-e2e.result != 'success' || needs.reference-docs.result != 'success') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+    steps:
+      - name: Checkout main's history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 40
+          persist-credentials: false
+
+      - name: Name the commits since the last all-green main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          CULPRIT_LIMIT: "30"
+        run: node scripts/ci/release-gate-wait.mjs --culprits "$REPO" "$SHA"
