@@ -22,10 +22,10 @@
 import type { EnumTone } from "../property-render/enum-tone.js";
 import {
   buildObjectActionTitle,
-  countedNoun,
   normalizeObjectKind,
   resolveObjectNoun,
 } from "../vocabulary/index.js";
+import { proposalsT } from "./copy.js";
 import { isItemRejected } from "./item-pack.js";
 
 /** Writes one join may hold. The next one is refused, in words. */
@@ -355,7 +355,11 @@ export function heldWritesPackName(
     agentNameOf(agentName) ??
     agentNameOf(typeof d.agentName === "string" ? d.agentName : null);
   const total = deriveDeferredWritesReview(d)?.total ?? 0;
-  return [name, d.day.trim() || null, countedNoun(total, "item")]
+  return [
+    name,
+    d.day.trim() || null,
+    proposalsT()("proposals.heldWrites.items", { n: total }),
+  ]
     .filter(Boolean)
     .join(", ");
 }

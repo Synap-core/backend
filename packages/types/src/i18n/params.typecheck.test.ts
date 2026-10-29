@@ -14,7 +14,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const PROBE = join(HERE, "__probe__.ts");
 
 const SOURCE = `
-import { createT, type Catalog, type ParamsOf } from "./index.js";
+import { createT, type Catalog, type NounParams, type ParamsOf } from "./index.js";
 import { seedEn, seedFr } from "./seed-catalog.js";
 
 type Equal<A, B> =
@@ -44,6 +44,18 @@ t("seed.nope"); // error: unknown key
 export const missingKey: Catalog<typeof seedEn> = { "seed.greeting": "x" }; // error: keys missing
 export const extraKey: Catalog<{ readonly a: "A" }> = { a: "x", b: "y" }; // error: extra key
 
+const nounCatalog = {
+  deleted: "Deleted {obj}",
+  counted: "{n, plural, one {# {obj}} other {# {objs}}}",
+} as const;
+const tn = createT("fr", { en: nounCatalog, fr: nounCatalog });
+const bundle = { obj: "task", Obj: "Task", objs: "tasks", objG: "f", objV: "no" } as const;
+tn("deleted", bundle);
+tn("counted", { n: 2, ...bundle });
+tn("deleted", { obj: "task" }); // error: a bundle member takes the whole bundle
+tn("counted", { n: 2, obj: "task", objs: "tasks" }); // error: objG, objV, Obj missing
+tn("deleted", { ...bundle, objG: "x" }); // error: objG is a gender
+
 export const shapes: [
   Equal<ParamsOf<"Hello">, {}>,
   Equal<ParamsOf<"Hi {name}">, { name: string | number }>,
@@ -57,7 +69,8 @@ export const shapes: [
     { g: string; n: number; who: string | number }
   >,
   Equal<ParamsOf<"{n, plural, one {#} other {#}} and {n}">, { n: number }>,
-] = [true, true, true, true, true, true];
+  Equal<ParamsOf<"Deleted {obj}">, NounParams>,
+] = [true, true, true, true, true, true, true];
 `;
 
 function diagnose(): { line: number; text: string }[] {
@@ -106,7 +119,7 @@ describe("t(key, params) is checked against the English message", () => {
     .filter((l) => l.text.includes("// error"));
 
   it("the probe marks the cases it expects to fail", () => {
-    expect(marked.length).toBe(11);
+    expect(marked.length).toBe(14);
   });
 
   for (const { text, line } of marked) {
