@@ -103,6 +103,10 @@ import {
   unknownRelationTypeMessage,
 } from "../utils/relation-types.js";
 import {
+  undeclaredLinkWarning,
+  UNDECLARED_LINK_UNCHECKED_WARNING,
+} from "../services/links/required-links.js";
+import {
   filterUnavailableEntityConnections,
   structuralNeighbor,
   type EntityConnection,
@@ -1033,6 +1037,27 @@ export const relationsRouter = router({
         effectiveWorkspaceId
       );
 
+      // D3.3: an edge whose kind pair no template declares WARNS, never
+      // refuses (`undeclaredLinkWarning`). Read only once both endpoints have
+      // passed the caller's floor above. Built-ins carry no declaration. A
+      // failed read is said, never folded into "declared".
+      const warnings: string[] = [];
+      if (!isBuiltinRelationType(input.type)) {
+        try {
+          const warning = await undeclaredLinkWarning({
+            type: input.type,
+            sourceEntityId: input.sourceEntityId,
+            targetEntityId: input.targetEntityId,
+            database: placementDb,
+          });
+          if (warning) warnings.push(warning);
+        } catch (err) {
+          console.warn("[relations.create] declared-link check failed:", err);
+          warnings.push(UNDECLARED_LINK_UNCHECKED_WARNING);
+        }
+      }
+      const warningsReply = warnings.length ? { warnings } : {};
+
       // 1. Permission check
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,
@@ -1092,7 +1117,11 @@ export const relationsRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
       }
       if ("proposalId" in perm) {
-        return { status: "proposed" as const, proposalId: perm.proposalId };
+        return {
+          status: "proposed" as const,
+          proposalId: perm.proposalId,
+          ...warningsReply,
+        };
       }
 
       // 2. Direct DB operation
@@ -1238,6 +1267,7 @@ export const relationsRouter = router({
       return {
         id: relation.id,
         status: "created" as const,
+        ...warningsReply,
       };
     }),
 

@@ -9,6 +9,8 @@
 
 import {
   HUB_WRITE_SOURCES,
+  readRequiredLinkCheck,
+  requiredLinkWarnings,
   type DuplicateCheck,
 } from "@synap-core/types/proposals";
 import { z } from "zod";
@@ -440,6 +442,13 @@ export const entitiesRouter = router({
         ctx.sessionId,
         input.expectedLabel
       );
+      // The links this kind's template marks required that the create left
+      // out (D3.2: warned, never refused) — one `warnings[]` sentence each.
+      const requiredLinks = readRequiredLinkCheck(resultShape);
+      const warnings = [
+        ...(slotClaimWarning ? [slotClaimWarning] : []),
+        ...requiredLinkWarnings(requiredLinks),
+      ];
       const rawUnmodeled = resultShape.unmodeled;
       const unmodeled = Array.isArray(rawUnmodeled)
         ? (rawUnmodeled as Array<{ key: string; didYouMean?: string }>)
@@ -489,7 +498,8 @@ export const entitiesRouter = router({
         ...(entityHomeWorkspaceId !== undefined
           ? { entityHomeWorkspaceId }
           : {}),
-        ...(slotClaimWarning ? { warnings: [slotClaimWarning] } : {}),
+        ...(warnings.length ? { warnings } : {}),
+        ...(requiredLinks ? { requiredLinks } : {}),
         // Kind + Facets: the roles attached in this call (empty/omitted when none
         // were requested or the create was proposal-gated).
         ...(attachedFacets.length ? { facets: attachedFacets } : {}),

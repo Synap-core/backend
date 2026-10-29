@@ -52,6 +52,12 @@ import { candidateSlugs } from "./skills/template-skills.js";
 import { isPodAdmin } from "../utils/workspace-role.js";
 import { officialCatalogCondition } from "./capabilities/catalog-cache-query.js";
 import { SOURCE_ID_PATTERN } from "@synap-core/types/marketplace-source";
+import {
+  requiredLinkDebtByWorkspace,
+  requiredLinkDebtWarning,
+  REQUIRED_LINK_DEBT_UNCHECKED_WARNING,
+  type RequiredLinkDebt,
+} from "./links/required-links.js";
 
 const logger = createLogger({ module: "template-health" });
 
@@ -1004,10 +1010,18 @@ export interface WorkspaceTemplateHealth extends TemplateHealth {
   /** An agent's pending "update this space" proposal — its door. `null` = none. */
   updateProposal: TemplateUpdateProposal | null;
   /**
+   * The LIST of required links (D3.2, warn → list): per kind, the live rows
+   * of this space missing a link its template marks required — count + the
+   * newest ids, the backfill worklist (`requiredLinkDebtByWorkspace`). `[]` =
+   * none missing; `null` = could not be read (said in `warnings`).
+   */
+  missingRequiredLinks: RequiredLinkDebt[] | null;
+  /**
    * Non-fatal template problems in this space — the apply warning, a retired /
    * unlisted template (`lifecycleWarning`), each overlay's warning, a read
    * that could not be checked, and an `always` skill whose body is over the
-   * per-skill budget (it loads on demand instead). Empty when there are none.
+   * per-skill budget (it loads on demand instead), and one line per kind
+   * missing a required link. Empty when there are none.
    */
   warnings: string[];
 }
@@ -1084,7 +1098,14 @@ export async function listWorkspaceTemplateHealth(
   );
   const warningsByWs = await alwaysSkillWarningsByWorkspace(active);
   const stepsByWs = await templateStepsByWorkspace(active, viewerUserId);
+  const linkDebt = await requiredLinkDebtByWorkspace(
+    active.map((r) => r.id)
+  ).catch((err: unknown) => {
+    logger.warn({ err }, "required-link debt could not be read");
+    return null;
+  });
   return active.map((r) => {
+    const missingRequiredLinks = linkDebt ? (linkDebt.get(r.id) ?? []) : null;
     const recorded = readTemplateState(r.settings);
     const pkgSlug = recorded?.slug ?? null;
     const health = templateHealthFor(
@@ -1102,6 +1123,7 @@ export async function listWorkspaceTemplateHealth(
       ...health,
       overlays,
       ...step,
+      missingRequiredLinks,
       warnings: [
         ...(step.applyWarning ? [step.applyWarning] : []),
         ...stepWarnings,
@@ -1110,6 +1132,9 @@ export async function listWorkspaceTemplateHealth(
           o.lifecycleWarning ? [o.lifecycleWarning] : []
         ),
         ...(warningsByWs.get(r.id) ?? []),
+        ...(missingRequiredLinks
+          ? missingRequiredLinks.map(requiredLinkDebtWarning)
+          : [REQUIRED_LINK_DEBT_UNCHECKED_WARNING]),
       ],
     };
   });

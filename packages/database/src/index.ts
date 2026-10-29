@@ -368,6 +368,11 @@ export {
   type InstallLayerReport,
 } from "./utils/reconcile-workspace-from-definition.js";
 export {
+  readRequiredLinkMark,
+  withRequiredLinkMark,
+  type RequiredLinkMark,
+} from "./utils/required-link-mark.js";
+export {
   resolveProfileForApply,
   readProfileRetirement,
   type ProfileApplyResolution,

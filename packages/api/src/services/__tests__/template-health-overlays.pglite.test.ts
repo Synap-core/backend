@@ -50,8 +50,12 @@ vi.mock("@synap/database", async (importOriginal) => {
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import {
   cpCatalogCache,
+  entities,
   podSettings,
+  profileRelations,
+  profiles,
   proposals,
+  relationDefs,
   skills,
   workspaces,
 } from "@synap/database/schema";
@@ -172,7 +176,19 @@ const overlay = (row: Awaited<ReturnType<typeof healthOf>>, slug: string) =>
   row.overlays.find((o) => o.slug === slug)!;
 
 beforeAll(async () => {
-  for (const t of [skills, workspaces, cpCatalogCache, podSettings, proposals])
+  // Health also lists the rows missing a required link (entities, profiles,
+  // profile_relations, relation_defs); empty here, so it adds no warning.
+  for (const t of [
+    skills,
+    workspaces,
+    cpCatalogCache,
+    podSettings,
+    proposals,
+    entities,
+    profiles,
+    profileRelations,
+    relationDefs,
+  ])
     await h.client!.exec(ddlFor(t));
   // The founder's case: business-developer (retired → crm) on the CRM space.
   // The space's own slug is ALSO listed in the ledger — never its own overlay.
