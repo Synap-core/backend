@@ -48525,6 +48525,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				timezone: string;
 			};
 		}>;
+		setLocale: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				locale: "en" | "fr";
+			};
+			meta: object;
+			output: {
+				locale: "en" | "fr";
+			};
+		}>;
 		updateFeedPreferences: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				preferences: {
