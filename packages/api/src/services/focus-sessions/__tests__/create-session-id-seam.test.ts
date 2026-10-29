@@ -92,6 +92,11 @@ vi.mock("../update-session.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../update-session.js")>()),
   sanitizeDeclaredOutputs: (x: unknown) => x,
 }));
+// An unpinned agent start reads the agent's declared focus; none here.
+vi.mock("../../agent-identity-service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agent-identity-service.js")>()),
+  getAgentFocusProjectId: vi.fn(async () => null),
+}));
 
 import { createFocusSession } from "../create-session.js";
 
