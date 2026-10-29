@@ -18,6 +18,7 @@ import { db, GrantRepository } from "@synap/database";
 import "./vendor/document-access.js";
 import {
   canJoinRoom,
+  canRead,
   userPrincipal,
   type Principal,
 } from "./vendor/access-door.js";
@@ -42,13 +43,13 @@ export type RealtimePrincipal =
  * instead of reading as "denied" — for the periodic re-check of open sockets
  * (presence-sweep.ts), where a database blip must not evict everyone.
  */
-export function decidePrincipalJoinRoom(
+export async function decidePrincipalJoinRoom(
   roomId: string,
   principal: RealtimePrincipal
 ): Promise<boolean> {
-  return principal.kind === "service"
-    ? decideForKey(roomId, principal)
-    : decide(roomId, principal.userId);
+  // The door's own rule (`canRead(p, {room})`, which `canJoinRoom` wraps):
+  // a failed grant or row read throws here instead of denying.
+  return canRead(await principalOf(principal), { room: roomId });
 }
 
 /** THE room gate of `/presence`: handshake rooms and every `join-room`. */
