@@ -21,7 +21,7 @@
  *     otherwise the waiting clause says "wait on you", never a guessed link.
  */
 import type { NeedsYouBucket } from "../needs-you/buckets.js";
-import { formatFloorCount } from "./header.js";
+import { formatFloorCount } from "../value-format/numbers.js";
 
 /** One count the brief reads. `count: null` = the read failed (unknown ≠ 0). */
 export interface HomeBriefCount {

@@ -4,10 +4,12 @@
  *
  * THE SUBSET (nothing else parses):
  * - text;
- * - `{name}`: a value, printed with `String(value)`;
+ * - `{name}`: a value; a string prints as is, a number through the locale's
+ *   number form (`formatNumber`: "1,234.5" in English, "1 234,5" in French),
+ *   as ICU prints a number argument. Pass a year or an id as a string;
  * - `{n, plural, one {…} other {…}}`: CLDR categories (`zero one two few many
  *   other`) and exact matches `=0`, `=1`, … (checked first). `#` inside a
- *   branch prints the number. `other` is required;
+ *   branch prints the number in the locale's number form. `other` is required;
  * - `{g, select, a {…} b {…} other {…}}`: string keys, `other` required.
  *
  * Branches nest. Argument names are `[A-Za-z_][A-Za-z0-9_]*`, select keys
@@ -20,10 +22,12 @@
  * write the typographic apostrophe ’ (U+2019), which French copy uses anyway.
  * Every other apostrophe is plain text, as in ICU ("l'espace" is fine).
  *
- * Numbers print as `String(n)` until the formatting door takes a locale.
+ * Numbers print through `@synap-core/types/value-format` (no `Intl`), so
+ * "1 000 000 d’éléments" reads right in French.
  */
 import type { Locale } from "./locale.js";
 import { pluralCategory } from "./plural.js";
+import { formatNumber } from "../value-format/numbers.js";
 
 /** One piece of a parsed message. */
 export type MessagePart =
@@ -245,6 +249,13 @@ export function parseMessage(source: string): MessageAst {
   return ast;
 }
 
+/** A number in the locale's form; a string as it was given. */
+function printValue(value: ParamValue, locale: Locale): string {
+  return typeof value === "number"
+    ? formatNumber(value, { locale })
+    : String(value);
+}
+
 function formatParts(
   parts: MessageAst,
   locale: Locale,
@@ -263,7 +274,7 @@ function formatParts(
       case "arg": {
         const value = params?.[part.name];
         // A missing value shows its placeholder: visible, never a crash.
-        out += value == null ? `{${part.name}}` : String(value);
+        out += value == null ? `{${part.name}}` : printValue(value, locale);
         break;
       }
       case "plural": {
@@ -273,7 +284,7 @@ function formatParts(
           part.options[`=${n}`] ??
           part.options[pluralCategory(locale, n)] ??
           part.options.other;
-        const shown = raw == null ? `{${part.name}}` : String(raw);
+        const shown = raw == null ? `{${part.name}}` : printValue(raw, locale);
         out += formatParts(branch, locale, params, shown);
         break;
       }

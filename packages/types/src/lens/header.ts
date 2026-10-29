@@ -33,6 +33,7 @@ import {
 } from "../units/track.js";
 import type { GoalCriterionMark } from "../units/goal.js";
 import { resolveActionLabel, resolveStatusLabel } from "../vocabulary/index.js";
+import { formatFloorCount } from "../value-format/numbers.js";
 import { LENS_SECTION_LABELS } from "./classes.js";
 import type { LensDoor, LensRow, LensVerb } from "./rows.js";
 import type { LensScopeKind } from "./scope.js";
@@ -345,17 +346,6 @@ export function lensNextMove(
  * like a section title, never a calm zero. Hosts draw it muted.
  */
 export const LENS_UNKNOWN_COUNT = "\u2013";
-
-/**
- * THE count formatter for a count that may be a floor: "3", "100+". A capped
- * read (the scan stopped at its limit) says so with a trailing "+", never a
- * bare N that reads as exact (ui-composition §11 "one number, one source").
- * Every "N+" in this package goes through here; hosts reuse it rather than
- * writing `${n}+` again.
- */
-export function formatFloorCount(count: number, floor = false): string {
-  return floor ? `${count}+` : `${count}`;
-}
 
 /** The strip's words for one lens-section count door. */
 export function lensCountDoorText(
