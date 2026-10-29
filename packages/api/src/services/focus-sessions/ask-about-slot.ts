@@ -44,15 +44,19 @@ import {
 } from "../../utils/message-anchor.js";
 import { selectSlotToAnswer } from "./answer-slot.js";
 import { normalizeExpectedLabel } from "./expected-label.js";
-import { resolveWakeAgentType } from "./session-answer.js";
+import { resolveWakeAgentType, resolveWakeTarget } from "./session-answer.js";
+import { wakeExternalAgent } from "../agent-dispatch/wake-external-agent.js";
 import { agentRepliedAfter, findNewestSlotThreadSeed } from "./slot-thread.js";
 
-/** The sentence the person is understood to be saying. Not a prompt — the
+/** What the person says: their OWN words when they wrote any (founder
+ *  2026-10-29: a person asks what they want to ask, never a template), else
+ *  the one sentence a bare tap is understood to mean. Not a prompt — the
  *  agent's instructions for a slot thread live in the IS prompt. */
 export function askAboutSlotSeed(label: string, note?: string): string {
-  const head = `Tell me more about "${label}". What exactly do you need from me?`;
-  const extra = note?.trim();
-  return extra ? `${head}\n\n${extra}` : head;
+  const own = note?.trim();
+  return (
+    own || `Tell me more about "${label}". What exactly do you need from me?`
+  );
 }
 
 /**
@@ -118,19 +122,49 @@ export async function askAboutSlot(params: {
   const content = askAboutSlotSeed(slot.label, note);
   const wanted = normalizeExpectedLabel(slot.label);
 
-  // A session room is a GROUP room: only a NAMED agent is woken. The agent
-  // that owns the work (delegatedTo), else the first pod-run agent staffed on
-  // the session, else the orchestrator.
+  // A session room is a GROUP room: only a NAMED agent is woken, and the
+  // agent that ASKED (`askedBy`) is the one the person is talking to — the
+  // same rule an answer follows (`resolveWakeTarget`). One the pod dispatches
+  // to gets the words through its binding's `send`; one that reads its own
+  // room (`pull`: Claude Code on the person's computer) is not woken — the
+  // message in the room IS its delivery — and no stand-in agent answers in
+  // its place. With no asker (a system-raised ask), the work's owner: the
+  // delegated or first staffed agent, else the orchestrator.
+  const agentIds = Array.isArray(session.agentIds) ? session.agentIds : [];
   const startTurn = async (
     seedId: string,
     seedContent: string,
     seedAnchor: SessionSlotAnchor
   ) => {
+    if (slot.askedBy) {
+      const target = await resolveWakeTarget({
+        askingAgentUserId: slot.askedBy,
+        session: { id: session.id, ownerId: params.userId },
+      });
+      if (!target) return false;
+      if (target.reach === "dispatch") {
+        const sent = await wakeExternalAgent({
+          sessionId: session.id,
+          agentUserId: target.agentUserId,
+          kind: "message",
+          text: seedContent,
+          slotKey: slot.label,
+          idempotencyKey: `ask-about:${seedId}`,
+        });
+        return sent.status === "sent";
+      }
+      return podTurn(seedId, seedContent, seedAnchor, target.agentType);
+    }
     const agentType =
-      (await resolveWakeAgentType({
-        slot,
-        agentIds: Array.isArray(session.agentIds) ? session.agentIds : [],
-      })) ?? "meta";
+      (await resolveWakeAgentType({ slot, agentIds })) ?? "meta";
+    return podTurn(seedId, seedContent, seedAnchor, agentType);
+  };
+  const podTurn = async (
+    seedId: string,
+    seedContent: string,
+    seedAnchor: SessionSlotAnchor,
+    agentType: string
+  ) => {
     const plan = await planSlotAnchorTurn({
       anchor: seedAnchor,
       comment: seedContent,
@@ -152,7 +186,13 @@ export async function askAboutSlot(params: {
     label: slot.label,
     userId: params.userId,
   });
-  if (waiting && !(await agentRepliedAfter(channelId, waiting.id))) {
+  // A double tap re-sends the SAME words: answered by the waiting seed. New
+  // words are a new message, even while the first waits for its reply.
+  if (
+    waiting &&
+    waiting.content === content &&
+    !(await agentRepliedAfter(channelId, waiting.id))
+  ) {
     return {
       status: "asked",
       channelId,
