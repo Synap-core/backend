@@ -1,0 +1,46 @@
+2026-10-29T01:33:13.6420582Z env:
+2026-10-29T01:33:13.6420920Z   PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin
+2026-10-29T01:33:13.6421485Z   NODE_PATH: /home/runner/work/backend/backend/node_modules/.pnpm/node_modules
+2026-10-29T01:33:13.6421976Z ##[endgroup]
+2026-10-29T01:33:13.8597960Z 
+2026-10-29T01:33:13.8600980Z ✓ CI/CD conformance: all rules pass
+2026-10-29T01:33:13.8603059Z   ○ @synap-core/chat-ui: hestia-cli carries a source copy at packages/@synap-core/chat-ui (a nested path outside its workspace globs). It is never published — that repo ships GitHub release assets, not npm — so this is latent confusion rather than a broken tag, but a stray `npm publish` from hestia-cli would collide with synap-app's copy. (open)
+2026-10-29T01:33:13.8604750Z 
+2026-10-29T01:33:13.8690321Z ##[group]Run node scripts/check-eslint-ledger-paths.mjs
+2026-10-29T01:33:13.8691068Z [36;1mnode scripts/check-eslint-ledger-paths.mjs[0m
+2026-10-29T01:33:13.8691502Z [36;1mpnpm lint --max-warnings=100[0m
+2026-10-29T01:33:13.8722072Z shell: /usr/bin/bash -e {0}
+2026-10-29T01:33:13.8722412Z env:
+2026-10-29T01:33:13.8722751Z   PNPM_HOME: /home/runner/setup-pnpm/node_modules/.bin
+2026-10-29T01:33:13.8723162Z ##[endgroup]
+2026-10-29T01:33:14.6469966Z check-eslint-ledger-paths: 162 allowlisted paths, all present.
+2026-10-29T01:33:15.0379129Z 
+2026-10-29T01:33:15.0379967Z > synap-backend@1.0.0 lint /home/runner/work/backend/backend
+2026-10-29T01:33:15.0380604Z > eslint . --cache --max-warnings=100
+2026-10-29T01:33:15.0380871Z 
+2026-10-29T01:35:52.0507163Z 
+2026-10-29T01:35:52.0508209Z /home/runner/work/backend/backend/packages/database/src/migrations-0371.pglite.test.ts
+2026-10-29T01:35:52.0547121Z ##[error]  24:29  error  Replace `·run:·number·|·null;·ok:·number·|·null;·bad:·number·|·null` with `⏎····run:·number·|·null;⏎····ok:·number·|·null;⏎····bad:·number·|·null;⏎·`  prettier/prettier
+2026-10-29T01:35:52.0559826Z 
+2026-10-29T01:35:52.0560547Z /home/runner/work/backend/backend/packages/database/src/utils/api-usage.ts
+2026-10-29T01:35:52.0562405Z   21:1  warning  Unused eslint-disable directive (no problems were reported from '@typescript-eslint/no-explicit-any')
+2026-10-29T01:35:52.0563346Z 
+2026-10-29T01:35:52.0564420Z /home/runner/work/backend/backend/packages/database/src/utils/automation-owner-access.ts
+2026-10-29T01:35:52.0566309Z   33:3  warning  Unused eslint-disable directive (no problems were reported from '@typescript-eslint/no-explicit-any')
+2026-10-29T01:35:52.0568274Z   68:3  warning  Unused eslint-disable directive (no problems were reported from '@typescript-eslint/no-explicit-any')
+2026-10-29T01:35:52.0569196Z 
+2026-10-29T01:35:52.0569810Z /home/runner/work/backend/backend/packages/hub-rest-client/src/client.ts
+2026-10-29T01:35:52.0573168Z ##[warning]  192:3  warning  'HubRelation' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+2026-10-29T01:35:52.0575458Z 
+2026-10-29T01:35:52.0576116Z /home/runner/work/backend/backend/packages/types/src/needs-you/rule.ts
+2026-10-29T01:35:52.0578967Z ##[warning]  129:7  warning  'NEEDS_YOU_SLOT_CLASSES' is assigned a value but only used as a type. Allowed unused vars must match /^_/u      @typescript-eslint/no-unused-vars
+2026-10-29T01:35:52.0583028Z ##[warning]  139:7  warning  'NEEDS_YOU_PROPOSAL_CLASSES' is assigned a value but only used as a type. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+2026-10-29T01:35:52.0585456Z 
+2026-10-29T01:35:52.0586016Z ✖ 7 problems (1 error, 6 warnings)
+2026-10-29T01:35:52.0586962Z   1 error and 3 warnings potentially fixable with the `--fix` option.
+2026-10-29T01:35:52.0587562Z 
+2026-10-29T01:35:52.1715613Z  ELIFECYCLE  Command failed with exit code 1.
+2026-10-29T01:35:52.2091708Z ##[error]Process completed with exit code 1.
+2026-10-29T01:35:52.2311149Z Post job cleanup.
+2026-10-29T01:35:52.2317594Z ##[start-action display=Setup pnpm cache;id=__846c6128-fd3b-440a-b10f-7f2573ec3ac5.__actions_cache]
+2026-10-29T01:35:52.2320202Z ##[end-action id=__846c6128-fd3b-440a-b10f-7f2573ec3ac5.__actions_cache;outcome=skipped;conclusion=skipped;duration_ms=0]

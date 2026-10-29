@@ -1,0 +1,41 @@
+2026-10-29T01:46:24.9782662Z [36;1mnode scripts/test-ratchet.mjs --reports="$RUNNER_TEMP/ratchet" --shards=4[0m
+2026-10-29T01:46:24.9821080Z shell: /usr/bin/bash -e {0}
+2026-10-29T01:46:24.9821370Z ##[endgroup]
+2026-10-29T01:46:25.1730364Z 
+2026-10-29T01:46:25.1731618Z ─── test ratchet ─────────────────────────────────────────────
+2026-10-29T01:46:25.1732582Z   apps/api                              60 files     0 red     638/638 tests passed
+2026-10-29T01:46:25.1733527Z   apps/pod-admin                       126 files     2 red    1583/1603 tests passed
+2026-10-29T01:46:25.1734532Z   packages/ai                            0 files     0 red       0/0 tests passed
+2026-10-29T01:46:25.1735534Z   packages/ai-embeddings                 0 files     0 red       0/0 tests passed
+2026-10-29T01:46:25.1736526Z   packages/api                        2045 files     7 red   18227/18268 tests passed
+2026-10-29T01:46:25.1737789Z   packages/api-types                     2 files     0 red       8/8 tests passed
+2026-10-29T01:46:25.1738726Z   packages/auth                          4 files     0 red      18/18 tests passed
+2026-10-29T01:46:25.1739704Z   packages/capability-gate               3 files     0 red      28/28 tests passed
+2026-10-29T01:46:25.1740709Z   packages/database                    261 files     0 red    1982/1982 tests passed
+2026-10-29T01:46:25.1741664Z   packages/events                        6 files     0 red      35/35 tests passed
+2026-10-29T01:46:25.1742623Z   packages/field-crypto                  1 files     0 red      35/35 tests passed
+2026-10-29T01:46:25.1744169Z   packages/governance-policy            25 files     0 red     471/471 tests passed
+2026-10-29T01:46:25.1745234Z   packages/hub-protocol                  1 files     0 red      18/18 tests passed
+2026-10-29T01:46:25.1746296Z   packages/intelligence-client          20 files     0 red     180/180 tests passed
+2026-10-29T01:46:25.1747552Z   packages/jobs                        150 files     2 red    1299/1300 tests passed
+2026-10-29T01:46:25.1748201Z   packages/markdown-core                22 files     0 red     347/347 tests passed
+2026-10-29T01:46:25.1748801Z   packages/playbooks                     8 files     0 red      87/87 tests passed
+2026-10-29T01:46:25.1749382Z   packages/realtime                     13 files     0 red     134/134 tests passed
+2026-10-29T01:46:25.1749737Z 
+2026-10-29T01:46:25.1749997Z ✗ TEST RATCHET — 1 problem(s)
+2026-10-29T01:46:25.1750190Z 
+2026-10-29T01:46:25.1750305Z   [new-failure]
+2026-10-29T01:46:25.1750984Z       3 file(s) fail that are not in the baseline (failed twice where a retry ran). Fix them; the baseline is not a place to park new red:
+2026-10-29T01:46:25.1751778Z       packages/api/src/routers/hub-protocol/observations.contract.test.ts
+2026-10-29T01:46:25.1752546Z         ↳ AssertionError: the merge sweeper job was not enqueued: expected undefined to be defined
+2026-10-29T01:46:25.1753206Z       packages/api/src/access/grant-read-coverage.tripwire.test.ts
+2026-10-29T01:46:25.1754194Z         ↳ AssertionError: Add the table to GRANT_READ_SPECS (access/grant-read.ts) with its subject.: expected [ 'inbound_deliveries' ] to deeply equal []
+2026-10-29T01:46:25.1755045Z       packages/api/src/__tripwires__/trigger-subject-has-producer.test.ts
+2026-10-29T01:46:25.1756200Z         ↳ AssertionError: No `emitSideEffects`/`recordDomainMutation` call site emits subjectType "external_webhook". A subject with no producer is a trigger that install
+2026-10-29T01:46:25.1757582Z 
+2026-10-29T01:46:25.1757965Z   packages/search                        6 files     0 red      27/27 tests passed
+2026-10-29T01:46:25.1758878Z   packages/storage                       9 files     0 red      56/56 tests passed
+2026-10-29T01:46:25.1759463Z   packages/types                       263 files     2 red    4351/4357 tests passed
+2026-10-29T01:46:25.1760497Z   tripwires:.                           10 files     0 red     173/173 tests passed
+2026-10-29T01:46:25.1761192Z   3035 files ran, 13 red, baseline 15, 368 tripwires discovered
+2026-10-29T01:46:25.1841045Z ##[error]Process completed with exit code 1.

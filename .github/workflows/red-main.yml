@@ -1,0 +1,240 @@
+name: Red main
+
+# When backend main goes red, name the PR that did it and tell its pod
+# session; when nobody fixes it within 30 min, open a revert PR that jumps the
+# merge queue (founder decision 0b4db9f7, 2026-10-29 ~13:10Z). The rules, and
+# why each one: scripts/ci/culprit-finder.mjs. Tripwire:
+# scripts/ci/culprit-finder.tripwire.test.ts.
+#
+#   name    a push run of CI on main that ended `failure`: reads the failing
+#           files of its failed jobs, maps them to the PRs since the last
+#           all-green main, comments on the culprit PR, posts to its pod
+#           session, and records the verdict as the check run
+#           "Red main: culprit" on the red commit. What the mapping cannot
+#           settle goes to `bisect`.
+#   bisect  ONE job: re-runs only the unsettled failing files at a few
+#           commits of the range (a binary search), then posts the verdict.
+#   sweep   every 10 min: opens the revert PR when the record names exactly
+#           one high-confidence culprit, 30 min have passed, main is still red
+#           on the same files, and nobody owns the fix. It never merges, never
+#           enqueues (the merge bot does, with jump, for `fix/main-red-*`),
+#           never pushes to main.
+#
+# Not a required check, and it adds no PR CI: a CI run of a PR skips every job
+# here by its `if:` (no runner). The sweep is a ~20 s job.
+#
+# Secrets and variables, each optional (fail-safe without):
+#   SYNAP_MERGE_BOT_APP_ID / SYNAP_MERGE_BOT_KEY  the "Synap Merge Bot" app
+#       (merge-bot.yml): pushes the revert branch and opens the PR. A push or a
+#       PR made with GITHUB_TOKEN starts no CI, so the revert would never get
+#       its checks. Without them the sweep logs what it would do.
+#   SYNAP_POD_URL / SYNAP_OBS_KEY  the pod (pod-observations.yml's pair); the
+#       key needs hub-protocol.read AND hub-protocol.write here.
+#   vars.SYNAP_POD_WORKSPACE_ID  the space whose sessions are read for a
+#       `main red: backend …` owner. Without the pod, no session is told and
+#       the owner is UNKNOWN, which holds every revert (never read as nobody).
+#
+# workflow_run and schedule run the DEFAULT BRANCH's copy of this file and of
+# the script; no PR's code runs here. Try it with "Run workflow" (dry run).
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+  schedule:
+    - cron: "2,12,22,32,42,52 * * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "sweep: judge a revert now; name: name the culprit of a run"
+        type: choice
+        options: [sweep, name]
+        default: sweep
+      run_id:
+        description: "name: the id of a red push run of CI on main"
+        type: string
+        default: ""
+      dry_run:
+        description: Judge and log only; post nothing, revert nothing
+        type: boolean
+        default: true
+
+permissions: {}
+
+concurrency:
+  # One naming per red run; the sweeps one at a time (two must never open
+  # two reverts).
+  group: red-main-${{ github.event_name == 'workflow_run' && format('name-{0}', github.event.workflow_run.id) || 'sweep' }}
+  cancel-in-progress: false
+
+jobs:
+  name:
+    name: Name the culprit
+    if: >-
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.conclusion == 'failure' &&
+       github.event.workflow_run.head_repository.full_name == github.repository) ||
+      (github.event_name == 'workflow_dispatch' && inputs.mode == 'name')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      # the run's jobs and their logs
+      actions: read
+      # the record check run on the red commit
+      checks: write
+      # the comment on the culprit PR
+      issues: write
+      pull-requests: read
+    outputs:
+      bisect: ${{ steps.name.outputs.bisect }}
+      plan: ${{ steps.name.outputs.plan }}
+    steps:
+      # main's history: the commits since the last all-green main.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 60
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: ".node-version"
+
+      - name: Name the culprit
+        id: name
+        run: node scripts/ci/culprit-finder.mjs name
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.id || inputs.run_id }}
+          SYNAP_POD_URL: ${{ secrets.SYNAP_POD_URL }}
+          SYNAP_OBS_KEY: ${{ secrets.SYNAP_OBS_KEY }}
+          SYNAP_POD_WORKSPACE_ID: ${{ vars.SYNAP_POD_WORKSPACE_ID }}
+          CULPRIT_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+
+  bisect:
+    name: Bisect the failing files
+    needs: name
+    if: ${{ needs.name.outputs.bisect == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    permissions:
+      contents: read
+      actions: read
+      checks: write
+      issues: write
+      pull-requests: read
+
+    # The probes run the failing tests, which read a migrated database: one
+    # fresh database per probe (scripts/ci/culprit-finder.mjs makeProbe).
+    services:
+      postgres:
+        image: timescale/timescaledb-ha:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: synap_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 60
+          persist-credentials: false
+
+      # The probes check other commits out: the finder runs from a copy of
+      # the default branch's scripts.
+      - name: Keep the default branch's finder
+        run: |
+          mkdir -p "$RUNNER_TEMP/finder/scripts/ci"
+          cp scripts/ci/culprit-finder.mjs scripts/ci/affected.mjs scripts/ci/release-gate-wait.mjs "$RUNNER_TEMP/finder/scripts/ci/"
+          cp scripts/tripwire-discovery.mjs "$RUNNER_TEMP/finder/scripts/"
+
+      - name: Monorepo layout + dependencies
+        uses: ./.github/actions/monorepo-setup
+        with:
+          app-id: ${{ vars.SYNAP_READER_APP_ID }}
+          app-key: ${{ secrets.SYNAP_READER_APP_KEY }}
+          cross-repo-token: ${{ secrets.CROSS_REPO_TOKEN }}
+
+      # No token here: the probes run merged commits' tests.
+      - name: Probe the range
+        id: probe
+        continue-on-error: true
+        timeout-minutes: 60
+        run: node "$RUNNER_TEMP/finder/scripts/ci/culprit-finder.mjs" bisect
+        env:
+          PLAN: ${{ needs.name.outputs.plan }}
+          RESULT_FILE: ${{ runner.temp }}/culprit-result.json
+          CULPRIT_ROOT: ${{ github.workspace }}
+          DATABASE_ADMIN_URL: postgresql://postgres:postgres@localhost:5432/postgres
+
+      # Always: a bisect that did not finish still posts the mapping's verdict.
+      - name: Post the verdict
+        if: ${{ !cancelled() }}
+        run: node "$RUNNER_TEMP/finder/scripts/ci/culprit-finder.mjs" post
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLAN: ${{ needs.name.outputs.plan }}
+          RESULT_FILE: ${{ runner.temp }}/culprit-result.json
+          SYNAP_POD_URL: ${{ secrets.SYNAP_POD_URL }}
+          SYNAP_OBS_KEY: ${{ secrets.SYNAP_OBS_KEY }}
+          SYNAP_POD_WORKSPACE_ID: ${{ vars.SYNAP_POD_WORKSPACE_ID }}
+          CULPRIT_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+
+  sweep:
+    name: Revert a culprit nobody fixes
+    if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'sweep') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+      # the once-only "held" / "reverted" notes on the culprit PR
+      issues: write
+      pull-requests: read
+    env:
+      REVERT_CONFIGURED: ${{ secrets.SYNAP_MERGE_BOT_APP_ID != '' && secrets.SYNAP_MERGE_BOT_KEY != '' }}
+    steps:
+      # main deep enough to hold the culprit merge and its first parent.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 200
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: ".node-version"
+
+      # The writer: a push and a PR that START CI. A failed mint leaves the
+      # token empty, and the sweep then writes no revert (fail-safe).
+      - name: Mint the revert token (Synap Merge Bot app)
+        id: bot-token
+        if: ${{ env.REVERT_CONFIGURED == 'true' }}
+        continue-on-error: true
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        with:
+          app-id: ${{ secrets.SYNAP_MERGE_BOT_APP_ID }}
+          private-key: ${{ secrets.SYNAP_MERGE_BOT_KEY }}
+          owner: Synap-core
+          repositories: backend
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Revert a culprit nobody fixes
+        run: node scripts/ci/culprit-finder.mjs sweep
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVERT_TOKEN: ${{ steps.bot-token.outputs.token }}
+          SYNAP_POD_URL: ${{ secrets.SYNAP_POD_URL }}
+          SYNAP_OBS_KEY: ${{ secrets.SYNAP_OBS_KEY }}
+          SYNAP_POD_WORKSPACE_ID: ${{ vars.SYNAP_POD_WORKSPACE_ID }}
+          CULPRIT_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
