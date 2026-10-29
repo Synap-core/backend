@@ -506,7 +506,12 @@ export class UnipileConnector implements MessagingConnector {
     ) {
       return cached.secrets;
     }
-    const secrets = (await this.listWebhookEndpoints()).map((e) => e.secret);
+    // An endpoint with no secret signs nothing: an HMAC under the empty key is
+    // one anyone can compute, so it never verifies a delivery (pre-launch audit
+    // 2026-10-28, webhooks F2: no secret = every call refused).
+    const secrets = (await this.listWebhookEndpoints())
+      .map((e) => e.secret)
+      .filter((s) => s.trim().length > 0);
     signingSecretCache.set(key, { secrets, fetchedAt: Date.now() });
     return secrets;
   }
