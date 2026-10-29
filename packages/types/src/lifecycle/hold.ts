@@ -179,13 +179,16 @@ export function recordHold(
   at: { resumeTo: string | null; since: Date; base?: HoldReviewBase | null }
 ): RecordedHold {
   const datedResume = hold.until != null && "date" in hold.until;
-  const reviewBy =
-    hold.reviewBy ??
-    (datedResume
+  // Stored in ONE stamp shape (`toISOString`), so the watcher compares it as
+  // text and never casts a value written another way.
+  const given = hold.reviewBy ? Date.parse(hold.reviewBy) : NaN;
+  const reviewBy = Number.isFinite(given)
+    ? new Date(given).toISOString()
+    : datedResume
       ? null
       : new Date(
           at.since.getTime() + HOLD_REVIEW_DAYS[at.base ?? "default"] * DAY_MS
-        ).toISOString());
+        ).toISOString();
   return {
     on: hold.on,
     ref: hold.ref ?? null,

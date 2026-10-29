@@ -14030,6 +14030,23 @@ declare const OperationalEventTypes: {
 		readonly label: "Entity deleted";
 		readonly type: "entity.delete.completed";
 	};
+	readonly ENTITY_SIGNALED: {
+		readonly description: "Runs once when something passes its due date or is about to, stays too long in one status, or a pause is ready for review.";
+		readonly domain: "Entity";
+		readonly filterKeys: [
+			"signal",
+			"lifecycleProfile",
+			"profileSlug",
+			"role",
+			"status",
+			"category",
+			"ownerId",
+			"projectId",
+			"trackId"
+		];
+		readonly label: "Needs a look";
+		readonly type: "entity.signal.completed";
+	};
 	readonly ENTITY_TRANSITIONED: {
 		readonly description: "Fires when a thing's lifecycle status moves (the kind's own, or a role's), through the one moveStatus door.";
 		readonly domain: "Entity";
@@ -14079,6 +14096,20 @@ declare const OperationalEventTypes: {
 		];
 		readonly label: "Feed new item";
 		readonly type: "feed.new_item.completed";
+	};
+	readonly FOCUS_SESSION_SIGNALED: {
+		readonly description: "Runs once when a paused session is ready to be reviewed.";
+		readonly domain: "Focus sessions";
+		readonly filterKeys: [
+			"signal",
+			"status",
+			"category",
+			"ownerId",
+			"projectId",
+			"trackId"
+		];
+		readonly label: "Needs a look";
+		readonly type: "focus_session.signal.completed";
 	};
 	readonly FOCUS_SESSION_STAGE_CHANGED: {
 		readonly description: "Fires when a focus session advances to a different playbook stage.";
@@ -14240,6 +14271,20 @@ declare const OperationalEventTypes: {
 		];
 		readonly label: "Relation deleted";
 		readonly type: "relation.delete.completed";
+	};
+	readonly TRACK_SIGNALED: {
+		readonly description: "Runs once when a paused goal is ready to be reviewed.";
+		readonly domain: "Tracks";
+		readonly filterKeys: [
+			"signal",
+			"status",
+			"category",
+			"ownerId",
+			"projectId",
+			"trackId"
+		];
+		readonly label: "Needs a look";
+		readonly type: "track.signal.completed";
 	};
 	readonly TRACK_STAGE_CHANGED: {
 		readonly description: "Fires when a project's track (a method it runs) moves to a different stage.";
@@ -19375,6 +19420,7 @@ declare const PUSH_CATEGORIES: readonly [
 	"blocking-ask",
 	"decision-blocking",
 	"work-broke",
+	"late-or-stuck",
 	"mention",
 	"morning-brief",
 	"system"
@@ -38255,6 +38301,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				lifecycle: {
 					options: {
 						category: "active" | "done" | "lost" | "open" | "paused";
+						dateBinding?: string | undefined;
 						humanOnly: boolean;
 						key: string;
 						label: string;
@@ -38285,6 +38332,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				options: {
 					category: "active" | "done" | "lost" | "open" | "paused";
+					dateBinding?: string | undefined;
 					humanOnly: boolean;
 					key: string;
 					label: string;
@@ -39291,6 +39339,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					icon: string | null;
 					id: string;
 					priority: "high" | "low" | "normal" | "urgent";
+					pushedAt: Date | null;
 					readAt: Date | null;
 					snoozedUntil: Date | null;
 					sourceId: string | null;
@@ -39380,7 +39429,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		setPushPrefs: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				categories: Partial<Record<"blocking-ask" | "decision-blocking" | "mention" | "morning-brief" | "system" | "work-broke", boolean>>;
+				categories: Partial<Record<"blocking-ask" | "decision-blocking" | "late-or-stuck" | "mention" | "morning-brief" | "system" | "work-broke", boolean>>;
 			};
 			meta: object;
 			output: {

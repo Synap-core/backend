@@ -33,6 +33,7 @@ import {
   LIFECYCLE_CATEGORIES,
 } from "../../utils/lifecycle-model.js";
 import { lifecycleProjectionStatements } from "./project-lifecycle-columns.js";
+import { dateBindingProblems } from "./declare-lifecycle.js";
 
 type Db = PostgresJsDatabase<typeof schema>;
 
@@ -121,6 +122,13 @@ export function checkLifecycleDefUpdate(
 
   const merged: StoredEnumOption[] = authored.map((o) => {
     const prev = old.get(o.key);
+    // A date binding is checked against the profile's date properties, which
+    // this pure door cannot read: it is set through `changeLifecycleOptions`.
+    if (o.dateBinding !== undefined && o.dateBinding !== prev?.dateBinding) {
+      reasons.push(
+        `"${o.key}" dateBinding is set through the lifecycle door (it must name a date property)`
+      );
+    }
     if (!prev) {
       if (!isLifecycleCategory(o.category)) {
         reasons.push(`the new option "${o.key}" needs a category`);
@@ -207,6 +215,7 @@ export async function changeLifecycleOptions(
   if (!def) return { status: "refused", reason: "property not found" };
 
   const { options, errors } = parseLifecycleOptions(input.options);
+  errors.push(...(await dateBindingProblems(db, profileIds, options)));
   if (errors.length) return { status: "refused", reason: errors.join("; ") };
   const next = new Set(options.map((o) => o.key));
   const before = storedOptions(def);
@@ -233,7 +242,8 @@ export async function changeLifecycleOptions(
         b.label === o.label &&
         b.tone === o.tone &&
         Boolean(b.humanOnly) === Boolean(o.humanOnly) &&
-        b.stuckAfterDays === o.stuckAfterDays
+        b.stuckAfterDays === o.stuckAfterDays &&
+        b.dateBinding === o.dateBinding
       );
     });
   if (same) return { status: "unchanged" };

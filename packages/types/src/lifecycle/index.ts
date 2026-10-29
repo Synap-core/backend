@@ -182,6 +182,14 @@ export {
 } from "./hold.js";
 
 export {
+  STATUS_SIGNALS,
+  DATE_APPROACHING_DAYS,
+  dateDueAt,
+  dateSignalOf,
+  type StatusSignal,
+} from "./signal.js";
+
+export {
   STEP_POSITIONS,
   stepTone,
   stepsFromLifecycle,

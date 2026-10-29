@@ -2665,6 +2665,7 @@ CREATE TABLE IF NOT EXISTS "notifications" (
   "read_at"       timestamp with time zone,
   "expires_at"    timestamp with time zone,
   "snoozed_until" timestamp with time zone,
+  "pushed_at"     timestamp with time zone,
   "created_at"    timestamp with time zone NOT NULL DEFAULT now()
 );
 -- Ensure all columns exist on pre-existing tables (idempotent guard)
@@ -2686,6 +2687,7 @@ ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "status" text DEFAULT 'unre
 ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "read_at" timestamp with time zone;
 ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "expires_at" timestamp with time zone;
 ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "snoozed_until" timestamp with time zone;
+ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "pushed_at" timestamp with time zone;  -- 0375 (daily push cap)
 ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 
 CREATE INDEX IF NOT EXISTS "notifs_user_workspace_status_idx"
@@ -2711,6 +2713,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS "notifs_open_dedupe_key_uq"
 CREATE INDEX IF NOT EXISTS "notifs_snoozed_until_idx"
   ON "notifications" ("user_id", "snoozed_until")
   WHERE "status" = 'snoozed';
+
+-- A person's pushes today, for the daily push cap (migration 0375).
+CREATE INDEX IF NOT EXISTS "notifs_user_pushed_idx"
+  ON "notifications" ("user_id", "pushed_at")
+  WHERE "pushed_at" IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS "notification_preferences" (
   "id"                  uuid    PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -5527,3 +5534,14 @@ ALTER TABLE "entities" ADD COLUMN IF NOT EXISTS "last_interaction_at" timestampt
 CREATE INDEX IF NOT EXISTS "entities_profile_last_interaction_idx"
   ON "entities" ("profile_id", "last_interaction_at")
   WHERE "deleted_at" IS NULL;
+
+-- 0376: the status watcher's episode claims (status-flow W6) — mirrors
+-- 0376_status_signal_raised.sql.
+CREATE TABLE IF NOT EXISTS "status_signal_raised" (
+  "subject_type" text NOT NULL,
+  "subject_id"   text NOT NULL,
+  "signal"       text NOT NULL,
+  "episode_key"  text NOT NULL,
+  "raised_at"    timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY ("subject_type", "subject_id", "signal", "episode_key")
+);

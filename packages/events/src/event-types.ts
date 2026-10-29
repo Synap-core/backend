@@ -109,6 +109,28 @@ export const OperationalEventTypes = {
       "actorKind",
     ],
   },
+  // The status watcher noticed something about a thing that stands still,
+  // ONCE per episode (raised again only after it clears and recurs). Stored
+  // only because a rule triggers on it; goal and project resolved when raised.
+  ENTITY_SIGNALED: {
+    type: "entity.signal.completed",
+    label: "Needs a look",
+    domain: "Entity",
+    description:
+      "Runs once when something passes its due date or is about to, stays too long in one status, or a pause is ready for review.",
+    filterKeys: [
+      // stuck | late | approaching | hold_review_due
+      "signal",
+      "lifecycleProfile",
+      "profileSlug",
+      "role",
+      "status",
+      "category",
+      "ownerId",
+      "projectId",
+      "trackId",
+    ],
+  },
   ENTITY_DELETED: {
     type: "entity.delete.completed",
     label: "Entity deleted",
@@ -148,6 +170,21 @@ export const OperationalEventTypes = {
       "trackId",
     ],
   },
+  // The status watcher: a session paused past its hold's review date.
+  FOCUS_SESSION_SIGNALED: {
+    type: "focus_session.signal.completed",
+    label: "Needs a look",
+    domain: "Focus sessions",
+    description: "Runs once when a paused session is ready to be reviewed.",
+    filterKeys: [
+      "signal",
+      "status",
+      "category",
+      "ownerId",
+      "projectId",
+      "trackId",
+    ],
+  },
 
   // ── Tracks (a method running inside a project, 0272) ──────────────────────
   // Emitted as `track.stage_changed` (action="stage_changed") by the track's
@@ -178,6 +215,21 @@ export const OperationalEventTypes = {
       "fromCategory",
       "category",
       "actorKind",
+      "projectId",
+      "trackId",
+    ],
+  },
+  // The status watcher: a goal paused past its hold's review date.
+  TRACK_SIGNALED: {
+    type: "track.signal.completed",
+    label: "Needs a look",
+    domain: "Tracks",
+    description: "Runs once when a paused goal is ready to be reviewed.",
+    filterKeys: [
+      "signal",
+      "status",
+      "category",
+      "ownerId",
       "projectId",
       "trackId",
     ],

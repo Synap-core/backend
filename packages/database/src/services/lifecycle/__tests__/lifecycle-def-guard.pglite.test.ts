@@ -99,6 +99,18 @@ describe("checkLifecycleDefUpdate — the generic door", () => {
     expect(refused({ constraints: {} })).toMatch(/cannot be emptied/);
     expect(refused({ slug: "stage" })).toMatch(/cannot be renamed/);
   });
+
+  it("refuses setting a date binding here: the lifecycle door checks it", () => {
+    expect(
+      refused({
+        constraints: {
+          enumOptions: OPTIONS.map((o) =>
+            o.key === "negotiating" ? { ...o, dateBinding: "closeDate" } : o
+          ),
+        },
+      })
+    ).toMatch(/dateBinding is set through the lifecycle door/);
+  });
 });
 
 let h: Awaited<ReturnType<typeof makeLifecyclePglite>>;
@@ -193,5 +205,35 @@ describe("changeLifecycleOptions — the lifecycle door", () => {
     });
     expect(r.status).toBe("changed");
     expect((await rowOf(e)).statusCategory).toBe("active");
+  });
+
+  it("sets a date binding only when it names a date property of the profile", async () => {
+    const options = [
+      { key: "draft", category: "active" },
+      { key: "proposed", category: "active", dateBinding: "closeDate" },
+      OPTIONS[2],
+    ];
+    const none = await changeLifecycleOptions(db, {
+      propertyDefId: defId,
+      options,
+    });
+    expect(none).toMatchObject({ status: "refused" });
+    expect((none as { reason: string }).reason).toMatch(/closeDate/);
+    const [d] = await db
+      .insert(schema.propertyDefs)
+      .values({
+        slug: "closeDate",
+        valueType: "date",
+        constraints: {},
+        profileId,
+      })
+      .returning();
+    await db
+      .insert(schema.profileProperties)
+      .values({ profileId, propertyDefId: d.id });
+    expect(
+      (await changeLifecycleOptions(db, { propertyDefId: defId, options }))
+        .status
+    ).toBe("changed");
   });
 });

@@ -3,7 +3,8 @@
  *
  * Every kind and every role declares at most ONE lifecycle: one select
  * property (the link row `profile_properties.is_lifecycle`) whose options are
- * objects `{ key, label?, category, tone?, humanOnly? }` stored at
+ * objects `{ key, label?, category, tone?, humanOnly?, stuckAfterDays?,
+ * dateBinding? }` stored at
  * `property_defs.constraints.enumOptions` (the bare `constraints.enum` key list
  * is DERIVED from them by the one mapper, `utils/property-enum.ts`).
  *
@@ -49,6 +50,9 @@ export interface EffectiveLifecycle extends LifecycleDeclaration {
 
 /** The longest stuck threshold an option may declare (ten years). */
 export const STUCK_AFTER_DAYS_MAX = 3650;
+
+/** A valid `dateBinding`: a property slug (letters, digits, `_`, `-`). */
+const DATE_BINDING = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 
 /** A valid `stuckAfterDays`: a whole number of days, 1…{@link STUCK_AFTER_DAYS_MAX}. */
 export function isStuckAfterDays(v: unknown): v is number {
@@ -121,6 +125,23 @@ export function parseLifecycleOptions(raw: unknown): {
         );
       } else {
         opt.stuckAfterDays = o.stuckAfterDays;
+      }
+    }
+    if (o.dateBinding !== undefined) {
+      // Validated like `stuckAfterDays`: reported, never dropping the option.
+      if (
+        typeof o.dateBinding !== "string" ||
+        !DATE_BINDING.test(o.dateBinding)
+      ) {
+        errors.push(
+          `option "${key}" dateBinding must name a date property (its slug, e.g. "dueDate")`
+        );
+      } else if (TERMINAL_LIFECYCLE_CATEGORIES.includes(o.category)) {
+        errors.push(
+          `option "${key}" is ${o.category}: a finished thing cannot be late (dateBinding is for open, active or paused options)`
+        );
+      } else {
+        opt.dateBinding = o.dateBinding;
       }
     }
     options.push(opt);

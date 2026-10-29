@@ -186,6 +186,10 @@ import {
   STALE_PROPOSAL_CRON_QUEUE,
 } from "./stale-proposal-cron.js";
 import {
+  handleStatusWatcherCron,
+  STATUS_WATCHER_QUEUE,
+} from "./status-watcher-cron.js";
+import {
   handleBrokenAutomationCron,
   BROKEN_AUTOMATION_CRON_QUEUE,
 } from "./broken-automation-cron.js";
@@ -403,6 +407,7 @@ const ALL_QUEUES = [
   MAIL_FEED_CRON_QUEUE,
   EVENT_SYNC_CRON_QUEUE,
   STALE_PROPOSAL_CRON_QUEUE,
+  STATUS_WATCHER_QUEUE,
   BROKEN_AUTOMATION_CRON_QUEUE,
   EVENT_END_CRON_QUEUE,
   EXTERNAL_AGENT_POLL_QUEUE,
@@ -1044,6 +1049,12 @@ export async function registerAllWorkers(): Promise<void> {
     handleStaleProposalCron(job)
   );
   logger.info("Registered worker: stale-proposal-cron");
+
+  // Status watcher (cron: hourly) — late, approaching, stuck and hold-review
+  // signals, once per episode; the api-side runner in-process (IoC slot;
+  // status-flow W6).
+  await boss.work(STATUS_WATCHER_QUEUE, async () => handleStatusWatcherCron());
+  logger.info("Registered worker: status-watcher");
 
   // Broken-automation scan (cron: every 6h) — invokes the api-side runner
   // in-process (IoC slot) to notify members of automations in status='error'.

@@ -43,6 +43,13 @@ const {
 vi.mock("../../utils/chat-realtime-broadcast.js", () => ({
   emitChatEvent: mockEmitChatEvent,
 }));
+// The daily push budget has its own suite (`push-cap.pglite.test.ts`); this
+// one owns the transport, so the budget reads as untouched.
+vi.mock("../push-decision.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../push-decision.js")>()),
+  pushesCountedToday: async () => 0,
+  recordPush: async () => undefined,
+}));
 vi.mock("../expo-push.js", () => ({ sendExpoPush: mockSendExpoPush }));
 vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@synap/database")>();

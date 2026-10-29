@@ -468,6 +468,12 @@ export { registerGoalLoopReactor } from "./services/tracks/goal-loop-reactor.js"
 // Exported for @synap/jobs' `registerHoldResumeFollowUp` IoC slot (W4): what
 // a goal's or a session's hold resume owes after the move.
 export { holdResumeFollowUp } from "./services/lifecycle/hold-resume-follow-up.js";
+// Exported for @synap/jobs' `registerStatusWatcherRunner` IoC slot (W6): the
+// hourly watcher that raises late / approaching / stuck / hold-review signals.
+export {
+  runStatusWatcher,
+  type StatusWatcherResult,
+} from "./services/status/watcher.js";
 export { sweepGoalLoops } from "./services/tracks/goal-loop.js";
 // And the closing report: on the same close event the session document gains
 // its structured Outcome / Definition of done / Produced / Decisions sections.

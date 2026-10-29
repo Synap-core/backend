@@ -44,6 +44,7 @@ export const PUSH_CATEGORIES = [
   "blocking-ask",
   "decision-blocking",
   "work-broke",
+  "late-or-stuck",
   "mention",
   "morning-brief",
   "system",
@@ -101,6 +102,13 @@ export const PUSH_CATEGORY_POLICY: Readonly<
     level: "interruptive",
     interruptionLevel: "active",
   },
+  // A status signal (status-flow W6): on, but silent — it is news about a
+  // thing you own, not an agent waiting on you.
+  "late-or-stuck": {
+    defaultOn: true,
+    level: "passive",
+    interruptionLevel: "passive",
+  },
   mention: {
     defaultOn: true,
     level: "interruptive",
@@ -142,6 +150,10 @@ export const PUSH_CATEGORY_LABELS: Readonly<
   "work-broke": {
     name: "When something breaks",
     hint: "A task failed, a session fell short, or a connection expired",
+  },
+  "late-or-stuck": {
+    name: "When something is late or stuck",
+    hint: "A date passed or is close, a step took too long, or a pause is due for review",
   },
   mention: {
     name: "When you're mentioned",
@@ -225,6 +237,11 @@ export const PUSH_TYPE_RULES: Readonly<Record<string, PushTypeRule>> = {
   // it for 48 h (R10, W3): the goal's plan broke and waits on the owner.
   "track.report_unacknowledged": "work-broke",
   "connector.auth.expired": "work-broke",
+  // The status watcher noticed a thing you own is late, close to its date,
+  // stuck in its step, or its pause is due for review (status-flow W6).
+  "entity.signal": "late-or-stuck",
+  "track.signal": "late-or-stuck",
+  "session.signal": "late-or-stuck",
   // A person addressed you by name.
   "chat.mention": "mention",
   "workspace.invite": "mention",
@@ -239,6 +256,35 @@ export const PUSH_TYPE_RULES: Readonly<Record<string, PushTypeRule>> = {
   "inbox.mention": null,
   "chat.room_member_added": null,
 };
+
+// ─── The interruption budget ────────────────────────────────────────────────
+
+/**
+ * At most this many pushes a day per person (plan Q4.1, founder 2026-10-29):
+ * the push past it is not sent — the notification still lands in-app and in
+ * needs-you, where the morning brief carries it. The day is the person's own.
+ */
+export const PUSH_DAILY_CAP = 3;
+
+/**
+ * Categories the cap never holds back and never counts: "something you own
+ * broke" (incidents and failures, plan Q5.2) always reaches the phone.
+ */
+export const PUSH_CAP_EXEMPT_CATEGORIES: readonly PushCategory[] = [
+  "work-broke",
+];
+
+/** The notification types whose push the cap never counts (derived, never listed). */
+export function pushCapExemptTypes(): string[] {
+  return Object.entries(PUSH_TYPE_RULES)
+    .filter(
+      ([, rule]) =>
+        rule !== null &&
+        rule !== "blocking-proposal" &&
+        PUSH_CAP_EXEMPT_CATEGORIES.includes(rule)
+    )
+    .map(([type]) => type);
+}
 
 /** The category a notification pushes under, or `null` (do not push). */
 export function classifyPush(

@@ -4,7 +4,7 @@
     "packages/events/src/event-types.ts (OperationalEventTypes, SystemEventTypes)",
     "packages/types/src/events/unified.ts (naming grammar)"
   ],
-  "eventCount": 31,
+  "eventCount": 34,
   "events": [
     {
       "key": "ENTITY_CREATED",
@@ -47,6 +47,24 @@
       ]
     },
     {
+      "key": "ENTITY_SIGNALED",
+      "type": "entity.signal.completed",
+      "label": "Needs a look",
+      "domain": "Entity",
+      "description": "Runs once when something passes its due date or is about to, stays too long in one status, or a pause is ready for review.",
+      "filterKeys": [
+        "signal",
+        "lifecycleProfile",
+        "profileSlug",
+        "role",
+        "status",
+        "category",
+        "ownerId",
+        "projectId",
+        "trackId"
+      ]
+    },
+    {
       "key": "ENTITY_DELETED",
       "type": "entity.delete.completed",
       "label": "Entity deleted",
@@ -79,6 +97,21 @@
       ]
     },
     {
+      "key": "FOCUS_SESSION_SIGNALED",
+      "type": "focus_session.signal.completed",
+      "label": "Needs a look",
+      "domain": "Focus sessions",
+      "description": "Runs once when a paused session is ready to be reviewed.",
+      "filterKeys": [
+        "signal",
+        "status",
+        "category",
+        "ownerId",
+        "projectId",
+        "trackId"
+      ]
+    },
+    {
       "key": "TRACK_STAGE_CHANGED",
       "type": "track.stage_changed.completed",
       "label": "Track stage changed",
@@ -104,6 +137,21 @@
         "fromCategory",
         "category",
         "actorKind",
+        "projectId",
+        "trackId"
+      ]
+    },
+    {
+      "key": "TRACK_SIGNALED",
+      "type": "track.signal.completed",
+      "label": "Needs a look",
+      "domain": "Tracks",
+      "description": "Runs once when a paused goal is ready to be reviewed.",
+      "filterKeys": [
+        "signal",
+        "status",
+        "category",
+        "ownerId",
         "projectId",
         "trackId"
       ]

@@ -34,6 +34,13 @@ export interface LifecycleOption {
    * surface omits its Stuck count). Never on a done/lost option.
    */
   stuckAfterDays?: number;
+  /**
+   * The date property this step is bound to (an invoice's `dueDate` while
+   * `sent`): the thing is LATE once that date passes while it stands here,
+   * APPROACHING in the days before (`./signal.ts`). Calendar time. Absent ⇒ no
+   * date rule. Never on a done/lost option.
+   */
+  dateBinding?: string;
 }
 
 /** The default mark of each category — a tone TOKEN, never a colour. */

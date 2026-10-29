@@ -14,21 +14,35 @@
  *   3. an explicit PER-TYPE routing rule of `"os"` / `"all"` wins over both:
  *      the person named that type and asked for its push. A CATEGORY-level
  *      rule does not — it predates the push categories and was never a
- *      statement about one type.
+ *      statement about one type;
+ *   4. the interruption budget ({@link withinPushCap}): an EARNED push past
+ *      the person's {@link PUSH_DAILY_CAP} pushes today is held back — the row
+ *      stays in the bell and in needs-you. "Something broke" (`work-broke`) is
+ *      exempt and never counted; a forced push (rule 3) is the person's own
+ *      ask and is never held back, but it counts. The count is read only when
+ *      the cap applies (`pushCapApplies`), so no exempt or forced push waits
+ *      on it.
  */
 import {
+  and,
   db,
   desc,
+  drizzleSql,
   eq,
   focusSessions,
+  isNotNull,
+  notifications,
   proposals,
   storedSessionSource,
 } from "@synap/database";
 import { loadAgentPresence } from "../services/agent-presence.js";
 import { OPEN_SESSION_STATUSES } from "@synap-core/types/focus-sessions";
 import {
+  PUSH_CAP_EXEMPT_CATEGORIES,
+  PUSH_DAILY_CAP,
   classifyPush,
   isPushCategoryEnabled,
+  pushCapExemptTypes,
   type PushCategory,
   type PushFacts,
   type PushPrefs,
@@ -39,10 +53,10 @@ export type PushDecision =
   | {
       push: false;
       category: PushCategory | null;
-      reason: "unclassified" | "category_off";
+      reason: "unclassified" | "category_off" | "over_cap";
     };
 
-/** Pure: the three rules above, in order. */
+/** Pure: rules 1-3 above, in order. */
 export function decidePush(p: {
   type: string;
   typeRule: string | undefined;
@@ -58,6 +72,69 @@ export function decidePush(p: {
     return { push: false, category, reason: "category_off" };
   }
   return { push: true, category, reason: "earned" };
+}
+
+/** Rule 4 applies only to an EARNED push in a counted category. Pure. */
+export function pushCapApplies(d: PushDecision): boolean {
+  return (
+    d.push &&
+    d.reason === "earned" &&
+    d.category !== null &&
+    !PUSH_CAP_EXEMPT_CATEGORIES.includes(d.category)
+  );
+}
+
+/**
+ * Rule 4, pure: hold back an earned push once the person had their pushes
+ * today. Accepted overshoot: the count is read, then the push recorded, so
+ * two pushes deciding at the same instant can both pass at the cap's edge.
+ */
+export function withinPushCap(
+  d: PushDecision,
+  pushedToday: number
+): PushDecision {
+  return pushCapApplies(d) && pushedToday >= PUSH_DAILY_CAP
+    ? { push: false, category: d.category, reason: "over_cap" }
+    : d;
+}
+
+/**
+ * The pushes the cap counts that `userId` got since the start of THEIR day
+ * (`timeZone`, a VALID IANA name: `recipientTimezone` checks it): every row
+ * pushed today (`pushed_at`) except "something broke" types. A failed read
+ * THROWS (the caller logs it, and skips the push unless it is a blocking ask).
+ */
+export async function pushesCountedToday(
+  userId: string,
+  timeZone: string
+): Promise<number> {
+  const exempt = pushCapExemptTypes();
+  const [row] = await db
+    .select({ n: drizzleSql<number>`cast(count(*) as integer)` })
+    .from(notifications)
+    .where(
+      and(
+        eq(notifications.userId, userId),
+        isNotNull(notifications.pushedAt),
+        drizzleSql`${notifications.pushedAt} >= (date_trunc('day', now() AT TIME ZONE ${timeZone}) AT TIME ZONE ${timeZone})`,
+        exempt.length
+          ? drizzleSql`${notifications.type} NOT IN (${drizzleSql.join(
+              exempt.map((t) => drizzleSql`${t}`),
+              drizzleSql`, `
+            )})`
+          : undefined
+      )
+    );
+  return Number(row?.n ?? 0);
+}
+
+/** Record that a row's push went out — what {@link pushesCountedToday} counts. */
+export async function recordPush(notificationId: string): Promise<void> {
+  // No Date bind (postgres.js 3.4.8 crashes on it on the pod image).
+  await db
+    .update(notifications)
+    .set({ pushedAt: drizzleSql`now()` })
+    .where(eq(notifications.id, notificationId));
 }
 
 /**

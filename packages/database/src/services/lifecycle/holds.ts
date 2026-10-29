@@ -12,14 +12,15 @@
  * subject still stands in that status (a status written outside the doors —
  * born, merged, synced — has no transition, so it carries no hold).
  *
- * ONE helper, three questions: the holds of given subjects (a read, the
+ * ONE helper, four questions: the holds of given subjects (a read, the
  * carried hold of a `paused → paused` move), the holds whose `until.date` has
- * come (the hourly resume sweep), and the holds waiting on a thing that just
- * moved (the `until.moves` resume). `reviewDue` is exposed for the watcher; a
- * passed `reviewBy` never moves anything.
+ * come (the hourly resume sweep), the holds waiting on a thing that just
+ * moved (the `until.moves` resume), and the holds whose `reviewBy` has passed
+ * (the status watcher, W6). A passed `reviewBy` never moves anything.
  */
 import { and, inArray, isNull, sql, type SQL } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
+import { ISO_STAMP_PATTERN } from "@synap-core/types/needs-you/rule";
 import type {
   MoveHoldDecision,
   RecordedHold,
@@ -77,6 +78,7 @@ export class HoldRefusedError extends Error {
 export type HoldFilter =
   | { subjects: readonly HoldSubjectRef[] }
   | { resumeDueBy: Date }
+  | { reviewDueBy: Date }
   | { awaiting: { subjectType: string; subjectId: string } };
 
 /** A row owed before W1 has no subject fields: it is an entity's. */
@@ -102,6 +104,12 @@ function filterSql(filter: HoldFilter): SQL {
   }
   if ("resumeDueBy" in filter) {
     return sql`(o.transition->'hold'->'until'->>'date')::timestamptz <= ${filter.resumeDueBy.toISOString()}::timestamptz`;
+  }
+  if ("reviewDueBy" in filter) {
+    // Compared as TEXT in the one stamp shape `recordHold` writes: a stored
+    // value in any other shape is skipped, never cast (a bad row must not
+    // fail the watcher's whole read).
+    return sql`(o.transition->'hold'->>'reviewBy') ~ ${ISO_STAMP_PATTERN} AND (o.transition->'hold'->>'reviewBy') <= ${filter.reviewDueBy.toISOString()}`;
   }
   return sql`o.transition->'hold'->'until'->>'moves' = ${`${filter.awaiting.subjectType}:${filter.awaiting.subjectId}`}`;
 }

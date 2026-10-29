@@ -63,6 +63,15 @@ describe("decideMoveHold", () => {
     });
   });
 
+  it("stores a given review date in the one stamp shape the watcher compares", () => {
+    const d = decideMoveHold({
+      ...pause,
+      actorKind: "agent",
+      given: { on: "external", reviewBy: "2026-12-01" },
+    });
+    expect(d.ok && d.hold.reviewBy).toBe("2026-12-01T00:00:00.000Z");
+  });
+
   it("takes an agent's hold; a dated resume needs no review date", () => {
     const until = { date: "2026-11-10T00:00:00.000Z" };
     const d = decideMoveHold({
