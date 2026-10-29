@@ -83,6 +83,7 @@ const OWNER = randomUUID();
 const OTHER = randomUUID();
 const AGENT = randomUUID();
 let NOTE_PROFILE = "";
+let KNOWLEDGE_PROFILE = "";
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -116,12 +117,16 @@ function ddlFor(table: PgTable): string {
 }
 const q = (sql: string, params?: unknown[]) => h.client!.query(sql, params);
 
-async function seedEntity(ownerId: string, title: string): Promise<string> {
+async function seedEntity(
+  ownerId: string,
+  title: string,
+  profileId = NOTE_PROFILE
+): Promise<string> {
   const id = randomUUID();
   await q(
     `insert into entities (id, user_id, workspace_id, profile_id, type, title, properties)
      values ($1, $2, null, $3, 'note', $4, '{}'::jsonb)`,
-    [id, ownerId, NOTE_PROFILE, title]
+    [id, ownerId, profileId, title]
   );
   return id;
 }
@@ -171,6 +176,22 @@ beforeAll(async () => {
      values (gen_random_uuid(),'note','Note','kind','system','pod',null,true,'{}'::jsonb) returning id`
   );
   NOTE_PROFILE = (rows[0] as { id: string }).id;
+  // A kind that records its replacement: `supersededBy` on its own def (D2).
+  const kind = await q(
+    `insert into profiles (id, slug, display_name, profile_kind, scope, entity_scope, workspace_id, is_active, ui_hints)
+     values (gen_random_uuid(),'knowledge','Knowledge','kind','system','pod',null,true,'{}'::jsonb) returning id`
+  );
+  KNOWLEDGE_PROFILE = (kind.rows[0] as { id: string }).id;
+  const def = await q(
+    `insert into property_defs (id, slug, profile_id, workspace_id, value_type, constraints, ui_hints)
+     values (gen_random_uuid(),'supersededBy',$1,null,'entity_id','{}'::jsonb,'{}'::jsonb) returning id`,
+    [KNOWLEDGE_PROFILE]
+  );
+  await q(
+    `insert into profile_properties (profile_id, property_def_id, required, display_order, is_lifecycle)
+     values ($1,$2,false,0,false)`,
+    [KNOWLEDGE_PROFILE, (def.rows[0] as { id: string }).id]
+  );
 }, 120_000);
 
 beforeEach(() => {
@@ -233,5 +254,42 @@ describe("synap_delete_entity — the governed soft delete, as the agent", () =>
     expect(String(outcome)).toMatch(/not found/i);
     expect(h.gateCalls).toHaveLength(0);
     expect(await deletedAt(theirs)).toBeNull();
+  });
+});
+
+/**
+ * D2 (founder, 2026-10-29): an agent retiring knowledge or a decision should
+ * set `supersededBy` (reversible, no review), not delete it. The delete door
+ * says so when the kind has that property, and still files the delete.
+ * Rows: a kind with `supersededBy` gets the hint (rules out "never said"); a
+ * kind without it gets none (rules out "said on every delete").
+ */
+describe("synap_delete_entity — supersede instead of delete (D2)", () => {
+  it("a kind with supersededBy: the delete is still proposed, with the hint", async () => {
+    const id = await seedEntity(OWNER, "Old claim", KNOWLEDGE_PROFILE);
+    h.gateAnswer = { proposalId: "prop-del-k", proposalType: "entity.delete" };
+
+    const { text } = await callDelete({ entityId: id });
+
+    const payload = JSON.parse(text) as Record<string, unknown>;
+    expect(payload).toMatchObject({
+      status: "proposed",
+      proposalId: "prop-del-k",
+    });
+    expect(payload.supersedeHint).toMatch(
+      /set supersededBy with synap_update_entity/
+    );
+    expect(h.gateCalls).toHaveLength(1);
+  });
+
+  it("a kind without supersededBy: no hint", async () => {
+    const id = await seedEntity(OWNER, "Plain note");
+    h.gateAnswer = { proposalId: "prop-del-n", proposalType: "entity.delete" };
+
+    const { text } = await callDelete({ entityId: id });
+
+    expect(
+      (JSON.parse(text) as Record<string, unknown>).supersedeHint
+    ).toBeUndefined();
   });
 });

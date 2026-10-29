@@ -16,7 +16,9 @@ import { checkHubRateLimit } from "../../../utils/hub-protocol-rate-limit.js";
 import { isAllowedMimeType, MAX_FILE_SIZE } from "../../file-upload.js";
 import {
   db,
+  eq,
   entities,
+  ProfileResolutionService,
   resolveIdentity,
   extractIdentitySignals,
   signalsFromExplicit,
@@ -26,6 +28,7 @@ import {
 } from "@synap/database";
 import { type UserObservationCategory } from "../../../services/knowledge/remember-fact.js";
 import { accessScopeWhere } from "../../../utils/project-scope.js";
+import { AccessContext, scopedDb } from "../../../access/index.js";
 import { buildIdentityResolveResponse } from "../../../utils/identity-resolve-response.js";
 import {
   ok,
@@ -105,6 +108,36 @@ function describePlacement(p: {
         ? `A ${p.profileSlug} is a pod-wide kind and this one is filed for no space, so workspaceId ${lens} only governed this write.`
         : `Its kind placed it in workspace ${p.entityWorkspaceId}, not ${lens}: workspaceId only governed this write. To move it, call synap_move_entities once it exists.`,
   };
+}
+
+/** Said to an agent deleting a record whose kind can point at its replacement (D2). */
+export const SUPERSEDE_INSTEAD_HINT =
+  "This kind records a replacement (supersededBy): if it stopped being true, set supersededBy with synap_update_entity instead (reversible, no review); delete only what was never true.";
+
+/**
+ * True when the entity's kind carries a `supersededBy` property. Keyed on the
+ * property, never on a kind list (`services/knowledge/superseded.ts`), with
+ * the same key-shape tolerance. Read through the caller's own floor.
+ */
+async function kindRecordsReplacement(
+  entityId: string,
+  userId: string
+): Promise<boolean> {
+  const [row] = await scopedDb(AccessContext.operator({ userId })).findMany<{
+    profileId: string | null;
+    workspaceId: string | null;
+  }>(entities, {
+    where: eq(entities.id, entityId),
+    columns: { profileId: true, workspaceId: true },
+  });
+  if (!row?.profileId) return false;
+  const props = await new ProfileResolutionService(db).getEffectiveProperties(
+    row.profileId,
+    row.workspaceId
+  );
+  return props.some(
+    (p) => p.slug.toLowerCase().replace(/[-_]/g, "") === "supersededby"
+  );
 }
 
 export const entityHandlers: McpHandlerMap = {
@@ -416,11 +449,24 @@ export const entityHandlers: McpHandlerMap = {
       ...(agentUserId ? { agentUserId } : {}),
       ...(reasoning ? { reasoning } : {}),
     })) as { status: string } & Record<string, unknown>;
+    // D2: an agent retiring knowledge or a decision should supersede it, not
+    // delete it. Advice only: the delete goes on, and a failed read drops it.
+    let supersedeHint: string | undefined;
+    if (agentUserId) {
+      try {
+        if (await kindRecordsReplacement(entityId, userId)) {
+          supersedeHint = SUPERSEDE_INSTEAD_HINT;
+        }
+      } catch {
+        // advice only
+      }
+    }
     // Say what landed: a proposal deleted nothing yet; a completed call (only
     // a non-agent principal reaches it) soft-deleted the row.
     return ok({
       entityId,
       ...result,
+      ...(supersedeHint ? { supersedeHint } : {}),
       landed:
         result.status === "proposed"
           ? "Nothing is deleted yet. If the person approves, the entity is hidden (soft delete, its body kept) and they can undo it from the proposal."
