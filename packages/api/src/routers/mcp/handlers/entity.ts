@@ -140,6 +140,26 @@ async function kindRecordsReplacement(
   );
 }
 
+/**
+ * D2: an agent retiring knowledge or a decision should supersede it, not
+ * delete it. The hint for an agent's delete of such a kind; undefined for a
+ * person, another kind, or a failed read (advice only: the delete goes on).
+ */
+async function supersedeHintFor(
+  entityId: string,
+  userId: string,
+  agentUserId: string | undefined
+): Promise<string | undefined> {
+  if (!agentUserId) return undefined;
+  try {
+    return (await kindRecordsReplacement(entityId, userId))
+      ? SUPERSEDE_INSTEAD_HINT
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export const entityHandlers: McpHandlerMap = {
   synap_create_entity: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const {
@@ -449,18 +469,7 @@ export const entityHandlers: McpHandlerMap = {
       ...(agentUserId ? { agentUserId } : {}),
       ...(reasoning ? { reasoning } : {}),
     })) as { status: string } & Record<string, unknown>;
-    // D2: an agent retiring knowledge or a decision should supersede it, not
-    // delete it. Advice only: the delete goes on, and a failed read drops it.
-    let supersedeHint: string | undefined;
-    if (agentUserId) {
-      try {
-        if (await kindRecordsReplacement(entityId, userId)) {
-          supersedeHint = SUPERSEDE_INSTEAD_HINT;
-        }
-      } catch {
-        // advice only
-      }
-    }
+    const supersedeHint = await supersedeHintFor(entityId, userId, agentUserId);
     // Say what landed: a proposal deleted nothing yet; a completed call (only
     // a non-agent principal reaches it) soft-deleted the row.
     return ok({
