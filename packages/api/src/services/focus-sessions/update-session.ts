@@ -81,6 +81,10 @@ import {
   trackFilingStampsUses,
 } from "./session-undo.js";
 import {
+  fileFollowingSubSessions,
+  findFollowingSubSessions,
+} from "./session-tree-filing.js";
+import {
   readSessionUndoSnapshot,
   stampSessionUpdate,
 } from "../proposals/stamp-materialized.js";
@@ -275,6 +279,8 @@ export type UpdateFocusSessionResult =
       reason: string;
       /** A filing the pod applied on its own receipt before the rest was refused. */
       filing?: SessionFilingDecision;
+      /** The sub-sessions that filing carried (S5 Q7). */
+      subSessionsFiled?: string[];
     }
   | {
       status: "proposed";
@@ -291,6 +297,8 @@ export type UpdateFocusSessionResult =
       reviewUrl?: string;
       /** The agent's filing, proposed on its own beside this proposal. */
       filing?: SessionFilingDecision;
+      /** The sub-sessions a filing applied before the rest was proposed carried (S5 Q7). */
+      subSessionsFiled?: string[];
     }
   | {
       status: "updated";
@@ -353,6 +361,12 @@ export type UpdateFocusSessionResult =
        * rest of this patch.
        */
       filing?: SessionFilingDecision;
+      /**
+       * The open sub-sessions this filing carried with it (S5 Q7,
+       * `session-tree-filing.ts`), under the same receipt and Undo. Absent
+       * when it carried none. A PROPOSED filing carries them on its proposal.
+       */
+      subSessionsFiled?: string[];
       trackFiling?: {
         trackId: string | null;
         trackStage: string | null;
@@ -2047,6 +2061,24 @@ export async function updateFocusSession(
     }
   }
 
+  // THE TREE (structural plan S5, founder Q7): filing this session into a
+  // project or a goal also files its open sub-sessions that still sit where it
+  // sits, in the same governed write (`session-tree-filing.ts`). Never an
+  // unfile, never with a space move.
+  const subSessionIds =
+    params.workspaceId === undefined &&
+    (typeof params.projectId === "string" || !!trackFiling?.set.trackId)
+      ? await findFollowingSubSessions(existing)
+      : [];
+  // Where the tree sat before: a carried sub-session is filed only while it
+  // still sits there (compare-and-set).
+  const treeFrom = {
+    workspaceId: existing.workspaceId ?? null,
+    projectId: existing.projectId ?? null,
+    trackId: existing.trackId ?? null,
+  };
+  let subSessionsFiled: string[] | undefined;
+
   // AGENT HAND-OFF — an agent putting ANOTHER agent on the roster is its own
   // governed write (`focus_session/assign_agent`, propose unless a rule says
   // auto), decided BEFORE the update membrane so an auto-approved update can
@@ -2099,6 +2131,7 @@ export async function updateFocusSession(
     workspaceId: params.workspaceId,
     workspaceName: moveWorkspaceName,
     trackFiling,
+    subSessionIds,
   };
   if (agentUserId && hasSessionFiling(filingPatch)) {
     filing = await gateSessionFiling({
@@ -2209,6 +2242,21 @@ export async function updateFocusSession(
       before,
       after: before && filed ? { ...before, ...filed } : undefined,
     });
+    // The tree rides the same receipt, so its one Undo restores every row.
+    if (subSessionIds.length > 0) {
+      subSessionsFiled = await fileFollowingSubSessions({
+        ids: subSessionIds,
+        userId,
+        from: treeFrom,
+        set: {
+          ...(params.projectId !== undefined
+            ? { projectId: params.projectId }
+            : {}),
+          ...(trackFiling ? trackFiling.set : {}),
+        },
+        proposalId: filingReceiptId,
+      });
+    }
     params = {
       ...params,
       projectId: undefined,
@@ -2309,12 +2357,14 @@ export async function updateFocusSession(
       status: "denied",
       reason: perm.reason,
       ...(filing?.status === "granted" ? { filing } : {}),
+      ...(subSessionsFiled?.length ? { subSessionsFiled } : {}),
     };
   }
   if ("proposalId" in perm) {
     return {
       status: "proposed",
       ...(filing ? { filing } : {}),
+      ...(subSessionsFiled?.length ? { subSessionsFiled } : {}),
       proposalId: perm.proposalId,
       // The discriminator MUST cross this boundary: this door is join-gate
       // reachable (the MCP handler threads `agentUserId`), and without it the
@@ -2456,6 +2506,25 @@ export async function updateFocusSession(
     before: undoBefore,
     after: updated,
   });
+  // The tree, when its filing rode this write (a person's, or an agent's
+  // filing granted with nothing else to decide): on the same receipt.
+  if (
+    subSessionIds.length > 0 &&
+    (typeof params.projectId === "string" || !!trackFiling?.set.trackId)
+  ) {
+    subSessionsFiled = await fileFollowingSubSessions({
+      ids: subSessionIds,
+      userId,
+      from: treeFrom,
+      set: {
+        ...(params.projectId !== undefined
+          ? { projectId: params.projectId }
+          : {}),
+        ...(trackFiling ? trackFiling.set : {}),
+      },
+      proposalId: receiptId && undoable ? receiptId : undefined,
+    });
+  }
 
   // A relay this write made stale (the ask changed, or the slot left the
   // person) leaves its room question too, so nobody confirms it there.
@@ -2656,5 +2725,8 @@ export async function updateFocusSession(
     ...(warnings.length > 0 ? { warnings } : {}),
     ...(handOff ? { handOff } : {}),
     ...(filing ? { filing } : {}),
+    ...(subSessionsFiled && subSessionsFiled.length > 0
+      ? { subSessionsFiled }
+      : {}),
   };
 }

@@ -1850,6 +1850,10 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         // own agent, not the capture-path remap above: a person's start (or a
         // capture they made) is never re-shaped by a guessed template.
         matchTemplate: !!ctxAgentUserId,
+        // The same start offers the MCP door hands back (goals, near sessions,
+        // and `homes` for a start that landed in no project) — suggestions
+        // only, for an agent's start, so the CLI sees what MCP sees (S5).
+        offerStartContext: !!ctxAgentUserId,
         clientKey: ctxAgentUserId ? requestClientKey(ctxAgentUserId) : null,
         // An agent key's NEW session declares what done means (F11,
         // NO_CRITERIA). A person's key and the capture path (X-Capture: 1, a
@@ -1910,6 +1914,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         // The pod's playbooks ranked against this session's words (suggestions
         // only — nothing applied), and the auto-opened session adopted.
         ...(result.playbooks ? { playbooks: result.playbooks } : {}),
+        // Start offers (goals, near sessions, homes): suggestions, nothing applied.
+        ...(result.offers ? { offers: result.offers } : {}),
         ...(result.adopted ? { adopted: true } : {}),
       });
     } catch (err) {

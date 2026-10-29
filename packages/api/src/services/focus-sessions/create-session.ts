@@ -121,6 +121,60 @@ export function firstStageKey(stages: unknown): string | null {
   return typeof key === "string" && key.length > 0 ? key : null;
 }
 
+/**
+ * The goal a sub-session inherits (structural plan S5, Q6): its parent's
+ * `trackId` and stage, when the parent is the caller's own session, is filed
+ * into a goal, and that goal still takes work in the project the child was
+ * placed in (`resolveTrackFiling`: visible, not closed, same project). Any
+ * miss inherits nothing and never fails the start.
+ */
+async function inheritParentTrack(p: {
+  userId: string;
+  parentSessionId: string;
+  projectId: string;
+}): Promise<{ trackId: string; trackStage: string | null } | null> {
+  // A uuid only: comparing the uuid column to other text throws in Postgres.
+  if (!UUID_RE.test(p.parentSessionId)) return null;
+  const [parent] = await db
+    .select({
+      trackId: focusSessions.trackId,
+      trackStage: focusSessions.trackStage,
+    })
+    .from(focusSessions)
+    .where(
+      and(
+        eq(focusSessions.id, p.parentSessionId),
+        eq(focusSessions.userId, p.userId)
+      )
+    )
+    .limit(1);
+  if (!parent?.trackId) return null;
+  try {
+    const filing = await resolveTrackFiling({
+      trackId: parent.trackId,
+      projectId: p.projectId,
+      trackStage: parent.trackStage ?? null,
+      actor: { userId: p.userId },
+    });
+    return { trackId: filing.trackId, trackStage: filing.trackStage };
+  } catch (err) {
+    logger.warn(
+      { err, parentSessionId: p.parentSessionId },
+      "sub-session start: the parent's goal was not inherited"
+    );
+    return null;
+  }
+}
+
+/** The folder a session was started from (`metadata.conversationCwd`), if stamped. */
+function readConversationCwd(metadata: unknown): string | null {
+  const cwd =
+    metadata && typeof metadata === "object"
+      ? (metadata as { conversationCwd?: unknown }).conversationCwd
+      : undefined;
+  return typeof cwd === "string" && cwd !== "" ? cwd : null;
+}
+
 /** `reasonCode` of an agent's start that declares no criterion. */
 export const NO_CRITERIA = "NO_CRITERIA" as const;
 
@@ -507,9 +561,6 @@ export async function createFocusSession(
         actor: { userId },
       })
     : null;
-  const trackId = trackFiling?.trackId ?? null;
-  // The stage it is FILED at (M1) — explicit (validated) or the track's current.
-  const trackStage = trackFiling?.trackStage ?? null;
   // The pin rung 1 receives: the track's project when filed into a track
   // (equal to any explicit projectId — a mismatch was refused above).
   const pinnedProjectId = trackFiling?.projectId ?? explicitProjectId;
@@ -628,6 +679,21 @@ export async function createFocusSession(
           : null,
     })
   ).projectId;
+
+  // GOAL INHERITANCE (structural plan S5, founder Q6): a sub-session is in its
+  // parent's goal, written at creation on the same parent rung that gives it
+  // the project — the session page, the goal's lists and Plan then agree.
+  // Creation only: no existing row is re-goaled. The caller's own `trackId`
+  // wins, and so does an explicit project the parent's goal is not in.
+  const inheritedTrack =
+    !trackFiling && parentSessionId && projectId
+      ? await inheritParentTrack({ userId, parentSessionId, projectId })
+      : null;
+  const trackId = trackFiling?.trackId ?? inheritedTrack?.trackId ?? null;
+  // The stage it is FILED at (M1) — explicit (validated) or the track's current;
+  // an inherited goal keeps the parent's stage.
+  const trackStage =
+    trackFiling?.trackStage ?? inheritedTrack?.trackStage ?? null;
 
   // DEDUP — the SAME question the approve executor asks before its insert
   // (`findOpenSessionTwin`). Live, every duplicate pair was an approved
@@ -1348,6 +1414,10 @@ export async function createFocusSession(
         trackId: sessionOut.trackId ?? null,
         title: sessionOut.title ?? null,
         goal: sessionOut.goal,
+        // The facts a `homes` offer reads when the start landed nowhere.
+        subjectEntityId: sessionOut.subjectEntityId ?? null,
+        conversationCwd: readConversationCwd(sessionOut.metadata),
+        agentUserId: agentUserId ?? null,
       }).catch((err): StartOffersRead => {
         logger.warn({ err }, "start offers NOT read — unavailable");
         return {
