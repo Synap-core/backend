@@ -483,7 +483,14 @@ export const sessionHandlers: McpHandlerMap = {
   },
 
   synap_start_session: async (ctx: McpToolContext): Promise<CallToolResult> => {
-    const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
+    const {
+      toolName,
+      args,
+      userId,
+      apiKeyScopes,
+      agentUserId,
+      lensWorkspaceId,
+    } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
     // MCP tool schemas are ADVISORY — nothing validates the args server-side,
     // so a non-uuid handle would reach `eq(focusSessions.id, …)` against a
@@ -565,7 +572,11 @@ export const sessionHandlers: McpHandlerMap = {
         };
     const result = await createFocusSession({
       userId,
-      workspaceId: args.workspaceId as string | undefined,
+      // The ambient lens (`?workspaceId=`, or the agent's workspace focus) is
+      // resolved and access-checked by the adapter; an EXPLICIT arg still wins.
+      // Same precedence as `synap_create_rule` (`rule.ts`). Without it a start
+      // ignored the focus its own captures were placed by (plan A2-a).
+      workspaceId: (args.workspaceId as string | undefined) ?? lensWorkspaceId,
       projectId: args.projectId as string | undefined,
       trackId:
         typeof args.trackId === "string" && args.trackId.trim()

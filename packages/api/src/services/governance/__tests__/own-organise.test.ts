@@ -6,8 +6,9 @@
  * the door's own rule:
  *   - closing: only the `task` kind, only a `done` option, never a role, never
  *     without a key;
- *   - session filing: a project only (not unfile, a space move or a track),
- *     and only the project the agent was told to focus on.
+ *   - session filing: a project, or a goal of it (D1) only through a door
+ *     that can undo it and only when no `uses` stamp is written; never an
+ *     unfile or a space move; only the project the agent was told to focus on.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -125,7 +126,83 @@ describe("ownWorkOrganiseForSessionFiling", () => {
       false
     );
     expect(
-      await file({ projectId: "proj-named", trackFiling: { set: {} } })
+      await file({
+        projectId: "proj-named",
+        trackFiling: {
+          set: { trackId: "track-1" },
+          trackProjectId: "proj-named",
+          projectWorkspaceId: null,
+        },
+      })
     ).toBe(false);
+  });
+});
+
+describe("ownWorkOrganiseForSessionFiling — a goal filing (D1)", () => {
+  type Goal = {
+    set: { trackId: string | null };
+    trackProjectId: string | null;
+    projectWorkspaceId: string | null;
+  };
+  const goal = (over: Partial<Goal> = {}): Goal => ({
+    set: { trackId: "track-1" },
+    trackProjectId: "proj-named",
+    projectWorkspaceId: "ws-home",
+    ...over,
+  });
+  const fileGoal = (
+    over: {
+      trackFiling?: Goal;
+      projectId?: string | null;
+      workspaceId?: string | null;
+      sessionWorkspaceId?: string | null;
+      goalFilingUndo?: boolean;
+    } = {}
+  ) =>
+    ownWorkOrganiseForSessionFiling({
+      agentUserId: "a1",
+      sessionId: "s1",
+      sessionWorkspaceId:
+        "sessionWorkspaceId" in over ? over.sessionWorkspaceId : "ws-home",
+      goalFilingUndo: over.goalFilingUndo ?? true,
+      filing: {
+        trackFiling: over.trackFiling ?? goal(),
+        ...("projectId" in over ? { projectId: over.projectId } : {}),
+        ...("workspaceId" in over ? { workspaceId: over.workspaceId } : {}),
+      },
+    });
+
+  it("a goal of the focus project, the session in its home space or in none → proven", async () => {
+    expect(await fileGoal()).toBe(true);
+    expect(h.fresh).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({
+        subjectType: "focus_session",
+        subjectIds: ["s1"],
+      })
+    );
+    expect(await fileGoal({ sessionWorkspaceId: null })).toBe(true);
+    expect(await fileGoal({ projectId: "proj-named" })).toBe(true);
+  });
+
+  it("a session in another space (the filing stamps `uses`, no Undo for it) → never", async () => {
+    expect(await fileGoal({ sessionWorkspaceId: "ws-other" })).toBe(false);
+  });
+
+  it("a goal of another project, an unfile, a space move, a door with no Undo → never", async () => {
+    expect(
+      await fileGoal({ trackFiling: goal({ trackProjectId: "proj-other" }) })
+    ).toBe(false);
+    expect(
+      await fileGoal({ trackFiling: goal({ set: { trackId: null } }) })
+    ).toBe(false);
+    expect(await fileGoal({ workspaceId: "ws-home" })).toBe(false);
+    expect(await fileGoal({ projectId: "proj-other" })).toBe(false);
+    expect(await fileGoal({ goalFilingUndo: false })).toBe(false);
+  });
+
+  it("not fresh (a person touched it, or > 24 h) → never", async () => {
+    h.fresh.mockResolvedValueOnce(false);
+    expect(await fileGoal()).toBe(false);
   });
 });

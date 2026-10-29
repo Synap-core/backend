@@ -590,6 +590,11 @@ export async function createFocusSession(
   // read by an access decision), so deriving it here cannot widen a permission.
   //
   // `NONE` → null. No AI rung, no "the only project" fallback.
+  //
+  // An AGENT's declared project focus is rung 3.5, the same reader and the same
+  // rung the auto-opened receipt sessions use (`permission-check.ts`): without
+  // it a session the agent STARTED floated outside the project its own ambient
+  // writes were filed in. Read only when nothing was pinned.
   const projectId = (
     await resolveSessionProjectPlacement(db, {
       userId,
@@ -597,6 +602,10 @@ export async function createFocusSession(
       parentSessionId,
       channelId,
       subjectEntityId,
+      focusProjectId:
+        !pinnedProjectId && agentUserId
+          ? await getAgentFocusProjectId(agentUserId)
+          : null,
     })
   ).projectId;
 

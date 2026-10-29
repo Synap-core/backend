@@ -863,6 +863,8 @@ export async function readSessionUndoSnapshot(
       goal: focusSessions.goal,
       progress: focusSessions.progress,
       projectId: focusSessions.projectId,
+      trackId: focusSessions.trackId,
+      trackStage: focusSessions.trackStage,
     })
     .from(focusSessions)
     .where(eq(focusSessions.id, sessionId))

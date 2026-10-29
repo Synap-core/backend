@@ -2,8 +2,10 @@
  * FILING, gated on its own — where a session belongs (its project, its space,
  * its track step) is the person's call, so an AGENT's filing is a proposal
  * (`forcePropose`) — except an agent filing its OWN FRESH session into the
- * project the person named, which the pod's own-organise class row may apply
- * directly with a receipt and Undo (FB1020 B3, `own-organise.ts`). It is decided HERE, before the update membrane,
+ * project the person named, or into a goal of it (D1, when the filing writes
+ * no `uses` stamp and the door can undo it), which the pod's own-organise
+ * class row may apply directly with a receipt and Undo (FB1020 B3,
+ * `own-organise.ts`). It is decided HERE, before the update membrane,
  * as its OWN proposal, exactly like a hand-off (`agent-hand-off.ts`).
  *
  * WHY SPLIT. The filing fields used to force the WHOLE update to a proposal, so
@@ -113,6 +115,12 @@ export async function gateSessionFiling(p: {
   session: { id: string; title?: string | null; goal: string };
   filing: SessionFilingPatch;
   reasoning?: string;
+  /**
+   * This door applies a granted goal filing on the receipt WITH its Undo
+   * (`updateFocusSession`). The Hub PATCH does not stamp one, so its goal
+   * filing stays a proposal.
+   */
+  goalFilingUndo?: boolean;
 }): Promise<SessionFilingDecision> {
   const perm = await checkPermissionOrPropose({
     userId: p.userId,
@@ -122,11 +130,14 @@ export async function gateSessionFiling(p: {
     action: "update",
     source: "intelligence",
     // Where a session belongs is the person's call — UNLESS the agent files
-    // its OWN FRESH session into the project the person named (FB1020 B3):
-    // then only the pod's own-organise class row may apply it directly.
+    // its OWN FRESH session into the project the person named, or a goal of
+    // it (FB1020 B3, D1): then only the pod's own-organise class row may
+    // apply it directly.
     ...((await ownWorkOrganiseForSessionFiling({
       agentUserId: p.agentUserId,
       sessionId: p.session.id,
+      sessionWorkspaceId: p.workspaceId ?? null,
+      goalFilingUndo: p.goalFilingUndo === true,
       filing: p.filing,
     }))
       ? { forcePropose: false, ownWorkOrganise: true }

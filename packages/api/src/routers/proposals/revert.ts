@@ -190,7 +190,7 @@ export function planProposalRevert(
         kind: "unsupported",
         reason: stamped
           ? "Revert of this session update is not supported: it changed nothing, so there is nothing to undo."
-          : "Revert of this session update is not supported: undo restores a session's title, goal, progress and project only, and this change also touched something else (or was applied before undo records were kept).",
+          : "Revert of this session update is not supported: undo restores a session's title, goal, progress, project and goal filing only (a goal filing that also listed its space on the project cannot be undone), and this change also touched something else (or was applied before undo records were kept).",
       };
     }
     if (
