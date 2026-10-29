@@ -10,22 +10,28 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, it, expect } from "vitest";
+import { RATE_LIMIT_BUDGET_KEYS } from "./rate-limit-classes.js";
 
 const repoRoot = fileURLToPath(new URL("../../../../", import.meta.url));
 const read = (rel: string) => readFileSync(repoRoot + rel, "utf8");
 
-const codeKeys = [
-  ...new Set(
-    read("apps/api/src/middleware/rate-limit-classes.ts").match(
-      /\bRATE_LIMIT_[A-Z_]+\b/g
-    ) ?? []
-  ),
-].sort();
+const codeKeys = [...RATE_LIMIT_BUDGET_KEYS].sort();
 
 describe("rate-limit budgets reach a deployed pod", () => {
   it("finds the budgets the code reads", () => {
     expect(codeKeys).toContain("RATE_LIMIT_CRUD_MAX");
     expect(codeKeys.length).toBeGreaterThanOrEqual(20);
+  });
+
+  it("every budget is read through the one list (so a pod setting reaches it)", () => {
+    const source = read("apps/api/src/middleware/rate-limit-classes.ts");
+    expect(source).not.toMatch(/process\.env\.RATE_LIMIT_/);
+    const named = new Set(source.match(/\bRATE_LIMIT_[A-Z_]+\b/g) ?? []);
+    named.delete("RATE_LIMIT_BUDGET_KEYS");
+    named.delete("RATE_LIMIT_SETTING_MAX");
+    expect([...named].filter((k) => !codeKeys.includes(k as never))).toEqual(
+      []
+    );
   });
 
   it("docker-compose passes every one to the backend", () => {
