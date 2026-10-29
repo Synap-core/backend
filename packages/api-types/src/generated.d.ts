@@ -1683,9 +1683,11 @@ export interface WorkspaceSettings {
 	/** Settings for the DevPlane app embedded in this workspace */
 	devplane?: {
 		/**
-		 * Allow DevPlane to open a local PTY terminal in the browser.
-		 * Only safe when the pod is running on a trusted local machine.
-		 * Disabled by default.
+		 * @deprecated Gates nothing. The DevPlane local terminal is a POD-level
+		 * operator switch (`LOCAL_MODE` or `SYNAP_LOCAL_TERMINAL=1` on the pod
+		 * process) plus a pod-admin check, never a workspace setting: any member
+		 * could set this on a workspace they created (pre-launch audit
+		 * 2026-10-28, F2). Server-owned: `workspaces.create` / `update` strip it.
 		 */
 		localTerminalEnabled?: boolean;
 	};
@@ -23625,6 +23627,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					workspaceIds?: string[] | undefined;
 				} | undefined;
 				integration: "cli" | "custom" | "openclaw" | "raycast";
+				redirectUri?: string | undefined;
 				strategy?: "create_new" | "replace_existing" | undefined;
 				workspaceId?: string | undefined;
 			};

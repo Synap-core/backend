@@ -16,6 +16,7 @@ import {
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { integrationKindSchema } from "@synap-core/types";
+import { isAllowedConnectRedirectUri } from "@synap-core/types/external-connect";
 import { isAppPublicId } from "@synap-core/types/membrane";
 import { API_KEY_SCOPES, isPrivilegedMintScope } from "@synap/database/schema";
 import {
@@ -1233,6 +1234,12 @@ export const apiKeysRouter = router({
    * Called from the admin UI /connect page after the user authenticates.
    * Returns the key + podUrl + workspaceId so the caller can build a deeplink
    * or display a copy-paste flow — no separate agent provisioning required.
+   *
+   * `redirectUri`: where the page will deliver the plaintext key. Checked here,
+   * before anything is minted, with the same parsed-URL rule the page uses
+   * (default targets only: Raycast, the desktop app, the CLI's loopback). A
+   * prefix test let `http://localhost:@attacker.example/` through (pre-launch
+   * audit 2026-10-28, F3); the server is the check a page edit cannot skip.
    */
   connectIntegration: credentialProcedure
     .input(
@@ -1244,10 +1251,23 @@ export const apiKeysRouter = router({
           .default("create_new"),
         /** What it may touch (D-2); omitted = the person's full reach. */
         grant: GrantInputSchema.optional(),
+        redirectUri: z.string().max(2048).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
       assertGrantInput(input.grant);
+      if (
+        input.redirectUri !== undefined &&
+        !isAllowedConnectRedirectUri(input.redirectUri)
+      ) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "This redirect_uri may not receive a key: only the Synap Raycast " +
+            "extension, the Synap desktop app (synap://) or a loopback " +
+            "callback (http://127.0.0.1, http://localhost) can.",
+        });
+      }
       const flowId = randomUUID();
       const id = randomUUID();
 

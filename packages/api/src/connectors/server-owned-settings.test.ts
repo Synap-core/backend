@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   preserveServerOwnedSettings,
   stripServerOwnedSettings,
+  stripServerOwnedSettingsLeaves,
 } from "./server-owned-settings.js";
 
 /**
@@ -78,6 +79,27 @@ describe("server-owned workspace settings", () => {
     expect(preserveServerOwnedSettings({ theme: "light" }, stored)).toEqual({
       theme: "light",
       intent: stored.intent,
+    });
+  });
+
+  it("devplane.localTerminalEnabled (audit F2) is dropped; the rest of devplane is kept", () => {
+    const planted = {
+      theme: "dark",
+      devplane: { localTerminalEnabled: true, monorepoRoot: "/src/app" },
+    };
+    const expected = { theme: "dark", devplane: { monorepoRoot: "/src/app" } };
+    // create + the review payload of an update
+    expect(stripServerOwnedSettings(planted)).toEqual(expected);
+    // what `workspaces.update` persists (top-level keys go via the repository)
+    expect(stripServerOwnedSettingsLeaves(planted)).toEqual(expected);
+    // the caller's object is not mutated
+    expect(planted.devplane.localTerminalEnabled).toBe(true);
+    // a blob without devplane, or with a non-object devplane, passes through
+    expect(stripServerOwnedSettingsLeaves({ theme: "x" })).toEqual({
+      theme: "x",
+    });
+    expect(stripServerOwnedSettingsLeaves({ devplane: null })).toEqual({
+      devplane: null,
     });
   });
 

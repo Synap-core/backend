@@ -60,11 +60,42 @@ export const SERVER_OWNED_WORKSPACE_SETTINGS_KEYS = [
   "systemSlug",
 ] as const;
 
-/** The client's settings with every server-owned key removed. */
-export function stripServerOwnedSettings(
+/**
+ * Server-owned LEAVES inside a client-writable top-level key: the parent stays
+ * the client's (`devplane.monorepoRoot` / `workspacePath` are written through
+ * `workspaces.update`), only the leaf is dropped.
+ *
+ * `devplane.localTerminalEnabled` was the only gate in front of a shell on the
+ * pod host, and any member could set it on a workspace they created
+ * (pre-launch audit 2026-10-28, F2). The local terminal is now a pod-level
+ * operator switch (`isLocalShellAllowed`, utils/local-shell-switch.ts) plus a
+ * pod-admin check; this leaf gates nothing, and no settings save or approved
+ * proposal may write it.
+ */
+export const SERVER_OWNED_WORKSPACE_SETTINGS_LEAVES = [
+  ["devplane", "localTerminalEnabled"],
+] as const;
+
+/** The settings with every server-owned leaf removed (parents kept). */
+export function stripServerOwnedSettingsLeaves(
   incoming: Record<string, unknown>
 ): Record<string, unknown> {
   const out = { ...incoming };
+  for (const [parent, leaf] of SERVER_OWNED_WORKSPACE_SETTINGS_LEAVES) {
+    const value = out[parent];
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      const { [leaf]: _dropped, ...rest } = value as Record<string, unknown>;
+      out[parent] = rest;
+    }
+  }
+  return out;
+}
+
+/** The client's settings with every server-owned key and leaf removed. */
+export function stripServerOwnedSettings(
+  incoming: Record<string, unknown>
+): Record<string, unknown> {
+  const out = stripServerOwnedSettingsLeaves(incoming);
   for (const key of SERVER_OWNED_WORKSPACE_SETTINGS_KEYS) delete out[key];
   return out;
 }

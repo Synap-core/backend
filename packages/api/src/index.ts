@@ -44,6 +44,13 @@ export {
   describeServingIntelligence,
 } from "./utils/intelligence-routing.js";
 export { getPodCallback, type PodCallback } from "./utils/pod-callback.js";
+// The pod-level switch for a shell on the pod host (DevPlane local terminal).
+export {
+  isLocalShellAllowed,
+  LOCAL_SHELL_ENV,
+} from "./utils/local-shell-switch.js";
+// The one pod-admin predicate (owner/admin of the live pod-admin space).
+export { isPodAdmin } from "./utils/workspace-role.js";
 export {
   ensureAgentThread,
   ensureWorkspaceGroupChannel,
