@@ -17,6 +17,7 @@ import {
 import {
   deriveNextMove,
   type NextMoveBlockers,
+  type NextMoveCriteria,
   type NextMoveInbox,
   type PacketChildItem,
   type PacketOutputItem,
@@ -101,8 +102,17 @@ function input(over: Partial<Parameters<typeof deriveNextMove>[0]> = {}) {
     outputs: ok<PacketOutputItem>([]),
     children: ok<PacketChildItem>([]),
     inbox: { status: "ok", total: 0, waiting: null } as NextMoveInbox,
+    criteria: graded("none", 0),
     ...over,
   };
+}
+
+/** The session's grade, as THE verdict reports it. */
+function graded(
+  state: "none" | "passing" | "failing" | "incomplete",
+  requiredUnmet: number
+): NextMoveCriteria {
+  return { status: "ok", verdict: { state, requiredUnmet } };
 }
 
 /** An open inbox whose oldest wake-worthy post is this one. */
@@ -174,6 +184,109 @@ describe("deriveNextMove", () => {
     expect(
       deriveNextMove(input({ children: ok([session("closed", "Detour")]) }))
     ).toMatchObject({ kind: "ready_to_close", actor: "user" });
+  });
+
+  /**
+   * Rung 6b (plan aac47c4a, Q7.2): ready to close also needs every REQUIRED
+   * criterion passing. Discriminating rows: `incomplete` and `failing` (the
+   * old rule said ready on both), `passing` with an optional criterion unmet
+   * (ready, `requiredUnmet` 0), and `none` (legacy work keeps its readiness).
+   */
+  it("a required criterion not passing keeps the move the AI's, from both ready branches", () => {
+    for (const verdict of [graded("incomplete", 1), graded("failing", 2)]) {
+      for (const over of [
+        { expectedOutputs: [doneSlot] },
+        { outputs: ok([output]) },
+      ]) {
+        const move = deriveNextMove(input({ ...over, criteria: verdict }));
+        expect(move).toMatchObject({ kind: "agent_slot", actor: "ai" });
+        expect(move.label).toMatch(/criteri/);
+      }
+    }
+    expect(
+      deriveNextMove(
+        input({ expectedOutputs: [doneSlot], criteria: graded("failing", 2) })
+      )
+    ).toMatchObject({
+      label: "Pass the 2 required criteria left",
+      reason:
+        "Everything declared is produced, but 2 required criteria do not pass; at least one has failed. Once they pass, the session is ready to close.",
+      reasonCode: "criteria_unmet",
+    });
+  });
+
+  it("one required criterion left reads in the singular, with its reason code", () => {
+    const failed = deriveNextMove(
+      input({ expectedOutputs: [doneSlot], criteria: graded("failing", 1) })
+    );
+    expect(failed).toMatchObject({
+      kind: "agent_slot",
+      label: "Pass the last required criterion",
+      reasonCode: "criteria_unmet",
+    });
+    expect(failed.reason).toBe(
+      "Everything declared is produced, but 1 required criterion has failed. Once it passes, the session is ready to close."
+    );
+    expect(
+      deriveNextMove(
+        input({
+          expectedOutputs: [doneSlot],
+          criteria: graded("incomplete", 1),
+        })
+      ).reason
+    ).toBe(
+      "Everything declared is produced, but 1 required criterion is not graded yet. Once it passes, the session is ready to close."
+    );
+    // A declared agent slot is the plain agent_slot: no code.
+    expect(
+      deriveNextMove(
+        input({
+          expectedOutputs: [doneSlot],
+          aiCanDo: ok([{ label: "Brief", kind: "document" } as PacketSlotItem]),
+          criteria: graded("failing", 1),
+        })
+      )
+    ).not.toHaveProperty("reasonCode");
+  });
+
+  it("every required criterion passing (an optional one unmet) is the person's ready to close", () => {
+    const move = deriveNextMove(
+      input({ expectedOutputs: [doneSlot], criteria: graded("passing", 0) })
+    );
+    expect(move).toMatchObject({ kind: "ready_to_close", actor: "user" });
+    expect(move.reason).toMatch(/every required criterion passes/);
+  });
+
+  it("no criteria declared keeps today's readiness (legacy work never blocked)", () => {
+    const move = deriveNextMove(
+      input({ expectedOutputs: [doneSlot], criteria: graded("none", 0) })
+    );
+    expect(move).toMatchObject({ kind: "ready_to_close", actor: "user" });
+    expect(move.reason).not.toMatch(/criteri/);
+  });
+
+  it("an unreadable grade never yields ready_to_close, and holds nothing earlier", () => {
+    const down: NextMoveCriteria = {
+      status: "unavailable",
+      reason: "internal read failure",
+    };
+    const unknown = deriveNextMove(
+      input({ expectedOutputs: [doneSlot], criteria: down })
+    );
+    expect(unknown).toMatchObject({
+      kind: "unknown",
+      reason:
+        "Could not check whether this session's criteria pass. Try again.",
+    });
+    expect(deriveNextMove(input({ criteria: down })).kind).toBe("undeclared");
+    expect(
+      deriveNextMove(
+        input({
+          aiCanDo: ok([{ label: "Brief", kind: "document" } as PacketSlotItem]),
+          criteria: down,
+        })
+      ).kind
+    ).toBe("agent_slot");
   });
 
   it("an OWED slot is the person's move and is NOT ready to close", () => {

@@ -488,6 +488,14 @@ export interface ContinuationNextMove {
    * `message_waiting`, the SENDER session (when it has one).
    */
   sessionId?: string;
+  /**
+   * WHY an `agent_slot` move is the agent's when no declared slot is open:
+   * `criteria_unmet` — everything is produced, but a required criterion does
+   * not pass yet (rung 6b). Absent on every other move. A code, not a kind:
+   * every reader of `agent_slot` keeps working, and one that needs these
+   * sessions (orient) can tell them apart.
+   */
+  reasonCode?: "criteria_unmet";
 }
 
 /**
@@ -498,6 +506,19 @@ export interface ContinuationNextMove {
  */
 export type NextMoveBlockers =
   | { status: "ok"; items: readonly OpenBlocker[] }
+  | { status: "unavailable"; reason: string };
+
+/**
+ * The session's grade as `deriveNextMove` reads it: THE verdict
+ * (`computeSessionVerdict`, read through `loadSessionEvaluationSummary` /
+ * `attachSessionVerdicts`), never a second computation. A failed read holds
+ * back `ready_to_close`, never "no criteria".
+ */
+export type NextMoveCriteria =
+  | {
+      status: "ok";
+      verdict: Pick<SessionVerdict, "state" | "requiredUnmet">;
+    }
   | { status: "unavailable"; reason: string };
 
 /**
@@ -2065,7 +2086,15 @@ const isOpenStatus = (status: string): boolean =>
  *     owed nor produced, so it declares nothing; a cancelled, failed or stale
  *     sub-session produced nothing, so it is no evidence either. Its actor is
  *     the USER: everything promised is produced, so what remains is the
- *     person's acceptance, never the agent closing its own work.
+ *     person's acceptance, never the agent closing its own work;
+ *  6b. …and only when every REQUIRED criterion passes (plan aac47c4a, Q7.2).
+ *     With one not passing, the move stays the AI's (`agent_slot`): a
+ *     criterion is a declared outcome the agent still owes (outcomes model,
+ *     `kind: "fact"`). It grades it against real evidence, or hands one only
+ *     the person can check to them as a task whose answer grades it. A
+ *     session with no criteria keeps the readiness above (legacy work is
+ *     never blocked); closing itself still never blocks on criteria
+ *     (`complete-session.ts`, founder decision).
  *
  * Never claims a move from a section it could not read: an `unavailable`
  * section it would have consulted yields `unknown`.
@@ -2084,6 +2113,8 @@ export function deriveNextMove(input: {
   children: PacketSection<PacketChildItem>;
   /** The open inbox — the rung reads only its `waiting` post. */
   inbox: NextMoveInbox;
+  /** The session's grade — rung 6b reads only its required criteria. */
+  criteria: NextMoveCriteria;
 }): ContinuationNextMove {
   const { owedSlots, pendingProposals, aiCanDo, blockers } = input;
   const terminal = isTerminalSessionStatus(input.status);
@@ -2237,12 +2268,50 @@ export function deriveNextMove(input: {
   // share is the actor: `selectNextMoveBanner` (@synap-core/session-continuation)
   // promotes the first row whose `nextMove.actor === "user"`, and the workbench /
   // relay continue card render it "Next move · You" off the same field.
-  const readyToClose: ContinuationNextMove = {
-    kind: "ready_to_close",
-    actor: "user",
-    label: "Review and close this session",
-    reason:
-      "Everything this session declared is produced, and nothing is owed or pending review — accepting the work and closing it is yours to decide.",
+  //
+  // Rung 6b: every REQUIRED criterion passes first. Until then the move is the
+  // agent's: the person is never asked to accept work whose contract is not
+  // met. No criteria at all keeps today's readiness.
+  const readyToClose = (): ContinuationNextMove => {
+    if (input.criteria.status === "unavailable") {
+      return {
+        kind: "unknown",
+        actor: "none",
+        label: "Next move unknown",
+        // The cause is logged where the read failed (the packet's section
+        // reader, the page batch's `settle`); the person gets no internals.
+        reason:
+          "Could not check whether this session's criteria pass. Try again.",
+      };
+    }
+    const { state, requiredUnmet } = input.criteria.verdict;
+    if (requiredUnmet > 0) {
+      const one = requiredUnmet === 1;
+      return {
+        kind: "agent_slot",
+        actor: "ai",
+        label: one
+          ? "Pass the last required criterion"
+          : `Pass the ${requiredUnmet} required criteria left`,
+        // Person-facing words; how the agent gets there is its nudge's
+        // (`session-nudges.ts`, ungraded criteria).
+        reason: `Everything declared is produced, but ${
+          one
+            ? `1 required criterion ${state === "failing" ? "has failed" : "is not graded yet"}`
+            : `${requiredUnmet} required criteria ${state === "failing" ? "do not pass; at least one has failed" : "are not graded yet"}`
+        }. Once ${one ? "it passes" : "they pass"}, the session is ready to close.`,
+        reasonCode: "criteria_unmet",
+      };
+    }
+    return {
+      kind: "ready_to_close",
+      actor: "user",
+      label: "Review and close this session",
+      reason:
+        state === "none"
+          ? "Everything this session declared is produced, and nothing is owed or pending review — accepting the work and closing it is yours to decide."
+          : "Everything this session declared is produced, every required criterion passes, and nothing is owed or pending review — accepting the work and closing it is yours to decide.",
+    };
   };
   if (input.children.status === "unavailable") {
     return {
@@ -2272,7 +2341,7 @@ export function deriveNextMove(input: {
     };
   }
   if (input.expectedOutputs.some((s) => s.retiredAt == null)) {
-    return readyToClose;
+    return readyToClose();
   }
   // No live declared deliverables: only produced work or sub-sessions separate
   // a finished session from an empty one, so a failed outputs read is unknown.
@@ -2288,7 +2357,7 @@ export function deriveNextMove(input: {
     (input.outputs.status === "ok" && input.outputs.total > 0) ||
     input.children.items.some((c) => c.status === "closed")
   ) {
-    return readyToClose;
+    return readyToClose();
   }
   return {
     kind: "undeclared",
@@ -2734,6 +2803,7 @@ export async function projectContinuationPacket(
       outputs,
       children,
       inbox,
+      criteria: evaluation,
     }),
     evaluation,
   };
