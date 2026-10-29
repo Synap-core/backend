@@ -21,6 +21,7 @@
  *    system kind is a pod-scope write;
  *  - profiles.setRenderer: a `pod` binding is pod scope;
  *  - profiles.createPropertyDef: a base def is stored pod-wide;
+ *  - profiles.createPropertyDefs: one base field makes the batch pod-wide;
  *  - profiles.updatePropertyDef: the stored def is pod-wide;
  *  - entities.attach/update/detachFacet (D1, superseding D2): the ROLE's
  *    space is the target, not the parent's. A pod-wide parent passes when W
@@ -420,6 +421,37 @@ describe("property defs gate where the def LIVES (W2a)", () => {
       slug: "ws-overlay",
       valueType: "string",
       overlay: true,
+    });
+    expect(res.status).toBe(PASSED_THE_GRANT);
+  });
+
+  it("a batch with one base field lands pod-wide: refused, nothing stored", async () => {
+    await expect(
+      hub().profiles.createPropertyDefs({
+        userId: USER,
+        workspaceId: WS,
+        profileId: NOTE_PROFILE,
+        fields: [
+          { slug: "batch-overlay", valueType: "string", overlay: true },
+          { slug: "batch-smuggled-base", valueType: "string" },
+        ],
+      })
+    ).rejects.toMatchObject(GRANT_DENIED);
+    const { rows } = await q(
+      `select id from property_defs where slug like 'batch-%'`
+    );
+    expect(rows).toHaveLength(0);
+  });
+
+  it("CONTROL — an all-overlay batch in W passes the grant", async () => {
+    const res = await hub().profiles.createPropertyDefs({
+      userId: USER,
+      workspaceId: WS,
+      profileId: NOTE_PROFILE,
+      fields: [
+        { slug: "ws-batch-a", valueType: "string", overlay: true },
+        { slug: "ws-batch-b", valueType: "string", overlay: true },
+      ],
     });
     expect(res.status).toBe(PASSED_THE_GRANT);
   });

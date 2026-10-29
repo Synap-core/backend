@@ -100,7 +100,11 @@ import { dirname, join, relative } from "node:path";
 // 48 → 47 on 2026-10-22 (#81, one door for unique violations):
 // `routers/proposals/__tests__/view-create-legacy-filters.test.ts` converted —
 // its module now imports `isUniqueViolation` from @synap/database.
-const BASELINE = 47;
+// 47 → 46 on 2026-10-29 (#505): `services/profiles/create-and-link-property-def.test.ts`
+// converted — its door now imports `PropertyValueType` (via proposed-kind-field,
+// #495). Counts 46 once the three #482 recall tests are converted too
+// (fix/main-red-recall-mocks-and-lineage).
+const BASELINE = 46;
 
 const here = dirname(fileURLToPath(import.meta.url));
 const SRC = join(here, "..");
