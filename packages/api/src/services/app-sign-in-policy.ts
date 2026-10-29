@@ -23,7 +23,7 @@ import { apps } from "@synap/database/schema";
 import { isAppPublicId } from "@synap-core/types/membrane";
 
 /** The app whose key drove this request (its public id), or null. */
-export function requestAppId(): string | null {
+function requestAppId(): string | null {
   const clientId = getRequestGrant()?.clientId ?? null;
   return isAppPublicId(clientId) ? clientId : null;
 }

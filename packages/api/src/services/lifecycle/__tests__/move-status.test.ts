@@ -321,30 +321,32 @@ describe("statusMoveActorFor (who a request-door move is made by)", () => {
   const HUB = { userId: "u1", source: "intelligence", isHubProtocol: true };
   const asSignIn = <T>(fn: () => T) =>
     runWithGrant(grantOfScope({ permissions: ["*"] }, APP), fn);
-  it("a person's app sign-in is the PERSON, naming the app", () => {
+  // The app itself is stamped on the transition (`transitionStamp`), not on
+  // the actor: these pin who governs the move.
+  it("a person's app sign-in is the PERSON", () => {
     expect(asSignIn(() => statusMoveActorFor(HUB, {}))).toEqual({
-      actor: { kind: "human", userId: "u1", appId: APP },
+      actor: { kind: "human", userId: "u1" },
       approvedProposalId: undefined,
     });
   });
   it("an app sign-in never claims the system (its hub ctx has no req)", () => {
     expect(
       asSignIn(() => statusMoveActorFor(HUB, { source: "system" })).actor
-    ).toEqual({ kind: "human", userId: "u1", appId: APP });
+    ).toEqual({ kind: "human", userId: "u1" });
   });
   it("an app sign-in is the person through the hub forwarder's AI source too", () => {
     expect(
       asSignIn(() => statusMoveActorFor(HUB, { source: "intelligence" })).actor
-    ).toEqual({ kind: "human", userId: "u1", appId: APP });
+    ).toEqual({ kind: "human", userId: "u1" });
   });
-  it("an app's AGENT key stays its agent, naming the app", () => {
+  it("an app's AGENT key stays its agent", () => {
     expect(
       asSignIn(() =>
         runWithActingAgent("a1", () =>
           statusMoveActorFor({ ...HUB, agentUserId: "a1" }, {})
         )
       ).actor
-    ).toEqual({ kind: "agent", userId: "u1", agentUserId: "a1", appId: APP });
+    ).toEqual({ kind: "agent", userId: "u1", agentUserId: "a1" });
   });
   it("a hub key whose grant names no app is still an unattributed agent", () => {
     expect(

@@ -138,8 +138,6 @@ export interface LifecycleTransitionPayload extends TransitionBase {
   profileSlug: string | null;
   role: string | null;
   facetId: string | null;
-  /** The app the mover acted through; absent on rows owed before it existed. */
-  appId?: string | null;
 }
 
 /**

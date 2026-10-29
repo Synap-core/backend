@@ -68,8 +68,6 @@ export interface StatusMoveActor {
   /** The human the write is attributed to (owner of an agent's write). */
   userId: string;
   agentUserId?: string | null;
-  /** The app whose key drove the move (its public id): "via <app>". */
-  appId?: string | null;
 }
 
 /**
@@ -469,7 +467,6 @@ export async function applyStatusMove(
       actorKind: actor.kind,
       userId: actor.userId,
       agentUserId: actor.agentUserId ?? null,
-      appId: actor.appId ?? null,
       sessionId: input.sessionId ?? null,
       reason: input.reason ?? null,
       staleExpected: human && expressed && expected !== current,

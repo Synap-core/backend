@@ -26,8 +26,8 @@
  * unattributed AGENT, never a person — governed on the anonymous AI ladder and
  * strict CAS. A person's own app sign-in (`app_person`, backend #94) is that
  * PERSON, as for every other write it makes. `system` is server code only: a
- * request can never claim it. A move driven by an app's key names the app
- * (`appId`) on its event.
+ * request can never claim it. The app a move was made with is stamped on its
+ * transition by `transitionStamp` (`actorClass: "app"`, `appId`), not here.
  */
 import {
   db,
@@ -53,7 +53,7 @@ import { roleWriteGrantSpace } from "../../utils/role-write-grant.js";
 import { ownWorkOrganiseForTaskClose } from "../governance/own-organise.js";
 import { mayWriteStatusTarget } from "./status-write-floor.js";
 import { markProposalNotificationsActioned } from "../../notifications/mark-proposal-notifications-actioned.js";
-import { appSignInPublicId, requestAppId } from "../app-sign-in-policy.js";
+import { appSignInPublicId } from "../app-sign-in-policy.js";
 
 const logger = createLogger({ module: "move-status" });
 
@@ -134,8 +134,6 @@ export interface StatusMoveCallerContext {
  *    no agent → an UNATTRIBUTED agent (`agentUserId: null`), never a person;
  *  - `source: "system"` → `system` only for server code (no wire request);
  *    a client that sends it is a person;
- *  - a move driven by an app's key, agent or person, carries the app's
- *    public id (`appId`) to its transition event ("via <app>");
  *  - an internal caller holding a decision (`ctx.governanceProposalId`) is a
  *    REPLAY: governance is skipped and the CAS is strict.
  */
@@ -146,16 +144,14 @@ export function statusMoveActorFor(
   const userId = ctx.userId ?? "";
   const agentUserId = input.agentUserId ?? ctx.agentUserId ?? null;
   const approvedProposalId = ctx.governanceProposalId || undefined;
-  const appId = requestAppId();
-  const via = appId ? { appId } : {};
   if (agentUserId) {
     return {
-      actor: { kind: "agent", userId, agentUserId, ...via },
+      actor: { kind: "agent", userId, agentUserId },
       approvedProposalId,
     };
   }
   if (appSignInPublicId()) {
-    return { actor: { kind: "human", userId, ...via }, approvedProposalId };
+    return { actor: { kind: "human", userId }, approvedProposalId };
   }
   const aiCaller =
     ctx.isHubProtocol === true ||
@@ -163,14 +159,14 @@ export function statusMoveActorFor(
     AI_SOURCES.has(input.source ?? "");
   if (aiCaller) {
     return {
-      actor: { kind: "agent", userId, agentUserId: null, ...via },
+      actor: { kind: "agent", userId, agentUserId: null },
       approvedProposalId,
     };
   }
   if (input.source === "system" && ctx.req === undefined) {
     return { actor: { kind: "system", userId }, approvedProposalId };
   }
-  return { actor: { kind: "human", userId, ...via }, approvedProposalId };
+  return { actor: { kind: "human", userId }, approvedProposalId };
 }
 
 export type MoveStatusResult =
