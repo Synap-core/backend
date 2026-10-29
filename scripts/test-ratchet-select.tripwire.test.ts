@@ -105,6 +105,7 @@ function judge(
     dropFile,
     notListed,
     emptyList,
+    packageListed = 5,
     red = [],
     vacuousRun,
     echo,
@@ -114,6 +115,8 @@ function judge(
     dropFile?: string;
     notListed?: string;
     emptyList?: string;
+    /** emptyList's package listed with no filter: how many files (null: failed) */
+    packageListed?: number | null;
     red?: string[];
     /** this run's report: tests, and not one passed */
     vacuousRun?: string;
@@ -130,7 +133,9 @@ function judge(
         r.id === emptyList ? [] : r.files.filter((f) => f !== notListed);
       writeFileSync(
         join(dir, fileName(r.id, "list.json")),
-        JSON.stringify({ listed })
+        JSON.stringify(
+          r.id === emptyList ? { listed, packageListed } : { listed }
+        )
       );
       if (r.id === dropReport || r.id === emptyList) continue;
       const files = r.files.filter((f) => f !== dropFile && f !== notListed);
@@ -173,6 +178,29 @@ const planOf = (tests: string[], opts = {}) =>
     countByDir,
     ...opts,
   }) as Sel;
+
+/** A suite with no tripwire and no --passWithNoTests: a run of one file. */
+function loneRun() {
+  const pkg = (d: string) =>
+    JSON.parse(readFileSync(join(REPO, d, "package.json"), "utf8"));
+  const lone = execFileSync("git", ["ls-files"], {
+    cwd: REPO,
+    encoding: "utf8",
+  })
+    .split("\n")
+    .find(
+      (f) =>
+        /\.test\.ts$/.test(f) &&
+        SUITES.includes(ownerDir(f)) &&
+        !/--passWithNoTests/.test(pkg(ownerDir(f)).scripts?.test ?? "") &&
+        !tripwires.some((t) => ownerDir(t) === ownerDir(f))
+    )!;
+  expect(lone).toBeTruthy();
+  const sel = planOf([...tripwires, lone]);
+  const run = sel.runs.find((x) => x.files.includes(lone))!;
+  expect(run.files).toEqual([lone]);
+  return { sel, run };
+}
 
 describe("test-ratchet --select: the PR selection, judged as CI judges it", () => {
   const small = planOf([...tripwires, ...EXTRA]);
@@ -223,24 +251,22 @@ describe("test-ratchet --select: the PR selection, judged as CI judges it", () =
   it("a run whose listing is empty needs no report", () => {
     // A test of a suite with no tripwire: its run holds no tripwire (one
     // must always run), so its listing may be empty.
-    const lone = execFileSync("git", ["ls-files"], {
-      cwd: REPO,
-      encoding: "utf8",
-    })
-      .split("\n")
-      .find(
-        (f) =>
-          /\.test\.ts$/.test(f) &&
-          SUITES.includes(ownerDir(f)) &&
-          !tripwires.some((t) => ownerDir(t) === ownerDir(f))
-      )!;
-    expect(lone).toBeTruthy();
-    const sel = planOf([...tripwires, lone]);
-    const run = sel.runs.find((x) => x.files.includes(lone))!;
-    expect(run.files).toEqual([lone]);
+    const { sel, run } = loneRun();
     const r = judge(sel, { emptyList: run.id });
     expect(r.out).toContain("[not-collected]");
     expect(r.status).toBe(0);
+  });
+
+  it("a package whose config collects NOTHING is red, as main's full mode is", () => {
+    // Its files list [] and the package listed with no filter is empty too
+    // (a broken `include`); without --passWithNoTests main is red on it.
+    const { sel, run } = loneRun();
+    for (const packageListed of [0, null]) {
+      const r = judge(sel, { emptyList: run.id, packageListed });
+      expect(r.status, String(packageListed)).toBe(1);
+      expect(r.out).toContain("[vacuous]");
+      expect(r.out).toContain(run.dir);
+    }
   });
 
   it("a tripwire the plan dropped: red (the decision promised every tripwire)", () => {

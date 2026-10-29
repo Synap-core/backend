@@ -120,6 +120,9 @@ import {
   planSelection,
 } from "./test-ratchet-shards.mjs";
 import { isTripwire } from "./tripwire-discovery.mjs";
+// THE test-file pattern (the import graph's): the selection, everyTest and
+// the negctl tests agree on what a test file is.
+import { TEST_FILE } from "./ci/import-graph.mjs";
 
 // Paths no test, build or image reads. Narrow on purpose: tests read
 // docs/decisions/*.md, skills/**/SKILL.md, CLAUDE.md and .claude/rules/*.md,
@@ -171,8 +174,6 @@ const IMAGE_INPUTS = [
   /^apps\/api\/src\/(index\.ts|routers\/provision\.ts|webhooks\/kratos[^/]*\.ts)$/,
   /^apps\/pod-admin\/app\/(recovery|settings\/security)\/page\.tsx$/,
 ];
-
-const TEST_FILE = /\.test\.(ts|tsx|mts|mjs|js)$/;
 
 // Paths the other repos link by source (app-bases, browser and relay-app read
 // @synap-core/types, api-types and markdown-core from this checkout; #372 broke
@@ -705,6 +706,10 @@ function tierOfCheckout(baseSha) {
  */
 export function withPlan(t, ctx) {
   if (t.scope !== "selected" && t.scope !== "full") return t;
+  // A full tier the runner, the selector or ci.yml caused is planned by the
+  // changed code itself: it gets no plan, so the shards run the committed
+  // 4-shard plan in the full mode (re-review of #522, N2).
+  if (t.scope === "full" && t.selfFull) return t;
   const full = t.scope === "full";
   return {
     ...t,

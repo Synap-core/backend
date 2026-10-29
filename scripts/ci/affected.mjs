@@ -18,7 +18,7 @@
  *   2. every test file that names a changed file's package by path;
  *   3. when the known-red baseline changed: every file it names, before and
  *      after the change (a removed line claims a file passes: it runs);
- *   4. EVERY tripwire, whatever changed: they read across the tree (381 files
+ *   4. EVERY tripwire, whatever changed: they read across the tree (380 files
  *      on 2026-10-29, ~5.3 min of one shard in the shard plan's costs).
  * Package source goes through the graph, packages/types, packages/database
  * (its src) and packages/core included.
@@ -67,9 +67,9 @@
  */
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
-import { buildGraph, reach } from "./import-graph.mjs";
+import { TEST_FILE, buildGraph, reach } from "./import-graph.mjs";
 
-export const TEST_FILE = /\.test\.(ts|tsx|mts|cts|mjs|cjs|js)$/;
+export { TEST_FILE };
 
 /**
  * Paths outside every workspace package that no test file reads, so their
@@ -105,6 +105,18 @@ export const NARROWED = [
   /^docs\//,
   /^(CLAUDE|AGENTS)\.md$/,
   /^\.claude\//,
+];
+
+/**
+ * The full-suite paths that plan, run or judge the tests, or define the shard
+ * jobs: a full tier they cause runs the committed 4-shard plan, never a plan
+ * the changed code computed (ci-changes.mjs withPlan).
+ */
+export const SELF_FULL = [
+  /^scripts\/(test-ratchet[^/]*\.mjs|tripwire-discovery\.mjs|test-floors\.json)$/,
+  /^scripts\/(ci-changes|strip-comments)\.mjs$/,
+  /^scripts\/ci\/(affected|import-graph)\.mjs$/,
+  /^\.github\/workflows\/ci\.yml$/,
 ];
 
 /** The known-red baseline: when it changes, every file it names runs. */
@@ -350,6 +362,7 @@ export function selectTier(files, g, { baseBaseline = [] } = {}) {
       scope: "full",
       tests: [],
       e2e: true,
+      selfFull: files.some((f) => SELF_FULL.some((re) => re.test(f))),
       why: [`full suite: ${cap(full)}`],
     };
 

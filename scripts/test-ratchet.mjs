@@ -520,9 +520,19 @@ async function selectMode() {
     for (const r of mine) {
       const listed = await listVitestFiles(r, { emptyIsList: true });
       const repoRel = listed?.map((f) => (r.dir === "." ? f : `${r.dir}/${f}`));
+      // Nothing collected: does the package's config collect anything at
+      // all? Main's full mode is red on a package that runs 0 files.
+      let packageListed;
+      if (repoRel && repoRel.length === 0 && scriptArgs.has(r.dir)) {
+        const all = await listVitestFiles(
+          { ...r, id: `${r.id}#package`, args: scriptArgs.get(r.dir) },
+          { emptyIsList: true }
+        );
+        packageListed = all ? all.length : null;
+      }
       writeFileSync(
         listPath(r.id),
-        `${JSON.stringify({ listed: repoRel ?? null })}\n`
+        `${JSON.stringify({ listed: repoRel ?? null, ...(packageListed !== undefined ? { packageListed } : {}) })}\n`
       );
       if (repoRel && repoRel.length === 0) continue;
       rmSync(reportFile(reportsDir, r.id), { force: true });
@@ -564,13 +574,28 @@ async function selectMode() {
   const unrun = [];
   for (const r of planned) {
     let listed = null;
+    let packageListed = null;
     try {
-      listed = JSON.parse(readFileSync(listPath(r.id), "utf8")).listed;
+      const l = JSON.parse(readFileSync(listPath(r.id), "utf8"));
+      listed = l.listed;
+      packageListed = l.packageListed ?? null;
     } catch {
       // no listing: the shard did not reach this run; its report decides
     }
     if (Array.isArray(listed) && listed.length === 0) {
       notCollected.push(...r.files);
+      // A package whose config collects nothing at all is red, as in the
+      // full mode (unless its script passes with no tests); a listing that
+      // failed is red too, never a guess.
+      const args = scriptArgs.get(r.dir);
+      if (args && packageListed !== null && packageListed > 0) continue;
+      if (args && packageListed === 0 && args.includes("--passWithNoTests"))
+        continue;
+      if (args)
+        problems.push({
+          kind: "vacuous",
+          detail: `${r.dir}: its vitest config ${packageListed === 0 ? "collects 0 test files" : "could not be listed"} (${r.id} planned ${r.files.length} file(s)); main's full suite is red on this too`,
+        });
       continue;
     }
     const report = readReport(reportsDir, r.id);

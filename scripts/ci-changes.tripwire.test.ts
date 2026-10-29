@@ -20,6 +20,7 @@ import { describe, expect, it } from "vitest";
 // @ts-expect-error — plain ESM script, no declarations
 import {
   BASELINE,
+  SELF_FULL,
   SUITE_NEUTRAL,
   TEST_FILE,
   loadGraph,
@@ -35,6 +36,8 @@ import {
 } from "./test-ratchet-shards.mjs";
 // @ts-expect-error — plain ESM script, no declarations
 import { isTripwire } from "./tripwire-discovery.mjs";
+// @ts-expect-error — plain ESM script, no declarations
+import { TEST_FILE as GRAPH_TEST_FILE } from "./ci/import-graph.mjs";
 import {
   QUEUE_REUSE_CHECKS,
   TESTED_STEP,
@@ -545,14 +548,32 @@ describe("ci-changes: the PR tier on the real graph", () => {
     ]) {
       const d = pr([f]);
       expect([d.scope, d.suites, d.e2e], f).toEqual(["full", true, true]);
-      // Every test file, planned by cost (lead decision, 29 Oct): more than
-      // the main plan's 4 shards, never more than the cap.
-      expect(d.selection?.full, f).toBe(true);
-      expect(shardMatrix(d).length, f).toBeGreaterThan(4);
-      expect(shardMatrix(d).length, f).toBeLessThanOrEqual(
-        SELECTION_MAX_SHARDS
-      );
+      if (SELF_FULL.some((re: RegExp) => re.test(f))) {
+        // The runner, the selector, ci.yml: never a plan the changed code
+        // computed; the committed 4-shard plan, in the full mode.
+        expect(d.selection, f).toBeNull();
+        expect(shardMatrix(d), f).toEqual([1, 2, 3, 4]);
+      } else {
+        // Every test file, planned by cost (lead decision, 29 Oct): more
+        // than the main plan's 4 shards, never more than the cap.
+        expect(d.selection?.full, f).toBe(true);
+        expect(shardMatrix(d).length, f).toBeGreaterThan(4);
+        expect(shardMatrix(d).length, f).toBeLessThanOrEqual(
+          SELECTION_MAX_SHARDS
+        );
+      }
     }
+    // Both kinds are in the list above (non-vacuity of the two branches).
+    expect(
+      SELF_FULL.some((re: RegExp) => re.test("scripts/ci-changes.mjs"))
+    ).toBe(true);
+    expect(SELF_FULL.some((re: RegExp) => re.test("pnpm-lock.yaml"))).toBe(
+      false
+    );
+    // A self-change beside a lockfile change: still the committed plan.
+    expect(
+      pr(["pnpm-lock.yaml", "scripts/ci/import-graph.mjs"]).selection
+    ).toBeNull();
     // The control: a narrowed script beside them is not full on its own.
     expect(pr(["scripts/pod-observation.mjs"]).scope).toBe("selected");
     for (const f of [
@@ -602,6 +623,23 @@ describe("ci-changes: the PR tier on the real graph", () => {
     expect(changedFiles(base, "HEAD", dir).sort()).toEqual([
       "new.yml",
       "old.yml",
+    ]);
+  });
+
+  it("5a. one test-file pattern: the graph's, in the selection and in ci-changes", () => {
+    expect(TEST_FILE).toBe(GRAPH_TEST_FILE);
+    // ci-changes' own use (a negctl branch's test files) sees .cts and .cjs.
+    const d = decide({
+      event: "pull_request",
+      headRef: "negctl/x",
+      draft: false,
+      files: ["packages/a/src/x.test.cts", "scripts/y.test.cjs"],
+      siblingTests: none,
+      tier,
+    });
+    expect(d.negctlTests).toEqual([
+      "packages/a/src/x.test.cts",
+      "scripts/y.test.cjs",
     ]);
   });
 
